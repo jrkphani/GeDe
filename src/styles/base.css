@@ -953,3 +953,98 @@ body {
   resize: none;
   overflow: hidden;
 }
+
+/* ── 1st Tier · Foundation (issue 013) ──────────────────────────────────────
+   The most document-like tier (SPEC §4.6): a single reading column on the
+   graph-paper ground — purpose statement above the propositions table, with
+   generous 32px section spacing (design brief). */
+.foundation {
+  max-width: 760px;
+  margin: 0 auto;
+  padding: var(--space-6) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-6);
+}
+
+.tier1-header {
+  font-size: var(--text-header);
+  line-height: var(--leading-header);
+  font-weight: 600;
+  margin: 0;
+}
+
+/* Purpose: a paper panel that reads as a paragraph, not a textarea — click
+   anywhere to edit in place. */
+.tier1-purpose {
+  padding: var(--space-4) var(--space-5);
+  cursor: text;
+}
+
+.tier1-purpose__display,
+.tier1-purpose__body,
+.tier1-purpose__ghost {
+  display: block;
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  min-height: var(--leading-body);
+}
+
+.tier1-purpose__ghost {
+  color: var(--ink-muted);
+}
+
+.tier1-purpose__input {
+  display: block;
+  width: 100%;
+  min-height: var(--leading-body);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  resize: none;
+  overflow: hidden;
+}
+
+/* Rank: a narrow leading column of mono degree notation (STYLE_GUIDE §3) with
+   a drag handle that appears on row hover (§6). */
+.tier1-col--rank {
+  width: 84px;
+  white-space: nowrap;
+}
+
+.tier1-rank {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 0 var(--space-3);
+}
+
+.tier1-rank__degree {
+  font-size: var(--text-mono);
+  color: var(--ink);
+}
+
+.tier1-props .drag-handle {
+  visibility: hidden;
+}
+
+.tier1-props tr:hover .drag-handle,
+.tier1-props tr:focus-within .drag-handle,
+.tier1-rank[data-dragging] .drag-handle {
+  visibility: visible;
+}
+
+/* Empty state (design brief): the phantom row's rank cell ghosts the 1° a
+   first proposition will take. Only when there are no props yet — once rows
+   exist the phantom's leading cell stays quiet (its true next rank can't be
+   expressed in CSS, and a stale "1°" would mislead). */
+.tier1-props[data-empty] .grid-row--phantom td:first-child::before {
+  content: '1°';
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  color: var(--ink-muted);
+}

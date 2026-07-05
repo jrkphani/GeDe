@@ -2,7 +2,7 @@ import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { uuidv7 } from 'uuidv7'
 import type { Database } from './client'
 import { firstOrThrow } from './util'
-import { bindings, contexts, dimensions, parameters, projects } from './schema'
+import { bindings, contexts, dimensions, parameters, projects, tier1Props, tier1Purpose } from './schema'
 import { paletteColor } from '../theme/palette'
 import { computeTupleHash, nextRootSymbol } from '../domain/symbols'
 
@@ -527,4 +527,162 @@ export async function unbindParameter(
     .where(and(eq(bindings.contextId, contextId), eq(bindings.dimensionId, dimensionId)))
   await recomputeTupleHash(db, contextId)
   return listBindings(db, contextId)
+}
+
+// ── Tier 1 Foundation (issue 013) ────────────────────────────────────────────
+// The most document-like tier: one purpose statement per project + a table of
+// ranked value propositions. No linkage to tiers 2–3 in this slice.
+
+export type Tier1PurposeRow = typeof tier1Purpose.$inferSelect
+export type Tier1PropRow = typeof tier1Props.$inferSelect
+
+// SPEC §4.6 — a single body per project (the schema's unique project_id index
+// makes the setter a true upsert, never a second purpose row).
+export async function getTier1Purpose(
+  db: Database,
+  projectId: string,
+): Promise<Tier1PurposeRow | null> {
+  const rows = await db
+    .select()
+    .from(tier1Purpose)
+    .where(and(eq(tier1Purpose.projectId, projectId), isNull(tier1Purpose.deletedAt)))
+    .limit(1)
+  return rows[0] ?? null
+}
+
+export async function setTier1Purpose(
+  db: Database,
+  projectId: string,
+  body: string,
+): Promise<Tier1PurposeRow | null> {
+  await db
+    .insert(tier1Purpose)
+    .values({ id: uuidv7(), projectId, body })
+    .onConflictDoUpdate({ target: tier1Purpose.projectId, set: { body, updatedAt: now() } })
+  return getTier1Purpose(db, projectId)
+}
+
+function tier1PropScope(projectId: string) {
+  return and(eq(tier1Props.projectId, projectId), isNull(tier1Props.deletedAt))
+}
+
+export async function listTier1Props(db: Database, projectId: string): Promise<Tier1PropRow[]> {
+  return db.select().from(tier1Props).where(tier1PropScope(projectId)).orderBy(asc(tier1Props.sort))
+}
+
+// rank (1-based, degree notation) and sort (0-based order) move in lockstep in
+// this tier — rewritten to their positional index on every add/reorder/remove
+// so both stay contiguous (issue 013 unit test).
+async function rewriteTier1PropRanks(db: Database, ordered: Tier1PropRow[]): Promise<void> {
+  for (const [index, row] of ordered.entries()) {
+    if (row.sort !== index || row.rank !== index + 1) {
+      await db
+        .update(tier1Props)
+        .set({ sort: index, rank: index + 1, updatedAt: now() })
+        .where(eq(tier1Props.id, row.id))
+    }
+  }
+}
+
+export async function addTier1Prop(
+  db: Database,
+  projectId: string,
+  name: string,
+): Promise<Tier1PropRow> {
+  const existing = await listTier1Props(db, projectId)
+  const rows = await db
+    .insert(tier1Props)
+    .values({
+      id: uuidv7(),
+      projectId,
+      name,
+      description: null,
+      rank: existing.length + 1,
+      sort: existing.length,
+    })
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function renameTier1Prop(
+  db: Database,
+  id: string,
+  name: string,
+): Promise<Tier1PropRow> {
+  const rows = await db
+    .update(tier1Props)
+    .set({ name, updatedAt: now() })
+    .where(eq(tier1Props.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function setTier1PropDescription(
+  db: Database,
+  id: string,
+  description: string,
+): Promise<Tier1PropRow> {
+  const rows = await db
+    .update(tier1Props)
+    .set({ description, updatedAt: now() })
+    .where(eq(tier1Props.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+// One drag gesture = one call = one future undo step (command log, issue 006).
+export async function reorderTier1Prop(
+  db: Database,
+  projectId: string,
+  id: string,
+  toIndex: number,
+): Promise<Tier1PropRow[]> {
+  const rows = await listTier1Props(db, projectId)
+  const from = rows.findIndex((p) => p.id === id)
+  if (from === -1) return rows
+  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
+  const moved = firstOrThrow(rows.splice(from, 1))
+  rows.splice(target, 0, moved)
+  await rewriteTier1PropRanks(db, rows)
+  return listTier1Props(db, projectId)
+}
+
+export async function removeTier1Prop(
+  db: Database,
+  projectId: string,
+  id: string,
+): Promise<Tier1PropRow[]> {
+  const rows = await listTier1Props(db, projectId)
+  await db
+    .update(tier1Props)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(eq(tier1Props.id, id))
+  await rewriteTier1PropRanks(
+    db,
+    rows.filter((p) => p.id !== id),
+  )
+  return listTier1Props(db, projectId)
+}
+
+// Mirrors restoreParameter (issue 006) — the undo-of-remove / redo-of-add
+// primitive: un-soft-deletes the row and rewrites every live row's rank/sort
+// to match `orderedIds` verbatim, so a middle removal's undo restores the
+// exact original position instead of appending at the end.
+export async function restoreTier1Prop(
+  db: Database,
+  projectId: string,
+  id: string,
+  orderedIds: readonly string[],
+): Promise<Tier1PropRow[]> {
+  await db
+    .update(tier1Props)
+    .set({ deletedAt: null, updatedAt: now() })
+    .where(eq(tier1Props.id, id))
+  const rows = await listTier1Props(db, projectId)
+  const byId = new Map(rows.map((p) => [p.id, p]))
+  const ordered = orderedIds
+    .map((oid) => byId.get(oid))
+    .filter((p): p is Tier1PropRow => p !== undefined)
+  await rewriteTier1PropRanks(db, ordered)
+  return listTier1Props(db, projectId)
 }

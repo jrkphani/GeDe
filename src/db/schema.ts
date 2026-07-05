@@ -17,6 +17,44 @@ export const projects = pgTable('projects', {
   deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
 })
 
+// SPEC.md §3/§4.6 — 1st Tier Foundation. A single purpose statement per
+// project (one body row, enforced by the unique project_id index → setter
+// upserts) plus ranked value-proposition rows. Table-based, mirroring the
+// source Numbers document (issue 013); no linkage to tiers 2–3 in this slice.
+export const tier1Purpose = pgTable(
+  'tier1_purpose',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id),
+    body: text('body').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [uniqueIndex('tier1_purpose_project_idx').on(table.projectId)],
+)
+
+// SPEC.md §3/§4.6 — a ranked value proposition. `rank` is the 1-based priority
+// rendered as degree notation (1°, 2°…, STYLE_GUIDE §3); `sort` is the 0-based
+// storage order. In this tier they move together (drag re-ranks = reorders),
+// but both columns are pinned by the SPEC data model. Re-rank / delete keep
+// rank contiguous 1..k (issue 013 unit test).
+export const tier1Props = pgTable('tier1_props', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id')
+    .notNull()
+    .references(() => projects.id),
+  rank: integer('rank').notNull(),
+  name: text('name').notNull(),
+  description: text('description'),
+  sort: integer('sort').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+})
+
 // SPEC.md §3 — context_id null = root canvas; a context's child canvas gets its
 // own rows (issue 011). Dimension count is pure row data: nothing encodes "3".
 export const dimensions = pgTable('dimensions', {

@@ -1,6 +1,6 @@
 # 013: Tier 1 — Foundation (purpose + ranked value propositions)
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M5
 - **Blocked by**: 004, 016
 
@@ -36,6 +36,15 @@ As a designer I record the system's purpose and its ranked value propositions in
 
 ## Acceptance criteria
 
-- [ ] EditableGrid required no modification (proves slice 004's reuse claim).
-- [ ] Re-rank is one undo step.
-- [ ] Purpose block autosaves through the mutation layer like any cell.
+- [x] EditableGrid required no modification (proves slice 004's reuse claim).
+- [x] Re-rank is one undo step.
+- [x] Purpose block autosaves through the mutation layer like any cell.
+
+## Shipped notes
+
+- **Schema/migration**: `tier1_purpose` (single body per project, enforced by a unique `project_id` index) + `tier1_props` (rank, name, description, sort). Migration `0004_tier1.sql`, journal tag `0004_tier1` (generated name renamed to convention). `rank` and `sort` move in lockstep (`rank = sort + 1`), rewritten contiguous `1..k` on every add/reorder/remove.
+- **Store** (`src/store/tier1.ts`): command-log-backed (one undo step per action, re-rank included); generation-guarded `load` with synchronous `projectId` set (the CI-race pattern from HANDOFF).
+- **UI** (`src/components/FoundationSurface.tsx`): purpose block via `MultilineEdit` (ghost "What is this system for?", autosaves) + propositions table reusing **`EditableGrid` unchanged** — only tier-1 additions are the column defs and the `RankCell` renderer. dnd-kit wraps the grid; the sortable node is the rank cell (grid still owns the `<tr>`), with live rank renumber during drag. `src/domain/degree.ts`'s `formatDegree(n) → "n°"`.
+- **Empty-state rank ghost** (`1°` in the phantom row) is CSS-only (`::before`), not grid logic — CSS can't count rows, so once props exist the phantom's leading cell stays quiet. This is deliberate: EditableGrid was left completely unmodified, which was the acceptance criterion.
+- **routes.ts/router.ts untouched** — the `foundation` route shape already existed and round-trips were already tested; clean merge surface for issue 017.
+- **Verified**: full `npm run verify` green on main (typecheck/eslint/stylelint clean, unit/component + e2e including `e2e/foundation.spec.ts`).

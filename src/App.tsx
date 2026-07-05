@@ -1,5 +1,6 @@
 import { useEffect } from 'react'
 import { DesignSurface } from './components/DesignSurface'
+import { FoundationSurface } from './components/FoundationSurface'
 import { ProjectsList } from './components/ProjectsList'
 import { AppShell } from './shell/AppShell'
 import { navigate, useRoute } from './shell/router'
@@ -28,14 +29,11 @@ function Surface({ route }: { route: AppRoute }) {
     case 'project':
       return null // redirect handled in App effect
     case 'tier':
+      if (route.tier === 'foundation') return <FoundationSurface projectId={route.projectId} />
       return (
         <main className="projects">
           <section className="panel">
-            <p className="placeholder">
-              {route.tier === 'foundation'
-                ? '1st Tier · Foundation — arrives with issue 013.'
-                : '2nd Tier · Architecture — arrives with issue 014.'}
-            </p>
+            <p className="placeholder">2nd Tier · Architecture — arrives with issue 014.</p>
           </section>
         </main>
       )
