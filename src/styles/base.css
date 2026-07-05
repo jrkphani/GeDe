@@ -141,6 +141,14 @@ body {
   font-size: 12px;
 }
 
+/* The band collapses when its portal slot is empty (slots.tsx sets `hidden`
+ * when count === 0). `.context-bar { display: flex }` above outranks the UA
+ * `[hidden]` rule, so state the collapse explicitly rather than relying on it
+ * being force-hidden by a framework reset. */
+.context-bar[hidden] {
+  display: none;
+}
+
 .surface {
   flex: 1;
   overflow: auto;

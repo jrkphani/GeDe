@@ -1,0 +1,61 @@
+/*
+ * Tailwind v4 + shadcn/ui bridge — issue 018.
+ *
+ * This file wires Tailwind and shadcn's semantic color names to the GeDe
+ * design tokens in tokens.css. The mapping is ONE-DIRECTIONAL: Tailwind
+ * utilities read FROM the GeDe tokens; tokens.css and STYLE_GUIDE.md remain
+ * the single source of truth. Dark mode needs no dark values here — every
+ * alias resolves through a token that already flips under [data-theme='dark'].
+ *
+ * Import order (main.tsx): tokens.css → theme-bridge.css → base.css.
+ */
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+/* Project convention is the [data-theme='dark'] attribute, NOT the `.dark`
+ * class shadcn defaults to. Bind the `dark:` variant to it. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+@theme inline {
+  /* Surfaces */
+  --color-background: var(--paper);
+  --color-foreground: var(--ink);
+  --color-card: var(--panel);
+  --color-card-foreground: var(--ink);
+  --color-popover: var(--panel);
+  --color-popover-foreground: var(--ink);
+
+  /* Brand green → shadcn "primary" (shadcn's own --accent is a muted hover
+   * surface, mapped below to --accent-wash; no collision with GeDe's --accent
+   * because Tailwind defines --color-accent, not a raw --accent). */
+  --color-primary: var(--accent);
+  --color-primary-foreground: var(--panel);
+  --color-accent: var(--accent-wash);
+  --color-accent-foreground: var(--ink);
+
+  /* Muted / secondary text + chrome */
+  --color-muted: var(--panel);
+  --color-muted-foreground: var(--ink-muted);
+  --color-secondary: var(--panel);
+  --color-secondary-foreground: var(--ink);
+
+  /* Lines & focus */
+  --color-border: var(--hairline);
+  --color-input: var(--hairline);
+  --color-ring: var(--accent-strong);
+
+  /* Status */
+  --color-destructive: var(--danger);
+  --color-destructive-foreground: var(--panel);
+
+  /* Shape — STYLE_GUIDE §4: everything chrome is square. */
+  --radius: 0px;
+  --radius-sm: 0px;
+  --radius-md: 0px;
+  --radius-lg: 0px;
+  --radius-xl: 0px;
+
+  /* Type families */
+  --font-sans: var(--font-ui);
+  --font-mono: var(--font-mono);
+}

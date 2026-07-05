@@ -31,6 +31,9 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [014](014-tier2-architecture-promote.md) | Tier 2 Architecture + promote | M5 | 013 |
 | [015](015-export-import-json.md) | Export/import JSON | M6 | 011, 014 |
 | [017](017-command-palette.md) | Command palette (⌘K) | M2 | 016, 004 |
+| [018](done/018-shadcn-tailwind-foundation.md) ✅ | shadcn/ui + Tailwind v4 foundation | M1 (pre-work) | — |
+| [019](019-shared-primitive-migration.md) | Shared UI primitives + migration | M1 (pre-work) | 018 |
+| [020](020-enforcement-guardrails.md) | Enforcement guardrails (types/tokens/components) | M1 (pre-work) | 019 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
