@@ -168,12 +168,21 @@ export function ContextRegister({ projectId }: { projectId: string }) {
         columnId: 'justification',
         placeholder: contexts.length === 0 ? FIRST_CONTEXT_GHOST : 'New context',
         onCreate: (text) => {
+          console.log('[DIAG] phantom onCreate: fired', text)
           // One user gesture (typing + Enter in the phantom row) spans two
           // store calls — batched into a single undo step (issue 006).
-          void useCommandLogStore.getState().batch('create context', async () => {
-            const ctx = await createContext()
-            if (ctx) await setJustification(ctx.id, text)
-          })
+          void useCommandLogStore
+            .getState()
+            .batch('create context', async () => {
+              console.log('[DIAG] phantom onCreate: batch fn start')
+              const ctx = await createContext()
+              console.log('[DIAG] phantom onCreate: createContext resolved', ctx?.id)
+              if (ctx) await setJustification(ctx.id, text)
+              console.log('[DIAG] phantom onCreate: batch fn done')
+            })
+            .catch((err: unknown) => {
+              console.error('[DIAG] phantom onCreate: batch REJECTED', err)
+            })
         },
       }}
     />

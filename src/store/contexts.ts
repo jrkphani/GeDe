@@ -71,25 +71,37 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   generation: 0,
 
   async load(projectId) {
+    console.log('[DIAG] contexts.load: start', projectId)
     const db = requireDatabase()
     const gen = get().generation
     const contexts = await dbListContexts(db, projectId)
+    console.log('[DIAG] contexts.load: dbListContexts done', contexts.length)
     const bindingsByContext = await fetchBindingsMap(
       db,
       contexts.map((c) => c.id),
     )
-    if (get().generation !== gen) return
+    console.log('[DIAG] contexts.load: fetchBindingsMap done')
+    if (get().generation !== gen) {
+      console.log('[DIAG] contexts.load: DISCARDED (stale generation)', gen, get().generation)
+      return
+    }
     set({ projectId, contexts, bindingsByContext })
+    console.log('[DIAG] contexts.load: applied')
   },
 
   async create() {
+    console.log('[DIAG] contexts.create: start')
     const { projectId } = get()
     if (projectId === null) return null
     const db = requireDatabase()
     set({ generation: get().generation + 1 })
+    console.log('[DIAG] contexts.create: before dbCreate')
     const row = await dbCreate(db, projectId)
+    console.log('[DIAG] contexts.create: after dbCreate', row.id, row.symbol)
     const contexts = await dbListContexts(db, projectId)
+    console.log('[DIAG] contexts.create: after dbListContexts', contexts.length)
     set({ contexts, bindingsByContext: { ...get().bindingsByContext, [row.id]: {} } })
+    console.log('[DIAG] contexts.create: set() applied')
     useCommandLogStore.getState().push({
       label: `create context ${row.symbol}`,
       async undo() {
@@ -106,6 +118,7 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
         })
       },
     })
+    console.log('[DIAG] contexts.create: returning', row.id)
     return row
   },
 
