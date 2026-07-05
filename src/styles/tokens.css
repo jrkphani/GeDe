@@ -31,6 +31,20 @@
   --font-ui: 'Inter Variable', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
 
+  /* Type scale — §3 (size · line-height, named by primary role) */
+  --text-title: 22px;
+  --text-header: 17px;
+  --text-body: 14px;
+  --text-mono: 13px;
+  --text-label: 12px;
+  --text-colhead: 11px;
+  --leading-title: 28px;
+  --leading-header: 24px;
+  --leading-body: 20px;
+  --leading-mono: 20px;
+  --leading-label: 16px;
+  --leading-colhead: 16px;
+
   /* Space & shape — §4 */
   --space-1: 4px;
   --space-2: 8px;

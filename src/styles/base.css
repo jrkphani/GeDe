@@ -107,7 +107,7 @@ body {
 .tab {
   display: flex;
   align-items: center;
-  font-size: 13px;
+  font-size: var(--text-mono);
   font-weight: 500;
   color: var(--ink-muted);
   text-decoration: none;
@@ -138,7 +138,7 @@ body {
   padding: 0 var(--space-4);
   background: var(--panel);
   border-bottom: 1px solid var(--hairline);
-  font-size: 12px;
+  font-size: var(--text-label);
 }
 
 /* The band collapses when its portal slot is empty (slots.tsx sets `hidden`
@@ -164,7 +164,7 @@ body {
   padding: 0 var(--space-3);
   background: var(--panel);
   border-top: 1px solid var(--hairline);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
 }
 
@@ -179,7 +179,7 @@ body {
 
 .status-bar__ambient {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--text-colhead);
 }
 
 .placeholder {
@@ -239,7 +239,7 @@ body {
   color: var(--ink-muted);
   cursor: grab;
   padding: 0;
-  font-size: 11px;
+  font-size: var(--text-colhead);
   letter-spacing: -2px;
 }
 
@@ -270,7 +270,7 @@ body {
   min-height: 0;
   width: 80px;
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-label);
   flex: none;
 }
 
@@ -290,8 +290,8 @@ body {
 }
 
 .dim-row__name--head {
-  font-size: 11px;
-  line-height: 16px;
+  font-size: var(--text-colhead);
+  line-height: var(--leading-colhead);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   font-weight: 500;
@@ -312,7 +312,7 @@ body {
 
 .param-row__index {
   font-family: var(--font-mono);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
   flex: none;
   width: 16px;
@@ -349,7 +349,7 @@ body {
     gap: var(--space-2);
   }
   .tab {
-    font-size: 12px;
+    font-size: var(--text-label);
   }
 }
 
@@ -400,13 +400,13 @@ body {
 
 .project-desc {
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: var(--text-label);
   flex: 1;
 }
 
 .project-title {
-  font-size: 17px;
-  line-height: 24px;
+  font-size: var(--text-header);
+  line-height: var(--leading-header);
   font-weight: 600;
   margin: 0 0 var(--space-3);
 }
@@ -432,7 +432,7 @@ body {
 
 .row-action {
   font: inherit;
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
   background: transparent;
   border: 1px solid var(--hairline);
@@ -451,7 +451,7 @@ body {
   gap: var(--space-2);
   min-height: 28px;
   padding: var(--space-2) var(--space-1);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
 }
 
@@ -468,14 +468,14 @@ body {
 .editable-grid {
   border-collapse: collapse;
   width: 100%;
-  font-size: 14px;
+  font-size: var(--text-body);
 }
 
 .editable-grid th {
   position: sticky;
   top: 0;
   font: inherit;
-  font-size: 11px;
+  font-size: var(--text-colhead);
   font-weight: 500;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -534,7 +534,7 @@ body {
 /* Symbol chip: mono, square, ink-on-paper inverted (design brief). */
 .grid-cell--mono {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-mono);
   justify-content: center;
 }
 
@@ -549,7 +549,7 @@ body {
 
 .grid-col--symbol .grid-cell__input--mono {
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: var(--text-mono);
 }
 
 /* Draft signifier: dashed chip, no red — a draft is valid, not an error. */
@@ -622,5 +622,5 @@ body {
 .combobox-popover [cmdk-empty] {
   padding: var(--space-2);
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: var(--text-label);
 }

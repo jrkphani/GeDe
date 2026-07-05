@@ -1,6 +1,6 @@
 # 020: Enforcement guardrails — typesafety, tokens, component usage
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1 (foundation / pre-work)
 - **Blocked by**: 019
 
