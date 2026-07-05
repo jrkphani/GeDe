@@ -25,7 +25,7 @@ As a designer I create a context directly on the canvas: enter compose mode, cli
 - **Touch**: dots rely on the ≥ 44px invisible hit circles; compose on < 400px containers falls back to the composer bar's pickers (canvas is read-mostly at that tier).
 - **Haptics**: none — PWA scope, no reliable web haptics API; feedback is visual + instant.
 
-**References**: SPEC §4.2, §4.4, invariants 1–2 · STYLE_GUIDE §7 (touch, responsiveness), §8 · issues 005 (badge), 006 (undo batching)
+**References**: SPEC §4.2, §4.4, invariants 1–2 · SITEMAP §4 (`c` global key, Esc order) · STYLE_GUIDE §7 (touch, responsiveness), §8 · issues 005 (badge), 006 (undo batching)
 
 ## Test-first plan
 

@@ -28,7 +28,7 @@ As a designer I can create contexts in the register table and bind one parameter
 - **Content adaptability**: on narrow containers the grid scrolls horizontally *inside* the panel (frozen symbol column stays); the page never scrolls sideways.
 - **Component contract**: EditableGrid exposes cell renderers (text, combobox, mono) and emits commands — zero register-specific logic inside (reuse proven in 013/014).
 
-**References**: SPEC §3 (bindings), §4.3, invariants 1–2 · STYLE_GUIDE §3, §6, §10 · TECH_STACK §3 · ADR-0004
+**References**: SPEC §3 (bindings), §4.3, invariants 1–2 · SITEMAP §2 (Design surface), §4 (grid must not shadow global keys) · STYLE_GUIDE §3, §6, §10 · TECH_STACK §3 · ADR-0004
 
 ## Test-first plan
 

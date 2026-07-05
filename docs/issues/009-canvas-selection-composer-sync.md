@@ -25,7 +25,7 @@ As a designer I click a context on the canvas and see its n colored spokes, its 
 - **A11y**: each node is a button named by its content: "α — Comfort, Users, Engagement, draft". Selection changes announce via the same polite live region as undo.
 - **Sync rule**: selecting in either projection scrolls the other to reveal (register scrolls row into view; canvas selection never pans the page).
 
-**References**: SPEC §4.2–4.4, invariant 6 · STYLE_GUIDE §2.2, §7, §8, §10 · ADR-0001
+**References**: SPEC §4.2–4.4, invariant 6 · SITEMAP §2 (Design surface + composer slot), §4 (Esc order, globals not shadowed) · STYLE_GUIDE §2.2, §7, §8, §10 · ADR-0001
 
 ## Test-first plan
 

@@ -23,7 +23,7 @@ As a designer I record the system's purpose and its ranked value propositions in
 - **EditableGrid reuse is the point**: this slice must add *zero* grid logic — only column defs and the rank cell renderer. Any temptation to fork the grid is a design failure escalated in review.
 - **Microcopy**: header reads "1st Tier · Foundation" mirroring the source document's tier naming.
 
-**References**: SPEC §4.6 · STYLE_GUIDE §3 (degree notation), §6 · issue 004 (EditableGrid contract)
+**References**: SPEC §4.6 · SITEMAP §1 (`/foundation` route), §2 (context bar hidden on Foundation) · STYLE_GUIDE §3 (degree notation), §6 · issue 004 (EditableGrid contract)
 
 ## Test-first plan
 

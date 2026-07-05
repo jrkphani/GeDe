@@ -22,7 +22,7 @@ As a designer I can change my mind about a canvas's dimensions after contexts ex
 - **Error prevention**: the impact preview is computed by the same pure function the test suite uses — the numbers in the popover are the tested numbers, not a parallel estimate.
 - **Microcopy**: verbs first, numbers mono: "Remove *Process*? Deletes 7 bindings." Never "Are you sure?".
 
-**References**: SPEC invariant 4 · STYLE_GUIDE §2.2 (danger/warning), §4 (popover), §9 · issues 004 (draft signifiers), 006 (undo)
+**References**: SPEC invariant 4 · SITEMAP §2 (status-bar narration, context-bar draft count) · STYLE_GUIDE §2.2 (danger/warning), §4 (popover), §9 · issues 004 (draft signifiers), 006 (undo)
 
 ## Test-first plan
 

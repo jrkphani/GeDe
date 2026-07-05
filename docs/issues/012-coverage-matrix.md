@@ -26,7 +26,7 @@ As a designer I see the whole tuple space (∏ mᵢ) of the current canvas — w
 - **Empty/degenerate states**: a dimension with no parameters shows "Add parameters to *Stake* to plot coverage" linking to the manager; a filtered-to-zero view says which filter caused it.
 - **Performance**: virtualized beyond the viewport; ∏ mᵢ ≈ 10,000 target with no scroll jank (budget test); stat recomputes in the same frame as any mutation.
 
-**References**: SPEC §4.5, invariant 2 · STYLE_GUIDE §2.1 (grid pitch), §6, §10 · TECH_STACK T2 (virtualization) · issue 010 (compose handoff)
+**References**: SPEC §4.5, invariant 2 · SITEMAP §1 (`?view=coverage`), §2 (view toggle + stat in context bar), §4 (`v` key) · STYLE_GUIDE §2.1 (grid pitch), §6, §10 · TECH_STACK T2 (virtualization) · issue 010 (compose handoff)
 
 ## Test-first plan
 

@@ -25,7 +25,7 @@ As a designer I build nested architecture tables (Value / Stakeholders / Process
 - **Delete-with-link resolution**: deleting a linked entry surfaces an anchored popover with the two typed outcomes ("Keep parameter as unlinked copy" / "Delete parameter — unbinds 2 contexts"), never a silent cascade.
 - **Rename propagation feedback**: the status line narrates "Renamed *Users* → 1 parameter updated".
 
-**References**: SPEC §4.6, invariant 7 · STYLE_GUIDE §5, §6, §9 · issues 004 (grid), 007 (impact-preview pattern)
+**References**: SPEC §4.6, invariant 7 · SITEMAP §1 (`/architecture` route), §2 (context bar: table quick-jump, "Add table") · STYLE_GUIDE §5, §6, §9 · issues 004 (grid), 007 (impact-preview pattern)
 
 ## Test-first plan
 

@@ -23,7 +23,7 @@ As a designer I export a whole project to one JSON file and import it elsewhere,
 - **Trust surface**: this is the v1 backup story (ADR-0006) — the projects list footer quietly notes "Projects live in this browser. Export to back up." on first visit (dismissable, remembered).
 - **Offline**: both directions are fully offline — worth asserting in the e2e since it proves the PWA claim end to end.
 
-**References**: SPEC §4.7 · STYLE_GUIDE §2.2 (wash), §9 · TECH_STACK §2 (PGlite), §5 · ADR-0006
+**References**: SPEC §4.7 · SITEMAP §2 (project menu owns Export/Import; status bar owns the backup note) · STYLE_GUIDE §2.2 (wash), §9 · TECH_STACK §2 (PGlite), §5 · ADR-0006
 
 ## Test-first plan
 

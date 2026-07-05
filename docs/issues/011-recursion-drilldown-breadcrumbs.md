@@ -25,7 +25,7 @@ As a designer I open α and get its child canvas: α's n bound parameters become
 - **Wayfinding**: child contexts show lineage in their register symbol column (α2, not 2); the canvas header names the parent tuple so "where am I" is always answerable.
 - **Empty child canvas**: standard empty state plus one lineage line: "Refining {Comfort} {Users} {Engagement}".
 
-**References**: SPEC §1, §4.1, invariant 3 · STYLE_GUIDE §7, §8 (drill-down exception) · ADR-0002 · issues 002–003 (reused managers)
+**References**: SPEC §1, §4.1, invariant 3 · SITEMAP §1 (depth segments in URL), §2–3 (breadcrumbs in context bar, overflow rules) · STYLE_GUIDE §7, §8 (drill-down exception) · ADR-0002 · issues 002–003 (reused managers)
 
 ## Test-first plan
 

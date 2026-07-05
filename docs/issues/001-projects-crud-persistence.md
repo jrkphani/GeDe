@@ -25,7 +25,7 @@ As a designer I can create a named project, see it in the projects list, open it
 - **Focus & keyboard**: list is arrow-navigable; Enter opens; F2 or click renames in place. Tab order: wordmark → list → (nothing else exists yet).
 - **Touch**: rows are 44px minimum targets.
 
-**References**: SPEC §3 (schema), §4.1 · STYLE_GUIDE §2.1 (panels), §6 (grammar), §9 (voice) · TECH_STACK §2
+**References**: SPEC §3 (schema), §4.1 · SITEMAP §1 (`/` route), §2 (app bar on projects list) · STYLE_GUIDE §2.1 (panels), §6 (grammar), §9 (voice) · TECH_STACK §2
 
 ## Test-first plan
 
