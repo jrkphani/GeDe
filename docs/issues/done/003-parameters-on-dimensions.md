@@ -1,6 +1,6 @@
 # 003: Parameters on a dimension
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: 002
 

@@ -6,6 +6,7 @@ import { useState } from 'react'
 import type { DimensionRow } from '../db/mutations'
 import { useDimensionsStore } from '../store/dimensions'
 import { DIMENSION_PALETTE } from '../theme/palette'
+import { ParameterList } from './ParameterList'
 
 const FLOOR_TOOLTIP = 'A canvas needs at least 2 dimensions'
 
@@ -68,73 +69,78 @@ function DimensionItem({
     <div
       ref={setNodeRef}
       style={{ transform: CSS.Transform.toString(transform), transition }}
-      className="dim-row"
-      data-color={dimension.color}
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.altKey && e.key === 'ArrowUp') {
-          e.preventDefault()
-          void reorder(dimension.id, index - 1)
-        }
-        if (e.altKey && e.key === 'ArrowDown') {
-          e.preventDefault()
-          void reorder(dimension.id, index + 1)
-        }
-      }}
+      className="dim-section"
     >
-      <button
-        className="drag-handle"
-        aria-label={`Reorder ${dimension.name}`}
-        {...attributes}
-        {...listeners}
+      <div
+        className="dim-row"
+        data-color={dimension.color}
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.altKey && e.key === 'ArrowUp') {
+            e.preventDefault()
+            void reorder(dimension.id, index - 1)
+          }
+          if (e.altKey && e.key === 'ArrowDown') {
+            e.preventDefault()
+            void reorder(dimension.id, index + 1)
+          }
+        }}
       >
-        ⋮⋮
-      </button>
-      <button
-        className="swatch"
-        style={{ background: dimension.color }}
-        aria-label={`Color of ${dimension.name}`}
-        onClick={() => setPicking(!picking)}
-      />
-      {editing ? (
-        <input
-          className="inplace-input"
-          value={draft}
-          autoFocus
-          onFocus={(e) => e.target.select()}
-          onChange={(e) => setDraft(e.target.value)}
-          onBlur={() => setEditing(null)}
-          onKeyDown={(e) => {
-            e.stopPropagation()
-            if (e.key === 'Enter') {
-              const next = draft.trim()
-              if (next && next !== dimension.name) void rename(dimension.id, next)
-              setEditing(null)
-            }
-            if (e.key === 'Escape') setEditing(null)
-          }}
-        />
-      ) : (
-        <span
-          className="dim-row__name"
-          onClick={() => {
-            setDraft(dimension.name)
-            setEditing(dimension.id)
-          }}
+        <button
+          className="drag-handle"
+          aria-label={`Reorder ${dimension.name}`}
+          {...attributes}
+          {...listeners}
         >
-          {dimension.name}
-        </span>
-      )}
-      <button
-        className="row-action"
-        aria-label={`Remove ${dimension.name}`}
-        disabled={!canRemove}
-        title={canRemove ? undefined : FLOOR_TOOLTIP}
-        onClick={() => void remove(dimension.id)}
-      >
-        Remove
-      </button>
-      {picking && <SwatchPicker dimension={dimension} onDone={() => setPicking(false)} />}
+          ⋮⋮
+        </button>
+        <button
+          className="swatch"
+          style={{ background: dimension.color }}
+          aria-label={`Color of ${dimension.name}`}
+          onClick={() => setPicking(!picking)}
+        />
+        {editing ? (
+          <input
+            className="inplace-input dim-row__name--head"
+            value={draft}
+            autoFocus
+            onFocus={(e) => e.target.select()}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={() => setEditing(null)}
+            onKeyDown={(e) => {
+              e.stopPropagation()
+              if (e.key === 'Enter') {
+                const next = draft.trim()
+                if (next && next !== dimension.name) void rename(dimension.id, next)
+                setEditing(null)
+              }
+              if (e.key === 'Escape') setEditing(null)
+            }}
+          />
+        ) : (
+          <span
+            className="dim-row__name dim-row__name--head"
+            onClick={() => {
+              setDraft(dimension.name)
+              setEditing(dimension.id)
+            }}
+          >
+            {dimension.name}
+          </span>
+        )}
+        <button
+          className="row-action"
+          aria-label={`Remove ${dimension.name}`}
+          disabled={!canRemove}
+          title={canRemove ? undefined : FLOOR_TOOLTIP}
+          onClick={() => void remove(dimension.id)}
+        >
+          Remove
+        </button>
+        {picking && <SwatchPicker dimension={dimension} onDone={() => setPicking(false)} />}
+      </div>
+      <ParameterList dimensionId={dimension.id} />
     </div>
   )
 }

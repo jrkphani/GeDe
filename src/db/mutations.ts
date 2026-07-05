@@ -1,7 +1,7 @@
 import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { uuidv7 } from 'uuidv7'
 import type { Database } from './client'
-import { dimensions, projects } from './schema'
+import { dimensions, parameters, projects } from './schema'
 import { paletteColor } from '../theme/palette'
 
 // The mutation layer: every database write in the app flows through this module
@@ -180,4 +180,97 @@ export async function removeDimension(
     rows.filter((d) => d.id !== id),
   )
   return listDimensions(db, projectId)
+}
+
+// ── Parameters (issue 003) ────────────────────────────────────────────────────
+// m (parameter count) is unbounded and independent per dimension — no floor,
+// unlike dimensions' n = 2. parentParamId is accepted now but has no UI until
+// sub-parameters arrive (issue 011).
+
+export type ParameterRow = typeof parameters.$inferSelect
+
+function parameterScope(dimensionId: string) {
+  return and(eq(parameters.dimensionId, dimensionId), isNull(parameters.deletedAt))
+}
+
+export async function listParameters(db: Database, dimensionId: string): Promise<ParameterRow[]> {
+  return db.select().from(parameters).where(parameterScope(dimensionId)).orderBy(asc(parameters.sort))
+}
+
+export async function addParameter(
+  db: Database,
+  dimensionId: string,
+  name: string,
+  parentParamId: string | null = null,
+): Promise<ParameterRow> {
+  const existing = await listParameters(db, dimensionId)
+  const rows = await db
+    .insert(parameters)
+    .values({
+      id: uuidv7(),
+      dimensionId,
+      parentParamId,
+      name,
+      sort: existing.length,
+    })
+    .returning()
+  return rows[0] as ParameterRow
+}
+
+export async function renameParameter(
+  db: Database,
+  id: string,
+  name: string,
+): Promise<ParameterRow> {
+  const rows = await db
+    .update(parameters)
+    .set({ name, updatedAt: now() })
+    .where(eq(parameters.id, id))
+    .returning()
+  return rows[0] as ParameterRow
+}
+
+async function rewriteParameterSort(db: Database, ordered: ParameterRow[]): Promise<void> {
+  for (const [index, row] of ordered.entries()) {
+    if (row.sort !== index) {
+      await db
+        .update(parameters)
+        .set({ sort: index, updatedAt: now() })
+        .where(eq(parameters.id, row.id))
+    }
+  }
+}
+
+// One gesture = one call = one future undo step (command log lands in 006).
+export async function reorderParameter(
+  db: Database,
+  dimensionId: string,
+  id: string,
+  toIndex: number,
+): Promise<ParameterRow[]> {
+  const rows = await listParameters(db, dimensionId)
+  const from = rows.findIndex((p) => p.id === id)
+  if (from === -1) return rows
+  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
+  const [moved] = rows.splice(from, 1)
+  rows.splice(target, 0, moved as ParameterRow)
+  await rewriteParameterSort(db, rows)
+  return listParameters(db, dimensionId)
+}
+
+export async function removeParameter(
+  db: Database,
+  dimensionId: string,
+  id: string,
+): Promise<ParameterRow[]> {
+  const rows = await listParameters(db, dimensionId)
+  await db
+    .update(parameters)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(eq(parameters.id, id))
+  await rewriteParameterSort(
+    db,
+    rows.filter((p) => p.id !== id),
+  )
+  return listParameters(db, dimensionId)
 }

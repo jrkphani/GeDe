@@ -17,7 +17,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [001](done/001-projects-crud-persistence.md) ✅ | Projects CRUD + reload durability | M1 | 000 |
 | [016](done/016-app-shell-navigation.md) ✅ | App shell — routes, header, tabs, status bar | M1 | 001 |
 | [002](done/002-dimension-management.md) ✅ | Dimension management (n ≥ 2) | M1 | 001 |
-| [003](003-parameters-on-dimensions.md) | Parameters on dimensions | M1 | 002 |
+| [003](done/003-parameters-on-dimensions.md) ✅ | Parameters on dimensions | M1 | 002 |
 | [004](004-context-register-editable-grid.md) | Context register + EditableGrid core | M1 | 003, 016 |
 | [005](005-justification-documented-duplicates.md) | Justification, documented, duplicates | M1 | 004 |
 | [006](006-undo-redo-command-log.md) | Undo/redo command log | M1 | 004 |
