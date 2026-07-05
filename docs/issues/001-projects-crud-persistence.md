@@ -14,6 +14,19 @@ As a designer I can create a named project, see it in the projects list, open it
 - UI: projects list (name + description, in-place rename per style guide §4), open → empty project shell with tier tabs.
 - Persistence: PGlite on OPFS/IndexedDB in the real app; in-memory in tests.
 
+## Design brief
+
+- **Screen**: projects list — a single paper panel centered on the graph paper, most-recent first. Goal: from launch to inside a project in under 5 seconds.
+- **Empty state (first run)**: no dashboard chrome — the panel shows a phantom row with ghost text "Name your first project". Typing creates it; there is no "Create" button and no modal (STYLE_GUIDE principle 2).
+- **Row anatomy**: name (Inter 14), description (muted), last-opened (muted, right). Hover reveals rename/archive affordances; rows are quiet at rest.
+- **Destructive flow**: archive is instant + undoable via a quiet status line ("Archived *Tavalo* — Undo"), not a confirm dialog — undo replaces confirmation (snappy principle 5).
+- **Loading**: PGlite open is typically <100ms — no spinner under 150ms; beyond that, the wordmark pulses once. No skeletons for a local list.
+- **Error state**: storage unavailable (OPFS denied/private mode) renders a specific panel: what happened + "Export/import will still work from memory this session."
+- **Focus & keyboard**: list is arrow-navigable; Enter opens; F2 or click renames in place. Tab order: wordmark → list → (nothing else exists yet).
+- **Touch**: rows are 44px minimum targets.
+
+**References**: SPEC §3 (schema), §4.1 · STYLE_GUIDE §2.1 (panels), §6 (grammar), §9 (voice) · TECH_STACK §2
+
 ## Test-first plan
 
 1. Unit: `createProject` emits a row with UUIDv7 id + timestamps; `archiveProject` sets `deleted_at` and hides it from the list selector.

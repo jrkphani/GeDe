@@ -13,6 +13,17 @@ As a designer I can change my mind about a canvas's dimensions after contexts ex
 - Store: add-dimension marks affected contexts draft (their binding sets are now incomplete); remove-dimension cascades soft-deletes to its bindings; both emit one undoable command.
 - UI: confirmation with impact counts ("Removing Process deletes 7 bindings; 5 contexts become drafts"); register column appears/disappears; documented/coverage selectors recompute.
 
+## Design brief
+
+- **The one confirm in the app**: dimension *remove* is destructive at a distance, so it gets an anchored confirm popover (not a modal): impact counts in mono ("Deletes **7** bindings · **5** contexts become drafts"), danger-colored confirm, Esc/click-away cancels. Add never confirms — it destroys nothing.
+- **After add**: no dialog; the register shows the new (empty) column immediately and the status line reports "5 contexts need a *Priority* binding". Demoted rows show their standard draft signifiers (dashed chip, hollow cells) — no new visual vocabulary.
+- **Wayfinding to repair**: the new column's empty cells are the affordance; clicking the status line selects the first draft. A count chip on the canvas header ("5 drafts") persists until re-binding is done.
+- **Undo prominence**: both operations narrate in the status line with "Undo" inline — a full round-trip is one keystroke, which is why a heavier confirmation is unnecessary.
+- **Error prevention**: the impact preview is computed by the same pure function the test suite uses — the numbers in the popover are the tested numbers, not a parallel estimate.
+- **Microcopy**: verbs first, numbers mono: "Remove *Process*? Deletes 7 bindings." Never "Are you sure?".
+
+**References**: SPEC invariant 4 · STYLE_GUIDE §2.2 (danger/warning), §4 (popover), §9 · issues 004 (draft signifiers), 006 (undo)
+
 ## Test-first plan
 
 1. Unit: add dimension → every previously complete context's completeness flips to draft; documented count drops accordingly.

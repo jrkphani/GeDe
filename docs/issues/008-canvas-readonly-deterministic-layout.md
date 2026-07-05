@@ -14,6 +14,18 @@ As a designer I see my register as a circle: n arcs, parameter dots, context nod
 - SVG renderer: `<Canvas>`, `<DimensionArc>`, `<ParameterDot>`, `<ContextNode>`; `viewBox` scaling; label tiers per STYLE_GUIDE § Canvas responsiveness (container queries).
 - Read-only: no selection, no editing (slice 009/010).
 
+## Design brief
+
+- **Composition**: the circle sits directly on the graph-paper ground (no panel) — a drawing on drafting paper. Arcs 6px, butt caps, gaps between dimensions; parameter dots on the arc; labels outside in muted ink.
+- **Node anatomy**: context nodes are ink circles with the mono symbol; drafts get a dashed ring; contexts with children show a small mono count. Everything readable at 40% dim (the unselected state that arrives in 009).
+- **Responsiveness**: the three container-width tiers from STYLE_GUIDE § Canvas responsiveness govern labels; the circle always renders 1:1, centered on the grid; the square viewport is `min(width, available height)`.
+- **Empty state**: dimmed arcs at full geometry with "Bind your first context" centered — the structure is visible before any data exists, teaching the shape of the tool.
+- **Degenerate rendering**: a dimension with zero parameters draws its arc empty (no dots) with the label; nothing collapses or NaNs.
+- **Performance**: layout is memoized per tree revision; a 100-context canvas renders < 16ms after layout (budget asserted in a perf test).
+- **No interaction this slice** — read-only. Hover/selection vocabulary arrives in 009, which keeps this slice's visual snapshots stable.
+
+**References**: SPEC §4.2, invariant 5 · STYLE_GUIDE §2.1, §7 · TECH_STACK §4 · ADR-0005
+
 ## Test-first plan
 
 1. Unit: layout snapshot tests at n = 2, 3, 4 with fixed fixtures — byte-identical geometry across runs and Node versions.

@@ -2,7 +2,7 @@
 
 - **Status**: OPEN
 - **Milestone**: M1
-- **Blocked by**: 003
+- **Blocked by**: 003, 016
 
 ## Slice
 
@@ -15,6 +15,20 @@ As a designer I can create contexts in the register table and bind one parameter
 - UI: register with dynamic columns (Symbol · one per dimension · Justification · Children), phantom row, text cells (in-place input) and **parameter combobox cells** (type-ahead constrained to the column's dimension).
 - Keyboard grammar: click/Enter edits; Enter commits + moves down; Tab/Shift-Tab traverse; Esc reverts; arrows navigate cells.
 - Out of scope: justification semantics (005), canvas (008+), children column populated (011).
+
+## Design brief
+
+- **Surface**: the register is a paper panel on the graph paper; 40px rows, hairline separators, frozen symbol column (the only vertical rule). Column heads 11px uppercase muted.
+- **Hierarchy**: symbol chips (JetBrains Mono, square, ink-on-paper inverted) anchor each row; parameter cells carry a 8px square swatch in the dimension's color before the value — color enters the table only as data.
+- **Draft signifier**: incomplete contexts get a dashed-border symbol chip and their empty parameter cells show a hollow placeholder (`—`), muted. No red — a draft is a valid state, not an error (SPEC invariant 1).
+- **Combobox cell**: opens on click/Enter/typing; popover (0 radius, shadow token) lists the column's dimension parameters with swatches; type-ahead filters; no free text — invalid input is impossible rather than validated (error prevention by construction).
+- **Empty state**: phantom row with ghost text "Type to create your first context — it becomes α".
+- **Feedback**: commits are instant (≤100ms, no animation); the symbol chip is assigned the moment the row materializes so identity is visible immediately.
+- **Focus & keyboard**: full grammar per STYLE_GUIDE §6 — arrows navigate, Enter edits/commits-down, Tab traverses, Esc reverts; combobox traps focus and returns it to the cell. The e2e test runs mouse-free.
+- **Content adaptability**: on narrow containers the grid scrolls horizontally *inside* the panel (frozen symbol column stays); the page never scrolls sideways.
+- **Component contract**: EditableGrid exposes cell renderers (text, combobox, mono) and emits commands — zero register-specific logic inside (reuse proven in 013/014).
+
+**References**: SPEC §3 (bindings), §4.3, invariants 1–2 · STYLE_GUIDE §3, §6, §10 · TECH_STACK §3 · ADR-0004
 
 ## Test-first plan
 

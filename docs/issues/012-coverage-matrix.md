@@ -16,6 +16,18 @@ As a designer I see the whole tuple space (∏ mᵢ) of the current canvas — w
 - Live stat: `12 / 45 tuples documented`, recomputed on any dimension/parameter/context change.
 - Informational only — nothing gates on coverage (SPEC invariant 2).
 
+## Design brief
+
+- **Surface**: a paper panel; cells are 24px squares aligned to the graph-paper pitch — the matrix literally reads as plotted graph paper. Documented cells: mono symbol on ink fill; unexplored: hairline hollow square. Shape + fill carry state (colorblind-safe); dimension colors appear only in the axis headers' swatches.
+- **Projection controls**: two segmented pickers ("Rows: Value · Columns: Process"); remaining dimensions render as filter chips with mono parameter values; swapping axes preserves filters.
+- **Hierarchy**: the coverage stat leads the header in mono ("12 / 45 documented"); the grid is the body; controls stay quiet.
+- **Interaction**: hover/focus previews the full tuple in a tooltip; Enter/click on a hollow cell jumps to the canvas in compose mode, pre-filled (gap → composer); on a documented cell it selects that context (stacked symbols cycle on repeated Enter).
+- **Keyboard**: the grid is a 2-D roving-tabindex widget — arrows move, Home/End jump, typing a symbol jumps to that context's cell.
+- **Empty/degenerate states**: a dimension with no parameters shows "Add parameters to *Stake* to plot coverage" linking to the manager; a filtered-to-zero view says which filter caused it.
+- **Performance**: virtualized beyond the viewport; ∏ mᵢ ≈ 10,000 target with no scroll jank (budget test); stat recomputes in the same frame as any mutation.
+
+**References**: SPEC §4.5, invariant 2 · STYLE_GUIDE §2.1 (grid pitch), §6, §10 · TECH_STACK T2 (virtualization) · issue 010 (compose handoff)
+
 ## Test-first plan
 
 1. Property test: random canvases (2 ≤ n ≤ 5, 1 ≤ mᵢ ≤ 6) — every tuple appears exactly once across the projection's pages; documented/unexplored partition matches a brute-force oracle.

@@ -11,6 +11,7 @@ Tables are the record (Numbers-style, edited in place); the circle canvas is the
 | [docs/SPEC.md](docs/SPEC.md) | Product spec: domain model, invariants, application behavior, milestones |
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | Stack choices, cost analysis, decision log |
 | [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md) | Visual language, table grammar, canvas responsiveness |
+| [docs/SITEMAP.md](docs/SITEMAP.md) | Routes, shell anatomy (header/status bar), navigation styles, keyboard map |
 | [docs/adr/](docs/adr/) | Architecture decision records |
 | [docs/issues/](docs/issues/) | Lightweight issue tracker (one file per issue) |
 

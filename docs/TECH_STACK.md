@@ -118,20 +118,60 @@ The n-arc circle canvas (SPEC §4.2) is a bespoke visualization with a hard inva
 
 ---
 
-## 6. AWS deployment picture
+## 6. Deployment architecture
+
+### 6.1 Environments
+
+| Env | What | Where |
+| --- | --- | --- |
+| Local | Vite dev server; PGlite in-memory or OPFS | developer machine |
+| Preview | Per-PR static build, throwaway URL | S3 prefix `/preview/<pr>/` behind the same CloudFront (optional until collaborators exist) |
+| Production | `main` → static PWA | S3 + CloudFront |
+
+### 6.2 v1 — static PWA (now)
 
 ```text
-v1 (now)                                    v2 (collaboration)
-────────────────────────                    ─────────────────────────────────────
-S3 bucket (static build)                    same static frontend
-  └─ CloudFront (+ ACM cert)                + Lightsail 2GB instance:
-~$0–1 / month                                   Postgres 17
-Database: PGlite in-browser ($0)                Electric sync OR Supabase (self-hosted)
-                                                auth service (better-auth or Supabase)
-                                            ~$10–15 / month all-in
+GitHub (main) ──► GitHub Actions
+                    1. npm run verify   (tsc · eslint · vitest · playwright)
+                    2. vite build
+                    3. aws s3 sync ./dist  (OIDC role — no long-lived keys)
+                    4. cloudfront create-invalidation (index.html, sw.js only)
+                            │
+              S3 (private bucket, Origin Access Control)
+                            │
+              CloudFront  (ACM cert us-east-1 · HTTP/3 · Brotli)
+                            │
+              Browser: PWA shell + service worker + PGlite (OPFS)
 ```
 
-Route 53 (~$0.50/zone) if a custom domain is wanted. No other AWS services required. Everything on the server side is open source and portable off AWS unchanged.
+- **Cache policy**: hashed assets `Cache-Control: immutable, max-age=1y`; `index.html` and `sw.js` `no-cache`. Deploys are atomic from the user's view — old assets stay valid until the new shell references new hashes.
+- **Service-worker update UX**: `registerType: 'prompt'` — a quiet status-line note "New version — Reload" (never auto-reload; an in-place editor must not lose an editing session).
+- **Schema migrations at the edge**: the app runs pending drizzle migrations against local PGlite on boot, *before* the store hydrates; a failed migration surfaces the specific error and offers JSON export of the raw rows (never silent data loss).
+- **DNS**: Route 53 (~$0.50/zone) + ACM (free) when a custom domain lands.
+- Cost: **~$0–1/month**.
+
+### 6.3 v2 — collaboration (later)
+
+```text
+same CloudFront/S3 frontend
+        │  api.<domain> (Route 53)
+Lightsail 2GB ($10/mo · static IP · Docker Compose):
+   caddy        — TLS termination, reverse proxy
+   postgres:17  — the database (same migrations as v1)
+   sync         — Electric OR self-hosted Supabase stack (T6, decided at v2 kickoff)
+   auth         — better-auth or Supabase auth
+Backups: nightly pg_dump → S3 (lifecycle → Glacier, 90d) + weekly Lightsail snapshot
+```
+
+- All server components are open source and portable off AWS unchanged (Compose file is the deployment contract).
+- v2 cost: **~$10–15/month all-in**.
+
+### 6.4 CI/CD rules
+
+- GitHub Actions is the only deploy path; humans never `aws s3 sync` by hand.
+- AWS access via **OIDC federation** (short-lived role assumption); no access keys in repo secrets.
+- A deploy is blocked unless `npm run verify` is green — the same gate as local (issue 000).
+- Deployment code lives in `.github/workflows/` and `deploy/`; changes to it reference this section.
 
 ---
 
@@ -168,3 +208,4 @@ Exact pins land in `package.json` at M1; this table records the intended major l
 | T5 | Lightsail Postgres for v2 | RDS, Aurora Serverless | Backup/patching toil > cost delta, or multi-AZ needed |
 | T6 | Electric vs Supabase for sync | — | Deliberately deferred to v2 kickoff; both satisfy "row deltas, LWW, no positions on the wire" |
 | T7 | Relational schema over graph/NoSQL DB | Neo4j (GPLv3, server-only, no $0 v1), Neptune (proprietary, ~$70+/mo), MongoDB (SSPL), CouchDB (no multi-key constraints), Kùzu (development halted 2025) | Escape hatch without migration: Apache AGE extension adds openCypher inside Postgres if deep traversal queries ever appear |
+| T8 | GitHub Actions + OIDC as the only deploy path (§6.4) | Manual `s3 sync`, long-lived IAM keys, third-party CD | A build/deploy need Actions can't express (unlikely at this scale) |

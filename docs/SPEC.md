@@ -97,6 +97,8 @@ Notes:
 
 ### 4.1 Navigation shell
 
+> Authoritative shell detail — routes, header/status-bar anatomy, navigation styles, keyboard map — lives in **SITEMAP.md**; this section states the behavioral requirements.
+
 - **Projects list** → open project → tier tabs: `Foundation · Architecture · Design`.
 - All three tiers present as **table-based views mirroring the Numbers document**. Tiers 1–2 are tables only; the Design tab (Tier 3) shows the **context register table accompanied by the circle canvas** — side by side on wide screens, toggle/stacked on narrow ones. Neither is secondary: the table is the record, the canvas is its spatial companion (invariant 6 — same tree, two projections).
 - Drilling into a context pushes a breadcrumb (`Root ▸ α ▸ α2 ▸ …`) and scopes both table and canvas to that child canvas. Breadcrumbs are the primary depth navigation; browser back works.

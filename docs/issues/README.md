@@ -15,9 +15,10 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | --- | --- | --- | --- |
 | [000](000-walking-skeleton.md) | Walking skeleton & TDD harness | M1 | — |
 | [001](001-projects-crud-persistence.md) | Projects CRUD + reload durability | M1 | 000 |
+| [016](016-app-shell-navigation.md) | App shell — routes, header, tabs, status bar | M1 | 001 |
 | [002](002-dimension-management.md) | Dimension management (n ≥ 2) | M1 | 001 |
 | [003](003-parameters-on-dimensions.md) | Parameters on dimensions | M1 | 002 |
-| [004](004-context-register-editable-grid.md) | Context register + EditableGrid core | M1 | 003 |
+| [004](004-context-register-editable-grid.md) | Context register + EditableGrid core | M1 | 003, 016 |
 | [005](005-justification-documented-duplicates.md) | Justification, documented, duplicates | M1 | 004 |
 | [006](006-undo-redo-command-log.md) | Undo/redo command log | M1 | 004 |
 | [007](007-dimension-mutability-demotion.md) | Dimension mutability + demotion | M1 | 005, 006 |
@@ -26,10 +27,13 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [010](010-compose-bind-from-canvas.md) | Compose & bind from canvas | M2 | 009 |
 | [011](011-recursion-drilldown-breadcrumbs.md) | Recursion, drill-down, breadcrumbs | M3 | 010 |
 | [012](012-coverage-matrix.md) | Coverage matrix | M4 | 010 |
-| [013](013-tier1-foundation.md) | Tier 1 Foundation | M5 | 004 |
+| [013](013-tier1-foundation.md) | Tier 1 Foundation | M5 | 004, 016 |
 | [014](014-tier2-architecture-promote.md) | Tier 2 Architecture + promote | M5 | 013 |
 | [015](015-export-import-json.md) | Export/import JSON | M6 | 011, 014 |
+| [017](017-command-palette.md) | Command palette (⌘K) | M2 | 016, 004 |
 
-Parallelizable tracks after 004: canvas (008→010), tiers (013→014), and 005/006 can proceed independently.
+Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
+
+Every issue carries a **Design brief** (grounded in STYLE_GUIDE/SITEMAP tokens and patterns) and a **References** line pinning the SPEC/STYLE_GUIDE/SITEMAP/TECH_STACK/ADR sections it implements — deviation from a referenced section is a spec change to discuss, not an implementation choice.
 
 Statuses: `OPEN | IN PROGRESS | SHIPPED | ARCHIVED`. Issues graduate to GitHub Issues if/when collaboration warrants it.

@@ -15,6 +15,16 @@ The thinnest end-to-end path: app boots, PGlite opens, migration 0000 applies, o
 - Test harness: Vitest + Testing Library (unit/component), Playwright (e2e), each with npm scripts. Unit tests get a fresh **in-memory PGlite** with migrations applied per suite.
 - vite-plugin-pwa installed but minimal (manifest only).
 
+## Design brief
+
+- **Tokens are code from day one**: all STYLE_GUIDE §2–4 values ship as CSS variables (`--paper`, `--grid-*`, `--ink*`, `--accent*`, spacing scale) under `:root` and `[data-theme="dark"]`. No component ever hard-codes a color.
+- **Ground**: the shell renders the graph-paper background (CSS gradients, 24/96px pitch) with the wordmark — the drafting-table identity is visible in the very first build.
+- **Fonts**: Inter + JetBrains Mono self-hosted woff2, Latin+Greek subset, `font-display: swap`; no CDN requests (offline PWA).
+- **Global behaviors**: `prefers-reduced-motion` kill-switch for all transitions; `:focus-visible` outline token; theme switch stub (`data-theme`) even though the toggle UI comes later.
+- **Microcopy**: none yet — the shell is silent except the wordmark.
+
+**References**: TECH_STACK §2 (PGlite/Drizzle), §5, §7 (pins) · STYLE_GUIDE §2 (tokens), §3 (fonts), §8 (reduced motion) · SPEC §5
+
 ## Test-first plan
 
 1. `db.test.ts` — migration 0000 applies on a fresh PGlite; inserting and selecting a project row round-trips. *(red until schema exists)*

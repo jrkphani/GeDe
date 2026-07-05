@@ -15,6 +15,18 @@ As a designer I create a context directly on the canvas: enter compose mode, cli
 - Duplicate-tuple badge appears live in compose mode (slice 005 logic).
 - Composer bar in edit mode hosts justification before/after completion.
 
+## Design brief
+
+- **Entering compose**: toolbar "New context" or the `c` key; a draft node (dashed ring, next symbol pre-assigned) appears at circle center; the composer bar switches to edit mode with the active dimension highlighted.
+- **Guided binding**: dimensions are prompted in sort order — the active dimension's arc labels render at full strength while others rest; clicking a dot (or type-ahead in the composer) binds and advances to the next unbound dimension. The node migrates toward its centroid after each bind (single 120ms ease-out).
+- **Bind/unbind affordance**: bound dots show a filled ring; clicking a bound dot unbinds (read mode clicks only ever select — mode gates mutation).
+- **Duplicate preview**: the `= β` badge appears live in the composer the moment the pending tuple matches an existing one — before commit, never blocking.
+- **Exit paths**: Esc leaves compose mode keeping the draft (drafts are legal); the status line offers "Discard draft α" as one undoable action. No confirmation dialogs.
+- **Touch**: dots rely on the ≥ 44px invisible hit circles; compose on < 400px containers falls back to the composer bar's pickers (canvas is read-mostly at that tier).
+- **Haptics**: none — PWA scope, no reliable web haptics API; feedback is visual + instant.
+
+**References**: SPEC §4.2, §4.4, invariants 1–2 · STYLE_GUIDE §7 (touch, responsiveness), §8 · issues 005 (badge), 006 (undo batching)
+
 ## Test-first plan
 
 1. Unit: compose-mode reducer — bind/unbind/re-bind transitions; completion event fires exactly when the nth dimension binds.

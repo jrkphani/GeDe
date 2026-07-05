@@ -143,5 +143,5 @@ UI copy is quiet, specific, and numerate: "12 / 45 tuples documented", "α2 need
 
 - Text ≥ 4.5:1; UI glyphs ≥ 3:1; dimension colors never the sole channel (dots pair with position + label; states pair fill with ring style).
 - Full keyboard operability is a per-issue acceptance criterion, not a polish pass (see issues 004/009/010).
-- Focus order follows the visual grammar: breadcrumb → toolbar → primary surface (register/canvas) → composer.
+- Focus order follows the shell bands (SITEMAP §2): app bar → context bar → primary surface (register/canvas) → composer → status bar.
 - Touch targets ≥ 44px everywhere, including canvas hit circles.

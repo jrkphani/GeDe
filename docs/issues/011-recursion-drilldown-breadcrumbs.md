@@ -16,6 +16,17 @@ As a designer I open α and get its child canvas: α's n bound parameters become
 - Breadcrumb bar (`Root ▸ α ▸ α2`); browser back/forward integration; both projections scoped to the current canvas.
 - Drill-down zoom transition (CSS, reduced-motion aware).
 
+## Design brief
+
+- **Drill-in**: double-click / Enter on a context zooms the canvas into the node (~200ms, the app's one choreographed transition; instant under reduced motion). The child canvas fades in on the same graph paper — same place, deeper scale.
+- **Breadcrumbs**: mono symbols in a hairline bar (`Root ▸ α ▸ α2`), each crumb clickable; browser back/forward mirror it exactly. The current canvas's dimension names render beside the trail as muted context.
+- **First-open seeding**: if seeded dimensions lack sub-parameters, the child canvas opens with the dimension manager popover already showing those dimensions and phantom rows ready — "α's canvas needs parameters. Its dimensions come from α's bindings." No blocking wizard; the designer can look around first.
+- **Stale parent binding**: a hairline banner (warning color, not danger) atop the child canvas: "α re-bound *Users* → *Buyers*. This canvas now refines *Buyers* — 3 sub-bindings were retired (Undo)." Resolution is informational + undo, not a decision dialog (the rule itself is defined in scope).
+- **Wayfinding**: child contexts show lineage in their register symbol column (α2, not 2); the canvas header names the parent tuple so "where am I" is always answerable.
+- **Empty child canvas**: standard empty state plus one lineage line: "Refining {Comfort} {Users} {Engagement}".
+
+**References**: SPEC §1, §4.1, invariant 3 · STYLE_GUIDE §7, §8 (drill-down exception) · ADR-0002 · issues 002–003 (reused managers)
+
 ## Test-first plan
 
 1. Unit: first drill-in creates exactly n child dimensions mapped to the parent's bindings, idempotent on re-open; parent re-bind after drill-in flags the child dimension as stale (decide + test the resolution rule: child dimension follows the new parameter, existing sub-bindings soft-deleted with warning).

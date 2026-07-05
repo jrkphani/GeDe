@@ -14,6 +14,16 @@ As a designer I can undo and redo anything — cell edits, reorders, deletes —
 - Batching: one user gesture = one undo step (e.g. a drag-reorder is one command, not one per row shifted).
 - Depth: bounded log (e.g. 200 steps), cleared on project switch.
 
+## Design brief
+
+- **Controls**: ⌘Z/⇧⌘Z (Ctrl on Windows) plus two toolbar icons (Lucide undo-2/redo-2, 16px) — disabled state at stack ends, tooltip shows the step name ("Undo: bind Users → α").
+- **Feedback**: a quiet status line (footer, 12px muted mono) narrates the last action for 3s: "Undid: bind Users → α". No toasts, nothing stacks, nothing to dismiss.
+- **A11y**: the status line is an `aria-live="polite"` region — screen readers hear what undo did, since the visual change may be anywhere on screen.
+- **Spatial continuity**: undoing a change on an entity that's off-screen scrolls/selects it (selection is the app's pointing device — reuse it to show *what* changed).
+- **State persistence**: the log is session-scoped and clears on project switch; this is stated in the tooltip on first disabled hover ("Undo history starts fresh each session").
+
+**References**: SPEC §4.7 (undo/redo) · STYLE_GUIDE §5 (icons), §9, §10 (live region) · TECH_STACK §5 (command log)
+
 ## Test-first plan
 
 1. Property test: apply a random sequence of N mutations (create/rename/bind/reorder/delete across all entities), undo N times → state deep-equals initial; redo N times → state deep-equals final. Run across seeds.

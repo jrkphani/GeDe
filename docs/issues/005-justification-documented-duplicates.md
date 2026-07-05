@@ -14,6 +14,17 @@ As a designer I record *why* a combination matters, and the app tells me when a 
 - Documented status: complete bindings **and** non-empty justification.
 - Duplicate detection via `tuple_hash`: creating/editing a context onto an existing tuple shows a non-blocking inline badge listing the existing context symbol(s) (STYLE_GUIDE §4 — muted badge, never a popup).
 
+## Design brief
+
+- **Justification cell**: in-place multiline — the row grows to fit while editing (the one sanctioned row-height exception); display mode truncates to 2 lines with full text on focus/hover title.
+- **Documented signifier**: a filled square dot (ink) in a slim status column; draft = hollow, complete-but-unjustified = half-filled. Shape + fill carry the state, never color alone (A11y baseline).
+- **Duplicate badge**: muted mono badge `= β` at the row end — quiet, non-blocking (SPEC invariant 2). Focus/hover reveals a tooltip "Same tuple as β"; Enter/click on the badge selects β (navigation, not dismissal — the badge never has an ✕).
+- **Error prevention as information**: while a combobox pick would complete a duplicate tuple, the badge previews *live* in the open popover row, so the designer knows before committing — and may commit anyway.
+- **Microcopy**: "Same tuple as β" / "Same tuple as β, θ" — no warnings-speak ("duplicate!", "conflict") because duplicates are legal.
+- **Feedback**: documented dot fills the instant justification commits; the coverage stat (once 012 exists) increments in the same frame.
+
+**References**: SPEC §2 (Statement), §4.4, invariant 2 · STYLE_GUIDE §9, §10 · issue 004 (grid cells)
+
 ## Test-first plan
 
 1. Unit: documented selector — complete + justified = documented; complete + empty justification = not documented.
