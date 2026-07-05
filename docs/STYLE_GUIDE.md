@@ -145,3 +145,37 @@ UI copy is quiet, specific, and numerate: "12 / 45 tuples documented", "α2 need
 - Full keyboard operability is a per-issue acceptance criterion, not a polish pass (see issues 004/009/010).
 - Focus order follows the shell bands (SITEMAP §2): app bar → context bar → primary surface (register/canvas) → composer → status bar.
 - Touch targets ≥ 44px everywhere, including canvas hit circles.
+
+## 11. Implementation — tokens, Tailwind bridge, enforcement
+
+Tokens live in `src/styles/tokens.css` (`:root` + `[data-theme='dark']`) and are the **single source of truth**. Components never hardcode a color — `stylelint` fails the build on any `color`/`background`/`fill`/`stroke` that isn't a `var(--…)`.
+
+**Type scale (§3) tokens** (added issue 020; use these, don't hardcode a `font-size`):
+
+| Role | Token | Size / line |
+| --- | --- | --- |
+| Page title | `--text-title` / `--leading-title` | 22 / 28 |
+| Section / tier header | `--text-header` / `--leading-header` | 17 / 24 |
+| Body & cells | `--text-body` / `--leading-body` | 14 / 20 |
+| Symbol chips, tuples | `--text-mono` / `--leading-mono` | 13 / 20 |
+| Small labels, badges | `--text-label` / `--leading-label` | 12 / 16 |
+| Table column head | `--text-colhead` / `--leading-colhead` | 11 / 16 |
+
+(The 15px wordmark and the 40px app-bar line-height are deliberate chrome one-offs, not part of the scale.)
+
+**Tailwind v4 / shadcn bridge** (ADR-0007): `src/styles/theme-bridge.css` maps shadcn's semantic names onto GeDe tokens **one-directionally** — Tailwind reads from the tokens, never the reverse. Dark mode needs no dark values in the bridge; every alias resolves through a token that already flips under `[data-theme='dark']`.
+
+| shadcn / Tailwind | ← GeDe token |
+| --- | --- |
+| `--color-background` | `--paper` |
+| `--color-foreground` | `--ink` |
+| `--color-card` / `--color-popover` | `--panel` |
+| `--color-primary` | `--accent` |
+| `--color-accent` (hover surface) | `--accent-wash` |
+| `--color-muted-foreground` | `--ink-muted` |
+| `--color-border` / `--color-input` | `--hairline` |
+| `--color-ring` | `--accent-strong` |
+| `--color-destructive` | `--danger` |
+| `--radius` (all steps) | `0` (§4: everything chrome is square) |
+
+**Component usage** is lint-enforced: raw `<button>`/`<input>`/`<select>` and direct `@radix-ui`/`cmdk` imports are forbidden outside `src/components/ui/` — new UI composes the shared primitives (`Button`, `InlineEdit`, `PhantomInput`, `Popover`, `Command`, `Swatch`, `Input`).
