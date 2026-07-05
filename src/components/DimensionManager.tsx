@@ -7,6 +7,7 @@ import { useDimensionsStore } from '../store/dimensions'
 import { DIMENSION_PALETTE } from '../theme/palette'
 import { ParameterList } from './ParameterList'
 import { Button } from './ui/button'
+import { Input } from './ui/input'
 import { InlineEdit } from './ui/inline-editor'
 import { Popover, PopoverContent, PopoverTrigger, keepPopoverOpenWhileEditing } from './ui/popover'
 import { SwatchButton } from './ui/swatch'
@@ -29,7 +30,7 @@ function SwatchPicker({ dimension, onDone }: { dimension: DimensionRow; onDone: 
           }}
         />
       ))}
-      <input
+      <Input
         className="inplace-input palette-picker__hex"
         aria-label="Custom color"
         value={hex}
@@ -87,14 +88,15 @@ function DimensionItem({
           }
         }}
       >
-        <button
+        <Button
+          variant="bare"
           className="drag-handle"
           aria-label={`Reorder ${dimension.name}`}
           {...attributes}
           {...listeners}
         >
           ⋮⋮
-        </button>
+        </Button>
         <SwatchButton
           color={dimension.color}
           aria-label={`Color of ${dimension.name}`}

@@ -14,6 +14,9 @@ export const buttonVariants = cva('', {
   variants: {
     variant: {
       rowAction: 'row-action',
+      // No chrome of its own — for buttons that carry a bespoke class
+      // (e.g. the dnd drag handle) but must still be a real <button> primitive.
+      bare: '',
     },
   },
   defaultVariants: { variant: 'rowAction' },

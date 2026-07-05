@@ -75,4 +75,52 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // Issue 020: new UI flows through the shared primitive layer (src/components/ui).
+    // Raw HTML controls and third-party UI libs are wrapped once in ui/, so they
+    // are forbidden elsewhere in components. Scoped OUT of ui/ (where the wrapping
+    // lives) and EditableGrid (the shared grid primitive that owns its own cells,
+    // like a shadcn DataTable). Repeats the db pattern so this block — which wins
+    // for these files — doesn't drop the layer-boundary rule.
+    files: ['src/components/**/*.{ts,tsx}'],
+    ignores: [
+      'src/components/ui/**',
+      'src/components/**/*.test.{ts,tsx}',
+      'src/components/EditableGrid.tsx',
+    ],
+    rules: {
+      '@typescript-eslint/no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/db/**'],
+              message: 'Components must act through the store (src/store), not the db layer.',
+              allowTypeImports: true,
+            },
+            {
+              group: ['@radix-ui/*', 'cmdk'],
+              message:
+                'Wrap third-party UI primitives in src/components/ui and import from there, not directly.',
+            },
+          ],
+        },
+      ],
+      'no-restricted-syntax': [
+        'error',
+        {
+          selector: "JSXOpeningElement[name.name='button']",
+          message: 'Use <Button> from @/components/ui/button, not a raw <button>.',
+        },
+        {
+          selector: "JSXOpeningElement[name.name='input']",
+          message: 'Use <Input>/<InlineEdit>/<PhantomInput> from @/components/ui, not a raw <input>.',
+        },
+        {
+          selector: "JSXOpeningElement[name.name='select']",
+          message: 'Build a combobox from ui/command + ui/popover, not a raw <select>.',
+        },
+      ],
+    },
+  },
 )
