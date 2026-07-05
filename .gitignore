@@ -1,7 +1,12 @@
 # Dependencies / build
 node_modules/
 dist/
+dev-dist/
 coverage/
+
+# Test artifacts
+test-results/
+playwright-report/
 
 # Env & local config
 .env

@@ -1,0 +1,30 @@
+/// <reference types="vitest/config" />
+import { defineConfig } from 'vite'
+import react from '@vitejs/plugin-react'
+import { VitePWA } from 'vite-plugin-pwa'
+
+// PGlite ships its own WASM assets; pre-bundling breaks their resolution.
+export default defineConfig({
+  plugins: [
+    react(),
+    VitePWA({
+      // Manifest only for now (issue 000) — no SW registration until the
+      // update-UX from TECH_STACK §6.2 lands with the shell.
+      injectRegister: false,
+      manifest: {
+        name: 'GeDe',
+        short_name: 'GeDe',
+        description: 'Generative design process tool',
+        theme_color: '#FBFAF7',
+        background_color: '#FBFAF7',
+        display: 'standalone',
+        icons: [],
+      },
+    }),
+  ],
+  optimizeDeps: { exclude: ['@electric-sql/pglite'] },
+  test: {
+    include: ['src/**/*.test.{ts,tsx}'],
+    environment: 'node',
+  },
+})

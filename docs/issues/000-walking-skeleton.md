@@ -1,6 +1,6 @@
 # 000: Walking skeleton & TDD harness
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: —
 

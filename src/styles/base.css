@@ -1,0 +1,51 @@
+/* Base shell styles — graph-paper ground (STYLE_GUIDE §2.1), focus (§4), motion kill-switch (§8). */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-ui);
+  color: var(--ink);
+  background-color: var(--paper);
+  background-image:
+    linear-gradient(to right, var(--grid-major) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-major) 1px, transparent 1px),
+    linear-gradient(to right, var(--grid-minor) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--grid-minor) 1px, transparent 1px);
+  background-size:
+    var(--grid-pitch-major) var(--grid-pitch-major),
+    var(--grid-pitch-major) var(--grid-pitch-major),
+    var(--grid-pitch) var(--grid-pitch),
+    var(--grid-pitch) var(--grid-pitch);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition: none !important;
+    animation: none !important;
+  }
+}
+
+.wordmark {
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  padding: var(--space-5);
+}

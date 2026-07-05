@@ -1,0 +1,68 @@
+/* GeDe design tokens — STYLE_GUIDE.md §2–§4. Components never hard-code these values. */
+
+:root {
+  /* Ground & surfaces (graph paper) — §2.1 */
+  --paper: #fbfaf7;
+  --grid-minor: #eceae3;
+  --grid-major: #e0ddd2;
+  --panel: #ffffff;
+  --hairline: #e3e1d8;
+
+  /* Ink & chrome (forest green) — §2.2 */
+  --ink: #1a1a1a;
+  --ink-muted: #6b6961;
+  --accent: #2d6a4f;
+  --accent-strong: #23543f;
+  --accent-wash: rgba(45, 106, 79, 0.1);
+  --danger: #b3402e;
+  --warning: #9a6b00;
+
+  /* Dimension data palette seeds — §2.3 (assigned in sort order, no green slots) */
+  --dim-1: #6f5bd6;
+  --dim-2: #0e8a93;
+  --dim-3: #d9542b;
+  --dim-4: #c0448f;
+  --dim-5: #a87f1a;
+  --dim-6: #3d6bd6;
+  --dim-7: #c75d73;
+  --dim-8: #647e93;
+
+  /* Typography — §3 */
+  --font-ui: 'Inter Variable', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono Variable', ui-monospace, monospace;
+
+  /* Space & shape — §4 */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+  --space-8: 64px;
+  --grid-pitch: 24px;
+  --grid-pitch-major: 96px;
+  --radius: 0;
+  --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.1);
+
+  /* Motion — §8 */
+  --motion-fast: 100ms;
+  --motion-snappy: 140ms;
+  --motion-drilldown: 200ms;
+}
+
+[data-theme='dark'] {
+  --paper: #191918;
+  --grid-minor: #222221;
+  --grid-major: #2a2a28;
+  --panel: #1f1f1e;
+  --hairline: #2e2e2c;
+  --ink: #f2f1ed;
+  --ink-muted: #8f8d85;
+  --accent: #63a583;
+  --accent-strong: #7fb89a;
+  --accent-wash: rgba(99, 165, 131, 0.16);
+  --danger: #e06c55;
+  --warning: #d0a43c;
+  --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.45);
+}
