@@ -179,6 +179,97 @@ body {
   margin: var(--space-2);
 }
 
+/* Popover (Radix) — the app's single shadow token, zero radius. */
+.popover {
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popover);
+  padding: var(--space-2);
+  min-width: 280px;
+}
+
+/* Dimension manager — issue 002. Popover rows are denser than document tables. */
+.dim-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-1);
+  flex-wrap: wrap;
+}
+
+.dim-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.dim-row__name {
+  flex: 1;
+  cursor: text;
+}
+
+.dim-row .inplace-input {
+  min-height: 32px;
+}
+
+.dim-row .row-action,
+.dim-row .drag-handle {
+  visibility: hidden;
+}
+
+.dim-row:hover .row-action,
+.dim-row:hover .drag-handle,
+.dim-row:focus-within .row-action,
+.dim-row:focus-within .drag-handle {
+  visibility: visible;
+}
+
+.drag-handle {
+  background: transparent;
+  border: none;
+  color: var(--ink-muted);
+  cursor: grab;
+  padding: 0;
+  font-size: 11px;
+  letter-spacing: -2px;
+}
+
+.swatch {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: 0;
+  cursor: pointer;
+}
+
+.swatch[aria-pressed='true'] {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.palette-picker {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) 0 var(--space-2) var(--space-5);
+}
+
+.palette-picker__hex {
+  min-height: 0;
+  width: 80px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  flex: none;
+}
+
+.dim-manager__add {
+  margin-top: var(--space-2);
+}
+
 /* Responsive shell — SITEMAP §5 */
 @media (max-width: 640px) {
   .app-bar {

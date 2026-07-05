@@ -1,4 +1,5 @@
 import { useEffect } from 'react'
+import { DesignSurface } from './components/DesignSurface'
 import { ProjectsList } from './components/ProjectsList'
 import { AppShell } from './shell/AppShell'
 import { navigate, useRoute } from './shell/router'
@@ -39,16 +40,7 @@ function Surface({ route }: { route: AppRoute }) {
         </main>
       )
     case 'design':
-      return (
-        <main className="projects" data-view={route.view} data-depth={route.contextPath.length}>
-          <section className="panel">
-            <p className="placeholder">
-              3rd Tier · Design ({route.view}) — register and canvas arrive with issues 004 and
-              008.
-            </p>
-          </section>
-        </main>
-      )
+      return <DesignSurface projectId={route.projectId} view={route.view} />
     case 'not-found':
       return (
         <main className="projects">

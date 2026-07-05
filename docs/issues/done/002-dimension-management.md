@@ -1,6 +1,6 @@
 # 002: Dimension management on the root canvas
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: 001
 

@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { getDatabase, type Database } from '../db/client'
+import { resetDatabase, setDatabase } from './database'
 import {
   archiveProject as dbArchive,
   createProject as dbCreate,
@@ -43,6 +44,7 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
   async init(db) {
     try {
       database = db ?? (await getDatabase()).db
+      setDatabase(database)
       const projects = await dbList(database)
       set({ status: 'ready', projects })
     } catch (err) {
@@ -89,5 +91,6 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
 
 export function resetProjectsStore() {
   database = null
+  resetDatabase()
   useProjectsStore.setState({ ...initialState })
 }
