@@ -25,6 +25,8 @@ As a designer I export a whole project to one JSON file and import it elsewhere,
 
 **References**: SPEC §4.7 · SITEMAP §2 (project menu owns Export/Import; status bar owns the backup note) · STYLE_GUIDE §2.2 (wash), §9 · TECH_STACK §2 (PGlite), §5 · ADR-0006
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Property test: random projects (all entity types, recursion depth ≤ 4) → export → import → deep-equal modulo ids; re-export of the import is byte-stable.

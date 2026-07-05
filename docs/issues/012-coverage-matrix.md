@@ -28,6 +28,8 @@ As a designer I see the whole tuple space (∏ mᵢ) of the current canvas — w
 
 **References**: SPEC §4.5, invariant 2 · SITEMAP §1 (`?view=coverage`), §2 (view toggle + stat in context bar), §4 (`v` key) · STYLE_GUIDE §2.1 (grid pitch), §6, §10 · TECH_STACK T2 (virtualization) · issue 010 (compose handoff)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Property test: random canvases (2 ≤ n ≤ 5, 1 ≤ mᵢ ≤ 6) — every tuple appears exactly once across the projection's pages; documented/unexplored partition matches a brute-force oracle.

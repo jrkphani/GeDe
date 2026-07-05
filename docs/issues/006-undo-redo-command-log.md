@@ -24,6 +24,8 @@ As a designer I can undo and redo anything — cell edits, reorders, deletes —
 
 **References**: SPEC §4.7 (undo/redo) · SITEMAP §2 (status bar = narration home), §4 (⌘Z/⇧⌘Z globals) · STYLE_GUIDE §5 (icons), §9, §10 (live region) · TECH_STACK §5 (command log)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Property test: apply a random sequence of N mutations (create/rename/bind/reorder/delete across all entities), undo N times → state deep-equals initial; redo N times → state deep-equals final. Run across seeds.

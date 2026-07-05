@@ -27,6 +27,8 @@ As a designer I create a context directly on the canvas: enter compose mode, cli
 
 **References**: SPEC §4.2, §4.4, invariants 1–2 · SITEMAP §4 (`c` global key, Esc order) · STYLE_GUIDE §7 (touch, responsiveness), §8 · issues 005 (badge), 006 (undo batching)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Unit: compose-mode reducer — bind/unbind/re-bind transitions; completion event fires exactly when the nth dimension binds.

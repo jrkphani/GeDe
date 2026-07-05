@@ -27,6 +27,8 @@ As a designer I build nested architecture tables (Value / Stakeholders / Process
 
 **References**: SPEC §4.6, invariant 7 · SITEMAP §1 (`/architecture` route), §2 (context bar: table quick-jump, "Add table") · STYLE_GUIDE §5, §6, §9 · issues 004 (grid), 007 (impact-preview pattern)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Unit: nesting — arbitrary depth entries round-trip; move keeps subtree intact.

@@ -24,6 +24,8 @@ As a designer I can change my mind about a canvas's dimensions after contexts ex
 
 **References**: SPEC invariant 4 · SITEMAP §2 (status-bar narration, context-bar draft count) · STYLE_GUIDE §2.2 (danger/warning), §4 (popover), §9 · issues 004 (draft signifiers), 006 (undo)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Unit: add dimension → every previously complete context's completeness flips to draft; documented count drops accordingly.

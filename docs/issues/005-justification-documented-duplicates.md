@@ -25,6 +25,8 @@ As a designer I record *why* a combination matters, and the app tells me when a 
 
 **References**: SPEC §2 (Statement), §4.4, invariant 2 · STYLE_GUIDE §9, §10 · issue 004 (grid cells)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Unit: documented selector — complete + justified = documented; complete + empty justification = not documented.

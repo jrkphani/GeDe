@@ -4,7 +4,7 @@ For the next agent (or a fresh session). Read this, then `docs/issues/README.md`
 
 ## Where things stand
 
-**Repo**: https://github.com/jrkphani/GeDe · branch `main`. Issue 004 is shipped locally (this HANDOFF update, the issue-file move, and the commit happen together) — check `git log` for the exact hash. The repo is **public** — the private source documents (`GeDe Tavalo.numbers`, the Macro/Micro economy PDF/Pages) and `graphify-out/` are gitignored on purpose; do not commit them.
+**Repo**: https://github.com/jrkphani/GeDe · branch `main`, pushed and **CI-green** (`.github/workflows/verify.yml`). Latest shipped: the UI-foundation track **018 → 019 → 020** (shadcn/ui + Tailwind v4, the shared `src/components/ui/` primitive layer, and the type/token/component-usage enforcement). Before that, issues 000–004 + 016 built the domain. The repo is **public** — the private source documents (`GeDe Tavalo.numbers`, the Macro/Micro economy PDF/Pages) and `graphify-out/` are gitignored on purpose; do not commit them.
 
 **Shipped** (in `docs/issues/done/`, index rows marked ✅):
 

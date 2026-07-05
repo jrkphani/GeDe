@@ -25,6 +25,8 @@ As a designer I record the system's purpose and its ranked value propositions in
 
 **References**: SPEC §4.6 · SITEMAP §1 (`/foundation` route), §2 (context bar hidden on Foundation) · STYLE_GUIDE §3 (degree notation), §6 · issue 004 (EditableGrid contract)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Unit: re-rank via drag rewrites ranks 1..k contiguously; delete closes the gap.

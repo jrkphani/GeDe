@@ -27,6 +27,8 @@ As a designer I open α and get its child canvas: α's n bound parameters become
 
 **References**: SPEC §1, §4.1, invariant 3 · SITEMAP §1 (depth segments in URL), §2–3 (breadcrumbs in context bar, overflow rules) · STYLE_GUIDE §7, §8 (drill-down exception) · ADR-0002 · issues 002–003 (reused managers)
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Unit: first drill-in creates exactly n child dimensions mapped to the parent's bindings, idempotent on re-open; parent re-bind after drill-in flags the child dimension as stale (decide + test the resolution rule: child dimension follows the new parameter, existing sub-bindings soft-deleted with warning).

@@ -27,6 +27,8 @@ As a designer I click a context on the canvas and see its n colored spokes, its 
 
 **References**: SPEC §4.2–4.4, invariant 6 · SITEMAP §2 (Design surface + composer slot), §4 (Esc order, globals not shadowed) · STYLE_GUIDE §2.2, §7, §8, §10 · ADR-0001
 
+> **UI build convention (018–020):** compose the shared `src/components/ui/` primitives — `Button`, `InlineEdit`/`PhantomInput`, `Popover`, `Command`, `Swatch`, `Input` — and reuse `EditableGrid` for any tabular view; style only via design tokens. No hand-rolled `<button>`/`<input>` or hardcoded colors (lint-enforced — see ADR-0007 · STYLE_GUIDE §11).
+
 ## Test-first plan
 
 1. Unit: selection selector yields the same context to both projections; selecting a draft yields partial tuple readout with placeholders.

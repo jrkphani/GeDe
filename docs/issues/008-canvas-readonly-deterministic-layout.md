@@ -26,6 +26,8 @@ As a designer I see my register as a circle: n arcs, parameter dots, context nod
 
 **References**: SPEC §4.2, invariant 5 · STYLE_GUIDE §2.1, §7 · TECH_STACK §4 · ADR-0005
 
+> **UI build convention (018–020):** the canvas is SVG, but every design value comes from tokens (`var(--…)`, `--dim-*` for data colors) — no hardcoded colors (stylelint-enforced). Any DOM chrome around the canvas (toolbar buttons, menus, breadcrumbs) uses the shared `src/components/ui/` primitives, not raw elements. See ADR-0007 · STYLE_GUIDE §11.
+
 ## Test-first plan
 
 1. Unit: layout snapshot tests at n = 2, 3, 4 with fixed fixtures — byte-identical geometry across runs and Node versions.
