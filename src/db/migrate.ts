@@ -9,7 +9,7 @@ const migrationFiles = import.meta.glob('./migrations/*.sql', {
   query: '?raw',
   import: 'default',
   eager: true,
-}) as Record<string, string>
+})
 
 export async function runMigrations(pg: PGlite): Promise<string[]> {
   await pg.exec(

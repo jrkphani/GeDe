@@ -11,7 +11,7 @@ export function Swatch({
   color,
   className,
   ...props
-}: { color?: string } & HTMLAttributes<HTMLSpanElement>) {
+}: { color?: string | undefined } & HTMLAttributes<HTMLSpanElement>) {
   // color may be absent (ComboboxOption.color is optional) — matches the prior
   // `style={{ background: undefined }}`, i.e. no fill, rather than dropping the
   // square, so grid rows keep their alignment.

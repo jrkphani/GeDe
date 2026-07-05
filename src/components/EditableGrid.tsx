@@ -109,7 +109,7 @@ function cellKey(rowId: string, columnId: string): string {
 }
 
 function focusCell(nav: NavContext, rowId: string, columnId: string): void {
-  nav.refs.current?.get(cellKey(rowId, columnId))?.focus()
+  nav.refs.current.get(cellKey(rowId, columnId))?.focus()
 }
 
 function moveFocusDown(nav: NavContext, rowId: string, columnId: string): void {
@@ -143,7 +143,6 @@ function handleGridArrowKeys(e: React.KeyboardEvent, nav: NavContext, rowId: str
 function registerRef(nav: NavContext, rowId: string, columnId: string) {
   return (el: HTMLElement | null) => {
     const map = nav.refs.current
-    if (!map) return
     if (el) map.set(cellKey(rowId, columnId), el)
     else map.delete(cellKey(rowId, columnId))
   }
@@ -185,7 +184,7 @@ function TextOrMonoCell<TRow>({
   if (editing) {
     return (
       <input
-        ref={registerRef(nav, rowId, columnId) as React.Ref<HTMLInputElement>}
+        ref={registerRef(nav, rowId, columnId)}
         className={`inplace-input grid-cell__input${mono ? ' grid-cell__input--mono' : ''}`}
         autoFocus
         onFocus={(e) => e.target.select()}
@@ -264,7 +263,7 @@ function ComboboxCell<TRow>({
     >
       <PopoverTrigger asChild>
         <button
-          ref={registerRef(nav, rowId, columnId) as React.Ref<HTMLButtonElement>}
+          ref={registerRef(nav, rowId, columnId)}
           type="button"
           className="grid-cell grid-cell--combobox"
           onKeyDown={(e) => {
@@ -408,6 +407,10 @@ export function EditableGrid<TRow>({
   // `meta` at render time by the stable `renderGridCell`.
   const tanstackColumns = useMemo<ColumnDef<TRow>[]>(
     () => columns.map((col) => ({ id: col.id, header: col.header, cell: renderGridCell<TRow> })),
+    // Keyed on the shape signature, not the `columns` array identity (new every
+    // render) — rebuilding the ColumnDefs would remount cells. Intentional
+    // (see the flexRender note above); reviewed (issue 020).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [columnSignature],
   )
 

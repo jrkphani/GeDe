@@ -1,10 +1,59 @@
 import js from '@eslint/js'
 import tseslint from 'typescript-eslint'
+import reactHooks from 'eslint-plugin-react-hooks'
 
 export default tseslint.config(
   { ignores: ['dist', 'dev-dist', 'node_modules', 'playwright-report', 'test-results', 'graphify-out'] },
   js.configs.recommended,
-  ...tseslint.configs.recommended,
+  // Type-aware linting (issue 020): the powerful no-unsafe-*/no-floating-promises
+  // family that guards the "guarantee typesafety" goal.
+  ...tseslint.configs.strictTypeChecked,
+  ...tseslint.configs.stylisticTypeChecked,
+  {
+    languageOptions: {
+      parserOptions: {
+        projectService: true,
+        tsconfigRootDir: import.meta.dirname,
+      },
+    },
+    rules: {
+      // `() => void somePromise()` in event handlers is idiomatic fire-and-forget.
+      '@typescript-eslint/no-confusing-void-expression': ['error', { ignoreArrowShorthand: true }],
+      // Interpolating a number is safe and readable (`${index + 1}`).
+      '@typescript-eslint/restrict-template-expressions': ['error', { allowNumber: true }],
+      // Conflicts with a valid callback API shape: `() => Promise<boolean> | void`
+      // (EditableGrid cell onCommit — a handler may fire-and-forget or await).
+      '@typescript-eslint/no-invalid-void-type': 'off',
+      // We prefer the explicit `firstOrThrow`/guard pattern over `!`, so don't
+      // let this rule push `as T` casts toward non-null assertions.
+      '@typescript-eslint/non-nullable-type-assertion-style': 'off',
+    },
+  },
+  // Classic, stable hooks rules only. react-hooks v7's compiler-based rules
+  // (set-state-in-effect, refs, incompatible-library) false-positive on the
+  // deliberate guided-start state machine and on TanStack Table, so we don't
+  // adopt recommended-latest wholesale.
+  {
+    plugins: { 'react-hooks': reactHooks },
+    rules: {
+      'react-hooks/rules-of-hooks': 'error',
+      'react-hooks/exhaustive-deps': 'warn',
+    },
+  },
+  // JS config files (eslint.config.js) aren't part of a TS program — turn the
+  // type-checked rules off for them so the parser doesn't error.
+  { files: ['**/*.js'], extends: [tseslint.configs.disableTypeChecked] },
+  // Test stubs and jsdom polyfills (test/setup.ts) are legitimately empty no-ops.
+  {
+    files: ['**/*.test.{ts,tsx}', 'src/test/**/*.{ts,tsx}'],
+    rules: { '@typescript-eslint/no-empty-function': 'off' },
+  },
+  // jsdom polyfills patch APIs the DOM lib types say always exist, so the
+  // feature-detection guards read as "always truthy" to the type-checker.
+  {
+    files: ['src/test/**/*.{ts,tsx}'],
+    rules: { '@typescript-eslint/no-unnecessary-condition': 'off' },
+  },
   {
     // Issue 001 acceptance criterion: components never touch the database
     // directly — all writes flow through the store's mutation layer.
@@ -16,7 +65,8 @@ export default tseslint.config(
         {
           patterns: [
             {
-              group: ['**/db/*'],
+              // `**/db/**` (not `/db/*`) also catches deep imports like db/migrations/*.
+              group: ['**/db/**'],
               message: 'Components must act through the store (src/store), not the db layer.',
               allowTypeImports: true,
             },

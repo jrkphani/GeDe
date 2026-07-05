@@ -8,7 +8,7 @@ async function createAndOpenProject(page: import('@playwright/test').Page, name:
   await phantom.press('Enter')
   await page.getByRole('button', { name: `Open ${name}` }).click()
   await expect(page).toHaveURL(/\/p\/[^/]+\/foundation$/)
-  return page.url().match(/\/p\/([^/]+)\//)?.[1] as string
+  return (/\/p\/([^/]+)\//.exec(page.url()))?.[1] as string
 }
 
 test('tier tabs navigate, history walks back, reload restores', async ({ page }) => {

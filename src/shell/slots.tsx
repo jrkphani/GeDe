@@ -47,8 +47,10 @@ export function ContextBar({ children }: { children: ReactNode }) {
     if (!api) return
     api.add()
     return () => api.remove()
-    // register once per mount — intentionally no deps on `api`
+    // register once per mount — `api` is provider-stable; re-running would
+    // double-register. Intentional, reviewed (issue 020).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
-  if (api === null || api.el === null) return null
+  if (api?.el == null) return null
   return createPortal(children, api.el)
 }

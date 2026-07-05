@@ -27,7 +27,7 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
               if (e.key === 'Enter') onOpen(p.id)
               if (e.key === 'F2') {
                 e.preventDefault()
-                ;(e.currentTarget.querySelector('.project-name') as HTMLElement | null)?.click()
+                e.currentTarget.querySelector<HTMLElement>('.project-name')?.click()
               }
             }}
           >

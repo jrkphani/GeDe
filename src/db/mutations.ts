@@ -1,6 +1,7 @@
 import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { uuidv7 } from 'uuidv7'
 import type { Database } from './client'
+import { firstOrThrow } from './util'
 import { bindings, contexts, dimensions, parameters, projects } from './schema'
 import { paletteColor } from '../theme/palette'
 import { computeTupleHash, nextRootSymbol } from '../domain/symbols'
@@ -24,7 +25,7 @@ export async function createProject(
     .insert(projects)
     .values({ id: uuidv7(), name: input.name, description: input.description ?? null })
     .returning()
-  return rows[0] as ProjectRow
+  return firstOrThrow(rows)
 }
 
 export async function renameProject(db: Database, id: string, name: string): Promise<ProjectRow> {
@@ -33,7 +34,7 @@ export async function renameProject(db: Database, id: string, name: string): Pro
     .set({ name, updatedAt: now() })
     .where(eq(projects.id, id))
     .returning()
-  return rows[0] as ProjectRow
+  return firstOrThrow(rows)
 }
 
 export async function archiveProject(db: Database, id: string): Promise<ProjectRow> {
@@ -42,7 +43,7 @@ export async function archiveProject(db: Database, id: string): Promise<ProjectR
     .set({ deletedAt: now(), updatedAt: now() })
     .where(eq(projects.id, id))
     .returning()
-  return rows[0] as ProjectRow
+  return firstOrThrow(rows)
 }
 
 export async function restoreProject(db: Database, id: string): Promise<ProjectRow> {
@@ -51,7 +52,7 @@ export async function restoreProject(db: Database, id: string): Promise<ProjectR
     .set({ deletedAt: null, updatedAt: now() })
     .where(eq(projects.id, id))
     .returning()
-  return rows[0] as ProjectRow
+  return firstOrThrow(rows)
 }
 
 // Soft-deleted rows never leave this module (issue 001 acceptance criterion).
@@ -108,7 +109,7 @@ export async function addDimension(db: Database, projectId: string): Promise<Dim
       sort: existing.length,
     })
     .returning()
-  return rows[0] as DimensionRow
+  return firstOrThrow(rows)
 }
 
 export async function renameDimension(
@@ -121,7 +122,7 @@ export async function renameDimension(
     .set({ name, updatedAt: now() })
     .where(eq(dimensions.id, id))
     .returning()
-  return rows[0] as DimensionRow
+  return firstOrThrow(rows)
 }
 
 export async function setDimensionColor(
@@ -134,7 +135,7 @@ export async function setDimensionColor(
     .set({ color, updatedAt: now() })
     .where(eq(dimensions.id, id))
     .returning()
-  return rows[0] as DimensionRow
+  return firstOrThrow(rows)
 }
 
 async function rewriteSort(db: Database, ordered: DimensionRow[]): Promise<void> {
@@ -159,8 +160,8 @@ export async function reorderDimension(
   const from = rows.findIndex((d) => d.id === id)
   if (from === -1) return rows
   const target = Math.max(0, Math.min(rows.length - 1, toIndex))
-  const [moved] = rows.splice(from, 1)
-  rows.splice(target, 0, moved as DimensionRow)
+  const moved = firstOrThrow(rows.splice(from, 1))
+  rows.splice(target, 0, moved)
   await rewriteSort(db, rows)
   return listDimensions(db, projectId)
 }
@@ -215,7 +216,7 @@ export async function addParameter(
       sort: existing.length,
     })
     .returning()
-  return rows[0] as ParameterRow
+  return firstOrThrow(rows)
 }
 
 export async function renameParameter(
@@ -228,7 +229,7 @@ export async function renameParameter(
     .set({ name, updatedAt: now() })
     .where(eq(parameters.id, id))
     .returning()
-  return rows[0] as ParameterRow
+  return firstOrThrow(rows)
 }
 
 async function rewriteParameterSort(db: Database, ordered: ParameterRow[]): Promise<void> {
@@ -253,8 +254,8 @@ export async function reorderParameter(
   const from = rows.findIndex((p) => p.id === id)
   if (from === -1) return rows
   const target = Math.max(0, Math.min(rows.length - 1, toIndex))
-  const [moved] = rows.splice(from, 1)
-  rows.splice(target, 0, moved as ParameterRow)
+  const moved = firstOrThrow(rows.splice(from, 1))
+  rows.splice(target, 0, moved)
   await rewriteParameterSort(db, rows)
   return listParameters(db, dimensionId)
 }
@@ -316,7 +317,7 @@ export async function createContext(db: Database, projectId: string): Promise<Co
       sort: existing.length,
     })
     .returning()
-  return rows[0] as ContextRow
+  return firstOrThrow(rows)
 }
 
 export async function setContextSymbol(
@@ -334,7 +335,7 @@ export async function setContextSymbol(
     .set({ symbol, updatedAt: now() })
     .where(eq(contexts.id, id))
     .returning()
-  return rows[0] as ContextRow
+  return firstOrThrow(rows)
 }
 
 export async function setContextJustification(
@@ -347,7 +348,7 @@ export async function setContextJustification(
     .set({ justification, updatedAt: now() })
     .where(eq(contexts.id, id))
     .returning()
-  return rows[0] as ContextRow
+  return firstOrThrow(rows)
 }
 
 export async function listBindings(db: Database, contextId: string): Promise<BindingRow[]> {
@@ -358,7 +359,7 @@ export async function listBindings(db: Database, contextId: string): Promise<Bin
 // order — a single indexed scan then finds duplicate-tuple contexts (issue 005+).
 async function recomputeTupleHash(db: Database, contextId: string): Promise<void> {
   const contextRows = await db.select().from(contexts).where(eq(contexts.id, contextId))
-  const contextRow = contextRows[0] as ContextRow
+  const contextRow = firstOrThrow(contextRows)
   const dims = await listDimensions(db, contextRow.projectId)
   const rows = await listBindings(db, contextId)
   const byDimension = new Map(rows.map((r) => [r.dimensionId, r.parameterId]))
