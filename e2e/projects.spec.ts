@@ -15,9 +15,10 @@ test('create a project, survive a hard reload, open it', async ({ page }) => {
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   await expect(page.getByText('Tavalo')).toBeVisible()
 
-  // Open it.
+  // Open it: lands on the default tier with the project name in the app bar.
   await page.getByRole('button', { name: 'Open Tavalo' }).click()
-  await expect(page.getByRole('heading', { name: 'Tavalo' })).toBeVisible()
+  await expect(page).toHaveURL(/\/p\/[^/]+\/foundation$/)
+  await expect(page.getByRole('button', { name: 'Tavalo' })).toBeVisible()
 })
 
 test('archive is undoable via the status line', async ({ page }) => {
@@ -35,6 +36,6 @@ test('archive is undoable via the status line', async ({ page }) => {
   await expect(page.getByText('Archived “Throwaway”')).toBeVisible()
   await expect(row).not.toBeVisible()
 
-  await page.getByRole('button', { name: 'Undo' }).click()
+  await page.locator('.status-bar').getByRole('button', { name: 'Undo' }).click()
   await expect(page.getByRole('button', { name: 'Open Throwaway' })).toBeVisible()
 })

@@ -1,5 +1,6 @@
 import { useRef, useState } from 'react'
 import { useProjectsStore } from '../store/projects'
+import { useStatusStore } from '../store/status'
 
 function ProjectName({ id, name }: { id: string; name: string }) {
   const renameProject = useProjectsStore((s) => s.renameProject)
@@ -67,12 +68,11 @@ function PhantomRow({ first }: { first: boolean }) {
   )
 }
 
-export function ProjectsList() {
+export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   const projects = useProjectsStore((s) => s.projects)
   const archiveProject = useProjectsStore((s) => s.archiveProject)
-  const openProject = useProjectsStore((s) => s.openProject)
   const undoLast = useProjectsStore((s) => s.undoLast)
-  const lastAction = useProjectsStore((s) => s.lastAction)
+  const announce = useStatusStore((s) => s.announce)
 
   return (
     <main className="projects">
@@ -84,9 +84,9 @@ export function ProjectsList() {
             tabIndex={0}
             aria-label={`Open ${p.name}`}
             className="project-row"
-            onClick={() => openProject(p.id)}
+            onClick={() => onOpen(p.id)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') openProject(p.id)
+              if (e.key === 'Enter') onOpen(p.id)
               if (e.key === 'F2') {
                 e.preventDefault()
                 ;(e.currentTarget.querySelector('.project-name') as HTMLElement | null)?.click()
@@ -100,7 +100,11 @@ export function ProjectsList() {
               aria-label={`Archive ${p.name}`}
               onClick={(e) => {
                 e.stopPropagation()
-                void archiveProject(p.id)
+                void archiveProject(p.id).then(() => {
+                  // Narration goes to the shell status bar — the app's single
+                  // feedback channel (SITEMAP §2).
+                  announce(`Archived “${p.name}”`, { label: 'Undo', run: undoLast })
+                })
               }}
             >
               Archive
@@ -109,16 +113,6 @@ export function ProjectsList() {
         ))}
         <PhantomRow first={projects.length === 0} />
       </section>
-      <div className="status-line" role="status" aria-live="polite">
-        {lastAction !== null && (
-          <>
-            <span>{lastAction.label}</span>
-            <button className="row-action" onClick={() => void undoLast()}>
-              Undo
-            </button>
-          </>
-        )}
-      </div>
     </main>
   )
 }

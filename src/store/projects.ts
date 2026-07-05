@@ -20,15 +20,12 @@ interface ProjectsState {
   status: Status
   error: string | null
   projects: ProjectRow[]
-  openProjectId: string | null
   lastAction: { label: string; undo: () => Promise<void> } | null
   init: (db?: Database) => Promise<void>
   createProject: (name: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
   archiveProject: (id: string) => Promise<void>
   undoLast: () => Promise<void>
-  openProject: (id: string) => void
-  closeProject: () => void
 }
 
 let database: Database | null = null
@@ -37,7 +34,6 @@ const initialState = {
   status: 'booting' as Status,
   error: null,
   projects: [],
-  openProjectId: null,
   lastAction: null,
 }
 
@@ -88,14 +84,6 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
   async undoLast() {
     const action = get().lastAction
     if (action) await action.undo()
-  },
-
-  openProject(id) {
-    set({ openProjectId: id })
-  },
-
-  closeProject() {
-    set({ openProjectId: null })
   },
 }))
 

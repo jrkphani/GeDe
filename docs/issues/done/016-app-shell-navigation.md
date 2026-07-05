@@ -1,6 +1,6 @@
 # 016: App shell — routes, header, tabs, status bar
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: 001
 
