@@ -1,6 +1,6 @@
 # 017: Command palette (⌘K)
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M2
 - **Blocked by**: 016, 004
 
@@ -36,6 +36,16 @@ As a designer I press ⌘K and type to jump anywhere — tier, canvas, context �
 
 ## Acceptance criteria
 
-- [ ] Every SITEMAP §1 destination and every registered verb is reachable via the palette, keyboard-only.
-- [ ] Palette contains zero feature-specific imports (registry only).
-- [ ] Open-to-interactive < 100ms measured in a perf test.
+- [x] Every SITEMAP §1 destination and every registered verb is reachable via the palette, keyboard-only.
+- [x] Palette contains zero feature-specific imports (registry only).
+- [x] Open-to-interactive < 100ms measured in a perf test.
+
+## Shipped notes
+
+- **Verb registry** (`src/store/commandRegistry.ts`) is the 016 seam: `registerProvider(() => CommandItem[]) → disposer` for dynamic lists, `registerCommand(item) → disposer` as sugar; `collect()` dedups first-id-wins so a feature can't clobber a core command; `markUsed(id)`/`recentIds` drive recent-first ordering. `CommandItem = { id, kind:'tier'|'canvas'|'context'|'action', title, symbol?, keywords?, run }`. The palette reads only this store + the pure ranking module — zero feature imports.
+- **Ranking** (`src/domain/paletteRanking.ts`, pure + perf-tested): exact symbol → name → justification, recents float; empty-state copy included.
+- **Palette surface** (`src/components/CommandPalette.tsx`) composes `ui/command` (added `CommandDialog`/`CommandGroup` exports so cmdk stays wrapped in `ui/`). Centered panel, mono symbols, max-8, kind labels; focus trap; Esc returns focus to the exact origin element (captured at ⌘K press), a navigation moves focus to `.surface` (rAF beats cmdk's own close-focus).
+- **Shell wiring** (`src/shell/AppShell.tsx`): ⌘K joins the existing capture-phase shortcut effect; app-bar `⌘K` trigger; core sources registered on mount via `src/shell/coreCommands.ts` (tier jumps, Root canvas + Coverage, live contexts — selecting one navigates + reuses 009's `selectedContextId`). `--scrim` token added (both themes). No routes/schema change.
+- **Deliberately deferred** (per orchestration guidance): feature verbs (010 compose "New context", 014 export) are NOT wired — the seam is ready for them. The empty-state "Enter creates a context…" copy shows but doesn't yet create (needs a contexts-feature verb).
+- **a11y note**: `aria-activedescendant` moves across results when ≥2 match; a cmdk quirk under `shouldFilter=false` leaves it unset for a single result, but that sole option is `aria-selected="true"` (announced) and Enter-operable.
+- **Verified**: full `npm run verify` green on main (276 unit/component incl. ranking/registry/a11y + perf, e2e incl. `e2e/command-palette.spec.ts`). Manual chromium screenshots confirmed open/ranking/empty-state/dark.

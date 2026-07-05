@@ -1,8 +1,11 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useCommandLogStore } from '../store/commandLog'
+import { useCommandRegistryStore } from '../store/commandRegistry'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
 import { Button } from '../components/ui/button'
+import { CommandPalette } from '../components/CommandPalette'
+import { coreCommandSources } from './coreCommands'
 import { navigate } from './router'
 import { serializeRoute, type AppRoute, type Tier } from './routes'
 import { ContextBarSlot } from './slots'
@@ -120,6 +123,33 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
   const active = activeTab(route)
   const past = useCommandLogStore((s) => s.past)
   const future = useCommandLogStore((s) => s.future)
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  // Captured at ⌘K press so a dismissal (Esc) can restore focus to exactly the
+  // element the user left (SITEMAP §3); a navigation moves focus to the surface.
+  const paletteOriginRef = useRef<HTMLElement | null>(null)
+  const surfaceRef = useRef<HTMLDivElement | null>(null)
+
+  function closePalette(navigated: boolean) {
+    setPaletteOpen(false)
+    const origin = paletteOriginRef.current
+    // rAF wins the race against Radix's own close-focus (cmdk's dialog has no
+    // trigger to restore to, so it would otherwise drop focus to <body>).
+    requestAnimationFrame(() => {
+      if (navigated) surfaceRef.current?.focus()
+      else origin?.focus()
+    })
+  }
+
+  // The shell owns the palette's command sources (issue 016 seam): tier/canvas/
+  // context navigation. Feature verbs register the same way, later. Registered
+  // once on mount; the sources read live route/store state at collect time.
+  useEffect(() => {
+    const registry = useCommandRegistryStore.getState()
+    const disposers = coreCommandSources().map((source) => registry.registerProvider(source))
+    return () => {
+      for (const dispose of disposers) dispose()
+    }
+  }, [])
 
   // Global keys (SITEMAP §4): ⌘1/⌘2/⌘3 switch tiers within a project; ⌘Z/⇧⌘Z
   // undo/redo everywhere (not gated on a project being open — e.g. the
@@ -133,6 +163,12 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (!(e.metaKey || e.ctrlKey)) return
+      if (e.code === 'KeyK') {
+        e.preventDefault()
+        paletteOriginRef.current = document.activeElement as HTMLElement | null
+        setPaletteOpen(true)
+        return
+      }
       if (e.code === 'KeyZ') {
         if (shouldDeferToNativeUndo(document.activeElement)) return
         e.preventDefault()
@@ -193,6 +229,17 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           </nav>
         )}
         <div className="app-bar__cluster">
+          <button
+            className="row-action"
+            aria-label="Command palette"
+            title="Command palette (⌘K)"
+            onClick={() => {
+              paletteOriginRef.current = document.activeElement as HTMLElement | null
+              setPaletteOpen(true)
+            }}
+          >
+            ⌘K
+          </button>
           <Button
             aria-label="Undo"
             disabled={past.length === 0}
@@ -219,8 +266,11 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
         </div>
       </header>
       <ContextBarSlot />
-      <div className="surface">{children}</div>
+      <div className="surface" ref={surfaceRef} tabIndex={-1}>
+        {children}
+      </div>
       <StatusBar />
+      <CommandPalette open={paletteOpen} onClose={closePalette} />
     </div>
   )
 }

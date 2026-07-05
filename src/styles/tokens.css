@@ -59,6 +59,8 @@
   --radius: 0;
   --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.1);
   --shadow-frozen-col: 2px 0 4px rgba(0, 0, 0, 0.08);
+  /* Scrim behind the command palette (017) — the one modal surface. */
+  --scrim: rgba(26, 26, 26, 0.22);
 
   /* Motion — §8 */
   --motion-fast: 100ms;
@@ -82,4 +84,5 @@
   --warning: #d0a43c;
   --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.45);
   --shadow-frozen-col: 2px 0 4px rgba(0, 0, 0, 0.35);
+  --scrim: rgba(0, 0, 0, 0.5);
 }

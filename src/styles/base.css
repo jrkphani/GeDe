@@ -675,6 +675,95 @@ body {
   font-size: var(--text-label);
 }
 
+/* Command palette (issue 017, SITEMAP §3 / STYLE_GUIDE §3-4): centered panel,
+   zero radius, the app's single shadow token; mono for symbols; max 8 rows so
+   there is never a scroll hunt. */
+.command-palette__overlay {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  z-index: 100;
+}
+
+.command-palette {
+  position: fixed;
+  top: 15vh;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(560px, calc(100vw - 2 * var(--space-4)));
+  max-height: 60vh;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popover);
+  z-index: 101;
+  overflow: hidden;
+}
+
+.command-palette [cmdk-input] {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  width: 100%;
+  padding: var(--space-3) var(--space-4);
+}
+
+.command-palette [cmdk-input]:focus {
+  outline: none;
+}
+
+.command-palette__list {
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.command-palette__row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  cursor: pointer;
+}
+
+.command-palette__row[aria-selected='true'] {
+  background: var(--accent-wash);
+}
+
+.command-palette__symbol {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  color: var(--accent-strong);
+  min-width: 2.5ch;
+}
+
+.command-palette__title {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Kind label: muted 11px marker (tier · canvas · context · action). Always
+   right-aligned, whether or not a separate title is rendered. */
+.command-palette__kind {
+  margin-left: auto;
+  font-size: var(--text-colhead);
+  line-height: var(--leading-colhead);
+  color: var(--ink-muted);
+  text-transform: lowercase;
+  letter-spacing: 0.02em;
+}
+
+.command-palette__empty {
+  padding: var(--space-3) var(--space-4);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+}
+
 /* Documented signifier (issue 005, STYLE_GUIDE §9-10): shape + fill carry
    state, never color alone — hollow (draft), half-filled (complete,
    unjustified), filled (documented). Square, matching the app's radius-0
