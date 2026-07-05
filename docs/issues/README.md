@@ -26,7 +26,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [009](done/009-canvas-selection-composer-sync.md) ✅ | Selection, spokes, composer, sync | M2 | 008 |
 | [010](done/010-compose-bind-from-canvas.md) ✅ | Compose & bind from canvas | M2 | 009 |
 | [011](011-recursion-drilldown-breadcrumbs.md) | Recursion, drill-down, breadcrumbs | M3 | 010 |
-| [012](012-coverage-matrix.md) | Coverage matrix | M4 | 010 |
+| [012](done/012-coverage-matrix.md) ✅ | Coverage matrix | M4 | 010 |
 | [013](done/013-tier1-foundation.md) ✅ | Tier 1 Foundation | M5 | 004, 016 |
 | [014](014-tier2-architecture-promote.md) | Tier 2 Architecture + promote | M5 | 013 |
 | [015](015-export-import-json.md) | Export/import JSON | M6 | 011, 014 |

@@ -3,7 +3,11 @@ import { ContextBar } from '../shell/slots'
 import { composeReducer, firstUnbound } from '../domain/composeMode'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
+import { coverageStat } from '../domain/coverage'
 import { findDuplicateContextIds } from '../domain/duplicates'
+import type { ContextRow } from '../db/mutations'
+import { navigate } from '../shell/router'
+import { useCommandLogStore } from '../store/commandLog'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
@@ -12,6 +16,7 @@ import { Button } from './ui/button'
 import { Canvas } from './Canvas'
 import { Composer } from './Composer'
 import { ContextRegister } from './ContextRegister'
+import { CoverageMatrix } from './CoverageMatrix'
 import { DimensionManager, DimensionManagerPanel } from './DimensionManager'
 import type { DesignView } from '../shell/routes'
 
@@ -88,16 +93,46 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
   // --- Compose mode (issue 010) -------------------------------------------
   // Entering compose creates a real, persisted draft (same mutation layer as
   // the register — SPEC invariant 6, acceptance criterion 1) and selects it.
-  async function enterCompose() {
+  async function enterCompose(initialBindings?: Record<string, string>) {
     if (composeContextId) return
-    const created = await useContextsStore.getState().create()
+    // From a coverage-matrix gap the draft arrives pre-filled with the whole
+    // tuple (issue 012); create + the n binds are one undoable gesture, mirroring
+    // the register's batched phantom-row create.
+    const run = async (): Promise<ContextRow | null> => {
+      const row = await useContextsStore.getState().create()
+      if (!row) return null
+      if (initialBindings) {
+        for (const dimId of orderedDimensionIds) {
+          const paramId = initialBindings[dimId]
+          if (paramId) await useContextsStore.getState().bind(row.id, dimId, paramId)
+        }
+      }
+      return row
+    }
+    const created = initialBindings
+      ? await useCommandLogStore.getState().batch('compose from gap', run)
+      : await run()
     if (!created) return
     useContextsStore.getState().select(created.id)
     setComposeContextId(created.id)
-    const firstName = dimensions.find((d) => d.id === orderedDimensionIds[0])?.name
+    const firstUnboundName = dimensions.find(
+      (d) => d.id === firstUnbound(orderedDimensionIds, initialBindings ?? {}),
+    )?.name
     useStatusStore
       .getState()
-      .announce(firstName ? `Composing ${created.symbol} — bind ${firstName}` : `Composing ${created.symbol}`)
+      .announce(
+        firstUnboundName
+          ? `Composing ${created.symbol} — bind ${firstUnboundName}`
+          : `Composing ${created.symbol}`,
+      )
+  }
+
+  // A coverage-matrix hollow cell jumps to the canvas in compose mode, pre-filled
+  // with that tuple (SPEC §4.5 "gap → composer"). View switch + compose entry
+  // happen together; enterCompose is a no-op if a draft is already open.
+  function handleComposeTuple(bindings: Record<string, string>) {
+    navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })
+    void enterCompose(bindings)
   }
 
   function exitCompose() {
@@ -184,6 +219,52 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [composeContextId])
 
+  // `v` = toggle canvas / coverage view (SITEMAP §4). Capture phase + text-field
+  // guard, same grammar as the `c` compose shortcut above.
+  useEffect(() => {
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'v' || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = document.activeElement
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      ) {
+        return
+      }
+      e.preventDefault()
+      navigate({
+        kind: 'design',
+        projectId,
+        contextPath: [],
+        view: view === 'canvas' ? 'coverage' : 'canvas',
+      })
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [view, projectId])
+
+  // Live coverage stat + draft count for the context bar (SITEMAP §2). Both
+  // derive from store state each render, so any mutation moves them same-frame.
+  const coverage = useMemo(() => {
+    const paramIds: Record<string, string[]> = {}
+    for (const id of orderedDimensionIds) paramIds[id] = (paramsByDimension[id] ?? []).map((p) => p.id)
+    const ctxInput = contexts.map((c) => ({
+      id: c.id,
+      symbol: c.symbol,
+      bindings: bindingsByContext[c.id] ?? {},
+      justification: c.justification,
+    }))
+    return coverageStat(orderedDimensionIds, paramIds, ctxInput)
+  }, [orderedDimensionIds, paramsByDimension, contexts, bindingsByContext])
+  const draftCount = useMemo(
+    () =>
+      contexts.filter(
+        (c) => !isComplete(dimensionIds, new Set(Object.keys(bindingsByContext[c.id] ?? {}))),
+      ).length,
+    [contexts, dimensionIds, bindingsByContext],
+  )
+
   const selectedContext = selectedContextId ? (contexts.find((c) => c.id === selectedContextId) ?? null) : null
   const selectedBindings = selectedContextId ? (bindingsByContext[selectedContextId] ?? {}) : {}
   const composing = composeContextId !== null && composeContextId === selectedContextId
@@ -234,6 +315,35 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
     <>
       <ContextBar>
         <DimensionManager />
+        <div className="design-view-toggle" role="group" aria-label="Design view">
+          <Button
+            variant="bare"
+            className="view-toggle__btn"
+            data-active={view === 'canvas' || undefined}
+            aria-pressed={view === 'canvas'}
+            onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })}
+          >
+            Canvas
+          </Button>
+          <Button
+            variant="bare"
+            className="view-toggle__btn"
+            data-active={view === 'coverage' || undefined}
+            aria-pressed={view === 'coverage'}
+            onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'coverage' })}
+          >
+            Coverage
+          </Button>
+        </div>
+        <span
+          className="coverage-stat font-mono"
+          aria-label={`${coverage.documented} of ${coverage.total} tuples documented`}
+        >
+          {coverage.documented} / {coverage.total} documented
+        </span>
+        <span className="draft-count">
+          {draftCount} draft{draftCount === 1 ? '' : 's'}
+        </span>
       </ContextBar>
       <main className="design-main" data-view={view}>
         {view === 'canvas' ? (
@@ -284,9 +394,15 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
             />
           </>
         ) : (
-          <section className="panel">
-            <p className="placeholder">Coverage matrix arrives with issue 012.</p>
-          </section>
+          <CoverageMatrix
+            dimensions={dimensions}
+            parametersByDimension={paramsByDimension}
+            contexts={contexts}
+            bindingsByContext={bindingsByContext}
+            selectedContextId={selectedContextId}
+            onSelectContext={(id) => handleSelect(id)}
+            onComposeTuple={handleComposeTuple}
+          />
         )}
       </main>
     </>

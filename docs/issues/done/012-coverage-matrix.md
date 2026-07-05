@@ -1,6 +1,6 @@
 # 012: Coverage matrix — documented vs unexplored tuples
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M4
 - **Blocked by**: 010
 
@@ -39,6 +39,15 @@ As a designer I see the whole tuple space (∏ mᵢ) of the current canvas — w
 
 ## Acceptance criteria
 
-- [ ] The property test (with the brute-force oracle) is part of `npm run verify`.
-- [ ] Every tuple is reachable through the UI regardless of n (capacity guarantee).
-- [ ] Matrix stays responsive at ∏ mᵢ ≈ 10,000 (virtualized grid; perf budget test).
+- [x] The property test (with the brute-force oracle) is part of `npm run verify`.
+- [x] Every tuple is reachable through the UI regardless of n (capacity guarantee).
+- [x] Matrix stays responsive at ∏ mᵢ ≈ 10,000 (virtualized grid; perf budget test).
+
+## Shipped notes
+
+- **Pure engine** (`src/domain/coverage.ts`): `documentedTuples`, `coverageStat`, `defaultAxes`, `filterDimensionIds`, `fullTupleSpace`, `tupleSpaceSize` — store-free, keyed into the same `computeTupleHash` space as complete contexts. Property-tested against a brute-force oracle (every tuple reachable exactly once for any axis choice; documented/unexplored partition matches). `src/domain/gridWindow.ts` = pure fixed-pitch windowing for both-axis virtualization.
+- **In-memory, not SQL**: the documented set is O(#contexts) and ∏ mᵢ is pure arithmetic never materialized (cells keyed on demand). A SQL anti-join would materialize the full ~10k cross-product in PGlite to subtract a few rows and couple a pure derivation to the DB — strictly worse. No migration.
+- **`CoverageMatrix.tsx`**: two-largest-default axes with swap, remaining dimensions as filter chips, 24px graph-paper-pitch cells, roving-tabindex grid, both-axis virtualization. Documented = mono symbol on ink fill; unexplored = hairline hollow (shape+fill carry state, colorblind-safe); dimension color only in axis-header swatches.
+- **"Documented" = complete AND justified** (matches issue 005's `documentedStatus()` tri-state): a complete-but-unjustified context leaves its cell hollow. Keeps the matrix a strict binary per the brief.
+- **Compose seam** (`DesignSurface.tsx`, additive): `enterCompose(initialBindings?)` — a hollow-cell click navigates to the canvas and enters compose pre-filled with that tuple; the create + n binds are one undoable `batch('compose from gap', …)`. Also added the `v` view toggle (capture-phase, text-field-guarded), the Canvas/Coverage toggle + live `n / m documented` stat + draft count in the context bar. `routes.ts`/`router.ts` unchanged (the `coverage` view already existed).
+- **Verified**: full `npm run verify` green on main (unit/component incl. the property + perf-budget tests, e2e incl. `e2e/coverage.spec.ts`). Manual chromium screenshots confirmed the matrix, projection controls, live stat, and gap→compose.
