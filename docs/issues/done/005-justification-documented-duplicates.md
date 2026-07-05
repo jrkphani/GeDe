@@ -1,6 +1,6 @@
 # 005: Justification, documented status, duplicate-tuple warning
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: 004
 
@@ -36,6 +36,14 @@ As a designer I record *why* a combination matters, and the app tells me when a 
 
 ## Acceptance criteria
 
-- [ ] No code path blocks a save due to tuple duplication.
-- [ ] Documented status never gates saving, exporting, or navigation (SPEC invariant 2 wording).
-- [ ] Warning copy follows STYLE_GUIDE §7 voice (quiet, specific).
+- [x] No code path blocks a save due to tuple duplication.
+- [x] Documented status never gates saving, exporting, or navigation (SPEC invariant 2 wording).
+- [x] Warning copy follows STYLE_GUIDE §7 voice (quiet, specific).
+
+## Implementation notes
+
+- `domain/completeness.ts`: `documentedStatus(complete, justification)` — tri-state (`draft` / `complete` / `documented`), rendered as a hollow / half-filled / filled square dot (`.status-dot`) in a new "Documented" column right after Symbol.
+- `domain/duplicates.ts` (new): `tupleKeyFor`/`findDuplicateContextIds` — purely over already-loaded `bindingsByContext` (no extra DB read; mirrors the `tuple_hash` computed in `db/mutations.ts`). Two contexts are duplicates once they share the same ordered tuple of *currently bound* dimensions — never blocks, purely informational.
+- `EditableGrid`: new `multiline` cell kind (auto-growing `<textarea>` while editing, 2-line CSS clamp + `title` full-text on display) — the one sanctioned row-height exception. Also added `data-row-id` on every `<tr>` as a generic external-navigation hook.
+- `ContextRegister`: Justification switched to the `multiline` kind; new trailing "Duplicate" column renders a muted mono `Button` badge (`= β`) naming sibling symbol(s), title = "Same tuple as …"; click/Enter focuses the sibling's row via `data-row-id` (canvas-based selection is issues 008–010; this is the pre-canvas stand-in).
+- Deferred (not in acceptance criteria / test-first plan): the composer's *live* duplicate preview while hovering an unselected combobox option — scoped out to avoid speculative UI; can be added when the composer (issue 010) exists.

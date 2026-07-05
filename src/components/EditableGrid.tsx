@@ -46,11 +46,18 @@ export interface StaticCellKind<TRow> {
   render: (row: TRow) => React.ReactNode
 }
 
+export interface MultilineCellKind<TRow> {
+  kind: 'multiline'
+  getValue: (row: TRow) => string
+  onCommit: (row: TRow, value: string) => Promise<boolean> | void
+}
+
 export type GridCellKind<TRow> =
   | TextCellKind<TRow>
   | MonoCellKind<TRow>
   | ComboboxCellKind<TRow>
   | StaticCellKind<TRow>
+  | MultilineCellKind<TRow>
 
 export interface GridColumn<TRow> {
   id: string
@@ -235,6 +242,111 @@ function TextOrMonoCell<TRow>({
   )
 }
 
+// The one sanctioned row-height exception (STYLE_GUIDE §6, issue 005): the
+// justification cell grows to fit while editing instead of clipping.
+function MultilineCell<TRow>({
+  row,
+  rowId,
+  columnId,
+  cellDef,
+  nav,
+}: {
+  row: TRow
+  rowId: string
+  columnId: string
+  cellDef: MultilineCellKind<TRow>
+  nav: NavContext
+}) {
+  const value = cellDef.getValue(row)
+  const editing = nav.editing?.rowId === rowId && nav.editing.columnId === columnId
+  const [draft, setDraft] = useState(value)
+  const cancelling = useRef(false)
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null)
+
+  useEffect(() => {
+    if (!editing) setDraft(value)
+  }, [editing, value])
+
+  useEffect(() => {
+    const el = textareaRef.current
+    if (editing && el) {
+      el.style.height = 'auto'
+      el.style.height = `${el.scrollHeight}px`
+    }
+  }, [editing, draft])
+
+  async function commit(next: string, andMoveDown: boolean) {
+    if (next !== value) {
+      const ok = await cellDef.onCommit(row, next)
+      if (ok === false) setDraft(value)
+    }
+    nav.setEditing(null)
+    if (andMoveDown) moveFocusDown(nav, rowId, columnId)
+  }
+
+  if (editing) {
+    return (
+      <textarea
+        ref={(el) => {
+          textareaRef.current = el
+          registerRef(nav, rowId, columnId)(el)
+        }}
+        className="inplace-input grid-cell__input grid-cell__input--multiline"
+        rows={1}
+        autoFocus
+        onFocus={(e) => e.target.select()}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={(e) => {
+          e.stopPropagation()
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault()
+            void commit(draft.trim(), true)
+          }
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            cancelling.current = true
+            setDraft(value)
+            ;(e.target as HTMLTextAreaElement).blur()
+          }
+        }}
+        onBlur={() => {
+          if (cancelling.current) {
+            cancelling.current = false
+            nav.setEditing(null)
+            return
+          }
+          void commit(draft.trim(), false)
+        }}
+      />
+    )
+  }
+
+  return (
+    <div
+      ref={registerRef(nav, rowId, columnId)}
+      className="grid-cell grid-cell--multiline"
+      role="gridcell"
+      tabIndex={0}
+      title={value || undefined}
+      onClick={() => nav.setEditing({ rowId, columnId })}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          nav.setEditing({ rowId, columnId })
+        }
+        handleGridArrowKeys(e, nav, rowId, columnId)
+      }}
+    >
+      {value ? (
+        <span className="grid-cell__clamp">{value}</span>
+      ) : (
+        <span className="grid-cell__placeholder">—</span>
+      )}
+    </div>
+  )
+}
+
 function ComboboxCell<TRow>({
   row,
   rowId,
@@ -375,6 +487,9 @@ function renderGridCell<TRow>(info: CellContext<TRow, unknown>) {
   if (col.cell.kind === 'combobox') {
     return <ComboboxCell row={row} rowId={rowId} columnId={col.id} cellDef={col.cell} nav={meta.nav} />
   }
+  if (col.cell.kind === 'multiline') {
+    return <MultilineCell row={row} rowId={rowId} columnId={col.id} cellDef={col.cell} nav={meta.nav} />
+  }
   return (
     <TextOrMonoCell
       row={row}
@@ -441,7 +556,11 @@ export function EditableGrid<TRow>({
         </thead>
         <tbody>
           {table.getRowModel().rows.map((row) => (
-            <tr key={row.id} className={rowClassName?.(row.original)}>
+            <tr
+              key={row.id}
+              className={rowClassName?.(row.original)}
+              data-row-id={getRowId(row.original)}
+            >
               {row.getVisibleCells().map((cell, i) => (
                 <td key={cell.id} className={columns[i]?.cellClassName}>
                   {flexRender(cell.column.columnDef.cell, cell.getContext())}

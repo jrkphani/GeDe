@@ -1,11 +1,29 @@
 import { useEffect } from 'react'
 import type { ContextRow } from '../db/mutations'
-import { isComplete } from '../domain/completeness'
+import { documentedStatus, isComplete } from '../domain/completeness'
+import { findDuplicateContextIds } from '../domain/duplicates'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
 import { useStatusStore } from '../store/status'
 import { EditableGrid, type GridColumn } from './EditableGrid'
+import { Button } from './ui/button'
+
+const DOCUMENTED_LABEL: Record<'draft' | 'complete' | 'documented', string> = {
+  draft: 'Draft',
+  complete: 'Complete — needs justification',
+  documented: 'Documented',
+}
+
+// Pre-canvas (issues 008–010 add the circle), "selecting" a duplicate sibling
+// means focusing its row in the register — the only surface today.
+function focusRow(contextId: string): void {
+  const escaped = typeof CSS !== 'undefined' ? CSS.escape(contextId) : contextId
+  const row = document.querySelector<HTMLElement>(`[data-row-id="${escaped}"]`)
+  const target = row?.querySelector<HTMLElement>('[role="gridcell"], button')
+  target?.scrollIntoView({ block: 'nearest' })
+  target?.focus()
+}
 
 const FIRST_CONTEXT_GHOST = 'Type to create your first context — it becomes α'
 
@@ -34,6 +52,10 @@ export function ContextRegister({ projectId }: { projectId: string }) {
     for (const d of dimensions) void loadParams(d.id)
   }, [dimensions, loadParams])
 
+  const dimensionIds = dimensions.map((d) => d.id)
+  const duplicatesByContext = findDuplicateContextIds(dimensionIds, bindingsByContext)
+  const symbolById = Object.fromEntries(contexts.map((c) => [c.id, c.symbol]))
+
   const columns: GridColumn<ContextRow>[] = [
     {
       id: 'symbol',
@@ -47,6 +69,21 @@ export function ContextRegister({ projectId }: { projectId: string }) {
           const result = await setSymbol(ctx.id, value)
           if (!result.ok && result.reason) announce(result.reason)
           return result.ok
+        },
+      },
+    },
+    {
+      id: 'documented',
+      header: 'Documented',
+      headClassName: 'grid-col--status',
+      cellClassName: 'grid-col--status',
+      cell: {
+        kind: 'static',
+        render: (ctx) => {
+          const bound = new Set(Object.keys(bindingsByContext[ctx.id] ?? {}))
+          const status = documentedStatus(isComplete(dimensionIds, bound), ctx.justification)
+          const label = DOCUMENTED_LABEL[status]
+          return <span className="status-dot" data-status={status} title={label} aria-label={label} />
         },
       },
     },
@@ -75,7 +112,7 @@ export function ContextRegister({ projectId }: { projectId: string }) {
       id: 'justification',
       header: 'Justification',
       cell: {
-        kind: 'text',
+        kind: 'multiline',
         getValue: (ctx) => ctx.justification ?? '',
         onCommit: async (ctx, value) => {
           await setJustification(ctx.id, value)
@@ -88,9 +125,34 @@ export function ContextRegister({ projectId }: { projectId: string }) {
       header: 'Children',
       cell: { kind: 'static', render: () => <span className="grid-cell__placeholder">—</span> },
     },
+    {
+      id: 'duplicate',
+      header: 'Duplicate',
+      headClassName: 'grid-col--duplicate',
+      cellClassName: 'grid-col--duplicate',
+      cell: {
+        kind: 'static',
+        render: (ctx) => {
+          const siblingIds = duplicatesByContext[ctx.id]
+          if (!siblingIds || siblingIds.length === 0) return null
+          const symbols = siblingIds.map((id) => symbolById[id] ?? '?')
+          const label = `Same tuple as ${symbols.join(', ')}`
+          return (
+            <Button
+              variant="bare"
+              className="duplicate-badge"
+              title={label}
+              onClick={() => {
+                focusRow(siblingIds[0] as string)
+              }}
+            >
+              = {symbols.join(', ')}
+            </Button>
+          )
+        },
+      },
+    },
   ]
-
-  const dimensionIds = dimensions.map((d) => d.id)
 
   return (
     <EditableGrid

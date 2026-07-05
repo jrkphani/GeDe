@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isComplete } from './completeness'
+import { documentedStatus, isComplete } from './completeness'
 
 describe('isComplete', () => {
   it('is false when no dimensions are bound', () => {
@@ -20,5 +20,23 @@ describe('isComplete', () => {
 
   it('is false for a canvas with no dimensions (vacuous truth guarded)', () => {
     expect(isComplete([], new Set())).toBe(false)
+  })
+})
+
+describe('documentedStatus', () => {
+  it('is draft when incomplete, regardless of justification', () => {
+    expect(documentedStatus(false, 'a reason')).toBe('draft')
+    expect(documentedStatus(false, '')).toBe('draft')
+  })
+
+  it('is complete (unjustified) when complete but justification is empty or whitespace', () => {
+    expect(documentedStatus(true, '')).toBe('complete')
+    expect(documentedStatus(true, '   ')).toBe('complete')
+    expect(documentedStatus(true, null)).toBe('complete')
+    expect(documentedStatus(true, undefined)).toBe('complete')
+  })
+
+  it('is documented when complete and justified', () => {
+    expect(documentedStatus(true, 'Reflects the primary beneficiaries')).toBe('documented')
   })
 })

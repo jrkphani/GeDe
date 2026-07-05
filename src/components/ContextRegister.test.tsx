@@ -37,10 +37,12 @@ describe('ContextRegister', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('columnheader').map((h) => h.textContent)).toEqual([
         'Symbol',
+        'Documented',
         'Dimension 1',
         'Dimension 2',
         'Justification',
         'Children',
+        'Duplicate',
       ])
     })
   })
@@ -91,5 +93,79 @@ describe('ContextRegister', () => {
 
     await waitFor(() => expect(useStatusStore.getState().message).toMatch(/already in use/))
     expect(screen.getByText('β')).toBeInTheDocument()
+  })
+
+  it('the documented dot reflects draft, complete-unjustified, and documented states', async () => {
+    const user = userEvent.setup()
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'Reason')
+    await user.keyboard('{Enter}')
+    await screen.findByText('α')
+    const row = (await screen.findByText('α')).closest('tr') as HTMLElement
+
+    expect(within(row).getByTitle('Draft')).toHaveAttribute('data-status', 'draft')
+
+    const buttons = within(row).getAllByRole('button')
+    await user.click(buttons[0] as HTMLElement)
+    await user.click(screen.getByRole('option', { name: 'Comfort' }))
+    await user.click(buttons[1] as HTMLElement)
+    await user.click(screen.getByRole('option', { name: 'Users' }))
+
+    await waitFor(() =>
+      expect(within(row).getByTitle('Documented')).toHaveAttribute('data-status', 'documented'),
+    )
+
+    await user.click(within(row).getByText('Reason'))
+    const textarea = screen.getByDisplayValue('Reason')
+    await user.clear(textarea)
+    await user.keyboard('{Enter}')
+
+    await waitFor(() =>
+      expect(within(row).getByTitle('Complete — needs justification')).toHaveAttribute(
+        'data-status',
+        'complete',
+      ),
+    )
+  })
+
+  it('flags two contexts on the same tuple with a duplicate badge that clears when either rebinds away', async () => {
+    const user = userEvent.setup()
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'first')
+    await user.keyboard('{Enter}')
+    await screen.findByText('α')
+    await user.type(phantom, 'second')
+    await user.keyboard('{Enter}')
+    await screen.findByText('β')
+
+    async function bindBoth(symbol: string) {
+      const row = (await screen.findByText(symbol)).closest('tr') as HTMLElement
+      const buttons = within(row).getAllByRole('button')
+      await user.click(buttons[0] as HTMLElement)
+      await user.click(screen.getByRole('option', { name: 'Comfort' }))
+      await user.click(buttons[1] as HTMLElement)
+      await user.click(screen.getByRole('option', { name: 'Users' }))
+    }
+    await bindBoth('α')
+    await bindBoth('β')
+
+    const rowAlpha = (await screen.findByText('α')).closest('tr') as HTMLElement
+    const rowBeta = (await screen.findByText('β')).closest('tr') as HTMLElement
+
+    await waitFor(() => {
+      expect(within(rowAlpha).getByTitle(/Same tuple as/)).toBeInTheDocument()
+      expect(within(rowBeta).getByTitle(/Same tuple as/)).toBeInTheDocument()
+    })
+
+    const betaButtons = within(rowBeta).getAllByRole('button')
+    await user.click(betaButtons[0] as HTMLElement)
+    await user.click(screen.getByText('— clear —'))
+
+    await waitFor(() => {
+      expect(within(rowAlpha).queryByTitle(/Same tuple as/)).not.toBeInTheDocument()
+      expect(within(rowBeta).queryByTitle(/Same tuple as/)).not.toBeInTheDocument()
+    })
   })
 })

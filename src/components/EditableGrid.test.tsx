@@ -152,4 +152,65 @@ describe('EditableGrid', () => {
     expect(phantomInput).toHaveValue('')
     expect(phantomInput).toHaveFocus()
   })
+
+  it('renders the row id as a data attribute for external row navigation', () => {
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} />)
+    expect(document.querySelector('[data-row-id="1"]')).toContainElement(screen.getByText('Alpha'))
+  })
+})
+
+describe('EditableGrid — multiline cell', () => {
+  interface Note {
+    id: string
+    body: string
+  }
+
+  const noteRows: Note[] = [{ id: 'n1', body: 'A short justification' }]
+
+  function makeNoteColumns(onCommit: (row: Note, v: string) => void = vi.fn()): GridColumn<Note>[] {
+    return [
+      {
+        id: 'body',
+        header: 'Body',
+        cell: {
+          kind: 'multiline',
+          getValue: (n) => n.body,
+          onCommit: (n, v) => {
+            onCommit(n, v)
+          },
+        },
+      },
+    ]
+  }
+
+  it('shows the full value as a title attribute for hover/focus, truncated display otherwise', () => {
+    render(<EditableGrid rows={noteRows} columns={makeNoteColumns()} getRowId={(r) => r.id} />)
+    expect(screen.getByText('A short justification').closest('[role="gridcell"]')).toHaveAttribute(
+      'title',
+      'A short justification',
+    )
+  })
+
+  it('click/Enter edits via a textarea and commits the full text on Enter', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    render(<EditableGrid rows={noteRows} columns={makeNoteColumns(onCommit)} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('A short justification'))
+    const textarea = screen.getByDisplayValue('A short justification')
+    expect(textarea.tagName).toBe('TEXTAREA')
+    await user.clear(textarea)
+    await user.type(textarea, 'Reflects the primary beneficiaries')
+    await user.keyboard('{Enter}')
+    expect(onCommit).toHaveBeenCalledWith(noteRows[0], 'Reflects the primary beneficiaries')
+  })
+
+  it('Esc reverts without committing', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    render(<EditableGrid rows={noteRows} columns={makeNoteColumns(onCommit)} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('A short justification'))
+    await user.keyboard('changed{Escape}')
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(await screen.findByText('A short justification')).toBeInTheDocument()
+  })
 })

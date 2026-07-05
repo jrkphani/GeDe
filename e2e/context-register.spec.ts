@@ -1,8 +1,8 @@
-import { expect, test } from '@playwright/test'
+import { expect, test, type Page } from '@playwright/test'
 
-test('context register: create α and bind Comfort/Users/Engagement via type-ahead, keyboard only', async ({
-  page,
-}) => {
+// Shared canvas setup: project → Design tab → 3 dimensions (Value/Stake/Process)
+// each with one parameter (Comfort/Users/Engagement). Used by every test below.
+async function setUpCanvas(page: Page) {
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
@@ -50,20 +50,29 @@ test('context register: create α and bind Comfort/Users/Engagement via type-ahe
 
   // Close the dimension manager popover — the register underneath is unaffected.
   await page.getByRole('button', { name: 'Dimensions' }).click()
+}
 
-  // Create the context — table-side creation is "new empty row, start typing".
-  const registerPhantom = page.getByPlaceholder('Type to create your first context — it becomes α')
+async function createContext(page: Page, justification: string) {
+  const registerPhantom = page.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
   await registerPhantom.click()
-  await page.keyboard.type('Stake reflects the primary beneficiaries')
+  await page.keyboard.type(justification)
   await page.keyboard.press('Enter')
+}
+
+test('context register: create α and bind Comfort/Users/Engagement via type-ahead, keyboard only', async ({
+  page,
+}) => {
+  await setUpCanvas(page)
+  await createContext(page, 'Stake reflects the primary beneficiaries')
 
   const row = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
   await expect(row).toHaveClass(/grid-row--draft/)
 
-  // Column order is Symbol(0) · Value(1) · Stake(2) · Process(3) · Justification(4) · Children(5).
-  const valueCell = row.locator('td').nth(1)
-  const stakeCell = row.locator('td').nth(2)
-  const processCell = row.locator('td').nth(3)
+  // Column order is Symbol(0) · Documented(1) · Value(2) · Stake(3) · Process(4) ·
+  // Justification(5) · Children(6) · Duplicate(7).
+  const valueCell = row.locator('td').nth(2)
+  const stakeCell = row.locator('td').nth(3)
+  const processCell = row.locator('td').nth(4)
 
   // From here on: keyboard only. Arrow up from the (refocused) phantom row
   // reaches α's Justification cell; arrow left walks Process → Stake → Value.
@@ -105,4 +114,43 @@ test('context register: create α and bind Comfort/Users/Engagement via type-ahe
   await expect(rowAfter.getByText('Comfort')).toBeVisible()
   await expect(rowAfter.getByText('Users')).toBeVisible()
   await expect(rowAfter.getByText('Engagement')).toBeVisible()
+})
+
+test('context register: two contexts on the same tuple both save and both show a duplicate badge', async ({
+  page,
+}) => {
+  await setUpCanvas(page)
+
+  async function bindRow(symbol: string) {
+    const row = page.locator('.editable-grid tbody tr', { has: page.getByText(symbol, { exact: true }) })
+    const valueCell = row.locator('td').nth(2)
+    const stakeCell = row.locator('td').nth(3)
+    const processCell = row.locator('td').nth(4)
+
+    async function bindViaClick(cell: typeof valueCell, paramName: string) {
+      await cell.getByRole('button').click()
+      await page.getByPlaceholder('Type to filter…').fill(paramName)
+      await page.keyboard.press('Enter')
+      await expect(cell).toContainText(paramName)
+    }
+    await bindViaClick(valueCell, 'Comfort')
+    await bindViaClick(stakeCell, 'Users')
+    await bindViaClick(processCell, 'Engagement')
+    return row
+  }
+
+  await createContext(page, 'First take')
+  const rowAlpha = await bindRow('α')
+  await expect(rowAlpha).not.toHaveClass(/grid-row--draft/)
+
+  await createContext(page, 'Second take, same tuple')
+  const rowBeta = await bindRow('β')
+  await expect(rowBeta).not.toHaveClass(/grid-row--draft/)
+
+  // Both contexts saved (no save was ever rejected) and both show the
+  // non-blocking duplicate badge naming the sibling (SPEC invariant 2).
+  await expect(rowAlpha.getByTitle(/Same tuple as/)).toBeVisible()
+  await expect(rowBeta.getByTitle(/Same tuple as/)).toBeVisible()
+  await expect(rowAlpha.getByTitle('Same tuple as β')).toBeVisible()
+  await expect(rowBeta.getByTitle('Same tuple as α')).toBeVisible()
 })
