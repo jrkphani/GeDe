@@ -1,6 +1,6 @@
 # 007: Dimension add/remove with draft demotion
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: 005, 006
 
@@ -36,6 +36,14 @@ As a designer I can change my mind about a canvas's dimensions after contexts ex
 
 ## Acceptance criteria
 
-- [ ] Both operations are single undo steps that fully round-trip (property-test extension of slice 006).
-- [ ] No orphan bindings possible — asserted by a DB-level integrity test.
-- [ ] Impact copy follows STYLE_GUIDE §7.
+- [x] Both operations are single undo steps that fully round-trip (property-test extension of slice 006).
+- [x] No orphan bindings possible — asserted by a DB-level integrity test.
+- [x] Impact copy follows STYLE_GUIDE §7.
+
+## Shipped notes
+
+- **Add**: no store change was needed — `isComplete()`/`documentedStatus()` (issues 004/005) always evaluate against the *current* live dimension list, so a newly added dimension demotes every previously-complete context to draft the instant it exists, purely emergent. Locked in by a regression test (`store/dimensions.test.ts`).
+- **Remove**: bindings have no `deletedAt` (schema.ts), so removal is a genuine cascading hard delete (`cascadeDeleteBindingsForDimension` in `db/mutations.ts`), not a soft one — the issue's own "soft-deletes to its bindings" scope line was imprecise. Tuple hashes are recomputed for every affected context. `restoreDimension` grew an optional `bindingsToRestore` param so undo reinserts the exact deleted rows and recomputes hashes back to the original; `removeDimension`/`removeDimensionUnchecked` now return `{ dimensions, deletedBindings }` so the store can both persist and mirror the cascade into `useContextsStore`'s in-memory `bindingsByContext` (`syncBindingsForContexts`, a plain DB re-read — no new race-prone diffing logic).
+- **Impact preview**: `src/domain/dimensionImpact.ts` — `computeRemovalImpact()` returns only `{ bindingCount }`. The design brief's example copy ("Deletes 7 bindings · 5 contexts become drafts") turned out not to be reproducible: given the current dimension-count floor and the live-evaluated `isComplete()`, a dimension *removal* can only ever **promote** a draft to complete (the required set shrinks) or leave completeness unchanged — it can never demote one, since every dimension a context had bound stays bound. The confirm popover therefore shows one accurate number ("Remove *Name*? Deletes N bindings.") rather than a second, always-equal-to-the-first "contexts affected" figure.
+- **UI**: `RemoveDimensionConfirm` in `DimensionManager.tsx` — the one confirm in the app, an anchored `Popover` (not a modal) with the impact copy and a `danger`-variant `Button` (new `buttonVariants` entry, Tailwind `bg-destructive`/`text-destructive-foreground` off the existing `--danger` token bridge — no hardcoded color). Cancel is a true no-op; confirming calls the same `dimensionsStore.remove()` used everywhere else, so the single command-log entry and status-bar "Undo" narration come for free.
+- Property test (`store/undoRedo.property.test.ts`) already generated remove-dimension ops against bound contexts; it silently didn't catch the missing cascade before this issue (bindings were simply never touched by remove, so before/after snapshots still matched). It now genuinely exercises the cascade + restore path and passes.

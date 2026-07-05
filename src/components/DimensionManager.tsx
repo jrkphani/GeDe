@@ -3,6 +3,8 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-
 import { CSS } from '@dnd-kit/utilities'
 import { useState } from 'react'
 import type { DimensionRow } from '../db/mutations'
+import { computeRemovalImpact } from '../domain/dimensionImpact'
+import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { DIMENSION_PALETTE } from '../theme/palette'
 import { ParameterList } from './ParameterList'
@@ -46,6 +48,58 @@ function SwatchPicker({ dimension, onDone }: { dimension: DimensionRow; onDone: 
   )
 }
 
+// SPEC invariant 4 / STYLE_GUIDE §9 — the one confirm in the app: remove is
+// destructive at a distance (bindings on every context that used it), so it
+// gets an anchored popover with the exact impact numbers instead of a bare
+// "Are you sure?". Add never confirms — it destroys nothing.
+function RemoveDimensionConfirm({
+  dimension,
+  canRemove,
+}: {
+  dimension: DimensionRow
+  canRemove: boolean
+}) {
+  const remove = useDimensionsStore((s) => s.remove)
+  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
+  const [open, setOpen] = useState(false)
+  const { bindingCount } = computeRemovalImpact(dimension.id, bindingsByContext)
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          aria-label={`Remove ${dimension.name}`}
+          disabled={!canRemove}
+          title={canRemove ? undefined : FLOOR_TOOLTIP}
+        >
+          Remove
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" sideOffset={4} className="remove-dimension-confirm">
+        <p className="remove-dimension-confirm__copy">
+          Remove <strong>{dimension.name}</strong>? Deletes{' '}
+          <span className="font-mono">{bindingCount}</span>{' '}
+          {bindingCount === 1 ? 'binding' : 'bindings'}.
+        </p>
+        <div className="remove-dimension-confirm__actions">
+          <Button variant="bare" className="row-action" onClick={() => setOpen(false)}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            aria-label={`Confirm remove ${dimension.name}`}
+            onClick={() => {
+              void remove(dimension.id).then(() => setOpen(false))
+            }}
+          >
+            Remove
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function DimensionItem({
   dimension,
   index,
@@ -61,7 +115,6 @@ function DimensionItem({
 }) {
   const rename = useDimensionsStore((s) => s.rename)
   const reorder = useDimensionsStore((s) => s.reorder)
-  const remove = useDimensionsStore((s) => s.remove)
   const [picking, setPicking] = useState(false)
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: dimension.id,
@@ -113,14 +166,7 @@ function DimensionItem({
           editing={editing}
           onEditingChange={(next) => setEditing(next ? dimension.id : null)}
         />
-        <Button
-          aria-label={`Remove ${dimension.name}`}
-          disabled={!canRemove}
-          title={canRemove ? undefined : FLOOR_TOOLTIP}
-          onClick={() => void remove(dimension.id)}
-        >
-          Remove
-        </Button>
+        <RemoveDimensionConfirm dimension={dimension} canRemove={canRemove} />
         {picking && <SwatchPicker dimension={dimension} onDone={() => setPicking(false)} />}
       </div>
       <ParameterList dimensionId={dimension.id} />

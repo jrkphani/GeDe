@@ -21,7 +21,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [004](done/004-context-register-editable-grid.md) ✅ | Context register + EditableGrid core | M1 | 003, 016 |
 | [005](done/005-justification-documented-duplicates.md) ✅ | Justification, documented, duplicates | M1 | 004 |
 | [006](done/006-undo-redo-command-log.md) ✅ | Undo/redo command log | M1 | 004 |
-| [007](007-dimension-mutability-demotion.md) | Dimension mutability + demotion | M1 | 005, 006 |
+| [007](done/007-dimension-mutability-demotion.md) ✅ | Dimension mutability + demotion | M1 | 005, 006 |
 | [008](008-canvas-readonly-deterministic-layout.md) | Canvas read-only + deterministic layout | M2 | 004 |
 | [009](009-canvas-selection-composer-sync.md) | Selection, spokes, composer, sync | M2 | 008 |
 | [010](010-compose-bind-from-canvas.md) | Compose & bind from canvas | M2 | 009 |

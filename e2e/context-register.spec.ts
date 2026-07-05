@@ -154,3 +154,54 @@ test('context register: two contexts on the same tuple both save and both show a
   await expect(rowAlpha.getByTitle('Same tuple as β')).toBeVisible()
   await expect(rowBeta.getByTitle('Same tuple as α')).toBeVisible()
 })
+
+// Issue 007, test-first plan item 5: adding a dimension after a context is
+// already complete demotes it to draft (the new column's empty cell is the
+// affordance) until the new dimension is bound, at which point it's complete
+// again — mirrors SPEC §6 M2 done-when on the table side.
+test('adding a 4th dimension demotes a complete context to draft; binding it restores complete', async ({
+  page,
+}) => {
+  await setUpCanvas(page)
+  await createContext(page, 'Comfort, Users, Engagement align')
+
+  const row = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
+  const valueCell = row.locator('td').nth(2)
+  const stakeCell = row.locator('td').nth(3)
+  const processCell = row.locator('td').nth(4)
+
+  async function bindViaClick(cell: typeof valueCell, paramName: string) {
+    await cell.getByRole('button').click()
+    await page.getByPlaceholder('Type to filter…').fill(paramName)
+    await page.keyboard.press('Enter')
+    await expect(cell).toContainText(paramName)
+  }
+  await bindViaClick(valueCell, 'Comfort')
+  await bindViaClick(stakeCell, 'Users')
+  await bindViaClick(processCell, 'Engagement')
+  await expect(row).not.toHaveClass(/grid-row--draft/)
+
+  // Add a 4th dimension (with its own parameter) — α is now missing a
+  // binding on it and drops to draft, with no separate "demote" step.
+  await page.getByRole('button', { name: 'Dimensions' }).click()
+  await page.getByRole('button', { name: 'Add dimension' }).click()
+  await page.locator('.dim-row input').first().waitFor()
+  await page.keyboard.press('Escape') // keep the default name "Dimension 4"
+
+  const section = page.locator('.dim-section', {
+    has: page.locator('.dim-row__name', { hasText: 'Dimension 4' }),
+  })
+  const paramPhantom = section.getByPlaceholder('Type to add a parameter')
+  await paramPhantom.fill('Low')
+  await paramPhantom.press('Enter')
+  await expect(section.getByText('Low', { exact: true })).toBeVisible()
+  await page.getByRole('button', { name: 'Dimensions' }).click() // close the popover
+
+  await expect(row).toHaveClass(/grid-row--draft/)
+
+  // Column order is now Symbol(0)·Documented(1)·Value(2)·Stake(3)·Process(4)·
+  // Dimension 4(5)·Justification(6)·Children(7)·Duplicate(8).
+  const dimension4Cell = row.locator('td').nth(5)
+  await bindViaClick(dimension4Cell, 'Low')
+  await expect(row).not.toHaveClass(/grid-row--draft/)
+})

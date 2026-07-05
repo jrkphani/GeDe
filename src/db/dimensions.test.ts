@@ -1,8 +1,14 @@
+import { eq, isNotNull } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { openDatabase } from './client'
+import { bindings, dimensions } from './schema'
 import {
   addDimension,
+  addParameter,
+  bindParameter,
+  createContext,
   DimensionFloorError,
+  listBindings,
   listDimensions,
   removeDimension,
   renameDimension,
@@ -124,6 +130,83 @@ describe('dimension mutations', () => {
       const rows = await listDimensions(db, projectId)
       expect(rows.map((d) => d.id)).toEqual(orderedIds)
       expect(rows.map((d) => d.sort)).toEqual([0, 1, 2])
+    })
+  })
+
+  // issue 007: removal cascades to bindings — SPEC invariant 4. Bindings have
+  // no deletedAt (schema.ts) so this is a real hard delete, not a soft one.
+  describe('removeDimension binding cascade (issue 007)', () => {
+    async function canvasWithFullyBoundContext() {
+      const { db, projectId } = await projectDb()
+      const value = await addDimension(db, projectId)
+      const stake = await addDimension(db, projectId)
+      const risk = await addDimension(db, projectId)
+      const vParam = await addParameter(db, value.id, 'Comfort')
+      const sParam = await addParameter(db, stake.id, 'Users')
+      const rParam = await addParameter(db, risk.id, 'Low')
+      const ctx = await createContext(db, projectId)
+      await bindParameter(db, ctx.id, value.id, vParam.id)
+      await bindParameter(db, ctx.id, stake.id, sParam.id)
+      await bindParameter(db, ctx.id, risk.id, rParam.id)
+      return { db, projectId, value, stake, risk, vParam, sParam, rParam, ctx }
+    }
+
+    it('hard-deletes bindings for the removed dimension and recomputes remaining tuple hashes', async () => {
+      const { db, projectId, value, stake, risk, vParam, rParam, ctx } =
+        await canvasWithFullyBoundContext()
+
+      const { dimensions: after, deletedBindings } = await removeDimension(db, projectId, stake.id)
+      expect(after.map((d) => d.id)).toEqual([value.id, risk.id])
+      expect(deletedBindings).toHaveLength(1)
+      expect(deletedBindings[0]?.dimensionId).toBe(stake.id)
+      expect(deletedBindings[0]?.contextId).toBe(ctx.id)
+
+      const remaining = await listBindings(db, ctx.id)
+      expect(remaining.map((r) => r.dimensionId).sort()).toEqual([risk.id, value.id].sort())
+      const expectedHash = `${vParam.id}|${rParam.id}`
+      expect(remaining.every((r) => r.tupleHash === expectedHash)).toBe(true)
+    })
+
+    it('leaves other contexts untouched when they never bound the removed dimension', async () => {
+      const { db, projectId, value, stake, vParam } = await canvasWithFullyBoundContext()
+      const untouched = await createContext(db, projectId)
+      await bindParameter(db, untouched.id, value.id, vParam.id)
+
+      await removeDimension(db, projectId, stake.id)
+
+      const rows = await listBindings(db, untouched.id)
+      expect(rows).toHaveLength(1)
+      expect(rows[0]?.dimensionId).toBe(value.id)
+    })
+
+    it('no binding ever references a soft-deleted dimension (integrity)', async () => {
+      const { db, projectId, stake } = await canvasWithFullyBoundContext()
+
+      await removeDimension(db, projectId, stake.id)
+
+      const orphans = await db
+        .select()
+        .from(bindings)
+        .innerJoin(dimensions, eq(bindings.dimensionId, dimensions.id))
+        .where(isNotNull(dimensions.deletedAt))
+      expect(orphans).toHaveLength(0)
+    })
+
+    it('undo (restoreDimension with the deleted bindings) reinserts them and recomputes the original hash', async () => {
+      const { db, projectId, value, stake, risk, vParam, sParam, rParam, ctx } =
+        await canvasWithFullyBoundContext()
+      const orderedIds = [value.id, stake.id, risk.id]
+
+      const { deletedBindings } = await removeDimension(db, projectId, stake.id)
+      await restoreDimension(db, projectId, stake.id, orderedIds, deletedBindings)
+
+      const rows = await listDimensions(db, projectId)
+      expect(rows.map((d) => d.id)).toEqual(orderedIds)
+
+      const restoredBindings = await listBindings(db, ctx.id)
+      expect(restoredBindings.map((r) => r.dimensionId).sort()).toEqual(orderedIds.slice().sort())
+      const expectedHash = `${vParam.id}|${sParam.id}|${rParam.id}`
+      expect(restoredBindings.every((r) => r.tupleHash === expectedHash)).toBe(true)
     })
   })
 })

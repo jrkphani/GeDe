@@ -9,10 +9,12 @@ import {
   restoreDimension as dbRestore,
   setDimensionColor as dbSetColor,
   undoAddDimension,
+  type BindingRow,
   type DimensionRow,
 } from '../db/mutations'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
+import { useContextsStore } from './contexts'
 
 // Root-canvas dimensions for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
@@ -31,6 +33,10 @@ interface DimensionsState {
   setColor: (id: string, color: string) => Promise<void>
   reorder: (id: string, toIndex: number) => Promise<void>
   remove: (id: string) => Promise<{ ok: boolean; reason?: string }>
+}
+
+function contextIdsOf(rows: readonly BindingRow[]): string[] {
+  return [...new Set(rows.map((r) => r.contextId))]
 }
 
 export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
@@ -136,14 +142,20 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     const orderedIds = get().dimensions.map((d) => d.id)
     const removedName = get().dimensions.find((d) => d.id === id)?.name ?? ''
     try {
-      set({ dimensions: await dbRemove(db, projectId, id) })
+      const { dimensions, deletedBindings } = await dbRemove(db, projectId, id)
+      set({ dimensions })
+      await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
       useCommandLogStore.getState().push({
         label: `remove dimension "${removedName}"`,
         async undo() {
-          set({ dimensions: await dbRestore(db, projectId, id, orderedIds) })
+          const restored = await dbRestore(db, projectId, id, orderedIds, deletedBindings)
+          set({ dimensions: restored })
+          await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
         },
         async redo() {
-          set({ dimensions: await dbRemove(db, projectId, id) })
+          const result = await dbRemove(db, projectId, id)
+          set({ dimensions: result.dimensions })
+          await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(result.deletedBindings))
         },
       })
       return { ok: true }

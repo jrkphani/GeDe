@@ -17,6 +17,10 @@ export const buttonVariants = cva('', {
       // No chrome of its own — for buttons that carry a bespoke class
       // (e.g. the dnd drag handle) but must still be a real <button> primitive.
       bare: '',
+      // The one destructive action in the app (issue 007: dimension remove
+      // confirm) — same shape as rowAction, recolored via the Tailwind bridge
+      // to --danger (theme-bridge.css), never a hardcoded color.
+      danger: 'row-action bg-destructive text-destructive-foreground border-destructive hover:opacity-90',
     },
   },
   defaultVariants: { variant: 'rowAction' },

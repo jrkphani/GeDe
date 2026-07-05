@@ -166,6 +166,29 @@ export async function reorderDimension(
   return listDimensions(db, projectId)
 }
 
+export interface DimensionRemoveResult {
+  dimensions: DimensionRow[]
+  deletedBindings: BindingRow[]
+}
+
+// SPEC invariant 4 (issue 007) — bindings have no deletedAt (schema.ts), so a
+// dimension removal hard-deletes every binding pointing at it and recomputes
+// the remaining tuple hash for each context that had one, keeping the
+// duplicate-tuple index (issue 005) correct with the shrunk dimension set.
+// Returns the deleted rows verbatim so the caller can restore them exactly on
+// undo (restoreDimension below).
+async function cascadeDeleteBindingsForDimension(
+  db: Database,
+  dimensionId: string,
+): Promise<BindingRow[]> {
+  const rows = await db.select().from(bindings).where(eq(bindings.dimensionId, dimensionId))
+  if (rows.length === 0) return rows
+  await db.delete(bindings).where(eq(bindings.dimensionId, dimensionId))
+  const contextIds = [...new Set(rows.map((r) => r.contextId))]
+  for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
+  return rows
+}
+
 // The floor is a *user-facing* guard (SPEC §1): you can't manually remove
 // below n = 2. It must NOT apply when the command log (issue 006) undoes an
 // add() — that can legitimately take the count back through 1 or 0, the same
@@ -175,8 +198,9 @@ async function removeDimensionUnchecked(
   db: Database,
   projectId: string,
   id: string,
-): Promise<DimensionRow[]> {
+): Promise<DimensionRemoveResult> {
   const rows = await listDimensions(db, projectId)
+  const deletedBindings = await cascadeDeleteBindingsForDimension(db, id)
   await db
     .update(dimensions)
     .set({ deletedAt: now(), updatedAt: now() })
@@ -185,14 +209,14 @@ async function removeDimensionUnchecked(
     db,
     rows.filter((d) => d.id !== id),
   )
-  return listDimensions(db, projectId)
+  return { dimensions: await listDimensions(db, projectId), deletedBindings }
 }
 
 export async function removeDimension(
   db: Database,
   projectId: string,
   id: string,
-): Promise<DimensionRow[]> {
+): Promise<DimensionRemoveResult> {
   const rows = await listDimensions(db, projectId)
   if (rows.length <= 2) throw new DimensionFloorError()
   return removeDimensionUnchecked(db, projectId, id)
@@ -207,11 +231,14 @@ export { removeDimensionUnchecked as undoAddDimension }
 // middle removal's undo restores the exact original position instead of
 // appending at the end. `orderedIds` is the full live order captured by the
 // caller (store) right before the mutation being undone/redone.
+// `bindingsToRestore` (issue 007) reinserts the exact rows a cascade delete
+// removed and recomputes their contexts' tuple hashes back to the original.
 export async function restoreDimension(
   db: Database,
   projectId: string,
   id: string,
   orderedIds: readonly string[],
+  bindingsToRestore: readonly BindingRow[] = [],
 ): Promise<DimensionRow[]> {
   await db
     .update(dimensions)
@@ -223,6 +250,19 @@ export async function restoreDimension(
     .map((oid) => byId.get(oid))
     .filter((d): d is DimensionRow => d !== undefined)
   await rewriteSort(db, ordered)
+  if (bindingsToRestore.length > 0) {
+    await db.insert(bindings).values(
+      bindingsToRestore.map((row) => ({
+        id: row.id,
+        contextId: row.contextId,
+        dimensionId: row.dimensionId,
+        parameterId: row.parameterId,
+        tupleHash: row.tupleHash,
+      })),
+    )
+    const contextIds = [...new Set(bindingsToRestore.map((r) => r.contextId))]
+    for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
+  }
   return listDimensions(db, projectId)
 }
 

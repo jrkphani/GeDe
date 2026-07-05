@@ -27,12 +27,12 @@ import { requireDatabase } from './database'
 
 async function fetchBindingsMap(
   db: Database,
-  contextRows: ContextRow[],
+  contextIds: readonly string[],
 ): Promise<Record<string, Record<string, string>>> {
   const map: Record<string, Record<string, string>> = {}
-  for (const c of contextRows) {
-    const rows: BindingRow[] = await dbListBindings(db, c.id)
-    map[c.id] = Object.fromEntries(rows.map((r) => [r.dimensionId, r.parameterId]))
+  for (const id of contextIds) {
+    const rows: BindingRow[] = await dbListBindings(db, id)
+    map[id] = Object.fromEntries(rows.map((r) => [r.dimensionId, r.parameterId]))
   }
   return map
 }
@@ -48,6 +48,10 @@ interface ContextsState {
   setJustification: (id: string, text: string) => Promise<void>
   bind: (contextId: string, dimensionId: string, parameterId: string) => Promise<void>
   unbind: (contextId: string, dimensionId: string) => Promise<void>
+  // Re-reads bindings for exactly these contexts from the DB and merges them
+  // in (issue 007) — the mirror side of a dimension add/remove, whose own
+  // mutation + undo/redo already wrote the authoritative binding rows.
+  syncBindingsForContexts: (contextIds: readonly string[]) => Promise<void>
 }
 
 export const useContextsStore = create<ContextsState>()((set, get) => ({
@@ -58,7 +62,10 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   async load(projectId) {
     const db = requireDatabase()
     const contexts = await dbListContexts(db, projectId)
-    const bindingsByContext = await fetchBindingsMap(db, contexts)
+    const bindingsByContext = await fetchBindingsMap(
+      db,
+      contexts.map((c) => c.id),
+    )
     set({ projectId, contexts, bindingsByContext })
   },
 
@@ -200,6 +207,13 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
         })
       },
     })
+  },
+
+  async syncBindingsForContexts(contextIds) {
+    if (contextIds.length === 0) return
+    const db = requireDatabase()
+    const updated = await fetchBindingsMap(db, contextIds)
+    set((state) => ({ bindingsByContext: { ...state.bindingsByContext, ...updated } }))
   },
 }))
 
