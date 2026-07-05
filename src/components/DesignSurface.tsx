@@ -1,6 +1,9 @@
 import { useEffect, useState } from 'react'
 import { ContextBar } from '../shell/slots'
+import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
+import { useParametersStore } from '../store/parameters'
+import { Canvas } from './Canvas'
 import { ContextRegister } from './ContextRegister'
 import { DimensionManager, DimensionManagerPanel } from './DimensionManager'
 import type { DesignView } from '../shell/routes'
@@ -9,12 +12,26 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const loadedFor = useDimensionsStore((s) => s.projectId)
   const editingId = useDimensionsStore((s) => s.editingId)
+  const contexts = useContextsStore((s) => s.contexts)
+  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
+  const paramsByDimension = useParametersStore((s) => s.byDimension)
   const [guided, setGuided] = useState<boolean | null>(null)
 
   useEffect(() => {
     void useDimensionsStore.getState().load(projectId)
     setGuided(null)
   }, [projectId])
+
+  // The canvas is a read-only companion projection (SPEC invariant 6) — it
+  // reads the same contexts/parameters state ContextRegister already loads,
+  // via its own subscription rather than prop-threading through the register.
+  useEffect(() => {
+    void useContextsStore.getState().load(projectId)
+  }, [projectId])
+
+  useEffect(() => {
+    for (const d of dimensions) void useParametersStore.getState().load(d.id)
+  }, [dimensions])
 
   // Guided mode starts when the canvas is below the floor and ends only once
   // the crossing gesture completes — never unmount an open editor mid-gesture.
@@ -44,14 +61,27 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
       <ContextBar>
         <DimensionManager />
       </ContextBar>
-      <main className="projects" data-view={view}>
-        <section className="panel">
-          {view === 'canvas' ? (
-            <ContextRegister projectId={projectId} />
-          ) : (
+      <main className="design-main" data-view={view}>
+        {view === 'canvas' ? (
+          <div className="design-surface-row">
+            {/* Design brief (issue 008): the circle sits directly on the
+                graph-paper ground, no panel — unlike the register, which
+                stays opaque per STYLE_GUIDE's table convention. */}
+            <Canvas
+              dimensions={dimensions}
+              parametersByDimension={paramsByDimension}
+              contexts={contexts}
+              bindingsByContext={bindingsByContext}
+            />
+            <section className="panel context-register-shell">
+              <ContextRegister projectId={projectId} />
+            </section>
+          </div>
+        ) : (
+          <section className="panel">
             <p className="placeholder">Coverage matrix arrives with issue 012.</p>
-          )}
-        </section>
+          </section>
+        )}
       </main>
     </>
   )

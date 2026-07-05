@@ -376,6 +376,14 @@ body {
   padding: var(--space-6) var(--space-5);
 }
 
+/* Design tab main surface (issue 008) — unlike .projects above, this holds
+   the canvas+register side by side (SPEC §4.1) and needs real width, not a
+   single centered form panel. */
+.design-main {
+  container-type: inline-size;
+  padding: var(--space-6) var(--space-5);
+}
+
 .panel {
   background: var(--panel);
   border: 1px solid var(--hairline);
@@ -728,4 +736,102 @@ body {
 .duplicate-badge:hover,
 .duplicate-badge:focus-visible {
   color: var(--ink);
+}
+
+/* Circle canvas (issue 008, SPEC §4.2, STYLE_GUIDE §7): read-only this slice —
+   no hover/selection state. Geometry lives in a fixed 1000x1000 space
+   (src/domain/canvasLayout.ts); the shell scales it via viewBox and drives
+   label-tier switching from its own measured width (container-query driven,
+   the canvas shares a row with the register). */
+.canvas-shell {
+  container-type: inline-size;
+  width: 100%;
+}
+
+.canvas-svg {
+  display: block;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  max-height: 60vh;
+}
+
+.canvas-arc {
+  stroke: none;
+}
+
+.canvas-svg[data-empty='true'] .canvas-arc {
+  opacity: 0.35;
+}
+
+.canvas-arc-label {
+  font-family: var(--font-ui);
+  font-size: var(--text-mono);
+  fill: var(--ink-muted);
+}
+
+.canvas-shell[data-label-tier='legend'] .canvas-arc-label {
+  display: none;
+}
+
+.canvas-dot {
+  stroke: none;
+}
+
+.canvas-node circle {
+  fill: var(--ink);
+  stroke: none;
+}
+
+.canvas-node text {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  fill: var(--paper);
+}
+
+.canvas-node--draft circle {
+  fill: none;
+  stroke: var(--ink);
+  stroke-width: 1.5px;
+  stroke-dasharray: 3 2;
+}
+
+.canvas-node--draft text {
+  fill: var(--ink);
+}
+
+.canvas-node-badge {
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  fill: var(--ink-muted);
+}
+
+.canvas-empty-prompt {
+  font-family: var(--font-ui);
+  font-size: var(--text-body);
+  fill: var(--ink-muted);
+}
+
+/* SPEC §4.1 — register + canvas are two projections of the same tree, side by
+   side on wide screens; STYLE_GUIDE §7's 640px tier stacks them on narrow
+   containers instead. */
+.design-surface-row {
+  display: flex;
+  gap: var(--space-5);
+  align-items: flex-start;
+}
+
+.design-surface-row > .canvas-shell {
+  flex: 1 1 40%;
+  min-width: 0;
+}
+
+.design-surface-row > .context-register-shell {
+  flex: 1 1 60%;
+  min-width: 0;
+}
+
+@container (max-width: 640px) {
+  .design-surface-row {
+    flex-direction: column;
+  }
 }
