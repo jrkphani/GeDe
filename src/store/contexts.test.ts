@@ -170,4 +170,27 @@ describe('contexts store — command log (issue 006)', () => {
     expect(useContextsStore.getState().contexts.map((c) => c.id)).toEqual([(created as { id: string }).id])
     spy.mockRestore()
   })
+
+  // The actual CI-only e2e failure (undo-redo.spec.ts): ContextRegister's
+  // mount effect fires `void loadContexts(projectId)` without awaiting it,
+  // and the register is interactive (phantom row included) on that same
+  // render. create()/setJustification/etc. read get().projectId internally
+  // rather than taking it as an argument — if load(projectId) hadn't yet
+  // reached its own set({projectId}) (only did so after its full DB
+  // round-trip, pre-fix), a context created fast enough after mount would
+  // see projectId still null and silently no-op: no error, no context, the
+  // phantom just optimistically clears forever. Reproduced 100% on CI
+  // (slow enough to lose the race every run) and 0% locally (load() always
+  // won there) — a Playwright trace with temporary console.log
+  // instrumentation pinpointed create() returning null almost instantly,
+  // well before load()'s DB calls had resolved.
+  it('create() works even when called immediately after load(projectId) is fired but not yet awaited', async () => {
+    resetContextsStore()
+    const loadPromise = useContextsStore.getState().load(projectId) // not awaited — mirrors the mount effect
+    expect(useContextsStore.getState().projectId).toBe(projectId) // set synchronously, before load's own DB round-trip
+    const created = await useContextsStore.getState().create()
+    expect(created).not.toBeNull()
+    await loadPromise
+    expect(useContextsStore.getState().contexts.map((c) => c.id)).toEqual([(created as { id: string }).id])
+  })
 })

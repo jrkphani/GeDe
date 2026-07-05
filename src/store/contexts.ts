@@ -71,37 +71,34 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   generation: 0,
 
   async load(projectId) {
-    console.log('[DIAG] contexts.load: start', projectId)
     const db = requireDatabase()
+    // Set synchronously, before any await (issue 007 CI bug, real root
+    // cause): create() etc. read get().projectId internally rather than
+    // taking it as an argument, so if it were only set after this
+    // function's own DB round-trip, a mutation fired very soon after mount
+    // (ContextRegister's own load() effect) could run while projectId was
+    // still null and silently no-op — no error, since create()'s guard
+    // just returns null. Reproduced on CI (slow enough to lose the race
+    // every time) but never locally (load() always won there).
+    set({ projectId })
     const gen = get().generation
     const contexts = await dbListContexts(db, projectId)
-    console.log('[DIAG] contexts.load: dbListContexts done', contexts.length)
     const bindingsByContext = await fetchBindingsMap(
       db,
       contexts.map((c) => c.id),
     )
-    console.log('[DIAG] contexts.load: fetchBindingsMap done')
-    if (get().generation !== gen) {
-      console.log('[DIAG] contexts.load: DISCARDED (stale generation)', gen, get().generation)
-      return
-    }
-    set({ projectId, contexts, bindingsByContext })
-    console.log('[DIAG] contexts.load: applied')
+    if (get().generation !== gen) return
+    set({ contexts, bindingsByContext })
   },
 
   async create() {
-    console.log('[DIAG] contexts.create: start')
     const { projectId } = get()
     if (projectId === null) return null
     const db = requireDatabase()
     set({ generation: get().generation + 1 })
-    console.log('[DIAG] contexts.create: before dbCreate')
     const row = await dbCreate(db, projectId)
-    console.log('[DIAG] contexts.create: after dbCreate', row.id, row.symbol)
     const contexts = await dbListContexts(db, projectId)
-    console.log('[DIAG] contexts.create: after dbListContexts', contexts.length)
     set({ contexts, bindingsByContext: { ...get().bindingsByContext, [row.id]: {} } })
-    console.log('[DIAG] contexts.create: set() applied')
     useCommandLogStore.getState().push({
       label: `create context ${row.symbol}`,
       async undo() {
@@ -118,7 +115,6 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
         })
       },
     })
-    console.log('[DIAG] contexts.create: returning', row.id)
     return row
   },
 

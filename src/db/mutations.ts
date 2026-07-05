@@ -408,11 +408,8 @@ export async function listContexts(db: Database, projectId: string): Promise<Con
 }
 
 export async function createContext(db: Database, projectId: string): Promise<ContextRow> {
-  console.log('[DIAG] mutations.createContext: start')
   const existing = await listContexts(db, projectId)
-  console.log('[DIAG] mutations.createContext: listContexts done', existing.length)
   const symbol = nextRootSymbol(new Set(existing.map((c) => c.symbol)))
-  console.log('[DIAG] mutations.createContext: symbol', symbol)
   const rows = await db
     .insert(contexts)
     .values({
@@ -423,7 +420,6 @@ export async function createContext(db: Database, projectId: string): Promise<Co
       sort: existing.length,
     })
     .returning()
-  console.log('[DIAG] mutations.createContext: insert done', rows.length)
   return firstOrThrow(rows)
 }
 
