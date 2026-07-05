@@ -18,7 +18,14 @@ test('⌘Z reverts a justification edit; the reverted value survives a reload', 
   await page.getByRole('button', { name: 'Add dimension' }).click()
   await page.locator('.dim-row input').first().waitFor()
   await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: 'Dimensions' }).click() // close the popover
+  // Crossing the floor swaps the guided panel for the real DesignSurface,
+  // where "Dimensions" is a closed-by-default popover trigger in the context
+  // bar — this test never needs to open it. (A stray click here used to
+  // open it, since it's the trigger's first toggle, not a close; the very
+  // next action then dismissed it as an "outside click" and Radix's default
+  // onCloseAutoFocus raced the following keystrokes back to the trigger
+  // button instead of the register's phantom input — reliable on CI's
+  // slower timing, invisible locally. No app bug; just don't touch it.)
 
   const registerPhantom = page.getByPlaceholder('Type to create your first context — it becomes α')
   await registerPhantom.click()
@@ -27,12 +34,8 @@ test('⌘Z reverts a justification edit; the reverted value survives a reload', 
 
   const row = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
   const justificationCell = row.locator('.grid-cell--multiline')
-  // Context creation batches two sequential DB writes (create + set
-  // justification) before this, the register's first content assertion,
-  // ever renders anything — under CI's more constrained/contended runner
-  // this occasionally outruns the default 5s expect timeout (flaky on CI
-  // only; the codebase's existing precedent for this is the 15s db-ready
-  // wait below).
+  // Generous timeout: context creation batches two sequential DB writes
+  // before this, the register's first content assertion, renders anything.
   await expect(justificationCell).toContainText('Original justification', { timeout: 15_000 })
 
   // Edit the cell.
