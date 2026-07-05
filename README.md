@@ -8,6 +8,7 @@ Tables are the record (Numbers-style, edited in place); the circle canvas is the
 
 | Document | Purpose |
 | --- | --- |
+| [docs/HANDOFF.md](docs/HANDOFF.md) | **Start here when resuming work** — current state, next slice, working agreement, gotchas |
 | [docs/SPEC.md](docs/SPEC.md) | Product spec: domain model, invariants, application behavior, milestones |
 | [docs/TECH_STACK.md](docs/TECH_STACK.md) | Stack choices, cost analysis, decision log |
 | [docs/STYLE_GUIDE.md](docs/STYLE_GUIDE.md) | Visual language, table grammar, canvas responsiveness |
