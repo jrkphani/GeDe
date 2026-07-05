@@ -1,78 +1,16 @@
-import { useRef, useState } from 'react'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
-
-function ProjectName({ id, name }: { id: string; name: string }) {
-  const renameProject = useProjectsStore((s) => s.renameProject)
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(name)
-
-  if (!editing) {
-    return (
-      <span
-        className="project-name"
-        onClick={(e) => {
-          e.stopPropagation()
-          setDraft(name)
-          setEditing(true)
-        }}
-      >
-        {name}
-      </span>
-    )
-  }
-  return (
-    <input
-      className="inplace-input"
-      value={draft}
-      autoFocus
-      onClick={(e) => e.stopPropagation()}
-      onChange={(e) => setDraft(e.target.value)}
-      onBlur={() => setEditing(false)}
-      onKeyDown={(e) => {
-        e.stopPropagation()
-        if (e.key === 'Enter') {
-          const next = draft.trim()
-          if (next && next !== name) void renameProject(id, next)
-          setEditing(false)
-        }
-        if (e.key === 'Escape') setEditing(false)
-      }}
-    />
-  )
-}
-
-function PhantomRow({ first }: { first: boolean }) {
-  const createProject = useProjectsStore((s) => s.createProject)
-  const [draft, setDraft] = useState('')
-  const inputRef = useRef<HTMLInputElement>(null)
-
-  return (
-    <div className="project-row project-row--phantom">
-      <input
-        ref={inputRef}
-        className="inplace-input"
-        placeholder={first ? 'Name your first project' : 'New project'}
-        value={draft}
-        onChange={(e) => setDraft(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === 'Enter' && draft.trim()) {
-            void createProject(draft.trim())
-            setDraft('')
-            inputRef.current?.focus()
-          }
-          if (e.key === 'Escape') setDraft('')
-        }}
-      />
-    </div>
-  )
-}
+import { Button } from './ui/button'
+import { InlineEdit, PhantomInput } from './ui/inline-editor'
 
 export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   const projects = useProjectsStore((s) => s.projects)
+  const renameProject = useProjectsStore((s) => s.renameProject)
   const archiveProject = useProjectsStore((s) => s.archiveProject)
+  const createProject = useProjectsStore((s) => s.createProject)
   const undoLast = useProjectsStore((s) => s.undoLast)
   const announce = useStatusStore((s) => s.announce)
+  const first = projects.length === 0
 
   return (
     <main className="projects">
@@ -93,10 +31,16 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
               }
             }}
           >
-            <ProjectName id={p.id} name={p.name} />
+            {/* Row is clickable-to-open, so the editor stops click/key propagation. */}
+            <InlineEdit
+              value={p.name}
+              onCommit={(next) => void renameProject(p.id, next)}
+              display={p.name}
+              displayClassName="project-name"
+              stopPropagation
+            />
             {p.description !== null && <span className="project-desc">{p.description}</span>}
-            <button
-              className="row-action"
+            <Button
               aria-label={`Archive ${p.name}`}
               onClick={(e) => {
                 e.stopPropagation()
@@ -108,10 +52,15 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
               }}
             >
               Archive
-            </button>
+            </Button>
           </div>
         ))}
-        <PhantomRow first={projects.length === 0} />
+        <div className="project-row project-row--phantom">
+          <PhantomInput
+            placeholder={first ? 'Name your first project' : 'New project'}
+            onSubmit={(name) => void createProject(name)}
+          />
+        </div>
       </section>
     </main>
   )
