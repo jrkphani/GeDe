@@ -27,14 +27,20 @@ test('⌘Z reverts a justification edit; the reverted value survives a reload', 
 
   const row = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
   const justificationCell = row.locator('.grid-cell--multiline')
-  await expect(justificationCell).toContainText('Original justification')
+  // Context creation batches two sequential DB writes (create + set
+  // justification) before this, the register's first content assertion,
+  // ever renders anything — under CI's more constrained/contended runner
+  // this occasionally outruns the default 5s expect timeout (flaky on CI
+  // only; the codebase's existing precedent for this is the 15s db-ready
+  // wait below).
+  await expect(justificationCell).toContainText('Original justification', { timeout: 15_000 })
 
   // Edit the cell.
   await justificationCell.click()
   const textarea = row.locator('textarea')
   await textarea.fill('Changed justification')
   await page.keyboard.press('Enter')
-  await expect(justificationCell).toContainText('Changed justification')
+  await expect(justificationCell).toContainText('Changed justification', { timeout: 15_000 })
 
   // ⇧⌘Z first (a no-op — nothing to redo yet), sanity-checking it doesn't
   // accidentally do something before we've undone anything.
@@ -43,19 +49,21 @@ test('⌘Z reverts a justification edit; the reverted value survives a reload', 
 
   // ⌘Z reverts it, narrated in the status bar.
   await page.keyboard.press('Control+z')
-  await expect(justificationCell).toContainText('Original justification')
+  await expect(justificationCell).toContainText('Original justification', { timeout: 15_000 })
   await expect(page.locator('.status-bar')).toContainText('Undid:')
 
   // ⇧⌘Z redoes it, within the same session.
   await page.keyboard.press('Control+Shift+z')
-  await expect(justificationCell).toContainText('Changed justification')
+  await expect(justificationCell).toContainText('Changed justification', { timeout: 15_000 })
 
   // Undo again, then reload: the reverted state is what persisted — not just
   // an in-memory undo (the command log itself doesn't survive a reload).
   await page.keyboard.press('Control+z')
-  await expect(justificationCell).toContainText('Original justification')
+  await expect(justificationCell).toContainText('Original justification', { timeout: 15_000 })
   await page.reload()
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const rowAfter = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
-  await expect(rowAfter.locator('.grid-cell--multiline')).toContainText('Original justification')
+  await expect(rowAfter.locator('.grid-cell--multiline')).toContainText('Original justification', {
+    timeout: 15_000,
+  })
 })
