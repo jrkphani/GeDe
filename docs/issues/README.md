@@ -1,19 +1,35 @@
 # Issues
 
-One markdown file per issue: `NNN-short-slug.md` (e.g. `001-editable-grid-keyboard-grammar.md`).
+One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical slice** — schema → store → UI — sized for TDD: the *Test-first plan* section lists the red tests to write before any implementation, and the acceptance criteria are those tests passing plus the standing gates (`npx tsc --noEmit`, `npx eslint . --quiet`).
 
-Suggested front matter:
+## Working agreement (TDD)
 
-```markdown
-# NNN: Title
+1. Pick the lowest-numbered OPEN issue whose blockers are SHIPPED.
+2. Write the issue's *Test-first plan* tests; watch them fail.
+3. Implement until green; refactor; run `npm run verify`.
+4. Update the issue status; commit with the issue number in the message.
 
-- **Status**: OPEN | IN PROGRESS | SHIPPED | ARCHIVED
-- **Milestone**: M1–M6 (see docs/SPEC.md §6)
-- **Blocked by**: NNN, NNN (optional)
+## Index
 
-## Problem
+| # | Slice | Milestone | Blocked by |
+| --- | --- | --- | --- |
+| [000](000-walking-skeleton.md) | Walking skeleton & TDD harness | M1 | — |
+| [001](001-projects-crud-persistence.md) | Projects CRUD + reload durability | M1 | 000 |
+| [002](002-dimension-management.md) | Dimension management (n ≥ 2) | M1 | 001 |
+| [003](003-parameters-on-dimensions.md) | Parameters on dimensions | M1 | 002 |
+| [004](004-context-register-editable-grid.md) | Context register + EditableGrid core | M1 | 003 |
+| [005](005-justification-documented-duplicates.md) | Justification, documented, duplicates | M1 | 004 |
+| [006](006-undo-redo-command-log.md) | Undo/redo command log | M1 | 004 |
+| [007](007-dimension-mutability-demotion.md) | Dimension mutability + demotion | M1 | 005, 006 |
+| [008](008-canvas-readonly-deterministic-layout.md) | Canvas read-only + deterministic layout | M2 | 004 |
+| [009](009-canvas-selection-composer-sync.md) | Selection, spokes, composer, sync | M2 | 008 |
+| [010](010-compose-bind-from-canvas.md) | Compose & bind from canvas | M2 | 009 |
+| [011](011-recursion-drilldown-breadcrumbs.md) | Recursion, drill-down, breadcrumbs | M3 | 010 |
+| [012](012-coverage-matrix.md) | Coverage matrix | M4 | 010 |
+| [013](013-tier1-foundation.md) | Tier 1 Foundation | M5 | 004 |
+| [014](014-tier2-architecture-promote.md) | Tier 2 Architecture + promote | M5 | 013 |
+| [015](015-export-import-json.md) | Export/import JSON | M6 | 011, 014 |
 
-## Acceptance criteria
-```
+Parallelizable tracks after 004: canvas (008→010), tiers (013→014), and 005/006 can proceed independently.
 
-Issues graduate to GitHub Issues if/when collaboration warrants it; this folder is the lightweight v1 tracker.
+Statuses: `OPEN | IN PROGRESS | SHIPPED | ARCHIVED`. Issues graduate to GitHub Issues if/when collaboration warrants it.
