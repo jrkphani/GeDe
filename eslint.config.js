@@ -3,7 +3,20 @@ import tseslint from 'typescript-eslint'
 import reactHooks from 'eslint-plugin-react-hooks'
 
 export default tseslint.config(
-  { ignores: ['dist', 'dev-dist', 'node_modules', 'playwright-report', 'test-results', 'graphify-out'] },
+  {
+    ignores: [
+      'dist',
+      'dev-dist',
+      'node_modules',
+      'playwright-report',
+      'test-results',
+      'graphify-out',
+      // Transient agent worktrees + local Claude state live under .claude/ and
+      // are untracked; never lint their source copies (their paths don't match
+      // the src/** exemption blocks below, so they'd false-positive).
+      '.claude',
+    ],
+  },
   js.configs.recommended,
   // Type-aware linting (issue 020): the powerful no-unsafe-*/no-floating-promises
   // family that guards the "guarantee typesafety" goal.

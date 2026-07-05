@@ -17,6 +17,9 @@ playwright-report/
 .DS_Store
 *.local
 
+# Local Claude Code state + transient agent worktrees
+.claude/
+
 # Source design documents (private working material — not published)
 *.numbers
 *.pages
