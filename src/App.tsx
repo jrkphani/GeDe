@@ -1,31 +1,45 @@
-import { useEffect, useState } from 'react'
-import { getDatabase } from './db/client'
+import { useEffect } from 'react'
+import { ProjectsList } from './components/ProjectsList'
+import { useProjectsStore } from './store/projects'
+
+function ProjectShell({ id }: { id: string }) {
+  const project = useProjectsStore((s) => s.projects.find((p) => p.id === id))
+  const closeProject = useProjectsStore((s) => s.closeProject)
+  // Tier tabs and routes arrive with issue 016; this is the minimal open state.
+  return (
+    <main className="projects">
+      <section className="panel" aria-label={project?.name}>
+        <h2 className="project-title">{project?.name}</h2>
+        <button className="row-action" onClick={closeProject}>
+          Back to projects
+        </button>
+      </section>
+    </main>
+  )
+}
 
 export default function App() {
-  const [dbReady, setDbReady] = useState(false)
-  const [dbError, setDbError] = useState<string | null>(null)
+  const status = useProjectsStore((s) => s.status)
+  const error = useProjectsStore((s) => s.error)
+  const openProjectId = useProjectsStore((s) => s.openProjectId)
 
   useEffect(() => {
-    let cancelled = false
-    getDatabase().then(
-      () => {
-        if (!cancelled) setDbReady(true)
-      },
-      (err: unknown) => {
-        // TECH_STACK §6.2: a failed boot migration must surface, never fail silently.
-        console.error('database boot failed', err)
-        if (!cancelled) setDbError(err instanceof Error ? err.message : String(err))
-      },
-    )
-    return () => {
-      cancelled = true
-    }
+    void useProjectsStore.getState().init()
   }, [])
 
   return (
-    <div data-db-ready={dbReady} data-db-error={dbError ?? undefined}>
+    <div data-db-ready={status === 'ready'}>
       <h1 className="wordmark">GeDe</h1>
-      {dbError !== null && <p role="alert">Database failed to open: {dbError}</p>}
+      {status === 'error' && (
+        <main className="projects">
+          <section className="panel" role="alert">
+            <p>Storage is unavailable: {error}</p>
+            <p>Export/import will still work from memory this session.</p>
+          </section>
+        </main>
+      )}
+      {status === 'ready' &&
+        (openProjectId !== null ? <ProjectShell id={openProjectId} /> : <ProjectsList />)}
     </div>
   )
 }

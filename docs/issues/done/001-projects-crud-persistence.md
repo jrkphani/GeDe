@@ -1,6 +1,6 @@
 # 001: Create, list, open a project — and survive reload
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: 000
 

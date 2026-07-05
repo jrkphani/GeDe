@@ -13,8 +13,8 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 
 | # | Slice | Milestone | Blocked by |
 | --- | --- | --- | --- |
-| [000](000-walking-skeleton.md) | Walking skeleton & TDD harness | M1 | — |
-| [001](001-projects-crud-persistence.md) | Projects CRUD + reload durability | M1 | 000 |
+| [000](done/000-walking-skeleton.md) ✅ | Walking skeleton & TDD harness | M1 | — |
+| [001](done/001-projects-crud-persistence.md) ✅ | Projects CRUD + reload durability | M1 | 000 |
 | [016](016-app-shell-navigation.md) | App shell — routes, header, tabs, status bar | M1 | 001 |
 | [002](002-dimension-management.md) | Dimension management (n ≥ 2) | M1 | 001 |
 | [003](003-parameters-on-dimensions.md) | Parameters on dimensions | M1 | 002 |
@@ -36,4 +36,4 @@ Issue numbers are identity, not order — pick by the dependency graph (016 come
 
 Every issue carries a **Design brief** (grounded in STYLE_GUIDE/SITEMAP tokens and patterns) and a **References** line pinning the SPEC/STYLE_GUIDE/SITEMAP/TECH_STACK/ADR sections it implements — deviation from a referenced section is a spec change to discuss, not an implementation choice.
 
-Statuses: `OPEN | IN PROGRESS | SHIPPED | ARCHIVED`. Issues graduate to GitHub Issues if/when collaboration warrants it.
+Statuses: `OPEN | IN PROGRESS | SHIPPED | ARCHIVED`. **SHIPPED issues move to `done/`** (index links follow them; the row stays as the permanent record). Issues graduate to GitHub Issues if/when collaboration warrants it.
