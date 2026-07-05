@@ -79,6 +79,10 @@ export interface EditableGridProps<TRow> {
   getRowId: (row: TRow) => string
   phantom?: PhantomConfig
   rowClassName?: (row: TRow) => string | undefined
+  // Issue 009 — fires on any click within the row, alongside whatever that
+  // cell's own click does (e.g. entering edit mode); callers use this for
+  // "select this row" gestures without EditableGrid knowing what selection is.
+  onRowClick?: (row: TRow) => void
 }
 
 const PHANTOM_ROW_ID = '__phantom__'
@@ -508,6 +512,7 @@ export function EditableGrid<TRow>({
   getRowId,
   phantom,
   rowClassName,
+  onRowClick,
 }: EditableGridProps<TRow>) {
   const [editing, setEditing] = useState<EditingCell | null>(null)
   const refs = useRef<Map<string, HTMLElement>>(new Map())
@@ -560,6 +565,7 @@ export function EditableGrid<TRow>({
               key={row.id}
               className={rowClassName?.(row.original)}
               data-row-id={getRowId(row.original)}
+              onClick={onRowClick ? () => onRowClick(row.original) : undefined}
             >
               {row.getVisibleCells().map((cell, i) => (
                 <td key={cell.id} className={columns[i]?.cellClassName}>

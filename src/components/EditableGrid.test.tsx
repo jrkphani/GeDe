@@ -214,3 +214,28 @@ describe('EditableGrid — multiline cell', () => {
     expect(await screen.findByText('A short justification')).toBeInTheDocument()
   })
 })
+
+describe('onRowClick (issue 009)', () => {
+  it('fires with the row data when any part of the row is clicked, alongside whatever that cell does', async () => {
+    const user = userEvent.setup()
+    const onRowClick = vi.fn()
+    const onTitleCommit = vi.fn()
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns(onTitleCommit)}
+        getRowId={(r) => r.id}
+        onRowClick={onRowClick}
+      />,
+    )
+    await user.click(screen.getByText('Alpha'))
+    expect(onRowClick).toHaveBeenCalledExactlyOnceWith(rows[0])
+  })
+
+  it('is optional — omitting it changes nothing about existing row behavior', async () => {
+    const user = userEvent.setup()
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.getByRole('textbox')).toHaveValue('Alpha')
+  })
+})

@@ -8,7 +8,7 @@ import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
 import { resetDimensionsStore, useDimensionsStore } from '../store/dimensions'
 import { resetParametersStore } from '../store/parameters'
-import { resetContextsStore } from '../store/contexts'
+import { resetContextsStore, useContextsStore } from '../store/contexts'
 import { useStatusStore } from '../store/status'
 import { ContextRegister } from './ContextRegister'
 
@@ -169,5 +169,34 @@ describe('ContextRegister', () => {
       expect(within(rowAlpha).queryByTitle(/Same tuple as/)).not.toBeInTheDocument()
       expect(within(rowBeta).queryByTitle(/Same tuple as/)).not.toBeInTheDocument()
     })
+  })
+
+  it('clicking a row selects it in the shared store, and the matching row gets the selected class (issue 009)', async () => {
+    const user = userEvent.setup()
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'first')
+    await user.keyboard('{Enter}')
+
+    const rowAlpha = (await screen.findByText('α')).closest('tr') as HTMLElement
+    await user.click(within(rowAlpha).getByText('α'))
+
+    expect(useContextsStore.getState().selectedContextId).toBe(
+      useContextsStore.getState().contexts.find((c) => c.symbol === 'α')?.id,
+    )
+    await waitFor(() => expect(rowAlpha).toHaveClass('grid-row--selected'))
+  })
+
+  it('selecting a context via the store (e.g. from the canvas) highlights its row without requiring a click', async () => {
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    const user = userEvent.setup()
+    await user.type(phantom, 'first')
+    await user.keyboard('{Enter}')
+    const rowAlpha = (await screen.findByText('α')).closest('tr') as HTMLElement
+    const alphaId = useContextsStore.getState().contexts.find((c) => c.symbol === 'α')?.id as string
+
+    useContextsStore.getState().select(alphaId)
+    await waitFor(() => expect(rowAlpha).toHaveClass('grid-row--selected'))
   })
 })

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { Canvas } from './Canvas'
 import type { ContextRow, DimensionRow, ParameterRow } from '../db/mutations'
 
@@ -66,6 +67,8 @@ describe('Canvas', () => {
         parametersByDimension={parametersByDimension}
         contexts={contexts}
         bindingsByContext={bindingsByContext}
+        selectedContextId={null}
+        onSelect={() => {}}
       />,
     )
     expect(container.querySelectorAll('.canvas-arc')).toHaveLength(3)
@@ -80,6 +83,8 @@ describe('Canvas', () => {
         parametersByDimension={parametersByDimension}
         contexts={contexts}
         bindingsByContext={bindingsByContext}
+        selectedContextId={null}
+        onSelect={() => {}}
       />,
     )
     const emptyArc = container.querySelector('.canvas-arc[data-dimension-id="d2"]')
@@ -96,6 +101,8 @@ describe('Canvas', () => {
         parametersByDimension={parametersByDimension}
         contexts={contexts}
         bindingsByContext={{ ctxA: { d0: 'd0-p0' }, ctxB: { d0: 'd0-p1', d1: 'd1-p0' } }}
+        selectedContextId={null}
+        onSelect={() => {}}
       />,
     )
     const draftNode = container.querySelector('[data-context-id="ctxA"]')
@@ -111,6 +118,8 @@ describe('Canvas', () => {
         parametersByDimension={parametersByDimension}
         contexts={[]}
         bindingsByContext={{}}
+        selectedContextId={null}
+        onSelect={() => {}}
       />,
     )
     expect(screen.getByText('Bind your first context')).toBeInTheDocument()
@@ -141,6 +150,8 @@ describe('Canvas', () => {
           parametersByDimension={parametersByDimension}
           contexts={contexts}
           bindingsByContext={bindingsByContext}
+          selectedContextId={null}
+          onSelect={() => {}}
         />,
       )
       const shell = container.querySelector('.canvas-shell')
@@ -154,6 +165,127 @@ describe('Canvas', () => {
 
       act(() => observed?.([{ contentRect: { width: 300 } }]))
       expect(shell).toHaveAttribute('data-label-tier', 'legend')
+    })
+  })
+
+  describe('selection (issue 009)', () => {
+    // Two dims only (d2 has zero params, so it can never be bound — same
+    // rationale as the draft-node fixture above); ctxA fully bound (d0/d1),
+    // ctxB missing d1 (draft).
+    const selDims = [dim('d0', 0), dim('d1', 1)]
+    const selBindings = { ctxA: { d0: 'd0-p0', d1: 'd1-p0' }, ctxB: { d0: 'd0-p1' } }
+
+    function renderCanvas(selectedContextId: string | null, onSelect: (id: string | null) => void = () => {}) {
+      return render(
+        <Canvas
+          dimensions={selDims}
+          parametersByDimension={parametersByDimension}
+          contexts={contexts}
+          bindingsByContext={selBindings}
+          selectedContextId={selectedContextId}
+          onSelect={onSelect}
+        />,
+      )
+    }
+
+    it('clicking a node calls onSelect with its context id', async () => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      const { container } = renderCanvas(null, onSelect)
+      await user.click(container.querySelector('[data-context-id="ctxA"]') as Element)
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith('ctxA')
+    })
+
+    it('gives the selected node an aria-label describing symbol, tuple, and status', () => {
+      const { container } = renderCanvas('ctxB')
+      const node = container.querySelector('[data-context-id="ctxB"]')
+      expect(node).toHaveAttribute('aria-label', 'β — d0-p1, —, draft')
+    })
+
+    it('dims every non-selected node when a selection exists; the selected node is never dimmed', () => {
+      const { container } = renderCanvas('ctxA')
+      expect(container.querySelector('[data-context-id="ctxA"]')).not.toHaveClass('canvas-node--dimmed')
+      expect(container.querySelector('[data-context-id="ctxB"]')).toHaveClass('canvas-node--dimmed')
+    })
+
+    it('draws no dimming when nothing is selected', () => {
+      const { container } = renderCanvas(null)
+      expect(container.querySelectorAll('.canvas-node--dimmed')).toHaveLength(0)
+    })
+
+    it('draws one spoke per bound dimension of the selected context, colored by dimension; none for unbound', () => {
+      const { container } = renderCanvas('ctxB') // ctxB binds only d0
+      expect(container.querySelectorAll('.canvas-spoke')).toHaveLength(1)
+      const spoke = container.querySelector('.canvas-spoke') as HTMLElement
+      expect(spoke.getAttribute('data-dimension-id')).toBe('d0')
+    })
+
+    it('draws no spokes when nothing is selected', () => {
+      const { container } = renderCanvas(null)
+      expect(container.querySelectorAll('.canvas-spoke')).toHaveLength(0)
+    })
+
+    it('roving tabIndex: the selected node is the only tab stop; the first node is the default when none is selected', () => {
+      const { container: none } = renderCanvas(null)
+      expect(none.querySelector('[data-context-id="ctxA"]')).toHaveAttribute('tabindex', '0')
+      expect(none.querySelector('[data-context-id="ctxB"]')).toHaveAttribute('tabindex', '-1')
+
+      const { container: withB } = renderCanvas('ctxB')
+      expect(withB.querySelector('[data-context-id="ctxA"]')).toHaveAttribute('tabindex', '-1')
+      expect(withB.querySelector('[data-context-id="ctxB"]')).toHaveAttribute('tabindex', '0')
+    })
+
+    it('ArrowRight/ArrowDown selects the next node in layout order, wrapping past the last', async () => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      const { container } = renderCanvas('ctxA', onSelect)
+      const nodeA = container.querySelector('[data-context-id="ctxA"]') as HTMLElement
+      nodeA.focus()
+      await user.keyboard('{ArrowRight}')
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith('ctxB')
+
+      onSelect.mockClear()
+      const { container: c2 } = renderCanvas('ctxB', onSelect)
+      const nodeB = c2.querySelector('[data-context-id="ctxB"]') as HTMLElement
+      nodeB.focus()
+      await user.keyboard('{ArrowDown}')
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith('ctxA') // wraps
+    })
+
+    it('ArrowLeft/ArrowUp selects the previous node, wrapping past the first', async () => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      const { container } = renderCanvas('ctxA', onSelect)
+      const nodeA = container.querySelector('[data-context-id="ctxA"]') as HTMLElement
+      nodeA.focus()
+      await user.keyboard('{ArrowLeft}')
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith('ctxB') // wraps
+    })
+
+    it('Escape clears the selection', async () => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      const { container } = renderCanvas('ctxA', onSelect)
+      const nodeA = container.querySelector('[data-context-id="ctxA"]') as HTMLElement
+      nodeA.focus()
+      await user.keyboard('{Escape}')
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith(null)
+    })
+
+    it('clicking the canvas background (not a node) clears the selection', async () => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      const { container } = renderCanvas('ctxA', onSelect)
+      await user.click(container.querySelector('.canvas-svg') as Element)
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith(null)
+    })
+
+    it('clicking a node does not also clear the selection via background-click bubbling', async () => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      const { container } = renderCanvas(null, onSelect)
+      await user.click(container.querySelector('[data-context-id="ctxA"]') as Element)
+      expect(onSelect).toHaveBeenCalledExactlyOnceWith('ctxA')
     })
   })
 })

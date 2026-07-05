@@ -52,6 +52,11 @@ interface ContextsState {
   // moved while it was in flight (root-caused via a CI-only e2e failure,
   // issue 007 cleanup — mutations always win regardless of DB interleaving).
   generation: number
+  // Issue 009 — one field, read by both projections (SPEC invariant 6):
+  // Canvas and ContextRegister each highlight/dim off this same value rather
+  // than owning a local notion of "selected".
+  selectedContextId: string | null
+  select: (id: string | null) => void
   load: (projectId: string) => Promise<void>
   create: () => Promise<ContextRow | null>
   setSymbol: (id: string, symbol: string) => Promise<{ ok: boolean; reason?: string }>
@@ -69,6 +74,11 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   contexts: [],
   bindingsByContext: {},
   generation: 0,
+  selectedContextId: null,
+
+  select(id) {
+    set({ selectedContextId: id })
+  },
 
   async load(projectId) {
     const db = requireDatabase()
@@ -80,7 +90,7 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     // still null and silently no-op — no error, since create()'s guard
     // just returns null. Reproduced on CI (slow enough to lose the race
     // every time) but never locally (load() always won there).
-    set({ projectId })
+    set({ projectId, selectedContextId: null })
     const gen = get().generation
     const contexts = await dbListContexts(db, projectId)
     const bindingsByContext = await fetchBindingsMap(
@@ -256,5 +266,11 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
 }))
 
 export function resetContextsStore(): void {
-  useContextsStore.setState({ projectId: null, contexts: [], bindingsByContext: {}, generation: 0 })
+  useContextsStore.setState({
+    projectId: null,
+    contexts: [],
+    bindingsByContext: {},
+    generation: 0,
+    selectedContextId: null,
+  })
 }

@@ -41,6 +41,8 @@ export function ContextRegister({ projectId }: { projectId: string }) {
   const setJustification = useContextsStore((s) => s.setJustification)
   const bind = useContextsStore((s) => s.bind)
   const unbind = useContextsStore((s) => s.unbind)
+  const selectedContextId = useContextsStore((s) => s.selectedContextId)
+  const select = useContextsStore((s) => s.select)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
   const loadParams = useParametersStore((s) => s.load)
   const announce = useStatusStore((s) => s.announce)
@@ -52,6 +54,17 @@ export function ContextRegister({ projectId }: { projectId: string }) {
   useEffect(() => {
     for (const d of dimensions) void loadParams(d.id)
   }, [dimensions, loadParams])
+
+  // Issue 009 sync rule — selecting in either projection scrolls the other
+  // to reveal. Canvas-driven selection must not steal keyboard focus from
+  // the canvas, so this only scrolls (no .focus()); register-driven
+  // selection already has focus here, so the call is a harmless no-op.
+  useEffect(() => {
+    if (!selectedContextId) return
+    const escaped = typeof CSS !== 'undefined' ? CSS.escape(selectedContextId) : selectedContextId
+    const row = document.querySelector<HTMLElement>(`[data-row-id="${escaped}"]`)
+    row?.scrollIntoView({ block: 'nearest' })
+  }, [selectedContextId])
 
   const dimensionIds = dimensions.map((d) => d.id)
   const duplicatesByContext = findDuplicateContextIds(dimensionIds, bindingsByContext)
@@ -162,8 +175,13 @@ export function ContextRegister({ projectId }: { projectId: string }) {
       getRowId={(ctx) => ctx.id}
       rowClassName={(ctx) => {
         const bound = new Set(Object.keys(bindingsByContext[ctx.id] ?? {}))
-        return isComplete(dimensionIds, bound) ? undefined : 'grid-row--draft'
+        const classes = [
+          isComplete(dimensionIds, bound) ? null : 'grid-row--draft',
+          ctx.id === selectedContextId ? 'grid-row--selected' : null,
+        ].filter((c): c is string => c !== null)
+        return classes.length > 0 ? classes.join(' ') : undefined
       }}
+      onRowClick={(ctx) => select(ctx.id)}
       phantom={{
         columnId: 'justification',
         placeholder: contexts.length === 0 ? FIRST_CONTEXT_GHOST : 'New context',

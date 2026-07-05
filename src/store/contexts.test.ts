@@ -194,3 +194,27 @@ describe('contexts store — command log (issue 006)', () => {
     expect(useContextsStore.getState().contexts.map((c) => c.id)).toEqual([(created as { id: string }).id])
   })
 })
+
+describe('contexts store — selection (issue 009)', () => {
+  it('select() sets and clears selectedContextId; not part of the undo/redo command log', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    const commandCountBefore = useCommandLogStore.getState().past.length
+
+    useContextsStore.getState().select(id)
+    expect(useContextsStore.getState().selectedContextId).toBe(id)
+    expect(useCommandLogStore.getState().past.length).toBe(commandCountBefore) // no new undo step
+
+    useContextsStore.getState().select(null)
+    expect(useContextsStore.getState().selectedContextId).toBeNull()
+  })
+
+  it('load() (project switch) clears any existing selection', async () => {
+    const ctx = await useContextsStore.getState().create()
+    useContextsStore.getState().select((ctx as { id: string }).id)
+    expect(useContextsStore.getState().selectedContextId).not.toBeNull()
+
+    await useContextsStore.getState().load(projectId)
+    expect(useContextsStore.getState().selectedContextId).toBeNull()
+  })
+})

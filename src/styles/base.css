@@ -599,6 +599,16 @@ body {
   color: var(--ink-muted);
 }
 
+/* Selection sync (issue 009, STYLE_GUIDE §7): the same accent-wash + left
+   rule vocabulary as everywhere else selection appears. `box-shadow` (not
+   `border-left`) because border rendering on `<tr>` is inconsistent across
+   browsers under `border-collapse: separate` (already relied on elsewhere
+   in this file — see the frozen-column depth-cue gotcha in HANDOFF.md). */
+.grid-row--selected {
+  background: var(--accent-wash);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
 .grid-cell--combobox {
   display: flex;
   align-items: center;
@@ -805,6 +815,55 @@ body {
   fill: var(--ink-muted);
 }
 
+/* Selection (issue 009, STYLE_GUIDE §7/§8/§10): one selection, everywhere.
+   Cursor + hover halo make the node read as clickable; dimming and the
+   selected ring only apply once something is actually selected. Opacity
+   transitions inherit `prefers-reduced-motion` for free from the blanket
+   rule near the top of this file. */
+.canvas-node {
+  cursor: pointer;
+  /* :focus-visible ring comes from the global rule near the top of this
+     file — it targets whatever element actually has focus, which is this
+     `<g>` itself, so no override is needed (or wanted: overriding here
+     would need to out-cascade that rule, which is more fragile than not
+     touching `outline` at all). */
+}
+
+.canvas-node:hover circle {
+  filter: drop-shadow(0 0 3px var(--ink));
+}
+
+.canvas-node[aria-pressed='true'] circle {
+  stroke: var(--accent);
+  stroke-width: 2px;
+}
+
+.canvas-node--dimmed {
+  opacity: 0.4;
+  transition: opacity var(--motion-fast);
+}
+
+/* Resting opacity is 1 (the correct final state) — the animation only
+   dips it to 0 at mount and eases back up. This way, when
+   `prefers-reduced-motion` forces `animation: none !important` (global
+   rule above), the spoke simply keeps its resting opacity: 1 instead of
+   being stuck invisible, which an `opacity: 0` resting state + `forwards`
+   fill-mode would have caused. */
+.canvas-spoke {
+  stroke-width: 2px;
+  opacity: 1;
+  animation: canvas-spoke-in var(--motion-fast) ease-out;
+}
+
+@keyframes canvas-spoke-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 .canvas-empty-prompt {
   font-family: var(--font-ui);
   font-size: var(--text-body);
@@ -834,4 +893,63 @@ body {
   .design-surface-row {
     flex-direction: column;
   }
+}
+
+/* Composer bar (issue 009, STYLE_GUIDE §7): full-width panel under the
+   canvas, hairline top border — read mode only (parameter pickers arrive in
+   issue 010). Absent entirely from the DOM when nothing is selected
+   (Composer.tsx returns null), so no "empty" state to style here. */
+.composer-bar {
+  margin-top: var(--space-5);
+  padding: var(--space-4) var(--space-5);
+  background: var(--panel);
+  border-top: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.composer-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-5);
+  margin-bottom: var(--space-3);
+}
+
+.composer-legend__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.composer-legend__dimension {
+  font-size: var(--text-label);
+  color: var(--ink-muted);
+}
+
+.composer-legend__parameter {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  color: var(--ink);
+}
+
+.composer-tuple {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  color: var(--ink-muted);
+  margin-bottom: var(--space-3);
+}
+
+.composer-justification {
+  display: block;
+  font-size: var(--text-body);
+  color: var(--ink);
+  cursor: text;
+}
+
+.composer-justification__input {
+  display: block;
+  width: 100%;
+  font: inherit;
+  color: var(--ink);
+  resize: none;
+  overflow: hidden;
 }
