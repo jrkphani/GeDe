@@ -1,3 +1,4 @@
+import { useCommandLogStore } from '../store/commandLog'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
 import { Button } from './ui/button'
@@ -8,7 +9,7 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   const renameProject = useProjectsStore((s) => s.renameProject)
   const archiveProject = useProjectsStore((s) => s.archiveProject)
   const createProject = useProjectsStore((s) => s.createProject)
-  const undoLast = useProjectsStore((s) => s.undoLast)
+  const undo = useCommandLogStore((s) => s.undo)
   const announce = useStatusStore((s) => s.announce)
   const first = projects.length === 0
 
@@ -46,8 +47,10 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
                 e.stopPropagation()
                 void archiveProject(p.id).then(() => {
                   // Narration goes to the shell status bar — the app's single
-                  // feedback channel (SITEMAP §2).
-                  announce(`Archived “${p.name}”`, { label: 'Undo', run: undoLast })
+                  // feedback channel (SITEMAP §2). "Undo" here undoes the
+                  // shared command log's most recent step (issue 006), which
+                  // is this archive as long as nothing else happened since.
+                  announce(`Archived “${p.name}”`, { label: 'Undo', run: undo })
                 })
               }}
             >

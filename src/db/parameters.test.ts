@@ -8,6 +8,7 @@ import {
   removeParameter,
   renameParameter,
   reorderParameter,
+  restoreParameter,
 } from './mutations'
 
 async function projectWithDimension() {
@@ -85,5 +86,25 @@ describe('parameter mutations', () => {
     const a = await addParameter(db, dimensionId, 'Buyers')
     await removeParameter(db, dimensionId, a.id)
     expect(await listParameters(db, dimensionId)).toHaveLength(0)
+  })
+
+  // issue 006: restoreParameter is the undo-of-remove / redo-of-add primitive
+  // — it must reproduce the exact prior order, not just un-delete the row.
+  describe('restoreParameter (issue 006 undo/redo)', () => {
+    it('restores a middle removal at its original position, shifting the rest back', async () => {
+      const { db, dimensionId } = await projectWithDimension()
+      const a = await addParameter(db, dimensionId, 'Buyers')
+      const b = await addParameter(db, dimensionId, 'Maintainer')
+      const c = await addParameter(db, dimensionId, 'Users')
+      const orderedIds = [a.id, b.id, c.id]
+
+      await removeParameter(db, dimensionId, b.id)
+      expect((await listParameters(db, dimensionId)).map((p) => p.sort)).toEqual([0, 1])
+
+      await restoreParameter(db, dimensionId, b.id, orderedIds)
+      const rows = await listParameters(db, dimensionId)
+      expect(rows.map((p) => p.id)).toEqual(orderedIds)
+      expect(rows.map((p) => p.sort)).toEqual([0, 1, 2])
+    })
   })
 })

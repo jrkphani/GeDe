@@ -166,13 +166,17 @@ export async function reorderDimension(
   return listDimensions(db, projectId)
 }
 
-export async function removeDimension(
+// The floor is a *user-facing* guard (SPEC §1): you can't manually remove
+// below n = 2. It must NOT apply when the command log (issue 006) undoes an
+// add() — that can legitimately take the count back through 1 or 0, the same
+// below-floor guided-start states issue 002 already allows before the first
+// crossing. removeDimensionUnchecked is that mechanical-replay primitive.
+async function removeDimensionUnchecked(
   db: Database,
   projectId: string,
   id: string,
 ): Promise<DimensionRow[]> {
   const rows = await listDimensions(db, projectId)
-  if (rows.length <= 2) throw new DimensionFloorError()
   await db
     .update(dimensions)
     .set({ deletedAt: now(), updatedAt: now() })
@@ -181,6 +185,44 @@ export async function removeDimension(
     db,
     rows.filter((d) => d.id !== id),
   )
+  return listDimensions(db, projectId)
+}
+
+export async function removeDimension(
+  db: Database,
+  projectId: string,
+  id: string,
+): Promise<DimensionRow[]> {
+  const rows = await listDimensions(db, projectId)
+  if (rows.length <= 2) throw new DimensionFloorError()
+  return removeDimensionUnchecked(db, projectId, id)
+}
+
+// Exported specifically for the command log's undo-of-add (issue 006) — see
+// removeDimensionUnchecked above for why the floor check must not apply here.
+export { removeDimensionUnchecked as undoAddDimension }
+
+// The undo-of-remove / redo-of-add primitive (issue 006): un-soft-deletes the
+// row AND rewrites every live row's sort to match `orderedIds` verbatim, so a
+// middle removal's undo restores the exact original position instead of
+// appending at the end. `orderedIds` is the full live order captured by the
+// caller (store) right before the mutation being undone/redone.
+export async function restoreDimension(
+  db: Database,
+  projectId: string,
+  id: string,
+  orderedIds: readonly string[],
+): Promise<DimensionRow[]> {
+  await db
+    .update(dimensions)
+    .set({ deletedAt: null, updatedAt: now() })
+    .where(eq(dimensions.id, id))
+  const rows = await listDimensions(db, projectId)
+  const byId = new Map(rows.map((d) => [d.id, d]))
+  const ordered = orderedIds
+    .map((oid) => byId.get(oid))
+    .filter((d): d is DimensionRow => d !== undefined)
+  await rewriteSort(db, ordered)
   return listDimensions(db, projectId)
 }
 
@@ -277,6 +319,27 @@ export async function removeParameter(
   return listParameters(db, dimensionId)
 }
 
+// Mirrors restoreDimension (issue 006) — the undo-of-remove / redo-of-add
+// primitive for parameters.
+export async function restoreParameter(
+  db: Database,
+  dimensionId: string,
+  id: string,
+  orderedIds: readonly string[],
+): Promise<ParameterRow[]> {
+  await db
+    .update(parameters)
+    .set({ deletedAt: null, updatedAt: now() })
+    .where(eq(parameters.id, id))
+  const rows = await listParameters(db, dimensionId)
+  const byId = new Map(rows.map((p) => [p.id, p]))
+  const ordered = orderedIds
+    .map((oid) => byId.get(oid))
+    .filter((p): p is ParameterRow => p !== undefined)
+  await rewriteParameterSort(db, ordered)
+  return listParameters(db, dimensionId)
+}
+
 // ── Contexts & bindings (issue 004) ──────────────────────────────────────────
 // Root canvas only (parentId null) — recursion into child canvases is issue 011.
 
@@ -333,6 +396,29 @@ export async function setContextSymbol(
   const rows = await db
     .update(contexts)
     .set({ symbol, updatedAt: now() })
+    .where(eq(contexts.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+// Contexts have no user-facing delete yet — this pair exists solely as the
+// undo-of-create / redo-of-archive primitive (issue 006). create() always
+// appends at the tail, so unlike dimensions/parameters no sort-rewrite is
+// needed: archiving the just-created row never leaves a gap for a sibling to
+// fill, and restoring re-takes the same (still-highest) sort slot.
+export async function archiveContext(db: Database, id: string): Promise<ContextRow> {
+  const rows = await db
+    .update(contexts)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(eq(contexts.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function restoreContext(db: Database, id: string): Promise<ContextRow> {
+  const rows = await db
+    .update(contexts)
+    .set({ deletedAt: null, updatedAt: now() })
     .where(eq(contexts.id, id))
     .returning()
   return firstOrThrow(rows)

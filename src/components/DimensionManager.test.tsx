@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { createProject } from '../db/mutations'
+import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
 import { resetDimensionsStore, useDimensionsStore } from '../store/dimensions'
 import { DimensionManagerPanel } from './DimensionManager'
@@ -12,6 +13,7 @@ beforeEach(async () => {
   const { db } = await openDatabase('memory://')
   setDatabase(db)
   resetDimensionsStore()
+  useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   await useDimensionsStore.getState().load(project.id)
 })

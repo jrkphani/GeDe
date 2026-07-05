@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import type { ContextRow } from '../db/mutations'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { findDuplicateContextIds } from '../domain/duplicates'
+import { useCommandLogStore } from '../store/commandLog'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
@@ -167,8 +168,11 @@ export function ContextRegister({ projectId }: { projectId: string }) {
         columnId: 'justification',
         placeholder: contexts.length === 0 ? FIRST_CONTEXT_GHOST : 'New context',
         onCreate: (text) => {
-          void createContext().then((ctx) => {
-            if (ctx) void setJustification(ctx.id, text)
+          // One user gesture (typing + Enter in the phantom row) spans two
+          // store calls — batched into a single undo step (issue 006).
+          void useCommandLogStore.getState().batch('create context', async () => {
+            const ctx = await createContext()
+            if (ctx) await setJustification(ctx.id, text)
           })
         },
       }}

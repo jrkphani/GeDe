@@ -1,12 +1,20 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { AppShell } from './AppShell'
-import { useRoute } from './router'
+import { navigate, useRoute } from './router'
 import { ContextBar, ContextBarProvider } from './slots'
 import { StatusBar } from './StatusBar'
+import { useCommandLogStore } from '../store/commandLog'
 import { useStatusStore } from '../store/status'
+
+function pushFakeCommand(label: string) {
+  const undo = vi.fn(async () => {})
+  const redo = vi.fn(async () => {})
+  useCommandLogStore.getState().push({ label, undo, redo })
+  return { undo, redo }
+}
 
 function TestShell({ filler }: { filler?: boolean }) {
   const route = useRoute()
@@ -28,6 +36,7 @@ function Filler() {
 beforeEach(() => {
   window.history.replaceState(null, '', '/p/proj-1/foundation')
   useStatusStore.setState({ message: null, action: null })
+  useCommandLogStore.getState().clear()
 })
 
 describe('tier tabs', () => {
@@ -92,5 +101,83 @@ describe('status bar', () => {
     await user.click(screen.getByRole('button', { name: 'Undo' }))
     expect(ran).toBe(true)
     expect(region).not.toHaveTextContent('Archived')
+  })
+})
+
+describe('undo/redo (issue 006)', () => {
+  it('⌘Z undoes the top command and narrates it', async () => {
+    const user = userEvent.setup()
+    render(<TestShell />)
+    // Pushed after mount — AppShell clears the log on mount too (harmless in
+    // the real single-mount app; see the "clears on project switch" test).
+    const { undo } = pushFakeCommand('rename α')
+    await user.keyboard('{Meta>}z{/Meta}')
+    expect(undo).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Undid: rename α')).toBeInTheDocument()
+  })
+
+  it('⇧⌘Z redoes the top future command and narrates it', async () => {
+    const user = userEvent.setup()
+    render(<TestShell />)
+    const { redo } = pushFakeCommand('rename α')
+    await useCommandLogStore.getState().undo()
+    await user.keyboard('{Meta>}{Shift>}z{/Shift}{/Meta}')
+    expect(redo).toHaveBeenCalledTimes(1)
+    expect(await screen.findByText('Redid: rename α')).toBeInTheDocument()
+  })
+
+  it('does not fire while a text field with content is focused — native undo applies there', async () => {
+    const user = userEvent.setup()
+    render(<TestShell />)
+    const { undo } = pushFakeCommand('rename α')
+    const input = document.createElement('input')
+    input.value = 'in-progress edit'
+    document.body.appendChild(input)
+    input.focus()
+    await user.keyboard('{Meta>}z{/Meta}')
+    expect(undo).not.toHaveBeenCalled()
+    document.body.removeChild(input)
+  })
+
+  it('still fires when focus lands on an *empty* field — e.g. the phantom row right after a commit', async () => {
+    const user = userEvent.setup()
+    render(<TestShell />)
+    const { undo } = pushFakeCommand('rename α')
+    const input = document.createElement('input')
+    document.body.appendChild(input)
+    input.focus()
+    await user.keyboard('{Meta>}z{/Meta}')
+    expect(undo).toHaveBeenCalledTimes(1)
+    document.body.removeChild(input)
+  })
+
+  it('the narration clears itself after a few seconds', async () => {
+    const user = userEvent.setup()
+    render(<TestShell />)
+    pushFakeCommand('rename α')
+    await user.keyboard('{Meta>}z{/Meta}')
+    await screen.findByText('Undid: rename α')
+    await waitFor(() => expect(screen.queryByText('Undid: rename α')).not.toBeInTheDocument(), {
+      timeout: 3500,
+    })
+  })
+
+  it('undo/redo buttons reflect stack state, disabled at empty with the fresh-session tooltip', async () => {
+    render(<TestShell />)
+    const undoButton = screen.getByRole('button', { name: 'Undo' })
+    expect(undoButton).toBeDisabled()
+    expect(undoButton).toHaveAttribute('title', 'Undo history starts fresh each session')
+
+    pushFakeCommand('rename α')
+    await waitFor(() => expect(undoButton).not.toBeDisabled())
+    expect(undoButton).toHaveAttribute('title', 'Undo: rename α')
+  })
+
+  it('clears when the open project changes', async () => {
+    render(<TestShell />)
+    pushFakeCommand('rename α')
+    expect(useCommandLogStore.getState().past).toHaveLength(1)
+    navigate({ kind: 'tier', projectId: 'proj-2', tier: 'foundation' })
+    await waitFor(() => expect(useCommandLogStore.getState().past).toEqual([]))
   })
 })

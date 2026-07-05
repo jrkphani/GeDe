@@ -4,6 +4,7 @@ import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { addDimension, createProject } from '../db/mutations'
+import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
 import { resetParametersStore, useParametersStore } from '../store/parameters'
 import { ParameterList } from './ParameterList'
@@ -14,6 +15,7 @@ beforeEach(async () => {
   const { db } = await openDatabase('memory://')
   setDatabase(db)
   resetParametersStore()
+  useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   const dimension = await addDimension(db, project.id)
   dimensionId = dimension.id

@@ -5,13 +5,16 @@ import {
   removeParameter as dbRemove,
   renameParameter as dbRename,
   reorderParameter as dbReorder,
+  restoreParameter as dbRestore,
   type ParameterRow,
 } from '../db/mutations'
 import { requireDatabase } from './database'
+import { useCommandLogStore } from './commandLog'
 
 // Parameters keyed by their owning dimension — m is unbounded and independent
-// per dimension (SPEC §2). Each action is one gesture, same seam as dimensions
-// for the future 006 command log.
+// per dimension (SPEC §2), so unlike dimensions there is no floor to bypass:
+// removeParameter is always safe to use directly as undo-of-add. Every
+// mutating action pushes its inverse onto the shared command log (issue 006).
 
 interface ParametersState {
   byDimension: Record<string, ParameterRow[]>
@@ -24,7 +27,8 @@ interface ParametersState {
   // interleaving. Each mutation bumps the generation synchronously before
   // awaiting anything; load() snapshots the generation before its read and
   // discards its result if a mutation started meanwhile (mutations always
-  // apply unconditionally — they read-after-write themselves).
+  // apply unconditionally — they read-after-write themselves). Undo/redo are
+  // mutations too and bump the generation the same way.
   generation: Record<string, number>
   load: (dimensionId: string) => Promise<void>
   add: (dimensionId: string, name: string) => Promise<ParameterRow | null>
@@ -52,28 +56,85 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
     const row = await dbAdd(db, dimensionId, trimmed)
     set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+    const orderedIdsAfterAdd = get().byDimension[dimensionId]?.map((p) => p.id) ?? [row.id]
+    useCommandLogStore.getState().push({
+      label: `add parameter "${row.name}"`,
+      async undo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        await dbRemove(db, dimensionId, row.id)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+      },
+      async redo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        await dbRestore(db, dimensionId, row.id, orderedIdsAfterAdd)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+      },
+    })
     return row
   },
 
   async rename(dimensionId, id, name) {
     const db = requireDatabase()
+    const previousName = get().byDimension[dimensionId]?.find((p) => p.id === id)?.name ?? name
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
     await dbRename(db, id, name)
     set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+    useCommandLogStore.getState().push({
+      label: `rename parameter to "${name}"`,
+      async undo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        await dbRename(db, id, previousName)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+      },
+      async redo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        await dbRename(db, id, name)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+      },
+    })
   },
 
   async reorder(dimensionId, id, toIndex) {
     const db = requireDatabase()
+    const fromIndex = (get().byDimension[dimensionId] ?? []).findIndex((p) => p.id === id)
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
     const rows = await dbReorder(db, dimensionId, id, toIndex)
     set({ byDimension: { ...get().byDimension, [dimensionId]: rows } })
+    useCommandLogStore.getState().push({
+      label: 'reorder parameter',
+      async undo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const reverted = await dbReorder(db, dimensionId, id, fromIndex)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: reverted } })
+      },
+      async redo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const reapplied = await dbReorder(db, dimensionId, id, toIndex)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: reapplied } })
+      },
+    })
   },
 
   async remove(dimensionId, id) {
     const db = requireDatabase()
+    const orderedIds = (get().byDimension[dimensionId] ?? []).map((p) => p.id)
+    const removedName = get().byDimension[dimensionId]?.find((p) => p.id === id)?.name ?? ''
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
     const rows = await dbRemove(db, dimensionId, id)
     set({ byDimension: { ...get().byDimension, [dimensionId]: rows } })
+    useCommandLogStore.getState().push({
+      label: `remove parameter "${removedName}"`,
+      async undo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const restored = await dbRestore(db, dimensionId, id, orderedIds)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: restored } })
+      },
+      async redo() {
+        set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const removed = await dbRemove(db, dimensionId, id)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: removed } })
+      },
+    })
   },
 }))
 

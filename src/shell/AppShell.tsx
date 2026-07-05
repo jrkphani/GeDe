@@ -1,10 +1,55 @@
 import { useEffect, useState, type ReactNode } from 'react'
+import { useCommandLogStore } from '../store/commandLog'
 import { useProjectsStore } from '../store/projects'
+import { useStatusStore } from '../store/status'
+import { Button } from '../components/ui/button'
 import { navigate } from './router'
 import { serializeRoute, type AppRoute, type Tier } from './routes'
 import { ContextBarSlot } from './slots'
 import { StatusBar } from './StatusBar'
 import { toggleTheme } from './theme'
+
+const UNDO_NARRATION_MS = 3000
+const FRESH_SESSION_TOOLTIP = 'Undo history starts fresh each session'
+
+// SITEMAP §2/§4, issue 006: the status bar narrates the step just undone/
+// redone for 3s, then falls quiet again — distinct from the persistent
+// inline-Undo pattern (archive) which waits for the user to act.
+function narrate(message: string): void {
+  useStatusStore.getState().announce(message)
+  setTimeout(() => {
+    if (useStatusStore.getState().message === message) useStatusStore.getState().clear()
+  }, UNDO_NARRATION_MS)
+}
+
+function triggerUndo(): void {
+  const { past, undo } = useCommandLogStore.getState()
+  const label = past[past.length - 1]?.label
+  if (!label) return
+  void undo().then(() => narrate(`Undid: ${label}`))
+}
+
+function triggerRedo(): void {
+  const { future, redo } = useCommandLogStore.getState()
+  const label = future[future.length - 1]?.label
+  if (!label) return
+  void redo().then(() => narrate(`Redid: ${label}`))
+}
+
+// ⌘Z/⇧⌘Z falls through to the browser's native text-field undo when focus is
+// inside an editable control *with something to revert* — the app's command
+// log must not fight an in-progress edit a user is typing. But only while
+// there's actual native undo history to defer to: committing a cell edit
+// (Enter) moves focus to the next row, which is often the phantom row's
+// empty input (Numbers-style grammar) — deferring there would silently
+// swallow every ⌘Z pressed right after a commit, since an empty field has
+// nothing for native undo to do.
+function shouldDeferToNativeUndo(el: Element | null): boolean {
+  if (el === null) return false
+  if ((el as HTMLElement).isContentEditable) return true
+  if (el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement) return el.value.length > 0
+  return false
+}
 
 const TIER_TABS: { key: Tier | 'design'; label: string }[] = [
   { key: 'foundation', label: 'Foundation' },
@@ -73,12 +118,29 @@ function ProjectName({ id }: { id: string }) {
 export function AppShell({ route, children }: { route: AppRoute; children: ReactNode }) {
   const projectId = projectIdOf(route)
   const active = activeTab(route)
+  const past = useCommandLogStore((s) => s.past)
+  const future = useCommandLogStore((s) => s.future)
 
-  // Global keys (SITEMAP §4): ⌘1/⌘2/⌘3 switch tiers within a project.
+  // Global keys (SITEMAP §4): ⌘1/⌘2/⌘3 switch tiers within a project; ⌘Z/⇧⌘Z
+  // undo/redo everywhere (not gated on a project being open — e.g. the
+  // projects-list archive lives here too). Skipped inside an editable field
+  // so native text-undo still works there. Registered on the *capture* phase:
+  // EditableGrid's phantom-row input calls stopPropagation() on every keydown
+  // (to keep its own Enter/Escape/arrow grammar from leaking to ancestors),
+  // which would otherwise swallow this bubble-phase listener whenever focus
+  // is inside a phantom row — a real scenario, since committing a cell edit
+  // moves focus to the next row, often the phantom one.
   useEffect(() => {
-    if (projectId === null) return
     function onKeyDown(e: KeyboardEvent) {
-      if (!(e.metaKey || e.ctrlKey) || projectId === null) return
+      if (!(e.metaKey || e.ctrlKey)) return
+      if (e.code === 'KeyZ') {
+        if (shouldDeferToNativeUndo(document.activeElement)) return
+        e.preventDefault()
+        if (e.shiftKey) triggerRedo()
+        else triggerUndo()
+        return
+      }
+      if (projectId === null) return
       const tab = { Digit1: 'foundation', Digit2: 'architecture', Digit3: 'design' }[e.code] as
         | Tier
         | 'design'
@@ -87,8 +149,14 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
       e.preventDefault()
       navigate(routeForTab(projectId, tab))
     }
-    window.addEventListener('keydown', onKeyDown)
-    return () => window.removeEventListener('keydown', onKeyDown)
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [projectId])
+
+  // Session-scoped: the command log clears when the open project changes
+  // (issue 006 design brief) — never carries stale cross-project commands.
+  useEffect(() => {
+    useCommandLogStore.getState().clear()
   }, [projectId])
 
   return (
@@ -125,13 +193,22 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           </nav>
         )}
         <div className="app-bar__cluster">
-          {/* Undo/redo are wired by the command log (issue 006). */}
-          <button className="row-action" aria-label="Undo" disabled title="Undo arrives with the command log">
+          <Button
+            aria-label="Undo"
+            disabled={past.length === 0}
+            title={past.length > 0 ? `Undo: ${past[past.length - 1]?.label}` : FRESH_SESSION_TOOLTIP}
+            onClick={triggerUndo}
+          >
             ↶
-          </button>
-          <button className="row-action" aria-label="Redo" disabled title="Redo arrives with the command log">
+          </Button>
+          <Button
+            aria-label="Redo"
+            disabled={future.length === 0}
+            title={future.length > 0 ? `Redo: ${future[future.length - 1]?.label}` : FRESH_SESSION_TOOLTIP}
+            onClick={triggerRedo}
+          >
             ↷
-          </button>
+          </Button>
           <button className="row-action" aria-label="Toggle theme" onClick={() => toggleTheme()}>
             ◐
           </button>

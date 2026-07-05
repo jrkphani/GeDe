@@ -4,6 +4,7 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { StatusBar } from '../shell/StatusBar'
+import { useCommandLogStore } from '../store/commandLog'
 import { resetProjectsStore, useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
 import { ProjectsList } from './ProjectsList'
@@ -17,6 +18,7 @@ async function bootStore() {
 beforeEach(async () => {
   await bootStore()
   useStatusStore.setState({ message: null, action: null })
+  useCommandLogStore.getState().clear()
 })
 
 const noop = () => undefined

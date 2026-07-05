@@ -3,12 +3,14 @@ import { openDatabase } from './client'
 import {
   addDimension,
   addParameter,
+  archiveContext,
   bindParameter,
   ContextSymbolCollisionError,
   createContext,
   createProject,
   listBindings,
   listContexts,
+  restoreContext,
   setContextSymbol,
   unbindParameter,
 } from './mutations'
@@ -94,5 +96,23 @@ describe('binding mutations', () => {
     const rows = await listBindings(db, ctx.id)
     expect(rows).toHaveLength(1)
     expect(rows[0]?.tupleHash).toBe(vComfort.id)
+  })
+})
+
+// issue 006: archiveContext/restoreContext back undo-of-create / redo-of-archive.
+// Contexts have no user-facing delete yet — this pair exists solely as the
+// command log's inverse for context creation.
+describe('archiveContext / restoreContext (issue 006 undo/redo)', () => {
+  it('archiving hides a context from listContexts; restoring brings the same row back', async () => {
+    const { db, projectId } = await projectWithCanvas()
+    const ctx = await createContext(db, projectId)
+
+    await archiveContext(db, ctx.id)
+    expect(await listContexts(db, projectId)).toHaveLength(0)
+
+    const restored = await restoreContext(db, ctx.id)
+    expect(restored.id).toBe(ctx.id)
+    expect(restored.symbol).toBe(ctx.symbol)
+    expect(await listContexts(db, projectId)).toHaveLength(1)
   })
 })

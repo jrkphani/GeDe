@@ -7,6 +7,7 @@ import {
   removeDimension,
   renameDimension,
   reorderDimension,
+  restoreDimension,
   setDimensionColor,
 } from './mutations'
 import { createProject } from './mutations'
@@ -89,5 +90,40 @@ describe('dimension mutations', () => {
     const names = (await listDimensions(db, projectId)).map((d) => d.name)
     expect(new Set(names).size).toBe(names.length)
     expect(fresh.name).toBe('Dimension 4')
+  })
+
+  // issue 006: restoreDimension is the undo-of-remove / redo-of-add primitive
+  // — it must reproduce the exact prior order, not just un-delete the row.
+  describe('restoreDimension (issue 006 undo/redo)', () => {
+    it('restores a tail removal back to the end', async () => {
+      const { db, projectId } = await projectDb()
+      const a = await addDimension(db, projectId)
+      const b = await addDimension(db, projectId)
+      const c = await addDimension(db, projectId)
+      const orderedIds = [a.id, b.id, c.id]
+
+      await removeDimension(db, projectId, c.id)
+      await restoreDimension(db, projectId, c.id, orderedIds)
+
+      const rows = await listDimensions(db, projectId)
+      expect(rows.map((d) => d.id)).toEqual(orderedIds)
+      expect(rows.map((d) => d.sort)).toEqual([0, 1, 2])
+    })
+
+    it('restores a middle removal at its original position, shifting the rest back', async () => {
+      const { db, projectId } = await projectDb()
+      const a = await addDimension(db, projectId)
+      const b = await addDimension(db, projectId)
+      const c = await addDimension(db, projectId)
+      const orderedIds = [a.id, b.id, c.id]
+
+      await removeDimension(db, projectId, b.id)
+      expect((await listDimensions(db, projectId)).map((d) => d.sort)).toEqual([0, 1])
+
+      await restoreDimension(db, projectId, b.id, orderedIds)
+      const rows = await listDimensions(db, projectId)
+      expect(rows.map((d) => d.id)).toEqual(orderedIds)
+      expect(rows.map((d) => d.sort)).toEqual([0, 1, 2])
+    })
   })
 })
