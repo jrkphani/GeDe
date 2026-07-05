@@ -34,6 +34,11 @@ export interface InlineEditProps {
   /** Stop click + keydown propagation — needed when an ancestor row is itself
    *  interactive (clickable project row, Alt+arrow reorder on the dim row). */
   stopPropagation?: boolean
+  /** Controlled editing state. Omit for self-managed editing; provide both
+   *  when editing must live elsewhere — e.g. DimensionManager keeps it in the
+   *  store so add() can open a freshly-created row atomically (HANDOFF race). */
+  editing?: boolean
+  onEditingChange?: (editing: boolean) => void
 }
 
 export function InlineEdit({
@@ -45,8 +50,16 @@ export function InlineEdit({
   ariaLabel,
   selectOnFocus = false,
   stopPropagation = false,
+  editing: editingProp,
+  onEditingChange,
 }: InlineEditProps) {
-  const [editing, setEditing] = useState(false)
+  const [internalEditing, setInternalEditing] = useState(false)
+  const controlled = editingProp !== undefined
+  const editing = controlled ? editingProp : internalEditing
+  const setEditing = (next: boolean) => {
+    if (controlled) onEditingChange?.(next)
+    else setInternalEditing(next)
+  }
   const [draft, setDraft] = useState(value)
 
   if (!editing) {

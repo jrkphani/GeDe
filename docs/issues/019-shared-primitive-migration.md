@@ -16,7 +16,8 @@ As a contributor I compose UI from a small set of owned primitives in `src/compo
 - Migrate `ProjectsList` + `ParameterList`.
 
 **19b — remaining call sites**
-- Migrate `DimensionManager` (rename input) + `EditableGrid` (`TextOrMonoCell`) to `InlineEditor`.
+- Migrate `DimensionManager` (rename input) to `InlineEdit` — needs the controlled-editing seam (its editing state lives in the store per the guided-start atomic-set race).
+- **`EditableGrid` (`TextOrMonoCell`) is deliberately NOT migrated.** Its cell editor is grid-specific — blur *commits* (opposite of InlineEdit's blur-cancels), Enter commits *and moves down a row*, and it's wired into the grid's `nav`/`registerRef` focus system (issue 004). It is already a single implementation reused by all tiers, not a duplicate; forcing it into `InlineEdit` would break the grid keyboard grammar for no gain.
 
 **19c — overlay primitives**
 - `ui/popover.tsx` (wraps `@radix-ui/react-popover`, bakes in `sideOffset`, the `.popover` styling, and the SITEMAP §4 Esc-order guard).
@@ -42,7 +43,7 @@ As a contributor I compose UI from a small set of owned primitives in `src/compo
 
 ## Acceptance criteria
 
-- [ ] The `inplace-input` Enter/Esc/blur logic exists in exactly **one** place (`ui/inline-editor.tsx`); the 4 former copies are gone.
+- [ ] The standalone click-to-edit Enter/Esc/blur logic exists in exactly **one** place (`ui/inline-editor.tsx`); the 3 former copies (ProjectsList, ParameterList, DimensionManager) are gone. EditableGrid keeps its distinct grid-cell editor (see 19b).
 - [ ] `EditableGrid` and `ContextRegister` behave identically (issue 004 acceptance still holds); tier tables (013/014) can still reuse `EditableGrid` unchanged.
 - [ ] No raw `@radix-ui/*` or `cmdk` import remains outside `src/components/ui/` (this becomes lint-enforced in 020).
 - [ ] `npm run verify` green after every sub-phase; pixel parity in both themes.

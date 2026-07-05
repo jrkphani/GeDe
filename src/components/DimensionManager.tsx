@@ -7,6 +7,8 @@ import type { DimensionRow } from '../db/mutations'
 import { useDimensionsStore } from '../store/dimensions'
 import { DIMENSION_PALETTE } from '../theme/palette'
 import { ParameterList } from './ParameterList'
+import { Button } from './ui/button'
+import { InlineEdit } from './ui/inline-editor'
 
 const FLOOR_TOOLTIP = 'A canvas needs at least 2 dimensions'
 
@@ -59,7 +61,6 @@ function DimensionItem({
   const rename = useDimensionsStore((s) => s.rename)
   const reorder = useDimensionsStore((s) => s.reorder)
   const remove = useDimensionsStore((s) => s.remove)
-  const [draft, setDraft] = useState(dimension.name)
   const [picking, setPicking] = useState(false)
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: dimension.id,
@@ -100,44 +101,25 @@ function DimensionItem({
           aria-label={`Color of ${dimension.name}`}
           onClick={() => setPicking(!picking)}
         />
-        {editing ? (
-          <input
-            className="inplace-input dim-row__name--head"
-            value={draft}
-            autoFocus
-            onFocus={(e) => e.target.select()}
-            onChange={(e) => setDraft(e.target.value)}
-            onBlur={() => setEditing(null)}
-            onKeyDown={(e) => {
-              e.stopPropagation()
-              if (e.key === 'Enter') {
-                const next = draft.trim()
-                if (next && next !== dimension.name) void rename(dimension.id, next)
-                setEditing(null)
-              }
-              if (e.key === 'Escape') setEditing(null)
-            }}
-          />
-        ) : (
-          <span
-            className="dim-row__name dim-row__name--head"
-            onClick={() => {
-              setDraft(dimension.name)
-              setEditing(dimension.id)
-            }}
-          >
-            {dimension.name}
-          </span>
-        )}
-        <button
-          className="row-action"
+        <InlineEdit
+          value={dimension.name}
+          onCommit={(next) => void rename(dimension.id, next)}
+          display={dimension.name}
+          displayClassName="dim-row__name dim-row__name--head"
+          inputClassName="dim-row__name--head"
+          selectOnFocus
+          stopPropagation
+          editing={editing}
+          onEditingChange={(next) => setEditing(next ? dimension.id : null)}
+        />
+        <Button
           aria-label={`Remove ${dimension.name}`}
           disabled={!canRemove}
           title={canRemove ? undefined : FLOOR_TOOLTIP}
           onClick={() => void remove(dimension.id)}
         >
           Remove
-        </button>
+        </Button>
         {picking && <SwatchPicker dimension={dimension} onDone={() => setPicking(false)} />}
       </div>
       <ParameterList dimensionId={dimension.id} />
@@ -178,14 +160,14 @@ export function DimensionManagerPanel() {
           ))}
         </SortableContext>
       </DndContext>
-      <button
-        className="row-action dim-manager__add"
+      <Button
+        className="dim-manager__add"
         onClick={() => {
           void add() // opens the new row's editor via the same store update
         }}
       >
         Add dimension
-      </button>
+      </Button>
     </div>
   )
 }

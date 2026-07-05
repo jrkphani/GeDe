@@ -54,6 +54,40 @@ describe('InlineEdit', () => {
     expect(onCommit).not.toHaveBeenCalled()
     expect(screen.queryByRole('textbox')).toBeNull()
   })
+
+  it('controlled: `editing` prop drives the input; onEditingChange fires on exit', async () => {
+    const user = userEvent.setup()
+    const onEditingChange = vi.fn()
+    const onCommit = vi.fn()
+    const { rerender } = render(
+      <InlineEdit
+        value="Alpha"
+        onCommit={onCommit}
+        display="Alpha"
+        editing={false}
+        onEditingChange={onEditingChange}
+      />,
+    )
+    expect(screen.queryByRole('textbox')).toBeNull()
+    await user.click(screen.getByText('Alpha'))
+    expect(onEditingChange).toHaveBeenCalledExactlyOnceWith(true)
+
+    // Parent applies the state; now the input shows and commits close it.
+    rerender(
+      <InlineEdit
+        value="Alpha"
+        onCommit={onCommit}
+        display="Alpha"
+        editing
+        onEditingChange={onEditingChange}
+      />,
+    )
+    await user.clear(screen.getByRole('textbox'))
+    await user.type(screen.getByRole('textbox'), 'Gamma')
+    await user.keyboard('{Enter}')
+    expect(onCommit).toHaveBeenCalledExactlyOnceWith('Gamma')
+    expect(onEditingChange).toHaveBeenLastCalledWith(false)
+  })
 })
 
 describe('PhantomInput', () => {
