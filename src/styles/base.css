@@ -787,6 +787,36 @@ body {
   stroke: none;
 }
 
+/* Compose mode (issue 010, SPEC §4.2): dots become bind targets. The hit
+   circle is an invisible ≥44px pointer target (sized in Canvas.tsx from the
+   measured width); a bound dot gains a filled ring; the whole group shows the
+   pointer affordance. Read mode renders neither the hit circle nor a handler,
+   so a dot click can never mutate. */
+.canvas-dot-group--compose {
+  cursor: pointer;
+}
+
+.canvas-dot-hit {
+  fill: transparent;
+}
+
+.canvas-dot-group--compose .canvas-dot {
+  transition: r var(--motion-fast) ease-out;
+}
+
+.canvas-dot-group--bound .canvas-dot {
+  stroke: var(--paper);
+  stroke-width: 2px;
+  r: 7px;
+}
+
+/* Guided binding (SPEC §4.2): only the active dimension's arc + labels read at
+   full strength; the rest recede so the prompted dimension stands out. */
+.canvas-arc-group[data-active='false'] {
+  opacity: 0.4;
+  transition: opacity var(--motion-fast);
+}
+
 .canvas-node circle {
   fill: var(--ink);
   stroke: none;
@@ -822,6 +852,11 @@ body {
    rule near the top of this file. */
 .canvas-node {
   cursor: pointer;
+  /* The node position is a group transform (Canvas.tsx), so easing the
+     transform migrates the node to its recomputed centroid after each bind
+     (STYLE_GUIDE §8, ~120ms). The blanket prefers-reduced-motion rule above
+     disables this transition, snapping to the correct final transform. */
+  transition: transform var(--motion-migrate) ease-out;
   /* :focus-visible ring comes from the global rule near the top of this
      file — it targets whatever element actually has focus, which is this
      `<g>` itself, so no override is needed (or wanted: overriding here
@@ -907,10 +942,76 @@ body {
   border-radius: var(--radius);
 }
 
+/* Canvas toolbar (issue 010): "New context" entry to compose mode, above the
+   canvas + register row. */
+.canvas-toolbar {
+  display: flex;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+}
+
 .composer-legend {
   display: flex;
   flex-wrap: wrap;
   gap: var(--space-5);
+  margin-bottom: var(--space-3);
+}
+
+/* Compose/edit mode (issue 010): one parameter picker per dimension. The
+   active dimension's picker reads at full strength (accent border); the rest
+   rest quietly. Each picker shows the dimension label + bound parameter. */
+.composer-pickers {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
+
+.composer-picker {
+  display: inline-flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  align-items: flex-start;
+  padding: var(--space-2) var(--space-3);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font: inherit;
+  color: var(--ink);
+}
+
+.composer-picker--active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.composer-picker__dimension {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: var(--text-label);
+  color: var(--ink-muted);
+}
+
+.composer-picker__value {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  color: var(--ink);
+}
+
+.composer-tuple-row {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+}
+
+/* Live, non-blocking duplicate-tuple indicator (invariant 2, issue 005): the
+   pending tuple already exists on another context. Informational only. */
+.composer-duplicate {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+  color: var(--ink-muted);
   margin-bottom: var(--space-3);
 }
 

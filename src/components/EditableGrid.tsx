@@ -6,8 +6,7 @@ import {
   type ColumnDef,
 } from '@tanstack/react-table'
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
-import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
+import { Combobox, type ComboboxOption } from './ui/combobox'
 import { Swatch } from './ui/swatch'
 
 // ADR-0004: TanStack Table computes rows/columns; EditableGrid owns every
@@ -16,11 +15,9 @@ import { Swatch } from './ui/swatch'
 // This component has zero knowledge of dimensions/contexts/tiers; callers
 // supply getValue/onCommit closures (reused unchanged by tiers 1–2, 013–014).
 
-export interface ComboboxOption {
-  value: string
-  label: string
-  color?: string
-}
+// Re-exported so existing callers keep importing the option shape from here;
+// the picker itself now lives in ui/combobox (shared with the composer, 010).
+export type { ComboboxOption }
 
 export interface TextCellKind<TRow> {
   kind: 'text'
@@ -370,14 +367,19 @@ function ComboboxCell<TRow>({
   const selected = options.find((o) => o.value === value)
 
   return (
-    <Popover
+    <Combobox
+      value={value}
+      options={options}
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
         nav.setEditing(next ? { rowId, columnId } : null)
       }}
-    >
-      <PopoverTrigger asChild>
+      onChange={(next) => {
+        void cellDef.onCommit(row, next)
+        moveFocusDown(nav, rowId, columnId)
+      }}
+      trigger={
         <button
           ref={registerRef(nav, rowId, columnId)}
           type="button"
@@ -399,42 +401,8 @@ function ComboboxCell<TRow>({
             <span className="grid-cell__placeholder">—</span>
           )}
         </button>
-      </PopoverTrigger>
-      <PopoverContent className="combobox-popover" align="start" sideOffset={2}>
-        <Command loop>
-          <CommandInput autoFocus placeholder="Type to filter…" />
-          <CommandList>
-            <CommandEmpty>No match</CommandEmpty>
-            {value !== null && (
-              <CommandItem
-                value="__unbind__"
-                onSelect={() => {
-                  void cellDef.onCommit(row, null)
-                  setOpen(false)
-                  moveFocusDown(nav, rowId, columnId)
-                }}
-              >
-                <span className="grid-cell__placeholder">— clear —</span>
-              </CommandItem>
-            )}
-            {options.map((opt) => (
-              <CommandItem
-                key={opt.value}
-                value={opt.label}
-                onSelect={() => {
-                  void cellDef.onCommit(row, opt.value)
-                  setOpen(false)
-                  moveFocusDown(nav, rowId, columnId)
-                }}
-              >
-                <Swatch color={opt.color} />
-                {opt.label}
-              </CommandItem>
-            ))}
-          </CommandList>
-        </Command>
-      </PopoverContent>
-    </Popover>
+      }
+    />
   )
 }
 

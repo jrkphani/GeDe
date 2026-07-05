@@ -43,6 +43,20 @@ describe('contexts store — command log (issue 006)', () => {
     expect(useContextsStore.getState().contexts[0]?.symbol).toBe('α')
   })
 
+  it('discard archives the context and clears selection; undo restores it', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    useContextsStore.getState().select(id)
+
+    await useContextsStore.getState().discard(id)
+    expect(useContextsStore.getState().contexts).toEqual([])
+    expect(useContextsStore.getState().selectedContextId).toBeNull()
+    expect(await listContexts(db, projectId)).toEqual([])
+
+    await useCommandLogStore.getState().undo()
+    expect(useContextsStore.getState().contexts.map((c) => c.id)).toEqual([id])
+  })
+
   it('undo of setSymbol restores the previous symbol; redo re-applies the new one', async () => {
     const ctx = await useContextsStore.getState().create()
     const id = (ctx as { id: string }).id

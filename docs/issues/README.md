@@ -24,7 +24,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [007](done/007-dimension-mutability-demotion.md) ✅ | Dimension mutability + demotion | M1 | 005, 006 |
 | [008](done/008-canvas-readonly-deterministic-layout.md) ✅ | Canvas read-only + deterministic layout | M2 | 004 |
 | [009](done/009-canvas-selection-composer-sync.md) ✅ | Selection, spokes, composer, sync | M2 | 008 |
-| [010](010-compose-bind-from-canvas.md) | Compose & bind from canvas | M2 | 009 |
+| [010](done/010-compose-bind-from-canvas.md) ✅ | Compose & bind from canvas | M2 | 009 |
 | [011](011-recursion-drilldown-breadcrumbs.md) | Recursion, drill-down, breadcrumbs | M3 | 010 |
 | [012](012-coverage-matrix.md) | Coverage matrix | M4 | 010 |
 | [013](done/013-tier1-foundation.md) ✅ | Tier 1 Foundation | M5 | 004, 016 |

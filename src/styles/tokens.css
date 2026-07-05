@@ -63,6 +63,7 @@
   /* Motion — §8 */
   --motion-fast: 100ms;
   --motion-snappy: 140ms;
+  --motion-migrate: 120ms; /* canvas node easing to its centroid on bind (010) */
   --motion-drilldown: 200ms;
 }
 

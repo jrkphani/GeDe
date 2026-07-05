@@ -59,6 +59,10 @@ interface ContextsState {
   select: (id: string | null) => void
   load: (projectId: string) => Promise<void>
   create: () => Promise<ContextRow | null>
+  // Issue 010 — archive a context (undoable). Backs the compose exit path's
+  // "Discard draft α" status-line action; the same soft-delete as create()'s
+  // own undo, exposed as a first-class action so it can be triggered directly.
+  discard: (id: string) => Promise<void>
   setSymbol: (id: string, symbol: string) => Promise<{ ok: boolean; reason?: string }>
   setJustification: (id: string, text: string) => Promise<void>
   bind: (contextId: string, dimensionId: string, parameterId: string) => Promise<void>
@@ -126,6 +130,29 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
       },
     })
     return row
+  },
+
+  async discard(id) {
+    const { projectId } = get()
+    if (projectId === null) return
+    const db = requireDatabase()
+    const symbol = get().contexts.find((c) => c.id === id)?.symbol ?? id
+    set({ generation: get().generation + 1 })
+    await dbArchive(db, id)
+    set({ contexts: await dbListContexts(db, projectId), selectedContextId: null })
+    useCommandLogStore.getState().push({
+      label: `discard draft ${symbol}`,
+      async undo() {
+        set({ generation: get().generation + 1 })
+        await dbRestore(db, id)
+        set({ contexts: await dbListContexts(db, projectId) })
+      },
+      async redo() {
+        set({ generation: get().generation + 1 })
+        await dbArchive(db, id)
+        set({ contexts: await dbListContexts(db, projectId), selectedContextId: null })
+      },
+    })
   },
 
   async setSymbol(id, symbol) {

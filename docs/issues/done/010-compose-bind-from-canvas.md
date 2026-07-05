@@ -1,6 +1,6 @@
 # 010: Create and bind contexts from the canvas
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M2
 - **Blocked by**: 009
 
@@ -38,6 +38,16 @@ As a designer I create a context directly on the canvas: enter compose mode, cli
 
 ## Acceptance criteria
 
-- [ ] Canvas-created and register-created contexts are indistinguishable in the store (same mutation layer).
-- [ ] Compose mode is fully keyboard-operable.
-- [ ] Undo treats compose-and-bind as sensible steps (each bind = one step; consistent with slice 006 batching rules).
+- [x] Canvas-created and register-created contexts are indistinguishable in the store (same mutation layer).
+- [x] Compose mode is fully keyboard-operable.
+- [x] Undo treats compose-and-bind as sensible steps (each bind = one step; consistent with slice 006 batching rules).
+
+## Shipped notes
+
+- **Pure reducer** (`src/domain/composeMode.ts`): store-free guided-compose state machine (bind/unbind/re-bind, next-unbound pointer, a `completed` event that fires exactly on the tuple-finishing bind). `firstUnbound()` exported so `DesignSurface` derives the displayed active dimension straight from the live generation-guarded store bindings — race-free under rapid clicks (a real bug caught only in the browser: deriving the active pointer from settling store state left a picker stuck "active").
+- **Shared picker** (`src/components/ui/combobox.tsx`): the register grid cell and the composer's per-dimension pickers now use one primitive (Popover + cmdk, incl. the "— clear —" item), so "same picker logic" is met by sharing, not forking. `EditableGrid`'s combobox cell was refactored onto it; `ComboboxOption` re-exported from EditableGrid for existing callers. Register e2e still green.
+- **Canvas** (`src/components/Canvas.tsx`): interactive dots with ≥44px invisible hit circles (`dotHitRadiusUnits()` maps 44px into viewBox units from measured width), bound-dot affordance, active-dimension highlight, transform-based node migration to centroid (`--motion-migrate: 120ms`). Stays presentational; compose state lives in `DesignSurface`.
+- **Composer** (`src/components/Composer.tsx`): edit mode adds n pickers + live `= β` duplicate badge (slice 005 logic); read mode untouched.
+- **Orchestration** (`src/components/DesignSurface.tsx`): `c` global key (capture-phase, editable-guarded per the 006 gotcha); compose-scoped Esc checks the DOM synchronously for an open picker popover and defers to Radix that press (the 009 Esc-ordering gotcha, not a listener race). `contexts.ts` gained `discard()` — one undoable archive backing the "Discard draft α" status offer. Selection field (`selectedContextId`/`select`) untouched → clean seam for 017.
+- **Known UX choice**: "New context" is disabled while composing (start a second context by exiting compose first). Flagged for review if commit-and-restart is preferred instead.
+- **Verified**: full `npm run verify` green on main (unit/component + e2e incl. `e2e/canvas-compose.spec.ts` recreating the M2 done-when flow). Manual chromium screenshots confirmed compose enter / spoke attach / migration / live duplicate badge.

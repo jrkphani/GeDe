@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { CENTER, layout, NODE_RADIUS } from '../domain/canvasLayout'
-import { labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
+import { dotHitRadiusUnits, labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
 import type { ContextRow, DimensionRow, ParameterRow } from '../db/mutations'
@@ -18,6 +18,17 @@ export interface CanvasProps {
   bindingsByContext: Readonly<Record<string, Readonly<Record<string, string>>>>
   selectedContextId: string | null
   onSelect: (id: string | null) => void
+  // Issue 010 — compose mode. When `composeContextId` is set, that context is
+  // the live draft: parameter dots become interactive (click to bind/unbind),
+  // the active dimension's arc reads at full strength while the rest recede,
+  // and Escape exits compose (keeping the draft) rather than clearing
+  // selection. All null/undefined in read mode — the canvas stays presentational
+  // and mutation-free, exactly like selection (DesignSurface owns the store).
+  composeContextId?: string | null
+  activeDimensionId?: string | null
+  onBindParameter?: (dimensionId: string, parameterId: string) => void
+  onUnbindParameter?: (dimensionId: string) => void
+  onExitCompose?: () => void
 }
 
 function useElementWidth(): [React.RefObject<HTMLDivElement | null>, number | null] {
@@ -41,6 +52,8 @@ function useElementWidth(): [React.RefObject<HTMLDivElement | null>, number | nu
 
 const LABEL_TIER_FALLBACK: CanvasLabelTier = 'full'
 
+const HIT_REFERENCE_WIDTH = 500
+
 export function Canvas({
   dimensions,
   parametersByDimension,
@@ -48,10 +61,21 @@ export function Canvas({
   bindingsByContext,
   selectedContextId,
   onSelect,
+  composeContextId = null,
+  activeDimensionId = null,
+  onBindParameter,
+  onUnbindParameter,
+  onExitCompose,
 }: CanvasProps) {
   const [shellRef, width] = useElementWidth()
   const labelTier = width === null ? LABEL_TIER_FALLBACK : labelTierForWidth(width)
   const nodeRefs = useRef<Record<string, SVGGElement | null>>({})
+
+  const composing = composeContextId !== null
+  const draftBindings = composeContextId ? (bindingsByContext[composeContextId] ?? {}) : {}
+  // Invisible ≥44px hit circle in viewBox units (STYLE_GUIDE §7), derived from
+  // the *measured* on-screen width so the target stays 44px at any scale.
+  const hitRadius = dotHitRadiusUnits(width && width > 0 ? width : HIT_REFERENCE_WIDTH)
 
   const geometry = useMemo(
     () => layout({ dimensions, parametersByDimension, contexts, bindingsByContext }),
@@ -116,7 +140,14 @@ export function Canvas({
         }}
       >
         {geometry.arcs.map((arc) => (
-          <g key={arc.dimensionId}>
+          <g
+            key={arc.dimensionId}
+            className="canvas-arc-group"
+            data-dimension-id={arc.dimensionId}
+            // In compose mode only the active dimension reads at full strength
+            // (guided binding, SPEC §4.2); in read mode every arc is "active".
+            data-active={activeDimensionId === null ? 'true' : String(arc.dimensionId === activeDimensionId)}
+          >
             <path
               className="canvas-arc"
               data-dimension-id={arc.dimensionId}
@@ -138,18 +169,43 @@ export function Canvas({
           </g>
         ))}
 
-        {geometry.dots.map((dot) => (
-          <circle
-            key={`${dot.dimensionId}:${dot.parameterId}`}
-            className="canvas-dot"
-            data-dimension-id={dot.dimensionId}
-            data-parameter-id={dot.parameterId}
-            cx={dot.x}
-            cy={dot.y}
-            r={5}
-            style={{ fill: dot.color }}
-          />
-        ))}
+        {geometry.dots.map((dot) => {
+          const isBound = composing && draftBindings[dot.dimensionId] === dot.parameterId
+          return (
+            <g
+              key={`${dot.dimensionId}:${dot.parameterId}`}
+              className={cn('canvas-dot-group', {
+                'canvas-dot-group--compose': composing,
+                'canvas-dot-group--bound': isBound,
+              })}
+              data-dimension-id={dot.dimensionId}
+              data-parameter-id={dot.parameterId}
+              onClick={
+                composing
+                  ? () => {
+                      // Toggle: clicking the bound dot unbinds, any other dot
+                      // (re)binds its dimension. Read mode has no handler at
+                      // all, so a dot click can never mutate (SPEC invariant 2
+                      // — mode gates mutation; read-mode clicks only select).
+                      if (draftBindings[dot.dimensionId] === dot.parameterId) onUnbindParameter?.(dot.dimensionId)
+                      else onBindParameter?.(dot.dimensionId, dot.parameterId)
+                    }
+                  : undefined
+              }
+            >
+              {composing ? <circle className="canvas-dot-hit" cx={dot.x} cy={dot.y} r={hitRadius} /> : null}
+              <circle
+                className="canvas-dot"
+                data-dimension-id={dot.dimensionId}
+                data-parameter-id={dot.parameterId}
+                cx={dot.x}
+                cy={dot.y}
+                r={5}
+                style={{ fill: dot.color }}
+              />
+            </g>
+          )
+        })}
 
         {selectedContextId && selectedNode
           ? Object.entries(bindingsByContext[selectedContextId] ?? {}).map(([dimensionId, parameterId]) => {
@@ -192,6 +248,12 @@ export function Canvas({
                 'canvas-node--draft': node.isDraft,
                 'canvas-node--dimmed': dimmed,
               })}
+              // The node's position lives on the group transform (not per-shape
+              // x/y) so it can ease toward its recomputed centroid after each
+              // bind (single ~120ms migration, STYLE_GUIDE §8) via a CSS
+              // transform transition — which `prefers-reduced-motion` disables
+              // for free, snapping straight to the correct final position.
+              transform={`translate(${node.x},${node.y})`}
               data-context-id={node.contextId}
               role="button"
               tabIndex={isTabStop ? 0 : -1}
@@ -206,17 +268,20 @@ export function Canvas({
                   e.preventDefault()
                   moveSelection(index, -1)
                 } else if (e.key === 'Escape') {
-                  onSelect(null)
+                  // Esc order (SITEMAP §4): in compose mode it exits compose,
+                  // keeping the draft; otherwise it clears the selection.
+                  if (composeContextId) onExitCompose?.()
+                  else onSelect(null)
                 }
                 // Enter: drill-down arrives in issue 011 — no-op for now.
               }}
             >
-              <circle cx={node.x} cy={node.y} r={NODE_RADIUS} />
-              <text x={node.x} y={node.y} textAnchor="middle" dominantBaseline="central">
+              <circle cx={0} cy={0} r={NODE_RADIUS} />
+              <text x={0} y={0} textAnchor="middle" dominantBaseline="central">
                 {node.symbol}
               </text>
               {node.childCount > 0 ? (
-                <text className="canvas-node-badge" x={node.x + NODE_RADIUS} y={node.y - NODE_RADIUS}>
+                <text className="canvas-node-badge" x={NODE_RADIUS} y={-NODE_RADIUS}>
                   {node.childCount}
                 </text>
               ) : null}
