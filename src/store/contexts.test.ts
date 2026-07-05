@@ -1,5 +1,6 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { openDatabase } from '../db/client'
+import * as mutations from '../db/mutations'
 import { addDimension, addParameter, createProject, listContexts } from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
@@ -134,5 +135,39 @@ describe('contexts store — command log (issue 006)', () => {
     await useContextsStore.getState().bind(id, stakeId, usersId)
     await useCommandLogStore.getState().undo()
     expect(useContextsStore.getState().bindingsByContext[id]?.[stakeId]).toBeUndefined()
+  })
+
+  // Root-caused a real CI-only e2e failure (undo-redo.spec.ts, issue 007
+  // cleanup) via a Playwright trace: the register's first-mount load(projectId)
+  // (fired by ContextRegister's own effect) can still be in flight when a
+  // context is created moments later; if that stale, pre-create SELECT
+  // resolves *after* create()'s own state update, it silently overwrites the
+  // just-created context out of the store (no error — the DB row is fine,
+  // only in-memory state is wrong). Mirrors the exact race parameters.ts
+  // already guards against with a generation counter (issue 004 fix).
+  it('a slow initial load() never overwrites a context created while it was in flight', async () => {
+    const originalListContexts = mutations.listContexts
+    let releaseSlowLoad: (() => void) | undefined
+    const slow = new Promise<void>((resolve) => {
+      releaseSlowLoad = resolve
+    })
+    let callIndex = 0
+    const spy = vi.spyOn(mutations, 'listContexts').mockImplementation(async (db, pid) => {
+      const myIndex = callIndex
+      callIndex += 1
+      const rows = await originalListContexts(db, pid) // real read, captured now
+      if (myIndex === 0) await slow // withhold only load()'s own (first) call
+      return rows
+    })
+
+    const loadPromise = useContextsStore.getState().load(projectId) // call #0 — reads empty, then hangs
+    const created = await useContextsStore.getState().create() // calls #1 (symbol lookup) + #2 (post-insert list) — both proceed normally
+    expect(useContextsStore.getState().contexts.map((c) => c.id)).toEqual([(created as { id: string }).id])
+
+    releaseSlowLoad?.() // load()'s stale (pre-create) result now resolves
+    await loadPromise
+
+    expect(useContextsStore.getState().contexts.map((c) => c.id)).toEqual([(created as { id: string }).id])
+    spy.mockRestore()
   })
 })
