@@ -466,7 +466,13 @@ body {
 }
 
 .editable-grid {
-  border-collapse: collapse;
+  /* `separate` + zero spacing, not `collapse` — every border here is already
+     declared on one specific cell edge (never shared/redundant with a
+     neighbor's same edge), so this renders identically, but `collapse`
+     suppresses box-shadow on table cells entirely in every browser, which
+     the frozen symbol column's depth cue needs (below). */
+  border-collapse: separate;
+  border-spacing: 0;
   width: 100%;
   font-size: var(--text-body);
 }
@@ -496,13 +502,23 @@ body {
   border-bottom: none;
 }
 
-/* Frozen symbol column — the only vertical rule in the table. */
+/* Frozen symbol column — the only vertical rule in the table. Once the
+   register's columns (issue 005 added two) don't all fit `.register-scroll`'s
+   width, this column stays pinned during horizontal scroll and everything
+   else slides underneath it — expected frozen-column behavior, not a bug on
+   its own. But without a depth cue, a column sliding partway under it reads
+   as broken/clipped text rather than "there's more, scrolled behind the
+   frozen column" — the shadow makes the layering legible. `width` is a
+   comfortable minimum for the symbol chip; `table-layout: auto` may still
+   grow it slightly for a wide manual symbol override, which is fine. */
 .editable-grid th.grid-col--symbol,
 .editable-grid td.grid-col--symbol {
   position: sticky;
   left: 0;
+  width: 80px;
   background: var(--panel);
   border-right: 1px solid var(--hairline);
+  box-shadow: var(--shadow-frozen-col);
   z-index: 1;
 }
 
@@ -628,9 +644,11 @@ body {
 /* Documented signifier (issue 005, STYLE_GUIDE §9-10): shape + fill carry
    state, never color alone — hollow (draft), half-filled (complete,
    unjustified), filled (documented). Square, matching the app's radius-0
-   aesthetic (never a rounded dot). */
+   aesthetic (never a rounded dot). Comfortable width for the header word
+   (data itself is just the dot) — see the frozen symbol column's comment for
+   why this specific column can visibly slide under it during scroll. */
 .grid-col--status {
-  width: 1%;
+  width: 116px;
   text-align: center;
 }
 
@@ -675,9 +693,11 @@ body {
 }
 
 /* Duplicate-tuple badge (issue 005, invariant 2): quiet, non-blocking, mono —
-   navigation to the sibling, never dismissal (no ✕). */
+   navigation to the sibling, never dismissal (no ✕). Explicit width for the
+   same reason as .grid-col--status above; `nowrap` still lets a long sibling
+   list (`= β, θ, λ`) grow the column beyond this under table-layout: auto. */
 .grid-col--duplicate {
-  width: 1%;
+  width: 100px;
   white-space: nowrap;
 }
 
