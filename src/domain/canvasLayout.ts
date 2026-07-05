@@ -23,9 +23,9 @@ const JITTER_RADIUS = 8
 // alphaMin (0.001). Collision-only resolution over small, mostly-non-
 // -overlapping node sets converges much sooner; running fewer ticks with a
 // matching steeper alphaDecay reaches the same full convergence for a
-// fraction of the cost — this budget is asserted directly (100 contexts
-// under 16ms, see canvasLayout.test.ts).
-const SIMULATION_TICKS = 60
+// fraction of the cost — this budget is asserted directly (see
+// canvasLayout.test.ts's 100-context perf test).
+const SIMULATION_TICKS = 30
 const ALPHA_MIN = 0.001
 const SIMULATION_ALPHA_DECAY = 1 - Math.pow(ALPHA_MIN, 1 / SIMULATION_TICKS)
 
