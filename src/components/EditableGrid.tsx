@@ -1,4 +1,3 @@
-import * as Popover from '@radix-ui/react-popover'
 import {
   flexRender,
   getCoreRowModel,
@@ -6,8 +5,10 @@ import {
   type CellContext,
   type ColumnDef,
 } from '@tanstack/react-table'
-import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from 'cmdk'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from './ui/command'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
+import { Swatch } from './ui/swatch'
 
 // ADR-0004: TanStack Table computes rows/columns; EditableGrid owns every
 // <td> and implements the shared Numbers-style editing grammar once — text,
@@ -254,14 +255,14 @@ function ComboboxCell<TRow>({
   const selected = options.find((o) => o.value === value)
 
   return (
-    <Popover.Root
+    <Popover
       open={open}
       onOpenChange={(next) => {
         setOpen(next)
         nav.setEditing(next ? { rowId, columnId } : null)
       }}
     >
-      <Popover.Trigger asChild>
+      <PopoverTrigger asChild>
         <button
           ref={registerRef(nav, rowId, columnId) as React.Ref<HTMLButtonElement>}
           type="button"
@@ -276,51 +277,49 @@ function ComboboxCell<TRow>({
         >
           {selected ? (
             <>
-              <span className="swatch" style={{ background: selected.color }} />
+              <Swatch color={selected.color} />
               {selected.label}
             </>
           ) : (
             <span className="grid-cell__placeholder">—</span>
           )}
         </button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content className="popover combobox-popover" align="start" sideOffset={2}>
-          <Command loop>
-            <CommandInput autoFocus placeholder="Type to filter…" />
-            <CommandList>
-              <CommandEmpty>No match</CommandEmpty>
-              {value !== null && (
-                <CommandItem
-                  value="__unbind__"
-                  onSelect={() => {
-                    void cellDef.onCommit(row, null)
-                    setOpen(false)
-                    moveFocusDown(nav, rowId, columnId)
-                  }}
-                >
-                  <span className="grid-cell__placeholder">— clear —</span>
-                </CommandItem>
-              )}
-              {options.map((opt) => (
-                <CommandItem
-                  key={opt.value}
-                  value={opt.label}
-                  onSelect={() => {
-                    void cellDef.onCommit(row, opt.value)
-                    setOpen(false)
-                    moveFocusDown(nav, rowId, columnId)
-                  }}
-                >
-                  <span className="swatch" style={{ background: opt.color }} />
-                  {opt.label}
-                </CommandItem>
-              ))}
-            </CommandList>
-          </Command>
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+      </PopoverTrigger>
+      <PopoverContent className="combobox-popover" align="start" sideOffset={2}>
+        <Command loop>
+          <CommandInput autoFocus placeholder="Type to filter…" />
+          <CommandList>
+            <CommandEmpty>No match</CommandEmpty>
+            {value !== null && (
+              <CommandItem
+                value="__unbind__"
+                onSelect={() => {
+                  void cellDef.onCommit(row, null)
+                  setOpen(false)
+                  moveFocusDown(nav, rowId, columnId)
+                }}
+              >
+                <span className="grid-cell__placeholder">— clear —</span>
+              </CommandItem>
+            )}
+            {options.map((opt) => (
+              <CommandItem
+                key={opt.value}
+                value={opt.label}
+                onSelect={() => {
+                  void cellDef.onCommit(row, opt.value)
+                  setOpen(false)
+                  moveFocusDown(nav, rowId, columnId)
+                }}
+              >
+                <Swatch color={opt.color} />
+                {opt.label}
+              </CommandItem>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
   )
 }
 

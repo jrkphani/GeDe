@@ -1,4 +1,3 @@
-import * as Popover from '@radix-ui/react-popover'
 import { DndContext, closestCenter, type DragEndEvent } from '@dnd-kit/core'
 import { SortableContext, useSortable, verticalListSortingStrategy } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
@@ -9,6 +8,8 @@ import { DIMENSION_PALETTE } from '../theme/palette'
 import { ParameterList } from './ParameterList'
 import { Button } from './ui/button'
 import { InlineEdit } from './ui/inline-editor'
+import { Popover, PopoverContent, PopoverTrigger, keepPopoverOpenWhileEditing } from './ui/popover'
+import { SwatchButton } from './ui/swatch'
 
 const FLOOR_TOOLTIP = 'A canvas needs at least 2 dimensions'
 
@@ -18,10 +19,9 @@ function SwatchPicker({ dimension, onDone }: { dimension: DimensionRow; onDone: 
   return (
     <div className="palette-picker">
       {DIMENSION_PALETTE.map((color) => (
-        <button
+        <SwatchButton
           key={color}
-          className="swatch"
-          style={{ background: color }}
+          color={color}
           aria-label={`Use ${color}`}
           aria-pressed={dimension.color === color}
           onClick={() => {
@@ -95,9 +95,8 @@ function DimensionItem({
         >
           ⋮⋮
         </button>
-        <button
-          className="swatch"
-          style={{ background: dimension.color }}
+        <SwatchButton
+          color={dimension.color}
           aria-label={`Color of ${dimension.name}`}
           onClick={() => setPicking(!picking)}
         />
@@ -174,26 +173,15 @@ export function DimensionManagerPanel() {
 
 export function DimensionManager() {
   return (
-    <Popover.Root>
-      <Popover.Trigger asChild>
-        <button className="row-action">Dimensions</button>
-      </Popover.Trigger>
-      <Popover.Portal>
-        <Popover.Content
-          className="popover"
-          align="start"
-          sideOffset={4}
-          onEscapeKeyDown={(e) => {
-            // Esc order (SITEMAP §4): close the in-place editor first, the
-            // popover on the next press — never both at once.
-            if (e.target instanceof HTMLElement && e.target.tagName === 'INPUT') {
-              e.preventDefault()
-            }
-          }}
-        >
-          <DimensionManagerPanel />
-        </Popover.Content>
-      </Popover.Portal>
-    </Popover.Root>
+    <Popover>
+      <PopoverTrigger asChild>
+        <Button>Dimensions</Button>
+      </PopoverTrigger>
+      {/* Esc order (SITEMAP §4): close the in-place editor first, the popover
+          on the next press — never both at once. */}
+      <PopoverContent align="start" sideOffset={4} onEscapeKeyDown={keepPopoverOpenWhileEditing}>
+        <DimensionManagerPanel />
+      </PopoverContent>
+    </Popover>
   )
 }

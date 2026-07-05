@@ -1,6 +1,6 @@
 # 019: Shared UI primitives + component migration
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1 (foundation / pre-work)
 - **Blocked by**: 018
 
