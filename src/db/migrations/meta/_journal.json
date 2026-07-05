@@ -36,6 +36,13 @@
       "when": 1783265294736,
       "tag": "0004_tier1",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1783293678516,
+      "tag": "0005_tier2",
+      "breakpoints": true
     }
   ]
 }

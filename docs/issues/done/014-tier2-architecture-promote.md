@@ -1,6 +1,6 @@
 # 014: Tier 2 — Architecture tables + promote to design
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M5
 - **Blocked by**: 013
 
@@ -39,6 +39,16 @@ As a designer I build nested architecture tables (Value / Stakeholders / Process
 
 ## Acceptance criteria
 
-- [ ] Full GeDe Tavalo example enterable end-to-end (SPEC §6 M5 done-when).
-- [ ] No orphan `source_entry_id` references possible (integrity test).
-- [ ] Promote is one undo step per invocation.
+- [x] Full GeDe Tavalo example enterable end-to-end (SPEC §6 M5 done-when).
+- [x] No orphan `source_entry_id` references possible (integrity test).
+- [x] Promote is one undo step per invocation.
+
+## Shipped notes
+
+- **Schema/migration** `0005_tier2` (journal idx 5): `tier2_tables` + `tier2_entries` (self-nesting via `parent_id`); `parameters.source_entry_id` FK → `tier2_entries` for the live link back (SPEC invariant 7). `src/domain/entryTree.ts` = pure build/flatten/subtree helpers.
+- **Store** (`src/store/tier2.ts`): tables, nested entries, promote, delete-with-link resolution; generation-guarded `load`, command-log undo (promote = one step).
+- **Promote flow** (`mutations.ts` `promoteEntries`): target new dimension (palette-colored from existing count) or extend an existing one; idempotently skips already-linked entries; inserts parameters carrying `source_entry_id`. Renaming a tier-2 entry propagates to its parameter; deleting a linked entry surfaces the typed resolution popover (keep-as-unlinked-copy / delete-if-unbound) — never a silent cascade.
+- **UI** (`src/components/ArchitectureSurface.tsx`): one paper panel per table, `EditableGrid` reused unchanged (24px indent per level, chevrons on parents), ghost "Add table" panel. Multi-select via the leading tree-cell "Select X" button (plain toggle, Shift-click ranges) — chosen over row-modifier-click because `EditableGrid.onRowClick` carries no event, keeping the grid unmodified per ADR-0004. Checkboxes appear only once ≥1 selected (progressive disclosure). Source badges (`→ Stake`) on promoted entries; a link glyph on the parameter side (`ParameterList.tsx`) so both ends of the link are visible.
+- **Rendering**: `App.tsx` `case 'tier'` now renders `ArchitectureSurface` for the `architecture` tier (route already existed). `DesignSurface` gained one effect — `useTier2Store.load(projectId)` — so `ParameterList` can name a parameter's source entry. `ui/popover.tsx` gained a `PopoverAnchor` export.
+- **Merge note**: cherry-picked onto the 012+017 tip; only conflict was `base.css` (three issues appending CSS) — resolved by keeping all blocks. `DesignSurface.tsx`/`App.tsx`/`schema.ts`/`mutations.ts` auto-merged.
+- **Verified**: full `npm run verify` green on main (unit/component incl. entry-tree + tier2 store/mutations + integrity tests, e2e incl. `e2e/architecture.spec.ts` — build Stakeholders → promote → register offers params → rename propagates). Manual chromium screenshots confirmed nested tables, multi-select bar, promote popover + preview, source badges, and the delete-resolution popover.

@@ -12,6 +12,7 @@ import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
 import { useStatusStore } from '../store/status'
+import { useTier2Store } from '../store/tier2'
 import { Button } from './ui/button'
 import { Canvas } from './Canvas'
 import { Composer } from './Composer'
@@ -45,6 +46,12 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
   // via its own subscription rather than prop-threading through the register.
   useEffect(() => {
     void useContextsStore.getState().load(projectId)
+  }, [projectId])
+
+  // Tier-2 linkage projection (issue 014): loaded so a promoted parameter's
+  // link glyph in ParameterList can name its source entry. Read-only here.
+  useEffect(() => {
+    void useTier2Store.getState().load(projectId)
   }, [projectId])
 
   useEffect(() => {

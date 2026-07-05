@@ -10,6 +10,10 @@ import { cn } from '@/lib/utils'
  */
 export const Popover = PopoverPrimitive.Root
 export const PopoverTrigger = PopoverPrimitive.Trigger
+// Anchor without a toggle: for popovers whose open state is controlled
+// externally (e.g. the delete-with-link resolution opens only when the store
+// reports a linked parameter — issue 014), positioned against a plain button.
+export const PopoverAnchor = PopoverPrimitive.Anchor
 
 export function PopoverContent({
   className,

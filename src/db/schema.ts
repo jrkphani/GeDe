@@ -55,6 +55,40 @@ export const tier1Props = pgTable('tier1_props', {
   deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
 })
 
+// SPEC.md §3/§4.6 — 2nd Tier UDS Architecture (issue 014). One table per
+// intended dimension (the example ships Value / Stakeholders / Process; tables
+// are addable/renamable). `sort` orders the tables on the page.
+export const tier2Tables = pgTable('tier2_tables', {
+  id: text('id').primaryKey(),
+  projectId: text('project_id')
+    .notNull()
+    .references(() => projects.id),
+  name: text('name').notNull(),
+  sort: integer('sort').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+})
+
+// SPEC.md §3/§4.6 — an architecture entry (row). Nests arbitrarily via a
+// parent_id self-FK (null = a top-level row of its table); `sort` orders
+// siblings within a parent. Selected entries promote into 3rd-Tier
+// dimensions + parameters, each parameter keeping a source_entry_id
+// back-reference (invariant 7 — tier linkage).
+export const tier2Entries = pgTable('tier2_entries', {
+  id: text('id').primaryKey(),
+  tableId: text('table_id')
+    .notNull()
+    .references(() => tier2Tables.id),
+  parentId: text('parent_id').references((): AnyPgColumn => tier2Entries.id),
+  name: text('name').notNull(),
+  description: text('description'),
+  sort: integer('sort').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+})
+
 // SPEC.md §3 — context_id null = root canvas; a context's child canvas gets its
 // own rows (issue 011). Dimension count is pure row data: nothing encodes "3".
 export const dimensions = pgTable('dimensions', {
@@ -80,6 +114,11 @@ export const parameters = pgTable('parameters', {
     .notNull()
     .references(() => dimensions.id),
   parentParamId: text('parent_param_id').references((): AnyPgColumn => parameters.id),
+  // SPEC invariant 7 (issue 014) — the 2nd-Tier entry this parameter was
+  // promoted from; null for parameters authored directly on the canvas. A
+  // rename of the source entry propagates here; deleting the source requires
+  // resolution (unlink → null, or delete this parameter). Never left dangling.
+  sourceEntryId: text('source_entry_id').references(() => tier2Entries.id),
   name: text('name').notNull(),
   sort: integer('sort').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),

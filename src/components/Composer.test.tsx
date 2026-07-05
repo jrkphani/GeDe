@@ -10,6 +10,7 @@ function param(dimensionId: string, id: string, name: string, sort: number): Par
     id,
     dimensionId,
     parentParamId: null,
+    sourceEntryId: null,
     name,
     sort,
     createdAt: '',

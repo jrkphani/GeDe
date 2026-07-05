@@ -24,6 +24,7 @@ function param(dimensionId: string, id: string, sort: number): ParameterRow {
     id,
     dimensionId,
     parentParamId: null,
+    sourceEntryId: null,
     name: id,
     sort,
     createdAt: '',

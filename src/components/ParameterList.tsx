@@ -1,6 +1,8 @@
+import { Link2 } from 'lucide-react'
 import { useEffect } from 'react'
 import type { ParameterRow } from '../db/mutations'
 import { useParametersStore } from '../store/parameters'
+import { useTier2Store } from '../store/tier2'
 import { Button } from './ui/button'
 import { InlineEdit, PhantomInput } from './ui/inline-editor'
 
@@ -24,6 +26,17 @@ function ParameterRowView({
 }) {
   const rename = useParametersStore((s) => s.rename)
   const remove = useParametersStore((s) => s.remove)
+  // Both sides of the tier link stay visible (invariant 7, issue 014): a
+  // promoted parameter shows a link glyph whose tooltip names its 2nd-Tier
+  // source entry (the entry carries the mirrored `→ Dim` badge).
+  const sourceEntryName = useTier2Store((s) => {
+    if (!param.sourceEntryId) return undefined
+    for (const list of Object.values(s.entriesByTable)) {
+      const hit = list.find((e) => e.id === param.sourceEntryId)
+      if (hit) return hit.name
+    }
+    return undefined
+  })
   return (
     <div className="param-row">
       <span className="param-row__index">{index + 1}</span>
@@ -35,6 +48,15 @@ function ParameterRowView({
         selectOnFocus
         stopPropagation
       />
+      {param.sourceEntryId && (
+        <span
+          className="param-row__source"
+          title={sourceEntryName ? `Linked from ${sourceEntryName}` : 'Linked from an architecture entry'}
+          aria-label={sourceEntryName ? `Linked from ${sourceEntryName}` : 'Linked from an architecture entry'}
+        >
+          <Link2 size={14} />
+        </span>
+      )}
       <Button aria-label={`Remove ${param.name}`} onClick={() => void remove(dimensionId, param.id)}>
         Remove
       </Button>

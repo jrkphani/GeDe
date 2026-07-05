@@ -1,8 +1,18 @@
-import { and, asc, desc, eq, isNull } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { uuidv7 } from 'uuidv7'
 import type { Database } from './client'
 import { firstOrThrow } from './util'
-import { bindings, contexts, dimensions, parameters, projects, tier1Props, tier1Purpose } from './schema'
+import {
+  bindings,
+  contexts,
+  dimensions,
+  parameters,
+  projects,
+  tier1Props,
+  tier1Purpose,
+  tier2Entries,
+  tier2Tables,
+} from './schema'
 import { paletteColor } from '../theme/palette'
 import { computeTupleHash, nextRootSymbol } from '../domain/symbols'
 
@@ -685,4 +695,443 @@ export async function restoreTier1Prop(
     .filter((p): p is Tier1PropRow => p !== undefined)
   await rewriteTier1PropRanks(db, ordered)
   return listTier1Props(db, projectId)
+}
+
+// ── Tier 2 Architecture (issue 014) ──────────────────────────────────────────
+// One nested-row table per intended dimension (Value / Stakeholders / Process
+// in the example). Selected entries promote into 3rd-Tier dimensions +
+// parameters, each parameter keeping a source_entry_id back-reference
+// (SPEC §4.6, invariant 7 — tier linkage). Root canvas only (child canvases 011).
+
+export type Tier2TableRow = typeof tier2Tables.$inferSelect
+export type Tier2EntryRow = typeof tier2Entries.$inferSelect
+
+function tier2TableScope(projectId: string) {
+  return and(eq(tier2Tables.projectId, projectId), isNull(tier2Tables.deletedAt))
+}
+
+export async function listTier2Tables(db: Database, projectId: string): Promise<Tier2TableRow[]> {
+  return db.select().from(tier2Tables).where(tier2TableScope(projectId)).orderBy(asc(tier2Tables.sort))
+}
+
+export async function addTier2Table(
+  db: Database,
+  projectId: string,
+  name: string,
+): Promise<Tier2TableRow> {
+  const existing = await listTier2Tables(db, projectId)
+  const rows = await db
+    .insert(tier2Tables)
+    .values({ id: uuidv7(), projectId, name, sort: existing.length })
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function renameTier2Table(
+  db: Database,
+  id: string,
+  name: string,
+): Promise<Tier2TableRow> {
+  const rows = await db
+    .update(tier2Tables)
+    .set({ name, updatedAt: now() })
+    .where(eq(tier2Tables.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+async function rewriteTier2TableSort(db: Database, ordered: Tier2TableRow[]): Promise<void> {
+  for (const [index, row] of ordered.entries()) {
+    if (row.sort !== index) {
+      await db.update(tier2Tables).set({ sort: index, updatedAt: now() }).where(eq(tier2Tables.id, row.id))
+    }
+  }
+}
+
+// The undo-of-add primitive (issue 006): add always appends an empty table, so
+// its undo soft-deletes that row and closes the sort gap for siblings.
+export async function removeTier2Table(
+  db: Database,
+  projectId: string,
+  id: string,
+): Promise<Tier2TableRow[]> {
+  const rows = await listTier2Tables(db, projectId)
+  await db.update(tier2Tables).set({ deletedAt: now(), updatedAt: now() }).where(eq(tier2Tables.id, id))
+  await rewriteTier2TableSort(
+    db,
+    rows.filter((t) => t.id !== id),
+  )
+  return listTier2Tables(db, projectId)
+}
+
+export async function restoreTier2Table(
+  db: Database,
+  projectId: string,
+  id: string,
+  orderedIds: readonly string[],
+): Promise<Tier2TableRow[]> {
+  await db.update(tier2Tables).set({ deletedAt: null, updatedAt: now() }).where(eq(tier2Tables.id, id))
+  const rows = await listTier2Tables(db, projectId)
+  const byId = new Map(rows.map((t) => [t.id, t]))
+  const ordered = orderedIds
+    .map((oid) => byId.get(oid))
+    .filter((t): t is Tier2TableRow => t !== undefined)
+  await rewriteTier2TableSort(db, ordered)
+  return listTier2Tables(db, projectId)
+}
+
+// ── Entries ──────────────────────────────────────────────────────────────────
+
+function tier2EntryScope(tableId: string) {
+  return and(eq(tier2Entries.tableId, tableId), isNull(tier2Entries.deletedAt))
+}
+
+// All live entries of a table (every level); the nesting is assembled purely in
+// domain/entryTree.ts. `sort` orders siblings within a parent.
+export async function listTier2Entries(db: Database, tableId: string): Promise<Tier2EntryRow[]> {
+  return db.select().from(tier2Entries).where(tier2EntryScope(tableId)).orderBy(asc(tier2Entries.sort))
+}
+
+function siblingsOf(entries: Tier2EntryRow[], parentId: string | null): Tier2EntryRow[] {
+  return entries.filter((e) => e.parentId === parentId).sort((a, b) => a.sort - b.sort)
+}
+
+async function rewriteEntrySiblingSort(db: Database, ordered: Tier2EntryRow[]): Promise<void> {
+  for (const [index, row] of ordered.entries()) {
+    if (row.sort !== index) {
+      await db.update(tier2Entries).set({ sort: index, updatedAt: now() }).where(eq(tier2Entries.id, row.id))
+    }
+  }
+}
+
+export async function addTier2Entry(
+  db: Database,
+  tableId: string,
+  parentId: string | null,
+  name: string,
+): Promise<Tier2EntryRow> {
+  const existing = await listTier2Entries(db, tableId)
+  const rows = await db
+    .insert(tier2Entries)
+    .values({
+      id: uuidv7(),
+      tableId,
+      parentId,
+      name,
+      description: null,
+      sort: siblingsOf(existing, parentId).length,
+    })
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function renameTier2Entry(db: Database, id: string, name: string): Promise<Tier2EntryRow> {
+  const rows = await db
+    .update(tier2Entries)
+    .set({ name, updatedAt: now() })
+    .where(eq(tier2Entries.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function setTier2EntryDescription(
+  db: Database,
+  id: string,
+  description: string,
+): Promise<Tier2EntryRow> {
+  const rows = await db
+    .update(tier2Entries)
+    .set({ description, updatedAt: now() })
+    .where(eq(tier2Entries.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+// Re-parent + reorder an entry among its (new) siblings. Descendants reference
+// the moved entry by id, so the subtree follows intact — only the two affected
+// sibling groups' sorts are rewritten contiguous.
+export async function moveTier2Entry(
+  db: Database,
+  tableId: string,
+  id: string,
+  newParentId: string | null,
+  toIndex: number,
+): Promise<Tier2EntryRow[]> {
+  const before = await listTier2Entries(db, tableId)
+  const moved = before.find((e) => e.id === id)
+  if (!moved) return before
+  const oldParentId = moved.parentId
+  await db
+    .update(tier2Entries)
+    .set({ parentId: newParentId, updatedAt: now() })
+    .where(eq(tier2Entries.id, id))
+
+  const after = await listTier2Entries(db, tableId)
+  // Order the destination group with the moved entry spliced to toIndex.
+  const destOthers = siblingsOf(after, newParentId).filter((e) => e.id !== id)
+  const target = Math.max(0, Math.min(destOthers.length, toIndex))
+  const movedRow = after.find((e) => e.id === id) as Tier2EntryRow
+  destOthers.splice(target, 0, movedRow)
+  await rewriteEntrySiblingSort(db, destOthers)
+  if (oldParentId !== newParentId) {
+    await rewriteEntrySiblingSort(db, siblingsOf(await listTier2Entries(db, tableId), oldParentId))
+  }
+  return listTier2Entries(db, tableId)
+}
+
+// Soft-delete an entry and every descendant, closing the sort gap left in the
+// removed root's sibling group. Returns the removed ids so the caller (store)
+// can restore the exact subtree on undo and audit linkage (invariant 7).
+export async function removeTier2EntrySubtree(
+  db: Database,
+  tableId: string,
+  id: string,
+): Promise<{ entries: Tier2EntryRow[]; removedIds: string[] }> {
+  const before = await listTier2Entries(db, tableId)
+  const childrenOf = new Map<string, string[]>()
+  for (const e of before) {
+    if (e.parentId) childrenOf.set(e.parentId, [...(childrenOf.get(e.parentId) ?? []), e.id])
+  }
+  const removedIds: string[] = []
+  const stack = [id]
+  while (stack.length > 0) {
+    const current = stack.pop() as string
+    removedIds.push(current)
+    for (const childId of childrenOf.get(current) ?? []) stack.push(childId)
+  }
+  await db
+    .update(tier2Entries)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(inArray(tier2Entries.id, removedIds))
+  const removedRoot = before.find((e) => e.id === id)
+  await rewriteEntrySiblingSort(
+    db,
+    siblingsOf(await listTier2Entries(db, tableId), removedRoot?.parentId ?? null),
+  )
+  return { entries: await listTier2Entries(db, tableId), removedIds }
+}
+
+export async function restoreTier2EntrySubtree(
+  db: Database,
+  tableId: string,
+  removedIds: readonly string[],
+): Promise<Tier2EntryRow[]> {
+  await db
+    .update(tier2Entries)
+    .set({ deletedAt: null, updatedAt: now() })
+    .where(inArray(tier2Entries.id, [...removedIds]))
+  const restored = await listTier2Entries(db, tableId)
+  // Re-close each affected sibling group so restored rows regain contiguous sort.
+  const parents = new Set(restored.filter((e) => removedIds.includes(e.id)).map((e) => e.parentId))
+  for (const parentId of parents) await rewriteEntrySiblingSort(db, siblingsOf(restored, parentId))
+  return listTier2Entries(db, tableId)
+}
+
+// ── Promote to Design (invariant 7) ──────────────────────────────────────────
+
+export interface PromoteInput {
+  projectId: string
+  entryIds: string[]
+  target: { kind: 'new'; name: string } | { kind: 'existing'; dimensionId: string }
+}
+
+export interface PromoteOutcome {
+  dimensionId: string
+  // Non-null only when a new dimension was created (undo must remove it).
+  createdDimension: DimensionRow | null
+  createdParameters: ParameterRow[]
+  // Entries skipped because a live parameter already links to them.
+  skippedEntryIds: string[]
+}
+
+// Live parameters (across all dimensions) whose source_entry_id is in the set —
+// used both to skip already-linked entries on re-promote and to find the
+// parameters that a to-be-deleted entry subtree links to.
+export async function listParametersBySourceEntries(
+  db: Database,
+  entryIds: readonly string[],
+): Promise<ParameterRow[]> {
+  if (entryIds.length === 0) return []
+  return db
+    .select()
+    .from(parameters)
+    .where(and(inArray(parameters.sourceEntryId, [...entryIds]), isNull(parameters.deletedAt)))
+}
+
+// Seeds (kind 'new') or extends (kind 'existing') a root-canvas dimension with
+// one parameter per selected entry, skipping entries already linked. Returns
+// everything the command log needs to undo the whole gesture as one step.
+export async function promoteEntries(db: Database, input: PromoteInput): Promise<PromoteOutcome> {
+  const { projectId, entryIds, target } = input
+
+  let createdDimension: DimensionRow | null = null
+  let dimensionId: string
+  if (target.kind === 'new') {
+    const existingDims = await listDimensions(db, projectId)
+    const rows = await db
+      .insert(dimensions)
+      .values({
+        id: uuidv7(),
+        projectId,
+        name: target.name,
+        color: paletteColor(existingDims.length),
+        sort: existingDims.length,
+      })
+      .returning()
+    createdDimension = firstOrThrow(rows)
+    dimensionId = createdDimension.id
+  } else {
+    dimensionId = target.dimensionId
+  }
+
+  const alreadyLinked = new Set(
+    (await listParametersBySourceEntries(db, entryIds)).map((p) => p.sourceEntryId),
+  )
+  const skippedEntryIds: string[] = []
+  const createdParameters: ParameterRow[] = []
+  let sort = (await listParameters(db, dimensionId)).length
+  for (const entryId of entryIds) {
+    if (alreadyLinked.has(entryId)) {
+      skippedEntryIds.push(entryId)
+      continue
+    }
+    const entryRows = await db.select().from(tier2Entries).where(eq(tier2Entries.id, entryId)).limit(1)
+    const entry = entryRows[0]
+    if (!entry) continue
+    const inserted = await db
+      .insert(parameters)
+      .values({ id: uuidv7(), dimensionId, name: entry.name, sort, sourceEntryId: entryId })
+      .returning()
+    createdParameters.push(firstOrThrow(inserted))
+    sort += 1
+  }
+
+  return { dimensionId, createdDimension, createdParameters, skippedEntryIds }
+}
+
+export interface PromotedLink {
+  entryId: string
+  parameterId: string
+  dimensionId: string
+  dimensionName: string
+}
+
+// Every live root-canvas parameter that carries a source_entry_id, with its
+// dimension's current name — powers the `→ Stake` source badge on 2nd-Tier
+// entries (both sides of the link stay visible, invariant 7).
+export async function listPromotedLinks(db: Database, projectId: string): Promise<PromotedLink[]> {
+  const dims = await listDimensions(db, projectId)
+  const dimById = new Map(dims.map((d) => [d.id, d]))
+  const linkedParams = await db
+    .select()
+    .from(parameters)
+    .where(and(isNotNull(parameters.sourceEntryId), isNull(parameters.deletedAt)))
+  const out: PromotedLink[] = []
+  for (const p of linkedParams) {
+    const dim = dimById.get(p.dimensionId)
+    if (dim && p.sourceEntryId) {
+      out.push({ entryId: p.sourceEntryId, parameterId: p.id, dimensionId: dim.id, dimensionName: dim.name })
+    }
+  }
+  return out
+}
+
+// ── Linked-parameter resolution ──────────────────────────────────────────────
+
+export async function countBindingsForParameter(db: Database, parameterId: string): Promise<number> {
+  const rows = await db.select().from(bindings).where(eq(bindings.parameterId, parameterId))
+  return rows.length
+}
+
+// "Keep parameter as unlinked copy" — the parameter survives, its source link
+// is cleared so deleting the entry leaves no orphan reference. Returns the
+// prior (id → entryId) pairs so undo can re-link.
+export async function unlinkParametersFromEntries(
+  db: Database,
+  parameterIds: readonly string[],
+): Promise<{ id: string; sourceEntryId: string | null }[]> {
+  if (parameterIds.length === 0) return []
+  const before = await db
+    .select()
+    .from(parameters)
+    .where(inArray(parameters.id, [...parameterIds]))
+  await db
+    .update(parameters)
+    .set({ sourceEntryId: null, updatedAt: now() })
+    .where(inArray(parameters.id, [...parameterIds]))
+  return before.map((p) => ({ id: p.id, sourceEntryId: p.sourceEntryId }))
+}
+
+export async function relinkParameters(
+  db: Database,
+  links: readonly { id: string; sourceEntryId: string | null }[],
+): Promise<void> {
+  for (const link of links) {
+    await db
+      .update(parameters)
+      .set({ sourceEntryId: link.sourceEntryId, updatedAt: now() })
+      .where(eq(parameters.id, link.id))
+  }
+}
+
+export interface DeleteParametersResult {
+  affectedContextIds: string[]
+  deletedBindings: BindingRow[]
+  // Enough to restore each parameter (id + dimensionId + prior linkage) on undo.
+  removedParameters: { id: string; dimensionId: string; sourceEntryId: string | null }[]
+}
+
+// "Delete parameter — unbinds N contexts" — hard-deletes every binding pointing
+// at the parameter (bindings carry no deleted_at, schema.ts), recomputes the
+// affected contexts' tuple hashes, then soft-deletes the parameter. Returns the
+// removed bindings + parameters so the caller can restore both on undo.
+export async function deleteParametersUnbinding(
+  db: Database,
+  parameterIds: readonly string[],
+): Promise<DeleteParametersResult> {
+  const affected = new Set<string>()
+  const deletedBindings: BindingRow[] = []
+  const removedParameters: DeleteParametersResult['removedParameters'] = []
+  for (const parameterId of parameterIds) {
+    const paramRows = await db.select().from(parameters).where(eq(parameters.id, parameterId)).limit(1)
+    const param = paramRows[0]
+    if (!param) continue
+    const boundRows = await db.select().from(bindings).where(eq(bindings.parameterId, parameterId))
+    deletedBindings.push(...boundRows)
+    for (const b of boundRows) affected.add(b.contextId)
+    await db.delete(bindings).where(eq(bindings.parameterId, parameterId))
+    await removeParameter(db, param.dimensionId, parameterId)
+    removedParameters.push({ id: param.id, dimensionId: param.dimensionId, sourceEntryId: param.sourceEntryId })
+  }
+  for (const contextId of affected) await recomputeTupleHash(db, contextId)
+  return { affectedContextIds: [...affected], deletedBindings, removedParameters }
+}
+
+// Undo of deleteParametersUnbinding: un-soft-delete the parameters (restoring
+// linkage), reinsert the exact bindings, recompute the affected tuple hashes.
+export async function restoreParametersWithBindings(
+  db: Database,
+  removedParameters: readonly { id: string; dimensionId: string; sourceEntryId: string | null }[],
+  deletedBindings: readonly BindingRow[],
+): Promise<string[]> {
+  for (const p of removedParameters) {
+    await db
+      .update(parameters)
+      .set({ deletedAt: null, sourceEntryId: p.sourceEntryId, updatedAt: now() })
+      .where(eq(parameters.id, p.id))
+  }
+  if (deletedBindings.length > 0) {
+    await db.insert(bindings).values(
+      deletedBindings.map((b) => ({
+        id: b.id,
+        contextId: b.contextId,
+        dimensionId: b.dimensionId,
+        parameterId: b.parameterId,
+        tupleHash: b.tupleHash,
+      })),
+    )
+  }
+  const affected = [...new Set(deletedBindings.map((b) => b.contextId))]
+  for (const contextId of affected) await recomputeTupleHash(db, contextId)
+  return affected
 }
