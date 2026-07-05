@@ -1,0 +1,115 @@
+import { useEffect } from 'react'
+import type { ContextRow } from '../db/mutations'
+import { isComplete } from '../domain/completeness'
+import { useContextsStore } from '../store/contexts'
+import { useDimensionsStore } from '../store/dimensions'
+import { useParametersStore } from '../store/parameters'
+import { useStatusStore } from '../store/status'
+import { EditableGrid, type GridColumn } from './EditableGrid'
+
+const FIRST_CONTEXT_GHOST = 'Type to create your first context — it becomes α'
+
+// SPEC §4.3 — Symbol · one column per dimension (dynamic, sort order) ·
+// Justification · Children. Children stays a placeholder until recursion
+// (issue 011) populates it.
+export function ContextRegister({ projectId }: { projectId: string }) {
+  const dimensions = useDimensionsStore((s) => s.dimensions)
+  const contexts = useContextsStore((s) => s.contexts)
+  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
+  const loadContexts = useContextsStore((s) => s.load)
+  const createContext = useContextsStore((s) => s.create)
+  const setSymbol = useContextsStore((s) => s.setSymbol)
+  const setJustification = useContextsStore((s) => s.setJustification)
+  const bind = useContextsStore((s) => s.bind)
+  const unbind = useContextsStore((s) => s.unbind)
+  const paramsByDimension = useParametersStore((s) => s.byDimension)
+  const loadParams = useParametersStore((s) => s.load)
+  const announce = useStatusStore((s) => s.announce)
+
+  useEffect(() => {
+    void loadContexts(projectId)
+  }, [projectId, loadContexts])
+
+  useEffect(() => {
+    for (const d of dimensions) void loadParams(d.id)
+  }, [dimensions, loadParams])
+
+  const columns: GridColumn<ContextRow>[] = [
+    {
+      id: 'symbol',
+      header: 'Symbol',
+      headClassName: 'grid-col--symbol',
+      cellClassName: 'grid-col--symbol',
+      cell: {
+        kind: 'mono',
+        getValue: (ctx) => ctx.symbol,
+        onCommit: async (ctx, value) => {
+          const result = await setSymbol(ctx.id, value)
+          if (!result.ok && result.reason) announce(result.reason)
+          return result.ok
+        },
+      },
+    },
+    ...dimensions.map(
+      (dim): GridColumn<ContextRow> => ({
+        id: dim.id,
+        header: dim.name,
+        cell: {
+          kind: 'combobox',
+          getValue: (ctx) => bindingsByContext[ctx.id]?.[dim.id] ?? null,
+          getOptions: () =>
+            (paramsByDimension[dim.id] ?? []).map((p) => ({
+              value: p.id,
+              label: p.name,
+              color: dim.color,
+            })),
+          onCommit: async (ctx, value) => {
+            if (value) await bind(ctx.id, dim.id, value)
+            else await unbind(ctx.id, dim.id)
+            return true
+          },
+        },
+      }),
+    ),
+    {
+      id: 'justification',
+      header: 'Justification',
+      cell: {
+        kind: 'text',
+        getValue: (ctx) => ctx.justification ?? '',
+        onCommit: async (ctx, value) => {
+          await setJustification(ctx.id, value)
+          return true
+        },
+      },
+    },
+    {
+      id: 'children',
+      header: 'Children',
+      cell: { kind: 'static', render: () => <span className="grid-cell__placeholder">—</span> },
+    },
+  ]
+
+  const dimensionIds = dimensions.map((d) => d.id)
+
+  return (
+    <EditableGrid
+      rows={contexts}
+      columns={columns}
+      getRowId={(ctx) => ctx.id}
+      rowClassName={(ctx) => {
+        const bound = new Set(Object.keys(bindingsByContext[ctx.id] ?? {}))
+        return isComplete(dimensionIds, bound) ? undefined : 'grid-row--draft'
+      }}
+      phantom={{
+        columnId: 'justification',
+        placeholder: contexts.length === 0 ? FIRST_CONTEXT_GHOST : 'New context',
+        onCreate: (text) => {
+          void createContext().then((ctx) => {
+            if (ctx) void setJustification(ctx.id, text)
+          })
+        },
+      }}
+    />
+  )
+}

@@ -24,7 +24,7 @@ test('parameters: build the Stake dimension (Buyers, Maintainer, Users) — pers
   await page.getByRole('button', { name: 'Dimensions' }).click()
 
   // Rename the first dimension to Stake.
-  await page.getByText('Dimension 1').click()
+  await page.locator('.dim-row__name', { hasText: 'Dimension 1' }).click()
   await page.locator('.dim-row input').first().fill('Stake')
   await page.keyboard.press('Enter')
 

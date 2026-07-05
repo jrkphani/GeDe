@@ -1,6 +1,6 @@
 # 004: Context register with in-place editing (EditableGrid core)
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M1
 - **Blocked by**: 003, 016
 

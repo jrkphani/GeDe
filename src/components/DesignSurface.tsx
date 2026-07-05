@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { ContextBar } from '../shell/slots'
 import { useDimensionsStore } from '../store/dimensions'
+import { ContextRegister } from './ContextRegister'
 import { DimensionManager, DimensionManagerPanel } from './DimensionManager'
 import type { DesignView } from '../shell/routes'
 
@@ -45,9 +46,11 @@ export function DesignSurface({ projectId, view }: { projectId: string; view: De
       </ContextBar>
       <main className="projects" data-view={view}>
         <section className="panel">
-          <p className="placeholder">
-            3rd Tier · Design ({view}) — register and canvas arrive with issues 004 and 008.
-          </p>
+          {view === 'canvas' ? (
+            <ContextRegister projectId={projectId} />
+          ) : (
+            <p className="placeholder">Coverage matrix arrives with issue 012.</p>
+          )}
         </section>
       </main>
     </>

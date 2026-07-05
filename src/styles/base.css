@@ -446,3 +446,173 @@ body {
   font-size: 12px;
   color: var(--ink-muted);
 }
+
+/* Context register (issue 004) — EditableGrid, Numbers grammar, STYLE_GUIDE §6. */
+.register-scroll {
+  /* The register scrolls horizontally inside its own panel; the page never
+     scrolls sideways (design brief: content adaptability). */
+  overflow-x: auto;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.editable-grid {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+
+.editable-grid th {
+  position: sticky;
+  top: 0;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--hairline);
+  background: var(--panel);
+  white-space: nowrap;
+}
+
+.editable-grid td {
+  border-bottom: 1px solid var(--hairline);
+  padding: 0;
+}
+
+.editable-grid tr:last-child td {
+  border-bottom: none;
+}
+
+/* Frozen symbol column — the only vertical rule in the table. */
+.editable-grid th.grid-col--symbol,
+.editable-grid td.grid-col--symbol {
+  position: sticky;
+  left: 0;
+  background: var(--panel);
+  border-right: 1px solid var(--hairline);
+  z-index: 1;
+}
+
+.grid-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  cursor: text;
+}
+
+.grid-cell:focus-visible,
+.grid-cell--combobox:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.grid-cell__input {
+  min-height: 40px;
+  padding: 0 var(--space-3);
+  width: 100%;
+}
+
+.grid-cell__placeholder {
+  color: var(--ink-muted);
+}
+
+/* Symbol chip: mono, square, ink-on-paper inverted (design brief). */
+.grid-cell--mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  justify-content: center;
+}
+
+.grid-col--symbol .grid-cell--mono,
+.grid-col--symbol .grid-cell__input--mono {
+  background: var(--ink);
+  color: var(--paper);
+  margin: var(--space-1);
+  min-height: 28px;
+  text-align: center;
+}
+
+.grid-col--symbol .grid-cell__input--mono {
+  font-family: var(--font-mono);
+  font-size: 13px;
+}
+
+/* Draft signifier: dashed chip, no red — a draft is valid, not an error. */
+.grid-row--draft .grid-col--symbol .grid-cell--mono {
+  border: 1px dashed var(--ink-muted);
+  background: transparent;
+  color: var(--ink-muted);
+}
+
+.grid-cell--combobox {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 40px;
+  width: 100%;
+  padding: 0 var(--space-3);
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+}
+
+.editable-grid .swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 0;
+}
+
+.grid-row--phantom .inplace-input {
+  color: var(--ink-muted);
+}
+
+/* Combobox popover — cmdk type-ahead list, reuses the app's one shadow token. */
+.combobox-popover {
+  min-width: 220px;
+  max-height: 280px;
+  overflow-y: auto;
+  padding: var(--space-1);
+}
+
+.combobox-popover [cmdk-input] {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: none;
+  border-bottom: 1px solid var(--hairline);
+  width: 100%;
+  padding: var(--space-2);
+  margin-bottom: var(--space-1);
+}
+
+.combobox-popover [cmdk-input]:focus {
+  outline: none;
+}
+
+.combobox-popover [cmdk-item] {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2);
+  cursor: pointer;
+}
+
+.combobox-popover [cmdk-item][aria-selected='true'] {
+  background: var(--accent-wash);
+}
+
+.combobox-popover [cmdk-empty] {
+  padding: var(--space-2);
+  color: var(--ink-muted);
+  font-size: 12px;
+}

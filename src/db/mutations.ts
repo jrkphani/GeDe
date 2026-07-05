@@ -1,8 +1,9 @@
 import { and, asc, desc, eq, isNull } from 'drizzle-orm'
 import { uuidv7 } from 'uuidv7'
 import type { Database } from './client'
-import { dimensions, parameters, projects } from './schema'
+import { bindings, contexts, dimensions, parameters, projects } from './schema'
 import { paletteColor } from '../theme/palette'
+import { computeTupleHash, nextRootSymbol } from '../domain/symbols'
 
 // The mutation layer: every database write in the app flows through this module
 // (SPEC §3 sync-readiness — row-granular mutations through a single seam).
@@ -273,4 +274,130 @@ export async function removeParameter(
     rows.filter((p) => p.id !== id),
   )
   return listParameters(db, dimensionId)
+}
+
+// ── Contexts & bindings (issue 004) ──────────────────────────────────────────
+// Root canvas only (parentId null) — recursion into child canvases is issue 011.
+
+export type ContextRow = typeof contexts.$inferSelect
+export type BindingRow = typeof bindings.$inferSelect
+
+// SPEC §3: symbols are unique per canvas. Root contexts share the project's
+// root canvas namespace.
+export class ContextSymbolCollisionError extends Error {
+  constructor(symbol: string) {
+    super(`"${symbol}" is already in use on this canvas`)
+    this.name = 'ContextSymbolCollisionError'
+  }
+}
+
+function rootContextScope(projectId: string) {
+  return and(
+    eq(contexts.projectId, projectId),
+    isNull(contexts.parentId),
+    isNull(contexts.deletedAt),
+  )
+}
+
+export async function listContexts(db: Database, projectId: string): Promise<ContextRow[]> {
+  return db.select().from(contexts).where(rootContextScope(projectId)).orderBy(asc(contexts.sort))
+}
+
+export async function createContext(db: Database, projectId: string): Promise<ContextRow> {
+  const existing = await listContexts(db, projectId)
+  const symbol = nextRootSymbol(new Set(existing.map((c) => c.symbol)))
+  const rows = await db
+    .insert(contexts)
+    .values({
+      id: uuidv7(),
+      projectId,
+      parentId: null,
+      symbol,
+      sort: existing.length,
+    })
+    .returning()
+  return rows[0] as ContextRow
+}
+
+export async function setContextSymbol(
+  db: Database,
+  projectId: string,
+  id: string,
+  symbol: string,
+): Promise<ContextRow> {
+  const existing = await listContexts(db, projectId)
+  if (existing.some((c) => c.id !== id && c.symbol === symbol)) {
+    throw new ContextSymbolCollisionError(symbol)
+  }
+  const rows = await db
+    .update(contexts)
+    .set({ symbol, updatedAt: now() })
+    .where(eq(contexts.id, id))
+    .returning()
+  return rows[0] as ContextRow
+}
+
+export async function setContextJustification(
+  db: Database,
+  id: string,
+  justification: string,
+): Promise<ContextRow> {
+  const rows = await db
+    .update(contexts)
+    .set({ justification, updatedAt: now() })
+    .where(eq(contexts.id, id))
+    .returning()
+  return rows[0] as ContextRow
+}
+
+export async function listBindings(db: Database, contextId: string): Promise<BindingRow[]> {
+  return db.select().from(bindings).where(eq(bindings.contextId, contextId))
+}
+
+// All of a context's binding rows share one tuple_hash, kept in dimension-sort
+// order — a single indexed scan then finds duplicate-tuple contexts (issue 005+).
+async function recomputeTupleHash(db: Database, contextId: string): Promise<void> {
+  const contextRows = await db.select().from(contexts).where(eq(contexts.id, contextId))
+  const contextRow = contextRows[0] as ContextRow
+  const dims = await listDimensions(db, contextRow.projectId)
+  const rows = await listBindings(db, contextId)
+  const byDimension = new Map(rows.map((r) => [r.dimensionId, r.parameterId]))
+  const ordered = dims.filter((d) => byDimension.has(d.id)).map((d) => byDimension.get(d.id) as string)
+  const hash = computeTupleHash(ordered)
+  for (const row of rows) {
+    if (row.tupleHash !== hash) {
+      await db.update(bindings).set({ tupleHash: hash, updatedAt: now() }).where(eq(bindings.id, row.id))
+    }
+  }
+}
+
+// Re-binding a dimension is an upsert (scope: bindings are current-state
+// pointers, not history — see schema.ts).
+export async function bindParameter(
+  db: Database,
+  contextId: string,
+  dimensionId: string,
+  parameterId: string,
+): Promise<BindingRow[]> {
+  await db
+    .insert(bindings)
+    .values({ id: uuidv7(), contextId, dimensionId, parameterId, tupleHash: '' })
+    .onConflictDoUpdate({
+      target: [bindings.contextId, bindings.dimensionId],
+      set: { parameterId, updatedAt: now() },
+    })
+  await recomputeTupleHash(db, contextId)
+  return listBindings(db, contextId)
+}
+
+export async function unbindParameter(
+  db: Database,
+  contextId: string,
+  dimensionId: string,
+): Promise<BindingRow[]> {
+  await db
+    .delete(bindings)
+    .where(and(eq(bindings.contextId, contextId), eq(bindings.dimensionId, dimensionId)))
+  await recomputeTupleHash(db, contextId)
+  return listBindings(db, contextId)
 }
