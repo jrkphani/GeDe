@@ -324,7 +324,7 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
           "cdk-hnb659fds-assets-975049998516-us-east-1",
         ],
         "SourceObjectKeys": [
-          "7fa063c8afb8defa58eb31cf1cc4f9c9316b401370e2718a93047058ebe78da3.zip",
+          "a334b47b76d0d31e587797efaeb72fcdfab0d7458c5f27594ba963e657a52484.zip",
         ],
         "WaitForDistributionInvalidation": true,
       },
