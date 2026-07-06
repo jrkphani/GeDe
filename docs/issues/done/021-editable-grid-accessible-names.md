@@ -1,6 +1,6 @@
 # 021: Accessible names & grid semantics for EditableGrid (and inplace inputs)
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit fcd286b — landed with 022/024)
 - **Milestone**: M6 (Polish — keyboard/a11y flows)
 - **Blocked by**: 004 (SHIPPED)
 

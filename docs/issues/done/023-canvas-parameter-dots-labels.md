@@ -1,6 +1,6 @@
 # 023: Canvas shows no parameters — add parameter labels + legible dots
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit 32021a4)
 - **Milestone**: M2 (canvas completeness gap) / M6 polish
 - **Blocked by**: 008 (SHIPPED)
 

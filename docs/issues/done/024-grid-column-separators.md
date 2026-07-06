@@ -1,6 +1,6 @@
 # 024: Table legibility — alternating row colors + vertical column hairlines
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit fcd286b — landed with 021/022)
 - **Milestone**: M6 (Polish)
 - **Blocked by**: 004 (SHIPPED)
 

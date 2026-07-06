@@ -1,6 +1,6 @@
 # 022: EditableGrid keyboard editing grammar (Tab across, Enter down, no focus loss)
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit fcd286b — landed with 021/024)
 - **Milestone**: M6 (Polish — keyboard flows)
 - **Blocked by**: 004 (SHIPPED)
 
