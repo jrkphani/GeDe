@@ -111,6 +111,11 @@ interface NavContext extends GridNav {
   // the given target, or safely no-op onto `from` when the target is null so
   // focus is never stranded on <body>.
   advance: (target: EditingCell | null, fromRowId: string, fromColumnId: string) => void
+  // Tab from the phantom row: create the row (via the phantom's onCreate) and,
+  // once it materializes, open its next editable cell for editing — so Tab
+  // continues across a brand-new record (Numbers/Excel grammar) instead of
+  // dead-ending on the phantom's single column.
+  createFromPhantom: (columnId: string, value: string) => void
 }
 
 // TanStack's `meta` is read at render time inside the (stable) cell renderer
@@ -517,12 +522,19 @@ function PhantomCell({
           setDraft('')
           ref.current?.focus()
         } else if (e.key === 'Tab') {
-          e.preventDefault()
-          nav.advance(
-            nextEditableCell(nav, PHANTOM_ROW_ID, columnId, e.shiftKey ? 'left' : 'right'),
-            PHANTOM_ROW_ID,
-            columnId,
-          )
+          if (e.shiftKey) {
+            // Go back up to the previous row's last editable cell.
+            e.preventDefault()
+            nav.advance(nextEditableCell(nav, PHANTOM_ROW_ID, columnId, 'left'), PHANTOM_ROW_ID, columnId)
+          } else if (draft.trim()) {
+            // Forward Tab with content: create the row and continue into its
+            // next editable cell (Numbers/Excel grammar across a new record).
+            e.preventDefault()
+            nav.createFromPhantom(columnId, draft.trim())
+            setDraft('')
+          }
+          // Empty phantom + forward Tab: let native Tab move focus out of the
+          // grid rather than trapping the user on an empty phantom cell.
         }
         if (e.key === 'Escape') setDraft('')
         handleGridArrowKeys(e, nav, PHANTOM_ROW_ID, columnId)
@@ -585,6 +597,11 @@ export function EditableGrid<TRow>({
   // an always-mounted control (combobox trigger, phantom input) or a stay-put
   // no-op — text/mono/multiline editors self-focus via autoFocus on mount.
   const pendingFocus = useRef<EditingCell | null>(null)
+  // Tab-across-a-new-row (issue 022 refinement): the phantom column Tab was
+  // pressed from; the effect below opens the freshly-created row's next
+  // editable cell once that row appears in `rows`.
+  const pendingPhantomEdit = useRef<string | null>(null)
+  const prevRowIdsRef = useRef<string[]>([])
   const rowIds = rows.map(getRowId)
   const allRowIds = phantom ? [...rowIds, PHANTOM_ROW_ID] : rowIds
   const columnIds = columns.map((c) => c.id)
@@ -609,6 +626,10 @@ export function EditableGrid<TRow>({
       pendingFocus.current = target ?? { rowId: fromRowId, columnId: fromColumnId }
       setEditing(null)
     },
+    createFromPhantom: (columnId, value) => {
+      pendingPhantomEdit.current = columnId
+      phantom?.onCreate(value)
+    },
   }
   const columnSignature = columns.map((c) => `${c.id}:${c.header}:${c.headClassName ?? ''}`).join('|')
 
@@ -620,6 +641,26 @@ export function EditableGrid<TRow>({
       pendingFocus.current = null
       focusCell(nav, target.rowId, target.columnId)
     }
+  })
+
+  // Once a Tab-created phantom row appears in `rows`, open its next editable
+  // cell for editing (the Description after the Name, etc.); if the phantom's
+  // column is the row's last editable one, fall back to the phantom for the
+  // next entry. Diffed against the previous render's ids so we edit the row
+  // that was just added, not a pre-existing one.
+  useEffect(() => {
+    const column = pendingPhantomEdit.current
+    if (column) {
+      const previous = new Set(prevRowIdsRef.current)
+      const createdId = rowIds.find((id) => !previous.has(id))
+      if (createdId) {
+        pendingPhantomEdit.current = null
+        const target = nextEditableCell(nav, createdId, column, 'right')
+        if (target) setEditing(target)
+        else focusCell(nav, PHANTOM_ROW_ID, column)
+      }
+    }
+    prevRowIdsRef.current = rowIds
   })
 
   // The ColumnDef skeleton only depends on shape (id/header), never on the

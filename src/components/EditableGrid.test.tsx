@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -309,6 +310,33 @@ describe('keyboard editing grammar (issue 022)', () => {
     expect(document.body).not.toHaveFocus()
     // Focus rests on the just-committed cell (display), not lost.
     expect(screen.getByText('Beta')).toHaveFocus()
+  })
+
+  it('Tab from the phantom creates the row and opens its next editable cell', async () => {
+    const user = userEvent.setup()
+    function Harness() {
+      const [data, setData] = useState<Task[]>([])
+      return (
+        <EditableGrid
+          rows={data}
+          columns={makeColumns()}
+          getRowId={(r) => r.id}
+          phantom={{
+            columnId: 'title',
+            placeholder: 'New task',
+            // The new row lands with a recognizable priority so we can assert
+            // its (next-editable) priority cell is the one now being edited.
+            onCreate: (title) =>
+              setData((d) => [...d, { id: `r${d.length + 1}`, title, priority: 'NEW', category: null }]),
+          }}
+        />
+      )
+    }
+    render(<Harness />)
+    await user.type(screen.getByPlaceholderText('New task'), 'Gamma')
+    await user.keyboard('{Tab}')
+    // The row was created; Tab continued into its next editable cell (priority).
+    expect(await screen.findByDisplayValue('NEW')).toHaveFocus()
   })
 
   it('Shift+Enter inserts a newline in a multiline cell and does not advance', async () => {
