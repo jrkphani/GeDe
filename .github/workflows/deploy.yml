@@ -1,0 +1,105 @@
+name: deploy
+
+# Deploy pipeline (issue 029) for the CDK infra (issue 040).
+#
+# - Pull requests: read-only validation only — `cdk synth` + the CDK
+#   assertion/snapshot tests (+ `cdk diff` when OIDC creds are available on
+#   same-repo PRs). No AWS mutation ever happens on a PR.
+# - `main`: triggered by the `verify` workflow (verify.yml) *completing
+#   successfully* on `main` — via `workflow_run`, since `needs:` can only
+#   reference jobs within the same workflow file, and verify.yml is
+#   deliberately left untouched (issue 040 §"keep the main gate unaffected").
+#   This is "one gate, reused" (issue 029 design brief) rather than a second,
+#   forked check: deploy never re-runs typecheck/lint/test/e2e itself, it
+#   just refuses to run unless verify already said yes.
+#
+# The OIDC identity provider + the `AWS_DEPLOY_ROLE_ARN` role are provisioned
+# separately (out of band, by a human, scoped to the `Gede-*` stacks — see
+# issue 029) and the role ARN is stored in the `AWS_DEPLOY_ROLE_ARN`
+# repository secret — a placeholder until that provisioning happens.
+
+on:
+  workflow_run:
+    workflows: [verify]
+    types: [completed]
+  pull_request:
+
+jobs:
+  # PR validation only: synth + assertion/snapshot tests, `cdk diff` when
+  # creds are available. Never deploys.
+  cdk-validate:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deploy/cdk/package-lock.json
+      - run: npm ci
+        working-directory: deploy/cdk
+      - run: npx cdk synth
+        working-directory: deploy/cdk
+      - run: npm test
+        working-directory: deploy/cdk
+      # `cdk diff` needs AWS credentials. Forked-repo PRs don't get repo
+      # secrets, so this step is best-effort and skips cleanly without one.
+      - name: Configure AWS credentials (same-repo PRs only)
+        if: github.event.pull_request.head.repo.full_name == github.repository
+        continue-on-error: true
+        id: aws-creds
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+      - name: cdk diff
+        if: steps.aws-creds.outcome == 'success'
+        working-directory: deploy/cdk
+        run: npx cdk diff --all
+
+  # `main` only, and only once `verify` has gone green for that exact commit
+  # (the "one gate" — a red verify blocks this job entirely; it is not
+  # re-checked here, see header comment).
+  deploy:
+    if: >
+      github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Deploy the exact commit `verify` just validated, not whatever
+          # HEAD happens to be when this workflow_run event fires.
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: deploy/cdk/package-lock.json
+      - run: npm ci
+        working-directory: deploy/cdk
+
+      # Short-lived OIDC role assumption — no long-lived AWS keys anywhere
+      # (TECH_STACK §6.4, T8).
+      - name: Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
+          aws-region: us-east-1
+
+      - name: cdk deploy
+        working-directory: deploy/cdk
+        run: npx cdk deploy --all --require-approval never

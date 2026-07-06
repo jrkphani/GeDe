@@ -1,0 +1,153 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { Stack, StackProps, CfnOutput, Duration, RemovalPolicy } from 'aws-cdk-lib';
+import * as s3 from 'aws-cdk-lib/aws-s3';
+import * as cloudfront from 'aws-cdk-lib/aws-cloudfront';
+import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import * as s3deploy from 'aws-cdk-lib/aws-s3-deployment';
+import { Construct } from 'constructs';
+
+export interface HostingStackProps extends StackProps {
+  /** Lowercase env/name prefix (e.g. `gede-test`) for physical resource names. */
+  namePrefix: string;
+  /**
+   * Custom domain to serve on, in addition to the CloudFront default domain.
+   * Undefined (the `test` default) => no `domainNames`/certificate is set on
+   * the distribution — the default `*.cloudfront.net` domain + CloudFront's
+   * default viewer certificate are used (ACM cannot validate a domain we
+   * don't control the DNS for, so we simply don't ask it to).
+   */
+  domainName?: string;
+}
+
+/**
+ * `Gede-Test-Hosting` — the static PWA's live infrastructure (issue 040,
+ * scope item 2). Private S3 origin (Origin Access Control, no public
+ * access) behind a CloudFront distribution.
+ */
+export class HostingStack extends Stack {
+  public readonly bucket: s3.Bucket;
+  public readonly distribution: cloudfront.Distribution;
+
+  constructor(scope: Construct, id: string, props: HostingStackProps) {
+    super(scope, id, props);
+
+    // --- Private origin bucket -----------------------------------------
+    this.bucket = new s3.Bucket(this, 'SiteBucket', {
+      bucketName: `${props.namePrefix}-site-${this.account}`,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      // `test` env only: let `cdk destroy` tear the bucket down cleanly
+      // (docs/DEPLOYMENT.md §10). A future `prod` env should use RETAIN.
+      removalPolicy: RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+    });
+
+    // --- Domain / certificate (DNS seam) --------------------------------
+    // A real cert can only be attached once the Gede-Test-Dns stack has
+    // created it (DNS-validated certs need the hosted zone to exist first).
+    // Rather than a circular stack dependency (Dns needs this distribution
+    // for its alias records; this distribution would need Dns's cert), the
+    // documented seam (README "domain-flip") is: Dns creates the zone +
+    // cert and outputs the cert ARN; a human/CI feeds that ARN back in via
+    // the `certificateArn` context on a follow-up `cdk deploy` of Hosting.
+    // With no `domainName` (the default), none of this applies and the
+    // distribution uses CloudFront's default cert/domain only.
+    const certificateArn = this.node.tryGetContext('certificateArn') as string | undefined;
+    const certificate =
+      props.domainName && certificateArn
+        ? acm.Certificate.fromCertificateArn(this, 'ImportedCertificate', certificateArn)
+        : undefined;
+
+    // --- Cache behaviors (TECH_STACK §6.2) ------------------------------
+    // Default (catch-all) behavior covers index.html, sw.js, and any other
+    // unhashed path: no-cache, so a deploy's new shell is visible immediately.
+    const noCachePolicy = new cloudfront.CachePolicy(this, 'NoCachePolicy', {
+      cachePolicyName: `${props.namePrefix}-no-cache`,
+      comment: 'index.html / sw.js / unhashed paths — always revalidate (TECH_STACK §6.2).',
+      defaultTtl: Duration.seconds(0),
+      minTtl: Duration.seconds(0),
+      maxTtl: Duration.seconds(0),
+    });
+
+    // Hashed, content-addressed assets (Vite's `assets/*` output) are
+    // immutable for a year — safe because a new build always emits new
+    // hashed filenames.
+    const immutableAssetsCachePolicy = new cloudfront.CachePolicy(this, 'ImmutableAssetsCachePolicy', {
+      cachePolicyName: `${props.namePrefix}-immutable-assets`,
+      comment: 'Hashed build assets — immutable, max-age=1y (TECH_STACK §6.2).',
+      defaultTtl: Duration.days(365),
+      minTtl: Duration.days(365),
+      maxTtl: Duration.days(365),
+    });
+
+    const origin = origins.S3BucketOrigin.withOriginAccessControl(this.bucket);
+
+    this.distribution = new cloudfront.Distribution(this, 'Distribution', {
+      comment: `${props.namePrefix} — GeDe static PWA`,
+      defaultRootObject: 'index.html',
+      // HTTP/3 (+HTTP/2) support (issue 040 scope).
+      httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
+      defaultBehavior: {
+        origin,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: noCachePolicy,
+        // CloudFront auto-negotiates Brotli/gzip against the viewer's
+        // Accept-Encoding when `compress` is true — there is no separate
+        // "enable Brotli" flag on the L2 construct.
+        compress: true,
+      },
+      additionalBehaviors: {
+        'assets/*': {
+          origin,
+          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+          cachePolicy: immutableAssetsCachePolicy,
+          compress: true,
+        },
+      },
+      // SPA/PWA routing: unknown paths (deep links) come back from S3 as
+      // 403 (private bucket via OAC) — map both 403 and 404 to index.html
+      // with a 200 so client-side routing takes over.
+      errorResponses: [
+        { httpStatus: 403, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: Duration.seconds(0) },
+        { httpStatus: 404, responseHttpStatus: 200, responsePagePath: '/index.html', ttl: Duration.seconds(0) },
+      ],
+      // Default CloudFront domain/cert unless a real domain + cert (from
+      // the Dns stack seam, see above) are both available.
+      domainNames: props.domainName && certificate ? [props.domainName] : undefined,
+      certificate,
+    });
+
+    // --- Publish the built site -----------------------------------------
+    // `cdk synth`/tests must succeed even when `dist/` doesn't exist yet
+    // (e.g. a fresh checkout, or CDK tests running before `npm run build`).
+    // Resolve the real web-app `dist/` and fall back to a tiny committed
+    // placeholder so BucketDeployment always has a valid asset directory.
+    // CI (deploy.yml) always runs `npm run build` first, so production
+    // deploys publish the real `dist/`; local `cdk synth`/tests use the
+    // placeholder and never assert on its contents.
+    const repoDistPath = path.resolve(__dirname, '..', '..', '..', 'dist');
+    const placeholderPath = path.resolve(__dirname, '..', 'assets', 'placeholder');
+    const siteSourcePath = fs.existsSync(repoDistPath) ? repoDistPath : placeholderPath;
+
+    new s3deploy.BucketDeployment(this, 'DeploySite', {
+      sources: [s3deploy.Source.asset(siteSourcePath)],
+      destinationBucket: this.bucket,
+      distribution: this.distribution,
+      // Only the shell paths need invalidating on deploy (TECH_STACK §6.2 /
+      // DEPLOYMENT.md §10) — hashed assets are new filenames, never stale.
+      distributionPaths: ['/index.html', '/sw.js'],
+    });
+
+    new CfnOutput(this, 'DistributionDomainName', {
+      value: this.distribution.distributionDomainName,
+      description: 'CloudFront default domain — the test-env app URL.',
+    });
+    new CfnOutput(this, 'BucketName', {
+      value: this.bucket.bucketName,
+      description: 'Private S3 origin bucket (OAC only, no public access).',
+    });
+  }
+}

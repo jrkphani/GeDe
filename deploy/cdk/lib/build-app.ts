@@ -1,0 +1,79 @@
+import * as cdk from 'aws-cdk-lib';
+import { NetworkStack } from './network-stack';
+import { HostingStack } from './hosting-stack';
+import { DnsStack } from './dns-stack';
+
+// --- Env config (issue 040 §"Scope") ---------------------------------------
+// Only one named env exists today: `test`. A future `prod` env is added here
+// (its own account/region) when a domain + prod account decision land —
+// see docs/issues/040-cdk-aws-deployment.md and TECH_STACK §6.1.
+export type EnvName = 'test';
+
+export interface EnvConfig {
+  account: string;
+  region: string;
+  /** Stack name prefix, e.g. `Gede-Test` -> `Gede-Test-Network`. */
+  stackPrefix: string;
+  /** Lowercase physical-name prefix for globally-unique resources (S3 etc). */
+  namePrefix: string;
+}
+
+export const ENVS: Record<EnvName, EnvConfig> = {
+  test: {
+    account: '975049998516',
+    region: 'us-east-1',
+    stackPrefix: 'Gede-Test',
+    namePrefix: 'gede-test',
+  },
+};
+
+export interface AppStacks {
+  network: NetworkStack;
+  hosting: HostingStack;
+  dns: DnsStack;
+}
+
+/**
+ * Builds the three layered stacks (Network -> Hosting -> Dns) on the given
+ * `app`, exactly as the real CLI entrypoint (`bin/gede.ts`) does. Shared so
+ * the CDK test suite exercises the identical wiring/tagging as a real synth
+ * — see docs/issues/040-cdk-aws-deployment.md.
+ */
+export function buildAppStacks(
+  app: cdk.App,
+  envName: EnvName = 'test',
+  domainName?: string,
+): AppStacks {
+  const envConfig = ENVS[envName];
+  const env: cdk.Environment = { account: envConfig.account, region: envConfig.region };
+
+  // Tag strategy (issue 040 "Tag strategy" table) — applied once at the App
+  // so every stack + resource inherits them.
+  cdk.Tags.of(app).add('Organization', 'quadnomics');
+  cdk.Tags.of(app).add('Application', 'GeDe');
+  cdk.Tags.of(app).add('Environment', envName);
+  cdk.Tags.of(app).add('ManagedBy', 'CDK');
+
+  const network = new NetworkStack(app, `${envConfig.stackPrefix}-Network`, {
+    env,
+    description: 'GeDe network foundation (VPC, no NAT) — issue 040',
+  });
+
+  const hosting = new HostingStack(app, `${envConfig.stackPrefix}-Hosting`, {
+    env,
+    description: 'GeDe static hosting: private S3 + CloudFront — issue 040',
+    namePrefix: envConfig.namePrefix,
+    domainName,
+  });
+  hosting.addDependency(network);
+
+  const dns = new DnsStack(app, `${envConfig.stackPrefix}-Dns`, {
+    env,
+    description: 'GeDe DNS seam (Route 53 + ACM), inert without a domain — issue 040',
+    domainName,
+    distribution: hosting.distribution,
+  });
+  dns.addDependency(hosting);
+
+  return { network, hosting, dns };
+}

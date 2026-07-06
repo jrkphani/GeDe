@@ -15,6 +15,11 @@ export default tseslint.config(
       // are untracked; never lint their source copies (their paths don't match
       // the src/** exemption blocks below, so they'd false-positive).
       '.claude',
+      // The CDK deploy app (issue 040) is a fully separate TS project with
+      // its own package.json/tsconfig/lint setup — it is never linted by
+      // the root gate (`npm run verify`), only by its own `deploy/cdk`
+      // tooling in CI. See deploy/cdk/README.md.
+      'deploy',
     ],
   },
   js.configs.recommended,

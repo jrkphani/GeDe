@@ -27,3 +27,9 @@ playwright-report/
 
 # Generated knowledge graph
 graphify-out/
+
+# CDK deploy app (issue 040) — self-contained, own deps/build output.
+# (node_modules/ and dist/ above already match these, listed explicitly
+# per the deploy app's own gitignore contract.)
+deploy/cdk/node_modules/
+deploy/cdk/cdk.out/

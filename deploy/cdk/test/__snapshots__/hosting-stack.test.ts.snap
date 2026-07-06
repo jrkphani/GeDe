@@ -1,0 +1,705 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
+{
+  "Description": "GeDe static hosting: private S3 + CloudFront — issue 040",
+  "Outputs": {
+    "BucketName": {
+      "Description": "Private S3 origin bucket (OAC only, no public access).",
+      "Value": {
+        "Ref": "SiteBucket397A1860",
+      },
+    },
+    "DistributionDomainName": {
+      "Description": "CloudFront default domain — the test-env app URL.",
+      "Value": {
+        "Fn::GetAtt": [
+          "Distribution830FAC52",
+          "DomainName",
+        ],
+      },
+    },
+    "ExportsOutputFnGetAttDistribution830FAC52DomainNameBEB09E30": {
+      "Export": {
+        "Name": "Gede-Test-Hosting:ExportsOutputFnGetAttDistribution830FAC52DomainNameBEB09E30",
+      },
+      "Value": {
+        "Fn::GetAtt": [
+          "Distribution830FAC52",
+          "DomainName",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C81C01536": {
+      "DependsOn": [
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRoleDefaultPolicy88902FDF",
+        "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "97e9ebf0b174a5c8f7faa505739022b7f509edddffcab9211dcd08b759944c4f.zip",
+        },
+        "Environment": {
+          "Variables": {
+            "AWS_CA_BUNDLE": "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+          },
+        },
+        "Handler": "index.handler",
+        "Layers": [
+          {
+            "Ref": "DeploySiteAwsCliLayer88B0EBE2",
+          },
+        ],
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265",
+            "Arn",
+          ],
+        },
+        "Runtime": "python3.13",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 900,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRoleDefaultPolicy88902FDF": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition",
+                      },
+                      ":s3:::cdk-hnb659fds-assets-975049998516-us-east-1",
+                    ],
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition",
+                      },
+                      ":s3:::cdk-hnb659fds-assets-975049998516-us-east-1/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "s3:GetObject*",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*",
+                "s3:PutObject",
+                "s3:PutObjectLegalHold",
+                "s3:PutObjectRetention",
+                "s3:PutObjectTagging",
+                "s3:PutObjectVersionTagging",
+                "s3:Abort*",
+              ],
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SiteBucket397A1860",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "SiteBucket397A1860",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "cloudfront:GetInvalidation",
+                "cloudfront:CreateInvalidation",
+              ],
+              "Effect": "Allow",
+              "Resource": "*",
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRoleDefaultPolicy88902FDF",
+        "Roles": [
+          {
+            "Ref": "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756CServiceRole89A01265",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F": {
+      "DependsOn": [
+        "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "faa95a81ae7d7373f3e1f242268f904eb748d8d0fdd306e8a6fe515a1905a7d6.zip",
+        },
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Lambda function for auto-deleting objects in ",
+              {
+                "Ref": "SiteBucket397A1860",
+              },
+              " S3 bucket.",
+            ],
+          ],
+        },
+        "Handler": "index.handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Timeout": 900,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:\${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "DeploySiteAwsCliLayer88B0EBE2": {
+      "Properties": {
+        "Content": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "a72522445441e9b66c2f16956c54d4786af8c61c156b80c48a6e7c32fcc49023.zip",
+        },
+        "Description": "/opt/awscli/aws",
+      },
+      "Type": "AWS::Lambda::LayerVersion",
+    },
+    "DeploySiteCustomResourceE47C9748": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "DestinationBucketName": {
+          "Ref": "SiteBucket397A1860",
+        },
+        "DistributionId": {
+          "Ref": "Distribution830FAC52",
+        },
+        "DistributionPaths": [
+          "/index.html",
+          "/sw.js",
+        ],
+        "OutputObjectKeys": true,
+        "Prune": true,
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomCDKBucketDeployment8693BB64968944B69AAFB0CC9EB8756C81C01536",
+            "Arn",
+          ],
+        },
+        "SourceBucketNames": [
+          "cdk-hnb659fds-assets-975049998516-us-east-1",
+        ],
+        "SourceObjectKeys": [
+          "a334b47b76d0d31e587797efaeb72fcdfab0d7458c5f27594ba963e657a52484.zip",
+        ],
+        "WaitForDistributionInvalidation": true,
+      },
+      "Type": "Custom::CDKBucketDeployment",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "Distribution830FAC52": {
+      "Properties": {
+        "DistributionConfig": {
+          "CacheBehaviors": [
+            {
+              "CachePolicyId": {
+                "Ref": "ImmutableAssetsCachePolicyF887E7CD",
+              },
+              "Compress": true,
+              "PathPattern": "assets/*",
+              "TargetOriginId": "GedeTestHostingDistributionOrigin10EF450BA",
+              "ViewerProtocolPolicy": "redirect-to-https",
+            },
+          ],
+          "Comment": "gede-test — GeDe static PWA",
+          "CustomErrorResponses": [
+            {
+              "ErrorCachingMinTTL": 0,
+              "ErrorCode": 403,
+              "ResponseCode": 200,
+              "ResponsePagePath": "/index.html",
+            },
+            {
+              "ErrorCachingMinTTL": 0,
+              "ErrorCode": 404,
+              "ResponseCode": 200,
+              "ResponsePagePath": "/index.html",
+            },
+          ],
+          "DefaultCacheBehavior": {
+            "CachePolicyId": {
+              "Ref": "NoCachePolicy1F71EC46",
+            },
+            "Compress": true,
+            "TargetOriginId": "GedeTestHostingDistributionOrigin10EF450BA",
+            "ViewerProtocolPolicy": "redirect-to-https",
+          },
+          "DefaultRootObject": "index.html",
+          "Enabled": true,
+          "HttpVersion": "http2and3",
+          "IPV6Enabled": true,
+          "Origins": [
+            {
+              "DomainName": {
+                "Fn::GetAtt": [
+                  "SiteBucket397A1860",
+                  "RegionalDomainName",
+                ],
+              },
+              "Id": "GedeTestHostingDistributionOrigin10EF450BA",
+              "OriginAccessControlId": {
+                "Fn::GetAtt": [
+                  "DistributionOrigin1S3OriginAccessControlEB606076",
+                  "Id",
+                ],
+              },
+              "S3OriginConfig": {
+                "OriginAccessIdentity": "",
+              },
+            },
+          ],
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::CloudFront::Distribution",
+    },
+    "DistributionOrigin1S3OriginAccessControlEB606076": {
+      "Properties": {
+        "OriginAccessControlConfig": {
+          "Name": "GedeTestHostingDistributionOrigin1S3OriginAccessControlBF9FBEB3",
+          "OriginAccessControlOriginType": "s3",
+          "SigningBehavior": "always",
+          "SigningProtocol": "sigv4",
+        },
+      },
+      "Type": "AWS::CloudFront::OriginAccessControl",
+    },
+    "ImmutableAssetsCachePolicyF887E7CD": {
+      "Properties": {
+        "CachePolicyConfig": {
+          "Comment": "Hashed build assets — immutable, max-age=1y (TECH_STACK §6.2).",
+          "DefaultTTL": 31536000,
+          "MaxTTL": 31536000,
+          "MinTTL": 31536000,
+          "Name": "gede-test-immutable-assets",
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "CookiesConfig": {
+              "CookieBehavior": "none",
+            },
+            "EnableAcceptEncodingBrotli": false,
+            "EnableAcceptEncodingGzip": false,
+            "HeadersConfig": {
+              "HeaderBehavior": "none",
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "none",
+            },
+          },
+        },
+      },
+      "Type": "AWS::CloudFront::CachePolicy",
+    },
+    "NoCachePolicy1F71EC46": {
+      "Properties": {
+        "CachePolicyConfig": {
+          "Comment": "index.html / sw.js / unhashed paths — always revalidate (TECH_STACK §6.2).",
+          "DefaultTTL": 0,
+          "MaxTTL": 0,
+          "MinTTL": 0,
+          "Name": "gede-test-no-cache",
+          "ParametersInCacheKeyAndForwardedToOrigin": {
+            "CookiesConfig": {
+              "CookieBehavior": "none",
+            },
+            "EnableAcceptEncodingBrotli": false,
+            "EnableAcceptEncodingGzip": false,
+            "HeadersConfig": {
+              "HeaderBehavior": "none",
+            },
+            "QueryStringsConfig": {
+              "QueryStringBehavior": "none",
+            },
+          },
+        },
+      },
+      "Type": "AWS::CloudFront::CachePolicy",
+    },
+    "SiteBucket397A1860": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256",
+              },
+            },
+          ],
+        },
+        "BucketName": "gede-test-site-975049998516",
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true,
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "aws-cdk:auto-delete-objects",
+            "Value": "true",
+          },
+          {
+            "Key": "aws-cdk:cr-owned:4cedae5a",
+            "Value": "true",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::S3::Bucket",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "SiteBucketAutoDeleteObjectsCustomResource9585E968": {
+      "DeletionPolicy": "Delete",
+      "DependsOn": [
+        "SiteBucketPolicy3AC1D0F8",
+      ],
+      "Properties": {
+        "BucketName": {
+          "Ref": "SiteBucket397A1860",
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "CustomS3AutoDeleteObjectsCustomResourceProviderHandler9D90184F",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "Custom::S3AutoDeleteObjects",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "SiteBucketPolicy3AC1D0F8": {
+      "Properties": {
+        "Bucket": {
+          "Ref": "SiteBucket397A1860",
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false",
+                },
+              },
+              "Effect": "Deny",
+              "Principal": {
+                "AWS": "*",
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SiteBucket397A1860",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "SiteBucket397A1860",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": [
+                "s3:PutBucketPolicy",
+                "s3:GetBucket*",
+                "s3:List*",
+                "s3:DeleteObject*",
+              ],
+              "Effect": "Allow",
+              "Principal": {
+                "AWS": {
+                  "Fn::GetAtt": [
+                    "CustomS3AutoDeleteObjectsCustomResourceProviderRole3B1BD092",
+                    "Arn",
+                  ],
+                },
+              },
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "SiteBucket397A1860",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "SiteBucket397A1860",
+                          "Arn",
+                        ],
+                      },
+                      "/*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": "s3:GetObject",
+              "Condition": {
+                "StringEquals": {
+                  "AWS:SourceArn": {
+                    "Fn::Join": [
+                      "",
+                      [
+                        "arn:",
+                        {
+                          "Ref": "AWS::Partition",
+                        },
+                        ":cloudfront::",
+                        {
+                          "Ref": "AWS::AccountId",
+                        },
+                        ":distribution/",
+                        {
+                          "Ref": "Distribution830FAC52",
+                        },
+                      ],
+                    ],
+                  },
+                },
+              },
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "cloudfront.amazonaws.com",
+              },
+              "Resource": {
+                "Fn::Join": [
+                  "",
+                  [
+                    {
+                      "Fn::GetAtt": [
+                        "SiteBucket397A1860",
+                        "Arn",
+                      ],
+                    },
+                    "/*",
+                  ],
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+      },
+      "Type": "AWS::S3::BucketPolicy",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
