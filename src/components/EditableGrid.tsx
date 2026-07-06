@@ -291,7 +291,10 @@ function TextOrMonoCell<TRow>({
     <div
       ref={registerRef(nav, rowId, columnId)}
       className={`grid-cell${mono ? ' grid-cell--mono' : ''}`}
-      aria-label={value ? `${name}: ${value}` : `${name}, empty`}
+      // A non-empty cell's name is its own text (the column is announced via the
+      // scoped <th>); an empty cell has only the aria-hidden em-dash, so it
+      // needs an explicit name that states the column and its empty state (021).
+      aria-label={value ? undefined : `${name}, empty`}
       tabIndex={0}
       onClick={() => nav.setEditing({ rowId, columnId })}
       onKeyDown={(e) => {
@@ -396,7 +399,7 @@ function MultilineCell<TRow>({
     <div
       ref={registerRef(nav, rowId, columnId)}
       className="grid-cell grid-cell--multiline"
-      aria-label={value ? `${name}: ${value}` : `${name}, empty`}
+      aria-label={value ? undefined : `${name}, empty`}
       tabIndex={0}
       title={value || undefined}
       onClick={() => nav.setEditing({ rowId, columnId })}

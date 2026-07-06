@@ -131,7 +131,7 @@ test('architecture: selection bar stays in view (sticky) on a tall table without
   const panel = tablePanel(page, 'Stakeholders')
   // Select the first entry — at the very top of a table dozens of rows tall
   // — without scrolling the page at all.
-  await panel.getByRole('button', { name: 'Select Entry 1' }).click()
+  await panel.getByRole('button', { name: 'Select Entry 1', exact: true }).click()
 
   const promoteTrigger = page.getByRole('button', { name: 'Use as dimension…' })
   await expect(promoteTrigger).toBeVisible()
