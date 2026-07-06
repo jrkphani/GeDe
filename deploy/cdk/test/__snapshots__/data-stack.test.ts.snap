@@ -5,7 +5,7 @@ exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
   "Description": "GeDe v2 backend: managed RDS PostgreSQL 17 in isolated subnets — issue 030 (ADR-0008)",
   "Outputs": {
     "DatabaseEndpoint": {
-      "Description": "RDS endpoint address — isolated-subnet only, no public route.",
+      "Description": "RDS endpoint address - isolated-subnet only, no public route.",
       "Export": {
         "Name": "Gede-Test-Data-DatabaseEndpoint",
       },
@@ -17,7 +17,7 @@ exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
       },
     },
     "DatabaseSecretArn": {
-      "Description": "Secrets Manager ARN holding the generated DB credentials — consumed by the 032 (sync) / 033 (auth) Fargate task definitions.",
+      "Description": "Secrets Manager ARN holding the generated DB credentials - consumed by the 032 (sync) / 033 (auth) Fargate task definitions.",
       "Export": {
         "Name": "Gede-Test-Data-DatabaseSecretArn",
       },
@@ -120,7 +120,7 @@ exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
     },
     "DatabaseSecurityGroup7319C0F6": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Data RDS Postgres — ingress restricted to the Api compute security group only (issue 030). No 0.0.0.0/0 rule is ever added to this security group; the one permitted rule is added by the Api stack.",
+        "GroupDescription": "Gede-Test-Data RDS Postgres - ingress restricted to the Api compute security group only (issue 030). No 0.0.0.0/0 rule is ever added to this security group; the one permitted rule is added by the Api stack.",
         "SecurityGroupEgress": [
           {
             "CidrIp": "255.255.255.255/32",

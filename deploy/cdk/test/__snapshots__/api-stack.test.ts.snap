@@ -5,7 +5,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
   "Description": "GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) behind an internet-facing ALB — issue 030 (ADR-0008)",
   "Outputs": {
     "LoadBalancerDnsName": {
-      "Description": "Api ALB DNS name — issue 040/033 later fronts this with a real domain + TLS.",
+      "Description": "Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS.",
       "Value": {
         "Fn::GetAtt": [
           "Alb16C2F182",
@@ -75,7 +75,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
           {
             "FixedResponseConfig": {
               "ContentType": "text/plain",
-              "MessageBody": "Gede-Test-Api: no route matched (placeholder tier, issue 030) — /sync* and /auth* are stubbed pending issues 032/033.",
+              "MessageBody": "Gede-Test-Api: no route matched (placeholder tier, issue 030) - /sync* and /auth* are stubbed pending issues 032/033.",
               "StatusCode": "404",
             },
             "Type": "fixed-response",
@@ -225,7 +225,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "AlbSecurityGroup86A59E99": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Api ALB — internet-facing. Placeholder tier serves plain HTTP; a real domain + ACM cert (the Hosting/Dns seam, issue 040) upgrades this to HTTPS when 032/033 land.",
+        "GroupDescription": "Gede-Test-Api ALB - internet-facing. Placeholder tier serves plain HTTP; a real domain + ACM cert (the Hosting/Dns seam, issue 040) upgrades this to HTTPS when 032/033 land.",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
@@ -236,7 +236,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         "SecurityGroupIngress": [
           {
             "CidrIp": "0.0.0.0/0",
-            "Description": "Public ALB ingress — the only 0.0.0.0/0 rule in this stack, and the only one anywhere in the v2 backend (by design: only the ALB is internet-facing, DEPLOYMENT.md §9).",
+            "Description": "Public ALB ingress - the only 0.0.0.0/0 rule in this stack, and the only one anywhere in the v2 backend (by design: only the ALB is internet-facing, DEPLOYMENT.md section 9).",
             "FromPort": 80,
             "IpProtocol": "tcp",
             "ToPort": 80,
@@ -268,7 +268,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "AllowComputeToPostgres": {
       "Properties": {
-        "Description": "Api compute (sync/auth stub slots, issue 030) -> Postgres 5432 — the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.",
+        "Description": "Api compute (sync/auth stub slots, issue 030) -> Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.",
         "FromPort": 5432,
         "GroupId": {
           "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
@@ -591,7 +591,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "ComputeSecurityGroupF0F5C976": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Api Fargate compute (sync/auth stub slots, issue 030) — ingress only from the ALB security group.",
+        "GroupDescription": "Gede-Test-Api Fargate compute (sync/auth stub slots, issue 030) - ingress only from the ALB security group.",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
