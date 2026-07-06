@@ -102,17 +102,18 @@ test('hovering a parameter dot emphasizes the contexts bound to it and mutes an 
   await expect(page.locator('.canvas--muted')).toHaveCount(0)
 
   // Hover the Comfort dot (Value's single parameter) — both contexts bind it.
-  // Hover the invisible ≥44px hit circle (issue 028(a)), not the group: the
-  // painted 8px `.canvas-dot` circle plus its far-away label give the group
-  // itself a bounding box whose center is empty svg background, which a real
-  // pointer (and Playwright) can't land on.
-  const comfortDot = page.locator('.canvas-dot-hit').first()
+  // Hover the painted `.canvas-dot` itself: it's the topmost element at the dot
+  // centre (the invisible ≥44px `.canvas-dot-hit` sibling sits under it, so
+  // hovering the hit circle's centre is obstructed by the dot). Entering either
+  // fires the group's onMouseEnter — a real pointer over the 44px ring works
+  // the same way; this is just the actionable target for Playwright.
+  const comfortDot = page.locator('.canvas-dot').first()
   await comfortDot.hover()
 
-  // Both context nodes stay unmuted (both bind Comfort); an unrelated arc —
-  // one the hovered parameter doesn't belong to — mutes.
+  // Both context nodes stay unmuted (both bind Comfort — the "who uses this"
+  // read). The parameter role lights no arcs, so every arc mutes (3 of 3).
   await expect(page.locator('.canvas-node.canvas--muted')).toHaveCount(0)
-  await expect(page.locator('.canvas-arc-group.canvas--muted')).toHaveCount(2) // parameter role lights no arcs
+  await expect(page.locator('.canvas-arc-group.canvas--muted')).toHaveCount(3)
 
   await page.mouse.move(10, 10) // move off the canvas entirely
   await expect(page.locator('.canvas--muted')).toHaveCount(0)
