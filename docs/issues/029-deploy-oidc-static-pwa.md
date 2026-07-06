@@ -1,8 +1,8 @@
-# 029: Deploy pipeline — OIDC static PWA to S3 + CloudFront
+# 029: Deploy pipeline — GitHub Actions OIDC → `cdk deploy`
 
 - **Status**: OPEN
 - **Milestone**: M7 (Deploy — the v1→v2 enabler)
-- **Blocked by**: — (the app + `verify.yml` are ready; this is the deferred deploy half, TECH_STACK §6.2/§6.4)
+- **Blocked by**: 040 (the CDK infra this pipeline deploys). The app + `verify.yml` are ready; this is the deferred deploy half, TECH_STACK §6.2/§6.4.
 
 ## Slice
 
@@ -10,17 +10,18 @@ As the maintainer I can land on `main`, watch CI go green, and have the built PW
 
 ## Motivation
 
-`verify.yml` runs the full gate on push/PR and is CI-green, but there is **no deploy job** — the app only runs locally. TECH_STACK §6.2 specifies the pipeline (build → `aws s3 sync` via OIDC → CloudFront invalidation) and §6.4 makes GitHub Actions + OIDC the *only* deploy path (T8). Nothing ships until this exists.
+`verify.yml` runs the full gate on push/PR and is CI-green, but there is **no deploy job** — the app only runs locally. Issue **040** defines the AWS infrastructure as a **CDK** app (network → hosting → DNS); this issue is the **GitHub Actions pipeline that deploys it**. §6.4 makes GitHub Actions + OIDC the *only* deploy path (T8): a human's manual `cdk deploy` is for first-run bootstrap only — steady-state deploys are triggered from CI on `main`, never from a laptop. Nothing ships until this exists.
 
 ## Scope
 
-- **Infra (in `deploy/`)**: a private **S3** bucket with **Origin Access Control**; **CloudFront** distribution (ACM cert in us-east-1, HTTP/3, Brotli); the cache policy from §6.2 (hashed assets `immutable, max-age=1y`; `index.html` + `sw.js` `no-cache`). Infrastructure as code (CDK or Terraform — pick one, note it in the ADR) so the account is reproducible, not click-ops.
-- **OIDC trust**: a GitHub → AWS OIDC identity provider + a deploy role scoped to exactly this bucket + a CloudFront invalidation; **no access keys in repo secrets** (§6.4, T8).
-- **Deploy workflow** (`.github/workflows/deploy.yml`): on push to `main`, **after `verify` is green**, run `vite build` → `aws s3 sync ./dist` → `cloudfront create-invalidation` for `index.html`/`sw.js` only. Deploy is blocked if verify fails (same gate as local, issue 000).
+- **Infra is issue 040, not here.** The S3 bucket, CloudFront, VPC, DNS seam, and cache policy are all defined by the **CDK** app in `deploy/cdk/` (issue 040). This issue does **not** redefine them — it wires the pipeline that runs `cdk deploy` against those stacks.
+- **OIDC trust**: a GitHub → AWS OIDC identity provider in account `975049998516` + a **CI deploy role** that CI assumes (short-lived, no access keys in repo secrets — §6.4, T8). Because deploys go through CDK/CloudFormation, the role's permissions cover **`cdk deploy`** — the CDK toolkit (assume the CDK deploy/publish roles from `cdk bootstrap`) plus CloudFormation and the stacks' resources — not just "write one bucket + invalidate". Scope it to the `Gede-*` stacks, not account-admin.
+- **Deploy workflow** (`.github/workflows/deploy.yml`): on push to `main`, **after `verify` is green**, `npm run build` → `cd deploy/cdk && npx cdk deploy --all --require-approval never` under the assumed OIDC role. CDK's `BucketDeployment` publishes `dist/` and invalidates the CloudFront shell paths — no hand-rolled `s3 sync`/`create-invalidation`. Deploy is blocked if verify fails (same gate as local, issue 000).
+- **PR vs `main`**: pull requests run **`cdk synth` + `cdk diff` + the CDK assertion tests** (no AWS mutation, read-only or no creds) so infra changes are reviewable; **only pushes to `main` actually `cdk deploy`**. This keeps deployment a CI event, never a manual one.
 - **Service-worker update UX** already specified (§6.2): `registerType: 'prompt'` → the quiet status-line "New version — Reload", never auto-reload.
-- **Env split** (§6.1): `main` → production. **Preview** (per-PR build to an `/preview/<pr>/` prefix) is *out of scope here* — optional until collaborators exist (its own issue when v2 lands).
+- **Env split** (§6.1): `main` → the `test` env (account `975049998516`); a `prod` env/account is a later decision. **Preview** (per-PR build to an `/preview/<pr>/` prefix) is *out of scope here* — optional until collaborators exist (its own issue when v2 lands).
 
-Out of scope: any server/backend (that is v2, issue 030); custom domain/Route 53 (a small follow-up once the account + a domain exist); preview environments.
+Out of scope: the CDK infra definition itself (issue 040); any server/backend (v2, issues 030–038); custom domain/Route 53 cutover (040's DNS seam, once a domain exists); preview environments.
 
 ## Design brief
 
@@ -29,7 +30,7 @@ Out of scope: any server/backend (that is v2, issue 030); custom domain/Route 53
 - **Reproducible account**: the AWS topology lives in `deploy/` as code and is the deployment contract; the account can be torn down and recreated from it.
 - **One gate**: reuse `npm run verify` as the deploy precondition; do not fork a second, weaker check.
 
-**References**: TECH_STACK §6.1 (environments), §6.2 (v1 pipeline + cache policy + SW update), §6.4 (CI/CD rules, OIDC, T8) · SPEC §5 (PWA) · issue 000 (the verify gate) · issue 015 (JSON export as the pre-cutover backup story).
+**References**: issue **040** (the CDK infra this pipeline deploys) · TECH_STACK §6.1 (environments), §6.2 (cache policy + SW update), §6.4 (CI/CD rules, OIDC, T8) · SPEC §5 (PWA) · issue 000 (the verify gate) · issue 015 (JSON export as the pre-cutover backup story) · `docs/DEPLOYMENT.md` (the operator guide).
 
 ## Test-first plan
 
@@ -40,10 +41,10 @@ Out of scope: any server/backend (that is v2, issue 030); custom domain/Route 53
 
 ## Acceptance criteria
 
-- [ ] Push to `main` → green `verify` → automatic publish to the private S3 origin + CloudFront invalidation, with **zero long-lived AWS credentials** in the repo.
-- [ ] Bucket is private (OAC only); cache policy matches §6.2; SW prompts to reload, never auto-reloads.
-- [ ] The AWS topology is codified in `deploy/`; a red verify blocks deploy.
-- [ ] An ADR records the IaC choice (CDK vs Terraform) and the account/region.
+- [ ] Push to `main` → green `verify` → CI assumes the OIDC role and runs `cdk deploy --all` (publishing `dist/` + invalidating the shell), with **zero long-lived AWS credentials** in the repo.
+- [ ] Pull requests run `cdk synth`/`diff` + CDK tests only (no AWS mutation); **only `main` deploys** — deployment is never triggered manually in steady state.
+- [ ] The OIDC role is scoped to the `Gede-*` stacks (CDK/CloudFormation + their resources), not account-admin; a red `verify` blocks the deploy job.
+- [ ] SW prompts to reload, never auto-reloads (§6.2); the IaC tool decision (CDK) lives in 040/its ADR.
 
 ## Implementation notes
 

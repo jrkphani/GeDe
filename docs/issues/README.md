@@ -44,7 +44,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [028](done/028-canvas-focus-adjacency.md) ✅ | Canvas focus + adjacency (phase a; splines deferred) | M6 | 008, 009 |
 | [039](done/039-canvas-spline-bundling.md) ✅ | Canvas spline bundling (028 phase b) | M6 | 028 |
 | [040](040-cdk-aws-deployment.md) | CDK AWS deployment — network → hosting → DNS (test env) | M7 | — |
-| [029](029-deploy-oidc-static-pwa.md) | Deploy pipeline — OIDC static PWA → S3 + CloudFront | M7 | 040 |
+| [029](029-deploy-oidc-static-pwa.md) | Deploy pipeline — GitHub Actions OIDC → `cdk deploy` | M7 | 040 |
 | [030](030-v2-server-postgres-compose.md) | v2 server — Lightsail Postgres + Compose + backups | M8 | 029 |
 | [031](031-sync-engine-decision.md) | Sync-engine decision — Electric vs Supabase (T6) | M8 | — |
 | [032](032-sync-integration-row-delta.md) | Sync integration — Postgres ⇄ PGlite (row-delta, LWW) | M8 | 030, 031 |

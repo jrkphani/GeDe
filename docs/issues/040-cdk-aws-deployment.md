@@ -39,7 +39,7 @@ Out of scope: the CI/CD wiring + OIDC role (issue 029 — its role scopes to *th
 
 - **Lowest AWS cost stays the ethos** (TECH_STACK criterion 2): v1 is ~$0–1/mo. Do **not** add a NAT gateway for a static app — the VPC uses public + isolated subnets only; private egress/NAT is deferred to when v2 compute actually needs it. Call the cost out in the VPC construct's comment.
 - **Least privilege, no standing secrets**: the S3 bucket is private (OAC only); 029's deploy role (OIDC, short-lived) is scoped to these stacks. No access keys in the repo.
-- **IaC is the contract** (§6.4): the account is reproducible from `deploy/cdk/` and portable-in-intent; humans never click-ops or `s3 sync` by hand — deploys go through `cdk deploy` (locally now, via 029's Actions later).
+- **IaC is the contract, and CI is the trigger** (§6.4, T8): the account is reproducible from `deploy/cdk/`; humans never click-ops. A manual `cdk deploy` is allowed **only for first-run bootstrap** (before the pipeline exists). Steady state, **`cdk deploy` is triggered exclusively from GitHub Actions on `main`** (issue 029) via the OIDC role — never from a laptop. On **pull requests**, CI runs `cdk synth` + `cdk diff` + this app's assertion/snapshot tests (no AWS mutation), so infra changes are reviewed before they can deploy. This issue makes the CDK app *CI-deployable* (a `cdk deploy --all --require-approval never` with credentials from an assumed role, `dist/` built beforehand); 029 owns the workflow + OIDC role that does the assuming.
 - **Default domain now, real domain later, zero rework**: the DNS seam means "test on the CloudFront URL" and "cut over to `app.<domain>`" differ by one context value, per the maintainer's "default public domain for testing" direction.
 - **Tags are load-bearing**: every resource carries org/app/env so cost, cleanup, and multi-env isolation are trivial — set once at the `App`, never per-resource.
 
@@ -54,7 +54,8 @@ CDK ships an assertions library — the tests are template assertions on the syn
 3. **Tag assertions**: every taggable resource carries `Organization=quadnomics`, `Application=GeDe`, `Environment=test`, `ManagedBy=CDK` (assert on the synthesized template).
 4. **Network assertions**: the VPC has 2 AZs, public + isolated subnets, and **zero NAT gateways** (the cost guard — a NAT gateway appearing is a test failure).
 5. **DNS seam**: with no `domainName`, the Dns stack creates no `AWS::Route53::HostedZone` and no ACM cert, and outputs the CloudFront domain; a unit test of the stack with a `domainName` set asserts the zone + us-east-1 cert + alias records appear (the flip works).
-6. **Deploy smoke (manual, first run)**: `cdk deploy` into `975049998516`; the CloudFront default URL serves the PWA (PGlite boots, a project can be created), `index.html` is `no-cache`, a hashed asset `immutable` — captured as a checklist in `deploy/cdk/README.md`.
+6. **CI-deployability**: `cdk synth`, `cdk diff`, and the assertion/snapshot tests run headless with no interactive prompts and no long-lived creds — i.e. they run in GitHub Actions on PRs (validation) and `cdk deploy --all --require-approval never` works under an assumed role (the shape 029's workflow invokes). No `cdk deploy` step assumes a human is present.
+7. **Deploy smoke (manual bootstrap, first run only)**: the first `cdk deploy` into `975049998516`; the CloudFront default URL serves the PWA (PGlite boots, a project can be created), `index.html` is `no-cache`, a hashed asset `immutable` — captured as a checklist in `deploy/cdk/README.md`. After this bootstrap, deploys come from CI (029).
 
 ## Acceptance criteria
 
