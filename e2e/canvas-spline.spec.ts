@@ -90,27 +90,35 @@ test('a dense canvas (many contexts x many bindings) renders legible bundled spl
 }) => {
   await setUpCanvas(page)
 
-  // Six contexts spread across the 3x3x3 parameter grid — enough to make a
-  // hovered dimension's fan-in genuinely dense (issue 039 motivation).
+  // Six distinct contexts that all share Value's first parameter (Comfort) but
+  // differ in Stake/Process — so hovering the Comfort dot lights every one of
+  // them, the dense fan-in the issue targets (issue 039 motivation).
   const tuples: [number, number, number][] = [
     [0, 0, 0],
-    [1, 1, 1],
-    [2, 2, 2],
+    [0, 1, 1],
+    [0, 2, 2],
+    [0, 0, 1],
     [0, 1, 2],
-    [1, 2, 0],
-    [2, 0, 1],
+    [0, 2, 0],
   ]
   for (const tuple of tuples) {
     await composeContext(page, tuple)
   }
   await expect(page.locator('.canvas-node')).toHaveCount(tuples.length)
 
-  // Hover the Value arc: every context binds a Value parameter (issue 028a),
-  // so all six contexts' bound-dimension spokes render at once — 6 contexts
-  // x 3 bound dimensions each = 18 spokes converging through the interior,
-  // the exact "dense" scenario the issue's motivation describes.
-  const valueArc = page.locator('.canvas-arc-group[data-dimension-id]').first()
-  await valueArc.hover()
+  // Widen so labels are at the full tier (and the dense screenshot is legible).
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  await page.waitForTimeout(200)
+
+  // Clear the selection (the last-composed context) so we see hover-only
+  // emphasis, then hover the Comfort dot — Value's first parameter, which all
+  // six contexts bind (issue 028a). Every one lights up: 6 contexts x 3 bound
+  // dimensions = 18 spokes converging through the interior, the dense fan the
+  // issue targets. The painted `.canvas-dot` is the reliable actionable target
+  // (a ring-segment arc's bbox centre is empty interior, so it can't be hovered
+  // directly).
+  await page.locator('.canvas-svg').click({ position: { x: 10, y: 10 } })
+  await page.locator('.canvas-dot').first().hover()
 
   const spokes = page.locator('.canvas-spoke')
   await expect(spokes).toHaveCount(tuples.length * 3)
