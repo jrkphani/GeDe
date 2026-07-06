@@ -29,6 +29,12 @@ const LABEL_RADIUS = ARC_RADIUS - 40
 // which only needs to clear the stroke.
 export const DOT_RADIUS = 8
 const DOT_LABEL_RADIUS = ARC_RADIUS + 32
+// Minimum vertical gap between two labels on the same side of the ring, in
+// viewBox user units. The label font is 13 user units tall (--text-mono, sized
+// in the SVG's own coordinate space, so it does not change with container
+// width); ~20 leaves a comfortable line-height so labels near the poles — where
+// the arc's y barely changes per angle and dots bunch vertically — never touch.
+const MIN_LABEL_GAP = 20
 export const NODE_RADIUS = 14
 const COLLIDE_RADIUS = NODE_RADIUS + 6
 const JITTER_RADIUS = 8
@@ -140,6 +146,34 @@ function labelAnchorFor(angle: number): LabelAnchor {
   return 'middle'
 }
 
+// De-collide parameter labels vertically (issue 023 crowding fix): near the top
+// and bottom of the ring the arc's y barely changes per angle, so evenly-spaced
+// dots produce labels that stack. Per side (labels grow left or right, so the
+// two sides never collide with each other), sort by y and push any pair closer
+// than MIN_LABEL_GAP apart, then shift the whole side back so its mean y is
+// unchanged — the group stays anchored to its dots instead of drifting down.
+// Pure and deterministic: it mutates only the fresh labelPos objects this call
+// created (ADR-0005).
+function declutterLabels(dots: DotGeometry[]): void {
+  const sides = [
+    dots.filter((d) => d.labelPos.x >= CENTER),
+    dots.filter((d) => d.labelPos.x < CENTER),
+  ]
+  for (const side of sides) {
+    if (side.length < 2) continue
+    side.sort((a, b) => a.labelPos.y - b.labelPos.y)
+    const meanBefore = side.reduce((sum, d) => sum + d.labelPos.y, 0) / side.length
+    for (let i = 1; i < side.length; i++) {
+      const floor = (side[i - 1] as DotGeometry).labelPos.y + MIN_LABEL_GAP
+      const dot = side[i] as DotGeometry
+      if (dot.labelPos.y < floor) dot.labelPos.y = floor
+    }
+    const meanAfter = side.reduce((sum, d) => sum + d.labelPos.y, 0) / side.length
+    const shift = meanBefore - meanAfter
+    for (const d of side) d.labelPos.y += shift
+  }
+}
+
 // Deterministic, non-cryptographic string hash (FNV-1a) — used only to seed a
 // small per-context jitter so two contexts never start a collision simulation
 // at the exact same coordinate (see the Math.random() note below).
@@ -224,6 +258,8 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
     })
     dotPositionsByDimension.set(dim.id, positions)
   })
+
+  declutterLabels(dots)
 
   const dimensionIds = sortedDimensions.map((d) => d.id)
   const childCountByParent = new Map<string, number>()

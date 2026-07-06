@@ -255,6 +255,26 @@ describe('layout', () => {
     for (const arc of geometry.arcs) expect(arc.labelAnchor).toBe('middle')
   })
 
+  // Issue 023 crowding fix — many parameters bunch near the poles (the arc's y
+  // barely changes per angle there); labels on the same side must never stack.
+  it('spreads crowded same-side parameter labels so none vertically overlap', () => {
+    const dimensions = [dimension('d0', 0), dimension('d1', 1)]
+    // 9 params on one dimension forces near-pole vertical bunching.
+    const parametersByDimension = { d0: params('d0', 9), d1: params('d1', 2) }
+    const geometry = layout({ dimensions, parametersByDimension, contexts: [], bindingsByContext: {} })
+
+    for (const side of [
+      geometry.dots.filter((d) => d.labelPos.x >= CENTER),
+      geometry.dots.filter((d) => d.labelPos.x < CENTER),
+    ]) {
+      const ys = side.map((d) => d.labelPos.y).sort((a, b) => a - b)
+      for (let i = 1; i < ys.length; i++) {
+        // A comfortable line-height gap (MIN_LABEL_GAP = 20), minus float slack.
+        expect((ys[i] as number) - (ys[i - 1] as number)).toBeGreaterThanOrEqual(19.9)
+      }
+    }
+  })
+
   // Design brief targets a 16ms (one-frame) budget for 100 contexts. Asserted
   // here with real headroom (40ms) for shared/noisy CI hardware — GitHub
   // Actions measured 16.4ms on a run that took 14ms locally, and a strict
