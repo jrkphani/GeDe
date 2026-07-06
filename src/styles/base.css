@@ -435,6 +435,94 @@ body {
   margin: 0 0 var(--space-3);
 }
 
+/* ── Export / import (issue 015) ─────────────────────────────────────────── */
+.projects__toolbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: var(--space-3);
+}
+
+/* Accessible hidden file input — off-screen but focusable/clickable. */
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* The panel is a drop target; while a file hovers it fills with the accent
+   wash and shows a dashed hairline (STYLE_GUIDE §2.2 wash, §4 selection). */
+.projects__droptarget[data-dragging] {
+  background: var(--accent-wash);
+  border-style: dashed;
+  border-color: var(--accent);
+}
+
+.project-row--selected {
+  background: var(--accent-wash);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+/* Calm, specific import failure — rendered in the panel, never a dialog. */
+.import-error {
+  color: var(--danger);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  margin: 0 0 var(--space-3);
+}
+
+.import-error code {
+  font-family: var(--font-mono);
+  font-size: var(--text-mono);
+}
+
+/* First-visit backup reminder (ADR-0006), dismissable + remembered. */
+.backup-note {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-top: var(--space-4);
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+  border-top: 1px solid var(--hairline);
+}
+
+.backup-note__dismiss {
+  color: var(--ink-muted);
+  cursor: pointer;
+}
+
+.backup-note__dismiss:hover {
+  color: var(--ink);
+}
+
+/* App-bar project menu (Popover) list. */
+.menu {
+  min-width: 200px;
+  padding: var(--space-1);
+}
+
+.menu__item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: var(--space-2) var(--space-3);
+  color: var(--ink);
+  cursor: pointer;
+}
+
+.menu__item:hover {
+  background: var(--accent-wash);
+}
+
 /* In-place editing: borderless input at identical metrics (STYLE_GUIDE §6). */
 .inplace-input {
   font: inherit;

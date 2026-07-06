@@ -36,3 +36,31 @@ if (typeof window !== 'undefined' && !window.ResizeObserver) {
     disconnect() {}
   }
 }
+// jsdom disables Web Storage on its default opaque origin, so `localStorage` is
+// undefined under vitest's jsdom env. The app uses it (backup-note memory,
+// last-tier recall); an in-memory shim gives components a working store in
+// tests without depending on a configured jsdom URL.
+if (typeof window !== 'undefined' && !('localStorage' in window && window.localStorage)) {
+  class MemoryStorage {
+    private store = new Map<string, string>()
+    get length() {
+      return this.store.size
+    }
+    clear() {
+      this.store.clear()
+    }
+    getItem(key: string) {
+      return this.store.has(key) ? (this.store.get(key) as string) : null
+    }
+    setItem(key: string, value: string) {
+      this.store.set(key, value)
+    }
+    removeItem(key: string) {
+      this.store.delete(key)
+    }
+    key(index: number) {
+      return [...this.store.keys()][index] ?? null
+    }
+  }
+  Object.defineProperty(window, 'localStorage', { value: new MemoryStorage(), configurable: true })
+}

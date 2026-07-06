@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { StatusBar } from '../shell/StatusBar'
@@ -19,6 +19,7 @@ beforeEach(async () => {
   await bootStore()
   useStatusStore.setState({ message: null, action: null })
   useCommandLogStore.getState().clear()
+  localStorage.clear()
 })
 
 const noop = () => undefined
@@ -87,5 +88,58 @@ describe('ProjectsList', () => {
     row.focus()
     await user.keyboard('{Enter}')
     expect(opened).toEqual([useProjectsStore.getState().projects[0]?.id])
+  })
+})
+
+describe('ProjectsList — export/import (issue 015)', () => {
+  it('shows the first-visit backup note and remembers dismissal', async () => {
+    const user = userEvent.setup()
+    render(<ProjectsList onOpen={noop} />)
+    expect(screen.getByText('Projects live in this browser. Export to back up.')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Dismiss backup reminder' }))
+    expect(
+      screen.queryByText('Projects live in this browser. Export to back up.'),
+    ).not.toBeInTheDocument()
+    expect(localStorage.getItem('gede-backup-note-dismissed')).toBe('dismissed')
+  })
+
+  it('highlights the drop panel while a file is dragged over it', () => {
+    render(<ProjectsList onOpen={noop} />)
+    const panel = screen.getByLabelText('Projects')
+    expect(panel).not.toHaveAttribute('data-dragging')
+    fireEvent.dragOver(panel)
+    expect(panel).toHaveAttribute('data-dragging')
+  })
+
+  it('renders a calm, specific error in the panel when a non-GeDe file is dropped', async () => {
+    render(<ProjectsList onOpen={noop} />)
+    const panel = screen.getByLabelText('Projects')
+    const file = new File(['this is not json'], 'photo.json', { type: 'application/json' })
+    fireEvent.drop(panel, { dataTransfer: { files: [file] } })
+    expect(await screen.findByRole('alert')).toHaveTextContent('Not a GeDe export')
+    // Nothing was added.
+    expect(useProjectsStore.getState().projects).toHaveLength(0)
+  })
+
+  it('imports a dropped GeDe export as a new project and narrates', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    const { json } = await useProjectsStore.getState().exportProject(id)
+
+    render(
+      <>
+        <ProjectsList onOpen={noop} />
+        <StatusBar />
+      </>,
+    )
+    const panel = screen.getByLabelText('Projects')
+    const file = new File([json], 'Tavalo.gede.json', { type: 'application/json' })
+    fireEvent.drop(panel, { dataTransfer: { files: [file] } })
+
+    await waitFor(() =>
+      expect(useProjectsStore.getState().projects.filter((p) => p.name === 'Tavalo')).toHaveLength(2),
+    )
+    // Empty project → just the root canvas, no contexts.
+    expect(screen.getByRole('status')).toHaveTextContent(/Imported Tavalo — 1 canvas, 0 contexts/)
   })
 })

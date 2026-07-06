@@ -10,6 +10,13 @@ import {
   restoreProject as dbRestore,
   type ProjectRow,
 } from '../db/mutations'
+import { gatherProjectRows, importProject as dbImport } from '../db/projectIO'
+import {
+  envelopeToJson,
+  parseEnvelope,
+  serializeEnvelope,
+  type EnvelopeStats,
+} from '../domain/projectEnvelope'
 
 // The store is the only caller of the mutation layer. Components act through
 // these actions; optimistic in-memory state mirrors what the row functions
@@ -26,6 +33,11 @@ interface ProjectsState {
   createProject: (name: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
   archiveProject: (id: string) => Promise<void>
+  // Issue 015 — export gathers a project's rows into the versioned JSON
+  // envelope; import always creates a NEW project (fresh ids) atomically and
+  // throws a typed rejection (parseEnvelope) the caller renders calmly.
+  exportProject: (id: string) => Promise<{ name: string; json: string }>
+  importProject: (text: string) => Promise<{ project: ProjectRow; stats: EnvelopeStats }>
 }
 
 let database: Database | null = null
@@ -103,6 +115,27 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
         set({ projects: get().projects.filter((p) => p.id !== id) })
       },
     })
+  },
+
+  async exportProject(id) {
+    const db = database
+    if (!db) throw new Error('Storage is unavailable')
+    const name = get().projects.find((p) => p.id === id)?.name ?? 'project'
+    const tables = await gatherProjectRows(db, id)
+    return { name, json: envelopeToJson(serializeEnvelope(tables)) }
+  },
+
+  async importProject(text) {
+    const db = database
+    if (!db) throw new Error('Storage is unavailable')
+    // parseEnvelope throws NotGeDeExportError / NewerVersionError /
+    // CorruptedEnvelopeError before the DB is touched; the DB import is atomic.
+    const envelope = parseEnvelope(text)
+    const result = await dbImport(db, envelope)
+    // Re-list so the imported clone slots into persisted (updatedAt) order,
+    // matching what a reload would show.
+    set({ projects: await dbList(db) })
+    return result
   },
 }))
 

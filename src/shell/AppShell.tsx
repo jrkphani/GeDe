@@ -4,7 +4,9 @@ import { useCommandRegistryStore } from '../store/commandRegistry'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
 import { Button } from '../components/ui/button'
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { CommandPalette } from '../components/CommandPalette'
+import { downloadTextFile, exportFilename } from '../lib/download'
 import { coreCommandSources } from './coreCommands'
 import { navigate } from './router'
 import { serializeRoute, type AppRoute, type Tier } from './routes'
@@ -115,6 +117,41 @@ function ProjectName({ id }: { id: string }) {
         if (e.key === 'Escape') setEditing(false)
       }}
     />
+  )
+}
+
+// App-bar project menu (SITEMAP §2): owns "Export project…". Import lives on the
+// projects list (issue 015 design brief). Export downloads immediately — no
+// options screen — and narrates through the single status channel.
+function ProjectMenu({ projectId }: { projectId: string }) {
+  const exportProject = useProjectsStore((s) => s.exportProject)
+  const announce = useStatusStore((s) => s.announce)
+  const [open, setOpen] = useState(false)
+
+  async function onExport() {
+    setOpen(false)
+    try {
+      const { name, json } = await exportProject(projectId)
+      downloadTextFile(exportFilename(name), json)
+      announce(`Exported ${name}`)
+    } catch (err) {
+      announce(err instanceof Error ? err.message : 'Export failed')
+    }
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button variant="rowAction" aria-label="Project menu" title="Project menu">
+          ⋯
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="menu">
+        <Button variant="bare" className="menu__item" onClick={() => void onExport()}>
+          Export project…
+        </Button>
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -259,10 +296,9 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           <button className="row-action" aria-label="Toggle theme" onClick={() => toggleTheme()}>
             ◐
           </button>
-          {/* Export/Import land here in issue 015. */}
-          <button className="row-action" aria-label="Project menu" disabled title="Project menu arrives with export/import">
-            ⋯
-          </button>
+          {/* Export lives in the project menu (SITEMAP §2); import is on the
+              projects list (issue 015). No menu without an open project. */}
+          {projectId !== null && <ProjectMenu projectId={projectId} />}
         </div>
       </header>
       <ContextBarSlot />
