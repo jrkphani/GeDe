@@ -42,6 +42,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [026](done/026-standalone-button-affordance.md) ✅ | Standalone button affordance (no-fill buttons) | M6 | 019 |
 | [027](done/027-design-tier-layout-navigation.md) ✅ | Design tier layout cleanup + navigation clarity | M6 | 009, 011 |
 | [028](done/028-canvas-focus-adjacency.md) ✅ | Canvas focus + adjacency (phase a; splines deferred) | M6 | 008, 009 |
+| [039](039-canvas-spline-bundling.md) | Canvas spline bundling (028 phase b) | M6 | 028 |
 | [029](029-deploy-oidc-static-pwa.md) | Deploy pipeline — OIDC static PWA → S3 + CloudFront | M7 | — |
 | [030](030-v2-server-postgres-compose.md) | v2 server — Lightsail Postgres + Compose + backups | M8 | 029 |
 | [031](031-sync-engine-decision.md) | Sync-engine decision — Electric vs Supabase (T6) | M8 | — |
