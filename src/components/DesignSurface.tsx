@@ -372,41 +372,52 @@ export function DesignSurface({
   return (
     <>
       <ContextBar>
-        {/* SITEMAP §2: breadcrumbs · dimension-manager trigger. On a child
-            canvas the trigger auto-opens while sub-parameters are still needed
-            (design brief). Root-canvas dimension names trail the crumbs as
-            muted context. */}
-        <Breadcrumbs projectId={projectId} crumbs={breadcrumbs} dimensionNames={dimensionNames} />
-        <DimensionManager defaultOpen={needsSeeding} childCanvas={contextId !== null} />
-        <div className="design-view-toggle" role="group" aria-label="Design view">
-          <Button
-            variant="bare"
-            className="view-toggle__btn"
-            data-active={view === 'canvas' || undefined}
-            aria-pressed={view === 'canvas'}
-            onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })}
-          >
-            Canvas
-          </Button>
-          <Button
-            variant="bare"
-            className="view-toggle__btn"
-            data-active={view === 'coverage' || undefined}
-            aria-pressed={view === 'coverage'}
-            onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'coverage' })}
-          >
-            Coverage
-          </Button>
+        {/* Design brief (issue 027): the bar reads as three distinct groups —
+            location (breadcrumb, the primary depth nav) · controls (dimension
+            manager, canvas/coverage toggle) · stats (documented, drafts) —
+            separated by group-level spacing so it parses in one glance
+            instead of one flat row at equal weight (SITEMAP §2). */}
+        <div className="context-bar__location">
+          {/* SITEMAP §2: breadcrumbs · dimension-manager trigger. On a child
+              canvas the trigger auto-opens while sub-parameters are still
+              needed (design brief). Root-canvas dimension names trail the
+              crumbs as muted context. */}
+          <Breadcrumbs projectId={projectId} crumbs={breadcrumbs} dimensionNames={dimensionNames} />
         </div>
-        <span
-          className="coverage-stat font-mono"
-          aria-label={`${coverage.documented} of ${coverage.total} tuples documented`}
-        >
-          {coverage.documented} / {coverage.total} documented
-        </span>
-        <span className="draft-count">
-          {draftCount} draft{draftCount === 1 ? '' : 's'}
-        </span>
+        <div className="context-bar__controls">
+          <DimensionManager defaultOpen={needsSeeding} childCanvas={contextId !== null} />
+          <div className="design-view-toggle" role="group" aria-label="Design view">
+            <Button
+              variant="bare"
+              className="view-toggle__btn"
+              data-active={view === 'canvas' || undefined}
+              aria-pressed={view === 'canvas'}
+              onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })}
+            >
+              Canvas
+            </Button>
+            <Button
+              variant="bare"
+              className="view-toggle__btn"
+              data-active={view === 'coverage' || undefined}
+              aria-pressed={view === 'coverage'}
+              onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'coverage' })}
+            >
+              Coverage
+            </Button>
+          </div>
+        </div>
+        <div className="context-bar__stats">
+          <span
+            className="coverage-stat font-mono"
+            aria-label={`${coverage.documented} of ${coverage.total} tuples documented`}
+          >
+            {coverage.documented} / {coverage.total} documented
+          </span>
+          <span className="draft-count">
+            {draftCount} draft{draftCount === 1 ? '' : 's'}
+          </span>
+        </div>
       </ContextBar>
       <main className="design-main" data-view={view}>
         {view === 'canvas' ? (
@@ -439,7 +450,17 @@ export function DesignSurface({
                   New context
                 </Button>
               </div>
-              <div className="design-surface-row">
+              <div
+                className="design-surface-row"
+                // Issue 027 — the child-no-params state already shows ONE
+                // calm prompt above ("This canvas needs parameters…"); the
+                // canvas's own always-on empty-state text (SPEC §4.2) would
+                // otherwise repeat "nothing here yet" a second time. Canvas
+                // still mounts (its arcs/geometry are real chrome) — only its
+                // redundant empty-state text is suppressed here, in CSS,
+                // since Canvas.tsx itself is out of scope for this issue.
+                data-suppress-canvas-empty={needsSeeding || undefined}
+              >
                 {/* Design brief (issue 008): the circle sits directly on the
                     graph-paper ground, no panel — unlike the register, which
                     stays opaque per STYLE_GUIDE's table convention. */}
@@ -452,7 +473,10 @@ export function DesignSurface({
                   selectedContextId={selectedContextId}
                   onSelect={handleSelect}
                   onDrillIn={handleDrillIn}
-                  lineage={contextId !== null ? dimensionNames : undefined}
+                  // Issue 027 — dropped: the breadcrumb already states the
+                  // parent tuple being refined ("Refining …" trails the
+                  // crumbs, Breadcrumbs.tsx), so the canvas-center lineage
+                  // line was a second copy of the same sentence.
                   composeContextId={composeContextId}
                   activeDimensionId={activeDimensionId}
                   onBindParameter={(d, p) => void handleBindParameter(d, p)}

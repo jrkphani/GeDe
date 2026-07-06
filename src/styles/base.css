@@ -134,7 +134,11 @@ body {
   flex: none;
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  /* Issue 027 — space-5 (24px) between the bar's top-level groups (location /
+     controls / stats), a visibly larger gap than any group's own internal
+     spacing below, so the three read as distinct clusters, not one flat row
+     at equal weight (bug report #6). */
+  gap: var(--space-5);
   padding: 0 var(--space-4);
   background: var(--panel);
   border-bottom: 1px solid var(--hairline);
@@ -147,6 +151,32 @@ body {
  * being force-hidden by a framework reset. */
 .context-bar[hidden] {
   display: none;
+}
+
+/* Issue 027 — the Design context bar's three groups (SITEMAP §2): location
+   (breadcrumb — the primary depth nav), controls (dimension manager,
+   canvas/coverage toggle), stats (documented, drafts). Shared layout rule;
+   each group's own internal gap (space-3) is tighter than the space-5 between
+   groups above, so hierarchy comes from spacing alone (STYLE_GUIDE §3), no
+   new colors. `.context-bar__location` is allowed to shrink (long breadcrumb
+   trails already scroll internally, `.breadcrumbs`'s own overflow-x) so it
+   never pushes controls/stats out of the bar. */
+.context-bar__location,
+.context-bar__controls,
+.context-bar__stats {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+.context-bar__location {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.context-bar__controls,
+.context-bar__stats {
+  flex: none;
 }
 
 .surface {
@@ -1168,11 +1198,15 @@ body {
 
 /* SPEC §4.1 — register + canvas are two projections of the same tree, side by
    side on wide screens; STYLE_GUIDE §7's 640px tier stacks them on narrow
-   containers instead. */
+   containers instead. Issue 027: `align-items: stretch` (not the previous
+   `flex-start`) so the register's panel matches the canvas's height instead
+   of shrinking to its own (often short) content — an empty/near-empty
+   register then reads as a deliberate, fully-bordered column with room to
+   grow into, not a short strip floating over dead space beneath it. */
 .design-surface-row {
   display: flex;
   gap: var(--space-5);
-  align-items: flex-start;
+  align-items: stretch;
 }
 
 .design-surface-row > .canvas-shell {
@@ -1182,7 +1216,31 @@ body {
 
 .design-surface-row > .context-register-shell {
   flex: 1 1 60%;
-  min-width: 0;
+  /* A real floor (design brief: "keeps a sensible min-width, doesn't collapse
+     to a floating strip") — `min(…, 100%)` still yields to the <640px
+     container query below, which switches the row to a column and gives
+     every child 100% width anyway. */
+  min-width: min(320px, 100%);
+  display: flex;
+  flex-direction: column;
+}
+
+/* The register's own scroll panel (rendered by EditableGrid) grows to fill
+   the stretched shell above, so its opaque panel — not just its content —
+   spans the full row height alongside the canvas. */
+.context-register-shell > .register-scroll {
+  flex: 1;
+  min-height: 0;
+}
+
+/* Issue 027 — suppress Canvas's own always-on empty-state text (SPEC §4.2's
+   "bind your first context" prompt) when this canvas's ONE calm empty-state
+   voice is already the `.canvas-seed-hint` above (child canvas, still missing
+   sub-parameters). Never both at once (design brief). Canvas.tsx itself is
+   untouched — this targets the classes it already emits. */
+[data-suppress-canvas-empty] .canvas-empty-prompt,
+[data-suppress-canvas-empty] .canvas-empty-lineage {
+  display: none;
 }
 
 @container (max-width: 640px) {
@@ -1236,13 +1294,25 @@ body {
   }
 }
 
+/* Issue 027 — root-vs-child is otherwise only legible by reading the
+   breadcrumb text; a quiet top accent (same token as the active-tab
+   underline, STYLE_GUIDE §4) on a child canvas's own zoom container makes
+   "I am inside a drilled-in canvas" readable at a glance, no new color. */
+.canvas-zoom[data-depth]:not([data-depth='0']) {
+  border-top: 2px solid var(--accent);
+  padding-top: var(--space-3);
+}
+
 /* Breadcrumb trail (SITEMAP §2/§3): mono symbols in the hairline context bar,
    crumbs are links (accent on hover), the current crumb is ink (not a link),
-   separators muted. The trailing dimension names are muted context. */
+   separators muted. The trailing dimension names are muted context.
+   Issue 027: breadcrumbs are the primary depth nav (SITEMAP §3 — "JetBrains
+   Mono 13") — sized up from the bar's ambient --text-label (12px) so they
+   read as the clear anchor point rather than blending with controls/stats. */
 .breadcrumbs {
   display: flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
   min-width: 0;
   overflow-x: auto;
   white-space: nowrap;
@@ -1251,12 +1321,12 @@ body {
 .breadcrumb__group {
   display: inline-flex;
   align-items: center;
-  gap: var(--space-1);
+  gap: var(--space-2);
 }
 
 .breadcrumb {
   font-family: var(--font-mono);
-  font-size: var(--text-label);
+  font-size: var(--text-mono);
   text-decoration: none;
 }
 
