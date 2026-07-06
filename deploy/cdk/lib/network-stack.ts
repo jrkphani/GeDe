@@ -44,6 +44,17 @@ export class NetworkStack extends Stack {
       // requirement). `us-east-1` always has these two AZs.
       availabilityZones: ['us-east-1a', 'us-east-1b'],
       natGateways: 1, // Cost guard — see class doc. Asserted in network-stack.test.ts.
+      // Subnet ORDER is load-bearing for the v1→v2 in-place update. CDK
+      // allocates CIDRs in this array's order (public → 10.0.0/1,
+      // isolated → 10.0.2/3, private → 10.0.4/5). v1 (issue 040) shipped
+      // `[public, isolated]`, so the live VPC already has public at 10.0.0/1
+      // and isolated at 10.0.2/3. The new `private` tier MUST be appended
+      // LAST — inserting it between public and isolated (as first written)
+      // shifted isolated's CIDRs and made the new private subnets claim
+      // 10.0.2/3, which the live isolated subnets still occupy → CloudFormation
+      // "CIDR conflicts with another subnet" → UPDATE_ROLLBACK. Appending keeps
+      // every existing subnet's CIDR unchanged, so the update only ADDS the NAT
+      // gateway + the private subnets/route tables. Never reorder these.
       subnetConfiguration: [
         {
           name: 'public',
@@ -51,13 +62,13 @@ export class NetworkStack extends Stack {
           cidrMask: 24,
         },
         {
-          name: 'private',
-          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+          name: 'isolated',
+          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
           cidrMask: 24,
         },
         {
-          name: 'isolated',
-          subnetType: ec2.SubnetType.PRIVATE_ISOLATED,
+          name: 'private',
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
           cidrMask: 24,
         },
       ],
