@@ -20,8 +20,8 @@ Selection criteria, in order: (1) open source with permissive licenses, (2) lowe
 | UI chrome | **Radix primitives via shadcn/ui** + **Tailwind CSS v4** | MIT | Accessible menus/popovers/dialogs without owning a design system |
 | App shell | **Installable PWA**, static hosting | — | Resolves SPEC §5 open question; cheapest possible AWS footprint |
 | v1 hosting | **S3 + CloudFront** | — | ~$0–1/month |
-| v2 database hosting | **Postgres on Lightsail** ($5–10/mo) → RDS only when ops pain justifies it | — | Cheapest always-on open-source Postgres on AWS |
-| v2 sync | **ElectricSQL** (Postgres → client sync) or self-hosted **Supabase** | Apache-2.0 | Both open source, both Postgres-native; decide at v2 kickoff |
+| v2 database hosting | **RDS PostgreSQL 17** (CDK-managed, private subnets) — ADR-0008 | — | AWS-native, one deploy model with issue 040; ~$30–60/mo all-in (RDS+NAT+Fargate) |
+| v2 sync | **ElectricSQL** (Postgres → client sync, over our own RDS) — ADR-0008 | Apache-2.0 | Postgres-native, local-first; chosen over self-hosted Supabase at v2 kickoff |
 | Testing | **Vitest + Testing Library + Playwright** | MIT | Per SPEC §7 |
 
 ---
@@ -205,7 +205,7 @@ Exact pins land in `package.json` at M1; this table records the intended major l
 | T2 | TanStack Table + custom cells | AG Grid (tree = paid), Glide (canvas grid), Handsontable (license) | Row counts exceed ~10k per table (consider virtualization via @tanstack/react-virtual first) |
 | T3 | Hand-rolled SVG canvas; collisions via synchronous `d3-force` inside the pure layout fn | visx, full d3, konva; free-running physics | **Designated fallback: React Flow (xyflow)** if M2 pan/zoom/drag interaction work overruns — layout stays a pure function feeding either renderer |
 | T4 | PWA over Tauri | Tauri + SQLite | A hard native requirement appears (file-system watching, offline installers for enterprise) |
-| T5 | Lightsail Postgres for v2 | RDS, Aurora Serverless | Backup/patching toil > cost delta, or multi-AZ needed |
-| T6 | Electric vs Supabase for sync | — | Deliberately deferred to v2 kickoff; both satisfy "row deltas, LWW, no positions on the wire" |
+| T5 | ~~Lightsail Postgres for v2~~ → **RDS (CDK-managed)** — RESOLVED ADR-0008 | Lightsail, Aurora Serverless | Chose RDS + CDK VPC over Lightsail/Compose to keep one deploy model (issue 040); revisit Aurora if multi-AZ/scale needed |
+| T6 | ~~Electric vs Supabase for sync~~ → **ElectricSQL** — RESOLVED ADR-0008 | self-hosted Supabase | Electric syncs over our own RDS + fits local-first PGlite; revisit if Electric hits a blocking limit while building 032 |
 | T7 | Relational schema over graph/NoSQL DB | Neo4j (GPLv3, server-only, no $0 v1), Neptune (proprietary, ~$70+/mo), MongoDB (SSPL), CouchDB (no multi-key constraints), Kùzu (development halted 2025) | Escape hatch without migration: Apache AGE extension adds openCypher inside Postgres if deep traversal queries ever appear |
 | T8 | GitHub Actions + OIDC as the only deploy path (§6.4) | Manual `s3 sync`, long-lived IAM keys, third-party CD | A build/deploy need Actions can't express (unlikely at this scale) |

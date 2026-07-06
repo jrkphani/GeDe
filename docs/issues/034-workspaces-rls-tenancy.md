@@ -46,6 +46,6 @@ Out of scope: sharing/invitations/role UX (035 — this issue is the *enforcemen
 
 ## Implementation notes
 
-- If Supabase is the engine (031), its RLS + policy tooling is the native path; if Electric, author policies directly and confirm Electric honors them on the sync boundary (this was a 031 scoring criterion — hold it to that).
+- Engine is **ElectricSQL** (031/ADR-0008): author RLS policies **directly in Postgres** and confirm Electric honors them on the sync boundary (a 031 scoring criterion — hold it to that; the RLS-at-sync-boundary behavior is the thing to prove first).
 - Export/import (015) gains a `workspace_id` and bumps to `formatVersion: 2`; keep the v1 envelope importable (remap into the importer's chosen workspace) so backups survive the boundary.
 - The role enum (owner/editor/viewer) defined here is consumed by 035's invitation/granting UX — keep it minimal until a real permission need appears.

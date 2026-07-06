@@ -2,7 +2,7 @@
 
 - **Status**: OPEN
 - **Milestone**: M9 (Identity & tenancy)
-- **Blocked by**: 030 (server); coupled to 031 (if Supabase wins, auth folds into it)
+- **Blocked by**: 030 (server); provider decided by 031/ADR-0008 → **better-auth** (self-hosted, pairs with Electric)
 
 ## Slice
 
@@ -14,7 +14,7 @@ TECH_STACK §6.3 lists an `auth` service — **better-auth or Supabase auth** �
 
 ## Scope
 
-- **Provider** (decide with 031's ADR): **better-auth** (self-hosted, pairs with Electric) *or* **Supabase auth** (if Supabase is the sync engine). This issue implements whichever the ADR names.
+- **Provider**: **better-auth** (self-hosted, pairs with Electric) — decided in ADR-0008. Runs as the `auth` service on 030's Fargate compute tier, separate from the Electric sync service.
 - **Session**: sign-in / sign-out, a durable session token, and the client attaching identity to its sync/API connection (so 034's RLS can scope rows).
 - **Shell integration**: an account affordance in the app bar (composed from `ui/` primitives — `Button`/`Popover`, not raw controls; note the shell currently holds raw controls, HANDOFF "deferred threads" — migrate the ones this touches). Signed-out state, signed-in identity, sign-out.
 - **Local mode preserved**: a user with no account keeps the full single-user local-first app (PGlite/idb); auth gates only the *shared* server features. Signing in later can adopt existing local projects (the on-ramp is 037).
@@ -46,5 +46,5 @@ Out of scope: workspaces & RLS policy (034), sharing/roles/invitations (035), SS
 
 ## Implementation notes
 
-- If Supabase is chosen (031), auth + RLS + sync share one stack — 034 shrinks accordingly; if better-auth, auth is its own Compose service (030's `auth` slot) separate from Electric.
+- Auth is its own **better-auth** Fargate service (030's `auth` slot), separate from the Electric sync service (ADR-0008); 034 authors RLS directly in Postgres and confirms Electric honors it at the sync boundary.
 - This is the natural moment to migrate the shell's raw `<button>`/`<input>` account/menu controls to `Button`/`Input`/`InlineEdit` and widen the lint scope to `src/shell/**` (HANDOFF deferred thread) — do it here rather than leave the new account control as another raw exception.

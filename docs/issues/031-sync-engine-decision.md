@@ -1,8 +1,10 @@
 # 031: Sync-engine decision — ElectricSQL vs self-hosted Supabase (T6)
 
-- **Status**: OPEN
+- **Status**: DECIDED → **ElectricSQL** (see [ADR-0008](../adr/0008-v2-backend-cdk-rds-electricsql.md))
 - **Milestone**: M8 (Server & sync)
 - **Blocked by**: — (a decision spike; unblocks 032)
+
+> **Decided 2026-07-06 (ADR-0008).** Given the fixed CDK VPC + RDS topology (T5 → RDS), **ElectricSQL** was chosen over self-hosted Supabase: it syncs over our own RDS, fits the local-first PGlite model, and avoids self-hosting Supabase's full multi-container stack on the VPC. Auth → **better-auth**; RLS authored directly in Postgres. The decision was taken analytically against the fixed topology rather than by running the spike below; the spike plan is retained as the revisit procedure if Electric hits a blocking limit while 032 is built.
 
 ## Slice
 
