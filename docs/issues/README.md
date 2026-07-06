@@ -38,9 +38,9 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [022](done/022-grid-keyboard-editing-grammar.md) ✅ | Grid keyboard editing grammar (Tab/Enter) | M6 | 004 |
 | [023](done/023-canvas-parameter-dots-labels.md) ✅ | Canvas parameter dots + labels (invisible params) | M2/M6 | 008 |
 | [024](done/024-grid-column-separators.md) ✅ | Table legibility — zebra rows + column hairlines | M6 | 004 |
-| [025](025-architecture-selection-bar-placement.md) | Architecture selection/promote bar placement | M6 | 014 |
-| [026](026-standalone-button-affordance.md) | Standalone button affordance (no-fill buttons) | M6 | 019 |
-| [027](027-design-tier-layout-navigation.md) | Design tier layout cleanup + navigation clarity | M6 | 009, 011 |
+| [025](done/025-architecture-selection-bar-placement.md) ✅ | Architecture selection/promote bar placement | M6 | 014 |
+| [026](done/026-standalone-button-affordance.md) ✅ | Standalone button affordance (no-fill buttons) | M6 | 019 |
+| [027](done/027-design-tier-layout-navigation.md) ✅ | Design tier layout cleanup + navigation clarity | M6 | 009, 011 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 

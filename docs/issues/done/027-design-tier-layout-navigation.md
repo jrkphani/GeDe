@@ -1,6 +1,6 @@
 # 027: Design tier — layout cleanup + clearer depth navigation
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit cd822c4)
 - **Milestone**: M6 (Polish)
 - **Blocked by**: 009, 011 (SHIPPED)
 

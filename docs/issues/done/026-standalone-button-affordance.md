@@ -1,6 +1,6 @@
 # 026: Standalone buttons (no background fill) are hard to spot
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit 936b43b — `command` button variant, subtle fill; landed with 025)
 - **Milestone**: M6 (Polish / a11y)
 - **Blocked by**: 019 (SHIPPED)
 

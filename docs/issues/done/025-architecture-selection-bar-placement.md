@@ -1,6 +1,6 @@
 # 025: Architecture promote/selection bar drifts to the table bottom
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit 936b43b — sticky placement; landed with 026)
 - **Milestone**: M6 (Polish)
 - **Blocked by**: 014 (SHIPPED)
 
