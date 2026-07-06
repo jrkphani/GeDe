@@ -1,6 +1,6 @@
 # 039: Canvas spline bundling (028 phase b)
 
-- **Status**: OPEN
+- **Status**: SHIPPED (main, commit 7d9f1a3; dense e2e corrected in the follow-up). Pure `spokePath` quadratic Bézier, control point pulled `SPOKE_BUNDLE_PULL = 0.35` toward `CENTER` — a gentle inward bundle; the constant is exported for tuning if a stronger bundle is wanted.
 - **Milestone**: M6 (Polish — canvas legibility)
 - **Blocked by**: 028 (SHIPPED — phase a adjacency emphasis; this is the deferred phase b)
 
