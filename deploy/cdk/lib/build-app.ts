@@ -2,6 +2,8 @@ import * as cdk from 'aws-cdk-lib';
 import { NetworkStack } from './network-stack';
 import { HostingStack } from './hosting-stack';
 import { DnsStack } from './dns-stack';
+import { DataStack } from './data-stack';
+import { ApiStack } from './api-stack';
 
 // --- Env config (issue 040 §"Scope") ---------------------------------------
 // Only one named env exists today: `test`. A future `prod` env is added here
@@ -31,13 +33,22 @@ export interface AppStacks {
   network: NetworkStack;
   hosting: HostingStack;
   dns: DnsStack;
+  data: DataStack;
+  api: ApiStack;
 }
 
 /**
- * Builds the three layered stacks (Network -> Hosting -> Dns) on the given
- * `app`, exactly as the real CLI entrypoint (`bin/gede.ts`) does. Shared so
- * the CDK test suite exercises the identical wiring/tagging as a real synth
- * — see docs/issues/040-cdk-aws-deployment.md.
+ * Builds the five layered stacks (Network -> Hosting -> Dns, and
+ * Network -> Data -> Api) on the given `app`, exactly as the real CLI
+ * entrypoint (`bin/gede.ts`) does. Shared so the CDK test suite exercises
+ * the identical wiring/tagging as a real synth — see
+ * docs/issues/040-cdk-aws-deployment.md and docs/issues/030-*.md.
+ *
+ * Cross-stack wiring (issue 030 scope item 4): Network's VPC feeds both Data
+ * and Api; Data's RDS security group feeds Api (which adds the one
+ * permitted ingress rule against it — see api-stack.ts / data-stack.ts for
+ * why that direction avoids a circular dependency). Hosting/Dns (issue 040,
+ * v1's static path) are unaffected by any of this.
  */
 export function buildAppStacks(
   app: cdk.App,
@@ -56,7 +67,7 @@ export function buildAppStacks(
 
   const network = new NetworkStack(app, `${envConfig.stackPrefix}-Network`, {
     env,
-    description: 'GeDe network foundation (VPC, no NAT) — issue 040',
+    description: 'GeDe network foundation (VPC + NAT + public/private/isolated subnets) — issue 040, extended by 030',
   });
 
   const hosting = new HostingStack(app, `${envConfig.stackPrefix}-Hosting`, {
@@ -75,5 +86,22 @@ export function buildAppStacks(
   });
   dns.addDependency(hosting);
 
-  return { network, hosting, dns };
+  const data = new DataStack(app, `${envConfig.stackPrefix}-Data`, {
+    env,
+    description: 'GeDe v2 backend: managed RDS PostgreSQL 17 in isolated subnets — issue 030 (ADR-0008)',
+    vpc: network.vpc,
+  });
+  data.addDependency(network);
+
+  const api = new ApiStack(app, `${envConfig.stackPrefix}-Api`, {
+    env,
+    description:
+      'GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) behind an internet-facing ALB — issue 030 (ADR-0008)',
+    vpc: network.vpc,
+    databaseSecurityGroup: data.databaseSecurityGroup,
+  });
+  api.addDependency(network);
+  api.addDependency(data);
+
+  return { network, hosting, dns, data, api };
 }

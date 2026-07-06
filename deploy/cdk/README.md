@@ -1,26 +1,45 @@
-# GeDe — CDK deploy app (issue 040)
+# GeDe — CDK deploy app (issue 040, extended by issue 030)
 
 AWS CDK (TypeScript) app that provisions GeDe's `test`-environment AWS
-footprint: network → static hosting → DNS. Fully self-contained — its own
-`package.json`/`tsconfig.json`/`cdk.json`/tests, never touched by the root
-web app's `npm run verify`.
+footprint: network → static hosting → DNS (v1, issue 040), plus a v2 backend
+foundation — managed Postgres + a Fargate compute tier (issue 030, ADR-0008).
+Fully self-contained — its own `package.json`/`tsconfig.json`/`cdk.json`/
+tests, never touched by the root web app's `npm run verify`.
 
-Companion docs: `../../docs/DEPLOYMENT.md` (the operator guide),
-`../../docs/issues/040-cdk-aws-deployment.md` (this app's spec),
-`../../docs/issues/029-deploy-oidc-static-pwa.md` (the CI pipeline that
-deploys this app), `../../docs/TECH_STACK.md` §6.
+Companion docs: `../../docs/DEPLOYMENT.md` §9 (the v2 topology this app now
+implements), `../../docs/issues/040-cdk-aws-deployment.md` (the original v1
+app spec), `../../docs/issues/030-v2-server-postgres-compose.md` (the v2
+network/data/compute spec), `../../docs/adr/0008-v2-backend-cdk-rds-electricsql.md`
+(the decision record), `../../docs/issues/029-deploy-oidc-static-pwa.md` (the
+CI pipeline that deploys this app), `../../docs/TECH_STACK.md` §6.
 
 ## Stacks
 
 | Stack | Provisions |
 | --- | --- |
-| `Gede-Test-Network` | VPC, 2 AZ, public + private-isolated subnets, **no NAT gateway** (cost guard) |
+| `Gede-Test-Network` | VPC, 2 AZ, public + private (compute) + isolated (data) subnets, **exactly one NAT gateway** (cost guard — issue 030 added NAT + the private tier to issue 040's no-NAT shape) |
 | `Gede-Test-Hosting` | Private S3 bucket (Origin Access Control) + CloudFront distribution serving the built PWA |
 | `Gede-Test-Dns` | Route 53 seam — inert (CloudFront URL output only) without a domain |
+| `Gede-Test-Data` | RDS PostgreSQL 17 (`db.t4g.micro`), isolated subnets, not publicly accessible, encrypted, automated backups + retained-snapshot removal policy, credentials generated into Secrets Manager (issue 030) |
+| `Gede-Test-Api` | ECS Fargate cluster + internet-facing ALB, two **stubbed** services (`sync` → issue 032 ElectricSQL, `auth` → issue 033 better-auth) behind path-based routing, placeholder `nginx:alpine` image, container + ALB healthchecks (issue 030) |
 
-Deploy order: Network → Hosting → Dns (each stack declares `addDependency`
-on the previous one via `lib/build-app.ts`, which both `bin/gede.ts` and
-the test suite use, so tests exercise the exact production wiring).
+Deploy order: Network → Hosting → Dns, and Network → Data → Api (each stack
+declares `addDependency` via `lib/build-app.ts`, which both `bin/gede.ts` and
+the test suite use, so tests exercise the exact production wiring). Data's
+RDS security group is passed into Api, which adds the *only* ingress rule
+against it (compute SG → 5432) — see `lib/api-stack.ts`/`lib/data-stack.ts`
+for why that direction avoids a circular `Data <-> Api` stack dependency.
+
+## v2 migration parity (issue 030)
+
+`../migration-parity/check-migrations.sh` applies the app's real Drizzle
+migration history (`../../src/db/migrations/*.sql` — the same files
+`src/db/migrate.ts` runs against in-browser PGlite) to a real Postgres 17
+from empty, proving the v2 RDS boundary adds zero schema fork. It's CI-only
+by design: with no `DATABASE_URL` set (no live Postgres to point at) it
+skips cleanly rather than failing — see `.github/workflows/migration-parity.yml`
+for the `postgres:17` service container that gives it one in CI, or the
+script's header comment to run it locally against Docker.
 
 ## One-time setup
 
@@ -150,8 +169,12 @@ npx cdk destroy --all --profile phani-quadnomics
 
 The S3 bucket has `autoDeleteObjects: true` (test env only — a future
 `prod` env should use `RemovalPolicy.RETAIN`), so `cdk destroy` empties and
-removes it in one step. Confirm nothing else depends on `Gede-Test-Network`
-before destroying it.
+removes it in one step. `Gede-Test-Data`'s RDS instance uses
+`RemovalPolicy.SNAPSHOT` — destroying it takes a final snapshot rather than
+losing data outright (the snapshot itself is **not** auto-deleted; clean it
+up manually once confirmed unneeded). Confirm nothing else depends on
+`Gede-Test-Network` before destroying it (both `Gede-Test-Data` and
+`Gede-Test-Api` now do).
 
 ## What CI does with this app
 
