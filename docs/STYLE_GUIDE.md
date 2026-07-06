@@ -13,7 +13,7 @@ Decisions locked 2026-07-05: light-first · Inter + JetBrains Mono · forest-gre
 1. **Drafting table.** Surfaces are instruments: graph-paper ground, opaque paper panels, hairline borders, square corners. No decorative depth — the only shadow in the app sits under popovers.
 2. **In-place, always.** No modals or side-forms for data entry. Cells edit where they are; the composer is a bar, not a dialog.
 3. **Color is data.** Chromatic *data* color belongs to dimensions alone. Chrome speaks ink and forest green; the two vocabularies never overlap (which is why the data palette contains no green).
-4. **Position is derived.** Nothing on the canvas is draggable-to-mean-something. Selection, not arrangement, is the user's spatial verb.
+4. **Position is derived.** Nothing on the canvas is draggable-to-mean-something. Selection, not arrangement, is the user's spatial verb. **Emphasis and routing are derived *presentation*, never user meaning:** hovering may fade unrelated elements (focus + context) and connections may bundle into deterministic splines — both computed from the data (ADR-0005), never hand-arranged.
 5. **Instant beats elegant.** Commits, selection, and hover respond immediately. Motion exists only to preserve spatial continuity (drill-down), never to decorate.
 
 ---
@@ -120,7 +120,10 @@ Hierarchy comes from weight and spacing, never from additional colors. Minimum t
 ## 7. Canvas
 
 - Arcs: 6px stroke, butt caps meeting the square aesthetic, gaps between dimensions; parameter dots on the arc; labels outside (`--ink-muted`). The graph-paper grid shows behind the circle — the drawing sits on the paper.
+- Parameter labels read **outward** on their own side of the ring (right → left-anchored, left → right-anchored) and de-collide vertically near the poles; the **dimension name** sits just inside the ring, centered on the arc (issue 023).
 - Selected context: n spokes in dimension colors + composer bar populated; unselected contexts dim to 40%.
+- **Focus + adjacency (amended, issue 028):** hovering or keyboard-focusing an element emphasizes what it is connected to and fades the rest to `--canvas-muted` (~0.2). Adjacency is symmetric across the three roles: a **context** → its spokes + bound dots; a **parameter dot** → every context bound to it + their spokes (answers "who uses this parameter?"); a **dimension arc** → its parameters + the contexts bound within it. This is *transient* focus + context — a **click locks it** (the existing selection). Emphasis only ever mutes *others*; the resting state (no hover, no selection) shows every element at full opacity, so it survives `prefers-reduced-motion` (§8) with nothing stranded. Prior art for the interaction grammar: ECharts `focus: 'adjacency'`, nivo chord hover-opacity, D3 hierarchical edge bundling.
+- **Connections (amended, issue 028):** spokes may render as **deterministic splines** bundled toward the interior (chord / edge-bundling aesthetic) to cut crossing-clutter when many contexts bind many parameters, or as straight radial lines — either way the routing is computed in the pure layout (ADR-0005), never hand-drawn (principle 4). Spline curvature is a fixed function of the endpoints, not animated.
 - Composer bar: a full-width panel (0 radius, hairline top border) — mono tuple readout, justification in place.
 
 ### Canvas responsiveness
@@ -143,6 +146,7 @@ Geometry is scale-free (1000×1000 abstract space → SVG `viewBox`). Container-
 - **Snappy: 80–140ms**, ease-out, CSS transitions only. Hover/commit/selection feedback ≤ 100ms — effectively instant. Nothing animates on data commit.
 - The one spatial exception: **drill-down zoom ~200ms** (canvas scales into the opened node) to preserve continuity across recursion levels.
 - One thing moves at a time. `prefers-reduced-motion` replaces all transitions with instant state changes, including drill-down.
+- Focus/adjacency emphasis (§7, issue 028) is an **opacity-only** transition ≤ 100ms; reduced-motion makes it instant. Because the resting state is fully legible (emphasis only mutes *others*), disabling the transition strands nothing — contrast the mount-fade gotcha where an `opacity: 0` resting state broke under `animation: none`.
 
 ## 9. Voice
 

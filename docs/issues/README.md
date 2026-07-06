@@ -41,6 +41,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [025](done/025-architecture-selection-bar-placement.md) ✅ | Architecture selection/promote bar placement | M6 | 014 |
 | [026](done/026-standalone-button-affordance.md) ✅ | Standalone button affordance (no-fill buttons) | M6 | 019 |
 | [027](done/027-design-tier-layout-navigation.md) ✅ | Design tier layout cleanup + navigation clarity | M6 | 009, 011 |
+| [028](028-canvas-focus-adjacency.md) | Canvas focus + adjacency (+ optional spline bundling) | M6 | 008, 009 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
