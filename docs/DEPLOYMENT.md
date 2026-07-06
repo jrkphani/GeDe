@@ -91,7 +91,45 @@ cd deploy/cdk && npm ci
 npx cdk bootstrap aws://975049998516/us-east-1 --profile phani-quadnomics
 ```
 
-`cdk bootstrap` is idempotent and only needs to run once per account/region.
+`cdk bootstrap` is idempotent and only needs to run once per account/region. It
+creates the `CDKToolkit` stack and the `cdk-hnb659fds-*` deploy / file-publishing /
+lookup / cfn-exec roles that CI assumes below.
+
+### 4a. GitHub OIDC deploy identity (one-time, done)
+
+CI never holds long-lived AWS keys. Instead GitHub Actions federates into a
+short-lived role via OIDC. This is provisioned **out of band** (not in the CDK
+app) because it is the bootstrap credential the deploy itself uses — the deploy
+role can't create the deploy role. Provisioned once with `--profile phani-quadnomics`:
+
+```bash
+# i. GitHub Actions OIDC identity provider (audience = sts.amazonaws.com)
+aws iam create-open-id-connect-provider \
+  --url https://token.actions.githubusercontent.com \
+  --client-id-list sts.amazonaws.com \
+  --thumbprint-list 6938fd4d98bba010e435a9e6c1e3a8b21b6d6f88
+
+# ii. The CI deploy role — trusts ONLY jrkphani/GeDe's main branch, and can do
+#     nothing but assume the CDK bootstrap roles (least privilege: it drives
+#     cdk deploy, it does not touch the account directly).
+#     trust-policy.json  → Federated principal = the OIDC provider above,
+#                          condition sub = repo:jrkphani/GeDe:ref:refs/heads/main,
+#                          aud = sts.amazonaws.com
+#     assume-cdk.json    → Allow sts:AssumeRole on
+#                          arn:aws:iam::975049998516:role/cdk-hnb659fds-*-975049998516-us-east-1
+aws iam create-role --role-name github-actions-gede-deploy \
+  --assume-role-policy-document file://trust-policy.json --max-session-duration 3600
+aws iam put-role-policy --role-name github-actions-gede-deploy \
+  --policy-name assume-cdk-bootstrap-roles --policy-document file://assume-cdk.json
+
+# iii. Hand the role ARN to CI as a repo secret (no other secret is needed)
+gh secret set AWS_DEPLOY_ROLE_ARN \
+  --body arn:aws:iam::975049998516:role/github-actions-gede-deploy
+```
+
+**Provisioned:** role `github-actions-gede-deploy`
+(`arn:aws:iam::975049998516:role/github-actions-gede-deploy`), OIDC provider
+`token.actions.githubusercontent.com`, secret `AWS_DEPLOY_ROLE_ARN`. See §8.
 
 ---
 
@@ -152,12 +190,17 @@ There is **no registered public domain yet**, so:
 
 ## 8. CI/CD (issue 029)
 
-Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions only** (`TECH_STACK §6.4`, issue 029):
+Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions only** (`TECH_STACK §6.4`, issue 029). The pipeline lives in `.github/workflows/deploy.yml`:
 
-- On push to `main`, **after `npm run verify` is green**, a workflow runs `cdk deploy` (or builds + syncs `dist/`) into `975049998516`.
-- AWS access is via **GitHub OIDC federation** — a short-lived role assumption scoped to these stacks. **No long-lived AWS keys in the repo.**
+- **On push to `main`**, and **only after `verify.yml` completes successfully** for that commit, the `deploy` job runs (`workflow_run` trigger — "one gate, reused": deploy never re-runs the checks, it refuses to run unless `verify` already went green). It checks out the exact `head_sha` verify validated, runs `npm run build`, then `cd deploy/cdk && npx cdk deploy --all --require-approval never`.
+- **On pull requests**, a separate `cdk-validate` job runs `cdk synth` + the CDK assertion/snapshot tests (and a best-effort `cdk diff` on same-repo PRs). **PRs never mutate AWS.**
+- **AWS access is via GitHub OIDC federation** — no long-lived keys anywhere. CI assumes role **`github-actions-gede-deploy`** (`arn:aws:iam::975049998516:role/github-actions-gede-deploy`), whose ARN is the `AWS_DEPLOY_ROLE_ARN` repo secret. The role:
+  - **trusts only** the subject `repo:jrkphani/GeDe:ref:refs/heads/main` (audience `sts.amazonaws.com`) — so only a workflow running on this repo's `main` can assume it. PR builds can't (their subject is `pull_request`), which is why the PR `cdk diff` step is best-effort and skips cleanly.
+  - **can do exactly one thing:** `sts:AssumeRole` on `cdk-hnb659fds-*-975049998516-us-east-1`. It has no direct S3/CloudFront/CloudFormation permissions of its own — it drives `cdk deploy`, which assumes the CDK bootstrap roles that carry the real permissions. Least privilege, scoped to the `Gede-*` stacks, not account-admin.
 - A red `verify` blocks the deploy (same gate as local).
 - Service-worker updates are `registerType: 'prompt'` — a quiet status-line "New version — Reload", never an auto-reload (an in-place edit must not be lost). Deploys are atomic from a user's view: hashed immutable assets stay valid until the new `no-cache` shell references new hashes.
+
+> **Hardening note:** `cdk bootstrap` used the default `AdministratorAccess` cfn-exec policy. Since CI can only *assume* the CDK roles (not use them arbitrarily) and CloudFormation is what wields that policy, the CI blast radius is bounded by the stacks it deploys. Tightening the cfn-exec role to a `Gede-*`-scoped policy (re-bootstrap with `--cloudformation-execution-policies`) is a future hardening step, tracked separately.
 
 ---
 
