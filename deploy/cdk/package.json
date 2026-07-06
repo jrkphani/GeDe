@@ -1,0 +1,32 @@
+{
+  "name": "gede-cdk",
+  "version": "0.0.1",
+  "private": true,
+  "description": "AWS CDK app for GeDe (issue 040) — network, hosting, DNS stacks. Self-contained; not part of the root web-app build or verify gate.",
+  "bin": {
+    "gede-cdk": "bin/gede.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "test": "jest",
+    "synth": "cdk synth",
+    "diff": "cdk diff",
+    "deploy": "cdk deploy --all --require-approval never",
+    "cdk": "cdk"
+  },
+  "devDependencies": {
+    "@types/jest": "^29.5.14",
+    "@types/node": "^22.10.2",
+    "aws-cdk": "2.1129.0",
+    "jest": "^29.7.0",
+    "source-map-support": "^0.5.21",
+    "ts-jest": "^29.2.5",
+    "ts-node": "^10.9.2",
+    "typescript": "~5.6.3"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "2.261.0",
+    "constructs": "^10.6.0"
+  }
+}

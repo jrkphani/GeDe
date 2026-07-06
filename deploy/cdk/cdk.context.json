@@ -1,0 +1,4 @@
+{
+  "//": "Cached AZ answer for account=975049998516 region=us-east-1 (issue 040). aws-cdk-lib's Vpc construct validates any explicit `availabilityZones` prop against Stack.availabilityZones, which otherwise triggers a live AWS context-provider lookup (an assumed-role SDK call) even though the AZ names it validates are already hardcoded in lib/network-stack.ts. Committing this cache keeps `cdk synth`/tests fully offline (no AWS credentials) — see deploy/cdk/README.md. us-east-1a/us-east-1b are real, publicly documented AZs for this region and match network-stack.ts.",
+  "availability-zones:account=975049998516:region=us-east-1": ["us-east-1a", "us-east-1b"]
+}

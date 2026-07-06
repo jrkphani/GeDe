@@ -1,0 +1,247 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`DnsStack (Gede-Test-Dns) — domainName supplied (the flip) matches the snapshot 1`] = `
+{
+  "Description": "GeDe DNS seam (Route 53 + ACM), inert without a domain — issue 040",
+  "Mappings": {
+    "MappingCopyAWSCloudFrontPartitionHostedZoneIdMapc865bc58a33171d5e46f35918ba7f3faacbc61ce87": {
+      "aws": {
+        "zoneId": "Z2FDTNDATAQYW2",
+      },
+      "aws-cn": {
+        "zoneId": "Z3RFFRIM2A3IF5",
+      },
+    },
+  },
+  "Outputs": {
+    "AppUrl": {
+      "Description": "The custom-domain app URL (active once Hosting is redeployed with the certificate).",
+      "Value": "https://app.example.com",
+    },
+    "CertificateArn": {
+      "Description": "Feed this back into Gede-Test-Hosting as \`-c certificateArn=<arn>\` (with \`-c domainName=...\`) to attach the alternate name — see README "domain-flip".",
+      "Value": {
+        "Ref": "Certificate4E7ABB08",
+      },
+    },
+    "HostedZoneNameServers": {
+      "Description": "Delegate the domain registrar's NS records to these.",
+      "Value": {
+        "Fn::Join": [
+          ", ",
+          {
+            "Fn::GetAtt": [
+              "ZoneA5DE4B68",
+              "NameServers",
+            ],
+          },
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "AliasRecordAAAA6FC85F69": {
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": {
+            "Fn::ImportValue": "Gede-Test-Hosting:ExportsOutputFnGetAttDistribution830FAC52DomainNameBEB09E30",
+          },
+          "HostedZoneId": {
+            "Fn::FindInMap": [
+              "MappingCopyAWSCloudFrontPartitionHostedZoneIdMapc865bc58a33171d5e46f35918ba7f3faacbc61ce87",
+              {
+                "Ref": "AWS::Partition",
+              },
+              "zoneId",
+            ],
+          },
+        },
+        "HostedZoneId": {
+          "Ref": "ZoneA5DE4B68",
+        },
+        "Name": "app.example.com.",
+        "Type": "AAAA",
+      },
+      "Type": "AWS::Route53::RecordSet",
+    },
+    "AliasRecordAB84985CE": {
+      "Properties": {
+        "AliasTarget": {
+          "DNSName": {
+            "Fn::ImportValue": "Gede-Test-Hosting:ExportsOutputFnGetAttDistribution830FAC52DomainNameBEB09E30",
+          },
+          "HostedZoneId": {
+            "Fn::FindInMap": [
+              "MappingCopyAWSCloudFrontPartitionHostedZoneIdMapc865bc58a33171d5e46f35918ba7f3faacbc61ce87",
+              {
+                "Ref": "AWS::Partition",
+              },
+              "zoneId",
+            ],
+          },
+        },
+        "HostedZoneId": {
+          "Ref": "ZoneA5DE4B68",
+        },
+        "Name": "app.example.com.",
+        "Type": "A",
+      },
+      "Type": "AWS::Route53::RecordSet",
+    },
+    "Certificate4E7ABB08": {
+      "Properties": {
+        "DomainName": "app.example.com",
+        "DomainValidationOptions": [
+          {
+            "DomainName": "app.example.com",
+            "HostedZoneId": {
+              "Ref": "ZoneA5DE4B68",
+            },
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Name",
+            "Value": "Gede-Test-Dns/Certificate",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "ValidationMethod": "DNS",
+      },
+      "Type": "AWS::CertificateManager::Certificate",
+    },
+    "ZoneA5DE4B68": {
+      "Properties": {
+        "HostedZoneConfig": {
+          "Comment": "GeDe app.example.com — created by CDK (Gede-Test-Dns). Delegate the registrar's NS records here.",
+        },
+        "HostedZoneTags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Name": "app.example.com.",
+      },
+      "Type": "AWS::Route53::HostedZone",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;
+
+exports[`DnsStack (Gede-Test-Dns) — no domain (the \`test\` default) matches the snapshot 1`] = `
+{
+  "Description": "GeDe DNS seam (Route 53 + ACM), inert without a domain — issue 040",
+  "Outputs": {
+    "AppUrl": {
+      "Description": "The test-env app URL (CloudFront default domain; no custom domain configured).",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Fn::ImportValue": "Gede-Test-Hosting:ExportsOutputFnGetAttDistribution830FAC52DomainNameBEB09E30",
+            },
+          ],
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

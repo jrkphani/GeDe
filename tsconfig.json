@@ -20,5 +20,9 @@
     "baseUrl": ".",
     "paths": { "@/*": ["src/*"] }
   },
-  "include": ["src", "e2e", "vite.config.ts", "drizzle.config.ts", "playwright.config.ts", "eslint.config.js"]
+  "include": ["src", "e2e", "vite.config.ts", "drizzle.config.ts", "playwright.config.ts", "eslint.config.js"],
+  // The CDK deploy app (issue 040, deploy/cdk/) has its own tsconfig.json
+  // and is never part of the root program — explicit for clarity even
+  // though `include` above already omits it.
+  "exclude": ["deploy"]
 }

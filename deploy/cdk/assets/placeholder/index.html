@@ -1,0 +1,20 @@
+<!doctype html>
+<!--
+  Placeholder BucketDeployment source (issue 040).
+
+  cdk synth / the CDK test suite must succeed even when the web app's
+  `dist/` hasn't been built yet (a fresh checkout, or CI running CDK tests
+  before `npm run build`). hosting-stack.ts resolves the real
+  `../../../dist` first and only falls back to this directory when it's
+  missing, so this file is never published in a real deploy — CI's
+  deploy.yml always runs `npm run build` before `cdk deploy`.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>GeDe (placeholder)</title>
+  </head>
+  <body>
+    <p>Placeholder asset — the real build output replaces this file at deploy time.</p>
+  </body>
+</html>
