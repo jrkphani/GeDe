@@ -41,7 +41,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [025](done/025-architecture-selection-bar-placement.md) ✅ | Architecture selection/promote bar placement | M6 | 014 |
 | [026](done/026-standalone-button-affordance.md) ✅ | Standalone button affordance (no-fill buttons) | M6 | 019 |
 | [027](done/027-design-tier-layout-navigation.md) ✅ | Design tier layout cleanup + navigation clarity | M6 | 009, 011 |
-| [028](028-canvas-focus-adjacency.md) | Canvas focus + adjacency (+ optional spline bundling) | M6 | 008, 009 |
+| [028](done/028-canvas-focus-adjacency.md) ✅ | Canvas focus + adjacency (phase a; splines deferred) | M6 | 008, 009 |
 | [029](029-deploy-oidc-static-pwa.md) | Deploy pipeline — OIDC static PWA → S3 + CloudFront | M7 | — |
 | [030](030-v2-server-postgres-compose.md) | v2 server — Lightsail Postgres + Compose + backups | M8 | 029 |
 | [031](031-sync-engine-decision.md) | Sync-engine decision — Electric vs Supabase (T6) | M8 | — |
@@ -55,7 +55,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
-**v1 milestones** M1–M6 are shipped (000–027). **028** (canvas focus+adjacency) is v1 polish, in progress. **v2 (collaboration)** is milestones **M7–M10**, all OPEN and grounded in TECH_STACK §6.3 + SPEC §1/§3:
+**v1 milestones** M1–M6 are shipped (000–028; 028 is phase (a) — hover/focus adjacency emphasis — with spline bundling deferred). **v2 (collaboration)** is milestones **M7–M10**, all OPEN and grounded in TECH_STACK §6.3 + SPEC §1/§3:
 
 - **M7 · Deploy** — 029 (OIDC static deploy; the deferred v1 half, and the foundation everything else ships onto).
 - **M8 · Server & sync** — 030 (server Postgres) · 031 (T6 engine decision → ADR) · 032 (row-delta LWW sync) · 036 (sync-state UI). The critical path: **029 → 030/031 → 032**.

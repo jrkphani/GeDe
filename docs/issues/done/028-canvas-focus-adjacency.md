@@ -1,6 +1,6 @@
 # 028: Canvas focus + adjacency (and optional spline bundling)
 
-- **Status**: OPEN
+- **Status**: SHIPPED — phase (a) hover/focus adjacency emphasis (main, commit 3438850; e2e corrected in the follow-up). **Phase (b) spline bundling is deferred** — open a follow-up issue if the straight-spoke clutter warrants it.
 - **Milestone**: M6 (Polish — canvas legibility)
 - **Blocked by**: 008, 009 (SHIPPED); builds on 023 (labels) and the label de-collision fix
 
