@@ -14,7 +14,7 @@
 | Region | `us-east-1` (required for CloudFront/ACM certs) |
 | CLI profile | `phani-quadnomics` |
 | IaC | AWS CDK (TypeScript), `deploy/cdk/` |
-| App URL | CloudFront **default** domain (`https://<id>.cloudfront.net`) — no custom domain yet |
+| App URL | **https://d1nzod71m3rz6x.cloudfront.net** (live; CloudFront default domain — no custom domain yet, the Dns stack is a seam, §7) |
 | Database | **None in AWS** — PGlite (WASM Postgres) runs in the browser, persisted to IndexedDB/OPFS |
 | Cost | ~$0–1 / month |
 
@@ -204,9 +204,11 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
 
 ---
 
-## 9. v2 architecture (future) — **private VPC + NAT gateway**
+## 9. v2 architecture — **private VPC + NAT gateway** (decided: ADR-0008; issue 030 built, PR #3)
 
 > **When GeDe gains a server (v2 — collaboration: sync, auth, workspaces), it moves into a private VPC with a NAT gateway.** v1's static frontend is unchanged; v2 adds a backend tier behind it. This supersedes the earlier Lightsail sketch in `TECH_STACK §6.3` for a CDK-managed, AWS-native account.
+>
+> **Status (2026-07-06):** the two open decisions are **made in [ADR-0008](adr/0008-v2-backend-cdk-rds-electricsql.md)** — backend is **CDK VPC + NAT + RDS + Fargate** (T5 → RDS, superseding Lightsail/Compose), sync is **ElectricSQL** (T6), auth is **better-auth**, RLS authored in Postgres. **Issue 030** implements the network+RDS+Fargate foundation and is open as **PR #3 — reviewed but not yet merged: merging auto-deploys and starts v2 spend (~$30–60/mo) and mutates the live `Gede-Test-Network` in place to add the NAT gateway.** The stubbed `sync`/`auth` Fargate services are filled by issues 032 (Electric) / 033 (better-auth).
 
 **Why a private VPC + NAT for v2 (and not for v1):**
 
@@ -223,10 +225,9 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
    │  PUBLIC subnets      Application Load Balancer (TLS, api ingress)        │
    │                      NAT Gateway  ◄── the outbound path for private tiers│
    │                                                                         │
-   │  PRIVATE subnets     Compute (ECS Fargate or EC2) — no public IP:       │
-   │                        • API / app service                              │
-   │                        • sync engine  (ElectricSQL or Supabase — T6)    │
-   │                        • auth         (better-auth or Supabase auth)    │
+   │  PRIVATE subnets     Compute (ECS Fargate) — no public IP:             │
+   │                        • sync engine  (ElectricSQL — ADR-0008)          │
+   │                        • auth         (better-auth — ADR-0008)          │
    │                      egress to the internet via the NAT Gateway         │
    │                                                                         │
    │  ISOLATED subnets    PostgreSQL 17 (RDS) — same Drizzle migrations as   │
@@ -241,15 +242,15 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
 **v2 components & security:**
 
 - **Ingress:** CloudFront/S3 frontend unchanged; `api.<domain>` (Route 53 alias) → an ALB in the public subnets. Only the ALB and NAT gateway live in public subnets.
-- **Compute (private subnets, no public IP):** the API, the sync engine (T6: ElectricSQL vs self-hosted Supabase — decided in issue 031), and auth (issue 033). Egress via the **NAT gateway** only; ingress only from the ALB via security groups.
-- **Database (isolated subnets):** managed **PostgreSQL 17** (RDS; `TECH_STACK` T5 revisits Lightsail-vs-RDS). It runs the **same Drizzle migration history** as v1's PGlite (the whole "one dialect, no migration cliff" bet, `TECH_STACK §2`) and enforces **workspace RLS** (issue 034). No internet route — reachable only from the compute security group.
+- **Compute (private subnets, no public IP):** the sync engine (**ElectricSQL** — ADR-0008, issue 032) and auth (**better-auth** — ADR-0008, issue 033), on ECS Fargate. Egress via the **NAT gateway** only; ingress only from the ALB via security groups. (In PR #3 both are stubbed with an `nginx:alpine` placeholder behind path-routed `/sync*` `/auth*`.)
+- **Database (isolated subnets):** managed **PostgreSQL 17** (RDS `db.t4g.micro`, single-AZ for `test`; T5 resolved to RDS, ADR-0008). It runs the **same Drizzle migration history** as v1's PGlite (the "one dialect, no migration cliff" bet, `TECH_STACK §2` — proven by `deploy/migration-parity/`) and enforces **workspace RLS** (issue 034). No internet route — reachable only from the compute security group; credentials in Secrets Manager.
 - **Security groups:** ALB → compute → database, one hop each; the database SG admits only the compute SG; nothing admits `0.0.0.0/0` except the ALB (443) and NAT egress.
 - **Backups:** automated RDS snapshots + point-in-time recovery (or `pg_dump → S3 → Glacier` if self-managed), per `TECH_STACK §6.3`.
 - **Sync:** row-delta, last-write-wins between server Postgres and client PGlite (issue 032) — the client remains offline-capable and local-first; the server is the shared, RLS-scoped source of truth.
 
 **v2 cost:** materially higher than v1 — a NAT gateway (~$32/mo per AZ + data processing), the compute tier, and RDS. Budget on the order of **$30–60+/month** depending on AZ count and instance sizes, versus v1's ~$0–1. Right-size AZs (one NAT gateway for `test`, multi-AZ NAT only for `prod`), and prefer Fargate/RDS smallest tiers until load justifies more.
 
-**v2 CDK shape:** the `Gede-<Env>-Network` stack gains a **NAT gateway** and private/isolated subnet tiers (the v1 stack's forward-looking exports are consumed here); new `Gede-<Env>-Api`, `Gede-<Env>-Data` stacks add the ALB + compute + RDS. The tagging strategy (§6) and env-parameterization carry over unchanged. This lands as its own issue when v2 kicks off (see issues 030–038 for the sync/auth/tenancy slices).
+**v2 CDK shape:** the `Gede-<Env>-Network` stack gains a **NAT gateway** and a private compute subnet tier alongside the existing isolated tier; new `Gede-<Env>-Data` (RDS) + `Gede-<Env>-Api` (Fargate: Electric sync + better-auth stubs, behind an internet-facing ALB) stacks are added. The tagging strategy (§6) and env-parameterization carry over unchanged. This is **issue 030, implemented in PR #3** (reviewed, green — 48 CDK tests + offline synth — but unmerged pending the cost-gate decision above); downstream sync/auth/tenancy slices are issues 032–038 (see `docs/issues/README.md` M8–M10 and ADR-0008 for the wave plan).
 
 ---
 
