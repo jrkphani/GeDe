@@ -83,6 +83,32 @@ export class HostingStack extends Stack {
       maxTtl: Duration.days(365),
     });
 
+    // --- Browser cache-control (TECH_STACK §6.2) ------------------------
+    // A CachePolicy only governs how long *CloudFront's edge* holds an
+    // object; it does NOT put a `Cache-Control` header on the response the
+    // *browser* sees. The PWA's update story (registerType: 'prompt') needs
+    // the browser itself to revalidate the shell/SW and to treat hashed
+    // assets as immutable — so we set the header explicitly via
+    // ResponseHeadersPolicy on each behavior (`override: true`, since the
+    // private S3 origin sends no Cache-Control of its own).
+    const noCacheHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'NoCacheHeadersPolicy', {
+      responseHeadersPolicyName: `${props.namePrefix}-no-cache-headers`,
+      comment: 'index.html / sw.js — browser must revalidate (TECH_STACK §6.2).',
+      customHeadersBehavior: {
+        customHeaders: [{ header: 'Cache-Control', value: 'no-cache', override: true }],
+      },
+    });
+
+    const immutableAssetsHeadersPolicy = new cloudfront.ResponseHeadersPolicy(this, 'ImmutableAssetsHeadersPolicy', {
+      responseHeadersPolicyName: `${props.namePrefix}-immutable-assets-headers`,
+      comment: 'Hashed build assets — immutable, max-age=1y (TECH_STACK §6.2).',
+      customHeadersBehavior: {
+        customHeaders: [
+          { header: 'Cache-Control', value: 'public, max-age=31536000, immutable', override: true },
+        ],
+      },
+    });
+
     const origin = origins.S3BucketOrigin.withOriginAccessControl(this.bucket);
 
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
@@ -94,6 +120,7 @@ export class HostingStack extends Stack {
         origin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: noCachePolicy,
+        responseHeadersPolicy: noCacheHeadersPolicy,
         // CloudFront auto-negotiates Brotli/gzip against the viewer's
         // Accept-Encoding when `compress` is true — there is no separate
         // "enable Brotli" flag on the L2 construct.
@@ -104,6 +131,7 @@ export class HostingStack extends Stack {
           origin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
           cachePolicy: immutableAssetsCachePolicy,
+          responseHeadersPolicy: immutableAssetsHeadersPolicy,
           compress: true,
         },
       },
