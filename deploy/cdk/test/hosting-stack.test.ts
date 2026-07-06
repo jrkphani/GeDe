@@ -55,9 +55,17 @@ describe('HostingStack (Gede-Test-Hosting)', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
-        DefaultCacheBehavior: Match.objectLike({ CachePolicyId: Match.anyValue(), Compress: true }),
+        DefaultCacheBehavior: Match.objectLike({
+          CachePolicyId: Match.anyValue(),
+          ResponseHeadersPolicyId: Match.anyValue(),
+          Compress: true,
+        }),
         CacheBehaviors: Match.arrayWith([
-          Match.objectLike({ PathPattern: 'assets/*', Compress: true }),
+          Match.objectLike({
+            PathPattern: 'assets/*',
+            ResponseHeadersPolicyId: Match.anyValue(),
+            Compress: true,
+          }),
         ]),
       }),
     });
@@ -76,6 +84,37 @@ describe('HostingStack (Gede-Test-Hosting)', () => {
         DefaultTTL: 60 * 60 * 24 * 365,
         MinTTL: 60 * 60 * 24 * 365,
         MaxTTL: 60 * 60 * 24 * 365,
+      }),
+    });
+  });
+
+  it('sets the browser-facing Cache-Control header (not just edge TTL) via ResponseHeadersPolicy', () => {
+    const template = synth();
+    // A CachePolicy alone never reaches the browser — the shell must carry
+    // `Cache-Control: no-cache` so the PWA update prompt is timely, and
+    // hashed assets must carry `immutable` so the browser caches them for a
+    // year. Assert the actual response headers, the mechanism the earlier
+    // CachePolicy-only setup silently omitted.
+    template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        CustomHeadersConfig: {
+          Items: Match.arrayWith([
+            Match.objectLike({ Header: 'Cache-Control', Value: 'no-cache', Override: true }),
+          ]),
+        },
+      }),
+    });
+    template.hasResourceProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        CustomHeadersConfig: {
+          Items: Match.arrayWith([
+            Match.objectLike({
+              Header: 'Cache-Control',
+              Value: 'public, max-age=31536000, immutable',
+              Override: true,
+            }),
+          ]),
+        },
       }),
     });
   });

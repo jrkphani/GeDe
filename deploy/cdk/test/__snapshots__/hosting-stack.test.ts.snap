@@ -341,6 +341,9 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
               },
               "Compress": true,
               "PathPattern": "assets/*",
+              "ResponseHeadersPolicyId": {
+                "Ref": "ImmutableAssetsHeadersPolicy2D81C6A6",
+              },
               "TargetOriginId": "GedeTestHostingDistributionOrigin10EF450BA",
               "ViewerProtocolPolicy": "redirect-to-https",
             },
@@ -365,6 +368,9 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
               "Ref": "NoCachePolicy1F71EC46",
             },
             "Compress": true,
+            "ResponseHeadersPolicyId": {
+              "Ref": "NoCacheHeadersPolicyB495F332",
+            },
             "TargetOriginId": "GedeTestHostingDistributionOrigin10EF450BA",
             "ViewerProtocolPolicy": "redirect-to-https",
           },
@@ -449,6 +455,42 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
         },
       },
       "Type": "AWS::CloudFront::CachePolicy",
+    },
+    "ImmutableAssetsHeadersPolicy2D81C6A6": {
+      "Properties": {
+        "ResponseHeadersPolicyConfig": {
+          "Comment": "Hashed build assets — immutable, max-age=1y (TECH_STACK §6.2).",
+          "CustomHeadersConfig": {
+            "Items": [
+              {
+                "Header": "Cache-Control",
+                "Override": true,
+                "Value": "public, max-age=31536000, immutable",
+              },
+            ],
+          },
+          "Name": "gede-test-immutable-assets-headers",
+        },
+      },
+      "Type": "AWS::CloudFront::ResponseHeadersPolicy",
+    },
+    "NoCacheHeadersPolicyB495F332": {
+      "Properties": {
+        "ResponseHeadersPolicyConfig": {
+          "Comment": "index.html / sw.js — browser must revalidate (TECH_STACK §6.2).",
+          "CustomHeadersConfig": {
+            "Items": [
+              {
+                "Header": "Cache-Control",
+                "Override": true,
+                "Value": "no-cache",
+              },
+            ],
+          },
+          "Name": "gede-test-no-cache-headers",
+        },
+      },
+      "Type": "AWS::CloudFront::ResponseHeadersPolicy",
     },
     "NoCachePolicy1F71EC46": {
       "Properties": {
