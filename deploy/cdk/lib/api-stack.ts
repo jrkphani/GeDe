@@ -75,7 +75,7 @@ export class ApiStack extends Stack {
     this.computeSecurityGroup.addIngressRule(
       this.albSecurityGroup,
       ec2.Port.tcp(80),
-      'ALB -> Fargate services (placeholder container port 80).',
+      'ALB to Fargate services (placeholder container port 80).',
     );
 
     // The Data stack's RDS security group admits ONLY this compute security
@@ -93,7 +93,7 @@ export class ApiStack extends Stack {
       toPort: 5432,
       sourceSecurityGroupId: this.computeSecurityGroup.securityGroupId,
       description:
-        'Api compute (sync/auth stub slots, issue 030) -> Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.',
+        'Api compute (sync/auth stub slots, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.',
     });
 
     // --- ALB ----------------------------------------------------------------

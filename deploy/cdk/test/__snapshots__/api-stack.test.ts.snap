@@ -268,7 +268,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "AllowComputeToPostgres": {
       "Properties": {
-        "Description": "Api compute (sync/auth stub slots, issue 030) -> Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.",
+        "Description": "Api compute (sync/auth stub slots, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.",
         "FromPort": 5432,
         "GroupId": {
           "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
@@ -625,7 +625,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "ComputeSecurityGroupfromGedeTestApiAlbSecurityGroup97C2D9BC8029CF6224": {
       "Properties": {
-        "Description": "ALB -> Fargate services (placeholder container port 80).",
+        "Description": "ALB to Fargate services (placeholder container port 80).",
         "FromPort": 80,
         "GroupId": {
           "Fn::GetAtt": [
