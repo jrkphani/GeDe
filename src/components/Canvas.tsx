@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
-import { CENTER, layout, NODE_RADIUS } from '../domain/canvasLayout'
+import { CENTER, DOT_RADIUS, layout, NODE_RADIUS } from '../domain/canvasLayout'
 import { dotHitRadiusUnits, labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
@@ -63,6 +63,20 @@ function useElementWidth(): [React.RefObject<HTMLDivElement | null>, number | nu
 const LABEL_TIER_FALLBACK: CanvasLabelTier = 'full'
 
 const HIT_REFERENCE_WIDTH = 500
+
+// Issue 023 — STYLE_GUIDE §7 responsive degradation is "shrink one step ->
+// truncate -> legend, no jiggle". Dimension arc labels are short by
+// construction (a handful of named axes); parameter labels are user-authored
+// and can be long, so the 400-640px "truncated" tier needs an actual
+// truncation step (dimension labels don't have one yet — out of scope here).
+// A full anti-collision/measure-text solver is explicitly out of scope per
+// the issue; this is a deterministic char-count truncation.
+const PARAM_LABEL_TRUNCATE_LENGTH = 8
+
+function truncateParamLabel(label: string): string {
+  if (label.length <= PARAM_LABEL_TRUNCATE_LENGTH) return label
+  return `${label.slice(0, PARAM_LABEL_TRUNCATE_LENGTH - 1)}…`
+}
 
 export function Canvas({
   dimensions,
@@ -213,9 +227,19 @@ export function Canvas({
                 data-parameter-id={dot.parameterId}
                 cx={dot.x}
                 cy={dot.y}
-                r={5}
+                r={DOT_RADIUS}
                 style={{ fill: dot.color }}
               />
+              {labelTier !== 'legend' ? (
+                <text
+                  className="canvas-param-label"
+                  x={dot.labelPos.x}
+                  y={dot.labelPos.y}
+                  textAnchor="middle"
+                >
+                  {labelTier === 'truncated' ? truncateParamLabel(dot.label) : dot.label}
+                </text>
+              ) : null}
             </g>
           )
         })}

@@ -988,6 +988,23 @@ body {
   display: none;
 }
 
+/* Parameter dot labels (issue 023, SPEC §4.2, STYLE_GUIDE §7): mirrors
+   .canvas-arc-label above — same type role (canvas label), same muted ink,
+   same legend-tier hide rule. Positioned via DotGeometry.labelPos
+   (src/domain/canvasLayout.ts), outside the arc on the dot's own radial
+   angle; text content is truncated by Canvas.tsx at the 'truncated' tier
+   (deterministic char-count, not a measured/anti-collision layout — out of
+   scope per the issue). */
+.canvas-param-label {
+  font-family: var(--font-ui);
+  font-size: var(--text-mono);
+  fill: var(--ink-muted);
+}
+
+.canvas-shell[data-label-tier='legend'] .canvas-param-label {
+  display: none;
+}
+
 .canvas-dot {
   stroke: none;
 }
@@ -1012,7 +1029,10 @@ body {
 .canvas-dot-group--bound .canvas-dot {
   stroke: var(--paper);
   stroke-width: 2px;
-  r: 7px;
+  /* Issue 023 bumped the resting dot radius (5 -> DOT_RADIUS = 8 in
+     canvasLayout.ts) for legibility; the bound ring must stay visibly larger
+     than resting, so it scales up proportionally (was 7px against a 5px rest). */
+  r: 11px;
 }
 
 /* Guided binding (SPEC §4.2): only the active dimension's arc + labels read at

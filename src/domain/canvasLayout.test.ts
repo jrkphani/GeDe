@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { layout, NODE_RADIUS, type CanvasLayoutInput } from './canvasLayout'
+import { ARC_RADIUS, layout, NODE_RADIUS, type CanvasLayoutInput } from './canvasLayout'
 
 const CENTER = 500
 
@@ -198,6 +198,41 @@ describe('layout', () => {
       expect(afterById.get(id)).toEqual(node)
     }
     expect(afterById.get('ctxC')).toBeDefined()
+  })
+
+  // Issue 023 — every dot gains a labelPos outside ARC_RADIUS, on the dot's
+  // own radial angle (same angle convention as pointAt: 0 = north, clockwise).
+  it('adds a labelPos for each dot, outside ARC_RADIUS on the dot\'s own radial angle, deterministic across n', () => {
+    for (const n of [2, 3]) {
+      const dimensions = Array.from({ length: n }, (_, i) => dimension(`d${i}`, i))
+      const parametersByDimension = Object.fromEntries(dimensions.map((d) => [d.id, params(d.id, 2)]))
+      const input: CanvasLayoutInput = {
+        dimensions,
+        parametersByDimension,
+        contexts: [],
+        bindingsByContext: {},
+      }
+      const geometry = layout(input)
+
+      expect(geometry.dots.length).toBeGreaterThan(0)
+      for (const dot of geometry.dots) {
+        expect(Number.isFinite(dot.labelPos.x)).toBe(true)
+        expect(Number.isFinite(dot.labelPos.y)).toBe(true)
+
+        const labelDistance = distanceFromCenter(dot.labelPos.x, dot.labelPos.y)
+        expect(labelDistance).toBeGreaterThan(ARC_RADIUS)
+
+        // Same radial angle as the dot itself (pointAt's convention: angle =
+        // atan2(dx, -dy) relative to CENTER).
+        const dotAngle = Math.atan2(dot.x - CENTER, -(dot.y - CENTER))
+        const labelAngle = Math.atan2(dot.labelPos.x - CENTER, -(dot.labelPos.y - CENTER))
+        expect(labelAngle).toBeCloseTo(dotAngle, 5)
+      }
+
+      // Determinism (ADR-0005): identical input, identical output, including labelPos.
+      const again = layout(input)
+      expect(again).toEqual(geometry)
+    }
   })
 
   // Design brief targets a 16ms (one-frame) budget for 100 contexts. Asserted

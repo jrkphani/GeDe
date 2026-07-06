@@ -351,6 +351,88 @@ describe('Canvas', () => {
     })
   })
 
+  describe('parameter dots + labels (issue 023)', () => {
+    const paramDims = [dim('dA', 0), dim('dB', 1)]
+    const paramParams = {
+      dA: [param('dA', 'dA-p0', 0), param('dA', 'ReallyLongParamName', 1)],
+      dB: [param('dB', 'dB-p0', 0), param('dB', 'dB-p1', 1)],
+    }
+
+    it('renders one label per parameter dot with its name, and a legible dot radius', () => {
+      // jsdom's real (unmocked) ResizeObserver never fires, and the initial
+      // mount measurement (`getBoundingClientRect().width`) is 0 in jsdom, not
+      // null — so the tier defaults to 'legend' unless a width is supplied
+      // the same way the responsive-tier tests below do.
+      type ResizeCallback = (entries: { contentRect: { width: number } }[]) => void
+      let observed: ResizeCallback | null = null
+      const Original = window.ResizeObserver
+      window.ResizeObserver = function (cb: ResizeCallback) {
+        observed = cb
+        return { observe: () => {}, unobserve: () => {}, disconnect: () => {} }
+      } as unknown as typeof ResizeObserver
+      try {
+        const { container } = render(
+          <Canvas
+            dimensions={paramDims}
+            parametersByDimension={paramParams}
+            contexts={[]}
+            bindingsByContext={{}}
+            selectedContextId={null}
+            onSelect={() => {}}
+          />,
+        )
+        act(() => observed?.([{ contentRect: { width: 800 } }]))
+
+        const labels = Array.from(container.querySelectorAll('.canvas-param-label'))
+        expect(labels).toHaveLength(4)
+        expect(labels.map((l) => l.textContent).sort()).toEqual(
+          ['dA-p0', 'ReallyLongParamName', 'dB-p0', 'dB-p1'].sort(),
+        )
+
+        const dotEl = container.querySelector('.canvas-dot') as SVGCircleElement
+        // Legibility bump (issue 023 bug report: the original r=5 measured
+        // ~2-4px on screen). Above 5 is a meaningful, testable floor.
+        expect(Number(dotEl.getAttribute('r'))).toBeGreaterThan(5)
+      } finally {
+        window.ResizeObserver = Original
+      }
+    })
+
+    it('degrades labels per the responsive tier: full text ≥640, truncated 400-640, hidden <400', () => {
+      type ResizeCallback = (entries: { contentRect: { width: number } }[]) => void
+      let observed: ResizeCallback | null = null
+      const Original = window.ResizeObserver
+      window.ResizeObserver = function (cb: ResizeCallback) {
+        observed = cb
+        return { observe: () => {}, unobserve: () => {}, disconnect: () => {} }
+      } as unknown as typeof ResizeObserver
+      try {
+        const { container } = render(
+          <Canvas
+            dimensions={paramDims}
+            parametersByDimension={paramParams}
+            contexts={[]}
+            bindingsByContext={{}}
+            selectedContextId={null}
+            onSelect={() => {}}
+          />,
+        )
+
+        act(() => observed?.([{ contentRect: { width: 800 } }]))
+        expect(screen.getByText('ReallyLongParamName')).toBeInTheDocument()
+
+        act(() => observed?.([{ contentRect: { width: 500 } }]))
+        expect(screen.queryByText('ReallyLongParamName')).not.toBeInTheDocument()
+        expect(container.querySelectorAll('.canvas-param-label').length).toBeGreaterThan(0)
+
+        act(() => observed?.([{ contentRect: { width: 300 } }]))
+        expect(container.querySelectorAll('.canvas-param-label')).toHaveLength(0)
+      } finally {
+        window.ResizeObserver = Original
+      }
+    })
+  })
+
   describe('compose mode (issue 010)', () => {
     // Two dims with real parameters so dots exist to click; ctxDraft is the
     // context being composed (starts unbound).

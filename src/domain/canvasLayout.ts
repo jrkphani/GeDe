@@ -12,10 +12,19 @@ const SIZE = 1000
 // `transform="translate(${CENTER},${CENTER})"` (see Canvas.tsx). Exported so
 // the renderer can never drift from this value.
 export const CENTER = SIZE / 2
-const ARC_RADIUS = 400
+export const ARC_RADIUS = 400
 const ARC_STROKE_HALF_WIDTH = 3 // 6px stroke (STYLE_GUIDE §7), 3px either side of ARC_RADIUS
 const GAP_RADIANS = (6 * Math.PI) / 180 // fixed 6deg gap between dimension arcs
 const LABEL_RADIUS = ARC_RADIUS + 24
+// Issue 023 — parameter dots gained a legible visual radius (up from the
+// original 5, which measured ~2-4px on screen — see done/023's bug report).
+// The dot label sits further out than the arc label offset: dots (and their
+// enlarged radius + the compose-mode bound ring, up to BOUND_DOT_RADIUS in
+// base.css) sit ON the arc's centerline, so a label needs enough clearance to
+// pass the stroke halfwidth AND the dot's own radius, unlike an arc label
+// which only needs to clear the stroke.
+export const DOT_RADIUS = 8
+const DOT_LABEL_RADIUS = ARC_RADIUS + 32
 export const NODE_RADIUS = 14
 const COLLIDE_RADIUS = NODE_RADIUS + 6
 const JITTER_RADIUS = 8
@@ -82,6 +91,7 @@ export interface DotGeometry {
   y: number
   color: string
   label: string
+  labelPos: Point
 }
 
 export interface NodeGeometry {
@@ -177,7 +187,15 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
       const angle = startAngle + slot * (j + 1)
       const pos = pointAt(ARC_RADIUS, angle)
       positions.set(param.id, pos)
-      dots.push({ dimensionId: dim.id, parameterId: param.id, x: pos.x, y: pos.y, color: dim.color, label: param.name })
+      dots.push({
+        dimensionId: dim.id,
+        parameterId: param.id,
+        x: pos.x,
+        y: pos.y,
+        color: dim.color,
+        label: param.name,
+        labelPos: pointAt(DOT_LABEL_RADIUS, angle),
+      })
     })
     dotPositionsByDimension.set(dim.id, positions)
   })
