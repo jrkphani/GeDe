@@ -15,7 +15,11 @@ export const CENTER = SIZE / 2
 export const ARC_RADIUS = 400
 const ARC_STROKE_HALF_WIDTH = 3 // 6px stroke (STYLE_GUIDE §7), 3px either side of ARC_RADIUS
 const GAP_RADIANS = (6 * Math.PI) / 180 // fixed 6deg gap between dimension arcs
-const LABEL_RADIUS = ARC_RADIUS + 24
+// The dimension name sits just INSIDE the ring, centered on the arc midpoint
+// (issue 023 fix): parameter labels now live outside the arc, so an outside
+// dimension label at the same mid-angle collided with the middle parameter
+// (both grow outward along the same ray). Placing it inside keeps it clear.
+const LABEL_RADIUS = ARC_RADIUS - 40
 // Issue 023 — parameter dots gained a legible visual radius (up from the
 // original 5, which measured ~2-4px on screen — see done/023's bug report).
 // The dot label sits further out than the arc label offset: dots (and their
@@ -75,12 +79,19 @@ export interface Point {
   y: number
 }
 
+// SVG text-anchor for a radial label, chosen by which side of the circle it
+// sits on so the text always reads OUTWARD and never crosses the arc/dots
+// (issue 023 fix): right half → 'start' (grows right), left half → 'end'
+// (grows left), near the vertical top/bottom → 'middle' (centered).
+export type LabelAnchor = 'start' | 'middle' | 'end'
+
 export interface ArcGeometry {
   dimensionId: string
   d: string
   color: string
   label: string
   labelPos: Point
+  labelAnchor: LabelAnchor
   empty: boolean
 }
 
@@ -92,6 +103,7 @@ export interface DotGeometry {
   color: string
   label: string
   labelPos: Point
+  labelAnchor: LabelAnchor
 }
 
 export interface NodeGeometry {
@@ -115,6 +127,17 @@ export interface CanvasGeometry {
 // dot/node placement agree on the same coordinate frame.
 function pointAt(radius: number, angle: number): Point {
   return { x: CENTER + radius * Math.sin(angle), y: CENTER - radius * Math.cos(angle) }
+}
+
+// Side-aware text anchor so a radial label grows away from the circle instead
+// of overlapping it. sin(angle) is the horizontal offset from center; the
+// ±0.2 dead-band (~11.5° either side of vertical) keeps top/bottom labels
+// centered rather than jittering between start/end.
+function labelAnchorFor(angle: number): LabelAnchor {
+  const horizontal = Math.sin(angle)
+  if (horizontal > 0.2) return 'start'
+  if (horizontal < -0.2) return 'end'
+  return 'middle'
 }
 
 // Deterministic, non-cryptographic string hash (FNV-1a) — used only to seed a
@@ -178,6 +201,7 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
       color: dim.color,
       label: dim.name,
       labelPos: pointAt(LABEL_RADIUS, midAngle),
+      labelAnchor: 'middle', // centered inside the ring at the arc midpoint
       empty: params.length === 0,
     })
 
@@ -195,6 +219,7 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
         color: dim.color,
         label: param.name,
         labelPos: pointAt(DOT_LABEL_RADIUS, angle),
+        labelAnchor: labelAnchorFor(angle),
       })
     })
     dotPositionsByDimension.set(dim.id, positions)

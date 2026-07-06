@@ -235,6 +235,26 @@ describe('layout', () => {
     }
   })
 
+  // Issue 023 fix — a label reads OUTWARD from the ring so it never crosses the
+  // arc/dots: right half anchors 'start', left half 'end', vertical top/bottom
+  // 'middle'. The dimension (arc) label sits inside, always centered.
+  it('gives each dot a side-aware text anchor and centers the dimension label', () => {
+    const dimensions = [dimension('d0', 0), dimension('d1', 1)]
+    const parametersByDimension = Object.fromEntries(dimensions.map((d) => [d.id, params(d.id, 3)]))
+    const geometry = layout({ dimensions, parametersByDimension, contexts: [], bindingsByContext: {} })
+
+    for (const dot of geometry.dots) {
+      const horizontal = dot.labelPos.x - CENTER
+      if (dot.labelAnchor === 'start') expect(horizontal).toBeGreaterThan(0)
+      else if (dot.labelAnchor === 'end') expect(horizontal).toBeLessThan(0)
+      // A dot's outward label anchor must never point back across the circle.
+      expect(['start', 'middle', 'end']).toContain(dot.labelAnchor)
+    }
+    // With two dimensions the arcs face east/west, so their labels land on a
+    // side — but the dimension label is always centered (it sits inside).
+    for (const arc of geometry.arcs) expect(arc.labelAnchor).toBe('middle')
+  })
+
   // Design brief targets a 16ms (one-frame) budget for 100 contexts. Asserted
   // here with real headroom (40ms) for shared/noisy CI hardware — GitHub
   // Actions measured 16.4ms on a run that took 14ms locally, and a strict

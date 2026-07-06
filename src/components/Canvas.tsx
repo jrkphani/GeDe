@@ -188,7 +188,8 @@ export function Canvas({
                 className="canvas-arc-label"
                 x={arc.labelPos.x}
                 y={arc.labelPos.y}
-                textAnchor="middle"
+                textAnchor={arc.labelAnchor}
+                dominantBaseline="central"
               >
                 {arc.label}
               </text>
@@ -235,7 +236,8 @@ export function Canvas({
                   className="canvas-param-label"
                   x={dot.labelPos.x}
                   y={dot.labelPos.y}
-                  textAnchor="middle"
+                  textAnchor={dot.labelAnchor}
+                  dominantBaseline="central"
                 >
                   {labelTier === 'truncated' ? truncateParamLabel(dot.label) : dot.label}
                 </text>
