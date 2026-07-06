@@ -21,6 +21,13 @@ export const buttonVariants = cva('', {
       // confirm) — same shape as rowAction, recolored via the Tailwind bridge
       // to --danger (theme-bridge.css), never a hardcoded color.
       danger: 'row-action bg-destructive text-destructive-foreground border-destructive hover:opacity-90',
+      // Standalone, always-visible command buttons (issue 026) — "Import
+      // project", "Use as dimension…", "Add dimension". `rowAction` is
+      // designed for hover-revealed row chrome (visibility: hidden until a
+      // row/dim-row/project-row is hovered, STYLE_GUIDE §6); a command
+      // button must read as clickable at rest, so it gets its own class
+      // rather than reusing `.row-action`'s quiet styling.
+      command: 'command-button',
     },
   },
   defaultVariants: { variant: 'rowAction' },

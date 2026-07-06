@@ -557,6 +557,34 @@ body {
   color: var(--ink);
 }
 
+/* Standalone "command" buttons (issue 026) — always-on affordances (Import
+   project, Use as dimension…, Add dimension) reused `.row-action`'s quiet,
+   hover-revealed row chrome (STYLE_GUIDE §6) and were nearly invisible at
+   rest against the graph-paper ground. A subtle `--paper` fill + `--ink`
+   text + a firmer `--ink-muted` boundary reads as clickable at rest; hover
+   only deepens the fill, it never introduces the contrast for the first
+   time. Secondary weight — the accent stays reserved for chrome/selection
+   (§2.2), so no new hue lives here. */
+.command-button {
+  font: inherit;
+  font-size: var(--text-label);
+  color: var(--ink);
+  background: var(--paper);
+  border: 1px solid var(--ink-muted);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  cursor: pointer;
+}
+
+.command-button:hover {
+  background: var(--grid-minor);
+}
+
+.command-button:disabled {
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
 .status-line {
   display: flex;
   align-items: center;
@@ -1907,12 +1935,25 @@ body {
   color: var(--ink);
 }
 
-/* Selection bar slides in at the panel foot when ≥1 row is selected. */
+/* Selection bar (issue 025): sticky within the panel's scroll viewport, not
+   end-of-list flow — it stays reachable near the selection regardless of
+   table height (no more scrolling to the bottom of a tall table to reach
+   "Use as dimension…"). `bottom: 0` sticks it to the nearest scrolling
+   ancestor (`.surface`, SITEMAP §2) but only while `.t2-table` — its
+   containing block — is itself in view, so it still disappears once the
+   whole panel has scrolled past. Progressive disclosure (only when ≥1 row
+   is selected) and the promote popover are unchanged; only the positioning
+   moved from static flow to sticky. An opaque fill is required now that
+   grid rows can scroll underneath the pinned bar. */
 .t2-selection-bar {
+  position: sticky;
+  bottom: 0;
+  z-index: 1;
   display: flex;
   align-items: center;
   gap: var(--space-4);
-  padding: var(--space-2) var(--space-1) 0;
+  padding: var(--space-2) var(--space-1);
+  background: var(--panel);
   border-top: 1px solid var(--hairline);
 }
 

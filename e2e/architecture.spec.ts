@@ -106,3 +106,37 @@ test('architecture: build tables, promote to dimensions, register offers params,
   await expect(page.getByRole('option', { name: 'People' })).toBeVisible()
   await expect(page.getByRole('option', { name: 'Users' })).toBeHidden()
 })
+
+// Issue 025, test-first plan item 3: the selection bar/promote trigger must
+// stay reachable near the top of a tall table without scrolling to its end.
+test('architecture: selection bar stays in view (sticky) on a tall table without scrolling to the bottom', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill('Tavalo')
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: 'Open Tavalo' }).click()
+
+  await page.getByRole('link', { name: 'Architecture' }).click()
+  await expect(page.getByText('2nd Tier · Architecture')).toBeVisible()
+
+  await addTable(page, 'Stakeholders')
+  // A tall table — enough rows that end-of-list flow would push the
+  // selection bar far below the fold (design brief, done/025).
+  const entryNames = Array.from({ length: 30 }, (_, i) => `Entry ${i + 1}`)
+  for (const name of entryNames) await addEntry(page, 'Stakeholders', name)
+
+  const panel = tablePanel(page, 'Stakeholders')
+  // Select the first entry — at the very top of a table dozens of rows tall
+  // — without scrolling the page at all.
+  await panel.getByRole('button', { name: 'Select Entry 1' }).click()
+
+  const promoteTrigger = page.getByRole('button', { name: 'Use as dimension…' })
+  await expect(promoteTrigger).toBeVisible()
+  // The sticky positioning (base.css `.t2-selection-bar { position: sticky }`)
+  // means this is reachable without any scroll — assert it's actually within
+  // the viewport, not merely present in the DOM off-screen.
+  await expect(promoteTrigger).toBeInViewport()
+})

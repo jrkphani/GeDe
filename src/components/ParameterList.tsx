@@ -57,7 +57,11 @@ function ParameterRowView({
           <Link2 size={14} />
         </span>
       )}
-      <Button aria-label={`Remove ${param.name}`} onClick={() => void remove(dimensionId, param.id)}>
+      <Button
+        variant="command"
+        aria-label={`Remove ${param.name}`}
+        onClick={() => void remove(dimensionId, param.id)}
+      >
         Remove
       </Button>
     </div>

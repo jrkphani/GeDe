@@ -82,7 +82,7 @@ function RemoveDimensionConfirm({
           {bindingCount === 1 ? 'binding' : 'bindings'}.
         </p>
         <div className="remove-dimension-confirm__actions">
-          <Button variant="bare" className="row-action" onClick={() => setOpen(false)}>
+          <Button variant="command" onClick={() => setOpen(false)}>
             Cancel
           </Button>
           <Button
@@ -226,6 +226,7 @@ export function DimensionManagerPanel({ childCanvas = false }: { childCanvas?: b
           freely added (SPEC recursion rule) — only sub-parameters are edited. */}
       {childCanvas ? null : (
         <Button
+          variant="command"
           className="dim-manager__add"
           onClick={() => {
             void add() // opens the new row's editor via the same store update
@@ -248,7 +249,7 @@ export function DimensionManager({
   return (
     <Popover defaultOpen={defaultOpen}>
       <PopoverTrigger asChild>
-        <Button>Dimensions</Button>
+        <Button variant="command">Dimensions</Button>
       </PopoverTrigger>
       {/* Esc order (SITEMAP §4): close the in-place editor first, the popover
           on the next press — never both at once. */}

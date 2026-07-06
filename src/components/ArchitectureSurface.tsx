@@ -340,8 +340,7 @@ function ResolutionPopover({
       </p>
       <div className="t2-resolution__actions">
         <Button
-          variant="bare"
-          className="row-action"
+          variant="command"
           onClick={() => {
             void resolveKeep(tableId, entry.id).then(() => {
               useStatusStore.getState().announce(`Deleted ${entry.name} — parameter kept as unlinked copy`)
@@ -407,7 +406,9 @@ function PromotePopover({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button className="t2-promote-trigger">Use as dimension…</Button>
+        <Button variant="command" className="t2-promote-trigger">
+          Use as dimension…
+        </Button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={4} className="t2-promote">
         <div className="t2-promote__modes">
@@ -458,7 +459,12 @@ function PromotePopover({
             ? `Creates ${plural(unlinkedCount, 'parameter')} on ${targetName || '…'}`
             : 'All selected entries are already linked'}
         </p>
-        <Button className="t2-promote__confirm" disabled={!canConfirm} onClick={() => void confirm()}>
+        <Button
+          variant="command"
+          className="t2-promote__confirm"
+          disabled={!canConfirm}
+          onClick={() => void confirm()}
+        >
           Promote
         </Button>
       </PopoverContent>

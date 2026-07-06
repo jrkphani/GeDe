@@ -56,7 +56,9 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <main className="projects">
       <div className="projects__toolbar">
-        <Button onClick={() => fileInputRef.current?.click()}>Import project</Button>
+        <Button variant="command" onClick={() => fileInputRef.current?.click()}>
+          Import project
+        </Button>
         <Input
           ref={fileInputRef}
           type="file"

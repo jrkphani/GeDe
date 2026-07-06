@@ -47,6 +47,13 @@ Light is canonical: designed, screenshotted, and verified first. Dark is derived
 
 Forest green is the *entire* chrome vocabulary — there is no second UI hue. Success states reuse `--accent`; the remaining status colors are `--danger #B3402E / #E06C55` and `--warning #9A6B00 / #D0A43C`, used only for genuine error/warning semantics.
 
+**Two button intents** (issue 026 amendment): the `Button` primitive's variants split into two deliberately different resting affordances — neither borrows the other's chrome, and neither introduces a new hue.
+
+- **Row action** (`rowAction` variant → `.row-action`): quiet by design. `--ink-muted` text, transparent fill, `--hairline` border; hidden (`visibility: hidden`) until its row is hovered/focused (§6's progressive disclosure). For affordances that belong to a specific table/list row — drag handle, add-child, per-row delete — never for a button that is always on screen.
+- **Command button** (`command` variant → `.command-button`): a standalone, always-visible action — "Import project", "Use as dimension…", "Add dimension". A quiet `--paper` fill + `--ink` text + a firmer `--ink-muted` boundary reads as clickable at rest (meeting the §10 contrast floor immediately, not only on hover); hover only deepens the fill (to `--grid-minor`), it never introduces the contrast for the first time. This is secondary weight — the accent stays reserved for chrome/selection, so `command` carries no hue of its own (a caller may still layer an existing accent-text override on top, e.g. the promote trigger, without that being a second command-button hue).
+
+Reassigning a button between these two is a design decision, not a free implementation choice: it changes whether the button is quiet-until-hovered or legible at rest.
+
 ### 2.3 Dimension data palette
 
 Assigned in dimension sort order, user-overridable. **No green slots** — green is chrome (principle 3). Values are the light-theme set; dark-theme companions brighten one step. Adjacent-pair distinguishability (including for deuteranopia/protanopia) is validated by an automated contrast test at M2; these are the seeds:
@@ -104,10 +111,11 @@ Hierarchy comes from weight and spacing, never from additional colors. Minimum t
 
 - **Row height 40px**; cell padding 12px horizontal; hairline row separators.
 - **Column separation & row banding (amended, issue 024)**: a faint `--hairline` vertical rule sits between every column (header + body); the trailing column is closed by the panel border. Alternate **data** rows carry a barely-there `--row-zebra` wash for horizontal tracking (the phantom row is exempt — it is an affordance, not data). The frozen symbol column keeps its depth cue (`--shadow-frozen-col`) so it still reads one step stronger than the uniform inter-column hairlines. This supersedes the former "no vertical rules" / "rows are quiet, hairline separators only" clauses. Text contrast stays ≥4.5:1 on every tint in both themes (§10).
-- Row hover: `--paper`-tinted wash reveals affordances (drag handle, add-child); **selection** wash and **hover** wash both win over the zebra tint (selection > hover > zebra).
+- Row hover: `--paper`-tinted wash reveals affordances (drag handle, add-child) — these are the `rowAction` button variant (§2.2), quiet until the row is hovered/focused; **selection** wash and **hover** wash both win over the zebra tint (selection > hover > zebra). A button that is **not** scoped to a specific row (a table's own promote/selection bar, an "Add table" ghost affordance) is a **command button** instead (§2.2) — it must read as clickable without a hover.
 - Click or Enter edits in place — borderless input, identical metrics to display text (zero layout shift). Enter commits + moves down; Tab moves right; Esc reverts. New row = start typing in the phantom row.
 - Nested rows indent by 24px per level (one grid cell); no tree lines.
 - Validation is inline and non-blocking: duplicate-tuple warnings are a muted mono badge (`= β`), never a popup.
+- A table's selection/promote bar (issue 025) stays `position: sticky` within its own panel rather than flowing to the end of the list — it must stay reachable near the selection regardless of how many rows the table has.
 
 ## 7. Canvas
 
