@@ -614,6 +614,34 @@ body {
   border-bottom: none;
 }
 
+/* Column separation (024, STYLE_GUIDE §6 amendment): a faint vertical hairline
+   between every column, header and body; the trailing column is closed by the
+   panel border, so it carries none. The frozen symbol column keeps its own
+   depth cue (below) so it still reads one step stronger. */
+.editable-grid th,
+.editable-grid td {
+  border-right: 1px solid var(--hairline);
+}
+
+.editable-grid th:last-child,
+.editable-grid td:last-child {
+  border-right: none;
+}
+
+/* Row banding (024): a barely-there wash on alternate DATA rows for horizontal
+   tracking. Keyed off `.grid-row--zebra` (added per data-row index in
+   EditableGrid) rather than `:nth-child`, so the phantom row and selection are
+   never mis-striped. Non-frozen cells are transparent and inherit this row
+   background; the frozen symbol cell needs its own opaque stripe to stay
+   continuous under horizontal scroll. Selection (below, defined later) wins. */
+.editable-grid tr.grid-row--zebra {
+  background: var(--row-zebra);
+}
+
+.editable-grid tr.grid-row--zebra td.grid-col--symbol {
+  background: var(--row-zebra);
+}
+
 /* Frozen symbol column — the only vertical rule in the table. Once the
    register's columns (issue 005 added two) don't all fit `.register-scroll`'s
    width, this column stays pinned during horizontal scroll and everything

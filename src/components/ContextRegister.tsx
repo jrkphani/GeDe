@@ -21,7 +21,7 @@ const DOCUMENTED_LABEL: Record<'draft' | 'complete' | 'documented', string> = {
 function focusRow(contextId: string): void {
   const escaped = typeof CSS !== 'undefined' ? CSS.escape(contextId) : contextId
   const row = document.querySelector<HTMLElement>(`[data-row-id="${escaped}"]`)
-  const target = row?.querySelector<HTMLElement>('[role="gridcell"], button')
+  const target = row?.querySelector<HTMLElement>('.grid-cell, button')
   target?.scrollIntoView({ block: 'nearest' })
   target?.focus()
 }

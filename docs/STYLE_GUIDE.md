@@ -102,8 +102,9 @@ Hierarchy comes from weight and spacing, never from additional colors. Minimum t
 
 ## 6. Tables (Numbers grammar, comfortable density)
 
-- **Row height 40px**; cell padding 12px horizontal; hairline row separators only (no vertical rules except between frozen symbol column and the rest).
-- Row hover: `--paper`-tinted wash reveals affordances (drag handle, add-child). Otherwise rows are quiet.
+- **Row height 40px**; cell padding 12px horizontal; hairline row separators.
+- **Column separation & row banding (amended, issue 024)**: a faint `--hairline` vertical rule sits between every column (header + body); the trailing column is closed by the panel border. Alternate **data** rows carry a barely-there `--row-zebra` wash for horizontal tracking (the phantom row is exempt — it is an affordance, not data). The frozen symbol column keeps its depth cue (`--shadow-frozen-col`) so it still reads one step stronger than the uniform inter-column hairlines. This supersedes the former "no vertical rules" / "rows are quiet, hairline separators only" clauses. Text contrast stays ≥4.5:1 on every tint in both themes (§10).
+- Row hover: `--paper`-tinted wash reveals affordances (drag handle, add-child); **selection** wash and **hover** wash both win over the zebra tint (selection > hover > zebra).
 - Click or Enter edits in place — borderless input, identical metrics to display text (zero layout shift). Enter commits + moves down; Tab moves right; Esc reverts. New row = start typing in the phantom row.
 - Nested rows indent by 24px per level (one grid cell); no tree lines.
 - Validation is inline and non-blocking: duplicate-tuple warnings are a muted mono badge (`= β`), never a popup.

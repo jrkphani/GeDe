@@ -2,7 +2,7 @@
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { EditableGrid, type GridColumn } from './EditableGrid'
+import { EditableGrid, PHANTOM_ROW_ID, nextEditableCell, type GridColumn, type GridNav } from './EditableGrid'
 
 // Generic domain, deliberately unrelated to contexts/dimensions — proves
 // EditableGrid carries zero register-specific logic (acceptance criterion 4).
@@ -58,7 +58,7 @@ function makeColumns(
 }
 
 describe('EditableGrid', () => {
-  it('click/Enter edits a text cell; Enter commits and moves focus to the cell below', async () => {
+  it('click/Enter edits a text cell; Enter commits and opens the cell below for editing (022)', async () => {
     const onCommit = vi.fn()
     const user = userEvent.setup()
     render(<EditableGrid rows={rows} columns={makeColumns(onCommit)} getRowId={(r) => r.id} />)
@@ -66,7 +66,8 @@ describe('EditableGrid', () => {
     expect(screen.getByDisplayValue('Alpha')).toHaveFocus()
     await user.keyboard('Zed{Enter}')
     expect(onCommit).toHaveBeenCalledWith(rows[0], 'Zed')
-    expect(screen.getByText('Beta')).toHaveFocus()
+    // The cell below is now an editor with focus (not a display cell) — 022.
+    expect(screen.getByDisplayValue('Beta')).toHaveFocus()
   })
 
   it('Esc reverts an in-progress edit without committing', async () => {
@@ -185,7 +186,7 @@ describe('EditableGrid — multiline cell', () => {
 
   it('shows the full value as a title attribute for hover/focus, truncated display otherwise', () => {
     render(<EditableGrid rows={noteRows} columns={makeNoteColumns()} getRowId={(r) => r.id} />)
-    expect(screen.getByText('A short justification').closest('[role="gridcell"]')).toHaveAttribute(
+    expect(screen.getByText('A short justification').closest('.grid-cell--multiline')).toHaveAttribute(
       'title',
       'A short justification',
     )
@@ -237,5 +238,135 @@ describe('onRowClick (issue 009)', () => {
     render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} />)
     await user.click(screen.getByText('Alpha'))
     expect(screen.getByRole('textbox')).toHaveValue('Alpha')
+  })
+})
+
+describe('accessible names & grid semantics (issue 021)', () => {
+  it('an editing text cell has a name of "{column} for {row label}"', async () => {
+    const user = userEvent.setup()
+    render(
+      <EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} getRowLabel={(r) => r.title} />,
+    )
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.getByRole('textbox', { name: 'Title for Alpha' })).toHaveFocus()
+  })
+
+  it('a combobox trigger has a name including its selection state', () => {
+    render(
+      <EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} getRowLabel={(r) => r.title} />,
+    )
+    // rows[0].category is null → "unset"
+    expect(screen.getByRole('button', { name: 'Category for Alpha: unset' })).toBeInTheDocument()
+  })
+
+  it('an empty text cell announces "empty" and hides the em-dash from assistive tech', () => {
+    const emptyRows: Task[] = [{ id: 'x', title: '', priority: 'P1', category: null }]
+    render(
+      <EditableGrid rows={emptyRows} columns={makeColumns()} getRowId={(r) => r.id} getRowLabel={() => 'row X'} />,
+    )
+    const cell = screen.getByLabelText('Title for row X, empty')
+    expect(cell).toBeInTheDocument()
+    expect(cell.querySelector('.grid-cell__placeholder')).toHaveAttribute('aria-hidden', 'true')
+  })
+
+  it('every header is a scoped column header (native table semantics)', () => {
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} />)
+    const headers = screen.getAllByRole('columnheader')
+    expect(headers).toHaveLength(3)
+    for (const h of headers) expect(h).toHaveAttribute('scope', 'col')
+  })
+
+  it('the phantom row input has a real accessible name (not placeholder-only)', () => {
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate: vi.fn() }}
+      />,
+    )
+    expect(screen.getByRole('textbox', { name: 'New task' })).toBeInTheDocument()
+  })
+})
+
+describe('keyboard editing grammar (issue 022)', () => {
+  it('Tab commits and opens the next editable cell for editing', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    render(<EditableGrid rows={rows} columns={makeColumns(onCommit)} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('Alpha'))
+    await user.keyboard('Xed{Tab}')
+    expect(onCommit).toHaveBeenCalledWith(rows[0], 'Xed')
+    // The next editable cell (priority/mono) is now an editor with focus.
+    expect(screen.getByDisplayValue('P1')).toHaveFocus()
+  })
+
+  it('Enter on the last data row never strands focus on <body>', async () => {
+    const user = userEvent.setup()
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('Beta'))
+    await user.keyboard('{Enter}')
+    expect(document.body).not.toHaveFocus()
+    // Focus rests on the just-committed cell (display), not lost.
+    expect(screen.getByText('Beta')).toHaveFocus()
+  })
+
+  it('Shift+Enter inserts a newline in a multiline cell and does not advance', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    const noteRows = [{ id: 'n1', body: 'A short justification' }]
+    const cols: GridColumn<(typeof noteRows)[number]>[] = [
+      {
+        id: 'body',
+        header: 'Body',
+        cell: {
+          kind: 'multiline',
+          getValue: (n) => n.body,
+          onCommit: (n, v) => {
+            onCommit(n, v)
+          },
+        },
+      },
+    ]
+    render(<EditableGrid rows={noteRows} columns={cols} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('A short justification'))
+    const textarea = screen.getByRole('textbox')
+    await user.keyboard('{Shift>}{Enter}{/Shift}')
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(textarea).toHaveFocus()
+  })
+})
+
+describe('nextEditableCell — pure boundary logic (issue 022)', () => {
+  const nav: GridNav = {
+    rowIds: ['r1', 'r2', PHANTOM_ROW_ID],
+    columnIds: ['a', 'b', 'c'],
+    columnKindById: { a: 'text', b: 'static', c: 'combobox' },
+    phantomColumnId: 'a',
+  }
+
+  it('right skips static columns within the row', () => {
+    expect(nextEditableCell(nav, 'r1', 'a', 'right')).toEqual({ rowId: 'r1', columnId: 'c' })
+  })
+
+  it('right wraps to the next row’s first editable cell', () => {
+    expect(nextEditableCell(nav, 'r1', 'c', 'right')).toEqual({ rowId: 'r2', columnId: 'a' })
+  })
+
+  it('left wraps back to the previous row’s last editable cell', () => {
+    expect(nextEditableCell(nav, 'r2', 'a', 'left')).toEqual({ rowId: 'r1', columnId: 'c' })
+  })
+
+  it('down walks the column', () => {
+    expect(nextEditableCell(nav, 'r1', 'a', 'down')).toEqual({ rowId: 'r2', columnId: 'a' })
+  })
+
+  it('down enters the phantom row only for the phantom column, else null', () => {
+    expect(nextEditableCell(nav, 'r2', 'a', 'down')).toEqual({ rowId: PHANTOM_ROW_ID, columnId: 'a' })
+    expect(nextEditableCell(nav, 'r2', 'c', 'down')).toBeNull()
+  })
+
+  it('returns null at the far boundary rather than stranding', () => {
+    expect(nextEditableCell(nav, PHANTOM_ROW_ID, 'a', 'right')).toBeNull()
   })
 })

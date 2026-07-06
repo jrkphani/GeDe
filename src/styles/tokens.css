@@ -7,6 +7,7 @@
   --grid-major: #e0ddd2;
   --panel: #ffffff;
   --hairline: #e3e1d8;
+  --row-zebra: #f6f5f0; /* §6 (024) — barely-there wash on alternate rows */
 
   /* Ink & chrome (forest green) — §2.2 */
   --ink: #1a1a1a;
@@ -75,6 +76,7 @@
   --grid-major: #2a2a28;
   --panel: #1f1f1e;
   --hairline: #2e2e2c;
+  --row-zebra: #242423; /* §6 (024) — zebra wash, dark */
   --ink: #f2f1ed;
   --ink-muted: #8f8d85;
   --accent: #63a583;
