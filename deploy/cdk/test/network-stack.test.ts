@@ -9,35 +9,56 @@ describe('NetworkStack (Gede-Test-Network)', () => {
     return Template.fromStack(network);
   }
 
-  it('provisions a VPC with 2 AZs, public + isolated subnets', () => {
+  it('provisions a VPC with 2 AZs, public + private + isolated subnets', () => {
     const template = synth();
 
     template.resourceCountIs('AWS::EC2::VPC', 1);
-    // 2 AZs x 2 subnet groups (public, isolated) = 4 subnets.
-    template.resourceCountIs('AWS::EC2::Subnet', 4);
+    // 2 AZs x 3 subnet groups (public, private, isolated) = 6 subnets
+    // (issue 030 adds the "private" compute tier to the issue-040 shape).
+    template.resourceCountIs('AWS::EC2::Subnet', 6);
     template.hasResourceProperties('AWS::EC2::Subnet', {
       MapPublicIpOnLaunch: true,
     });
   });
 
-  it('cost guard: creates zero NAT gateways', () => {
+  it('has 2 private (compute) and 2 isolated (data) subnets, tagged accordingly', () => {
     const template = synth();
-    template.resourceCountIs('AWS::EC2::NatGateway', 0);
+    const privateSubnets = template.findResources('AWS::EC2::Subnet', {
+      Properties: { Tags: Match.arrayWith([{ Key: 'aws-cdk:subnet-name', Value: 'private' }]) },
+    });
+    const isolatedSubnets = template.findResources('AWS::EC2::Subnet', {
+      Properties: { Tags: Match.arrayWith([{ Key: 'aws-cdk:subnet-name', Value: 'isolated' }]) },
+    });
+    expect(Object.keys(privateSubnets)).toHaveLength(2);
+    expect(Object.keys(isolatedSubnets)).toHaveLength(2);
   });
 
-  it('has no route to the internet from the isolated subnets (no NAT/IGW route)', () => {
+  it('cost guard: creates exactly one NAT gateway (single-AZ compute egress in `test`)', () => {
     const template = synth();
-    // Only the 2 public-subnet route tables should have a 0.0.0.0/0 route
-    // (to the Internet Gateway); the 2 isolated-subnet route tables must not.
+    // Issue 030 (ADR-0008) requires v2 compute egress, so the issue-040
+    // zero-NAT guard becomes a one-NAT guard: not zero (v1's static-only
+    // shape) and not one-per-AZ (the more expensive default `natGateways:
+    // subnetConfiguration.length` would produce).
+    template.resourceCountIs('AWS::EC2::NatGateway', 1);
+  });
+
+  it('routes public subnets to the Internet Gateway, private subnets to the NAT gateway, and isolated subnets nowhere', () => {
+    const template = synth();
     const routes = template.findResources('AWS::EC2::Route', {
       Properties: { DestinationCidrBlock: '0.0.0.0/0' },
     });
-    expect(Object.keys(routes)).toHaveLength(2);
-    for (const route of Object.values(routes)) {
-      expect((route as { Properties: Record<string, unknown> }).Properties).toEqual(
-        expect.objectContaining({ GatewayId: expect.anything() }),
-      );
-    }
+    // 2 public route tables -> IGW, 2 private route tables -> the single NAT
+    // gateway. The 2 isolated route tables get no 0.0.0.0/0 route at all —
+    // unchanged from issue 040's guarantee.
+    expect(Object.keys(routes)).toHaveLength(4);
+
+    const properties = Object.values(routes).map(
+      (route) => (route as { Properties: Record<string, unknown> }).Properties,
+    );
+    const gatewayRoutes = properties.filter((p) => p.GatewayId !== undefined);
+    const natRoutes = properties.filter((p) => p.NatGatewayId !== undefined);
+    expect(gatewayRoutes).toHaveLength(2);
+    expect(natRoutes).toHaveLength(2);
   });
 
   it('carries the four app-wide tags on the VPC', () => {

@@ -1,0 +1,44 @@
+name: migration-parity
+
+# Issue 030 test-first plan #1: proves the app's Drizzle migration history
+# (src/db/migrations/*.sql — identical to what src/db/migrate.ts applies
+# against in-browser PGlite) applies cleanly, from empty, to a real
+# PostgreSQL 17 server. This is the CI half of ADR-0008's "zero schema fork"
+# bet between v1 (PGlite) and v2 (RDS); it does not touch any real AWS
+# resource — the database here is a disposable `postgres:17` service
+# container, not RDS.
+#
+# Deliberately its own workflow (not folded into verify.yml or deploy.yml):
+# verify.yml is the language-agnostic app gate and deploy.yml is
+# CDK-synth/deploy only — this check is specific to the migration files and
+# has its own service-container dependency, so it gets its own job rather
+# than complicating either of those.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  migration-parity:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: gede_migration_parity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply the full Drizzle migration history to a clean Postgres 17
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/gede_migration_parity
+        run: bash deploy/migration-parity/check-migrations.sh

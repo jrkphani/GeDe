@@ -1,0 +1,260 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
+{
+  "Description": "GeDe v2 backend: managed RDS PostgreSQL 17 in isolated subnets — issue 030 (ADR-0008)",
+  "Outputs": {
+    "DatabaseEndpoint": {
+      "Description": "RDS endpoint address — isolated-subnet only, no public route.",
+      "Export": {
+        "Name": "Gede-Test-Data-DatabaseEndpoint",
+      },
+      "Value": {
+        "Fn::GetAtt": [
+          "DatabaseB269D8BB",
+          "Endpoint.Address",
+        ],
+      },
+    },
+    "DatabaseSecretArn": {
+      "Description": "Secrets Manager ARN holding the generated DB credentials — consumed by the 032 (sync) / 033 (auth) Fargate task definitions.",
+      "Export": {
+        "Name": "Gede-Test-Data-DatabaseSecretArn",
+      },
+      "Value": {
+        "Ref": "DatabaseSecretAttachmentE5D1B020",
+      },
+    },
+    "ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827": {
+      "Export": {
+        "Name": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
+      },
+      "Value": {
+        "Fn::GetAtt": [
+          "DatabaseSecurityGroup7319C0F6",
+          "GroupId",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "DatabaseB269D8BB": {
+      "DeletionPolicy": "Snapshot",
+      "Properties": {
+        "AllocatedStorage": "20",
+        "BackupRetentionPeriod": 7,
+        "CopyTagsToSnapshot": true,
+        "DBInstanceClass": "db.t4g.micro",
+        "DBName": "gede",
+        "DBSubnetGroupName": {
+          "Ref": "DatabaseSubnetGroup7D60F180",
+        },
+        "DeletionProtection": false,
+        "Engine": "postgres",
+        "EngineVersion": "17",
+        "MasterUserPassword": {
+          "Fn::Join": [
+            "",
+            [
+              "{{resolve:secretsmanager:",
+              {
+                "Ref": "GedeTestDataDatabaseSecretDC63B9DE3fdaad7efa858a3daf9490cf0a702aeb",
+              },
+              ":SecretString:password::}}",
+            ],
+          ],
+        },
+        "MasterUsername": "gede_admin",
+        "MultiAZ": false,
+        "PubliclyAccessible": false,
+        "StorageEncrypted": true,
+        "StorageType": "gp2",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "VPCSecurityGroups": [
+          {
+            "Fn::GetAtt": [
+              "DatabaseSecurityGroup7319C0F6",
+              "GroupId",
+            ],
+          },
+        ],
+      },
+      "Type": "AWS::RDS::DBInstance",
+      "UpdateReplacePolicy": "Snapshot",
+    },
+    "DatabaseSecretAttachmentE5D1B020": {
+      "Properties": {
+        "SecretId": {
+          "Ref": "GedeTestDataDatabaseSecretDC63B9DE3fdaad7efa858a3daf9490cf0a702aeb",
+        },
+        "TargetId": {
+          "Ref": "DatabaseB269D8BB",
+        },
+        "TargetType": "AWS::RDS::DBInstance",
+      },
+      "Type": "AWS::SecretsManager::SecretTargetAttachment",
+    },
+    "DatabaseSecurityGroup7319C0F6": {
+      "Properties": {
+        "GroupDescription": "Gede-Test-Data RDS Postgres — ingress restricted to the Api compute security group only (issue 030). No 0.0.0.0/0 rule is ever added to this security group; the one permitted rule is added by the Api stack.",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "255.255.255.255/32",
+            "Description": "Disallow all traffic",
+            "FromPort": 252,
+            "IpProtocol": "icmp",
+            "ToPort": 86,
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "VpcId": {
+          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "DatabaseSubnetGroup7D60F180": {
+      "Properties": {
+        "DBSubnetGroupDescription": "Subnet group for Database database",
+        "SubnetIds": [
+          {
+            "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcisolatedSubnet1SubnetE62B1B9BEE029908",
+          },
+          {
+            "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcisolatedSubnet2Subnet392170557C27A199",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::RDS::DBSubnetGroup",
+    },
+    "GedeTestDataDatabaseSecretDC63B9DE3fdaad7efa858a3daf9490cf0a702aeb": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": {
+          "Fn::Join": [
+            "",
+            [
+              "Generated by the CDK for stack: ",
+              {
+                "Ref": "AWS::StackName",
+              },
+            ],
+          ],
+        },
+        "GenerateSecretString": {
+          "ExcludeCharacters": " %+~\`#$&*()|[]{}:;<>?!'/@"\\",
+          "GenerateStringKey": "password",
+          "PasswordLength": 30,
+          "SecretStringTemplate": "{"username":"gede_admin"}",
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

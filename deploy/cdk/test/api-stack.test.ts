@@ -1,0 +1,150 @@
+import * as cdk from 'aws-cdk-lib';
+import { Template, Match } from 'aws-cdk-lib/assertions';
+import { buildAppStacks } from '../lib/build-app';
+
+const TEST_CONTEXT = {
+  'availability-zones:account=975049998516:region=us-east-1': ['us-east-1a', 'us-east-1b'],
+};
+
+describe('ApiStack (Gede-Test-Api)', () => {
+  function synth() {
+    const app = new cdk.App({ context: TEST_CONTEXT });
+    const { api } = buildAppStacks(app, 'test');
+    return Template.fromStack(api);
+  }
+
+  it('the ALB is internet-facing, in the public subnets', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+      Scheme: 'internet-facing',
+      Type: 'application',
+    });
+    const albs = template.findResources('AWS::ElasticLoadBalancingV2::LoadBalancer');
+    const [alb] = Object.values(albs) as Array<{ Properties: { Subnets: Array<{ 'Fn::ImportValue': string }> } }>;
+    for (const subnet of alb.Properties.Subnets) {
+      expect(subnet['Fn::ImportValue']).toEqual(expect.stringMatching(/publicSubnet/));
+    }
+  });
+
+  it('creates an ECS Fargate cluster with exactly two services (the sync/auth stub slots)', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::ECS::Cluster', 1);
+    template.resourceCountIs('AWS::ECS::Service', 2);
+    template.hasResourceProperties('AWS::ECS::Service', { LaunchType: 'FARGATE' });
+  });
+
+  it('the stub services run in the private (NAT-egress) subnets, not public or isolated, with no public IP', () => {
+    const template = synth();
+    const services = template.findResources('AWS::ECS::Service');
+    for (const service of Object.values(services) as Array<{
+      Properties: {
+        NetworkConfiguration: { AwsvpcConfiguration: { AssignPublicIp: string; Subnets: Array<{ 'Fn::ImportValue': string }> } };
+      };
+    }>) {
+      const netConfig = service.Properties.NetworkConfiguration.AwsvpcConfiguration;
+      expect(netConfig.AssignPublicIp).toBe('DISABLED');
+      for (const subnet of netConfig.Subnets) {
+        expect(subnet['Fn::ImportValue']).toEqual(expect.stringMatching(/privateSubnet/));
+      }
+    }
+  });
+
+  it('each stub service has a container healthcheck and an ALB-managed, health-checked target group', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 2);
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+      HealthCheckPath: Match.anyValue(),
+    });
+    template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({ HealthCheck: Match.objectLike({ Command: Match.anyValue() }) }),
+      ]),
+    });
+  });
+
+  it('uses the clearly-marked nginx placeholder image on both stub slots — 032/033 replace it', () => {
+    const template = synth();
+    const taskDefs = template.findResources('AWS::ECS::TaskDefinition');
+    const images = Object.values(taskDefs).map(
+      (t) => (t as { Properties: { ContainerDefinitions: Array<{ Image: string }> } }).Properties.ContainerDefinitions[0].Image,
+    );
+    expect(images).toHaveLength(2);
+    for (const image of images) {
+      expect(image).toMatch(/nginx/);
+    }
+  });
+
+  it('routes /sync* and /auth* via distinct ALB listener rules to distinct target groups', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/sync*'] } })]),
+    });
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/auth*'] } })]),
+    });
+  });
+
+  it('grants the Data stack\'s RDS security group ingress ONLY from this stack\'s compute security group on 5432 — never 0.0.0.0/0', () => {
+    const template = synth();
+    const rule5432 = template.findResources('AWS::EC2::SecurityGroupIngress', {
+      Properties: { FromPort: 5432, ToPort: 5432 },
+    });
+    expect(Object.keys(rule5432)).toHaveLength(1);
+    const [rule] = Object.values(rule5432) as Array<{
+      Properties: { CidrIp?: string; SourceSecurityGroupId?: unknown; GroupId: { 'Fn::ImportValue': string } };
+    }>;
+    expect(rule.Properties.CidrIp).toBeUndefined();
+    expect(rule.Properties.SourceSecurityGroupId).toBeDefined();
+    // The rule targets the Data stack's (imported) security group, proving
+    // the reference is one-directional (Api -> Data), never the reverse.
+    expect(rule.Properties.GroupId['Fn::ImportValue']).toEqual(expect.stringMatching(/^Gede-Test-Data:/));
+  });
+
+  it('no 0.0.0.0/0 ingress rule ever targets port 5432 (only the ALB\'s port 80 is internet-open, by design)', () => {
+    const template = synth();
+    const allIngress = {
+      ...template.findResources('AWS::EC2::SecurityGroupIngress'),
+      ...template.findResources('AWS::EC2::SecurityGroup'), // inline ingress on the ALB SG itself
+    };
+    for (const resource of Object.values(allIngress) as Array<{ Properties: Record<string, unknown> }>) {
+      const props = resource.Properties;
+      const inlineRules = (props.SecurityGroupIngress as Array<Record<string, unknown>> | undefined) ?? [
+        props as Record<string, unknown>,
+      ];
+      for (const rule of inlineRules) {
+        if (rule.CidrIp === '0.0.0.0/0') {
+          expect(rule.FromPort).not.toBe(5432);
+        }
+      }
+    }
+  });
+
+  it('carries the four app-wide tags on the cluster, ALB, and services', () => {
+    const template = synth();
+    const expectedTags = Match.arrayWith([
+      { Key: 'Application', Value: 'GeDe' },
+      { Key: 'Environment', Value: 'test' },
+      { Key: 'ManagedBy', Value: 'CDK' },
+      { Key: 'Organization', Value: 'quadnomics' },
+    ]);
+    template.hasResourceProperties('AWS::ECS::Cluster', { Tags: expectedTags });
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', { Tags: expectedTags });
+    template.hasResourceProperties('AWS::ECS::Service', { Tags: expectedTags });
+  });
+
+  it('cost guard: each stub service runs a single task, single-listener/ALB (no per-AZ duplication)', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+    const services = template.findResources('AWS::ECS::Service');
+    for (const service of Object.values(services) as Array<{ Properties: { DesiredCount: number } }>) {
+      expect(service.Properties.DesiredCount).toBe(1);
+    }
+  });
+
+  it('matches the snapshot', () => {
+    const template = synth();
+    expect(template.toJSON()).toMatchSnapshot();
+  });
+});
