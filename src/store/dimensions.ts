@@ -22,12 +22,18 @@ import { useContextsStore } from './contexts'
 
 interface DimensionsState {
   projectId: string | null
+  // The canvas currently loaded: null = the project's root canvas, a context
+  // id = that context's child canvas (issue 011). Child-canvas dimensions are
+  // DERIVED from the parent's bindings (seeded via openChildCanvas), so the
+  // add/remove/reorder gestures are root-only here — the UI hides them on a
+  // child canvas and the store guards against them defensively.
+  contextId: string | null
   dimensions: DimensionRow[]
   // The row whose name editor is open. Shared state (not component-local) so
   // surfaces can avoid unmounting an editor mid-gesture (guided start swap).
   editingId: string | null
   setEditing: (id: string | null) => void
-  load: (projectId: string) => Promise<void>
+  load: (projectId: string, contextId?: string | null) => Promise<void>
   add: () => Promise<DimensionRow | null>
   rename: (id: string, name: string) => Promise<void>
   setColor: (id: string, color: string) => Promise<void>
@@ -41,6 +47,7 @@ function contextIdsOf(rows: readonly BindingRow[]): string[] {
 
 export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
   projectId: null,
+  contextId: null,
   dimensions: [],
   editingId: null,
 
@@ -48,14 +55,16 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     set({ editingId: id })
   },
 
-  async load(projectId) {
+  async load(projectId, contextId = null) {
     const db = requireDatabase()
-    set({ projectId, dimensions: await dbList(db, projectId), editingId: null })
+    set({ projectId, contextId, dimensions: await dbList(db, projectId, contextId), editingId: null })
   },
 
   async add() {
-    const { projectId } = get()
-    if (projectId === null) return null
+    const { projectId, contextId } = get()
+    // Child-canvas dimensions are derived from the parent's bindings — not
+    // freely added (SPEC recursion rule). Guarded; the UI hides the affordance.
+    if (projectId === null || contextId !== null) return null
     const db = requireDatabase()
     const row = await dbAdd(db, projectId)
     // Ready-to-edit is part of the same state transition as the new row —
@@ -79,41 +88,41 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
   },
 
   async rename(id, name) {
-    const { projectId } = get()
+    const { projectId, contextId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const previousName = get().dimensions.find((d) => d.id === id)?.name ?? name
     await dbRename(db, id, name)
-    set({ dimensions: await dbList(db, projectId) })
+    set({ dimensions: await dbList(db, projectId, contextId) })
     useCommandLogStore.getState().push({
       label: `rename dimension to "${name}"`,
       async undo() {
         await dbRename(db, id, previousName)
-        set({ dimensions: await dbList(db, projectId) })
+        set({ dimensions: await dbList(db, projectId, contextId) })
       },
       async redo() {
         await dbRename(db, id, name)
-        set({ dimensions: await dbList(db, projectId) })
+        set({ dimensions: await dbList(db, projectId, contextId) })
       },
     })
   },
 
   async setColor(id, color) {
-    const { projectId } = get()
+    const { projectId, contextId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const previousColor = get().dimensions.find((d) => d.id === id)?.color ?? color
     await dbSetColor(db, id, color)
-    set({ dimensions: await dbList(db, projectId) })
+    set({ dimensions: await dbList(db, projectId, contextId) })
     useCommandLogStore.getState().push({
       label: 'recolor dimension',
       async undo() {
         await dbSetColor(db, id, previousColor)
-        set({ dimensions: await dbList(db, projectId) })
+        set({ dimensions: await dbList(db, projectId, contextId) })
       },
       async redo() {
         await dbSetColor(db, id, color)
-        set({ dimensions: await dbList(db, projectId) })
+        set({ dimensions: await dbList(db, projectId, contextId) })
       },
     })
   },
@@ -167,5 +176,5 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
 }))
 
 export function resetDimensionsStore(): void {
-  useDimensionsStore.setState({ projectId: null, dimensions: [], editingId: null })
+  useDimensionsStore.setState({ projectId: null, contextId: null, dimensions: [], editingId: null })
 }

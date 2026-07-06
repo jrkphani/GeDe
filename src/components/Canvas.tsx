@@ -29,6 +29,16 @@ export interface CanvasProps {
   onBindParameter?: (dimensionId: string, parameterId: string) => void
   onUnbindParameter?: (dimensionId: string) => void
   onExitCompose?: () => void
+  // Issue 011 — drilling into a context (double-click / Enter) opens its child
+  // canvas. Presentational: DesignSurface owns the navigation. Child counts
+  // feed the node badge (a canvas holds only one level of contexts, so the
+  // count comes from the store, not the loaded set).
+  onDrillIn?: (contextId: string) => void
+  childCountByContext?: Readonly<Record<string, number>> | undefined
+  // Issue 011 — on a child canvas, the dimension names ARE the parent tuple
+  // being refined; shown as a lineage line under the empty-state prompt so
+  // "where am I / what is this refining" is always answerable.
+  lineage?: readonly string[] | undefined
 }
 
 function useElementWidth(): [React.RefObject<HTMLDivElement | null>, number | null] {
@@ -66,6 +76,9 @@ export function Canvas({
   onBindParameter,
   onUnbindParameter,
   onExitCompose,
+  onDrillIn,
+  childCountByContext,
+  lineage,
 }: CanvasProps) {
   const [shellRef, width] = useElementWidth()
   const labelTier = width === null ? LABEL_TIER_FALLBACK : labelTierForWidth(width)
@@ -78,8 +91,8 @@ export function Canvas({
   const hitRadius = dotHitRadiusUnits(width && width > 0 ? width : HIT_REFERENCE_WIDTH)
 
   const geometry = useMemo(
-    () => layout({ dimensions, parametersByDimension, contexts, bindingsByContext }),
-    [dimensions, parametersByDimension, contexts, bindingsByContext],
+    () => layout({ dimensions, parametersByDimension, contexts, bindingsByContext, childCountByContext }),
+    [dimensions, parametersByDimension, contexts, bindingsByContext, childCountByContext],
   )
 
   const dimensionIds = useMemo(() => dimensions.map((d) => d.id), [dimensions])
@@ -260,6 +273,12 @@ export function Canvas({
               aria-label={label}
               aria-pressed={isSelected}
               onClick={() => onSelect(node.contextId)}
+              // Double-click drills into the context's child canvas (SPEC
+              // §4.2, issue 011). Never in compose mode (the draft isn't a
+              // stable canvas yet).
+              onDoubleClick={() => {
+                if (!composeContextId) onDrillIn?.(node.contextId)
+              }}
               onKeyDown={(e) => {
                 if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                   e.preventDefault()
@@ -267,13 +286,18 @@ export function Canvas({
                 } else if (e.key === 'ArrowLeft' || e.key === 'ArrowUp') {
                   e.preventDefault()
                   moveSelection(index, -1)
+                } else if (e.key === 'Enter') {
+                  // Enter drills into the node's child canvas (SPEC §4.2).
+                  if (!composeContextId) {
+                    e.preventDefault()
+                    onDrillIn?.(node.contextId)
+                  }
                 } else if (e.key === 'Escape') {
                   // Esc order (SITEMAP §4): in compose mode it exits compose,
                   // keeping the draft; otherwise it clears the selection.
                   if (composeContextId) onExitCompose?.()
                   else onSelect(null)
                 }
-                // Enter: drill-down arrives in issue 011 — no-op for now.
               }}
             >
               <circle cx={0} cy={0} r={NODE_RADIUS} />
@@ -290,9 +314,16 @@ export function Canvas({
         })}
 
         {isEmpty ? (
-          <text className="canvas-empty-prompt" x={500} y={500} textAnchor="middle">
-            Bind your first context
-          </text>
+          <>
+            <text className="canvas-empty-prompt" x={500} y={500} textAnchor="middle">
+              Bind your first context
+            </text>
+            {lineage && lineage.length > 0 ? (
+              <text className="canvas-empty-lineage" x={500} y={540} textAnchor="middle">
+                Refining {lineage.join(', ')}
+              </text>
+            ) : null}
+          </>
         ) : null}
       </svg>
     </div>

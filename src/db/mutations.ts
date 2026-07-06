@@ -14,7 +14,7 @@ import {
   tier2Tables,
 } from './schema'
 import { paletteColor } from '../theme/palette'
-import { computeTupleHash, nextRootSymbol } from '../domain/symbols'
+import { computeTupleHash, nextChildSymbol, nextRootSymbol } from '../domain/symbols'
 
 // The mutation layer: every database write in the app flows through this module
 // (SPEC §3 sync-readiness — row-granular mutations through a single seam).
@@ -89,16 +89,24 @@ export class DimensionFloorError extends Error {
   }
 }
 
-function rootScope(projectId: string) {
+// A canvas is identified by (projectId, contextId): contextId null = the
+// project's root canvas; a context id = that context's child canvas (issue
+// 011). Every dimension query is canvas-scoped; the default null keeps every
+// pre-011 caller pinned to the root canvas.
+function canvasScope(projectId: string, contextId: string | null) {
   return and(
     eq(dimensions.projectId, projectId),
-    isNull(dimensions.contextId),
+    contextId === null ? isNull(dimensions.contextId) : eq(dimensions.contextId, contextId),
     isNull(dimensions.deletedAt),
   )
 }
 
-export async function listDimensions(db: Database, projectId: string): Promise<DimensionRow[]> {
-  return db.select().from(dimensions).where(rootScope(projectId)).orderBy(asc(dimensions.sort))
+export async function listDimensions(
+  db: Database,
+  projectId: string,
+  contextId: string | null = null,
+): Promise<DimensionRow[]> {
+  return db.select().from(dimensions).where(canvasScope(projectId, contextId)).orderBy(asc(dimensions.sort))
 }
 
 export async function addDimension(db: Database, projectId: string): Promise<DimensionRow> {
@@ -405,27 +413,49 @@ export class ContextSymbolCollisionError extends Error {
   }
 }
 
-function rootContextScope(projectId: string) {
+// Contexts are scoped to a canvas by parent_id: null = the root canvas; a
+// context id = that context's child canvas (issue 011). Symbols are unique
+// per canvas, so the collision check and the auto-assign both scope here.
+function contextCanvasScope(projectId: string, parentId: string | null) {
   return and(
     eq(contexts.projectId, projectId),
-    isNull(contexts.parentId),
+    parentId === null ? isNull(contexts.parentId) : eq(contexts.parentId, parentId),
     isNull(contexts.deletedAt),
   )
 }
 
-export async function listContexts(db: Database, projectId: string): Promise<ContextRow[]> {
-  return db.select().from(contexts).where(rootContextScope(projectId)).orderBy(asc(contexts.sort))
+export async function listContexts(
+  db: Database,
+  projectId: string,
+  parentId: string | null = null,
+): Promise<ContextRow[]> {
+  return db
+    .select()
+    .from(contexts)
+    .where(contextCanvasScope(projectId, parentId))
+    .orderBy(asc(contexts.sort))
 }
 
-export async function createContext(db: Database, projectId: string): Promise<ContextRow> {
-  const existing = await listContexts(db, projectId)
-  const symbol = nextRootSymbol(new Set(existing.map((c) => c.symbol)))
+// Root contexts cycle the Greek alphabet; a child context (parent set) is named
+// parent-symbol + index (α1, α2 — SPEC §3, issue 011), both scoped to the
+// canvas's live siblings so a deleted gap never collides on reassignment.
+export async function createContext(
+  db: Database,
+  projectId: string,
+  parentId: string | null = null,
+): Promise<ContextRow> {
+  const parentSymbol = parentId
+    ? firstOrThrow(await db.select().from(contexts).where(eq(contexts.id, parentId))).symbol
+    : null
+  const existing = await listContexts(db, projectId, parentId)
+  const taken = new Set(existing.map((c) => c.symbol))
+  const symbol = parentSymbol ? nextChildSymbol(parentSymbol, taken) : nextRootSymbol(taken)
   const rows = await db
     .insert(contexts)
     .values({
       id: uuidv7(),
       projectId,
-      parentId: null,
+      parentId,
       symbol,
       sort: existing.length,
     })
@@ -439,7 +469,8 @@ export async function setContextSymbol(
   id: string,
   symbol: string,
 ): Promise<ContextRow> {
-  const existing = await listContexts(db, projectId)
+  const target = firstOrThrow(await db.select().from(contexts).where(eq(contexts.id, id)))
+  const existing = await listContexts(db, projectId, target.parentId)
   if (existing.some((c) => c.id !== id && c.symbol === symbol)) {
     throw new ContextSymbolCollisionError(symbol)
   }
@@ -496,7 +527,10 @@ export async function listBindings(db: Database, contextId: string): Promise<Bin
 async function recomputeTupleHash(db: Database, contextId: string): Promise<void> {
   const contextRows = await db.select().from(contexts).where(eq(contexts.id, contextId))
   const contextRow = firstOrThrow(contextRows)
-  const dims = await listDimensions(db, contextRow.projectId)
+  // A context's tuple is over the dimensions of ITS canvas (its parent_id),
+  // not the project's root canvas — critical once bindings live on a child
+  // canvas (issue 011).
+  const dims = await listDimensions(db, contextRow.projectId, contextRow.parentId)
   const rows = await listBindings(db, contextId)
   const byDimension = new Map(rows.map((r) => [r.dimensionId, r.parameterId]))
   const ordered = dims.filter((d) => byDimension.has(d.id)).map((d) => byDimension.get(d.id) as string)
@@ -537,6 +571,172 @@ export async function unbindParameter(
     .where(and(eq(bindings.contextId, contextId), eq(bindings.dimensionId, dimensionId)))
   await recomputeTupleHash(db, contextId)
   return listBindings(db, contextId)
+}
+
+// ── Recursion: child canvases (issue 011) ────────────────────────────────────
+// Drilling into a context α opens its child canvas: one dimension per α binding
+// (SPEC recursion rule, invariant 3), each seeded from the bound parameter and
+// carrying source_param_id so a re-open maps back to the same rows (idempotent)
+// and a parent re-bind is detectable. Sub-parameters of a source parameter live
+// AS the child dimension's parameters (dimension_id = child dim, parent_param_id
+// = source), so the parameters/register/canvas layers reuse unchanged.
+
+export interface StaleRebindEvent {
+  childDimensionId: string
+  fromParameterId: string
+  toParameterId: string
+  fromName: string
+  toName: string
+  // Sub-bindings hard-deleted because they pointed at the old parameter's
+  // sub-parameters (bindings have no deleted_at — schema.ts). Kept verbatim so
+  // revertStaleRebind can re-insert them exactly.
+  retiredBindings: BindingRow[]
+}
+
+export interface ChildCanvasResult {
+  dimensions: DimensionRow[]
+  stale: StaleRebindEvent[]
+}
+
+async function getParameter(db: Database, id: string): Promise<ParameterRow> {
+  return firstOrThrow(await db.select().from(parameters).where(eq(parameters.id, id)))
+}
+
+// Idempotent open/reconcile. First call seeds child dimensions; later calls
+// reconcile each against the parent's CURRENT bindings (the stale-rebind rule:
+// child dimension follows the new parameter, its sub-bindings retired) and add
+// any missing ones — never duplicating (acceptance criterion 1).
+export async function openChildCanvas(
+  db: Database,
+  parentContextId: string,
+): Promise<ChildCanvasResult> {
+  const parent = firstOrThrow(await db.select().from(contexts).where(eq(contexts.id, parentContextId)))
+  const projectId = parent.projectId
+  const parentDims = await listDimensions(db, projectId, parent.parentId)
+  const parentBindings = await listBindings(db, parentContextId)
+  const boundByDim = new Map(parentBindings.map((b) => [b.dimensionId, b.parameterId]))
+  // One prospective child dimension per parent binding, in parent dim order.
+  const slots = parentDims
+    .filter((d) => boundByDim.has(d.id))
+    .map((d, i) => ({
+      parentDimensionId: d.id,
+      parameterId: boundByDim.get(d.id) as string,
+      color: d.color,
+      sort: i,
+    }))
+
+  const existing = await listDimensions(db, projectId, parentContextId)
+  // Each existing child dimension maps to a parent dimension via its source
+  // parameter (a parameter belongs to exactly one dimension, stable across a
+  // re-bind since parameters never change dimension).
+  const existingByParentDim = new Map<string, DimensionRow>()
+  for (const child of existing) {
+    if (!child.sourceParamId) continue
+    const src = await getParameter(db, child.sourceParamId)
+    existingByParentDim.set(src.dimensionId, child)
+  }
+
+  const stale: StaleRebindEvent[] = []
+  for (const slot of slots) {
+    const paramRow = await getParameter(db, slot.parameterId)
+    const child = existingByParentDim.get(slot.parentDimensionId)
+    if (!child) {
+      await db.insert(dimensions).values({
+        id: uuidv7(),
+        projectId,
+        contextId: parentContextId,
+        sourceParamId: slot.parameterId,
+        name: paramRow.name,
+        color: slot.color,
+        sort: slot.sort,
+      })
+      continue
+    }
+    if (child.sourceParamId !== slot.parameterId) {
+      const retiredBindings = await db
+        .select()
+        .from(bindings)
+        .where(eq(bindings.dimensionId, child.id))
+      const fromParam = child.sourceParamId ? await getParameter(db, child.sourceParamId) : null
+      if (retiredBindings.length > 0) {
+        await db.delete(bindings).where(eq(bindings.dimensionId, child.id))
+        for (const cid of new Set(retiredBindings.map((r) => r.contextId))) {
+          await recomputeTupleHash(db, cid)
+        }
+      }
+      await db
+        .update(dimensions)
+        .set({ sourceParamId: slot.parameterId, name: paramRow.name, sort: slot.sort, updatedAt: now() })
+        .where(eq(dimensions.id, child.id))
+      stale.push({
+        childDimensionId: child.id,
+        fromParameterId: child.sourceParamId as string,
+        toParameterId: slot.parameterId,
+        fromName: fromParam?.name ?? '',
+        toName: paramRow.name,
+        retiredBindings,
+      })
+    } else if (child.sort !== slot.sort || child.name !== paramRow.name) {
+      // Keep order/name synced with the parent binding (parent reorder/rename).
+      await db
+        .update(dimensions)
+        .set({ sort: slot.sort, name: paramRow.name, updatedAt: now() })
+        .where(eq(dimensions.id, child.id))
+    }
+  }
+
+  return { dimensions: await listDimensions(db, projectId, parentContextId), stale }
+}
+
+// The banner Undo (issue 011): restores a child dimension to the parameter it
+// refined before the parent re-bind and re-inserts the retired sub-bindings.
+export async function revertStaleRebind(db: Database, event: StaleRebindEvent): Promise<void> {
+  await db
+    .update(dimensions)
+    .set({ sourceParamId: event.fromParameterId, name: event.fromName, updatedAt: now() })
+    .where(eq(dimensions.id, event.childDimensionId))
+  if (event.retiredBindings.length > 0) {
+    await db.insert(bindings).values(
+      event.retiredBindings.map((r) => ({
+        id: r.id,
+        contextId: r.contextId,
+        dimensionId: r.dimensionId,
+        parameterId: r.parameterId,
+        tupleHash: r.tupleHash,
+      })),
+    )
+    for (const cid of new Set(event.retiredBindings.map((r) => r.contextId))) {
+      await recomputeTupleHash(db, cid)
+    }
+  }
+}
+
+// Resolve a recursion path (context ids, in depth order) to its context rows,
+// dropping any id that no longer resolves — backs the breadcrumb trail's
+// symbols (URL segments are ids; breadcrumbs display symbols — SITEMAP §1).
+export async function getContextsByIds(db: Database, ids: readonly string[]): Promise<ContextRow[]> {
+  const rows: ContextRow[] = []
+  for (const id of ids) {
+    const found = await db.select().from(contexts).where(eq(contexts.id, id)).limit(1)
+    if (found[0]) rows.push(found[0])
+  }
+  return rows
+}
+
+// Child count per context on a canvas — backs the node's child badge (SPEC
+// §4.2) and the register's Children column (issue 011).
+export async function childCountsByContext(
+  db: Database,
+  projectId: string,
+  parentId: string | null,
+): Promise<Record<string, number>> {
+  const canvasContexts = await listContexts(db, projectId, parentId)
+  const counts: Record<string, number> = {}
+  for (const ctx of canvasContexts) {
+    const kids = await listContexts(db, projectId, ctx.id)
+    if (kids.length > 0) counts[ctx.id] = kids.length
+  }
+  return counts
 }
 
 // ── Tier 1 Foundation (issue 013) ────────────────────────────────────────────

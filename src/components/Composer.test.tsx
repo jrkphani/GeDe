@@ -24,6 +24,7 @@ function dim(id: string, sort: number, name: string, color = '#6f5bd6'): Dimensi
     id,
     projectId: 'proj1',
     contextId: null,
+    sourceParamId: null,
     name,
     color,
     sort,

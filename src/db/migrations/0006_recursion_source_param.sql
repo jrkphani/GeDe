@@ -1,0 +1,2 @@
+ALTER TABLE "dimensions" ADD COLUMN "source_param_id" text;--> statement-breakpoint
+ALTER TABLE "dimensions" ADD CONSTRAINT "dimensions_source_param_id_parameters_id_fk" FOREIGN KEY ("source_param_id") REFERENCES "public"."parameters"("id") ON DELETE no action ON UPDATE no action;

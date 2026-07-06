@@ -3,16 +3,21 @@ import type { Database } from '../db/client'
 import {
   archiveContext as dbArchive,
   bindParameter as dbBind,
+  childCountsByContext as dbChildCounts,
   ContextSymbolCollisionError,
   createContext as dbCreate,
+  getContextsByIds as dbGetByIds,
   listBindings as dbListBindings,
   listContexts as dbListContexts,
+  openChildCanvas as dbOpenChildCanvas,
   restoreContext as dbRestore,
+  revertStaleRebind as dbRevertStale,
   setContextJustification as dbSetJustification,
   setContextSymbol as dbSetSymbol,
   unbindParameter as dbUnbind,
   type BindingRow,
   type ContextRow,
+  type StaleRebindEvent,
 } from '../db/mutations'
 import { useCommandLogStore } from './commandLog'
 import { requireDatabase } from './database'
@@ -39,7 +44,18 @@ async function fetchBindingsMap(
 
 interface ContextsState {
   projectId: string | null
+  // The canvas currently loaded: null = the project's root canvas, a context
+  // id = that context's child canvas (issue 011). `contexts` are the contexts
+  // ON this canvas (parent_id = parentId).
+  parentId: string | null
   contexts: ContextRow[]
+  // contextId -> number of children on its own child canvas (node/register
+  // "Children" badge — SPEC §4.2/§4.3, issue 011). Recomputed on load.
+  childCountByContext: Record<string, number>
+  // The current recursion trail as {id, symbol} in depth order (excludes Root),
+  // resolved from the URL's context-id segments — backs the breadcrumb bar
+  // (SITEMAP §1/§2). Cross-canvas, so kept separate from `contexts`.
+  breadcrumbs: { id: string; symbol: string }[]
   // contextId -> dimensionId -> parameterId
   bindingsByContext: Record<string, Record<string, string>>
   // Mirrors parameters.ts's per-dimension generation counter (issue 004 fix),
@@ -57,7 +73,16 @@ interface ContextsState {
   // than owning a local notion of "selected".
   selectedContextId: string | null
   select: (id: string | null) => void
-  load: (projectId: string) => Promise<void>
+  load: (projectId: string, parentId?: string | null) => Promise<void>
+  // Issue 011 — resolve the URL's context-id path to breadcrumb {id, symbol}.
+  loadBreadcrumbs: (contextPath: readonly string[]) => Promise<void>
+  // Issue 011 — seed/reconcile a context's child canvas (idempotent). Returns
+  // the stale parent-rebind events for the child canvas's warning banner.
+  openChildCanvas: (parentContextId: string) => Promise<StaleRebindEvent[]>
+  // Issue 011 — the stale-rebind banner's Undo: restore the child dimension to
+  // the parameter it refined and re-insert the retired sub-bindings, then
+  // reload the current canvas so the register/canvas reflect it.
+  revertStale: (event: StaleRebindEvent) => Promise<void>
   create: () => Promise<ContextRow | null>
   // Issue 010 — archive a context (undoable). Backs the compose exit path's
   // "Discard draft α" status-line action; the same soft-delete as create()'s
@@ -75,7 +100,10 @@ interface ContextsState {
 
 export const useContextsStore = create<ContextsState>()((set, get) => ({
   projectId: null,
+  parentId: null,
   contexts: [],
+  childCountByContext: {},
+  breadcrumbs: [],
   bindingsByContext: {},
   generation: 0,
   selectedContextId: null,
@@ -84,7 +112,34 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     set({ selectedContextId: id })
   },
 
-  async load(projectId) {
+  async loadBreadcrumbs(contextPath) {
+    if (contextPath.length === 0) {
+      set({ breadcrumbs: [] })
+      return
+    }
+    const db = requireDatabase()
+    const rows = await dbGetByIds(db, contextPath)
+    set({ breadcrumbs: rows.map((r) => ({ id: r.id, symbol: r.symbol })) })
+  },
+
+  async openChildCanvas(parentContextId) {
+    const db = requireDatabase()
+    const { stale } = await dbOpenChildCanvas(db, parentContextId)
+    return stale
+  },
+
+  async revertStale(event) {
+    const { projectId, parentId } = get()
+    if (projectId === null) return
+    const db = requireDatabase()
+    set({ generation: get().generation + 1 })
+    await dbRevertStale(db, event)
+    const contexts = await dbListContexts(db, projectId, parentId)
+    const bindingsByContext = await fetchBindingsMap(db, contexts.map((c) => c.id))
+    set({ contexts, bindingsByContext })
+  },
+
+  async load(projectId, parentId = null) {
     const db = requireDatabase()
     // Set synchronously, before any await (issue 007 CI bug, real root
     // cause): create() etc. read get().projectId internally rather than
@@ -94,37 +149,38 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     // still null and silently no-op — no error, since create()'s guard
     // just returns null. Reproduced on CI (slow enough to lose the race
     // every time) but never locally (load() always won there).
-    set({ projectId, selectedContextId: null })
+    set({ projectId, parentId, selectedContextId: null })
     const gen = get().generation
-    const contexts = await dbListContexts(db, projectId)
+    const contexts = await dbListContexts(db, projectId, parentId)
     const bindingsByContext = await fetchBindingsMap(
       db,
       contexts.map((c) => c.id),
     )
+    const childCountByContext = await dbChildCounts(db, projectId, parentId)
     if (get().generation !== gen) return
-    set({ contexts, bindingsByContext })
+    set({ contexts, bindingsByContext, childCountByContext })
   },
 
   async create() {
-    const { projectId } = get()
+    const { projectId, parentId } = get()
     if (projectId === null) return null
     const db = requireDatabase()
     set({ generation: get().generation + 1 })
-    const row = await dbCreate(db, projectId)
-    const contexts = await dbListContexts(db, projectId)
+    const row = await dbCreate(db, projectId, parentId)
+    const contexts = await dbListContexts(db, projectId, parentId)
     set({ contexts, bindingsByContext: { ...get().bindingsByContext, [row.id]: {} } })
     useCommandLogStore.getState().push({
       label: `create context ${row.symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
         await dbArchive(db, row.id)
-        set({ contexts: await dbListContexts(db, projectId) })
+        set({ contexts: await dbListContexts(db, projectId, parentId) })
       },
       async redo() {
         set({ generation: get().generation + 1 })
         await dbRestore(db, row.id)
         set({
-          contexts: await dbListContexts(db, projectId),
+          contexts: await dbListContexts(db, projectId, parentId),
           bindingsByContext: { ...get().bindingsByContext, [row.id]: get().bindingsByContext[row.id] ?? {} },
         })
       },
@@ -133,48 +189,48 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   },
 
   async discard(id) {
-    const { projectId } = get()
+    const { projectId, parentId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const symbol = get().contexts.find((c) => c.id === id)?.symbol ?? id
     set({ generation: get().generation + 1 })
     await dbArchive(db, id)
-    set({ contexts: await dbListContexts(db, projectId), selectedContextId: null })
+    set({ contexts: await dbListContexts(db, projectId, parentId), selectedContextId: null })
     useCommandLogStore.getState().push({
       label: `discard draft ${symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
         await dbRestore(db, id)
-        set({ contexts: await dbListContexts(db, projectId) })
+        set({ contexts: await dbListContexts(db, projectId, parentId) })
       },
       async redo() {
         set({ generation: get().generation + 1 })
         await dbArchive(db, id)
-        set({ contexts: await dbListContexts(db, projectId), selectedContextId: null })
+        set({ contexts: await dbListContexts(db, projectId, parentId), selectedContextId: null })
       },
     })
   },
 
   async setSymbol(id, symbol) {
-    const { projectId } = get()
+    const { projectId, parentId } = get()
     if (projectId === null) return { ok: false }
     const db = requireDatabase()
     const previousSymbol = get().contexts.find((c) => c.id === id)?.symbol ?? symbol
     try {
       set({ generation: get().generation + 1 })
       await dbSetSymbol(db, projectId, id, symbol)
-      set({ contexts: await dbListContexts(db, projectId) })
+      set({ contexts: await dbListContexts(db, projectId, parentId) })
       useCommandLogStore.getState().push({
         label: `rename ${previousSymbol} to ${symbol}`,
         async undo() {
           set({ generation: get().generation + 1 })
           await dbSetSymbol(db, projectId, id, previousSymbol)
-          set({ contexts: await dbListContexts(db, projectId) })
+          set({ contexts: await dbListContexts(db, projectId, parentId) })
         },
         async redo() {
           set({ generation: get().generation + 1 })
           await dbSetSymbol(db, projectId, id, symbol)
-          set({ contexts: await dbListContexts(db, projectId) })
+          set({ contexts: await dbListContexts(db, projectId, parentId) })
         },
       })
       return { ok: true }
@@ -185,25 +241,25 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   },
 
   async setJustification(id, text) {
-    const { projectId } = get()
+    const { projectId, parentId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const previousText = get().contexts.find((c) => c.id === id)?.justification ?? ''
     const symbol = get().contexts.find((c) => c.id === id)?.symbol ?? id
     set({ generation: get().generation + 1 })
     await dbSetJustification(db, id, text)
-    set({ contexts: await dbListContexts(db, projectId) })
+    set({ contexts: await dbListContexts(db, projectId, parentId) })
     useCommandLogStore.getState().push({
       label: `edit justification for ${symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
         await dbSetJustification(db, id, previousText)
-        set({ contexts: await dbListContexts(db, projectId) })
+        set({ contexts: await dbListContexts(db, projectId, parentId) })
       },
       async redo() {
         set({ generation: get().generation + 1 })
         await dbSetJustification(db, id, text)
-        set({ contexts: await dbListContexts(db, projectId) })
+        set({ contexts: await dbListContexts(db, projectId, parentId) })
       },
     })
   },
@@ -295,7 +351,10 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
 export function resetContextsStore(): void {
   useContextsStore.setState({
     projectId: null,
+    parentId: null,
     contexts: [],
+    childCountByContext: {},
+    breadcrumbs: [],
     bindingsByContext: {},
     generation: 0,
     selectedContextId: null,

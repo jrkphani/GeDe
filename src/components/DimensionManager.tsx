@@ -106,12 +106,17 @@ function DimensionItem({
   editing,
   setEditing,
   canRemove,
+  childCanvas = false,
 }: {
   dimension: DimensionRow
   index: number
   editing: boolean
   setEditing: (id: string | null) => void
   canRemove: boolean
+  // On a child canvas the dimensions are DERIVED from the parent's bindings
+  // (issue 011): the name tracks the source parameter and there is no
+  // add/remove/reorder — only the nested sub-parameter list is editable.
+  childCanvas?: boolean
 }) {
   const rename = useDimensionsStore((s) => s.rename)
   const reorder = useDimensionsStore((s) => s.reorder)
@@ -131,6 +136,7 @@ function DimensionItem({
         data-color={dimension.color}
         tabIndex={0}
         onKeyDown={(e) => {
+          if (childCanvas) return
           if (e.altKey && e.key === 'ArrowUp') {
             e.preventDefault()
             void reorder(dimension.id, index - 1)
@@ -141,32 +147,40 @@ function DimensionItem({
           }
         }}
       >
-        <Button
-          variant="bare"
-          className="drag-handle"
-          aria-label={`Reorder ${dimension.name}`}
-          {...attributes}
-          {...listeners}
-        >
-          ⋮⋮
-        </Button>
+        {childCanvas ? null : (
+          <Button
+            variant="bare"
+            className="drag-handle"
+            aria-label={`Reorder ${dimension.name}`}
+            {...attributes}
+            {...listeners}
+          >
+            ⋮⋮
+          </Button>
+        )}
         <SwatchButton
           color={dimension.color}
           aria-label={`Color of ${dimension.name}`}
           onClick={() => setPicking(!picking)}
         />
-        <InlineEdit
-          value={dimension.name}
-          onCommit={(next) => void rename(dimension.id, next)}
-          display={dimension.name}
-          displayClassName="dim-row__name dim-row__name--head"
-          inputClassName="dim-row__name--head"
-          selectOnFocus
-          stopPropagation
-          editing={editing}
-          onEditingChange={(next) => setEditing(next ? dimension.id : null)}
-        />
-        <RemoveDimensionConfirm dimension={dimension} canRemove={canRemove} />
+        {childCanvas ? (
+          <span className="dim-row__name dim-row__name--head" title="Refines the parent’s bound parameter">
+            {dimension.name}
+          </span>
+        ) : (
+          <InlineEdit
+            value={dimension.name}
+            onCommit={(next) => void rename(dimension.id, next)}
+            display={dimension.name}
+            displayClassName="dim-row__name dim-row__name--head"
+            inputClassName="dim-row__name--head"
+            selectOnFocus
+            stopPropagation
+            editing={editing}
+            onEditingChange={(next) => setEditing(next ? dimension.id : null)}
+          />
+        )}
+        {childCanvas ? null : <RemoveDimensionConfirm dimension={dimension} canRemove={canRemove} />}
         {picking && <SwatchPicker dimension={dimension} onDone={() => setPicking(false)} />}
       </div>
       <ParameterList dimensionId={dimension.id} />
@@ -176,7 +190,7 @@ function DimensionItem({
 
 // Exported for direct testing and for the guided start (issue 002 design
 // brief: the manager is already open when a canvas has fewer than 2 dims).
-export function DimensionManagerPanel() {
+export function DimensionManagerPanel({ childCanvas = false }: { childCanvas?: boolean }) {
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const add = useDimensionsStore((s) => s.add)
   const reorder = useDimensionsStore((s) => s.reorder)
@@ -203,32 +217,43 @@ export function DimensionManagerPanel() {
               editing={editingId === d.id}
               setEditing={setEditingId}
               canRemove={canRemove}
+              childCanvas={childCanvas}
             />
           ))}
         </SortableContext>
       </DndContext>
-      <Button
-        className="dim-manager__add"
-        onClick={() => {
-          void add() // opens the new row's editor via the same store update
-        }}
-      >
-        Add dimension
-      </Button>
+      {/* Child-canvas dimensions are derived from the parent's bindings, not
+          freely added (SPEC recursion rule) — only sub-parameters are edited. */}
+      {childCanvas ? null : (
+        <Button
+          className="dim-manager__add"
+          onClick={() => {
+            void add() // opens the new row's editor via the same store update
+          }}
+        >
+          Add dimension
+        </Button>
+      )}
     </div>
   )
 }
 
-export function DimensionManager() {
+export function DimensionManager({
+  defaultOpen = false,
+  childCanvas = false,
+}: {
+  defaultOpen?: boolean
+  childCanvas?: boolean
+}) {
   return (
-    <Popover>
+    <Popover defaultOpen={defaultOpen}>
       <PopoverTrigger asChild>
         <Button>Dimensions</Button>
       </PopoverTrigger>
       {/* Esc order (SITEMAP §4): close the in-place editor first, the popover
           on the next press — never both at once. */}
       <PopoverContent align="start" sideOffset={4} onEscapeKeyDown={keepPopoverOpenWhileEditing}>
-        <DimensionManagerPanel />
+        <DimensionManagerPanel childCanvas={childCanvas} />
       </PopoverContent>
     </Popover>
   )

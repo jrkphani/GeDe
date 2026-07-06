@@ -27,14 +27,25 @@ function focusRow(contextId: string): void {
 }
 
 const FIRST_CONTEXT_GHOST = 'Type to create your first context — it becomes α'
+const FIRST_CHILD_GHOST = 'Type to create the first context on this canvas'
 
 // SPEC §4.3 — Symbol · one column per dimension (dynamic, sort order) ·
-// Justification · Children. Children stays a placeholder until recursion
-// (issue 011) populates it.
-export function ContextRegister({ projectId }: { projectId: string }) {
+// Justification · Children. On a child canvas the register is scoped to that
+// canvas's contexts; the Children column drills into a context's own child
+// canvas (issue 011).
+export function ContextRegister({
+  projectId,
+  contextId = null,
+  onDrillIn,
+}: {
+  projectId: string
+  contextId?: string | null
+  onDrillIn?: (contextId: string) => void
+}) {
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const contexts = useContextsStore((s) => s.contexts)
   const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
+  const childCountByContext = useContextsStore((s) => s.childCountByContext)
   const loadContexts = useContextsStore((s) => s.load)
   const createContext = useContextsStore((s) => s.create)
   const setSymbol = useContextsStore((s) => s.setSymbol)
@@ -48,8 +59,8 @@ export function ContextRegister({ projectId }: { projectId: string }) {
   const announce = useStatusStore((s) => s.announce)
 
   useEffect(() => {
-    void loadContexts(projectId)
-  }, [projectId, loadContexts])
+    void loadContexts(projectId, contextId)
+  }, [projectId, contextId, loadContexts])
 
   useEffect(() => {
     for (const d of dimensions) void loadParams(d.id)
@@ -137,7 +148,24 @@ export function ContextRegister({ projectId }: { projectId: string }) {
     {
       id: 'children',
       header: 'Children',
-      cell: { kind: 'static', render: () => <span className="grid-cell__placeholder">—</span> },
+      cell: {
+        kind: 'static',
+        render: (ctx) => {
+          const count = childCountByContext[ctx.id] ?? 0
+          const label = count > 0 ? `${count} ▸` : 'Open ▸'
+          return (
+            <Button
+              variant="bare"
+              className="children-drill"
+              aria-label={`Open ${ctx.symbol}’s canvas${count > 0 ? ` (${count} contexts)` : ''}`}
+              title="Open child canvas"
+              onClick={() => onDrillIn?.(ctx.id)}
+            >
+              {label}
+            </Button>
+          )
+        },
+      },
     },
     {
       id: 'duplicate',
@@ -184,7 +212,8 @@ export function ContextRegister({ projectId }: { projectId: string }) {
       onRowClick={(ctx) => select(ctx.id)}
       phantom={{
         columnId: 'justification',
-        placeholder: contexts.length === 0 ? FIRST_CONTEXT_GHOST : 'New context',
+        placeholder:
+          contexts.length === 0 ? (contextId === null ? FIRST_CONTEXT_GHOST : FIRST_CHILD_GHOST) : 'New context',
         onCreate: (text) => {
           // One user gesture (typing + Enter in the phantom row) spans two
           // store calls — batched into a single undo step (issue 006).

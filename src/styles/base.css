@@ -994,6 +994,14 @@ body {
   fill: var(--ink-muted);
 }
 
+/* Issue 011 — the lineage line under an empty child canvas's prompt names the
+   parent tuple this canvas refines ("Refining Comfort, Users"). Mono, quiet. */
+.canvas-empty-lineage {
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  fill: var(--ink-muted);
+}
+
 /* SPEC §4.1 — register + canvas are two projections of the same tree, side by
    side on wide screens; STYLE_GUIDE §7's 640px tier stacks them on narrow
    containers instead. */
@@ -1037,6 +1045,136 @@ body {
   display: flex;
   gap: var(--space-3);
   margin-bottom: var(--space-4);
+}
+
+/* ── Recursion / drill-down (issue 011) ──────────────────────────────────── */
+
+/* The app's ONE choreographed transition (STYLE_GUIDE §8 drill-down exception,
+   ~200ms). Keyed on the canvas id in DesignSurface so it replays whenever the
+   canvas changes — the child fades and scales in on the same graph paper.
+   Resting state is the correct FINAL state (opacity 1, no transform): the
+   animation only dips at mount, so the blanket `prefers-reduced-motion`
+   `animation: none !important` rule leaves the canvas fully visible and
+   in-place (the paid-for mount-fade trap — HANDOFF). */
+.canvas-zoom {
+  animation: canvas-zoom-in var(--motion-drilldown) ease-out;
+  transform-origin: 40% 50%;
+}
+
+@keyframes canvas-zoom-in {
+  from {
+    opacity: 0;
+    transform: scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* Breadcrumb trail (SITEMAP §2/§3): mono symbols in the hairline context bar,
+   crumbs are links (accent on hover), the current crumb is ink (not a link),
+   separators muted. The trailing dimension names are muted context. */
+.breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  min-width: 0;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+
+.breadcrumb__group {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.breadcrumb {
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  text-decoration: none;
+}
+
+.breadcrumb--link {
+  color: var(--accent);
+}
+
+.breadcrumb--link:hover,
+.breadcrumb--link:focus-visible {
+  text-decoration: underline;
+}
+
+.breadcrumb--current {
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.breadcrumb--ellipsis {
+  color: var(--ink-muted);
+  cursor: default;
+}
+
+.breadcrumb__sep {
+  color: var(--ink-muted);
+}
+
+.breadcrumbs__dims {
+  margin-left: var(--space-3);
+  padding-left: var(--space-3);
+  border-left: 1px solid var(--hairline);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+}
+
+/* Stale parent-rebind banner (issue 011): informational + Undo, warning color
+   (not danger — nothing was destroyed; the Undo restores everything). Hairline
+   band atop the child canvas. */
+.child-canvas-banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.stale-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--panel);
+  border: 1px solid var(--warning);
+  border-left-width: 3px;
+  font-size: var(--text-label);
+  color: var(--ink);
+}
+
+.stale-banner__copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.stale-banner__undo {
+  color: var(--accent);
+  flex: none;
+}
+
+/* First-open seeding hint (issue 011): a freshly-seeded child canvas needs
+   sub-parameters; the dimension manager opens on its own, this line explains. */
+.canvas-seed-hint {
+  margin: 0 0 var(--space-3);
+  padding: var(--space-2) var(--space-3);
+  background: var(--panel);
+  border: 1px dashed var(--hairline);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+}
+
+/* Register "Children" cell drill affordance (issue 011). */
+.children-drill {
+  font-family: var(--font-mono);
+  color: var(--accent);
 }
 
 .composer-legend {

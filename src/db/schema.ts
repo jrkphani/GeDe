@@ -91,12 +91,18 @@ export const tier2Entries = pgTable('tier2_entries', {
 
 // SPEC.md §3 — context_id null = root canvas; a context's child canvas gets its
 // own rows (issue 011). Dimension count is pure row data: nothing encodes "3".
+// source_param_id (issue 011) records which of the parent context's bound
+// parameters seeded this child-canvas dimension — null on every root-canvas
+// dimension, set on every seeded child one. It is how a re-drill maps a child
+// dimension back to its parent binding (idempotent seeding) and how a parent
+// re-bind is detected as stale (SPEC §3 data model, recursion rule invariant 3).
 export const dimensions = pgTable('dimensions', {
   id: text('id').primaryKey(),
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
   contextId: text('context_id').references((): AnyPgColumn => contexts.id),
+  sourceParamId: text('source_param_id').references((): AnyPgColumn => parameters.id),
   name: text('name').notNull(),
   color: text('color').notNull(),
   sort: integer('sort').notNull(),

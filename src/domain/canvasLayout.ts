@@ -53,6 +53,12 @@ export interface CanvasLayoutInput {
   parametersByDimension: Readonly<Record<string, readonly ParameterInput[]>>
   contexts: readonly ContextInput[]
   bindingsByContext: Readonly<Record<string, Readonly<Record<string, string>>>>
+  // Issue 011 — child count per context for the node badge. On a child canvas
+  // the loaded contexts are all siblings (no parent/child pairs among them), so
+  // the count can't be derived from `contexts` alone; the store supplies it. If
+  // omitted, it falls back to counting parentId links within `contexts` (the
+  // pre-011 single-level behaviour).
+  childCountByContext?: Readonly<Record<string, number>> | undefined
 }
 
 export interface Point {
@@ -130,7 +136,7 @@ function seededStart(id: string, base: Point): Point {
 }
 
 export function layout(input: CanvasLayoutInput): CanvasGeometry {
-  const { dimensions, parametersByDimension, contexts, bindingsByContext } = input
+  const { dimensions, parametersByDimension, contexts, bindingsByContext, childCountByContext } = input
   const viewBox = `0 0 ${SIZE} ${SIZE}`
   if (dimensions.length === 0) return { viewBox, arcs: [], dots: [], nodes: [] }
 
@@ -223,7 +229,7 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
       x: sim?.x ?? CENTER,
       y: sim?.y ?? CENTER,
       isDraft: !isComplete(dimensionIds, bound),
-      childCount: childCountByParent.get(ctx.id) ?? 0,
+      childCount: childCountByContext?.[ctx.id] ?? childCountByParent.get(ctx.id) ?? 0,
     }
   })
 

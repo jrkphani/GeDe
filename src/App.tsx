@@ -33,7 +33,14 @@ function Surface({ route }: { route: AppRoute }) {
       if (route.tier === 'foundation') return <FoundationSurface projectId={route.projectId} />
       return <ArchitectureSurface projectId={route.projectId} />
     case 'design':
-      return <DesignSurface projectId={route.projectId} view={route.view} />
+      return (
+        <DesignSurface
+          key={route.projectId}
+          projectId={route.projectId}
+          contextPath={route.contextPath}
+          view={route.view}
+        />
+      )
     case 'not-found':
       return (
         <main className="projects">

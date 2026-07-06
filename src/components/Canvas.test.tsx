@@ -10,6 +10,7 @@ function dim(id: string, sort: number, color = '#6f5bd6'): DimensionRow {
     id,
     projectId: 'proj1',
     contextId: null,
+    sourceParamId: null,
     name: id,
     color,
     sort,
@@ -287,6 +288,66 @@ describe('Canvas', () => {
       const { container } = renderCanvas(null, onSelect)
       await user.click(container.querySelector('[data-context-id="ctxA"]') as Element)
       expect(onSelect).toHaveBeenCalledExactlyOnceWith('ctxA')
+    })
+  })
+
+  describe('drill-in (issue 011)', () => {
+    const drillDims = [dim('d0', 0), dim('d1', 1)]
+    const drillBindings = { ctxA: { d0: 'd0-p0', d1: 'd1-p0' }, ctxB: { d0: 'd0-p1', d1: 'd1-p0' } }
+
+    it('double-clicking a node drills into its child canvas', async () => {
+      const user = userEvent.setup()
+      const onDrillIn = vi.fn()
+      const { container } = render(
+        <Canvas
+          dimensions={drillDims}
+          parametersByDimension={parametersByDimension}
+          contexts={contexts}
+          bindingsByContext={drillBindings}
+          selectedContextId={null}
+          onSelect={() => {}}
+          onDrillIn={onDrillIn}
+        />,
+      )
+      await user.dblClick(container.querySelector('[data-context-id="ctxA"]') as Element)
+      expect(onDrillIn).toHaveBeenCalledExactlyOnceWith('ctxA')
+    })
+
+    it('Enter on a focused node drills in', async () => {
+      const user = userEvent.setup()
+      const onDrillIn = vi.fn()
+      const { container } = render(
+        <Canvas
+          dimensions={drillDims}
+          parametersByDimension={parametersByDimension}
+          contexts={contexts}
+          bindingsByContext={drillBindings}
+          selectedContextId="ctxB"
+          onSelect={() => {}}
+          onDrillIn={onDrillIn}
+        />,
+      )
+      const node = container.querySelector('[data-context-id="ctxB"]') as HTMLElement
+      node.focus()
+      await user.keyboard('{Enter}')
+      expect(onDrillIn).toHaveBeenCalledExactlyOnceWith('ctxB')
+    })
+
+    it('shows a child badge from the supplied per-context child counts', () => {
+      const { container } = render(
+        <Canvas
+          dimensions={drillDims}
+          parametersByDimension={parametersByDimension}
+          contexts={contexts}
+          bindingsByContext={drillBindings}
+          selectedContextId={null}
+          onSelect={() => {}}
+          childCountByContext={{ ctxA: 3 }}
+        />,
+      )
+      const badge = container.querySelector('[data-context-id="ctxA"] .canvas-node-badge')
+      expect(badge?.textContent).toBe('3')
+      expect(container.querySelector('[data-context-id="ctxB"] .canvas-node-badge')).toBeNull()
     })
   })
 
