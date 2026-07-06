@@ -1070,8 +1070,12 @@ body {
 /* Compose mode (issue 010, SPEC §4.2): dots become bind targets. The hit
    circle is an invisible ≥44px pointer target (sized in Canvas.tsx from the
    measured width); a bound dot gains a filled ring; the whole group shows the
-   pointer affordance. Read mode renders neither the hit circle nor a handler,
-   so a dot click can never mutate. */
+   pointer affordance. Read mode renders the same hit circle (issue 028(a) —
+   STYLE_GUIDE §7's "every dot carries an invisible ≥44px hit circle" already
+   required this; hover/focus emphasis is what finally needed it, since the
+   painted 8px `.canvas-dot` circle is otherwise too small a target to
+   reliably hover/focus in a real browser) but never a click handler, so a
+   dot click can still never mutate outside compose mode. */
 .canvas-dot-group--compose {
   cursor: pointer;
 }
@@ -1159,6 +1163,20 @@ body {
 .canvas-node--dimmed {
   opacity: 0.4;
   transition: opacity var(--motion-fast);
+}
+
+/* Focus + adjacency (issue 028, STYLE_GUIDE §7/§8, amended): hovering or
+   keyboard-focusing a context node, parameter dot, or dimension arc mutes
+   everything NOT adjacent to it (src/domain/canvasAdjacency.ts computes the
+   adjacent set; Canvas.tsx decides per-mark whether this class applies).
+   Resting state (no hover, no selection) carries this class nowhere, so it
+   stays fully legible — the blanket prefers-reduced-motion rule near the top
+   of this file kills the transition below for free, snapping straight to the
+   correct opacity with nothing stranded (contrast the mount-fade gotcha,
+   which this pattern deliberately avoids by never resting at opacity: 0). */
+.canvas--muted {
+  opacity: var(--canvas-muted);
+  transition: opacity var(--motion-fast) ease-out;
 }
 
 /* Resting opacity is 1 (the correct final state) — the animation only

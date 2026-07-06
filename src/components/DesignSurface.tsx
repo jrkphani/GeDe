@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { ContextBar } from '../shell/slots'
+import type { CanvasEmphasis } from '../domain/canvasAdjacency'
 import { composeReducer, firstUnbound } from '../domain/composeMode'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
@@ -54,6 +55,12 @@ export function DesignSurface({
   // render (see below), not held in state — so rapid dot clicks, whose async
   // store writes settle out of order, can never leave the pointer stale.
   const [composeContextId, setComposeContextId] = useState<string | null>(null)
+  // Issue 028(a) — focus + adjacency (STYLE_GUIDE §7/§8, amended). The
+  // transient hover/keyboard-focus mark; Canvas resolves it against
+  // selectedContextId itself ("hover ?? selection") so this stays exactly as
+  // transient as selection is persistent — reset on canvas navigation below
+  // so a stale mark from a different canvas can never linger.
+  const [hoveredMark, setHoveredMark] = useState<CanvasEmphasis | null>(null)
 
   // One canvas-load effect, keyed on (project, canvas). Drilling in changes
   // `contextId`; before loading a child canvas we seed/reconcile it (idempotent
@@ -64,6 +71,10 @@ export function DesignSurface({
   useEffect(() => {
     let cancelled = false
     setGuided(null)
+    // Issue 028(a) — a hover/focus mark from the canvas we're leaving can
+    // never refer to anything on the one we're entering; drop it so nothing
+    // stays muted/emphasized against stale ids.
+    setHoveredMark(null)
     async function openCanvas() {
       if (contextId !== null) {
         const stale = await useContextsStore.getState().openChildCanvas(contextId)
@@ -482,6 +493,8 @@ export function DesignSurface({
                   onBindParameter={(d, p) => void handleBindParameter(d, p)}
                   onUnbindParameter={(d) => void handleUnbindParameter(d)}
                   onExitCompose={exitCompose}
+                  hoveredMark={hoveredMark}
+                  onHoverChange={setHoveredMark}
                 />
                 <section className="panel context-register-shell">
                   <ContextRegister projectId={projectId} contextId={contextId} onDrillIn={handleDrillIn} />

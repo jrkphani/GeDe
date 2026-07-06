@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
+import { adjacentSet, dotKey, type CanvasEmphasis } from '../domain/canvasAdjacency'
 import { CENTER, DOT_RADIUS, layout, NODE_RADIUS } from '../domain/canvasLayout'
 import { dotHitRadiusUnits, labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
 import { documentedStatus, isComplete } from '../domain/completeness'
@@ -39,6 +40,15 @@ export interface CanvasProps {
   // being refined; shown as a lineage line under the empty-state prompt so
   // "where am I / what is this refining" is always answerable.
   lineage?: readonly string[] | undefined
+  // Issue 028(a) — focus + adjacency (STYLE_GUIDE §7/§8, amended). The
+  // transient hover/keyboard-focus mark, owned by DesignSurface exactly like
+  // selectedContextId; Canvas raises changes via onHoverChange and falls
+  // back to treating the current selection as a 'context' emphasis when
+  // nothing is hovered/focused ("hover ?? selection" — see the design brief).
+  // Both default to inert (no emphasis, no callback) so every pre-028 caller
+  // and test keeps its exact prior rendering.
+  hoveredMark?: CanvasEmphasis | null
+  onHoverChange?: (mark: CanvasEmphasis | null) => void
 }
 
 function useElementWidth(): [React.RefObject<HTMLDivElement | null>, number | null] {
@@ -93,6 +103,8 @@ export function Canvas({
   onDrillIn,
   childCountByContext,
   lineage,
+  hoveredMark = null,
+  onHoverChange,
 }: CanvasProps) {
   const [shellRef, width] = useElementWidth()
   const labelTier = width === null ? LABEL_TIER_FALLBACK : labelTierForWidth(width)
@@ -132,9 +144,21 @@ export function Canvas({
   }, [geometry.dots])
 
   const isEmpty = contexts.length === 0
-  const selectedNode = selectedContextId
-    ? geometry.nodes.find((n) => n.contextId === selectedContextId)
-    : undefined
+
+  // Issue 028(a) — the emphasis actually driving muting/spokes this render:
+  // an active hover/keyboard-focus wins; absent that, a locked selection acts
+  // as its own 'context' emphasis (STYLE_GUIDE §7 "hover ?? selection"), so
+  // spokes/adjacency reduce to exactly the pre-028 selection-only behaviour
+  // when nothing is hovered. Suppressed entirely while composing — compose
+  // mode already has its own active-dimension emphasis grammar (010) and this
+  // feature is explicitly out of scope for it (issue 028 Scope).
+  const resolvedEmphasis: CanvasEmphasis | null =
+    hoveredMark ?? (selectedContextId ? { id: selectedContextId, role: 'context' } : null)
+  const adjacent = useMemo(
+    () => adjacentSet(resolvedEmphasis, { bindingsByContext, dots: geometry.dots }),
+    [resolvedEmphasis, bindingsByContext, geometry.dots],
+  )
+  const hasEmphasis = !composing && resolvedEmphasis !== null
 
   function moveSelection(fromIndex: number, delta: 1 | -1) {
     const n = geometry.nodes.length
@@ -166,14 +190,20 @@ export function Canvas({
           if (e.target === e.currentTarget) onSelect(null)
         }}
       >
-        {geometry.arcs.map((arc) => (
+        {geometry.arcs.map((arc) => {
+          const muted = hasEmphasis && !adjacent.dimensionIds.has(arc.dimensionId)
+          return (
           <g
             key={arc.dimensionId}
-            className="canvas-arc-group"
+            className={cn('canvas-arc-group', { 'canvas--muted': muted })}
             data-dimension-id={arc.dimensionId}
             // In compose mode only the active dimension reads at full strength
             // (guided binding, SPEC §4.2); in read mode every arc is "active".
             data-active={activeDimensionId === null ? 'true' : String(arc.dimensionId === activeDimensionId)}
+            // Issue 028(a) — hover/focus emphasis (STYLE_GUIDE §7, amended).
+            // Suppressed while composing (own emphasis grammar, out of scope).
+            onMouseEnter={composing ? undefined : () => onHoverChange?.({ id: arc.dimensionId, role: 'dimension' })}
+            onMouseLeave={composing ? undefined : () => onHoverChange?.(null)}
           >
             <path
               className="canvas-arc"
@@ -195,19 +225,35 @@ export function Canvas({
               </text>
             ) : null}
           </g>
-        ))}
+          )
+        })}
 
         {geometry.dots.map((dot) => {
           const isBound = composing && draftBindings[dot.dimensionId] === dot.parameterId
+          // A hovered/focused parameter's own dot never mutes itself away —
+          // adjacentSet deliberately doesn't return a parameter's own dot key
+          // (see canvasAdjacency.ts), so Canvas checks the reflexive case here.
+          const isEmphasisSelf = resolvedEmphasis?.role === 'parameter' && resolvedEmphasis.id === dot.parameterId
+          const muted = hasEmphasis && !isEmphasisSelf && !adjacent.dotKeys.has(dotKey(dot.dimensionId, dot.parameterId))
           return (
             <g
               key={`${dot.dimensionId}:${dot.parameterId}`}
               className={cn('canvas-dot-group', {
                 'canvas-dot-group--compose': composing,
                 'canvas-dot-group--bound': isBound,
+                'canvas--muted': muted,
               })}
               data-dimension-id={dot.dimensionId}
               data-parameter-id={dot.parameterId}
+              // Issue 028(a) — read-mode dots gain hover + keyboard focus so
+              // "which contexts use this parameter" is answerable without a
+              // click (STYLE_GUIDE §7). Suppressed while composing: the dot's
+              // own click handler already owns that interaction there.
+              tabIndex={composing ? undefined : 0}
+              onMouseEnter={composing ? undefined : () => onHoverChange?.({ id: dot.parameterId, role: 'parameter' })}
+              onMouseLeave={composing ? undefined : () => onHoverChange?.(null)}
+              onFocus={composing ? undefined : () => onHoverChange?.({ id: dot.parameterId, role: 'parameter' })}
+              onBlur={composing ? undefined : () => onHoverChange?.(null)}
               onClick={
                 composing
                   ? () => {
@@ -221,7 +267,14 @@ export function Canvas({
                   : undefined
               }
             >
-              {composing ? <circle className="canvas-dot-hit" cx={dot.x} cy={dot.y} r={hitRadius} /> : null}
+              {/* Issue 028(a) — the invisible ≥44px hit circle (STYLE_GUIDE
+                  §7) now renders in read mode too, not only while composing:
+                  hover/focus emphasis needs a real target, and the painted
+                  8px `.canvas-dot` circle alone is too small to reliably
+                  hover/focus in a real browser. It carries no click handler
+                  outside compose mode, so SPEC invariant 2 (mode gates
+                  mutation) is untouched. */}
+              <circle className="canvas-dot-hit" cx={dot.x} cy={dot.y} r={hitRadius} />
               <circle
                 className="canvas-dot"
                 data-dimension-id={dot.dimensionId}
@@ -246,25 +299,34 @@ export function Canvas({
           )
         })}
 
-        {selectedContextId && selectedNode
-          ? Object.entries(bindingsByContext[selectedContextId] ?? {}).map(([dimensionId, parameterId]) => {
-              const dimension = dimensions.find((d) => d.id === dimensionId)
-              const to = dotPositionByKey.get(`${dimensionId}:${parameterId}`)
-              if (!dimension || !to) return null
-              return (
-                <line
-                  key={dimensionId}
-                  className="canvas-spoke"
-                  data-dimension-id={dimensionId}
-                  x1={selectedNode.x}
-                  y1={selectedNode.y}
-                  x2={to.x}
-                  y2={to.y}
-                  style={{ stroke: dimension.color }}
-                />
-              )
-            })
-          : null}
+        {/* Issue 009's selection-only spokes generalize to issue 028(a)'s
+            adjacency: draw every bound-dimension spoke for every context in
+            `adjacent.contextIds`. With no hover, that set is exactly
+            `{selectedContextId}` (via the emphasis fallback above), so this
+            reproduces the pre-028 rendering unchanged; a parameter/dimension
+            hover additionally lights up whichever OTHER contexts are
+            adjacent — "who uses this parameter/dimension" (issue 028 Scope). */}
+        {Array.from(adjacent.contextIds).flatMap((ctxId) => {
+          const fromNode = geometry.nodes.find((n) => n.contextId === ctxId)
+          if (!fromNode) return []
+          return Object.entries(bindingsByContext[ctxId] ?? {}).flatMap(([dimensionId, parameterId]) => {
+            const dimension = dimensions.find((d) => d.id === dimensionId)
+            const to = dotPositionByKey.get(dotKey(dimensionId, parameterId))
+            if (!dimension || !to) return []
+            return [
+              <line
+                key={`${ctxId}:${dimensionId}`}
+                className="canvas-spoke"
+                data-dimension-id={dimensionId}
+                x1={fromNode.x}
+                y1={fromNode.y}
+                x2={to.x}
+                y2={to.y}
+                style={{ stroke: dimension.color }}
+              />,
+            ]
+          })
+        })}
 
         {geometry.nodes.map((node, index) => {
           const ctxRow = contextById.get(node.contextId)
@@ -276,6 +338,7 @@ export function Canvas({
           const isSelected = selectedContextId === node.contextId
           const isTabStop = selectedContextId ? isSelected : index === 0
           const dimmed = selectedContextId !== null && !isSelected
+          const muted = hasEmphasis && !adjacent.contextIds.has(node.contextId)
 
           return (
             <g
@@ -286,6 +349,7 @@ export function Canvas({
               className={cn('canvas-node', {
                 'canvas-node--draft': node.isDraft,
                 'canvas-node--dimmed': dimmed,
+                'canvas--muted': muted,
               })}
               // The node's position lives on the group transform (not per-shape
               // x/y) so it can ease toward its recomputed centroid after each
@@ -299,6 +363,12 @@ export function Canvas({
               aria-label={label}
               aria-pressed={isSelected}
               onClick={() => onSelect(node.contextId)}
+              // Issue 028(a) — hover/focus emphasis. Suppressed while
+              // composing (own emphasis grammar, out of scope).
+              onMouseEnter={composing ? undefined : () => onHoverChange?.({ id: node.contextId, role: 'context' })}
+              onMouseLeave={composing ? undefined : () => onHoverChange?.(null)}
+              onFocus={composing ? undefined : () => onHoverChange?.({ id: node.contextId, role: 'context' })}
+              onBlur={composing ? undefined : () => onHoverChange?.(null)}
               // Double-click drills into the context's child canvas (SPEC
               // §4.2, issue 011). Never in compose mode (the draft isn't a
               // stable canvas yet).

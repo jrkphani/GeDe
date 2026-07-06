@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
+import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { Canvas } from './Canvas'
+import { Canvas, type CanvasProps } from './Canvas'
+import type { CanvasEmphasis } from '../domain/canvasAdjacency'
 import type { ContextRow, DimensionRow, ParameterRow } from '../db/mutations'
 
 function dim(id: string, sort: number, color = '#6f5bd6'): DimensionRow {
@@ -470,11 +472,15 @@ describe('Canvas', () => {
       )
     }
 
-    it('read mode: clicking a parameter dot never binds (no hit circle, no mutation)', async () => {
+    it('read mode: clicking a parameter dot never binds (no click handler, no mutation)', async () => {
       const user = userEvent.setup()
       const onBindParameter = vi.fn()
       const { container } = renderCompose({ composeContextId: null, onBindParameter })
-      expect(container.querySelectorAll('.canvas-dot-hit')).toHaveLength(0)
+      // Issue 028(a) — the invisible hit circle now renders in read mode too
+      // (a real hover/focus target, STYLE_GUIDE §7's pre-existing ≥44px
+      // touch-target rule); what read mode still never has is a click
+      // handler wired to it, so clicking it can never mutate.
+      expect(container.querySelectorAll('.canvas-dot-hit').length).toBeGreaterThan(0)
       await user.click(container.querySelector('.canvas-dot[data-parameter-id="d0-p0"]') as Element)
       expect(onBindParameter).not.toHaveBeenCalled()
     })
@@ -571,6 +577,172 @@ describe('Canvas', () => {
       await user.keyboard('{Escape}')
       expect(onExitCompose).toHaveBeenCalledOnce()
       expect(onSelect).not.toHaveBeenCalledWith(null)
+    })
+  })
+
+  describe('focus + adjacency (issue 028)', () => {
+    // Two dims, both with real parameters, so there's something to mute on
+    // every role. ctxA binds d0-p0 + d1-p0; ctxB binds d0-p1 + d1-p0 (shares
+    // d1-p0 with ctxA — the "who else uses this parameter" case).
+    const focusDims = [dim('d0', 0), dim('d1', 1)]
+    const focusParams = {
+      d0: [param('d0', 'd0-p0', 0), param('d0', 'd0-p1', 1)],
+      d1: [param('d1', 'd1-p0', 0)],
+    }
+    const focusContexts = [ctx('ctxA', 'α'), ctx('ctxB', 'β')]
+    const focusBindings = {
+      ctxA: { d0: 'd0-p0', d1: 'd1-p0' },
+      ctxB: { d0: 'd0-p1', d1: 'd1-p0' },
+    }
+
+    // Canvas is fully controlled for hover/focus (hoveredMark + onHoverChange
+    // — mirrors selectedContextId/onSelect exactly): the real owner is
+    // DesignSurface's own useState. Exercising hover/focus in a unit test
+    // therefore needs a tiny stateful harness playing that role, otherwise
+    // `onHoverChange` fires into the void and the prop never actually
+    // updates — this is the correct behaviour of a controlled component, not
+    // a gap in Canvas itself.
+    function CanvasHarness(props: Partial<CanvasProps>) {
+      const [hoveredMark, setHoveredMark] = useState<CanvasEmphasis | null>(null)
+      return (
+        <Canvas
+          dimensions={focusDims}
+          parametersByDimension={focusParams}
+          contexts={focusContexts}
+          bindingsByContext={focusBindings}
+          selectedContextId={null}
+          onSelect={() => {}}
+          hoveredMark={hoveredMark}
+          onHoverChange={setHoveredMark}
+          {...props}
+        />
+      )
+    }
+
+    function renderFocus(overrides: Partial<CanvasProps> = {}) {
+      return render(<CanvasHarness {...overrides} />)
+    }
+
+    it('resting state (no hover, no selection) carries .canvas--muted nowhere', () => {
+      const { container } = renderFocus()
+      expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
+    })
+
+    it('hovering a context node mutes non-adjacent dots/arcs/nodes; mouseleave clears it', async () => {
+      const user = userEvent.setup()
+      const { container } = renderFocus()
+      const nodeA = container.querySelector('[data-context-id="ctxA"]') as HTMLElement
+      await user.hover(nodeA)
+
+      expect(container.querySelector('[data-parameter-id="d0-p0"].canvas-dot-group')).not.toHaveClass(
+        'canvas--muted',
+      )
+      expect(container.querySelector('[data-parameter-id="d1-p0"].canvas-dot-group')).not.toHaveClass(
+        'canvas--muted',
+      )
+      expect(container.querySelector('[data-parameter-id="d0-p1"].canvas-dot-group')).toHaveClass('canvas--muted')
+      expect(container.querySelector('[data-context-id="ctxA"]')).not.toHaveClass('canvas--muted')
+      expect(container.querySelector('[data-context-id="ctxB"]')).toHaveClass('canvas--muted')
+      // Context adjacency has no dimensions of its own — both arcs mute.
+      expect(container.querySelector('.canvas-arc-group[data-dimension-id="d0"]')).toHaveClass('canvas--muted')
+      expect(container.querySelector('.canvas-arc-group[data-dimension-id="d1"]')).toHaveClass('canvas--muted')
+
+      await user.unhover(nodeA)
+      expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
+    })
+
+    it('hovering a parameter dot keeps it and its bound contexts (+ their spokes) unmuted', async () => {
+      const user = userEvent.setup()
+      const { container } = renderFocus()
+      const dot = container.querySelector('.canvas-dot-group[data-parameter-id="d1-p0"]') as HTMLElement
+      await user.hover(dot)
+
+      // d1-p0 is bound by both contexts.
+      expect(container.querySelector('[data-context-id="ctxA"]')).not.toHaveClass('canvas--muted')
+      expect(container.querySelector('[data-context-id="ctxB"]')).not.toHaveClass('canvas--muted')
+      expect(container.querySelectorAll('.canvas-spoke')).toHaveLength(4) // 2 contexts x 2 bound dims
+
+      // The hovered dot itself is never muted, even though the pure predicate
+      // doesn't return a parameter's own dot key (Canvas's self-check).
+      expect(dot).not.toHaveClass('canvas--muted')
+      expect(container.querySelector('[data-parameter-id="d0-p0"].canvas-dot-group')).toHaveClass('canvas--muted')
+      expect(container.querySelector('.canvas-arc-group[data-dimension-id="d0"]')).toHaveClass('canvas--muted')
+
+      await user.unhover(dot)
+      expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
+    })
+
+    it('hovering a dimension arc keeps its dots and bound contexts unmuted', async () => {
+      const user = userEvent.setup()
+      const { container } = renderFocus()
+      const arc = container.querySelector('.canvas-arc-group[data-dimension-id="d0"]') as HTMLElement
+      await user.hover(arc)
+
+      expect(arc).not.toHaveClass('canvas--muted')
+      expect(container.querySelector('.canvas-arc-group[data-dimension-id="d1"]')).toHaveClass('canvas--muted')
+      expect(container.querySelector('[data-parameter-id="d0-p0"].canvas-dot-group')).not.toHaveClass(
+        'canvas--muted',
+      )
+      expect(container.querySelector('[data-parameter-id="d0-p1"].canvas-dot-group')).not.toHaveClass(
+        'canvas--muted',
+      )
+      expect(container.querySelector('[data-parameter-id="d1-p0"].canvas-dot-group')).toHaveClass('canvas--muted')
+      expect(container.querySelector('[data-context-id="ctxA"]')).not.toHaveClass('canvas--muted')
+      expect(container.querySelector('[data-context-id="ctxB"]')).not.toHaveClass('canvas--muted')
+
+      await user.unhover(arc)
+      expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
+    })
+
+    it('keyboard focus on a node produces the same emphasis as hover; blur clears it', () => {
+      const { container } = renderFocus()
+      const nodeA = container.querySelector('[data-context-id="ctxA"]') as HTMLElement
+      act(() => nodeA.focus())
+      expect(container.querySelector('[data-context-id="ctxB"]')).toHaveClass('canvas--muted')
+      act(() => nodeA.blur())
+      expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
+    })
+
+    it('keyboard focus on a parameter dot produces the same emphasis as hover; blur clears it', () => {
+      const { container } = renderFocus()
+      const dot = container.querySelector('.canvas-dot-group[data-parameter-id="d0-p1"]') as HTMLElement
+      act(() => dot.focus())
+      expect(container.querySelector('[data-context-id="ctxB"]')).not.toHaveClass('canvas--muted') // binds d0-p1
+      expect(container.querySelector('[data-context-id="ctxA"]')).toHaveClass('canvas--muted')
+      act(() => dot.blur())
+      expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
+    })
+
+    it('a locked selection composes with a transient hover: hovering elsewhere never calls onSelect and previews, then falls back on unhover', async () => {
+      const user = userEvent.setup()
+      const onSelect = vi.fn()
+      const { container } = renderFocus({ selectedContextId: 'ctxA', onSelect })
+
+      // Resting-with-a-locked-selection already mutes non-adjacent marks
+      // (the "hover ?? selection" fallback).
+      expect(container.querySelector('[data-context-id="ctxB"]')).toHaveClass('canvas--muted')
+
+      const dot = container.querySelector('.canvas-dot-group[data-parameter-id="d1-p0"]') as HTMLElement
+      await user.hover(dot)
+      // d1-p0 is bound by both contexts — the hover preview un-mutes ctxB
+      // without ever touching the lock.
+      expect(container.querySelector('[data-context-id="ctxB"]')).not.toHaveClass('canvas--muted')
+      expect(onSelect).not.toHaveBeenCalled()
+
+      await user.unhover(dot)
+      expect(container.querySelector('[data-context-id="ctxB"]')).toHaveClass('canvas--muted')
+    })
+
+    it('does not apply hover-driven muting while composing (existing active-dimension dimming is unaffected)', async () => {
+      const user = userEvent.setup()
+      const { container } = renderFocus({
+        composeContextId: 'ctxA',
+        activeDimensionId: 'd1',
+        selectedContextId: 'ctxA',
+      })
+      const dot = container.querySelector('.canvas-dot-group[data-parameter-id="d0-p0"]') as HTMLElement
+      await user.hover(dot)
+      expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
     })
   })
 })

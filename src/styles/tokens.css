@@ -68,6 +68,10 @@
   --motion-snappy: 140ms;
   --motion-migrate: 120ms; /* canvas node easing to its centroid on bind (010) */
   --motion-drilldown: 200ms;
+
+  /* Canvas focus + adjacency (issue 028) — opacity for marks not adjacent to
+     the current hover/focus/selection emphasis. §7/§8. */
+  --canvas-muted: 0.2;
 }
 
 [data-theme='dark'] {
@@ -87,4 +91,5 @@
   --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.45);
   --shadow-frozen-col: 2px 0 4px rgba(0, 0, 0, 0.35);
   --scrim: rgba(0, 0, 0, 0.5);
+  --canvas-muted: 0.22;
 }
