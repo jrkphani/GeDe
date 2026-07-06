@@ -229,6 +229,24 @@ describe('Canvas', () => {
       expect(container.querySelectorAll('.canvas-spoke')).toHaveLength(0)
     })
 
+    // Issue 039 (028 phase b) — spokes are now bundled splines (a <path>
+    // built by the pure spokePath), not straight <line>s. Same count, same
+    // class/data-attributes (028a + every pre-existing spoke-counting spec
+    // keep working); only the tag and the presence of a curve command in `d`
+    // change.
+    it('renders spokes as <path> elements with a bundled (curved) d attribute, not straight <line>s', () => {
+      const { container } = renderCanvas('ctxA') // ctxA is fully bound: d0 + d1
+      const spokes = container.querySelectorAll('.canvas-spoke')
+      expect(spokes).toHaveLength(2)
+      expect(container.querySelectorAll('line.canvas-spoke')).toHaveLength(0)
+      for (const spoke of Array.from(spokes)) {
+        expect(spoke.tagName.toLowerCase()).toBe('path')
+        const d = spoke.getAttribute('d') ?? ''
+        expect(d.length).toBeGreaterThan(0)
+        expect(d).toMatch(/[QC]/)
+      }
+    })
+
     it('roving tabIndex: the selected node is the only tab stop; the first node is the default when none is selected', () => {
       const { container: none } = renderCanvas(null)
       expect(none.querySelector('[data-context-id="ctxA"]')).toHaveAttribute('tabindex', '0')

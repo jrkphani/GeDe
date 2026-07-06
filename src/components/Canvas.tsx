@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { adjacentSet, dotKey, type CanvasEmphasis } from '../domain/canvasAdjacency'
-import { CENTER, DOT_RADIUS, layout, NODE_RADIUS } from '../domain/canvasLayout'
+import { CENTER, DOT_RADIUS, layout, NODE_RADIUS, spokePath } from '../domain/canvasLayout'
 import { dotHitRadiusUnits, labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
@@ -305,7 +305,13 @@ export function Canvas({
             `{selectedContextId}` (via the emphasis fallback above), so this
             reproduces the pre-028 rendering unchanged; a parameter/dimension
             hover additionally lights up whichever OTHER contexts are
-            adjacent — "who uses this parameter/dimension" (issue 028 Scope). */}
+            adjacent — "who uses this parameter/dimension" (issue 028 Scope).
+            Issue 039 (028 phase b): the spoke is a `<path>` built by the pure
+            `spokePath(from, to)` (deterministic bundled curve toward CENTER)
+            instead of a straight `<line>` — geometry lives in the layout,
+            Canvas just renders the `d` it's handed. Class/data-attributes are
+            unchanged so 028(a)'s muting and every existing `.canvas-spoke`
+            count/point assertion keep passing. */}
         {Array.from(adjacent.contextIds).flatMap((ctxId) => {
           const fromNode = geometry.nodes.find((n) => n.contextId === ctxId)
           if (!fromNode) return []
@@ -314,14 +320,11 @@ export function Canvas({
             const to = dotPositionByKey.get(dotKey(dimensionId, parameterId))
             if (!dimension || !to) return []
             return [
-              <line
+              <path
                 key={`${ctxId}:${dimensionId}`}
                 className="canvas-spoke"
                 data-dimension-id={dimensionId}
-                x1={fromNode.x}
-                y1={fromNode.y}
-                x2={to.x}
-                y2={to.y}
+                d={spokePath(fromNode, to)}
                 style={{ stroke: dimension.color }}
               />,
             ]

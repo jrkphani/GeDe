@@ -135,6 +135,41 @@ function pointAt(radius: number, angle: number): Point {
   return { x: CENTER + radius * Math.sin(angle), y: CENTER - radius * Math.cos(angle) }
 }
 
+// Issue 039 (028 phase b) — bundling strength for spokePath below: how far the
+// quadratic's control point is pulled from the straight chord's midpoint
+// toward CENTER. 0 = straight line, 1 = control point sits exactly at CENTER.
+// A single fixed constant per the issue's scope (density-adaptive bundling is
+// an explicit non-goal for this slice); 0.35 reads as a legible inward bend
+// without the spline reading as ornament (STYLE_GUIDE §7 "drafting
+// restraint").
+export const SPOKE_BUNDLE_PULL = 0.35
+
+function lerpPoint(a: Point, b: Point, t: number): Point {
+  return { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t }
+}
+
+// Issue 039 (028 phase b) — deterministic bundled spoke curve (SPEC §4.2,
+// ADR-0005, STYLE_GUIDE §7 amended "Connections"). Picked the hand-rolled
+// quadratic Bezier over `d3-shape`'s `curveBundle` (the issue's other
+// option): both are dependency-available (d3-shape is already used for arcs
+// above) and both are pure/deterministic, but the quadratic's determinism is
+// visibly trivial from the formula alone — `curveBundle` derives its curve
+// from a B-spline basis over the whole point list, which is harder to reason
+// about byte-for-byte across engines/versions. `Canvas.tsx` calls this per
+// spoke; it does no geometry math itself (stays presentational, per Canvas's
+// own header comment).
+//
+// Control point = the straight chord's midpoint, pulled SPOKE_BUNDLE_PULL of
+// the way toward CENTER — the same bundling attractor as the design brief's
+// "hierarchical edge bundling" prior art. `from`/`to` are reproduced exactly
+// as given (only the interior bends), so endpoints/hit circles/labels are
+// untouched.
+export function spokePath(from: Point, to: Point): string {
+  const chordMid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }
+  const ctrl = lerpPoint(chordMid, { x: CENTER, y: CENTER }, SPOKE_BUNDLE_PULL)
+  return `M ${from.x} ${from.y} Q ${ctrl.x} ${ctrl.y} ${to.x} ${to.y}`
+}
+
 // Side-aware text anchor so a radial label grows away from the circle instead
 // of overlapping it. sin(angle) is the horizontal offset from center; the
 // ±0.2 dead-band (~11.5° either side of vertical) keeps top/bottom labels

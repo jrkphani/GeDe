@@ -1186,6 +1186,11 @@ body {
    being stuck invisible, which an `opacity: 0` resting state + `forwards`
    fill-mode would have caused. */
 .canvas-spoke {
+  /* Issue 039: the spoke moved from a stroke-only <line> (no fill concept)
+     to a <path> (spokePath's quadratic curve) — a <path> defaults to
+     fill: black, which would paint the area the bundled curve sweeps out
+     against the chord. Stroke-only, exactly like the line it replaced. */
+  fill: none;
   stroke-width: 2px;
   opacity: 1;
   animation: canvas-spoke-in var(--motion-fast) ease-out;

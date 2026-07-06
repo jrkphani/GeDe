@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ARC_RADIUS, layout, NODE_RADIUS, type CanvasLayoutInput } from './canvasLayout'
+import { ARC_RADIUS, layout, NODE_RADIUS, spokePath, type CanvasLayoutInput } from './canvasLayout'
 
 const CENTER = 500
 
@@ -300,5 +300,80 @@ describe('layout', () => {
     const elapsed = performance.now() - start
 
     expect(elapsed).toBeLessThan(40)
+  })
+})
+
+// Issue 039 (028 phase b) — deterministic bundled spoke splines. `spokePath`
+// is pure: fed only the two endpoints (the module's own CENTER attractor is
+// baked in, per ADR-0005), so it's unit-testable without touching `layout`.
+describe('spokePath', () => {
+  // Quadratic Bezier point at parameter t, matching the `M from Q ctrl to`
+  // path spokePath emits — used to independently verify the emitted `d`
+  // actually bends the way the construction claims, rather than trusting the
+  // string alone.
+  function quadraticAt(p0: { x: number; y: number }, ctrl: { x: number; y: number }, p2: { x: number; y: number }, t: number) {
+    const mt = 1 - t
+    return {
+      x: mt * mt * p0.x + 2 * mt * t * ctrl.x + t * t * p2.x,
+      y: mt * mt * p0.y + 2 * mt * t * ctrl.y + t * t * p2.y,
+    }
+  }
+
+  // Extracts the three points out of the `M x y Q cx cy ex ey` path spokePath
+  // emits, so tests can check curve shape without depending on exact
+  // formatting/whitespace of the `d` string.
+  function parseQuadratic(d: string) {
+    const match = /M\s*([-\d.]+)\s+([-\d.]+)\s*Q\s*([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)\s+([-\d.]+)/.exec(d)
+    if (!match) throw new Error(`not a quadratic path: ${d}`)
+    const [, mx, my, cx, cy, ex, ey] = match.map(Number)
+    return {
+      from: { x: mx as number, y: my as number },
+      ctrl: { x: cx as number, y: cy as number },
+      to: { x: ex as number, y: ey as number },
+    }
+  }
+
+  it('returns a non-empty path containing a curve command, not a straight segment', () => {
+    const from = { x: 500, y: 100 }
+    const to = { x: 850, y: 400 }
+    const d = spokePath(from, to)
+    expect(d.length).toBeGreaterThan(0)
+    expect(d).toMatch(/[QC]/)
+  })
+
+  it('is deterministic: identical input produces a byte-identical path', () => {
+    const from = { x: 500, y: 100 }
+    const to = { x: 850, y: 400 }
+    expect(spokePath(from, to)).toBe(spokePath({ ...from }, { ...to }))
+  })
+
+  it("bends inward: the curve's midpoint sits closer to CENTER than the straight chord's midpoint", () => {
+    const CENTER = 500
+    // A spread of endpoint angles/radii around the ring, node-to-dot pairs
+    // like the real canvas produces.
+    const pairs = [
+      { from: { x: 500, y: 100 }, to: { x: 850, y: 400 } },
+      { from: { x: 480, y: 520 }, to: { x: 120, y: 500 } },
+      { from: { x: 700, y: 700 }, to: { x: 900, y: 100 } },
+      { from: { x: 300, y: 850 }, to: { x: 500, y: 900 } },
+      { from: { x: 510, y: 490 }, to: { x: 60, y: 60 } },
+    ]
+    for (const { from, to } of pairs) {
+      const d = spokePath(from, to)
+      const { ctrl } = parseQuadratic(d)
+      const curveMid = quadraticAt(from, ctrl, to, 0.5)
+      const chordMid = { x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 }
+      const distCurve = Math.hypot(curveMid.x - CENTER, curveMid.y - CENTER)
+      const distChord = Math.hypot(chordMid.x - CENTER, chordMid.y - CENTER)
+      expect(distCurve).toBeLessThan(distChord)
+    }
+  })
+
+  it('endpoints are preserved exactly (only the interior bends)', () => {
+    const from = { x: 500, y: 100 }
+    const to = { x: 850, y: 400 }
+    const { from: parsedFrom, to: parsedTo } = parseQuadratic(spokePath(from, to))
+    expect(parsedFrom).toEqual(from)
+    expect(parsedTo).toEqual(to)
   })
 })
