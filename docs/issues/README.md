@@ -52,9 +52,9 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [032](done/032-sync-integration-row-delta.md) ✅ | Sync — Electric **read-path** → PGlite + client optimistic-write queue (read-only collab; LWW server-side in 043) | M8 | 030, 031 |
 | [043](043-write-path-api-server-authority.md) | **Write-path API** — server write authority + invariant enforcement (Tier 2, serverless) | M8 | 030, 032, 033, 034 |
 | [033](done/033-auth-account.md) ✅ | Authentication + account — **Cognito** (email/pw) + hero + login screen | M9 | 030 |
-| [034](034-workspaces-rls-tenancy.md) | Workspaces + Postgres RLS multi-tenancy | M9 | 032, 033 |
+| [034](done/034-workspaces-rls-tenancy.md) ✅ | Workspaces + Postgres RLS multi-tenancy | M9 | 032, 033 |
 | [035](035-sharing-roles-invitations.md) | Sharing — roles & invitations | M9 | 034, 033 |
-| [036](036-sync-state-offline-ui.md) | Sync state + offline reconciliation UI | M8 | 032 |
+| [036](done/036-sync-state-offline-ui.md) ✅ | Sync state + offline reconciliation UI | M8 | 032 |
 | [037](037-local-to-cloud-migration.md) | Local → cloud project migration (on-ramp) | M10 | 033, 034, 032 |
 | [038](038-presence-live-collaboration.md) | Presence + live collaboration (speculative) | M10 | 032, 034, 035 |
 

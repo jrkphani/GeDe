@@ -1,6 +1,6 @@
 # 034: Workspaces + Postgres RLS multi-tenancy
 
-- **Status**: SHIPPED (implemented on `feat/034-workspaces-rls`; orchestrator to merge/cherry-pick)
+- **Status**: SHIPPED (merged to main `2de15eb`, migration `0008`)
 - **Milestone**: M9 (Identity & tenancy)
 - **Blocked by**: 032 (sync), 033 (auth) — both merged to `main` prior to this work.
 
