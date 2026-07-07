@@ -54,6 +54,13 @@ export function buildAppStacks(
   app: cdk.App,
   envName: EnvName = 'test',
   domainName?: string,
+  /**
+   * Test-only override threaded through to `HostingStack.siteSourcePath`
+   * (issue 041) — pins the `BucketDeployment` source so synth output never
+   * depends on whether a built `dist/` happens to exist on this machine.
+   * Never passed by the real CLI entrypoint (`bin/gede.ts`).
+   */
+  siteSourcePath?: string,
 ): AppStacks {
   const envConfig = ENVS[envName];
   const env: cdk.Environment = { account: envConfig.account, region: envConfig.region };
@@ -75,6 +82,7 @@ export function buildAppStacks(
     description: 'GeDe static hosting: private S3 + CloudFront — issue 040',
     namePrefix: envConfig.namePrefix,
     domainName,
+    siteSourcePath,
   });
   hosting.addDependency(network);
 

@@ -19,6 +19,18 @@ export interface HostingStackProps extends StackProps {
    * don't control the DNS for, so we simply don't ask it to).
    */
   domainName?: string;
+  /**
+   * Override for the `BucketDeployment` source directory (issue 041).
+   * `BucketDeployment` hashes whatever directory it's given, and that hash
+   * lands in the synthesized template — so leaving this to the ambient
+   * ("does `dist/` exist right now?") resolution below makes `cdk synth`
+   * output, and therefore any snapshot of it, depend on the machine/moment
+   * it ran on. Tests MUST pass the committed placeholder path explicitly so
+   * synth output is identical on every machine and in CI. Left undefined
+   * (the default), production/CI deploys are unaffected: the existing
+   * dist-or-placeholder resolution still applies.
+   */
+  siteSourcePath?: string;
 }
 
 /**
@@ -156,9 +168,14 @@ export class HostingStack extends Stack {
     // CI (deploy.yml) always runs `npm run build` first, so production
     // deploys publish the real `dist/`; local `cdk synth`/tests use the
     // placeholder and never assert on its contents.
+    //
+    // `props.siteSourcePath` (issue 041) short-circuits all of this for
+    // tests: pass the committed placeholder explicitly so BucketDeployment's
+    // asset hash — and therefore the synthesized template/snapshot — never
+    // depends on whether *this* machine happens to have a `dist/` built.
     const repoDistPath = path.resolve(__dirname, '..', '..', '..', 'dist');
     const placeholderPath = path.resolve(__dirname, '..', 'assets', 'placeholder');
-    const siteSourcePath = fs.existsSync(repoDistPath) ? repoDistPath : placeholderPath;
+    const siteSourcePath = props.siteSourcePath ?? (fs.existsSync(repoDistPath) ? repoDistPath : placeholderPath);
 
     new s3deploy.BucketDeployment(this, 'DeploySite', {
       sources: [s3deploy.Source.asset(siteSourcePath)],
