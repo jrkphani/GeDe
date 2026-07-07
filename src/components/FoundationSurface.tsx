@@ -9,7 +9,9 @@ import { CSS } from '@dnd-kit/utilities'
 import { useEffect, useMemo, useState } from 'react'
 import type { Tier1PropRow } from '../db/mutations'
 import { formatDegree } from '../domain/degree'
+import { canWrite } from '../domain/workspaceRole'
 import { useTier1Store } from '../store/tier1'
+import { useWorkspaceRole } from '../store/workspace'
 import { EditableGrid, type GridColumn } from './EditableGrid'
 import { Button } from './ui/button'
 import { MultilineEdit } from './ui/multiline-editor'
@@ -51,6 +53,10 @@ function RankCell({ prop, rank }: { prop: Tier1PropRow; rank: number }) {
 // purpose above the table, on the graph-paper ground. No context bar here
 // (SITEMAP §2 — Foundation's bar is empty, so it stays hidden).
 export function FoundationSurface({ projectId }: { projectId: string }) {
+  // Issue 035 — a viewer sees the same purpose + ranked table, minus the
+  // in-place purpose edit, re-rank drag, and phantom row.
+  const { role } = useWorkspaceRole(projectId)
+  const readOnly = !canWrite(role)
   const purpose = useTier1Store((s) => s.purpose)
   const props = useTier1Store((s) => s.props)
   const load = useTier1Store((s) => s.load)
@@ -103,7 +109,16 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
       cellClassName: 'tier1-col--rank',
       cell: {
         kind: 'static',
-        render: (prop) => <RankCell prop={prop} rank={displayRankById[prop.id] ?? prop.rank} />,
+        // Issue 035 — a viewer sees the same degree notation, minus the drag
+        // handle (there's nothing for it to reorder into, RLS-wise).
+        render: (prop) =>
+          readOnly ? (
+            <span className="tier1-rank__degree font-mono">
+              {formatDegree(displayRankById[prop.id] ?? prop.rank)}
+            </span>
+          ) : (
+            <RankCell prop={prop} rank={displayRankById[prop.id] ?? prop.rank} />
+          ),
       },
     },
     {
@@ -154,24 +169,29 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
           displayClassName="tier1-purpose__display"
           inputClassName="tier1-purpose__input"
           ariaLabel="System purpose"
+          readOnly={readOnly}
         />
       </section>
 
       <section className="tier1-props" data-empty={props.length === 0 || undefined}>
-        <DndContext collisionDetection={closestCenter} onDragOver={onDragOver} onDragEnd={onDragEnd}>
-          <SortableContext items={propIds} strategy={verticalListSortingStrategy}>
-            <EditableGrid
-              rows={props}
-              columns={columns}
-              getRowId={(prop) => prop.id}
-              phantom={{
-                columnId: 'name',
-                placeholder: 'Name a value proposition',
-                onCreate: (name) => void addProp(name),
-              }}
-            />
-          </SortableContext>
-        </DndContext>
+        {readOnly ? (
+          <EditableGrid rows={props} columns={columns} getRowId={(prop) => prop.id} readOnly />
+        ) : (
+          <DndContext collisionDetection={closestCenter} onDragOver={onDragOver} onDragEnd={onDragEnd}>
+            <SortableContext items={propIds} strategy={verticalListSortingStrategy}>
+              <EditableGrid
+                rows={props}
+                columns={columns}
+                getRowId={(prop) => prop.id}
+                phantom={{
+                  columnId: 'name',
+                  placeholder: 'Name a value proposition',
+                  onCreate: (name) => void addProp(name),
+                }}
+              />
+            </SortableContext>
+          </DndContext>
+        )}
       </section>
     </main>
   )

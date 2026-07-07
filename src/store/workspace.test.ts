@@ -1,0 +1,109 @@
+import { beforeEach, describe, expect, it } from 'vitest'
+import { openDatabase, type Database } from '../db/client'
+import { setDatabase } from './database'
+import { createWorkspace } from '../db/workspaces'
+import { createInvitation } from '../db/invitations'
+import { resetAuthStoreForTests, useAuthStore } from './auth'
+import { resetWorkspaceStore, useWorkspaceStore } from './workspace'
+
+let db: Database
+
+beforeEach(async () => {
+  ;({ db } = await openDatabase('memory://'))
+  setDatabase(db)
+  resetWorkspaceStore()
+  resetAuthStoreForTests()
+})
+
+describe('load', () => {
+  it('loads members and invitations for a workspace', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    await createInvitation(db, ws.id, 'invitee@example.com', 'viewer', 'sub-owner')
+
+    await useWorkspaceStore.getState().load(ws.id)
+
+    const state = useWorkspaceStore.getState()
+    expect(state.workspaceId).toBe(ws.id)
+    expect(state.members).toHaveLength(1)
+    expect(state.invitations).toHaveLength(1)
+  })
+})
+
+describe('role (computed from members + auth identity)', () => {
+  it('is "owner" when auth is not configured (solo/local mode)', async () => {
+    const ws = await createWorkspace(db, 'Acme') // no members at all
+    await useWorkspaceStore.getState().load(ws.id)
+    expect(useWorkspaceStore.getState().role).toBe('owner')
+  })
+
+  it('matches the signed-in user’s own membership row once authenticated', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const { addWorkspaceMember } = await import('../db/workspaces')
+    await addWorkspaceMember(db, ws.id, 'sub-viewer', 'viewer')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-viewer', email: null } })
+
+    await useWorkspaceStore.getState().load(ws.id)
+    expect(useWorkspaceStore.getState().role).toBe('viewer')
+  })
+})
+
+describe('invite / changeRole / removeMember', () => {
+  it('invite creates a pending invitation attributed to the signed-in user', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-owner', email: 'owner@example.com' } })
+    await useWorkspaceStore.getState().load(ws.id)
+
+    await useWorkspaceStore.getState().invite('New@Example.com', 'editor')
+
+    const state = useWorkspaceStore.getState()
+    expect(state.invitations).toHaveLength(1)
+    expect(state.invitations[0]).toMatchObject({ email: 'new@example.com', role: 'editor', invitedBySub: 'sub-owner' })
+  })
+
+  it('changeRole updates a member’s role and refreshes the list', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const { addWorkspaceMember } = await import('../db/workspaces')
+    await addWorkspaceMember(db, ws.id, 'sub-x', 'viewer')
+    await useWorkspaceStore.getState().load(ws.id)
+
+    await useWorkspaceStore.getState().changeRole('sub-x', 'editor')
+
+    const member = useWorkspaceStore.getState().members.find((m) => m.userSub === 'sub-x')
+    expect(member?.role).toBe('editor')
+  })
+
+  it('removeMember drops the member from the list', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const { addWorkspaceMember } = await import('../db/workspaces')
+    await addWorkspaceMember(db, ws.id, 'sub-x', 'viewer')
+    await useWorkspaceStore.getState().load(ws.id)
+
+    await useWorkspaceStore.getState().removeMember('sub-x')
+
+    expect(useWorkspaceStore.getState().members.find((m) => m.userSub === 'sub-x')).toBeUndefined()
+  })
+})
+
+describe('revokeInvitation / resendInvitation', () => {
+  it('revoke removes a pending invitation from the visible list', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'viewer', 'sub-owner')
+    await useWorkspaceStore.getState().load(ws.id)
+
+    await useWorkspaceStore.getState().revokeInvitation(inv.id)
+
+    const reloaded = useWorkspaceStore.getState().invitations.find((i) => i.id === inv.id)
+    expect(reloaded?.deletedAt).not.toBeNull()
+  })
+
+  it('resend extends the invitation’s expiry', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'viewer', 'sub-owner', 1)
+    await useWorkspaceStore.getState().load(ws.id)
+
+    await useWorkspaceStore.getState().resendInvitation(inv.id)
+
+    const reloaded = useWorkspaceStore.getState().invitations.find((i) => i.id === inv.id)
+    expect(new Date(reloaded?.expiresAt ?? 0).getTime()).toBeGreaterThan(new Date(inv.expiresAt).getTime())
+  })
+})

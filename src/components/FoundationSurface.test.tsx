@@ -4,21 +4,30 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { addTier1Prop, createProject } from '../db/mutations'
+import { addWorkspaceMember } from '../db/workspaces'
+import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
+import { useProjectsStore } from '../store/projects'
 import { resetTier1Store } from '../store/tier1'
+import { resetWorkspaceStore } from '../store/workspace'
 import { FoundationSurface } from './FoundationSurface'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
+let workspaceId: string
 
 beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetTier1Store()
+  resetWorkspaceStore()
+  resetAuthStoreForTests()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
+  workspaceId = project.workspaceId
+  useProjectsStore.setState({ projects: [project], status: 'ready' })
 })
 
 describe('FoundationSurface', () => {
@@ -62,5 +71,19 @@ describe('FoundationSurface', () => {
     await user.keyboard('{Enter}')
     expect(await screen.findByText('Age-spectrum compatibility')).toBeInTheDocument()
     expect(await screen.findByText('1°')).toBeInTheDocument()
+  })
+
+  it('a viewer sees no phantom row and cannot open the purpose editor (issue 035)', async () => {
+    await addTier1Prop(db, projectId, 'Seating-status comfort')
+    await addWorkspaceMember(db, workspaceId, 'sub-viewer', 'viewer')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-viewer', email: null } })
+    const user = userEvent.setup()
+
+    render(<FoundationSurface projectId={projectId} />)
+    await screen.findByText('Seating-status comfort')
+
+    expect(screen.queryByPlaceholderText('Name a value proposition')).not.toBeInTheDocument()
+    await user.click(screen.getByText('What is this system for?'))
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
   })
 })

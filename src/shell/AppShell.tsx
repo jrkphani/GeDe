@@ -8,6 +8,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { CommandPalette } from '../components/CommandPalette'
+import { WorkspaceMembers } from '../components/WorkspaceMembers'
 import { downloadTextFile, exportFilename } from '../lib/download'
 import { coreCommandSources } from './coreCommands'
 import { navigate } from './router'
@@ -352,7 +353,10 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
             ◐
           </Button>
           {/* Export lives in the project menu (SITEMAP §2); import is on the
-              projects list (issue 015). No menu without an open project. */}
+              projects list (issue 015). No menu without an open project.
+              Share (issue 035) sits alongside — its own trigger self-hides
+              outside a signed-in Cognito session (WorkspaceMembers). */}
+          {projectId !== null && <WorkspaceMembers projectId={projectId} />}
           {projectId !== null && <ProjectMenu projectId={projectId} />}
           <AccountMenu />
         </div>

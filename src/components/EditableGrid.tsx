@@ -85,6 +85,11 @@ export interface EditableGridProps<TRow> {
   // cell's own click does (e.g. entering edit mode); callers use this for
   // "select this row" gestures without EditableGrid knowing what selection is.
   onRowClick?: (row: TRow) => void
+  // Issue 035 — viewer-role affordance: every cell renders its display state
+  // only (no click-to-edit, no keyboard editing grammar) and the phantom row
+  // never renders, regardless of whether `phantom` is passed. Defaults to
+  // false so every existing caller is unchanged.
+  readOnly?: boolean
 }
 
 export const PHANTOM_ROW_ID = '__phantom__'
@@ -101,6 +106,9 @@ export interface GridNav {
   columnIds: string[]
   columnKindById: Record<string, GridCellKind<unknown>['kind']>
   phantomColumnId: string | null
+  // Issue 035 — optional so existing `nextEditableCell` unit-test fixtures
+  // (which predate this) keep compiling unchanged; treated as `false` when absent.
+  readOnly?: boolean
 }
 
 interface NavContext extends GridNav {
@@ -145,6 +153,7 @@ function focusCell(nav: NavContext, rowId: string, columnId: string): void {
 // Is there an editable control at (rowId, columnId)? Static columns have none;
 // the phantom row only renders its single configured column.
 function isEditableCell(nav: GridNav, rowId: string, columnId: string): boolean {
+  if (nav.readOnly) return false
   if (rowId === PHANTOM_ROW_ID) return columnId === nav.phantomColumnId
   const kind = nav.columnKindById[columnId]
   return kind !== undefined && kind !== 'static'
@@ -239,7 +248,7 @@ function TextOrMonoCell<TRow>({
   name: string
 }) {
   const value = cellDef.getValue(row)
-  const editing = nav.editing?.rowId === rowId && nav.editing.columnId === columnId
+  const editing = !nav.readOnly && nav.editing?.rowId === rowId && nav.editing.columnId === columnId
   const [draft, setDraft] = useState(value)
   const cancelling = useRef(false)
 
@@ -253,6 +262,21 @@ function TextOrMonoCell<TRow>({
       if (ok === false) setDraft(value) // rejected: revert to the last-known-good value
     }
     nav.advance(target, rowId, columnId)
+  }
+
+  // Issue 035 — a read-only cell never becomes a click/keyboard target at all
+  // (no tabIndex, no handlers), so it can never enter `editing` in the first
+  // place; this is a static display, not merely a disabled input.
+  if (nav.readOnly) {
+    return (
+      <div className={`grid-cell${mono ? ' grid-cell--mono' : ''}`} aria-label={value ? undefined : `${name}, empty`}>
+        {value || (
+          <span className="grid-cell__placeholder" aria-hidden="true">
+            —
+          </span>
+        )}
+      </div>
+    )
   }
 
   if (editing) {
@@ -333,7 +357,7 @@ function MultilineCell<TRow>({
   name: string
 }) {
   const value = cellDef.getValue(row)
-  const editing = nav.editing?.rowId === rowId && nav.editing.columnId === columnId
+  const editing = !nav.readOnly && nav.editing?.rowId === rowId && nav.editing.columnId === columnId
   const [draft, setDraft] = useState(value)
   const cancelling = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
@@ -356,6 +380,25 @@ function MultilineCell<TRow>({
       if (ok === false) setDraft(value)
     }
     nav.advance(target, rowId, columnId)
+  }
+
+  // Issue 035 — same read-only short-circuit as TextOrMonoCell.
+  if (nav.readOnly) {
+    return (
+      <div
+        className="grid-cell grid-cell--multiline"
+        aria-label={value ? undefined : `${name}, empty`}
+        title={value || undefined}
+      >
+        {value ? (
+          <span className="grid-cell__clamp">{value}</span>
+        ) : (
+          <span className="grid-cell__placeholder" aria-hidden="true">
+            —
+          </span>
+        )}
+      </div>
+    )
   }
 
   if (editing) {
@@ -444,6 +487,25 @@ function ComboboxCell<TRow>({
   const value = cellDef.getValue(row)
   const options = cellDef.getOptions(row)
   const selected = options.find((o) => o.value === value)
+
+  // Issue 035 — same read-only short-circuit as the other cell kinds: no
+  // trigger button at all, just the current selection's display.
+  if (nav.readOnly) {
+    return (
+      <div className="grid-cell grid-cell--combobox" aria-label={`${name}: ${selected ? selected.label : 'unset'}`}>
+        {selected ? (
+          <>
+            <Swatch color={selected.color} />
+            {selected.label}
+          </>
+        ) : (
+          <span className="grid-cell__placeholder" aria-hidden="true">
+            —
+          </span>
+        )}
+      </div>
+    )
+  }
 
   return (
     <Combobox
@@ -590,7 +652,11 @@ export function EditableGrid<TRow>({
   rowClassName,
   getRowLabel,
   onRowClick,
+  readOnly = false,
 }: EditableGridProps<TRow>) {
+  // Issue 035 — a read-only grid never shows the phantom row, regardless of
+  // what the caller passed; callers don't need their own conditional.
+  const activePhantom = readOnly ? undefined : phantom
   const [editing, setEditing] = useState<EditingCell | null>(null)
   const refs = useRef<Map<string, HTMLElement>>(new Map())
   // A queued focus target (issue 022): set by `advance` when the destination is
@@ -603,7 +669,7 @@ export function EditableGrid<TRow>({
   const pendingPhantomEdit = useRef<string | null>(null)
   const prevRowIdsRef = useRef<string[]>([])
   const rowIds = rows.map(getRowId)
-  const allRowIds = phantom ? [...rowIds, PHANTOM_ROW_ID] : rowIds
+  const allRowIds = activePhantom ? [...rowIds, PHANTOM_ROW_ID] : rowIds
   const columnIds = columns.map((c) => c.id)
   const columnKindById = Object.fromEntries(columns.map((c) => [c.id, c.cell.kind]))
 
@@ -611,7 +677,8 @@ export function EditableGrid<TRow>({
     rowIds: allRowIds,
     columnIds,
     columnKindById,
-    phantomColumnId: phantom?.columnId ?? null,
+    phantomColumnId: activePhantom?.columnId ?? null,
+    readOnly,
     refs,
     editing,
     setEditing,
@@ -628,7 +695,7 @@ export function EditableGrid<TRow>({
     },
     createFromPhantom: (columnId, value) => {
       pendingPhantomEdit.current = columnId
-      phantom?.onCreate(value)
+      activePhantom?.onCreate(value)
     },
   }
   const columnSignature = columns.map((c) => `${c.id}:${c.header}:${c.headClassName ?? ''}`).join('|')
@@ -724,12 +791,12 @@ export function EditableGrid<TRow>({
               </tr>
             )
           })}
-          {phantom && (
+          {activePhantom && (
             <tr className="grid-row--phantom">
               {columns.map((col) =>
-                col.id === phantom.columnId ? (
+                col.id === activePhantom.columnId ? (
                   <td key={col.id}>
-                    <PhantomCell columnId={col.id} config={phantom} nav={nav} />
+                    <PhantomCell columnId={col.id} config={activePhantom} nav={nav} />
                   </td>
                 ) : (
                   <td key={col.id} />

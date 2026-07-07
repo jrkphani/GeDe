@@ -85,7 +85,12 @@ async function seedRichProject(db: Database): Promise<string> {
 // bundled in the file (src/domain/projectEnvelope.ts's remapEnvelope). This
 // is the one documented exclusion from the schema-coverage guard below — any
 // OTHER new pgTable still breaks this test loudly, exactly as designed.
-const NON_ENVELOPE_TABLES = ['workspaces', 'workspace_members']
+//
+// Issue 035 — `invitations` is the same kind of exclusion: a pending grant is
+// itself workspace-level identity/membership state (like workspace_members),
+// not project content — exporting a project never carries who was invited to
+// its workspace, and importing one never re-issues invitations either.
+const NON_ENVELOPE_TABLES = ['workspaces', 'workspace_members', 'invitations']
 
 describe('projectIO — schema coverage guard', () => {
   it('the envelope covers exactly every project-scoped pgTable in the schema', () => {

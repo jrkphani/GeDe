@@ -39,6 +39,10 @@ export interface InlineEditProps {
    *  store so add() can open a freshly-created row atomically (HANDOFF race). */
   editing?: boolean
   onEditingChange?: (editing: boolean) => void
+  // Issue 035 — a viewer's read-only affordance: the display renders, but
+  // clicking it never enters edit mode. Defaults to false (every existing
+  // caller is unchanged).
+  readOnly?: boolean
 }
 
 export function InlineEdit({
@@ -52,10 +56,11 @@ export function InlineEdit({
   stopPropagation = false,
   editing: editingProp,
   onEditingChange,
+  readOnly = false,
 }: InlineEditProps) {
   const [internalEditing, setInternalEditing] = useState(false)
   const controlled = editingProp !== undefined
-  const editing = controlled ? editingProp : internalEditing
+  const editing = !readOnly && (controlled ? editingProp : internalEditing)
   const setEditing = (next: boolean) => {
     if (controlled) onEditingChange?.(next)
     else setInternalEditing(next)
@@ -66,11 +71,15 @@ export function InlineEdit({
     return (
       <span
         className={displayClassName}
-        onClick={(e) => {
-          if (stopPropagation) e.stopPropagation()
-          setDraft(value)
-          setEditing(true)
-        }}
+        onClick={
+          readOnly
+            ? undefined
+            : (e) => {
+                if (stopPropagation) e.stopPropagation()
+                setDraft(value)
+                setEditing(true)
+              }
+        }
       >
         {display}
       </span>

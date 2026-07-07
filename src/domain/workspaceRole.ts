@@ -32,3 +32,32 @@ export function canWrite(role: WorkspaceRole): boolean {
 export function canManageMembers(role: WorkspaceRole): boolean {
   return roleAtLeast(role, 'owner')
 }
+
+// Issue 035 — the client-side role gate for read-only UI affordances
+// (EditableGrid's phantom row/editing, Composer's pickers/justification,
+// "New context"). IMPORTANT: this is a UX signal, not the enforcement
+// boundary — this app's own PGlite connection is always the table OWNER
+// (see migration 0008's header), so RLS is inert against it regardless of
+// what this function returns. The actual boundary is server Postgres RLS
+// (workspaceRls.test.ts/invitationRls.test.ts, exercised via `SET ROLE
+// app_user`) enforced through 043's write-path API. This only decides what
+// the UI *shows*, so a signed-in viewer isn't invited to edit something that
+// would silently fail (or get overwritten) once their change tries to sync
+// upstream — "read-only reads as calm, not broken" (design brief).
+export function resolveEffectiveRole(
+  members: readonly { userSub: string; role: WorkspaceRole }[],
+  userSub: string | null,
+  authConfigured: boolean,
+): WorkspaceRole {
+  // Solo/local mode (no Cognito configured, or signed out): the pre-035
+  // single-user experience is untouched — always full control.
+  if (!authConfigured || userSub === null) return 'owner'
+  // A workspace with zero membership rows is exactly `getOrCreateDefaultWorkspace`'s
+  // shape (034: created with no ownerSub) — legacy/local data, never actually
+  // seated. Treat as owner rather than stranding it read-only.
+  if (members.length === 0) return 'owner'
+  const mine = members.find((m) => m.userSub === userSub)
+  // Authenticated, other members exist, but the caller isn't among them:
+  // least privilege, not a guess at ownership.
+  return mine?.role ?? 'viewer'
+}

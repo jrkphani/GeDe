@@ -79,4 +79,13 @@ describe('MultilineEdit', () => {
     await user.click(screen.getByText('elsewhere'))
     expect(onCommit).toHaveBeenCalledExactlyOnceWith('Reason  more')
   })
+
+  it('readOnly: clicking the display never enters edit mode (issue 035)', async () => {
+    const user = userEvent.setup()
+    const onCommit = vi.fn()
+    render(<MultilineEdit value="Reason" onCommit={onCommit} display="Reason" readOnly />)
+    await user.click(screen.getByText('Reason'))
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(onCommit).not.toHaveBeenCalled()
+  })
 })

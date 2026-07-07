@@ -2269,3 +2269,108 @@ body {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Workspace members / invitations (issue 035) — the granting UX, styled as a
+   wider Popover panel (STYLE_GUIDE §2.2/§4) alongside DimensionManager's own
+   dense-row convention (.dim-row) rather than inventing a new list grammar. */
+.ws-members-popover {
+  min-width: 320px;
+  max-width: 360px;
+}
+
+.ws-members__heading {
+  font-size: var(--text-colhead);
+  line-height: var(--leading-colhead);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--ink-muted);
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.ws-members__heading:first-child {
+  margin-top: 0;
+}
+
+.ws-members__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-member {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-1);
+}
+
+.ws-member__identity {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body);
+}
+
+.ws-member__role {
+  font-size: var(--text-label);
+  color: var(--ink-muted);
+  flex: none;
+}
+
+.ws-member__role--static {
+  padding: var(--space-1) 0;
+}
+
+/* Mirrors .status-dot's tri-state convention (issue 005): an outline for the
+   in-progress state, filled once the invitation is settled either way. */
+.ws-invite__status {
+  font-size: var(--text-label);
+  color: var(--ink-muted);
+  flex: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: 0 var(--space-1);
+}
+
+.ws-invite__status[data-status='revoked'] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.ws-invite__status[data-status='expired'] {
+  border-style: dashed;
+}
+
+.ws-invite-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--hairline);
+}
+
+.ws-invite-form__email {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  min-height: 32px;
+}
+
+.ws-invite-form__email:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Calm, specific invite failure (mirrors .import-error, issue 015) — rendered
+   in the panel, never a dialog. */
+.ws-invite-error {
+  color: var(--danger);
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+  margin: var(--space-2) 0 0;
+}
