@@ -45,7 +45,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [039](done/039-canvas-spline-bundling.md) ✅ | Canvas spline bundling (028 phase b) | M6 | 028 |
 | [040](done/040-cdk-aws-deployment.md) ✅ | CDK AWS deployment — network → hosting → DNS (test env) | M7 | — |
 | [029](done/029-deploy-oidc-static-pwa.md) ✅ | Deploy pipeline — GitHub Actions OIDC → `cdk deploy` | M7 | 040 |
-| [041](041-cdk-hosting-snapshot-dist-sensitivity.md) | CDK hosting snapshot env-sensitivity (local `dist/` breaks CI) | M7 | 040 |
+| [041](done/041-cdk-hosting-snapshot-dist-sensitivity.md) ✅ | CDK hosting snapshot env-sensitivity (local `dist/` breaks CI) | M7 | 040 |
 | [042](042-command-palette-semantic-search.md) | Command palette — semantic search (client-side embeddings, $0 AWS) | M6 | 017 |
 | [030](done/030-v2-server-postgres-compose.md) ✅ | v2 server — CDK VPC + RDS + Fargate (Electric-sync stub; auth → Cognito, ADR-0009) | M8 | 029, 040 |
 | [031](done/031-sync-engine-decision.md) ✅ | Sync-engine decision — **ElectricSQL** (T6, decided → ADR-0008) | M8 | — |
