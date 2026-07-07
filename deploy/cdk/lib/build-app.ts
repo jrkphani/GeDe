@@ -46,17 +46,19 @@ export interface AppStacks {
  * CLI entrypoint (`bin/gede.ts`) does. Shared so the CDK test suite exercises
  * the identical wiring/tagging as a real synth — see
  * docs/issues/040-cdk-aws-deployment.md, docs/issues/030-*.md,
- * docs/issues/033-auth-account.md, and issues 045/046 (M11, "close the cloud
- * write loop").
+ * docs/issues/033-auth-account.md, and issues 045/046/047 (M11, "close the
+ * cloud write loop").
  *
- * Cross-stack wiring (issue 030 scope item 4, extended by 045/046): Network's
- * VPC feeds Data, Migrations, and Api; Data's RDS security group feeds both
- * Migrations and Api (each adds its own permitted ingress rule against it —
- * see api-stack.ts / migration-stack.ts / data-stack.ts for why that
- * direction avoids a circular dependency); Auth's User Pool id feeds Api
+ * Cross-stack wiring (issue 030 scope item 4, extended by 045/046/047):
+ * Network's VPC feeds Data, Migrations, and Api; Data's RDS security group
+ * feeds both Migrations and Api (each adds its own permitted ingress rule
+ * against it — see api-stack.ts / migration-stack.ts / data-stack.ts for why
+ * that direction avoids a circular dependency); Auth's User Pool id feeds Api
  * (issue 046 — `COGNITO_ISSUER` is a genuine cross-stack reference, never the
- * `PLACEHOLDER_USER_POOL_ID` literal). Hosting/Dns (issue 040, v1's static
- * path) are unaffected by any of this.
+ * `PLACEHOLDER_USER_POOL_ID` literal); Api's ALB DNS name feeds Hosting
+ * (issue 047 — a second CloudFront origin behind `/write*`, ending the
+ * mixed-content block). Dns (issue 040, v1's static path) is unaffected by
+ * any of this beyond its existing dependency on Hosting's distribution.
  *
  * **Auth (issue 033, ADR-0009) has no INBOUND dependency** — Cognito is a
  * regional managed resource outside the VPC, so nothing needs to exist
@@ -67,8 +69,8 @@ export interface AppStacks {
  * **Migrations (issue 045) is deliberately NOT a dependency of Api**: the
  * real write-path Lambda (046) assumes 045's migrations have already applied
  * the RDS schema by deploy time, but that's a deploy-ORDER concern for the CI
- * pipeline (045 -> 046), not a synth-time one — see migration-stack.ts and
- * api-stack.ts's comments for why no `addDependency` encodes it here.
+ * pipeline (045 -> 046 -> 047), not a synth-time one — see migration-stack.ts
+ * and api-stack.ts's comments for why no `addDependency` encodes it here.
  */
 export function buildAppStacks(
   app: cdk.App,
@@ -96,23 +98,6 @@ export function buildAppStacks(
     env,
     description: 'GeDe network foundation (VPC + NAT + public/private/isolated subnets) — issue 040, extended by 030',
   });
-
-  const hosting = new HostingStack(app, `${envConfig.stackPrefix}-Hosting`, {
-    env,
-    description: 'GeDe static hosting: private S3 + CloudFront — issue 040',
-    namePrefix: envConfig.namePrefix,
-    domainName,
-    siteSourcePath,
-  });
-  hosting.addDependency(network);
-
-  const dns = new DnsStack(app, `${envConfig.stackPrefix}-Dns`, {
-    env,
-    description: 'GeDe DNS seam (Route 53 + ACM), inert without a domain — issue 040',
-    domainName,
-    distribution: hosting.distribution,
-  });
-  dns.addDependency(hosting);
 
   const data = new DataStack(app, `${envConfig.stackPrefix}-Data`, {
     env,
@@ -156,6 +141,25 @@ export function buildAppStacks(
   // `api.addDependency(migrations)` — the deploy-order relationship between
   // the migration runner and the write-path Lambda is a CI-pipeline concern,
   // not a CDK/CloudFormation one.
+
+  const hosting = new HostingStack(app, `${envConfig.stackPrefix}-Hosting`, {
+    env,
+    description: 'GeDe static hosting: private S3 + CloudFront, fronting the write-path API too (issue 047) — issue 040',
+    namePrefix: envConfig.namePrefix,
+    domainName,
+    siteSourcePath,
+    apiLoadBalancerDnsName: api.loadBalancer.loadBalancerDnsName,
+  });
+  hosting.addDependency(network);
+  hosting.addDependency(api);
+
+  const dns = new DnsStack(app, `${envConfig.stackPrefix}-Dns`, {
+    env,
+    description: 'GeDe DNS seam (Route 53 + ACM), inert without a domain — issue 040',
+    domainName,
+    distribution: hosting.distribution,
+  });
+  dns.addDependency(hosting);
 
   return { network, hosting, dns, data, api, auth, migrations };
 }

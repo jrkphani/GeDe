@@ -31,6 +31,19 @@ export interface HostingStackProps extends StackProps {
    * dist-or-placeholder resolution still applies.
    */
   siteSourcePath?: string;
+  /**
+   * The Api stack's ALB DNS name (issue 047) — when supplied, adds a second
+   * origin on THIS distribution behind a `/write*` path, ending the mixed-
+   * content block: the browser calls `https://<cloudfront-domain>/write`
+   * (same-origin, HTTPS, no CORS, no new cert — reuses CloudFront's own
+   * cert) instead of the ALB's plain-HTTP-only endpoint directly. The ALB
+   * origin itself stays HTTP internally (CloudFront-to-origin, not
+   * viewer-to-CloudFront) — no ACM cert or custom domain is needed for this
+   * path (DEPLOYMENT.md §7 — the DNS/cert seam stays inert). Undefined (the
+   * default) => no `/write*` behavior is added, so existing synths/tests
+   * that don't pass an Api stack are unaffected.
+   */
+  apiLoadBalancerDnsName?: string;
 }
 
 /**
@@ -123,6 +136,52 @@ export class HostingStack extends Stack {
 
     const origin = origins.S3BucketOrigin.withOriginAccessControl(this.bucket);
 
+    // --- API origin (issue 047 — ending the mixed-content block) -------
+    // The write-path Lambda (issue 043/046) sits behind an ALB with ONLY an
+    // HTTP:80 listener (no cert, no custom domain — DEPLOYMENT.md §7/§9a).
+    // A page served HTTPS from this SAME distribution cannot call that
+    // ALB directly (active mixed content — hard-blocked by every modern
+    // browser). Fronting the ALB as a second CloudFront origin under
+    // `/write*` gives HTTPS + same-origin in one move: CloudFront terminates
+    // TLS for the viewer (reusing ITS OWN cert — no ACM/domain needed) and
+    // talks to the ALB over plain HTTP internally, exactly like S3 does
+    // above. Preferred over an ALB HTTPS listener (the issue's alternative)
+    // because that path requires a registered custom domain + DNS-validated
+    // ACM cert (the inert Gede-Test-Dns seam) purely to mint a cert for a
+    // domain we don't otherwise need yet.
+    const additionalBehaviors: Record<string, cloudfront.BehaviorOptions> = {
+      'assets/*': {
+        origin,
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: immutableAssetsCachePolicy,
+        responseHeadersPolicy: immutableAssetsHeadersPolicy,
+        compress: true,
+      },
+    };
+
+    if (props.apiLoadBalancerDnsName) {
+      additionalBehaviors['write*'] = {
+        origin: new origins.HttpOrigin(props.apiLoadBalancerDnsName, {
+          // The ALB has no HTTPS listener (DEPLOYMENT.md §9a) — CloudFront
+          // talks to it over plain HTTP; the viewer never sees that hop
+          // (viewerProtocolPolicy below governs the browser-facing side).
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        // Mutating POSTs must NEVER be cached (issue 047 design brief) — the
+        // AWS-managed CachingDisabled policy (TTL 0) is the standard "don't
+        // cache this" policy; no hand-rolled CachePolicy needed.
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        // The default (GET/HEAD only) would reject the write API's POST
+        // outright — allow the full method set the ALB route accepts.
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        // Forward the Authorization header (+ body/query) through to the
+        // ALB — CloudFront strips non-forwarded headers by default, which
+        // would silently drop the JWT handleWriteRequest (043) requires.
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+      };
+    }
+
     this.distribution = new cloudfront.Distribution(this, 'Distribution', {
       comment: `${props.namePrefix} — GeDe static PWA`,
       defaultRootObject: 'index.html',
@@ -138,15 +197,7 @@ export class HostingStack extends Stack {
         // "enable Brotli" flag on the L2 construct.
         compress: true,
       },
-      additionalBehaviors: {
-        'assets/*': {
-          origin,
-          viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-          cachePolicy: immutableAssetsCachePolicy,
-          responseHeadersPolicy: immutableAssetsHeadersPolicy,
-          compress: true,
-        },
-      },
+      additionalBehaviors,
       // SPA/PWA routing: unknown paths (deep links) come back from S3 as
       // 403 (private bucket via OAC) — map both 403 and 404 to index.html
       // with a 200 so client-side routing takes over.

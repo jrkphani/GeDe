@@ -175,6 +175,63 @@ describe('HostingStack (Gede-Test-Hosting)', () => {
   });
 });
 
+describe('HostingStack — API path behavior (issue 047, ending the mixed-content block)', () => {
+  function synth() {
+    const app = new cdk.App({ context: TEST_CONTEXT });
+    const { hosting } = buildAppStacks(app, 'test', undefined, PLACEHOLDER_PATH);
+    return Template.fromStack(hosting);
+  }
+
+  it('adds a /write* behavior: HTTPS viewer-protocol, caching disabled (mutating POSTs must never be cached)', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: 'write*',
+            ViewerProtocolPolicy: 'redirect-to-https',
+            // AWS-managed "CachingDisabled" policy id (TTL 0) — never a
+            // hand-rolled cache policy for a mutating endpoint.
+            CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
+            AllowedMethods: Match.arrayWith(['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'POST', 'DELETE']),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('the /write* origin is the Api stack\'s ALB, reached over plain HTTP (CloudFront terminates HTTPS for the viewer)', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Origins: Match.arrayWith([
+          Match.objectLike({
+            CustomOriginConfig: Match.objectLike({ OriginProtocolPolicy: 'http-only' }),
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('the ALB origin\'s domain name is a cross-stack reference to the Api stack (never a hardcoded ALB DNS name)', () => {
+    const template = synth();
+    const distributions = template.findResources('AWS::CloudFront::Distribution');
+    const [distribution] = Object.values(distributions) as Array<{
+      Properties: { DistributionConfig: { Origins: Array<{ DomainName: unknown }> } };
+    }>;
+    const domainNames = distribution.Properties.DistributionConfig.Origins.map((o) => JSON.stringify(o.DomainName));
+    expect(domainNames.some((d) => d.includes('Gede-Test-Api'))).toBe(true);
+  });
+
+  it('no dependency on a registered custom domain — no ACM certificate is created for the API path', () => {
+    const template = synth();
+    // The `test` env passes no domainName, so this suite's synth() already
+    // proves 0 certificates overall (see the no-domain describe block
+    // above); re-assert scoped to this describe block for clarity.
+    template.resourceCountIs('AWS::CertificateManager::Certificate', 0);
+  });
+});
+
 // issue 041 — the snapshot must not depend on the ambient filesystem.
 //
 // Un-pinned (production/CLI) behavior still resolves `dist/`-or-placeholder

@@ -4,6 +4,17 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
 {
   "Description": "GeDe v2 backend: ECS Fargate compute tier (sync stub slot, issue 032) + the serverless write-path API (issues 043/046) behind an internet-facing ALB — issue 030 (ADR-0008), ADR-0010",
   "Outputs": {
+    "ExportsOutputFnGetAttAlb16C2F182DNSNameB67BDABC": {
+      "Export": {
+        "Name": "Gede-Test-Api:ExportsOutputFnGetAttAlb16C2F182DNSNameB67BDABC",
+      },
+      "Value": {
+        "Fn::GetAtt": [
+          "Alb16C2F182",
+          "DNSName",
+        ],
+      },
+    },
     "LoadBalancerDnsName": {
       "Description": "Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* routes to the issue 043 write-path Lambda.",
       "Value": {
