@@ -50,6 +50,13 @@
       "when": 1783293676359,
       "tag": "0006_recursion_source_param",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1783396530763,
+      "tag": "0007_bindings_tombstone",
+      "breakpoints": true
     }
   ]
 }

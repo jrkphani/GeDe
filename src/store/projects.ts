@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import { getDatabase, type Database } from '../db/client'
 import { resetDatabase, setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
+import { useSyncStore } from './sync'
 import {
   archiveProject as dbArchive,
   createProject as dbCreate,
@@ -57,6 +58,10 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
       setDatabase(database)
       const projects = await dbList(database)
       set({ status: 'ready', projects })
+      // Issue 032: a no-op unless VITE_SYNC_ENABLED=true (src/sync/config.ts)
+      // — v1's single-user, no-network path stays the tested default until
+      // v2 ships (implementation note, test-first plan #6).
+      useSyncStore.getState().start(database)
     } catch (err) {
       set({ status: 'error', error: err instanceof Error ? err.message : String(err) })
     }
@@ -142,5 +147,6 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
 export function resetProjectsStore() {
   database = null
   resetDatabase()
+  useSyncStore.getState().stop()
   useProjectsStore.setState({ ...initialState })
 }

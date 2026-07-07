@@ -19,7 +19,8 @@ export const FORMAT_VERSION = 1 as const
 
 // ── Row schemas — mirror src/db/schema.ts column-for-column (camelCase, as
 // drizzle's $inferSelect yields). timestamps are ISO strings (schema mode
-// 'string'); deleted_at is nullable everywhere it exists (bindings have none).
+// 'string'); deleted_at is nullable everywhere it exists (every table,
+// including bindings as of issue 032/migration 0007).
 const iso = z.string()
 const nullableIso = z.string().nullable()
 
@@ -113,6 +114,9 @@ const contextRow = z.object({
   deletedAt: nullableIso,
 })
 
+// Issue 032 (migration 0007): bindings gained `deleted_at` so the
+// dimension-removal cascade (007) could tombstone instead of hard-delete —
+// see src/db/mutations.ts's cascadeDeleteBindingsForDimension.
 const bindingRow = z.object({
   id: z.string(),
   contextId: z.string(),
@@ -121,6 +125,7 @@ const bindingRow = z.object({
   tupleHash: z.string(),
   createdAt: iso,
   updatedAt: iso,
+  deletedAt: nullableIso,
 })
 
 // One registry object keyed by SQL table name (matching schema.ts). Adding a
@@ -331,6 +336,16 @@ function validateAcyclic(tables: EnvelopeTables): void {
 
 function fieldOrder(name: TableName): string[] {
   return Object.keys(rowSchemas[name].shape)
+}
+
+// Public: the exact column set of a table, schema-order. Issue 032's sync
+// layer (src/domain/syncDelta.ts) reuses this rather than re-declaring a
+// third copy of the 9-table column registry (schema.ts is the first, the
+// rowSchemas above are the second) — it backs the "no derived columns on the
+// wire" guard (ADR-0005: a delta's row may only carry base-table columns,
+// never a canvas position/completeness/coverage value).
+export function tableColumns(name: TableName): readonly string[] {
+  return fieldOrder(name)
 }
 
 function normalizeRow(name: TableName, row: Row): Row {

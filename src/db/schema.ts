@@ -151,8 +151,13 @@ export const contexts = pgTable('contexts', {
 })
 
 // SPEC.md §3 — the pair (context × dimension → parameter). A binding is a
-// current-state pointer, not a history-bearing entity: rebinding upserts,
-// unbinding hard-deletes — no deleted_at (unlike every other table).
+// current-state pointer, not a history-bearing entity: rebinding upserts.
+// Unbind (direct user action) still hard-deletes. Issue 032 (migration 0007)
+// added `deleted_at` so the dimension-removal CASCADE specifically
+// (`cascadeDeleteBindingsForDimension`, issue 007) could become a tombstone
+// instead of a hard delete — sync (ElectricSQL) must be able to propagate a
+// deletion as a row-delta, and a hard-deleted row emits no delta at all. See
+// mutations.ts for exactly which paths tombstone vs. hard-delete.
 // tuple_hash is denormalized onto every binding row of a context (all rows
 // share the same value) so a duplicate-tuple lookup (invariant 2, issue 005+)
 // is a single indexed scan; recomputed whenever any of the context's
@@ -173,6 +178,7 @@ export const bindings = pgTable(
     tupleHash: text('tuple_hash').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
   },
   (table) => [uniqueIndex('bindings_context_dimension_idx').on(table.contextId, table.dimensionId)],
 )

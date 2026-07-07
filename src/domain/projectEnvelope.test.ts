@@ -70,11 +70,9 @@ function fixture(): EnvelopeTables {
   t.dimensions.push({ ...base('d3'), projectId: 'p1', contextId: 'c2', sourceParamId: 'pa1', name: 'D3', color: '#333', sort: 0 })
   t.parameters.push({ ...base('pa4'), dimensionId: 'd3', parentParamId: null, sourceEntryId: null, name: 'P4', sort: 0 })
   // bindings on both canvases
-  t.bindings.push({ ...base('b1'), contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' } as Row as EnvelopeTables['bindings'][number])
-  t.bindings.push({ ...base('b2'), contextId: 'c1', dimensionId: 'd2', parameterId: 'pa3', tupleHash: 'h1' } as Row as EnvelopeTables['bindings'][number])
-  t.bindings.push({ ...base('b3'), contextId: 'c2', dimensionId: 'd3', parameterId: 'pa4', tupleHash: 'h2' } as Row as EnvelopeTables['bindings'][number])
-  // bindings have no deletedAt — strip it
-  for (const b of t.bindings) delete (b as Row).deletedAt
+  t.bindings.push({ ...base('b1'), contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' })
+  t.bindings.push({ ...base('b2'), contextId: 'c1', dimensionId: 'd2', parameterId: 'pa3', tupleHash: 'h1' })
+  t.bindings.push({ ...base('b3'), contextId: 'c2', dimensionId: 'd3', parameterId: 'pa4', tupleHash: 'h2' })
   return t
 }
 
@@ -137,9 +135,7 @@ const arbTables = fc
       t.contexts.push({ ...base(cid), projectId: pid, parentId: null, symbol: `s${c}`, name: null, justification: 'j', sort: c })
       for (const did of dimIds) {
         const paid = (paramIdsByDim[did] ?? [])[0] as string
-        const b: Row = { ...base(nid('b')), contextId: cid, dimensionId: did, parameterId: paid, tupleHash: `h${c}` }
-        delete b.deletedAt
-        t.bindings.push(b as EnvelopeTables['bindings'][number])
+        t.bindings.push({ ...base(nid('b')), contextId: cid, dimensionId: did, parameterId: paid, tupleHash: `h${c}` })
       }
     }
     return t
