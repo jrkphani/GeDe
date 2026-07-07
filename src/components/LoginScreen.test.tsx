@@ -37,6 +37,16 @@ beforeEach(() => {
   resetAuthStoreForTests()
 })
 
+describe('LoginScreen — configured build (issue 044 test-first plan #2)', () => {
+  it('renders an enabled sign-in form with no "not configured" banner once the build has real Cognito ids', () => {
+    isAuthConfiguredMock.mockReturnValue(true)
+    resetAuthStoreForTests()
+    render(<LoginScreen onSignedIn={vi.fn()} />)
+    expect(screen.queryByRole('status')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Sign in' })).toBeEnabled()
+  })
+})
+
 describe('LoginScreen — sign-in (issue 033)', () => {
   it('is fully keyboard-operable in field order: email -> password -> submit -> switch link', async () => {
     const user = userEvent.setup()
