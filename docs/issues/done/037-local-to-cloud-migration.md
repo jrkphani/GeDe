@@ -1,6 +1,6 @@
 # 037: Local → cloud project migration (the on-ramp)
 
-- **Status**: SHIPPED (unmerged — on `feat/037-local-to-cloud`, based on `feat/v2-collaboration-wave`/PR #7, not yet integrated)
+- **Status**: SHIPPED (integrated into the v2 wave, PR #7; migration `0011`)
 - **Milestone**: M10 (Collaboration polish)
 - **Blocked by**: 033 (auth), 034 (workspaces), 032 (sync)
 

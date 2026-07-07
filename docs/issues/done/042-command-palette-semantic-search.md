@@ -1,6 +1,6 @@
 # 042: Command palette — semantic search (client-side embeddings)
 
-- **Status**: SHIPPED (branch `feat/042-semantic-palette`, not yet merged — see Shipped notes)
+- **Status**: SHIPPED (integrated into the v2 wave, PR #7 — see Shipped notes)
 - **Milestone**: M6 (UX) / M2 (palette)
 - **Blocked by**: 017 (the command palette + ranking seam — shipped)
 
