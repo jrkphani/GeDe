@@ -26,10 +26,10 @@ describe('ApiStack (Gede-Test-Api)', () => {
     }
   });
 
-  it('creates an ECS Fargate cluster with exactly two services (the sync/auth stub slots)', () => {
+  it('creates an ECS Fargate cluster with exactly one service (the sync stub slot — auth moved to Cognito, issue 033/ADR-0009)', () => {
     const template = synth();
     template.resourceCountIs('AWS::ECS::Cluster', 1);
-    template.resourceCountIs('AWS::ECS::Service', 2);
+    template.resourceCountIs('AWS::ECS::Service', 1);
     template.hasResourceProperties('AWS::ECS::Service', { LaunchType: 'FARGATE' });
   });
 
@@ -51,7 +51,7 @@ describe('ApiStack (Gede-Test-Api)', () => {
 
   it('each stub service has a container healthcheck and an ALB-managed, health-checked target group', () => {
     const template = synth();
-    template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 2);
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 1);
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       HealthCheckPath: Match.anyValue(),
     });
@@ -62,27 +62,30 @@ describe('ApiStack (Gede-Test-Api)', () => {
     });
   });
 
-  it('uses the clearly-marked nginx placeholder image on both stub slots — 032/033 replace it', () => {
+  it('uses the clearly-marked nginx placeholder image on the sync stub slot — 032 replaces it', () => {
     const template = synth();
     const taskDefs = template.findResources('AWS::ECS::TaskDefinition');
     const images = Object.values(taskDefs).map(
       (t) => (t as { Properties: { ContainerDefinitions: Array<{ Image: string }> } }).Properties.ContainerDefinitions[0].Image,
     );
-    expect(images).toHaveLength(2);
+    expect(images).toHaveLength(1);
     for (const image of images) {
       expect(image).toMatch(/nginx/);
     }
   });
 
-  it('routes /sync* and /auth* via distinct ALB listener rules to distinct target groups', () => {
+  it('routes /sync* via an ALB listener rule to its target group; there is no /auth* route (Cognito replaces it, issue 033/ADR-0009)', () => {
     const template = synth();
-    template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 1);
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
       Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/sync*'] } })]),
     });
-    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
-      Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/auth*'] } })]),
+    const rules = template.findResources('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Properties: {
+        Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/auth*'] } })]),
+      },
     });
+    expect(Object.keys(rules)).toHaveLength(0);
   });
 
   it('grants the Data stack\'s RDS security group ingress ONLY from this stack\'s compute security group on 5432 — never 0.0.0.0/0', () => {
