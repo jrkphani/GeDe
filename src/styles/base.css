@@ -208,8 +208,25 @@ body {
 }
 
 .status-bar__ambient {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   font-family: var(--font-mono);
   font-size: var(--text-colhead);
+}
+
+/* Issue 036 — sync indicator (SITEMAP §5 right cluster). STYLE_GUIDE §8:
+   opacity/text only, ≤100ms (--motion-fast), never a spinner. Quiet
+   `--ink-muted` for every state except the healthy one, which gets the
+   app's one accent (issue design brief: "one accent for the healthy
+   state") — the blanket prefers-reduced-motion rule above already turns
+   this instant for free. */
+.status-bar__sync {
+  transition: color var(--motion-fast) ease-out;
+}
+
+.status-bar__sync[data-sync-status='synced'] {
+  color: var(--accent);
 }
 
 .placeholder {

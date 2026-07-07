@@ -76,6 +76,39 @@ describe('startSync — orchestration (test-first plan #1, driven by a fake stre
     expect(onApplied).not.toHaveBeenCalled()
   })
 
+  // Issue 036: the read-path orchestrator's documented seam for a future
+  // sync-status UI ("syncEngine.ts owns reacting to those [control
+  // messages]") — onControl is the hook that seam was left for. Additive:
+  // must not change the assertion above (onApplied still never fires for a
+  // control-only batch).
+  it('calls onControl for a control message, without calling onApplied', async () => {
+    const db = await freshDb()
+    const { factory, push } = fakeStreamFactory()
+    const onApplied = vi.fn()
+    const onControl = vi.fn()
+    startSync(db, { streamFactory: factory, onApplied, onControl })
+
+    push('projects', [{ headers: { control: 'up-to-date' } }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onControl).toHaveBeenCalledWith('projects', 'up-to-date')
+    expect(onApplied).not.toHaveBeenCalled()
+  })
+
+  it('onControl fires per-table and ignores change messages', async () => {
+    const db = await freshDb()
+    const { factory, push } = fakeStreamFactory()
+    const onControl = vi.fn()
+    startSync(db, { streamFactory: factory, onControl })
+
+    push('projects', [change('p1', '2026-07-07T00:00:01.000Z', { name: 'Tavalo', description: null })])
+    push('dimensions', [{ headers: { control: 'must-refetch' } }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(onControl).toHaveBeenCalledTimes(1)
+    expect(onControl).toHaveBeenCalledWith('dimensions', 'must-refetch')
+  })
+
   it('a malformed message calls onError instead of throwing', async () => {
     const db = await freshDb()
     const { factory, push } = fakeStreamFactory()
