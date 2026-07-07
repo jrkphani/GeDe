@@ -1,16 +1,38 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { addDimension, addParameter, createProject } from '../db/mutations'
+import type { PresenceWireEvent } from '../domain/presence'
+import { startPresence, type PresenceChannelFactory, type PresenceChannelLike } from '../presence/presenceChannel'
+import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
 import { resetDimensionsStore, useDimensionsStore } from '../store/dimensions'
 import { resetParametersStore } from '../store/parameters'
 import { resetContextsStore, useContextsStore } from '../store/contexts'
+import { resetPresenceStoreForTests, usePresenceStore } from '../store/presence'
 import { useStatusStore } from '../store/status'
 import { ContextRegister } from './ContextRegister'
+
+// Shared in-memory bus fixture (mirrors presenceChannel.test.ts/store/
+// presence.test.ts) — a raw startPresence() call stands in for "another
+// browser tab" in the same workspace, sharing this fake transport. No live
+// Electric/AWS/BroadcastChannel in tests (HANDOFF).
+function fakeChannelFactory(): PresenceChannelFactory {
+  const subscribers = new Set<(event: PresenceWireEvent) => void>()
+  const channel: PresenceChannelLike = {
+    publish(event) {
+      for (const cb of subscribers) cb(event)
+    },
+    subscribe(callback) {
+      subscribers.add(callback)
+      return () => subscribers.delete(callback)
+    },
+  }
+  return () => channel
+}
 
 let projectId: string
 
@@ -198,5 +220,99 @@ describe('ContextRegister', () => {
 
     useContextsStore.getState().select(alphaId)
     await waitFor(() => expect(rowAlpha).toHaveClass('grid-row--selected'))
+  })
+})
+
+describe('presence cues (issue 038, test-first plan #2/#3)', () => {
+  beforeEach(() => {
+    resetAuthStoreForTests()
+    resetPresenceStoreForTests()
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+  })
+
+  afterEach(() => {
+    resetPresenceStoreForTests()
+    resetAuthStoreForTests()
+    vi.unstubAllEnvs()
+  })
+
+  it('a remote collaborator selecting this context renders a hollow presence cue naming them', async () => {
+    const user = userEvent.setup()
+    const channelFactory = fakeChannelFactory()
+    useAuthStore.setState({ status: 'authenticated', user: { sub: 'self-sub', email: 'me@x.test' }, configured: true })
+    usePresenceStore.getState().start('ws1', { channelFactory })
+
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'Reason')
+    await user.keyboard('{Enter}')
+    const row = (await screen.findByText('α')).closest('tr') as HTMLElement
+    const alphaId = useContextsStore.getState().contexts.find((c) => c.symbol === 'α')?.id as string
+
+    expect(within(row).queryByTitle(/is here|is editing/)).not.toBeInTheDocument()
+
+    const peer = startPresence('ws1', { userSub: 'bob-sub', label: 'bob@x.test' }, { channelFactory })
+    peer.setSelection(alphaId)
+
+    await waitFor(() => {
+      const cue = within(row).getByTitle('bob@x.test is here')
+      expect(cue).toHaveAttribute('data-presence', 'selected')
+    })
+
+    peer.stop()
+  })
+
+  it('a remote collaborator editing this context renders a filled "editing" cue, distinct from just-selected', async () => {
+    const user = userEvent.setup()
+    const channelFactory = fakeChannelFactory()
+    useAuthStore.setState({ status: 'authenticated', user: { sub: 'self-sub', email: 'me@x.test' }, configured: true })
+    usePresenceStore.getState().start('ws1', { channelFactory })
+
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'Reason')
+    await user.keyboard('{Enter}')
+    const row = (await screen.findByText('α')).closest('tr') as HTMLElement
+    const alphaId = useContextsStore.getState().contexts.find((c) => c.symbol === 'α')?.id as string
+
+    const peer = startPresence('ws1', { userSub: 'bob-sub', label: 'bob@x.test' }, { channelFactory })
+    peer.setSelection(alphaId)
+    peer.setFocusedCell({ contextId: alphaId, field: 'justification' })
+
+    await waitFor(() => {
+      const cue = within(row).getByTitle('bob@x.test is editing')
+      expect(cue).toHaveAttribute('data-presence', 'editing')
+    })
+
+    peer.stop()
+  })
+
+  it('this client editing a cell publishes its own focus over the presence channel (feeds a peer\'s hint)', async () => {
+    const user = userEvent.setup()
+    const channelFactory = fakeChannelFactory()
+    useAuthStore.setState({ status: 'authenticated', user: { sub: 'self-sub', email: 'me@x.test' }, configured: true })
+    usePresenceStore.getState().start('ws1', { channelFactory })
+
+    const seenByPeer: PresenceWireEvent[] = []
+    const peer = startPresence(
+      'ws1',
+      { userSub: 'bob-sub', label: 'bob' },
+      { channelFactory, onEvent: (e) => seenByPeer.push(e) },
+    )
+
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'Reason')
+    await user.keyboard('{Enter}')
+    const alphaId = useContextsStore.getState().contexts.find((c) => c.symbol === 'α')?.id as string
+
+    await user.click(await screen.findByText('Reason'))
+
+    await waitFor(() => {
+      const latest = seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'self-sub').pop()
+      expect(latest).toMatchObject({ focusedCell: { contextId: alphaId, field: 'justification' } })
+    })
+
+    peer.stop()
   })
 })

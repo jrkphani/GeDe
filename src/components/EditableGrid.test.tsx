@@ -242,6 +242,33 @@ describe('onRowClick (issue 009)', () => {
   })
 })
 
+describe('onEditingChange (issue 038 — presence seam)', () => {
+  it('fires with the cell opened for editing, then null when it closes', async () => {
+    const user = userEvent.setup()
+    const onEditingChange = vi.fn()
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        onEditingChange={onEditingChange}
+      />,
+    )
+    expect(onEditingChange).toHaveBeenLastCalledWith(null)
+    await user.click(screen.getByText('Alpha'))
+    expect(onEditingChange).toHaveBeenLastCalledWith({ rowId: '1', columnId: 'title' })
+    await user.keyboard('{Escape}')
+    expect(onEditingChange).toHaveBeenLastCalledWith(null)
+  })
+
+  it('is optional — omitting it changes nothing about existing behavior', async () => {
+    const user = userEvent.setup()
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.getByDisplayValue('Alpha')).toHaveFocus()
+  })
+})
+
 describe('accessible names & grid semantics (issue 021)', () => {
   it('an editing text cell has a name of "{column} for {row label}"', async () => {
     const user = userEvent.setup()

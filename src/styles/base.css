@@ -992,6 +992,25 @@ body {
   border-color: var(--ink);
 }
 
+/* Register presence cue (issue 038) — sits beside the status-dot above and
+   mirrors its own hollow/filled convention: hollow ring = someone else has
+   this context selected (test-first plan #2); filled = someone else is
+   editing it right now (test-first plan #3). Per-user color comes from an
+   inline style (src/theme/palette.ts's PRESENCE_PALETTE — never a hardcoded
+   hex here); this rule only supplies the shared shape + the resting/no-cue
+   color a JS-supplied borderColor overrides. No transition — mount/unmount is
+   the only "motion" (an ordinary conditional render), which is instant by
+   construction and needs no prefers-reduced-motion override (STYLE_GUIDE §8,
+   test-first plan #4). */
+.presence-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-left: var(--space-1);
+  border: 1px solid var(--ink-muted);
+  background: transparent;
+}
+
 /* Multiline justification (issue 005): the one sanctioned row-height
    exception — grows to fit while editing; display truncates to 2 lines. */
 .grid-cell--multiline {
@@ -2277,6 +2296,35 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Presence roster (issue 038) — quiet identity chips in the app-bar cluster,
+   one per online collaborator in the current workspace (self excluded).
+   Radius 0 like every other chrome element (STYLE_GUIDE §4: circles are data
+   geometry only, chrome is rectilinear); the per-user fill is an inline
+   style from src/theme/palette.ts's PRESENCE_PALETTE (disjoint from the
+   dimension data palette, so a chip never reads as a dimension swatch).
+   Renders nothing when nobody else is here (SyncIndicator's own "no honest
+   state to show" convention) — no ambient chrome cost on a solo session. */
+.presence-roster {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.presence-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex: none;
+  font-size: 10px;
+  line-height: 1;
+  font-weight: 500;
+  font-family: var(--font-ui);
+  color: var(--paper);
+  border: 1px solid var(--panel);
 }
 
 /* Workspace members / invitations (issue 035) — the granting UX, styled as a

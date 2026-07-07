@@ -2,18 +2,49 @@ import { useEffect } from 'react'
 import type { ContextRow } from '../db/mutations'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { findDuplicateContextIds } from '../domain/duplicates'
+import { presenceCueLabel } from '../domain/presence'
 import { useCommandLogStore } from '../store/commandLog'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
+import { usePresenceCues, usePresenceStore } from '../store/presence'
 import { useStatusStore } from '../store/status'
-import { EditableGrid, type GridColumn } from './EditableGrid'
+import { EditableGrid, PHANTOM_ROW_ID, type GridColumn } from './EditableGrid'
 import { Button } from './ui/button'
 
 const DOCUMENTED_LABEL: Record<'draft' | 'complete' | 'documented', string> = {
   draft: 'Draft',
   complete: 'Complete — needs justification',
   documented: 'Documented',
+}
+
+// Issue 038 (presence) — an ephemeral, per-row identity cue beside the
+// existing completeness status-dot: filled = someone else is editing this
+// context right now (test-first plan #3's same-cell hint, at row grain — see
+// the EditableGrid `onEditingChange` wiring below for why this doesn't
+// narrow to the exact field in this slice); hollow ring = someone else has
+// this context selected but isn't editing it (test-first plan #2's
+// selectedContextId cue). Renders nothing when nobody else is here — no
+// visual cost on the untested-for-demand common case (a solo session).
+// Never persisted: reads straight off usePresenceCues (src/store/presence.ts),
+// which never touches src/db — see that module's own header comment and
+// presence.test.ts's "never persisted" assertion.
+function PresenceCue({ contextId }: { contextId: string }) {
+  const { selectors, editors } = usePresenceCues(contextId)
+  const editing = editors.length > 0
+  const entries = editing ? editors : selectors
+  const first = entries[0]
+  if (!first) return null
+  const label = presenceCueLabel(entries, editing ? 'editing' : 'here')
+  return (
+    <span
+      className="presence-dot"
+      data-presence={editing ? 'editing' : 'selected'}
+      style={editing ? { borderColor: first.color, background: first.color } : { borderColor: first.color }}
+      title={label}
+      aria-label={label}
+    />
+  )
 }
 
 // Pre-canvas (issues 008–010 add the circle), "selecting" a duplicate sibling
@@ -112,7 +143,12 @@ export function ContextRegister({
           const bound = new Set(Object.keys(bindingsByContext[ctx.id] ?? {}))
           const status = documentedStatus(isComplete(dimensionIds, bound), ctx.justification)
           const label = DOCUMENTED_LABEL[status]
-          return <span className="status-dot" data-status={status} title={label} aria-label={label} />
+          return (
+            <>
+              <span className="status-dot" data-status={status} title={label} aria-label={label} />
+              <PresenceCue contextId={ctx.id} />
+            </>
+          )
         },
       },
     },
@@ -206,6 +242,18 @@ export function ContextRegister({
       columns={columns}
       getRowId={(ctx) => ctx.id}
       readOnly={readOnly}
+      // Issue 038 — feeds the presence store's "same-cell editing" hint. Only
+      // text/mono/multiline cells (Symbol, Justification) report through
+      // EditableGrid's shared `editing` state; a dimension-binding combobox
+      // cell manages its own open/closed state internally and isn't wired to
+      // this signal in this slice (see EditableGrid's own prop doc comment
+      // and this issue's final report for the flagged scope cut). The
+      // phantom row has no real context id yet, so it never publishes.
+      onEditingChange={(cell) =>
+        usePresenceStore
+          .getState()
+          .setFocusedCell(cell && cell.rowId !== PHANTOM_ROW_ID ? { contextId: cell.rowId, field: cell.columnId } : null)
+      }
       rowClassName={(ctx) => {
         const bound = new Set(Object.keys(bindingsByContext[ctx.id] ?? {}))
         const classes = [
