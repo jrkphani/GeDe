@@ -219,7 +219,7 @@ async function cascadeDeleteBindingsForDimension(
   const tombstoned = await db
     .update(bindings)
     .set({ deletedAt: now(), updatedAt: now() })
-    .where(eq(bindings.dimensionId, dimensionId))
+    .where(and(eq(bindings.dimensionId, dimensionId), isNull(bindings.deletedAt)))
     .returning()
   const contextIds = [...new Set(rows.map((r) => r.contextId))]
   for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
@@ -292,12 +292,20 @@ export async function restoreDimension(
     .filter((d): d is DimensionRow => d !== undefined)
   await rewriteSort(db, ordered)
   if (bindingsToRestore.length > 0) {
-    await db.update(bindings).set({ deletedAt: null, updatedAt: now() }).where(
-      inArray(
-        bindings.id,
-        bindingsToRestore.map((row) => row.id),
-      ),
-    )
+    // Restore each binding to its captured state — not merely un-tombstone.
+    // The binding rows are unique per (context, dimension); while this
+    // dimension was removed, a bind onto the same (context, dimension) — which
+    // the parameters store still permits, since a removed dimension's
+    // parameters linger there — can have revived and re-pointed the SAME row to
+    // a different parameter. Clearing deleted_at alone would then revive it with
+    // the WRONG parameter (caught by undoRedo.property). Rewriting parameterId
+    // from the captured row makes undo-of-remove a faithful inverse regardless.
+    for (const b of bindingsToRestore) {
+      await db
+        .update(bindings)
+        .set({ deletedAt: null, parameterId: b.parameterId, updatedAt: now() })
+        .where(eq(bindings.id, b.id))
+    }
     const contextIds = [...new Set(bindingsToRestore.map((r) => r.contextId))]
     for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
   }
@@ -581,7 +589,13 @@ export async function bindParameter(
     .values({ id: uuidv7(), contextId, dimensionId, parameterId, tupleHash: '' })
     .onConflictDoUpdate({
       target: [bindings.contextId, bindings.dimensionId],
-      set: { parameterId, updatedAt: now() },
+      // Bindings are current-state pointers, not history (schema.ts). Since
+      // issue 032 made cascadeDeleteBindingsForDimension tombstone rows
+      // (deleted_at) instead of hard-deleting, a re-bind can land on a
+      // tombstoned pointer — clear deleted_at so the upsert always yields a
+      // LIVE binding (else it updates parameterId but stays soft-deleted and
+      // invisible to every live read).
+      set: { parameterId, deletedAt: null, updatedAt: now() },
     })
   await recomputeTupleHash(db, contextId)
   return listBindings(db, contextId)
@@ -592,9 +606,23 @@ export async function unbindParameter(
   contextId: string,
   dimensionId: string,
 ): Promise<BindingRow[]> {
+  // Tombstone, not hard-delete (issue 032): a hard delete emits no row-delta
+  // for ElectricSQL's read-path sync (same rationale as the dimension cascade),
+  // AND it destroys the row that a still-pending dimension-remove undo expects
+  // to restore by id — so a re-bind onto a removed dimension's stale parameter,
+  // then undo, could orphan a binding a later remove-undo could no longer bring
+  // back (caught by undoRedo.property). Soft-deleting keeps the row addressable
+  // by id; every live read already filters `deleted_at IS NULL`.
   await db
-    .delete(bindings)
-    .where(and(eq(bindings.contextId, contextId), eq(bindings.dimensionId, dimensionId)))
+    .update(bindings)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(
+      and(
+        eq(bindings.contextId, contextId),
+        eq(bindings.dimensionId, dimensionId),
+        isNull(bindings.deletedAt),
+      ),
+    )
   await recomputeTupleHash(db, contextId)
   return listBindings(db, contextId)
 }
