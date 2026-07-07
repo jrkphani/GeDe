@@ -1,6 +1,6 @@
 # 030: v2 server — CDK VPC + RDS + compute (Electric/better-auth slots)
 
-- **Status**: OPEN
+- **Status**: SHIPPED — all 5 stacks live & verified (PR #3 + deploy fixes #4/#5/#6); RDS 17.9 private/isolated, Fargate sync/auth stubs healthy behind the ALB
 - **Milestone**: M8 (Server & sync)
 - **Blocked by**: 029 (deploy account/OIDC exist), 040 (the CDK app this extends); pairs with 031 (**decided** — ADR-0008: ElectricSQL)
 

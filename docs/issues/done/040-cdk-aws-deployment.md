@@ -1,6 +1,6 @@
 # 040: CDK AWS deployment — network → hosting → DNS (test env)
 
-- **Status**: OPEN
+- **Status**: SHIPPED — deployed & verified live (PR #1); app at https://d1nzod71m3rz6x.cloudfront.net
 - **Milestone**: M7 (Deploy)
 - **Blocked by**: — (AWS account `975049998516` exists + the `phani-quadnomics` CLI profile is configured). Resolves issue 029's open IaC-tool decision (**CDK**, not Terraform) and provisions the resources 029's OIDC CI pipeline deploys.
 

@@ -1,6 +1,6 @@
 # 031: Sync-engine decision — ElectricSQL vs self-hosted Supabase (T6)
 
-- **Status**: DECIDED → **ElectricSQL** (see [ADR-0008](../adr/0008-v2-backend-cdk-rds-electricsql.md))
+- **Status**: DECIDED (ARCHIVED) → **ElectricSQL** (see [ADR-0008](../../adr/0008-v2-backend-cdk-rds-electricsql.md))
 - **Milestone**: M8 (Server & sync)
 - **Blocked by**: — (a decision spike; unblocks 032)
 

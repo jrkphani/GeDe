@@ -1,6 +1,6 @@
 # 029: Deploy pipeline — GitHub Actions OIDC → `cdk deploy`
 
-- **Status**: OPEN
+- **Status**: SHIPPED — pipeline live (PR #1); every deploy this session ran through it (v1 live + v2 stacks)
 - **Milestone**: M7 (Deploy — the v1→v2 enabler)
 - **Blocked by**: 040 (the CDK infra this pipeline deploys). The app + `verify.yml` are ready; this is the deferred deploy half, TECH_STACK §6.2/§6.4.
 

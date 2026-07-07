@@ -43,11 +43,11 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [027](done/027-design-tier-layout-navigation.md) ✅ | Design tier layout cleanup + navigation clarity | M6 | 009, 011 |
 | [028](done/028-canvas-focus-adjacency.md) ✅ | Canvas focus + adjacency (phase a; splines deferred) | M6 | 008, 009 |
 | [039](done/039-canvas-spline-bundling.md) ✅ | Canvas spline bundling (028 phase b) | M6 | 028 |
-| [040](040-cdk-aws-deployment.md) | CDK AWS deployment — network → hosting → DNS (test env) | M7 | — |
-| [029](029-deploy-oidc-static-pwa.md) | Deploy pipeline — GitHub Actions OIDC → `cdk deploy` | M7 | 040 |
+| [040](done/040-cdk-aws-deployment.md) ✅ | CDK AWS deployment — network → hosting → DNS (test env) | M7 | — |
+| [029](done/029-deploy-oidc-static-pwa.md) ✅ | Deploy pipeline — GitHub Actions OIDC → `cdk deploy` | M7 | 040 |
 | [041](041-cdk-hosting-snapshot-dist-sensitivity.md) | CDK hosting snapshot env-sensitivity (local `dist/` breaks CI) | M7 | 040 |
-| [030](030-v2-server-postgres-compose.md) | v2 server — CDK VPC + RDS + compute (Electric/better-auth) | M8 | 029, 040 |
-| [031](031-sync-engine-decision.md) | Sync-engine decision — **ElectricSQL** (T6, decided → ADR-0008) | M8 | — |
+| [030](done/030-v2-server-postgres-compose.md) ✅ | v2 server — CDK VPC + RDS + compute (Electric/better-auth stubs) | M8 | 029, 040 |
+| [031](done/031-sync-engine-decision.md) ✅ | Sync-engine decision — **ElectricSQL** (T6, decided → ADR-0008) | M8 | — |
 | [032](032-sync-integration-row-delta.md) | Sync integration — Postgres ⇄ PGlite (row-delta, LWW) | M8 | 030, 031 |
 | [033](033-auth-account.md) | Authentication + account | M9 | 030 |
 | [034](034-workspaces-rls-tenancy.md) | Workspaces + Postgres RLS multi-tenancy | M9 | 032, 033 |
