@@ -219,6 +219,7 @@ describe('sync store — status derivation (issue 036)', () => {
         value: {
           id: 'c1',
           project_id: project?.id,
+          workspace_id: project?.workspaceId,
           parent_id: null,
           symbol: 'α',
           name: null,
@@ -281,6 +282,7 @@ describe('sync store — lost-edit note (issue 036, test-first plan #3)', () => 
         value: {
           id: 'c1',
           project_id: project?.id,
+          workspace_id: project?.workspaceId,
           parent_id: null,
           symbol: 'α',
           name: 'Someone else renamed it',
