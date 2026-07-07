@@ -5,9 +5,13 @@ import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { CommandPalette } from './CommandPalette'
 import { resetCommandRegistry, useCommandRegistryStore } from '../store/commandRegistry'
+import { resetSemanticSearch, useSemanticSearchStore } from '../store/semanticSearch'
 import type { CommandItem } from '../domain/paletteRanking'
 
-afterEach(() => resetCommandRegistry())
+afterEach(() => {
+  resetCommandRegistry()
+  resetSemanticSearch()
+})
 
 function register(...items: CommandItem[]): void {
   for (const item of items) useCommandRegistryStore.getState().registerCommand(item)
@@ -107,5 +111,60 @@ describe('CommandPalette', () => {
     await user.keyboard('Payments')
     expect(await screen.findByText(/Enter creates a context named/)).toBeInTheDocument()
     expect(screen.getByText(/Payments/)).toBeInTheDocument()
+  })
+})
+
+// Issue 042 — semantic search, tested at the palette's wiring boundary: never
+// the real model (that lives behind `src/lib/semanticEmbedder.ts`, imported
+// only from `src/store/semanticSearch.ts`'s `ensureModel`, which this file
+// never calls) — always the store's own state, which is exactly what a
+// stubbed embedder would eventually produce (test-first plan #1/#2).
+describe('CommandPalette — semantic search (issue 042)', () => {
+  it('is pure-lexical (byte-identical to issue 017) while the model is unloaded — the graceful-degradation contract', async () => {
+    const user = userEvent.setup()
+    register(
+      verb('export', 'Export project…'),
+      verb('rename', 'Rename project…'),
+      verb('fade', 'Fade unconnected contexts'),
+    )
+    // The store is left in its default `idle` state (ensureModel was never
+    // called — that's a shell-owned side effect, not the palette's).
+    expect(useSemanticSearchStore.getState().status).toBe('idle')
+    render(<CommandPalette open onClose={() => {}} />)
+
+    // A query that only a *meaning* match (not a single shared letter run)
+    // would surface must show nothing extra — pure lexical, no semantic
+    // upgrade, exactly issue 017's behavior: none of the registered verbs
+    // share a token with this query, so the palette falls through to the
+    // empty state (which also proves "fade" — semantically the right
+    // answer — is NOT surfaced without a loaded model).
+    await user.keyboard('hide the unconnected')
+    expect(await screen.findByText(/No matches/)).toBeInTheDocument()
+    expect(screen.queryByText('Fade unconnected contexts')).not.toBeInTheDocument()
+  })
+
+  it('surfaces a semantically-relevant item that has no lexical match, once the store reports it', async () => {
+    const user = userEvent.setup()
+    register(
+      verb('fade', 'Fade unconnected contexts'),
+      verb('rename', 'Rename project…'),
+    )
+    const userQuery = 'hide the unconnected'
+    // Simulate exactly what `scoreQuery` would have written after a real
+    // (stubbed, per store-level tests) embed: a strong semantic hit for
+    // "fade" against a query that shares no lexical tokens with its title.
+    useSemanticSearchStore.setState({
+      status: 'ready',
+      query: userQuery,
+      scores: new Map([
+        ['fade', 0.92],
+        ['rename', 0.02],
+      ]),
+    })
+    render(<CommandPalette open onClose={() => {}} />)
+
+    await user.keyboard(userQuery)
+    expect(await screen.findByText('Fade unconnected contexts')).toBeInTheDocument()
+    expect(screen.queryByText('Rename project…')).not.toBeInTheDocument()
   })
 })

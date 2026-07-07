@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { useCommandRegistryStore } from '../store/commandRegistry'
+import { useSemanticSearchStore } from '../store/semanticSearch'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
 import { Button } from '../components/ui/button'
@@ -233,6 +234,17 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
     })
   }
 
+  // Issue 042: the shell owns triggering the semantic model's lazy load, on
+  // the palette's first open — never `CommandPalette.tsx` itself (see that
+  // file's header comment for why). `ensureModel` is idempotent and
+  // fire-and-forget: a slow/failed/offline load never blocks opening the
+  // palette, which stays fully lexical-functional either way.
+  function openPalette() {
+    paletteOriginRef.current = document.activeElement as HTMLElement | null
+    setPaletteOpen(true)
+    void useSemanticSearchStore.getState().ensureModel()
+  }
+
   // The shell owns the palette's command sources (issue 016 seam): tier/canvas/
   // context navigation. Feature verbs register the same way, later. Registered
   // once on mount; the sources read live route/store state at collect time.
@@ -258,8 +270,7 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
       if (!(e.metaKey || e.ctrlKey)) return
       if (e.code === 'KeyK') {
         e.preventDefault()
-        paletteOriginRef.current = document.activeElement as HTMLElement | null
-        setPaletteOpen(true)
+        openPalette()
         return
       }
       if (e.code === 'KeyZ') {
@@ -326,10 +337,7 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
             variant="rowAction"
             aria-label="Command palette"
             title="Command palette (⌘K)"
-            onClick={() => {
-              paletteOriginRef.current = document.activeElement as HTMLElement | null
-              setPaletteOpen(true)
-            }}
+            onClick={openPalette}
           >
             ⌘K
           </Button>

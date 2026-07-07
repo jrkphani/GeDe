@@ -30,6 +30,7 @@
     "@electric-sql/pglite": "^0.3.0",
     "@fontsource-variable/inter": "^5.2.0",
     "@fontsource-variable/jetbrains-mono": "^5.2.0",
+    "@huggingface/transformers": "^4.2.0",
     "@radix-ui/react-popover": "^1.1.18",
     "@tanstack/react-table": "^8.21.3",
     "amazon-cognito-identity-js": "^6.3.20",
