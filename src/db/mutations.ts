@@ -13,6 +13,7 @@ import {
   tier2Entries,
   tier2Tables,
 } from './schema'
+import { getOrCreateDefaultWorkspace } from './workspaces'
 import { paletteColor } from '../theme/palette'
 import { computeTupleHash, nextChildSymbol, nextRootSymbol } from '../domain/symbols'
 
@@ -27,13 +28,28 @@ function now(): string {
   return new Date().toISOString()
 }
 
+// Issue 034 — every project-scoped tenant table (tier1_purpose, tier1_props,
+// tier2_tables, dimensions, contexts) denormalizes its owning project's
+// workspace_id (migration 0008's RLS reads it directly, no join). Every
+// insert function below resolves it from the project row rather than asking
+// every store/component call site to thread it through — those call sites
+// are unchanged by this issue (design brief: "local stays simple").
+async function projectWorkspaceId(db: Database, projectId: string): Promise<string> {
+  const rows = await db
+    .select({ workspaceId: projects.workspaceId })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+  return firstOrThrow(rows, 'project not found').workspaceId
+}
+
 export async function createProject(
   db: Database,
-  input: { name: string; description?: string | null },
+  input: { name: string; description?: string | null; workspaceId?: string },
 ): Promise<ProjectRow> {
+  const workspaceId = input.workspaceId ?? (await getOrCreateDefaultWorkspace(db))
   const rows = await db
     .insert(projects)
-    .values({ id: uuidv7(), name: input.name, description: input.description ?? null })
+    .values({ id: uuidv7(), workspaceId, name: input.name, description: input.description ?? null })
     .returning()
   return firstOrThrow(rows)
 }
@@ -117,11 +133,13 @@ export async function addDimension(db: Database, projectId: string): Promise<Dim
     const m = /^Dimension (\d+)$/.exec(d.name)
     return m ? Math.max(max, Number(m[1])) : max
   }, 0)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(dimensions)
     .values({
       id: uuidv7(),
       projectId,
+      workspaceId,
       name: `Dimension ${Math.max(maxDefault, existing.length) + 1}`,
       color: paletteColor(existing.length),
       sort: existing.length,
@@ -478,11 +496,13 @@ export async function createContext(
   const existing = await listContexts(db, projectId, parentId)
   const taken = new Set(existing.map((c) => c.symbol))
   const symbol = parentSymbol ? nextChildSymbol(parentSymbol, taken) : nextRootSymbol(taken)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(contexts)
     .values({
       id: uuidv7(),
       projectId,
+      workspaceId,
       parentId,
       symbol,
       sort: existing.length,
@@ -698,6 +718,7 @@ export async function openChildCanvas(
       await db.insert(dimensions).values({
         id: uuidv7(),
         projectId,
+        workspaceId: parent.workspaceId,
         contextId: parentContextId,
         sourceParamId: slot.parameterId,
         name: paramRow.name,
@@ -819,9 +840,10 @@ export async function setTier1Purpose(
   projectId: string,
   body: string,
 ): Promise<Tier1PurposeRow | null> {
+  const workspaceId = await projectWorkspaceId(db, projectId)
   await db
     .insert(tier1Purpose)
-    .values({ id: uuidv7(), projectId, body })
+    .values({ id: uuidv7(), projectId, workspaceId, body })
     .onConflictDoUpdate({ target: tier1Purpose.projectId, set: { body, updatedAt: now() } })
   return getTier1Purpose(db, projectId)
 }
@@ -854,11 +876,13 @@ export async function addTier1Prop(
   name: string,
 ): Promise<Tier1PropRow> {
   const existing = await listTier1Props(db, projectId)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(tier1Props)
     .values({
       id: uuidv7(),
       projectId,
+      workspaceId,
       name,
       description: null,
       rank: existing.length + 1,
@@ -974,9 +998,10 @@ export async function addTier2Table(
   name: string,
 ): Promise<Tier2TableRow> {
   const existing = await listTier2Tables(db, projectId)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(tier2Tables)
-    .values({ id: uuidv7(), projectId, name, sort: existing.length })
+    .values({ id: uuidv7(), projectId, workspaceId, name, sort: existing.length })
     .returning()
   return firstOrThrow(rows)
 }
@@ -1222,11 +1247,13 @@ export async function promoteEntries(db: Database, input: PromoteInput): Promise
   let dimensionId: string
   if (target.kind === 'new') {
     const existingDims = await listDimensions(db, projectId)
+    const workspaceId = await projectWorkspaceId(db, projectId)
     const rows = await db
       .insert(dimensions)
       .values({
         id: uuidv7(),
         projectId,
+        workspaceId,
         name: target.name,
         color: paletteColor(existingDims.length),
         sort: existingDims.length,

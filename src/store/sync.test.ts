@@ -131,6 +131,7 @@ describe('sync store — engine lifecycle (driven by a fake stream, no live Elec
         value: {
           id: 'c1',
           project_id: project?.id,
+          workspace_id: project?.workspaceId,
           parent_id: null,
           symbol: 'α',
           name: null,

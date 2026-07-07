@@ -11,6 +11,7 @@ function dim(id: string, sort: number, color = '#6f5bd6'): DimensionRow {
   return {
     id,
     projectId: 'proj1',
+    workspaceId: 'ws1',
     contextId: null,
     sourceParamId: null,
     name: id,
@@ -40,6 +41,7 @@ function ctx(id: string, symbol: string): ContextRow {
   return {
     id,
     projectId: 'proj1',
+    workspaceId: 'ws1',
     parentId: null,
     symbol,
     name: null,

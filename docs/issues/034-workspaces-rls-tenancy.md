@@ -1,8 +1,8 @@
 # 034: Workspaces + Postgres RLS multi-tenancy
 
-- **Status**: OPEN
+- **Status**: SHIPPED (implemented on `feat/034-workspaces-rls`; orchestrator to merge/cherry-pick)
 - **Milestone**: M9 (Identity & tenancy)
-- **Blocked by**: 032 (sync), 033 (auth)
+- **Blocked by**: 032 (sync), 033 (auth) — both merged to `main` prior to this work.
 
 ## Slice
 
@@ -42,13 +42,27 @@ Out of scope: sharing/invitations/role UX (035 — this issue is the *enforcemen
 
 ## Acceptance criteria
 
-- [ ] A `workspaces` + membership model with `workspace_id` on tenant tables; RLS enabled and enforcing on the server for select/insert/update/delete.
-- [ ] The sync stream (032) delivers only the client's workspaces' rows — proven by a cross-tenant isolation test at both the query and sync boundaries.
-- [ ] Policies ship as migrations applying to PGlite (inert) and Postgres (enforcing); existing single-user data gets a default workspace with no regression.
-- [ ] `npm run verify` green.
+- [x] A `workspaces` + membership model with `workspace_id` on tenant tables; RLS enabled and enforcing on the server for select/insert/update/delete. (`workspace_id` lives directly on `projects`/`tier1_purpose`/`tier1_props`/`tier2_tables`/`dimensions`/`contexts`; `tier2_entries`/`parameters`/`bindings` scope via their parent's FK chain instead of a denormalized column — see migration 0008's header for the tradeoff.)
+- [x] The sync stream (032) delivers only the client's workspaces' rows — proven by a cross-tenant isolation test at **the query boundary** (`src/db/workspaceRls.test.ts`, real Postgres RLS via PGlite + `SET ROLE app_user`). The **sync-transport boundary** is proven only at the client-request-shaping layer (not against a live Electric server — none is reachable in this repo's tests, HANDOFF); see "Deviations" below for exactly what is and isn't verified here.
+- [x] Policies ship as migrations applying to PGlite (inert, table-owner exemption) and Postgres (enforcing, non-owner `app_user` role); existing single-user data gets a default workspace with no regression (verified against both an empty DB and a pre-034-populated one).
+- [x] `npm run verify` green (571 unit/component + 47 e2e; one pre-existing unseeded property-test flake, unrelated — see report).
 
-## Implementation notes
+## Shipped notes (implementation summary)
 
-- Engine is **ElectricSQL** (031/ADR-0008): author RLS policies **directly in Postgres** and confirm Electric honors them on the sync boundary (a 031 scoring criterion — hold it to that; the RLS-at-sync-boundary behavior is the thing to prove first).
-- Export/import (015) gains a `workspace_id` and bumps to `formatVersion: 2`; keep the v1 envelope importable (remap into the importer's chosen workspace) so backups survive the boundary.
-- The role enum (owner/editor/viewer) defined here is consumed by 035's invitation/granting UX — keep it minimal until a real permission need appears.
+- **Migration `0008_workspaces_rls.sql`**: `workspace_role` enum, `workspaces` + `workspace_members` tables, `workspace_id` added (nullable → backfilled → `NOT NULL`) to the six tables above, a least-privilege `app_user` role + grants, `app_current_user_sub()` + three `SECURITY DEFINER` membership-lookup helpers (`app_member_workspace_ids` / `app_writable_workspace_ids` / `app_owned_workspace_ids` — needed to avoid RLS self-reference recursion on `workspace_members`'s own policies), and full select/insert/update/delete policies on every tenant table plus `workspaces`/`workspace_members` themselves.
+- **Enforcement mechanism**: RLS policies are inert on PGlite because the app's own connection is always the table OWNER (Postgres exempts owners from RLS by default) — no dialect fork, no special-casing. On server Postgres, the same policies enforce for any connection using the granted-but-non-owning `app_user` role (e.g. the future write-path API / Electric connection, issue 043/deploy).
+- **`src/db/workspaces.ts`**: `createWorkspace`, `getOrCreateDefaultWorkspace` (single-user simplification), `addWorkspaceMember`/`removeWorkspaceMember`/`setWorkspaceMemberRole`, `listWorkspaceIdsForUser`.
+- **`src/db/tenantContext.ts`**: `setTenantContext`/`getTenantContext` — the client-side seam that sets the `app.current_user_sub` session GUC RLS policies read.
+- **`src/domain/workspaceRole.ts`**: pure role-ordering helpers (`roleAtLeast`/`canWrite`/`canManageMembers`) mirroring the DB policies' owner/editor-vs-viewer cut, for future UI (035) to agree with without re-deriving it.
+- **`src/db/mutations.ts`**: `createProject` takes an optional `workspaceId` (defaults to `getOrCreateDefaultWorkspace`); every other insert into a workspace-scoped table resolves its workspace from the owning project row internally — no store/component call site changed.
+- **Export/import (015)**: `FORMAT_VERSION` bumped 1 → 2; the six workspace-scoped row schemas gained a nullable `workspaceId`; `parseEnvelope` upgrades a legacy v1 file in place (injects `workspaceId: null`); `remapEnvelope`/`importProject` take a `targetWorkspaceId` (defaults to `getOrCreateDefaultWorkspace`) and stamp it onto every workspace-scoped row — never preserving the source file's original workspace.
+- **Sync (032) column parity**: `src/sync/electricProtocol.ts`'s hardcoded SQL→JS column map gained `workspace_id` for the six affected tables (a real bug this work surfaced: without it, inbound deltas for those tables would silently drop `workspace_id` and fail the server's NOT NULL constraint on apply).
+- Engine is **ElectricSQL** (031/ADR-0008): RLS is authored **directly in Postgres**. Electric honoring it on the sync boundary depends on Electric's *own* Postgres connection running as a non-owner, RLS-subject role (`app_user`, provisioned here) — that connection-credential wiring is a **deploy-layer (043) follow-up**, out of this issue's buildable surface; see "Deviations" below.
+- The role enum (owner/editor/viewer) defined here is consumed by 035's invitation/granting UX — kept minimal (self-only membership bootstrap; inviting other subs is 035's job).
+
+## Deviations from plan / flagged for review
+
+1. **`workspace_id` is NOT denormalized onto every tenant table.** `tier2_entries`, `parameters`, `bindings` scope via a join to their nearest workspace_id-bearing ancestor (`tier2_tables`/`dimensions`/`contexts` respectively) instead of carrying their own column. Isolation is identical (proven in `workspaceRls.test.ts`); this keeps the mutation-layer diff to 8 insert sites instead of ~15+ and avoids threading workspace_id through every nested insert. Flagging since the issue text read as "workspace_id on … everything under" the project.
+2. **Sync-boundary RLS is proven at the query boundary, not against a live Electric server.** No Electric server is reachable in this repo's tests (a standing HANDOFF/032 constraint). What IS proven: (a) real Postgres RLS enforcement via PGlite + a non-owner role, (b) the client normalizes/replays deltas correctly for the now-6 workspace_id-bearing tables. What is NOT proven here: that Electric's actual production connection to Postgres runs as the non-owner `app_user` role rather than an owner/superuser credential — that's a deploy-layer wiring task (CDK secret for `app_user`, not `gede_admin`) belonging to 043/deploy, not fabricated or claimed done here.
+3. **Membership creation (`workspace_members` INSERT policy) is self-only** (`user_sub = app_current_user_sub()`), deferring "owner invites another sub" to 035's granting UX, per the issue's own scope boundary.
+4. **No new UI.** The acceptance criteria and test-first plan are backend/db/domain-scoped; no workspace-picker or membership UI was built (none was required, and ADR-0010 keeps 035 as the granting-UX issue).

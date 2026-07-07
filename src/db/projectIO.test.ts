@@ -78,10 +78,20 @@ async function seedRichProject(db: Database): Promise<string> {
   return projectId
 }
 
+// Issue 034 — `workspaces`/`workspace_members` are account-level identity
+// tables, not part of any single project's exported tree (the envelope is
+// "everything under one project", SPEC §4.7); a project export/import never
+// carries them, and a destination workspace is chosen by the importer, not
+// bundled in the file (src/domain/projectEnvelope.ts's remapEnvelope). This
+// is the one documented exclusion from the schema-coverage guard below — any
+// OTHER new pgTable still breaks this test loudly, exactly as designed.
+const NON_ENVELOPE_TABLES = ['workspaces', 'workspace_members']
+
 describe('projectIO — schema coverage guard', () => {
-  it('the envelope covers exactly every pgTable in the schema', () => {
+  it('the envelope covers exactly every project-scoped pgTable in the schema', () => {
     const schemaTableNames = (Object.values(schema).filter((v) => is(v, PgTable)) as PgTable[])
       .map((t) => getTableName(t))
+      .filter((name) => !NON_ENVELOPE_TABLES.includes(name))
       .sort()
     expect(schemaTableNames).toEqual([...ENVELOPE_TABLE_NAMES].sort())
   })
