@@ -56,7 +56,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [035](done/035-sharing-roles-invitations.md) ✅ | Sharing — roles & invitations | M9 | 034, 033 |
 | [036](done/036-sync-state-offline-ui.md) ✅ | Sync state + offline reconciliation UI | M8 | 032 |
 | [037](done/037-local-to-cloud-migration.md) ✅ | Local → cloud project migration (on-ramp) | M10 | 033, 034, 032 |
-| [038](038-presence-live-collaboration.md) | Presence + live collaboration (speculative) | M10 | 032, 034, 035 |
+| [038](done/038-presence-live-collaboration.md) ✅ | Presence + live collaboration (speculative; cross-tab slice) | M10 | 032, 034, 035 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 

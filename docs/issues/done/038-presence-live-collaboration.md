@@ -1,6 +1,6 @@
 # 038: Presence + live collaboration affordances
 
-- **Status**: IMPLEMENTED — smallest honest slice built on explicit instruction to proceed despite the demand gate below (see Implementation notes). The "demand validated" acceptance box is deliberately left unchecked: that is a product/process decision this session did not make, not a code gap. Left in `docs/issues/` (not moved to `done/`) per that instruction.
+- **Status**: SHIPPED (integrated to `main`, verify green) — smallest honest slice built on explicit instruction to proceed despite the demand gate. Cross-**tab** only (BroadcastChannel); real cross-network presence needs new server transport (WebSocket/Electric primitive), deliberately not built. The "demand validated" acceptance box stays unchecked: a product/process decision, not a code gap. Register cue only (canvas not wired).
 - **Milestone**: M10 (Collaboration polish)
 - **Blocked by**: 032 (sync), 034 (workspaces), 035 (membership) — all shipped on `main`
 
