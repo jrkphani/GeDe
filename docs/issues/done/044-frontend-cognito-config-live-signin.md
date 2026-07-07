@@ -1,6 +1,6 @@
 # 044: Frontend Cognito config — enable live sign-in in the deployed build
 
-- **Status**: OPEN
+- **Status**: SHIPPED — code complete; combined verify green (837 vitest + 87 CDK jest + `cdk synth --all`); integrated on `m11-close-write-loop`. **Live AWS deploy pending** (CI on merge to `main`); the live-smoke acceptance items verify at that point.
 - **Milestone**: M11 (Close the cloud write loop)
 - **Blocked by**: 033 (Auth stack + LoginScreen — SHIPPED; the User Pool exists, the client just isn't given its ids)
 

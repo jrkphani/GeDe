@@ -1,6 +1,6 @@
 # 045: Apply the Drizzle migration history to the deployed RDS
 
-- **Status**: OPEN
+- **Status**: SHIPPED — code complete; combined verify green (837 vitest + 87 CDK jest + `cdk synth --all`, incl. new `Gede-Test-Migrations` stack); integrated on `m11-close-write-loop`. **Live AWS deploy pending** (CI on merge to `main`); the migrations apply to the deployed RDS at that point.
 - **Milestone**: M11 (Close the cloud write loop)
 - **Blocked by**: 030 (RDS instance + VPC — SHIPPED)
 

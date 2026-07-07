@@ -1,6 +1,6 @@
 # 047: HTTPS for the write API — end the mixed-content block
 
-- **Status**: OPEN
+- **Status**: SHIPPED — code complete (CloudFront second-origin option; same-origin HTTPS, caching disabled for `/write*`); combined verify green (837 vitest + 87 CDK jest + `cdk synth --all`); integrated on `m11-close-write-loop`. **Live AWS deploy pending** (CI on merge to `main`); the mixed-content block clears live at that point.
 - **Milestone**: M11 (Close the cloud write loop)
 - **Blocked by**: 030 (ALB — SHIPPED)
 

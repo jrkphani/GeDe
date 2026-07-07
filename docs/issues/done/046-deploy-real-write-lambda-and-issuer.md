@@ -1,6 +1,6 @@
 # 046: Deploy the real write-path Lambda + wire the Cognito issuer
 
-- **Status**: OPEN
+- **Status**: SHIPPED — code complete; combined verify green (837 vitest + 87 CDK jest + `cdk synth --all`; real handler bundles offline, issuer resolves as a cross-stack ref); integrated on `m11-close-write-loop`. **Live AWS deploy pending** (CI on merge to `main`, after 045); the `/write` 503 stub is replaced live at that point.
 - **Milestone**: M11 (Close the cloud write loop)
 - **Blocked by**: 043 (real handler code — SHIPPED, unit-tested, undeployed), 045 (RDS schema must exist first), 044 (real Cognito ids to derive the issuer)
 

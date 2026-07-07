@@ -1,6 +1,6 @@
 # 048: Flush the client write-queue to `/write` — close the loop
 
-- **Status**: OPEN
+- **Status**: SHIPPED — code complete (DI-testable `writeTransport`, gated flush, retry/backoff/reconnect, calm rejection); combined verify green (837 vitest incl. transport tests + 87 CDK jest); integrated on `m11-close-write-loop`. **Live AWS deploy pending** (CI on merge to `main`, after 044–047); the live end-to-end e2e runs at that point. Downstream seams noted below still open (workspace-id wiring, queue insert/update split, rejection row snapshot).
 - **Milestone**: M11 (Close the cloud write loop)
 - **Blocked by**: 044 (real JWT), 045 (RDS schema), 046 (real handler), 047 (HTTPS endpoint), 032 (the mutation queue this flushes — SHIPPED)
 
