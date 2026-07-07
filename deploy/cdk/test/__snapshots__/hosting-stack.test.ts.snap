@@ -47,7 +47,7 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "97e9ebf0b174a5c8f7faa505739022b7f509edddffcab9211dcd08b759944c4f.zip",
+          "S3Key": "<ASSET_HASH>.zip",
         },
         "Environment": {
           "Variables": {
@@ -240,7 +240,7 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "faa95a81ae7d7373f3e1f242268f904eb748d8d0fdd306e8a6fe515a1905a7d6.zip",
+          "S3Key": "<ASSET_HASH>.zip",
         },
         "Description": {
           "Fn::Join": [
@@ -293,7 +293,7 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
       "Properties": {
         "Content": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "a72522445441e9b66c2f16956c54d4786af8c61c156b80c48a6e7c32fcc49023.zip",
+          "S3Key": "<ASSET_HASH>.zip",
         },
         "Description": "/opt/awscli/aws",
       },
@@ -324,7 +324,7 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
           "cdk-hnb659fds-assets-975049998516-us-east-1",
         ],
         "SourceObjectKeys": [
-          "a334b47b76d0d31e587797efaeb72fcdfab0d7458c5f27594ba963e657a52484.zip",
+          "<ASSET_HASH>.zip",
         ],
         "WaitForDistributionInvalidation": true,
       },

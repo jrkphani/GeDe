@@ -45,17 +45,17 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [039](done/039-canvas-spline-bundling.md) ✅ | Canvas spline bundling (028 phase b) | M6 | 028 |
 | [040](done/040-cdk-aws-deployment.md) ✅ | CDK AWS deployment — network → hosting → DNS (test env) | M7 | — |
 | [029](done/029-deploy-oidc-static-pwa.md) ✅ | Deploy pipeline — GitHub Actions OIDC → `cdk deploy` | M7 | 040 |
-| [041](041-cdk-hosting-snapshot-dist-sensitivity.md) | CDK hosting snapshot env-sensitivity (local `dist/` breaks CI) | M7 | 040 |
-| [042](042-command-palette-semantic-search.md) | Command palette — semantic search (client-side embeddings, $0 AWS) | M6 | 017 |
+| [041](done/041-cdk-hosting-snapshot-dist-sensitivity.md) ✅ | CDK hosting snapshot env-sensitivity (local `dist/` breaks CI) | M7 | 040 |
+| [042](done/042-command-palette-semantic-search.md) ✅ | Command palette — semantic search (client-side embeddings, $0 AWS) | M6 | 017 |
 | [030](done/030-v2-server-postgres-compose.md) ✅ | v2 server — CDK VPC + RDS + Fargate (Electric-sync stub; auth → Cognito, ADR-0009) | M8 | 029, 040 |
 | [031](done/031-sync-engine-decision.md) ✅ | Sync-engine decision — **ElectricSQL** (T6, decided → ADR-0008) | M8 | — |
-| [032](032-sync-integration-row-delta.md) | Sync — Electric **read-path** → PGlite + client optimistic-write queue (read-only collab; LWW server-side in 043) | M8 | 030, 031 |
-| [043](043-write-path-api-server-authority.md) | **Write-path API** — server write authority + invariant enforcement (Tier 2, serverless) | M8 | 030, 032, 033, 034 |
-| [033](033-auth-account.md) | Authentication + account — **Cognito** (email/pw) + hero + login screen | M9 | 030 |
-| [034](034-workspaces-rls-tenancy.md) | Workspaces + Postgres RLS multi-tenancy | M9 | 032, 033 |
-| [035](035-sharing-roles-invitations.md) | Sharing — roles & invitations | M9 | 034, 033 |
-| [036](036-sync-state-offline-ui.md) | Sync state + offline reconciliation UI | M8 | 032 |
-| [037](037-local-to-cloud-migration.md) | Local → cloud project migration (on-ramp) | M10 | 033, 034, 032 |
+| [032](done/032-sync-integration-row-delta.md) ✅ | Sync — Electric **read-path** → PGlite + client optimistic-write queue (read-only collab; LWW server-side in 043) | M8 | 030, 031 |
+| [043](done/043-write-path-api-server-authority.md) ✅ | **Write-path API** — server write authority + invariant enforcement (Tier 2, serverless) | M8 | 030, 032, 033, 034 |
+| [033](done/033-auth-account.md) ✅ | Authentication + account — **Cognito** (email/pw) + hero + login screen | M9 | 030 |
+| [034](done/034-workspaces-rls-tenancy.md) ✅ | Workspaces + Postgres RLS multi-tenancy | M9 | 032, 033 |
+| [035](done/035-sharing-roles-invitations.md) ✅ | Sharing — roles & invitations | M9 | 034, 033 |
+| [036](done/036-sync-state-offline-ui.md) ✅ | Sync state + offline reconciliation UI | M8 | 032 |
+| [037](done/037-local-to-cloud-migration.md) ✅ | Local → cloud project migration (on-ramp) | M10 | 033, 034, 032 |
 | [038](038-presence-live-collaboration.md) | Presence + live collaboration (speculative) | M10 | 032, 034, 035 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.

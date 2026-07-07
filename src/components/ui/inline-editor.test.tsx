@@ -88,6 +88,15 @@ describe('InlineEdit', () => {
     expect(onCommit).toHaveBeenCalledExactlyOnceWith('Gamma')
     expect(onEditingChange).toHaveBeenLastCalledWith(false)
   })
+
+  it('readOnly: clicking the display never enters edit mode (issue 035)', async () => {
+    const user = userEvent.setup()
+    const onCommit = vi.fn()
+    render(<InlineEdit value="Alpha" onCommit={onCommit} display="Alpha" readOnly />)
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.queryByRole('textbox')).toBeNull()
+    expect(onCommit).not.toHaveBeenCalled()
+  })
 })
 
 describe('PhantomInput', () => {

@@ -15,16 +15,40 @@ import { z } from 'zod'
 
 // Bump only with a migration path in parseEnvelope. A file whose version is
 // GREATER than this is from a newer app build → NewerVersionError.
-export const FORMAT_VERSION = 1 as const
+//
+// Issue 034: bumped 1 -> 2 when workspace_id joined the schema (migration
+// 0008). A v1 file (no workspaceId on any row) is still importable —
+// parseEnvelope upgrades it in place (injects `workspaceId: null` on every
+// row of the six workspace-scoped tables) before validation, and import
+// remaps that null to the importer's CHOSEN destination workspace (never the
+// original exporting workspace, which the importer may not even belong to) —
+// see remapEnvelope's targetWorkspaceId parameter. "Backups survive the
+// boundary" (issue 034 implementation notes).
+export const FORMAT_VERSION = 2 as const
+const MIN_SUPPORTED_IMPORT_VERSION = 1
 
 // ── Row schemas — mirror src/db/schema.ts column-for-column (camelCase, as
 // drizzle's $inferSelect yields). timestamps are ISO strings (schema mode
-// 'string'); deleted_at is nullable everywhere it exists (bindings have none).
+// 'string'); deleted_at is nullable everywhere it exists (every table,
+// including bindings as of issue 032/migration 0007).
 const iso = z.string()
 const nullableIso = z.string().nullable()
 
+// workspaceId is nullable at the SCHEMA level (unlike the live DB column,
+// which is NOT NULL) purely to accept an upgraded-in-place v1 file — see
+// FORMAT_VERSION's header. It is never left null after import: remapEnvelope
+// always stamps the importer's chosen destination workspace onto it.
+// Issue 037 — `adoptedIntoProjectId` (schema.ts) is deliberately NOT a field
+// here. It is local-instance bookkeeping (a same-db pointer from an adopted
+// local project to the fresh-id copy adoptProject created), not portable
+// project content — like workspaceId's own exclusion-from-the-id-graph note
+// below, it never belongs in a file someone else's app might import. Zod
+// silently drops unknown keys on parse, and serializeEnvelope's normalizeRow
+// only ever emits the fields declared here, so gatherProjectRows's raw
+// (wider) row never leaks it into an exported/adopted envelope.
 const projectRow = z.object({
   id: z.string(),
+  workspaceId: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
   createdAt: iso,
@@ -35,6 +59,7 @@ const projectRow = z.object({
 const tier1PurposeRow = z.object({
   id: z.string(),
   projectId: z.string(),
+  workspaceId: z.string().nullable(),
   body: z.string(),
   createdAt: iso,
   updatedAt: iso,
@@ -44,6 +69,7 @@ const tier1PurposeRow = z.object({
 const tier1PropRow = z.object({
   id: z.string(),
   projectId: z.string(),
+  workspaceId: z.string().nullable(),
   rank: z.number().int(),
   name: z.string(),
   description: z.string().nullable(),
@@ -56,6 +82,7 @@ const tier1PropRow = z.object({
 const tier2TableRow = z.object({
   id: z.string(),
   projectId: z.string(),
+  workspaceId: z.string().nullable(),
   name: z.string(),
   sort: z.number().int(),
   createdAt: iso,
@@ -78,6 +105,7 @@ const tier2EntryRow = z.object({
 const dimensionRow = z.object({
   id: z.string(),
   projectId: z.string(),
+  workspaceId: z.string().nullable(),
   contextId: z.string().nullable(),
   sourceParamId: z.string().nullable(),
   name: z.string(),
@@ -103,6 +131,7 @@ const parameterRow = z.object({
 const contextRow = z.object({
   id: z.string(),
   projectId: z.string(),
+  workspaceId: z.string().nullable(),
   parentId: z.string().nullable(),
   symbol: z.string(),
   name: z.string().nullable(),
@@ -113,6 +142,9 @@ const contextRow = z.object({
   deletedAt: nullableIso,
 })
 
+// Issue 032 (migration 0007): bindings gained `deleted_at` so the
+// dimension-removal cascade (007) could tombstone instead of hard-delete —
+// see src/db/mutations.ts's cascadeDeleteBindingsForDimension.
 const bindingRow = z.object({
   id: z.string(),
   contextId: z.string(),
@@ -121,6 +153,7 @@ const bindingRow = z.object({
   tupleHash: z.string(),
   createdAt: iso,
   updatedAt: iso,
+  deletedAt: nullableIso,
 })
 
 // One registry object keyed by SQL table name (matching schema.ts). Adding a
@@ -190,6 +223,21 @@ const SELF_PARENT_FIELD: Partial<Record<TableName, string>> = {
   contexts: 'parentId',
 }
 
+// Issue 034 — the tables that carry a denormalized workspace_id column
+// (migration 0008's schema decision: projects + the five directly
+// project_id-scoped tables; tier2_entries/parameters/bindings scope via their
+// parent's FK chain instead — see that migration's header). Used both to
+// upgrade a legacy v1 file in parseEnvelope and to stamp the importer's
+// chosen destination workspace in remapEnvelope.
+const WORKSPACE_SCOPED_TABLES = [
+  'projects',
+  'tier1_purpose',
+  'tier1_props',
+  'tier2_tables',
+  'dimensions',
+  'contexts',
+] as const satisfies readonly TableName[]
+
 export type ProjectRowData = z.infer<typeof projectRow>
 export type Row = Record<string, string | number | null>
 
@@ -253,6 +301,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
+// Issue 034 — upgrades a legacy formatVersion:1 file in place: every row of a
+// workspace-scoped table gains a `workspaceId: null` (a pre-034 export never
+// had the column at all). Mutates `raw` directly since it's already a
+// throwaway `JSON.parse` result local to parseEnvelope, then bumps the
+// version marker so the rest of this function proceeds as if it always saw
+// the current shape. Validation (envelopeSchema) still catches anything
+// actually malformed beneath this — this only fills in a column that simply
+// didn't exist yet.
+function upgradeV1ToV2(raw: Record<string, unknown>): void {
+  const tables = raw.tables
+  if (isRecord(tables)) {
+    for (const name of WORKSPACE_SCOPED_TABLES) {
+      const rows = tables[name]
+      if (!Array.isArray(rows)) continue
+      for (const row of rows) {
+        if (isRecord(row) && !('workspaceId' in row)) row.workspaceId = null
+      }
+    }
+  }
+  raw.formatVersion = FORMAT_VERSION
+}
+
 // Parse untrusted text → a fully validated Envelope, or throw a typed rejection.
 // Order matters: JSON/shape marker first (Not a GeDe export), then version
 // (newer), then schema + graph integrity (corrupted at a location). Never
@@ -266,7 +336,11 @@ export function parseEnvelope(text: string): Envelope {
   }
   if (!isRecord(raw) || typeof raw.formatVersion !== 'number') throw new NotGeDeExportError()
   if (raw.formatVersion > FORMAT_VERSION) throw new NewerVersionError(raw.formatVersion)
-  if (raw.formatVersion !== FORMAT_VERSION) throw new NotGeDeExportError()
+  if (raw.formatVersion === MIN_SUPPORTED_IMPORT_VERSION) {
+    upgradeV1ToV2(raw)
+  } else if (raw.formatVersion !== FORMAT_VERSION) {
+    throw new NotGeDeExportError()
+  }
 
   const parsed = envelopeSchema.safeParse(raw)
   if (!parsed.success) {
@@ -333,6 +407,16 @@ function fieldOrder(name: TableName): string[] {
   return Object.keys(rowSchemas[name].shape)
 }
 
+// Public: the exact column set of a table, schema-order. Issue 032's sync
+// layer (src/domain/syncDelta.ts) reuses this rather than re-declaring a
+// third copy of the 9-table column registry (schema.ts is the first, the
+// rowSchemas above are the second) — it backs the "no derived columns on the
+// wire" guard (ADR-0005: a delta's row may only carry base-table columns,
+// never a canvas position/completeness/coverage value).
+export function tableColumns(name: TableName): readonly string[] {
+  return fieldOrder(name)
+}
+
 function normalizeRow(name: TableName, row: Row): Row {
   const out: Row = {}
   for (const field of fieldOrder(name)) out[field] = row[field] ?? null
@@ -366,7 +450,18 @@ export interface RemapResult {
   idMap: Map<string, string>
 }
 
-export function remapEnvelope(tables: EnvelopeTables, newId: () => string): RemapResult {
+// Issue 034 — `targetWorkspaceId` is stamped onto every row of a
+// workspace-scoped table, OVERWRITING whatever was in the source envelope
+// (the exporting workspace's id, or null for an upgraded v1 file — see
+// FORMAT_VERSION's header). This is deliberately NOT routed through idMap
+// like every other id field: a workspace is not part of the exported
+// project's own id-graph, and the destination is chosen by the importer
+// (their own workspace), not preserved from the file.
+export function remapEnvelope(
+  tables: EnvelopeTables,
+  newId: () => string,
+  targetWorkspaceId: string,
+): RemapResult {
   const idMap = new Map<string, string>()
   for (const name of ENVELOPE_TABLE_NAMES) {
     for (const row of tables[name] as Row[]) idMap.set(row.id as string, newId())
@@ -374,12 +469,14 @@ export function remapEnvelope(tables: EnvelopeTables, newId: () => string): Rema
   const out: Record<string, Row[]> = {}
   for (const name of ENVELOPE_TABLE_NAMES) {
     const fields = ID_FIELDS[name] as readonly string[]
+    const isWorkspaceScoped = (WORKSPACE_SCOPED_TABLES as readonly TableName[]).includes(name)
     out[name] = (tables[name] as Row[]).map((row) => {
       const copy: Row = { ...row }
       for (const field of fields) {
         const value = copy[field]
         if (typeof value === 'string') copy[field] = idMap.get(value) ?? value
       }
+      if (isWorkspaceScoped) copy.workspaceId = targetWorkspaceId
       return copy
     })
   }
@@ -407,4 +504,4 @@ export function projectName(tables: EnvelopeTables): string {
 }
 
 // Re-exported for the DB layer's insert plan and the schema cross-check test.
-export { ID_FIELDS, FK_TARGETS, SELF_PARENT_FIELD }
+export { ID_FIELDS, FK_TARGETS, SELF_PARENT_FIELD, WORKSPACE_SCOPED_TABLES }

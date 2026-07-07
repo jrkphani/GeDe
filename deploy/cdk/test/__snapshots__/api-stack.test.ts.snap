@@ -2,10 +2,10 @@
 
 exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
 {
-  "Description": "GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) behind an internet-facing ALB — issue 030 (ADR-0008)",
+  "Description": "GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) + the serverless write-path API (issue 043) behind an internet-facing ALB — issue 030 (ADR-0008), ADR-0010",
   "Outputs": {
     "LoadBalancerDnsName": {
-      "Description": "Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS.",
+      "Description": "Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* routes to the issue 043 write-path Lambda.",
       "Value": {
         "Fn::GetAtt": [
           "Alb16C2F182",
@@ -75,7 +75,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
           {
             "FixedResponseConfig": {
               "ContentType": "text/plain",
-              "MessageBody": "Gede-Test-Api: no route matched (placeholder tier, issue 030) - /sync* and /auth* are stubbed pending issues 032/033.",
+              "MessageBody": "Gede-Test-Api: no route matched (placeholder tier, issue 030) - /sync* is stubbed pending issue 032. /auth* is intentionally absent - auth is Amazon Cognito (issue 033, ADR-0009), not routed through this ALB.",
               "StatusCode": "404",
             },
             "Type": "fixed-response",
@@ -88,73 +88,6 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         "Protocol": "HTTP",
       },
       "Type": "AWS::ElasticLoadBalancingV2::Listener",
-    },
-    "AlbHttpListenerAuthTargetsGroup269442ED": {
-      "Properties": {
-        "HealthCheckIntervalSeconds": 30,
-        "HealthCheckPath": "/",
-        "Matcher": {
-          "HttpCode": "200-399",
-        },
-        "Port": 80,
-        "Protocol": "HTTP",
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-        "TargetGroupAttributes": [
-          {
-            "Key": "stickiness.enabled",
-            "Value": "false",
-          },
-        ],
-        "TargetType": "ip",
-        "VpcId": {
-          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
-        },
-      },
-      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
-    },
-    "AlbHttpListenerAuthTargetsRuleBB74FAC0": {
-      "Properties": {
-        "Actions": [
-          {
-            "TargetGroupArn": {
-              "Ref": "AlbHttpListenerAuthTargetsGroup269442ED",
-            },
-            "Type": "forward",
-          },
-        ],
-        "Conditions": [
-          {
-            "Field": "path-pattern",
-            "PathPatternConfig": {
-              "Values": [
-                "/auth*",
-              ],
-            },
-          },
-        ],
-        "ListenerArn": {
-          "Ref": "AlbHttpListener00C8B33E",
-        },
-        "Priority": 20,
-      },
-      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
     },
     "AlbHttpListenerSyncTargetsGroup45D10C03": {
       "Properties": {
@@ -223,6 +156,33 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       },
       "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
     },
+    "AlbHttpListenerWriteApiRouteRule57E70B5E": {
+      "Properties": {
+        "Actions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "WriteApiTargetGroup7AA1C6B2",
+            },
+            "Type": "forward",
+          },
+        ],
+        "Conditions": [
+          {
+            "Field": "path-pattern",
+            "PathPatternConfig": {
+              "Values": [
+                "/write*",
+              ],
+            },
+          },
+        ],
+        "ListenerArn": {
+          "Ref": "AlbHttpListener00C8B33E",
+        },
+        "Priority": 30,
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
+    },
     "AlbSecurityGroup86A59E99": {
       "Properties": {
         "GroupDescription": "Gede-Test-Api ALB - internet-facing. Placeholder tier serves plain HTTP; a real domain + ACM cert (the Hosting/Dns seam, issue 040) upgrades this to HTTPS when 032/033 land.",
@@ -268,7 +228,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "AllowComputeToPostgres": {
       "Properties": {
-        "Description": "Api compute (sync/auth stub slots, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.",
+        "Description": "Api compute (sync stub slot, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.",
         "FromPort": 5432,
         "GroupId": {
           "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
@@ -284,287 +244,23 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroupIngress",
     },
-    "AuthService3C2B741A": {
-      "DependsOn": [
-        "AlbHttpListenerAuthTargetsRuleBB74FAC0",
-        "AuthTaskDefTaskRole7B268201",
-      ],
+    "AllowWriteApiToPostgres": {
       "Properties": {
-        "Cluster": {
-          "Ref": "ClusterEB0386A7",
+        "Description": "Write-path Lambda (issue 043) to Postgres 5432 - a second, distinct ingress rule on the Data security group (alongside the Fargate compute SG rule above); still never 0.0.0.0/0.",
+        "FromPort": 5432,
+        "GroupId": {
+          "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
         },
-        "DeploymentConfiguration": {
-          "Alarms": {
-            "AlarmNames": [],
-            "Enable": false,
-            "Rollback": false,
-          },
-          "DeploymentCircuitBreaker": {
-            "Enable": true,
-            "Rollback": true,
-          },
-          "MaximumPercent": 200,
-          "MinimumHealthyPercent": 100,
-        },
-        "DeploymentController": {
-          "Type": "ECS",
-        },
-        "DesiredCount": 1,
-        "EnableECSManagedTags": false,
-        "HealthCheckGracePeriodSeconds": 60,
-        "LaunchType": "FARGATE",
-        "LoadBalancers": [
-          {
-            "ContainerName": "auth",
-            "ContainerPort": 80,
-            "TargetGroupArn": {
-              "Ref": "AlbHttpListenerAuthTargetsGroup269442ED",
-            },
-          },
-        ],
-        "NetworkConfiguration": {
-          "AwsvpcConfiguration": {
-            "AssignPublicIp": "DISABLED",
-            "SecurityGroups": [
-              {
-                "Fn::GetAtt": [
-                  "ComputeSecurityGroupF0F5C976",
-                  "GroupId",
-                ],
-              },
-            ],
-            "Subnets": [
-              {
-                "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
-              },
-              {
-                "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
-              },
-            ],
-          },
-        },
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-        "TaskDefinition": {
-          "Ref": "AuthTaskDefF426C9E5",
-        },
-      },
-      "Type": "AWS::ECS::Service",
-    },
-    "AuthTaskDefAuthContainerLogGroup9C200B6A": {
-      "DeletionPolicy": "Retain",
-      "Properties": {
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-      },
-      "Type": "AWS::Logs::LogGroup",
-      "UpdateReplacePolicy": "Retain",
-    },
-    "AuthTaskDefExecutionRoleDefaultPolicyF9D1F4E1": {
-      "Properties": {
-        "PolicyDocument": {
-          "Statement": [
-            {
-              "Action": [
-                "logs:CreateLogStream",
-                "logs:PutLogEvents",
-              ],
-              "Effect": "Allow",
-              "Resource": {
-                "Fn::GetAtt": [
-                  "AuthTaskDefAuthContainerLogGroup9C200B6A",
-                  "Arn",
-                ],
-              },
-            },
-          ],
-          "Version": "2012-10-17",
-        },
-        "PolicyName": "AuthTaskDefExecutionRoleDefaultPolicyF9D1F4E1",
-        "Roles": [
-          {
-            "Ref": "AuthTaskDefExecutionRoleF790B4FF",
-          },
-        ],
-      },
-      "Type": "AWS::IAM::Policy",
-    },
-    "AuthTaskDefExecutionRoleF790B4FF": {
-      "Properties": {
-        "AssumeRolePolicyDocument": {
-          "Statement": [
-            {
-              "Action": "sts:AssumeRole",
-              "Effect": "Allow",
-              "Principal": {
-                "Service": "ecs-tasks.amazonaws.com",
-              },
-            },
-          ],
-          "Version": "2012-10-17",
-        },
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-      },
-      "Type": "AWS::IAM::Role",
-    },
-    "AuthTaskDefF426C9E5": {
-      "Properties": {
-        "ContainerDefinitions": [
-          {
-            "Essential": true,
-            "HealthCheck": {
-              "Command": [
-                "CMD-SHELL",
-                "wget -qO- http://localhost/ || exit 1",
-              ],
-              "Interval": 30,
-              "Retries": 3,
-              "StartPeriod": 10,
-              "Timeout": 5,
-            },
-            "Image": "public.ecr.aws/docker/library/nginx:alpine",
-            "LogConfiguration": {
-              "LogDriver": "awslogs",
-              "Options": {
-                "awslogs-group": {
-                  "Ref": "AuthTaskDefAuthContainerLogGroup9C200B6A",
-                },
-                "awslogs-region": "us-east-1",
-                "awslogs-stream-prefix": "gede-auth",
-              },
-            },
-            "Name": "auth",
-            "PortMappings": [
-              {
-                "ContainerPort": 80,
-                "Protocol": "tcp",
-              },
-            ],
-          },
-        ],
-        "Cpu": "256",
-        "ExecutionRoleArn": {
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
           "Fn::GetAtt": [
-            "AuthTaskDefExecutionRoleF790B4FF",
-            "Arn",
+            "WriteApiSecurityGroup3EC390E8",
+            "GroupId",
           ],
         },
-        "Family": "GedeTestApiAuthTaskDef051E3209",
-        "Memory": "512",
-        "NetworkMode": "awsvpc",
-        "RequiresCompatibilities": [
-          "FARGATE",
-        ],
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-        "TaskRoleArn": {
-          "Fn::GetAtt": [
-            "AuthTaskDefTaskRole7B268201",
-            "Arn",
-          ],
-        },
+        "ToPort": 5432,
       },
-      "Type": "AWS::ECS::TaskDefinition",
-    },
-    "AuthTaskDefTaskRole7B268201": {
-      "Properties": {
-        "AssumeRolePolicyDocument": {
-          "Statement": [
-            {
-              "Action": "sts:AssumeRole",
-              "Effect": "Allow",
-              "Principal": {
-                "Service": "ecs-tasks.amazonaws.com",
-              },
-            },
-          ],
-          "Version": "2012-10-17",
-        },
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-      },
-      "Type": "AWS::IAM::Role",
+      "Type": "AWS::EC2::SecurityGroupIngress",
     },
     "ClusterEB0386A7": {
       "Properties": {
@@ -591,7 +287,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "ComputeSecurityGroupF0F5C976": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Api Fargate compute (sync/auth stub slots, issue 030) - ingress only from the ALB security group.",
+        "GroupDescription": "Gede-Test-Api Fargate compute (sync stub slot, issue 030; auth moved to Cognito, issue 033) - ingress only from the ALB security group.",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
@@ -925,6 +621,248 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         ],
       },
       "Type": "AWS::IAM::Role",
+    },
+    "WriteApiFunction5106E371": {
+      "DependsOn": [
+        "WriteApiFunctionServiceRoleDefaultPolicy270A05DC",
+        "WriteApiFunctionServiceRoleCB6CB54D",
+      ],
+      "Properties": {
+        "Code": {
+          "ZipFile": "exports.handler = async () => ({ statusCode: 503, body: 'write-path not yet wired (issue 043 follow-up)' });",
+        },
+        "Description": "Gede-Test-Api Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres. Placeholder handler until the write-path is wired (see src/server/writeApi).",
+        "Environment": {
+          "Variables": {
+            "COGNITO_ISSUER": "https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID",
+            "DATABASE_ENDPOINT": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+            },
+            "DATABASE_SECRET_ARN": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+            },
+          },
+        },
+        "Handler": "index.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "WriteApiFunctionServiceRoleCB6CB54D",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 10,
+        "VpcConfig": {
+          "SecurityGroupIds": [
+            {
+              "Fn::GetAtt": [
+                "WriteApiSecurityGroup3EC390E8",
+                "GroupId",
+              ],
+            },
+          ],
+          "SubnetIds": [
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
+            },
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "WriteApiFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY73A5A0F9": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "WriteApiFunction5106E371",
+            "Arn",
+          ],
+        },
+        "Principal": "elasticloadbalancing.amazonaws.com",
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "WriteApiFunctionServiceRoleCB6CB54D": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "WriteApiFunctionServiceRoleDefaultPolicy270A05DC": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "WriteApiFunctionServiceRoleDefaultPolicy270A05DC",
+        "Roles": [
+          {
+            "Ref": "WriteApiFunctionServiceRoleCB6CB54D",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "WriteApiSecurityGroup3EC390E8": {
+      "Properties": {
+        "GroupDescription": "Gede-Test-Api write-path Lambda (issue 043) - egress to Postgres (5432) and the internet (NAT, for Cognito JWKS) only; nothing ingresses to it over the network.",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "VpcId": {
+          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "WriteApiTargetGroup7AA1C6B2": {
+      "DependsOn": [
+        "WriteApiFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY73A5A0F9",
+      ],
+      "Properties": {
+        "HealthCheckEnabled": false,
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "TargetType": "lambda",
+        "Targets": [
+          {
+            "Id": {
+              "Fn::GetAtt": [
+                "WriteApiFunction5106E371",
+                "Arn",
+              ],
+            },
+          },
+        ],
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
     },
   },
   "Rules": {

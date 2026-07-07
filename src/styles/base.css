@@ -208,8 +208,25 @@ body {
 }
 
 .status-bar__ambient {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
   font-family: var(--font-mono);
   font-size: var(--text-colhead);
+}
+
+/* Issue 036 — sync indicator (SITEMAP §5 right cluster). STYLE_GUIDE §8:
+   opacity/text only, ≤100ms (--motion-fast), never a spinner. Quiet
+   `--ink-muted` for every state except the healthy one, which gets the
+   app's one accent (issue design brief: "one accent for the healthy
+   state") — the blanket prefers-reduced-motion rule above already turns
+   this instant for free. */
+.status-bar__sync {
+  transition: color var(--motion-fast) ease-out;
+}
+
+.status-bar__sync[data-sync-status='synced'] {
+  color: var(--accent);
 }
 
 .placeholder {
@@ -463,6 +480,15 @@ body {
   line-height: var(--leading-header);
   font-weight: 600;
   margin: 0 0 var(--space-3);
+}
+
+/* Issue 037 — the local→cloud on-ramp's idempotent "already adopted" state:
+   a quiet, static label (never a button) in place of the "Move to
+   workspace…" row action, mirroring .project-desc's muted tone. */
+.project-adopted {
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+  white-space: nowrap;
 }
 
 /* ── Export / import (issue 015) ─────────────────────────────────────────── */
@@ -2144,4 +2170,216 @@ body {
   display: inline-flex;
   align-items: center;
   color: var(--ink-muted);
+}
+
+/* ── Hero + login (issue 033, ADR-0009) — the v2 on-ramp ─────────────────── */
+.hero,
+.login {
+  max-width: 480px;
+  margin: var(--space-8) auto;
+  padding: 0 var(--space-5);
+}
+
+.hero__panel,
+.login__panel {
+  padding: var(--space-6) var(--space-5);
+}
+
+.hero__eyebrow {
+  margin: 0 0 var(--space-2);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.hero__title,
+.login__title {
+  margin: 0 0 var(--space-3);
+  font-size: var(--text-header);
+  line-height: var(--leading-header);
+  font-weight: 600;
+}
+
+.hero__body,
+.login__body {
+  margin: 0 0 var(--space-5);
+  color: var(--ink-muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+
+.hero__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
+
+.hero__use-locally {
+  color: var(--ink-muted);
+}
+
+.hero__use-locally:hover {
+  color: var(--ink);
+}
+
+.login__notice {
+  margin: 0 0 var(--space-4);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+}
+
+.login__form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+}
+
+.login__field {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+}
+
+.login__field input {
+  color: var(--ink);
+  font-size: var(--text-body);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--paper);
+}
+
+.login__field input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.login__switch {
+  align-self: flex-start;
+  color: var(--ink-muted);
+}
+
+.login__switch:hover {
+  color: var(--ink);
+}
+
+/* Account affordance in the app bar (issue 033) — quiet identity chip
+   composed like ProjectMenu's popover trigger. */
+.account-chip {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Workspace members / invitations (issue 035) — the granting UX, styled as a
+   wider Popover panel (STYLE_GUIDE §2.2/§4) alongside DimensionManager's own
+   dense-row convention (.dim-row) rather than inventing a new list grammar. */
+.ws-members-popover {
+  min-width: 320px;
+  max-width: 360px;
+}
+
+.ws-members__heading {
+  font-size: var(--text-colhead);
+  line-height: var(--leading-colhead);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 500;
+  color: var(--ink-muted);
+  margin: var(--space-3) 0 var(--space-1);
+}
+
+.ws-members__heading:first-child {
+  margin-top: 0;
+}
+
+.ws-members__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.ws-member {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-1);
+}
+
+.ws-member__identity {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--text-body);
+}
+
+.ws-member__role {
+  font-size: var(--text-label);
+  color: var(--ink-muted);
+  flex: none;
+}
+
+.ws-member__role--static {
+  padding: var(--space-1) 0;
+}
+
+/* Mirrors .status-dot's tri-state convention (issue 005): an outline for the
+   in-progress state, filled once the invitation is settled either way. */
+.ws-invite__status {
+  font-size: var(--text-label);
+  color: var(--ink-muted);
+  flex: none;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: 0 var(--space-1);
+}
+
+.ws-invite__status[data-status='revoked'] {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.ws-invite__status[data-status='expired'] {
+  border-style: dashed;
+}
+
+.ws-invite-form {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+  padding-top: var(--space-2);
+  border-top: 1px solid var(--hairline);
+}
+
+.ws-invite-form__email {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-1) var(--space-2);
+  min-height: 32px;
+}
+
+.ws-invite-form__email:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+/* Calm, specific invite failure (mirrors .import-error, issue 015) — rendered
+   in the panel, never a dialog. */
+.ws-invite-error {
+  color: var(--danger);
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+  margin: var(--space-2) 0 0;
 }

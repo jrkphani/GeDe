@@ -6,21 +6,30 @@ import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { addTier2Entry, addTier2Table, createProject } from '../db/mutations'
+import { addWorkspaceMember } from '../db/workspaces'
+import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
+import { useProjectsStore } from '../store/projects'
 import { resetTier2Store } from '../store/tier2'
+import { resetWorkspaceStore } from '../store/workspace'
 import { ArchitectureSurface } from './ArchitectureSurface'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
+let workspaceId: string
 
 beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetTier2Store()
+  resetWorkspaceStore()
+  resetAuthStoreForTests()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
+  workspaceId = project.workspaceId
+  useProjectsStore.setState({ projects: [project], status: 'ready' })
 })
 
 describe('ArchitectureSurface', () => {
@@ -141,6 +150,38 @@ describe('ArchitectureSurface — selection bar placement (issue 025)', () => {
     await user.click(await screen.findByRole('button', { name: 'Select Buyers' }))
     await user.click(await screen.findByRole('button', { name: /Use as dimension/ }))
     expect(await screen.findByLabelText('New dimension name')).toBeInTheDocument()
+  })
+})
+
+describe('ArchitectureSurface — viewer read-only affordance (issue 035)', () => {
+  it('a viewer sees the tree read-only: no select/add-child/delete/promote/add-table, no phantom row', async () => {
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    await addWorkspaceMember(db, workspaceId, 'sub-viewer', 'viewer')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-viewer', email: null } })
+
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    expect(screen.queryByRole('button', { name: 'Select Buyers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Add child to Buyers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Delete Buyers' })).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Name an entry')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Add table')).not.toBeInTheDocument()
+  })
+
+  it('an editor still sees the full write surface', async () => {
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    await addWorkspaceMember(db, workspaceId, 'sub-editor', 'editor')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-editor', email: null } })
+
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    expect(await screen.findByRole('button', { name: 'Select Buyers' })).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Name an entry')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Add table')).toBeInTheDocument()
   })
 })
 

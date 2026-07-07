@@ -5,13 +5,17 @@ import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import { openDatabase } from '../db/client'
 import { addDimension, addParameter, createProject } from '../db/mutations'
+import { addWorkspaceMember } from '../db/workspaces'
+import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
-import { setDatabase } from '../store/database'
+import { requireDatabase, setDatabase } from '../store/database'
 import { resetDimensionsStore, useDimensionsStore } from '../store/dimensions'
 import { resetParametersStore } from '../store/parameters'
 import { resetContextsStore, useContextsStore } from '../store/contexts'
+import { useProjectsStore } from '../store/projects'
 import { resetTier2Store } from '../store/tier2'
 import { useStatusStore } from '../store/status'
+import { resetWorkspaceStore } from '../store/workspace'
 import { ContextBarProvider, ContextBarSlot } from '../shell/slots'
 import { DesignSurface } from './DesignSurface'
 
@@ -45,6 +49,7 @@ function renderDesignSurface(props: Parameters<typeof DesignSurface>[0]) {
 }
 
 let projectId: string
+let workspaceId: string
 let dimAId: string
 let dimBId: string
 let paramAId: string
@@ -61,11 +66,18 @@ beforeEach(async () => {
   resetParametersStore()
   resetContextsStore()
   resetTier2Store()
+  resetWorkspaceStore()
+  resetAuthStoreForTests()
   useCommandLogStore.getState().clear()
   useStatusStore.setState({ message: null, action: null })
 
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
+  workspaceId = project.workspaceId
+  // Seeds the projects store (unrelated to this file's own db-driven setup)
+  // just far enough for useWorkspaceRole's project→workspaceId lookup to
+  // resolve — DesignSurface itself never reads the projects store directly.
+  useProjectsStore.setState({ projects: [project], status: 'ready' })
   const dimA = await addDimension(db, project.id)
   const dimB = await addDimension(db, project.id)
   dimAId = dimA.id
@@ -193,5 +205,37 @@ describe('DesignSurface — context bar hierarchy (issue 027)', () => {
     const current = await screen.findByText('α', { selector: '.breadcrumb--current' })
     expect(current).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Root' })).toBeInTheDocument()
+  })
+})
+
+describe('DesignSurface — viewer read-only affordance (issue 035)', () => {
+  it('a signed-in viewer sees no "New context" affordance and no register phantom row', async () => {
+    const db = requireDatabase()
+    await addWorkspaceMember(db, workspaceId, 'sub-viewer', 'viewer')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-viewer', email: null },
+    })
+
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+    await waitFor(() => expect(screen.queryByRole('button', { name: 'New context' })).not.toBeInTheDocument())
+    expect(document.querySelector('.grid-row--phantom')).not.toBeInTheDocument()
+  })
+
+  it('an editor still sees the full write surface', async () => {
+    const db = requireDatabase()
+    await addWorkspaceMember(db, workspaceId, 'sub-editor', 'editor')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-editor', email: null },
+    })
+
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByRole('button', { name: 'New context' })).toBeInTheDocument())
+    expect(document.querySelector('.grid-row--phantom')).toBeInTheDocument()
   })
 })

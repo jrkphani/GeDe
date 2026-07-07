@@ -1,11 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { useCommandRegistryStore } from '../store/commandRegistry'
+import { useSemanticSearchStore } from '../store/semanticSearch'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
 import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { CommandPalette } from '../components/CommandPalette'
+import { WorkspaceMembers } from '../components/WorkspaceMembers'
 import { downloadTextFile, exportFilename } from '../lib/download'
 import { coreCommandSources } from './coreCommands'
 import { navigate } from './router'
@@ -80,6 +84,12 @@ function projectIdOf(route: AppRoute): string | null {
     : null
 }
 
+// A real, keyboard-native <button>/<input> pair (via the `ui/` primitives) —
+// not `InlineEdit`, whose display state is a plain (non-focusable, click-only)
+// <span> meant to live inside an already keyboard-handled row (F2/Enter, see
+// ProjectsList). The app-bar rename control has no such wrapper, so it needs
+// its own native focus/activation: a <Button> so Tab/Enter/Space still open
+// the editor, matching the pre-migration raw <button>'s accessible behavior.
 function ProjectName({ id }: { id: string }) {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === id))
   const renameProject = useProjectsStore((s) => s.renameProject)
@@ -89,7 +99,8 @@ function ProjectName({ id }: { id: string }) {
   if (!project) return null
   if (!editing) {
     return (
-      <button
+      <Button
+        variant="bare"
         className="app-bar__project-name"
         title="Rename project"
         onClick={() => {
@@ -98,12 +109,13 @@ function ProjectName({ id }: { id: string }) {
         }}
       >
         {project.name}
-      </button>
+      </Button>
     )
   }
   return (
-    <input
+    <Input
       className="inplace-input app-bar__project-name-input"
+      aria-label="Rename project"
       value={draft}
       autoFocus
       onChange={(e) => setDraft(e.target.value)}
@@ -155,6 +167,51 @@ function ProjectMenu({ projectId }: { projectId: string }) {
   )
 }
 
+// Account affordance (issue 033, SITEMAP §2 "App bar (stable everywhere)"):
+// signed-out reads as a quiet, always-visible `command` CTA to /login;
+// signed-in shows the identity + a sign-out popover. Composed entirely from
+// `ui/` primitives — never a raw control, per the shell-wide lint (below).
+function AccountMenu() {
+  const status = useAuthStore((s) => s.status)
+  const user = useAuthStore((s) => s.user)
+  const signOut = useAuthStore((s) => s.signOut)
+  const configured = useAuthStore((s) => s.configured)
+  const [open, setOpen] = useState(false)
+
+  if (status === 'authenticated' && user) {
+    const label = user.email ?? user.sub
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="rowAction" aria-label={`Account: ${label}`} title={label} className="account-chip">
+            {label}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="menu">
+          <Button
+            variant="bare"
+            className="menu__item"
+            onClick={() => {
+              setOpen(false)
+              signOut()
+            }}
+          >
+            Sign out
+          </Button>
+        </PopoverContent>
+      </Popover>
+    )
+  }
+
+  if (!configured) return null
+
+  return (
+    <Button variant="command" onClick={() => navigate({ kind: 'login' })}>
+      Sign in
+    </Button>
+  )
+}
+
 export function AppShell({ route, children }: { route: AppRoute; children: ReactNode }) {
   const projectId = projectIdOf(route)
   const active = activeTab(route)
@@ -175,6 +232,23 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
       if (navigated) surfaceRef.current?.focus()
       else origin?.focus()
     })
+  }
+
+  // Issue 042: the shell owns triggering the semantic model's lazy load, on
+  // the palette's first open — never `CommandPalette.tsx` itself (see that
+  // file's header comment for why). `ensureModel` is idempotent and
+  // fire-and-forget: a slow/failed/offline load never blocks opening the
+  // palette, which stays fully lexical-functional either way.
+  function openPalette() {
+    paletteOriginRef.current = document.activeElement as HTMLElement | null
+    setPaletteOpen(true)
+    // Gated so e2e never triggers the ~45MB model fetch: the Playwright dev
+    // server sets VITE_SEMANTIC_SEARCH=off, keeping the suite free of an
+    // external-network dependency (the palette stays fully lexical). Any real
+    // build leaves the flag unset, so production gets semantic search.
+    if (import.meta.env.VITE_SEMANTIC_SEARCH !== 'off') {
+      void useSemanticSearchStore.getState().ensureModel()
+    }
   }
 
   // The shell owns the palette's command sources (issue 016 seam): tier/canvas/
@@ -202,8 +276,7 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
       if (!(e.metaKey || e.ctrlKey)) return
       if (e.code === 'KeyK') {
         e.preventDefault()
-        paletteOriginRef.current = document.activeElement as HTMLElement | null
-        setPaletteOpen(true)
+        openPalette()
         return
       }
       if (e.code === 'KeyZ') {
@@ -266,17 +339,14 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           </nav>
         )}
         <div className="app-bar__cluster">
-          <button
-            className="row-action"
+          <Button
+            variant="rowAction"
             aria-label="Command palette"
             title="Command palette (⌘K)"
-            onClick={() => {
-              paletteOriginRef.current = document.activeElement as HTMLElement | null
-              setPaletteOpen(true)
-            }}
+            onClick={openPalette}
           >
             ⌘K
-          </button>
+          </Button>
           <Button
             aria-label="Undo"
             disabled={past.length === 0}
@@ -293,12 +363,16 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           >
             ↷
           </Button>
-          <button className="row-action" aria-label="Toggle theme" onClick={() => toggleTheme()}>
+          <Button variant="rowAction" aria-label="Toggle theme" onClick={() => toggleTheme()}>
             ◐
-          </button>
+          </Button>
           {/* Export lives in the project menu (SITEMAP §2); import is on the
-              projects list (issue 015). No menu without an open project. */}
+              projects list (issue 015). No menu without an open project.
+              Share (issue 035) sits alongside — its own trigger self-hides
+              outside a signed-in Cognito session (WorkspaceMembers). */}
+          {projectId !== null && <WorkspaceMembers projectId={projectId} />}
           {projectId !== null && <ProjectMenu projectId={projectId} />}
+          <AccountMenu />
         </div>
       </header>
       <ContextBarSlot />

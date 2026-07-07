@@ -194,7 +194,7 @@ Backups: RDS automated backups + snapshots (pg_dump → S3 kept as a portable-ex
 | d3-shape | 3.x |
 | tailwindcss | 4.x |
 | vitest / playwright | latest stable |
-| @xenova/transformers (transformers.js) | v2 · on-device embeddings for semantic ⌘K search (issue 042) — lazy-loaded, SW-cached, $0 AWS |
+| @huggingface/transformers (transformers.js v3+, the actively-maintained successor to `@xenova/transformers` — same model namespace, fixed onnxruntime-web/protobufjs advisories) | v4 · on-device embeddings for semantic ⌘K search (issue 042, shipped) — lazy dynamic-imported (own ~549KB chunk, gzip ~159KB — confirmed out of the initial bundle), browser-cached, $0 AWS |
 | amazon-cognito-identity-js / OIDC-PKCE | v2 · client auth against the Cognito User Pool (issue 033, ADR-0009) |
 
 Exact pins land in `package.json` at M1; this table records the intended major lines. Renovate/dependabot optional but recommended from M1.

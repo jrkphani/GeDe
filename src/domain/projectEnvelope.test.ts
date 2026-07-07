@@ -8,6 +8,7 @@ import {
   ID_FIELDS,
   NewerVersionError,
   NotGeDeExportError,
+  WORKSPACE_SCOPED_TABLES,
   type EnvelopeTables,
   type Row,
   type TableName,
@@ -44,37 +45,43 @@ function base(id: string) {
   return { id, createdAt: ts, updatedAt: ts, deletedAt: null }
 }
 
+// The six workspace_id-bearing tables (issue 034, migration 0008) — every
+// other table (tier2_entries, parameters, bindings) scopes via its parent's
+// FK chain instead and never carries this field.
+const WS = 'ws1'
+function baseWs(id: string) {
+  return { ...base(id), workspaceId: WS }
+}
+
 // A hand-built fixture with every FK type wired up, used for the isomorphism
 // test where explicit edges are easier to assert than random ones.
 function fixture(): EnvelopeTables {
   const t = empty()
-  t.projects.push({ ...base('p1'), name: 'Tavalo', description: 'desc' })
-  t.tier1_purpose.push({ ...base('pu1'), projectId: 'p1', body: 'why' })
-  t.tier1_props.push({ ...base('pr1'), projectId: 'p1', rank: 1, name: 'Prop', description: null, sort: 0 })
-  t.tier2_tables.push({ ...base('tt1'), projectId: 'p1', name: 'Value', sort: 0 })
+  t.projects.push({ ...baseWs('p1'), name: 'Tavalo', description: 'desc' })
+  t.tier1_purpose.push({ ...baseWs('pu1'), projectId: 'p1', body: 'why' })
+  t.tier1_props.push({ ...baseWs('pr1'), projectId: 'p1', rank: 1, name: 'Prop', description: null, sort: 0 })
+  t.tier2_tables.push({ ...baseWs('tt1'), projectId: 'p1', name: 'Value', sort: 0 })
   // tier2 entries: root → child → grandchild (self-ref chain, depth 3)
   t.tier2_entries.push({ ...base('te1'), tableId: 'tt1', parentId: null, name: 'E1', description: null, sort: 0 })
   t.tier2_entries.push({ ...base('te2'), tableId: 'tt1', parentId: 'te1', name: 'E2', description: null, sort: 0 })
   t.tier2_entries.push({ ...base('te3'), tableId: 'tt1', parentId: 'te2', name: 'E3', description: null, sort: 0 })
   // root-canvas dimensions
-  t.dimensions.push({ ...base('d1'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D1', color: '#111', sort: 0 })
-  t.dimensions.push({ ...base('d2'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D2', color: '#222', sort: 1 })
+  t.dimensions.push({ ...baseWs('d1'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D1', color: '#111', sort: 0 })
+  t.dimensions.push({ ...baseWs('d2'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D2', color: '#222', sort: 1 })
   // parameters incl. a self-ref (sub-parameter) and a sourceEntryId cross-link
   t.parameters.push({ ...base('pa1'), dimensionId: 'd1', parentParamId: null, sourceEntryId: 'te1', name: 'P1', sort: 0 })
   t.parameters.push({ ...base('pa2'), dimensionId: 'd1', parentParamId: 'pa1', sourceEntryId: null, name: 'P2', sort: 1 })
   t.parameters.push({ ...base('pa3'), dimensionId: 'd2', parentParamId: null, sourceEntryId: null, name: 'P3', sort: 0 })
   // contexts: root context + drilled child (self-ref parentId)
-  t.contexts.push({ ...base('c1'), projectId: 'p1', parentId: null, symbol: 'α', name: 'root', justification: 'j', sort: 0 })
-  t.contexts.push({ ...base('c2'), projectId: 'p1', parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 })
+  t.contexts.push({ ...baseWs('c1'), projectId: 'p1', parentId: null, symbol: 'α', name: 'root', justification: 'j', sort: 0 })
+  t.contexts.push({ ...baseWs('c2'), projectId: 'p1', parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 })
   // child-canvas dimension: contextId + sourceParamId cross-link both set
-  t.dimensions.push({ ...base('d3'), projectId: 'p1', contextId: 'c2', sourceParamId: 'pa1', name: 'D3', color: '#333', sort: 0 })
+  t.dimensions.push({ ...baseWs('d3'), projectId: 'p1', contextId: 'c2', sourceParamId: 'pa1', name: 'D3', color: '#333', sort: 0 })
   t.parameters.push({ ...base('pa4'), dimensionId: 'd3', parentParamId: null, sourceEntryId: null, name: 'P4', sort: 0 })
   // bindings on both canvases
-  t.bindings.push({ ...base('b1'), contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' } as Row as EnvelopeTables['bindings'][number])
-  t.bindings.push({ ...base('b2'), contextId: 'c1', dimensionId: 'd2', parameterId: 'pa3', tupleHash: 'h1' } as Row as EnvelopeTables['bindings'][number])
-  t.bindings.push({ ...base('b3'), contextId: 'c2', dimensionId: 'd3', parameterId: 'pa4', tupleHash: 'h2' } as Row as EnvelopeTables['bindings'][number])
-  // bindings have no deletedAt — strip it
-  for (const b of t.bindings) delete (b as Row).deletedAt
+  t.bindings.push({ ...base('b1'), contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' })
+  t.bindings.push({ ...base('b2'), contextId: 'c1', dimensionId: 'd2', parameterId: 'pa3', tupleHash: 'h1' })
+  t.bindings.push({ ...base('b3'), contextId: 'c2', dimensionId: 'd3', parameterId: 'pa4', tupleHash: 'h2' })
   return t
 }
 
@@ -97,11 +104,11 @@ const arbTables = fc
     const nid = (p: string) => `${p}-${(n += 1)}`
     const t = empty()
     const pid = nid('p')
-    t.projects.push({ ...base(pid), name: `Proj ${pid}`, description: null })
-    t.tier1_purpose.push({ ...base(nid('pu')), projectId: pid, body: 'b' })
+    t.projects.push({ ...baseWs(pid), name: `Proj ${pid}`, description: null })
+    t.tier1_purpose.push({ ...baseWs(nid('pu')), projectId: pid, body: 'b' })
 
     const tableId = nid('tt')
-    t.tier2_tables.push({ ...base(tableId), projectId: pid, name: 'T', sort: 0 })
+    t.tier2_tables.push({ ...baseWs(tableId), projectId: pid, name: 'T', sort: 0 })
     // A linear entry chain of length entryDepth (self-ref, depth ≤ 4)
     let parentEntry: string | null = null
     const entryIds: string[] = []
@@ -116,7 +123,7 @@ const arbTables = fc
     const paramIdsByDim: Record<string, string[]> = {}
     for (let i = 0; i < 2; i++) {
       const did = nid('d')
-      t.dimensions.push({ ...base(did), projectId: pid, contextId: null, sourceParamId: null, name: `D${i}`, color: '#000', sort: i })
+      t.dimensions.push({ ...baseWs(did), projectId: pid, contextId: null, sourceParamId: null, name: `D${i}`, color: '#000', sort: i })
       dimIds.push(did)
       paramIdsByDim[did] = []
       let prevParam: string | null = null
@@ -134,12 +141,10 @@ const arbTables = fc
     // Root contexts, each fully bound → complete tuple.
     for (let c = 0; c < ctxCount; c++) {
       const cid = nid('c')
-      t.contexts.push({ ...base(cid), projectId: pid, parentId: null, symbol: `s${c}`, name: null, justification: 'j', sort: c })
+      t.contexts.push({ ...baseWs(cid), projectId: pid, parentId: null, symbol: `s${c}`, name: null, justification: 'j', sort: c })
       for (const did of dimIds) {
         const paid = (paramIdsByDim[did] ?? [])[0] as string
-        const b: Row = { ...base(nid('b')), contextId: cid, dimensionId: did, parameterId: paid, tupleHash: `h${c}` }
-        delete b.deletedAt
-        t.bindings.push(b as EnvelopeTables['bindings'][number])
+        t.bindings.push({ ...base(nid('b')), contextId: cid, dimensionId: did, parameterId: paid, tupleHash: `h${c}` })
       }
     }
     return t
@@ -190,14 +195,23 @@ describe('projectEnvelope — round-trip', () => {
         const parsed = parseEnvelope(json)
         expect(parsed.tables).toEqual(env.tables)
 
-        const { tables: remapped, idMap } = remapEnvelope(env.tables, seqId)
+        const { tables: remapped, idMap } = remapEnvelope(env.tables, seqId, 'target-ws')
         // Every id changed (fresh) and the bijection is total + injective.
         expect(new Set(idMap.values()).size).toBe(idMap.size)
         // Applying the same bijection to the original reproduces the remap
-        // exactly → every FK/self-ref/cross-link field was rewritten.
-        expect(serializeEnvelope(remapped).tables).toEqual(
-          serializeEnvelope(applyIdMap(env.tables, idMap)).tables,
-        )
+        // exactly → every FK/self-ref/cross-link field was rewritten. The
+        // workspaceId column is a special case (issue 034): it is NOT part of
+        // the id bijection — every workspace-scoped row is stamped with the
+        // caller's target workspace regardless of what the source had, so
+        // applyIdMap's output must be adjusted the same way before comparing.
+        const expected = serializeEnvelope(applyIdMap(env.tables, idMap))
+        for (const name of WORKSPACE_SCOPED_TABLES) {
+          expected.tables[name] = (expected.tables[name] as Row[]).map((row) => ({
+            ...row,
+            workspaceId: 'target-ws',
+          })) as never
+        }
+        expect(serializeEnvelope(remapped).tables).toEqual(expected.tables)
       }),
       { numRuns: 60 },
     )
@@ -207,7 +221,7 @@ describe('projectEnvelope — round-trip', () => {
 describe('projectEnvelope — id remap preserves every FK (graph isomorphism)', () => {
   it('rewrites pk, fk, self-ref and cross-link edges consistently', () => {
     const src = serializeEnvelope(fixture()).tables
-    const { tables: dst, idMap } = remapEnvelope(src, seqId)
+    const { tables: dst, idMap } = remapEnvelope(src, seqId, 'target-ws')
 
     // Bijection: distinct new ids, one per source row.
     const totalRows = ENVELOPE_TABLE_NAMES.reduce((sum, n) => sum + src[n].length, 0)

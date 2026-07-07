@@ -13,8 +13,10 @@ import {
   tier2Entries,
   tier2Tables,
 } from './schema'
+import { getOrCreateDefaultWorkspace } from './workspaces'
 import { paletteColor } from '../theme/palette'
 import { computeTupleHash, nextChildSymbol, nextRootSymbol } from '../domain/symbols'
+import { violatesDimensionFloor } from '../domain/writeInvariants'
 
 // The mutation layer: every database write in the app flows through this module
 // (SPEC §3 sync-readiness — row-granular mutations through a single seam).
@@ -27,13 +29,28 @@ function now(): string {
   return new Date().toISOString()
 }
 
+// Issue 034 — every project-scoped tenant table (tier1_purpose, tier1_props,
+// tier2_tables, dimensions, contexts) denormalizes its owning project's
+// workspace_id (migration 0008's RLS reads it directly, no join). Every
+// insert function below resolves it from the project row rather than asking
+// every store/component call site to thread it through — those call sites
+// are unchanged by this issue (design brief: "local stays simple").
+async function projectWorkspaceId(db: Database, projectId: string): Promise<string> {
+  const rows = await db
+    .select({ workspaceId: projects.workspaceId })
+    .from(projects)
+    .where(eq(projects.id, projectId))
+  return firstOrThrow(rows, 'project not found').workspaceId
+}
+
 export async function createProject(
   db: Database,
-  input: { name: string; description?: string | null },
+  input: { name: string; description?: string | null; workspaceId?: string },
 ): Promise<ProjectRow> {
+  const workspaceId = input.workspaceId ?? (await getOrCreateDefaultWorkspace(db))
   const rows = await db
     .insert(projects)
-    .values({ id: uuidv7(), name: input.name, description: input.description ?? null })
+    .values({ id: uuidv7(), workspaceId, name: input.name, description: input.description ?? null })
     .returning()
   return firstOrThrow(rows)
 }
@@ -117,11 +134,13 @@ export async function addDimension(db: Database, projectId: string): Promise<Dim
     const m = /^Dimension (\d+)$/.exec(d.name)
     return m ? Math.max(max, Number(m[1])) : max
   }, 0)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(dimensions)
     .values({
       id: uuidv7(),
       projectId,
+      workspaceId,
       name: `Dimension ${Math.max(maxDefault, existing.length) + 1}`,
       color: paletteColor(existing.length),
       sort: existing.length,
@@ -189,22 +208,41 @@ export interface DimensionRemoveResult {
   deletedBindings: BindingRow[]
 }
 
-// SPEC invariant 4 (issue 007) — bindings have no deletedAt (schema.ts), so a
-// dimension removal hard-deletes every binding pointing at it and recomputes
-// the remaining tuple hash for each context that had one, keeping the
-// duplicate-tuple index (issue 005) correct with the shrunk dimension set.
-// Returns the deleted rows verbatim so the caller can restore them exactly on
-// undo (restoreDimension below).
+// SPEC invariant 4 (issue 007) — a dimension removal cascades to every binding
+// pointing at it and recomputes the remaining tuple hash for each context that
+// had one, keeping the duplicate-tuple index (issue 005) correct with the
+// shrunk dimension set.
+//
+// Issue 032 (migration 0007): this cascade TOMBSTONES the bindings
+// (`deleted_at`) rather than hard-deleting them, diverging from 007's original
+// hard-delete — a hard-deleted row emits no row-delta, so ElectricSQL's
+// read-path sync would have nothing to propagate a binding's removal to other
+// clients. Every other read path (listBindings, recomputeTupleHash) already
+// filters `deleted_at IS NULL`, so a tombstoned row disappears from every live
+// view exactly as a hard-deleted one did; only this cascade + its undo
+// counterpart (restoreDimension) know tombstones exist. Direct unbind
+// (unbindParameter) and the parameter-delete cascade (deleteParametersUnbinding)
+// are unchanged (still hard-delete) — 032 scopes the tombstone conversion to
+// this cascade specifically (docs/issues/032).
+// Returns the tombstoned rows verbatim so the caller can restore them exactly
+// on undo (restoreDimension below).
 async function cascadeDeleteBindingsForDimension(
   db: Database,
   dimensionId: string,
 ): Promise<BindingRow[]> {
-  const rows = await db.select().from(bindings).where(eq(bindings.dimensionId, dimensionId))
+  const rows = await db
+    .select()
+    .from(bindings)
+    .where(and(eq(bindings.dimensionId, dimensionId), isNull(bindings.deletedAt)))
   if (rows.length === 0) return rows
-  await db.delete(bindings).where(eq(bindings.dimensionId, dimensionId))
+  const tombstoned = await db
+    .update(bindings)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(and(eq(bindings.dimensionId, dimensionId), isNull(bindings.deletedAt)))
+    .returning()
   const contextIds = [...new Set(rows.map((r) => r.contextId))]
   for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
-  return rows
+  return tombstoned
 }
 
 // The floor is a *user-facing* guard (SPEC §1): you can't manually remove
@@ -236,7 +274,10 @@ export async function removeDimension(
   id: string,
 ): Promise<DimensionRemoveResult> {
   const rows = await listDimensions(db, projectId)
-  if (rows.length <= 2) throw new DimensionFloorError()
+  // Shared with the server write-path (src/domain/writeInvariants.ts, issue
+  // 043) — one predicate, enforced identically client-side (here) and
+  // server-side, per ADR-0010's "share the rules, don't fork them".
+  if (violatesDimensionFloor(rows.length)) throw new DimensionFloorError()
   return removeDimensionUnchecked(db, projectId, id)
 }
 
@@ -249,8 +290,12 @@ export { removeDimensionUnchecked as undoAddDimension }
 // middle removal's undo restores the exact original position instead of
 // appending at the end. `orderedIds` is the full live order captured by the
 // caller (store) right before the mutation being undone/redone.
-// `bindingsToRestore` (issue 007) reinserts the exact rows a cascade delete
-// removed and recomputes their contexts' tuple hashes back to the original.
+// `bindingsToRestore` (issue 007) un-tombstones the exact rows the cascade
+// (cascadeDeleteBindingsForDimension) set `deleted_at` on — issue 032 changed
+// that cascade from a hard delete to a tombstone, so undo now clears
+// `deleted_at` on the same row ids (they still exist) rather than
+// re-inserting fresh rows — and recomputes their contexts' tuple hashes back
+// to the original.
 export async function restoreDimension(
   db: Database,
   projectId: string,
@@ -269,15 +314,20 @@ export async function restoreDimension(
     .filter((d): d is DimensionRow => d !== undefined)
   await rewriteSort(db, ordered)
   if (bindingsToRestore.length > 0) {
-    await db.insert(bindings).values(
-      bindingsToRestore.map((row) => ({
-        id: row.id,
-        contextId: row.contextId,
-        dimensionId: row.dimensionId,
-        parameterId: row.parameterId,
-        tupleHash: row.tupleHash,
-      })),
-    )
+    // Restore each binding to its captured state — not merely un-tombstone.
+    // The binding rows are unique per (context, dimension); while this
+    // dimension was removed, a bind onto the same (context, dimension) — which
+    // the parameters store still permits, since a removed dimension's
+    // parameters linger there — can have revived and re-pointed the SAME row to
+    // a different parameter. Clearing deleted_at alone would then revive it with
+    // the WRONG parameter (caught by undoRedo.property). Rewriting parameterId
+    // from the captured row makes undo-of-remove a faithful inverse regardless.
+    for (const b of bindingsToRestore) {
+      await db
+        .update(bindings)
+        .set({ deletedAt: null, parameterId: b.parameterId, updatedAt: now() })
+        .where(eq(bindings.id, b.id))
+    }
     const contextIds = [...new Set(bindingsToRestore.map((r) => r.contextId))]
     for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
   }
@@ -450,11 +500,13 @@ export async function createContext(
   const existing = await listContexts(db, projectId, parentId)
   const taken = new Set(existing.map((c) => c.symbol))
   const symbol = parentSymbol ? nextChildSymbol(parentSymbol, taken) : nextRootSymbol(taken)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(contexts)
     .values({
       id: uuidv7(),
       projectId,
+      workspaceId,
       parentId,
       symbol,
       sort: existing.length,
@@ -518,8 +570,14 @@ export async function setContextJustification(
   return firstOrThrow(rows)
 }
 
+// Live bindings only — a tombstoned row (issue 032: cascadeDeleteBindingsForDimension
+// below) never surfaces through this read path. recomputeTupleHash, the register,
+// and the sync read-path all key off this same filter.
 export async function listBindings(db: Database, contextId: string): Promise<BindingRow[]> {
-  return db.select().from(bindings).where(eq(bindings.contextId, contextId))
+  return db
+    .select()
+    .from(bindings)
+    .where(and(eq(bindings.contextId, contextId), isNull(bindings.deletedAt)))
 }
 
 // All of a context's binding rows share one tuple_hash, kept in dimension-sort
@@ -555,7 +613,13 @@ export async function bindParameter(
     .values({ id: uuidv7(), contextId, dimensionId, parameterId, tupleHash: '' })
     .onConflictDoUpdate({
       target: [bindings.contextId, bindings.dimensionId],
-      set: { parameterId, updatedAt: now() },
+      // Bindings are current-state pointers, not history (schema.ts). Since
+      // issue 032 made cascadeDeleteBindingsForDimension tombstone rows
+      // (deleted_at) instead of hard-deleting, a re-bind can land on a
+      // tombstoned pointer — clear deleted_at so the upsert always yields a
+      // LIVE binding (else it updates parameterId but stays soft-deleted and
+      // invisible to every live read).
+      set: { parameterId, deletedAt: null, updatedAt: now() },
     })
   await recomputeTupleHash(db, contextId)
   return listBindings(db, contextId)
@@ -566,9 +630,23 @@ export async function unbindParameter(
   contextId: string,
   dimensionId: string,
 ): Promise<BindingRow[]> {
+  // Tombstone, not hard-delete (issue 032): a hard delete emits no row-delta
+  // for ElectricSQL's read-path sync (same rationale as the dimension cascade),
+  // AND it destroys the row that a still-pending dimension-remove undo expects
+  // to restore by id — so a re-bind onto a removed dimension's stale parameter,
+  // then undo, could orphan a binding a later remove-undo could no longer bring
+  // back (caught by undoRedo.property). Soft-deleting keeps the row addressable
+  // by id; every live read already filters `deleted_at IS NULL`.
   await db
-    .delete(bindings)
-    .where(and(eq(bindings.contextId, contextId), eq(bindings.dimensionId, dimensionId)))
+    .update(bindings)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(
+      and(
+        eq(bindings.contextId, contextId),
+        eq(bindings.dimensionId, dimensionId),
+        isNull(bindings.deletedAt),
+      ),
+    )
   await recomputeTupleHash(db, contextId)
   return listBindings(db, contextId)
 }
@@ -644,6 +722,7 @@ export async function openChildCanvas(
       await db.insert(dimensions).values({
         id: uuidv7(),
         projectId,
+        workspaceId: parent.workspaceId,
         contextId: parentContextId,
         sourceParamId: slot.parameterId,
         name: paramRow.name,
@@ -656,7 +735,7 @@ export async function openChildCanvas(
       const retiredBindings = await db
         .select()
         .from(bindings)
-        .where(eq(bindings.dimensionId, child.id))
+        .where(and(eq(bindings.dimensionId, child.id), isNull(bindings.deletedAt)))
       const fromParam = child.sourceParamId ? await getParameter(db, child.sourceParamId) : null
       if (retiredBindings.length > 0) {
         await db.delete(bindings).where(eq(bindings.dimensionId, child.id))
@@ -765,9 +844,10 @@ export async function setTier1Purpose(
   projectId: string,
   body: string,
 ): Promise<Tier1PurposeRow | null> {
+  const workspaceId = await projectWorkspaceId(db, projectId)
   await db
     .insert(tier1Purpose)
-    .values({ id: uuidv7(), projectId, body })
+    .values({ id: uuidv7(), projectId, workspaceId, body })
     .onConflictDoUpdate({ target: tier1Purpose.projectId, set: { body, updatedAt: now() } })
   return getTier1Purpose(db, projectId)
 }
@@ -800,11 +880,13 @@ export async function addTier1Prop(
   name: string,
 ): Promise<Tier1PropRow> {
   const existing = await listTier1Props(db, projectId)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(tier1Props)
     .values({
       id: uuidv7(),
       projectId,
+      workspaceId,
       name,
       description: null,
       rank: existing.length + 1,
@@ -920,9 +1002,10 @@ export async function addTier2Table(
   name: string,
 ): Promise<Tier2TableRow> {
   const existing = await listTier2Tables(db, projectId)
+  const workspaceId = await projectWorkspaceId(db, projectId)
   const rows = await db
     .insert(tier2Tables)
-    .values({ id: uuidv7(), projectId, name, sort: existing.length })
+    .values({ id: uuidv7(), projectId, workspaceId, name, sort: existing.length })
     .returning()
   return firstOrThrow(rows)
 }
@@ -1168,11 +1251,13 @@ export async function promoteEntries(db: Database, input: PromoteInput): Promise
   let dimensionId: string
   if (target.kind === 'new') {
     const existingDims = await listDimensions(db, projectId)
+    const workspaceId = await projectWorkspaceId(db, projectId)
     const rows = await db
       .insert(dimensions)
       .values({
         id: uuidv7(),
         projectId,
+        workspaceId,
         name: target.name,
         color: paletteColor(existingDims.length),
         sort: existingDims.length,
@@ -1239,7 +1324,10 @@ export async function listPromotedLinks(db: Database, projectId: string): Promis
 // ── Linked-parameter resolution ──────────────────────────────────────────────
 
 export async function countBindingsForParameter(db: Database, parameterId: string): Promise<number> {
-  const rows = await db.select().from(bindings).where(eq(bindings.parameterId, parameterId))
+  const rows = await db
+    .select()
+    .from(bindings)
+    .where(and(eq(bindings.parameterId, parameterId), isNull(bindings.deletedAt)))
   return rows.length
 }
 
@@ -1296,7 +1384,10 @@ export async function deleteParametersUnbinding(
     const paramRows = await db.select().from(parameters).where(eq(parameters.id, parameterId)).limit(1)
     const param = paramRows[0]
     if (!param) continue
-    const boundRows = await db.select().from(bindings).where(eq(bindings.parameterId, parameterId))
+    const boundRows = await db
+      .select()
+      .from(bindings)
+      .where(and(eq(bindings.parameterId, parameterId), isNull(bindings.deletedAt)))
     deletedBindings.push(...boundRows)
     for (const b of boundRows) affected.add(b.contextId)
     await db.delete(bindings).where(eq(bindings.parameterId, parameterId))

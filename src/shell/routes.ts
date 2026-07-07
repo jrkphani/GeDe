@@ -10,6 +10,11 @@ export type AppRoute =
   | { kind: 'project'; projectId: string } // redirects to the last-visited tier
   | { kind: 'tier'; projectId: string; tier: Tier }
   | { kind: 'design'; projectId: string; contextPath: string[]; view: DesignView }
+  // v2 (issue 033, ADR-0009) — the hero/login on-ramp. Never gates `/` or any
+  // project route; the account-free local app is reachable regardless.
+  | { kind: 'welcome' }
+  | { kind: 'login' }
+  | { kind: 'auth-callback'; search: string }
   | { kind: 'not-found'; path: string }
 
 export function parseRoute(pathname: string, search: string): AppRoute {
@@ -19,6 +24,11 @@ export function parseRoute(pathname: string, search: string): AppRoute {
     .map(decodeURIComponent)
 
   if (segments.length === 0) return { kind: 'projects' }
+  if (segments.length === 1 && segments[0] === 'welcome') return { kind: 'welcome' }
+  if (segments.length === 1 && segments[0] === 'login') return { kind: 'login' }
+  if (segments.length === 2 && segments[0] === 'auth' && segments[1] === 'callback') {
+    return { kind: 'auth-callback', search }
+  }
   if (segments[0] !== 'p' || segments.length < 2) return { kind: 'not-found', path: pathname }
 
   const projectId = segments[1] as string
@@ -52,6 +62,12 @@ export function serializeRoute(route: AppRoute): string {
       const view = route.view === 'coverage' ? '?view=coverage' : ''
       return `/p/${enc(route.projectId)}/design${depth}${view}`
     }
+    case 'welcome':
+      return '/welcome'
+    case 'login':
+      return '/login'
+    case 'auth-callback':
+      return `/auth/callback${route.search}`
     case 'not-found':
       return route.path
   }

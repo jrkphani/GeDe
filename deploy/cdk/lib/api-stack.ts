@@ -2,6 +2,9 @@ import { Stack, StackProps, CfnOutput, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 export interface ApiStackProps extends StackProps {
@@ -14,28 +17,37 @@ export interface ApiStackProps extends StackProps {
    * rather than there (avoids a circular Data<->Api stack dependency).
    */
   databaseSecurityGroup: ec2.ISecurityGroup;
+  /** The Data stack's generated RDS credentials secret (issue 043 - the write-API Lambda reads this at cold start). */
+  databaseSecret: secretsmanager.ISecret;
+  /** The Data stack's RDS endpoint address (issue 043). */
+  databaseEndpoint: string;
 }
 
 /**
  * `Gede-Test-Api` - the v2 compute tier (issue 030, ADR-0008, scope item 3):
  * an internet-facing ALB in the public subnets, fronting an ECS Fargate
- * cluster running two *stubbed* services in the private (NAT-egress)
+ * cluster running one *stubbed* service in the private (NAT-egress)
  * subnets:
  *
  *   - `sync` - filled in by issue 032 (ElectricSQL sync container)
- *   - `auth` - filled in by issue 033 (better-auth, self-hosted)
  *
- * Both slots run the same clearly-marked placeholder image
+ * The `auth` stub slot that originally lived here (better-auth, ADR-0008)
+ * has been REMOVED (issue 033, ADR-0009): auth is now Amazon Cognito, a
+ * managed regional resource outside the VPC (see `auth-stack.ts`), so there
+ * is no auth Fargate service, target group, or `/auth*` ALB route to run
+ * here anymore - one fewer always-on task.
+ *
+ * The remaining slot runs the same clearly-marked placeholder image
  * (`public.ecr.aws/docker/library/nginx:alpine`) behind path-based ALB
- * routing (`/sync*`, `/auth*`), each with its own container healthcheck and
- * ALB target-group health check wired end-to-end. This is a documented,
- * health-checked placeholder tier, NOT a real implementation of either
- * service - 032/033 swap the image (+ container port, if it differs from
- * nginx's 80) without needing to re-architect the ALB/service/healthcheck
- * plumbing built here.
+ * routing (`/sync*`), with its own container healthcheck and ALB
+ * target-group health check wired end-to-end. This is a documented,
+ * health-checked placeholder tier, NOT a real implementation of the service
+ * - 032 swaps the image (+ container port, if it differs from nginx's 80)
+ * without needing to re-architect the ALB/service/healthcheck plumbing
+ * built here.
  *
- * Security groups: internet (`0.0.0.0/0:80`) -> ALB SG -> compute SG (both
- * stub services) -> the Data stack's RDS SG on 5432 (the ingress rule for
+ * Security groups: internet (`0.0.0.0/0:80`) -> ALB SG -> compute SG (the
+ * sync stub service) -> the Data stack's RDS SG on 5432 (the ingress rule for
  * that last hop is added here - see the `databaseSecurityGroup` prop doc and
  * data-stack.ts's class doc for the circular-dependency rationale). No rule
  * anywhere in this stack admits `0.0.0.0/0` to port 5432.
@@ -46,7 +58,9 @@ export class ApiStack extends Stack {
   public readonly computeSecurityGroup: ec2.SecurityGroup;
   public readonly albSecurityGroup: ec2.SecurityGroup;
   public readonly syncService: ecs.FargateService;
-  public readonly authService: ecs.FargateService;
+  /** The Tier-2 write-path API (issue 043, ADR-0010) - Lambda, not Fargate: `$0` idle, pay-per-write. */
+  public readonly writeApiFunction: lambda.Function;
+  public readonly writeApiSecurityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
@@ -69,8 +83,8 @@ export class ApiStack extends Stack {
 
     this.computeSecurityGroup = new ec2.SecurityGroup(this, 'ComputeSecurityGroup', {
       vpc: props.vpc,
-      description: `${id} Fargate compute (sync/auth stub slots, issue 030) - ingress only from the ALB security group.`,
-      allowAllOutbound: true, // NAT egress: pulling container images now; outbound calls for the real 032/033 services later.
+      description: `${id} Fargate compute (sync stub slot, issue 030; auth moved to Cognito, issue 033) - ingress only from the ALB security group.`,
+      allowAllOutbound: true, // NAT egress: pulling container images now; outbound calls for the real 032 service later.
     });
     this.computeSecurityGroup.addIngressRule(
       this.albSecurityGroup,
@@ -93,7 +107,7 @@ export class ApiStack extends Stack {
       toPort: 5432,
       sourceSecurityGroupId: this.computeSecurityGroup.securityGroupId,
       description:
-        'Api compute (sync/auth stub slots, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.',
+        'Api compute (sync stub slot, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.',
     });
 
     // --- ALB ----------------------------------------------------------------
@@ -110,20 +124,19 @@ export class ApiStack extends Stack {
       defaultAction: elbv2.ListenerAction.fixedResponse(404, {
         contentType: 'text/plain',
         messageBody:
-          `${id}: no route matched (placeholder tier, issue 030) - /sync* and /auth* are stubbed pending issues 032/033.`,
+          `${id}: no route matched (placeholder tier, issue 030) - /sync* is stubbed pending issue 032. ` +
+          '/auth* is intentionally absent - auth is Amazon Cognito (issue 033, ADR-0009), not routed through this ALB.',
       }),
     });
 
     // --- Placeholder container image ----------------------------------------
-    // 032 (ElectricSQL sync) and 033 (better-auth) replace this image - the
-    // task/service/target-group/health-check plumbing below is built to
-    // survive that swap unchanged.
+    // 032 (ElectricSQL sync) replaces this image - the task/service/target-
+    // group/health-check plumbing below is built to survive that swap
+    // unchanged. There is no `auth` slot anymore (issue 033, ADR-0009).
     const placeholderImage = ecs.ContainerImage.fromRegistry('public.ecr.aws/docker/library/nginx:alpine');
 
     const sync = this.buildStubService('Sync', placeholderImage);
-    const auth = this.buildStubService('Auth', placeholderImage);
     this.syncService = sync.service;
-    this.authService = auth.service;
 
     listener.addTargets('SyncTargets', {
       priority: 10,
@@ -137,33 +150,93 @@ export class ApiStack extends Stack {
       },
     });
 
-    listener.addTargets('AuthTargets', {
-      priority: 20,
-      conditions: [elbv2.ListenerCondition.pathPatterns(['/auth*'])],
-      port: 80,
-      targets: [auth.service],
-      healthCheck: {
-        path: '/',
-        interval: Duration.seconds(30),
-        healthyHttpCodes: '200-399',
+    // --- Write-path API (issue 043, ADR-0010) --------------------------------
+    // Serverless by design: a Lambda behind this same ALB, NOT a third
+    // Fargate service - the cost/shape guard the test-first plan asks for
+    // (`$0` idle, pay-per-write; only `sync` above is an always-on task).
+    // The Lambda still needs VPC networking (private, NAT-egress subnets) to
+    // reach RDS in the isolated tier and Cognito's JWKS endpoint over the
+    // internet - unlike the ALB-Lambda invocation path itself (which never
+    // touches this security group; ALB invokes Lambda via the Lambda service
+    // API, not a network hop governed by albSecurityGroup).
+    this.writeApiSecurityGroup = new ec2.SecurityGroup(this, 'WriteApiSecurityGroup', {
+      vpc: props.vpc,
+      description: `${id} write-path Lambda (issue 043) - egress to Postgres (5432) and the internet (NAT, for Cognito JWKS) only; nothing ingresses to it over the network.`,
+      allowAllOutbound: true,
+    });
+
+    new ec2.CfnSecurityGroupIngress(this, 'AllowWriteApiToPostgres', {
+      groupId: props.databaseSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 5432,
+      toPort: 5432,
+      sourceSecurityGroupId: this.writeApiSecurityGroup.securityGroupId,
+      description: 'Write-path Lambda (issue 043) to Postgres 5432 - a second, distinct ingress rule on the Data security group (alongside the Fargate compute SG rule above); still never 0.0.0.0/0.',
+    });
+
+    // Deterministic inline placeholder handler — mirrors the sync Fargate
+    // nginx stub (issue 030). The real Tier-2 write-path handler lives and is
+    // unit-tested at `src/server/writeApi/*`, but is NOT bundled here: a real
+    // `NodejsFunction` esbuild bundle would make `cdk synth` depend on a local
+    // esbuild toolchain and emit a machine-specific asset hash (the issue 041
+    // hazard, for Lambda), and the write-path is not yet wired to the client
+    // queue (issue 043 follow-up). Swapping this stub for the bundled handler
+    // is that follow-up; the stack SHAPE (VPC, SG, ALB route, IAM, env) is real
+    // now and asserted by the tests.
+    this.writeApiFunction = new lambda.Function(this, 'WriteApiFunction', {
+      description: `${id} Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres. Placeholder handler until the write-path is wired (see src/server/writeApi).`,
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline(
+        "exports.handler = async () => ({ statusCode: 503, body: 'write-path not yet wired (issue 043 follow-up)' });",
+      ),
+      memorySize: 256,
+      timeout: Duration.seconds(10),
+      vpc: props.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [this.writeApiSecurityGroup],
+      environment: {
+        // Placeholder issuer — cross-stack wiring of 033's Cognito User Pool
+        // issuer URL into this stack is a follow-up (see docs/issues/043).
+        COGNITO_ISSUER: 'https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID',
+        DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
+        DATABASE_ENDPOINT: props.databaseEndpoint,
       },
+    });
+    props.databaseSecret.grantRead(this.writeApiFunction);
+
+    const writeApiTargetGroup = new elbv2.ApplicationTargetGroup(this, 'WriteApiTargetGroup', {
+      vpc: props.vpc,
+      targetType: elbv2.TargetType.LAMBDA,
+      targets: [new targets.LambdaTarget(this.writeApiFunction)],
+      // Lambda ALB targets are billed per invocation - a periodic synthetic
+      // health check would burn invocations for no benefit (Lambda's own
+      // concurrency/retry model already handles availability). Disabled, as
+      // AWS recommends for a single-Lambda-target target group.
+      healthCheck: { enabled: false },
+    });
+
+    listener.addAction('WriteApiRoute', {
+      priority: 30,
+      conditions: [elbv2.ListenerCondition.pathPatterns(['/write*'])],
+      action: elbv2.ListenerAction.forward([writeApiTargetGroup]),
     });
 
     new CfnOutput(this, 'LoadBalancerDnsName', {
       value: this.loadBalancer.loadBalancerDnsName,
-      description: 'Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS.',
+      description: 'Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* routes to the issue 043 write-path Lambda.',
     });
   }
 
   /**
-   * Builds one stubbed Fargate service (`sync` or `auth`): a task definition
-   * with a container healthcheck, running the placeholder image, deployed
-   * in the private (NAT-egress) subnets behind the compute security group.
-   * 032/033 replace the image passed in; everything else here is meant to
-   * be the real, permanent shape of the service.
+   * Builds one stubbed Fargate service (`sync`): a task definition with a
+   * container healthcheck, running the placeholder image, deployed in the
+   * private (NAT-egress) subnets behind the compute security group. 032
+   * replaces the image passed in; everything else here is meant to be the
+   * real, permanent shape of the service.
    */
   private buildStubService(
-    name: 'Sync' | 'Auth',
+    name: 'Sync',
     image: ecs.ContainerImage,
   ): { service: ecs.FargateService; taskDefinition: ecs.FargateTaskDefinition } {
     const taskDefinition = new ecs.FargateTaskDefinition(this, `${name}TaskDef`, {

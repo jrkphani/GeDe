@@ -1,8 +1,19 @@
 # 033: Authentication + account — Cognito (email/password) + hero + login screen
 
-- **Status**: OPEN
+- **Status**: SHIPPED (merged to main `4dd0a24`).
 - **Milestone**: M9 (Identity & tenancy)
 - **Blocked by**: 030 (server/CDK app — shipped); provider decided by **ADR-0009** → **Amazon Cognito** (supersedes ADR-0008's better-auth)
+
+## Shipped notes (this branch)
+
+- **CDK**: new `Gede-<Env>-Auth` stack (`deploy/cdk/lib/auth-stack.ts`) — Cognito User Pool (email sign-up/verify, a real password policy), a public App Client (`generateSecret: false`, `ALLOW_USER_SRP_AUTH` only), a `member` `CfnUserPoolGroup` seam for 034/035, and `UserPoolId`/`UserPoolClientId`/`UserPoolJwksUri` outputs. The `auth` Fargate service/target-group/`/auth*` route is removed from `Gede-<Env>-Api` (`api-stack.ts`) — one fewer always-on task, per ADR-0009. `build-app.ts`/`tags.test.ts` updated; CDK suite is 57/57 green (was 48); offline `cdk synth` lists all six stacks.
+- **Client auth**: `src/auth/{config,cognitoClient,jwt,wireIdentity}.ts` + `src/store/auth.ts` — a Promise wrapper over `amazon-cognito-identity-js` (SRP `authenticateUser`, never Hosted UI), a Zustand session store (`hydrate`/`signUp`/`confirmSignUp`/`resendCode`/`signIn`/`signOut`/`getIdToken`), and the wire-identity seam (`getAuthHeaders()`) that 032 attaches to its connection. All network-boundary tests mock `amazon-cognito-identity-js` — no live AWS call.
+- **UI**: `src/components/Hero.tsx` (`/welcome`) and `src/components/LoginScreen.tsx` (`/login`, sign-in/sign-up/verify modes) — composed entirely from `ui/` Button/Input, calm error surface (015), `command`-variant CTAs (026). `AppShell`'s account affordance: quiet "Sign in" when configured+signed-out, identity + sign-out popover when authenticated, silent when the build has no Cognito config.
+- **Deferred cleanup done**: migrated the shell's remaining raw controls (app-bar rename, ⌘K trigger, theme toggle, status-bar action, not-found's back button) onto `Button`/`Input`; widened `no-restricted-syntax` to `src/shell/**`/`src/App.tsx` so the gap can't recur (HANDOFF).
+- **Deviations from the literal spec text (flagged for review)**:
+  - Sign-in uses the SDK's **SRP** flow (`amazon-cognito-identity-js`), not an OAuth/PKCE redirect — no client secret either way, but there is no `/auth/callback` round-trip today. The App Client is not configured for OAuth (no callback URL exists before a real domain, issue 040/Hosting-Dns). The `/auth/callback` route (SITEMAP §1) parses and inertly redirects to `/login`, reserved for the Google Workspace OAuth fast-follow.
+  - Full **server-side JWT verification against JWKS** is out of scope here per the issue's own implementation notes ("full server validation belongs to later issues") — this branch builds the client-side attachment (`getAuthHeaders()`) and publishes the JWKS URI as a CDK output; 032/034 wire the actual verification.
+  - Fixed a latent Vite/browser bug surfaced by adding `amazon-cognito-identity-js`: the package's `buffer` dependency assumes a Node-style `global`, which Vite doesn't polyfill — added `define: { global: 'globalThis' }` to `vite.config.ts` (confirmed in both dev and a production `vite build`).
 
 > **Provider pivot (ADR-0009).** This issue was originally scoped around self-hosted **better-auth** on Fargate (ADR-0008). It is now **Amazon Cognito** — managed, no VPC compute, Google-Workspace-ready, and *cheaper* (removes an always-on Fargate task). Email/password ships here; **Google Workspace federation is a fast-follow issue** (a Cognito IdP config change, not a re-architecture).
 
@@ -45,11 +56,11 @@ Out of scope: **Google Workspace federation** (fast-follow issue — Cognito IdP
 
 ## Acceptance criteria
 
-- [ ] Hero page + custom login screen (Cognito email/password: sign-up, verify, sign-in, sign-out) with a durable, refreshing session; account affordance in the app bar via `ui/` primitives.
-- [ ] The Cognito JWT attaches to the server connection and validates against JWKS; no long-lived secret in the client (PKCE public client).
-- [ ] The `auth` Fargate service/target-group/route is removed from `Gede-<Env>-Api`; a `Gede-<Env>-Auth` (Cognito) stack is added; CDK assertion tests cover both.
-- [ ] Account-free local mode is fully preserved; no existing single-user test regresses.
-- [ ] `npm run verify` green; CDK suite + offline synth green.
+- [x] Hero page + custom login screen (Cognito email/password: sign-up, verify, sign-in, sign-out) with a durable, refreshing session; account affordance in the app bar via `ui/` primitives.
+- [x] The Cognito JWT attaches to the server connection (client-side seam, `getAuthHeaders()`) and the JWKS URI is published for validation; no long-lived secret in the client (public App Client, `generateSecret: false`). **Partial**: this branch does not implement server-side JWKS signature verification — that lives in 032/034 per the issue's own implementation notes.
+- [x] The `auth` Fargate service/target-group/route is removed from `Gede-<Env>-Api`; a `Gede-<Env>-Auth` (Cognito) stack is added; CDK assertion tests cover both.
+- [x] Account-free local mode is fully preserved; no existing single-user test regresses.
+- [x] `npm run verify` green; CDK suite + offline synth green.
 
 ## Implementation notes
 

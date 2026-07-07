@@ -1,17 +1,97 @@
 import {
   type AnyPgColumn,
   integer,
+  pgEnum,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 
-// SPEC.md §3 — every row: UUIDv7 id, created_at/updated_at (LWW), deleted_at (soft delete).
-export const projects = pgTable('projects', {
+// Issue 034 (ADR-0010) — the tenancy unit. RLS policies (authored by hand in
+// migration 0008, alongside this Drizzle-generated DDL) scope every
+// workspace_id-bearing table below to the caller's memberships. See that
+// migration file's header for exactly how PGlite stays permissive (table
+// owner) while server Postgres enforces (a distinct, granted-not-owning
+// `app_user` role).
+export const workspaceRole = pgEnum('workspace_role', ['owner', 'editor', 'viewer'])
+
+export const workspaces = pgTable('workspaces', {
   id: text('id').primaryKey(),
   name: text('name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+})
+
+// user_sub = the Cognito ID token's `sub` claim (ADR-0009) — the identity RLS
+// keys off, not a local users table (there isn't one; Cognito is the identity
+// store). Role is least-privilege (issue 035 grants it; defined here so RLS
+// can read it now).
+export const workspaceMembers = pgTable(
+  'workspace_members',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    userSub: text('user_sub').notNull(),
+    role: workspaceRole('role').notNull().default('owner'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [uniqueIndex('workspace_members_workspace_user_idx').on(table.workspaceId, table.userSub)],
+)
+
+// Issue 035 (ADR-0009, done/034 deviation #3) — the granting path 034
+// deliberately deferred: "membership creation is self-only, deferring 'owner
+// invites another sub' to 035's granting UX". An invitation is email-first
+// (the owner doesn't know the invitee's Cognito `sub` yet — only 033's
+// identity store resolves that, at accept time). `status` is deliberately NOT
+// a stored column — this schema's convention is to derive status live from
+// timestamps (mirrors `documentedStatus`/`isComplete`, issue 005/SPEC
+// invariant 1) rather than duplicate state that can drift: pending = neither
+// accepted_at nor deleted_at set and not past expires_at; accepted =
+// accepted_at set; revoked = deleted_at set (the standard tombstone
+// convention, §3); expired = past expires_at with neither. See
+// src/domain/invitation.ts for the pure derivation.
+export const invitations = pgTable('invitations', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  // Stored lowercase (app-layer normalization, src/db/invitations.ts) so a
+  // case-insensitive email match is a plain equality, not a SQL lower() at
+  // every read — RLS policies still lower() defensively (migration 0009).
+  email: text('email').notNull(),
+  role: workspaceRole('role').notNull().default('viewer'),
+  invitedBySub: text('invited_by_sub').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+})
+
+// SPEC.md §3 — every row: UUIDv7 id, created_at/updated_at (LWW), deleted_at (soft delete).
+//
+// Issue 037 — `adopted_into_project_id` is the local→cloud on-ramp's
+// idempotency marker: once a local project has been adopted into a workspace
+// (src/db/projectIO.ts's adoptProject), this points at the fresh-id copy that
+// landed in the destination workspace, so a repeat "Move to workspace…"
+// gesture is a no-op instead of a second copy. Self-referencing (mirrors
+// tier2_entries.parentId's pattern below) rather than a separate mapping
+// table — it is set on exactly one row (the original local project) and never
+// on the adopted copy itself, so no cycle is possible.
+export const projects = pgTable('projects', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  name: text('name').notNull(),
   description: text('description'),
+  adoptedIntoProjectId: text('adopted_into_project_id').references((): AnyPgColumn => projects.id),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
@@ -28,6 +108,9 @@ export const tier1Purpose = pgTable(
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
     body: text('body').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -46,6 +129,9 @@ export const tier1Props = pgTable('tier1_props', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   rank: integer('rank').notNull(),
   name: text('name').notNull(),
   description: text('description'),
@@ -63,6 +149,9 @@ export const tier2Tables = pgTable('tier2_tables', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   name: text('name').notNull(),
   sort: integer('sort').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -101,6 +190,9 @@ export const dimensions = pgTable('dimensions', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   contextId: text('context_id').references((): AnyPgColumn => contexts.id),
   sourceParamId: text('source_param_id').references((): AnyPgColumn => parameters.id),
   name: text('name').notNull(),
@@ -140,6 +232,9 @@ export const contexts = pgTable('contexts', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   parentId: text('parent_id').references((): AnyPgColumn => contexts.id),
   symbol: text('symbol').notNull(),
   name: text('name'),
@@ -151,8 +246,13 @@ export const contexts = pgTable('contexts', {
 })
 
 // SPEC.md §3 — the pair (context × dimension → parameter). A binding is a
-// current-state pointer, not a history-bearing entity: rebinding upserts,
-// unbinding hard-deletes — no deleted_at (unlike every other table).
+// current-state pointer, not a history-bearing entity: rebinding upserts.
+// Unbind (direct user action) still hard-deletes. Issue 032 (migration 0007)
+// added `deleted_at` so the dimension-removal CASCADE specifically
+// (`cascadeDeleteBindingsForDimension`, issue 007) could become a tombstone
+// instead of a hard delete — sync (ElectricSQL) must be able to propagate a
+// deletion as a row-delta, and a hard-deleted row emits no delta at all. See
+// mutations.ts for exactly which paths tombstone vs. hard-delete.
 // tuple_hash is denormalized onto every binding row of a context (all rows
 // share the same value) so a duplicate-tuple lookup (invariant 2, issue 005+)
 // is a single indexed scan; recomputed whenever any of the context's
@@ -173,6 +273,22 @@ export const bindings = pgTable(
     tupleHash: text('tuple_hash').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
   },
   (table) => [uniqueIndex('bindings_context_dimension_idx').on(table.contextId, table.dimensionId)],
 )
+
+// Issue 043 — the Tier-2 write-path API's idempotency ledger. Every accepted
+// mutation records its own (client-generated UUIDv7) mutation id here, in
+// the SAME transaction as the row it wrote (src/server/writeApi/store.ts's
+// `PgWriteStore.applyIfNew`) — so a replayed offline mutation (same id) is a
+// guaranteed no-op even across a Lambda cold start, with no possibility of
+// "ledger says applied but the write didn't happen" (both commit or neither
+// does). Server-only bookkeeping, not a synced domain entity — v1's PGlite
+// has no equivalent (a single local writer never needs to de-duplicate its
+// own replayed mutations).
+export const appliedMutations = pgTable('applied_mutations', {
+  mutationId: text('mutation_id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  appliedAt: timestamp('applied_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+})

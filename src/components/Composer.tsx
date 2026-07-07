@@ -26,6 +26,10 @@ export interface ComposerProps {
   onBindParameter?: (dimensionId: string, parameterId: string) => void
   onUnbindParameter?: (dimensionId: string) => void
   duplicateSiblingSymbols?: readonly string[]
+  // Issue 035 — a viewer's composer bar never enters compose mode (DesignSurface
+  // never sets `composing`), but justification editing is reachable independent
+  // of compose mode; this disables that one remaining write affordance too.
+  readOnly?: boolean
 }
 
 export function Composer({
@@ -40,6 +44,7 @@ export function Composer({
   onBindParameter,
   onUnbindParameter,
   duplicateSiblingSymbols = [],
+  readOnly = false,
 }: ComposerProps) {
   if (!selected) return null
 
@@ -47,9 +52,14 @@ export function Composer({
   const justification = selected.justification ?? ''
   const justificationDisplay = justification.trim() === '' ? 'Add a justification…' : justification
 
+  // Issue 035 — belt-and-suspenders: DesignSurface never lets a read-only
+  // caller enter compose mode in the first place, but the pickers are gated
+  // here too so Composer itself never depends on that discipline.
+  const showPickers = composing && !readOnly
+
   return (
-    <div className="composer-bar" data-composing={composing}>
-      {composing ? (
+    <div className="composer-bar" data-composing={showPickers}>
+      {showPickers ? (
         <div className="composer-pickers">
           {dimensions.map((dim) => {
             const value = bindings[dim.id] ?? null
@@ -118,6 +128,7 @@ export function Composer({
         displayClassName="composer-justification"
         inputClassName="composer-justification__input"
         ariaLabel={`Justification for ${selected.symbol}`}
+        readOnly={readOnly}
       />
     </div>
   )

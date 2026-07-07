@@ -26,10 +26,10 @@ describe('ApiStack (Gede-Test-Api)', () => {
     }
   });
 
-  it('creates an ECS Fargate cluster with exactly two services (the sync/auth stub slots)', () => {
+  it('creates an ECS Fargate cluster with exactly one service (the sync stub slot — auth moved to Cognito, issue 033/ADR-0009)', () => {
     const template = synth();
     template.resourceCountIs('AWS::ECS::Cluster', 1);
-    template.resourceCountIs('AWS::ECS::Service', 2);
+    template.resourceCountIs('AWS::ECS::Service', 1);
     template.hasResourceProperties('AWS::ECS::Service', { LaunchType: 'FARGATE' });
   });
 
@@ -51,6 +51,9 @@ describe('ApiStack (Gede-Test-Api)', () => {
 
   it('each stub service has a container healthcheck and an ALB-managed, health-checked target group', () => {
     const template = synth();
+    // 2 target groups: the sync Fargate stub (issue 030; auth removed per 033/
+    // ADR-0009) PLUS the issue 043 write-path Lambda target group (asserted
+    // separately below, in the "Write-path API" describe block).
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 2);
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
       HealthCheckPath: Match.anyValue(),
@@ -62,43 +65,55 @@ describe('ApiStack (Gede-Test-Api)', () => {
     });
   });
 
-  it('uses the clearly-marked nginx placeholder image on both stub slots — 032/033 replace it', () => {
+  it('uses the clearly-marked nginx placeholder image on the sync stub slot — 032 replaces it', () => {
     const template = synth();
     const taskDefs = template.findResources('AWS::ECS::TaskDefinition');
     const images = Object.values(taskDefs).map(
       (t) => (t as { Properties: { ContainerDefinitions: Array<{ Image: string }> } }).Properties.ContainerDefinitions[0].Image,
     );
-    expect(images).toHaveLength(2);
+    expect(images).toHaveLength(1);
     for (const image of images) {
       expect(image).toMatch(/nginx/);
     }
   });
 
-  it('routes /sync* and /auth* via distinct ALB listener rules to distinct target groups', () => {
+  it('routes /sync* and /write* via distinct ALB listener rules; there is no /auth* route (Cognito replaces it, issue 033/ADR-0009)', () => {
     const template = synth();
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
       Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/sync*'] } })]),
     });
+    const rules = template.findResources('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Properties: {
+        Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/auth*'] } })]),
+      },
+    });
+    expect(Object.keys(rules)).toHaveLength(0);
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
-      Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/auth*'] } })]),
+      Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/write*'] } })]),
     });
   });
 
-  it('grants the Data stack\'s RDS security group ingress ONLY from this stack\'s compute security group on 5432 — never 0.0.0.0/0', () => {
+  it('grants the Data stack\'s RDS security group ingress from exactly the two Api-owned security groups on 5432 — never 0.0.0.0/0', () => {
     const template = synth();
+    // Two rules now: the Fargate compute SG (sync/auth stub slots, issue
+    // 030) and the write-path Lambda's own SG (issue 043) — added as
+    // separate, independent ingress grants rather than reusing one SG for
+    // both tiers, so each can be tightened/removed independently later.
     const rule5432 = template.findResources('AWS::EC2::SecurityGroupIngress', {
       Properties: { FromPort: 5432, ToPort: 5432 },
     });
-    expect(Object.keys(rule5432)).toHaveLength(1);
-    const [rule] = Object.values(rule5432) as Array<{
+    expect(Object.keys(rule5432)).toHaveLength(2);
+    for (const rule of Object.values(rule5432) as Array<{
       Properties: { CidrIp?: string; SourceSecurityGroupId?: unknown; GroupId: { 'Fn::ImportValue': string } };
-    }>;
-    expect(rule.Properties.CidrIp).toBeUndefined();
-    expect(rule.Properties.SourceSecurityGroupId).toBeDefined();
-    // The rule targets the Data stack's (imported) security group, proving
-    // the reference is one-directional (Api -> Data), never the reverse.
-    expect(rule.Properties.GroupId['Fn::ImportValue']).toEqual(expect.stringMatching(/^Gede-Test-Data:/));
+    }>) {
+      expect(rule.Properties.CidrIp).toBeUndefined();
+      expect(rule.Properties.SourceSecurityGroupId).toBeDefined();
+      // Both rules target the Data stack's (imported) security group,
+      // proving the reference is one-directional (Api -> Data), never the
+      // reverse.
+      expect(rule.Properties.GroupId['Fn::ImportValue']).toEqual(expect.stringMatching(/^Gede-Test-Data:/));
+    }
   });
 
   it('no 0.0.0.0/0 ingress rule ever targets port 5432 (only the ALB\'s port 80 is internet-open, by design)', () => {
@@ -141,6 +156,71 @@ describe('ApiStack (Gede-Test-Api)', () => {
     for (const service of Object.values(services) as Array<{ Properties: { DesiredCount: number } }>) {
       expect(service.Properties.DesiredCount).toBe(1);
     }
+  });
+
+  describe('Write-path API (issue 043, ADR-0010) — cost/shape guard (test-first plan item 6)', () => {
+    it('is a Lambda function, not another Fargate/ECS service — the ECS::Service count stays at 1 (the sync stub slot; auth removed per 033/ADR-0009)', () => {
+      const template = synth();
+      template.resourceCountIs('AWS::ECS::Service', 1);
+      template.resourceCountIs('AWS::Lambda::Function', 1);
+      template.hasResourceProperties('AWS::Lambda::Function', { Runtime: Match.stringLikeRegexp('nodejs20') });
+    });
+
+    it('routes to the Lambda via an ALB target group of TargetType Lambda, with its health check disabled (cost: no synthetic-invocation billing)', () => {
+      const template = synth();
+      template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+        TargetType: 'lambda',
+        HealthCheckEnabled: false,
+      });
+    });
+
+    it('the Lambda runs inside the VPC\'s private (NAT-egress) subnets, with its own security group — not the compute SG shared by the stub services', () => {
+      const template = synth();
+      const fns = template.findResources('AWS::Lambda::Function');
+      const [fn] = Object.values(fns) as Array<{
+        Properties: { VpcConfig?: { SubnetIds: unknown; SecurityGroupIds: string[] } };
+      }>;
+      expect(fn?.Properties.VpcConfig).toBeDefined();
+      expect(fn?.Properties.VpcConfig?.SubnetIds).toBeDefined();
+    });
+
+    it('the write-path Lambda\'s security group ingresses to the Data stack\'s Postgres SG, distinct from the Fargate compute SG\'s rule', () => {
+      const template = synth();
+      const rule5432 = template.findResources('AWS::EC2::SecurityGroupIngress', {
+        Properties: { FromPort: 5432, ToPort: 5432 },
+      });
+      const sourceIds = (Object.values(rule5432) as Array<{ Properties: { SourceSecurityGroupId: { 'Fn::GetAtt': [string, string] } } }>).map(
+        (r) => r.Properties.SourceSecurityGroupId['Fn::GetAtt'][0],
+      );
+      expect(new Set(sourceIds).size).toBe(2); // two distinct security groups, not the same one twice
+    });
+
+    it('is granted read-only access to exactly the Data stack\'s database secret (least privilege — no wildcard resource)', () => {
+      const template = synth();
+      template.hasResourceProperties('AWS::IAM::Policy', {
+        PolicyDocument: {
+          Statement: Match.arrayWith([
+            Match.objectLike({
+              Action: Match.arrayWith([Match.stringLikeRegexp('secretsmanager:GetSecretValue')]),
+              Effect: 'Allow',
+              Resource: Match.objectLike({ 'Fn::ImportValue': Match.stringLikeRegexp('^Gede-Test-Data:') }),
+            }),
+          ]),
+        },
+      });
+    });
+
+    it('carries the four app-wide tags on the write-path Lambda and its security group', () => {
+      const template = synth();
+      const expectedTags = Match.arrayWith([
+        { Key: 'Application', Value: 'GeDe' },
+        { Key: 'Environment', Value: 'test' },
+        { Key: 'ManagedBy', Value: 'CDK' },
+        { Key: 'Organization', Value: 'quadnomics' },
+      ]);
+      template.hasResourceProperties('AWS::Lambda::Function', { Tags: expectedTags });
+      template.hasResourceProperties('AWS::EC2::SecurityGroup', { Tags: expectedTags });
+    });
   });
 
   it('matches the snapshot', () => {

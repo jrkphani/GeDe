@@ -1,6 +1,6 @@
 {
   "id": "9df29e75-81e3-438f-820f-489c362bd5f9",
-  "prevId": "c8a68e3e-a088-450d-9211-176f1ddc580a",
+  "prevId": "e1d4ad4f-522d-4b69-895e-c00e97ee4138",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -362,6 +362,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "source_entry_id": {
+          "name": "source_entry_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "name": {
           "name": "name",
           "type": "text",
@@ -416,6 +422,19 @@
           "tableTo": "parameters",
           "columnsFrom": [
             "parent_param_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "parameters_source_entry_id_tier2_entries_id_fk": {
+          "name": "parameters_source_entry_id_tier2_entries_id_fk",
+          "tableFrom": "parameters",
+          "tableTo": "tier2_entries",
+          "columnsFrom": [
+            "source_entry_id"
           ],
           "columnsTo": [
             "id"
@@ -628,6 +647,173 @@
         "tier1_purpose_project_id_projects_id_fk": {
           "name": "tier1_purpose_project_id_projects_id_fk",
           "tableFrom": "tier1_purpose",
+          "tableTo": "projects",
+          "columnsFrom": [
+            "project_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.tier2_entries": {
+      "name": "tier2_entries",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "table_id": {
+          "name": "table_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "parent_id": {
+          "name": "parent_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "description": {
+          "name": "description",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
+        "sort": {
+          "name": "sort",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "tier2_entries_table_id_tier2_tables_id_fk": {
+          "name": "tier2_entries_table_id_tier2_tables_id_fk",
+          "tableFrom": "tier2_entries",
+          "tableTo": "tier2_tables",
+          "columnsFrom": [
+            "table_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        },
+        "tier2_entries_parent_id_tier2_entries_id_fk": {
+          "name": "tier2_entries_parent_id_tier2_entries_id_fk",
+          "tableFrom": "tier2_entries",
+          "tableTo": "tier2_entries",
+          "columnsFrom": [
+            "parent_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
+      "compositePrimaryKeys": {},
+      "uniqueConstraints": {},
+      "policies": {},
+      "checkConstraints": {},
+      "isRLSEnabled": false
+    },
+    "public.tier2_tables": {
+      "name": "tier2_tables",
+      "schema": "",
+      "columns": {
+        "id": {
+          "name": "id",
+          "type": "text",
+          "primaryKey": true,
+          "notNull": true
+        },
+        "project_id": {
+          "name": "project_id",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "name": {
+          "name": "name",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "sort": {
+          "name": "sort",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true
+        },
+        "created_at": {
+          "name": "created_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "updated_at": {
+          "name": "updated_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "now()"
+        },
+        "deleted_at": {
+          "name": "deleted_at",
+          "type": "timestamp with time zone",
+          "primaryKey": false,
+          "notNull": false
+        }
+      },
+      "indexes": {},
+      "foreignKeys": {
+        "tier2_tables_project_id_projects_id_fk": {
+          "name": "tier2_tables_project_id_projects_id_fk",
+          "tableFrom": "tier2_tables",
           "tableTo": "projects",
           "columnsFrom": [
             "project_id"

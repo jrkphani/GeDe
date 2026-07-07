@@ -4,6 +4,7 @@ import { HostingStack } from './hosting-stack';
 import { DnsStack } from './dns-stack';
 import { DataStack } from './data-stack';
 import { ApiStack } from './api-stack';
+import { AuthStack } from './auth-stack';
 
 // --- Env config (issue 040 §"Scope") ---------------------------------------
 // Only one named env exists today: `test`. A future `prod` env is added here
@@ -35,25 +36,38 @@ export interface AppStacks {
   dns: DnsStack;
   data: DataStack;
   api: ApiStack;
+  auth: AuthStack;
 }
 
 /**
- * Builds the five layered stacks (Network -> Hosting -> Dns, and
- * Network -> Data -> Api) on the given `app`, exactly as the real CLI
- * entrypoint (`bin/gede.ts`) does. Shared so the CDK test suite exercises
- * the identical wiring/tagging as a real synth — see
- * docs/issues/040-cdk-aws-deployment.md and docs/issues/030-*.md.
+ * Builds the six layered stacks (Network -> Hosting -> Dns, Network -> Data
+ * -> Api, and the standalone Auth stack) on the given `app`, exactly as the
+ * real CLI entrypoint (`bin/gede.ts`) does. Shared so the CDK test suite
+ * exercises the identical wiring/tagging as a real synth — see
+ * docs/issues/040-cdk-aws-deployment.md, docs/issues/030-*.md, and
+ * docs/issues/033-auth-account.md.
  *
  * Cross-stack wiring (issue 030 scope item 4): Network's VPC feeds both Data
  * and Api; Data's RDS security group feeds Api (which adds the one
  * permitted ingress rule against it — see api-stack.ts / data-stack.ts for
  * why that direction avoids a circular dependency). Hosting/Dns (issue 040,
- * v1's static path) are unaffected by any of this.
+ * v1's static path) are unaffected by any of this. **Auth (issue 033,
+ * ADR-0009) is intentionally standalone** — Cognito is a regional managed
+ * resource outside the VPC, so it has no dependency on Network/Data/Api and
+ * no cross-stack security-group wiring; it only needs the app-level tags
+ * (applied once below, to every stack under `app`).
  */
 export function buildAppStacks(
   app: cdk.App,
   envName: EnvName = 'test',
   domainName?: string,
+  /**
+   * Test-only override threaded through to `HostingStack.siteSourcePath`
+   * (issue 041) — pins the `BucketDeployment` source so synth output never
+   * depends on whether a built `dist/` happens to exist on this machine.
+   * Never passed by the real CLI entrypoint (`bin/gede.ts`).
+   */
+  siteSourcePath?: string,
 ): AppStacks {
   const envConfig = ENVS[envName];
   const env: cdk.Environment = { account: envConfig.account, region: envConfig.region };
@@ -75,6 +89,7 @@ export function buildAppStacks(
     description: 'GeDe static hosting: private S3 + CloudFront — issue 040',
     namePrefix: envConfig.namePrefix,
     domainName,
+    siteSourcePath,
   });
   hosting.addDependency(network);
 
@@ -96,12 +111,20 @@ export function buildAppStacks(
   const api = new ApiStack(app, `${envConfig.stackPrefix}-Api`, {
     env,
     description:
-      'GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) behind an internet-facing ALB — issue 030 (ADR-0008)',
+      'GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) + the serverless write-path API (issue 043) behind an internet-facing ALB — issue 030 (ADR-0008), ADR-0010',
     vpc: network.vpc,
     databaseSecurityGroup: data.databaseSecurityGroup,
+    databaseSecret: data.database.secret!,
+    databaseEndpoint: data.database.dbInstanceEndpointAddress,
   });
   api.addDependency(network);
   api.addDependency(data);
 
-  return { network, hosting, dns, data, api };
+  const auth = new AuthStack(app, `${envConfig.stackPrefix}-Auth`, {
+    env,
+    description:
+      'GeDe v2 identity: Cognito User Pool + public App Client (email/password, PKCE/SRP, no client secret) — issue 033 (ADR-0009), replacing the Api stack\'s former `auth` Fargate stub',
+  });
+
+  return { network, hosting, dns, data, api, auth };
 }

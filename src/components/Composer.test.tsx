@@ -23,6 +23,7 @@ function dim(id: string, sort: number, name: string, color = '#6f5bd6'): Dimensi
   return {
     id,
     projectId: 'proj1',
+    workspaceId: 'ws1',
     contextId: null,
     sourceParamId: null,
     name,
@@ -38,6 +39,7 @@ function ctx(id: string, symbol: string, justification: string | null): ContextR
   return {
     id,
     projectId: 'proj1',
+    workspaceId: 'ws1',
     parentId: null,
     symbol,
     name: null,
@@ -202,6 +204,41 @@ describe('Composer', () => {
         />,
       )
       expect(container.querySelectorAll('.composer-picker')).toHaveLength(0)
+    })
+  })
+
+  describe('readOnly (issue 035 — viewer role affordance)', () => {
+    it('never shows pickers even if a caller passes composing=true (belt-and-suspenders)', () => {
+      const { container } = render(
+        <Composer
+          dimensions={dimensions}
+          selected={ctx('ctxA', 'α', null)}
+          bindings={{ d0: 'p0' }}
+          paramNameById={paramNameById}
+          onJustificationCommit={() => {}}
+          composing
+          readOnly
+        />,
+      )
+      expect(container.querySelectorAll('.composer-picker')).toHaveLength(0)
+    })
+
+    it('the justification cannot be edited', async () => {
+      const user = userEvent.setup()
+      const onJustificationCommit = vi.fn()
+      render(
+        <Composer
+          dimensions={dimensions}
+          selected={ctx('ctxA', 'α', 'A reason')}
+          bindings={{ d0: 'p0' }}
+          paramNameById={paramNameById}
+          onJustificationCommit={onJustificationCommit}
+          readOnly
+        />,
+      )
+      await user.click(screen.getByText('A reason'))
+      expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+      expect(onJustificationCommit).not.toHaveBeenCalled()
     })
   })
 })

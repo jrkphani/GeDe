@@ -25,6 +25,17 @@ exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
         "Ref": "DatabaseSecretAttachmentE5D1B020",
       },
     },
+    "ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059": {
+      "Export": {
+        "Name": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+      },
+      "Value": {
+        "Fn::GetAtt": [
+          "DatabaseB269D8BB",
+          "Endpoint.Address",
+        ],
+      },
+    },
     "ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827": {
       "Export": {
         "Name": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
@@ -34,6 +45,14 @@ exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
           "DatabaseSecurityGroup7319C0F6",
           "GroupId",
         ],
+      },
+    },
+    "ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73": {
+      "Export": {
+        "Name": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+      },
+      "Value": {
+        "Ref": "DatabaseSecretAttachmentE5D1B020",
       },
     },
   },
