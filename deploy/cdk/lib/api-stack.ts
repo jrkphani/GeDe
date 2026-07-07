@@ -1,7 +1,12 @@
+import * as path from 'path';
 import { Stack, StackProps, CfnOutput, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
+import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
 export interface ApiStackProps extends StackProps {
@@ -14,6 +19,10 @@ export interface ApiStackProps extends StackProps {
    * rather than there (avoids a circular Data<->Api stack dependency).
    */
   databaseSecurityGroup: ec2.ISecurityGroup;
+  /** The Data stack's generated RDS credentials secret (issue 043 - the write-API Lambda reads this at cold start). */
+  databaseSecret: secretsmanager.ISecret;
+  /** The Data stack's RDS endpoint address (issue 043). */
+  databaseEndpoint: string;
 }
 
 /**
@@ -51,6 +60,9 @@ export class ApiStack extends Stack {
   public readonly computeSecurityGroup: ec2.SecurityGroup;
   public readonly albSecurityGroup: ec2.SecurityGroup;
   public readonly syncService: ecs.FargateService;
+  /** The Tier-2 write-path API (issue 043, ADR-0010) - Lambda, not Fargate: `$0` idle, pay-per-write. */
+  public readonly writeApiFunction: NodejsFunction;
+  public readonly writeApiSecurityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
@@ -140,9 +152,78 @@ export class ApiStack extends Stack {
       },
     });
 
+    // --- Write-path API (issue 043, ADR-0010) --------------------------------
+    // Serverless by design: a Lambda behind this same ALB, NOT a third
+    // Fargate service - the cost/shape guard the test-first plan asks for
+    // (`$0` idle, pay-per-write; only `sync` above is an always-on task).
+    // The Lambda still needs VPC networking (private, NAT-egress subnets) to
+    // reach RDS in the isolated tier and Cognito's JWKS endpoint over the
+    // internet - unlike the ALB-Lambda invocation path itself (which never
+    // touches this security group; ALB invokes Lambda via the Lambda service
+    // API, not a network hop governed by albSecurityGroup).
+    this.writeApiSecurityGroup = new ec2.SecurityGroup(this, 'WriteApiSecurityGroup', {
+      vpc: props.vpc,
+      description: `${id} write-path Lambda (issue 043) - egress to Postgres (5432) and the internet (NAT, for Cognito JWKS) only; nothing ingresses to it over the network.`,
+      allowAllOutbound: true,
+    });
+
+    new ec2.CfnSecurityGroupIngress(this, 'AllowWriteApiToPostgres', {
+      groupId: props.databaseSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 5432,
+      toPort: 5432,
+      sourceSecurityGroupId: this.writeApiSecurityGroup.securityGroupId,
+      description: 'Write-path Lambda (issue 043) to Postgres 5432 - a second, distinct ingress rule on the Data security group (alongside the Fargate compute SG rule above); still never 0.0.0.0/0.',
+    });
+
+    this.writeApiFunction = new NodejsFunction(this, 'WriteApiFunction', {
+      description: `${id} Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres.`,
+      entry: path.join(__dirname, '..', '..', '..', 'src', 'server', 'writeApi', 'albAdapter.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 256,
+      timeout: Duration.seconds(10),
+      vpc: props.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [this.writeApiSecurityGroup],
+      depsLockFilePath: path.join(__dirname, '..', '..', '..', 'package-lock.json'),
+      bundling: {
+        // The Node 20 Lambda runtime ships its own AWS SDK v3 - excluding it
+        // keeps the bundle small; everything else (jose, pg, drizzle-orm)
+        // is bundled since it is NOT provided by the runtime.
+        externalModules: ['@aws-sdk/*'],
+      },
+      environment: {
+        // 033 (Cognito User Pool) has not shipped in this worktree yet - this
+        // is a placeholder issuer, overwritten with the real User Pool issuer
+        // URL once that stack exists (see docs/issues/033-auth-account.md).
+        COGNITO_ISSUER: 'https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID',
+        DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
+        DATABASE_ENDPOINT: props.databaseEndpoint,
+      },
+    });
+    props.databaseSecret.grantRead(this.writeApiFunction);
+
+    const writeApiTargetGroup = new elbv2.ApplicationTargetGroup(this, 'WriteApiTargetGroup', {
+      vpc: props.vpc,
+      targetType: elbv2.TargetType.LAMBDA,
+      targets: [new targets.LambdaTarget(this.writeApiFunction)],
+      // Lambda ALB targets are billed per invocation - a periodic synthetic
+      // health check would burn invocations for no benefit (Lambda's own
+      // concurrency/retry model already handles availability). Disabled, as
+      // AWS recommends for a single-Lambda-target target group.
+      healthCheck: { enabled: false },
+    });
+
+    listener.addAction('WriteApiRoute', {
+      priority: 30,
+      conditions: [elbv2.ListenerCondition.pathPatterns(['/write*'])],
+      action: elbv2.ListenerAction.forward([writeApiTargetGroup]),
+    });
+
     new CfnOutput(this, 'LoadBalancerDnsName', {
       value: this.loadBalancer.loadBalancerDnsName,
-      description: 'Api ALB DNS name - issue 040 later fronts this with a real domain + TLS.',
+      description: 'Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* routes to the issue 043 write-path Lambda.',
     });
   }
 

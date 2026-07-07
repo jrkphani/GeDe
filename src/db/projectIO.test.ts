@@ -78,22 +78,18 @@ async function seedRichProject(db: Database): Promise<string> {
   return projectId
 }
 
-// Issue 034 — `workspaces`/`workspace_members` are account-level identity
-// tables, not part of any single project's exported tree (the envelope is
-// "everything under one project", SPEC §4.7); a project export/import never
-// carries them, and a destination workspace is chosen by the importer, not
-// bundled in the file (src/domain/projectEnvelope.ts's remapEnvelope). This
-// is the one documented exclusion from the schema-coverage guard below — any
-// OTHER new pgTable still breaks this test loudly, exactly as designed.
-//
-// Issue 035 — `invitations` is the same kind of exclusion: a pending grant is
-// itself workspace-level identity/membership state (like workspace_members),
-// not project content — exporting a project never carries who was invited to
-// its workspace, and importing one never re-issues invitations either.
-const NON_ENVELOPE_TABLES = ['workspaces', 'workspace_members', 'invitations']
+// Tables deliberately excluded from a project's export/import envelope — they
+// aren't project-domain data (SPEC §4.7's "everything under one project"):
+// - Issue 034: `workspaces`/`workspace_members` are account-level identity;
+//   a destination workspace is chosen by the importer, not bundled in the file.
+// - Issue 035: `invitations` is workspace-level membership state, not content.
+// - Issue 043: `applied_mutations` is the write-path idempotency ledger —
+//   server-side replay-safety bookkeeping with no `project_id`.
+// Any OTHER new pgTable still breaks this test loudly, exactly as designed.
+const NON_ENVELOPE_TABLES = ['workspaces', 'workspace_members', 'invitations', 'applied_mutations']
 
 describe('projectIO — schema coverage guard', () => {
-  it('the envelope covers exactly every project-scoped pgTable in the schema', () => {
+  it('the envelope covers exactly every project-domain pgTable in the schema (infra tables excepted)', () => {
     const schemaTableNames = (Object.values(schema).filter((v) => is(v, PgTable)) as PgTable[])
       .map((t) => getTableName(t))
       .filter((name) => !NON_ENVELOPE_TABLES.includes(name))

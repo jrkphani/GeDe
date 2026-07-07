@@ -71,6 +71,13 @@
       "when": 1783403216302,
       "tag": "0009_invitations",
       "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1783990000000,
+      "tag": "0010_write_path_idempotency",
+      "breakpoints": true
     }
   ]
 }

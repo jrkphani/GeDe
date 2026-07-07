@@ -111,9 +111,11 @@ export function buildAppStacks(
   const api = new ApiStack(app, `${envConfig.stackPrefix}-Api`, {
     env,
     description:
-      'GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) behind an internet-facing ALB — issue 030 (ADR-0008)',
+      'GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) + the serverless write-path API (issue 043) behind an internet-facing ALB — issue 030 (ADR-0008), ADR-0010',
     vpc: network.vpc,
     databaseSecurityGroup: data.databaseSecurityGroup,
+    databaseSecret: data.database.secret!,
+    databaseEndpoint: data.database.dbInstanceEndpointAddress,
   });
   api.addDependency(network);
   api.addDependency(data);

@@ -16,6 +16,7 @@ import {
 import { getOrCreateDefaultWorkspace } from './workspaces'
 import { paletteColor } from '../theme/palette'
 import { computeTupleHash, nextChildSymbol, nextRootSymbol } from '../domain/symbols'
+import { violatesDimensionFloor } from '../domain/writeInvariants'
 
 // The mutation layer: every database write in the app flows through this module
 // (SPEC §3 sync-readiness — row-granular mutations through a single seam).
@@ -273,7 +274,10 @@ export async function removeDimension(
   id: string,
 ): Promise<DimensionRemoveResult> {
   const rows = await listDimensions(db, projectId)
-  if (rows.length <= 2) throw new DimensionFloorError()
+  // Shared with the server write-path (src/domain/writeInvariants.ts, issue
+  // 043) — one predicate, enforced identically client-side (here) and
+  // server-side, per ADR-0010's "share the rules, don't fork them".
+  if (violatesDimensionFloor(rows.length)) throw new DimensionFloorError()
   return removeDimensionUnchecked(db, projectId, id)
 }
 

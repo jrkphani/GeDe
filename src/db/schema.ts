@@ -267,3 +267,18 @@ export const bindings = pgTable(
   },
   (table) => [uniqueIndex('bindings_context_dimension_idx').on(table.contextId, table.dimensionId)],
 )
+
+// Issue 043 — the Tier-2 write-path API's idempotency ledger. Every accepted
+// mutation records its own (client-generated UUIDv7) mutation id here, in
+// the SAME transaction as the row it wrote (src/server/writeApi/store.ts's
+// `PgWriteStore.applyIfNew`) — so a replayed offline mutation (same id) is a
+// guaranteed no-op even across a Lambda cold start, with no possibility of
+// "ledger says applied but the write didn't happen" (both commit or neither
+// does). Server-only bookkeeping, not a synced domain entity — v1's PGlite
+// has no equivalent (a single local writer never needs to de-duplicate its
+// own replayed mutations).
+export const appliedMutations = pgTable('applied_mutations', {
+  mutationId: text('mutation_id').primaryKey(),
+  workspaceId: text('workspace_id').notNull(),
+  appliedAt: timestamp('applied_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+})
