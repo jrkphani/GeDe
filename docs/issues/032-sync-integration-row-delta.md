@@ -1,6 +1,6 @@
 # 032: Sync integration — ElectricSQL read-path → PGlite + client optimistic-write queue
 
-- **Status**: OPEN
+- **Status**: IMPLEMENTED (client-side; live Electric wiring is a documented seam — see Shipped notes). Branch `feat/032-electric-sync-readpath`, not yet merged/archived — orchestrator integrates.
 - **Milestone**: M8 (Server & sync)
 - **Blocked by**: 030 (server Postgres), 031 (engine decided → ElectricSQL). **Pairs with 043** (write authority) — this issue is the *read-path* half.
 
@@ -48,14 +48,26 @@ Out of scope: the **server write authority/API (043)** — this issue queues + o
 
 ## Acceptance criteria
 
-- [ ] Local writes stay instant/offline-capable; authoritative rows stream in via Electric's read-path and apply as `deleted_at`-aware deltas; the client reconciles its optimistic state (LWW-winner is 043/DB, not this client).
-- [ ] The mutation queue + optimistic apply are implemented here with the 043 replay contract (UUIDv7 idempotency) pinned; delivers **read-only collaboration** (durable writes arrive with 043).
-- [ ] Two clients applying the same authoritative delta set in any order converge to identical row state; the derived layer is always recomputed, never synced.
-- [ ] Undo/redo and the single mutation path are preserved; **032 ships the tombstone migration** (007's hard-delete cascade → `deleted_at` soft-delete).
-- [ ] `npm run verify` green with sync off (no single-user regression); sync integration tests green with sync on.
+- [x] Local writes stay instant/offline-capable; authoritative rows stream in via Electric's read-path and apply as `deleted_at`-aware deltas; the client reconciles its optimistic state (LWW-winner is 043/DB, not this client). *(`src/db/sync.ts`'s `applyInboundDeltas` — a SQL `WHERE updated_at <` guard on every upsert, tested against real PGlite.)*
+- [x] The mutation queue + optimistic apply are implemented here with the 043 replay contract (UUIDv7 idempotency) pinned; delivers **read-only collaboration** (durable writes arrive with 043). *(`src/domain/mutationQueue.ts` + `src/store/sync.ts`'s `enqueueLocalMutation`/`reconcileWithDelta` wiring. Local PGlite writes were already optimistic pre-032 (v1's local-first model); 032 adds the queue's data structure + reconciliation contract. Auto-enqueuing from every existing store mutation (contexts/dimensions/parameters/…) is NOT wired in this slice — the contract + a proven integration point are; wiring every call site is mechanical follow-up, flagged for review.)*
+- [x] Two clients applying the same authoritative delta set in any order converge to identical row state; the derived layer is always recomputed, never synced. *(`src/domain/syncDelta.ts` — LWW register merge, property-tested for permutation-independence + a brute-force oracle; `assertBaseColumnsOnly` rejects any non-base-table column.)*
+- [x] Undo/redo and the single mutation path are preserved; **032 ships the tombstone migration** (007's hard-delete cascade → `deleted_at` soft-delete). *(Migration `0007_bindings_tombstone.sql`; `cascadeDeleteBindingsForDimension` + `restoreDimension` converted; `unbindParameter`/`deleteParametersUnbinding` deliberately left as hard deletes — see Shipped notes.)*
+- [x] `npm run verify` green with sync off (no single-user regression); sync integration tests green with sync on. *(486 unit/property tests + 43 e2e, sync-on paths driven via fake/injected Electric streams — see Shipped notes for exact counts.)*
 
 ## Implementation notes
 
 - The client writes PGlite as today (keeps optimistic UI + undo intact) — but with ElectricSQL the durable write path **is** the server (the **043** write-API), not the engine shipping a delta upstream (ADR-0010 corrects the earlier assumption). Sequence: optimistic local write → enqueue mutation → 043 persists (auth+scope+validate) → Electric streams the authoritative rows back. Undo/optimism stay local; durability + legality are the server's.
 - The hard-delete cascade in 007 (`cascadeDeleteBindingsForDimension`) needs a tombstone equivalent under sync so deletes propagate — **032 owns this migration** (a new Drizzle slot, coordinated with 034's slot assignment); it's a schema/behavior change, document it in the migration and reconcile the delete model. 043 enforces the tombstone rule server-side; 034 scopes it by tenant.
 - Feature-flag sync so v1's single-user, no-network path stays the tested default until v2 ships.
+
+## Shipped notes
+
+Implemented client-side (read-path apply + merge engine + mutation-queue contract + Electric wire-protocol normalizer + orchestration), with live Electric/Cognito wiring left as a documented, typed seam — this repo cannot depend on live AWS/Electric (HANDOFF), so the read-path is driven by fixtures/mocks modeling Electric's real wire shape, not a live connection.
+
+- **Migration `0007_bindings_tombstone.sql`**: `ALTER TABLE bindings ADD COLUMN deleted_at timestamptz`. Verified applying cleanly to a from-empty real `postgres:17` via `npm run db:migration-parity` (8 migrations, 9 tables). `cascadeDeleteBindingsForDimension` (issue 007's dimension-removal cascade) now tombstones instead of hard-deleting — the one cascade the issue names explicitly; `unbindParameter` and `deleteParametersUnbinding` are unchanged hard deletes (narrower scope than "convert bindings to soft-delete everywhere" — flagged for review, see the branch report).
+- **Pure domain** (`src/domain/`): `syncDelta.ts` (RowDelta type, LWW merge `applyRowDelta`/`applyRowDeltas`, `assertBaseColumnsOnly` derived-state guard, `liveRows`), `mutationQueue.ts` (`QueuedMutation`, `enqueue`/`acknowledge`/`prune`/`rejectMutation`/`reconcileWithDelta`). Both property-tested (fast-check) and zero DB/store imports.
+- **DB layer** (`src/db/sync.ts`): `applyInboundDeltas` — one transaction per batch, a `setWhere: updated_at <` guard on every table's upsert (idempotent + order-independent by construction, not caller discipline), and the same NULL-then-restore two-pass 015/`projectIO.ts` established for the FK cycles (contexts/tier2_entries/parameters self-refs, dimensions↔parameters cross-link) — Electric doesn't guarantee cross-shape FK delivery order.
+- **Electric wire seam** (`src/sync/`): `electricProtocol.ts` normalizes `@electric-sql/client`'s real `ChangeMessage`/`ControlMessage` shape (snake_case wire rows) into camelCase `RowDelta`s; `syncEngine.ts` subscribes one shape per table (DI'd `streamFactory`, so tests never touch a live server) and applies + reconciles; `config.ts` (`isSyncEnabled()`, default false via `VITE_SYNC_ENABLED`) and `authToken.ts` (the `TokenProvider` JWT seam 033 fills) round it out.
+- **Store** (`src/store/sync.ts`): `useSyncStore` — `start()`/`stop()` lifecycle (start is a no-op unless the feature flag is on), the runtime `MutationQueue`, `enqueueLocalMutation`. Wired into `src/store/projects.ts`'s `init()` behind the flag — inert by default, so every existing test/dev/CI run is unaffected (verified: all 486 unit tests + 43 e2e pass unchanged).
+- **New dependency**: `@electric-sql/client` (real Electric TS client — used for its real wire-message types and, in `syncEngine.ts`'s non-DI default path, its actual `ShapeStream`; never instantiated in a test).
+- **Deferred to 043 / out of scope here**: the actual write-path API (auth, tenancy/RLS scoping, invariant validation, LWW-winner decision), a real Cognito JWT provider (033 supplies one matching `TokenProvider`), wiring `enqueueLocalMutation` into every existing store mutation, an actual deployed Electric container (issue 030's `sync` Fargate slot stays the `nginx:alpine` stub — not touched, to stay out of 033's concurrent lane on `deploy/cdk/lib/api-stack.ts`).

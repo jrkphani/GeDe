@@ -1,4 +1,4 @@
-import { eq, isNotNull } from 'drizzle-orm'
+import { and, eq, isNotNull, isNull } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { openDatabase } from './client'
 import { bindings, dimensions } from './schema'
@@ -133,8 +133,10 @@ describe('dimension mutations', () => {
     })
   })
 
-  // issue 007: removal cascades to bindings — SPEC invariant 4. Bindings have
-  // no deletedAt (schema.ts) so this is a real hard delete, not a soft one.
+  // issue 007: removal cascades to bindings — SPEC invariant 4. Issue 032
+  // (migration 0007) gave bindings a `deletedAt` and converted this specific
+  // cascade to a tombstone (soft delete) so sync has a row-delta to
+  // propagate; direct unbind/parameter-delete elsewhere are still hard deletes.
   describe('removeDimension binding cascade (issue 007)', () => {
     async function canvasWithFullyBoundContext() {
       const { db, projectId } = await projectDb()
@@ -151,7 +153,11 @@ describe('dimension mutations', () => {
       return { db, projectId, value, stake, risk, vParam, sParam, rParam, ctx }
     }
 
-    it('hard-deletes bindings for the removed dimension and recomputes remaining tuple hashes', async () => {
+    // Issue 032 (migration 0007): the cascade tombstones (`deleted_at`) rather
+    // than hard-deletes, so ElectricSQL's read-path sync has a row-delta to
+    // propagate the removal — see cascadeDeleteBindingsForDimension's doc
+    // comment. This diverges from 007's original "hard delete" framing.
+    it('tombstones bindings for the removed dimension and recomputes remaining tuple hashes', async () => {
       const { db, projectId, value, stake, risk, vParam, rParam, ctx } =
         await canvasWithFullyBoundContext()
 
@@ -160,11 +166,19 @@ describe('dimension mutations', () => {
       expect(deletedBindings).toHaveLength(1)
       expect(deletedBindings[0]?.dimensionId).toBe(stake.id)
       expect(deletedBindings[0]?.contextId).toBe(ctx.id)
+      // Tombstoned, not gone — the row still exists (for sync to propagate).
+      expect(deletedBindings[0]?.deletedAt).not.toBeNull()
 
       const remaining = await listBindings(db, ctx.id)
       expect(remaining.map((r) => r.dimensionId).sort()).toEqual([risk.id, value.id].sort())
       const expectedHash = `${vParam.id}|${rParam.id}`
       expect(remaining.every((r) => r.tupleHash === expectedHash)).toBe(true)
+
+      // The tombstoned row is still physically present in the table (a real
+      // DELETE would emit no row-delta for sync to carry).
+      const raw = await db.select().from(bindings).where(eq(bindings.id, deletedBindings[0]?.id ?? ''))
+      expect(raw).toHaveLength(1)
+      expect(raw[0]?.deletedAt).not.toBeNull()
     })
 
     it('leaves other contexts untouched when they never bound the removed dimension', async () => {
@@ -179,16 +193,19 @@ describe('dimension mutations', () => {
       expect(rows[0]?.dimensionId).toBe(value.id)
     })
 
-    it('no binding ever references a soft-deleted dimension (integrity)', async () => {
+    it('no LIVE binding ever references a soft-deleted dimension (integrity)', async () => {
       const { db, projectId, stake } = await canvasWithFullyBoundContext()
 
       await removeDimension(db, projectId, stake.id)
 
+      // A tombstoned binding pointing at the now-removed dimension is expected
+      // (that's the point of the tombstone — see the test above); the
+      // invariant is that no LIVE binding is left dangling.
       const orphans = await db
         .select()
         .from(bindings)
         .innerJoin(dimensions, eq(bindings.dimensionId, dimensions.id))
-        .where(isNotNull(dimensions.deletedAt))
+        .where(and(isNotNull(dimensions.deletedAt), isNull(bindings.deletedAt)))
       expect(orphans).toHaveLength(0)
     })
 
