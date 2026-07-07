@@ -1,0 +1,434 @@
+// Jest Snapshot v1, https://goo.gl/fbAQLP
+
+exports[`MigrationStack (Gede-Test-Migrations) — issue 045 matches the snapshot 1`] = `
+{
+  "Description": "GeDe v2 backend: one-shot migration runner — applies src/db/migrations/*.sql to the RDS via a VPC-attached custom-resource Lambda — issue 045",
+  "Outputs": {
+    "MigrationsApplied": {
+      "Description": "Comma-separated migration filenames applied by the MOST RECENT run (empty if this deploy had nothing new) - issue 045 test-first plan item 4, the deploy-smoke signal.",
+      "Value": {
+        "Fn::GetAtt": [
+          "MigrationRunnerResource",
+          "Applied",
+        ],
+      },
+    },
+  },
+  "Parameters": {
+    "BootstrapVersion": {
+      "Default": "/cdk-bootstrap/hnb659fds/version",
+      "Description": "Version of the CDK Bootstrap resources in this environment, automatically retrieved from SSM Parameter Store. [cdk:skip]",
+      "Type": "AWS::SSM::Parameter::Value<String>",
+    },
+  },
+  "Resources": {
+    "AllowMigrationRunnerToPostgres": {
+      "Properties": {
+        "Description": "Migration runner Lambda (issue 045) to Postgres 5432 - a third, independent ingress rule on the Data security group (alongside the Fargate compute and write-path Lambda SG rules in api-stack.ts); still never 0.0.0.0/0.",
+        "FromPort": 5432,
+        "GroupId": {
+          "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "MigrationRunnerSecurityGroup97496B8C",
+            "GroupId",
+          ],
+        },
+        "ToPort": 5432,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "MigrationRunnerFunction2F9B9A8B": {
+      "DependsOn": [
+        "MigrationRunnerFunctionServiceRoleDefaultPolicy7372931C",
+        "MigrationRunnerFunctionServiceRole05B4001E",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "<ASSET_HASH>.zip",
+        },
+        "Description": "Gede-Test-Migrations one-shot migration runner (issue 045) - applies src/db/migrations/*.sql in filename order to the RDS via a CDK custom resource; idempotent, skips already-applied files.",
+        "Environment": {
+          "Variables": {
+            "DATABASE_ENDPOINT": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+            },
+            "DATABASE_SECRET_ARN": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+            },
+          },
+        },
+        "Handler": "index.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "MigrationRunnerFunctionServiceRole05B4001E",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 300,
+        "VpcConfig": {
+          "SecurityGroupIds": [
+            {
+              "Fn::GetAtt": [
+                "MigrationRunnerSecurityGroup97496B8C",
+                "GroupId",
+              ],
+            },
+          ],
+          "SubnetIds": [
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
+            },
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "MigrationRunnerFunctionServiceRole05B4001E": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "MigrationRunnerFunctionServiceRoleDefaultPolicy7372931C": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "MigrationRunnerFunctionServiceRoleDefaultPolicy7372931C",
+        "Roles": [
+          {
+            "Ref": "MigrationRunnerFunctionServiceRole05B4001E",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "MigrationRunnerProviderframeworkonEvent4B2DF953": {
+      "DependsOn": [
+        "MigrationRunnerProviderframeworkonEventServiceRoleDefaultPolicy64530C61",
+        "MigrationRunnerProviderframeworkonEventServiceRole913EA538",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "<ASSET_HASH>.zip",
+        },
+        "Description": "AWS CDK resource provider framework - onEvent (Gede-Test-Migrations/MigrationRunnerProvider)",
+        "Environment": {
+          "Variables": {
+            "USER_ON_EVENT_FUNCTION_ARN": {
+              "Fn::GetAtt": [
+                "MigrationRunnerFunction2F9B9A8B",
+                "Arn",
+              ],
+            },
+          },
+        },
+        "Handler": "framework.onEvent",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "FATAL",
+          "LogFormat": "JSON",
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "MigrationRunnerProviderframeworkonEventServiceRole913EA538",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 900,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "MigrationRunnerProviderframeworkonEventServiceRole913EA538": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "MigrationRunnerProviderframeworkonEventServiceRoleDefaultPolicy64530C61": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "MigrationRunnerFunction2F9B9A8B",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "MigrationRunnerFunction2F9B9A8B",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": "lambda:GetFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "MigrationRunnerFunction2F9B9A8B",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "MigrationRunnerProviderframeworkonEventServiceRoleDefaultPolicy64530C61",
+        "Roles": [
+          {
+            "Ref": "MigrationRunnerProviderframeworkonEventServiceRole913EA538",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "MigrationRunnerResource": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "MigrationFileCount": 12,
+        "MigrationSetHash": "<ASSET_HASH>",
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "MigrationRunnerProviderframeworkonEvent4B2DF953",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::CloudFormation::CustomResource",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "MigrationRunnerSecurityGroup97496B8C": {
+      "Properties": {
+        "GroupDescription": "Gede-Test-Migrations one-shot migration runner Lambda (issue 045) - egress to Postgres (5432) only; invoked once per deploy via a CDK custom resource, never left running.",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "VpcId": {
+          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+  },
+  "Rules": {
+    "CheckBootstrapVersion": {
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Contains": [
+                  [
+                    "1",
+                    "2",
+                    "3",
+                    "4",
+                    "5",
+                  ],
+                  {
+                    "Ref": "BootstrapVersion",
+                  },
+                ],
+              },
+            ],
+          },
+          "AssertDescription": "CDK bootstrap stack version 6 required. Please run 'cdk bootstrap' with a recent version of the CDK CLI.",
+        },
+      ],
+    },
+  },
+}
+`;

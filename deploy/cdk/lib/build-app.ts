@@ -3,6 +3,7 @@ import { NetworkStack } from './network-stack';
 import { HostingStack } from './hosting-stack';
 import { DnsStack } from './dns-stack';
 import { DataStack } from './data-stack';
+import { MigrationStack } from './migration-stack';
 import { ApiStack } from './api-stack';
 import { AuthStack } from './auth-stack';
 
@@ -37,25 +38,34 @@ export interface AppStacks {
   data: DataStack;
   api: ApiStack;
   auth: AuthStack;
+  migrations: MigrationStack;
 }
 
 /**
- * Builds the six layered stacks (Network -> Hosting -> Dns, Network -> Data
- * -> Api, and the standalone Auth stack) on the given `app`, exactly as the
- * real CLI entrypoint (`bin/gede.ts`) does. Shared so the CDK test suite
- * exercises the identical wiring/tagging as a real synth — see
- * docs/issues/040-cdk-aws-deployment.md, docs/issues/030-*.md, and
- * docs/issues/033-auth-account.md.
+ * Builds the seven layered stacks (Network -> Hosting -> Dns, Network -> Data
+ * -> Migrations, Network -> Data -> Api, and the standalone Auth stack) on
+ * the given `app`, exactly as the real CLI entrypoint (`bin/gede.ts`) does.
+ * Shared so the CDK test suite exercises the identical wiring/tagging as a
+ * real synth — see docs/issues/040-cdk-aws-deployment.md,
+ * docs/issues/030-*.md, docs/issues/033-auth-account.md, and issue 045 (M11,
+ * "close the cloud write loop" — the RDS migration runner).
  *
- * Cross-stack wiring (issue 030 scope item 4): Network's VPC feeds both Data
- * and Api; Data's RDS security group feeds Api (which adds the one
- * permitted ingress rule against it — see api-stack.ts / data-stack.ts for
- * why that direction avoids a circular dependency). Hosting/Dns (issue 040,
- * v1's static path) are unaffected by any of this. **Auth (issue 033,
- * ADR-0009) is intentionally standalone** — Cognito is a regional managed
- * resource outside the VPC, so it has no dependency on Network/Data/Api and
- * no cross-stack security-group wiring; it only needs the app-level tags
- * (applied once below, to every stack under `app`).
+ * Cross-stack wiring (issue 030 scope item 4, extended by issue 045):
+ * Network's VPC feeds Data, Migrations, and Api; Data's RDS security group
+ * feeds both Migrations and Api (each adds its own permitted ingress rule
+ * against it — see api-stack.ts / migration-stack.ts / data-stack.ts for why
+ * that direction avoids a circular dependency). Hosting/Dns (issue 040, v1's
+ * static path) are unaffected by any of this. **Auth (issue 033, ADR-0009) is
+ * intentionally standalone** — Cognito is a regional managed resource outside
+ * the VPC, so it has no dependency on Network/Data/Api and no cross-stack
+ * security-group wiring; it only needs the app-level tags (applied once
+ * below, to every stack under `app`).
+ *
+ * **Migrations (issue 045) is deliberately NOT a dependency of Api**: the
+ * real write-path Lambda (a later issue, 046) will assume 045's migrations
+ * have already applied the RDS schema by deploy time, but that's a
+ * deploy-ORDER concern for the CI pipeline, not a synth-time one — see
+ * migration-stack.ts's comments for why no `addDependency` encodes it here.
  */
 export function buildAppStacks(
   app: cdk.App,
@@ -108,6 +118,18 @@ export function buildAppStacks(
   });
   data.addDependency(network);
 
+  const migrations = new MigrationStack(app, `${envConfig.stackPrefix}-Migrations`, {
+    env,
+    description:
+      'GeDe v2 backend: one-shot migration runner — applies src/db/migrations/*.sql to the RDS via a VPC-attached custom-resource Lambda — issue 045',
+    vpc: network.vpc,
+    databaseSecurityGroup: data.databaseSecurityGroup,
+    databaseSecret: data.database.secret!,
+    databaseEndpoint: data.database.dbInstanceEndpointAddress,
+  });
+  migrations.addDependency(network);
+  migrations.addDependency(data);
+
   const api = new ApiStack(app, `${envConfig.stackPrefix}-Api`, {
     env,
     description:
@@ -119,6 +141,10 @@ export function buildAppStacks(
   });
   api.addDependency(network);
   api.addDependency(data);
+  // See this function's class doc + migration-stack.ts's own comments: NO
+  // `api.addDependency(migrations)` — the deploy-order relationship between
+  // the migration runner and the (currently still-stubbed) write-path Lambda
+  // is a CI-pipeline concern, not a CDK/CloudFormation one.
 
   const auth = new AuthStack(app, `${envConfig.stackPrefix}-Auth`, {
     env,
@@ -126,5 +152,5 @@ export function buildAppStacks(
       'GeDe v2 identity: Cognito User Pool + public App Client (email/password, PKCE/SRP, no client secret) — issue 033 (ADR-0009), replacing the Api stack\'s former `auth` Fargate stub',
   });
 
-  return { network, hosting, dns, data, api, auth };
+  return { network, hosting, dns, data, api, auth, migrations };
 }

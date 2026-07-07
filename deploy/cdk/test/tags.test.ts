@@ -33,7 +33,7 @@ function tagArrayOf(resource: CfnResource): unknown {
 
 describe('Tag strategy — every taggable resource carries the four app-wide tags', () => {
   const app = new cdk.App({ context: TEST_CONTEXT });
-  const { network, hosting, dns, data, api, auth } = buildAppStacks(app, 'test', 'app.example.com');
+  const { network, hosting, dns, data, api, auth, migrations } = buildAppStacks(app, 'test', 'app.example.com');
 
   it.each([
     ['Gede-Test-Network', () => Template.fromStack(network)],
@@ -42,6 +42,7 @@ describe('Tag strategy — every taggable resource carries the four app-wide tag
     ['Gede-Test-Data', () => Template.fromStack(data)],
     ['Gede-Test-Api', () => Template.fromStack(api)],
     ['Gede-Test-Auth', () => Template.fromStack(auth)],
+    ['Gede-Test-Migrations', () => Template.fromStack(migrations)],
   ])('%s: all taggable resources carry Organization/Application/Environment/ManagedBy', (_name, getTemplate) => {
     const template = getTemplate();
     const resources = template.toJSON().Resources as Record<string, CfnResource>;
