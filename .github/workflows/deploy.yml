@@ -93,30 +93,27 @@ jobs:
           role-to-assume: ${{ secrets.AWS_DEPLOY_ROLE_ARN }}
           aws-region: us-east-1
 
-      # Issue 044 — thread the live Auth stack's Cognito ids into the
-      # frontend build as VITE_COGNITO_* so the deployed `/login` can
-      # actually sign in, instead of shipping a build with no ids (the
-      # gap this issue closes — see docs/issues/044, DEPLOYMENT.md §9a).
-      # Sourced from CloudFormation at deploy time, never hardcoded here —
-      # a redeploy of the Auth stack (e.g. a User Pool replacement) can
-      # never silently desync the frontend. `Gede-Test-Auth` is this repo's
-      # only deployed environment today (deploy/cdk/lib/build-app.ts's
-      # `test` env stackPrefix); a future multi-env deploy would need this
-      # stack name parameterized alongside it.
-      - name: Read Cognito config from the Auth stack outputs
+      # Issue 044 — thread the Auth stack's Cognito ids into the frontend
+      # build as VITE_COGNITO_* so the deployed `/login` can actually sign in,
+      # instead of shipping a build with no ids (the gap this issue closes —
+      # see docs/issues/044, DEPLOYMENT.md §9a). These are non-secret public
+      # SPA values (User Pool id + public app-client id; no client secret,
+      # PKCE) held as GitHub repo *variables* (`vars.*`, not secrets), rather
+      # than read from CloudFormation at deploy time: the least-privilege OIDC
+      # deploy role (DEPLOYMENT §8) may only `sts:AssumeRole` the CDK roles and
+      # deliberately has no `cloudformation:DescribeStacks` of its own. If the
+      # Auth stack's User Pool is ever replaced, update the `VITE_COGNITO_*`
+      # repo variables to match (a deliberate, rare act) — see docs/issues/044.
+      - name: Set Cognito config for the frontend build
         id: cognito-config
+        env:
+          VAR_USER_POOL_ID: ${{ vars.VITE_COGNITO_USER_POOL_ID }}
+          VAR_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID }}
+          VAR_REGION: ${{ vars.VITE_COGNITO_REGION }}
         run: |
-          USER_POOL_ID=$(aws cloudformation describe-stacks \
-            --stack-name Gede-Test-Auth \
-            --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" \
-            --output text)
-          CLIENT_ID=$(aws cloudformation describe-stacks \
-            --stack-name Gede-Test-Auth \
-            --query "Stacks[0].Outputs[?OutputKey=='UserPoolClientId'].OutputValue" \
-            --output text)
-          echo "VITE_COGNITO_USER_POOL_ID=$USER_POOL_ID" >> "$GITHUB_ENV"
-          echo "VITE_COGNITO_CLIENT_ID=$CLIENT_ID" >> "$GITHUB_ENV"
-          echo "VITE_COGNITO_REGION=us-east-1" >> "$GITHUB_ENV"
+          echo "VITE_COGNITO_USER_POOL_ID=$VAR_USER_POOL_ID" >> "$GITHUB_ENV"
+          echo "VITE_COGNITO_CLIENT_ID=$VAR_CLIENT_ID" >> "$GITHUB_ENV"
+          echo "VITE_COGNITO_REGION=${VAR_REGION:-us-east-1}" >> "$GITHUB_ENV"
 
       # Vite inlines import.meta.env.VITE_* at build time (src/auth/config.ts)
       # from whatever's already in process.env — the three vars the previous

@@ -25,9 +25,12 @@ describe('.github/workflows/deploy.yml — Cognito config wiring (issue 044)', (
     expect(workflow).toContain('VITE_COGNITO_REGION')
   })
 
-  it('sources the ids from the Gede-Test-Auth CloudFormation stack outputs, not a hardcoded id', () => {
-    expect(workflow).toContain('describe-stacks')
-    expect(workflow).toContain('Gede-Test-Auth')
+  it('sources the ids from GitHub repo variables (vars.*), not a hardcoded id', () => {
+    // The least-privilege OIDC deploy role can't call cloudformation:DescribeStacks
+    // (DEPLOYMENT §8), so the non-secret public SPA ids come from repo variables
+    // rather than the Auth stack outputs — the ids still never appear literally here.
+    expect(workflow).toContain('vars.VITE_COGNITO_USER_POOL_ID')
+    expect(workflow).toContain('vars.VITE_COGNITO_CLIENT_ID')
     expect(workflow).not.toContain(LIVE_USER_POOL_ID)
     expect(workflow).not.toContain(LIVE_CLIENT_ID)
   })
