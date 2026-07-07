@@ -242,7 +242,13 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
   function openPalette() {
     paletteOriginRef.current = document.activeElement as HTMLElement | null
     setPaletteOpen(true)
-    void useSemanticSearchStore.getState().ensureModel()
+    // Gated so e2e never triggers the ~45MB model fetch: the Playwright dev
+    // server sets VITE_SEMANTIC_SEARCH=off, keeping the suite free of an
+    // external-network dependency (the palette stays fully lexical). Any real
+    // build leaves the flag unset, so production gets semantic search.
+    if (import.meta.env.VITE_SEMANTIC_SEARCH !== 'off') {
+      void useSemanticSearchStore.getState().ensureModel()
+    }
   }
 
   // The shell owns the palette's command sources (issue 016 seam): tier/canvas/

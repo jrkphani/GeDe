@@ -20,5 +20,9 @@ export default defineConfig({
     url: 'http://localhost:5173',
     reuseExistingServer: !process.env.CI,
     timeout: 120_000,
+    // Issue 042: disable the semantic-search model auto-load for e2e so the
+    // suite never fetches ~45MB from huggingface.co (an external-network
+    // dependency at the CI/deploy gate). The palette stays fully lexical here.
+    env: { VITE_SEMANTIC_SEARCH: 'off' },
   },
 })
