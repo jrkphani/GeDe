@@ -19,6 +19,9 @@ interface ImportMetaEnv {
   // Electric sync config (issue 032) — see src/sync/config.ts.
   readonly VITE_SYNC_ENABLED?: string
   readonly VITE_SYNC_URL?: string
+  // The write-path API's endpoint (issue 048) — same-origin '/write' by
+  // default; see src/sync/config.ts's writeApiPath().
+  readonly VITE_WRITE_API_PATH?: string
   // Set to 'off' to disable the semantic-search model auto-load (issue 042) —
   // the Playwright dev server sets it so e2e has no external-network dependency.
   readonly VITE_SEMANTIC_SEARCH?: string

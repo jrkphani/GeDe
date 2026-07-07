@@ -9,12 +9,40 @@ import { createProject } from '../db/mutations'
 import { projects } from '../db/schema'
 import { useCommandLogStore } from './commandLog'
 import { useStatusStore } from './status'
+import { resetAuthStoreForTests, useAuthStore } from './auth'
 import { resetSyncStore, useSyncStore } from './sync'
 import { SYNCED_TABLES } from '../sync/config'
 import type { ShapeStreamFactory, ShapeStreamLike } from '../sync/syncEngine'
 import type { ElectricMessage } from '../sync/electricProtocol'
 import type { QueuedMutation } from '../domain/mutationQueue'
 import type { TableName } from '../domain/syncDelta'
+
+// Issue 048 — signs the store into "authenticated" without ever touching the
+// real amazon-cognito-identity-js client: getAuthHeaders() (src/auth/
+// wireIdentity.ts) reads useAuthStore.getState().getIdToken(), which returns
+// the cached idToken as-is when it isn't expired (src/store/auth.ts), so a
+// real-shaped, not-yet-expired JWT here is enough to avoid ever calling
+// cognitoClient.getCurrentSession().
+function base64url(input: string): string {
+  return btoa(input).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function fakeIdToken(): string {
+  const exp = Math.floor(Date.now() / 1000) + 3600
+  const header = base64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }))
+  const body = base64url(JSON.stringify({ sub: 'user-1', email: 'a@b.com', exp, iat: 1 }))
+  return `${header}.${body}.fake-signature`
+}
+
+function signIn(): void {
+  useAuthStore.setState({
+    status: 'authenticated',
+    configured: true,
+    user: { sub: 'user-1', email: 'a@b.com' },
+    idToken: fakeIdToken(),
+    accessToken: 'fake-access-token',
+  })
+}
 
 // A per-table fake shape stream (issue 036): mirrors syncEngine.test.ts's
 // fakeStreamFactory, but also exposes deliverUpToDateAll() so a store test
@@ -53,13 +81,16 @@ function mutation(overrides: Partial<QueuedMutation> = {}): QueuedMutation {
 
 beforeEach(() => {
   resetSyncStore()
+  resetAuthStoreForTests()
   useCommandLogStore.getState().clear()
   useStatusStore.setState({ message: null, action: null })
 })
 
 afterEach(() => {
   resetSyncStore()
+  resetAuthStoreForTests()
   vi.unstubAllEnvs()
+  vi.unstubAllGlobals()
 })
 
 describe('sync store — feature-flag gate (test-first plan #6)', () => {
@@ -299,5 +330,121 @@ describe('sync store — lost-edit note (issue 036, test-first plan #3)', () => 
 
     expect(useStatusStore.getState().message).toBe('A local change was replaced by a newer update.')
     expect(useStatusStore.getState().action).toBeNull()
+  })
+})
+
+// Issue 048 — the write-transport wiring itself (src/sync/writeTransport.ts)
+// is exhaustively DI-tested in isolation; these drive the store-level seam
+// (the real `fetch`, stubbed globally — there is no DI seam for the HTTP
+// client at the store layer, see sync.ts's own doc comment) to prove the
+// wiring — gating, queue reconciliation, status announcement — actually
+// fires end to end.
+describe('sync store — write-queue flush (issue 048)', () => {
+  it('signed-out: flush() never touches fetch, queue stays pending (test-first plan #5)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(mutation())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(useSyncStore.getState().pendingCount).toBe(1)
+  })
+
+  it('sync=off: flush() never touches fetch even when signed in with a workspace open (test-first plan #5)', async () => {
+    signIn()
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(mutation())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fetchMock).not.toHaveBeenCalled()
+    expect(useSyncStore.getState().pendingCount).toBe(1)
+  })
+
+  it('happy path: POSTs the pending queue as MutationEnvelopes with the JWT header and drains pendingCount on ack (test-first plan #1)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const m = mutation()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ outcomes: [{ mutationId: m.id, status: 'applied' }] }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(m)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/write')
+    expect((init.headers as Record<string, string>).Authorization).toMatch(/^Bearer /)
+    const body = JSON.parse(init.body as string) as { mutations: { id: string; workspaceId: string }[] }
+    expect(body.mutations).toEqual([expect.objectContaining({ id: m.id, workspaceId: 'ws-1' })])
+
+    expect(useSyncStore.getState().pendingCount).toBe(0)
+  })
+
+  it('rejection reconciliation: drops the rejected entry, announces a calm status error, and leaves the undo stack untouched (test-first plan #4)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const m = mutation()
+    const rejectionMessage = "Someone else's more recent change already landed — yours was not applied."
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          outcomes: [{ mutationId: m.id, status: 'rejected', reason: 'stale_conflict', message: rejectionMessage }],
+        }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const commandLogBefore = useCommandLogStore.getState().past.length
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(m)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().pendingCount).toBe(0)
+    expect(useStatusStore.getState().message).toBe(rejectionMessage)
+    expect(useCommandLogStore.getState().past.length).toBe(commandLogBefore)
+  })
+
+  it('offline backlog + reconnect: a write that fails while offline flushes once the browser comes back online (test-first plan #3)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const m = mutation()
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ outcomes: [{ mutationId: m.id, status: 'applied' }] }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    const { db } = await openDatabase('memory://')
+    const { factory } = fakeStreamFactory()
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    useSyncStore.getState().enqueueLocalMutation(m)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    // The first attempt (triggered by enqueue) failed over the network —
+    // the write stays queued, not lost.
+    expect(useSyncStore.getState().pendingCount).toBe(1)
+
+    window.dispatchEvent(new Event('online'))
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(fetchMock).toHaveBeenCalledTimes(2)
+    expect(useSyncStore.getState().pendingCount).toBe(0)
   })
 })

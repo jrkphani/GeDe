@@ -17,6 +17,15 @@ export function syncBaseUrl(): string {
   return import.meta.env.VITE_SYNC_URL ?? ''
 }
 
+// The write-path API's endpoint (issue 048): same-origin by default (empty
+// base + `/write`, per the deploy topology issue 047 makes HTTPS same-origin
+// via CloudFront — DEPLOYMENT.md §9a) so the client never hardcodes a full
+// URL. Overridable via VITE_WRITE_API_PATH for tests/alternate environments,
+// mirroring syncBaseUrl()'s own override seam.
+export function writeApiPath(): string {
+  return import.meta.env.VITE_WRITE_API_PATH ?? '/write'
+}
+
 // Every base table this app syncs, in a stable order. Not an FK-apply order
 // requirement (src/db/sync.ts's two-pass strategy tolerates any order within
 // a batch) — just the fixed list of shapes syncEngine.ts subscribes to.
