@@ -35,6 +35,15 @@ describe('parseRoute', () => {
     })
   })
 
+  it('parses the v2 auth on-ramp routes (issue 033, SITEMAP §1)', () => {
+    expect(parseRoute('/welcome', '')).toEqual({ kind: 'welcome' })
+    expect(parseRoute('/login', '')).toEqual({ kind: 'login' })
+    expect(parseRoute('/auth/callback', '?code=abc')).toEqual({
+      kind: 'auth-callback',
+      search: '?code=abc',
+    })
+  })
+
   it('tolerates trailing slashes and decodes ids', () => {
     expect(parseRoute('/p/abc/', '')).toEqual({ kind: 'project', projectId: 'abc' })
     expect(parseRoute('/p/a%20b/design', '')).toMatchObject({ projectId: 'a b' })
@@ -60,6 +69,9 @@ describe('serializeRoute round-trips', () => {
     { kind: 'design', projectId: 'abc', contextPath: [], view: 'canvas' },
     { kind: 'design', projectId: 'abc', contextPath: ['c1', 'c2'], view: 'coverage' },
     { kind: 'design', projectId: 'a b', contextPath: ['c/1'], view: 'canvas' },
+    { kind: 'welcome' },
+    { kind: 'login' },
+    { kind: 'auth-callback', search: '' },
   ]
 
   it('parse(serialize(route)) is identity', () => {

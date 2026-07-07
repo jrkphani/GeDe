@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { useCommandRegistryStore } from '../store/commandRegistry'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
 import { Button } from '../components/ui/button'
+import { Input } from '../components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { CommandPalette } from '../components/CommandPalette'
 import { downloadTextFile, exportFilename } from '../lib/download'
@@ -80,6 +82,12 @@ function projectIdOf(route: AppRoute): string | null {
     : null
 }
 
+// A real, keyboard-native <button>/<input> pair (via the `ui/` primitives) —
+// not `InlineEdit`, whose display state is a plain (non-focusable, click-only)
+// <span> meant to live inside an already keyboard-handled row (F2/Enter, see
+// ProjectsList). The app-bar rename control has no such wrapper, so it needs
+// its own native focus/activation: a <Button> so Tab/Enter/Space still open
+// the editor, matching the pre-migration raw <button>'s accessible behavior.
 function ProjectName({ id }: { id: string }) {
   const project = useProjectsStore((s) => s.projects.find((p) => p.id === id))
   const renameProject = useProjectsStore((s) => s.renameProject)
@@ -89,7 +97,8 @@ function ProjectName({ id }: { id: string }) {
   if (!project) return null
   if (!editing) {
     return (
-      <button
+      <Button
+        variant="bare"
         className="app-bar__project-name"
         title="Rename project"
         onClick={() => {
@@ -98,12 +107,13 @@ function ProjectName({ id }: { id: string }) {
         }}
       >
         {project.name}
-      </button>
+      </Button>
     )
   }
   return (
-    <input
+    <Input
       className="inplace-input app-bar__project-name-input"
+      aria-label="Rename project"
       value={draft}
       autoFocus
       onChange={(e) => setDraft(e.target.value)}
@@ -152,6 +162,51 @@ function ProjectMenu({ projectId }: { projectId: string }) {
         </Button>
       </PopoverContent>
     </Popover>
+  )
+}
+
+// Account affordance (issue 033, SITEMAP §2 "App bar (stable everywhere)"):
+// signed-out reads as a quiet, always-visible `command` CTA to /login;
+// signed-in shows the identity + a sign-out popover. Composed entirely from
+// `ui/` primitives — never a raw control, per the shell-wide lint (below).
+function AccountMenu() {
+  const status = useAuthStore((s) => s.status)
+  const user = useAuthStore((s) => s.user)
+  const signOut = useAuthStore((s) => s.signOut)
+  const configured = useAuthStore((s) => s.configured)
+  const [open, setOpen] = useState(false)
+
+  if (status === 'authenticated' && user) {
+    const label = user.email ?? user.sub
+    return (
+      <Popover open={open} onOpenChange={setOpen}>
+        <PopoverTrigger asChild>
+          <Button variant="rowAction" aria-label={`Account: ${label}`} title={label} className="account-chip">
+            {label}
+          </Button>
+        </PopoverTrigger>
+        <PopoverContent align="end" className="menu">
+          <Button
+            variant="bare"
+            className="menu__item"
+            onClick={() => {
+              setOpen(false)
+              signOut()
+            }}
+          >
+            Sign out
+          </Button>
+        </PopoverContent>
+      </Popover>
+    )
+  }
+
+  if (!configured) return null
+
+  return (
+    <Button variant="command" onClick={() => navigate({ kind: 'login' })}>
+      Sign in
+    </Button>
   )
 }
 
@@ -266,8 +321,8 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           </nav>
         )}
         <div className="app-bar__cluster">
-          <button
-            className="row-action"
+          <Button
+            variant="rowAction"
             aria-label="Command palette"
             title="Command palette (⌘K)"
             onClick={() => {
@@ -276,7 +331,7 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
             }}
           >
             ⌘K
-          </button>
+          </Button>
           <Button
             aria-label="Undo"
             disabled={past.length === 0}
@@ -293,12 +348,13 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           >
             ↷
           </Button>
-          <button className="row-action" aria-label="Toggle theme" onClick={() => toggleTheme()}>
+          <Button variant="rowAction" aria-label="Toggle theme" onClick={() => toggleTheme()}>
             ◐
-          </button>
+          </Button>
           {/* Export lives in the project menu (SITEMAP §2); import is on the
               projects list (issue 015). No menu without an open project. */}
           {projectId !== null && <ProjectMenu projectId={projectId} />}
+          <AccountMenu />
         </div>
       </header>
       <ContextBarSlot />

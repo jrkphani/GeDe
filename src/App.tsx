@@ -2,11 +2,15 @@ import { useEffect } from 'react'
 import { ArchitectureSurface } from './components/ArchitectureSurface'
 import { DesignSurface } from './components/DesignSurface'
 import { FoundationSurface } from './components/FoundationSurface'
+import { Hero } from './components/Hero'
+import { LoginScreen } from './components/LoginScreen'
 import { ProjectsList } from './components/ProjectsList'
+import { Button } from './components/ui/button'
 import { AppShell } from './shell/AppShell'
 import { navigate, useRoute } from './shell/router'
 import { type AppRoute, type Tier } from './shell/routes'
 import { ContextBarProvider } from './shell/slots'
+import { useAuthStore } from './store/auth'
 import { useProjectsStore } from './store/projects'
 
 const LAST_TIER_PREFIX = 'gede-last-tier:'
@@ -21,6 +25,18 @@ function lastTierRoute(projectId: string): AppRoute {
   if (stored === 'design') return { kind: 'design', projectId, contextPath: [], view: 'canvas' }
   const tier: Tier = stored === 'architecture' ? 'architecture' : 'foundation'
   return { kind: 'tier', projectId, tier }
+}
+
+// The OAuth/PKCE authorization-code callback (SITEMAP §1) is a reserved seam
+// for the Google Workspace federation fast-follow (ADR-0009) — this slice's
+// sign-in is direct SRP via the SDK (src/auth/cognitoClient.ts), which never
+// redirects here. Landing on this path today (a stale/external link) simply
+// bounces to /login rather than showing a dead end.
+function AuthCallbackRedirect() {
+  useEffect(() => {
+    navigate({ kind: 'login' }, { replace: true })
+  }, [])
+  return null
 }
 
 function Surface({ route }: { route: AppRoute }) {
@@ -41,14 +57,25 @@ function Surface({ route }: { route: AppRoute }) {
           view={route.view}
         />
       )
+    case 'welcome':
+      return (
+        <Hero
+          onSignIn={() => navigate({ kind: 'login' })}
+          onUseLocally={() => navigate({ kind: 'projects' })}
+        />
+      )
+    case 'login':
+      return <LoginScreen onSignedIn={() => navigate({ kind: 'projects' })} />
+    case 'auth-callback':
+      return <AuthCallbackRedirect />
     case 'not-found':
       return (
         <main className="projects">
           <section className="panel">
             <p className="placeholder">Nothing at this address.</p>
-            <button className="row-action" onClick={() => navigate({ kind: 'projects' })}>
+            <Button variant="command" onClick={() => navigate({ kind: 'projects' })}>
               Back to projects
-            </button>
+            </Button>
           </section>
         </main>
       )
@@ -62,6 +89,11 @@ export default function App() {
 
   useEffect(() => {
     void useProjectsStore.getState().init()
+    // Session hydration (issue 033) runs alongside, never before/blocking the
+    // local app's own init — "session ≠ sync" (design brief). An unconfigured
+    // or signed-out build settles on 'unauthenticated' without ever touching
+    // the DB-readiness gate below.
+    void useAuthStore.getState().hydrate()
   }, [])
 
   // /p/:id redirects to the last-visited tier; visited tiers are remembered.

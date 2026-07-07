@@ -32,7 +32,14 @@ export default defineConfig({
       },
     }),
   ],
-  define: { __APP_VERSION__: JSON.stringify(pkg.version) },
+  define: {
+    __APP_VERSION__: JSON.stringify(pkg.version),
+    // `amazon-cognito-identity-js` (issue 033) pulls in the `buffer` package,
+    // which assumes a Node-style `global` — Vite's browser build target
+    // doesn't polyfill this the way webpack's did. Aliasing to `globalThis`
+    // is the standard, minimal fix (no full Node polyfill needed elsewhere).
+    global: 'globalThis',
+  },
   optimizeDeps: { exclude: ['@electric-sql/pglite'] },
   test: {
     include: ['src/**/*.test.{ts,tsx}'],
