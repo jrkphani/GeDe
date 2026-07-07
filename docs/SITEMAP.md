@@ -25,6 +25,7 @@ Decisions locked 2026-07-05: app-only routes (`/` is the app) · top tier tabs +
 - **URL segments use context ids** (stable under rename); breadcrumbs display symbols. Deep links restore tier, canvas depth, view, and selection.
 - Browser back/forward mirror breadcrumb navigation exactly (SPEC §4.1); tier switches and `view` changes are history entries too.
 - **Auth is an on-ramp, not a gate** (v2, issue 033 / ADR-0009): `/welcome` + `/login` unlock the *shared* server features (sync, workspaces), but the single-user **local-first app is fully usable without an account** — signed-out users can still open `/` and every project route. The hero offers "Use locally" alongside "Sign in". v1 had no public/marketing routes (the GitHub README was the public face).
+  - **Deployed-build reality (verified 2026-07-07 — issue 044 OPEN):** on the live app (`https://d1nzod71m3rz6x.cloudfront.net`), `/welcome` and the `/login` screen render, but sign-in is **disabled**: the frontend build shipped without the `VITE_COGNITO_*` ids, so `LoginScreen` shows *"Sign-in isn't configured for this build"* and the button is greyed out. The Cognito User Pool itself is live — only the client's config injection is missing. **Issue 044** wires it; until then the on-ramp is UI-only and the account-free local app is the whole live experience.
 
 ## 2. Shell anatomy
 

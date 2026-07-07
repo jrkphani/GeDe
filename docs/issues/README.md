@@ -57,6 +57,11 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [036](done/036-sync-state-offline-ui.md) ✅ | Sync state + offline reconciliation UI | M8 | 032 |
 | [037](done/037-local-to-cloud-migration.md) ✅ | Local → cloud project migration (on-ramp) | M10 | 033, 034, 032 |
 | [038](done/038-presence-live-collaboration.md) ✅ | Presence + live collaboration (speculative; cross-tab slice) | M10 | 032, 034, 035 |
+| [044](044-frontend-cognito-config-live-signin.md) ⬜ | Frontend Cognito config — enable live sign-in in the deployed build | M11 | 033 |
+| [045](045-apply-migrations-to-rds.md) ⬜ | Apply the Drizzle migration history to the deployed RDS | M11 | 030 |
+| [046](046-deploy-real-write-lambda-and-issuer.md) ⬜ | Deploy the real write-path Lambda + wire the Cognito issuer | M11 | 043, 045, 044 |
+| [047](047-api-tls-https-endpoint.md) ⬜ | HTTPS for the write API — end the mixed-content block | M11 | 030 |
+| [048](048-client-write-queue-flush.md) ⬜ | Flush the client write-queue to `/write` — close the loop | M11 | 044, 045, 046, 047, 032 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
@@ -66,6 +71,9 @@ Issue numbers are identity, not order — pick by the dependency graph (016 come
 - **M8 · Server & sync** — 030 (server Postgres) · 031 (T6 engine decision → ADR) · 032 (row-delta LWW sync) · 036 (sync-state UI). The critical path: **029 → 030/031 → 032**.
 - **M9 · Identity & tenancy** — 033 (auth) · 034 (workspaces + RLS) · 035 (sharing/roles).
 - **M10 · Collaboration polish** — 037 (local→cloud on-ramp) · 038 (presence, speculative — validate demand first).
+- **M11 · Close the cloud write loop (production wiring)** — 044 (inject Cognito config into the deployed build) · 045 (apply migrations to the RDS) · 046 (deploy the real write Lambda + issuer) · 047 (HTTPS for the API) · 048 (flush the client queue to `/write`). Critical path: **044 → 045 → 046 → 047 → 048**.
+
+> **Reality check (verified against live AWS, 2026-07-07).** M7–M10 shipped the v2 *code* and the CDK *infrastructure* (all 6 stacks `*_COMPLETE`, RDS `available`, Cognito pool live, ALB active), but the **end-to-end cloud write loop is not closed in production** — every server-side hop is a documented seam that was never joined: the deployed build has no Cognito ids (live sign-in is disabled), the `/write` Lambda is a `503` inline stub with a placeholder issuer, the RDS has no schema applied (no runner targets it), the ALB is HTTP-only (mixed-content-blocked from the HTTPS frontend), and the client never POSTs to `/write`. What is genuinely live end-to-end is the **local-first app** (browser ↔ PGlite) plus the auth/palette UI shells. **M11 (044–048) closes the loop**, each issue grounded in a specific verified AWS fact. See `DEPLOYMENT.md §9` ("Deployment reality").
 
 The whole v2 bet rests on invariants v1 already satisfies: one Postgres dialect + one migration history (PGlite→server verbatim), UUIDv7 + `created_at/updated_at/deleted_at` on every row, and the single mutation layer that emits row-granular changes (the sync seam). The v2-kickoff decisions are now **made** and the backend is **shipped & live** (ADR-0008): **AWS-native CDK — VPC + NAT + RDS + Fargate** (T5 → RDS, superseding the Lightsail/Compose sketch), sync is **ElectricSQL** (T6), **auth is Amazon Cognito** (ADR-0009, superseding better-auth), RLS authored directly in Postgres. 032/033/034 inherit these; see ADR-0008/0009 and `DEPLOYMENT.md §9`.
 

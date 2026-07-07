@@ -20,6 +20,8 @@
 
 **Key idea:** v1 has no server and no server-side database. The whole app — including its Postgres — ships in the browser bundle. AWS only serves static files. That is why v1 costs almost nothing and needs no VPC data path.
 
+> **Note (2026-07-07):** this "v1 at a glance" row set still describes what the **live app actually runs on** (static PWA + in-browser PGlite). But the v2 backend stacks (RDS + NAT + Fargate + Cognito) are now **also deployed** alongside it — so the real running cost is **~$30–60/mo**, not ~$0–1, even though no data flows through that backend yet. See **§9 / §9a** for the deployed-v2 topology and the verified gap list (the cloud write loop is not closed; milestone M11).
+
 ---
 
 ## 2. Architecture — v1 (test)
@@ -209,6 +211,32 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
 > **When GeDe gains a server (v2 — collaboration: sync, auth, workspaces), it moves into a private VPC with a NAT gateway.** v1's static frontend is unchanged; v2 adds a backend tier behind it. This supersedes the earlier Lightsail sketch in `TECH_STACK §6.3` for a CDK-managed, AWS-native account.
 >
 > **Status (2026-07-07):** the v2 backend is **deployed and live** ([ADR-0008](adr/0008-v2-backend-cdk-rds-electricsql.md)) — CDK VPC + NAT + RDS 17.9 (private) + Fargate, sync is **ElectricSQL**, RLS authored in Postgres. **Auth is now [Amazon Cognito](adr/0009-auth-cognito-over-better-auth.md)** (ADR-0009, superseding ADR-0008's better-auth): a managed User Pool **outside the VPC**, email/password first then Google Workspace federation (issue 033). This **removes the `auth` Fargate service** — only the `sync` (Electric) task remains in the compute tier. The `sync` Fargate service is still an `nginx:alpine` stub until issue 032 lands.
+
+### 9a. Deployment reality — the cloud write loop is NOT closed (verified 2026-07-07)
+
+> The infrastructure is live, but **no data flows through it end-to-end**. The v2 backend was shipped as a set of documented seams (each built + unit-tested in isolation) that were never joined in production. Verified directly against AWS account `975049998516` / `us-east-1` on 2026-07-07 (CloudFormation, CloudFront, Cognito, RDS, ELBv2, Lambda, ECS, EC2). **Milestone M11 (issues 044–048) closes the loop.**
+
+**What is genuinely live:**
+
+| Component | Verified state |
+| --- | --- |
+| 6 CloudFormation stacks | all `*_COMPLETE` (`Network`/`Data`/`Api`/`Hosting`/`Auth`/`Dns`) |
+| Frontend | CloudFront `E35YVH6FB7YXIO` → `d1nzod71m3rz6x.cloudfront.net`, HTTP 200; the **local-first app (browser ↔ PGlite) works fully end-to-end** |
+| Cognito | User Pool `us-east-1_d0qKGDQmC`, app client `5qbs9mgmms9mcf0u7r26npi3g2`, JWKS live |
+| RDS | `gede-test-data-databaseb269d8bb-…` Postgres, `available`, `db.t4g.micro`, private (no public route) |
+| ALB | `Gede-T-Alb16-…`, internet-facing, `active`; `/write*` → write Lambda target group |
+| Write Lambda | `Gede-Test-Api-WriteApiFunction…`, deployed, VPC-attached, DB env + SG path ready |
+| ECS | one `SyncService` (Electric/nginx stub) |
+
+**The five gaps that break the end-to-end chain** (`frontend → API → RDS`):
+
+1. **Frontend has no Cognito ids** — the deployed bundle does not contain `us-east-1_d0qKGDQmC`; `/login` renders *"Sign-in isn't configured for this build"* with a disabled button. No JWT can be minted, so every signed-in feature is unreachable. → **issue 044**.
+2. **RDS has no schema** — `src/db/migrate.ts` applies migrations to **PGlite only**; `deploy/migration-parity/check-migrations.sh` applies them to a **throwaway `postgres:17` container in CI**. **Nothing applies `0000`–`0011` to the deployed RDS** (and there is no bastion/EC2 in the VPC to do it by hand). The database is empty; 034's RLS policies are inert files, not live policy. → **issue 045**.
+3. **`/write` Lambda is a stub** — the deployed code is 230 bytes: `exports.handler = async () => ({ statusCode: 503, body: 'write-path not yet wired (issue 043 follow-up)' });`. A live `POST /write` returns **503** regardless of auth. `COGNITO_ISSUER` is the literal placeholder `https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID`. The real handler (`src/server/writeApi/*`) is unit-tested but `api-stack.ts` deploys `Code.fromInline`. → **issue 046**.
+4. **ALB is HTTP-only** — the only listener is `HTTP:80`; there is no `HTTPS:443` listener and no ACM cert. A browser on the HTTPS CloudFront origin is **mixed-content-blocked** from calling `http://…elb…/write`. → **issue 047**.
+5. **The client never calls the API** — grep of `src/` finds **no `fetch()`** to the ALB or `/write`; 032's mutation queue enqueues + tracks `pendingCount` but has no transport, so writes never leave the browser. → **issue 048**.
+
+**The network wiring, by contrast, is correct:** the DB security group (`sg-0584…`) admits `:5432` from the write Lambda's SG (`sg-063b…`) and the sync SG (`sg-0557…`); the Lambda carries `DATABASE_ENDPOINT` + `DATABASE_SECRET_ARN`. So M11 is *wiring + config + one migration-runner*, not new infrastructure. Deploy order for the fix: **045 (schema) → 046 (real handler) → 047 (HTTPS) → 048 (client flush)**, with **044 (auth config)** in parallel.
 
 **Why a private VPC + NAT for v2 (and not for v1):**
 

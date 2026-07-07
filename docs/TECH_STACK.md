@@ -168,6 +168,15 @@ Backups: RDS automated backups + snapshots (pg_dump → S3 kept as a portable-ex
 - **Auth is Cognito** — a managed User Pool the SPA calls directly, so there is **no auth service in the VPC** (removed the planned better-auth Fargate task, ADR-0009).
 - v2 cost: **~$30–60/month all-in** (RDS + NAT + one Fargate task); Cognito is free-to-single-digit-dollars at this scale. Further lever: swap NAT for VPC endpoints once only the sync task remains (ADR-0009).
 
+> **Deployment reality — the cloud write loop is not closed (verified against live AWS, 2026-07-07; milestone M11, issues 044–048).** The v2 *infrastructure* is live (6 stacks `*_COMPLETE`, RDS `available`, Cognito pool `us-east-1_d0qKGDQmC`, ALB active), but no data flows through it end-to-end — every server-side hop is a documented seam that was built and unit-tested but never joined in production:
+> - **Frontend has no Cognito ids** → live sign-in is disabled (bundle lacks `VITE_COGNITO_*`; `/login` reports "not configured"). → **044**.
+> - **RDS has no schema** → `src/db/migrate.ts` targets PGlite only, and the migration-parity check runs against a throwaway CI container; **nothing applies the migrations to the deployed RDS**. → **045**.
+> - **`/write` Lambda is a `503` inline stub** with `COGNITO_ISSUER=…/PLACEHOLDER_USER_POOL_ID` (the real handler `src/server/writeApi/*` is unit-tested but undeployed — `api-stack.ts` uses `Code.fromInline`). → **046**.
+> - **ALB is HTTP-only** (no TLS listener) → a browser on the HTTPS CloudFront origin is mixed-content-blocked from calling it. → **047**.
+> - **The client never POSTs to `/write`** → 032's mutation queue enqueues but has no transport (no `fetch` to the API anywhere in `src/`). → **048**.
+>
+> What is genuinely live end-to-end is the **local-first app** (browser ↔ PGlite) — which is the whole point of the "one dialect, no migration cliff" bet: the app is fully usable with zero server. M11 promotes it from "infra provisioned" to "shared writes actually work." See `DEPLOYMENT.md §9` and `docs/issues/044`–`048`.
+
 ### 6.4 CI/CD rules
 
 - GitHub Actions is the only deploy path; humans never `aws s3 sync` by hand.
