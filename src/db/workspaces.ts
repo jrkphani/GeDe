@@ -1,4 +1,4 @@
-import { and, asc, eq, isNull } from 'drizzle-orm'
+import { and, asc, eq, inArray, isNull } from 'drizzle-orm'
 import { uuidv7 } from 'uuidv7'
 import type { Database } from './client'
 import { firstOrThrow } from './util'
@@ -68,6 +68,37 @@ export async function listWorkspaceIdsForUser(db: Database, userSub: string): Pr
     .from(workspaceMembers)
     .where(and(eq(workspaceMembers.userSub, userSub), isNull(workspaceMembers.deletedAt)))
   return rows.map((r) => r.workspaceId)
+}
+
+// Issue 037 (the local→cloud on-ramp) — the "target picker" for adoption:
+// every live workspace a signed-in Cognito `sub` currently belongs to, oldest
+// first (so a single-workspace user's own workspace sorts first). Local-only
+// today — `workspaces`/`workspace_members` aren't Electric-synced tables
+// (src/sync/config.ts's SYNCED_TABLES is the project-tree only), so this
+// reads whatever membership rows getOrCreateUserWorkspace below has ensured
+// exist in THIS PGlite, not a live server-side query.
+export async function listWorkspacesForUser(db: Database, userSub: string): Promise<WorkspaceRow[]> {
+  const ids = await listWorkspaceIdsForUser(db, userSub)
+  if (ids.length === 0) return []
+  const rows = await db
+    .select()
+    .from(workspaces)
+    .where(and(inArray(workspaces.id, ids), isNull(workspaces.deletedAt)))
+    .orderBy(asc(workspaces.createdAt))
+  return rows
+}
+
+// The signed-in counterpart to getOrCreateDefaultWorkspace: ensures `userSub`
+// has at least one workspace of their own to adopt a local project INTO,
+// creating a personal one on first use (owner-seated) exactly like the
+// local/solo path's "Personal Workspace" — signing in shouldn't require a
+// separate "create a workspace" step before the on-ramp works. Idempotent:
+// a sub who already has membership somewhere reuses their oldest one rather
+// than spawning a second "personal" workspace on every call.
+export async function getOrCreateUserWorkspace(db: Database, userSub: string): Promise<WorkspaceRow> {
+  const existing = await listWorkspacesForUser(db, userSub)
+  if (existing.length > 0) return firstOrThrow(existing)
+  return createWorkspace(db, 'My Workspace', userSub)
 }
 
 export async function addWorkspaceMember(

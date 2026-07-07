@@ -75,6 +75,15 @@ export const invitations = pgTable('invitations', {
 })
 
 // SPEC.md §3 — every row: UUIDv7 id, created_at/updated_at (LWW), deleted_at (soft delete).
+//
+// Issue 037 — `adopted_into_project_id` is the local→cloud on-ramp's
+// idempotency marker: once a local project has been adopted into a workspace
+// (src/db/projectIO.ts's adoptProject), this points at the fresh-id copy that
+// landed in the destination workspace, so a repeat "Move to workspace…"
+// gesture is a no-op instead of a second copy. Self-referencing (mirrors
+// tier2_entries.parentId's pattern below) rather than a separate mapping
+// table — it is set on exactly one row (the original local project) and never
+// on the adopted copy itself, so no cycle is possible.
 export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
   workspaceId: text('workspace_id')
@@ -82,6 +91,7 @@ export const projects = pgTable('projects', {
     .references(() => workspaces.id),
   name: text('name').notNull(),
   description: text('description'),
+  adoptedIntoProjectId: text('adopted_into_project_id').references((): AnyPgColumn => projects.id),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),

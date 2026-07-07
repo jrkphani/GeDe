@@ -4,8 +4,10 @@ import {
   addWorkspaceMember,
   createWorkspace,
   getOrCreateDefaultWorkspace,
+  getOrCreateUserWorkspace,
   listMembers,
   listWorkspaceIdsForUser,
+  listWorkspacesForUser,
   removeWorkspaceMember,
   setWorkspaceMemberRole,
 } from './workspaces'
@@ -90,5 +92,54 @@ describe('membership scoping (test-first plan #2)', () => {
     await setWorkspaceMemberRole(db, wsA.id, 'sub-x', 'owner')
     const members = await listMembers(db, wsA.id)
     expect(members[0]?.role).toBe('owner')
+  })
+})
+
+// Issue 037 — the local→cloud on-ramp's "target picker" seam.
+describe('listWorkspacesForUser', () => {
+  it('returns nothing for a sub with no membership', async () => {
+    expect(await listWorkspacesForUser(db, 'sub-x')).toEqual([])
+  })
+
+  it('returns every live workspace a sub belongs to, oldest first', async () => {
+    const wsA = await createWorkspace(db, 'A', 'sub-x')
+    const wsB = await createWorkspace(db, 'B', 'sub-x')
+    const result = await listWorkspacesForUser(db, 'sub-x')
+    expect(result.map((w) => w.id)).toEqual([wsA.id, wsB.id])
+  })
+
+  it('excludes a workspace the sub was removed from', async () => {
+    const wsA = await createWorkspace(db, 'A', 'sub-x')
+    await removeWorkspaceMember(db, wsA.id, 'sub-x')
+    expect(await listWorkspacesForUser(db, 'sub-x')).toEqual([])
+  })
+})
+
+describe('getOrCreateUserWorkspace', () => {
+  it('creates a personal workspace, seating the sub as owner, on first use', async () => {
+    const ws = await getOrCreateUserWorkspace(db, 'sub-x')
+    expect(ws.name).toBe('My Workspace')
+    const members = await listMembers(db, ws.id)
+    expect(members).toEqual([expect.objectContaining({ userSub: 'sub-x', role: 'owner' })])
+  })
+
+  it('is idempotent — a second call returns the same workspace, not a second one', async () => {
+    const first = await getOrCreateUserWorkspace(db, 'sub-x')
+    const second = await getOrCreateUserWorkspace(db, 'sub-x')
+    expect(second.id).toBe(first.id)
+    expect(await listWorkspacesForUser(db, 'sub-x')).toHaveLength(1)
+  })
+
+  it('reuses an existing membership instead of creating a second personal workspace', async () => {
+    const invited = await createWorkspace(db, 'Acme', 'sub-owner')
+    await addWorkspaceMember(db, invited.id, 'sub-x', 'editor')
+    const ws = await getOrCreateUserWorkspace(db, 'sub-x')
+    expect(ws.id).toBe(invited.id)
+  })
+
+  it("two different subs each get their own workspace", async () => {
+    const a = await getOrCreateUserWorkspace(db, 'sub-a')
+    const b = await getOrCreateUserWorkspace(db, 'sub-b')
+    expect(a.id).not.toBe(b.id)
   })
 })

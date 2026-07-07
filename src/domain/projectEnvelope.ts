@@ -38,6 +38,14 @@ const nullableIso = z.string().nullable()
 // which is NOT NULL) purely to accept an upgraded-in-place v1 file — see
 // FORMAT_VERSION's header. It is never left null after import: remapEnvelope
 // always stamps the importer's chosen destination workspace onto it.
+// Issue 037 — `adoptedIntoProjectId` (schema.ts) is deliberately NOT a field
+// here. It is local-instance bookkeeping (a same-db pointer from an adopted
+// local project to the fresh-id copy adoptProject created), not portable
+// project content — like workspaceId's own exclusion-from-the-id-graph note
+// below, it never belongs in a file someone else's app might import. Zod
+// silently drops unknown keys on parse, and serializeEnvelope's normalizeRow
+// only ever emits the fields declared here, so gatherProjectRows's raw
+// (wider) row never leaks it into an exported/adopted envelope.
 const projectRow = z.object({
   id: z.string(),
   workspaceId: z.string().nullable(),
