@@ -2,7 +2,9 @@
 
 - **Status**: OPEN
 - **Milestone**: M8 (Server & sync)
-- **Blocked by**: 030 (server Postgres), 031 (engine decided + ADR)
+- **Blocked by**: 030 (server Postgres), 031 (engine decided → ElectricSQL). **Pairs with 043** (write authority) — this issue is the *read-path* half.
+
+> **Read-path / write-path split (ADR-0010).** Modern **ElectricSQL is read-path sync only** (Postgres → clients via "shapes"); **we own writes**. So this issue is: (a) the Electric **read-path** (server rows stream into local PGlite) and (b) the **client** optimistic-write + offline-queue model. Writes are *persisted* by the **043 write-path API** (authenticate + scope + validate + write to Postgres), then Electric syncs the authoritative result back — **not** by "the engine shipping the delta straight to the server" (the original framing below is corrected accordingly).
 
 ## Slice
 
@@ -14,13 +16,14 @@ The schema was built sync-ready from day one — UUIDv7 keys, `created_at`/`upda
 
 ## Scope
 
-- **Wire the chosen engine** (031's ADR) between server Postgres (030) and client PGlite so the client's existing local writes (`src/db/mutations.ts` + command-log) produce outbound row-deltas, and inbound deltas apply to local PGlite.
+- **Read-path (Electric shapes → PGlite)**: wire ElectricSQL (031's ADR) so server Postgres rows (030), scoped to the caller's workspace (034), stream into local PGlite and apply as inbound deltas.
+- **Client write model**: the client's existing local writes (`src/db/mutations.ts` + command-log) apply to PGlite **optimistically** (instant/offline) and enqueue a mutation for the **043 write-path API** to persist server-side; the authoritative result returns via the read-path stream. (This issue builds the queue + optimistic apply; 043 is the server authority.)
 - **LWW conflict resolution on `updated_at`**, soft-delete via `deleted_at` (tombstones, not hard deletes — note this diverges from v1's hard-deleted bindings, issue 007; reconcile the delete model here).
 - **No derived state on the wire** (ADR-0005): canvas layout, completeness, coverage, duplicates are all recomputed locally from synced rows — never pushed. The tuple-hash and layout stay pure functions of synced data.
 - **Optimistic + undoable under sync**: local writes stay instant; undo/redo (006) operates on the local command-log; a remote delta that lands mid-session updates state without corrupting the undo stack.
 - **The FK-cycle tables** (015: `contexts.parentId`, `tier2_entries.parentId`, `parameters.parentParamId`, `dimensions.sourceParamId`↔`parameters`) sync without the insert-order deadlock 015 solved for import — verify the engine's apply order or replicate the NULL-then-UPDATE strategy.
 
-Out of scope: auth/session (033), workspace scoping/RLS (034 — sync must respect it once it exists), presence/live cursors (038), the sync-state UI (036 — this issue exposes the state; 036 renders it).
+Out of scope: the **server write authority/API (043)** — this issue queues + optimistically applies writes; 043 authenticates, scopes, validates, and persists them. Auth/session (033), workspace scoping/RLS (034 — sync must respect it once it exists), presence/live cursors (038), the sync-state UI (036 — this issue exposes the state; 036 renders it).
 
 ## Design brief
 
@@ -29,7 +32,7 @@ Out of scope: auth/session (033), workspace scoping/RLS (034 — sync must respe
 - **One write path**: deltas emit from the existing mutation layer, not a parallel one — preserving the command-log/undo invariant (006, SPEC invariant 4).
 - **Convergence is testable**: two clients applying the same delta set in any order reach identical row state (a property worth a test).
 
-**References**: TECH_STACK §2 (LWW row-delta sync, no column changes), §5 (mutation layer = sync seam), §6.3 · SPEC §1 (realtime row-delta sync), §3 (sync-ready schema, invariants) · ADR-0005 (layout derived never stored) · 031's sync ADR · issues 006 (command-log), 007 (hard-delete model to reconcile with tombstones), 015 (FK-cycle apply order).
+**References**: **ADR-0010** (tier responsibilities; read-path/write-path split; server-authority-for-writes) · ADR-0008 (ElectricSQL) · issue **043** (the write-path API this pairs with) · TECH_STACK §2 (LWW row-delta sync, no column changes), §5 (mutation layer = sync seam), §6.3 · SPEC §1 (realtime row-delta sync), §3 (sync-ready schema, invariants) · ADR-0005 (layout derived never stored) · issues 006 (command-log), 007 (hard-delete model to reconcile with tombstones), 015 (FK-cycle apply order).
 
 ## Test-first plan
 
@@ -49,6 +52,6 @@ Out of scope: auth/session (033), workspace scoping/RLS (034 — sync must respe
 
 ## Implementation notes
 
-- Prefer letting the client write PGlite as today and having the engine ship the delta, over routing writes through the server (keeps optimistic UI + undo intact). 031's ADR pins the exact mechanism.
+- The client writes PGlite as today (keeps optimistic UI + undo intact) — but with ElectricSQL the durable write path **is** the server (the **043** write-API), not the engine shipping a delta upstream (ADR-0010 corrects the earlier assumption). Sequence: optimistic local write → enqueue mutation → 043 persists (auth+scope+validate) → Electric streams the authoritative rows back. Undo/optimism stay local; durability + legality are the server's.
 - The hard-delete cascade in 007 (`cascadeDeleteBindingsForDimension`) needs a tombstone equivalent under sync so deletes propagate — call this out as a schema/behavior change and migrate it.
 - Feature-flag sync so v1's single-user, no-network path stays the tested default until v2 ships.

@@ -28,7 +28,9 @@ Out of scope: sharing/invitations/role UX (035 — this issue is the *enforcemen
 - **Local stays simple**: on PGlite (single local user) the workspace is a formality — one personal workspace, policies permissive — so the local-first app is unchanged (SPEC §1).
 - **Least privilege by role**: membership carries a role (owner/editor/viewer) that 035 grants and RLS can read; define the role enum here even though the granting UX is 035.
 
-**References**: SPEC §1 (workspace RLS + realtime sync), §3 (schema invariants) · TECH_STACK §2 (Postgres-for-RLS rationale, "carry over verbatim"), §6.3 · issues 032 (sync must respect RLS), 033 (identity), 037 (adopt local data into a workspace), 015 (export envelope may need a `workspace_id` field bump → `formatVersion: 2`).
+> **Scope boundary (ADR-0010):** this issue enforces **tenancy** (workspace isolation) via RLS. **Domain-invariant** enforcement (dimension floor, tuple completeness, cascade integrity — the rules v1 enforces client-side) is issue **043**'s concern, with the DB **constraints/triggers backstop** authored alongside these RLS policies. RLS keeps *other tenants'* rows out; 043 + constraints keep *illegal* rows out.
+
+**References**: **ADR-0010** (tier responsibilities; tenancy vs domain-invariant enforcement) · SPEC §1 (workspace RLS + realtime sync), §3 (schema invariants) · TECH_STACK §2 (Postgres-for-RLS rationale, "carry over verbatim"), §6.3 · issues 032 (sync must respect RLS), 033 (Cognito identity), **043** (write authority + domain-invariant enforcement), 037 (adopt local data into a workspace), 015 (export envelope may need a `workspace_id` field bump → `formatVersion: 2`).
 
 ## Test-first plan
 
