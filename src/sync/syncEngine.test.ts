@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest'
 import { openDatabase } from '../db/client'
-import { projects } from '../db/schema'
+import { projects, workspaces } from '../db/schema'
 import { startSync, type ShapeStreamFactory, type ShapeStreamLike } from './syncEngine'
 import type { ElectricMessage } from './electricProtocol'
 import type { TableName } from '../domain/syncDelta'
@@ -42,6 +42,10 @@ function change(id: string, updatedAt: string, extra: Record<string, unknown>): 
 
 async function freshDb() {
   const { db } = await openDatabase('memory://')
+  // Issue 034: projects carries a NOT NULL workspace_id FK — seed the
+  // workspace the fixture deltas below reference (bypassing RLS as the
+  // table owner; this is test setup, not a tenancy assertion).
+  await db.insert(workspaces).values({ id: 'ws1', name: 'Test Workspace' })
   return db
 }
 
@@ -52,7 +56,7 @@ describe('startSync — orchestration (test-first plan #1, driven by a fake stre
     const onApplied = vi.fn()
     const handle = startSync(db, { streamFactory: factory, onApplied })
 
-    push('projects', [change('p1', '2026-07-07T00:00:01.000Z', { name: 'Tavalo', description: null })])
+    push('projects', [change('p1', '2026-07-07T00:00:01.000Z', { workspace_id: 'ws1', name: 'Tavalo', description: null })])
     // applyInboundDeltas is awaited internally then onApplied fires — flush microtasks.
     await new Promise((resolve) => setTimeout(resolve, 0))
 
@@ -95,7 +99,7 @@ describe('startSync — orchestration (test-first plan #1, driven by a fake stre
     const handle = startSync(db, { streamFactory: factory, onApplied })
     handle.stop()
 
-    push('projects', [change('p1', '2026-07-07T00:00:01.000Z', { name: 'Tavalo', description: null })])
+    push('projects', [change('p1', '2026-07-07T00:00:01.000Z', { workspace_id: 'ws1', name: 'Tavalo', description: null })])
     await new Promise((resolve) => setTimeout(resolve, 0))
 
     expect(onApplied).not.toHaveBeenCalled()

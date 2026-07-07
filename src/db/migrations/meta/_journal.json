@@ -57,6 +57,13 @@
       "when": 1783396530763,
       "tag": "0007_bindings_tombstone",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1783399377663,
+      "tag": "0008_workspaces_rls",
+      "breakpoints": true
     }
   ]
 }

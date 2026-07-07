@@ -3,7 +3,7 @@ import { PGlite } from '@electric-sql/pglite'
 import { drizzle } from 'drizzle-orm/pglite'
 import { uuidv7 } from 'uuidv7'
 import { runMigrations, migrationCount } from './migrate'
-import { projects } from './schema'
+import { projects, workspaces } from './schema'
 
 async function freshPg() {
   const pg = new PGlite()
@@ -36,9 +36,13 @@ describe('migrations', () => {
 describe('projects round-trip', () => {
   it('inserts and selects a project row', async () => {
     const pg = await freshPg()
-    const db = drizzle(pg, { schema: { projects } })
+    const db = drizzle(pg, { schema: { projects, workspaces } })
+    const workspaceId = uuidv7()
+    await db.insert(workspaces).values({ id: workspaceId, name: 'Personal' })
     const id = uuidv7()
-    await db.insert(projects).values({ id, name: 'Tavalo', description: 'example system' })
+    await db
+      .insert(projects)
+      .values({ id, workspaceId, name: 'Tavalo', description: 'example system' })
     const rows = await db.select().from(projects)
     expect(rows).toHaveLength(1)
     expect(rows[0]?.id).toBe(id)

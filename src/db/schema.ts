@@ -1,15 +1,55 @@
 import {
   type AnyPgColumn,
   integer,
+  pgEnum,
   pgTable,
   text,
   timestamp,
   uniqueIndex,
 } from 'drizzle-orm/pg-core'
 
+// Issue 034 (ADR-0010) — the tenancy unit. RLS policies (authored by hand in
+// migration 0008, alongside this Drizzle-generated DDL) scope every
+// workspace_id-bearing table below to the caller's memberships. See that
+// migration file's header for exactly how PGlite stays permissive (table
+// owner) while server Postgres enforces (a distinct, granted-not-owning
+// `app_user` role).
+export const workspaceRole = pgEnum('workspace_role', ['owner', 'editor', 'viewer'])
+
+export const workspaces = pgTable('workspaces', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+})
+
+// user_sub = the Cognito ID token's `sub` claim (ADR-0009) — the identity RLS
+// keys off, not a local users table (there isn't one; Cognito is the identity
+// store). Role is least-privilege (issue 035 grants it; defined here so RLS
+// can read it now).
+export const workspaceMembers = pgTable(
+  'workspace_members',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    userSub: text('user_sub').notNull(),
+    role: workspaceRole('role').notNull().default('owner'),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [uniqueIndex('workspace_members_workspace_user_idx').on(table.workspaceId, table.userSub)],
+)
+
 // SPEC.md §3 — every row: UUIDv7 id, created_at/updated_at (LWW), deleted_at (soft delete).
 export const projects = pgTable('projects', {
   id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   name: text('name').notNull(),
   description: text('description'),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -28,6 +68,9 @@ export const tier1Purpose = pgTable(
     projectId: text('project_id')
       .notNull()
       .references(() => projects.id),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
     body: text('body').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -46,6 +89,9 @@ export const tier1Props = pgTable('tier1_props', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   rank: integer('rank').notNull(),
   name: text('name').notNull(),
   description: text('description'),
@@ -63,6 +109,9 @@ export const tier2Tables = pgTable('tier2_tables', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   name: text('name').notNull(),
   sort: integer('sort').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -101,6 +150,9 @@ export const dimensions = pgTable('dimensions', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   contextId: text('context_id').references((): AnyPgColumn => contexts.id),
   sourceParamId: text('source_param_id').references((): AnyPgColumn => parameters.id),
   name: text('name').notNull(),
@@ -140,6 +192,9 @@ export const contexts = pgTable('contexts', {
   projectId: text('project_id')
     .notNull()
     .references(() => projects.id),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   parentId: text('parent_id').references((): AnyPgColumn => contexts.id),
   symbol: text('symbol').notNull(),
   name: text('name'),

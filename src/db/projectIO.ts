@@ -21,6 +21,7 @@ import {
   remapEnvelope,
 } from '../domain/projectEnvelope'
 import type { ProjectRow } from './mutations'
+import { getOrCreateDefaultWorkspace } from './workspaces'
 
 // The DB seam for project export/import (issue 015). The FORMAT lives in
 // src/domain/projectEnvelope.ts; this module only READS a project's rows into an
@@ -73,6 +74,17 @@ export interface ImportResult {
   stats: EnvelopeStats
 }
 
+// After remapEnvelope, every workspace-scoped table's rows carry a real
+// (non-null) workspaceId — remapEnvelope always stamps targetWorkspaceId onto
+// them. The envelope's own row type stays nullable (a legitimate shape before
+// remap — a v1-upgraded file's rows start out null), so this narrows at the
+// one point that matters: the actual INSERT into a NOT NULL DB column.
+function withWorkspace<T extends { workspaceId: string | null }>(
+  rows: readonly T[],
+): (Omit<T, 'workspaceId'> & { workspaceId: string })[] {
+  return rows.map((row) => ({ ...row, workspaceId: row.workspaceId as string }))
+}
+
 // Import ALWAYS creates a NEW project (fresh ids, every reference rewritten) and
 // is ATOMIC: the whole write runs in one transaction, so a failure at any step
 // (e.g. a unique-index violation a tampered file slipped past validation) rolls
@@ -82,21 +94,42 @@ export interface ImportResult {
 // the self-referential parent columns and the dimensions↔parameters cross-cycle
 // column (sourceParamId) are inserted NULL, then set in a second UPDATE pass
 // once every row exists.
-export async function importProject(db: Database, envelope: Envelope): Promise<ImportResult> {
-  const { tables } = remapEnvelope(envelope.tables, uuidv7)
+//
+// Issue 034 — every imported row is remapped into `targetWorkspaceId` (never
+// the exporting workspace's original id, which the importer may not even
+// belong to — "remap into the importer's chosen workspace" per the issue's
+// implementation notes). Defaults to the local single-user default workspace
+// (getOrCreateDefaultWorkspace) so pre-034 callers (the drag-drop/button
+// import flow, issue 015) keep working unchanged; a future workspace-aware UI
+// (035+) can pass an explicit destination.
+export async function importProject(
+  db: Database,
+  envelope: Envelope,
+  targetWorkspaceId?: string,
+): Promise<ImportResult> {
+  const workspaceId = targetWorkspaceId ?? (await getOrCreateDefaultWorkspace(db))
+  const { tables } = remapEnvelope(envelope.tables, uuidv7, workspaceId)
   const stats = envelopeStats(tables)
 
   const project = await db.transaction(async (tx) => {
-    const insertedProject = firstOrThrow(await tx.insert(projects).values(tables.projects).returning())
+    const insertedProject = firstOrThrow(
+      await tx.insert(projects).values(withWorkspace(tables.projects)).returning(),
+    )
 
     // parent_id deferred (self-ref) — the whole tree exists before we wire it.
     if (tables.contexts.length) {
-      await tx.insert(contexts).values(tables.contexts.map((c) => ({ ...c, parentId: null })))
+      await tx.insert(contexts).values(withWorkspace(tables.contexts).map((c) => ({ ...c, parentId: null })))
     }
 
-    if (tables.tier1_purpose.length) await tx.insert(tier1Purpose).values(tables.tier1_purpose)
-    if (tables.tier1_props.length) await tx.insert(tier1Props).values(tables.tier1_props)
-    if (tables.tier2_tables.length) await tx.insert(tier2Tables).values(tables.tier2_tables)
+    if (tables.tier1_purpose.length) {
+      await tx.insert(tier1Purpose).values(withWorkspace(tables.tier1_purpose))
+    }
+    if (tables.tier1_props.length) {
+      await tx.insert(tier1Props).values(withWorkspace(tables.tier1_props))
+    }
+    if (tables.tier2_tables.length) {
+      await tx.insert(tier2Tables).values(withWorkspace(tables.tier2_tables))
+    }
 
     // parent_id deferred (self-ref).
     if (tables.tier2_entries.length) {
@@ -105,7 +138,9 @@ export async function importProject(db: Database, envelope: Envelope): Promise<I
 
     // source_param_id deferred (dimensions ↔ parameters cross-cycle).
     if (tables.dimensions.length) {
-      await tx.insert(dimensions).values(tables.dimensions.map((d) => ({ ...d, sourceParamId: null })))
+      await tx
+        .insert(dimensions)
+        .values(withWorkspace(tables.dimensions).map((d) => ({ ...d, sourceParamId: null })))
     }
 
     // parent_param_id deferred (self-ref); dimension_id + source_entry_id resolve now.

@@ -23,6 +23,7 @@ function dim(id: string, sort: number, name: string, color = '#6f5bd6'): Dimensi
   return {
     id,
     projectId: 'proj1',
+    workspaceId: 'ws1',
     contextId: null,
     sourceParamId: null,
     name,
@@ -38,6 +39,7 @@ function ctx(id: string, symbol: string, justification: string | null): ContextR
   return {
     id,
     projectId: 'proj1',
+    workspaceId: 'ws1',
     parentId: null,
     symbol,
     name: null,

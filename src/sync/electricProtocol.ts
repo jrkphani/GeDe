@@ -51,6 +51,7 @@ export function isElectricChangeMessage(message: ElectricMessage): message is El
 const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   projects: {
     id: 'id',
+    workspace_id: 'workspaceId',
     name: 'name',
     description: 'description',
     created_at: 'createdAt',
@@ -60,6 +61,7 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   tier1_purpose: {
     id: 'id',
     project_id: 'projectId',
+    workspace_id: 'workspaceId',
     body: 'body',
     created_at: 'createdAt',
     updated_at: 'updatedAt',
@@ -68,6 +70,7 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   tier1_props: {
     id: 'id',
     project_id: 'projectId',
+    workspace_id: 'workspaceId',
     rank: 'rank',
     name: 'name',
     description: 'description',
@@ -79,6 +82,7 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   tier2_tables: {
     id: 'id',
     project_id: 'projectId',
+    workspace_id: 'workspaceId',
     name: 'name',
     sort: 'sort',
     created_at: 'createdAt',
@@ -99,6 +103,7 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   dimensions: {
     id: 'id',
     project_id: 'projectId',
+    workspace_id: 'workspaceId',
     context_id: 'contextId',
     source_param_id: 'sourceParamId',
     name: 'name',
@@ -122,6 +127,7 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   contexts: {
     id: 'id',
     project_id: 'projectId',
+    workspace_id: 'workspaceId',
     parent_id: 'parentId',
     symbol: 'symbol',
     name: 'name',
