@@ -16,12 +16,15 @@ Decisions locked 2026-07-05: app-only routes (`/` is the app) · top tier tabs +
 /p/:projectId/design                3rd Tier — root canvas + register
 /p/:projectId/design/:ctx/:ctx…     Child canvas (one segment per recursion level, context ids)
    ?view=canvas|coverage            Design sub-view (canvas default; coverage matrix)
+/welcome                            Hero / landing (v2, issue 033) — product framing; "Sign in" + "Use locally"
+/login                              Custom login screen (v2, issue 033) — Cognito email/password (not Hosted UI)
+/auth/callback                      OIDC PKCE redirect callback (v2) — completes sign-in, returns to origin
 /*                                  Not-found: quiet panel, "Back to projects"
 ```
 
 - **URL segments use context ids** (stable under rename); breadcrumbs display symbols. Deep links restore tier, canvas depth, view, and selection.
 - Browser back/forward mirror breadcrumb navigation exactly (SPEC §4.1); tier switches and `view` changes are history entries too.
-- No public/marketing routes in v1 — the GitHub README is the public face (revisit at v2).
+- **Auth is an on-ramp, not a gate** (v2, issue 033 / ADR-0009): `/welcome` + `/login` unlock the *shared* server features (sync, workspaces), but the single-user **local-first app is fully usable without an account** — signed-out users can still open `/` and every project route. The hero offers "Use locally" alongside "Sign in". v1 had no public/marketing routes (the GitHub README was the public face).
 
 ## 2. Shell anatomy
 
@@ -46,7 +49,7 @@ Three fixed chrome bands; everything between them scrolls per-surface (the page 
 
 ### App bar (stable everywhere)
 
-- **Wordmark** (→ `/`) · **project name** (in-place rename) · **tier tabs** · right cluster: **⌘K** trigger, **undo/redo**, **theme toggle**, **project menu** (Export…, Import…, project settings).
+- **Wordmark** (→ `/`) · **project name** (in-place rename) · **tier tabs** · right cluster: **⌘K** trigger, **undo/redo**, **theme toggle**, **project menu** (Export…, Import…, project settings), **account** (v2, issue 033 — signed-out: quiet "Sign in" `command` button; signed-in: identity + sign-out popover, composed from `ui/` primitives).
 - On `/` (projects list): wordmark + right cluster only; no tabs.
 
 ### Context bar (per tier)
@@ -65,7 +68,7 @@ Three fixed chrome bands; everything between them scrolls per-surface (the page 
 
 - **Tier tabs**: Inter 13/500; active = ink + 2px accent underline (square, flush with the bar's hairline); inactive = muted ink; hover = ink. Keyboard: ⌘1/⌘2/⌘3.
 - **Breadcrumbs**: JetBrains Mono 13; crumbs are links (accent on hover/focus); separator `▸` muted; current crumb = ink, not a link. Overflow: middle crumbs collapse to `…` (menu on click), root and current always visible.
-- **Command palette (⌘K)**: centered panel (0 radius, popover shadow), type-ahead over: tier jumps, canvases (by lineage `α ▸ α2`), contexts (by symbol/name/justification), and verbs ("New context", "Export project…"). Mono for symbols/tuples in results. Esc closes, focus returns to origin.
+- **Command palette (⌘K)**: centered panel (0 radius, popover shadow), type-ahead over: tier jumps, canvases (by lineage `α ▸ α2`), contexts (by symbol/name/justification), and verbs ("New context", "Export project…"). Mono for symbols/tuples in results. Esc closes, focus returns to origin. **Semantic search (v2, issue 042)**: an on-device embedding model (client-side, $0 AWS, offline) blends a *meaning* score into the lexical ranking — "hide the unconnected" finds the adjacency toggle — while exact/prefix matches still rank first; degrades to pure lexical until the model loads.
 - **Links** in surfaces: accent color, underline on hover only.
 
 ## 4. Keyboard map (global)
@@ -93,4 +96,4 @@ Bands are fixed heights at all sizes — chrome never grows; content areas absor
 
 ## 6. Ownership
 
-The shell is built by issue **016** (app bar, tabs, routes, status bar, theme toggle) and **017** (command palette). Feature issues mount into the slots this document defines and reference it — deviations are spec changes, not implementation choices.
+The shell is built by issue **016** (app bar, tabs, routes, status bar, theme toggle) and **017** (command palette). **v2** adds the auth on-ramp — **033** (hero `/welcome`, `/login`, app-bar account affordance; Cognito, ADR-0009) — and **042** (semantic ⌘K search, on-device embeddings). Feature issues mount into the slots this document defines and reference it — deviations are spec changes, not implementation choices.

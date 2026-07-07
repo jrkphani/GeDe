@@ -208,7 +208,7 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
 
 > **When GeDe gains a server (v2 — collaboration: sync, auth, workspaces), it moves into a private VPC with a NAT gateway.** v1's static frontend is unchanged; v2 adds a backend tier behind it. This supersedes the earlier Lightsail sketch in `TECH_STACK §6.3` for a CDK-managed, AWS-native account.
 >
-> **Status (2026-07-06):** the two open decisions are **made in [ADR-0008](adr/0008-v2-backend-cdk-rds-electricsql.md)** — backend is **CDK VPC + NAT + RDS + Fargate** (T5 → RDS, superseding Lightsail/Compose), sync is **ElectricSQL** (T6), auth is **better-auth**, RLS authored in Postgres. **Issue 030** implements the network+RDS+Fargate foundation and is open as **PR #3 — reviewed but not yet merged: merging auto-deploys and starts v2 spend (~$30–60/mo) and mutates the live `Gede-Test-Network` in place to add the NAT gateway.** The stubbed `sync`/`auth` Fargate services are filled by issues 032 (Electric) / 033 (better-auth).
+> **Status (2026-07-07):** the v2 backend is **deployed and live** ([ADR-0008](adr/0008-v2-backend-cdk-rds-electricsql.md)) — CDK VPC + NAT + RDS 17.9 (private) + Fargate, sync is **ElectricSQL**, RLS authored in Postgres. **Auth is now [Amazon Cognito](adr/0009-auth-cognito-over-better-auth.md)** (ADR-0009, superseding ADR-0008's better-auth): a managed User Pool **outside the VPC**, email/password first then Google Workspace federation (issue 033). This **removes the `auth` Fargate service** — only the `sync` (Electric) task remains in the compute tier. The `sync` Fargate service is still an `nginx:alpine` stub until issue 032 lands.
 
 **Why a private VPC + NAT for v2 (and not for v1):**
 
@@ -227,7 +227,8 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
    │                                                                         │
    │  PRIVATE subnets     Compute (ECS Fargate) — no public IP:             │
    │                        • sync engine  (ElectricSQL — ADR-0008)          │
-   │                        • auth         (better-auth — ADR-0008)          │
+   │                      (auth is Cognito — managed, OUTSIDE the VPC;        │
+   │                       no auth task here — ADR-0009)                      │
    │                      egress to the internet via the NAT Gateway         │
    │                                                                         │
    │  ISOLATED subnets    PostgreSQL 17 (RDS) — same Drizzle migrations as   │
@@ -242,7 +243,8 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
 **v2 components & security:**
 
 - **Ingress:** CloudFront/S3 frontend unchanged; `api.<domain>` (Route 53 alias) → an ALB in the public subnets. Only the ALB and NAT gateway live in public subnets.
-- **Compute (private subnets, no public IP):** the sync engine (**ElectricSQL** — ADR-0008, issue 032) and auth (**better-auth** — ADR-0008, issue 033), on ECS Fargate. Egress via the **NAT gateway** only; ingress only from the ALB via security groups. (In PR #3 both are stubbed with an `nginx:alpine` placeholder behind path-routed `/sync*` `/auth*`.)
+- **Compute (private subnets, no public IP):** the sync engine (**ElectricSQL** — ADR-0008, issue 032) on ECS Fargate. Egress via the **NAT gateway** only; ingress only from the ALB via security groups. (Shipped as an `nginx:alpine` stub behind path-routed `/sync*`; issue 032 swaps in Electric.)
+- **Auth (managed, outside the VPC):** **Amazon Cognito** User Pool ([ADR-0009](adr/0009-auth-cognito-over-better-auth.md), issue 033) — the SPA authenticates against it directly over the internet (OIDC+PKCE); the sync/API validates the Cognito JWT via JWKS. No Fargate auth task, no VPC path. Email/password first; Google Workspace federation is a fast-follow.
 - **Database (isolated subnets):** managed **PostgreSQL 17** (RDS `db.t4g.micro`, single-AZ for `test`; T5 resolved to RDS, ADR-0008). It runs the **same Drizzle migration history** as v1's PGlite (the "one dialect, no migration cliff" bet, `TECH_STACK §2` — proven by `deploy/migration-parity/`) and enforces **workspace RLS** (issue 034). No internet route — reachable only from the compute security group; credentials in Secrets Manager.
 - **Security groups:** ALB → compute → database, one hop each; the database SG admits only the compute SG; nothing admits `0.0.0.0/0` except the ALB (443) and NAT egress.
 - **Backups:** automated RDS snapshots + point-in-time recovery (or `pg_dump → S3 → Glacier` if self-managed), per `TECH_STACK §6.3`.
@@ -250,7 +252,7 @@ Manual `cdk deploy` is fine for bring-up; the steady state is **GitHub Actions o
 
 **v2 cost:** materially higher than v1 — a NAT gateway (~$32/mo per AZ + data processing), the compute tier, and RDS. Budget on the order of **$30–60+/month** depending on AZ count and instance sizes, versus v1's ~$0–1. Right-size AZs (one NAT gateway for `test`, multi-AZ NAT only for `prod`), and prefer Fargate/RDS smallest tiers until load justifies more.
 
-**v2 CDK shape:** the `Gede-<Env>-Network` stack gains a **NAT gateway** and a private compute subnet tier alongside the existing isolated tier; new `Gede-<Env>-Data` (RDS) + `Gede-<Env>-Api` (Fargate: Electric sync + better-auth stubs, behind an internet-facing ALB) stacks are added. The tagging strategy (§6) and env-parameterization carry over unchanged. This is **issue 030, implemented in PR #3** (reviewed, green — 48 CDK tests + offline synth — but unmerged pending the cost-gate decision above); downstream sync/auth/tenancy slices are issues 032–038 (see `docs/issues/README.md` M8–M10 and ADR-0008 for the wave plan).
+**v2 CDK shape:** the `Gede-<Env>-Network` stack gained a **NAT gateway** + a private compute subnet tier alongside the existing isolated tier; `Gede-<Env>-Data` (RDS) + `Gede-<Env>-Api` (Fargate Electric-sync stub behind an internet-facing ALB) were added. This is **issue 030, shipped** (PR #3 + deploy fixes #4/#5/#6 — all five stacks live & verified). **Auth adds a `Gede-<Env>-Auth` (Cognito) stack** and **removes the `auth` Fargate service/route** from the Api stack (ADR-0009, issue 033). The tagging strategy (§6) and env-parameterization carry over unchanged; downstream sync/tenancy slices are issues 032–038 (see `docs/issues/README.md` M8–M10, ADR-0008/0009 for the wave plan).
 
 ---
 

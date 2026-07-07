@@ -1,6 +1,6 @@
 # ADR-0008: v2 backend — CDK VPC + RDS + ElectricSQL + better-auth
 
-- **Status**: Accepted
+- **Status**: Accepted (the **auth** decision below is **superseded by [ADR-0009](0009-auth-cognito-over-better-auth.md)** — Cognito replaces better-auth; topology + sync stand)
 - **Date**: 2026-07-06
 
 ## Context
@@ -21,7 +21,7 @@ Adopt an **AWS-native, CDK-managed v2 backend**, resolving both open decisions t
 
 2. **Sync engine (T6) → ElectricSQL.** Electric is a sync layer that runs **over our own Postgres** — it drops directly onto the RDS instance, matches GeDe's local-first PGlite↔Postgres shape-sync model, and preserves the core bet: one Postgres dialect, one migration history, UUIDv7 + `created_at`/`updated_at`/`deleted_at` on every row for LWW row-delta sync, derived layout never on the wire. Electric runs as a single container beside RDS.
 
-3. **Auth (033) → better-auth (self-hosted).** With Electric owning read-path sync and our own API owning the write path, auth is ours: a self-hosted **better-auth** service on Fargate, identity carried on the sync/API connection. RLS (034) is authored **directly in Postgres** and enforced at the Electric shape boundary.
+3. **Auth (033) → better-auth (self-hosted).** _(SUPERSEDED by [ADR-0009](0009-auth-cognito-over-better-auth.md): auth is now **Amazon Cognito** — managed, no Fargate auth task, Google-Workspace-ready, lower cost. The rest of this ADR stands.)_ With Electric owning read-path sync and our own API owning the write path, auth is ours: a self-hosted **better-auth** service on Fargate, identity carried on the sync/API connection. RLS (034) is authored **directly in Postgres** and enforced at the Electric shape boundary.
 
 ## Why not self-hosted Supabase
 

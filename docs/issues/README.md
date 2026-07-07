@@ -46,10 +46,11 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [040](done/040-cdk-aws-deployment.md) ✅ | CDK AWS deployment — network → hosting → DNS (test env) | M7 | — |
 | [029](done/029-deploy-oidc-static-pwa.md) ✅ | Deploy pipeline — GitHub Actions OIDC → `cdk deploy` | M7 | 040 |
 | [041](041-cdk-hosting-snapshot-dist-sensitivity.md) | CDK hosting snapshot env-sensitivity (local `dist/` breaks CI) | M7 | 040 |
-| [030](done/030-v2-server-postgres-compose.md) ✅ | v2 server — CDK VPC + RDS + compute (Electric/better-auth stubs) | M8 | 029, 040 |
+| [042](042-command-palette-semantic-search.md) | Command palette — semantic search (client-side embeddings, $0 AWS) | M6 | 017 |
+| [030](done/030-v2-server-postgres-compose.md) ✅ | v2 server — CDK VPC + RDS + Fargate (Electric-sync stub; auth → Cognito, ADR-0009) | M8 | 029, 040 |
 | [031](done/031-sync-engine-decision.md) ✅ | Sync-engine decision — **ElectricSQL** (T6, decided → ADR-0008) | M8 | — |
 | [032](032-sync-integration-row-delta.md) | Sync integration — Postgres ⇄ PGlite (row-delta, LWW) | M8 | 030, 031 |
-| [033](033-auth-account.md) | Authentication + account | M9 | 030 |
+| [033](033-auth-account.md) | Authentication + account — **Cognito** (email/pw) + hero + login screen | M9 | 030 |
 | [034](034-workspaces-rls-tenancy.md) | Workspaces + Postgres RLS multi-tenancy | M9 | 032, 033 |
 | [035](035-sharing-roles-invitations.md) | Sharing — roles & invitations | M9 | 034, 033 |
 | [036](036-sync-state-offline-ui.md) | Sync state + offline reconciliation UI | M8 | 032 |
@@ -65,7 +66,7 @@ Issue numbers are identity, not order — pick by the dependency graph (016 come
 - **M9 · Identity & tenancy** — 033 (auth) · 034 (workspaces + RLS) · 035 (sharing/roles).
 - **M10 · Collaboration polish** — 037 (local→cloud on-ramp) · 038 (presence, speculative — validate demand first).
 
-The whole v2 bet rests on invariants v1 already satisfies: one Postgres dialect + one migration history (PGlite→server verbatim), UUIDv7 + `created_at/updated_at/deleted_at` on every row, and the single mutation layer that emits row-granular changes (the sync seam). The v2-kickoff decisions are now **made** (ADR-0008): backend is **AWS-native CDK — VPC + NAT + RDS + Fargate** (T5 → RDS, superseding the Lightsail/Compose sketch), sync is **ElectricSQL** (T6), auth is **better-auth**, RLS is authored directly in Postgres. 032/033/034 inherit these; see ADR-0008 and `DEPLOYMENT.md §9`.
+The whole v2 bet rests on invariants v1 already satisfies: one Postgres dialect + one migration history (PGlite→server verbatim), UUIDv7 + `created_at/updated_at/deleted_at` on every row, and the single mutation layer that emits row-granular changes (the sync seam). The v2-kickoff decisions are now **made** and the backend is **shipped & live** (ADR-0008): **AWS-native CDK — VPC + NAT + RDS + Fargate** (T5 → RDS, superseding the Lightsail/Compose sketch), sync is **ElectricSQL** (T6), **auth is Amazon Cognito** (ADR-0009, superseding better-auth), RLS authored directly in Postgres. 032/033/034 inherit these; see ADR-0008/0009 and `DEPLOYMENT.md §9`.
 
 Every issue carries a **Design brief** (grounded in STYLE_GUIDE/SITEMAP tokens and patterns) and a **References** line pinning the SPEC/STYLE_GUIDE/SITEMAP/TECH_STACK/ADR sections it implements — deviation from a referenced section is a spec change to discuss, not an implementation choice.
 

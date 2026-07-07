@@ -152,19 +152,21 @@ GitHub (main) ──► GitHub Actions
 
 ### 6.3 v2 — collaboration (later)
 
+> **Superseded by [ADR-0008](adr/0008-v2-backend-cdk-rds-electricsql.md) + [ADR-0009](adr/0009-auth-cognito-over-better-auth.md) — SHIPPED.** The Lightsail + Docker Compose sketch below was replaced at v2 kickoff by an **AWS-native CDK** backend (one deploy model with v1, issue 040). T5 → **RDS**; T6 → **ElectricSQL**; auth → **Amazon Cognito** (not better-auth). Canonical topology + security live in `docs/DEPLOYMENT.md §9`.
+
 ```text
-same CloudFront/S3 frontend
-        │  api.<domain> (Route 53)
-Lightsail 2GB ($10/mo · static IP · Docker Compose):
-   caddy        — TLS termination, reverse proxy
-   postgres:17  — the database (same migrations as v1)
-   sync         — Electric OR self-hosted Supabase stack (T6, decided at v2 kickoff)
-   auth         — better-auth or Supabase auth
-Backups: nightly pg_dump → S3 (lifecycle → Glacier, 90d) + weekly Lightsail snapshot
+same CloudFront/S3 frontend (unchanged)          Amazon Cognito (managed, OUTSIDE the VPC)
+        │  api.<domain> (Route 53 → ALB)          └─ email/password now; Google Workspace SSO next (033)
+CDK VPC (private, 2 AZ, 1 NAT):
+   PUBLIC    — internet-facing ALB
+   PRIVATE   — ECS Fargate: sync (ElectricSQL) — the API/sync validates the Cognito JWT (JWKS)
+   ISOLATED  — RDS PostgreSQL 17 (same migrations as v1; workspace RLS keys off the Cognito sub)
+Backups: RDS automated backups + snapshots (pg_dump → S3 kept as a portable-export escape hatch)
 ```
 
-- All server components are open source and portable off AWS unchanged (Compose file is the deployment contract).
-- v2 cost: **~$10–15/month all-in**.
+- Deployed by the same OIDC CI pipeline as v1 (issue 029, `cdk deploy --all`); no second deploy model, no Compose.
+- **Auth is Cognito** — a managed User Pool the SPA calls directly, so there is **no auth service in the VPC** (removed the planned better-auth Fargate task, ADR-0009).
+- v2 cost: **~$30–60/month all-in** (RDS + NAT + one Fargate task); Cognito is free-to-single-digit-dollars at this scale. Further lever: swap NAT for VPC endpoints once only the sync task remains (ADR-0009).
 
 ### 6.4 CI/CD rules
 
@@ -192,6 +194,8 @@ Backups: nightly pg_dump → S3 (lifecycle → Glacier, 90d) + weekly Lightsail 
 | d3-shape | 3.x |
 | tailwindcss | 4.x |
 | vitest / playwright | latest stable |
+| @xenova/transformers (transformers.js) | v2 · on-device embeddings for semantic ⌘K search (issue 042) — lazy-loaded, SW-cached, $0 AWS |
+| amazon-cognito-identity-js / OIDC-PKCE | v2 · client auth against the Cognito User Pool (issue 033, ADR-0009) |
 
 Exact pins land in `package.json` at M1; this table records the intended major lines. Renovate/dependabot optional but recommended from M1.
 

@@ -50,7 +50,7 @@ Out of scope: the sync protocol itself (031 decided → 032 implements); auth (0
 
 ## Implementation notes
 
-- The `sync` and `auth` Fargate services are stubs here — **031 is decided (ADR-0008: ElectricSQL)**, so 032 fills `sync` with the Electric container and 033 fills `auth` with better-auth. Wire the ALB routes + service discovery so those slots drop in without re-architecting.
+- The `sync` and `auth` Fargate services are stubs here — **031 is decided (ADR-0008: ElectricSQL)**, so 032 fills `sync` with the Electric container. _(Update: **auth is now Amazon Cognito** — [ADR-0009](../../adr/0009-auth-cognito-over-better-auth.md) — a managed service outside the VPC, so issue 033 **removes** the `auth` Fargate slot rather than filling it with better-auth.)_ Wire the ALB routes + service discovery so the sync slot drops in without re-architecting.
 - Keep secrets (DB credentials, service tokens) in **Secrets Manager**, injected into Fargate task definitions — never in the repo, mirroring 029's no-standing-secrets stance.
 - Cost target rises to ~**$30–60/month** all-in (RDS + NAT + Fargate) per ADR-0008 — the accepted price of the AWS-native single-deploy-model backend. v1 static hosting (040) stays ~$0.
 - Pre-assign the migration slot before any schema-touching sibling (032/034) runs in parallel, per the HANDOFF worktree discipline.
