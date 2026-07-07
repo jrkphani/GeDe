@@ -90,11 +90,19 @@ export interface EditableGridProps<TRow> {
   // never renders, regardless of whether `phantom` is passed. Defaults to
   // false so every existing caller is unchanged.
   readOnly?: boolean
+  // Issue 038 (presence) — fires with the cell currently open for editing, or
+  // null when none is. Covers text/mono/multiline cells only (the shared
+  // `editing` state below); a combobox cell's open/closed state is owned
+  // internally by ComboboxCell and isn't wired to this signal in this slice —
+  // see ContextRegister's own comment for why that's a deliberate, flagged
+  // scope cut rather than an oversight. Optional and additive: omitting it is
+  // exactly the pre-038 behavior.
+  onEditingChange?: (cell: EditingCell | null) => void
 }
 
 export const PHANTOM_ROW_ID = '__phantom__'
 
-interface EditingCell {
+export interface EditingCell {
   rowId: string
   columnId: string
 }
@@ -653,11 +661,21 @@ export function EditableGrid<TRow>({
   getRowLabel,
   onRowClick,
   readOnly = false,
+  onEditingChange,
 }: EditableGridProps<TRow>) {
   // Issue 035 — a read-only grid never shows the phantom row, regardless of
   // what the caller passed; callers don't need their own conditional.
   const activePhantom = readOnly ? undefined : phantom
   const [editing, setEditing] = useState<EditingCell | null>(null)
+
+  // Issue 038 — the presence seam: report every open/close of the shared
+  // `editing` state to whoever asked. A plain effect (not folded into
+  // `setEditing` calls directly) so every path that changes `editing` — the
+  // grammar's several call sites below — stays a single source of truth.
+  useEffect(() => {
+    onEditingChange?.(editing)
+  }, [editing, onEditingChange])
+
   const refs = useRef<Map<string, HTMLElement>>(new Map())
   // A queued focus target (issue 022): set by `advance` when the destination is
   // an always-mounted control (combobox trigger, phantom input) or a stay-put

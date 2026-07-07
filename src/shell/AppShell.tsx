@@ -12,6 +12,7 @@ import { CommandPalette } from '../components/CommandPalette'
 import { WorkspaceMembers } from '../components/WorkspaceMembers'
 import { downloadTextFile, exportFilename } from '../lib/download'
 import { coreCommandSources } from './coreCommands'
+import { PresenceRoster } from './PresenceRoster'
 import { navigate } from './router'
 import { serializeRoute, type AppRoute, type Tier } from './routes'
 import { ContextBarSlot } from './slots'
@@ -369,7 +370,10 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
           {/* Export lives in the project menu (SITEMAP §2); import is on the
               projects list (issue 015). No menu without an open project.
               Share (issue 035) sits alongside — its own trigger self-hides
-              outside a signed-in Cognito session (WorkspaceMembers). */}
+              outside a signed-in Cognito session (WorkspaceMembers). Presence
+              (issue 038) is the quietest of the three — it self-hides
+              whenever there's nobody else to show (PresenceRoster). */}
+          {projectId !== null && <PresenceRoster projectId={projectId} />}
           {projectId !== null && <WorkspaceMembers projectId={projectId} />}
           {projectId !== null && <ProjectMenu projectId={projectId} />}
           <AccountMenu />
