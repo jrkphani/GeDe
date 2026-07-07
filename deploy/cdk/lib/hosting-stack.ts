@@ -184,6 +184,11 @@ export class HostingStack extends Stack {
       // Only the shell paths need invalidating on deploy (TECH_STACK §6.2 /
       // DEPLOYMENT.md §10) — hashed assets are new filenames, never stale.
       distributionPaths: ['/index.html', '/sw.js'],
+      // The default 128MB deployment Lambda OOMs on the ~38MB `dist/` (issue
+      // 042 self-hosts the ~22MB onnxruntime WASM for offline semantic search
+      // — deliberately not CDN-fetched, so no external dependency). Give it
+      // room to unzip + upload the bundle.
+      memoryLimit: 1024,
     });
 
     new CfnOutput(this, 'DistributionDomainName', {
