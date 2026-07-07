@@ -1,6 +1,8 @@
+import { uuidv7 } from 'uuidv7'
 import { create } from 'zustand'
 import { getDatabase, type Database } from '../db/client'
 import { resetDatabase, setDatabase } from './database'
+import { useAuthStore } from './auth'
 import { useCommandLogStore } from './commandLog'
 import { useSyncStore } from './sync'
 import {
@@ -11,8 +13,14 @@ import {
   restoreProject as dbRestore,
   type ProjectRow,
 } from '../db/mutations'
-import { gatherProjectRows, importProject as dbImport } from '../db/projectIO'
+import { adoptProject as dbAdopt, gatherProjectRows, importProject as dbImport } from '../db/projectIO'
 import {
+  getOrCreateUserWorkspace,
+  listWorkspacesForUser,
+  type WorkspaceRow,
+} from '../db/workspaces'
+import {
+  ENVELOPE_TABLE_NAMES,
   envelopeToJson,
   parseEnvelope,
   serializeEnvelope,
@@ -39,6 +47,20 @@ interface ProjectsState {
   // throws a typed rejection (parseEnvelope) the caller renders calmly.
   exportProject: (id: string) => Promise<{ name: string; json: string }>
   importProject: (text: string) => Promise<{ project: ProjectRow; stats: EnvelopeStats }>
+  // Issue 037 — the local→cloud on-ramp. Moves a local project into a
+  // workspace (see src/db/projectIO.ts's adoptProject for the atomicity/
+  // idempotency contract) and, for a genuinely new adoption, enqueues every
+  // row of the destination copy onto the optimistic-write queue (issue 032)
+  // — "push through the sync/write-path" using the existing queue plumbing,
+  // since no live client→server write flush exists yet in this repo.
+  adoptProject: (
+    id: string,
+    targetWorkspaceId: string,
+  ) => Promise<{ project: ProjectRow; stats: EnvelopeStats; alreadyAdopted: boolean }>
+  // The signed-in user's available adoption destinations — ensures they have
+  // at least their own workspace (creating one on first use) then lists
+  // every workspace they belong to, oldest first.
+  listWorkspaceOptions: () => Promise<WorkspaceRow[]>
 }
 
 let database: Database | null = null
@@ -141,6 +163,47 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     // matching what a reload would show.
     set({ projects: await dbList(db) })
     return result
+  },
+
+  // Deliberately no command-log entry (mirrors WorkspaceMembers' own choice,
+  // issue 035): adoption reaches into a shared workspace another party may
+  // already see, so "undo" would read as a false promise of a purely local,
+  // reversible action.
+  async adoptProject(id, targetWorkspaceId) {
+    const db = database
+    if (!db) throw new Error('Storage is unavailable')
+    const result = await dbAdopt(db, id, targetWorkspaceId)
+    set({ projects: await dbList(db) })
+
+    if (!result.alreadyAdopted) {
+      const enqueue = useSyncStore.getState().enqueueLocalMutation
+      const enqueuedAt = new Date().toISOString()
+      for (const table of ENVELOPE_TABLE_NAMES) {
+        for (const row of result.tables[table]) {
+          enqueue({
+            id: uuidv7(),
+            table,
+            rowId: row.id,
+            op: 'upsert',
+            row,
+            optimisticUpdatedAt: row.updatedAt,
+            enqueuedAt,
+            status: 'pending',
+          })
+        }
+      }
+    }
+
+    return { project: result.project, stats: result.stats, alreadyAdopted: result.alreadyAdopted }
+  },
+
+  async listWorkspaceOptions() {
+    const db = database
+    if (!db) throw new Error('Storage is unavailable')
+    const sub = useAuthStore.getState().user?.sub
+    if (!sub) throw new Error('Sign in to move a project into a workspace')
+    await getOrCreateUserWorkspace(db, sub)
+    return listWorkspacesForUser(db, sub)
   },
 }))
 

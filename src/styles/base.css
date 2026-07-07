@@ -482,6 +482,15 @@ body {
   margin: 0 0 var(--space-3);
 }
 
+/* Issue 037 — the local→cloud on-ramp's idempotent "already adopted" state:
+   a quiet, static label (never a button) in place of the "Move to
+   workspace…" row action, mirroring .project-desc's muted tone. */
+.project-adopted {
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+  white-space: nowrap;
+}
+
 /* ── Export / import (issue 015) ─────────────────────────────────────────── */
 .projects__toolbar {
   display: flex;

@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useCommandLogStore } from '../store/commandLog'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
+import { AdoptProjectButton } from './AdoptProjectButton'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
 import { InlineEdit, PhantomInput } from './ui/inline-editor'
@@ -124,6 +125,7 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
               stopPropagation
             />
             {p.description !== null && <span className="project-desc">{p.description}</span>}
+            <AdoptProjectButton project={p} />
             <Button
               aria-label={`Archive ${p.name}`}
               onClick={(e) => {
