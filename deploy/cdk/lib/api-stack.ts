@@ -1,11 +1,9 @@
-import * as path from 'path';
 import { Stack, StackProps, CfnOutput, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
-import { NodejsFunction } from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
@@ -61,7 +59,7 @@ export class ApiStack extends Stack {
   public readonly albSecurityGroup: ec2.SecurityGroup;
   public readonly syncService: ecs.FargateService;
   /** The Tier-2 write-path API (issue 043, ADR-0010) - Lambda, not Fargate: `$0` idle, pay-per-write. */
-  public readonly writeApiFunction: NodejsFunction;
+  public readonly writeApiFunction: lambda.Function;
   public readonly writeApiSecurityGroup: ec2.SecurityGroup;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
@@ -176,27 +174,30 @@ export class ApiStack extends Stack {
       description: 'Write-path Lambda (issue 043) to Postgres 5432 - a second, distinct ingress rule on the Data security group (alongside the Fargate compute SG rule above); still never 0.0.0.0/0.',
     });
 
-    this.writeApiFunction = new NodejsFunction(this, 'WriteApiFunction', {
-      description: `${id} Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres.`,
-      entry: path.join(__dirname, '..', '..', '..', 'src', 'server', 'writeApi', 'albAdapter.ts'),
-      handler: 'handler',
+    // Deterministic inline placeholder handler — mirrors the sync Fargate
+    // nginx stub (issue 030). The real Tier-2 write-path handler lives and is
+    // unit-tested at `src/server/writeApi/*`, but is NOT bundled here: a real
+    // `NodejsFunction` esbuild bundle would make `cdk synth` depend on a local
+    // esbuild toolchain and emit a machine-specific asset hash (the issue 041
+    // hazard, for Lambda), and the write-path is not yet wired to the client
+    // queue (issue 043 follow-up). Swapping this stub for the bundled handler
+    // is that follow-up; the stack SHAPE (VPC, SG, ALB route, IAM, env) is real
+    // now and asserted by the tests.
+    this.writeApiFunction = new lambda.Function(this, 'WriteApiFunction', {
+      description: `${id} Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres. Placeholder handler until the write-path is wired (see src/server/writeApi).`,
       runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromInline(
+        "exports.handler = async () => ({ statusCode: 503, body: 'write-path not yet wired (issue 043 follow-up)' });",
+      ),
       memorySize: 256,
       timeout: Duration.seconds(10),
       vpc: props.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [this.writeApiSecurityGroup],
-      depsLockFilePath: path.join(__dirname, '..', '..', '..', 'package-lock.json'),
-      bundling: {
-        // The Node 20 Lambda runtime ships its own AWS SDK v3 - excluding it
-        // keeps the bundle small; everything else (jose, pg, drizzle-orm)
-        // is bundled since it is NOT provided by the runtime.
-        externalModules: ['@aws-sdk/*'],
-      },
       environment: {
-        // 033 (Cognito User Pool) has not shipped in this worktree yet - this
-        // is a placeholder issuer, overwritten with the real User Pool issuer
-        // URL once that stack exists (see docs/issues/033-auth-account.md).
+        // Placeholder issuer — cross-stack wiring of 033's Cognito User Pool
+        // issuer URL into this stack is a follow-up (see docs/issues/043).
         COGNITO_ISSUER: 'https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID',
         DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
         DATABASE_ENDPOINT: props.databaseEndpoint,

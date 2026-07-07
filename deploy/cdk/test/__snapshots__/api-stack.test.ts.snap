@@ -629,10 +629,9 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       ],
       "Properties": {
         "Code": {
-          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "a608e925b49c7424facf82d2224220e09dac472b4e3872a9357d9da3119e7f59.zip",
+          "ZipFile": "exports.handler = async () => ({ statusCode: 503, body: 'write-path not yet wired (issue 043 follow-up)' });",
         },
-        "Description": "Gede-Test-Api Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres.",
+        "Description": "Gede-Test-Api Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres. Placeholder handler until the write-path is wired (see src/server/writeApi).",
         "Environment": {
           "Variables": {
             "COGNITO_ISSUER": "https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID",
