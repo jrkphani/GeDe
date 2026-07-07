@@ -1,6 +1,6 @@
 # 032: Sync integration — ElectricSQL read-path → PGlite + client optimistic-write queue
 
-- **Status**: IMPLEMENTED (client-side; live Electric wiring is a documented seam — see Shipped notes). Branch `feat/032-electric-sync-readpath`, not yet merged/archived — orchestrator integrates.
+- **Status**: SHIPPED (merged to main `2fcc3e7`; client-side — live Electric wiring is a documented seam, see Shipped notes).
 - **Milestone**: M8 (Server & sync)
 - **Blocked by**: 030 (server Postgres), 031 (engine decided → ElectricSQL). **Pairs with 043** (write authority) — this issue is the *read-path* half.
 

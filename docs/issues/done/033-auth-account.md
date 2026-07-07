@@ -1,6 +1,6 @@
 # 033: Authentication + account — Cognito (email/password) + hero + login screen
 
-- **Status**: IMPLEMENTED on branch `feat/033-cognito-auth` — pending orchestrator review/integration (ship ritual — status flip to SHIPPED + `git mv` to `done/` — is done on integration, not here).
+- **Status**: SHIPPED (merged to main `4dd0a24`).
 - **Milestone**: M9 (Identity & tenancy)
 - **Blocked by**: 030 (server/CDK app — shipped); provider decided by **ADR-0009** → **Amazon Cognito** (supersedes ADR-0008's better-auth)
 
