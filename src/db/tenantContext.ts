@@ -31,3 +31,22 @@ export async function getTenantContext(db: Database): Promise<string | null> {
   const row = (rows as unknown as { rows: { sub: string | null }[] }).rows[0]
   return row?.sub ?? null
 }
+
+// Issue 035 (ADR-0009) — the email half of the identity seam. Invitations
+// (migration 0009) are keyed by email (the owner doesn't know the invitee's
+// Cognito `sub` until they accept), so `app_current_user_email()`'s RLS
+// policies need this GUC alongside the sub's. Additive: kept as its own
+// function rather than widening `setTenantContext`'s signature so no
+// existing call site (there are none yet in production code — this whole
+// seam awaits 043's write-path wiring) needs to change.
+export async function setTenantEmail(db: Database, email: string | null): Promise<void> {
+  await db.execute(sql`SELECT set_config('app.current_user_email', ${email ?? ''}, false)`)
+}
+
+export async function getTenantEmail(db: Database): Promise<string | null> {
+  const rows = await db.execute<{ email: string | null }>(
+    sql`SELECT NULLIF(current_setting('app.current_user_email', true), '') AS email`,
+  )
+  const row = (rows as unknown as { rows: { email: string | null }[] }).rows[0]
+  return row?.email ?? null
+}

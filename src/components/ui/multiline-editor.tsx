@@ -21,6 +21,10 @@ export interface MultilineEditProps {
   displayClassName?: string
   inputClassName?: string
   ariaLabel?: string
+  // Issue 035 — a viewer's read-only affordance: the display renders, but
+  // clicking it never enters edit mode. Defaults to false (every existing
+  // caller — Composer's justification, Foundation's purpose — is unchanged).
+  readOnly?: boolean
 }
 
 export function MultilineEdit({
@@ -30,6 +34,7 @@ export function MultilineEdit({
   displayClassName,
   inputClassName,
   ariaLabel,
+  readOnly = false,
 }: MultilineEditProps) {
   const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState(value)
@@ -49,14 +54,18 @@ export function MultilineEdit({
     setEditing(false)
   }
 
-  if (!editing) {
+  if (!editing || readOnly) {
     return (
       <span
         className={displayClassName}
-        onClick={() => {
-          setDraft(value)
-          setEditing(true)
-        }}
+        onClick={
+          readOnly
+            ? undefined
+            : () => {
+                setDraft(value)
+                setEditing(true)
+              }
+        }
       >
         {display}
       </span>

@@ -8,12 +8,14 @@ import { coverageStat } from '../domain/coverage'
 import { findDuplicateContextIds } from '../domain/duplicates'
 import type { ContextRow } from '../db/mutations'
 import { navigate } from '../shell/router'
+import { canWrite } from '../domain/workspaceRole'
 import { useCommandLogStore } from '../store/commandLog'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
 import { useStatusStore } from '../store/status'
 import { useTier2Store } from '../store/tier2'
+import { useWorkspaceRole } from '../store/workspace'
 import type { StaleRebindEvent } from '../db/mutations'
 import { Button } from './ui/button'
 import { Breadcrumbs } from './Breadcrumbs'
@@ -37,6 +39,13 @@ export function DesignSurface({
   // The canvas currently open: null = root canvas; the last path segment = the
   // context whose child canvas we're inside (issue 011).
   const contextId = contextPath.length > 0 ? (contextPath[contextPath.length - 1] as string) : null
+  // Issue 035 — a viewer's read surface renders unchanged, minus every write
+  // affordance: EditableGrid's phantom row/in-place edit, Composer's pickers/
+  // justification, and "New context" (compose is never entered at all, so
+  // Canvas's own compose-mode dot interactivity is moot — it's only reachable
+  // via `composeContextId`, which stays null for a read-only caller below).
+  const { role } = useWorkspaceRole(projectId)
+  const readOnly = !canWrite(role)
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const loadedFor = useDimensionsStore((s) => s.projectId)
   const loadedContextId = useDimensionsStore((s) => s.contextId)
@@ -148,7 +157,10 @@ export function DesignSurface({
   // Entering compose creates a real, persisted draft (same mutation layer as
   // the register — SPEC invariant 6, acceptance criterion 1) and selects it.
   async function enterCompose(initialBindings?: Record<string, string>) {
-    if (composeContextId) return
+    // Issue 035 — a read-only caller never opens a compose draft: no button,
+    // no `c` shortcut, and this guard even if something else calls it (the
+    // coverage matrix's gap-click, `handleComposeTuple` below).
+    if (composeContextId || readOnly) return
     // From a coverage-matrix gap the draft arrives pre-filled with the whole
     // tuple (issue 012); create + the n binds are one undoable gesture, mirroring
     // the register's batched phantom-row create.
@@ -453,14 +465,19 @@ export function DesignSurface({
                   sub-parameters in the dimension manager.
                 </p>
               ) : null}
-              <div className="canvas-toolbar">
-                {/* "New context" or the `c` key enters compose mode (SPEC §4.2,
-                    §4.4). No palette verb here — the command palette (017) owns
-                    its own registry. */}
-                <Button onClick={() => void enterCompose()} disabled={composing}>
-                  New context
-                </Button>
-              </div>
+              {/* Issue 035 — a viewer never sees the write-only "New context"
+                  affordance at all (not merely disabled); the read surface
+                  otherwise looks identical. */}
+              {readOnly ? null : (
+                <div className="canvas-toolbar">
+                  {/* "New context" or the `c` key enters compose mode (SPEC §4.2,
+                      §4.4). No palette verb here — the command palette (017) owns
+                      its own registry. */}
+                  <Button onClick={() => void enterCompose()} disabled={composing}>
+                    New context
+                  </Button>
+                </div>
+              )}
               <div
                 className="design-surface-row"
                 // Issue 027 — the child-no-params state already shows ONE
@@ -497,7 +514,12 @@ export function DesignSurface({
                   onHoverChange={setHoveredMark}
                 />
                 <section className="panel context-register-shell">
-                  <ContextRegister projectId={projectId} contextId={contextId} onDrillIn={handleDrillIn} />
+                  <ContextRegister
+                    projectId={projectId}
+                    contextId={contextId}
+                    onDrillIn={handleDrillIn}
+                    readOnly={readOnly}
+                  />
                 </section>
               </div>
             </div>
@@ -512,6 +534,7 @@ export function DesignSurface({
               onBindParameter={(d, p) => void handleBindParameter(d, p)}
               onUnbindParameter={(d) => void handleUnbindParameter(d)}
               duplicateSiblingSymbols={duplicateSiblingSymbols}
+              readOnly={readOnly}
               onJustificationCommit={(text) => {
                 if (selectedContextId) void useContextsStore.getState().setJustification(selectedContextId, text)
               }}

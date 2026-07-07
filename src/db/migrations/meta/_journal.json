@@ -64,6 +64,13 @@
       "when": 1783399377663,
       "tag": "0008_workspaces_rls",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1783403216302,
+      "tag": "0009_invitations",
+      "breakpoints": true
     }
   ]
 }

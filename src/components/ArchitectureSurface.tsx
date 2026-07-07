@@ -2,9 +2,11 @@ import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Tier2EntryRow, Tier2TableRow } from '../db/mutations'
 import { buildEntryTree, flattenEntryTree } from '../domain/entryTree'
+import { canWrite } from '../domain/workspaceRole'
 import { ContextBar } from '../shell/slots'
 import { useStatusStore } from '../store/status'
 import { useTier2Store, type EntryLink } from '../store/tier2'
+import { useWorkspaceRole } from '../store/workspace'
 import { EditableGrid, type GridColumn } from './EditableGrid'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -29,6 +31,10 @@ interface RowMeta {
 // EditableGrid unchanged (ADR-0004) — the nesting, selection and source badge
 // live in two static cell renderers only.
 export function ArchitectureSurface({ projectId }: { projectId: string }) {
+  // Issue 035 — a viewer sees every table's tree read-only: no add/delete
+  // entry, no promote, no add-table, no table rename, no phantom row.
+  const { role } = useWorkspaceRole(projectId)
+  const readOnly = !canWrite(role)
   const tables = useTier2Store((s) => s.tables)
   const load = useTier2Store((s) => s.load)
   const addTable = useTier2Store((s) => s.addTable)
@@ -70,23 +76,34 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
       <h2 className="tier2-header">2nd Tier · Architecture</h2>
 
       {tables.map((table) => (
-        <TablePanel key={table.id} projectId={projectId} table={table} />
+        <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
       ))}
 
-      {/* A quiet ghost panel at the end names the next table (design brief). */}
-      <section className="panel t2-add-table" ref={addTableRef}>
-        <PhantomInput
-          placeholder="Add table"
-          ariaLabel="Add architecture table"
-          inputClassName="t2-add-table__input"
-          onSubmit={(name) => void addTable(name)}
-        />
-      </section>
+      {/* A quiet ghost panel at the end names the next table (design brief);
+          a viewer never sees this write-only affordance at all (issue 035). */}
+      {readOnly ? null : (
+        <section className="panel t2-add-table" ref={addTableRef}>
+          <PhantomInput
+            placeholder="Add table"
+            ariaLabel="Add architecture table"
+            inputClassName="t2-add-table__input"
+            onSubmit={(name) => void addTable(name)}
+          />
+        </section>
+      )}
     </main>
   )
 }
 
-function TablePanel({ projectId, table }: { projectId: string; table: Tier2TableRow }) {
+function TablePanel({
+  projectId,
+  table,
+  readOnly,
+}: {
+  projectId: string
+  table: Tier2TableRow
+  readOnly: boolean
+}) {
   const entries = useTier2Store((s) => s.entriesByTable[table.id] ?? NO_ENTRIES)
   const linkByEntryId = useTier2Store((s) => s.linkByEntryId)
   const renameTable = useTier2Store((s) => s.renameTable)
@@ -175,15 +192,19 @@ function TablePanel({ projectId, table }: { projectId: string; table: Tier2Table
               ) : (
                 <span className="t2-chevron-spacer" />
               )}
-              <Button
-                variant="bare"
-                className="t2-select"
-                aria-label={`Select ${entry.name}`}
-                aria-pressed={isSelected}
-                onClick={(e) => onSelectClick(entry.id, e)}
-              >
-                <span className="t2-checkbox" data-checked={isSelected || undefined} />
-              </Button>
+              {/* Issue 035 — selection only ever feeds the promote action, so
+                  a viewer (who can't promote) never sees the affordance. */}
+              {readOnly ? null : (
+                <Button
+                  variant="bare"
+                  className="t2-select"
+                  aria-label={`Select ${entry.name}`}
+                  aria-pressed={isSelected}
+                  onClick={(e) => onSelectClick(entry.id, e)}
+                >
+                  <span className="t2-checkbox" data-checked={isSelected || undefined} />
+                </Button>
+              )}
             </div>
           )
         },
@@ -224,46 +245,50 @@ function TablePanel({ projectId, table }: { projectId: string; table: Tier2Table
                   → {link.dimensionName}
                 </span>
               )}
-              <Button
-                variant="bare"
-                className="t2-row-action"
-                aria-label={`Add child to ${entry.name}`}
-                onClick={() => {
-                  setCollapsed((prev) => {
-                    const next = new Set(prev)
-                    next.delete(entry.id)
-                    return next
-                  })
-                  void addEntry(table.id, entry.id, 'New entry')
-                }}
-              >
-                <Plus size={16} />
-              </Button>
-              <Popover
-                open={resolving?.id === entry.id}
-                onOpenChange={(open) => {
-                  if (!open) setResolving(null)
-                }}
-              >
-                <PopoverAnchor asChild>
+              {readOnly ? null : (
+                <>
                   <Button
                     variant="bare"
                     className="t2-row-action"
-                    aria-label={`Delete ${entry.name}`}
-                    onClick={() => void handleDelete(entry)}
+                    aria-label={`Add child to ${entry.name}`}
+                    onClick={() => {
+                      setCollapsed((prev) => {
+                        const next = new Set(prev)
+                        next.delete(entry.id)
+                        return next
+                      })
+                      void addEntry(table.id, entry.id, 'New entry')
+                    }}
                   >
-                    <Trash2 size={16} />
+                    <Plus size={16} />
                   </Button>
-                </PopoverAnchor>
-                {resolving?.id === entry.id && (
-                  <ResolutionPopover
-                    tableId={table.id}
-                    entry={entry}
-                    links={resolving.links}
-                    onClose={() => setResolving(null)}
-                  />
-                )}
-              </Popover>
+                  <Popover
+                    open={resolving?.id === entry.id}
+                    onOpenChange={(open) => {
+                      if (!open) setResolving(null)
+                    }}
+                  >
+                    <PopoverAnchor asChild>
+                      <Button
+                        variant="bare"
+                        className="t2-row-action"
+                        aria-label={`Delete ${entry.name}`}
+                        onClick={() => void handleDelete(entry)}
+                      >
+                        <Trash2 size={16} />
+                      </Button>
+                    </PopoverAnchor>
+                    {resolving?.id === entry.id && (
+                      <ResolutionPopover
+                        tableId={table.id}
+                        entry={entry}
+                        links={resolving.links}
+                        onClose={() => setResolving(null)}
+                      />
+                    )}
+                  </Popover>
+                </>
+              )}
             </div>
           )
         },
@@ -292,11 +317,13 @@ function TablePanel({ projectId, table }: { projectId: string; table: Tier2Table
         displayClassName="t2-table__name"
         ariaLabel={`Table name ${table.name}`}
         selectOnFocus
+        readOnly={readOnly}
       />
       <EditableGrid
         rows={rows}
         columns={columns}
         getRowId={(entry) => entry.id}
+        readOnly={readOnly}
         phantom={{
           columnId: 'name',
           placeholder: 'Name an entry',

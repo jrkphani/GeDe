@@ -44,6 +44,36 @@ export const workspaceMembers = pgTable(
   (table) => [uniqueIndex('workspace_members_workspace_user_idx').on(table.workspaceId, table.userSub)],
 )
 
+// Issue 035 (ADR-0009, done/034 deviation #3) — the granting path 034
+// deliberately deferred: "membership creation is self-only, deferring 'owner
+// invites another sub' to 035's granting UX". An invitation is email-first
+// (the owner doesn't know the invitee's Cognito `sub` yet — only 033's
+// identity store resolves that, at accept time). `status` is deliberately NOT
+// a stored column — this schema's convention is to derive status live from
+// timestamps (mirrors `documentedStatus`/`isComplete`, issue 005/SPEC
+// invariant 1) rather than duplicate state that can drift: pending = neither
+// accepted_at nor deleted_at set and not past expires_at; accepted =
+// accepted_at set; revoked = deleted_at set (the standard tombstone
+// convention, §3); expired = past expires_at with neither. See
+// src/domain/invitation.ts for the pure derivation.
+export const invitations = pgTable('invitations', {
+  id: text('id').primaryKey(),
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
+  // Stored lowercase (app-layer normalization, src/db/invitations.ts) so a
+  // case-insensitive email match is a plain equality, not a SQL lower() at
+  // every read — RLS policies still lower() defensively (migration 0009).
+  email: text('email').notNull(),
+  role: workspaceRole('role').notNull().default('viewer'),
+  invitedBySub: text('invited_by_sub').notNull(),
+  expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'string' }).notNull(),
+  acceptedAt: timestamp('accepted_at', { withTimezone: true, mode: 'string' }),
+  createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+  deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+})
+
 // SPEC.md §3 — every row: UUIDv7 id, created_at/updated_at (LWW), deleted_at (soft delete).
 export const projects = pgTable('projects', {
   id: text('id').primaryKey(),

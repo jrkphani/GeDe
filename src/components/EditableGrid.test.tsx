@@ -398,3 +398,39 @@ describe('nextEditableCell — pure boundary logic (issue 022)', () => {
     expect(nextEditableCell(nav, PHANTOM_ROW_ID, 'a', 'right')).toBeNull()
   })
 })
+
+describe('readOnly (issue 035 — viewer role affordance)', () => {
+  it('renders no phantom row, regardless of what the caller passes as `phantom`', () => {
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(t) => t.id}
+        readOnly
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate: vi.fn() }}
+      />,
+    )
+    expect(screen.queryByPlaceholderText('New task')).not.toBeInTheDocument()
+  })
+
+  it('a text/mono cell click does not open an editor', async () => {
+    const user = userEvent.setup()
+    const onTitleCommit = vi.fn()
+    render(<EditableGrid rows={rows} columns={makeColumns(onTitleCommit)} getRowId={(t) => t.id} readOnly />)
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  })
+
+  it('a combobox cell renders a plain display, not an interactive trigger', () => {
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(t) => t.id} readOnly />)
+    expect(screen.queryAllByRole('button', { name: /Category/ })).toHaveLength(0)
+    expect(screen.queryByPlaceholderText('Type to filter…')).not.toBeInTheDocument()
+  })
+
+  it('is false by default — every existing caller keeps full read/write behavior unchanged', async () => {
+    const user = userEvent.setup()
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(t) => t.id} />)
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.getByRole('textbox')).toBeInTheDocument()
+  })
+})

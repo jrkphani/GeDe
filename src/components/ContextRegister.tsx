@@ -37,10 +37,14 @@ export function ContextRegister({
   projectId,
   contextId = null,
   onDrillIn,
+  readOnly = false,
 }: {
   projectId: string
   contextId?: string | null
   onDrillIn?: (contextId: string) => void
+  // Issue 035 — a viewer sees the same register, minus every write affordance
+  // (phantom row, in-place edit of any cell); forwarded straight to EditableGrid.
+  readOnly?: boolean
 }) {
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const contexts = useContextsStore((s) => s.contexts)
@@ -201,6 +205,7 @@ export function ContextRegister({
       rows={contexts}
       columns={columns}
       getRowId={(ctx) => ctx.id}
+      readOnly={readOnly}
       rowClassName={(ctx) => {
         const bound = new Set(Object.keys(bindingsByContext[ctx.id] ?? {}))
         const classes = [
