@@ -18,9 +18,10 @@ As a signed-in collaborator, my local edits (already instant against PGlite) **r
   - **Authenticates** the Cognito JWT (JWKS, ADR-0009) → the acting user (`sub`).
   - **Scopes** to the caller's workspace/tenant (034) — rejects cross-tenant writes independent of RLS (defense-in-depth).
   - **Validates domain invariants** server-side (mirrored from the client domain rules: dimension floor, tuple/completeness legality, FK-cycle integrity, cascade rules) — rejects illegal writes with a typed error.
+  - **Resolves conflicts (LWW authority lives here, not in 032)**: on a concurrent edit to the same row, this write path (or a Postgres trigger) decides the winner by **`updated_at` last-write-wins** at persist time. The read-path (032) does not resolve conflicts — it applies whatever authoritative row this path produces, so two clients can never disagree on the winner (ADR-0010).
   - **Persists** to Postgres; ElectricSQL (032) syncs the authoritative rows back to all clients.
 - **Serverless by default (cost)**: implement the API as **AWS Lambda behind the ALB / API Gateway** — `$0` idle, pay-per-write (ADR-0010). Not an always-on Fargate task. (Fargate remains only the ElectricSQL sync service.)
-- **Client offline queue + replay**: the client keeps writing PGlite optimistically (032); mutations queue while offline and **replay through this API on reconnect**, in order, idempotently (UUIDv7 keys make replays safe).
+- **The replay protocol (this issue owns it; 032 owns the queue)**: **032 builds the client mutation-queue + optimistic apply**; **043 defines the protocol that queue replays into** — ordering, **idempotency via UUIDv7** (replaying the same mutation is a no-op), and the rollback-on-reject contract. The queue is the pinned integration seam between the two issues; keep them consistent (see 032's "queue seam" scope item).
 - **Rejection → reconciliation**: a server-rejected mutation surfaces as a calm client error (015 style) and the local optimistic write is rolled back / reconciled to the authoritative server state (via the Electric stream).
 - **Tier-3 backstop** (pairs with 034): the same invariants that can be expressed as **Postgres constraints/triggers** are added there too — the last line that no client or API bug can bypass.
 

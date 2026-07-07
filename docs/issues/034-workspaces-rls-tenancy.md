@@ -15,6 +15,7 @@ SPEC §1 defines v2 as "workspace RLS + realtime row-delta sync", and TECH_STACK
 ## Scope
 
 - **Workspace model** (migration): a `workspaces` table + membership (`workspace_members` with a user↔workspace role), and a `workspace_id` on the tenant-scoped tables (projects and everything under them). UUIDv7 keys + the standard timestamps/soft-delete, consistent with every other table (§3).
+- **Migration-slot coordination**: M8 lands two schema migrations near each other — **032's tombstone migration** (007 hard-delete → `deleted_at` soft-delete) and **034's** workspace/RLS migration. Pre-assign distinct slots so parallel worktree builds don't collide (HANDOFF worktree discipline); 032's tombstone typically lands first (sync-readiness), then 034's tenancy columns/policies on top.
 - **RLS policies**: enable RLS on all tenant tables; policies scope `select`/`insert`/`update`/`delete` to the authenticated user's workspace memberships (identity from 033). The **sync stream (032) must run under RLS** so a client only ever receives its workspaces' deltas.
 - **Migration of existing single-user data**: v1 projects have no workspace — provide a personal/default workspace so existing rows get a home (dovetails with 037's local→cloud adoption).
 - **Same migrations everywhere**: policies live in the Drizzle migration history and apply to both PGlite (where they're inert/permissive for the single local user) and server Postgres (where they enforce) — no dialect fork.
