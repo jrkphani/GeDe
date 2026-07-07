@@ -16,6 +16,16 @@ const STANDALONE_COMMAND_BUTTONS: readonly { file: string; label: string }[] = [
   { file: 'src/components/DimensionManager.tsx', label: 'Dimensions' },
   { file: 'src/components/DimensionManager.tsx', label: 'Cancel' },
   { file: 'src/components/ParameterList.tsx', label: 'Remove' },
+  // Issue 033: the hero CTA and the login screen's per-mode submit are each a
+  // standalone, always-visible action — never a row affordance.
+  { file: 'src/components/Hero.tsx', label: 'Sign in' },
+  { file: 'src/components/LoginScreen.tsx', label: 'Sign in' },
+  { file: 'src/components/LoginScreen.tsx', label: 'Sign up' },
+  { file: 'src/components/LoginScreen.tsx', label: 'Verify' },
+  // Issue 033: the not-found panel's own recovery action (HANDOFF flagged
+  // this exact button as a latent 026 candidate before it was migrated off
+  // a raw <button className="row-action">).
+  { file: 'src/App.tsx', label: 'Back to projects' },
 ]
 
 // Finds the JSX child text ">Label" (i.e. Label rendered directly as a

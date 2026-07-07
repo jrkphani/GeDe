@@ -94,17 +94,24 @@ export default tseslint.config(
     },
   },
   {
-    // Issue 020: new UI flows through the shared primitive layer (src/components/ui).
-    // Raw HTML controls and third-party UI libs are wrapped once in ui/, so they
-    // are forbidden elsewhere in components. Scoped OUT of ui/ (where the wrapping
-    // lives) and EditableGrid (the shared grid primitive that owns its own cells,
-    // like a shadcn DataTable). Repeats the db pattern so this block — which wins
-    // for these files — doesn't drop the layer-boundary rule.
-    files: ['src/components/**/*.{ts,tsx}'],
+    // Issue 020 (scope widened by issue 033): new UI flows through the shared
+    // primitive layer (src/components/ui). Raw HTML controls and third-party
+    // UI libs are wrapped once in ui/, so they are forbidden elsewhere in
+    // components AND in the shell (src/shell/**, src/App.tsx) — issue 033
+    // migrated the shell's last hand-rolled controls (app-bar rename/palette/
+    // theme-toggle, status-bar action, not-found's back button) onto
+    // Button/InlineEdit and widened this rule's `files` here so the gap
+    // (HANDOFF "Shell-layer raw controls + lint gap") can't recur. Scoped OUT
+    // of ui/ (where the wrapping lives) and EditableGrid (the shared grid
+    // primitive that owns its own cells, like a shadcn DataTable). Repeats the
+    // db pattern so this block — which wins for these files — doesn't drop
+    // the layer-boundary rule.
+    files: ['src/components/**/*.{ts,tsx}', 'src/shell/**/*.{ts,tsx}', 'src/App.tsx'],
     ignores: [
       'src/components/ui/**',
       'src/components/**/*.test.{ts,tsx}',
       'src/components/EditableGrid.tsx',
+      'src/shell/**/*.test.{ts,tsx}',
     ],
     rules: {
       '@typescript-eslint/no-restricted-imports': [

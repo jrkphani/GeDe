@@ -19,23 +19,28 @@ export interface ApiStackProps extends StackProps {
 /**
  * `Gede-Test-Api` - the v2 compute tier (issue 030, ADR-0008, scope item 3):
  * an internet-facing ALB in the public subnets, fronting an ECS Fargate
- * cluster running two *stubbed* services in the private (NAT-egress)
+ * cluster running one *stubbed* service in the private (NAT-egress)
  * subnets:
  *
  *   - `sync` - filled in by issue 032 (ElectricSQL sync container)
- *   - `auth` - filled in by issue 033 (better-auth, self-hosted)
  *
- * Both slots run the same clearly-marked placeholder image
+ * The `auth` stub slot that originally lived here (better-auth, ADR-0008)
+ * has been REMOVED (issue 033, ADR-0009): auth is now Amazon Cognito, a
+ * managed regional resource outside the VPC (see `auth-stack.ts`), so there
+ * is no auth Fargate service, target group, or `/auth*` ALB route to run
+ * here anymore - one fewer always-on task.
+ *
+ * The remaining slot runs the same clearly-marked placeholder image
  * (`public.ecr.aws/docker/library/nginx:alpine`) behind path-based ALB
- * routing (`/sync*`, `/auth*`), each with its own container healthcheck and
- * ALB target-group health check wired end-to-end. This is a documented,
- * health-checked placeholder tier, NOT a real implementation of either
- * service - 032/033 swap the image (+ container port, if it differs from
- * nginx's 80) without needing to re-architect the ALB/service/healthcheck
- * plumbing built here.
+ * routing (`/sync*`), with its own container healthcheck and ALB
+ * target-group health check wired end-to-end. This is a documented,
+ * health-checked placeholder tier, NOT a real implementation of the service
+ * - 032 swaps the image (+ container port, if it differs from nginx's 80)
+ * without needing to re-architect the ALB/service/healthcheck plumbing
+ * built here.
  *
- * Security groups: internet (`0.0.0.0/0:80`) -> ALB SG -> compute SG (both
- * stub services) -> the Data stack's RDS SG on 5432 (the ingress rule for
+ * Security groups: internet (`0.0.0.0/0:80`) -> ALB SG -> compute SG (the
+ * sync stub service) -> the Data stack's RDS SG on 5432 (the ingress rule for
  * that last hop is added here - see the `databaseSecurityGroup` prop doc and
  * data-stack.ts's class doc for the circular-dependency rationale). No rule
  * anywhere in this stack admits `0.0.0.0/0` to port 5432.
@@ -46,7 +51,6 @@ export class ApiStack extends Stack {
   public readonly computeSecurityGroup: ec2.SecurityGroup;
   public readonly albSecurityGroup: ec2.SecurityGroup;
   public readonly syncService: ecs.FargateService;
-  public readonly authService: ecs.FargateService;
 
   constructor(scope: Construct, id: string, props: ApiStackProps) {
     super(scope, id, props);
@@ -69,8 +73,8 @@ export class ApiStack extends Stack {
 
     this.computeSecurityGroup = new ec2.SecurityGroup(this, 'ComputeSecurityGroup', {
       vpc: props.vpc,
-      description: `${id} Fargate compute (sync/auth stub slots, issue 030) - ingress only from the ALB security group.`,
-      allowAllOutbound: true, // NAT egress: pulling container images now; outbound calls for the real 032/033 services later.
+      description: `${id} Fargate compute (sync stub slot, issue 030; auth moved to Cognito, issue 033) - ingress only from the ALB security group.`,
+      allowAllOutbound: true, // NAT egress: pulling container images now; outbound calls for the real 032 service later.
     });
     this.computeSecurityGroup.addIngressRule(
       this.albSecurityGroup,
@@ -93,7 +97,7 @@ export class ApiStack extends Stack {
       toPort: 5432,
       sourceSecurityGroupId: this.computeSecurityGroup.securityGroupId,
       description:
-        'Api compute (sync/auth stub slots, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.',
+        'Api compute (sync stub slot, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.',
     });
 
     // --- ALB ----------------------------------------------------------------
@@ -110,20 +114,19 @@ export class ApiStack extends Stack {
       defaultAction: elbv2.ListenerAction.fixedResponse(404, {
         contentType: 'text/plain',
         messageBody:
-          `${id}: no route matched (placeholder tier, issue 030) - /sync* and /auth* are stubbed pending issues 032/033.`,
+          `${id}: no route matched (placeholder tier, issue 030) - /sync* is stubbed pending issue 032. ` +
+          '/auth* is intentionally absent - auth is Amazon Cognito (issue 033, ADR-0009), not routed through this ALB.',
       }),
     });
 
     // --- Placeholder container image ----------------------------------------
-    // 032 (ElectricSQL sync) and 033 (better-auth) replace this image - the
-    // task/service/target-group/health-check plumbing below is built to
-    // survive that swap unchanged.
+    // 032 (ElectricSQL sync) replaces this image - the task/service/target-
+    // group/health-check plumbing below is built to survive that swap
+    // unchanged. There is no `auth` slot anymore (issue 033, ADR-0009).
     const placeholderImage = ecs.ContainerImage.fromRegistry('public.ecr.aws/docker/library/nginx:alpine');
 
     const sync = this.buildStubService('Sync', placeholderImage);
-    const auth = this.buildStubService('Auth', placeholderImage);
     this.syncService = sync.service;
-    this.authService = auth.service;
 
     listener.addTargets('SyncTargets', {
       priority: 10,
@@ -137,33 +140,21 @@ export class ApiStack extends Stack {
       },
     });
 
-    listener.addTargets('AuthTargets', {
-      priority: 20,
-      conditions: [elbv2.ListenerCondition.pathPatterns(['/auth*'])],
-      port: 80,
-      targets: [auth.service],
-      healthCheck: {
-        path: '/',
-        interval: Duration.seconds(30),
-        healthyHttpCodes: '200-399',
-      },
-    });
-
     new CfnOutput(this, 'LoadBalancerDnsName', {
       value: this.loadBalancer.loadBalancerDnsName,
-      description: 'Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS.',
+      description: 'Api ALB DNS name - issue 040 later fronts this with a real domain + TLS.',
     });
   }
 
   /**
-   * Builds one stubbed Fargate service (`sync` or `auth`): a task definition
-   * with a container healthcheck, running the placeholder image, deployed
-   * in the private (NAT-egress) subnets behind the compute security group.
-   * 032/033 replace the image passed in; everything else here is meant to
-   * be the real, permanent shape of the service.
+   * Builds one stubbed Fargate service (`sync`): a task definition with a
+   * container healthcheck, running the placeholder image, deployed in the
+   * private (NAT-egress) subnets behind the compute security group. 032
+   * replaces the image passed in; everything else here is meant to be the
+   * real, permanent shape of the service.
    */
   private buildStubService(
-    name: 'Sync' | 'Auth',
+    name: 'Sync',
     image: ecs.ContainerImage,
   ): { service: ecs.FargateService; taskDefinition: ecs.FargateTaskDefinition } {
     const taskDefinition = new ecs.FargateTaskDefinition(this, `${name}TaskDef`, {

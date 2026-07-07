@@ -1,4 +1,5 @@
 import { useStatusStore } from '../store/status'
+import { Button } from '../components/ui/button'
 
 declare const __APP_VERSION__: string
 
@@ -14,15 +15,15 @@ export function StatusBar() {
           <>
             <span>{message}</span>
             {action !== null && (
-              <button
-                className="row-action"
+              <Button
+                variant="rowAction"
                 onClick={() => {
                   void action.run()
                   clear()
                 }}
               >
                 {action.label}
-              </button>
+              </Button>
             )}
           </>
         )}

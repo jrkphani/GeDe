@@ -6,6 +6,7 @@ import { AppShell } from './AppShell'
 import { navigate, useRoute } from './router'
 import { ContextBar, ContextBarProvider } from './slots'
 import { StatusBar } from './StatusBar'
+import { useAuthStore, resetAuthStoreForTests } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { useStatusStore } from '../store/status'
 
@@ -37,6 +38,7 @@ beforeEach(() => {
   window.history.replaceState(null, '', '/p/proj-1/foundation')
   useStatusStore.setState({ message: null, action: null })
   useCommandLogStore.getState().clear()
+  resetAuthStoreForTests()
 })
 
 describe('tier tabs', () => {
@@ -179,5 +181,56 @@ describe('undo/redo (issue 006)', () => {
     expect(useCommandLogStore.getState().past).toHaveLength(1)
     navigate({ kind: 'tier', projectId: 'proj-2', tier: 'foundation' })
     await waitFor(() => expect(useCommandLogStore.getState().past).toEqual([]))
+  })
+})
+
+describe('account affordance (issue 033, SITEMAP §2 "App bar (stable everywhere)")', () => {
+  it('renders nothing when this build has no Cognito configuration (local-mode preserved)', () => {
+    useAuthStore.setState({ configured: false, status: 'unauthenticated' })
+    render(<TestShell />)
+    expect(screen.queryByRole('button', { name: 'Sign in' })).not.toBeInTheDocument()
+  })
+
+  it('shows a quiet "Sign in" command button when configured but signed out', () => {
+    useAuthStore.setState({ configured: true, status: 'unauthenticated', user: null })
+    render(<TestShell />)
+    const signIn = screen.getByRole('button', { name: 'Sign in' })
+    expect(signIn.className).toContain('command-button')
+  })
+
+  it('clicking "Sign in" navigates to /login', async () => {
+    const user = userEvent.setup()
+    useAuthStore.setState({ configured: true, status: 'unauthenticated', user: null })
+    render(<TestShell />)
+    await user.click(screen.getByRole('button', { name: 'Sign in' }))
+    expect(window.location.pathname).toBe('/login')
+  })
+
+  it('shows the identity + a sign-out popover when authenticated', async () => {
+    const user = userEvent.setup()
+    useAuthStore.setState({
+      configured: true,
+      status: 'authenticated',
+      user: { sub: 'user-1', email: 'me@example.com' },
+    })
+    render(<TestShell />)
+    const trigger = screen.getByRole('button', { name: 'Account: me@example.com' })
+    expect(trigger).toBeInTheDocument()
+    await user.click(trigger)
+    expect(await screen.findByRole('button', { name: 'Sign out' })).toBeInTheDocument()
+  })
+
+  it('sign-out clears the session', async () => {
+    const user = userEvent.setup()
+    useAuthStore.setState({
+      configured: true,
+      status: 'authenticated',
+      user: { sub: 'user-1', email: 'me@example.com' },
+    })
+    render(<TestShell />)
+    await user.click(screen.getByRole('button', { name: 'Account: me@example.com' }))
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }))
+    expect(useAuthStore.getState().status).toBe('unauthenticated')
+    expect(useAuthStore.getState().user).toBeNull()
   })
 })
