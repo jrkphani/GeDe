@@ -9,7 +9,12 @@
 import { ShapeStream } from '@electric-sql/client'
 import type { Database } from '../db/client'
 import { applyInboundDeltas } from '../db/sync'
-import { toRowDeltas, type ElectricMessage } from './electricProtocol'
+import {
+  isElectricChangeMessage,
+  toRowDeltas,
+  type ElectricControlMessage,
+  type ElectricMessage,
+} from './electricProtocol'
 import { SYNCED_TABLES, syncBaseUrl } from './config'
 import { noAuth, type TokenProvider } from './authToken'
 import type { RowDelta, TableName } from '../domain/syncDelta'
@@ -42,6 +47,13 @@ export interface SyncOptions {
   // malformed message or a transient DB error must never crash the app
   // (local-first: the user's own edits keep working regardless).
   onError?: (table: TableName, error: unknown) => void
+  // Called for each Electric control message (`up-to-date`, `must-refetch`,
+  // `snapshot-end`, `subset-end`) on a table's shape — the seam 032 left for
+  // this ("syncEngine.ts owns reacting to those"). Issue 036 uses `up-to-date`
+  // per-table to know when a shape has fully caught up (the "synced" vs
+  // "syncing" distinction) — never fires for a change message, and never
+  // implies onApplied (a control-only batch carries no RowDelta).
+  onControl?: (table: TableName, control: ElectricControlMessage['headers']['control']) => void
 }
 
 function defaultShapeStreamFactory(table: TableName, options: SyncOptions): ShapeStreamLike {
@@ -73,6 +85,9 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
   const unsubscribes = SYNCED_TABLES.map((table) => {
     const stream = factory(table, options)
     return stream.subscribe((messages) => {
+      for (const message of messages) {
+        if (!isElectricChangeMessage(message)) options.onControl?.(table, message.headers.control)
+      }
       let deltas: RowDelta[]
       try {
         deltas = toRowDeltas(table, messages)

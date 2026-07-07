@@ -1,5 +1,6 @@
 import { useStatusStore } from '../store/status'
 import { Button } from '../components/ui/button'
+import { SyncIndicator } from './SyncIndicator'
 
 declare const __APP_VERSION__: string
 
@@ -29,6 +30,7 @@ export function StatusBar() {
         )}
       </div>
       <div className="status-bar__ambient">
+        <SyncIndicator />
         <span className="status-bar__version">v{__APP_VERSION__}</span>
       </div>
     </footer>
