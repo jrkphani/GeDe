@@ -1,9 +1,11 @@
+import * as path from 'node:path';
 import { Stack, StackProps, CfnOutput, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
 import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
@@ -21,6 +23,14 @@ export interface ApiStackProps extends StackProps {
   databaseSecret: secretsmanager.ISecret;
   /** The Data stack's RDS endpoint address (issue 043). */
   databaseEndpoint: string;
+  /**
+   * The Auth stack's Cognito User Pool id (issue 046) - a cross-stack
+   * reference used to derive `COGNITO_ISSUER` for the write-path Lambda.
+   * Never a hardcoded string or the issue-043 `PLACEHOLDER_USER_POOL_ID`
+   * stub: if the User Pool ever changes, this reference re-resolves rather
+   * than silently drifting.
+   */
+  userPoolId: string;
 }
 
 /**
@@ -174,33 +184,49 @@ export class ApiStack extends Stack {
       description: 'Write-path Lambda (issue 043) to Postgres 5432 - a second, distinct ingress rule on the Data security group (alongside the Fargate compute SG rule above); still never 0.0.0.0/0.',
     });
 
-    // Deterministic inline placeholder handler — mirrors the sync Fargate
-    // nginx stub (issue 030). The real Tier-2 write-path handler lives and is
-    // unit-tested at `src/server/writeApi/*`, but is NOT bundled here: a real
-    // `NodejsFunction` esbuild bundle would make `cdk synth` depend on a local
-    // esbuild toolchain and emit a machine-specific asset hash (the issue 041
-    // hazard, for Lambda), and the write-path is not yet wired to the client
-    // queue (issue 043 follow-up). Swapping this stub for the bundled handler
-    // is that follow-up; the stack SHAPE (VPC, SG, ALB route, IAM, env) is real
-    // now and asserted by the tests.
-    this.writeApiFunction = new lambda.Function(this, 'WriteApiFunction', {
-      description: `${id} Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres. Placeholder handler until the write-path is wired (see src/server/writeApi).`,
+    // Real bundled handler (issue 046, following up on issue 043's deferred
+    // inline 503 stub). `NodejsFunction` bundles `src/server/writeApi/albAdapter.ts`
+    // (the AWS-specific adapter — jwt.ts/handler.ts/store.ts underneath it are
+    // pure and already unit-tested) via esbuild, offline/no-Docker (esbuild is
+    // a deploy/cdk devDependency, added by issue 043 for exactly this;
+    // `forceDockerBundling: false` below makes that explicit rather than
+    // implicit, keeping `cdk synth` deterministic — the issue 041 hazard this
+    // stack previously sidestepped by staying inline). `COGNITO_ISSUER` is a
+    // genuine cross-stack reference to the Auth stack's User Pool (below) —
+    // never the `PLACEHOLDER_USER_POOL_ID` literal.
+    //
+    // Deploy-order note (see also migration-stack.ts's class doc): this
+    // handler assumes issue 045's migrations have already applied the schema
+    // (including 034's `app_user` role + RLS policies) to the RDS by the time
+    // it serves its first write — a deploy-ORDER concern (045 -> 046 -> 047),
+    // not something this stack enforces at synth time.
+    const rootLockFile = path.resolve(__dirname, '..', '..', '..', 'package-lock.json');
+
+    this.writeApiFunction = new nodejs.NodejsFunction(this, 'WriteApiFunction', {
+      description: `${id} Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).`,
+      entry: path.resolve(__dirname, '..', '..', '..', 'src', 'server', 'writeApi', 'albAdapter.ts'),
+      handler: 'handler',
       runtime: lambda.Runtime.NODEJS_20_X,
-      handler: 'index.handler',
-      code: lambda.Code.fromInline(
-        "exports.handler = async () => ({ statusCode: 503, body: 'write-path not yet wired (issue 043 follow-up)' });",
-      ),
       memorySize: 256,
       timeout: Duration.seconds(10),
       vpc: props.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [this.writeApiSecurityGroup],
+      depsLockFilePath: rootLockFile,
       environment: {
-        // Placeholder issuer — cross-stack wiring of 033's Cognito User Pool
-        // issuer URL into this stack is a follow-up (see docs/issues/043).
-        COGNITO_ISSUER: 'https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID',
+        // Cross-stack reference to the real Gede-Test-Auth User Pool (issue
+        // 046) — never a hardcoded string or the issue-043 PLACEHOLDER.
+        COGNITO_ISSUER: `https://cognito-idp.${this.region}.amazonaws.com/${props.userPoolId}`,
         DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
         DATABASE_ENDPOINT: props.databaseEndpoint,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        // Offline synth (issue 041 lesson) — esbuild is a deploy/cdk
+        // devDependency (issue 043) specifically so this never needs Docker.
+        forceDockerBundling: false,
       },
     });
     props.databaseSecret.grantRead(this.writeApiFunction);

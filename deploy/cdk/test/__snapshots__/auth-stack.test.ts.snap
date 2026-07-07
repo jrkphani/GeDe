@@ -4,6 +4,14 @@ exports[`AuthStack (Gede-Test-Auth) — issue 033, ADR-0009 matches the snapshot
 {
   "Description": "GeDe v2 identity: Cognito User Pool + public App Client (email/password, PKCE/SRP, no client secret) — issue 033 (ADR-0009), replacing the Api stack's former \`auth\` Fargate stub",
   "Outputs": {
+    "ExportsOutputRefUserPool6BA7E5F296FD7236": {
+      "Export": {
+        "Name": "Gede-Test-Auth:ExportsOutputRefUserPool6BA7E5F296FD7236",
+      },
+      "Value": {
+        "Ref": "UserPool6BA7E5F2",
+      },
+    },
     "UserPoolClientId": {
       "Description": "Cognito App Client id - consumed by the frontend build (VITE_COGNITO_CLIENT_ID).",
       "Export": {

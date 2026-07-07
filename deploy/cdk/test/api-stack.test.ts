@@ -166,6 +166,33 @@ describe('ApiStack (Gede-Test-Api)', () => {
       template.hasResourceProperties('AWS::Lambda::Function', { Runtime: Match.stringLikeRegexp('nodejs20') });
     });
 
+    it('bundles the REAL write-path handler (esbuild asset, not the issue-043 inline 503 stub) — issue 046', () => {
+      const template = synth();
+      const fns = template.findResources('AWS::Lambda::Function');
+      const [fn] = Object.values(fns) as Array<{ Properties: { Code: Record<string, unknown> } }>;
+      // The issue-043 stub was `lambda.Code.fromInline(...)`, which renders
+      // as a literal `ZipFile` string in the template. The bundled
+      // NodejsFunction instead renders as an S3 asset reference.
+      expect(fn.Properties.Code.ZipFile).toBeUndefined();
+      expect(JSON.stringify(fn.Properties.Code.ZipFile ?? '')).not.toContain('write-path not yet wired');
+      expect(fn.Properties.Code.S3Bucket).toBeDefined();
+      expect(fn.Properties.Code.S3Key).toBeDefined();
+    });
+
+    it('wires COGNITO_ISSUER as a cross-stack reference to the Auth User Pool — never a hardcoded/PLACEHOLDER string (issue 046)', () => {
+      const template = synth();
+      const fns = template.findResources('AWS::Lambda::Function');
+      const [fn] = Object.values(fns) as Array<{
+        Properties: { Environment: { Variables: Record<string, unknown> } };
+      }>;
+      const issuer = fn.Properties.Environment.Variables.COGNITO_ISSUER;
+      const issuerJson = JSON.stringify(issuer);
+      expect(issuerJson).not.toContain('PLACEHOLDER_USER_POOL_ID');
+      // A genuine cross-stack reference resolves through an Fn::ImportValue
+      // (or equivalent token) naming the Auth stack, not a literal string.
+      expect(issuerJson).toContain('Gede-Test-Auth');
+    });
+
     it('routes to the Lambda via an ALB target group of TargetType Lambda, with its health check disabled (cost: no synthetic-invocation billing)', () => {
       const template = synth();
       template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {

@@ -2,7 +2,7 @@
 
 exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
 {
-  "Description": "GeDe v2 backend: ECS Fargate compute tier (sync/auth stub slots, issues 032/033) + the serverless write-path API (issue 043) behind an internet-facing ALB — issue 030 (ADR-0008), ADR-0010",
+  "Description": "GeDe v2 backend: ECS Fargate compute tier (sync stub slot, issue 032) + the serverless write-path API (issues 043/046) behind an internet-facing ALB — issue 030 (ADR-0008), ADR-0010",
   "Outputs": {
     "LoadBalancerDnsName": {
       "Description": "Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* routes to the issue 043 write-path Lambda.",
@@ -629,12 +629,23 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       ],
       "Properties": {
         "Code": {
-          "ZipFile": "exports.handler = async () => ({ statusCode: 503, body: 'write-path not yet wired (issue 043 follow-up)' });",
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "b8c0a7b4edaef5fad5616eb84bcd1d1d88ee0ba7e704b9020b2f2445edea3a39.zip",
         },
-        "Description": "Gede-Test-Api Tier-2 write-path API (issue 043, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres. Placeholder handler until the write-path is wired (see src/server/writeApi).",
+        "Description": "Gede-Test-Api Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).",
         "Environment": {
           "Variables": {
-            "COGNITO_ISSUER": "https://cognito-idp.us-east-1.amazonaws.com/PLACEHOLDER_USER_POOL_ID",
+            "COGNITO_ISSUER": {
+              "Fn::Join": [
+                "",
+                [
+                  "https://cognito-idp.us-east-1.amazonaws.com/",
+                  {
+                    "Fn::ImportValue": "Gede-Test-Auth:ExportsOutputRefUserPool6BA7E5F296FD7236",
+                  },
+                ],
+              ],
+            },
             "DATABASE_ENDPOINT": {
               "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
             },
