@@ -69,6 +69,16 @@ export interface WriteStore extends WorkspaceScopeResolver {
    * FK_SCHEMA resolves against it.
    */
   workspaceExists(id: string): Promise<boolean>
+  /**
+   * Issue 057 — the membership-gated tenancy relaxation's primitive: true iff
+   * `sub` has a live (non-soft-deleted) `workspace_members` row for
+   * `workspaceId`. This is what `checkTenancy` (tenancy.ts) calls when a
+   * mutation declares a workspace other than the caller's own — see that
+   * module's `WorkspaceScopeResolver.isMember` doc comment for the full
+   * authorization shape. `WriteStore extends WorkspaceScopeResolver`, so
+   * this single method satisfies both.
+   */
+  isMember(workspaceId: string, sub: string): Promise<boolean>
   /** Live dimension count for a canvas (project + context, null = root canvas) — the dimension-floor primitive. */
   countLiveDimensions(projectId: string, contextId: string | null): Promise<number>
   /** Live bindings already occupying a (context, dimension) pair, excluding `excludeBindingId` (a rebind of itself). */
@@ -121,9 +131,18 @@ export class InMemoryWriteStore implements WriteStore {
   // `StoredRow.table` is a `MutationTable`, and `workspaces` deliberately
   // is not one (see `FkReferenceTable`'s doc comment).
   private readonly workspaceIds = new Set<string>()
+  // Issue 057 — seeded `workspace_members` rows, keyed `${workspaceId}:${sub}`
+  // (mirrors `key()`'s convention below, one level up). A fake, not a real
+  // table: tests seed exactly the membership tuples a scenario needs via
+  // `seedMembership`, mirroring `seedWorkspace`'s own minimal-fake shape.
+  private readonly memberships = new Set<string>()
 
   private key(table: MutationTable, id: string): string {
     return `${table}:${id}`
+  }
+
+  private membershipKey(workspaceId: string, sub: string): string {
+    return `${workspaceId}:${sub}`
   }
 
   /** Test/setup helper — seeds a row as if a prior mutation had already landed. */
@@ -136,8 +155,22 @@ export class InMemoryWriteStore implements WriteStore {
     this.workspaceIds.add(id)
   }
 
+  /**
+   * Issue 057 — test/setup helper mirroring `seedWorkspace`: seeds a live
+   * `workspace_members` row for `(workspaceId, sub)`, exactly what
+   * `isMember` below reads. Tests deliberately do NOT seed this to exercise
+   * the "no membership → still cross_tenant" half of the relaxation.
+   */
+  seedMembership(workspaceId: string, sub: string): void {
+    this.memberships.add(this.membershipKey(workspaceId, sub))
+  }
+
   workspaceExists(id: string): Promise<boolean> {
     return Promise.resolve(this.workspaceIds.has(id))
+  }
+
+  isMember(workspaceId: string, sub: string): Promise<boolean> {
+    return Promise.resolve(this.memberships.has(this.membershipKey(workspaceId, sub)))
   }
 
   getRow(table: MutationTable, id: string): Promise<StoredRow | null> {
@@ -323,6 +356,24 @@ export class PgWriteStore implements WriteStore {
 
   resolveWorkspaceForEntity(table: MutationTable, entityId: string): Promise<string | null> {
     return this.getRow(table, entityId).then((row) => row?.workspaceId ?? null)
+  }
+
+  // Issue 057 — the real membership check backing `checkTenancy`'s
+  // relaxation. Deliberately its own connection/query (not folded into
+  // `withTenantContext`): this runs BEFORE tenancy is decided, so there is no
+  // tenant-context GUC to set yet — `applyIfNew` is the only method that
+  // stamps that context, once a mutation has already been authorized.
+  async isMember(workspaceId: string, sub: string): Promise<boolean> {
+    const client = await this.config.pool.connect()
+    try {
+      const result = await client.query(
+        'SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_sub = $2 AND deleted_at IS NULL',
+        [workspaceId, sub],
+      )
+      return result.rows.length > 0
+    } finally {
+      client.release()
+    }
   }
 
   async countLiveDimensions(projectId: string, contextId: string | null): Promise<number> {

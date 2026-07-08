@@ -54,6 +54,21 @@ describe('toMutationEnvelope', () => {
     expect(toMutationEnvelope(mutation({ op: 'delete' }), 'ws-1').op).toBe('delete')
     expect(toMutationEnvelope(mutation({ op: 'upsert' }), 'ws-1').op).toBe('insert')
   })
+
+  // Issue 057 — a queued mutation's own explicit `workspaceId` (set by
+  // acceptInvitation for its seat mutation, scoped to the INVITER's
+  // workspace) must win over the flush's global workspace, since a
+  // multi-workspace member's accept-seat write is the one mutation that
+  // legitimately targets a workspace other than the caller's own.
+  it('uses the mutation\'s own explicit workspaceId over the flush-wide default when set', () => {
+    const envelope = toMutationEnvelope(mutation({ workspaceId: 'ws-inviter' }), 'ws-accepter-own')
+    expect(envelope.workspaceId).toBe('ws-inviter')
+  })
+
+  it('falls back to the flush-wide workspaceId when the mutation has none set (every pre-057 producer)', () => {
+    const envelope = toMutationEnvelope(mutation(), 'ws-accepter-own')
+    expect(envelope.workspaceId).toBe('ws-accepter-own')
+  })
 })
 
 describe('flushMutations — skips without touching the network (test-first plan #5)', () => {

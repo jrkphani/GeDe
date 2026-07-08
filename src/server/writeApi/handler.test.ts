@@ -243,6 +243,104 @@ describe('handleWriteRequest — invitations / workspaceMembers are routable (is
   })
 })
 
+// Issue 057 — the write-path contract test from the design brief's test-first
+// plan item 2: an authenticated caller (JWT sub = user B) submits a mutation
+// targeting user A's workspace, having been SEEDED as a member of it — this
+// exercises `handleWriteRequest` -> `checkTenancy` -> `store.isMember` end to
+// end, not just `checkTenancy` in isolation (tenancy.test.ts covers that).
+describe('handleWriteRequest — shared-workspace membership (issue 057)', () => {
+  const WS_A = workspaceIdForSub('user-a')
+
+  it('applies a workspaceMembers insert into another workspace when the caller is a seeded member', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS_A)
+    store.seedMembership(WS_A, 'user-b')
+    const token = await tokenFor('user-b', workspaceIdForSub('user-b'))
+    const mutation = envelope({
+      workspaceId: WS_A,
+      table: 'workspaceMembers',
+      op: 'insert',
+      payload: { workspaceId: WS_A, userSub: 'user-b', role: 'editor' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+  })
+
+  it('rejects the identical shape as cross_tenant when the caller has NO membership row for that workspace', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS_A)
+    // no seedMembership — user-b is not (yet) a member of WS_A
+    const token = await tokenFor('user-b', workspaceIdForSub('user-b'))
+    const mutation = envelope({
+      workspaceId: WS_A,
+      table: 'workspaceMembers',
+      op: 'insert',
+      payload: { workspaceId: WS_A, userSub: 'user-b', role: 'editor' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    }
+  })
+
+  it('applies a project rename into another workspace as a seeded member', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS_A)
+    store.seedMembership(WS_A, 'user-b')
+    const projectId = uuidv7()
+    store.seed({
+      id: projectId,
+      workspaceId: WS_A,
+      table: 'projects',
+      data: { name: 'Shared project' },
+      updatedAt: new Date(0).toISOString(),
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-b', workspaceIdForSub('user-b'))
+    const mutation = envelope({ workspaceId: WS_A, table: 'projects', op: 'update', entityId: projectId, payload: { name: 'Renamed by B' } })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+    const row = await store.getRow('projects', projectId)
+    expect(row?.data.name).toBe('Renamed by B')
+  })
+
+  // Requirement 2 (spec): the membership relaxation replaces only the FIRST
+  // equality gate — a member of workspace A still must not be able to edit
+  // an entity that actually belongs to a DIFFERENT workspace C, even by
+  // declaring A in the envelope.
+  it('still rejects a member update whose entity actually belongs to a third, different workspace', async () => {
+    const store = new InMemoryWriteStore()
+    const WS_C = workspaceIdForSub('user-c')
+    store.seedWorkspace(WS_A)
+    store.seedMembership(WS_A, 'user-b') // member of A, NOT C
+    const projectId = uuidv7()
+    store.seed({
+      id: projectId,
+      workspaceId: WS_C,
+      table: 'projects',
+      data: { name: 'Not shared with B' },
+      updatedAt: new Date(0).toISOString(),
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-b', workspaceIdForSub('user-b'))
+    const mutation = envelope({ workspaceId: WS_A, table: 'projects', op: 'update', entityId: projectId, payload: { name: 'Hijack attempt' } })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    }
+    const row = await store.getRow('projects', projectId)
+    expect(row?.data.name).toBe('Not shared with B') // untouched
+  })
+})
+
 describe('handleWriteRequest — offline replay/idempotency (test-first plan item 4)', () => {
   it('applies a fresh mutation once, and a replay of the same mutation id is a no-op, not a duplicate', async () => {
     const store = new InMemoryWriteStore()

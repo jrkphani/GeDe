@@ -1,6 +1,6 @@
 # 057: Shared-workspace membership / accept-seat model (break 1-user ↔ 1-workspace)
 
-- **Status**: OPEN
+- **Status**: SHIPPED — `checkTenancy` is membership-gated (never blanket), `acceptInvitation` enqueues a seat mutation scoped to the inviter's workspace, `npm run verify` green (957/960 vitest incl. 3 expected `pgWriteStore.live.test.ts` skips with no live DB, 49/49 Playwright e2e). Live two-Cognito-identity smoke test is **deferred** — see "What shipped / what's deferred" below.
 - **Milestone**: M9 (Identity & tenancy)
 - **Blocked by**: 056 (mutation protocol + write-path must carry `invitations`/`workspace_members` before an accept can be represented as a mutation), 034 (workspaces + RLS — the `workspace_members` table, roles, and RLS policies this issue authorizes against already exist and must not be re-derived)
 
@@ -53,11 +53,27 @@ This is part of the 055 sharing fix (056 → 057 → 058, plus optional 059 as a
 
 ## Acceptance criteria
 
-- [ ] `checkTenancy` authorizes a mutation into a non-own workspace given a real, seeded membership row; rejects it otherwise.
-- [ ] `acceptInvitation` enqueues a `workspace_members` seat mutation scoped to the inviter's workspace.
-- [ ] All Test-first plan items 1-4 pass (item 5's full assertion may remain partially blocked on 058, but the write-half must be independently verifiable).
-- [ ] `npm run verify` green.
-- [ ] Live smoke: two real Cognito identities, A invites B, B accepts, B's write against A's workspace returns `applied` from `/write` (verified via 049 debug API), not `401`/`403`.
+- [x] `checkTenancy` authorizes a mutation into a non-own workspace given a real, seeded membership row; rejects it otherwise.
+- [x] `acceptInvitation` enqueues a `workspace_members` seat mutation scoped to the inviter's workspace.
+- [x] All Test-first plan items 1-4 pass (item 5's full assertion may remain partially blocked on 058, but the write-half must be independently verifiable).
+- [x] `npm run verify` green.
+- [ ] Live smoke: two real Cognito identities, A invites B, B accepts, B's write against A's workspace returns `applied` from `/write` (verified via 049 debug API), not `401`/`403` — **deferred**, requires a deployed environment; see "What shipped / what's deferred".
+
+## What shipped / what's deferred
+
+**Shipped** (all four write-side test-first plan items, TDD red-first):
+
+- `src/server/writeApi/tenancy.ts` — `WorkspaceScopeResolver.isMember(workspaceId, sub)` added; `checkTenancy` now accepts a mutation into a non-own workspace IFF `isMember` returns true, and the entity-scope check (`update`/`delete`) now compares the resolved row's actual workspace against the envelope's **declared** `workspaceId` (not `claims.workspaceId`), so a member of A still can't touch a row that actually belongs to C by lying about the envelope. `claims.workspaceId` (jwt.ts) is UNCHANGED — still `workspaceIdForSub(sub)`, the fast-path "is this my own workspace" comparison.
+- `src/server/writeApi/store.ts` — `WriteStore.isMember`; `InMemoryWriteStore.seedMembership` (test seam, mirrors 056's `seedWorkspace`) + `isMember`; `PgWriteStore.isMember` (`SELECT 1 FROM workspace_members WHERE workspace_id = $1 AND user_sub = $2 AND deleted_at IS NULL`).
+- `src/store/workspace.ts` — `acceptInvitation` now enqueues a `workspace_members` upsert mutation via `useSyncStore.enqueueLocalMutation`, scoped to `member.workspaceId` (the **inviter's** workspace, already resolved server-side by `dbAcceptInvitation` from the invitation row) — never the accepting user's own `workspaceIdForSub(sub)`.
+- **Closed a real end-to-end gap found during implementation, not just the narrow unit surface**: `useSyncStore`'s flush stamps every queued mutation with ONE global `workspaceId` (the signed-in sub's own personal workspace). Enqueuing the accept-seat mutation without a fix would have shipped a mutation whose top-level envelope `workspaceId` silently got overwritten back to the accepter's own workspace at flush time — passing every isolated unit test while being cross-tenant-broken end to end (the `checkTenancy`/RLS mismatch this would cause is exactly the kind of bug this issue exists to prevent). Fixed with a minimal, targeted addition — **not** a workspace-switcher UI: `QueuedMutation` (`src/domain/mutationQueue.ts`) gained an optional `workspaceId?: string` override; `toMutationEnvelope` (`src/sync/writeTransport.ts`) prefers it over the flush-wide default when set. Every other producer (invite/changeRole/removeMember, adoptProject) omits it and is byte-for-byte unchanged.
+- Rule-12 audit of every `workspaceIdForSub` call site (`jwt.ts:59`, `provisionWorkspace/handler.ts:53`, `auth.ts:26`) — all three remain correct as the "own personal workspace" mechanism; none assumed "exactly one workspace ever" in a way 057 broke.
+
+**Deferred** (explicitly out of scope per the design brief's "Client-side workspace selection" bullet and this issue's own scope discipline):
+
+- **A real workspace-switcher UI.** `useSyncStore.workspaceId` remains a single global. The one non-own-workspace write this issue introduces (the accept-seat mutation) is handled via the explicit per-mutation `workspaceId` override above; a general "which workspace is this OTHER mutation for" mechanism (e.g. deriving from a project's own `workspaceId` column for ordinary edits inside a shared workspace) is real, unresolved design work left to a future issue — most naturally 058 (read-path, which needs the same "which workspaces is this sub a member of" answer) or a dedicated follow-up.
+- **The live two-Cognito-identity smoke test** (acceptance criterion: "A invites B, B accepts, B's write against A's workspace returns `applied` from `/write`, verified via 049's debug API") — requires a deployed environment with real Cognito identities; the write-half is independently verified here via `handler.test.ts`'s membership-seeded integration tests against `InMemoryWriteStore`, per the design brief's item 5 ("the write-side half can be verified now").
+- **RLS cross-check** — no new test added. `src/db/invitationRls.test.ts`'s existing "end-to-end: invite → accept → the new member reaches the workspace" test (035) already exercises exactly this against real PGlite RLS policies (redeem via `workspace_members` INSERT, then `SELECT` under `SET ROLE app_user` as the invited sub) and passes; no RLS gap was found, so 034's policy SQL was not touched, per this issue's own scope note ("this issue's job is to make the API-layer check agree, not to touch RLS policy SQL itself unless a gap is found").
 
 ## Dependencies / ordering
 

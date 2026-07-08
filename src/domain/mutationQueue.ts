@@ -36,6 +36,20 @@ export interface QueuedMutation {
   readonly optimisticUpdatedAt: string
   readonly enqueuedAt: string
   readonly status: 'pending' | 'acknowledged'
+  /**
+   * Issue 057 — an explicit per-mutation workspace override. `useSyncStore`
+   * scopes an entire flush to ONE global `workspaceId` (the signed-in sub's
+   * own personal workspace, `sync.ts`'s "the workspace a flush's
+   * MutationEnvelopes are scoped to") — that global is wrong for the one
+   * mutation a multi-workspace member can enqueue that does NOT belong to
+   * their own workspace: `acceptInvitation`'s seat mutation, which must land
+   * in the INVITER's workspace. When set, `toMutationEnvelope`
+   * (src/sync/writeTransport.ts) uses this instead of the flush's global
+   * `workspaceId`. Omitted (undefined) for every other producer today
+   * (invite/changeRole/removeMember, adoptProject, …), which all legitimately
+   * target the currently-open/own workspace and keep relying on the global.
+   */
+  readonly workspaceId?: string
 }
 
 export interface MutationQueue {

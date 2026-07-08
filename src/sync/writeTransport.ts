@@ -67,10 +67,16 @@ function toMutationOp(op: QueuedMutation['op']): MutationEnvelope['op'] {
   return op === 'delete' ? 'delete' : 'insert'
 }
 
+// Issue 057 — `mutation.workspaceId`, when set, overrides the flush's global
+// `workspaceId` (see QueuedMutation's own doc comment for why: a
+// multi-workspace member's accept-seat mutation targets the INVITER's
+// workspace, not whatever `useSyncStore.workspaceId` — the caller's own
+// personal workspace — currently holds). Every other producer omits it and
+// gets the flush-wide default, unchanged from pre-057 behavior.
 export function toMutationEnvelope(mutation: QueuedMutation, workspaceId: string): MutationEnvelope {
   return {
     id: mutation.id,
-    workspaceId,
+    workspaceId: mutation.workspaceId ?? workspaceId,
     table: TABLE_TO_MUTATION_TABLE[mutation.table],
     op: toMutationOp(mutation.op),
     entityId: mutation.rowId,

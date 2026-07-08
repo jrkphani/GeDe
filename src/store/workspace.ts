@@ -179,6 +179,34 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       ])
       set({ members, invitations, role: computeRole(members) })
     }
+    // Issue 057 (055's Cause 3 fix) — the write-path half of "an accepted
+    // invitee can write into the INVITER's workspace": enqueue the seat row
+    // itself as a sync mutation, mirroring invite/changeRole/removeMember's
+    // own signed-in gate (useSyncStore.workspaceId truthy = sync configured
+    // and this sub is authenticated). Unlike those three, this mutation's
+    // target workspace is `member.workspaceId` (the INVITER's workspace,
+    // already resolved server-side by dbAcceptInvitation from the
+    // invitation row) — it is NEVER the accepting user's own
+    // `workspaceIdForSub(sub)`, which is what useSyncStore.workspaceId
+    // itself holds (auth.ts's applyWorkspaceScope). The explicit
+    // `workspaceId` field on the QueuedMutation (domain/mutationQueue.ts,
+    // issue 057) is what lets writeTransport.ts's toMutationEnvelope stamp
+    // THIS mutation with the inviter's workspace instead of the flush-wide
+    // default — see that module's doc comments for why a single global
+    // `useSyncStore.workspaceId` can't express this on its own.
+    if (useSyncStore.getState().workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'workspace_members',
+        rowId: member.id,
+        op: 'upsert',
+        row: member,
+        workspaceId: member.workspaceId,
+        optimisticUpdatedAt: member.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
   },
 }))
 

@@ -6,6 +6,7 @@ import { createInvitation } from '../db/invitations'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
 import { resetSyncStore, useSyncStore } from './sync'
 import { resetWorkspaceStore, useWorkspaceStore } from './workspace'
+import { workspaceIdForSub } from '../domain/workspaceId'
 
 let db: Database
 
@@ -157,6 +158,51 @@ describe('invite / changeRole / removeMember — sync enqueue (issue 056)', () =
       op: 'delete',
       status: 'pending',
     })
+  })
+})
+
+// Issue 057 test-first plan item 3 — the accept-flow store test:
+// `acceptInvitation` must enqueue a mutation whose `workspaceId` is the
+// invitation's (inviter's) workspace, NOT the accepting user's own
+// `workspaceIdForSub(sub)` (which is what `useSyncStore.workspaceId` holds
+// once they're signed in — auth.ts's `applyWorkspaceScope`).
+describe('acceptInvitation — sync enqueue scoped to the INVITER\'s workspace (issue 057)', () => {
+  it('enqueues a workspace_members seat mutation whose workspaceId is the inviter\'s workspace, not the accepter\'s own', async () => {
+    const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
+
+    // The accepting user is signed in under a DIFFERENT sub than the
+    // inviter — their own personal workspace id is necessarily a different
+    // id than inviterWs.id. useSyncStore.workspaceId mirrors exactly what
+    // auth.ts's applyWorkspaceScope sets on sign-in: always the signed-in
+    // sub's own personal workspace, never the inviter's.
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-invitee', email: 'invitee@example.com' } })
+    const accepterOwnWs = workspaceIdForSub('sub-invitee')
+    expect(accepterOwnWs).not.toBe(inviterWs.id)
+    useSyncStore.setState({ workspaceId: accepterOwnWs })
+
+    await useWorkspaceStore.getState().acceptInvitation(inv.id)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({
+      table: 'workspace_members',
+      op: 'upsert',
+      status: 'pending',
+      workspaceId: inviterWs.id,
+    })
+    expect(queued[0]?.workspaceId).not.toBe(accepterOwnWs)
+  })
+
+  it('enqueues nothing when signed out / sync is off (local-only, byte-for-byte unchanged)', async () => {
+    const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-invitee', email: 'invitee@example.com' } })
+    // useSyncStore.workspaceId left at its default null — sync never configured.
+
+    await useWorkspaceStore.getState().acceptInvitation(inv.id)
+
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
   })
 })
 
