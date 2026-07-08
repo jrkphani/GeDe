@@ -329,15 +329,22 @@ export class PgWriteStore implements WriteStore {
         return true
       }
 
-      // `id`/`updated_at`/`deleted_at` are stamped explicitly by the server
-      // ($1/$2 and the delete branch), so exclude them from the payload-derived
-      // columns. Otherwise a client payload that echoes `id` yields
-      // `INSERT INTO t (id, updated_at, id, ...)` → Postgres 42701 "column
-      // \"id\" specified more than once" (this PgWriteStore path was never run
-      // against a live DB before — 043's contract test used a fake pg client
-      // that does not parse SQL).
-      const RESERVED_COLUMNS = new Set(['id', 'updated_at', 'deleted_at'])
-      const entries = Object.entries(mutation.payload).filter(([col]) => !RESERVED_COLUMNS.has(col))
+      // Client payloads use Drizzle's camelCase JS field names (the vocabulary
+      // electricProtocol.ts's SQL_TO_JS_COLUMNS maps); the DB columns are
+      // snake_case. Convert each key to its SQL column name, and drop the
+      // server-stamped columns (id/updated_at/deleted_at — set explicitly via
+      // $1/$2 and the delete branch) AFTER conversion so `updatedAt` is caught
+      // too. Every synced-table column follows the regular camel↔snake pattern
+      // (workspace_id↔workspaceId, source_param_id↔sourceParamId, ...). This
+      // PgWriteStore path was never run against a live DB before (043's contract
+      // test uses a fake pg client that does not parse SQL), so both the
+      // duplicate-id and camel/snake mismatches only surfaced in the 050 live
+      // write test.
+      const SERVER_STAMPED = new Set(['id', 'updated_at', 'deleted_at'])
+      const toSqlColumn = (jsKey: string): string => jsKey.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`)
+      const entries = Object.entries(mutation.payload)
+        .map(([jsKey, value]) => [toSqlColumn(jsKey), value] as const)
+        .filter(([col]) => !SERVER_STAMPED.has(col))
       const columns = entries.map(([col]) => col)
       const values = entries.map(([, value]) => value)
       if (mutation.op === 'insert') {
