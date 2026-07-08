@@ -63,6 +63,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [047](done/047-api-tls-https-endpoint.md) ✅ | HTTPS for the write API — end the mixed-content block | M11 | 030 |
 | [048](done/048-client-write-queue-flush.md) ✅ | Flush the client write-queue to `/write` — close the loop | M11 | 044, 045, 046, 047, 032 |
 | [049](049-db-inspection-api.md) ⬜ | Database inspection API — read-only diagnostic queries against the cloud RDS | M11 | 045, 046, 047 |
+| [050](050-workspace-provisioning-sync-enablement.md) ⬜ | Auto-provision workspace on sign-in + enable sync (write loop last mile) | M11 | 034, 043, 048, 049 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
