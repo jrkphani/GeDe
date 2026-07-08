@@ -64,10 +64,15 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [048](done/048-client-write-queue-flush.md) ✅ | Flush the client write-queue to `/write` — close the loop | M11 | 044, 045, 046, 047, 032 |
 | [049](done/049-db-inspection-api.md) ✅ | Database inspection API — read-only diagnostic queries against the cloud RDS | M11 | 045, 046, 047 |
 | [050](done/050-workspace-provisioning-sync-enablement.md) ✅ | Auto-provision workspace on sign-in + enable sync (write loop last mile) | M11 | 034, 043, 048, 049 |
-| [051](051-sync-read-path-crash-on-empty-url.md) ✅ | Bug: enabling sync crashed the signed-in app (read-path Electric on an empty URL) | M11 | 050 |
-| [052](052-write-api-missing-claims-workspace-id.md) ✅ | Bug: write API rejected every signed-in write with 401 missing_claims | M11 | 050 |
-| [053](053-pgwritestore-duplicate-id-column.md) ✅ | Bug: PgWriteStore INSERT duplicated the `id` column (Postgres 42701) | M11 | 043, 050 |
-| [054](054-pgwritestore-camelcase-column-mismatch.md) ✅ | Bug: PgWriteStore used camelCase payload keys as snake_case SQL columns (Postgres 42703) | M11 | 043, 050, 053 |
+| [051](done/051-sync-read-path-crash-on-empty-url.md) ✅ | Bug: enabling sync crashed the signed-in app (read-path Electric on an empty URL) | M11 | 050 |
+| [052](done/052-write-api-missing-claims-workspace-id.md) ✅ | Bug: write API rejected every signed-in write with 401 missing_claims | M11 | 050 |
+| [053](done/053-pgwritestore-duplicate-id-column.md) ✅ | Bug: PgWriteStore INSERT duplicated the `id` column (Postgres 42701) | M11 | 043, 050 |
+| [054](done/054-pgwritestore-camelcase-column-mismatch.md) ✅ | Bug: PgWriteStore used camelCase payload keys as snake_case SQL columns (Postgres 42703) | M11 | 043, 050, 053 |
+| [055](055-share-invitations-never-reach-invitees.md) | Bug: sharing a project never reaches invitees (invitations stay local-only; protocol excludes them; personal-workspace-only) | M9/M8 | 035, 043, 048, 050 |
+| [056](056-mutation-protocol-invitations-workspace-members.md) | 055 fix (1/3): extend mutation protocol + write-path to carry `invitations`/`workspace_members` writes | M9/M8 | 043, 048, 050 |
+| [057](057-shared-workspace-accept-seat-model.md) | 055 fix (2/3): shared-workspace accept/seat model — breaks the 1-user↔1-workspace invariant | M9 | 056, 034 |
+| [058](058-electric-read-path-shared-workspace-delivery.md) | 055 fix (3/3): deploy the ElectricSQL read-path so seated members receive the shared workspace's rows | M8 | 057, 032 |
+| [059](059-share-ux-honest-guard.md) | 055 interim mitigation: Share UI stops implying success while cloud sharing is unbuilt | M9 | — |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
@@ -75,7 +80,7 @@ Issue numbers are identity, not order — pick by the dependency graph (016 come
 
 - **M7 · Deploy** — 040 (CDK infra: network → hosting → DNS, `GeDe`/`test`/`quadnomics` tags, default CloudFront domain) → 029 (OIDC CI that `cdk deploy`s it). The foundation everything else ships onto.
 - **M8 · Server & sync** — 030 (server Postgres) · 031 (T6 engine decision → ADR) · 032 (row-delta LWW sync) · 036 (sync-state UI). The critical path: **029 → 030/031 → 032**.
-- **M9 · Identity & tenancy** — 033 (auth) · 034 (workspaces + RLS) · 035 (sharing/roles).
+- **M9 · Identity & tenancy** — 033 (auth) · 034 (workspaces + RLS) · 035 (sharing/roles). **Sharing-completion track (055→056→057→058, +059)**: 035 shipped the schema/RLS/local-CRUD/UI, but a live tester found invitations never reach the invitee (055) — 056 wires the protocol + write-path, 057 breaks the 1-user↔1-workspace invariant so an invitee can join the inviter's workspace, 058 deploys the ElectricSQL read-path so they can see it; 059 is an independent, immediately-shippable UX-honesty mitigation.
 - **M10 · Collaboration polish** — 037 (local→cloud on-ramp) · 038 (presence, speculative — validate demand first).
 - **M11 · Close the cloud write loop (production wiring)** — 044 (inject Cognito config into the deployed build) · 045 (apply migrations to the RDS) · 046 (deploy the real write Lambda + issuer) · 047 (HTTPS for the API) · 048 (flush the client queue to `/write`). Critical path: **044 → 045 → 046 → 047 → 048**. **All 5 SHIPPED** (code complete + combined-verify green, integrated on `m11-close-write-loop`); the loop is closed *in code* — **live AWS rollout is pending CI deploy** on merge to `main` (deploy order 045→046→047; the live-smoke acceptance items verify then).
 

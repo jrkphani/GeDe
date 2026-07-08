@@ -1,0 +1,57 @@
+# 056: Extend the mutation protocol + write-path to carry `invitations` (and `workspace_members`) writes
+
+- **Status**: OPEN
+- **Milestone**: M9 (Identity & tenancy) / M8 (Server & sync)
+- **Blocked by**: 043 (write-path API + `MutationTable` protocol), 048 (client write-queue flush), 050 (`workspaceIdForSub` provisioning + `createProject`'s enqueue pattern)
+
+## Slice
+
+Part 1 of the 055 sharing fix (**056 → 057 → 058**, plus optional 059 as an immediate mitigation). This issue closes 055's **Cause 1 + Cause 2**: today `useWorkspaceStore.invite()`/`changeRole()`/`removeMember()` write only to local PGlite (`src/store/workspace.ts:78-105`) and the wire protocol has no representation for an `invitations` or `workspace_members` mutation at all (`src/domain/mutationProtocol.ts:23-32`). After this issue, an invitation/role-change/removal enqueues a `MutationEnvelope`, flushes through `/write`, passes the handler's allow-list + invariant checks, and lands as a real RDS row — mirroring exactly what 050 already proved for `projects`.
+
+Out of scope: WHOSE workspace the mutation is scoped to when the actor isn't yet a member of it (that's 057 — the accept/seat model) and the ElectricSQL read-path (058). This issue only makes the wire able to carry these two tables end-to-end into RDS; it does not change who is authorized to read them back.
+
+## Problem / Goal
+
+055's root-cause analysis (`docs/issues/055-share-invitations-never-reach-invitees.md` root cause "Cause 1"/"Cause 2"):
+
+- **Cause 1**: `src/store/workspace.ts:78-87` (`invite()`) calls `dbCreateInvitation` against the local PGlite handle only — no `useSyncStore.getState().enqueueLocalMutation(...)` call, unlike `createProject` (`src/store/projects.ts:103-127`), which explicitly enqueues after its local write. The same gap applies to `changeRole` (`workspace.ts:89-96`) and `removeMember` (`workspace.ts:98-105`).
+- **Cause 2**: `MutationTable` is a fixed 9-table union — `'projects' | 'tier1Purpose' | 'tier1Props' | 'tier2Tables' | 'tier2Entries' | 'dimensions' | 'parameters' | 'contexts' | 'bindings'` (`src/domain/mutationProtocol.ts:23-32`) — with no `invitations`/`workspaceMembers` member. The client queue's `QueuedMutation.table` (`src/domain/mutationQueue.ts:25`) reuses `TableName` from `src/domain/projectEnvelope.ts:175-187`/`ENVELOPE_TABLE_NAMES:177-187`, so `table: 'invitations'` would not type-check even if `workspace.ts` tried to enqueue it. The inbound-apply switch (`src/db/sync.ts:47-218`, one `case` per table) has no case for either table, and the write-path handler's allow-list/store (`src/server/writeApi/handler.ts`, `src/server/writeApi/store.ts`'s `FK_SCHEMA`/`SQL_TABLE_NAMES`) has no entries either.
+
+**Goal**: extend the wire vocabulary and every module that switches on it so `invitations` and `workspace_members` are first-class mutation tables, then wire `workspace.ts`'s three actions to enqueue.
+
+## Files / layers touched
+
+1. **`src/domain/mutationProtocol.ts:23-32`** — add `'invitations' | 'workspaceMembers'` to `MutationTable`.
+2. **`src/domain/projectEnvelope.ts:175-187`** (`TableName`, `ENVELOPE_TABLE_NAMES`, `rowSchemas:163-173`) — this is the **export/import envelope's** table registry, not a generic "every table" registry (invitations/workspace_members are deliberately NOT part of the portable project-export format, since export/import is project-scoped and these two tables are workspace-scoped, per-membership state, not project content). **Do not add them here.** Instead, add a parallel, minimal row-shape registry the sync layer needs (see item 3) — this is the one place the suggested split in the parent task needs a correction; note it in the PR description so a reviewer doesn't assume `ENVELOPE_TABLE_NAMES` was meant to also gain these two tables.
+3. **`src/domain/syncDelta.ts`** (`TableName`, `SYNCED_TABLES` equivalents used by `src/db/sync.ts`/`src/sync/config.ts`) — extend to include `invitations`/`workspace_members` so a `RowDelta` can name them.
+4. **`src/db/sync.ts:47-218`** (`applyInboundDeltas`) — two new `case` branches (`invitations`, `workspace_members`) in the same guarded-upsert shape as the other nine, including `DEFERRED_FK_COLUMN` handling if either table has a self/cross-referential FK that needs the two-pass strategy (neither does today — `invitations.workspaceId`/`workspace_members.workspaceId` both point outward at `workspaces`, never inward — confirm before coding, cite `src/db/schema.ts:31-45,59-75`).
+5. **`src/server/writeApi/store.ts`** — `FK_SCHEMA` gains `invitations: { workspaceId: 'projects' }`-shaped entries (actually: `workspaceId` doesn't resolve against `projects`; add a `workspaces` FK target, which means `MutationTable`'s FK map needs a `'workspaces'` reference table too — resolve this during implementation, it is not itself a mutable table) and `SQL_TABLE_NAMES` gains `invitations: 'invitations'`, `workspaceMembers: 'workspace_members'`.
+6. **`src/server/writeApi/handler.ts`** — no allow-list literal exists today (the union type IS the allow-list, enforced at compile time via `MutationTable`); once step 1 lands, `invitations`/`workspaceMembers` are automatically routable through `handleWriteRequest`. Add table-specific invariant checks if needed (e.g. an `invitations` insert should require `expiresAt` in the future — decide during implementation whether this belongs here or is already covered by 035's DB-level check constraints).
+7. **`src/store/workspace.ts:78-105`** — `invite()`, `changeRole()`, `removeMember()` each gain a `useSyncStore.getState().enqueueLocalMutation({...})` call after their local DB write, mirroring `createProject`'s pattern (`src/store/projects.ts:116-127`) exactly (`uuidv7()` mutation id, `table`, `rowId`, `op: 'upsert'` or `'delete'`, `row`, `optimisticUpdatedAt: row.updatedAt`, `enqueuedAt`, `status: 'pending'`). **Ordering constraint**: this step cannot compile until step 1 (`MutationTable`/`TableName` extension) lands, since `table: 'invitations'` won't type-check against the pre-056 union — do steps 1-6 first, in one PR or one commit, before touching `workspace.ts`.
+8. A new Drizzle migration (next slot after `0011_adopted_into_project.sql` → **`0012`**) only if the idempotency ledger (`applied_mutations`, migration `0010`) or any new invariant needs schema support — audit during implementation; likely no schema change is needed since `invitations`/`workspace_members` already exist (migrations `0008`/`0009`).
+
+## Test-first plan
+
+1. **Client store (red first)**: `src/store/workspace.test.ts` — add a test asserting `useWorkspaceStore.getState().invite(email, role)` calls `useSyncStore.getState().enqueueLocalMutation` with `table: 'invitations'`, mirroring the existing `createProject` enqueue test in `src/store/projects.test.ts`. Currently red: `enqueueLocalMutation` is never called from `workspace.ts` (055's own verification: `grep enqueueLocalMutation src/store src/components` → only `projects.ts`). Add matching tests for `changeRole` (`table: 'workspaceMembers'`, op `'upsert'`) and `removeMember` (op `'delete'`).
+2. **Protocol type test**: `src/domain/mutationProtocol.test.ts` — a test constructing a `MutationEnvelope` with `table: 'invitations'` and asserting `isWellFormedEnvelope` accepts it. Currently red: won't type-check against the pre-056 `MutationTable` union (this is the exact assertion 055 flags as "currently impossible" under Cause 2).
+3. **Inbound-apply test**: `src/db/sync.test.ts` — a test applying an inbound `RowDelta` with `table: 'invitations'` (and one for `'workspace_members'`) via `applyInboundDeltas` and asserting the row lands in local PGlite with the LWW `updated_at` guard honored, mirroring the existing per-table tests in that file.
+4. **Write-path contract test**: `src/server/writeApi/handler.test.ts` — a POST-equivalent `handleWriteRequest` call with a `table: 'invitations'` insert mutation, asserting `status: 'applied'` and (using `InMemoryWriteStore`) the row is present afterward. Add the equivalent for `workspaceMembers`. Currently red: no `FK_SCHEMA`/`SQL_TABLE_NAMES` entry exists for either table.
+5. **PgWriteStore SQL test** (per the 043-follow-up regression discipline that caught bugs 053/054): extend `src/server/writeApi/pgWriteStore.contract.test.ts`'s SQL-string assertions (and, if reachable, `pgWriteStore.live.test.ts` against real Postgres) to cover an `invitations`/`workspace_members` INSERT — verifying camelCase→snake_case column conversion and no duplicate `id` column, since that bug class (bugs 053/054) was previously *undetected by the fake `pg` client* and only surfaced live.
+
+## Acceptance criteria
+
+- [ ] `MutationTable`/the sync-layer `TableName` include `invitations` and `workspaceMembers`/`workspace_members`.
+- [ ] `src/db/sync.ts`'s inbound-apply switch handles both tables.
+- [ ] `src/server/writeApi/store.ts`'s `FK_SCHEMA`/`SQL_TABLE_NAMES` and `handler.ts`'s invariant checks route both tables correctly.
+- [ ] `workspace.ts`'s `invite()`/`changeRole()`/`removeMember()` each enqueue a mutation.
+- [ ] All Test-first plan items above pass.
+- [ ] `npm run verify` green.
+- [ ] Live smoke (optional but recommended, mirrors 050's own live-test discipline that caught 053/054): sign in, invite a collaborator, confirm via the 049 debug API (`/debug/db/counts`) that `invitations` count increments from 0.
+
+## Risks
+
+- **Same SQL-parsing gap class as bugs 053/054**: the fake `pg` client in `pgWriteStore.contract.test.ts` does not parse SQL, so a duplicate-`id`-column or camelCase-column bug on the new tables could ship undetected exactly like it did for `projects`. The 043 follow-up commit (`3b92dd0`, "close the SQL-parsing gap") added string-assertion coverage — extend that same coverage to the two new tables rather than trusting the fake client alone.
+- **`workspaceId` FK target ambiguity**: `invitations.workspaceId`/`workspace_members.workspaceId` reference `workspaces`, a table that is itself never a *mutation* target (workspaces are provisioned server-side by 050's trigger, never via `/write`). `FK_SCHEMA`'s type (`Record<MutationTable, Record<string, MutationTable>>`, `src/server/writeApi/store.ts:31-41`) currently assumes every FK target is itself a `MutationTable` — resolving a FK against `workspaces` needs either a schema loosening or a dedicated `rowExists`-style check against a non-mutable table. Flag this during implementation; it is a small typing wrinkle, not an architecture change.
+- **Scope discipline**: it is tempting to also solve 057 (whose workspace does the invitee land in) while touching this code — don't. This issue only makes the tables *representable and appliable*; 057 is the authorization/model change.
+
+**References**: 055 (this bug, Causes 1+2 and "Fix direction" items 1-2), 035 (sharing — invitations/workspace_members schema, `done/035-sharing-roles-invitations.md`), 043 (write-path protocol + invariants), 048 (client flush), 050 (`createProject`'s enqueue pattern this mirrors — `src/store/projects.ts:103-127`), `docs/HANDOFF.md` "Clear next steps" #1 ("Extend the write loop past project-create... The write path (043) already allow-lists these tables" — note: invitations/workspace_members are NOT among those already-allow-listed tables, this issue adds them), `3b92dd0` (the SQL-parsing-gap regression-test precedent this issue's contract-test item follows).
