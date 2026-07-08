@@ -12,12 +12,14 @@
 // it is a documented integration seam (HANDOFF: "no live AWS/Electric/
 // Cognito reachable in tests").
 import { errors, jwtVerify, type JWTVerifyGetKey } from 'jose'
+import { workspaceIdForSub } from '../../domain/workspaceId'
 
 /**
- * The claims the write-path API needs out of a verified Cognito access
- * token. `workspaceId` is read from a custom Cognito attribute
- * (`custom:workspace_id`) — issue 034 (workspace/RLS tenancy) owns how that
- * attribute is populated at sign-up/invite time; this module only reads it.
+ * The claims the write-path API needs out of a verified Cognito token.
+ * `workspaceId` is DERIVED from the verified `sub` (issue 050,
+ * `workspaceIdForSub`) — the personal-workspace id is a pure function of the
+ * subject, not a Cognito custom attribute (that would force a User Pool
+ * replacement). The client scopes its writes to the same derived id.
  */
 export interface CognitoClaims {
   readonly sub: string
@@ -37,8 +39,6 @@ export type AuthResult =
   | { readonly ok: true; readonly claims: CognitoClaims }
   | { readonly ok: false; readonly reason: AuthFailureReason }
 
-const WORKSPACE_CLAIM = 'custom:workspace_id'
-
 /**
  * Verifies the `Authorization: Bearer <jwt>` header. Test-first plan item 1:
  * "a mutation with no/invalid/expired Cognito JWT is rejected (401/403); a
@@ -55,10 +55,8 @@ export async function verifyBearerToken(
   try {
     const { payload } = await jwtVerify(token, config.getKey, { issuer: config.issuer })
     const sub = typeof payload.sub === 'string' ? payload.sub : undefined
-    const workspaceClaim = payload[WORKSPACE_CLAIM]
-    const workspaceId = typeof workspaceClaim === 'string' ? workspaceClaim : undefined
-    if (!sub || !workspaceId) return { ok: false, reason: 'missing_claims' }
-    return { ok: true, claims: { sub, workspaceId } }
+    if (!sub) return { ok: false, reason: 'missing_claims' }
+    return { ok: true, claims: { sub, workspaceId: workspaceIdForSub(sub) } }
   } catch (err) {
     if (err instanceof errors.JWTExpired) return { ok: false, reason: 'expired_token' }
     return { ok: false, reason: 'invalid_token' }

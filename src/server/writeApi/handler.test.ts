@@ -10,9 +10,13 @@ import { handleWriteRequest, type WriteApiDeps } from './handler'
 import { InMemoryWriteStore } from './store'
 import type { MutationEnvelope } from '../../domain/mutationProtocol'
 import type { JwtVerifierConfig } from './jwt'
+import { workspaceIdForSub } from '../../domain/workspaceId'
 
 const ISSUER = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TEST'
 const KID = 'k1'
+// The write path derives the workspace from the sub (issue 050), so tokens
+// signed for `user-1` are scoped to this id — envelopes/seeds must use it too.
+const WS1 = workspaceIdForSub('user-1')
 let privateKey: CryptoKey
 let jwtConfig: JwtVerifierConfig
 
@@ -37,7 +41,7 @@ beforeAll(async () => {
 function envelope(overrides: Partial<MutationEnvelope> = {}): MutationEnvelope {
   return {
     id: uuidv7(),
-    workspaceId: 'ws-1',
+    workspaceId: WS1,
     table: 'projects',
     op: 'insert',
     entityId: uuidv7(),
@@ -58,14 +62,14 @@ describe('handleWriteRequest — auth gate (test-first plan item 1)', () => {
   })
 
   it('rejects the whole batch with 401 when the token is expired', async () => {
-    const token = await tokenFor('user-1', 'ws-1', '-10s')
+    const token = await tokenFor('user-1', WS1, '-10s')
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [envelope()] }, deps())
     expect(result.status).toBe(401)
     if (result.status === 401) expect(result.rejection.reason).toBe('expired_token')
   })
 
   it('accepts a batch with a valid token', async () => {
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [envelope()] }, deps())
     expect(result.status).toBe(200)
   })
@@ -73,7 +77,7 @@ describe('handleWriteRequest — auth gate (test-first plan item 1)', () => {
 
 describe('handleWriteRequest — tenancy (test-first plan item 2)', () => {
   it('rejects an insert into another workspace even with a valid JWT', async () => {
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const mutation = envelope({ workspaceId: 'ws-other' })
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps())
     expect(result.status).toBe(200)
@@ -86,8 +90,8 @@ describe('handleWriteRequest — tenancy (test-first plan item 2)', () => {
     const store = new InMemoryWriteStore()
     const rowId = uuidv7()
     store.seed({ id: rowId, workspaceId: 'ws-other', table: 'projects', data: { name: 'Theirs' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
-    const token = await tokenFor('user-1', 'ws-1')
-    const mutation = envelope({ op: 'update', entityId: rowId, workspaceId: 'ws-1', payload: { name: 'Hijacked' } })
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({ op: 'update', entityId: rowId, workspaceId: WS1, payload: { name: 'Hijacked' } })
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
     expect(result.status).toBe(200)
     if (result.status === 200) {
@@ -102,9 +106,9 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
     const projectId = uuidv7()
     const [firstDimId, secondDimId] = [uuidv7(), uuidv7()] // exactly 2 — the floor
     for (const id of [firstDimId, secondDimId]) {
-      store.seed({ id, workspaceId: 'ws-1', table: 'dimensions', data: { projectId, contextId: null }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, contextId: null }, updatedAt: new Date(0).toISOString(), deletedAt: null })
     }
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const mutation = envelope({ table: 'dimensions', op: 'delete', entityId: firstDimId, payload: {} })
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
     expect(result.status).toBe(200)
@@ -118,9 +122,9 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
     const projectId = uuidv7()
     const [firstDimId, secondDimId, thirdDimId] = [uuidv7(), uuidv7(), uuidv7()]
     for (const id of [firstDimId, secondDimId, thirdDimId]) {
-      store.seed({ id, workspaceId: 'ws-1', table: 'dimensions', data: { projectId, contextId: null }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, contextId: null }, updatedAt: new Date(0).toISOString(), deletedAt: null })
     }
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const mutation = envelope({ table: 'dimensions', op: 'delete', entityId: firstDimId, payload: {} })
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
     expect(result.status).toBe(200)
@@ -135,13 +139,13 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
     const dimensionId = uuidv7()
     store.seed({
       id: uuidv7(),
-      workspaceId: 'ws-1',
+      workspaceId: WS1,
       table: 'bindings',
       data: { contextId, dimensionId, parameterId: uuidv7() },
       updatedAt: new Date(0).toISOString(),
       deletedAt: null,
     })
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const mutation = envelope({
       table: 'bindings',
       op: 'insert',
@@ -155,7 +159,7 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
   })
 
   it('rejects a mutation whose foreign key does not resolve to a live row (illegal tuple)', async () => {
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const mutation = envelope({
       table: 'parameters',
       op: 'insert',
@@ -172,7 +176,7 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
 describe('handleWriteRequest — offline replay/idempotency (test-first plan item 4)', () => {
   it('applies a fresh mutation once, and a replay of the same mutation id is a no-op, not a duplicate', async () => {
     const store = new InMemoryWriteStore()
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const mutation = envelope()
 
     const first = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
@@ -189,7 +193,7 @@ describe('handleWriteRequest — offline replay/idempotency (test-first plan ite
 
   it('applies queued mutations in order within one batch', async () => {
     const store = new InMemoryWriteStore()
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const entityId = uuidv7()
     const insert = envelope({ entityId, op: 'insert', payload: { name: 'v1' }, clientUpdatedAt: '2026-01-01T00:00:00.000Z' })
     const update = envelope({ entityId, op: 'update', payload: { name: 'v2' }, clientUpdatedAt: '2026-01-01T00:00:01.000Z' })
@@ -210,13 +214,13 @@ describe('handleWriteRequest — LWW conflict resolution', () => {
     const entityId = uuidv7()
     store.seed({
       id: entityId,
-      workspaceId: 'ws-1',
+      workspaceId: WS1,
       table: 'projects',
       data: { name: 'Newer (from another client)' },
       updatedAt: '2026-01-02T00:00:00.000Z',
       deletedAt: null,
     })
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const stale = envelope({ entityId, op: 'update', payload: { name: 'Stale edit' }, clientUpdatedAt: '2026-01-01T00:00:00.000Z' })
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [stale] }, deps(store))
     expect(result.status).toBe(200)
@@ -230,7 +234,7 @@ describe('handleWriteRequest — LWW conflict resolution', () => {
 
 describe('handleWriteRequest — malformed envelopes', () => {
   it('rejects a mutation with a non-UUIDv7 id before touching the store', async () => {
-    const token = await tokenFor('user-1', 'ws-1')
+    const token = await tokenFor('user-1', WS1)
     const mutation = envelope({ id: 'not-a-uuid' })
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps())
     expect(result.status).toBe(200)

@@ -1,6 +1,7 @@
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose'
 import { beforeAll, describe, expect, it } from 'vitest'
 import { verifyBearerToken, type JwtVerifierConfig } from './jwt'
+import { workspaceIdForSub } from '../../domain/workspaceId'
 
 const ISSUER = 'https://cognito-idp.us-east-1.amazonaws.com/us-east-1_TEST123'
 const KID = 'test-key-1'
@@ -38,10 +39,10 @@ describe('verifyBearerToken', () => {
     expect(result).toEqual({ ok: false, reason: 'missing_token' })
   })
 
-  it('accepts a validly signed, unexpired token with the required claims', async () => {
-    const token = await sign({ sub: 'user-123', 'custom:workspace_id': 'ws-1' })
+  it('accepts a validly signed, unexpired token and derives the workspace from the sub', async () => {
+    const token = await sign({ sub: 'user-123' })
     const result = await verifyBearerToken(`Bearer ${token}`, config)
-    expect(result).toEqual({ ok: true, claims: { sub: 'user-123', workspaceId: 'ws-1' } })
+    expect(result).toEqual({ ok: true, claims: { sub: 'user-123', workspaceId: workspaceIdForSub('user-123') } })
   })
 
   it('rejects an expired token', async () => {
@@ -68,8 +69,8 @@ describe('verifyBearerToken', () => {
     expect(result).toEqual({ ok: false, reason: 'invalid_token' })
   })
 
-  it('rejects a valid token missing the workspace claim', async () => {
-    const token = await sign({ sub: 'user-123' })
+  it('rejects a token with no sub claim', async () => {
+    const token = await sign({})
     const result = await verifyBearerToken(`Bearer ${token}`, config)
     expect(result).toEqual({ ok: false, reason: 'missing_claims' })
   })
