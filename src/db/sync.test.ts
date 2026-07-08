@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { openDatabase } from './client'
-import { bindings, contexts, dimensions, projects, workspaces } from './schema'
+import { bindings, contexts, dimensions, invitations, projects, workspaceMembers, workspaces } from './schema'
 import { applyInboundDeltas } from './sync'
 import { listBindings } from './mutations'
 import type { RowDelta } from '../domain/syncDelta'
@@ -230,5 +230,115 @@ describe('applyInboundDeltas — FK-cycle apply order (issue 015/032)', () => {
     const rows = await db.select().from(contexts).where(eq(contexts.id, 'c2'))
     expect(rows[0]?.symbol).toBe('α1')
     expect(rows[0]?.parentId).toBe('c1')
+  })
+})
+
+// Issue 056 (055's Cause 2 fix, test-first plan item 3) — `invitations` and
+// `workspace_members` join the inbound-apply switch's guarded-upsert shape,
+// exactly like the original nine tables. Neither has a self/cross-referential
+// FK (both `workspaceId`s point OUTWARD at `workspaces`, never inward), so
+// neither needs the DEFERRED_FK_COLUMN two-pass strategy — confirmed against
+// src/db/schema.ts:31-45,59-75 before writing this.
+describe('applyInboundDeltas — invitations / workspace_members (issue 056)', () => {
+  it('a fresh invitations row streams in and is durably applied, with the LWW guard honored', async () => {
+    const db = await freshDb()
+    const fresh: RowDelta = {
+      table: 'invitations',
+      id: 'inv1',
+      updatedAt: T1,
+      row: row('inv1', T1, {
+        workspaceId: WS,
+        email: 'invitee@example.com',
+        role: 'viewer',
+        invitedBySub: 'sub-owner',
+        expiresAt: '2026-08-01T00:00:00.000Z',
+        acceptedAt: null,
+      }),
+    }
+    await applyInboundDeltas(db, [fresh])
+
+    const rows = await db.select().from(invitations)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.email).toBe('invitee@example.com')
+
+    // A stale re-delivery must not overwrite the newer row (same LWW guard as
+    // every other table).
+    await applyInboundDeltas(db, [
+      { ...fresh, updatedAt: T0, row: row('inv1', T0, { ...fresh.row, role: 'editor' }) },
+    ])
+    const stillFresh = await db.select().from(invitations)
+    expect(stillFresh[0]?.role).toBe('viewer')
+
+    // A newer delta DOES apply.
+    await applyInboundDeltas(db, [
+      { ...fresh, updatedAt: T2, row: row('inv1', T2, { ...fresh.row, role: 'editor' }) },
+    ])
+    const updated = await db.select().from(invitations)
+    expect(updated[0]?.role).toBe('editor')
+  })
+
+  it('a fresh workspace_members row streams in and is durably applied, with the LWW guard honored', async () => {
+    const db = await freshDb()
+    const fresh: RowDelta = {
+      table: 'workspace_members',
+      id: 'mem1',
+      updatedAt: T1,
+      row: row('mem1', T1, { workspaceId: WS, userSub: 'sub-x', role: 'viewer' }),
+    }
+    await applyInboundDeltas(db, [fresh])
+
+    const rows = await db.select().from(workspaceMembers)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.role).toBe('viewer')
+
+    await applyInboundDeltas(db, [
+      { ...fresh, updatedAt: T0, row: row('mem1', T0, { ...fresh.row, role: 'editor' }) },
+    ])
+    expect((await db.select().from(workspaceMembers))[0]?.role).toBe('viewer')
+
+    await applyInboundDeltas(db, [
+      { ...fresh, updatedAt: T2, row: row('mem1', T2, { ...fresh.row, role: 'editor' }) },
+    ])
+    expect((await db.select().from(workspaceMembers))[0]?.role).toBe('editor')
+  })
+
+  it('a soft-delete tombstone on an invitation applies and is reflected in deletedAt', async () => {
+    const db = await freshDb()
+    await applyInboundDeltas(db, [
+      {
+        table: 'invitations',
+        id: 'inv1',
+        updatedAt: T0,
+        row: row('inv1', T0, {
+          workspaceId: WS,
+          email: 'invitee@example.com',
+          role: 'viewer',
+          invitedBySub: 'sub-owner',
+          expiresAt: '2026-08-01T00:00:00.000Z',
+          acceptedAt: null,
+        }),
+      },
+    ])
+    await applyInboundDeltas(db, [
+      {
+        table: 'invitations',
+        id: 'inv1',
+        updatedAt: T1,
+        row: {
+          ...row('inv1', T1, {
+            workspaceId: WS,
+            email: 'invitee@example.com',
+            role: 'viewer',
+            invitedBySub: 'sub-owner',
+            expiresAt: '2026-08-01T00:00:00.000Z',
+            acceptedAt: null,
+          }),
+          deletedAt: T1,
+        },
+      },
+    ])
+    const raw = await db.select().from(invitations).where(eq(invitations.id, 'inv1'))
+    expect(raw).toHaveLength(1)
+    expect(raw[0]?.deletedAt).not.toBeNull()
   })
 })

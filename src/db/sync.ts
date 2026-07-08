@@ -170,6 +170,38 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
             .returning({ id: schema.bindings.id })
           return applied.length > 0
         }
+        // Issue 056 (055's Cause 2 fix) — invitations/workspace_members join
+        // the same guarded-upsert shape as every other table. Neither has a
+        // self/cross-referential FK (both `workspaceId`s point OUTWARD at
+        // `workspaces`, never inward — src/db/schema.ts:31-45,59-75), so
+        // neither needs forceDeferredNull's two-pass strategy; `row` here is
+        // the delta's row verbatim, mirroring every non-cyclic case above.
+        case 'invitations': {
+          const row = delta.row as typeof schema.invitations.$inferInsert
+          const applied = await tx
+            .insert(schema.invitations)
+            .values(row)
+            .onConflictDoUpdate({
+              target: schema.invitations.id,
+              set: row,
+              setWhere: sql`${schema.invitations.updatedAt} < ${delta.updatedAt}`,
+            })
+            .returning({ id: schema.invitations.id })
+          return applied.length > 0
+        }
+        case 'workspace_members': {
+          const row = delta.row as typeof schema.workspaceMembers.$inferInsert
+          const applied = await tx
+            .insert(schema.workspaceMembers)
+            .values(row)
+            .onConflictDoUpdate({
+              target: schema.workspaceMembers.id,
+              set: row,
+              setWhere: sql`${schema.workspaceMembers.updatedAt} < ${delta.updatedAt}`,
+            })
+            .returning({ id: schema.workspaceMembers.id })
+          return applied.length > 0
+        }
       }
     }
 

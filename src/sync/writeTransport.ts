@@ -44,6 +44,10 @@ const TABLE_TO_MUTATION_TABLE: Readonly<Record<TableName, MutationTable>> = {
   parameters: 'parameters',
   contexts: 'contexts',
   bindings: 'bindings',
+  // Issue 056 — invitations/workspace_members join the same snake_case
+  // (queue) <-> camelCase (protocol) bridge as the original nine.
+  invitations: 'invitations',
+  workspace_members: 'workspaceMembers',
 }
 
 // QueuedMutation.op is only 'upsert' | 'delete' (032 never distinguishes a

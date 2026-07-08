@@ -1,6 +1,6 @@
 # 056: Extend the mutation protocol + write-path to carry `invitations` (and `workspace_members`) writes
 
-- **Status**: OPEN
+- **Status**: SHIPPED — `invitations`/`workspaceMembers` are now first-class mutation tables end to end (protocol `MutationTable` + sync-layer `TableName`, inbound-apply switch, write-path `FK_SCHEMA`/`SQL_TABLE_NAMES` with a dedicated `workspaceExists` check for the non-mutable `workspaces` FK target), and `workspace.ts`'s `invite()`/`changeRole()`/`removeMember()` each enqueue a sync mutation; `npm run verify` green.
 - **Milestone**: M9 (Identity & tenancy) / M8 (Server & sync)
 - **Blocked by**: 043 (write-path API + `MutationTable` protocol), 048 (client write-queue flush), 050 (`workspaceIdForSub` provisioning + `createProject`'s enqueue pattern)
 

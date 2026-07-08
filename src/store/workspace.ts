@@ -1,8 +1,10 @@
 import { useEffect } from 'react'
 import { create } from 'zustand'
+import { uuidv7 } from 'uuidv7'
 import { requireDatabase } from './database'
 import { useAuthStore } from './auth'
 import { useProjectsStore } from './projects'
+import { useSyncStore } from './sync'
 import {
   listMembers as dbListMembers,
   removeWorkspaceMember as dbRemoveMember,
@@ -83,6 +85,23 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     const db = requireDatabase()
     const invitation = await dbCreateInvitation(db, workspaceId, email, role, invitedBySub)
     set({ invitations: await dbListInvitations(db, workspaceId) })
+    // Issue 056 (055's Cause 1 fix) — push through the sync/write-path,
+    // mirroring createProject's own signed-in gate exactly (src/store/
+    // projects.ts:106-127): useSyncStore's `workspaceId` is only set once
+    // signed in (src/store/auth.ts's applyWorkspaceScope), so signed-out /
+    // sync-off stays local-only, byte-for-byte unchanged.
+    if (useSyncStore.getState().workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'invitations',
+        rowId: invitation.id,
+        op: 'upsert',
+        row: invitation,
+        optimisticUpdatedAt: invitation.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
     return invitation
   },
 
@@ -90,18 +109,42 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     const { workspaceId } = get()
     if (!workspaceId) return
     const db = requireDatabase()
-    await dbSetRole(db, workspaceId, userSub, role)
+    const updated = await dbSetRole(db, workspaceId, userSub, role)
     const members = await dbListMembers(db, workspaceId)
     set({ members, role: computeRole(members) })
+    if (useSyncStore.getState().workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'workspace_members',
+        rowId: updated.id,
+        op: 'upsert',
+        row: updated,
+        optimisticUpdatedAt: updated.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
   },
 
   async removeMember(userSub) {
     const { workspaceId } = get()
     if (!workspaceId) return
     const db = requireDatabase()
-    await dbRemoveMember(db, workspaceId, userSub)
+    const removed = await dbRemoveMember(db, workspaceId, userSub)
     const members = await dbListMembers(db, workspaceId)
     set({ members, role: computeRole(members) })
+    if (useSyncStore.getState().workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'workspace_members',
+        rowId: removed.id,
+        op: 'delete',
+        row: removed,
+        optimisticUpdatedAt: removed.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
   },
 
   async revokeInvitation(invitationId) {

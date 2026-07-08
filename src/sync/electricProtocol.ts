@@ -147,6 +147,34 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     updated_at: 'updatedAt',
     deleted_at: 'deletedAt',
   },
+  // Issue 056 — not yet subscribed to by src/sync/config.ts's SYNCED_TABLES
+  // (the ElectricSQL read-path deploy for these two is 058's job, out of this
+  // issue's scope), but TableName is a superset now (src/domain/syncDelta.ts)
+  // and this map is typed exhaustively over it — filling these in keeps the
+  // mapping forward-compatible for whenever 058 lands, at zero runtime cost
+  // today (toRowDelta/toCamelRow are simply never called with these tables
+  // yet).
+  invitations: {
+    id: 'id',
+    workspace_id: 'workspaceId',
+    email: 'email',
+    role: 'role',
+    invited_by_sub: 'invitedBySub',
+    expires_at: 'expiresAt',
+    accepted_at: 'acceptedAt',
+    created_at: 'createdAt',
+    updated_at: 'updatedAt',
+    deleted_at: 'deletedAt',
+  },
+  workspace_members: {
+    id: 'id',
+    workspace_id: 'workspaceId',
+    user_sub: 'userSub',
+    role: 'role',
+    created_at: 'createdAt',
+    updated_at: 'updatedAt',
+    deleted_at: 'deletedAt',
+  },
 }
 
 export class MalformedElectricMessageError extends Error {

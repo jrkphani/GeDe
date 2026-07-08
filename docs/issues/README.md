@@ -69,7 +69,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [053](done/053-pgwritestore-duplicate-id-column.md) ✅ | Bug: PgWriteStore INSERT duplicated the `id` column (Postgres 42701) | M11 | 043, 050 |
 | [054](done/054-pgwritestore-camelcase-column-mismatch.md) ✅ | Bug: PgWriteStore used camelCase payload keys as snake_case SQL columns (Postgres 42703) | M11 | 043, 050, 053 |
 | [055](055-share-invitations-never-reach-invitees.md) | Bug: sharing a project never reaches invitees (invitations stay local-only; protocol excludes them; personal-workspace-only) | M9/M8 | 035, 043, 048, 050 |
-| [056](056-mutation-protocol-invitations-workspace-members.md) | 055 fix (1/3): extend mutation protocol + write-path to carry `invitations`/`workspace_members` writes | M9/M8 | 043, 048, 050 |
+| [056](done/056-mutation-protocol-invitations-workspace-members.md) ✅ | 055 fix (1/3): extend mutation protocol + write-path to carry `invitations`/`workspace_members` writes | M9/M8 | 043, 048, 050 |
 | [057](057-shared-workspace-accept-seat-model.md) | 055 fix (2/3): shared-workspace accept/seat model — breaks the 1-user↔1-workspace invariant | M9 | 056, 034 |
 | [058](058-electric-read-path-shared-workspace-delivery.md) | 055 fix (3/3): deploy the ElectricSQL read-path so seated members receive the shared workspace's rows | M8 | 057, 032 |
 | [059](059-share-ux-honest-guard.md) | 055 interim mitigation: Share UI stops implying success while cloud sharing is unbuilt | M9 | — |

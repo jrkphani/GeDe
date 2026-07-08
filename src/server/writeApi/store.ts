@@ -23,12 +23,25 @@ export interface StoredRow {
 }
 
 /**
+ * Issue 056 risk note ("workspaceId FK target ambiguity") — `invitations`/
+ * `workspaceMembers` are the first FK_SCHEMA entries whose target
+ * (`workspaces`) is NOT itself a mutable `MutationTable`: workspaces are
+ * provisioned server-side by 050's PostConfirmation trigger, never via
+ * `/write`. Rather than loosen `MutationTable` itself (which would make
+ * every OTHER FK_SCHEMA/SQL_TABLE_NAMES entry think `workspaces` is a valid
+ * mutation target too), this widens only the FK-TARGET type to a strict
+ * superset, and `resolveForeignKeys`/`WriteStore.workspaceExists` below
+ * handle `'workspaces'` as its own, dedicated (non-mutable) case.
+ */
+export type FkReferenceTable = MutationTable | 'workspaces'
+
+/**
  * The foreign-key edges the write-path pre-validates (a friendly mirror of
  * the real FK constraints already declared in src/db/schema.ts — those are
  * the Tier-3 backstop; this is the Tier-2 friendly pre-check, ADR-0010).
  * Each entry: payload column name -> the table it must resolve against.
  */
-export const FK_SCHEMA: Readonly<Record<MutationTable, Readonly<Record<string, MutationTable>>>> = {
+export const FK_SCHEMA: Readonly<Record<MutationTable, Readonly<Record<string, FkReferenceTable>>>> = {
   projects: {},
   tier1Purpose: { projectId: 'projects' },
   tier1Props: { projectId: 'projects' },
@@ -38,6 +51,10 @@ export const FK_SCHEMA: Readonly<Record<MutationTable, Readonly<Record<string, M
   parameters: { dimensionId: 'dimensions', parentParamId: 'parameters', sourceEntryId: 'tier2Entries' },
   contexts: { projectId: 'projects', parentId: 'contexts' },
   bindings: { contextId: 'contexts', dimensionId: 'dimensions', parameterId: 'parameters' },
+  // Issue 056 — both point OUTWARD at `workspaces` (never at each other or
+  // at another mutable table), matching src/db/schema.ts:31-45,59-75.
+  invitations: { workspaceId: 'workspaces' },
+  workspaceMembers: { workspaceId: 'workspaces' },
 }
 
 export interface WriteStore extends WorkspaceScopeResolver {
@@ -45,6 +62,13 @@ export interface WriteStore extends WorkspaceScopeResolver {
   getRow(table: MutationTable, id: string): Promise<StoredRow | null>
   /** True iff a live (non-deleted) row with this id exists in this table — the FK pre-check primitive. */
   rowExists(table: MutationTable, id: string): Promise<boolean>
+  /**
+   * Issue 056 — the dedicated FK pre-check primitive for `workspaces`, which
+   * is never itself a `MutationTable` (see `FkReferenceTable`'s doc comment
+   * above): `invitations`/`workspaceMembers` are the only tables whose
+   * FK_SCHEMA resolves against it.
+   */
+  workspaceExists(id: string): Promise<boolean>
   /** Live dimension count for a canvas (project + context, null = root canvas) — the dimension-floor primitive. */
   countLiveDimensions(projectId: string, contextId: string | null): Promise<number>
   /** Live bindings already occupying a (context, dimension) pair, excluding `excludeBindingId` (a rebind of itself). */
@@ -68,7 +92,7 @@ export interface WriteStore extends WorkspaceScopeResolver {
 export async function resolveForeignKeys(
   table: MutationTable,
   payload: Readonly<Record<string, unknown>>,
-  store: Pick<WriteStore, 'rowExists'>,
+  store: Pick<WriteStore, 'rowExists' | 'workspaceExists'>,
 ): Promise<string[]> {
   const edges = FK_SCHEMA[table]
   const unresolved: string[] = []
@@ -79,7 +103,10 @@ export async function resolveForeignKeys(
       unresolved.push(`${column} (invalid reference type)`)
       continue
     }
-    const exists = await store.rowExists(refTable, value)
+    // `workspaces` is a resolvable FK TARGET but never a mutable MutationTable
+    // (issue 056) — it gets its own dedicated existence check rather than
+    // `rowExists`, which is typed over MutationTable only.
+    const exists = refTable === 'workspaces' ? await store.workspaceExists(value) : await store.rowExists(refTable, value)
     if (!exists) unresolved.push(value)
   }
   return unresolved
@@ -90,6 +117,10 @@ export async function resolveForeignKeys(
 export class InMemoryWriteStore implements WriteStore {
   private readonly rows = new Map<string, StoredRow>() // key: `${table}:${id}`
   private readonly appliedMutationIds = new Set<string>()
+  // Issue 056 — `workspaces` rows tracked separately from `rows` above:
+  // `StoredRow.table` is a `MutationTable`, and `workspaces` deliberately
+  // is not one (see `FkReferenceTable`'s doc comment).
+  private readonly workspaceIds = new Set<string>()
 
   private key(table: MutationTable, id: string): string {
     return `${table}:${id}`
@@ -98,6 +129,15 @@ export class InMemoryWriteStore implements WriteStore {
   /** Test/setup helper — seeds a row as if a prior mutation had already landed. */
   seed(row: StoredRow): void {
     this.rows.set(this.key(row.table, row.id), row)
+  }
+
+  /** Test/setup helper — seeds a `workspaces` row (see `workspaceIds` above). */
+  seedWorkspace(id: string): void {
+    this.workspaceIds.add(id)
+  }
+
+  workspaceExists(id: string): Promise<boolean> {
+    return Promise.resolve(this.workspaceIds.has(id))
   }
 
   getRow(table: MutationTable, id: string): Promise<StoredRow | null> {
@@ -191,6 +231,8 @@ const SQL_TABLE_NAMES: Readonly<Record<MutationTable, string>> = {
   parameters: 'parameters',
   contexts: 'contexts',
   bindings: 'bindings',
+  invitations: 'invitations',
+  workspaceMembers: 'workspace_members',
 }
 
 export interface PgWriteStoreConfig {
@@ -263,6 +305,20 @@ export class PgWriteStore implements WriteStore {
 
   async rowExists(table: MutationTable, id: string): Promise<boolean> {
     return (await this.getRow(table, id)) !== null
+  }
+
+  // Issue 056 — `workspaces` is never a `MutationTable` (see
+  // `FkReferenceTable`'s doc comment), so it needs its own query rather than
+  // going through `getRow`/`SQL_TABLE_NAMES`, which are typed over
+  // `MutationTable` only.
+  async workspaceExists(id: string): Promise<boolean> {
+    const client = await this.config.pool.connect()
+    try {
+      const result = await client.query('SELECT 1 FROM workspaces WHERE id = $1 AND deleted_at IS NULL', [id])
+      return result.rows.length > 0
+    } finally {
+      client.release()
+    }
   }
 
   resolveWorkspaceForEntity(table: MutationTable, entityId: string): Promise<string | null> {

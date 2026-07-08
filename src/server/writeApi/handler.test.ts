@@ -173,6 +173,76 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
   })
 })
 
+// Issue 056 (055's Cause 2 fix, test-first plan item 4) — invitations/
+// workspaceMembers are now routable through the write path exactly like
+// every other table: the union type IS the allow-list (handler.ts's own
+// comment), so once step 1 (MutationTable) lands, no bespoke allow-list
+// entry is needed — only FK_SCHEMA/SQL_TABLE_NAMES (store.ts) do.
+describe('handleWriteRequest — invitations / workspaceMembers are routable (issue 056)', () => {
+  it('applies an invitations insert end to end and the row is present afterward', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS1)
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'invitations',
+      op: 'insert',
+      payload: {
+        workspaceId: WS1,
+        email: 'invitee@example.com',
+        role: 'viewer',
+        invitedBySub: 'user-1',
+        expiresAt: '2026-08-01T00:00:00.000Z',
+      },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+    const row = await store.getRow('invitations', mutation.entityId)
+    expect(row?.data.email).toBe('invitee@example.com')
+  })
+
+  it('applies a workspaceMembers insert end to end and the row is present afterward', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS1)
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'workspaceMembers',
+      op: 'insert',
+      payload: { workspaceId: WS1, userSub: 'user-2', role: 'editor' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+    const row = await store.getRow('workspaceMembers', mutation.entityId)
+    expect(row?.data.userSub).toBe('user-2')
+  })
+
+  it('rejects an invitations insert whose workspaceId does not resolve to a live workspace', async () => {
+    const store = new InMemoryWriteStore() // no seedWorkspace() — WS1 unknown to the store
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'invitations',
+      op: 'insert',
+      payload: {
+        workspaceId: WS1,
+        email: 'invitee@example.com',
+        role: 'viewer',
+        invitedBySub: 'user-1',
+        expiresAt: '2026-08-01T00:00:00.000Z',
+      },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'referential_integrity' })
+    }
+  })
+})
+
 describe('handleWriteRequest — offline replay/idempotency (test-first plan item 4)', () => {
   it('applies a fresh mutation once, and a replay of the same mutation id is a no-op, not a duplicate', async () => {
     const store = new InMemoryWriteStore()

@@ -54,6 +54,22 @@ describe('isWellFormedEnvelope', () => {
   })
 })
 
+// Issue 056 (055's Cause 2) — `invitations`/`workspaceMembers` were
+// structurally excluded from the wire protocol; before this issue, a
+// `MutationEnvelope` with either table wouldn't even type-check. This test
+// is the "currently impossible" assertion 055 flagged.
+describe('isWellFormedEnvelope — issue 056 (invitations/workspaceMembers are representable)', () => {
+  it('accepts a well-formed envelope targeting `invitations`', () => {
+    expect(isWellFormedEnvelope(envelope({ table: 'invitations', payload: { email: 'invitee@example.com' } }))).toBe(
+      true,
+    )
+  })
+
+  it('accepts a well-formed envelope targeting `workspaceMembers`', () => {
+    expect(isWellFormedEnvelope(envelope({ table: 'workspaceMembers', payload: { role: 'editor' } }))).toBe(true)
+  })
+})
+
 describe('resolveLastWriteWins', () => {
   it('applies when no row exists yet (fresh insert)', () => {
     expect(resolveLastWriteWins(null, envelope({ clientUpdatedAt: '2026-01-01T00:00:00.000Z' }))).toBe('apply')

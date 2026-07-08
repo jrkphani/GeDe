@@ -18,9 +18,53 @@
 // Soft-delete is not a separate delta shape: a tombstone is just a row whose
 // `deletedAt` is set (SPEC §3), so `deletedAt` sails through the merge exactly
 // like every other column — no bespoke "delete op" to model or test.
-import { tableColumns, type TableName } from './projectEnvelope'
+import { tableColumns as envelopeTableColumns, type TableName as EnvelopeTableName } from './projectEnvelope'
 
-export type { TableName }
+// Issue 056 (055's Cause 2 fix, item 3) — the SYNC layer's table vocabulary is
+// a strict superset of the export/import envelope's (EnvelopeTableName,
+// projectEnvelope.ts): every envelope table syncs, but `invitations`/
+// `workspace_members` also need to be nameable on a RowDelta/QueuedMutation
+// even though they are deliberately NOT part of the portable project-export
+// format (an export is project-scoped content; membership is workspace-scoped
+// identity — see mutationProtocol.ts's own doc comment on this same split).
+// This is a PARALLEL, minimal registry, not an extension of
+// ENVELOPE_TABLE_NAMES — projectEnvelope.ts's own projectIO.test.ts
+// cross-checks ENVELOPE_TABLE_NAMES against drizzle's live schema, which
+// would (rightly) reject a table that never appears in a project export.
+export type SyncOnlyTableName = 'invitations' | 'workspace_members'
+export type TableName = EnvelopeTableName | SyncOnlyTableName
+
+// Column set for each sync-only table, schema order — mirrors
+// src/db/schema.ts's `invitations`/`workspaceMembers` pgTable() definitions.
+// Kept here (not a third copy delegated elsewhere) since these two tables
+// intentionally have no `rowSchemas`/envelope entry to borrow columns from.
+const SYNC_ONLY_COLUMNS: Readonly<Record<SyncOnlyTableName, readonly string[]>> = {
+  invitations: [
+    'id',
+    'workspaceId',
+    'email',
+    'role',
+    'invitedBySub',
+    'expiresAt',
+    'acceptedAt',
+    'createdAt',
+    'updatedAt',
+    'deletedAt',
+  ],
+  workspace_members: ['id', 'workspaceId', 'userSub', 'role', 'createdAt', 'updatedAt', 'deletedAt'],
+}
+
+function isSyncOnlyTable(name: TableName): name is SyncOnlyTableName {
+  return name === 'invitations' || name === 'workspace_members'
+}
+
+// Public: the exact column set of a table, schema order — delegates to
+// projectEnvelope.ts's own `tableColumns` for the nine envelope tables (SPEC
+// §3's "no derived columns on the wire" guard, ADR-0005) and to the local
+// registry above for the two sync-only tables.
+export function tableColumns(name: TableName): readonly string[] {
+  return isSyncOnlyTable(name) ? SYNC_ONLY_COLUMNS[name] : envelopeTableColumns(name)
+}
 
 export interface RowDelta {
   readonly table: TableName
@@ -78,6 +122,8 @@ export function emptySyncState(): SyncState {
     parameters: NO_ENTRIES,
     contexts: NO_ENTRIES,
     bindings: NO_ENTRIES,
+    invitations: NO_ENTRIES,
+    workspace_members: NO_ENTRIES,
   }
 }
 

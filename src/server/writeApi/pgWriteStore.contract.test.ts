@@ -267,4 +267,84 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     expect(paramsByPlaceholder.get('$2')).toBe(clientUpdatedAt) // updated_at
     expect(updateCall.params[0]).toBe(entityId) // WHERE id = $1
   })
+
+  // Issue 056 (055's Cause 2 fix, test-first plan item 5) — extends this same
+  // SQL-parsing regression discipline (bugs 053/054, commit 3b92dd0) to the
+  // two new tables: the fake `pg` client never parses SQL, so a duplicate-`id`
+  // column or a camelCase leak on `invitations`/`workspace_members` could
+  // ship undetected exactly like it did for `projects` if only asserted via
+  // the fake client's echo behavior.
+  it('insert: an invitations mutation snake_cases its camelCase payload keys onto `invitations`, `id` exactly once', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const clientUpdatedAt = '2026-01-01T00:00:00.000Z'
+    const mutation = envelope({
+      table: 'invitations',
+      entityId,
+      clientUpdatedAt,
+      payload: {
+        id: entityId, // echoed by the client, same trigger as bug 053
+        workspaceId: 'ws-1',
+        email: 'invitee@example.com',
+        role: 'viewer',
+        invitedBySub: 'user-1',
+        expiresAt: '2026-08-01T00:00:00.000Z',
+      },
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const insertCall = calls.find((c) => c.text.includes('INSERT INTO invitations'))
+    if (!insertCall) throw new Error('no INSERT INTO invitations call was captured')
+    const columns = parseInsertColumns(insertCall.text)
+
+    // Bug 054 class: camelCase keys converted to snake_case column names.
+    expect(columns).toContain('workspace_id')
+    expect(columns).toContain('invited_by_sub')
+    expect(columns).toContain('expires_at')
+    expect(columns).not.toContain('workspaceId')
+    expect(columns).not.toContain('invitedBySub')
+    expect(columns).not.toContain('expiresAt')
+
+    // Bug 053 class: `id` appears exactly once (the explicit prefix column),
+    // never re-added from the payload's own echoed `id`.
+    expect(columns.filter((c) => c === 'id')).toHaveLength(1)
+    expect(columns[0]).toBe('id')
+    expect(columns[1]).toBe('updated_at')
+    expect(columns.slice(2)).not.toContain('id')
+    expect(columns.slice(2)).not.toContain('updated_at')
+  })
+
+  it('insert: a workspaceMembers mutation snake_cases its camelCase payload keys onto `workspace_members`, `id` exactly once', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const clientUpdatedAt = '2026-01-01T00:00:00.000Z'
+    const mutation = envelope({
+      table: 'workspaceMembers',
+      entityId,
+      clientUpdatedAt,
+      payload: {
+        id: entityId,
+        workspaceId: 'ws-1',
+        userSub: 'user-2',
+        role: 'editor',
+      },
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const insertCall = calls.find((c) => c.text.includes('INSERT INTO workspace_members'))
+    if (!insertCall) throw new Error('no INSERT INTO workspace_members call was captured')
+    const columns = parseInsertColumns(insertCall.text)
+
+    expect(columns).toContain('workspace_id')
+    expect(columns).toContain('user_sub')
+    expect(columns).not.toContain('workspaceId')
+    expect(columns).not.toContain('userSub')
+    expect(columns.filter((c) => c === 'id')).toHaveLength(1)
+    expect(columns[0]).toBe('id')
+    expect(columns[1]).toBe('updated_at')
+  })
 })

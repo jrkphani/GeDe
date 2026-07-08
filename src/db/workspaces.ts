@@ -151,14 +151,19 @@ export async function setWorkspaceMemberRole(
 
 // Soft-delete (mirrors every other table's tombstone convention, SPEC §3) so
 // a removal is itself a row-delta the sync stream can propagate, not a
-// silent disappearance.
+// silent disappearance. Issue 056 — returns the tombstoned row (`.returning()`,
+// mirroring `setWorkspaceMemberRole`'s own pattern) so the store layer can
+// enqueue it as a sync mutation without a second round trip; every existing
+// caller already ignored the prior `void` return, so this is additive.
 export async function removeWorkspaceMember(
   db: Database,
   workspaceId: string,
   userSub: string,
-): Promise<void> {
-  await db
+): Promise<WorkspaceMemberRow> {
+  const rows = await db
     .update(workspaceMembers)
     .set({ deletedAt: now(), updatedAt: now() })
     .where(and(eq(workspaceMembers.workspaceId, workspaceId), eq(workspaceMembers.userSub, userSub)))
+    .returning()
+  return firstOrThrow(rows)
 }

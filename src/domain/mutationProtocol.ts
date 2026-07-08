@@ -19,7 +19,21 @@
 // UPDATE/DELETE is also a safe no-op even though "set the same field twice"
 // would otherwise look like two legitimate writes.
 
-/** The tables a write-path mutation may target — mirrors src/db/schema.ts. */
+/**
+ * The tables a write-path mutation may target — mirrors src/db/schema.ts.
+ *
+ * Issue 056 (055's Cause 2 fix) — `invitations`/`workspaceMembers` were added
+ * so a sharing/role/removal write can be represented and routed at all;
+ * before this, the union was a fixed 9-table project-content list with no
+ * membership tables. Deliberately NOT added to `ENVELOPE_TABLE_NAMES`
+ * (src/domain/projectEnvelope.ts) — that registry is the portable
+ * project-EXPORT format (project-scoped content), while these two are
+ * workspace-scoped membership state. See src/domain/syncDelta.ts's own
+ * `TableName` for the parallel sync-layer registry these two also had to
+ * join (snake_case there, camelCase here — the same split that already
+ * existed for the original nine, per src/sync/writeTransport.ts's own doc
+ * comment).
+ */
 export type MutationTable =
   | 'projects'
   | 'tier1Purpose'
@@ -30,6 +44,8 @@ export type MutationTable =
   | 'parameters'
   | 'contexts'
   | 'bindings'
+  | 'invitations'
+  | 'workspaceMembers'
 
 export type MutationOp = 'insert' | 'update' | 'delete'
 
