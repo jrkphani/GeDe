@@ -9,6 +9,8 @@
 // repo, because doing so would require a real VPC-reachable RDS instance
 // and a real Cognito User Pool (033, not yet built) — exactly what HANDOFF's
 // "no live AWS/Electric/Cognito reachable in tests" rules out.
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager'
 import { createRemoteJWKSet } from 'jose'
 import { Pool } from 'pg'
@@ -47,7 +49,14 @@ async function loadDeps(): Promise<WriteApiDeps> {
     database,
     user: secret.username,
     password: secret.password,
-    ssl: { rejectUnauthorized: true },
+    // Verify the RDS server cert against Amazon's RDS CA bundle, copied into
+    // this Lambda's bundle at build time (api-stack.ts's afterBundling hook).
+    // Without a pinned CA, node's default trust store rejects RDS's AWS-managed
+    // CA as "self-signed certificate in certificate chain".
+    ssl: {
+      ca: readFileSync(join(__dirname, 'rds-global-bundle.pem'), 'utf8'),
+      rejectUnauthorized: true,
+    },
     max: 3, // Lambda concurrency is per-invocation; keep the pool small per execution environment.
   })
 

@@ -28,6 +28,10 @@ export interface MigrationStackProps extends StackProps {
 
 /** The real, single source of migration SQL — never forked (issue 045 scope). */
 const MIGRATIONS_SOURCE_DIR = path.resolve(__dirname, '..', '..', '..', 'src', 'db', 'migrations');
+// Amazon RDS global CA bundle (deploy/cdk/lib/rds-global-bundle.pem), copied
+// into both this stack's runner Lambda and api-stack.ts's write Lambda so each
+// can verify the RDS server cert. One shared source file, no duplication.
+const RDS_CA_SOURCE = path.resolve(__dirname, 'rds-global-bundle.pem');
 
 /**
  * `Gede-Test-Migrations` — issue 045's one-shot, idempotent migration
@@ -154,6 +158,10 @@ export class MigrationStack extends Stack {
             // Docker), so this absolute host path is valid.
             `mkdir -p "${outputDir}/migrations"`,
             `cp "${MIGRATIONS_SOURCE_DIR}"/*.sql "${outputDir}/migrations/"`,
+            // Amazon RDS CA bundle so handler.ts can verify the RDS server
+            // cert (ssl.rejectUnauthorized:true) instead of failing on the
+            // AWS-managed CA. Shared source file with api-stack.ts's write Lambda.
+            `cp "${RDS_CA_SOURCE}" "${outputDir}/rds-global-bundle.pem"`,
           ],
         },
       },

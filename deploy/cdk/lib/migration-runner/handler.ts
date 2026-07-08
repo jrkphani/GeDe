@@ -13,6 +13,7 @@
 // split (ADR-0010) — this file is the ONLY place here that touches AWS event
 // shapes, Secrets Manager, and a live `pg.Client`; `applyMigrations.ts` is
 // fully unit-tested without either (see `deploy/cdk/test/migration-runner.test.ts`).
+import { readFileSync } from 'node:fs';
 import * as path from 'node:path';
 import { GetSecretValueCommand, SecretsManagerClient } from '@aws-sdk/client-secrets-manager';
 import { Client } from 'pg';
@@ -78,7 +79,15 @@ export async function handler(event: CustomResourceEvent): Promise<CustomResourc
     database,
     user: secret.username,
     password: secret.password,
-    ssl: { rejectUnauthorized: true },
+    // Verify the RDS server cert against Amazon's RDS CA bundle, copied into
+    // this Lambda's bundle at build time (migration-stack.ts's afterBundling
+    // hook, alongside the migrations/ dir). Without a pinned CA, node's default
+    // trust store rejects RDS's AWS-managed CA as "self-signed certificate in
+    // certificate chain" and the deploy fails.
+    ssl: {
+      ca: readFileSync(path.join(__dirname, 'rds-global-bundle.pem'), 'utf8'),
+      rejectUnauthorized: true,
+    },
   });
   await client.connect();
   try {

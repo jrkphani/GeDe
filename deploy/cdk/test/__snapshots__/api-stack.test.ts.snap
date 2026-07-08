@@ -641,7 +641,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "b8c0a7b4edaef5fad5616eb84bcd1d1d88ee0ba7e704b9020b2f2445edea3a39.zip",
+          "S3Key": "26c13002259e4a6cd5f503306cff5275b2b26cd1da91f0c818f021f57f277738.zip",
         },
         "Description": "Gede-Test-Api Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).",
         "Environment": {

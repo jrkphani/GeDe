@@ -9,6 +9,11 @@ import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
 
+// Amazon RDS global CA bundle (deploy/cdk/lib/rds-global-bundle.pem) — copied
+// into the write Lambda's bundle so albAdapter.ts can verify the RDS server
+// cert (ssl.rejectUnauthorized:true). Shared with migration-stack.ts's runner.
+const RDS_CA_SOURCE = path.resolve(__dirname, 'rds-global-bundle.pem');
+
 export interface ApiStackProps extends StackProps {
   /** The Network stack's VPC - cross-stack reference (issue 030 scope item 4). */
   vpc: ec2.IVpc;
@@ -227,6 +232,16 @@ export class ApiStack extends Stack {
         // Offline synth (issue 041 lesson) — esbuild is a deploy/cdk
         // devDependency (issue 043) specifically so this never needs Docker.
         forceDockerBundling: false,
+        commandHooks: {
+          beforeBundling: () => [],
+          beforeInstall: () => [],
+          // Copy Amazon's RDS CA bundle alongside the handler so albAdapter.ts
+          // can verify the RDS server cert. Runs on the host (no Docker), so
+          // the absolute source path is valid. Mirrors migration-stack.ts.
+          afterBundling: (_inputDir: string, outputDir: string) => [
+            `cp "${RDS_CA_SOURCE}" "${outputDir}/rds-global-bundle.pem"`,
+          ],
+        },
       },
     });
     props.databaseSecret.grantRead(this.writeApiFunction);
