@@ -114,6 +114,15 @@ jobs:
           echo "VITE_COGNITO_USER_POOL_ID=$VAR_USER_POOL_ID" >> "$GITHUB_ENV"
           echo "VITE_COGNITO_CLIENT_ID=$VAR_CLIENT_ID" >> "$GITHUB_ENV"
           echo "VITE_COGNITO_REGION=${VAR_REGION:-us-east-1}" >> "$GITHUB_ENV"
+          # Issue 050 — the last of the three last-mile seams: src/sync/config.ts's
+          # isSyncEnabled() reads this at build time (Vite inlines
+          # import.meta.env.VITE_* below), and it never was set in this deploy
+          # build before — the write-queue's flush() was provably inert (0 rows
+          # in every cloud table, docs/issues/050's "Ground truth") even though
+          # the write-path Lambda (046) and the client flush code (048) were both
+          # already deployed. Not a secret — a plain feature flag, so it's a
+          # literal here rather than a repo variable like the Cognito ids above.
+          echo "VITE_SYNC_ENABLED=true" >> "$GITHUB_ENV"
 
       # Vite inlines import.meta.env.VITE_* at build time (src/auth/config.ts)
       # from whatever's already in process.env — the three vars the previous
