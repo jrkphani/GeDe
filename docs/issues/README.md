@@ -62,8 +62,12 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [046](done/046-deploy-real-write-lambda-and-issuer.md) ✅ | Deploy the real write-path Lambda + wire the Cognito issuer | M11 | 043, 045, 044 |
 | [047](done/047-api-tls-https-endpoint.md) ✅ | HTTPS for the write API — end the mixed-content block | M11 | 030 |
 | [048](done/048-client-write-queue-flush.md) ✅ | Flush the client write-queue to `/write` — close the loop | M11 | 044, 045, 046, 047, 032 |
-| [049](049-db-inspection-api.md) ⬜ | Database inspection API — read-only diagnostic queries against the cloud RDS | M11 | 045, 046, 047 |
-| [050](050-workspace-provisioning-sync-enablement.md) ⬜ | Auto-provision workspace on sign-in + enable sync (write loop last mile) | M11 | 034, 043, 048, 049 |
+| [049](done/049-db-inspection-api.md) ✅ | Database inspection API — read-only diagnostic queries against the cloud RDS | M11 | 045, 046, 047 |
+| [050](done/050-workspace-provisioning-sync-enablement.md) ✅ | Auto-provision workspace on sign-in + enable sync (write loop last mile) | M11 | 034, 043, 048, 049 |
+| [051](051-sync-read-path-crash-on-empty-url.md) ✅ | Bug: enabling sync crashed the signed-in app (read-path Electric on an empty URL) | M11 | 050 |
+| [052](052-write-api-missing-claims-workspace-id.md) ✅ | Bug: write API rejected every signed-in write with 401 missing_claims | M11 | 050 |
+| [053](053-pgwritestore-duplicate-id-column.md) ✅ | Bug: PgWriteStore INSERT duplicated the `id` column (Postgres 42701) | M11 | 043, 050 |
+| [054](054-pgwritestore-camelcase-column-mismatch.md) ✅ | Bug: PgWriteStore used camelCase payload keys as snake_case SQL columns (Postgres 42703) | M11 | 043, 050, 053 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 

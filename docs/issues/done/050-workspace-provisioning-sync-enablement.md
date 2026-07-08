@@ -1,6 +1,6 @@
 # 050: Close the write loop's last mile — auto-provision a workspace on sign-in + enable sync
 
-- **Status**: OPEN
+- **Status**: SHIPPED — deployed + verified live 2026-07-08: a fresh Cognito sign-up provisioned a cloud workspace (`workspaces`/`workspace_members` rows via the PostConfirmation trigger), and a project created in the signed-in frontend flushed through `/write` and landed in RDS (`/debug/db/counts` `projects` ≥ 1). Four latent bugs surfaced by this live end-to-end test were hotfixed directly on `main` and are filed as issues 051–054.
 - **Milestone**: M11 (Close the cloud write loop)
 - **Blocked by**: 033 (Cognito — SHIPPED), 034 (workspaces/RLS — SHIPPED), 043/046 (write path — SHIPPED & LIVE), 048 (client flush — SHIPPED), 049 (debug API to verify — SHIPPED & LIVE)
 

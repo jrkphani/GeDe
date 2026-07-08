@@ -1,6 +1,6 @@
 # 049: Database inspection API — read-only diagnostic queries against the cloud RDS
 
-- **Status**: OPEN
+- **Status**: SHIPPED — deployed + verified live 2026-07-08: `/debug/db/counts` returns live table counts, auth-gated (secret/`x-debug-token` required; missing/wrong → `401`).
 - **Milestone**: M11 (Close the cloud write loop — verification / observability)
 - **Blocked by**: 045 (schema on RDS — SHIPPED), 046 (write Lambda pg/CA/secret pattern to mirror — SHIPPED), 047 (CloudFront API origin — SHIPPED)
 
