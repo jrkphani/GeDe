@@ -329,8 +329,17 @@ export class PgWriteStore implements WriteStore {
         return true
       }
 
-      const columns = Object.keys(mutation.payload)
-      const values = Object.values(mutation.payload)
+      // `id`/`updated_at`/`deleted_at` are stamped explicitly by the server
+      // ($1/$2 and the delete branch), so exclude them from the payload-derived
+      // columns. Otherwise a client payload that echoes `id` yields
+      // `INSERT INTO t (id, updated_at, id, ...)` → Postgres 42701 "column
+      // \"id\" specified more than once" (this PgWriteStore path was never run
+      // against a live DB before — 043's contract test used a fake pg client
+      // that does not parse SQL).
+      const RESERVED_COLUMNS = new Set(['id', 'updated_at', 'deleted_at'])
+      const entries = Object.entries(mutation.payload).filter(([col]) => !RESERVED_COLUMNS.has(col))
+      const columns = entries.map(([col]) => col)
+      const values = entries.map(([, value]) => value)
       if (mutation.op === 'insert') {
         const placeholders = values.map((_, i) => `$${i + 3}`).join(', ')
         await client.query(
