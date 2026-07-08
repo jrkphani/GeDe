@@ -1,0 +1,197 @@
+// Bonus test-first plan item (issue 043 follow-up): the ONE test in this repo
+// that exercises `PgWriteStore` against a REAL Postgres, closing the gap the
+// SQL-assertion tests in pgWriteStore.contract.test.ts cannot — those parse
+// the SQL text a fake client captures, which proves the string is well-formed
+// but not that Postgres actually accepts it. Both shipped bugs (053: duplicate
+// `id` — Postgres 42701; 054: camelCase columns — Postgres 42703) are exactly
+// the class of error a fake client can never surface, because it never asks a
+// real server to parse/execute the SQL.
+//
+// Guarded exactly like `deploy/migration-parity/check-migrations.sh` /
+// `npm run db:migration-parity` (issue 030): needs a real, empty Postgres 17
+// reachable via DATABASE_URL, with `psql` on PATH to apply the migrations.
+// Neither is guaranteed in a dev worktree or this repo's default CI job, so
+// this file SKIPS cleanly (not a failure) when either is missing, exactly
+// like that script does. To run it locally:
+//
+//   docker run --rm -e POSTGRES_PASSWORD=postgres -p 5432:5432 postgres:17
+//   DATABASE_URL=postgresql://postgres:postgres@localhost:5432/postgres \
+//     npx vitest run src/server/writeApi/pgWriteStore.live.test.ts
+//
+// The connecting role here is whichever role DATABASE_URL authenticates as
+// (typically the server's own superuser/table-owner in a throwaway
+// container) — Postgres exempts a table's OWNER from its own RLS policies
+// (see src/db/migrations/0008_workspaces_rls.sql's header comment), so this
+// test does not need to impersonate `app_user` / set a matching tenant
+// context to observe the insert land; it is asserting persistence + column
+// mapping, not RLS enforcement (that is 034's dedicated coverage).
+import { execSync } from 'node:child_process'
+import { fileURLToPath } from 'node:url'
+import path from 'node:path'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { Pool } from 'pg'
+import { uuidv7 } from 'uuidv7'
+import { PgWriteStore } from './store'
+
+const DATABASE_URL = process.env.DATABASE_URL
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
+
+/** Mirrors check-migrations.sh's own readiness checks — same skip conditions, same reasoning. */
+function checkLiveDbReady(): boolean {
+  if (!DATABASE_URL) return false
+  try {
+    execSync('command -v psql', { stdio: 'ignore' })
+  } catch {
+    return false
+  }
+  try {
+    execSync(`psql "${DATABASE_URL}" -v ON_ERROR_STOP=1 -c "select 1"`, { stdio: 'ignore' })
+  } catch {
+    return false
+  }
+  return true
+}
+
+const LIVE_DB_READY = checkLiveDbReady()
+
+if (!LIVE_DB_READY) {
+  // mirrors check-migrations.sh's own stdout skip message
+  console.log(
+    'pgWriteStore.live.test: DATABASE_URL unset, psql missing, or DB unreachable — skipping (not a failure). ' +
+      'See this file header for how to run it locally against a throwaway postgres:17 container.',
+  )
+}
+
+describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integration (guarded, bugs 053/054)', () => {
+  let pool: Pool
+  let workspaceId: string
+
+  beforeAll(() => {
+    // Applies src/db/migrations/*.sql from empty, in filename order — the
+    // exact same DDL src/db/migrate.ts applies for PGlite (ADR-0008 parity).
+    execSync('bash deploy/migration-parity/check-migrations.sh', {
+      cwd: REPO_ROOT,
+      env: process.env,
+      stdio: 'inherit',
+    })
+
+    pool = new Pool({ connectionString: DATABASE_URL })
+  })
+
+  afterAll(async () => {
+    await pool.end()
+  })
+
+  it('creates a workspace and project row (setup fixture, not the assertion under test)', async () => {
+    workspaceId = uuidv7()
+    await pool.query('INSERT INTO workspaces (id, name) VALUES ($1, $2)', [workspaceId, 'Live Test Workspace'])
+    const result = await pool.query('SELECT id FROM workspaces WHERE id = $1', [workspaceId])
+    expect(result.rows).toHaveLength(1)
+  })
+
+  it('insert: persists a camelCase client payload as snake_case columns, with `id` landing exactly once', async () => {
+    const store = new PgWriteStore({ pool })
+    const entityId = uuidv7()
+    const clientUpdatedAt = new Date().toISOString()
+
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(), // the mutation's own idempotency-ledger id
+        workspaceId,
+        table: 'projects',
+        op: 'insert',
+        entityId,
+        payload: {
+          // Realistic client payload: echoes the entity's own id (bug 053's
+          // trigger) and uses Drizzle's camelCase JS field names (bug 054's).
+          id: entityId,
+          name: 'Live Integration Project',
+          workspaceId,
+          createdAt: clientUpdatedAt,
+        },
+        clientUpdatedAt,
+      },
+      'live-test-user-sub',
+    )
+
+    expect(applied).toBe(true)
+
+    const result = await pool.query<{
+      id: string
+      name: string
+      workspace_id: string
+      updated_at: Date
+      deleted_at: Date | null
+    }>('SELECT id, name, workspace_id, updated_at, deleted_at FROM projects WHERE id = $1', [entityId])
+
+    expect(result.rows).toHaveLength(1)
+    const row = result.rows[0]
+    expect(row).toBeDefined()
+    expect(row?.id).toBe(entityId)
+    expect(row?.name).toBe('Live Integration Project')
+    expect(row?.workspace_id).toBe(workspaceId) // bug 054: would be NULL / column-not-found pre-fix
+    expect(row?.deleted_at).toBeNull()
+
+    // Replaying the same mutation id must be a no-op (idempotency ledger),
+    // not a second attempted INSERT / duplicate-id error.
+    const repeated = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'projects',
+        op: 'insert',
+        entityId,
+        payload: { id: entityId, name: 'Should not overwrite', workspaceId },
+        clientUpdatedAt,
+      },
+      'live-test-user-sub',
+    )
+    // A different mutation id targeting the same entityId is a fresh
+    // mutation (not caught by the ledger) — `ON CONFLICT (id) DO NOTHING` on
+    // the INSERT is what makes this a safe no-op at the ROW level.
+    expect(repeated).toBe(true)
+    const afterRepeat = await pool.query<{ name: string }>('SELECT name FROM projects WHERE id = $1', [entityId])
+    expect(afterRepeat.rows[0]?.name).toBe('Live Integration Project') // unchanged — ON CONFLICT DO NOTHING held
+  })
+
+  it('update: persists a camelCase client payload as snake_case columns, without re-touching `id`', async () => {
+    const store = new PgWriteStore({ pool })
+    const entityId = uuidv7()
+    const createdAt = new Date().toISOString()
+
+    await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'projects',
+        op: 'insert',
+        entityId,
+        payload: { id: entityId, name: 'Before Update', workspaceId, createdAt },
+        clientUpdatedAt: createdAt,
+      },
+      'live-test-user-sub',
+    )
+
+    const clientUpdatedAt = new Date(Date.now() + 1000).toISOString()
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'projects',
+        op: 'update',
+        entityId,
+        payload: { id: entityId, name: 'After Update', workspaceId },
+        clientUpdatedAt,
+      },
+      'live-test-user-sub',
+    )
+
+    expect(applied).toBe(true)
+    const result = await pool.query<{ name: string; workspace_id: string; updated_at: Date }>(
+      'SELECT name, workspace_id, updated_at FROM projects WHERE id = $1',
+      [entityId],
+    )
+    expect(result.rows[0]?.name).toBe('After Update')
+    expect(result.rows[0]?.workspace_id).toBe(workspaceId)
+  })
+})
