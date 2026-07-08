@@ -131,4 +131,7 @@ jobs:
 
       - name: cdk deploy
         working-directory: deploy/cdk
-        run: npx cdk deploy --all --require-approval never
+        # -c debugApi=true enables issue 049's read-only db-inspection API.
+        # bin/gede.ts honors it only when env === 'test' (the default env), so a
+        # future prod deploy never exposes it even with this flag present.
+        run: npx cdk deploy --all --require-approval never -c debugApi=true

@@ -47,7 +47,9 @@ export interface AppStacks {
  * the identical wiring/tagging as a real synth — see
  * docs/issues/040-cdk-aws-deployment.md, docs/issues/030-*.md,
  * docs/issues/033-auth-account.md, and issues 045/046/047 (M11, "close the
- * cloud write loop").
+ * cloud write loop"). Issue 049 adds an optional, `test`-env-only debug/db
+ * inspection Lambda (`debugApi` param below) — off by default everywhere
+ * except where `bin/gede.ts` explicitly turns it on via CDK context.
  *
  * Cross-stack wiring (issue 030 scope item 4, extended by 045/046/047):
  * Network's VPC feeds Data, Migrations, and Api; Data's RDS security group
@@ -83,6 +85,15 @@ export function buildAppStacks(
    * Never passed by the real CLI entrypoint (`bin/gede.ts`).
    */
   siteSourcePath?: string,
+  /**
+   * Issue 049 — enables the read-only db-inspection Lambda + its `/debug/
+   * db/*` ALB route + CloudFront behavior. Threaded in from `bin/gede.ts`'s
+   * `debugApi` CDK context flag, which itself is only ever honored when
+   * `envName === 'test'` (see that file) — a future `prod` env must never
+   * get these resources, regardless of what context is passed. Defaults to
+   * `false` so every other test/synth in this suite is unaffected.
+   */
+  debugApi = false,
 ): AppStacks {
   const envConfig = ENVS[envName];
   const env: cdk.Environment = { account: envConfig.account, region: envConfig.region };
@@ -133,6 +144,7 @@ export function buildAppStacks(
     databaseSecret: data.database.secret!,
     databaseEndpoint: data.database.dbInstanceEndpointAddress,
     userPoolId: auth.userPool.userPoolId,
+    debugApiEnabled: debugApi,
   });
   api.addDependency(network);
   api.addDependency(data);
@@ -149,6 +161,7 @@ export function buildAppStacks(
     domainName,
     siteSourcePath,
     apiLoadBalancerDnsName: api.loadBalancer.loadBalancerDnsName,
+    debugApiEnabled: debugApi,
   });
   hosting.addDependency(network);
   hosting.addDependency(api);

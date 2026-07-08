@@ -44,6 +44,18 @@ export interface HostingStackProps extends StackProps {
    * that don't pass an Api stack are unaffected.
    */
   apiLoadBalancerDnsName?: string;
+  /**
+   * Issue 049 — when true (and `apiLoadBalancerDnsName` is set), adds a
+   * SECOND path-based behavior on the same ALB origin, `/debug/db/*`,
+   * fronting the read-only db-inspection Lambda — same same-origin-HTTPS
+   * rationale as `/write*` above, but no-cache for the same "never cache a
+   * live DB read" reason mutating POSTs must never be cached. False/
+   * undefined (the default) => no `/debug/db/*` behavior is added — this is
+   * the `test`-env-only gate's second half (the first half is the Api
+   * stack's own `debugApiEnabled`, which controls whether the Lambda this
+   * points at even exists).
+   */
+  debugApiEnabled?: boolean;
 }
 
 /**
@@ -178,6 +190,31 @@ export class HostingStack extends Stack {
         // Forward the Authorization header (+ body/query) through to the
         // ALB — CloudFront strips non-forwarded headers by default, which
         // would silently drop the JWT handleWriteRequest (043) requires.
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+      };
+    }
+
+    // --- Debug/db inspection API origin (issue 049) ---------------------
+    // Same mixed-content rationale as `/write*` above, extended to a SECOND
+    // path on the same ALB origin: `/debug/db/*` fronts the read-only
+    // db-inspection Lambda (api-stack.ts's `debugApiEnabled`). Only added
+    // when BOTH an Api ALB DNS name AND `debugApiEnabled` are supplied —
+    // this is the `test`-env-only gate's CloudFront half; the Api stack's
+    // own `debugApiEnabled` gates whether the Lambda it forwards to even
+    // exists. No-cache for the same reason `/write*` is no-cache: a live DB
+    // read must never be served stale from the edge.
+    if (props.apiLoadBalancerDnsName && props.debugApiEnabled) {
+      additionalBehaviors['debug/db/*'] = {
+        origin: new origins.HttpOrigin(props.apiLoadBalancerDnsName, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        // GET (counts/rows) and POST (the guarded query op) both need to pass through.
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        // Forward x-debug-token/Authorization through — CloudFront strips
+        // non-forwarded headers by default, which would silently turn every
+        // request into a 401 (handleDebugRequest's auth gate never sees the token).
         originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
       };
     }
