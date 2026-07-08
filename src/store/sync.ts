@@ -15,7 +15,7 @@ import {
 import { deriveSyncStatus, detectLostEdits, lostEditMessage, type SyncStatus } from '../domain/syncStatus'
 import type { TableName } from '../domain/syncDelta'
 import { startSync, type SyncHandle, type SyncOptions } from '../sync/syncEngine'
-import { isSyncEnabled, SYNCED_TABLES, writeApiPath } from '../sync/config'
+import { isSyncEnabled, syncBaseUrl, SYNCED_TABLES, writeApiPath } from '../sync/config'
 import { flushMutations, type WriteApiHttpClient } from '../sync/writeTransport'
 import { getAuthHeaders } from '../auth/wireIdentity'
 import { useAuthStore } from './auth'
@@ -164,6 +164,14 @@ export const useSyncStore = create<SyncState>()((set, get) => {
 
     start(db, options = {}) {
       if (!isSyncEnabled()) return
+      // The read-path (Electric) needs a configured shape endpoint. Without
+      // VITE_SYNC_URL — and no injected test streamFactory — the default
+      // factory would build a shape URL from an empty base and throw
+      // "Failed to construct 'URL': Invalid URL" (the sync Fargate slot is an
+      // nginx stub anyway, so there is nothing to read from). Skip the
+      // read-path; the write flush (048) is independent and stays enabled via
+      // isSyncEnabled() alone — see flush() below.
+      if (syncBaseUrl() === '' && !options.streamFactory) return
       get().handle?.stop()
       set({
         enabled: true,
