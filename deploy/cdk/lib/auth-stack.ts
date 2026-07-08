@@ -1,6 +1,47 @@
-import { Stack, StackProps, CfnOutput } from 'aws-cdk-lib';
+import * as path from 'path';
+import { Stack, StackProps, CfnOutput, Duration } from 'aws-cdk-lib';
 import * as cognito from 'aws-cdk-lib/aws-cognito';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as lambda from 'aws-cdk-lib/aws-lambda';
+import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
+import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
 import { Construct } from 'constructs';
+
+// Amazon RDS global CA bundle (deploy/cdk/lib/rds-global-bundle.pem) — copied
+// into the provisioning Lambda's bundle so albAdapter.ts can verify the RDS
+// server cert. Mirrors api-stack.ts's write Lambda and migration-stack.ts's
+// runner — same shared source file, no duplication.
+const RDS_CA_SOURCE = path.resolve(__dirname, 'rds-global-bundle.pem');
+
+export interface AuthStackProps extends StackProps {
+  /**
+   * The Network stack's VPC (issue 050) — the PostConfirmation provisioning
+   * Lambda below needs it to reach the Data stack's isolated-subnet RDS.
+   * Cognito itself is still a regional managed resource OUTSIDE the VPC
+   * (issue 033) — only the new trigger Lambda is VPC-attached.
+   */
+  vpc: ec2.IVpc;
+  /**
+   * The Data stack's RDS security group (issue 050). This stack adds the
+   * ONE ingress rule it needs (provisioning Lambda SG -> 5432) as a forward
+   * reference — the same one-directional pattern api-stack.ts and
+   * migration-stack.ts already use for their own Lambda SGs (see
+   * api-stack.ts's class doc for the circular-dependency rationale; it
+   * applies here identically).
+   */
+  databaseSecurityGroup: ec2.ISecurityGroup;
+  /**
+   * The Data stack's generated RDS credentials secret (issue 050) — the
+   * provisioning Lambda connects as this (master/owner) role, exactly like
+   * the migration runner, so its bootstrap INSERTs into `workspaces`/
+   * `workspace_members` are exempt from RLS (migration 0008's owner-
+   * exemption) — there is no existing membership row yet to authorize a
+   * least-privileged `app_user` write against.
+   */
+  databaseSecret: secretsmanager.ISecret;
+  /** The Data stack's RDS endpoint address (issue 050). */
+  databaseEndpoint: string;
+}
 
 /**
  * `Gede-<Env>-Auth` - the v2 identity tier (issue 033, ADR-0009, superseding
@@ -40,13 +81,92 @@ import { Construct } from 'constructs';
  *   `sub` claim as the row-scoping identity (ADR-0009). Full server-side JWT
  *   verification is out of scope for 033 (a later issue wires it); this
  *   stack only publishes the seam.
+ * - **Auto-provisioning (issue 050)**: a `PostConfirmation` Lambda trigger
+ *   that, on first confirm, idempotently creates the user's personal
+ *   `workspaces` row + owner `workspace_members` row in RDS
+ *   (src/server/provisionWorkspace/{handler,albAdapter}.ts) — the missing
+ *   server-side piece that lets a signed-in client's write-queue actually
+ *   flush somewhere real (034's tenancy check otherwise rejects every write
+ *   whose workspace isn't already in RDS with the caller as a member).
+ *   Deliberately a `LambdaConfig` attachment on the EXISTING User Pool, never
+ *   a `Schema`/custom-attribute change — the latter forces a full User Pool
+ *   REPLACEMENT in CloudFormation (destroying every existing user), which
+ *   this design avoids entirely by deriving the workspace id from the
+ *   token's `sub` instead of storing it on the pool (src/domain/
+ *   workspaceId.ts's `workspaceIdForSub` — "they agree by construction, not
+ *   by a stored/fetched value"). Verified via `cdk diff`: the
+ *   `AWS::Cognito::UserPool` resource must show Modify, never Replace.
  */
 export class AuthStack extends Stack {
   public readonly userPool: cognito.UserPool;
   public readonly userPoolClient: cognito.UserPoolClient;
+  /** The PostConfirmation provisioning Lambda (issue 050) — VPC-attached, unlike the pool/client above. */
+  public readonly provisionWorkspaceFunction: lambda.Function;
+  public readonly provisionWorkspaceSecurityGroup: ec2.SecurityGroup;
 
-  constructor(scope: Construct, id: string, props?: StackProps) {
+  constructor(scope: Construct, id: string, props: AuthStackProps) {
     super(scope, id, props);
+
+    // --- Provisioning trigger (issue 050) ------------------------------------
+    // Built BEFORE the User Pool so its ARN can be passed straight into the
+    // pool's own `lambdaTriggers` prop below — a single, in-place
+    // `LambdaConfig` property on the pool resource, not a separate
+    // `addTrigger()` call after the fact. Either shape produces the same
+    // CloudFormation property; this one keeps the pool's full configuration
+    // (including its trigger) visible in one constructor call.
+    this.provisionWorkspaceSecurityGroup = new ec2.SecurityGroup(this, 'ProvisionWorkspaceSecurityGroup', {
+      vpc: props.vpc,
+      description: `${id} PostConfirmation provisioning Lambda (issue 050) - egress to Postgres (5432) only; nothing ingresses to it over the network.`,
+      allowAllOutbound: true,
+    });
+
+    new ec2.CfnSecurityGroupIngress(this, 'AllowProvisionWorkspaceToPostgres', {
+      groupId: props.databaseSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 5432,
+      toPort: 5432,
+      sourceSecurityGroupId: this.provisionWorkspaceSecurityGroup.securityGroupId,
+      description:
+        'PostConfirmation provisioning Lambda (issue 050) to Postgres 5432 - a distinct ingress rule on the Data security group (alongside the compute/write-API/debug-API Lambda rules); still never 0.0.0.0/0.',
+    });
+
+    const rootLockFile = path.resolve(__dirname, '..', '..', '..', 'package-lock.json');
+
+    this.provisionWorkspaceFunction = new nodejs.NodejsFunction(this, 'ProvisionWorkspaceFunction', {
+      description: `${id} Cognito PostConfirmation trigger (issue 050) - idempotently creates the confirmed user's personal workspace + owner membership in Postgres.`,
+      entry: path.resolve(__dirname, '..', '..', '..', 'src', 'server', 'provisionWorkspace', 'albAdapter.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 256,
+      timeout: Duration.seconds(10),
+      vpc: props.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [this.provisionWorkspaceSecurityGroup],
+      depsLockFilePath: rootLockFile,
+      environment: {
+        DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
+        DATABASE_ENDPOINT: props.databaseEndpoint,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        // Offline synth (issue 041 lesson, mirrors api-stack.ts/migration-stack.ts)
+        // — esbuild is a deploy/cdk devDependency specifically so this never
+        // needs Docker.
+        forceDockerBundling: false,
+        commandHooks: {
+          beforeBundling: () => [],
+          beforeInstall: () => [],
+          // Copy Amazon's RDS CA bundle alongside the handler so albAdapter.ts
+          // can verify the RDS server cert. Mirrors api-stack.ts/migration-stack.ts.
+          afterBundling: (_inputDir: string, outputDir: string) => [
+            `cp "${RDS_CA_SOURCE}" "${outputDir}/rds-global-bundle.pem"`,
+          ],
+        },
+      },
+    });
+    props.databaseSecret.grantRead(this.provisionWorkspaceFunction);
 
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       selfSignUpEnabled: true,
@@ -63,6 +183,12 @@ export class AuthStack extends Stack {
         requireSymbols: false,
       },
       accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // Issue 050 — an in-place `LambdaConfig` attachment, NOT a `Schema`/
+      // custom-attribute change (see class doc: the latter forces a pool
+      // REPLACEMENT). This is the only new property on the pool.
+      lambdaTriggers: {
+        postConfirmation: this.provisionWorkspaceFunction,
+      },
     });
 
     this.userPoolClient = new cognito.UserPoolClient(this, 'AppClient', {

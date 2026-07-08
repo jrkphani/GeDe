@@ -67,12 +67,97 @@ describe('AuthStack (Gede-Test-Auth) — issue 033, ADR-0009', () => {
     expect(jwks).toBeDefined();
   });
 
-  it('is a regional managed resource — no VPC/subnet/security-group resources in this stack', () => {
+  it('the User Pool + App Client themselves stay regional-managed — no ECS/Fargate resources ever added here', () => {
     const template = synth();
     const json = template.toJSON();
     const types = Object.values(json.Resources as Record<string, { Type: string }>).map((r) => r.Type);
-    expect(types.some((t) => t.startsWith('AWS::EC2::'))).toBe(false);
+    // Issue 050 legitimately adds EC2 security groups (for the new VPC-attached
+    // provisioning Lambda below) — but never an ECS/Fargate service; auth
+    // itself is still never a compute tier the way api-stack.ts's `sync` stub
+    // is.
     expect(types.some((t) => t.startsWith('AWS::ECS::'))).toBe(false);
+    // Only security-group-shaped EC2 resources (the provisioning Lambda's own
+    // SG + its one ingress rule into Data's SG) — never a VPC, subnet, or NAT
+    // gateway of its own; those all belong to the Network stack.
+    const ec2Types = types.filter((t) => t.startsWith('AWS::EC2::'));
+    expect(ec2Types.every((t) => t === 'AWS::EC2::SecurityGroup' || t === 'AWS::EC2::SecurityGroupIngress')).toBe(
+      true,
+    );
+  });
+
+  // Issue 050 — the single riskiest change this issue can make: attaching a
+  // PostConfirmation trigger must be an in-place `LambdaConfig` update, NEVER
+  // a User Pool replacement (which would destroy every existing confirmed
+  // user). CloudFormation only forces replacement of `AWS::Cognito::UserPool`
+  // on a handful of specific properties — `UsernameAttributes`,
+  // `AliasAttributes`, and (in some cases) `Schema`/`UsernameConfiguration` —
+  // never on `LambdaConfig`. This asserts BOTH halves of that: (a) the new
+  // trigger property exists, and (b) every property CloudFormation treats as
+  // replacement-sensitive is byte-for-byte identical to what this stack
+  // synthesized before issue 050 (see the checked-in pre-050 snapshot this
+  // test's literals are copied from) — the strongest check available without
+  // a live `cdk diff` against the actual deployed stack (this sandbox has no
+  // credentials for the target AWS account; see the issue 050 report).
+  it('attaches the PostConfirmation trigger as an in-place LambdaConfig update — Schema/UsernameAttributes unchanged from the pre-050 template (never a pool replacement)', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::Cognito::UserPool', 1);
+    template.hasResourceProperties('AWS::Cognito::UserPool', {
+      LambdaConfig: Match.objectLike({
+        PostConfirmation: Match.objectLike({}),
+      }),
+      // Byte-for-byte identical to the pre-050 template (this exact literal
+      // shape is what's checked into __snapshots__/auth-stack.test.ts.snap
+      // from before this issue) — no custom attribute was added.
+      Schema: [{ Mutable: true, Name: 'email', Required: true }],
+      // Also unchanged — the OTHER CloudFormation property (besides Schema)
+      // that forces a UserPool replacement if it differs.
+      UsernameAttributes: ['email'],
+    });
+  });
+
+  it('provisions the PostConfirmation trigger as a VPC-attached Lambda with its own security group and DB-secret read access', () => {
+    const template = synth();
+    const fns = template.findResources('AWS::Lambda::Function', {
+      Properties: { Description: Match.stringLikeRegexp('PostConfirmation trigger') },
+    });
+    const [fn] = Object.values(fns) as Array<{
+      Properties: { VpcConfig?: { SecurityGroupIds: unknown[]; SubnetIds: unknown[] }; Handler: string };
+    }>;
+    expect(fn).toBeDefined();
+    expect(fn?.Properties.Handler).toBe('index.handler');
+    expect(fn?.Properties.VpcConfig?.SecurityGroupIds.length).toBeGreaterThan(0);
+    expect(fn?.Properties.VpcConfig?.SubnetIds.length).toBeGreaterThan(0);
+
+    // Exactly one new ingress rule into the (cross-stack) Data security
+    // group — the provisioning Lambda's SG -> 5432, mirroring api-stack.ts /
+    // migration-stack.ts's own forward-reference pattern.
+    template.resourceCountIs('AWS::EC2::SecurityGroupIngress', 1);
+    template.hasResourceProperties('AWS::EC2::SecurityGroupIngress', {
+      IpProtocol: 'tcp',
+      FromPort: 5432,
+      ToPort: 5432,
+    });
+
+    // The DB secret read grant (secretsmanager:GetSecretValue) — a scoped IAM
+    // policy statement, not a wildcard.
+    template.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: Match.arrayWith(['secretsmanager:GetSecretValue']),
+            Effect: 'Allow',
+          }),
+        ]),
+      }),
+    });
+  });
+
+  it('grants Cognito permission to invoke the PostConfirmation trigger', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      Principal: 'cognito-idp.amazonaws.com',
+    });
   });
 
   it('carries the four app-wide tags on the User Pool', () => {

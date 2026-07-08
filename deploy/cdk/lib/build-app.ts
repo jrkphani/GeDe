@@ -51,22 +51,26 @@ export interface AppStacks {
  * inspection Lambda (`debugApi` param below) — off by default everywhere
  * except where `bin/gede.ts` explicitly turns it on via CDK context.
  *
- * Cross-stack wiring (issue 030 scope item 4, extended by 045/046/047):
- * Network's VPC feeds Data, Migrations, and Api; Data's RDS security group
- * feeds both Migrations and Api (each adds its own permitted ingress rule
- * against it — see api-stack.ts / migration-stack.ts / data-stack.ts for why
- * that direction avoids a circular dependency); Auth's User Pool id feeds Api
- * (issue 046 — `COGNITO_ISSUER` is a genuine cross-stack reference, never the
- * `PLACEHOLDER_USER_POOL_ID` literal); Api's ALB DNS name feeds Hosting
- * (issue 047 — a second CloudFront origin behind `/write*`, ending the
- * mixed-content block). Dns (issue 040, v1's static path) is unaffected by
- * any of this beyond its existing dependency on Hosting's distribution.
+ * Cross-stack wiring (issue 030 scope item 4, extended by 045/046/047/050):
+ * Network's VPC feeds Data, Migrations, Api, and (issue 050) Auth; Data's RDS
+ * security group feeds Migrations, Api, AND Auth (each adds its own permitted
+ * ingress rule against it — see api-stack.ts / migration-stack.ts /
+ * auth-stack.ts / data-stack.ts for why that direction avoids a circular
+ * dependency); Auth's User Pool id feeds Api (issue 046 — `COGNITO_ISSUER` is
+ * a genuine cross-stack reference, never the `PLACEHOLDER_USER_POOL_ID`
+ * literal); Api's ALB DNS name feeds Hosting (issue 047 — a second CloudFront
+ * origin behind `/write*`, ending the mixed-content block). Dns (issue 040,
+ * v1's static path) is unaffected by any of this beyond its existing
+ * dependency on Hosting's distribution.
  *
- * **Auth (issue 033, ADR-0009) has no INBOUND dependency** — Cognito is a
- * regional managed resource outside the VPC, so nothing needs to exist
- * before Auth is created; it only needs the app-level tags (applied once
- * below, to every stack under `app`). It now has one OUTBOUND consumer (Api,
- * for the issuer), which is why Auth is constructed before Api below.
+ * **Auth (issue 033, ADR-0009) has an OUTBOUND consumer (Api, for the
+ * issuer) — and, since issue 050, an INBOUND dependency on Network + Data
+ * too**: the Cognito User Pool itself is still a regional managed resource
+ * outside the VPC, but its new PostConfirmation provisioning trigger
+ * (src/server/provisionWorkspace) is a VPC-attached Lambda that needs Data's
+ * RDS security group/secret/endpoint, exactly like Api's write-path Lambda
+ * and Migrations' runner. Auth is still constructed before Api below (Api
+ * needs Auth's User Pool id).
  *
  * **Migrations (issue 045) is deliberately NOT a dependency of Api**: the
  * real write-path Lambda (046) assumes 045's migrations have already applied
@@ -132,8 +136,14 @@ export function buildAppStacks(
   const auth = new AuthStack(app, `${envConfig.stackPrefix}-Auth`, {
     env,
     description:
-      'GeDe v2 identity: Cognito User Pool + public App Client (email/password, PKCE/SRP, no client secret) — issue 033 (ADR-0009), replacing the Api stack\'s former `auth` Fargate stub',
+      'GeDe v2 identity: Cognito User Pool + public App Client (email/password, PKCE/SRP, no client secret) — issue 033 (ADR-0009), replacing the Api stack\'s former `auth` Fargate stub — plus a VPC-attached PostConfirmation provisioning trigger (issue 050)',
+    vpc: network.vpc,
+    databaseSecurityGroup: data.databaseSecurityGroup,
+    databaseSecret: data.database.secret!,
+    databaseEndpoint: data.database.dbInstanceEndpointAddress,
   });
+  auth.addDependency(network);
+  auth.addDependency(data);
 
   const api = new ApiStack(app, `${envConfig.stackPrefix}-Api`, {
     env,

@@ -2,7 +2,7 @@
 
 exports[`AuthStack (Gede-Test-Auth) — issue 033, ADR-0009 matches the snapshot 1`] = `
 {
-  "Description": "GeDe v2 identity: Cognito User Pool + public App Client (email/password, PKCE/SRP, no client secret) — issue 033 (ADR-0009), replacing the Api stack's former \`auth\` Fargate stub",
+  "Description": "GeDe v2 identity: Cognito User Pool + public App Client (email/password, PKCE/SRP, no client secret) — issue 033 (ADR-0009), replacing the Api stack's former \`auth\` Fargate stub — plus a VPC-attached PostConfirmation provisioning trigger (issue 050)",
   "Outputs": {
     "ExportsOutputRefUserPool6BA7E5F296FD7236": {
       "Export": {
@@ -57,6 +57,24 @@ exports[`AuthStack (Gede-Test-Auth) — issue 033, ADR-0009 matches the snapshot
     },
   },
   "Resources": {
+    "AllowProvisionWorkspaceToPostgres": {
+      "Properties": {
+        "Description": "PostConfirmation provisioning Lambda (issue 050) to Postgres 5432 - a distinct ingress rule on the Data security group (alongside the compute/write-API/debug-API Lambda rules); still never 0.0.0.0/0.",
+        "FromPort": 5432,
+        "GroupId": {
+          "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "ProvisionWorkspaceSecurityGroup25F87C04",
+            "GroupId",
+          ],
+        },
+        "ToPort": 5432,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
     "AppClient4AE61178": {
       "Properties": {
         "AllowedOAuthFlows": [
@@ -99,6 +117,197 @@ exports[`AuthStack (Gede-Test-Auth) — issue 033, ADR-0009 matches the snapshot
       },
       "Type": "AWS::Cognito::UserPoolGroup",
     },
+    "ProvisionWorkspaceFunction8FB01547": {
+      "DependsOn": [
+        "ProvisionWorkspaceFunctionServiceRoleDefaultPolicyD953788C",
+        "ProvisionWorkspaceFunctionServiceRole68BF81DE",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "410e90855bde0444b2c470e8bab8023ee032fa42342d1813afb8c25cd70e9200.zip",
+        },
+        "Description": "Gede-Test-Auth Cognito PostConfirmation trigger (issue 050) - idempotently creates the confirmed user's personal workspace + owner membership in Postgres.",
+        "Environment": {
+          "Variables": {
+            "DATABASE_ENDPOINT": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+            },
+            "DATABASE_SECRET_ARN": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+            },
+          },
+        },
+        "Handler": "index.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "ProvisionWorkspaceFunctionServiceRole68BF81DE",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 10,
+        "VpcConfig": {
+          "SecurityGroupIds": [
+            {
+              "Fn::GetAtt": [
+                "ProvisionWorkspaceSecurityGroup25F87C04",
+                "GroupId",
+              ],
+            },
+          ],
+          "SubnetIds": [
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
+            },
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "ProvisionWorkspaceFunctionServiceRole68BF81DE": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ProvisionWorkspaceFunctionServiceRoleDefaultPolicyD953788C": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ProvisionWorkspaceFunctionServiceRoleDefaultPolicyD953788C",
+        "Roles": [
+          {
+            "Ref": "ProvisionWorkspaceFunctionServiceRole68BF81DE",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ProvisionWorkspaceSecurityGroup25F87C04": {
+      "Properties": {
+        "GroupDescription": "Gede-Test-Auth PostConfirmation provisioning Lambda (issue 050) - egress to Postgres (5432) only; nothing ingresses to it over the network.",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "VpcId": {
+          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
     "UserPool6BA7E5F2": {
       "DeletionPolicy": "Retain",
       "Properties": {
@@ -118,6 +327,14 @@ exports[`AuthStack (Gede-Test-Auth) — issue 033, ADR-0009 matches the snapshot
         ],
         "EmailVerificationMessage": "The verification code to your new account is {####}",
         "EmailVerificationSubject": "Verify your new account",
+        "LambdaConfig": {
+          "PostConfirmation": {
+            "Fn::GetAtt": [
+              "ProvisionWorkspaceFunction8FB01547",
+              "Arn",
+            ],
+          },
+        },
         "Policies": {
           "PasswordPolicy": {
             "MinimumLength": 8,
@@ -153,6 +370,25 @@ exports[`AuthStack (Gede-Test-Auth) — issue 033, ADR-0009 matches the snapshot
       },
       "Type": "AWS::Cognito::UserPool",
       "UpdateReplacePolicy": "Retain",
+    },
+    "UserPoolPostConfirmationCognito0E6001F8": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ProvisionWorkspaceFunction8FB01547",
+            "Arn",
+          ],
+        },
+        "Principal": "cognito-idp.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "UserPool6BA7E5F2",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Permission",
     },
   },
   "Rules": {
