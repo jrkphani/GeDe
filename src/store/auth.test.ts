@@ -33,6 +33,8 @@ vi.mock('../auth/cognitoClient', () => ({
 }))
 
 import { resetAuthStoreForTests, useAuthStore } from './auth'
+import { resetSyncStore, useSyncStore } from './sync'
+import { workspaceIdForSub } from '../domain/workspaceId'
 
 function base64url(input: string): string {
   return btoa(input).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -63,6 +65,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   isAuthConfiguredMock.mockReturnValue(true)
   resetAuthStoreForTests()
+  resetSyncStore()
 })
 
 describe('hydrate', () => {
@@ -150,6 +153,64 @@ describe('signOut', () => {
     expect(state.user).toBeNull()
     expect(state.idToken).toBeNull()
     expect(signOutMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears the sync store workspace scope back to null', async () => {
+    signInMock.mockResolvedValue(fakeSession({ sub: 'sub-to-clear' }))
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+    expect(useSyncStore.getState().workspaceId).not.toBeNull()
+    useAuthStore.getState().signOut()
+    expect(useSyncStore.getState().workspaceId).toBeNull()
+  })
+})
+
+// Issue 050, test-first plan item 3 — "given a token with a sub, sign-in
+// calls setWorkspaceId(workspaceIdForSub(sub)); signed-out/no sub -> no
+// crash, stays local." The workspace id is a pure function of the sub
+// (src/domain/workspaceId.ts) — no lookup, no network call — so this is
+// exercised directly against the real useSyncStore rather than a mock.
+describe('workspace scoping on sign-in (issue 050)', () => {
+  it('signIn computes workspaceIdForSub(sub) and hands it to the sync store', async () => {
+    const sub = 'sign-in-sub'
+    signInMock.mockResolvedValue(fakeSession({ sub }))
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+    expect(useSyncStore.getState().workspaceId).toBe(workspaceIdForSub(sub))
+  })
+
+  it('hydrate (restored session on reload) computes the same workspace id', async () => {
+    const sub = 'hydrated-sub'
+    getCurrentSessionMock.mockResolvedValue(fakeSession({ sub }))
+    await useAuthStore.getState().hydrate()
+    expect(useSyncStore.getState().workspaceId).toBe(workspaceIdForSub(sub))
+  })
+
+  it('a failed sign-in never sets a workspace id', async () => {
+    signInMock.mockRejectedValue(new Error('nope'))
+    await expect(useAuthStore.getState().signIn('a@b.com', 'wrong')).rejects.toThrow()
+    expect(useSyncStore.getState().workspaceId).toBeNull()
+  })
+
+  it('signed-out hydrate (no persisted session) never sets a workspace id — stays local, no crash', async () => {
+    getCurrentSessionMock.mockResolvedValue(null)
+    await expect(useAuthStore.getState().hydrate()).resolves.not.toThrow()
+    expect(useSyncStore.getState().workspaceId).toBeNull()
+  })
+
+  it('a build with no Cognito configuration never sets a workspace id', async () => {
+    isAuthConfiguredMock.mockReturnValue(false)
+    await useAuthStore.getState().hydrate()
+    expect(useSyncStore.getState().workspaceId).toBeNull()
+  })
+
+  it('the SAME sub always produces the SAME workspace id across independent sign-ins', async () => {
+    const sub = 'stable-across-signins'
+    signInMock.mockResolvedValue(fakeSession({ sub }))
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+    const first = useSyncStore.getState().workspaceId
+    useAuthStore.getState().signOut()
+    signInMock.mockResolvedValue(fakeSession({ sub }))
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+    expect(useSyncStore.getState().workspaceId).toBe(first)
   })
 })
 

@@ -15,6 +15,7 @@ import {
 } from '../db/mutations'
 import { adoptProject as dbAdopt, gatherProjectRows, importProject as dbImport } from '../db/projectIO'
 import {
+  ensureWorkspaceRow,
   getOrCreateUserWorkspace,
   listWorkspacesForUser,
   type WorkspaceRow,
@@ -89,11 +90,41 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     }
   },
 
+  // Issue 050 — the seam issue 048 left as a "KNOWN GAP" (src/store/sync.ts's
+  // own comment): when signed in, a newly created project must (a) carry the
+  // signed-in user's deterministic cloud workspace id (034 denormalization,
+  // so RLS/tenancy on the write path scopes it correctly) and (b) get queued
+  // onto the sync store so flush() actually posts it — createProject was the
+  // one mutation-layer entry point that never called enqueueLocalMutation at
+  // all (only adoptProject, issue 037, did). Signed-out / sync-off:
+  // useSyncStore's workspaceId is null (auth.ts never sets it without a
+  // sub), so this is byte-for-byte the pre-050 local-only path — same
+  // getOrCreateDefaultWorkspace() fallback inside dbCreate, nothing queued.
   async createProject(name) {
     const db = database
     if (!db) return
-    const row = await dbCreate(db, { name })
+    const workspaceId = useSyncStore.getState().workspaceId
+    if (workspaceId) {
+      // The local PGlite may never have seen this id before (a fresh sign-in
+      // on a fresh browser) — ensure it exists first, since
+      // projects.workspace_id is a real FK (migration 0008), not just a
+      // Drizzle-level hint. Idempotent (ON CONFLICT DO NOTHING).
+      await ensureWorkspaceRow(db, workspaceId, 'My Workspace')
+    }
+    const row = await dbCreate(db, workspaceId ? { name, workspaceId } : { name })
     set({ projects: [row, ...get().projects] })
+    if (workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'projects',
+        rowId: row.id,
+        op: 'upsert',
+        row,
+        optimisticUpdatedAt: row.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
     useCommandLogStore.getState().push({
       label: `create project "${row.name}"`,
       async undo() {

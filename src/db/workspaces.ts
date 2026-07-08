@@ -19,6 +19,23 @@ function now(): string {
   return new Date().toISOString()
 }
 
+// Issue 050 — the client-side mirror of src/server/provisionWorkspace/
+// handler.ts's own idempotent insert: BEFORE a signed-in createProject can
+// reference the user's deterministic cloud workspace id
+// (src/domain/workspaceId.ts's workspaceIdForSub), the LOCAL PGlite must
+// actually have a `workspaces` row at that exact id — `projects.workspace_id`
+// is a real FK (migration 0008), not just a Drizzle-level hint, so writing a
+// project with a workspace id this local database has never seen throws a
+// foreign-key violation. `ON CONFLICT (id) DO NOTHING` makes ensuring it any
+// number of times (once per project creation, effectively) a safe no-op —
+// this local row is a provisional mirror only; it is never reconciled
+// against whatever the server's PostConfirmation trigger already created,
+// since both sides compute and write the identical id independently ("agree
+// by construction", not by round trip).
+export async function ensureWorkspaceRow(db: Database, id: string, name: string): Promise<void> {
+  await db.insert(workspaces).values({ id, name }).onConflictDoNothing()
+}
+
 export async function createWorkspace(
   db: Database,
   name: string,

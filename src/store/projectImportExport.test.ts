@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase } from '../db/client'
 import { addDimension, addParameter } from '../db/mutations'
 import { createWorkspace } from '../db/workspaces'
+import { workspaceIdForSub } from '../domain/workspaceId'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
 import { setDatabase } from './database'
 import { resetSyncStore, useSyncStore } from './sync'
@@ -110,6 +111,50 @@ describe('projects store — adoptProject (issue 037)', () => {
     // Nothing new queued on the idempotent replay.
     expect(useSyncStore.getState().queue.entries.length).toBe(queueAfterFirst)
     expect(useProjectsStore.getState().projects.filter((p) => p.workspaceId === cloud.id)).toHaveLength(1)
+  })
+})
+
+// Issue 050 — the "subtle part": a project created while signed in must
+// carry the signed-in user's deterministic cloud workspace id (so the
+// flushed MutationEnvelope is scoped correctly), AND that id's LOCAL
+// `workspaces` row must actually exist first — `projects.workspace_id` is a
+// real FK (migration 0008), so passing a workspace id PGlite has never seen
+// would throw a foreign-key violation, not silently succeed.
+describe('projects store — cloud workspace scoping on createProject (issue 050)', () => {
+  it('signed-out / sync-off createProject is byte-for-byte unchanged: local default workspace, nothing queued', async () => {
+    await useProjectsStore.getState().createProject('Local only')
+    const project = useProjectsStore.getState().projects[0]
+    expect(project?.name).toBe('Local only')
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+
+  it('a project created while signed in (workspace scoped) carries that workspace id and gets queued for flush', async () => {
+    const workspaceId = workspaceIdForSub('sub-050')
+    useSyncStore.setState({ workspaceId })
+
+    await useProjectsStore.getState().createProject('Cloud-scoped')
+    const project = useProjectsStore.getState().projects[0]
+    expect(project?.workspaceId).toBe(workspaceId)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'projects', rowId: project?.id, op: 'upsert', status: 'pending' })
+  })
+
+  it('never throws even though the deterministic workspace id has no pre-existing local row (ensures it first)', async () => {
+    const workspaceId = workspaceIdForSub('brand-new-sub')
+    useSyncStore.setState({ workspaceId })
+    await expect(useProjectsStore.getState().createProject('No FK violation')).resolves.not.toThrow()
+  })
+
+  it('creating two projects while signed in reuses the same local workspace row (idempotent ensure, no duplicate-key error)', async () => {
+    const workspaceId = workspaceIdForSub('sub-two-projects')
+    useSyncStore.setState({ workspaceId })
+    await useProjectsStore.getState().createProject('First')
+    await useProjectsStore.getState().createProject('Second')
+    const projects = useProjectsStore.getState().projects
+    expect(projects.every((p) => p.workspaceId === workspaceId)).toBe(true)
+    expect(useSyncStore.getState().queue.entries).toHaveLength(2)
   })
 })
 

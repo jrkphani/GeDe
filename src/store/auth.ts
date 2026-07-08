@@ -1,12 +1,30 @@
 import { create } from 'zustand'
 import * as cognito from '../auth/cognitoClient'
 import { isJwtExpired } from '../auth/jwt'
+import { workspaceIdForSub } from '../domain/workspaceId'
+import { useSyncStore } from './sync'
 
 // Session/identity store (issue 033, ADR-0009). Deliberately separate from
 // every other store: `hydrate()` never blocks the local-first app's own
 // boot (App.tsx calls it alongside, not before, `projectsStore.init()`) —
 // "session ≠ sync" (issue 033 design brief). A build with no Cognito
 // configuration (`configured: false`) simply never leaves 'unauthenticated'.
+//
+// Issue 050 — the client half of "they agree by construction": whenever this
+// store lands on `authenticated` (a fresh sign-in OR a restored session on
+// reload), it computes `workspaceIdForSub(sub)` from the token's `sub` and
+// hands it to useSyncStore.setWorkspaceId(...) — the documented no-op seam
+// issue 048 left unwired (src/store/sync.ts's own "KNOWN GAP" comment). No
+// lookup, no network call: the id is a pure function of data already in the
+// session. Signing out clears it back to null so a subsequent signed-out
+// flush() stays the no-op it always was. This module importing useSyncStore
+// (which itself imports useAuthStore for its own flush() gate) is a
+// deliberate two-way reference, safe because each side only touches the
+// other's store inside a function body, never at module-evaluation time —
+// mirrors src/store/sync.ts's existing import of this same module.
+function applyWorkspaceScope(sub: string | null): void {
+  useSyncStore.getState().setWorkspaceId(sub ? workspaceIdForSub(sub) : null)
+}
 
 export type AuthStatus = 'idle' | 'checking' | 'authenticated' | 'unauthenticated'
 
@@ -63,6 +81,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         idToken: session.idToken,
         accessToken: session.accessToken,
       })
+      applyWorkspaceScope(session.sub)
     } else {
       set({ status: 'unauthenticated', user: null, idToken: null, accessToken: null })
     }
@@ -108,6 +127,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         idToken: session.idToken,
         accessToken: session.accessToken,
       })
+      applyWorkspaceScope(session.sub)
     } catch (err) {
       set({ error: errorMessage(err) })
       throw err
@@ -117,6 +137,7 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
   signOut() {
     cognito.signOut()
     set({ status: 'unauthenticated', user: null, idToken: null, accessToken: null, error: null })
+    applyWorkspaceScope(null)
   },
 
   clearError() {
