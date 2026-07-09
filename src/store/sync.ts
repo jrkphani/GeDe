@@ -112,6 +112,17 @@ interface SyncState {
   // whenever a NEW inbound invite streams in mid-session, closing the gap
   // where the 060 badge only ever refreshed on mount/identity-change.
   invitationsAppliedAt: number
+  // Issue 067 — the `workspace_members` analogue of invitationsAppliedAt
+  // directly above: a plain "an inbound `workspace_members` delta just
+  // applied" timestamp, bumped by onApplied below the same way. This store
+  // stays workspace-semantics-free either way — src/store/workspace.ts's
+  // useWorkspaceRole is the one consumer, subscribing to this value so its
+  // own load-on-workspaceId-change effect ALSO reruns whenever a member is
+  // added/changed/removed on another client mid-session, closing the gap
+  // where the owner's Members panel (WorkspaceMembers.tsx) only ever
+  // reflected whatever this device's own local PGlite happened to already
+  // contain.
+  membersAppliedAt: number
   setWorkspaceId: (workspaceId: string | null) => void
   // Starts the read-path engine if isSyncEnabled() is true; a no-op
   // otherwise (leaves `enabled: false`, `handle: null`) — safe to call
@@ -166,6 +177,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     workspaceId: null,
     flushing: false,
     invitationsAppliedAt: 0,
+    membersAppliedAt: 0,
 
     setWorkspaceId(workspaceId) {
       set({ workspaceId })
@@ -212,6 +224,8 @@ export const useSyncStore = create<SyncState>()((set, get) => {
           // looked", which a monotonically-updated Date.now() answers just
           // as well as a counter, with no extra state to reset in lockstep.
           if (table === 'invitations') set({ invitationsAppliedAt: Date.now() })
+          // Issue 067 — same bump, same rationale, for `workspace_members`.
+          if (table === 'workspace_members') set({ membersAppliedAt: Date.now() })
           recompute()
           if (lostEdits.length > 0) {
             useStatusStore.getState().announce(lostEditMessage(lostEdits.length))
@@ -373,5 +387,6 @@ export function resetSyncStore(): void {
     workspaceId: null,
     flushing: false,
     invitationsAppliedAt: 0,
+    membersAppliedAt: 0,
   })
 }

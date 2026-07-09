@@ -327,6 +327,102 @@ describe('sync store — invitations delta signal (issue 062)', () => {
   })
 })
 
+// Issue 067 — the client half of streaming `workspace_members`: mirrors
+// `invitationsAppliedAt` (062) exactly, but for inbound member deltas, so
+// the shared Members panel (WorkspaceMembers.tsx, via useWorkspaceRole's own
+// load-on-change effect) can refresh when another client's accept/role-
+// change/removal streams in mid-session — the whole point of this issue.
+describe('sync store — workspace_members delta signal (issue 067)', () => {
+  it('membersAppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().membersAppliedAt).toBe(0)
+  })
+
+  it('bumps membersAppliedAt when an inbound `workspace_members` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'workspace_members') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().membersAppliedAt).toBe(0)
+
+    box.deliver?.([
+      {
+        key: '"public"."workspace_members"/"mem1"',
+        value: {
+          id: 'mem1',
+          workspace_id: ws.id,
+          user_sub: 'sub-invitee',
+          role: 'editor',
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().membersAppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump membersAppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    await createProject(db, { name: 'Tavalo' })
+    const [project] = await db.select().from(projects)
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'contexts') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."contexts"/"c1"',
+        value: {
+          id: 'c1',
+          project_id: project?.id,
+          workspace_id: project?.workspaceId,
+          parent_id: null,
+          symbol: 'α',
+          name: null,
+          justification: null,
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:02.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().membersAppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets membersAppliedAt back to 0', () => {
+    useSyncStore.setState({ membersAppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().membersAppliedAt).toBe(0)
+  })
+})
+
 // Issue 036 — sync-state derivation wired to the live engine + browser
 // network events. All fake-stream driven (no live Electric server reachable
 // in this repo's tests, HANDOFF/032's own constraint) — same DI pattern 032

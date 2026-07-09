@@ -6,9 +6,9 @@
 -- 0012's own header comment for the full rationale (a row that stops
 -- matching a WHERE-scoped shape on UPDATE needs its full OLD row image to be
 -- recognized as a "move-out", not silently vanish). `workspace_members`
--- stays excluded — it is still not a SYNCED_TABLES entry (the shape-proxy
--- resolves memberships via a normal, non-replication query instead, see
--- src/server/shapeProxy/albAdapter.ts).
+-- stayed excluded at the time (it was still not a SYNCED_TABLES entry) —
+-- issue 067 later adds it via its own 0014_workspace_members_replica_identity.sql,
+-- once the Members UI needed it streamed to clients too.
 --
 -- Pure Postgres replication setting — no column/schema shape change — so,
 -- like 0012, this has no Drizzle-generated counterpart and no corresponding

@@ -873,7 +873,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "4ed040834b8739811b70bc939b75199a92bd028ab25ce20b829a71b377832b4e.zip",
+          "S3Key": "72e65a3a7999a90803da9331ff18ba2e9d79bd63ae4c2af5fc006322a265bb4d.zip",
         },
         "Description": "Gede-Test-Api ElectricSQL shape-proxy (issue 058) - verifies the Cognito JWT, resolves the caller's workspace memberships, builds a workspace-scoped shape request, forwards to Electric's private endpoint.",
         "Environment": {

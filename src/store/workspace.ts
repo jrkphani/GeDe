@@ -349,12 +349,22 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 export function useWorkspaceRole(projectId: string): { role: WorkspaceRole; workspaceId: string | null } {
   const workspaceId = useProjectsStore((s) => s.projects.find((p) => p.id === projectId)?.workspaceId ?? null)
   const role = useWorkspaceStore((s) => s.role)
+  // Issue 067 — `workspace_members` now streams (src/domain/syncScope.ts),
+  // so a member add/role-change/removal made by ANOTHER client can land in
+  // this device's local PGlite mid-session, well after the effect below
+  // last ran on a workspaceId change. Without also depending on this
+  // signal, WorkspaceMembers.tsx's shared Members list — and this hook's own
+  // `role` — would only ever reflect whatever this device's local db
+  // happened to contain at the last workspaceId change, exactly the
+  // per-client divergence this issue exists to close. Mirrors 062's
+  // `invitationsAppliedAt` → PendingInvitations.tsx wiring.
+  const membersAppliedAt = useSyncStore((s) => s.membersAppliedAt)
   // Mirrors every other surface's own store-load effect (tier1/tier2/contexts/
   // dimensions) — a render-phase side effect would violate React's render
   // purity, so the (re)load is kicked off here, not inline above.
   useEffect(() => {
     if (workspaceId) void useWorkspaceStore.getState().load(workspaceId)
-  }, [workspaceId])
+  }, [workspaceId, membersAppliedAt])
   return { role: workspaceId ? role : 'owner', workspaceId }
 }
 

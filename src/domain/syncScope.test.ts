@@ -99,3 +99,38 @@ describe('scopeToWorkspaces — invitations email-scoping (issue 062)', () => {
     }
   })
 })
+
+// Issue 067 — `workspace_members` joins SYNCED_TABLES so a shared Members
+// list is actually consistent across clients (062's own streaming pattern,
+// extended). Unlike `invitations`, this table's scope is membership-ONLY —
+// there is no by-email relaxation: a non-member must receive nothing, fail-
+// closed, exactly like every other table (invitations is the ONE deliberate
+// exception, not the template).
+describe('scopeToWorkspaces — workspace_members membership-only scoping (issue 067)', () => {
+  it('workspace_members is now a real SYNCED_TABLES entry', () => {
+    expect(SYNCED_TABLES).toContain('workspace_members')
+  })
+
+  it('scopes workspace_members with the plain membership predicate, same shape as every non-invitations table', () => {
+    const scope = scopeToWorkspaces('workspace_members', ['ws-a'])
+    expect(scope.where).toBe('workspace_id = ANY($1::text[])')
+    expect(scope.params).toEqual(['{"ws-a"}'])
+  })
+
+  it('a non-member (empty membership set) receives nothing — fail-closed, no cross-workspace leak', () => {
+    const scope = scopeToWorkspaces('workspace_members', [])
+    expect(scope.where).toBe('false')
+  })
+
+  it('a caller email does NOT widen workspace_members scope — unlike invitations, this table has no email relaxation', () => {
+    const withoutEmail = scopeToWorkspaces('workspace_members', ['ws-a'])
+    const withEmail = scopeToWorkspaces('workspace_members', ['ws-a'], 'someone@example.com')
+    expect(withEmail).toEqual(withoutEmail)
+    expect(withEmail.params).toHaveLength(1)
+  })
+
+  it('a caller email does NOT rescue an empty-membership workspace_members scope — still `false`, unlike invitations', () => {
+    const scope = scopeToWorkspaces('workspace_members', [], 'someone@example.com')
+    expect(scope.where).toBe('false')
+  })
+})

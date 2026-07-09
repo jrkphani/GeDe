@@ -9,6 +9,7 @@ import { createInvitation } from '../db/invitations'
 import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { setDatabase } from '../store/database'
 import { useProjectsStore } from '../store/projects'
+import { resetSyncStore, useSyncStore } from '../store/sync'
 import { resetWorkspaceStore } from '../store/workspace'
 import { WorkspaceMembers, WorkspaceMembersPanel } from './WorkspaceMembers'
 
@@ -21,6 +22,7 @@ beforeEach(async () => {
   setDatabase(db)
   resetWorkspaceStore()
   resetAuthStoreForTests()
+  resetSyncStore()
   const ws = await createWorkspace(db, 'Acme', 'sub-owner')
   workspaceId = ws.id
   const project = await createProject(db, { name: 'Tavalo', workspaceId: ws.id })
@@ -137,5 +139,46 @@ describe('WorkspaceMembersPanel — non-owner view', () => {
     expect(screen.queryByPlaceholderText('Invite by email…')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Remove/ })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Role for/ })).not.toBeInTheDocument()
+  })
+})
+
+// Issue 067 — the missing "shared Members list actually refreshes" wiring:
+// `workspace_members` now streams (src/domain/syncScope.ts), but nothing
+// previously re-ran useWorkspaceStore.load() when an INBOUND member delta
+// applied mid-session — only on workspaceId change (useWorkspaceRole's own
+// effect, src/store/workspace.ts). Without re-subscribing to something that
+// changes when that happens, the owner's panel would never show an accepted
+// invitee appear (or a role change another client made) until the next full
+// page reload. useSyncStore's `membersAppliedAt` (mirrors 062's
+// `invitationsAppliedAt` exactly) is that signal.
+describe('WorkspaceMembersPanel — refreshes on an inbound workspace_members delta (issue 067)', () => {
+  beforeEach(() => {
+    useAuthStore.setState({ configured: true, status: 'authenticated', user: { sub: 'sub-owner', email: 'owner@example.com' } })
+  })
+
+  it('a new member written directly to the local db (simulating a streamed-in row) appears once membersAppliedAt bumps, with no remount', async () => {
+    render(<WorkspaceMembersPanel projectId={projectId} />)
+    await waitFor(() => expect(screen.getByText('sub-owner (you)')).toBeInTheDocument())
+    expect(screen.queryByText('sub-invitee')).not.toBeInTheDocument()
+
+    // Simulates the read-path landing a row locally mid-session (056's
+    // applyInboundDeltas apply case) — this component never re-queries the
+    // db on its own timer, so without the signal below the new member would
+    // stay hidden until an unrelated re-render happened to fire the effect.
+    await addWorkspaceMember(db, workspaceId, 'sub-invitee', 'editor')
+    useSyncStore.setState({ membersAppliedAt: Date.now() })
+
+    await waitFor(() => expect(screen.getByText('sub-invitee')).toBeInTheDocument())
+  })
+
+  it('a role changed directly in the local db (simulating a streamed-in update) propagates once membersAppliedAt bumps', async () => {
+    await addWorkspaceMember(db, workspaceId, 'sub-viewer', 'viewer')
+    render(<WorkspaceMembersPanel projectId={projectId} />)
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Role for sub-viewer' })).toHaveTextContent('Viewer'))
+
+    await addWorkspaceMember(db, workspaceId, 'sub-viewer', 'editor')
+    useSyncStore.setState({ membersAppliedAt: Date.now() })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Role for sub-viewer' })).toHaveTextContent('Editor'))
   })
 })

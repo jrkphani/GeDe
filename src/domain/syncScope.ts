@@ -21,15 +21,21 @@ import type { TableName } from './syncDelta'
 // Every base table this app syncs, in a stable order. Not an FK-apply-order
 // requirement (src/db/sync.ts's two-pass strategy tolerates any order within
 // a batch) — just the fixed list of shapes the read-path subscribes to.
-// `workspace_members` is deliberately NOT included (056's own scope note:
-// the shape-proxy resolves a caller's memberships by querying
-// `workspace_members` directly server-side instead, see
-// src/server/shapeProxy/albAdapter.ts — streaming it to clients isn't needed
-// for that). `invitations` WAS excluded for the same reason until issue 062:
-// a fresh, not-yet-member invitee has no membership row to resolve FROM, so
-// there is no other delivery path for their own pending invite — see this
-// table's email-scoped predicate below (`scopeToWorkspaces`'s `callerEmail`
-// param), the one exception to "every shape is membership-scoped only".
+// `invitations` was excluded until issue 062: a fresh, not-yet-member
+// invitee has no membership row to resolve FROM, so there is no other
+// delivery path for their own pending invite — see this table's email-scoped
+// predicate below (`scopeToWorkspaces`'s `callerEmail` param), the one
+// exception to "every shape is membership-scoped only". `workspace_members`
+// was excluded for a DIFFERENT reason (056's own scope note: the shape-proxy
+// resolves a caller's memberships by querying `workspace_members` directly
+// server-side, see src/server/shapeProxy/albAdapter.ts — that query still
+// exists and is unchanged) until issue 067: the shape-proxy's own server-side
+// query was never a delivery path to CLIENTS, so the Members UI
+// (WorkspaceMembers.tsx) built its list from whatever each user's own local
+// PGlite happened to already contain, which diverges the moment membership
+// changes on another device — 067 adds it here, membership-scoped only (NO
+// email relaxation — that is invitations' own deliberate exception, not a
+// general pattern; see the workspace_members tests in syncScope.test.ts).
 export const SYNCED_TABLES: readonly TableName[] = [
   'projects',
   'tier1_purpose',
@@ -41,15 +47,16 @@ export const SYNCED_TABLES: readonly TableName[] = [
   'contexts',
   'bindings',
   'invitations',
+  'workspace_members',
 ]
 
-// Six of the nine synced tables carry `workspace_id` directly (schema.ts);
-// three (`tier2_entries`, `parameters`, `bindings`) don't — their workspace
-// is reachable only by walking the FK chain to a workspace_id-bearing
-// ancestor (tier2_entries -> tier2_tables, parameters -> dimensions,
-// bindings -> contexts). This is the EXACT same FK-chain migration
-// 0008_workspaces_rls.sql's RLS policies already walk for these three tables
-// (see that file's `tier2_entries_select`/`parameters_select`/
+// Eight of the eleven synced tables carry `workspace_id` directly
+// (schema.ts); three (`tier2_entries`, `parameters`, `bindings`) don't —
+// their workspace is reachable only by walking the FK chain to a
+// workspace_id-bearing ancestor (tier2_entries -> tier2_tables, parameters ->
+// dimensions, bindings -> contexts). This is the EXACT same FK-chain
+// migration 0008_workspaces_rls.sql's RLS policies already walk for these
+// three tables (see that file's `tier2_entries_select`/`parameters_select`/
 // `bindings_select` policies) — this map is the read-path's mirror of that
 // already-proven scoping logic, not a new invention.
 //
@@ -77,10 +84,13 @@ const WORKSPACE_SCOPE_SQL: Readonly<Record<TableName, string>> = {
   // no caller email is available (see scopeToWorkspaces below for the real,
   // email-OR-membership predicate issue 062 actually ships for this table).
   invitations: 'workspace_id = ANY($1::text[])',
-  // Not in SYNCED_TABLES (see above) — included for exhaustiveness
-  // (TableName is a superset, mirrors electricProtocol.ts's own
-  // forward-compatible SQL_TO_JS_COLUMNS map) so a future SYNCED_TABLES
-  // addition can't silently ship unscoped.
+  // Issue 067 — membership-only, same simple predicate shape as every
+  // non-invitations table. Deliberately has NO email relaxation:
+  // `scopeToWorkspaces` below only special-cases `table === 'invitations'`,
+  // so a caller email passed alongside `workspace_members` is silently
+  // ignored and this predicate (plus the same empty-set fail-closed `false`
+  // default) is used unconditionally — see syncScope.test.ts's "a caller
+  // email does NOT widen workspace_members scope" guard.
   workspace_members: 'workspace_id = ANY($1::text[])',
 }
 

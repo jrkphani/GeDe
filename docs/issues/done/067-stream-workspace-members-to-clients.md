@@ -1,6 +1,6 @@
 # 067: `workspace_members` is never streamed to clients — shared Members list diverges per user
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M9 — sharing correctness (consistent membership view)
 - **Severity**: Medium — data-correctness on the Members UI; sharing delivers the *project* but not a consistent *membership* view.
 - **Found via**: functional review of the open sharing issues (2026-07-10).

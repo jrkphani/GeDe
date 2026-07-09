@@ -1,0 +1,13 @@
+-- Issue 067 — `workspace_members` joins SYNCED_TABLES (src/domain/
+-- syncScope.ts), so it is now a real Electric shape subscription for the
+-- first time (0013's own header comment said it "stays excluded" at the
+-- time — that was 062's scope, not this one). ElectricSQL requires REPLICA
+-- IDENTITY FULL on every table it streams via logical replication — see
+-- 0012's own header comment for the full rationale (a row that stops
+-- matching a WHERE-scoped shape on UPDATE needs its full OLD row image to be
+-- recognized as a "move-out", not silently vanish).
+--
+-- Pure Postgres replication setting — no column/schema shape change — so,
+-- like 0012/0013, this has no Drizzle-generated counterpart and no
+-- corresponding meta/*_snapshot.json entry.
+ALTER TABLE "workspace_members" REPLICA IDENTITY FULL;
