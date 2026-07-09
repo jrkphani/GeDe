@@ -152,7 +152,7 @@ export class ApiStack extends Stack {
       vpc: props.vpc,
       description:
         `${id} Fargate compute (the real ElectricSQL sync service, issue 058; auth moved to Cognito, issue 033) - ` +
-        'ingress only from the shape-proxy Lambda\'s own security group (issue 058 - NOT from the ALB; Electric is never an ALB target).',
+        'ingress only from the shape-proxy Lambda security group (issue 058 - NOT from the ALB; Electric is never an ALB target).',
       allowAllOutbound: true, // NAT egress: pulling the Electric image, replicating to no external target, calling Secrets Manager.
     });
 
@@ -171,7 +171,7 @@ export class ApiStack extends Stack {
       toPort: 5432,
       sourceSecurityGroupId: this.computeSecurityGroup.securityGroupId,
       description:
-        'Api compute (the real Electric sync service, issue 058) to Postgres 5432 - Electric\'s own logical-replication connection. Never 0.0.0.0/0.',
+        'Api compute (the real Electric sync service, issue 058) to Postgres 5432 - the Electric logical-replication connection. Never 0.0.0.0/0.',
     });
 
     // --- ALB ----------------------------------------------------------------
@@ -460,7 +460,7 @@ export class ApiStack extends Stack {
     // forwarding the scoped request to Electric's private Cloud Map address.
     this.shapeProxySecurityGroup = new ec2.SecurityGroup(this, 'ShapeProxySecurityGroup', {
       vpc: props.vpc,
-      description: `${id} shape-proxy Lambda (issue 058) - egress to Postgres (5432, for workspace-membership lookups), Electric's private Cloud Map address (issue 058 - see the compute SG's own ingress rule below), and the internet (NAT, for Cognito JWKS).`,
+      description: `${id} shape-proxy Lambda (issue 058) - egress to Postgres (5432, for workspace-membership lookups), the Electric private Cloud Map address (issue 058 - see the compute SG ingress rule below), and the internet (NAT, for Cognito JWKS).`,
       allowAllOutbound: true,
     });
 
@@ -479,7 +479,7 @@ export class ApiStack extends Stack {
     this.computeSecurityGroup.addIngressRule(
       this.shapeProxySecurityGroup,
       ec2.Port.tcp(ELECTRIC_PORT),
-      'Shape-proxy Lambda (issue 058) to Electric\'s shape endpoint - the ONLY ingress this security group grants; never the ALB.',
+      'Shape-proxy Lambda (issue 058) to the Electric shape endpoint - the ONLY ingress this security group grants; never the ALB.',
     );
 
     this.shapeProxyFunction = new nodejs.NodejsFunction(this, 'ShapeProxyFunction', {

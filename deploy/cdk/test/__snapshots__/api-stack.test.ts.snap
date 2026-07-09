@@ -199,7 +199,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "AllowComputeToPostgres": {
       "Properties": {
-        "Description": "Api compute (the real Electric sync service, issue 058) to Postgres 5432 - Electric's own logical-replication connection. Never 0.0.0.0/0.",
+        "Description": "Api compute (the real Electric sync service, issue 058) to Postgres 5432 - the Electric logical-replication connection. Never 0.0.0.0/0.",
         "FromPort": 5432,
         "GroupId": {
           "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
@@ -276,7 +276,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "ComputeSecurityGroupF0F5C976": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Api Fargate compute (the real ElectricSQL sync service, issue 058; auth moved to Cognito, issue 033) - ingress only from the shape-proxy Lambda's own security group (issue 058 - NOT from the ALB; Electric is never an ALB target).",
+        "GroupDescription": "Gede-Test-Api Fargate compute (the real ElectricSQL sync service, issue 058; auth moved to Cognito, issue 033) - ingress only from the shape-proxy Lambda security group (issue 058 - NOT from the ALB; Electric is never an ALB target).",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
@@ -310,7 +310,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "ComputeSecurityGroupfromGedeTestApiShapeProxySecurityGroupFD221A8830009D5E07F1": {
       "Properties": {
-        "Description": "Shape-proxy Lambda (issue 058) to Electric's shape endpoint - the ONLY ingress this security group grants; never the ALB.",
+        "Description": "Shape-proxy Lambda (issue 058) to the Electric shape endpoint - the ONLY ingress this security group grants; never the ALB.",
         "FromPort": 3000,
         "GroupId": {
           "Fn::GetAtt": [
@@ -927,7 +927,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "ShapeProxySecurityGroup399F1CB1": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Api shape-proxy Lambda (issue 058) - egress to Postgres (5432, for workspace-membership lookups), Electric's private Cloud Map address (issue 058 - see the compute SG's own ingress rule below), and the internet (NAT, for Cognito JWKS).",
+        "GroupDescription": "Gede-Test-Api shape-proxy Lambda (issue 058) - egress to Postgres (5432, for workspace-membership lookups), the Electric private Cloud Map address (issue 058 - see the compute SG ingress rule below), and the internet (NAT, for Cognito JWKS).",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
