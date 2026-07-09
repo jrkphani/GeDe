@@ -1,6 +1,6 @@
 # 059: Interim honest-UX guard — Share UI stops implying success while cloud sharing is unbuilt
 
-- **Status**: OPEN (optional, shippable immediately)
+- **Status**: SUPERSEDED — not implemented. This was an interim "sharing not available yet" guard for the case where the real fix (056→057→058) was *deferred*. Since 056, 057, and 058 all landed (commits `5b20079`, `966db95`, `1630af1`) and make cloud sharing actually work, shipping a banner that says sharing is unavailable would be self-contradictory. Retained as a record; its Test-first plan and UX copy remain the fallback **if** the live 058 read-path deploy is later found not to stream (in which case re-open and ship this as a stopgap).
 - **Milestone**: M9 (Identity & tenancy) — a UX mitigation, not part of the 056→057→058 architecture chain
 - **Blocked by**: none — independent of 056/057/058, can ship before, during, or after them
 
