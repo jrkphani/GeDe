@@ -1,6 +1,6 @@
 # 055: Sharing a project never reaches the invited users (invitations stay local-only)
 
-- **Status**: OPEN
+- **Status**: PARTIAL — write-path fixed & verified live; invitee delivery still open. Shipped & live (2026-07-09): **056** (invitation/member writes now flush to RDS — verified live: `invitations` 0→1 via the debug API), **057** (membership-gated tenancy + accept-seat mutation), **058** (ElectricSQL read-path deployed & streaming, membership-scoped, no leak). **Still broken for real invitees:** an invited user has no UI to *accept* (`acceptInvitation` is never called — see **060**), so they're never seated, so the membership-scoped read-path delivers them nothing; and they get no notification (**061**). What looks like "the invitee sees it" in a single browser is local PGlite data, not a server-streamed share. **GitHub issue #8 stays open until 060 lands and a clean two-identity (separate-profile) smoke confirms a seated invitee actually receives the project.**
 - **Milestone**: M9 (Identity & tenancy) / M8 (Server & sync) — a cross-cutting gap in 035 (sharing) × 043/048 (write-path + client flush) × 050 (personal-workspace model)
 - **Found via**: Tester report against the live app (https://d1nzod71m3rz6x.cloudfront.net), 2026-07-09
 - **Severity**: High (a shipped, user-visible feature — "Share" — silently does nothing observable to the recipient)

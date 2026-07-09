@@ -1,6 +1,6 @@
 # 058: Deploy the ElectricSQL read-path so seated members receive the shared workspace's rows
 
-- **Status**: IMPLEMENTED — pending live CI deploy + smoke (orchestrator)
+- **Status**: SHIPPED (deployed & streaming live, 2026-07-09) — Electric 1.7.7 is running in the Api stack, connected to RDS, holding `electric_slot_default` and replicating from Postgres (CloudWatch-verified); `wal_level=logical` was already active (no reboot needed); the `/sync/v1/shape` shape-proxy is routed and auth-gated (401 unauthenticated); `desiredCount` restored to 1. **Caveat:** end-to-end delivery to a *seated* invitee is not yet verified, because no invitee can be seated — the accept flow has no UI (see **060**). The read-path infra is correct and membership-scoped; it simply has no seated members to deliver to yet.
 - **Milestone**: M8 (Server & sync)
 - **Blocked by**: 057 (an invited user must be a real, authorized member of the shared workspace before there is anything meaningful to stream to them), 032 (the read-path client code — `src/sync/{electricProtocol,syncEngine,config}.ts` — already exists and is merely gated off; this issue does not rebuild it)
 

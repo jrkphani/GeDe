@@ -68,11 +68,13 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [052](done/052-write-api-missing-claims-workspace-id.md) ✅ | Bug: write API rejected every signed-in write with 401 missing_claims | M11 | 050 |
 | [053](done/053-pgwritestore-duplicate-id-column.md) ✅ | Bug: PgWriteStore INSERT duplicated the `id` column (Postgres 42701) | M11 | 043, 050 |
 | [054](done/054-pgwritestore-camelcase-column-mismatch.md) ✅ | Bug: PgWriteStore used camelCase payload keys as snake_case SQL columns (Postgres 42703) | M11 | 043, 050, 053 |
-| [055](055-share-invitations-never-reach-invitees.md) | Bug: sharing a project never reaches invitees (invitations stay local-only; protocol excludes them; personal-workspace-only) | M9/M8 | 035, 043, 048, 050 |
+| [055](055-share-invitations-never-reach-invitees.md) ◐ partial | Bug: sharing a project never reaches invitees. **Write-path fixed & verified live** (056/057/058 shipped; invite reaches RDS, Electric streaming). **Invitee delivery still open**: no accept UI (060) ⇒ no seat ⇒ read-path can't deliver; no invitee notification (061) | M9/M8 | 035, 043, 048, 050 |
 | [056](done/056-mutation-protocol-invitations-workspace-members.md) ✅ | 055 fix (1/3): extend mutation protocol + write-path to carry `invitations`/`workspace_members` writes | M9/M8 | 043, 048, 050 |
 | [057](done/057-shared-workspace-accept-seat-model.md) ✅ | 055 fix (2/3): shared-workspace accept/seat model — breaks the 1-user↔1-workspace invariant | M9 | 056, 034 |
-| [058](058-electric-read-path-shared-workspace-delivery.md) (impl complete, deploy pending) | 055 fix (3/3): deploy the ElectricSQL read-path so seated members receive the shared workspace's rows | M8 | 057, 032 |
+| [058](done/058-electric-read-path-shared-workspace-delivery.md) ✅ | 055 fix (3/3): ElectricSQL read-path **deployed & streaming live** (Electric 1.7.7 replicating; shape-proxy auth-gated + membership-scoped). Delivery to a *seated* invitee is unverified end-to-end — blocked by 060 (no accept UI ⇒ no seat) | M8 | 057, 032 |
 | [059](059-share-ux-honest-guard.md) ⊘ superseded | 055 interim mitigation (NOT shipped — 056–058 make sharing actually work, so the "unavailable" guard is moot; kept as fallback if the live read-path is found not to stream) | M9 | — |
+| [060](060-invitee-accept-flow-unwired.md) | Bug (055/#8, invitee half): no UI calls `acceptInvitation` ⇒ invitees never seated ⇒ read-path never delivers the shared project. Blocks a full close of #8 | M9 | 056, 057, 058 |
+| [061](061-invitation-notification-to-invitee.md) | Invitee is never notified they were invited (no email, no in-app signal); "Resend" is mislabeled (extends expiry only). Tester request | M9 | 060, 035 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
