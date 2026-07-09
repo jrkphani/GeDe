@@ -2191,20 +2191,31 @@ body {
   color: var(--ink-muted);
 }
 
-/* ── Hero + login (issue 033, ADR-0009) — the v2 on-ramp ─────────────────── */
-.hero,
-.login {
-  max-width: 480px;
+/* ── Hero landing (issue 064, evolving issue 033/ADR-0009) — the v2 on-ramp
+   + sign-out destination: product brief beside a login-05-shaped auth card.
+   Two columns from 768px up; stacks (brief above auth) below that. ────── */
+.hero-landing {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: var(--space-6);
+  max-width: 960px;
   margin: var(--space-8) auto;
   padding: 0 var(--space-5);
 }
 
-.hero__panel,
-.login__panel {
+@media (min-width: 768px) {
+  .hero-landing {
+    grid-template-columns: 1.1fr 1fr;
+    align-items: start;
+  }
+}
+
+.hero-landing__brief,
+.hero-landing__auth {
   padding: var(--space-6) var(--space-5);
 }
 
-.hero__eyebrow {
+.hero-landing__eyebrow {
   margin: 0 0 var(--space-2);
   color: var(--ink-muted);
   font-size: var(--text-label);
@@ -2212,58 +2223,76 @@ body {
   text-transform: uppercase;
 }
 
-.hero__title,
-.login__title {
+.hero-landing__title {
   margin: 0 0 var(--space-3);
+  font-size: var(--text-title);
+  line-height: var(--leading-title);
+  font-weight: 600;
+}
+
+.hero-landing__auth-title {
+  margin: 0 0 var(--space-4);
   font-size: var(--text-header);
   line-height: var(--leading-header);
   font-weight: 600;
 }
 
-.hero__body,
-.login__body {
-  margin: 0 0 var(--space-5);
+.hero-landing__body {
+  margin: 0 0 var(--space-4);
   color: var(--ink-muted);
   font-size: var(--text-body);
   line-height: var(--leading-body);
 }
 
-.hero__actions {
+.hero-landing__points {
   display: flex;
-  align-items: center;
-  gap: var(--space-4);
+  flex-direction: column;
+  gap: var(--space-2);
+  margin: 0 0 var(--space-5);
+  padding: 0;
+  list-style: none;
+  color: var(--ink);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
 }
 
-.hero__use-locally {
+.hero-landing__points li {
+  position: relative;
+  padding-left: var(--space-4);
+}
+
+.hero-landing__points li::before {
+  content: '';
+  position: absolute;
+  top: 0.6em;
+  left: 0;
+  width: 6px;
+  height: 6px;
+  background: var(--accent);
+}
+
+.hero-landing__use-locally {
   color: var(--ink-muted);
 }
 
-.hero__use-locally:hover {
+.hero-landing__use-locally:hover {
   color: var(--ink);
 }
 
-.login__notice {
+.hero-landing__notice {
   margin: 0 0 var(--space-4);
   color: var(--ink-muted);
   font-size: var(--text-label);
   line-height: var(--leading-label);
 }
 
-.login__form {
+.hero-landing__form {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
 }
 
-.login__field {
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-  color: var(--ink-muted);
-  font-size: var(--text-label);
-}
-
-.login__field input {
+.hero-landing__input {
   color: var(--ink);
   font-size: var(--text-body);
   padding: var(--space-2) var(--space-3);
@@ -2272,17 +2301,17 @@ body {
   background: var(--paper);
 }
 
-.login__field input:focus-visible {
+.hero-landing__input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
 
-.login__switch {
+.hero-landing__switch {
   align-self: flex-start;
   color: var(--ink-muted);
 }
 
-.login__switch:hover {
+.hero-landing__switch:hover {
   color: var(--ink);
 }
 

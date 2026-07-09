@@ -2,8 +2,7 @@ import { useEffect } from 'react'
 import { ArchitectureSurface } from './components/ArchitectureSurface'
 import { DesignSurface } from './components/DesignSurface'
 import { FoundationSurface } from './components/FoundationSurface'
-import { Hero } from './components/Hero'
-import { LoginScreen } from './components/LoginScreen'
+import { HeroLanding } from './components/HeroLanding'
 import { ProjectsList } from './components/ProjectsList'
 import { Button } from './components/ui/button'
 import { AppShell } from './shell/AppShell'
@@ -57,15 +56,18 @@ function Surface({ route }: { route: AppRoute }) {
           view={route.view}
         />
       )
+    // Issue 064: /welcome and /login both render the same hero/landing
+    // surface — product brief + the 3-mode auth card in one polished page.
+    // It is the canonical signed-out destination and the sign-out redirect
+    // target (issue 063).
     case 'welcome':
+    case 'login':
       return (
-        <Hero
-          onSignIn={() => navigate({ kind: 'login' })}
+        <HeroLanding
+          onSignedIn={() => navigate({ kind: 'projects' })}
           onUseLocally={() => navigate({ kind: 'projects' })}
         />
       )
-    case 'login':
-      return <LoginScreen onSignedIn={() => navigate({ kind: 'projects' })} />
     case 'auth-callback':
       return <AuthCallbackRedirect />
     case 'not-found':
