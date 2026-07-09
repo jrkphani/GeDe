@@ -110,13 +110,17 @@ describe('WorkspaceMembersPanel — owner view', () => {
     await waitFor(() => expect(screen.getByText('Revoked')).toBeInTheDocument())
   })
 
-  it('resending an invitation keeps it pending', async () => {
+  it('extending an invitation keeps it pending (honest label — no email is sent, see issue 061)', async () => {
     const user = userEvent.setup()
     await createInvitation(db, workspaceId, 'invitee@example.com', 'viewer', 'sub-owner')
     render(<WorkspaceMembersPanel projectId={projectId} />)
     await waitFor(() => expect(screen.getByText('invitee@example.com')).toBeInTheDocument())
 
-    await user.click(screen.getByRole('button', { name: 'Resend invitation to invitee@example.com' }))
+    // The control must not read "Resend" — resendInvitation only bumps
+    // expiry; it never sends an email (issue 061).
+    expect(screen.queryByRole('button', { name: /Resend/ })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Extend invitation expiry for invitee@example.com' }))
 
     await waitFor(() => expect(screen.getByText('Pending')).toBeInTheDocument())
   })

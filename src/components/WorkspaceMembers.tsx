@@ -133,10 +133,10 @@ export function WorkspaceMembersPanel({ projectId }: { projectId: string }) {
                     <>
                       <Button
                         variant="rowAction"
-                        aria-label={`Resend invitation to ${inv.email}`}
+                        aria-label={`Extend invitation expiry for ${inv.email}`}
                         onClick={() => void resendInvitation(inv.id)}
                       >
-                        Resend
+                        Extend
                       </Button>
                       <Button
                         variant="rowAction"
