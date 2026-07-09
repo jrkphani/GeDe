@@ -8,6 +8,14 @@ on:
     branches: [main]
   pull_request:
 
+# onnxruntime-node (via @huggingface/transformers, issue 042) postinstall
+# downloads large CUDA/GPU EP binaries from nuget.org during `npm ci`; that
+# host is intermittently unreachable from CI runners (ETIMEDOUT). The app uses
+# onnxruntime-web (WASM), never the native Node backend, so skip the
+# non-bundled binary download. See onnxruntime-node/script/install.js.
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
 jobs:
   verify:
     runs-on: ubuntu-latest

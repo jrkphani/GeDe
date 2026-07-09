@@ -24,6 +24,15 @@ on:
     types: [completed]
   pull_request:
 
+# onnxruntime-node (pulled in by @huggingface/transformers, issue 042) runs a
+# postinstall that downloads large CUDA/GPU EP binaries from nuget.org during
+# `npm ci`. That host is intermittently unreachable from CI runners and has
+# blocked deploy with ETIMEDOUT. The frontend uses onnxruntime-web (WASM),
+# never the native Node backend, so skip the non-bundled binary download; the
+# CPU EP stays bundled in the package. See onnxruntime-node/script/install.js.
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
 jobs:
   # PR validation only: synth + assertion/snapshot tests, `cdk diff` when
   # creds are available. Never deploys.
