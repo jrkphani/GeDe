@@ -727,7 +727,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         "DeploymentController": {
           "Type": "ECS",
         },
-        "DesiredCount": 0,
+        "DesiredCount": 1,
         "EnableECSManagedTags": false,
         "LaunchType": "FARGATE",
         "NetworkConfiguration": {

@@ -180,10 +180,10 @@ describe('ApiStack (Gede-Test-Api)', () => {
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
   });
 
-  it('the Electric Fargate service is staged at desiredCount 0 for this deploy (deploy attempt #4) — Postgres wal_level=logical only takes effect after an RDS reboot CloudFormation cannot perform mid-deploy; a live task would crash-loop and roll the deploy back', () => {
+  it('the Electric Fargate service runs 1 always-on task (desiredCount 1) — verified live: logical replication was already active, the task acquired its replication slot and streamed from Postgres cleanly', () => {
     const template = synth();
     template.resourceCountIs('AWS::ECS::Service', 1);
-    template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 0 });
+    template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 1 });
   });
 
   it('the Electric Fargate service has no LoadBalancers property (Cloud Map only, never an ALB target — issue 058\'s whole point, and the exact shape mismatch that made the 030 stub\'s logical id unreusable)', () => {

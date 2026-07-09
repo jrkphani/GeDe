@@ -341,19 +341,15 @@ export class ApiStack extends Stack {
     this.syncService = new ecs.FargateService(this, 'ElectricSyncService', {
       cluster: this.cluster,
       taskDefinition: electricTaskDefinition,
-      // Staged at 0 for this deploy (deploy attempt #4) - NOT the final
-      // state. Electric requires Postgres wal_level=logical to start
-      // replicating; the Data stack's new RDS ParameterGroup sets
-      // rds.logical_replication=1, but that is a STATIC parameter that only
-      // takes effect after a DB REBOOT, and CloudFormation does not reboot
-      // RDS mid-deploy. A task started now would crash-loop against
-      // wal_level='replica', fail its health check, and roll the whole
-      // deploy back again. Staging at 0 lets this deploy provision the
-      // service, task def, Cloud Map registration, and DB URL wiring
-      // cleanly; a documented post-deploy step then reboots the RDS
-      // instance to activate logical replication, and a follow-up change
-      // flips this back to 1 once that's verified.
-      desiredCount: 0,
+      // 1 always-on Electric task. Background: this was briefly staged at 0
+      // to let the Api stack provision cleanly while we confirmed the DB's
+      // logical replication was active (Electric requires wal_level=logical;
+      // the Data stack's RDS ParameterGroup sets rds.logical_replication=1).
+      // Verified live: rds.logical_replication=on / wal_level=logical were
+      // already in effect (no reboot needed), and a scaled-up Electric task
+      // connected, acquired the `electric_slot_default` replication slot, and
+      // began streaming from Postgres cleanly. Restored to 1.
+      desiredCount: 1,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [this.computeSecurityGroup],
       assignPublicIp: false,
