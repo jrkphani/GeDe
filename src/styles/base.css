@@ -452,6 +452,14 @@ body {
   border-bottom: none;
 }
 
+/* Issue 065 — the row reads as clickable: a calm background wash on hover
+   or keyboard focus (design token, no hardcoded color), same "go here" cue
+   as the trailing chevron. */
+.project-row:hover,
+.project-row:focus-visible {
+  background: var(--row-zebra);
+}
+
 .project-row .row-action {
   visibility: hidden;
 }
@@ -465,8 +473,21 @@ body {
   cursor: text;
 }
 
+.project-row--phantom:hover,
+.project-row--phantom:focus-within {
+  background: none;
+}
+
 .project-name {
   font-weight: 500;
+}
+
+/* Issue 065 — decorative "open" affordance at the row's trailing edge;
+   always visible (unlike the hover-revealed .row-action controls) so the
+   row reads as a destination even before it's hovered/focused. */
+.project-row__chevron {
+  flex-shrink: 0;
+  color: var(--ink-muted);
 }
 
 .project-desc {

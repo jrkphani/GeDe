@@ -1,6 +1,6 @@
 # 065: Project list — unclear clickable affordance + open-vs-edit ambiguity
 
-- **Status**: OPEN
+- **Status**: SHIPPED
 - **Milestone**: M6 (UX polish)
 - **Severity**: Medium (usability) — new users can't tell rows are interactive, or where to click to *open* vs. *rename*.
 - **Requested by**: product owner, 2026-07-10 (with screenshot): "hard to tell which project can be clicked on and where to click to edit and where to click to access the project… think about solution options apart from just mouseover highlight, but keep things simple."

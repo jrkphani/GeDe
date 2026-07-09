@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -36,11 +38,11 @@ describe('ProjectsList', () => {
     expect(screen.getByPlaceholderText('New project')).toHaveValue('')
   })
 
-  it('renames in place: click name, edit, Enter commits', async () => {
+  it('renames via the revealed rename control: click, edit, Enter commits', async () => {
     const user = userEvent.setup()
     await useProjectsStore.getState().createProject('Old name')
     render(<ProjectsList onOpen={noop} />)
-    await user.click(screen.getByText('Old name'))
+    await user.click(screen.getByRole('button', { name: 'Rename Old name' }))
     const input = screen.getByDisplayValue('Old name')
     await user.clear(input)
     await user.type(input, 'New name{Enter}')
@@ -52,12 +54,55 @@ describe('ProjectsList', () => {
     const user = userEvent.setup()
     await useProjectsStore.getState().createProject('Keep me')
     render(<ProjectsList onOpen={noop} />)
-    await user.click(screen.getByText('Keep me'))
+    await user.click(screen.getByRole('button', { name: 'Rename Keep me' }))
     const input = screen.getByDisplayValue('Keep me')
     await user.clear(input)
     await user.type(input, 'Discard{Escape}')
     expect(await screen.findByText('Keep me')).toBeInTheDocument()
     expect(useProjectsStore.getState().projects[0]?.name).toBe('Keep me')
+  })
+
+  it('clicking the project row (name text) opens it, not renames it (issue 065)', async () => {
+    const user = userEvent.setup()
+    await useProjectsStore.getState().createProject('Tavalo')
+    const opened: string[] = []
+    render(<ProjectsList onOpen={(id) => opened.push(id)} />)
+    await user.click(screen.getByText('Tavalo'))
+    expect(opened).toEqual([useProjectsStore.getState().projects[0]?.id])
+    // Clicking the name must not have entered rename mode.
+    expect(screen.queryByDisplayValue('Tavalo')).not.toBeInTheDocument()
+  })
+
+  it('opens a project with Space on the focused row', async () => {
+    const user = userEvent.setup()
+    await useProjectsStore.getState().createProject('Tavalo')
+    const opened: string[] = []
+    render(<ProjectsList onOpen={(id) => opened.push(id)} />)
+    const row = screen.getByRole('button', { name: /Open Tavalo/ })
+    row.focus()
+    await user.keyboard(' ')
+    expect(opened).toEqual([useProjectsStore.getState().projects[0]?.id])
+  })
+
+  it('F2 on the row enters rename without a mouse', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    render(<ProjectsList onOpen={noop} />)
+    const row = screen.getByRole('button', { name: /Open Tavalo/ })
+    row.focus()
+    fireEvent.keyDown(row, { key: 'F2' })
+    expect(await screen.findByDisplayValue('Tavalo')).toBeInTheDocument()
+  })
+
+  it('activating the rename control via keyboard does not open the project', async () => {
+    const user = userEvent.setup()
+    await useProjectsStore.getState().createProject('Tavalo')
+    const opened: string[] = []
+    render(<ProjectsList onOpen={(id) => opened.push(id)} />)
+    const renameBtn = screen.getByRole('button', { name: 'Rename Tavalo' })
+    renameBtn.focus()
+    await user.keyboard('{Enter}')
+    expect(opened).toEqual([])
+    expect(screen.getByDisplayValue('Tavalo')).toBeInTheDocument()
   })
 
   it('archive hides the row and narrates via the status bar with an Undo that restores', async () => {
@@ -141,5 +186,24 @@ describe('ProjectsList — export/import (issue 015)', () => {
     )
     // Empty project → just the root canvas, no contexts.
     expect(screen.getByRole('status')).toHaveTextContent(/Imported Tavalo — 1 canvas, 0 contexts/)
+  })
+})
+
+describe('ProjectsList — row affordance (issue 065)', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
+
+  it('the row reads as clickable: pointer cursor at rest', () => {
+    const match = /\.project-row\s*\{([^}]*)\}/.exec(css)
+    expect(match).not.toBeNull()
+    expect((match as RegExpMatchArray)[1]).toMatch(/cursor:\s*pointer/)
+  })
+
+  it('hover/focus paints a calm background via a design token, not a hardcoded color', () => {
+    const match = /\.project-row:hover,\s*\n\.project-row:focus-visible\s*\{([^}]*)\}/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1]
+    expect(body).toMatch(/background:\s*var\(--[\w-]+\)/)
+    expect(body).not.toMatch(/#[0-9a-fA-F]{3,8}\b/)
+    expect(body).not.toMatch(/rgba?\(/)
   })
 })

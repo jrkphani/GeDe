@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react'
+import { ChevronRight, Pencil } from 'lucide-react'
 import { useCommandLogStore } from '../store/commandLog'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
@@ -28,6 +29,10 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   const [dragging, setDragging] = useState(false)
   const [importError, setImportError] = useState<string | null>(null)
   const [importedId, setImportedId] = useState<string | null>(null)
+  // Issue 065: row click/Enter/Space opens; rename is a deliberate, secondary
+  // gesture (the hover/focus-revealed pencil control, or F2). Only one row
+  // renames at a time.
+  const [renamingId, setRenamingId] = useState<string | null>(null)
   const [showBackupNote, setShowBackupNote] = useState(
     () => localStorage.getItem(BACKUP_NOTE_KEY) !== 'dismissed',
   )
@@ -109,22 +114,54 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
             className={p.id === importedId ? 'project-row project-row--selected' : 'project-row'}
             onClick={() => onOpen(p.id)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') onOpen(p.id)
+              // F2 is a global rename shortcut — honour it from anywhere in
+              // the row (name, Archive button, etc.), same as Windows/Explorer.
               if (e.key === 'F2') {
                 e.preventDefault()
-                e.currentTarget.querySelector<HTMLElement>('.project-name')?.click()
+                setRenamingId(p.id)
+                return
+              }
+              // Enter/Space open — but only when the row itself is the event
+              // target, not when a nested control (Archive, rename) has
+              // focus; those already handle their own activation.
+              if (e.currentTarget !== e.target) return
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault()
+                onOpen(p.id)
               }
             }}
           >
-            {/* Row is clickable-to-open, so the editor stops click/key propagation. */}
-            <InlineEdit
-              value={p.name}
-              onCommit={(next) => void renameProject(p.id, next)}
-              display={p.name}
-              displayClassName="project-name"
-              stopPropagation
-            />
+            {/* Row is the primary open target (click/Enter/Space). Rename is a
+                deliberate, secondary gesture — the revealed pencil control or
+                F2 — so the name itself carries no click handler here; while
+                renaming, InlineEdit owns the existing Enter-commit/Esc-revert
+                grammar and stops its own clicks/keys from bubbling to the row. */}
+            {renamingId === p.id ? (
+              <InlineEdit
+                value={p.name}
+                onCommit={(next) => void renameProject(p.id, next)}
+                display={p.name}
+                displayClassName="project-name"
+                stopPropagation
+                editing
+                onEditingChange={(next) => setRenamingId(next ? p.id : null)}
+              />
+            ) : (
+              <span className="project-name">{p.name}</span>
+            )}
             {p.description !== null && <span className="project-desc">{p.description}</span>}
+            {renamingId !== p.id && (
+              <Button
+                variant="rowAction"
+                aria-label={`Rename ${p.name}`}
+                onClick={(e) => {
+                  e.stopPropagation()
+                  setRenamingId(p.id)
+                }}
+              >
+                <Pencil size={14} aria-hidden="true" />
+              </Button>
+            )}
             <AdoptProjectButton project={p} />
             <Button
               aria-label={`Archive ${p.name}`}
@@ -141,6 +178,7 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
             >
               Archive
             </Button>
+            <ChevronRight className="project-row__chevron" aria-hidden="true" size={16} />
           </div>
         ))}
         <div className="project-row project-row--phantom">
