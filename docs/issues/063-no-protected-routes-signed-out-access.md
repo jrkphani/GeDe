@@ -1,6 +1,6 @@
 # 063: No protected routes — signed-out users still access project data in the same browser
 
-- **Status**: OPEN — needs a product/design decision before implementation (see "Design decision required")
+- **Status**: OPEN — model **decided (2026-07-10): Option 1, clear-on-sign-out** (keep local-first / no-account; on sign-out wipe local project data so a shared browser starts clean) **and redirect to the 064 hero/landing page**. Implement that; the other two models below are recorded as the rejected alternatives.
 - **Milestone**: M9/M10 — auth-gating vs. local-first reconciliation
 - **Severity**: Medium (security/privacy on shared devices) — but entangled with a core architectural stance, so **not** a blind fix.
 - **Found via**: Tester report (2026-07-10): "the browser does not redirect me away from the project upon sign out. I can still access the project without signing in as long as it is the same browser. I don't think we have implemented any protected pages."
@@ -24,11 +24,12 @@ These are materially different products — the fix depends on which is intended
 2. **Gate cloud content only.** Local-only projects stay accessible signed-out (offline-first intact); **workspace/shared** projects require an authenticated, authorized session to open (route guard + a membership check on load). Signing out hides cloud projects but keeps the local sandbox.
 3. **Full auth-gate (abandons no-account use).** Every route requires sign-in; signed-out → redirect to `/login`. Simplest mental model, but **removes** the offline/no-account capability that is a stated product pillar — a real strategic change, not just a fix.
 
-## Fix direction (once a model is chosen)
+## Fix direction (decided model: clear-on-sign-out + redirect to 064)
 
-- **Route guards:** a wrapper in `src/shell/` (router at `src/shell/router.ts`/`routes.ts`) that redirects to the login/hero screen when a page requires auth and `useAuthStore` has no session.
-- **Sign-out teardown:** in `useAuthStore` sign-out, in addition to clearing tokens/sync, clear the relevant local data (drop/reset the PGlite instance, clear the workspace store) per the chosen model.
-- **Load-time authorization:** for gated cloud projects, verify membership before rendering (defense-in-depth alongside RLS/shape-proxy scoping).
+- **Sign-out teardown (the core fix):** in `useAuthStore` sign-out, in addition to clearing Cognito tokens + stopping sync, **wipe the local project data** so the next person on the shared browser starts clean — drop/reset the PGlite instance (`src/store/database.ts` / the `idb://gede` store) and reset the in-memory stores (projects/workspace/sync/etc.). Decide whether a purely-local (never-synced) project should survive; default to a clean slate for safety on a shared device (a signed-in session implies cloud data was present).
+- **Redirect to the 064 hero/landing page on sign-out.** After teardown, navigate to the 064 hero/login page (the canonical signed-out on-ramp). This is the "redirect me away from the project on sign out" the tester asked for. Wire via `src/shell/routes.ts` / `AppShell.tsx`.
+- **Do NOT add hard route guards that block the no-account/offline path** — Option 1 keeps local-first usable without an account. Signed-out simply means: no cloud data loaded + you land on the hero (from which "Use locally" re-enters the local app).
+- **(Deferred, not this issue):** load-time membership authorization for gated cloud projects (that's Option 2's territory; RLS + the shape-proxy scoping already enforce this server-side).
 
 ## Test-first plan (model-dependent)
 
