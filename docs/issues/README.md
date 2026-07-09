@@ -80,7 +80,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [064](done/064-hero-landing-page-auth-login-05.md) ✅ | Hero/landing page (`HeroLanding`, shadcn `login-05`) with sign up + sign in, product brief, STYLE_GUIDE; the canonical signed-out + sign-out destination (replaces Hero/LoginScreen) | M9 | 033 |
 | [065](065-project-list-clickable-affordance.md) | UX: project list rows don't read as clickable + open-vs-rename is ambiguous (click currently renames). Add hover/pointer affordance, row-click opens, rename via a revealed control | M6 | 001 |
 | [066](done/066-sync-invitation-revoke-decline-resend.md) ✅ | Bug fixed: invitation revoke/decline/resend now enqueue to the sync queue (an already-tombstoned/updated row would otherwise stay live server-side after 062 started streaming invitations) | M9 | 056, 062 |
-| [067](067-stream-workspace-members-to-clients.md) | Bug: `workspace_members` isn't streamed ⇒ the shared Members list diverges per user (owner won't see the accepted invitee). Add it to SYNCED_TABLES, membership-scoped | M9 | 062, 057 |
+| [067](done/067-stream-workspace-members-to-clients.md) ✅ | `workspace_members` now streams (membership-scoped, fail-closed; `membersAppliedAt` refresh; migration 0014) so the shared Members list stays consistent across users | M9 | 062, 057 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
