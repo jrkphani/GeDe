@@ -91,7 +91,13 @@ export async function resolveShapeRequest(
   }
 
   const workspaceIds = await deps.listWorkspaceIdsForSub(auth.claims.sub)
-  const scope = scopeToWorkspaces(request.table, workspaceIds)
+  // Issue 062 — the invitations-only email scope. `auth.claims.email` comes
+  // straight off the VERIFIED JWT payload (src/server/writeApi/jwt.ts) —
+  // never from `request.query`, which is never even read for anything but
+  // FORWARDABLE_PARAMS below. scopeToWorkspaces ignores this argument for
+  // every table except `invitations` (src/domain/syncScope.ts), so passing
+  // it unconditionally here is safe for the other nine.
+  const scope = scopeToWorkspaces(request.table, workspaceIds, auth.claims.email)
 
   const url = new URL('/v1/shape', deps.electricBaseUrl)
   url.searchParams.set('table', request.table)

@@ -1,9 +1,21 @@
 # 062: Invitee never receives their pending invitation from the server (accept flow unreachable for a real invitee)
 
-- **Status**: OPEN
+- **Status**: SHIPPED — Option B (email-scoped read-path), lowest deploy risk: reuses the existing 058 shape proxy, no new CDK resources/Lambdas/routes
 - **Milestone**: M9 — the missing data-delivery piece behind 060; the true remaining blocker for GitHub #8
 - **Severity**: High — this is *why* the two-identity smoke fails. 060 shipped a correct accept UI, but a real (cross-device) invitee's client has no way to learn a pending invitation exists, so the "Invitations" badge never appears and there is nothing to accept.
 - **Found via**: Clean-profile smoke of the deployed 060 UI (2026-07-09/10) — the tester reported "not seeing any invite being accepted."
+
+## Resolution
+
+Shipped Option B, exactly as this issue's own fix-direction spec'd it:
+
+1. **`invitations` joins `SYNCED_TABLES`** (`src/domain/syncScope.ts`) — the shape proxy now subscribes to it like every other synced table.
+2. **Email-scoped WHERE, invitations only.** `scopeToWorkspaces(table, workspaceIds, callerEmail?)` grew an optional third param, consulted ONLY for `table === 'invitations'`: with a caller email it builds `(workspace_id = ANY($1::text[]) OR lower(email) = lower($2))`, params `[membershipArrayLiteral, callerEmail]` — a not-yet-member invitee (empty membership set) still gets a real, matches-by-email shape, never the fail-closed `false`. Every other table's single-param shape is byte-for-byte unchanged (asserted directly — `syncScope.test.ts`'s "every OTHER SYNCED_TABLES table ignores a passed-in callerEmail" guard). No email → falls back to the prior membership-only, fail-closed-on-empty predicate.
+3. **Email extracted from the VERIFIED Cognito JWT only.** `CognitoClaims` (`src/server/writeApi/jwt.ts`) grew an optional `email` field, read off the signature-verified payload (never a client-supplied query param/header); `resolveShapeRequest` (`src/server/shapeProxy/handler.ts`) passes `auth.claims.email` into the scope builder. A dedicated cross-email no-leak test proves a token for email Y never resolves email X's invites, and a client-supplied `email`/`params[2]` query override is proven to be ignored.
+4. **Client refresh wiring.** `src/store/sync.ts` gained a generic `invitationsAppliedAt` timestamp, bumped whenever an inbound `invitations` delta applies; `PendingInvitations.tsx` subscribes to it and re-runs `loadMyInvitations()` on change, so the 060 badge now appears the moment a fresh invite streams in, with no manual reload.
+5. **Migration `0013_invitations_replica_identity.sql`** sets `REPLICA IDENTITY FULL` on `invitations` (mirrors 0012's rationale for the other nine tables) — required now that Electric actually replicates this table. Picked up automatically by the existing migration-runner Lambda (`deploy/cdk/lib/migration-runner/`); no new CDK resource. Two existing CDK tests that hardcode the migration file count (`deploy/cdk/test/migration-stack.test.ts`, `deploy/cdk/test/migration-runner.test.ts`) were bumped 13→14, and `api-stack.test.ts`'s snapshot was refreshed for the shape-proxy/write-path Lambda bundle hash change (real code changed, not config drift). `cdk synth` passes.
+
+All new/changed logic is test-first (red confirmed before each green): `src/domain/syncScope.test.ts`, `src/server/writeApi/jwt.test.ts`, `src/server/shapeProxy/handler.test.ts`, `src/store/sync.test.ts`, `src/components/PendingInvitations.test.tsx`.
 
 ## Symptom
 

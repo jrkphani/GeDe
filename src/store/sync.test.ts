@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { uuidv7 } from 'uuidv7'
 import { openDatabase } from '../db/client'
 import { createProject } from '../db/mutations'
+import { createWorkspace } from '../db/workspaces'
 import { projects } from '../db/schema'
 import { useCommandLogStore } from './commandLog'
 import { useStatusStore } from './status'
@@ -219,6 +220,110 @@ describe('sync store — engine lifecycle (driven by a fake stream, no live Elec
 
     expect(useSyncStore.getState().pendingCount).toBe(0)
     vi.unstubAllEnvs()
+  })
+})
+
+// Issue 062 — the invitee-discovery client wiring: once `invitations` is a
+// real SYNCED_TABLES entry (src/domain/syncScope.ts), an inbound invitation
+// delta lands via the SAME onApplied path every other table already uses —
+// but nothing previously re-ran useWorkspaceStore.loadMyInvitations() when
+// that happened, so the 060 "Invitations" badge only ever refreshed on
+// mount/identity-change, never on a genuinely NEW inbound invite arriving
+// mid-session. `invitationsAppliedAt` is the generic, workspace-store-free
+// signal PendingInvitations.tsx subscribes to (see that component's own
+// effect) to close that gap without this store needing to know anything
+// about invitations semantics beyond "which table just applied".
+describe('sync store — invitations delta signal (issue 062)', () => {
+  it('invitationsAppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().invitationsAppliedAt).toBe(0)
+  })
+
+  it('bumps invitationsAppliedAt when an inbound `invitations` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'invitations') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().invitationsAppliedAt).toBe(0)
+
+    box.deliver?.([
+      {
+        key: '"public"."invitations"/"inv1"',
+        value: {
+          id: 'inv1',
+          workspace_id: ws.id,
+          email: 'invitee@example.com',
+          role: 'viewer',
+          invited_by_sub: 'sub-owner',
+          expires_at: '2026-08-01T00:00:00.000Z',
+          accepted_at: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().invitationsAppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump invitationsAppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    await createProject(db, { name: 'Tavalo' })
+    const [project] = await db.select().from(projects)
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'contexts') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."contexts"/"c1"',
+        value: {
+          id: 'c1',
+          project_id: project?.id,
+          workspace_id: project?.workspaceId,
+          parent_id: null,
+          symbol: 'α',
+          name: null,
+          justification: null,
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:02.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().invitationsAppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets invitationsAppliedAt back to 0', () => {
+    useSyncStore.setState({ invitationsAppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().invitationsAppliedAt).toBe(0)
   })
 })
 

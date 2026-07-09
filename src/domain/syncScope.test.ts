@@ -57,3 +57,45 @@ describe('scopeToWorkspaces (issue 058) — read-path tenancy scoping', () => {
     expect(scope.params).toEqual(['{"solo-ws"}'])
   })
 })
+
+// Issue 062 — the read-path delivery fix for a fresh (not-yet-member)
+// invitee: `invitations` now streams via SYNCED_TABLES, but a not-yet-member
+// invitee has no matching workspace membership, so its scope must ALSO match
+// by the caller's own VERIFIED email (never a client-supplied one — the
+// shape-proxy handler is what enforces that boundary, see handler.test.ts).
+describe('scopeToWorkspaces — invitations email-scoping (issue 062)', () => {
+  it('invitations is now a real SYNCED_TABLES entry', () => {
+    expect(SYNCED_TABLES).toContain('invitations')
+  })
+
+  it('given a caller email, scopes invitations to membership OR their own email, as a second positional param', () => {
+    const scope = scopeToWorkspaces('invitations', ['ws-a'], 'invitee@example.com')
+    expect(scope.where).toBe('(workspace_id = ANY($1::text[]) OR lower(email) = lower($2))')
+    expect(scope.params).toEqual(['{"ws-a"}', 'invitee@example.com'])
+  })
+
+  it('a not-yet-member invitee (empty membership set) still gets a real, matches-by-email scope — never fail-closed to `false`', () => {
+    const scope = scopeToWorkspaces('invitations', [], 'invitee@example.com')
+    expect(scope.where).toBe('(workspace_id = ANY($1::text[]) OR lower(email) = lower($2))')
+    expect(scope.params).toEqual(['{}', 'invitee@example.com'])
+  })
+
+  it('with no caller email, invitations falls back to the plain membership-only predicate (single param), same fail-closed-on-empty behavior as every other table', () => {
+    const scoped = scopeToWorkspaces('invitations', ['ws-a'])
+    expect(scoped.where).toBe('workspace_id = ANY($1::text[])')
+    expect(scoped.params).toEqual(['{"ws-a"}'])
+
+    const empty = scopeToWorkspaces('invitations', [])
+    expect(empty.where).toBe('false')
+  })
+
+  it('every OTHER SYNCED_TABLES table ignores a passed-in callerEmail entirely — unchanged single-param shape', () => {
+    for (const table of SYNCED_TABLES) {
+      if (table === 'invitations') continue
+      const withoutEmail = scopeToWorkspaces(table, ['ws-a'])
+      const withEmail = scopeToWorkspaces(table, ['ws-a'], 'someone@example.com')
+      expect(withEmail).toEqual(withoutEmail)
+      expect(withEmail.params).toHaveLength(1)
+    }
+  })
+})

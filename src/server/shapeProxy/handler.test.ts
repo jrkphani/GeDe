@@ -165,3 +165,93 @@ describe('resolveShapeRequest (issue 058) — the shape-proxy auth + scoping bou
     expect(url.searchParams.get('secret')).toBe(ELECTRIC_SECRET)
   })
 })
+
+// Issue 062 — the invitee-discovery delivery fix: `invitations` streams via
+// the shape proxy now, scoped to membership OR the caller's own VERIFIED
+// email (src/domain/syncScope.ts). This is the security-critical boundary
+// the whole fix hinges on — the email MUST come off the verified JWT, never
+// off anything the client sent on the wire.
+describe('resolveShapeRequest — invitations email-scoping (issue 062)', () => {
+  it('a verified caller with email X and memberships M gets a shape scoped to M ∪ email=X', async () => {
+    const token = await sign({ sub: 'user-1', email: 'x@example.com' })
+    const result = await resolveShapeRequest(
+      { authorizationHeader: `Bearer ${token}`, table: 'invitations', query: {} },
+      deps(['ws-1', 'ws-2']),
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const url = new URL(result.url)
+    expect(url.searchParams.get('table')).toBe('invitations')
+    expect(url.searchParams.get('where')).toBe('(workspace_id = ANY($1::text[]) OR lower(email) = lower($2))')
+    expect(url.searchParams.get('params[1]')).toBe('{"ws-1","ws-2"}')
+    expect(url.searchParams.get('params[2]')).toBe('x@example.com')
+  })
+
+  it('a fresh invitee with NO memberships yet still gets a real, matches-by-email shape — never `false`', async () => {
+    const token = await sign({ sub: 'user-new', email: 'brand-new@example.com' })
+    const result = await resolveShapeRequest(
+      { authorizationHeader: `Bearer ${token}`, table: 'invitations', query: {} },
+      deps([]),
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const url = new URL(result.url)
+    expect(url.searchParams.get('where')).toBe('(workspace_id = ANY($1::text[]) OR lower(email) = lower($2))')
+    expect(url.searchParams.get('params[1]')).toBe('{}')
+    expect(url.searchParams.get('params[2]')).toBe('brand-new@example.com')
+  })
+
+  // The cross-email no-leak proof (062's own test-first plan): a JWT for
+  // email Y must never produce a shape scoped to email X — the resolved
+  // `params[2]` always tracks the SIGNED TOKEN's own email, one caller at a
+  // time, never a value borrowed from anywhere else.
+  it('email Y\'s verified token never gets email X\'s invites — params[2] tracks the token\'s own email only', async () => {
+    const tokenX = await sign({ sub: 'user-x', email: 'x@example.com' })
+    const tokenY = await sign({ sub: 'user-y', email: 'y@example.com' })
+
+    const resultX = await resolveShapeRequest(
+      { authorizationHeader: `Bearer ${tokenX}`, table: 'invitations', query: {} },
+      deps([]),
+    )
+    const resultY = await resolveShapeRequest(
+      { authorizationHeader: `Bearer ${tokenY}`, table: 'invitations', query: {} },
+      deps([]),
+    )
+    expect(resultX.ok).toBe(true)
+    expect(resultY.ok).toBe(true)
+    if (!resultX.ok || !resultY.ok) return
+    const urlX = new URL(resultX.url)
+    const urlY = new URL(resultY.url)
+    expect(urlX.searchParams.get('params[2]')).toBe('x@example.com')
+    expect(urlY.searchParams.get('params[2]')).toBe('y@example.com')
+    expect(urlY.searchParams.get('params[2]')).not.toBe('x@example.com')
+  })
+
+  it('a client-supplied `email`/`params[2]` query override is never consulted — the email always comes from the verified JWT', async () => {
+    const token = await sign({ sub: 'user-1', email: 'real@example.com' })
+    const result = await resolveShapeRequest(
+      {
+        authorizationHeader: `Bearer ${token}`,
+        table: 'invitations',
+        query: { email: 'attacker@example.com', 'params[2]': 'attacker@example.com' },
+      },
+      deps(['ws-1']),
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const url = new URL(result.url)
+    expect(url.searchParams.get('params[2]')).toBe('real@example.com')
+  })
+
+  it('a token with no email claim at all falls back to membership-only scoping for invitations, fail-closed on empty memberships like every other table', async () => {
+    const token = await sign({ sub: 'user-1' })
+    const result = await resolveShapeRequest(
+      { authorizationHeader: `Bearer ${token}`, table: 'invitations', query: {} },
+      deps([]),
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const url = new URL(result.url)
+    expect(url.searchParams.get('where')).toBe('false')
+  })
+})

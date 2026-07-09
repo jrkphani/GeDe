@@ -21,10 +21,15 @@ import type { TableName } from './syncDelta'
 // Every base table this app syncs, in a stable order. Not an FK-apply-order
 // requirement (src/db/sync.ts's two-pass strategy tolerates any order within
 // a batch) — just the fixed list of shapes the read-path subscribes to.
-// `invitations`/`workspace_members` are deliberately NOT included (056's own
-// scope note: they aren't Electric-synced tables — the shape-proxy resolves
-// a caller's memberships by querying `workspace_members` directly server-side
-// instead, see src/server/shapeProxy/albAdapter.ts).
+// `workspace_members` is deliberately NOT included (056's own scope note:
+// the shape-proxy resolves a caller's memberships by querying
+// `workspace_members` directly server-side instead, see
+// src/server/shapeProxy/albAdapter.ts — streaming it to clients isn't needed
+// for that). `invitations` WAS excluded for the same reason until issue 062:
+// a fresh, not-yet-member invitee has no membership row to resolve FROM, so
+// there is no other delivery path for their own pending invite — see this
+// table's email-scoped predicate below (`scopeToWorkspaces`'s `callerEmail`
+// param), the one exception to "every shape is membership-scoped only".
 export const SYNCED_TABLES: readonly TableName[] = [
   'projects',
   'tier1_purpose',
@@ -35,6 +40,7 @@ export const SYNCED_TABLES: readonly TableName[] = [
   'parameters',
   'contexts',
   'bindings',
+  'invitations',
 ]
 
 // Six of the nine synced tables carry `workspace_id` directly (schema.ts);
@@ -67,18 +73,37 @@ const WORKSPACE_SCOPE_SQL: Readonly<Record<TableName, string>> = {
   tier2_entries: 'table_id IN (SELECT id FROM tier2_tables WHERE workspace_id = ANY($1::text[]))',
   parameters: 'dimension_id IN (SELECT id FROM dimensions WHERE workspace_id = ANY($1::text[]))',
   bindings: 'context_id IN (SELECT id FROM contexts WHERE workspace_id = ANY($1::text[]))',
-  // Not in SYNCED_TABLES today (see above) — included for exhaustiveness
+  // `invitations`' base (membership-only) predicate — the fallback used when
+  // no caller email is available (see scopeToWorkspaces below for the real,
+  // email-OR-membership predicate issue 062 actually ships for this table).
+  invitations: 'workspace_id = ANY($1::text[])',
+  // Not in SYNCED_TABLES (see above) — included for exhaustiveness
   // (TableName is a superset, mirrors electricProtocol.ts's own
   // forward-compatible SQL_TO_JS_COLUMNS map) so a future SYNCED_TABLES
   // addition can't silently ship unscoped.
-  invitations: 'workspace_id = ANY($1::text[])',
   workspace_members: 'workspace_id = ANY($1::text[])',
 }
 
+// Issue 062 — the invitations-only email predicate: an invitee who is NOT
+// YET a member of the inviting workspace (the common case — that is the
+// whole point of an invitation) has no membership row `WORKSPACE_SCOPE_SQL`
+// could ever match. This ORs in a second, by-VERIFIED-email clause so their
+// own pending invite still streams to their device. `$2` is a plain scalar
+// (not an array) — Electric's shape params are just a positional map, same
+// mechanism as `$1`, so no new protocol capability is needed here.
+const INVITATIONS_EMAIL_SCOPE_SQL = '(workspace_id = ANY($1::text[]) OR lower(email) = lower($2))'
+
 export interface ShapeScope {
   readonly where: string
-  /** Positional `$1` value for the WHERE clause above — a single Postgres text[] array literal. */
-  readonly params: readonly [string]
+  /**
+   * Positional params for the WHERE clause above. Every table except
+   * `invitations` (with a caller email) carries exactly one: a Postgres
+   * text[] array literal for `$1`. `invitations`, when scoped by email, adds
+   * a second, plain-string `$2` — the caller's own verified email, NEVER a
+   * client-supplied one (src/server/shapeProxy/handler.ts is what enforces
+   * that boundary).
+   */
+  readonly params: readonly string[]
 }
 
 export class UnknownSyncTableError extends Error {
@@ -97,9 +122,24 @@ export class UnknownSyncTableError extends Error {
 // default-deny posture ("rejects any mutation... unless a real, seeded
 // membership row" — the read-side has no membership row to check against
 // here, so it defaults to nothing rather than everything).
-export function scopeToWorkspaces(table: TableName, workspaceIds: readonly string[]): ShapeScope {
+// `callerEmail` (issue 062) is meaningful ONLY for `table === 'invitations'`
+// — every other table ignores it entirely, keeping their single-param shape
+// byte-for-byte unchanged (see syncScope.test.ts's "every OTHER SYNCED_TABLES
+// table ignores a passed-in callerEmail" guard). When invitations IS scoped
+// by a real caller email, the empty-membership fail-closed shortcut below is
+// deliberately skipped: a not-yet-member invitee (workspaceIds = []) with a
+// real email must still get a live, matches-by-email shape, never `false`
+// (that would be the exact bug 062 exists to fix).
+export function scopeToWorkspaces(
+  table: TableName,
+  workspaceIds: readonly string[],
+  callerEmail?: string | null,
+): ShapeScope {
   const predicate = WORKSPACE_SCOPE_SQL[table]
   if (!predicate) throw new UnknownSyncTableError(table)
+  if (table === 'invitations' && callerEmail) {
+    return { where: INVITATIONS_EMAIL_SCOPE_SQL, params: [toPgTextArrayLiteral(workspaceIds), callerEmail] }
+  }
   if (workspaceIds.length === 0) return { where: 'false', params: [''] }
   return { where: predicate, params: [toPgTextArrayLiteral(workspaceIds)] }
 }

@@ -873,7 +873,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "6d4a19ed0a9af8f1f2647714279dbbd7334766a1b20597883b43595fe03ef484.zip",
+          "S3Key": "4ed040834b8739811b70bc939b75199a92bd028ab25ce20b829a71b377832b4e.zip",
         },
         "Description": "Gede-Test-Api ElectricSQL shape-proxy (issue 058) - verifies the Cognito JWT, resolves the caller's workspace memberships, builds a workspace-scoped shape request, forwards to Electric's private endpoint.",
         "Environment": {
@@ -1379,7 +1379,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "3d5a03e582d0ce17edbf135b8e545a3b6a8c02c8036d316c05c434ca7fd343f6.zip",
+          "S3Key": "a5bdd5b763fa80a5cf607c142b256836da52ceb637e58967c5cfab4ce30e0a46.zip",
         },
         "Description": "Gede-Test-Api Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).",
         "Environment": {

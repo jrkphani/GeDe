@@ -75,3 +75,37 @@ describe('verifyBearerToken', () => {
     expect(result).toEqual({ ok: false, reason: 'missing_claims' })
   })
 })
+
+// Issue 062 — the shape-proxy's invitations email-scoping (src/domain/
+// syncScope.ts's `callerEmail` param) needs the caller's VERIFIED email, not
+// a client-supplied one. A Cognito ID token (unlike an access token) carries
+// `email` when the `email` scope is granted — this is the ONE place that
+// claim is allowed to enter the system, straight off the signature-verified
+// payload, never off a query param/header (see shapeProxy/handler.test.ts's
+// "no cross-email leak" proof).
+describe('verifyBearerToken — email claim (issue 062)', () => {
+  it('exposes the `email` claim from a valid Cognito ID token', async () => {
+    const token = await sign({ sub: 'user-123', email: 'invitee@example.com' })
+    const result = await verifyBearerToken(`Bearer ${token}`, config)
+    expect(result).toEqual({
+      ok: true,
+      claims: { sub: 'user-123', workspaceId: workspaceIdForSub('user-123'), email: 'invitee@example.com' },
+    })
+  })
+
+  it('a token with no email claim (e.g. an access token) verifies fine, with email left undefined — never throws', async () => {
+    const token = await sign({ sub: 'user-123' })
+    const result = await verifyBearerToken(`Bearer ${token}`, config)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.claims.email).toBeUndefined()
+  })
+
+  it('a non-string `email` claim (schema drift/forged claim shape) is dropped rather than trusted verbatim', async () => {
+    const token = await sign({ sub: 'user-123', email: 12345 })
+    const result = await verifyBearerToken(`Bearer ${token}`, config)
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.claims.email).toBeUndefined()
+  })
+})

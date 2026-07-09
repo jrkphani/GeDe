@@ -103,6 +103,15 @@ interface SyncState {
   // additive, never load-bearing" design).
   workspaceId: string | null
   flushing: boolean
+  // Issue 062 — a generic "an `invitations` delta just applied" signal, a
+  // plain `Date.now()` timestamp bumped by onApplied below. Deliberately
+  // table-name-only: this store has no notion of invitations/workspace
+  // semantics (mirrors its own "never touches the command log" isolation
+  // principle) — src/components/PendingInvitations.tsx is the one consumer,
+  // subscribing to this value so useWorkspaceStore.loadMyInvitations() reruns
+  // whenever a NEW inbound invite streams in mid-session, closing the gap
+  // where the 060 badge only ever refreshed on mount/identity-change.
+  invitationsAppliedAt: number
   setWorkspaceId: (workspaceId: string | null) => void
   // Starts the read-path engine if isSyncEnabled() is true; a no-op
   // otherwise (leaves `enabled: false`, `handle: null`) — safe to call
@@ -156,6 +165,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     status: 'disabled',
     workspaceId: null,
     flushing: false,
+    invitationsAppliedAt: 0,
 
     setWorkspaceId(workspaceId) {
       set({ workspaceId })
@@ -197,6 +207,11 @@ export const useSyncStore = create<SyncState>()((set, get) => {
           const lostEdits = detectLostEdits(get().queue, deltas)
           const queue = reconcileWithDeltas(get().queue, deltas)
           set({ queue, pendingCount: pendingCount(queue), hasError: false })
+          // Issue 062 — a plain timestamp bump, not a counter: any store
+          // subscribing to this only cares "did this change since I last
+          // looked", which a monotonically-updated Date.now() answers just
+          // as well as a counter, with no extra state to reset in lockstep.
+          if (table === 'invitations') set({ invitationsAppliedAt: Date.now() })
           recompute()
           if (lostEdits.length > 0) {
             useStatusStore.getState().announce(lostEditMessage(lostEdits.length))
@@ -357,5 +372,6 @@ export function resetSyncStore(): void {
     status: 'disabled',
     workspaceId: null,
     flushing: false,
+    invitationsAppliedAt: 0,
   })
 }

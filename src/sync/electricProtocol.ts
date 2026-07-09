@@ -147,13 +147,14 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     updated_at: 'updatedAt',
     deleted_at: 'deletedAt',
   },
-  // Issue 056 — not yet subscribed to by src/sync/config.ts's SYNCED_TABLES
-  // (the ElectricSQL read-path deploy for these two is 058's job, out of this
-  // issue's scope), but TableName is a superset now (src/domain/syncDelta.ts)
-  // and this map is typed exhaustively over it — filling these in keeps the
-  // mapping forward-compatible for whenever 058 lands, at zero runtime cost
-  // today (toRowDelta/toCamelRow are simply never called with these tables
-  // yet).
+  // Issue 056 filled these in ahead of subscription so TableName's map stays
+  // exhaustive (src/domain/syncDelta.ts). `invitations` joined SYNCED_TABLES
+  // for real in issue 062 (the email-scoped invitee-discovery fix) and now
+  // uses this mapping on every inbound delta; `workspace_members` remains
+  // unsubscribed (058/062's own scope note — the shape-proxy resolves
+  // memberships via a direct query instead, see src/server/shapeProxy/
+  // albAdapter.ts), so its entry here stays exercised only by direct unit
+  // tests, not live traffic.
   invitations: {
     id: 'id',
     workspace_id: 'workspaceId',

@@ -24,6 +24,16 @@ import { workspaceIdForSub } from '../../domain/workspaceId'
 export interface CognitoClaims {
   readonly sub: string
   readonly workspaceId: string
+  /**
+   * Issue 062 — the VERIFIED `email` claim, when present. A Cognito ID
+   * token carries it once the `email` scope is granted; an access token
+   * typically doesn't. `undefined` (never a thrown error) when absent or not
+   * a string — the one caller that needs it today (src/server/shapeProxy/
+   * handler.ts's invitations email-scoping) degrades gracefully to
+   * membership-only scoping rather than crashing (src/domain/syncScope.ts's
+   * `scopeToWorkspaces` treats a missing `callerEmail` as "no email scope").
+   */
+  readonly email?: string
 }
 
 export interface JwtVerifierConfig {
@@ -56,7 +66,8 @@ export async function verifyBearerToken(
     const { payload } = await jwtVerify(token, config.getKey, { issuer: config.issuer })
     const sub = typeof payload.sub === 'string' ? payload.sub : undefined
     if (!sub) return { ok: false, reason: 'missing_claims' }
-    return { ok: true, claims: { sub, workspaceId: workspaceIdForSub(sub) } }
+    const email = typeof payload.email === 'string' ? payload.email : undefined
+    return { ok: true, claims: { sub, workspaceId: workspaceIdForSub(sub), ...(email ? { email } : {}) } }
   } catch (err) {
     if (err instanceof errors.JWTExpired) return { ok: false, reason: 'expired_token' }
     return { ok: false, reason: 'invalid_token' }

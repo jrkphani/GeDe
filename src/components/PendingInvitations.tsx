@@ -3,6 +3,7 @@ import { WORKSPACE_ROLES } from '../domain/workspaceRole'
 import type { WorkspaceRole } from '../domain/workspaceRole'
 import { useAuthStore } from '../store/auth'
 import { useProjectsStore } from '../store/projects'
+import { useSyncStore } from '../store/sync'
 import { useWorkspaceStore, type MyInvitationView } from '../store/workspace'
 import { Button } from './ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
@@ -62,15 +63,25 @@ export function PendingInvitations() {
   const dbReady = useProjectsStore((s) => s.status === 'ready')
   const myInvitations = useWorkspaceStore((s) => s.myInvitations)
   const loadMyInvitations = useWorkspaceStore((s) => s.loadMyInvitations)
+  // Issue 062 — the read-path delivery fix's client half: `invitations` now
+  // streams to this device (src/domain/syncScope.ts's email-scoped shape),
+  // but nothing previously re-ran loadMyInvitations() when a NEW invite
+  // landed locally mid-session — only on mount/identity-change. Subscribing
+  // to this timestamp (bumped by src/store/sync.ts's onApplied whenever an
+  // `invitations` delta applies) closes that gap: a genuinely fresh invitee
+  // now sees the badge appear without a manual reload, which is the whole
+  // point of this issue.
+  const invitationsAppliedAt = useSyncStore((s) => s.invitationsAppliedAt)
 
-  // Reloads whenever the signed-in identity (or db readiness) changes —
-  // mirrors useWorkspaceRole's own store-load effect (src/store/workspace.ts)
-  // rather than a render-phase side effect.
+  // Reloads whenever the signed-in identity (or db readiness) changes, or a
+  // fresh invitation just streamed in — mirrors useWorkspaceRole's own
+  // store-load effect (src/store/workspace.ts) rather than a render-phase
+  // side effect.
   useEffect(() => {
     if (configured && status === 'authenticated' && email && dbReady) {
       void loadMyInvitations()
     }
-  }, [configured, status, email, dbReady, loadMyInvitations])
+  }, [configured, status, email, dbReady, loadMyInvitations, invitationsAppliedAt])
 
   if (!configured || status !== 'authenticated' || myInvitations.length === 0) return null
 

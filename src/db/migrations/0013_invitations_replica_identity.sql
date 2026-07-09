@@ -1,0 +1,16 @@
+-- Issue 062 — `invitations` joins SYNCED_TABLES (src/domain/syncScope.ts),
+-- so it is now a real Electric shape subscription for the first time (058's
+-- own scope note excluded it; 0012_electric_replica_identity.sql's header
+-- comment explicitly said so at the time). ElectricSQL requires REPLICA
+-- IDENTITY FULL on every table it streams via logical replication — see
+-- 0012's own header comment for the full rationale (a row that stops
+-- matching a WHERE-scoped shape on UPDATE needs its full OLD row image to be
+-- recognized as a "move-out", not silently vanish). `workspace_members`
+-- stays excluded — it is still not a SYNCED_TABLES entry (the shape-proxy
+-- resolves memberships via a normal, non-replication query instead, see
+-- src/server/shapeProxy/albAdapter.ts).
+--
+-- Pure Postgres replication setting — no column/schema shape change — so,
+-- like 0012, this has no Drizzle-generated counterpart and no corresponding
+-- meta/*_snapshot.json entry.
+ALTER TABLE "invitations" REPLICA IDENTITY FULL;

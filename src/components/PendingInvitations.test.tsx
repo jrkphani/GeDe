@@ -8,6 +8,7 @@ import { createInvitation, getInvitation } from '../db/invitations'
 import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { setDatabase } from '../store/database'
 import { resetProjectsStore, useProjectsStore } from '../store/projects'
+import { resetSyncStore, useSyncStore } from '../store/sync'
 import { resetWorkspaceStore } from '../store/workspace'
 import { PendingInvitations } from './PendingInvitations'
 
@@ -21,6 +22,7 @@ let workspaceId: string
 
 beforeEach(async () => {
   resetProjectsStore()
+  resetSyncStore()
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetWorkspaceStore()
@@ -120,5 +122,35 @@ describe('PendingInvitations — the invite list (issue 060)', () => {
       expect(reloaded?.deletedAt).not.toBeNull()
     })
     await waitFor(() => expect(screen.queryByRole('button', { name: /Invitations/ })).not.toBeInTheDocument())
+  })
+})
+
+// Issue 062 — the missing "badge updates without a manual reload" wiring: a
+// fresh invitee's local PGlite has no invitation row at mount time (that's
+// the whole bug); one only lands once the read-path streams it in, AFTER
+// this component's mount effect already ran. Without re-subscribing to
+// SOMETHING that changes when that happens, the badge would stay hidden
+// until the next full page reload. useSyncStore's `invitationsAppliedAt`
+// (src/store/sync.ts) is that signal — bumped by the SAME onApplied path
+// every table's inbound delta already flows through.
+describe('PendingInvitations — refreshes on an inbound invitation delta (issue 062)', () => {
+  it('the "Invitations" badge appears once invitationsAppliedAt bumps, with no remount and no manual reload', async () => {
+    useAuthStore.setState({
+      configured: true,
+      status: 'authenticated',
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+
+    render(<PendingInvitations />)
+    await waitFor(() => expect(screen.queryByRole('button', { name: /Invitations/ })).not.toBeInTheDocument())
+
+    // Simulates the read-path landing a row locally mid-session (056's
+    // applyInboundDeltas apply case) — this component never re-queries the
+    // db on its own timer, so without the signal below the badge would stay
+    // hidden until an unrelated re-render happened to fire the effect again.
+    await createInvitation(db, workspaceId, 'invitee@example.com', 'editor', 'sub-owner')
+    useSyncStore.setState({ invitationsAppliedAt: Date.now() })
+
+    await waitFor(() => expect(screen.getByRole('button', { name: /Invitations/ })).toBeInTheDocument())
   })
 })
