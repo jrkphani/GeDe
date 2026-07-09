@@ -72,6 +72,9 @@ exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
         "CopyTagsToSnapshot": true,
         "DBInstanceClass": "db.t4g.micro",
         "DBName": "gede",
+        "DBParameterGroupName": {
+          "Ref": "LogicalReplicationParameterGroup20A8A9BF",
+        },
         "DBSubnetGroupName": {
           "Ref": "DatabaseSubnetGroup7D60F180",
         },
@@ -246,6 +249,36 @@ exports[`DataStack (Gede-Test-Data) matches the snapshot 1`] = `
       },
       "Type": "AWS::SecretsManager::Secret",
       "UpdateReplacePolicy": "Delete",
+    },
+    "LogicalReplicationParameterGroup20A8A9BF": {
+      "Properties": {
+        "Description": "Gede-Test-Data Postgres 17 - enables logical replication for ElectricSQL's read path (issue 058).",
+        "Family": "postgres17",
+        "Parameters": {
+          "max_replication_slots": "10",
+          "max_wal_senders": "10",
+          "rds.logical_replication": "1",
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::RDS::DBParameterGroup",
     },
   },
   "Rules": {

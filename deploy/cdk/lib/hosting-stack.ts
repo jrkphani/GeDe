@@ -194,6 +194,37 @@ export class HostingStack extends Stack {
       };
     }
 
+    // --- ElectricSQL shape-proxy origin (issue 058) ----------------------
+    // Same mixed-content rationale as `/write*` above: the shape-proxy
+    // Lambda (deploy/cdk/lib/api-stack.ts's ShapeProxyFunction) sits behind
+    // the SAME plain-HTTP-only ALB, so this is a THIRD path-based behavior
+    // on that one ALB origin. `VITE_SYNC_URL` (the client's `syncBaseUrl()`,
+    // src/sync/config.ts) is wired to point at THIS CloudFront path
+    // (`https://<cloudfront-domain>/sync`) — never Electric's own address,
+    // which is not internet-reachable at all (issue 058's whole point; see
+    // api-stack.ts's class doc). No-cache: a shape's long-poll response must
+    // never be served stale from the edge, and Electric's own protocol
+    // headers (electric-offset/-handle/-schema/-cursor) must reach the
+    // client on every request, not just a cache miss.
+    if (props.apiLoadBalancerDnsName) {
+      additionalBehaviors['sync*'] = {
+        origin: new origins.HttpOrigin(props.apiLoadBalancerDnsName, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        // Electric's shape protocol uses both GET (the default long-poll)
+        // and POST (large `where`/`params` subsets, per Electric's own
+        // subset-security docs) — allow the full method set like the other
+        // two API behaviors.
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        // Forward the Authorization header through — the shape-proxy's own
+        // auth gate (src/server/shapeProxy/handler.ts) needs the caller's
+        // Cognito JWT, exactly like /write*'s handleWriteRequest does.
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+      };
+    }
+
     // --- Debug/db inspection API origin (issue 049) ---------------------
     // Same mixed-content rationale as `/write*` above, extended to a SECOND
     // path on the same ALB origin: `/debug/db/*` fronts the read-only

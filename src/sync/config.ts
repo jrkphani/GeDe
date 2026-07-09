@@ -4,7 +4,12 @@
 // every existing test, and CI's `npm run verify` all run with sync disabled,
 // so the full v1 suite is the regression guard (test-first plan #6) with zero
 // special-casing.
-import type { TableName } from '../domain/syncDelta'
+// Issue 058 — SYNCED_TABLES' canonical definition now lives in
+// src/domain/syncScope.ts (a pure, Vite-free module reachable from server
+// code too — src/server/shapeProxy/handler.ts imports it directly to
+// allow-list a shape request's `table` param). Re-exported here so every
+// existing client import of `SYNCED_TABLES` from this module is unaffected.
+export { SYNCED_TABLES } from '../domain/syncScope'
 
 export function isSyncEnabled(): boolean {
   return import.meta.env.VITE_SYNC_ENABLED === 'true'
@@ -26,17 +31,17 @@ export function writeApiPath(): string {
   return import.meta.env.VITE_WRITE_API_PATH ?? '/write'
 }
 
-// Every base table this app syncs, in a stable order. Not an FK-apply order
-// requirement (src/db/sync.ts's two-pass strategy tolerates any order within
-// a batch) — just the fixed list of shapes syncEngine.ts subscribes to.
-export const SYNCED_TABLES: readonly TableName[] = [
-  'projects',
-  'tier1_purpose',
-  'tier1_props',
-  'tier2_tables',
-  'tier2_entries',
-  'dimensions',
-  'parameters',
-  'contexts',
-  'bindings',
-]
+// The exact bug-051 crash-on-empty-URL guard (`src/store/sync.ts`'s
+// `start()`), extracted as a pure, directly-testable predicate (issue 058
+// test-first plan item 1). Without a configured VITE_SYNC_URL — and no
+// injected test `streamFactory` — the default shape-stream factory would
+// build a shape URL from an empty base and throw ("Failed to construct
+// 'URL': Invalid URL"). Once VITE_SYNC_URL is populated (issue 058's
+// CloudFront `/sync*` path, deploy/cdk/lib/hosting-stack.ts), this
+// naturally returns false and the read-path starts — the gate stays
+// defensive (per 051's own "Follow-up" note) rather than being deleted, so
+// a future environment with sync enabled but no sync URL configured yet
+// still degrades safely instead of crashing.
+export function shouldSkipReadPath(hasStreamFactory: boolean): boolean {
+  return syncBaseUrl() === '' && !hasStreamFactory
+}

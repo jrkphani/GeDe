@@ -82,7 +82,7 @@ describe('MigrationStack (Gede-Test-Migrations) — issue 045', () => {
       Properties: { MigrationSetHash?: string; MigrationFileCount?: number };
     }>;
     expect(resource.Properties.MigrationSetHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(resource.Properties.MigrationFileCount).toBe(12); // 0000-0011
+    expect(resource.Properties.MigrationFileCount).toBe(13); // 0000-0012 (issue 058 added 0012)
 
     // Determinism: synthesizing twice from the same (unchanged) source files
     // produces the identical hash.

@@ -135,6 +135,46 @@ describe('sync store — engine lifecycle (driven by a fake stream, no live Elec
     vi.unstubAllEnvs()
   })
 
+  // Issue 058 test-first plan item 1: "start() no longer short-circuits when
+  // syncBaseUrl() is non-empty — add/confirm a test for the 'real URL, no
+  // injected factory' branch too." The gate's PURE decision logic
+  // (`shouldSkipReadPath`, src/sync/config.ts) is unit-tested directly in
+  // config.test.ts, in complete isolation from the real Electric
+  // ShapeStream client — this repo's tests never construct a real
+  // ShapeStream (HANDOFF: "no live Electric server is reachable in tests");
+  // doing so here leaks an unresolvable background long-poll into later
+  // tests (confirmed empirically: it inflates an unrelated fetch-mock
+  // assertion two tests later). This test instead proves `start()` ACTUALLY
+  // consults that gate, end-to-end, via the same `streamFactory` DI seam
+  // every other test in this file already uses — a real URL is set
+  // alongside the injected factory, confirming the gate reads
+  // `syncBaseUrl()` and doesn't just always pass because a factory happens
+  // to be present.
+  it('start() proceeds once VITE_SYNC_URL is populated (051\'s gate no longer blocks it)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    vi.stubEnv('VITE_SYNC_URL', 'https://sync.example.test')
+    const { db } = await openDatabase('memory://')
+    const factory: ShapeStreamFactory = (): ShapeStreamLike => ({ subscribe: () => () => {} })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().enabled).toBe(true)
+    expect(useSyncStore.getState().handle).not.toBeNull()
+
+    useSyncStore.getState().stop()
+    vi.unstubAllEnvs()
+  })
+
+  it('start() still no-ops when VITE_SYNC_URL is empty and no streamFactory is injected (051\'s original crash-on-empty-URL guard, unregressed)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    vi.stubEnv('VITE_SYNC_URL', '')
+    const { db } = await openDatabase('memory://')
+
+    expect(() => useSyncStore.getState().start(db)).not.toThrow()
+    expect(useSyncStore.getState().enabled).toBe(false)
+    expect(useSyncStore.getState().handle).toBeNull()
+    vi.unstubAllEnvs()
+  })
+
   it('reconciles the queue when the engine applies an authoritative delta', async () => {
     vi.stubEnv('VITE_SYNC_ENABLED', 'true')
     const { db } = await openDatabase('memory://')

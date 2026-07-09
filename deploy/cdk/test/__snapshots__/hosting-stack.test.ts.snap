@@ -365,6 +365,23 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
               "TargetOriginId": "GedeTestHostingDistributionOrigin24527B100",
               "ViewerProtocolPolicy": "redirect-to-https",
             },
+            {
+              "AllowedMethods": [
+                "GET",
+                "HEAD",
+                "OPTIONS",
+                "PUT",
+                "PATCH",
+                "POST",
+                "DELETE",
+              ],
+              "CachePolicyId": "4135ea2d-6df8-44a3-9df3-4b5a84be39ad",
+              "Compress": true,
+              "OriginRequestPolicyId": "216adef6-5c7f-47e4-b989-5492eafa07d3",
+              "PathPattern": "sync*",
+              "TargetOriginId": "GedeTestHostingDistributionOrigin35392B687",
+              "ViewerProtocolPolicy": "redirect-to-https",
+            },
           ],
           "Comment": "gede-test — GeDe static PWA",
           "CustomErrorResponses": [
@@ -426,6 +443,18 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
                 "Fn::ImportValue": "Gede-Test-Api:ExportsOutputFnGetAttAlb16C2F182DNSNameB67BDABC",
               },
               "Id": "GedeTestHostingDistributionOrigin24527B100",
+            },
+            {
+              "CustomOriginConfig": {
+                "OriginProtocolPolicy": "http-only",
+                "OriginSSLProtocols": [
+                  "TLSv1.2",
+                ],
+              },
+              "DomainName": {
+                "Fn::ImportValue": "Gede-Test-Api:ExportsOutputFnGetAttAlb16C2F182DNSNameB67BDABC",
+              },
+              "Id": "GedeTestHostingDistributionOrigin35392B687",
             },
           ],
         },

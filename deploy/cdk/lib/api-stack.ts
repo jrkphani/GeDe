@@ -1,5 +1,5 @@
 import * as path from 'node:path';
-import { Stack, StackProps, CfnOutput, Duration } from 'aws-cdk-lib';
+import { Stack, StackProps, CfnOutput, CustomResource, Duration } from 'aws-cdk-lib';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as ecs from 'aws-cdk-lib/aws-ecs';
 import * as elbv2 from 'aws-cdk-lib/aws-elasticloadbalancingv2';
@@ -7,12 +7,21 @@ import * as targets from 'aws-cdk-lib/aws-elasticloadbalancingv2-targets';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as nodejs from 'aws-cdk-lib/aws-lambda-nodejs';
 import * as secretsmanager from 'aws-cdk-lib/aws-secretsmanager';
+import * as servicediscovery from 'aws-cdk-lib/aws-servicediscovery';
+import * as cr from 'aws-cdk-lib/custom-resources';
 import { Construct } from 'constructs';
 
 // Amazon RDS global CA bundle (deploy/cdk/lib/rds-global-bundle.pem) — copied
 // into the write Lambda's bundle so albAdapter.ts can verify the RDS server
-// cert (ssl.rejectUnauthorized:true). Shared with migration-stack.ts's runner.
+// cert (ssl.rejectUnauthorized:true). Shared with migration-stack.ts's runner
+// and, as of issue 058, the shape-proxy Lambda below too.
 const RDS_CA_SOURCE = path.resolve(__dirname, 'rds-global-bundle.pem');
+
+// Electric's own documented shape-endpoint port (node_modules/@electric-sql/
+// client/skills/electric-deployment: `ports: ['3000:3000']`, healthcheck on
+// `:3000/v1/health`) — a private, VPC-internal port; never exposed on the
+// public ALB (see this stack's class doc, "Issue 058" section, for why).
+const ELECTRIC_PORT = 3000;
 
 export interface ApiStackProps extends StackProps {
   /** The Network stack's VPC - cross-stack reference (issue 030 scope item 4). */
@@ -30,7 +39,8 @@ export interface ApiStackProps extends StackProps {
   databaseEndpoint: string;
   /**
    * The Auth stack's Cognito User Pool id (issue 046) - a cross-stack
-   * reference used to derive `COGNITO_ISSUER` for the write-path Lambda.
+   * reference used to derive `COGNITO_ISSUER` for the write-path Lambda
+   * (and, as of issue 058, the shape-proxy Lambda too).
    * Never a hardcoded string or the issue-043 `PLACEHOLDER_USER_POOL_ID`
    * stub: if the User Pool ever changes, this reference re-resolves rather
    * than silently drifting.
@@ -50,10 +60,10 @@ export interface ApiStackProps extends StackProps {
 /**
  * `Gede-Test-Api` - the v2 compute tier (issue 030, ADR-0008, scope item 3):
  * an internet-facing ALB in the public subnets, fronting an ECS Fargate
- * cluster running one *stubbed* service in the private (NAT-egress)
- * subnets:
+ * cluster running one real service in the private (NAT-egress) subnets:
  *
- *   - `sync` - filled in by issue 032 (ElectricSQL sync container)
+ *   - `sync` - the real ElectricSQL image (issue 058; was an `nginx:alpine`
+ *     placeholder through issue 030/032)
  *
  * The `auth` stub slot that originally lived here (better-auth, ADR-0008)
  * has been REMOVED (issue 033, ADR-0009): auth is now Amazon Cognito, a
@@ -61,25 +71,41 @@ export interface ApiStackProps extends StackProps {
  * is no auth Fargate service, target group, or `/auth*` ALB route to run
  * here anymore - one fewer always-on task.
  *
- * The remaining slot runs the same clearly-marked placeholder image
- * (`public.ecr.aws/docker/library/nginx:alpine`) behind path-based ALB
- * routing (`/sync*`), with its own container healthcheck and ALB
- * target-group health check wired end-to-end. This is a documented,
- * health-checked placeholder tier, NOT a real implementation of the service
- * - 032 swaps the image (+ container port, if it differs from nginx's 80)
- * without needing to re-architect the ALB/service/healthcheck plumbing
- * built here.
+ * **Issue 058 — Electric is NOT reachable from the public ALB.** ElectricSQL's
+ * own HTTP API has no per-request authorization of its own
+ * (node_modules/@electric-sql/client/skills/electric-proxy-auth: "CRITICAL
+ * Calling Electric directly from production client... Electric's HTTP API is
+ * public by default with no auth. Always proxy through your server so the
+ * server controls shape definitions and injects secrets."). Routing the raw
+ * Electric container behind the internet-facing ALB's `/sync*` path — as a
+ * more literal reading of "keep the existing ALB /sync* routing" might
+ * suggest — would let ANY internet client read the entire multi-tenant
+ * database by supplying an arbitrary `table`/`where`. This stack instead:
  *
- * Issue 049 adds a THIRD Lambda-behind-this-ALB slot, `test`-env-only: a
- * read-only db-inspection API under `/debug/db/*`, gated entirely on
+ *   1. Runs Electric in the private compute subnets, registered on an
+ *      internal Cloud Map DNS name (`sync.<namespace>`) reachable ONLY from
+ *      inside the VPC — no ALB target group references it at all.
+ *   2. Fronts `/sync*` on the SAME public ALB with a Lambda (`ShapeProxy`,
+ *      issue 058) that verifies the caller's Cognito JWT, resolves their
+ *      real workspace memberships (057's model) from Postgres, builds a
+ *      workspace-scoped shape request (src/domain/syncScope.ts), and ONLY
+ *      THEN forwards to Electric's private endpoint with `ELECTRIC_SECRET`
+ *      attached. This mirrors the write-path Lambda's exact shape (043/046)
+ *      and Electric's own documented proxy-auth pattern.
+ *
+ * Issue 049 adds a Lambda-behind-this-ALB slot, `test`-env-only: a read-only
+ * db-inspection API under `/debug/db/*`, gated entirely on
  * `props.debugApiEnabled` (never created otherwise - a future `prod` env
  * never passes it). It exists purely for operator observability (confirming
  * a frontend write actually landed in RDS) and creates no additional
  * `ECS::Service`.
  *
- * Security groups: internet (`0.0.0.0/0:80`) -> ALB SG -> compute SG (the
- * sync stub service) -> the Data stack's RDS SG on 5432 (the ingress rule for
- * that last hop is added here - see the `databaseSecurityGroup` prop doc and
+ * Security groups: internet (`0.0.0.0/0:80`) -> ALB SG. The ALB no longer
+ * has any network path to the compute SG (issue 058 — Electric moved off the
+ * ALB entirely); instead the shape-proxy Lambda's own SG -> compute SG on
+ * `ELECTRIC_PORT` is the only ingress the compute SG grants. Electric's own
+ * egress to the Data stack's RDS SG on 5432 (the ingress rule for that hop
+ * is added here - see the `databaseSecurityGroup` prop doc and
  * data-stack.ts's class doc for the circular-dependency rationale). No rule
  * anywhere in this stack admits `0.0.0.0/0` to port 5432.
  */
@@ -92,6 +118,11 @@ export class ApiStack extends Stack {
   /** The Tier-2 write-path API (issue 043, ADR-0010) - Lambda, not Fargate: `$0` idle, pay-per-write. */
   public readonly writeApiFunction: lambda.Function;
   public readonly writeApiSecurityGroup: ec2.SecurityGroup;
+  /** The ElectricSQL shape-proxy (issue 058) - the ONLY thing the browser's `/sync*` requests ever reach; Electric itself is VPC-private. */
+  public readonly shapeProxyFunction: lambda.Function;
+  public readonly shapeProxySecurityGroup: ec2.SecurityGroup;
+  /** The generated shared-secret Electric requires on every `/v1/shape` request (issue 058) - known only to the shape-proxy Lambda and Electric itself, never the browser. */
+  public readonly electricSecret: secretsmanager.Secret;
   /** The read-only db-inspection API (issue 049) - undefined unless `debugApiEnabled` was passed. */
   public readonly debugApiFunction?: lambda.Function;
   public readonly debugApiSecurityGroup?: ec2.SecurityGroup;
@@ -107,8 +138,8 @@ export class ApiStack extends Stack {
     this.albSecurityGroup = new ec2.SecurityGroup(this, 'AlbSecurityGroup', {
       vpc: props.vpc,
       description:
-        `${id} ALB - internet-facing. Placeholder tier serves plain HTTP; ` +
-        'a real domain + ACM cert (the Hosting/Dns seam, issue 040) upgrades this to HTTPS when 032/033 land.',
+        `${id} ALB - internet-facing. Fronts three Lambda targets (write-path, shape-proxy, ` +
+        'optional debug/db) behind path-based routing; Electric itself is never an ALB target (issue 058).',
       allowAllOutbound: true,
     });
     this.albSecurityGroup.addIngressRule(
@@ -119,14 +150,11 @@ export class ApiStack extends Stack {
 
     this.computeSecurityGroup = new ec2.SecurityGroup(this, 'ComputeSecurityGroup', {
       vpc: props.vpc,
-      description: `${id} Fargate compute (sync stub slot, issue 030; auth moved to Cognito, issue 033) - ingress only from the ALB security group.`,
-      allowAllOutbound: true, // NAT egress: pulling container images now; outbound calls for the real 032 service later.
+      description:
+        `${id} Fargate compute (the real ElectricSQL sync service, issue 058; auth moved to Cognito, issue 033) - ` +
+        'ingress only from the shape-proxy Lambda\'s own security group (issue 058 - NOT from the ALB; Electric is never an ALB target).',
+      allowAllOutbound: true, // NAT egress: pulling the Electric image, replicating to no external target, calling Secrets Manager.
     });
-    this.computeSecurityGroup.addIngressRule(
-      this.albSecurityGroup,
-      ec2.Port.tcp(80),
-      'ALB to Fargate services (placeholder container port 80).',
-    );
 
     // The Data stack's RDS security group admits ONLY this compute security
     // group, on 5432 - added here (an L1 resource, scoped to *this* stack)
@@ -143,7 +171,7 @@ export class ApiStack extends Stack {
       toPort: 5432,
       sourceSecurityGroupId: this.computeSecurityGroup.securityGroupId,
       description:
-        'Api compute (sync stub slot, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.',
+        'Api compute (the real Electric sync service, issue 058) to Postgres 5432 - Electric\'s own logical-replication connection. Never 0.0.0.0/0.',
     });
 
     // --- ALB ----------------------------------------------------------------
@@ -160,31 +188,169 @@ export class ApiStack extends Stack {
       defaultAction: elbv2.ListenerAction.fixedResponse(404, {
         contentType: 'text/plain',
         messageBody:
-          `${id}: no route matched (placeholder tier, issue 030) - /sync* is stubbed pending issue 032. ` +
-          '/auth* is intentionally absent - auth is Amazon Cognito (issue 033, ADR-0009), not routed through this ALB.',
+          `${id}: no route matched. /sync* -> the shape-proxy Lambda (issue 058), /write* -> the write-path ` +
+          'Lambda (issue 043/046). /auth* is intentionally absent - auth is Amazon Cognito (issue 033, ADR-0009).',
       }),
     });
 
-    // --- Placeholder container image ----------------------------------------
-    // 032 (ElectricSQL sync) replaces this image - the task/service/target-
-    // group/health-check plumbing below is built to survive that swap
-    // unchanged. There is no `auth` slot anymore (issue 033, ADR-0009).
-    const placeholderImage = ecs.ContainerImage.fromRegistry('public.ecr.aws/docker/library/nginx:alpine');
+    // --- Service discovery (issue 058) ---------------------------------------
+    // Electric is never an ALB target (see this class's doc comment) - the
+    // shape-proxy Lambda instead reaches it over a private Cloud Map DNS
+    // name, resolvable only from inside this VPC. This is the standard
+    // "same-VPC Lambda calls a private ECS service" pattern, lighter-weight
+    // than standing up a SECOND, internal-only load balancer for one task.
+    const serviceDiscoveryNamespace = new servicediscovery.PrivateDnsNamespace(this, 'ServiceDiscoveryNamespace', {
+      name: 'gede.internal',
+      vpc: props.vpc,
+      description: `${id} private DNS namespace (issue 058) - resolves the Electric sync service's internal address for the shape-proxy Lambda.`,
+    });
 
-    const sync = this.buildStubService('Sync', placeholderImage);
-    this.syncService = sync.service;
+    // --- Electric's composed DATABASE_URL (issue 058) ------------------------
+    // See deploy/cdk/lib/electric-db-url/handler.ts's header for why this
+    // indirection exists: ECS's native `secrets:` resolution can only pull
+    // ONE field out of the Data stack's generated {username,password} JSON
+    // secret per env var, so a tiny one-shot custom-resource Lambda composes
+    // the full `postgresql://user:pass@host:5432/db?sslmode=require` string
+    // ONCE, into this dedicated secret, which Electric's task then reads as
+    // a normal single-string `secrets:` entry - the composed value is never
+    // baked into the CloudFormation template (unlike a `{{resolve:
+    // secretsmanager:...}}` dynamic reference embedded in `environment`,
+    // which WOULD be readable via `ecs:DescribeTaskDefinition`).
+    const electricDatabaseUrlSecret = new secretsmanager.Secret(this, 'ElectricDatabaseUrlSecret', {
+      description:
+        `${id} Electric's composed DATABASE_URL (issue 058) - written by the ElectricDbUrlComposerFunction custom ` +
+        'resource below; the initial CDK-generated value is never used (overwritten before the Electric task ever starts).',
+    });
 
-    listener.addTargets('SyncTargets', {
-      priority: 10,
-      conditions: [elbv2.ListenerCondition.pathPatterns(['/sync*'])],
-      port: 80,
-      targets: [sync.service],
-      healthCheck: {
-        path: '/',
-        interval: Duration.seconds(30),
-        healthyHttpCodes: '200-399',
+    const rootLockFile = path.resolve(__dirname, '..', '..', '..', 'package-lock.json');
+
+    const electricDbUrlComposerFunction = new nodejs.NodejsFunction(this, 'ElectricDbUrlComposerFunction', {
+      description: `${id} one-shot DATABASE_URL composer for the Electric task (issue 058) - reads the Data stack's RDS secret, writes a composed connection string into ElectricDatabaseUrlSecret.`,
+      entry: path.resolve(__dirname, 'electric-db-url', 'handler.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 128,
+      timeout: Duration.seconds(30),
+      // No VPC attachment needed: this Lambda only calls the Secrets Manager
+      // API (reachable over the internet by default, no RDS connection of
+      // its own) - unlike every DB-querying Lambda elsewhere in this stack.
+      depsLockFilePath: rootLockFile,
+      environment: {
+        DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
+        DATABASE_ENDPOINT: props.databaseEndpoint,
+        TARGET_SECRET_ARN: electricDatabaseUrlSecret.secretArn,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        forceDockerBundling: false,
+        commandHooks: { beforeBundling: () => [], beforeInstall: () => [], afterBundling: () => [] },
       },
     });
+    props.databaseSecret.grantRead(electricDbUrlComposerFunction);
+    electricDatabaseUrlSecret.grantWrite(electricDbUrlComposerFunction);
+
+    const electricDbUrlProvider = new cr.Provider(this, 'ElectricDbUrlProvider', {
+      onEventHandler: electricDbUrlComposerFunction,
+    });
+    const electricDbUrlResource = new CustomResource(this, 'ElectricDbUrlResource', {
+      serviceToken: electricDbUrlProvider.serviceToken,
+      properties: {
+        // Re-runs if the Data stack's secret ARN or endpoint ever changes
+        // (e.g. an RDS replace) - otherwise a stable no-op on every deploy.
+        DatabaseSecretArn: props.databaseSecret.secretArn,
+        DatabaseEndpoint: props.databaseEndpoint,
+      },
+    });
+
+    // --- Electric's own shared secret (issue 058) -----------------------------
+    // Required in production (node_modules/@electric-sql/client/skills/
+    // electric-deployment: "CRITICAL Running without ELECTRIC_SECRET in
+    // production... refuses to start unless ELECTRIC_INSECURE=true is set").
+    // Known only to Electric itself and the shape-proxy Lambda (which
+    // attaches it to every forwarded request) - never the browser. Mirrors
+    // issue 049's debug-token secret pattern exactly.
+    this.electricSecret = new secretsmanager.Secret(this, 'ElectricSecret', {
+      description: `${id} ElectricSQL's own API secret (issue 058) - required on every /v1/shape request; known only to Electric and the shape-proxy Lambda, generated by CDK, never committed to the repo.`,
+      generateSecretString: { excludePunctuation: true, passwordLength: 40 },
+    });
+
+    // --- Real ElectricSQL Fargate service (issue 058) -------------------------
+    // Replaces the nginx:alpine placeholder (issue 030). `ELECTRIC_FEATURE_
+    // FLAGS=allow_subqueries` is a deliberate, flagged opt-in (see
+    // src/domain/syncScope.ts's header) - three of the nine synced tables
+    // (tier2_entries/parameters/bindings) have no direct workspace_id
+    // column, so their shape-scoping WHERE clause needs a subquery, which
+    // Electric otherwise rejects by default (an "experimental" feature per
+    // Electric's own docs). This is a real, monitored risk - flagged
+    // prominently in this issue's report, not silently absorbed.
+    const electricImage = ecs.ContainerImage.fromRegistry('electricsql/electric:latest');
+    // NOTE: `:latest` mirrors Electric's own documented Docker Compose
+    // example (node_modules/@electric-sql/client/skills/electric-deployment)
+    // - pinning to a specific version/digest before real production traffic
+    // is a recommended follow-up (this repo has no live way to enumerate
+    // available tags without network access to Docker Hub from this
+    // environment).
+
+    const electricTaskDefinition = new ecs.FargateTaskDefinition(this, 'SyncTaskDef', {
+      cpu: 256,
+      memoryLimitMiB: 512,
+    });
+
+    electricTaskDefinition.addContainer('SyncContainer', {
+      image: electricImage,
+      containerName: 'sync',
+      portMappings: [{ containerPort: ELECTRIC_PORT, protocol: ecs.Protocol.TCP }],
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'gede-sync' }),
+      environment: {
+        // Electric requires logical replication support at the Postgres
+        // level too (data-stack.ts's ParameterGroup, issue 058) - this env
+        // var alone is not sufficient without that.
+        ELECTRIC_FEATURE_FLAGS: 'allow_subqueries',
+      },
+      secrets: {
+        // fromSecretsManager (not the *Version variant) resolves to the
+        // CURRENT secret value at container launch — no pinned version id —
+        // so this always reads whatever ElectricDbUrlComposerFunction most
+        // recently wrote, without needing to know its version at synth time.
+        DATABASE_URL: ecs.Secret.fromSecretsManager(electricDatabaseUrlSecret),
+        ELECTRIC_SECRET: ecs.Secret.fromSecretsManager(this.electricSecret),
+      },
+      healthCheck: {
+        command: ['CMD-SHELL', `curl -sf http://localhost:${ELECTRIC_PORT}/v1/health || exit 1`],
+        interval: Duration.seconds(30),
+        timeout: Duration.seconds(5),
+        retries: 3,
+        startPeriod: Duration.seconds(30),
+      },
+    });
+
+    this.syncService = new ecs.FargateService(this, 'SyncService', {
+      cluster: this.cluster,
+      taskDefinition: electricTaskDefinition,
+      desiredCount: 1, // Cost guard - a single always-on Electric task (issue 058 risk callout: unlike the write-path Lambda, this is NOT pay-per-invocation).
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [this.computeSecurityGroup],
+      assignPublicIp: false,
+      circuitBreaker: { rollback: true },
+      minHealthyPercent: 100,
+      maxHealthyPercent: 200,
+      // Issue 058 - registers `sync.gede.internal` in the private DNS
+      // namespace above, so the shape-proxy Lambda can reach Electric
+      // without any ALB target group / public exposure at all.
+      cloudMapOptions: {
+        name: 'sync',
+        cloudMapNamespace: serviceDiscoveryNamespace,
+        dnsRecordType: servicediscovery.DnsRecordType.A,
+      },
+    });
+    // Electric must not start accepting shape requests before its
+    // DATABASE_URL secret has a real value (rather than the CDK-generated
+    // placeholder) - an explicit CFN dependency, since there is no other
+    // resource-graph edge between "a secret's VALUE was overwritten" and
+    // "a Fargate service that reads it at container start".
+    this.syncService.node.addDependency(electricDbUrlResource);
 
     // --- Write-path API (issue 043, ADR-0010) --------------------------------
     // Serverless by design: a Lambda behind this same ALB, NOT a third
@@ -226,7 +392,7 @@ export class ApiStack extends Stack {
     // (including 034's `app_user` role + RLS policies) to the RDS by the time
     // it serves its first write — a deploy-ORDER concern (045 -> 046 -> 047),
     // not something this stack enforces at synth time.
-    const rootLockFile = path.resolve(__dirname, '..', '..', '..', 'package-lock.json');
+    const cognitoIssuer = `https://cognito-idp.${this.region}.amazonaws.com/${props.userPoolId}`;
 
     this.writeApiFunction = new nodejs.NodejsFunction(this, 'WriteApiFunction', {
       description: `${id} Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).`,
@@ -242,7 +408,7 @@ export class ApiStack extends Stack {
       environment: {
         // Cross-stack reference to the real Gede-Test-Auth User Pool (issue
         // 046) — never a hardcoded string or the issue-043 PLACEHOLDER.
-        COGNITO_ISSUER: `https://cognito-idp.${this.region}.amazonaws.com/${props.userPoolId}`,
+        COGNITO_ISSUER: cognitoIssuer,
         DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
         DATABASE_ENDPOINT: props.databaseEndpoint,
       },
@@ -284,6 +450,88 @@ export class ApiStack extends Stack {
       action: elbv2.ListenerAction.forward([writeApiTargetGroup]),
     });
 
+    // --- ElectricSQL shape-proxy (issue 058) ----------------------------------
+    // The ONLY thing the browser's `/sync*` requests ever reach - see this
+    // class's doc comment for why Electric itself is never an ALB target.
+    // Mirrors the write-path Lambda's exact shape (VPC-attached, its own SG,
+    // RDS CA bundle, Cognito JWKS verification) plus TWO new capabilities:
+    // resolving the caller's workspace memberships (a `workspace_members`
+    // SELECT, the read-path's counterpart to 057's `isMember` check) and
+    // forwarding the scoped request to Electric's private Cloud Map address.
+    this.shapeProxySecurityGroup = new ec2.SecurityGroup(this, 'ShapeProxySecurityGroup', {
+      vpc: props.vpc,
+      description: `${id} shape-proxy Lambda (issue 058) - egress to Postgres (5432, for workspace-membership lookups), Electric's private Cloud Map address (issue 058 - see the compute SG's own ingress rule below), and the internet (NAT, for Cognito JWKS).`,
+      allowAllOutbound: true,
+    });
+
+    new ec2.CfnSecurityGroupIngress(this, 'AllowShapeProxyToPostgres', {
+      groupId: props.databaseSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 5432,
+      toPort: 5432,
+      sourceSecurityGroupId: this.shapeProxySecurityGroup.securityGroupId,
+      description: 'Shape-proxy Lambda (issue 058) to Postgres 5432 - a third, distinct ingress rule on the Data security group (alongside the Fargate compute and write-path Lambda SG rules above); still never 0.0.0.0/0.',
+    });
+
+    // The shape-proxy Lambda is the ONLY thing permitted to reach Electric's
+    // compute SG - replaces the pre-058 `albSecurityGroup -> computeSecurityGroup`
+    // rule entirely (Electric is no longer an ALB target at all).
+    this.computeSecurityGroup.addIngressRule(
+      this.shapeProxySecurityGroup,
+      ec2.Port.tcp(ELECTRIC_PORT),
+      'Shape-proxy Lambda (issue 058) to Electric\'s shape endpoint - the ONLY ingress this security group grants; never the ALB.',
+    );
+
+    this.shapeProxyFunction = new nodejs.NodejsFunction(this, 'ShapeProxyFunction', {
+      description: `${id} ElectricSQL shape-proxy (issue 058) - verifies the Cognito JWT, resolves the caller's workspace memberships, builds a workspace-scoped shape request, forwards to Electric's private endpoint.`,
+      entry: path.resolve(__dirname, '..', '..', '..', 'src', 'server', 'shapeProxy', 'albAdapter.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 256,
+      timeout: Duration.seconds(15),
+      vpc: props.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [this.shapeProxySecurityGroup],
+      depsLockFilePath: rootLockFile,
+      environment: {
+        COGNITO_ISSUER: cognitoIssuer,
+        DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
+        DATABASE_ENDPOINT: props.databaseEndpoint,
+        // Electric's private Cloud Map address - never reachable from
+        // outside this VPC (issue 058's whole point).
+        ELECTRIC_INTERNAL_URL: `http://sync.${serviceDiscoveryNamespace.namespaceName}:${ELECTRIC_PORT}`,
+        ELECTRIC_SECRET_ARN: this.electricSecret.secretArn,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        forceDockerBundling: false,
+        commandHooks: {
+          beforeBundling: () => [],
+          beforeInstall: () => [],
+          afterBundling: (_inputDir: string, outputDir: string) => [
+            `cp "${RDS_CA_SOURCE}" "${outputDir}/rds-global-bundle.pem"`,
+          ],
+        },
+      },
+    });
+    props.databaseSecret.grantRead(this.shapeProxyFunction);
+    this.electricSecret.grantRead(this.shapeProxyFunction);
+
+    const shapeProxyTargetGroup = new elbv2.ApplicationTargetGroup(this, 'ShapeProxyTargetGroup', {
+      vpc: props.vpc,
+      targetType: elbv2.TargetType.LAMBDA,
+      targets: [new targets.LambdaTarget(this.shapeProxyFunction)],
+      healthCheck: { enabled: false }, // Same cost rationale as the write-path target group above.
+    });
+
+    listener.addAction('ShapeProxyRoute', {
+      priority: 10,
+      conditions: [elbv2.ListenerCondition.pathPatterns(['/sync*'])],
+      action: elbv2.ListenerAction.forward([shapeProxyTargetGroup]),
+    });
+
     // --- Debug/db inspection API (issue 049) ---------------------------------
     // A SECOND serverless Lambda behind this same ALB, `test`-env-only
     // (props.debugApiEnabled, gated upstream in bin/gede.ts/build-app.ts) -
@@ -318,7 +566,7 @@ export class ApiStack extends Stack {
         fromPort: 5432,
         toPort: 5432,
         sourceSecurityGroupId: this.debugApiSecurityGroup.securityGroupId,
-        description: 'Debug/db inspection Lambda (issue 049, test-env only) to Postgres 5432 - a third, distinct ingress rule on the Data security group; still never 0.0.0.0/0.',
+        description: 'Debug/db inspection Lambda (issue 049, test-env only) to Postgres 5432 - a fourth, distinct ingress rule on the Data security group; still never 0.0.0.0/0.',
       });
 
       this.debugApiFunction = new nodejs.NodejsFunction(this, 'DebugApiFunction', {
@@ -381,57 +629,7 @@ export class ApiStack extends Stack {
 
     new CfnOutput(this, 'LoadBalancerDnsName', {
       value: this.loadBalancer.loadBalancerDnsName,
-      description: 'Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* routes to the issue 043 write-path Lambda.',
+      description: 'Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* and /sync* route to Lambdas (043/046, 058); Electric itself is never directly reachable (issue 058).',
     });
-  }
-
-  /**
-   * Builds one stubbed Fargate service (`sync`): a task definition with a
-   * container healthcheck, running the placeholder image, deployed in the
-   * private (NAT-egress) subnets behind the compute security group. 032
-   * replaces the image passed in; everything else here is meant to be the
-   * real, permanent shape of the service.
-   */
-  private buildStubService(
-    name: 'Sync',
-    image: ecs.ContainerImage,
-  ): { service: ecs.FargateService; taskDefinition: ecs.FargateTaskDefinition } {
-    const taskDefinition = new ecs.FargateTaskDefinition(this, `${name}TaskDef`, {
-      cpu: 256,
-      memoryLimitMiB: 512,
-    });
-
-    taskDefinition.addContainer(`${name}Container`, {
-      image,
-      containerName: name.toLowerCase(),
-      portMappings: [{ containerPort: 80, protocol: ecs.Protocol.TCP }],
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: `gede-${name.toLowerCase()}` }),
-      // Placeholder healthcheck against nginx's default page. 032/033
-      // replace this with a real liveness command for Electric/better-auth.
-      healthCheck: {
-        command: ['CMD-SHELL', 'wget -qO- http://localhost/ || exit 1'],
-        interval: Duration.seconds(30),
-        timeout: Duration.seconds(5),
-        retries: 3,
-        startPeriod: Duration.seconds(10),
-      },
-    });
-
-    const service = new ecs.FargateService(this, `${name}Service`, {
-      cluster: this.cluster,
-      taskDefinition,
-      desiredCount: 1, // Cost guard - single task per stub slot; 032/033 revisit sizing.
-      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
-      securityGroups: [this.computeSecurityGroup],
-      assignPublicIp: false,
-      // Fail fast (not the ECS default 3h timeout) if the placeholder image
-      // can't come up healthy, and allow one extra task during deploys so a
-      // desiredCount:1 service isn't taken fully offline mid-rollout.
-      circuitBreaker: { rollback: true },
-      minHealthyPercent: 100,
-      maxHealthyPercent: 200,
-    });
-
-    return { service, taskDefinition };
   }
 }

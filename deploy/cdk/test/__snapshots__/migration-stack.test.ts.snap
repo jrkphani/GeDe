@@ -356,7 +356,7 @@ exports[`MigrationStack (Gede-Test-Migrations) — issue 045 matches the snapsho
     "MigrationRunnerResource": {
       "DeletionPolicy": "Delete",
       "Properties": {
-        "MigrationFileCount": 12,
+        "MigrationFileCount": 13,
         "MigrationSetHash": "<ASSET_HASH>",
         "ServiceToken": {
           "Fn::GetAtt": [

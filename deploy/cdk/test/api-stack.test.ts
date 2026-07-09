@@ -26,7 +26,7 @@ describe('ApiStack (Gede-Test-Api)', () => {
     }
   });
 
-  it('creates an ECS Fargate cluster with exactly one service (the sync stub slot — auth moved to Cognito, issue 033/ADR-0009)', () => {
+  it('creates an ECS Fargate cluster with exactly one service (the real ElectricSQL sync service, issue 058 — auth moved to Cognito, issue 033/ADR-0009)', () => {
     const template = synth();
     template.resourceCountIs('AWS::ECS::Cluster', 1);
     template.resourceCountIs('AWS::ECS::Service', 1);
@@ -49,23 +49,32 @@ describe('ApiStack (Gede-Test-Api)', () => {
     }
   });
 
-  it('each stub service has a container healthcheck and an ALB-managed, health-checked target group', () => {
+  it('the Electric task has its own ECS-level container healthcheck (issue 058) — but is NEVER an ALB target group (Electric\'s HTTP API has no per-request auth of its own; see api-stack.ts\'s class doc)', () => {
     const template = synth();
-    // 2 target groups: the sync Fargate stub (issue 030; auth removed per 033/
-    // ADR-0009) PLUS the issue 043 write-path Lambda target group (asserted
-    // separately below, in the "Write-path API" describe block).
-    template.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 2);
-    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
-      HealthCheckPath: Match.anyValue(),
-    });
     template.hasResourceProperties('AWS::ECS::TaskDefinition', {
       ContainerDefinitions: Match.arrayWith([
         Match.objectLike({ HealthCheck: Match.objectLike({ Command: Match.anyValue() }) }),
       ]),
     });
+    // Every ALB target group in this stack is Lambda-typed (write-path +
+    // shape-proxy) — none references the Electric ECS service/task directly.
+    const targetGroups = Object.values(template.findResources('AWS::ElasticLoadBalancingV2::TargetGroup')) as Array<{
+      Properties: { TargetType: string };
+    }>;
+    expect(targetGroups.length).toBeGreaterThan(0);
+    for (const tg of targetGroups) {
+      expect(tg.Properties.TargetType).toBe('lambda');
+    }
   });
 
-  it('uses the clearly-marked nginx placeholder image on the sync stub slot — 032 replaces it', () => {
+  it('the Electric service is registered on a private Cloud Map DNS name (issue 058) — reachable only from inside the VPC, not the public ALB', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::ServiceDiscovery::PrivateDnsNamespace', 1);
+    template.hasResourceProperties('AWS::ServiceDiscovery::PrivateDnsNamespace', { Name: 'gede.internal' });
+    template.hasResourceProperties('AWS::ServiceDiscovery::Service', { Name: 'sync' });
+  });
+
+  it('uses the real ElectricSQL image on the sync slot (issue 058) — never the nginx:alpine placeholder', () => {
     const template = synth();
     const taskDefs = template.findResources('AWS::ECS::TaskDefinition');
     const images = Object.values(taskDefs).map(
@@ -73,8 +82,23 @@ describe('ApiStack (Gede-Test-Api)', () => {
     );
     expect(images).toHaveLength(1);
     for (const image of images) {
-      expect(image).toMatch(/nginx/);
+      expect(image).toMatch(/electricsql\/electric/);
+      expect(image).not.toMatch(/nginx/);
     }
+  });
+
+  it('the Electric container reads DATABASE_URL and ELECTRIC_SECRET via ECS-native secret resolution (issue 058) — never a plaintext env var', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({
+          Secrets: Match.arrayWith([
+            Match.objectLike({ Name: 'DATABASE_URL' }),
+            Match.objectLike({ Name: 'ELECTRIC_SECRET' }),
+          ]),
+        }),
+      ]),
+    });
   });
 
   it('routes /sync* and /write* via distinct ALB listener rules; there is no /auth* route (Cognito replaces it, issue 033/ADR-0009)', () => {
@@ -94,16 +118,18 @@ describe('ApiStack (Gede-Test-Api)', () => {
     });
   });
 
-  it('grants the Data stack\'s RDS security group ingress from exactly the two Api-owned security groups on 5432 — never 0.0.0.0/0', () => {
+  it('grants the Data stack\'s RDS security group ingress from exactly the three Api-owned security groups on 5432 — never 0.0.0.0/0', () => {
     const template = synth();
-    // Two rules now: the Fargate compute SG (sync/auth stub slots, issue
-    // 030) and the write-path Lambda's own SG (issue 043) — added as
-    // separate, independent ingress grants rather than reusing one SG for
-    // both tiers, so each can be tightened/removed independently later.
+    // Three rules now: the Fargate compute SG (the real Electric service,
+    // issue 058), the write-path Lambda's own SG (issue 043), and the
+    // shape-proxy Lambda's own SG (issue 058, for workspace-membership
+    // lookups) — each a separate, independent ingress grant rather than
+    // reusing one SG for multiple tiers, so each can be tightened/removed
+    // independently later.
     const rule5432 = template.findResources('AWS::EC2::SecurityGroupIngress', {
       Properties: { FromPort: 5432, ToPort: 5432 },
     });
-    expect(Object.keys(rule5432)).toHaveLength(2);
+    expect(Object.keys(rule5432)).toHaveLength(3);
     for (const rule of Object.values(rule5432) as Array<{
       Properties: { CidrIp?: string; SourceSecurityGroupId?: unknown; GroupId: { 'Fn::ImportValue': string } };
     }>) {
@@ -159,17 +185,43 @@ describe('ApiStack (Gede-Test-Api)', () => {
   });
 
   describe('Write-path API (issue 043, ADR-0010) — cost/shape guard (test-first plan item 6)', () => {
-    it('is a Lambda function, not another Fargate/ECS service — the ECS::Service count stays at 1 (the sync stub slot; auth removed per 033/ADR-0009)', () => {
+    // Issue 058 added two more Lambdas alongside the write-path one
+    // (ShapeProxyFunction + ElectricDbUrlComposerFunction, the latter's
+    // cr.Provider also synthesizes its own framework Lambda) - a bare
+    // `Object.values(fns)` destructure of "the one Lambda" no longer
+    // identifies the write-path function specifically. This helper finds it
+    // by its distinguishing env vars (COGNITO_ISSUER + DATABASE_SECRET_ARN,
+    // but NOT ELECTRIC_INTERNAL_URL, which only the shape-proxy carries).
+    function findWriteApiFunction(template: ReturnType<typeof synth>) {
+      const fns = Object.values(template.findResources('AWS::Lambda::Function')) as Array<{
+        Properties: {
+          Code: Record<string, unknown>;
+          Environment?: { Variables: Record<string, unknown> };
+          VpcConfig?: { SubnetIds: unknown; SecurityGroupIds: string[] };
+        };
+      }>;
+      const fn = fns.find(
+        (f) =>
+          f.Properties.Environment?.Variables.COGNITO_ISSUER !== undefined &&
+          f.Properties.Environment.Variables.ELECTRIC_INTERNAL_URL === undefined,
+      );
+      expect(fn).toBeDefined();
+      return fn!;
+    }
+
+    it('is a Lambda function, not another Fargate/ECS service — the ECS::Service count stays at 1 (the real Electric sync service, issue 058; auth removed per 033/ADR-0009)', () => {
       const template = synth();
       template.resourceCountIs('AWS::ECS::Service', 1);
-      template.resourceCountIs('AWS::Lambda::Function', 1);
+      // write-path + shape-proxy + electric-db-url composer + its
+      // cr.Provider framework Lambda (issue 058; debugApi is off by
+      // default in this describe block's plain `synth()`).
+      template.resourceCountIs('AWS::Lambda::Function', 4);
       template.hasResourceProperties('AWS::Lambda::Function', { Runtime: Match.stringLikeRegexp('nodejs20') });
     });
 
     it('bundles the REAL write-path handler (esbuild asset, not the issue-043 inline 503 stub) — issue 046', () => {
       const template = synth();
-      const fns = template.findResources('AWS::Lambda::Function');
-      const [fn] = Object.values(fns) as Array<{ Properties: { Code: Record<string, unknown> } }>;
+      const fn = findWriteApiFunction(template);
       // The issue-043 stub was `lambda.Code.fromInline(...)`, which renders
       // as a literal `ZipFile` string in the template. The bundled
       // NodejsFunction instead renders as an S3 asset reference.
@@ -181,11 +233,8 @@ describe('ApiStack (Gede-Test-Api)', () => {
 
     it('wires COGNITO_ISSUER as a cross-stack reference to the Auth User Pool — never a hardcoded/PLACEHOLDER string (issue 046)', () => {
       const template = synth();
-      const fns = template.findResources('AWS::Lambda::Function');
-      const [fn] = Object.values(fns) as Array<{
-        Properties: { Environment: { Variables: Record<string, unknown> } };
-      }>;
-      const issuer = fn.Properties.Environment.Variables.COGNITO_ISSUER;
+      const fn = findWriteApiFunction(template);
+      const issuer = fn.Properties.Environment!.Variables.COGNITO_ISSUER;
       const issuerJson = JSON.stringify(issuer);
       expect(issuerJson).not.toContain('PLACEHOLDER_USER_POOL_ID');
       // A genuine cross-stack reference resolves through an Fn::ImportValue
@@ -201,17 +250,14 @@ describe('ApiStack (Gede-Test-Api)', () => {
       });
     });
 
-    it('the Lambda runs inside the VPC\'s private (NAT-egress) subnets, with its own security group — not the compute SG shared by the stub services', () => {
+    it('the Lambda runs inside the VPC\'s private (NAT-egress) subnets, with its own security group — not the compute SG the Electric service uses', () => {
       const template = synth();
-      const fns = template.findResources('AWS::Lambda::Function');
-      const [fn] = Object.values(fns) as Array<{
-        Properties: { VpcConfig?: { SubnetIds: unknown; SecurityGroupIds: string[] } };
-      }>;
-      expect(fn?.Properties.VpcConfig).toBeDefined();
-      expect(fn?.Properties.VpcConfig?.SubnetIds).toBeDefined();
+      const fn = findWriteApiFunction(template);
+      expect(fn.Properties.VpcConfig).toBeDefined();
+      expect(fn.Properties.VpcConfig?.SubnetIds).toBeDefined();
     });
 
-    it('the write-path Lambda\'s security group ingresses to the Data stack\'s Postgres SG, distinct from the Fargate compute SG\'s rule', () => {
+    it('the write-path + shape-proxy Lambdas\' security groups each ingress to the Data stack\'s Postgres SG, distinct from the Fargate compute SG\'s rule (issue 058: three distinct SGs now, not two)', () => {
       const template = synth();
       const rule5432 = template.findResources('AWS::EC2::SecurityGroupIngress', {
         Properties: { FromPort: 5432, ToPort: 5432 },
@@ -219,7 +265,7 @@ describe('ApiStack (Gede-Test-Api)', () => {
       const sourceIds = (Object.values(rule5432) as Array<{ Properties: { SourceSecurityGroupId: { 'Fn::GetAtt': [string, string] } } }>).map(
         (r) => r.Properties.SourceSecurityGroupId['Fn::GetAtt'][0],
       );
-      expect(new Set(sourceIds).size).toBe(2); // two distinct security groups, not the same one twice
+      expect(new Set(sourceIds).size).toBe(3); // compute (Electric) + write-path + shape-proxy — three distinct security groups
     });
 
     it('is granted read-only access to exactly the Data stack\'s database secret (least privilege — no wildcard resource)', () => {

@@ -20,27 +20,27 @@ function synth(debugApi: boolean) {
 }
 
 describe('Debug/db inspection API (issue 049) — enabled (debugApi=true)', () => {
-  it('creates exactly one additional Lambda function (write-path + debug-path = 2), still zero additional ECS::Service', () => {
+  it('creates four Lambda functions (write-path + shape-proxy + electric-db-url composer + debug-path — issue 058 added the middle two), still zero additional ECS::Service', () => {
     const { apiTemplate } = synth(true);
     apiTemplate.resourceCountIs('AWS::ECS::Service', 1);
-    apiTemplate.resourceCountIs('AWS::Lambda::Function', 2);
+    apiTemplate.resourceCountIs('AWS::Lambda::Function', 5); // write-path + shape-proxy + electric-db-url composer + its cr.Provider framework Lambda + debug-path
   });
 
-  it('the debug Lambda runs in the VPC private subnets with its own dedicated security group', () => {
+  it('the debug Lambda runs in the VPC private subnets with its own dedicated security group (alongside write-path + shape-proxy — the electric-db-url composer needs no VPC, it only calls Secrets Manager)', () => {
     const { apiTemplate } = synth(true);
     const fns = apiTemplate.findResources('AWS::Lambda::Function');
     const vpcFns = Object.values(fns).filter(
       (fn) => (fn as { Properties: { VpcConfig?: unknown } }).Properties.VpcConfig !== undefined,
     );
-    expect(vpcFns).toHaveLength(2); // write-path + debug-path
+    expect(vpcFns).toHaveLength(3); // write-path + shape-proxy + debug-path
   });
 
-  it('the debug Lambda security group has its own distinct ingress rule to the Data stack\'s Postgres SG (a third rule, alongside sync + write-path)', () => {
+  it('the debug Lambda security group has its own distinct ingress rule to the Data stack\'s Postgres SG (a fourth rule, alongside sync + write-path + shape-proxy — issue 058)', () => {
     const { apiTemplate } = synth(true);
     const rule5432 = apiTemplate.findResources('AWS::EC2::SecurityGroupIngress', {
       Properties: { FromPort: 5432, ToPort: 5432 },
     });
-    expect(Object.keys(rule5432)).toHaveLength(3);
+    expect(Object.keys(rule5432)).toHaveLength(4);
   });
 
   it('routes /debug/db/* via its own ALB listener rule, distinct from /sync* and /write*', () => {
@@ -55,21 +55,28 @@ describe('Debug/db inspection API (issue 049) — enabled (debugApi=true)', () =
 
   it('routes to the debug Lambda via a Lambda target group with health checks disabled (cost: no synthetic-invocation billing)', () => {
     const { apiTemplate } = synth(true);
+    // Total stays 3: the pre-058 sync Fargate ALB target group is REPLACED
+    // by the shape-proxy Lambda's target group (issue 058 — Electric itself
+    // is never an ALB target), so write-path + shape-proxy + debug-path = 3.
     apiTemplate.resourceCountIs('AWS::ElasticLoadBalancingV2::TargetGroup', 3);
     const targetGroups = Object.values(
       apiTemplate.findResources('AWS::ElasticLoadBalancingV2::TargetGroup', {
         Properties: { TargetType: 'lambda', HealthCheckEnabled: false },
       }),
     );
-    expect(targetGroups).toHaveLength(2); // write-path + debug-path
+    // All three target groups are now Lambda-typed (unlike pre-058, where
+    // the sync slot's target group was ECS/IP-typed) — write-path +
+    // shape-proxy + debug-path.
+    expect(targetGroups).toHaveLength(3);
   });
 
-  it('creates a CDK-generated Secrets Manager secret for the debug token, and grants the debug Lambda read access to it', () => {
+  it('creates CDK-generated Secrets Manager secrets: the debug token (this issue) plus Electric\'s own secret + composed DATABASE_URL secret (issue 058)', () => {
     const { apiTemplate } = synth(true);
     // The Data stack's DB secret is a cross-stack (imported) reference, not
-    // a resource defined IN this stack's own template — only the debug-token
-    // secret this stack itself creates shows up here.
-    apiTemplate.resourceCountIs('AWS::SecretsManager::Secret', 1);
+    // a resource defined IN this stack's own template. This stack's OWN
+    // secrets: DebugTokenSecret (this issue), ElectricSecret + Electric
+    // DatabaseUrlSecret (issue 058).
+    apiTemplate.resourceCountIs('AWS::SecretsManager::Secret', 3);
     apiTemplate.hasResourceProperties('AWS::SecretsManager::Secret', {
       GenerateSecretString: Match.objectLike({ ExcludePunctuation: true }),
     });
@@ -125,15 +132,15 @@ describe('Debug/db inspection API (issue 049) — enabled (debugApi=true)', () =
 });
 
 describe('Debug/db inspection API (issue 049) — disabled (debugApi=false, the default — prod must never get this)', () => {
-  it('creates no debug Lambda — exactly one Lambda function (write-path only), ECS::Service count still 1', () => {
+  it('creates no debug Lambda — exactly three Lambda functions (write-path + shape-proxy + electric-db-url composer, issue 058), ECS::Service count still 1', () => {
     const { apiTemplate } = synth(false);
     apiTemplate.resourceCountIs('AWS::ECS::Service', 1);
-    apiTemplate.resourceCountIs('AWS::Lambda::Function', 1);
+    apiTemplate.resourceCountIs('AWS::Lambda::Function', 4); // write-path + shape-proxy + electric-db-url composer + its cr.Provider framework Lambda
   });
 
-  it('creates no debug-token secret in the Api stack\'s own template', () => {
+  it('creates no debug-token secret in the Api stack\'s own template — only Electric\'s own two secrets (issue 058) remain', () => {
     const { apiTemplate } = synth(false);
-    apiTemplate.resourceCountIs('AWS::SecretsManager::Secret', 0);
+    apiTemplate.resourceCountIs('AWS::SecretsManager::Secret', 2);
   });
 
   it('adds no /debug/db/* ALB listener rule — only /sync* and /write*', () => {
@@ -159,11 +166,11 @@ describe('Debug/db inspection API (issue 049) — disabled (debugApi=false, the 
     expect(pathPatterns).not.toContain('debug/db/*');
   });
 
-  it('never creates a debug SG ingress rule to Postgres — exactly the sync + write-path rules (two)', () => {
+  it('never creates a debug SG ingress rule to Postgres — exactly the sync + write-path + shape-proxy rules (three, issue 058)', () => {
     const { apiTemplate } = synth(false);
     const rule5432 = apiTemplate.findResources('AWS::EC2::SecurityGroupIngress', {
       Properties: { FromPort: 5432, ToPort: 5432 },
     });
-    expect(Object.keys(rule5432)).toHaveLength(2);
+    expect(Object.keys(rule5432)).toHaveLength(3);
   });
 });

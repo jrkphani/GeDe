@@ -39,11 +39,11 @@ function fakeExecutor(): MigrationSqlExecutor & { readonly executedSql: readonly
 }
 
 describe('listMigrationFiles (issue 045)', () => {
-  it('lists the real src/db/migrations/*.sql files, sorted in filename order (0000 first, 0011 last)', () => {
+  it('lists the real src/db/migrations/*.sql files, sorted in filename order (0000 first, 0012 last — issue 058 added 0012)', () => {
     const files = listMigrationFiles(REAL_MIGRATIONS_DIR);
-    expect(files).toHaveLength(12); // 0000-0011
+    expect(files).toHaveLength(13); // 0000-0012
     expect(files[0]).toBe('0000_init.sql');
-    expect(files.at(-1)).toBe('0011_adopted_into_project.sql');
+    expect(files.at(-1)).toBe('0012_electric_replica_identity.sql');
     expect(files).toEqual([...files].sort());
   });
 });
@@ -98,7 +98,7 @@ describe('applyMigrations (issue 045 test-first plan item 1 — idempotency + or
 
   it('parity guard: the runner reads the SAME migrations directory check-migrations.sh globs — no forked SQL (test-first plan item 3)', () => {
     const files = listMigrationFiles(REAL_MIGRATIONS_DIR);
-    expect(files).toHaveLength(12);
+    expect(files).toHaveLength(13); // 0000-0012 (issue 058 added 0012)
 
     const parityScript = fs.readFileSync(
       path.resolve(__dirname, '..', '..', 'migration-parity', 'check-migrations.sh'),

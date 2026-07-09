@@ -16,7 +16,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       },
     },
     "LoadBalancerDnsName": {
-      "Description": "Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* routes to the issue 043 write-path Lambda.",
+      "Description": "Api ALB DNS name - issue 040/033 later fronts this with a real domain + TLS. /write* and /sync* route to Lambdas (043/046, 058); Electric itself is never directly reachable (issue 058).",
       "Value": {
         "Fn::GetAtt": [
           "Alb16C2F182",
@@ -86,7 +86,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
           {
             "FixedResponseConfig": {
               "ContentType": "text/plain",
-              "MessageBody": "Gede-Test-Api: no route matched (placeholder tier, issue 030) - /sync* is stubbed pending issue 032. /auth* is intentionally absent - auth is Amazon Cognito (issue 033, ADR-0009), not routed through this ALB.",
+              "MessageBody": "Gede-Test-Api: no route matched. /sync* -> the shape-proxy Lambda (issue 058), /write* -> the write-path Lambda (issue 043/046). /auth* is intentionally absent - auth is Amazon Cognito (issue 033, ADR-0009).",
               "StatusCode": "404",
             },
             "Type": "fixed-response",
@@ -100,52 +100,12 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       },
       "Type": "AWS::ElasticLoadBalancingV2::Listener",
     },
-    "AlbHttpListenerSyncTargetsGroup45D10C03": {
-      "Properties": {
-        "HealthCheckIntervalSeconds": 30,
-        "HealthCheckPath": "/",
-        "Matcher": {
-          "HttpCode": "200-399",
-        },
-        "Port": 80,
-        "Protocol": "HTTP",
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-        "TargetGroupAttributes": [
-          {
-            "Key": "stickiness.enabled",
-            "Value": "false",
-          },
-        ],
-        "TargetType": "ip",
-        "VpcId": {
-          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
-        },
-      },
-      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
-    },
-    "AlbHttpListenerSyncTargetsRuleCAEAAE0C": {
+    "AlbHttpListenerShapeProxyRouteRuleBB61069C": {
       "Properties": {
         "Actions": [
           {
             "TargetGroupArn": {
-              "Ref": "AlbHttpListenerSyncTargetsGroup45D10C03",
+              "Ref": "ShapeProxyTargetGroup316D48DC",
             },
             "Type": "forward",
           },
@@ -196,7 +156,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "AlbSecurityGroup86A59E99": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Api ALB - internet-facing. Placeholder tier serves plain HTTP; a real domain + ACM cert (the Hosting/Dns seam, issue 040) upgrades this to HTTPS when 032/033 land.",
+        "GroupDescription": "Gede-Test-Api ALB - internet-facing. Fronts three Lambda targets (write-path, shape-proxy, optional debug/db) behind path-based routing; Electric itself is never an ALB target (issue 058).",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
@@ -239,7 +199,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "AllowComputeToPostgres": {
       "Properties": {
-        "Description": "Api compute (sync stub slot, issue 030) to Postgres 5432 - the ONLY ingress rule on the Data security group. Never 0.0.0.0/0.",
+        "Description": "Api compute (the real Electric sync service, issue 058) to Postgres 5432 - Electric's own logical-replication connection. Never 0.0.0.0/0.",
         "FromPort": 5432,
         "GroupId": {
           "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
@@ -248,6 +208,24 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         "SourceSecurityGroupId": {
           "Fn::GetAtt": [
             "ComputeSecurityGroupF0F5C976",
+            "GroupId",
+          ],
+        },
+        "ToPort": 5432,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
+    },
+    "AllowShapeProxyToPostgres": {
+      "Properties": {
+        "Description": "Shape-proxy Lambda (issue 058) to Postgres 5432 - a third, distinct ingress rule on the Data security group (alongside the Fargate compute and write-path Lambda SG rules above); still never 0.0.0.0/0.",
+        "FromPort": 5432,
+        "GroupId": {
+          "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "ShapeProxySecurityGroup399F1CB1",
             "GroupId",
           ],
         },
@@ -298,7 +276,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
     "ComputeSecurityGroupF0F5C976": {
       "Properties": {
-        "GroupDescription": "Gede-Test-Api Fargate compute (sync stub slot, issue 030; auth moved to Cognito, issue 033) - ingress only from the ALB security group.",
+        "GroupDescription": "Gede-Test-Api Fargate compute (the real ElectricSQL sync service, issue 058; auth moved to Cognito, issue 033) - ingress only from the shape-proxy Lambda's own security group (issue 058 - NOT from the ALB; Electric is never an ALB target).",
         "SecurityGroupEgress": [
           {
             "CidrIp": "0.0.0.0/0",
@@ -330,10 +308,10 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       },
       "Type": "AWS::EC2::SecurityGroup",
     },
-    "ComputeSecurityGroupfromGedeTestApiAlbSecurityGroup97C2D9BC8029CF6224": {
+    "ComputeSecurityGroupfromGedeTestApiShapeProxySecurityGroupFD221A8830009D5E07F1": {
       "Properties": {
-        "Description": "ALB to Fargate services (placeholder container port 80).",
-        "FromPort": 80,
+        "Description": "Shape-proxy Lambda (issue 058) to Electric's shape endpoint - the ONLY ingress this security group grants; never the ALB.",
+        "FromPort": 3000,
         "GroupId": {
           "Fn::GetAtt": [
             "ComputeSecurityGroupF0F5C976",
@@ -343,17 +321,685 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         "IpProtocol": "tcp",
         "SourceSecurityGroupId": {
           "Fn::GetAtt": [
-            "AlbSecurityGroup86A59E99",
+            "ShapeProxySecurityGroup399F1CB1",
             "GroupId",
           ],
         },
-        "ToPort": 80,
+        "ToPort": 3000,
       },
       "Type": "AWS::EC2::SecurityGroupIngress",
     },
+    "ElectricDatabaseUrlSecret9B869D75": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "Gede-Test-Api Electric's composed DATABASE_URL (issue 058) - written by the ElectricDbUrlComposerFunction custom resource below; the initial CDK-generated value is never used (overwritten before the Electric task ever starts).",
+        "GenerateSecretString": {},
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "ElectricDbUrlComposerFunction54247588": {
+      "DependsOn": [
+        "ElectricDbUrlComposerFunctionServiceRoleDefaultPolicyA7228D8E",
+        "ElectricDbUrlComposerFunctionServiceRoleA029A1D1",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "2a65c66a84308976647371e374db58dd9159cebf17017b4adf3aa5f7cc0c61cc.zip",
+        },
+        "Description": "Gede-Test-Api one-shot DATABASE_URL composer for the Electric task (issue 058) - reads the Data stack's RDS secret, writes a composed connection string into ElectricDatabaseUrlSecret.",
+        "Environment": {
+          "Variables": {
+            "DATABASE_ENDPOINT": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+            },
+            "DATABASE_SECRET_ARN": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+            },
+            "TARGET_SECRET_ARN": {
+              "Ref": "ElectricDatabaseUrlSecret9B869D75",
+            },
+          },
+        },
+        "Handler": "index.handler",
+        "MemorySize": 128,
+        "Role": {
+          "Fn::GetAtt": [
+            "ElectricDbUrlComposerFunctionServiceRoleA029A1D1",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 30,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "ElectricDbUrlComposerFunctionServiceRoleA029A1D1": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ElectricDbUrlComposerFunctionServiceRoleDefaultPolicyA7228D8E": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+              },
+            },
+            {
+              "Action": [
+                "secretsmanager:PutSecretValue",
+                "secretsmanager:UpdateSecret",
+                "secretsmanager:UpdateSecretVersionStage",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "ElectricDatabaseUrlSecret9B869D75",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ElectricDbUrlComposerFunctionServiceRoleDefaultPolicyA7228D8E",
+        "Roles": [
+          {
+            "Ref": "ElectricDbUrlComposerFunctionServiceRoleA029A1D1",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ElectricDbUrlProviderframeworkonEvent95E6B859": {
+      "DependsOn": [
+        "ElectricDbUrlProviderframeworkonEventServiceRoleDefaultPolicy4B16311D",
+        "ElectricDbUrlProviderframeworkonEventServiceRoleE0C587D1",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "e16ffb3b34af185b8b30c88fdb19faa13b6c42bb38580485c4e84b384ee48b63.zip",
+        },
+        "Description": "AWS CDK resource provider framework - onEvent (Gede-Test-Api/ElectricDbUrlProvider)",
+        "Environment": {
+          "Variables": {
+            "USER_ON_EVENT_FUNCTION_ARN": {
+              "Fn::GetAtt": [
+                "ElectricDbUrlComposerFunction54247588",
+                "Arn",
+              ],
+            },
+          },
+        },
+        "Handler": "framework.onEvent",
+        "LoggingConfig": {
+          "ApplicationLogLevel": "FATAL",
+          "LogFormat": "JSON",
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "ElectricDbUrlProviderframeworkonEventServiceRoleE0C587D1",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs24.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 900,
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "ElectricDbUrlProviderframeworkonEventServiceRoleDefaultPolicy4B16311D": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "lambda:InvokeFunction",
+              "Effect": "Allow",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "ElectricDbUrlComposerFunction54247588",
+                    "Arn",
+                  ],
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      {
+                        "Fn::GetAtt": [
+                          "ElectricDbUrlComposerFunction54247588",
+                          "Arn",
+                        ],
+                      },
+                      ":*",
+                    ],
+                  ],
+                },
+              ],
+            },
+            {
+              "Action": "lambda:GetFunction",
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::GetAtt": [
+                  "ElectricDbUrlComposerFunction54247588",
+                  "Arn",
+                ],
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ElectricDbUrlProviderframeworkonEventServiceRoleDefaultPolicy4B16311D",
+        "Roles": [
+          {
+            "Ref": "ElectricDbUrlProviderframeworkonEventServiceRoleE0C587D1",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ElectricDbUrlProviderframeworkonEventServiceRoleE0C587D1": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ElectricDbUrlResource": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "DatabaseEndpoint": {
+          "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+        },
+        "DatabaseSecretArn": {
+          "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+        },
+        "ServiceToken": {
+          "Fn::GetAtt": [
+            "ElectricDbUrlProviderframeworkonEvent95E6B859",
+            "Arn",
+          ],
+        },
+      },
+      "Type": "AWS::CloudFormation::CustomResource",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "ElectricSecretF4B4E5B4": {
+      "DeletionPolicy": "Delete",
+      "Properties": {
+        "Description": "Gede-Test-Api ElectricSQL's own API secret (issue 058) - required on every /v1/shape request; known only to Electric and the shape-proxy Lambda, generated by CDK, never committed to the repo.",
+        "GenerateSecretString": {
+          "ExcludePunctuation": true,
+          "PasswordLength": 40,
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::SecretsManager::Secret",
+      "UpdateReplacePolicy": "Delete",
+    },
+    "ServiceDiscoveryNamespace8AEF4AC1": {
+      "Properties": {
+        "Description": "Gede-Test-Api private DNS namespace (issue 058) - resolves the Electric sync service's internal address for the shape-proxy Lambda.",
+        "Name": "gede.internal",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Vpc": {
+          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
+        },
+      },
+      "Type": "AWS::ServiceDiscovery::PrivateDnsNamespace",
+    },
+    "ShapeProxyFunctionFEAF1096": {
+      "DependsOn": [
+        "ShapeProxyFunctionServiceRoleDefaultPolicy2A608300",
+        "ShapeProxyFunctionServiceRoleF9437065",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "6d4a19ed0a9af8f1f2647714279dbbd7334766a1b20597883b43595fe03ef484.zip",
+        },
+        "Description": "Gede-Test-Api ElectricSQL shape-proxy (issue 058) - verifies the Cognito JWT, resolves the caller's workspace memberships, builds a workspace-scoped shape request, forwards to Electric's private endpoint.",
+        "Environment": {
+          "Variables": {
+            "COGNITO_ISSUER": {
+              "Fn::Join": [
+                "",
+                [
+                  "https://cognito-idp.us-east-1.amazonaws.com/",
+                  {
+                    "Fn::ImportValue": "Gede-Test-Auth:ExportsOutputRefUserPool6BA7E5F296FD7236",
+                  },
+                ],
+              ],
+            },
+            "DATABASE_ENDPOINT": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+            },
+            "DATABASE_SECRET_ARN": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+            },
+            "ELECTRIC_INTERNAL_URL": "http://sync.gede.internal:3000",
+            "ELECTRIC_SECRET_ARN": {
+              "Ref": "ElectricSecretF4B4E5B4",
+            },
+          },
+        },
+        "Handler": "index.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "ShapeProxyFunctionServiceRoleF9437065",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 15,
+        "VpcConfig": {
+          "SecurityGroupIds": [
+            {
+              "Fn::GetAtt": [
+                "ShapeProxySecurityGroup399F1CB1",
+                "GroupId",
+              ],
+            },
+          ],
+          "SubnetIds": [
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
+            },
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "ShapeProxyFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY1E73CA2B": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ShapeProxyFunctionFEAF1096",
+            "Arn",
+          ],
+        },
+        "Principal": "elasticloadbalancing.amazonaws.com",
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "ShapeProxyFunctionServiceRoleDefaultPolicy2A608300": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+              },
+            },
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "ElectricSecretF4B4E5B4",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "ShapeProxyFunctionServiceRoleDefaultPolicy2A608300",
+        "Roles": [
+          {
+            "Ref": "ShapeProxyFunctionServiceRoleF9437065",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "ShapeProxyFunctionServiceRoleF9437065": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "ShapeProxySecurityGroup399F1CB1": {
+      "Properties": {
+        "GroupDescription": "Gede-Test-Api shape-proxy Lambda (issue 058) - egress to Postgres (5432, for workspace-membership lookups), Electric's private Cloud Map address (issue 058 - see the compute SG's own ingress rule below), and the internet (NAT, for Cognito JWKS).",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "VpcId": {
+          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "ShapeProxyTargetGroup316D48DC": {
+      "DependsOn": [
+        "ShapeProxyFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HY1E73CA2B",
+      ],
+      "Properties": {
+        "HealthCheckEnabled": false,
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "TargetType": "lambda",
+        "Targets": [
+          {
+            "Id": {
+              "Fn::GetAtt": [
+                "ShapeProxyFunctionFEAF1096",
+                "Arn",
+              ],
+            },
+          },
+        ],
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+    },
     "SyncService21AC2843": {
       "DependsOn": [
-        "AlbHttpListenerSyncTargetsRuleCAEAAE0C",
+        "ElectricDbUrlResource",
         "SyncTaskDefTaskRole44EF7EE0",
       ],
       "Properties": {
@@ -378,17 +1024,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         },
         "DesiredCount": 1,
         "EnableECSManagedTags": false,
-        "HealthCheckGracePeriodSeconds": 60,
         "LaunchType": "FARGATE",
-        "LoadBalancers": [
-          {
-            "ContainerName": "sync",
-            "ContainerPort": 80,
-            "TargetGroupArn": {
-              "Ref": "AlbHttpListenerSyncTargetsGroup45D10C03",
-            },
-          },
-        ],
         "NetworkConfiguration": {
           "AwsvpcConfiguration": {
             "AssignPublicIp": "DISABLED",
@@ -410,6 +1046,16 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
             ],
           },
         },
+        "ServiceRegistries": [
+          {
+            "RegistryArn": {
+              "Fn::GetAtt": [
+                "SyncServiceCloudmapService5E0A8848",
+                "Arn",
+              ],
+            },
+          },
+        ],
         "Tags": [
           {
             "Key": "Application",
@@ -434,22 +1080,80 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       },
       "Type": "AWS::ECS::Service",
     },
+    "SyncServiceCloudmapService5E0A8848": {
+      "DependsOn": [
+        "ElectricDbUrlResource",
+        "SyncTaskDefTaskRole44EF7EE0",
+      ],
+      "Properties": {
+        "DnsConfig": {
+          "DnsRecords": [
+            {
+              "TTL": 60,
+              "Type": "A",
+            },
+          ],
+          "NamespaceId": {
+            "Fn::GetAtt": [
+              "ServiceDiscoveryNamespace8AEF4AC1",
+              "Id",
+            ],
+          },
+          "RoutingPolicy": "MULTIVALUE",
+        },
+        "HealthCheckCustomConfig": {
+          "FailureThreshold": 1,
+        },
+        "Name": "sync",
+        "NamespaceId": {
+          "Fn::GetAtt": [
+            "ServiceDiscoveryNamespace8AEF4AC1",
+            "Id",
+          ],
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::ServiceDiscovery::Service",
+    },
     "SyncTaskDef647AE9A4": {
       "Properties": {
         "ContainerDefinitions": [
           {
+            "Environment": [
+              {
+                "Name": "ELECTRIC_FEATURE_FLAGS",
+                "Value": "allow_subqueries",
+              },
+            ],
             "Essential": true,
             "HealthCheck": {
               "Command": [
                 "CMD-SHELL",
-                "wget -qO- http://localhost/ || exit 1",
+                "curl -sf http://localhost:3000/v1/health || exit 1",
               ],
               "Interval": 30,
               "Retries": 3,
-              "StartPeriod": 10,
+              "StartPeriod": 30,
               "Timeout": 5,
             },
-            "Image": "public.ecr.aws/docker/library/nginx:alpine",
+            "Image": "electricsql/electric:latest",
             "LogConfiguration": {
               "LogDriver": "awslogs",
               "Options": {
@@ -463,8 +1167,22 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
             "Name": "sync",
             "PortMappings": [
               {
-                "ContainerPort": 80,
+                "ContainerPort": 3000,
                 "Protocol": "tcp",
+              },
+            ],
+            "Secrets": [
+              {
+                "Name": "DATABASE_URL",
+                "ValueFrom": {
+                  "Ref": "ElectricDatabaseUrlSecret9B869D75",
+                },
+              },
+              {
+                "Name": "ELECTRIC_SECRET",
+                "ValueFrom": {
+                  "Ref": "ElectricSecretF4B4E5B4",
+                },
               },
             ],
           },
@@ -561,6 +1279,26 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
                 ],
               },
             },
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "ElectricDatabaseUrlSecret9B869D75",
+              },
+            },
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Ref": "ElectricSecretF4B4E5B4",
+              },
+            },
           ],
           "Version": "2012-10-17",
         },
@@ -641,7 +1379,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "26c13002259e4a6cd5f503306cff5275b2b26cd1da91f0c818f021f57f277738.zip",
+          "S3Key": "3d5a03e582d0ce17edbf135b8e545a3b6a8c02c8036d316c05c434ca7fd343f6.zip",
         },
         "Description": "Gede-Test-Api Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).",
         "Environment": {

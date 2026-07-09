@@ -15,7 +15,7 @@ import {
 import { deriveSyncStatus, detectLostEdits, lostEditMessage, type SyncStatus } from '../domain/syncStatus'
 import type { TableName } from '../domain/syncDelta'
 import { startSync, type SyncHandle, type SyncOptions } from '../sync/syncEngine'
-import { isSyncEnabled, syncBaseUrl, SYNCED_TABLES, writeApiPath } from '../sync/config'
+import { isSyncEnabled, shouldSkipReadPath, SYNCED_TABLES, writeApiPath } from '../sync/config'
 import { flushMutations, type WriteApiHttpClient } from '../sync/writeTransport'
 import { getAuthHeaders } from '../auth/wireIdentity'
 import { useAuthStore } from './auth'
@@ -167,11 +167,16 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       // The read-path (Electric) needs a configured shape endpoint. Without
       // VITE_SYNC_URL — and no injected test streamFactory — the default
       // factory would build a shape URL from an empty base and throw
-      // "Failed to construct 'URL': Invalid URL" (the sync Fargate slot is an
-      // nginx stub anyway, so there is nothing to read from). Skip the
-      // read-path; the write flush (048) is independent and stays enabled via
-      // isSyncEnabled() alone — see flush() below.
-      if (syncBaseUrl() === '' && !options.streamFactory) return
+      // "Failed to construct 'URL': Invalid URL". Skip the read-path in that
+      // case; the write flush (048) is independent and stays enabled via
+      // isSyncEnabled() alone — see flush() below. As of issue 058, a real
+      // Electric service is deployed behind VITE_SYNC_URL (the CloudFront
+      // `/sync*` path, fronting the shape-proxy Lambda — never Electric
+      // directly, see src/server/shapeProxy/), so this naturally starts
+      // passing once that URL is populated in the deployed build — the
+      // predicate itself (shouldSkipReadPath, src/sync/config.ts) is
+      // unchanged from 051, still defensive rather than deleted.
+      if (shouldSkipReadPath(Boolean(options.streamFactory))) return
       get().handle?.stop()
       set({
         enabled: true,

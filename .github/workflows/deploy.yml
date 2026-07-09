@@ -110,6 +110,20 @@ jobs:
           VAR_USER_POOL_ID: ${{ vars.VITE_COGNITO_USER_POOL_ID }}
           VAR_CLIENT_ID: ${{ vars.VITE_COGNITO_CLIENT_ID }}
           VAR_REGION: ${{ vars.VITE_COGNITO_REGION }}
+          # Issue 058 — same injection pattern as the Cognito ids above: the
+          # least-privilege OIDC deploy role has no `cloudformation:
+          # DescribeStacks`, so this can't be read live off the Hosting
+          # stack's CloudFront domain at deploy time. It must be set as a
+          # GitHub repo variable BY A HUMAN/CI ADMIN (this workflow change
+          # cannot set it itself) to the deployed CloudFront distribution's
+          # own `/sync` path — e.g. `https://d1nzod71m3rz6x.cloudfront.net/sync`
+          # (DEPLOYMENT.md §9a's same-origin CloudFront pattern, mirroring
+          # `/write*`/`/debug/db/*` — NEVER Electric's own address, which is
+          # not internet-reachable at all, see deploy/cdk/lib/api-stack.ts's
+          # class doc). Empty/unset here is safe: src/sync/config.ts's
+          # shouldSkipReadPath() keeps the read-path off (051's guard) until
+          # a real value is set.
+          VAR_SYNC_URL: ${{ vars.VITE_SYNC_URL }}
         run: |
           echo "VITE_COGNITO_USER_POOL_ID=$VAR_USER_POOL_ID" >> "$GITHUB_ENV"
           echo "VITE_COGNITO_CLIENT_ID=$VAR_CLIENT_ID" >> "$GITHUB_ENV"
@@ -123,6 +137,7 @@ jobs:
           # already deployed. Not a secret — a plain feature flag, so it's a
           # literal here rather than a repo variable like the Cognito ids above.
           echo "VITE_SYNC_ENABLED=true" >> "$GITHUB_ENV"
+          echo "VITE_SYNC_URL=$VAR_SYNC_URL" >> "$GITHUB_ENV"
 
       # Vite inlines import.meta.env.VITE_* at build time (src/auth/config.ts)
       # from whatever's already in process.env — the three vars the previous
