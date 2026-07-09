@@ -123,7 +123,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         "ListenerArn": {
           "Ref": "AlbHttpListener00C8B33E",
         },
-        "Priority": 10,
+        "Priority": 20,
       },
       "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
     },

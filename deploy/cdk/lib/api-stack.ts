@@ -550,8 +550,14 @@ export class ApiStack extends Stack {
       healthCheck: { enabled: false }, // Same cost rationale as the write-path target group above.
     });
 
+    // Priority 20, NOT 10: the currently-live listener still has the issue-030
+    // stub's `/sync*` rule at priority 10, and CloudFormation creates this new
+    // rule before deleting the old one during the update — reusing priority 10
+    // collides ("Priority '10' is currently in use"). 20 is free (live rules:
+    // 10=old /sync*, 30=/write*, 40=/debug/db/*); once the old rule is deleted
+    // this becomes the sole `/sync*` rule. Verified against the live listener.
     listener.addAction('ShapeProxyRoute', {
-      priority: 10,
+      priority: 20,
       conditions: [elbv2.ListenerCondition.pathPatterns(['/sync*'])],
       action: elbv2.ListenerAction.forward([shapeProxyTargetGroup]),
     });
