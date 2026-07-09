@@ -79,6 +79,8 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [063](063-no-protected-routes-signed-out-access.md) | Bug: signed-out users still access project data in the same browser. **Decided: clear-on-sign-out** — wipe local data + redirect to the 064 hero (keeps local-first; no hard route gate) | M9/M10 | 033, 064 |
 | [064](064-hero-landing-page-auth-login-05.md) | Hero/landing page with sign up + sign in (shadcn `login-05`), product brief, STYLE_GUIDE; the canonical signed-out + sign-out destination | M9 | 033 |
 | [065](065-project-list-clickable-affordance.md) | UX: project list rows don't read as clickable + open-vs-rename is ambiguous (click currently renames). Add hover/pointer affordance, row-click opens, rename via a revealed control | M6 | 001 |
+| [066](066-sync-invitation-revoke-decline-resend.md) | Bug: invitation revoke/decline/resend are local-only (never sync) ⇒ once 062 streams invites, a revoked invite is still live + acceptable. Wire them to the sync queue. **Land right after 062** | M9 | 056, 062 |
+| [067](067-stream-workspace-members-to-clients.md) | Bug: `workspace_members` isn't streamed ⇒ the shared Members list diverges per user (owner won't see the accepted invitee). Add it to SYNCED_TABLES, membership-scoped | M9 | 062, 057 |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
