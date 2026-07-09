@@ -326,10 +326,34 @@ export class ApiStack extends Stack {
       },
     });
 
-    this.syncService = new ecs.FargateService(this, 'SyncService', {
+    // Construct id is 'ElectricSyncService', NOT 'SyncService' (deploy
+    // attempt #4 postmortem): the previously-deployed service (issue 030)
+    // under the logical id 'SyncService' was an nginx:alpine ALB target on
+    // container port 80. Reusing that id here would make CloudFormation
+    // attempt an in-place UPDATE of that live ECS::Service into this one -
+    // no ALB target, Cloud-Map-only, port 3000 - which ECS rejects outright
+    // ("The container sync did not have a container port 80 defined" /
+    // "Task failed ELB health checks"), UPDATE_FAILED, full stack rollback.
+    // A fresh logical id makes CloudFormation CREATE this service and
+    // DELETE the old stub instead - the correct operation for this shape
+    // change. (`this.syncService` and the Cloud Map name below stay 'sync'
+    // - only the CFN logical id changes.)
+    this.syncService = new ecs.FargateService(this, 'ElectricSyncService', {
       cluster: this.cluster,
       taskDefinition: electricTaskDefinition,
-      desiredCount: 1, // Cost guard - a single always-on Electric task (issue 058 risk callout: unlike the write-path Lambda, this is NOT pay-per-invocation).
+      // Staged at 0 for this deploy (deploy attempt #4) - NOT the final
+      // state. Electric requires Postgres wal_level=logical to start
+      // replicating; the Data stack's new RDS ParameterGroup sets
+      // rds.logical_replication=1, but that is a STATIC parameter that only
+      // takes effect after a DB REBOOT, and CloudFormation does not reboot
+      // RDS mid-deploy. A task started now would crash-loop against
+      // wal_level='replica', fail its health check, and roll the whole
+      // deploy back again. Staging at 0 lets this deploy provision the
+      // service, task def, Cloud Map registration, and DB URL wiring
+      // cleanly; a documented post-deploy step then reboots the RDS
+      // instance to activate logical replication, and a follow-up change
+      // flips this back to 1 once that's verified.
+      desiredCount: 0,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [this.computeSecurityGroup],
       assignPublicIp: false,

@@ -174,14 +174,23 @@ describe('ApiStack (Gede-Test-Api)', () => {
     template.hasResourceProperties('AWS::ECS::Service', { Tags: expectedTags });
   });
 
-  it('cost guard: each stub service runs a single task, single-listener/ALB (no per-AZ duplication)', () => {
+  it('cost guard: single-listener/ALB (no per-AZ duplication)', () => {
     const template = synth();
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::LoadBalancer', 1);
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
+  });
+
+  it('the Electric Fargate service is staged at desiredCount 0 for this deploy (deploy attempt #4) — Postgres wal_level=logical only takes effect after an RDS reboot CloudFormation cannot perform mid-deploy; a live task would crash-loop and roll the deploy back', () => {
+    const template = synth();
+    template.resourceCountIs('AWS::ECS::Service', 1);
+    template.hasResourceProperties('AWS::ECS::Service', { DesiredCount: 0 });
+  });
+
+  it('the Electric Fargate service has no LoadBalancers property (Cloud Map only, never an ALB target — issue 058\'s whole point, and the exact shape mismatch that made the 030 stub\'s logical id unreusable)', () => {
+    const template = synth();
     const services = template.findResources('AWS::ECS::Service');
-    for (const service of Object.values(services) as Array<{ Properties: { DesiredCount: number } }>) {
-      expect(service.Properties.DesiredCount).toBe(1);
-    }
+    const [service] = Object.values(services) as Array<{ Properties: Record<string, unknown> }>;
+    expect(service.Properties.LoadBalancers).toBeUndefined();
   });
 
   describe('Write-path API (issue 043, ADR-0010) — cost/shape guard (test-first plan item 6)', () => {

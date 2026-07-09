@@ -702,6 +702,141 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Type": "AWS::SecretsManager::Secret",
       "UpdateReplacePolicy": "Delete",
     },
+    "ElectricSyncService93CFB5D2": {
+      "DependsOn": [
+        "ElectricDbUrlResource",
+        "SyncTaskDefTaskRole44EF7EE0",
+      ],
+      "Properties": {
+        "Cluster": {
+          "Ref": "ClusterEB0386A7",
+        },
+        "DeploymentConfiguration": {
+          "Alarms": {
+            "AlarmNames": [],
+            "Enable": false,
+            "Rollback": false,
+          },
+          "DeploymentCircuitBreaker": {
+            "Enable": true,
+            "Rollback": true,
+          },
+          "MaximumPercent": 200,
+          "MinimumHealthyPercent": 100,
+        },
+        "DeploymentController": {
+          "Type": "ECS",
+        },
+        "DesiredCount": 0,
+        "EnableECSManagedTags": false,
+        "LaunchType": "FARGATE",
+        "NetworkConfiguration": {
+          "AwsvpcConfiguration": {
+            "AssignPublicIp": "DISABLED",
+            "SecurityGroups": [
+              {
+                "Fn::GetAtt": [
+                  "ComputeSecurityGroupF0F5C976",
+                  "GroupId",
+                ],
+              },
+            ],
+            "Subnets": [
+              {
+                "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
+              },
+              {
+                "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
+              },
+            ],
+          },
+        },
+        "ServiceRegistries": [
+          {
+            "RegistryArn": {
+              "Fn::GetAtt": [
+                "ElectricSyncServiceCloudmapServiceF98270E6",
+                "Arn",
+              ],
+            },
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "TaskDefinition": {
+          "Ref": "SyncTaskDef647AE9A4",
+        },
+      },
+      "Type": "AWS::ECS::Service",
+    },
+    "ElectricSyncServiceCloudmapServiceF98270E6": {
+      "DependsOn": [
+        "ElectricDbUrlResource",
+        "SyncTaskDefTaskRole44EF7EE0",
+      ],
+      "Properties": {
+        "DnsConfig": {
+          "DnsRecords": [
+            {
+              "TTL": 60,
+              "Type": "A",
+            },
+          ],
+          "NamespaceId": {
+            "Fn::GetAtt": [
+              "ServiceDiscoveryNamespace8AEF4AC1",
+              "Id",
+            ],
+          },
+          "RoutingPolicy": "MULTIVALUE",
+        },
+        "HealthCheckCustomConfig": {
+          "FailureThreshold": 1,
+        },
+        "Name": "sync",
+        "NamespaceId": {
+          "Fn::GetAtt": [
+            "ServiceDiscoveryNamespace8AEF4AC1",
+            "Id",
+          ],
+        },
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::ServiceDiscovery::Service",
+    },
     "ServiceDiscoveryNamespace8AEF4AC1": {
       "Properties": {
         "Description": "Gede-Test-Api private DNS namespace (issue 058) - resolves the Electric sync service's internal address for the shape-proxy Lambda.",
@@ -996,141 +1131,6 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         ],
       },
       "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
-    },
-    "SyncService21AC2843": {
-      "DependsOn": [
-        "ElectricDbUrlResource",
-        "SyncTaskDefTaskRole44EF7EE0",
-      ],
-      "Properties": {
-        "Cluster": {
-          "Ref": "ClusterEB0386A7",
-        },
-        "DeploymentConfiguration": {
-          "Alarms": {
-            "AlarmNames": [],
-            "Enable": false,
-            "Rollback": false,
-          },
-          "DeploymentCircuitBreaker": {
-            "Enable": true,
-            "Rollback": true,
-          },
-          "MaximumPercent": 200,
-          "MinimumHealthyPercent": 100,
-        },
-        "DeploymentController": {
-          "Type": "ECS",
-        },
-        "DesiredCount": 1,
-        "EnableECSManagedTags": false,
-        "LaunchType": "FARGATE",
-        "NetworkConfiguration": {
-          "AwsvpcConfiguration": {
-            "AssignPublicIp": "DISABLED",
-            "SecurityGroups": [
-              {
-                "Fn::GetAtt": [
-                  "ComputeSecurityGroupF0F5C976",
-                  "GroupId",
-                ],
-              },
-            ],
-            "Subnets": [
-              {
-                "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
-              },
-              {
-                "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
-              },
-            ],
-          },
-        },
-        "ServiceRegistries": [
-          {
-            "RegistryArn": {
-              "Fn::GetAtt": [
-                "SyncServiceCloudmapService5E0A8848",
-                "Arn",
-              ],
-            },
-          },
-        ],
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-        "TaskDefinition": {
-          "Ref": "SyncTaskDef647AE9A4",
-        },
-      },
-      "Type": "AWS::ECS::Service",
-    },
-    "SyncServiceCloudmapService5E0A8848": {
-      "DependsOn": [
-        "ElectricDbUrlResource",
-        "SyncTaskDefTaskRole44EF7EE0",
-      ],
-      "Properties": {
-        "DnsConfig": {
-          "DnsRecords": [
-            {
-              "TTL": 60,
-              "Type": "A",
-            },
-          ],
-          "NamespaceId": {
-            "Fn::GetAtt": [
-              "ServiceDiscoveryNamespace8AEF4AC1",
-              "Id",
-            ],
-          },
-          "RoutingPolicy": "MULTIVALUE",
-        },
-        "HealthCheckCustomConfig": {
-          "FailureThreshold": 1,
-        },
-        "Name": "sync",
-        "NamespaceId": {
-          "Fn::GetAtt": [
-            "ServiceDiscoveryNamespace8AEF4AC1",
-            "Id",
-          ],
-        },
-        "Tags": [
-          {
-            "Key": "Application",
-            "Value": "GeDe",
-          },
-          {
-            "Key": "Environment",
-            "Value": "test",
-          },
-          {
-            "Key": "ManagedBy",
-            "Value": "CDK",
-          },
-          {
-            "Key": "Organization",
-            "Value": "quadnomics",
-          },
-        ],
-      },
-      "Type": "AWS::ServiceDiscovery::Service",
     },
     "SyncTaskDef647AE9A4": {
       "Properties": {
