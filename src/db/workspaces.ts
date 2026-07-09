@@ -68,6 +68,19 @@ export async function getOrCreateDefaultWorkspace(db: Database): Promise<string>
   return created.id
 }
 
+// Best-effort single-row lookup (mirrors invitations.ts's getInvitation) —
+// used by the invitee-facing pending-invitations surface (issue 060) to show
+// "which workspace is this invite for" context. Returns null both when the
+// id is simply unknown AND when this local PGlite has never synced that
+// workspace's row down (058: sync only delivers rows for workspaces the
+// caller is ALREADY a member of, so a not-yet-accepted invitee's local copy
+// commonly has no row here yet) — callers must treat null as "no context
+// available", never as an error.
+export async function getWorkspace(db: Database, id: string): Promise<WorkspaceRow | null> {
+  const rows = await db.select().from(workspaces).where(eq(workspaces.id, id))
+  return rows[0] ?? null
+}
+
 function memberScope(workspaceId: string) {
   return and(eq(workspaceMembers.workspaceId, workspaceId), isNull(workspaceMembers.deletedAt))
 }

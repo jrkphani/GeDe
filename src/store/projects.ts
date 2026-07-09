@@ -62,6 +62,17 @@ interface ProjectsState {
   // at least their own workspace (creating one on first use) then lists
   // every workspace they belong to, oldest first.
   listWorkspaceOptions: () => Promise<WorkspaceRow[]>
+  // Issue 060 — the "pick up a newly-joined workspace" seam: re-lists local
+  // projects (a just-accepted invitation's seat mutation may already have
+  // landed via a prior sync round trip) AND restarts the read-path engine so
+  // Electric's shape proxy (058) re-resolves this sub's CURRENT memberships.
+  // Restarting matters, not just reloading: 058's proxy recomputes workspace
+  // scope fresh per shape request, but an already-open ShapeStream keeps
+  // polling the SAME shape (table + where + `handle`) it was initially
+  // granted — a membership gained mid-session never retroactively widens an
+  // open shape's scope, only a brand-new subscription request does. See
+  // useWorkspaceStore.acceptInvitation, the one caller (docs/issues/060).
+  refreshProjects: () => Promise<void>
 }
 
 let database: Database | null = null
@@ -235,6 +246,20 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     if (!sub) throw new Error('Sign in to move a project into a workspace')
     await getOrCreateUserWorkspace(db, sub)
     return listWorkspacesForUser(db, sub)
+  },
+
+  async refreshProjects() {
+    const db = database
+    if (!db) return
+    set({ projects: await dbList(db) })
+    const sync = useSyncStore.getState()
+    // Only a live read-path is worth restarting — sync-off/local-only stays
+    // exactly the reload above (byte-for-byte unchanged from every other
+    // re-list in this store).
+    if (sync.enabled) {
+      sync.stop()
+      sync.start(db)
+    }
   },
 }))
 

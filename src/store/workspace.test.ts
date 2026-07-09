@@ -2,8 +2,9 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase, type Database } from '../db/client'
 import { setDatabase } from './database'
 import { createWorkspace } from '../db/workspaces'
-import { createInvitation } from '../db/invitations'
+import { createInvitation, getInvitation } from '../db/invitations'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
+import { resetProjectsStore, useProjectsStore } from './projects'
 import { resetSyncStore, useSyncStore } from './sync'
 import { resetWorkspaceStore, useWorkspaceStore } from './workspace'
 import { workspaceIdForSub } from '../domain/workspaceId'
@@ -11,6 +12,7 @@ import { workspaceIdForSub } from '../domain/workspaceId'
 let db: Database
 
 beforeEach(async () => {
+  resetProjectsStore()
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetWorkspaceStore()
@@ -227,5 +229,116 @@ describe('revokeInvitation / resendInvitation', () => {
 
     const reloaded = useWorkspaceStore.getState().invitations.find((i) => i.id === inv.id)
     expect(new Date(reloaded?.expiresAt ?? 0).getTime()).toBeGreaterThan(new Date(inv.expiresAt).getTime())
+  })
+})
+
+// Issue 060 — the invitee's own view: pending invitations addressed to the
+// SIGNED-IN user's email, independent of whichever workspace's owner panel
+// (if any) is currently open (`workspaceId`/`invitations` above stay null/[]
+// in every test in this block).
+describe('loadMyInvitations / declineInvitation — the invitee-facing surface (issue 060)', () => {
+  it('loads pending invitations addressed to the signed-in user’s email', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+
+    await useWorkspaceStore.getState().loadMyInvitations()
+
+    const mine = useWorkspaceStore.getState().myInvitations
+    expect(mine).toHaveLength(1)
+    expect(mine[0]).toMatchObject({ id: inv.id, email: 'invitee@example.com', role: 'editor' })
+  })
+
+  it('is empty when signed out (never queries the db for an email it doesn’t have)', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    await createInvitation(db, ws.id, 'invitee@example.com', 'editor', 'sub-owner')
+
+    await useWorkspaceStore.getState().loadMyInvitations()
+
+    expect(useWorkspaceStore.getState().myInvitations).toHaveLength(0)
+  })
+
+  it('excludes invitations addressed to a different email', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    await createInvitation(db, ws.id, 'someone-else@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+
+    await useWorkspaceStore.getState().loadMyInvitations()
+
+    expect(useWorkspaceStore.getState().myInvitations).toHaveLength(0)
+  })
+
+  it('declineInvitation revokes the invite (server-side tombstone) and drops it from myInvitations', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+    await useWorkspaceStore.getState().loadMyInvitations()
+    expect(useWorkspaceStore.getState().myInvitations).toHaveLength(1)
+
+    await useWorkspaceStore.getState().declineInvitation(inv.id)
+
+    expect(useWorkspaceStore.getState().myInvitations).toHaveLength(0)
+    const reloaded = await getInvitation(db, inv.id)
+    expect(reloaded?.deletedAt).not.toBeNull()
+  })
+
+  it('acceptInvitation removes the accepted invite from myInvitations', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+    await useWorkspaceStore.getState().loadMyInvitations()
+    expect(useWorkspaceStore.getState().myInvitations).toHaveLength(1)
+
+    await useWorkspaceStore.getState().acceptInvitation(inv.id)
+
+    expect(useWorkspaceStore.getState().myInvitations).toHaveLength(0)
+  })
+})
+
+// Issue 060 — after a successful accept, the shared project must actually
+// become visible: acceptInvitation calls useProjectsStore.refreshProjects(),
+// which re-queries the local db rather than trusting the store's stale
+// in-memory snapshot from whenever init() last ran.
+describe('acceptInvitation — reloads the projects list (issue 060)', () => {
+  it('re-lists projects after accepting, picking up a row written to the db meanwhile', async () => {
+    const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
+    await useProjectsStore.getState().init(db)
+    expect(useProjectsStore.getState().projects).toHaveLength(0)
+
+    // Simulates a row landing locally mid-session (the real deployment: the
+    // read-path streaming in the inviter's project once this sub is seated)
+    // — the store's cached `projects` array won't reflect it until something
+    // re-queries the db, which is exactly what this test proves accepting
+    // now does.
+    const { createProject } = await import('../db/mutations')
+    const sharedProject = await createProject(db, { name: 'Shared', workspaceId: inviterWs.id })
+    expect(useProjectsStore.getState().projects.find((p) => p.id === sharedProject.id)).toBeUndefined()
+
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+
+    await useWorkspaceStore.getState().acceptInvitation(inv.id)
+
+    expect(useProjectsStore.getState().projects.find((p) => p.id === sharedProject.id)).toBeDefined()
   })
 })

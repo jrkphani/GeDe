@@ -9,6 +9,7 @@ import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { CommandPalette } from '../components/CommandPalette'
+import { PendingInvitations } from '../components/PendingInvitations'
 import { WorkspaceMembers } from '../components/WorkspaceMembers'
 import { downloadTextFile, exportFilename } from '../lib/download'
 import { coreCommandSources } from './coreCommands'
@@ -372,9 +373,16 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
               Share (issue 035) sits alongside — its own trigger self-hides
               outside a signed-in Cognito session (WorkspaceMembers). Presence
               (issue 038) is the quietest of the three — it self-hides
-              whenever there's nobody else to show (PresenceRoster). */}
+              whenever there's nobody else to show (PresenceRoster).
+              Invitations (issue 060) is deliberately OUTSIDE the
+              `projectId !== null` gates above: it's the invitee-facing
+              counterpart to WorkspaceMembers' owner view, and a
+              freshly-invited collaborator commonly has no project of their
+              own open yet — it self-hides on its own (signed out / no
+              pending invites), exactly like PresenceRoster/WorkspaceMembers. */}
           {projectId !== null && <PresenceRoster projectId={projectId} />}
           {projectId !== null && <WorkspaceMembers projectId={projectId} />}
+          <PendingInvitations />
           {projectId !== null && <ProjectMenu projectId={projectId} />}
           <AccountMenu />
         </div>

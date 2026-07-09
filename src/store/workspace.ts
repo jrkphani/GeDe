@@ -6,6 +6,7 @@ import { useAuthStore } from './auth'
 import { useProjectsStore } from './projects'
 import { useSyncStore } from './sync'
 import {
+  getWorkspace as dbGetWorkspace,
   listMembers as dbListMembers,
   removeWorkspaceMember as dbRemoveMember,
   setWorkspaceMemberRole as dbSetRole,
@@ -15,11 +16,21 @@ import {
   acceptInvitation as dbAcceptInvitation,
   createInvitation as dbCreateInvitation,
   listInvitations as dbListInvitations,
+  listPendingInvitationsForEmail as dbListPendingInvitationsForEmail,
   resendInvitation as dbResendInvitation,
   revokeInvitation as dbRevokeInvitation,
   type InvitationRow,
 } from '../db/invitations'
 import { resolveEffectiveRole, type WorkspaceRole } from '../domain/workspaceRole'
+
+// Issue 060 — the invitee's own view of a pending invitation: the raw row
+// plus a best-effort workspace name (dbGetWorkspace returns null when this
+// local PGlite has never synced that workspace's row — see that function's
+// own doc comment), so the accept/decline surface can show SOME context
+// ("Acme workspace — editor") instead of a bare, unreadable workspace id.
+export interface MyInvitationView extends InvitationRow {
+  workspaceName: string | null
+}
 
 // Issue 035 — the granting UX's store: member list + pending invitations for
 // the currently-open workspace, and the signed-in caller's own effective role
@@ -41,6 +52,12 @@ interface WorkspaceState {
   invitations: InvitationRow[]
   status: 'idle' | 'loading' | 'ready' | 'error'
   role: WorkspaceRole
+  // Issue 060 — pending invitations addressed to the SIGNED-IN user's own
+  // email, independent of `workspaceId`/`members`/`invitations` above (those
+  // are scoped to whichever workspace's owner panel is currently open; an
+  // invitee may have no workspace open — or none at all — yet still have
+  // invites waiting).
+  myInvitations: MyInvitationView[]
   load: (workspaceId: string) => Promise<void>
   invite: (email: string, role: WorkspaceRole) => Promise<InvitationRow>
   changeRole: (userSub: string, role: WorkspaceRole) => Promise<void>
@@ -48,6 +65,16 @@ interface WorkspaceState {
   revokeInvitation: (invitationId: string) => Promise<void>
   resendInvitation: (invitationId: string) => Promise<void>
   acceptInvitation: (invitationId: string) => Promise<void>
+  // The invitee's own lookup: pending invitations addressed to the signed-in
+  // user's email (src/db/invitations.ts's listPendingInvitationsForEmail, the
+  // by-email RLS SELECT migration 0009 already supports). A no-op (empty
+  // list) when signed out — mirrors every other store's signed-out gate.
+  loadMyInvitations: () => Promise<void>
+  // Revoke/dismiss from the INVITEE's side (mirrors the owner-side
+  // `revokeInvitation` above — same db call, same "no separate sync enqueue
+  // yet" limitation; see that action's own behavior) then refreshes
+  // `myInvitations`.
+  declineInvitation: (invitationId: string) => Promise<void>
 }
 
 function computeRole(members: WorkspaceMemberRow[]): WorkspaceRole {
@@ -61,6 +88,7 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
   invitations: [],
   status: 'idle',
   role: 'owner',
+  myInvitations: [],
 
   async load(workspaceId) {
     set({ workspaceId, status: 'loading' })
@@ -206,7 +234,46 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
         enqueuedAt: new Date().toISOString(),
         status: 'pending',
       })
+      // Issue 060 — best-effort: wait for the flush enqueueLocalMutation just
+      // kicked off before restarting the read-path below, so the seat
+      // mutation has a real chance to reach RDS BEFORE the shape proxy
+      // (058) re-resolves this sub's memberships. flush() is itself
+      // defensive (never throws, retries with backoff on failure) — this
+      // narrows the race for the common online case but does not eliminate
+      // it: a slow/offline flush still leaves the newly-shared project
+      // undelivered until a later retry lands and a subsequent
+      // refresh/reload picks it up (residual gap, docs/issues/060).
+      await useSyncStore.getState().flush()
     }
+    // Issue 060 — pick up the newly-joined workspace: reload the local
+    // projects list and force a fresh read-path subscription (see
+    // useProjectsStore.refreshProjects's own doc comment for why a restart,
+    // not just a reload, is required) so the just-accepted project actually
+    // streams in without a manual page reload.
+    await useProjectsStore.getState().refreshProjects()
+    // The accepted invite no longer belongs in the invitee's own pending
+    // list (acceptInvitation marks it accepted → excluded by canAccept).
+    await get().loadMyInvitations()
+  },
+
+  async loadMyInvitations() {
+    const email = useAuthStore.getState().user?.email
+    if (!email) {
+      set({ myInvitations: [] })
+      return
+    }
+    const db = requireDatabase()
+    const rows = await dbListPendingInvitationsForEmail(db, email)
+    const myInvitations = await Promise.all(
+      rows.map(async (inv) => ({ ...inv, workspaceName: (await dbGetWorkspace(db, inv.workspaceId))?.name ?? null })),
+    )
+    set({ myInvitations })
+  },
+
+  async declineInvitation(invitationId) {
+    const db = requireDatabase()
+    await dbRevokeInvitation(db, invitationId)
+    await get().loadMyInvitations()
   },
 }))
 
@@ -227,5 +294,12 @@ export function useWorkspaceRole(projectId: string): { role: WorkspaceRole; work
 }
 
 export function resetWorkspaceStore(): void {
-  useWorkspaceStore.setState({ workspaceId: null, members: [], invitations: [], status: 'idle', role: 'owner' })
+  useWorkspaceStore.setState({
+    workspaceId: null,
+    members: [],
+    invitations: [],
+    status: 'idle',
+    role: 'owner',
+    myInvitations: [],
+  })
 }
