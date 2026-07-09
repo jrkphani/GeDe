@@ -14,7 +14,17 @@
 // that: it never compares row VALUES, only whether the round-trip completed.
 import type { RowDelta, TableName } from './syncDelta'
 
-export type MutationOp = 'upsert' | 'delete'
+// Issue 066 — 'update' joins 'upsert'/'delete' as its own explicit op for a
+// producer that edits an ALREADY-SYNCED row in place (e.g. resendInvitation's
+// expires_at bump) rather than either creating a fresh row or tombstoning
+// one. This matters because src/sync/writeTransport.ts's toMutationEnvelope
+// maps 'upsert' to the wire protocol's 'insert' (`ON CONFLICT (id) DO
+// NOTHING`) — sending an existing row's edit as 'upsert' would silently
+// no-op server-side instead of applying it. 'upsert' itself is unchanged
+// (still maps to 'insert') for every pre-066 producer (invite/changeRole/
+// removeMember/acceptInvitation) — see that module's own KNOWN LIMITATION
+// note for the pre-existing producers this doesn't retroactively fix.
+export type MutationOp = 'upsert' | 'update' | 'delete'
 
 export interface QueuedMutation {
   // UUIDv7 — the 043 replay protocol's idempotency key. Re-enqueuing the same

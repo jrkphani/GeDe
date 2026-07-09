@@ -1,6 +1,6 @@
 # 066: Invitation revoke / decline / resend never reach the server (local-only) — revoked invites stay live
 
-- **Status**: OPEN
+- **Status**: SHIPPED — `revokeInvitation`/`declineInvitation`/`resendInvitation` (`src/store/workspace.ts`) now enqueue `invitations` delete/update mutations (a new explicit `update` op joins `mutationQueue.ts`'s `MutationOp`, since `upsert`→`insert` would silently no-op an edit of an already-synced row); write-path/`PgWriteStore` coverage for `invitations` update/delete confirmed + extended.
 - **Milestone**: M9 — sharing correctness; **should land with/right after 062**
 - **Severity**: High once 062 ships — a revoked invitation remains **live and acceptable** server-side, because the revoke never syncs.
 - **Found via**: functional review of the open sharing issues (2026-07-10).

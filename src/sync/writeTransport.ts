@@ -50,21 +50,26 @@ const TABLE_TO_MUTATION_TABLE: Readonly<Record<TableName, MutationTable>> = {
   workspace_members: 'workspaceMembers',
 }
 
-// QueuedMutation.op is only 'upsert' | 'delete' (032 never distinguishes a
-// fresh insert from an edit of an existing row); MutationEnvelope.op is
-// 'insert' | 'update' | 'delete' (043 needs the split — 'insert' is
-// idempotent via `ON CONFLICT DO NOTHING`, 'update' is a bare
+// QueuedMutation.op was originally only 'upsert' | 'delete' (032 never
+// distinguished a fresh insert from an edit of an existing row);
+// MutationEnvelope.op is 'insert' | 'update' | 'delete' (043 needs the split
+// — 'insert' is idempotent via `ON CONFLICT DO NOTHING`, 'update' is a bare
 // `UPDATE ... WHERE id`, which silently no-ops if the row doesn't exist yet,
 // see src/server/writeApi/store.ts's applyIfNew). This issue's only current
-// producer (issue 037's adoptProject, src/store/projects.ts) always creates
-// fresh rows in the destination workspace, so 'upsert' maps to 'insert'
-// here. KNOWN LIMITATION: a future producer that enqueues an edit to an
-// already-synced row will need mutationQueue.ts itself to carry the
-// insert/update distinction (out of this issue's scope — src/db/mutations.ts
-// and its callers are owned elsewhere) rather than silently mis-mapping to
-// an insert that a conflicting row would then just ignore.
+// producer at the time (issue 037's adoptProject, src/store/projects.ts)
+// always created fresh rows in the destination workspace, so 'upsert' maps
+// to 'insert' here — unchanged today for every 'upsert' producer (invite/
+// changeRole/removeMember/acceptInvitation). KNOWN LIMITATION (still open):
+// changeRole enqueues 'upsert' for an edit of an ALREADY-SYNCED
+// workspace_members row, which this mapping sends as 'insert' — a silent
+// server-side no-op via `ON CONFLICT DO NOTHING`. Out of 066's scope (that
+// producer predates it); 066 only adds the explicit 'update' op below for
+// its OWN new producer (resendInvitation) rather than reusing 'upsert' and
+// inheriting the same bug.
 function toMutationOp(op: QueuedMutation['op']): MutationEnvelope['op'] {
-  return op === 'delete' ? 'delete' : 'insert'
+  if (op === 'delete') return 'delete'
+  if (op === 'update') return 'update'
+  return 'insert'
 }
 
 // Issue 057 — `mutation.workspaceId`, when set, overrides the flush's global

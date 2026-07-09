@@ -71,9 +71,10 @@ interface WorkspaceState {
   // list) when signed out — mirrors every other store's signed-out gate.
   loadMyInvitations: () => Promise<void>
   // Revoke/dismiss from the INVITEE's side (mirrors the owner-side
-  // `revokeInvitation` above — same db call, same "no separate sync enqueue
-  // yet" limitation; see that action's own behavior) then refreshes
-  // `myInvitations`.
+  // `revokeInvitation` above — same db call, same sync-enqueue shape as of
+  // issue 066, scoped via an explicit workspaceId override since the
+  // invitee's own panel is never "open" for the inviter's workspace) then
+  // refreshes `myInvitations`.
   declineInvitation: (invitationId: string) => Promise<void>
 }
 
@@ -179,16 +180,58 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
     const { workspaceId } = get()
     if (!workspaceId) return
     const db = requireDatabase()
-    await dbRevokeInvitation(db, invitationId)
+    const revoked = await dbRevokeInvitation(db, invitationId)
     set({ invitations: await dbListInvitations(db, workspaceId) })
+    // Issue 066 — mirrors invite/changeRole/removeMember's own signed-in gate
+    // (useSyncStore's `workspaceId` is only set once signed in, src/store/
+    // auth.ts's applyWorkspaceScope) so signed-out/sync-off stays local-only,
+    // byte-for-byte unchanged. A `delete` op (not `upsert`) — the local write
+    // is itself already a soft-delete tombstone (dbRevokeInvitation sets
+    // `deletedAt`), exactly like removeMember's own `workspace_members`
+    // delete mutation above; the write-path's delete branch (src/server/
+    // writeApi/store.ts's applyIfNew) ignores the payload and just stamps
+    // `deleted_at`/`updated_at` from `clientUpdatedAt`, so the row itself is
+    // carried along for parity/debuggability rather than because it's read.
+    if (useSyncStore.getState().workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'invitations',
+        rowId: revoked.id,
+        op: 'delete',
+        row: revoked,
+        optimisticUpdatedAt: revoked.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
   },
 
   async resendInvitation(invitationId) {
     const { workspaceId } = get()
     if (!workspaceId) return
     const db = requireDatabase()
-    await dbResendInvitation(db, invitationId)
+    const resent = await dbResendInvitation(db, invitationId)
     set({ invitations: await dbListInvitations(db, workspaceId) })
+    // Issue 066 — an `update` op (not `upsert`): this invitation row already
+    // exists server-side (it was created via `invite`'s own `upsert`→`insert`
+    // mutation earlier), so mapping it through `upsert` would round-trip as
+    // an `INSERT ... ON CONFLICT (id) DO NOTHING` (src/sync/writeTransport.ts's
+    // toMutationOp) and silently no-op the expiry bump. `update` maps
+    // straight through to the wire protocol's own `update` op (src/sync/
+    // writeTransport.ts), which the write-path applies as a bare
+    // `UPDATE ... WHERE id` (src/server/writeApi/store.ts's applyIfNew).
+    if (useSyncStore.getState().workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'invitations',
+        rowId: resent.id,
+        op: 'update',
+        row: resent,
+        optimisticUpdatedAt: resent.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
   },
 
   // The invitee's own side of the lifecycle — accepting binds THEIR identity
@@ -272,7 +315,29 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
 
   async declineInvitation(invitationId) {
     const db = requireDatabase()
-    await dbRevokeInvitation(db, invitationId)
+    const revoked = await dbRevokeInvitation(db, invitationId)
+    // Issue 066 — same `delete` tombstone shape as the owner-side
+    // `revokeInvitation` above, but scoped via the mutation's own explicit
+    // `workspaceId` override (mirrors `acceptInvitation`'s own seat mutation,
+    // issue 057's own doc comment on `QueuedMutation.workspaceId`): the
+    // invitee's owner-panel `get().workspaceId` above is never the
+    // inviter's workspace (it may be null, or a WHOLLY different workspace
+    // the invitee happens to have open) — `useSyncStore.getState().workspaceId`
+    // is the flush-wide default (the invitee's OWN personal workspace), which
+    // would misroute this delete into the wrong tenant if used unscoped.
+    if (useSyncStore.getState().workspaceId) {
+      useSyncStore.getState().enqueueLocalMutation({
+        id: uuidv7(),
+        table: 'invitations',
+        rowId: revoked.id,
+        op: 'delete',
+        row: revoked,
+        workspaceId: revoked.workspaceId,
+        optimisticUpdatedAt: revoked.updatedAt,
+        enqueuedAt: new Date().toISOString(),
+        status: 'pending',
+      })
+    }
     await get().loadMyInvitations()
   },
 }))

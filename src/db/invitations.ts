@@ -132,16 +132,22 @@ export async function acceptInvitation(
 
 // Soft-delete (mirrors workspaces.ts's removeWorkspaceMember / SPEC §3
 // tombstone convention) — a revoke is itself a row-delta the sync stream can
-// propagate, not a silent disappearance.
-export async function revokeInvitation(db: Database, invitationId: string): Promise<void> {
+// propagate, not a silent disappearance. Issue 066 — returns the tombstoned
+// row (`.returning()`, mirroring removeWorkspaceMember's own pattern) so the
+// store layer can enqueue it as a sync mutation (a `delete` op scoped to its
+// `workspaceId`) without a second round trip; every pre-066 caller already
+// ignored the prior `void` return, so this is additive.
+export async function revokeInvitation(db: Database, invitationId: string): Promise<InvitationRow> {
   const invitation = await getInvitation(db, invitationId)
   if (!invitation) throw new InvitationNotFoundError()
   const status = invitationStatus(invitation)
   if (!canRevoke(status)) throw new InvitationNotAcceptableError(status)
-  await db
+  const rows = await db
     .update(invitations)
     .set({ deletedAt: now(), updatedAt: now() })
     .where(eq(invitations.id, invitationId))
+    .returning()
+  return firstOrThrow(rows)
 }
 
 // Extends a still-live invitation's expiry (least-surprise resend, design

@@ -241,6 +241,62 @@ describe('handleWriteRequest — invitations / workspaceMembers are routable (is
       expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'referential_integrity' })
     }
   })
+
+  // Issue 066 — revokeInvitation/declineInvitation/resendInvitation now
+  // enqueue update/delete mutations against an ALREADY-SYNCED invitations
+  // row (unlike the insert-only coverage above); this proves the write path
+  // accepts both ops end to end for `invitations` specifically, not just
+  // that InMemoryWriteStore's generic op branches work in isolation.
+  it('applies an invitations update (resend/extend-expiry) end to end and the new expiresAt is present afterward', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS1)
+    const invitationId = uuidv7()
+    store.seed({
+      id: invitationId,
+      workspaceId: WS1,
+      table: 'invitations',
+      data: { email: 'invitee@example.com', role: 'viewer', expiresAt: '2026-08-01T00:00:00.000Z' },
+      updatedAt: new Date(0).toISOString(),
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'invitations',
+      op: 'update',
+      entityId: invitationId,
+      payload: { expiresAt: '2026-08-15T00:00:00.000Z' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+    const row = await store.getRow('invitations', invitationId)
+    expect(row?.data.expiresAt).toBe('2026-08-15T00:00:00.000Z')
+  })
+
+  it('applies an invitations delete (revoke/decline tombstone) end to end and the row reads as gone afterward', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS1)
+    const invitationId = uuidv7()
+    store.seed({
+      id: invitationId,
+      workspaceId: WS1,
+      table: 'invitations',
+      data: { email: 'invitee@example.com', role: 'viewer', expiresAt: '2026-08-01T00:00:00.000Z' },
+      updatedAt: new Date(0).toISOString(),
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({ table: 'invitations', op: 'delete', entityId: invitationId, payload: {} })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+    expect(await store.rowExists('invitations', invitationId)).toBe(false)
+    expect(await store.getRow('invitations', invitationId)).toBeNull()
+  })
 })
 
 // Issue 057 — the write-path contract test from the design brief's test-first

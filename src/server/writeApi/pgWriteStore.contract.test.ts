@@ -347,4 +347,83 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     expect(columns[0]).toBe('id')
     expect(columns[1]).toBe('updated_at')
   })
+
+  // Issue 066 — resendInvitation now enqueues an explicit `update` op (not
+  // `upsert`/`insert`) so extending an already-synced invitation's expiry
+  // actually reaches Postgres as an `UPDATE` rather than silently no-opping
+  // via `INSERT ... ON CONFLICT (id) DO NOTHING`. Mirrors the generic
+  // `projects` update test above, for the `invitations` table specifically —
+  // the SQL-parsing regression discipline this file exists for (bugs
+  // 053/054) had no `invitations`-specific update coverage before this.
+  it('update: an invitations mutation (resend) snake_cases expiresAt onto `invitations`, never re-adds `id`/`updated_at`', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const clientUpdatedAt = '2026-02-02T00:00:00.000Z'
+    const mutation = envelope({
+      table: 'invitations',
+      op: 'update',
+      entityId,
+      clientUpdatedAt,
+      payload: {
+        id: entityId,
+        expiresAt: '2026-08-15T00:00:00.000Z',
+        deletedAt: null,
+      },
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const updateCall = calls.find((c) => c.text.includes('UPDATE invitations'))
+    if (!updateCall) throw new Error('no UPDATE invitations call was captured')
+    const assignments = parseSetClause(updateCall.text)
+    const setColumns = assignments.map(([col]) => col)
+
+    expect(setColumns).toContain('expires_at')
+    expect(setColumns).not.toContain('expiresAt')
+    expect(setColumns).not.toContain('deletedAt')
+    expect(setColumns).not.toContain('id')
+    expect(setColumns.filter((c) => c === 'updated_at')).toHaveLength(1)
+    expect(setColumns.filter((c) => c === 'deleted_at')).toHaveLength(0)
+    expect(setColumns).toEqual(['expires_at', 'updated_at'])
+
+    const paramsByPlaceholder = new Map(
+      assignments.map(([, placeholder]) => [placeholder, updateCall.params[Number(placeholder.slice(1)) - 1]]),
+    )
+    expect(paramsByPlaceholder.get('$3')).toBe('2026-08-15T00:00:00.000Z') // expires_at
+    expect(paramsByPlaceholder.get('$2')).toBe(clientUpdatedAt) // updated_at
+    expect(updateCall.params[0]).toBe(entityId) // WHERE id = $1
+  })
+
+  // Issue 066 — revokeInvitation/declineInvitation enqueue a `delete` op.
+  // The `delete` branch of applyIfNew (a bare
+  // `UPDATE <table> SET deleted_at = $2, updated_at = $2 WHERE id = $1`) had
+  // NO SQL-level test anywhere in this file before this — every existing
+  // `delete`-op test (handler.test.ts's dimension-floor tests) exercises only
+  // InMemoryWriteStore, which never parses SQL text, so the same class of
+  // bug bugs 053/054 caught in the insert/update branches could have shipped
+  // undetected here too.
+  it('delete: an invitations mutation (revoke) issues a bare UPDATE deleted_at/updated_at, ignoring the payload', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const clientUpdatedAt = '2026-03-03T00:00:00.000Z'
+    const mutation = envelope({
+      table: 'invitations',
+      op: 'delete',
+      entityId,
+      clientUpdatedAt,
+      // The store layer sends the full (already-tombstoned) row along for
+      // parity with the removeMember convention — the delete branch must
+      // ignore it entirely rather than leaking any of it into the SQL.
+      payload: { id: entityId, email: 'invitee@example.com', deletedAt: clientUpdatedAt },
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const deleteCall = calls.find((c) => c.text.includes('UPDATE invitations'))
+    if (!deleteCall) throw new Error('no UPDATE invitations call was captured for the delete op')
+    expect(deleteCall.text).toMatch(/SET deleted_at = \$2, updated_at = \$2 WHERE id = \$1/)
+    expect(deleteCall.params).toEqual([entityId, clientUpdatedAt])
+  })
 })

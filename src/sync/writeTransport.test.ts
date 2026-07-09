@@ -55,6 +55,15 @@ describe('toMutationEnvelope', () => {
     expect(toMutationEnvelope(mutation({ op: 'upsert' }), 'ws-1').op).toBe('insert')
   })
 
+  // Issue 066 — 'update' is its own explicit QueuedMutation op (distinct from
+  // 'upsert', which maps to 'insert') for a producer editing an
+  // already-synced row in place (resendInvitation's expires_at bump); it
+  // must map straight through to the wire protocol's own 'update', not
+  // silently collapse into 'insert' like 'upsert' does.
+  it('maps an update op straight through (issue 066)', () => {
+    expect(toMutationEnvelope(mutation({ op: 'update' }), 'ws-1').op).toBe('update')
+  })
+
   // Issue 057 — a queued mutation's own explicit `workspaceId` (set by
   // acceptInvitation for its seat mutation, scoped to the INVITER's
   // workspace) must win over the flush's global workspace, since a

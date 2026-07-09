@@ -232,6 +232,122 @@ describe('revokeInvitation / resendInvitation', () => {
   })
 })
 
+// Issue 066 — revokeInvitation/declineInvitation/resendInvitation were
+// local-PGlite-only (055/060's own limitation note): the revoke/decline/
+// resend never reached RDS, so a revoked/declined/resent invitation stayed
+// live server-side forever. Mirrors the invite/changeRole/removeMember sync-
+// enqueue tests above (issue 056) exactly — signed-in queues exactly one
+// pending mutation, signed-out/sync-off stays local-only.
+describe('revokeInvitation / declineInvitation / resendInvitation — sync enqueue (issue 066)', () => {
+  it('revokeInvitation() enqueues an `invitations` delete (tombstone) once a sync workspace is set', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'viewer', 'sub-owner')
+    await useWorkspaceStore.getState().load(ws.id)
+    useSyncStore.setState({ workspaceId: ws.id })
+
+    await useWorkspaceStore.getState().revokeInvitation(inv.id)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({
+      table: 'invitations',
+      rowId: inv.id,
+      op: 'delete',
+      status: 'pending',
+    })
+    expect((queued[0]?.row as { deletedAt: unknown }).deletedAt).not.toBeNull()
+  })
+
+  it('revokeInvitation() enqueues nothing when signed out / sync is off (local-only, byte-for-byte unchanged)', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'viewer', 'sub-owner')
+    await useWorkspaceStore.getState().load(ws.id)
+
+    await useWorkspaceStore.getState().revokeInvitation(inv.id)
+
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+
+  it('resendInvitation() enqueues an `invitations` update carrying the new expiry once a sync workspace is set', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'viewer', 'sub-owner', 1)
+    await useWorkspaceStore.getState().load(ws.id)
+    useSyncStore.setState({ workspaceId: ws.id })
+
+    await useWorkspaceStore.getState().resendInvitation(inv.id)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({
+      table: 'invitations',
+      rowId: inv.id,
+      op: 'update',
+      status: 'pending',
+    })
+    const queuedExpiresAt = (queued[0]?.row as { expiresAt: string }).expiresAt
+    expect(new Date(queuedExpiresAt).getTime()).toBeGreaterThan(new Date(inv.expiresAt).getTime())
+  })
+
+  it('resendInvitation() enqueues nothing when signed out / sync is off (local-only, byte-for-byte unchanged)', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'viewer', 'sub-owner', 1)
+    await useWorkspaceStore.getState().load(ws.id)
+
+    await useWorkspaceStore.getState().resendInvitation(inv.id)
+
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+
+  // declineInvitation is the INVITEE's side (mirrors acceptInvitation, issue
+  // 057): the invitee's own workspace panel is never "open" for the
+  // inviter's workspace, so the mutation must carry an explicit `workspaceId`
+  // override (the invitation's own workspaceId) rather than relying on the
+  // flush's global useSyncStore.workspaceId (the invitee's OWN personal
+  // workspace).
+  it('declineInvitation() enqueues an `invitations` delete (tombstone) scoped to the invitation\'s own workspace once signed in with sync configured', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+    const accepterOwnWs = workspaceIdForSub('sub-invitee')
+    expect(accepterOwnWs).not.toBe(ws.id)
+    useSyncStore.setState({ workspaceId: accepterOwnWs })
+    await useWorkspaceStore.getState().loadMyInvitations()
+
+    await useWorkspaceStore.getState().declineInvitation(inv.id)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({
+      table: 'invitations',
+      rowId: inv.id,
+      op: 'delete',
+      status: 'pending',
+      workspaceId: ws.id,
+    })
+    expect(queued[0]?.workspaceId).not.toBe(accepterOwnWs)
+  })
+
+  it('declineInvitation() enqueues nothing when signed out / sync is off (local-only, byte-for-byte unchanged)', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, ws.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({
+      status: 'authenticated',
+      configured: true,
+      user: { sub: 'sub-invitee', email: 'invitee@example.com' },
+    })
+    // useSyncStore.workspaceId left at its default null — sync never configured.
+    await useWorkspaceStore.getState().loadMyInvitations()
+
+    await useWorkspaceStore.getState().declineInvitation(inv.id)
+
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+})
+
 // Issue 060 — the invitee's own view: pending invitations addressed to the
 // SIGNED-IN user's email, independent of whichever workspace's owner panel
 // (if any) is currently open (`workspaceId`/`invitations` above stay null/[]
