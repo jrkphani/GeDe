@@ -14,6 +14,14 @@ export function requireDatabase(): Database {
   return handle
 }
 
+/** Non-throwing counterpart to requireDatabase() — null when no database has
+ *  been initialized yet. Issue 063's sign-out teardown needs "no database
+ *  yet" (never signed in, or projects init() hasn't run) to be a normal,
+ *  silent no-op rather than a thrown error. */
+export function peekDatabase(): Database | null {
+  return handle
+}
+
 export function resetDatabase(): void {
   handle = null
 }

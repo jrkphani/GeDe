@@ -233,4 +233,22 @@ describe('account affordance (issue 033, SITEMAP §2 "App bar (stable everywhere
     expect(useAuthStore.getState().status).toBe('unauthenticated')
     expect(useAuthStore.getState().user).toBeNull()
   })
+
+  // Issue 063 — the "redirect me away from the project on sign out" half of
+  // the decided model: after teardown, sign-out lands on the hero/login page
+  // (the canonical signed-out on-ramp, issue 064), not left sitting on
+  // whatever project route was open.
+  it('sign-out redirects to the hero/login page (issue 063 — shared-device safety)', async () => {
+    const user = userEvent.setup()
+    window.history.replaceState(null, '', '/p/proj-1/foundation')
+    useAuthStore.setState({
+      configured: true,
+      status: 'authenticated',
+      user: { sub: 'user-1', email: 'me@example.com' },
+    })
+    render(<TestShell />)
+    await user.click(screen.getByRole('button', { name: 'Account: me@example.com' }))
+    await user.click(await screen.findByRole('button', { name: 'Sign out' }))
+    await waitFor(() => expect(window.location.pathname).toBe('/login'))
+  })
 })

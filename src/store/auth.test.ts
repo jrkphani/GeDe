@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // vi.mock factories are hoisted above the module's top-level statements, so
 // the mock fns they close over must be created via `vi.hoisted` — a plain
@@ -34,7 +34,11 @@ vi.mock('../auth/cognitoClient', () => ({
 
 import { resetAuthStoreForTests, useAuthStore } from './auth'
 import { resetSyncStore, useSyncStore } from './sync'
+import { resetProjectsStore, useProjectsStore } from './projects'
+import { resetWorkspaceStore, useWorkspaceStore } from './workspace'
 import { workspaceIdForSub } from '../domain/workspaceId'
+import { openDatabase } from '../db/client'
+import { listProjects } from '../db/mutations'
 
 function base64url(input: string): string {
   return btoa(input).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
@@ -147,7 +151,7 @@ describe('signOut', () => {
   it('clears the session and calls the client synchronously', async () => {
     signInMock.mockResolvedValue(fakeSession())
     await useAuthStore.getState().signIn('a@b.com', 'x')
-    useAuthStore.getState().signOut()
+    await useAuthStore.getState().signOut()
     const state = useAuthStore.getState()
     expect(state.status).toBe('unauthenticated')
     expect(state.user).toBeNull()
@@ -159,7 +163,7 @@ describe('signOut', () => {
     signInMock.mockResolvedValue(fakeSession({ sub: 'sub-to-clear' }))
     await useAuthStore.getState().signIn('a@b.com', 'x')
     expect(useSyncStore.getState().workspaceId).not.toBeNull()
-    useAuthStore.getState().signOut()
+    await useAuthStore.getState().signOut()
     expect(useSyncStore.getState().workspaceId).toBeNull()
   })
 })
@@ -207,7 +211,7 @@ describe('workspace scoping on sign-in (issue 050)', () => {
     signInMock.mockResolvedValue(fakeSession({ sub }))
     await useAuthStore.getState().signIn('a@b.com', 'x')
     const first = useSyncStore.getState().workspaceId
-    useAuthStore.getState().signOut()
+    await useAuthStore.getState().signOut()
     signInMock.mockResolvedValue(fakeSession({ sub }))
     await useAuthStore.getState().signIn('a@b.com', 'x')
     expect(useSyncStore.getState().workspaceId).toBe(first)
@@ -238,5 +242,84 @@ describe('getIdToken', () => {
     const token = await useAuthStore.getState().getIdToken()
     expect(token).toBeNull()
     expect(useAuthStore.getState().status).toBe('unauthenticated')
+  })
+})
+
+// Issue 063 — the decided model (clear-on-sign-out): sign-out wipes the
+// local PGlite so a shared browser starts clean for the next person, and
+// resets the in-memory projects/workspace/sync stores. Redirect wiring
+// itself lives in src/shell/AppShell.tsx (exercised in shell.test.tsx) —
+// this only covers the store-level teardown contract signOut() must uphold.
+describe('signOut clears local data (issue 063)', () => {
+  let db: Awaited<ReturnType<typeof openDatabase>>['db']
+
+  beforeEach(async () => {
+    ;({ db } = await openDatabase('memory://'))
+    resetProjectsStore()
+    await useProjectsStore.getState().init(db)
+  })
+
+  it('wipes local project data so a shared browser starts clean', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    expect(useProjectsStore.getState().projects).toHaveLength(1)
+
+    signInMock.mockResolvedValue(fakeSession())
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+    await useAuthStore.getState().signOut()
+
+    expect(useProjectsStore.getState().projects).toEqual([])
+    expect(await listProjects(db)).toEqual([])
+  })
+
+  it('a purely local-only project (never adopted into a workspace) is wiped too — default clean slate for shared-device safety', async () => {
+    await useProjectsStore.getState().createProject('Local only')
+    signInMock.mockResolvedValue(fakeSession())
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+
+    await useAuthStore.getState().signOut()
+
+    expect(useProjectsStore.getState().projects).toEqual([])
+    expect(await listProjects(db)).toEqual([])
+  })
+
+  it('also resets the workspace and sync stores back to their initial state', async () => {
+    useWorkspaceStore.setState({ workspaceId: 'some-workspace', role: 'editor' })
+    signInMock.mockResolvedValue(fakeSession({ sub: 'sub-1' }))
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+    expect(useSyncStore.getState().workspaceId).not.toBeNull()
+
+    await useAuthStore.getState().signOut()
+
+    expect(useWorkspaceStore.getState().workspaceId).toBeNull()
+    expect(useWorkspaceStore.getState().role).toBe('owner')
+    expect(useSyncStore.getState().workspaceId).toBeNull()
+    expect(useSyncStore.getState().enabled).toBe(false)
+  })
+
+  it('the local-first/no-account path still works immediately after sign-out — a fresh project can be created from the clean slate', async () => {
+    await useProjectsStore.getState().createProject('Before sign-out')
+    await useAuthStore.getState().signOut()
+
+    await useProjectsStore.getState().createProject('After sign-out')
+
+    expect(useProjectsStore.getState().projects.map((p) => p.name)).toEqual(['After sign-out'])
+    expect((await listProjects(db)).map((p) => p.name)).toEqual(['After sign-out'])
+  })
+})
+
+describe('signOut regression: safe no-op edge cases (issue 063)', () => {
+  afterEach(() => {
+    resetWorkspaceStore()
+  })
+
+  it('signing out while never signed in does not throw', async () => {
+    await expect(useAuthStore.getState().signOut()).resolves.not.toThrow()
+    expect(useAuthStore.getState().status).toBe('unauthenticated')
+  })
+
+  it('signing out is a safe no-op when no local database has ever been initialized', async () => {
+    resetProjectsStore()
+    await expect(useAuthStore.getState().signOut()).resolves.not.toThrow()
+    expect(useProjectsStore.getState().projects).toEqual([])
   })
 })

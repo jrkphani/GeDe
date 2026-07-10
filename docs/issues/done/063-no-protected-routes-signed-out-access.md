@@ -1,6 +1,6 @@
 # 063: No protected routes — signed-out users still access project data in the same browser
 
-- **Status**: OPEN — model **decided (2026-07-10): Option 1, clear-on-sign-out** (keep local-first / no-account; on sign-out wipe local project data so a shared browser starts clean) **and redirect to the 064 hero/landing page**. Implement that; the other two models below are recorded as the rejected alternatives.
+- **Status**: SHIPPED — clear-on-sign-out (Option 1). `useAuthStore.signOut()` (`src/store/auth.ts`) now truncates every local PGlite table (`src/db/reset.ts`'s `wipeAllLocalData`, run against the SAME live connection — no PGlite re-open needed) and resets the projects/workspace/sync stores; `AppShell`'s sign-out control (`src/shell/AppShell.tsx`) redirects to `/login` (the 064 hero) once teardown settles. No hard route guards added — the no-account/offline path is untouched and immediately usable again post-wipe.
 - **Milestone**: M9/M10 — auth-gating vs. local-first reconciliation
 - **Severity**: Medium (security/privacy on shared devices) — but entangled with a core architectural stance, so **not** a blind fix.
 - **Found via**: Tester report (2026-07-10): "the browser does not redirect me away from the project upon sign out. I can still access the project without signing in as long as it is the same browser. I don't think we have implemented any protected pages."

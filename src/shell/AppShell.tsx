@@ -195,7 +195,12 @@ function AccountMenu() {
             className="menu__item"
             onClick={() => {
               setOpen(false)
-              signOut()
+              // Issue 063 — clear-on-sign-out: signOut() itself wipes the
+              // local PGlite (store/auth.ts); once that teardown settles,
+              // redirect to the hero/login page (issue 064's canonical
+              // signed-out on-ramp) rather than leaving the departed
+              // session sitting on whatever project route was open.
+              void signOut().then(() => navigate({ kind: 'login' }))
             }}
           >
             Sign out

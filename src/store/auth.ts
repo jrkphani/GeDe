@@ -2,7 +2,11 @@ import { create } from 'zustand'
 import * as cognito from '../auth/cognitoClient'
 import { isJwtExpired } from '../auth/jwt'
 import { workspaceIdForSub } from '../domain/workspaceId'
-import { useSyncStore } from './sync'
+import { wipeAllLocalData } from '../db/reset'
+import { peekDatabase } from './database'
+import { useProjectsStore } from './projects'
+import { resetSyncStore, useSyncStore } from './sync'
+import { resetWorkspaceStore } from './workspace'
 
 // Session/identity store (issue 033, ADR-0009). Deliberately separate from
 // every other store: `hydrate()` never blocks the local-first app's own
@@ -26,6 +30,41 @@ function applyWorkspaceScope(sub: string | null): void {
   useSyncStore.getState().setWorkspaceId(sub ? workspaceIdForSub(sub) : null)
 }
 
+// Issue 063 (decided model: clear-on-sign-out) — a shared browser must start
+// clean for the next person once this session signs out, so sign-out wipes
+// the local PGlite's project data (not just the Cognito session) and resets
+// every other store's in-memory state. This extends the SAME accepted
+// two-way-reference pattern this module's header comment already documents
+// for useSyncStore to useProjectsStore (projects.ts already imports
+// useAuthStore, for listWorkspaceOptions) and useWorkspaceStore (workspace.ts
+// already imports useAuthStore, for computeRole) — every cross-reference
+// stays inside a function body, never at module-evaluation time, so the
+// cycle is safe. Best-effort on the DB wipe itself: a failure there must
+// never block sign-out from completing (mirrors useSyncStore's own "additive,
+// never load-bearing" error handling) — the stale rows simply persist until
+// the next successful sign-out. A never-initialized database (never signed
+// in this session, or projects init() hasn't run) is a normal no-op, not an
+// error — peekDatabase() (not requireDatabase()) is the point of that.
+//
+// Deliberately NOT scoped to workspace-only data: a purely local (never
+// adopted into a workspace) project is wiped too — the doc's own default for
+// shared-device safety, since a signed-in session implies cloud data may
+// have been present and there is no reliable client-side signal to tell
+// "genuinely local-only" apart from "adopted but not yet synced".
+async function clearLocalDataOnSignOut(): Promise<void> {
+  const db = peekDatabase()
+  if (db) {
+    try {
+      await wipeAllLocalData(db)
+    } catch {
+      // best-effort — see doc comment above.
+    }
+  }
+  useProjectsStore.setState({ projects: [] })
+  resetWorkspaceStore()
+  resetSyncStore()
+}
+
 export type AuthStatus = 'idle' | 'checking' | 'authenticated' | 'unauthenticated'
 
 export interface AuthUser {
@@ -47,7 +86,11 @@ interface AuthState {
   confirmSignUp: (email: string, code: string) => Promise<void>
   resendCode: (email: string) => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
-  signOut: () => void
+  // Issue 063 — clear-on-sign-out: async because it also wipes the local
+  // PGlite (a shared-browser safety measure), not just the Cognito session.
+  // The synchronous parts (Cognito sign-out call, state clearing) still run
+  // to completion before the first `await` inside — see the implementation.
+  signOut: () => Promise<void>
   clearError: () => void
   /** The wire-identity seam (src/auth/wireIdentity.ts): a currently-valid ID
    *  token, transparently refreshed if the cached one is stale. Resolves
@@ -134,10 +177,11 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
     }
   },
 
-  signOut() {
+  async signOut() {
     cognito.signOut()
     set({ status: 'unauthenticated', user: null, idToken: null, accessToken: null, error: null })
     applyWorkspaceScope(null)
+    await clearLocalDataOnSignOut()
   },
 
   clearError() {
