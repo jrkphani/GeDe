@@ -85,6 +85,24 @@ describe('projects store — command log (issue 006)', () => {
   })
 })
 
+// Issue 069 — createProject's bespoke optimistic prepend was the only store
+// mutation that wasn't re-entrancy-safe: two overlapping calls each ran their
+// own dbCreate insert, landing two distinct uuidv7 rows for the same name
+// (verified empirically in the issue's standalone PGlite harness). Every
+// sibling mutation re-reads via dbList; createProject must additionally not
+// let two concurrent calls both reach dbCreate at all, or the DB itself ends
+// up with two real rows no re-read can undo.
+describe('createProject re-entrancy safety (issue 069)', () => {
+  it('two concurrent createProject calls for the same input do not produce two projects', async () => {
+    await Promise.all([
+      useProjectsStore.getState().createProject('Tavalo'),
+      useProjectsStore.getState().createProject('Tavalo'),
+    ])
+    expect(useProjectsStore.getState().projects).toHaveLength(1)
+    expect(await listProjects(db)).toHaveLength(1)
+  })
+})
+
 // Issue 068 (Bonus trap) — refreshProjects()'s own read-path restart used to
 // be gated `if (sync.enabled)`, but 063's resetSyncStore() (the sign-out
 // path) sets `enabled: false` — so calling refreshProjects() from the NEW

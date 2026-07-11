@@ -111,8 +111,12 @@ export function InlineEdit({
 
 export interface PhantomInputProps {
   placeholder: string
-  /** Called with the trimmed value when the user commits a non-empty draft. */
-  onSubmit: (value: string) => void
+  /** Called with the trimmed value when the user commits a non-empty draft.
+   *  May return a promise; while it is pending, a second Enter is a no-op
+   *  (issue 069) — guards against an impatient double-submit (or a stray
+   *  duplicate keydown) starting a second, independent create for the same
+   *  input before the first has settled. */
+  onSubmit: (value: string) => void | Promise<void>
   inputClassName?: string
   ariaLabel?: string
   stopPropagation?: boolean
@@ -127,6 +131,9 @@ export function PhantomInput({
 }: PhantomInputProps) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
+  // A ref, not state: it must be readable synchronously within the very next
+  // keydown, which state (batched, re-render-dependent) can't guarantee.
+  const submittingRef = useRef(false)
 
   return (
     <input
@@ -138,10 +145,14 @@ export function PhantomInput({
       onChange={(e) => setDraft(e.target.value)}
       onKeyDown={(e) => {
         if (stopPropagation) e.stopPropagation()
-        if (e.key === 'Enter' && draft.trim()) {
-          onSubmit(draft.trim())
+        if (e.key === 'Enter' && draft.trim() && !submittingRef.current) {
+          const value = draft.trim()
+          submittingRef.current = true
           setDraft('')
           inputRef.current?.focus()
+          void Promise.resolve(onSubmit(value)).finally(() => {
+            submittingRef.current = false
+          })
         }
         if (e.key === 'Escape') setDraft('')
       }}

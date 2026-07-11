@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it } from 'vitest'
 import { fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
+import type { ProjectRow } from '../db/mutations'
 import { StatusBar } from '../shell/StatusBar'
 import { useCommandLogStore } from '../store/commandLog'
 import { resetProjectsStore, useProjectsStore } from '../store/projects'
@@ -186,6 +187,19 @@ describe('ProjectsList — export/import (issue 015)', () => {
     )
     // Empty project → just the root canvas, no contexts.
     expect(screen.getByRole('status')).toHaveTextContent(/Imported Tavalo — 1 canvas, 0 contexts/)
+  })
+})
+
+describe('ProjectsList — duplicate row defense (issue 069)', () => {
+  it('dedupes rows by id even if the store holds a duplicated entry', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    const row: ProjectRow = useProjectsStore.getState().projects[0] as ProjectRow
+    // Simulate the upstream duplication this issue found (two identical rows
+    // in store state) — the render layer must still show exactly one row,
+    // as defense-in-depth regardless of how a dup got into `projects`.
+    useProjectsStore.setState({ projects: [row, row] })
+    render(<ProjectsList onOpen={noop} />)
+    expect(screen.getAllByText('Tavalo')).toHaveLength(1)
   })
 })
 

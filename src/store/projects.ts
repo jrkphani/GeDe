@@ -77,6 +77,16 @@ interface ProjectsState {
 
 let database: Database | null = null
 
+// Issue 069 — createProject was the only mutation that wasn't re-entrancy
+// safe: two overlapping calls for the same name each ran their own dbCreate
+// insert, landing two distinct uuidv7 rows for one user action (an impatient
+// double-Enter, or a stray duplicate submit — see PhantomInput). Keyed by
+// name: a genuinely concurrent call for the SAME name joins the in-flight
+// creation instead of starting a second insert; a call for a different name
+// (or one that arrives after the prior create has settled and been removed
+// below) still proceeds independently.
+const inFlightCreates = new Map<string, Promise<void>>()
+
 const initialState = {
   status: 'booting' as Status,
   error: null,
@@ -114,39 +124,62 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
   async createProject(name) {
     const db = database
     if (!db) return
-    const workspaceId = useSyncStore.getState().workspaceId
-    if (workspaceId) {
-      // The local PGlite may never have seen this id before (a fresh sign-in
-      // on a fresh browser) — ensure it exists first, since
-      // projects.workspace_id is a real FK (migration 0008), not just a
-      // Drizzle-level hint. Idempotent (ON CONFLICT DO NOTHING).
-      await ensureWorkspaceRow(db, workspaceId, 'My Workspace')
+
+    // A create for this exact name is already in flight — join it rather
+    // than starting a second dbCreate insert (issue 069).
+    const existing = inFlightCreates.get(name)
+    if (existing) {
+      await existing
+      return
     }
-    const row = await dbCreate(db, workspaceId ? { name, workspaceId } : { name })
-    set({ projects: [row, ...get().projects] })
-    if (workspaceId) {
-      useSyncStore.getState().enqueueLocalMutation({
-        id: uuidv7(),
-        table: 'projects',
-        rowId: row.id,
-        op: 'upsert',
-        row,
-        optimisticUpdatedAt: row.updatedAt,
-        enqueuedAt: new Date().toISOString(),
-        status: 'pending',
+
+    const task = (async () => {
+      const workspaceId = useSyncStore.getState().workspaceId
+      if (workspaceId) {
+        // The local PGlite may never have seen this id before (a fresh
+        // sign-in on a fresh browser) — ensure it exists first, since
+        // projects.workspace_id is a real FK (migration 0008), not just a
+        // Drizzle-level hint. Idempotent (ON CONFLICT DO NOTHING).
+        await ensureWorkspaceRow(db, workspaceId, 'My Workspace')
+      }
+      const row = await dbCreate(db, workspaceId ? { name, workspaceId } : { name })
+      // Re-read the canonical list, like every sibling mutation
+      // (renameProject/archiveProject/importProject/adoptProject) — a
+      // bespoke optimistic prepend here was the actual defect: it had
+      // nothing guarding against two overlapping calls both prepending
+      // their own freshly-inserted row.
+      set({ projects: await dbList(db) })
+      if (workspaceId) {
+        useSyncStore.getState().enqueueLocalMutation({
+          id: uuidv7(),
+          table: 'projects',
+          rowId: row.id,
+          op: 'upsert',
+          row,
+          optimisticUpdatedAt: row.updatedAt,
+          enqueuedAt: new Date().toISOString(),
+          status: 'pending',
+        })
+      }
+      useCommandLogStore.getState().push({
+        label: `create project "${row.name}"`,
+        async undo() {
+          await dbArchive(db, row.id)
+          set({ projects: await dbList(db) })
+        },
+        async redo() {
+          await dbRestore(db, row.id)
+          set({ projects: await dbList(db) })
+        },
       })
+    })()
+
+    inFlightCreates.set(name, task)
+    try {
+      await task
+    } finally {
+      inFlightCreates.delete(name)
     }
-    useCommandLogStore.getState().push({
-      label: `create project "${row.name}"`,
-      async undo() {
-        await dbArchive(db, row.id)
-        set({ projects: await dbList(db) })
-      },
-      async redo() {
-        await dbRestore(db, row.id)
-        set({ projects: await dbList(db) })
-      },
-    })
   },
 
   async renameProject(id, name) {
@@ -269,6 +302,7 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
 export function resetProjectsStore() {
   database = null
   resetDatabase()
+  inFlightCreates.clear()
   useSyncStore.getState().stop()
   useProjectsStore.setState({ ...initialState })
 }

@@ -129,4 +129,29 @@ describe('PhantomInput', () => {
     await user.keyboard('{Escape}')
     expect(input).toHaveValue('')
   })
+
+  // Issue 069 — an impatient double-Enter before the first submit's async
+  // work (e.g. createProject's DB insert) settles must not fire onSubmit
+  // twice; that's how a duplicate project row gets created.
+  it('ignores a second Enter while a promise-returning onSubmit is still pending', async () => {
+    const user = userEvent.setup()
+    let resolveSubmit: () => void = () => {}
+    const onSubmit = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveSubmit = resolve
+        }),
+    )
+    render(<PhantomInput placeholder="Type to add" onSubmit={onSubmit} />)
+    const input = screen.getByPlaceholderText('Type to add')
+    await user.type(input, 'Tavalo')
+    await user.keyboard('{Enter}')
+    expect(input).toHaveValue('')
+
+    await user.type(input, 'Tavalo')
+    await user.keyboard('{Enter}')
+    expect(onSubmit).toHaveBeenCalledTimes(1)
+
+    resolveSubmit()
+  })
 })

@@ -23,7 +23,17 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   const importProject = useProjectsStore((s) => s.importProject)
   const undo = useCommandLogStore((s) => s.undo)
   const announce = useStatusStore((s) => s.announce)
-  const first = projects.length === 0
+  // Issue 069 — defense-in-depth: dedupe by id before rendering, so any
+  // upstream duplication (a real duplicated DB row, or a stale/duplicated
+  // store array) can never surface as a visibly duplicated row. First
+  // occurrence wins; order otherwise matches `projects`.
+  const seenIds = new Set<string>()
+  const visibleProjects = projects.filter((p) => {
+    if (seenIds.has(p.id)) return false
+    seenIds.add(p.id)
+    return true
+  })
+  const first = visibleProjects.length === 0
 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -105,7 +115,7 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
           if (file) void importFile(file)
         }}
       >
-        {projects.map((p) => (
+        {visibleProjects.map((p) => (
           <div
             key={p.id}
             role="button"
@@ -184,7 +194,10 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
         <div className="project-row project-row--phantom">
           <PhantomInput
             placeholder={first ? 'Name your first project' : 'New project'}
-            onSubmit={(name) => void createProject(name)}
+            // Returned (not fire-and-forget) so PhantomInput's re-entrancy
+            // guard (issue 069) can await it and ignore a second Enter until
+            // this create settles.
+            onSubmit={(name) => createProject(name)}
           />
         </div>
       </section>
