@@ -56,6 +56,13 @@ export async function handleWriteRequest(request: WriteApiRequest, deps: WriteAp
     }
   }
 
+  // Issue 071 — self-heal the CALLER's own workspace before touching any
+  // mutation. Keyed on the server-verified `auth.claims.sub` ONLY — never a
+  // mutation's declared `workspaceId` — so an invitee writing into a shared
+  // workspace (056/057) never re-provisions the owner's row (see
+  // `WriteStore.ensureOwnWorkspace`'s doc comment for the full rationale).
+  await deps.store.ensureOwnWorkspace(auth.claims.sub)
+
   const outcomes: MutationOutcome[] = []
   // Ordering (issue 043 scope: "the replay protocol... owns ordering") —
   // mutations are applied strictly in the order the client queued them, one

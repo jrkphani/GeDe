@@ -141,6 +141,47 @@ describe('PgWriteStore.applyIfNew — tenant-context wiring (defense-in-depth, t
   })
 })
 
+// Issue 071 — every `/write` was 502ing on a Postgres FK violation because
+// the caller's workspace row was never provisioned (provisioning is a
+// one-shot Cognito PostConfirmation trigger with no self-heal). The fix
+// reuses `provisionWorkspace` (src/server/provisionWorkspace/handler.ts) —
+// its two idempotent `ON CONFLICT DO NOTHING` inserts — by wrapping
+// `PgWriteStore`'s own pool in a `ProvisionExecutor`. This mirrors the file's
+// existing SQL-shape assertions: a fake pg client records every statement,
+// and the assertions below prove BOTH inserts fire, in the shape
+// `provisionWorkspace` declares (workspaces row + owner workspace_members
+// row), without duplicating that SQL here.
+describe('PgWriteStore.ensureOwnWorkspace — self-heal (issue 071)', () => {
+  it('issues the two idempotent ON CONFLICT DO NOTHING inserts (workspaces + owner workspace_members)', async () => {
+    const { pool, calls } = fakePool()
+    const store = new PgWriteStore({ pool: asPool(pool) })
+
+    await store.ensureOwnWorkspace('user-42')
+
+    const workspaceInsert = calls.find((c) => c.text.includes('INSERT INTO workspaces'))
+    if (!workspaceInsert) throw new Error('no INSERT INTO workspaces call was captured')
+    expect(workspaceInsert.text).toContain('ON CONFLICT (id) DO NOTHING')
+
+    const membershipInsert = calls.find((c) => c.text.includes('INSERT INTO workspace_members'))
+    if (!membershipInsert) throw new Error('no INSERT INTO workspace_members call was captured')
+    expect(membershipInsert.text).toContain('ON CONFLICT (workspace_id, user_sub) DO NOTHING')
+    expect(membershipInsert.params).toContain('user-42')
+  })
+
+  it('is idempotent — calling it twice for the same sub issues the same two no-op-shaped inserts both times', async () => {
+    const { pool, calls } = fakePool()
+    const store = new PgWriteStore({ pool: asPool(pool) })
+
+    await store.ensureOwnWorkspace('user-42')
+    await store.ensureOwnWorkspace('user-42')
+
+    const workspaceInserts = calls.filter((c) => c.text.includes('INSERT INTO workspaces'))
+    const membershipInserts = calls.filter((c) => c.text.includes('INSERT INTO workspace_members'))
+    expect(workspaceInserts).toHaveLength(2)
+    expect(membershipInserts).toHaveLength(2)
+  })
+})
+
 // Regression coverage for the two SQL bugs that shipped because no test in
 // this repo ever parsed the SQL `PgWriteStore` generates (the tests above
 // only assert transaction/GUC *ordering* against a fake client that echoes

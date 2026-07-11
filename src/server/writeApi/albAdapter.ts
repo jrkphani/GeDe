@@ -105,7 +105,22 @@ export const handler: ALBHandler = async (event: ALBEvent): Promise<ALBResult> =
   // boundary; handleWriteRequest re-validates every envelope's shape
   // (isWellFormedEnvelope) before trusting any field of it.
   const mutations = body.mutations as MutationEnvelope[]
-  const result = await handleWriteRequest({ authorizationHeader, mutations }, deps)
+
+  // Issue 071 (secondary fix) — handleWriteRequest can throw (e.g. a
+  // Postgres error not already turned into a typed rejection, such as the
+  // FK-violation 502 this issue's primary fix now self-heals). Previously
+  // nothing here caught that: an uncaught throw became an unhandled Lambda
+  // error, which ALB reports as an opaque, undiagnosable 502. Mirrors the
+  // body-parse catch above — log, then return a typed JSON error — so any
+  // future write-path failure is a diagnosable logged 500 instead.
+  let result: Awaited<ReturnType<typeof handleWriteRequest>>
+  try {
+    result = await handleWriteRequest({ authorizationHeader, mutations }, deps)
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error('writeApi: handleWriteRequest failed unexpectedly', err)
+    return jsonResponse(500, { error: 'Something went wrong saving your changes. Please try again.' })
+  }
 
   if (result.status !== 200) {
     return jsonResponse(result.status, { rejection: result.rejection })

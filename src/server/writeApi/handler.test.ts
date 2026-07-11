@@ -4,7 +4,7 @@
 // (no live Postgres/Cognito reachable in tests, HANDOFF) and a locally
 // signed JWT (no network JWKS fetch).
 import { createLocalJWKSet, exportJWK, generateKeyPair, SignJWT, type JWK } from 'jose'
-import { beforeAll, describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 import { uuidv7 } from 'uuidv7'
 import { handleWriteRequest, type WriteApiDeps } from './handler'
 import { InMemoryWriteStore } from './store'
@@ -72,6 +72,61 @@ describe('handleWriteRequest — auth gate (test-first plan item 1)', () => {
     const token = await tokenFor('user-1', WS1)
     const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [envelope()] }, deps())
     expect(result.status).toBe(200)
+  })
+})
+
+// Issue 071 — every `/write` was 502ing because the caller's workspace row
+// was never provisioned in RDS (provisioning is a one-shot Cognito
+// PostConfirmation trigger with no self-heal, docs/issues/
+// 071-write-path-self-heal-workspace-provisioning.md). The fix: self-heal
+// the CALLER's own workspace (never the mutation's declared workspaceId)
+// before any mutation in the batch is touched. These tests spy on
+// `InMemoryWriteStore`'s new `ensureOwnWorkspace` method via `vi.spyOn` —
+// which requires the method to actually exist on the object being spied on,
+// so both tests fail today with "could not find an object to spy upon"
+// (the method doesn't exist yet), exactly the red-first signal this issue's
+// test-first plan calls for.
+describe('handleWriteRequest — own-workspace self-heal (071)', () => {
+  it('calls store.ensureOwnWorkspace with the caller\'s verified sub before processing any mutation', async () => {
+    const store = new InMemoryWriteStore()
+    const ensureSpy = vi.spyOn(store, 'ensureOwnWorkspace')
+    const applySpy = vi.spyOn(store, 'applyIfNew')
+    const token = await tokenFor('user-1', WS1)
+
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [envelope()] }, deps(store))
+
+    expect(result.status).toBe(200)
+    expect(ensureSpy).toHaveBeenCalledTimes(1)
+    expect(ensureSpy).toHaveBeenCalledWith('user-1')
+    expect(applySpy).toHaveBeenCalledTimes(1)
+    // Ordering: ensureOwnWorkspace's invocation must precede applyIfNew's —
+    // vitest's invocationCallOrder is a single, cross-spy monotonic counter.
+    expect(ensureSpy.mock.invocationCallOrder[0]).toBeLessThan(applySpy.mock.invocationCallOrder[0] as number)
+  })
+
+  it('only ever self-heals the caller\'s OWN sub, never a shared/member workspace id (sharing-safety, 056/057)', async () => {
+    const store = new InMemoryWriteStore()
+    const WS_A = workspaceIdForSub('user-a')
+    store.seedWorkspace(WS_A)
+    store.seedMembership(WS_A, 'user-b')
+    const ensureSpy = vi.spyOn(store, 'ensureOwnWorkspace')
+    const token = await tokenFor('user-b', workspaceIdForSub('user-b'))
+    // user-b writes into user-a's shared workspace (a legitimate 057 member
+    // write) — this must self-heal ONLY user-b's own workspace, never touch
+    // or re-provision user-a's row.
+    const mutation = envelope({
+      workspaceId: WS_A,
+      table: 'workspaceMembers',
+      op: 'insert',
+      payload: { workspaceId: WS_A, userSub: 'user-b', role: 'editor' },
+    })
+
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+
+    expect(result.status).toBe(200)
+    expect(ensureSpy).toHaveBeenCalledTimes(1)
+    expect(ensureSpy).toHaveBeenCalledWith('user-b')
+    expect(ensureSpy).not.toHaveBeenCalledWith('user-a')
   })
 })
 
@@ -221,14 +276,29 @@ describe('handleWriteRequest — invitations / workspaceMembers are routable (is
     expect(row?.data.userSub).toBe('user-2')
   })
 
-  it('rejects an invitations insert whose workspaceId does not resolve to a live workspace', async () => {
-    const store = new InMemoryWriteStore() // no seedWorkspace() — WS1 unknown to the store
+  // Issue 071 note: this used to seed nothing and target WS1 (the caller's
+  // OWN workspace) to prove the referential-integrity check fires on an
+  // unresolved workspace FK. Issue 071's self-heal now provisions the
+  // caller's own workspace before every mutation, so WS1 always resolves for
+  // user-1 — that scenario is exactly the bug 071 fixes, not a case that can
+  // still legally reject. This test now targets a DIFFERENT workspace the
+  // caller is a seeded MEMBER of (057) but which was never itself
+  // provisioned (no `seedWorkspace`) — proving referential_integrity still
+  // fires for a genuinely unprovisioned workspace, and that self-heal (071)
+  // provisions ONLY the caller's own workspace, never one it merely has
+  // member access to (the same sharing-safety property the 071 self-heal
+  // tests above lock in).
+  it('rejects an invitations insert whose workspaceId does not resolve to a live workspace (071: self-heal does not provision a member-accessible workspace)', async () => {
+    const store = new InMemoryWriteStore() // no seedWorkspace(WS_OTHER) — it stays genuinely unprovisioned
+    const WS_OTHER = workspaceIdForSub('someone-else')
+    store.seedMembership(WS_OTHER, 'user-1') // passes tenancy as a member, but WS_OTHER itself never existed
     const token = await tokenFor('user-1', WS1)
     const mutation = envelope({
+      workspaceId: WS_OTHER,
       table: 'invitations',
       op: 'insert',
       payload: {
-        workspaceId: WS1,
+        workspaceId: WS_OTHER,
         email: 'invitee@example.com',
         role: 'viewer',
         invitedBySub: 'user-1',

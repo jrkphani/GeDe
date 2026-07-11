@@ -12,6 +12,8 @@
 import type { Pool, PoolClient } from 'pg'
 import type { MutationEnvelope, MutationTable } from '../../domain/mutationProtocol'
 import type { WorkspaceScopeResolver } from './tenancy'
+import { provisionWorkspace, type ProvisionExecutor } from '../provisionWorkspace/handler'
+import { workspaceIdForSub } from '../../domain/workspaceId'
 
 export interface StoredRow {
   readonly id: string
@@ -79,6 +81,22 @@ export interface WriteStore extends WorkspaceScopeResolver {
    * this single method satisfies both.
    */
   isMember(workspaceId: string, sub: string): Promise<boolean>
+  /**
+   * Issue 071 — self-heals the CALLER's own workspace (never the mutation's
+   * declared workspaceId) on every write, before any mutation in the batch
+   * is processed. Provisioning is otherwise a one-shot Cognito
+   * PostConfirmation trigger (`src/server/provisionWorkspace/handler.ts`)
+   * with no self-heal (issue 050) — any account whose trigger never ran or
+   * failed has a permanently unprovisioned workspace, so its first
+   * `INSERT INTO projects` hits the real Postgres FK constraint
+   * (`projects_workspace_id_workspaces_id_fk`, 23503) and 502s. Idempotent +
+   * cheap: reuses `provisionWorkspace`'s two `ON CONFLICT DO NOTHING`
+   * inserts, so every call after the first is a no-op. Sharing-safety
+   * (056/057): keyed on the server-verified `sub` derivation
+   * (`workspaceIdForSub`) only — an invitee writing into an owner's shared
+   * workspace never touches/re-provisions the owner's row.
+   */
+  ensureOwnWorkspace(sub: string): Promise<void>
   /** Live dimension count for a canvas (project + context, null = root canvas) — the dimension-floor primitive. */
   countLiveDimensions(projectId: string, contextId: string | null): Promise<number>
   /** Live bindings already occupying a (context, dimension) pair, excluding `excludeBindingId` (a rebind of itself). */
@@ -171,6 +189,21 @@ export class InMemoryWriteStore implements WriteStore {
 
   isMember(workspaceId: string, sub: string): Promise<boolean> {
     return Promise.resolve(this.memberships.has(this.membershipKey(workspaceId, sub)))
+  }
+
+  /**
+   * Issue 071 — mirrors `PgWriteStore.ensureOwnWorkspace`'s effect (a
+   * provisioned workspace + owner membership row for `sub`) against this
+   * fake's own `workspaceIds`/`memberships` sets, so `handler.test.ts` can
+   * assert the orchestration (called once, with the caller's own sub, before
+   * the mutation loop) without a live Postgres. `Set.add` is naturally
+   * idempotent — no extra bookkeeping needed.
+   */
+  ensureOwnWorkspace(sub: string): Promise<void> {
+    const workspaceId = workspaceIdForSub(sub)
+    this.workspaceIds.add(workspaceId)
+    this.memberships.add(this.membershipKey(workspaceId, sub))
+    return Promise.resolve()
   }
 
   getRow(table: MutationTable, id: string): Promise<StoredRow | null> {
@@ -371,6 +404,36 @@ export class PgWriteStore implements WriteStore {
         [workspaceId, sub],
       )
       return result.rows.length > 0
+    } finally {
+      client.release()
+    }
+  }
+
+  /**
+   * Issue 071 — reuses `provisionWorkspace` (`../provisionWorkspace/handler`)
+   * rather than duplicating its two `ON CONFLICT DO NOTHING` INSERTs: a
+   * checked-out client is wrapped in a `ProvisionExecutor` exactly like
+   * `provisionWorkspace/albAdapter.ts` wraps its own pool, so both the
+   * one-shot PostConfirmation trigger and this per-write self-heal share one
+   * source of the provisioning SQL. Goes through `pool.connect()`/`release()`
+   * like every other method on this class (`getRow`, `workspaceExists`,
+   * `isMember`, ...) rather than a bare `pool.query` — no ambient
+   * tenant-context GUCs need setting here (mirrors `isMember`'s own comment:
+   * this runs before any tenant context is relevant). `client.query`'s
+   * `QueryResult.rows` is a mutable array typed by the caller's generic —
+   * cast to the executor's `{ rows: readonly Record<string, unknown>[] }`
+   * shape, mirroring the albAdapter's own adapter closure.
+   */
+  async ensureOwnWorkspace(sub: string): Promise<void> {
+    const client = await this.config.pool.connect()
+    try {
+      const executor: ProvisionExecutor = {
+        query: async (sql, params) => {
+          const result = await client.query(sql, params as unknown[] | undefined)
+          return { rows: result.rows as Record<string, unknown>[] }
+        },
+      }
+      await provisionWorkspace(sub, executor)
     } finally {
       client.release()
     }
