@@ -467,6 +467,102 @@ describe('sync store — workspace_members delta signal (issue 067)', () => {
   })
 })
 
+// Issue 072 — the `projects` analogue of `invitationsAppliedAt`/
+// `membersAppliedAt` directly above: a plain "an inbound `projects` delta
+// just applied" timestamp, bumped by onApplied the same way. Closes the read
+// side of 072's second (independent) defect — src/store/projects.ts's own
+// re-list subscriber is the one consumer (see projects.test.ts).
+describe('sync store — projects delta signal (issue 072)', () => {
+  it('projectsAppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().projectsAppliedAt).toBe(0)
+  })
+
+  it('bumps projectsAppliedAt when an inbound `projects` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().projectsAppliedAt).toBe(0)
+
+    box.deliver?.([
+      {
+        key: '"public"."projects"/"p1"',
+        value: {
+          id: 'p1',
+          workspace_id: ws.id,
+          name: 'Tavalo',
+          description: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().projectsAppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump projectsAppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    await createProject(db, { name: 'Tavalo' })
+    const [project] = await db.select().from(projects)
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'contexts') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."contexts"/"c1"',
+        value: {
+          id: 'c1',
+          project_id: project?.id,
+          workspace_id: project?.workspaceId,
+          parent_id: null,
+          symbol: 'α',
+          name: null,
+          justification: null,
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:02.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().projectsAppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets projectsAppliedAt back to 0', () => {
+    useSyncStore.setState({ projectsAppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().projectsAppliedAt).toBe(0)
+  })
+})
+
 // Issue 036 — sync-state derivation wired to the live engine + browser
 // network events. All fake-stream driven (no live Electric server reachable
 // in this repo's tests, HANDOFF/032's own constraint) — same DI pattern 032

@@ -93,6 +93,12 @@ interface ProjectsState {
 
 let database: Database | null = null
 
+// Issue 072 (Defect 2) — the `useSyncStore.projectsAppliedAt` subscription
+// below (mirrors src/store/presence.ts's own module-level
+// contextsUnsubscribe/teardown pattern for a cross-store subscribe): re-init
+// re-subscribes rather than accumulating a duplicate listener per call.
+let syncUnsubscribe: (() => void) | null = null
+
 // Issue 069 — createProject was the only mutation that wasn't re-entrancy
 // safe: two overlapping calls for the same name each ran their own dbCreate
 // insert, landing two distinct uuidv7 rows for one user action (an impatient
@@ -123,6 +129,19 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
       // — v1's single-user, no-network path stays the tested default until
       // v2 ships (implementation note, test-first plan #6).
       useSyncStore.getState().start(database)
+      // Issue 072 (Defect 2) — refreshProjects() (068) only ever snapshots
+      // dbList ONCE, before the read-path engine streams anything, so a
+      // successfully-applied projects delta arriving mid-session (another
+      // client's edit, or this device's own post-063 fresh sign-in) never
+      // re-rendered without a manual refresh. This store re-lists itself off
+      // its own ground-truth signal instead of trusting global sync status,
+      // mirroring 062/067's own invitations/members refresh wiring.
+      const activeDb = database
+      syncUnsubscribe?.()
+      syncUnsubscribe = useSyncStore.subscribe((state, prevState) => {
+        if (state.projectsAppliedAt === prevState.projectsAppliedAt) return
+        void dbList(activeDb).then((rows) => set({ projects: rows }))
+      })
     } catch (err) {
       set({ status: 'error', error: err instanceof Error ? err.message : String(err) })
     }
@@ -349,5 +368,7 @@ export function resetProjectsStore() {
   resetDatabase()
   inFlightCreates.clear()
   useSyncStore.getState().stop()
+  syncUnsubscribe?.()
+  syncUnsubscribe = null
   useProjectsStore.setState({ ...initialState })
 }

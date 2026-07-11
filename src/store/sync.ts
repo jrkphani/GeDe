@@ -123,6 +123,14 @@ interface SyncState {
   // reflected whatever this device's own local PGlite happened to already
   // contain.
   membersAppliedAt: number
+  // Issue 072 (Defect 2) — the `projects` analogue of invitationsAppliedAt/
+  // membersAppliedAt directly above: a plain "an inbound `projects` delta
+  // just applied" timestamp, bumped by onApplied below the same way.
+  // src/store/projects.ts subscribes to this to re-list itself off its own
+  // ground-truth signal, closing the gap where refreshProjects()'s one-shot
+  // dbList snapshot (taken before the read-path engine streams anything,
+  // 068's restart-safety design) never saw a late-arriving projects delta.
+  projectsAppliedAt: number
   setWorkspaceId: (workspaceId: string | null) => void
   // Starts the read-path engine if isSyncEnabled() is true; a no-op
   // otherwise (leaves `enabled: false`, `handle: null`) — safe to call
@@ -178,6 +186,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     flushing: false,
     invitationsAppliedAt: 0,
     membersAppliedAt: 0,
+    projectsAppliedAt: 0,
 
     setWorkspaceId(workspaceId) {
       set({ workspaceId })
@@ -238,6 +247,8 @@ export const useSyncStore = create<SyncState>()((set, get) => {
           if (table === 'invitations') set({ invitationsAppliedAt: Date.now() })
           // Issue 067 — same bump, same rationale, for `workspace_members`.
           if (table === 'workspace_members') set({ membersAppliedAt: Date.now() })
+          // Issue 072 (Defect 2) — same bump, same rationale, for `projects`.
+          if (table === 'projects') set({ projectsAppliedAt: Date.now() })
           recompute()
           if (lostEdits.length > 0) {
             useStatusStore.getState().announce(lostEditMessage(lostEdits.length))
@@ -400,5 +411,6 @@ export function resetSyncStore(): void {
     flushing: false,
     invitationsAppliedAt: 0,
     membersAppliedAt: 0,
+    projectsAppliedAt: 0,
   })
 }

@@ -5,6 +5,7 @@ import { useCommandLogStore } from './commandLog'
 import { resetProjectsStore, useProjectsStore } from './projects'
 import { resetSyncStore, useSyncStore } from './sync'
 import type { ShapeStreamFactory, ShapeStreamLike } from '../sync/syncEngine'
+import type { ElectricMessage } from '../sync/electricProtocol'
 import { SYNCED_TABLES } from '../sync/config'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
@@ -195,7 +196,7 @@ describe('refreshProjects restarts sync even after a prior sign-out reset (issue
     // startSync/ShapeStream by counting the factory firing, not just that a
     // JS method got invoked.
     const realStart = useSyncStore.getState().start
-    vi.spyOn(useSyncStore.getState(), 'start').mockImplementation((database, options) => {
+    const startSpy = vi.spyOn(useSyncStore.getState(), 'start').mockImplementation((database, options) => {
       realStart(database, { ...options, streamFactory: factory })
     })
 
@@ -215,5 +216,74 @@ describe('refreshProjects restarts sync even after a prior sign-out reset (issue
 
     expect(useSyncStore.getState().enabled).toBe(true)
     expect(factoryCalls).toBe(SYNCED_TABLES.length * 2)
+
+    // Issue 072 fix (test hygiene) — resetSyncStore()'s own setState merge
+    // preserves whatever the `start` property currently holds (it isn't part
+    // of the reset payload), so an un-restored spy here silently survives
+    // into every later test in this file, hijacking their own real start()
+    // calls with THIS test's closure-captured `factory`/`realStart`. Mirrors
+    // auth.test.ts/contexts.test.ts's own explicit mockRestore() convention.
+    startSpy.mockRestore()
+  })
+})
+
+// Issue 072 (Defect 2) — `refreshProjects` snapshots `dbList(db)` once
+// BEFORE the read-path engine streams anything (068's restart-safety
+// design), so even a successfully-applied, late-arriving `projects` delta
+// never re-rendered the list without a manual refresh. The projects store
+// must instead re-list itself off its OWN ground-truth signal
+// (`useSyncStore`'s `projectsAppliedAt`, bumped in onApplied — see
+// store/sync.test.ts) rather than trusting global sync status, mirroring how
+// 062/067 refresh PendingInvitations/Members off their own per-table signal.
+describe('projects store — re-lists on an inbound projects delta (issue 072)', () => {
+  afterEach(() => {
+    resetSyncStore()
+    vi.unstubAllEnvs()
+  })
+
+  it('a projects row that streams in AFTER the initial dbList snapshot becomes visible without a manual refreshProjects()', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    expect(useProjectsStore.getState().projects).toEqual([])
+
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    // Simulates the read-path engine (re)starting mid-session, exactly as
+    // init()/refreshProjects() do in production — the initial dbList
+    // snapshot (beforeEach's init(db) above) has already settled with an
+    // empty list before this delta streams in.
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."projects"/"p1"',
+        value: {
+          id: 'p1',
+          workspace_id: 'ws-unseen',
+          name: 'Streamed In',
+          description: null,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    // Poll rather than a single fixed setTimeout(0): the delta must flush
+    // THROUGH two chained async hops — applyInboundDeltas' own transaction,
+    // then the projects store's own follow-up dbList() re-read triggered by
+    // its projectsAppliedAt subscription — each a real PGlite round trip, not
+    // a single microtask (bounded so a genuine regression still fails fast).
+    for (let i = 0; i < 20 && !useProjectsStore.getState().projects.some((p) => p.name === 'Streamed In'); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+    }
+
+    expect(useProjectsStore.getState().projects.map((p) => p.name)).toContain('Streamed In')
   })
 })

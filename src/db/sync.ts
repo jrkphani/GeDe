@@ -54,6 +54,30 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
     async function upsertGuarded(delta: RowDelta): Promise<boolean> {
       switch (delta.table) {
         case 'projects': {
+          // Issue 072 — the client-side mirror of 071's server-side self-heal.
+          // `projects.workspace_id` carries a real, enforced FK (migration
+          // 0008), but `workspaces` is NOT itself an Electric-synced table
+          // (src/domain/syncScope.ts) — the only other local writer of a
+          // workspace row is createProject's ensureWorkspaceRow (src/db/
+          // workspaces.ts:35). After 063's clear-on-sign-out wipes local
+          // PGlite entirely, a fresh sign-in's local DB has no workspaces row
+          // at all, so a streamed project can be the very first thing this
+          // fresh DB has ever heard about its workspace — without this,
+          // the insert below throws a LOCAL FK violation that rolls back the
+          // WHOLE batch transaction (every other table's deltas in it too).
+          // Idempotently ensure the parent exists first, INSIDE the same tx,
+          // mirroring ensureWorkspaceRow's own ON CONFLICT DO NOTHING.
+          // Guarded on workspaceId being present: a genuinely local-only
+          // project (no workspace) must not force a bogus workspace row into
+          // existence. This is the one uncovered parent-FK edge — every
+          // other synced table's own workspace_id FK is already satisfied by
+          // the time its row can apply, since a child row's project_id FK
+          // requires that project (and therefore this same ensure step) to
+          // have already run.
+          const workspaceId = (delta.row as { workspaceId?: string | null }).workspaceId
+          if (workspaceId) {
+            await tx.insert(schema.workspaces).values({ id: workspaceId, name: 'Workspace' }).onConflictDoNothing()
+          }
           const row = forceDeferredNull(delta) as typeof schema.projects.$inferInsert
           const applied = await tx
             .insert(schema.projects)

@@ -342,3 +342,67 @@ describe('applyInboundDeltas — invitations / workspace_members (issue 056)', (
     expect(raw[0]?.deletedAt).not.toBeNull()
   })
 })
+
+// Issue 072 — the client-side mirror of 071. `projects.workspace_id` carries
+// a real, enforced FK (migration 0008), but `workspaces` is NOT itself an
+// Electric-synced table (src/domain/syncScope.ts) — the only other local
+// writer of a workspace row is createProject's ensureWorkspaceRow. After
+// 063's clear-on-sign-out wipes local PGlite, a fresh sign-in's local DB has
+// no workspaces row at all, so a streamed project is the FIRST thing this
+// fresh DB has ever heard about its workspace. Deliberately does NOT use
+// freshDb() (which pre-seeds WS) — every other describe block in this file
+// relies on that pre-seed; these two prove the apply path is durable even
+// when it's missing.
+describe('applyInboundDeltas — projects delta with a not-yet-known local workspace (072)', () => {
+  it('a projects insert whose workspace_id was never seeded locally still applies durably', async () => {
+    const { db } = await openDatabase('memory://')
+    const delta: RowDelta = {
+      table: 'projects',
+      id: 'p1',
+      updatedAt: T1,
+      row: row('p1', T1, { name: 'Tavalo', description: null, workspaceId: 'ws-unseen' }),
+    }
+
+    await expect(applyInboundDeltas(db, [delta])).resolves.toBeUndefined()
+
+    const rows = await db.select().from(projects)
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.name).toBe('Tavalo')
+    expect(rows[0]?.workspaceId).toBe('ws-unseen')
+  })
+
+  it('a batch with a projects(unknown-workspace) delta + a delta for an already-known table both apply (no full-batch rollback)', async () => {
+    // WS is already known locally (freshDb seeds it) — the invitations delta
+    // below targets it, standing in for "an already-known table" in the same
+    // batch as a projects delta whose OWN workspace ('ws-unseen') has never
+    // been seen locally. Before the fix, the projects insert's FK violation
+    // rolled back the whole transaction, taking the invitation down with it.
+    const db = await freshDb()
+    await applyInboundDeltas(db, [
+      {
+        table: 'projects',
+        id: 'p2',
+        updatedAt: T1,
+        row: row('p2', T1, { name: 'New Project', description: null, workspaceId: 'ws-unseen' }),
+      },
+      {
+        table: 'invitations',
+        id: 'inv1',
+        updatedAt: T1,
+        row: row('inv1', T1, {
+          workspaceId: WS,
+          email: 'invitee@example.com',
+          role: 'viewer',
+          invitedBySub: 'sub-owner',
+          expiresAt: '2026-08-01T00:00:00.000Z',
+          acceptedAt: null,
+        }),
+      },
+    ])
+
+    const projectRows = await db.select().from(projects).where(eq(projects.id, 'p2'))
+    expect(projectRows).toHaveLength(1)
+    const invitationRows = await db.select().from(invitations).where(eq(invitations.id, 'inv1'))
+    expect(invitationRows).toHaveLength(1)
+  })
+})
