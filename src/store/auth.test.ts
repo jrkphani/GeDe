@@ -218,6 +218,51 @@ describe('workspace scoping on sign-in (issue 050)', () => {
   })
 })
 
+// Issue 068 — Defect A: sign-in (and hydrate) must actually rehydrate the
+// projects list once the workspace scope is known, not just set
+// useSyncStore.workspaceId. Before this fix, App.tsx's projectsStore.init()
+// runs exactly once at boot, so a sign-in mid-session (or a sign-in after
+// 063's clear-on-sign-out wiped `projects: []`) never re-populates it.
+describe('signIn/hydrate rehydrate projects after workspace scope is set (issue 068)', () => {
+  it('signIn calls refreshProjects() after the workspace scope is established', async () => {
+    const sub = 'sub-refresh-signin'
+    signInMock.mockResolvedValue(fakeSession({ sub }))
+    let workspaceIdWhenCalled: string | null | undefined
+    const refreshSpy = vi
+      .spyOn(useProjectsStore.getState(), 'refreshProjects')
+      .mockImplementation(() => {
+        workspaceIdWhenCalled = useSyncStore.getState().workspaceId
+        return Promise.resolve()
+      })
+
+    await useAuthStore.getState().signIn('a@b.com', 'x')
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1)
+    expect(workspaceIdWhenCalled).not.toBeNull()
+    expect(workspaceIdWhenCalled).toBe(workspaceIdForSub(sub))
+    refreshSpy.mockRestore()
+  })
+
+  it('hydrate (restored session on reload) calls refreshProjects() after the workspace scope is established', async () => {
+    const sub = 'sub-refresh-hydrate'
+    getCurrentSessionMock.mockResolvedValue(fakeSession({ sub }))
+    let workspaceIdWhenCalled: string | null | undefined
+    const refreshSpy = vi
+      .spyOn(useProjectsStore.getState(), 'refreshProjects')
+      .mockImplementation(() => {
+        workspaceIdWhenCalled = useSyncStore.getState().workspaceId
+        return Promise.resolve()
+      })
+
+    await useAuthStore.getState().hydrate()
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1)
+    expect(workspaceIdWhenCalled).not.toBeNull()
+    expect(workspaceIdWhenCalled).toBe(workspaceIdForSub(sub))
+    refreshSpy.mockRestore()
+  })
+})
+
 describe('getIdToken', () => {
   it('returns the cached token without a network call when it is not near expiry', async () => {
     const session = fakeSession()

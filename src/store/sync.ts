@@ -184,8 +184,20 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       void get().flush()
     },
 
-    start(db, options = {}) {
+    start(db, callerOptions = {}) {
       if (!isSyncEnabled()) return
+      // Issue 068 (Defect B) — the read-path was never authenticated: a
+      // caller that doesn't inject its own getAuthToken (the one production
+      // entry point, src/store/projects.ts, never has) fell through to
+      // authToken.ts's `noAuth` deep inside syncEngine.ts, so every shape
+      // request's Authorization header was empty and the shape proxy 401s
+      // (src/server/shapeProxy/handler.ts). Mirror flush() below: default to
+      // the real Cognito JWT via useAuthStore. A caller (or a test) that
+      // injects its own getAuthToken keeps it as-is.
+      const options: SyncOptions = {
+        ...callerOptions,
+        getAuthToken: callerOptions.getAuthToken ?? (() => useAuthStore.getState().getIdToken()),
+      }
       // The read-path (Electric) needs a configured shape endpoint. Without
       // VITE_SYNC_URL — and no injected test streamFactory — the default
       // factory would build a shape URL from an empty base and throw

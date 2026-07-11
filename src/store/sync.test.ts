@@ -14,6 +14,7 @@ import { resetAuthStoreForTests, useAuthStore } from './auth'
 import { resetSyncStore, useSyncStore } from './sync'
 import { SYNCED_TABLES } from '../sync/config'
 import type { ShapeStreamFactory, ShapeStreamLike } from '../sync/syncEngine'
+import type { TokenProvider } from '../sync/authToken'
 import type { ElectricMessage } from '../sync/electricProtocol'
 import type { QueuedMutation } from '../domain/mutationQueue'
 import type { TableName } from '../domain/syncDelta'
@@ -220,6 +221,49 @@ describe('sync store — engine lifecycle (driven by a fake stream, no live Elec
 
     expect(useSyncStore.getState().pendingCount).toBe(0)
     vi.unstubAllEnvs()
+  })
+})
+
+// Issue 068 (Defect B) — the read-path was never authenticated: start() was
+// always called with no `getAuthToken`, so SyncOptions.getAuthToken fell
+// back to authToken.ts's `noAuth` (always resolves null), and the shape
+// proxy's server-side auth gate (401s with no bearer token, src/server/
+// shapeProxy/handler.ts) rejected every real client. The fix mirrors how
+// flush() (above) already wires the real Cognito JWT via useAuthStore —
+// start() must default `getAuthToken` the same way whenever the caller (the
+// one production entry point, src/store/projects.ts) doesn't inject its own.
+describe('sync store — read-path authentication default (issue 068)', () => {
+  it('start() with no caller-supplied getAuthToken defaults to the signed-in id token, not noAuth/null', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const { db } = await openDatabase('memory://')
+    let capturedGetAuthToken: TokenProvider | undefined
+    const factory: ShapeStreamFactory = (_table, options) => {
+      capturedGetAuthToken = options.getAuthToken
+      return { subscribe: () => () => {} }
+    }
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    expect(capturedGetAuthToken).toBeDefined()
+    const token = await capturedGetAuthToken?.()
+    expect(token).not.toBeNull()
+    expect(token).toBe(useAuthStore.getState().idToken)
+  })
+
+  it('a caller-supplied getAuthToken is used as-is (not overridden by the default)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const callerToken: TokenProvider = () => Promise.resolve('caller-supplied-token')
+    let capturedGetAuthToken: TokenProvider | undefined
+    const factory: ShapeStreamFactory = (_table, options) => {
+      capturedGetAuthToken = options.getAuthToken
+      return { subscribe: () => () => {} }
+    }
+
+    useSyncStore.getState().start(db, { streamFactory: factory, getAuthToken: callerToken })
+
+    expect(await capturedGetAuthToken?.()).toBe('caller-supplied-token')
   })
 })
 

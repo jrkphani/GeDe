@@ -125,6 +125,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         accessToken: session.accessToken,
       })
       applyWorkspaceScope(session.sub)
+      // Issue 068 (Defect A) — App.tsx's projectsStore.init() (the only
+      // place that lists local projects + starts the read-path) runs once
+      // at boot and never re-runs within the SPA session, so a restored
+      // session on reload must re-list + restart sync itself here or a
+      // sign-out's clear-on-sign-out (063) reset never gets repopulated.
+      await useProjectsStore.getState().refreshProjects()
     } else {
       set({ status: 'unauthenticated', user: null, idToken: null, accessToken: null })
     }
@@ -171,6 +177,12 @@ export const useAuthStore = create<AuthState>()((set, get) => ({
         accessToken: session.accessToken,
       })
       applyWorkspaceScope(session.sub)
+      // Issue 068 (Defect A) — see hydrate()'s matching comment above: a
+      // fresh sign-in mid-session never re-runs projectsStore.init(), so
+      // this is the one place that rehydrates the (possibly just-wiped,
+      // 063) local projects list and restarts the read-path for the newly
+      // scoped workspace.
+      await useProjectsStore.getState().refreshProjects()
     } catch (err) {
       set({ error: errorMessage(err) })
       throw err

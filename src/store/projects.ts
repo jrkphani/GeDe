@@ -252,14 +252,17 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     const db = database
     if (!db) return
     set({ projects: await dbList(db) })
+    // Issue 068 (Bonus trap) — unconditionally restart the read-path rather
+    // than gating on `sync.enabled`: 063's sign-out reset (resetSyncStore())
+    // leaves `enabled: false`, so a subsequent sign-in's refreshProjects()
+    // call (068, Defect A) must still be able to bring the engine back up.
+    // Both stop() and start() are internally safe no-ops when sync isn't
+    // configured/enabled (their own guards are env/config based, see
+    // src/store/sync.ts), so calling them unconditionally never regresses
+    // the sync-off/local-only path.
     const sync = useSyncStore.getState()
-    // Only a live read-path is worth restarting — sync-off/local-only stays
-    // exactly the reload above (byte-for-byte unchanged from every other
-    // re-list in this store).
-    if (sync.enabled) {
-      sync.stop()
-      sync.start(db)
-    }
+    sync.stop()
+    sync.start(db)
   },
 }))
 

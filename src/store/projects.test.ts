@@ -1,8 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openDatabase } from '../db/client'
 import { listProjects } from '../db/mutations'
 import { useCommandLogStore } from './commandLog'
 import { resetProjectsStore, useProjectsStore } from './projects'
+import { resetSyncStore, useSyncStore } from './sync'
+import type { ShapeStreamFactory, ShapeStreamLike } from '../sync/syncEngine'
+import { SYNCED_TABLES } from '../sync/config'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 
@@ -79,5 +82,57 @@ describe('projects store — command log (issue 006)', () => {
         .sort(),
     ).toEqual(finalIds)
     expect(useProjectsStore.getState().projects.find((p) => p.id === idA)?.name).toBe('A renamed')
+  })
+})
+
+// Issue 068 (Bonus trap) — refreshProjects()'s own read-path restart used to
+// be gated `if (sync.enabled)`, but 063's resetSyncStore() (the sign-out
+// path) sets `enabled: false` — so calling refreshProjects() from the NEW
+// signIn()/hydrate() rehydration (068, Defect A) would re-list an (empty)
+// snapshot and never actually restart the engine. sync.start()/stop() are
+// internally safe to call unconditionally (their own guards are env/config
+// based, src/store/sync.ts's own doc comment) — the gate here must be
+// loosened, not just given a new caller.
+describe('refreshProjects restarts sync even after a prior sign-out reset (issue 068)', () => {
+  afterEach(() => {
+    resetSyncStore()
+    vi.unstubAllEnvs()
+  })
+
+  it('calls sync.start() (and its injected streamFactory fires again) even though sync.enabled was left false by a prior reset', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    let factoryCalls = 0
+    const factory: ShapeStreamFactory = (): ShapeStreamLike => {
+      factoryCalls++
+      return { subscribe: () => () => {} }
+    }
+    // Intercept every sync.start() call so it always carries this
+    // test-injected streamFactory — production refreshProjects() itself
+    // calls sync.start(db) with no options at all (068's fix relies on
+    // sync.ts defaulting getAuthToken internally, out of scope for this
+    // store-level test) — this proves the call actually reaches
+    // startSync/ShapeStream by counting the factory firing, not just that a
+    // JS method got invoked.
+    const realStart = useSyncStore.getState().start
+    vi.spyOn(useSyncStore.getState(), 'start').mockImplementation((database, options) => {
+      realStart(database, { ...options, streamFactory: factory })
+    })
+
+    // First start (mirrors init()) establishes the engine — one factory
+    // call per synced table (startSync subscribes one shape per table).
+    useSyncStore.getState().start(db)
+    expect(useSyncStore.getState().enabled).toBe(true)
+    expect(factoryCalls).toBe(SYNCED_TABLES.length)
+
+    // A sign-out resets it back to disabled, exactly like resetSyncStore()
+    // (063) does — simulating the post-sign-out state a subsequent sign-in's
+    // refreshProjects() call must recover from.
+    resetSyncStore()
+    expect(useSyncStore.getState().enabled).toBe(false)
+
+    await useProjectsStore.getState().refreshProjects()
+
+    expect(useSyncStore.getState().enabled).toBe(true)
+    expect(factoryCalls).toBe(SYNCED_TABLES.length * 2)
   })
 })
