@@ -8,6 +8,7 @@ import { useSyncStore } from './sync'
 import {
   archiveProject as dbArchive,
   createProject as dbCreate,
+  listArchivedProjects as dbListArchived,
   listProjects as dbList,
   renameProject as dbRename,
   restoreProject as dbRestore,
@@ -39,10 +40,25 @@ interface ProjectsState {
   status: Status
   error: string | null
   projects: ProjectRow[]
+  // Issue 070 (fixes #9) — the durable counterpart to the session-scoped
+  // command-log undo: archived rows are never queried anywhere else, so a
+  // project archived more than one action ago was unreachable. `archivedProjects`
+  // is loaded on demand (loadArchivedProjects), not kept live automatically —
+  // mirrors `projects` itself, which is also only refreshed by explicit calls.
+  archivedProjects: ProjectRow[]
   init: (db?: Database) => Promise<void>
   createProject: (name: string) => Promise<void>
   renameProject: (id: string, name: string) => Promise<void>
   archiveProject: (id: string) => Promise<void>
+  // Populates `archivedProjects` from the durable soft-delete read path
+  // (listArchivedProjects) — independent of the command log, so it survives
+  // navigation, reload (via a fresh call), and store re-init.
+  loadArchivedProjects: () => Promise<void>
+  // Restores a project found via `archivedProjects` (not necessarily the
+  // most-recently-archived one — that's the whole point of this issue).
+  // Refreshes BOTH lists and pushes an undo/redo pair onto the shared
+  // command log, mirroring archiveProject's own pattern.
+  restoreArchivedProject: (id: string) => Promise<void>
   // Issue 015 — export gathers a project's rows into the versioned JSON
   // envelope; import always creates a NEW project (fresh ids) atomically and
   // throws a typed rejection (parseEnvelope) the caller renders calmly.
@@ -91,6 +107,7 @@ const initialState = {
   status: 'booting' as Status,
   error: null,
   projects: [],
+  archivedProjects: [],
 }
 
 export const useProjectsStore = create<ProjectsState>()((set, get) => ({
@@ -215,6 +232,34 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
       async redo() {
         await dbArchive(db, id)
         set({ projects: get().projects.filter((p) => p.id !== id) })
+      },
+    })
+  },
+
+  // Issue 070 (fixes #9) — on-demand load, not auto-refreshed by any other
+  // mutation (mirrors `projects`' own explicit-refresh convention). Callers
+  // (the archived-view UI, tests proving durability) call this whenever they
+  // need the current archived set.
+  async loadArchivedProjects() {
+    const db = database
+    if (!db) return
+    set({ archivedProjects: await dbListArchived(db) })
+  },
+
+  async restoreArchivedProject(id) {
+    const db = database
+    if (!db) return
+    const row = await dbRestore(db, id)
+    set({ projects: await dbList(db), archivedProjects: await dbListArchived(db) })
+    useCommandLogStore.getState().push({
+      label: `restore "${row.name}"`,
+      async undo() {
+        await dbArchive(db, id)
+        set({ projects: await dbList(db), archivedProjects: await dbListArchived(db) })
+      },
+      async redo() {
+        await dbRestore(db, id)
+        set({ projects: await dbList(db), archivedProjects: await dbListArchived(db) })
       },
     })
   },

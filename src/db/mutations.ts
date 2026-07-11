@@ -91,6 +91,19 @@ export async function listProjects(db: Database): Promise<ProjectRow[]> {
     .orderBy(desc(projects.updatedAt), asc(projects.name))
 }
 
+// Issue 070 (fixes #9) — the counterpart read path to listProjects: archiving
+// is a durable soft-delete (deleted_at, never a hard delete), but nothing
+// ever surfaced the archived side of it. Ordered most-recently-archived
+// first so a restore view reads like an undo stack even though it's a real,
+// durable list independent of the session-scoped command log.
+export async function listArchivedProjects(db: Database): Promise<ProjectRow[]> {
+  return db
+    .select()
+    .from(projects)
+    .where(isNotNull(projects.deletedAt))
+    .orderBy(desc(projects.deletedAt), asc(projects.name))
+}
+
 // ── Dimensions (issue 002) ────────────────────────────────────────────────────
 // contextId scoping (child canvases) arrives with issue 011; everything below
 // operates on the root canvas (context_id IS NULL).

@@ -203,6 +203,51 @@ describe('ProjectsList — duplicate row defense (issue 069)', () => {
   })
 })
 
+describe('ProjectsList — archived projects view (issue 070, fixes #9)', () => {
+  it('toggles to the archived view via the toolbar affordance and back', async () => {
+    const user = userEvent.setup()
+    await useProjectsStore.getState().createProject('Tavalo')
+    render(<ProjectsList onOpen={noop} />)
+
+    await user.click(screen.getByRole('button', { name: 'Archived projects' }))
+    expect(screen.getByRole('region', { name: 'Archived projects' })).toBeInTheDocument()
+    expect(screen.queryByText('Tavalo')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Back to projects' }))
+    expect(await screen.findByText('Tavalo')).toBeInTheDocument()
+  })
+
+  it('shows a calm placeholder when nothing is archived', async () => {
+    const user = userEvent.setup()
+    render(<ProjectsList onOpen={noop} />)
+    await user.click(screen.getByRole('button', { name: 'Archived projects' }))
+    expect(await screen.findByText('No archived projects.')).toBeInTheDocument()
+  })
+
+  it('lists an archived project with a Restore control that restores it and narrates via the status bar', async () => {
+    const user = userEvent.setup()
+    await useProjectsStore.getState().createProject('Tavalo')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    await useProjectsStore.getState().archiveProject(id)
+
+    render(
+      <>
+        <ProjectsList onOpen={noop} />
+        <StatusBar />
+      </>,
+    )
+    await user.click(screen.getByRole('button', { name: 'Archived projects' }))
+    expect(await screen.findByText('Tavalo')).toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Restore Tavalo' }))
+
+    await waitFor(() => expect(screen.queryByText('Tavalo')).not.toBeInTheDocument())
+    expect(useProjectsStore.getState().archivedProjects).toEqual([])
+    expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual([id])
+    expect(screen.getByRole('status')).toHaveTextContent('Restored “Tavalo”')
+  })
+})
+
 describe('ProjectsList — row affordance (issue 065)', () => {
   const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
 

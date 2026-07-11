@@ -103,6 +103,69 @@ describe('createProject re-entrancy safety (issue 069)', () => {
   })
 })
 
+// Issue 070 (fixes #9) — archiving is a durable soft-delete, but nothing ever
+// surfaced archived rows beyond the single-slot, session-scoped command-log
+// undo. These prove a second, durable read/restore path: archivedProjects +
+// loadArchivedProjects() + restoreArchivedProject(), independent of the undo
+// stack and of process/store re-init.
+describe('archived projects (issue 070)', () => {
+  it('archiving two projects then restoring the OLDER one succeeds and leaves the newer archived', async () => {
+    await useProjectsStore.getState().createProject('A')
+    await useProjectsStore.getState().createProject('B')
+    const idA = useProjectsStore.getState().projects.find((p) => p.name === 'A')?.id as string
+    const idB = useProjectsStore.getState().projects.find((p) => p.name === 'B')?.id as string
+
+    await useProjectsStore.getState().archiveProject(idA)
+    await useProjectsStore.getState().archiveProject(idB)
+    await useProjectsStore.getState().loadArchivedProjects()
+    expect(
+      useProjectsStore
+        .getState()
+        .archivedProjects.map((p) => p.id)
+        .sort(),
+    ).toEqual([idA, idB].sort())
+
+    await useProjectsStore.getState().restoreArchivedProject(idA)
+
+    expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual([idA])
+    expect(useProjectsStore.getState().archivedProjects.map((p) => p.id)).toEqual([idB])
+  })
+
+  it('restoring an archived project is undoable via the command log (undo re-archives it)', async () => {
+    await useProjectsStore.getState().createProject('A')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    await useProjectsStore.getState().archiveProject(id)
+    await useProjectsStore.getState().loadArchivedProjects()
+
+    await useProjectsStore.getState().restoreArchivedProject(id)
+    expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual([id])
+    expect(useProjectsStore.getState().archivedProjects).toEqual([])
+
+    await useCommandLogStore.getState().undo()
+    expect(useProjectsStore.getState().projects).toEqual([])
+    expect(useProjectsStore.getState().archivedProjects.map((p) => p.id)).toEqual([id])
+
+    await useCommandLogStore.getState().redo()
+    expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual([id])
+    expect(useProjectsStore.getState().archivedProjects).toEqual([])
+  })
+
+  it('the archived list survives a store re-init (persisted, not session state)', async () => {
+    await useProjectsStore.getState().createProject('A')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    await useProjectsStore.getState().archiveProject(id)
+    await useProjectsStore.getState().loadArchivedProjects()
+    expect(useProjectsStore.getState().archivedProjects).toHaveLength(1)
+
+    resetProjectsStore()
+    await useProjectsStore.getState().init(db)
+    expect(useProjectsStore.getState().archivedProjects).toEqual([])
+
+    await useProjectsStore.getState().loadArchivedProjects()
+    expect(useProjectsStore.getState().archivedProjects.map((p) => p.id)).toEqual([id])
+  })
+})
+
 // Issue 068 (Bonus trap) — refreshProjects()'s own read-path restart used to
 // be gated `if (sync.enabled)`, but 063's resetSyncStore() (the sign-out
 // path) sets `enabled: false` — so calling refreshProjects() from the NEW

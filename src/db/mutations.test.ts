@@ -3,6 +3,7 @@ import { openDatabase } from './client'
 import {
   archiveProject,
   createProject,
+  listArchivedProjects,
   listProjects,
   renameProject,
   restoreProject,
@@ -49,6 +50,27 @@ describe('project mutations', () => {
     const rows = await listProjects(db)
     expect(rows).toHaveLength(1)
     expect(rows[0]?.id).toBe(row.id)
+  })
+
+  // Issue 070 (fixes #9) — listProjects only ever surfaces live rows; nothing
+  // read the archived side of the same soft-delete until now, so a project
+  // archived more than one action ago was unreachable.
+  it('listArchivedProjects returns all archived rows, most-recently-archived first', async () => {
+    const db = await freshDb()
+    const a = await createProject(db, { name: 'A' })
+    const b = await createProject(db, { name: 'B' })
+    const c = await createProject(db, { name: 'C' })
+
+    await archiveProject(db, a.id)
+    await new Promise((r) => setTimeout(r, 5))
+    await archiveProject(db, c.id)
+    await new Promise((r) => setTimeout(r, 5))
+    await archiveProject(db, b.id)
+
+    const archived = await listArchivedProjects(db)
+    expect(archived.map((r) => r.id)).toEqual([b.id, c.id, a.id])
+
+    expect(await listProjects(db)).toEqual([])
   })
 
   it('renameProject updates name and bumps updated_at', async () => {

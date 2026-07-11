@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { ChevronRight, Pencil } from 'lucide-react'
 import { useCommandLogStore } from '../store/commandLog'
 import { useProjectsStore } from '../store/projects'
@@ -21,6 +21,13 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   const archiveProject = useProjectsStore((s) => s.archiveProject)
   const createProject = useProjectsStore((s) => s.createProject)
   const importProject = useProjectsStore((s) => s.importProject)
+  // Issue 070 (fixes #9) — the durable archived-projects view: unlike the
+  // generic command-log undo (session-scoped, single most-recent step), this
+  // reads the real soft-delete state, so any previously archived project is
+  // reachable, not just the last one.
+  const archivedProjects = useProjectsStore((s) => s.archivedProjects)
+  const loadArchivedProjects = useProjectsStore((s) => s.loadArchivedProjects)
+  const restoreArchivedProject = useProjectsStore((s) => s.restoreArchivedProject)
   const undo = useCommandLogStore((s) => s.undo)
   const announce = useStatusStore((s) => s.announce)
   // Issue 069 — defense-in-depth: dedupe by id before rendering, so any
@@ -46,6 +53,15 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   const [showBackupNote, setShowBackupNote] = useState(
     () => localStorage.getItem(BACKUP_NOTE_KEY) !== 'dismissed',
   )
+  // Issue 070 — a state on `/`, not a new route (consistent with the Design
+  // tier's `?view=canvas|coverage` query-param pattern, but this stays local
+  // component state rather than growing the route/AppRoute shape for a
+  // single-panel toggle nothing else needs to know about).
+  const [showArchived, setShowArchived] = useState(false)
+
+  useEffect(() => {
+    if (showArchived) void loadArchivedProjects()
+  }, [showArchived, loadArchivedProjects])
 
   // The one import path (button or drop): parse+import through the store, which
   // throws a typed, calm error we render in the panel — never partial, never a
@@ -72,21 +88,28 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <main className="projects">
       <div className="projects__toolbar">
-        <Button variant="command" onClick={() => fileInputRef.current?.click()}>
-          Import project
+        {!showArchived && (
+          <>
+            <Button variant="command" onClick={() => fileInputRef.current?.click()}>
+              Import project
+            </Button>
+            <Input
+              ref={fileInputRef}
+              type="file"
+              accept="application/json,.json"
+              className="visually-hidden"
+              aria-label="Import project file"
+              onChange={(e) => {
+                const file = e.target.files?.[0]
+                if (file) void importFile(file)
+                e.target.value = ''
+              }}
+            />
+          </>
+        )}
+        <Button variant="command" onClick={() => setShowArchived((v) => !v)}>
+          {showArchived ? 'Back to projects' : 'Archived projects'}
         </Button>
-        <Input
-          ref={fileInputRef}
-          type="file"
-          accept="application/json,.json"
-          className="visually-hidden"
-          aria-label="Import project file"
-          onChange={(e) => {
-            const file = e.target.files?.[0]
-            if (file) void importFile(file)
-            e.target.value = ''
-          }}
-        />
       </div>
 
       {importError !== null && (
@@ -95,8 +118,35 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
         </p>
       )}
 
-      {/* Drop a .gede.json anywhere on the panel — the whole surface is a target
-          (design brief), highlighted with the accent wash + a dashed hairline. */}
+      {/* Issue 070 (fixes #9) — the durable archived-projects view: reuses the
+          .project-row layout + rowAction Restore button, per-row, in
+          most-recently-archived-first order (listArchivedProjects). Restore
+          feedback goes through the shell status bar, same single channel as
+          every other narration (SITEMAP §2) — nothing here toasts. */}
+      {showArchived ? (
+        <section className="panel" aria-label="Archived projects">
+          {archivedProjects.length === 0 && <p className="placeholder">No archived projects.</p>}
+          {archivedProjects.map((p) => (
+            <div key={p.id} className="project-row">
+              <span className="project-name">{p.name}</span>
+              {p.description !== null && <span className="project-desc">{p.description}</span>}
+              <Button
+                variant="rowAction"
+                aria-label={`Restore ${p.name}`}
+                onClick={() => {
+                  void restoreArchivedProject(p.id).then(() => {
+                    announce(`Restored “${p.name}”`, { label: 'Undo', run: undo })
+                  })
+                }}
+              >
+                Restore
+              </Button>
+            </div>
+          ))}
+        </section>
+      ) : (
+      /* Drop a .gede.json anywhere on the panel — the whole surface is a target
+          (design brief), highlighted with the accent wash + a dashed hairline. */
       <section
         className="panel projects__droptarget"
         aria-label="Projects"
@@ -201,8 +251,9 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
           />
         </div>
       </section>
+      )}
 
-      {showBackupNote && (
+      {showBackupNote && !showArchived && (
         <footer className="backup-note">
           <span>Projects live in this browser. Export to back up.</span>
           <Button
