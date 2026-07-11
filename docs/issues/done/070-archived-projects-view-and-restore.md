@@ -1,6 +1,6 @@
 # 070: Archived projects are unreachable — no list/restore beyond the transient "Undo Archive"
 
-- **Status**: IMPLEMENTED (code-complete + verify:fast green)
+- **Status**: SHIPPED
 - **Milestone**: M6 — projects list / archive management
 - **Severity**: Medium — archived projects are safely persisted but permanently unreachable through the UI once the session-scoped undo is gone. GitHub **#9**.
 - **Found via**: read-only investigation (2026-07-10).

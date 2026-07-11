@@ -1,6 +1,6 @@
 # 069: Duplicate project entry on the home screen — `createProject`'s optimistic prepend is not re-entrancy-safe
 
-- **Status**: IMPLEMENTED (code-complete + verify:fast green)
+- **Status**: SHIPPED
 - **Milestone**: M6 — projects list correctness
 - **Severity**: Medium — a real duplicated DB row (survives reload), not a render glitch. GitHub **#10**.
 - **Found via**: read-only investigation (2026-07-10), reproduced in a standalone PGlite harness.
