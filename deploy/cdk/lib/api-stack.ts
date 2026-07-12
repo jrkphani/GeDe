@@ -291,13 +291,12 @@ export class ApiStack extends Stack {
     // Electric otherwise rejects by default (an "experimental" feature per
     // Electric's own docs). This is a real, monitored risk - flagged
     // prominently in this issue's report, not silently absorbed.
-    const electricImage = ecs.ContainerImage.fromRegistry('electricsql/electric:latest');
-    // NOTE: `:latest` mirrors Electric's own documented Docker Compose
-    // example (node_modules/@electric-sql/client/skills/electric-deployment)
-    // - pinning to a specific version/digest before real production traffic
-    // is a recommended follow-up (this repo has no live way to enumerate
-    // available tags without network access to Docker Hub from this
-    // environment).
+    const electricImage = ecs.ContainerImage.fromRegistry('electricsql/electric:1.7.7');
+    // NOTE: PINNED (issue 078 step 1) to the exact build validated as
+    // replicating live in issue 058 - was `:latest`, which silently drifts
+    // to a different Electric build on every ECS task restart. That drift
+    // is a reproducibility hazard around the experimental allow_subqueries
+    // shape feature and was implicated in 078's stale/empty-shape bug.
 
     const electricTaskDefinition = new ecs.FargateTaskDefinition(this, 'SyncTaskDef', {
       cpu: 256,

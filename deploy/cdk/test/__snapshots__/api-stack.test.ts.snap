@@ -1157,7 +1157,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
               "StartPeriod": 30,
               "Timeout": 5,
             },
-            "Image": "electricsql/electric:latest",
+            "Image": "electricsql/electric:1.7.7",
             "LogConfiguration": {
               "LogDriver": "awslogs",
               "Options": {
