@@ -180,6 +180,25 @@ describe('ApiStack (Gede-Test-Api)', () => {
     template.resourceCountIs('AWS::ElasticLoadBalancingV2::Listener', 1);
   });
 
+  it('issue 076: the ALB has an explicit 60s idle timeout — >= the shape-proxy Lambda\'s 30s timeout, so the ALB never cuts the connection before the Lambda itself would', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
+      LoadBalancerAttributes: Match.arrayWith([
+        Match.objectLike({ Key: 'idle_timeout.timeout_seconds', Value: '60' }),
+      ]),
+    });
+  });
+
+  it('issue 076: the shape-proxy Lambda\'s timeout is 30s — above Electric\'s ~20s long-poll hold (was 15s, which fired first and severed the fetch, causing ALB 502s)', () => {
+    const template = synth();
+    const fns = Object.values(template.findResources('AWS::Lambda::Function')) as Array<{
+      Properties: { Environment?: { Variables: Record<string, unknown> }; Timeout?: number };
+    }>;
+    const shapeProxyFn = fns.find((f) => f.Properties.Environment?.Variables.ELECTRIC_INTERNAL_URL !== undefined);
+    expect(shapeProxyFn).toBeDefined();
+    expect(shapeProxyFn!.Properties.Timeout).toBe(30);
+  });
+
   it('the Electric Fargate service runs 1 always-on task (desiredCount 1) — verified live: logical replication was already active, the task acquired its replication slot and streamed from Postgres cleanly', () => {
     const template = synth();
     template.resourceCountIs('AWS::ECS::Service', 1);

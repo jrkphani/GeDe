@@ -40,6 +40,10 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
             "Key": "deletion_protection.enabled",
             "Value": "false",
           },
+          {
+            "Key": "idle_timeout.timeout_seconds",
+            "Value": "60",
+          },
         ],
         "Scheme": "internet-facing",
         "SecurityGroups": [
@@ -928,7 +932,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
             "Value": "quadnomics",
           },
         ],
-        "Timeout": 15,
+        "Timeout": 30,
         "VpcConfig": {
           "SecurityGroupIds": [
             {
@@ -1379,7 +1383,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "a5bdd5b763fa80a5cf607c142b256836da52ceb637e58967c5cfab4ce30e0a46.zip",
+          "S3Key": "2370bfe6d5293c676a5e2475fca33773a04651eb4b0781568ae27bc588e8d0b7.zip",
         },
         "Description": "Gede-Test-Api Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).",
         "Environment": {

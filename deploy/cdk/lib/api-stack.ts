@@ -180,6 +180,12 @@ export class ApiStack extends Stack {
       internetFacing: true,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       securityGroup: this.albSecurityGroup,
+      // Issue 076: explicit (this was already the CDK/ALB default) so the
+      // timeout ordering below is intentional and documented, not
+      // incidental. Must stay >= the ShapeProxyFunction's 30s Lambda
+      // timeout (this stack, below) so the ALB never cuts the connection
+      // before the Lambda itself would.
+      idleTimeout: Duration.seconds(60),
     });
 
     const listener = this.loadBalancer.addListener('HttpListener', {
@@ -508,7 +514,13 @@ export class ApiStack extends Stack {
       handler: 'handler',
       runtime: lambda.Runtime.NODEJS_20_X,
       memorySize: 256,
-      timeout: Duration.seconds(15),
+      // Issue 076: Electric's `live=true` long-poll holds the connection
+      // open ~20s before responding. This timeout MUST exceed that (was
+      // 15s, which fired before Electric could respond, severing the
+      // in-flight fetch -> ALB 502). Ordering: Electric ~20s < Lambda 30s
+      // <= CloudFront readTimeout 60s (hosting-stack.ts's sync* origin);
+      // Lambda 30s < ALB idle 60s (this stack's ApplicationLoadBalancer).
+      timeout: Duration.seconds(30),
       vpc: props.vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
       securityGroups: [this.shapeProxySecurityGroup],

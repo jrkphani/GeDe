@@ -447,6 +447,7 @@ exports[`HostingStack (Gede-Test-Hosting) matches the snapshot 1`] = `
             {
               "CustomOriginConfig": {
                 "OriginProtocolPolicy": "http-only",
+                "OriginReadTimeout": 60,
                 "OriginSSLProtocols": [
                   "TLSv1.2",
                 ],

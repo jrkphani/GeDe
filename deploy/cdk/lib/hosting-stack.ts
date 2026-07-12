@@ -208,8 +208,15 @@ export class HostingStack extends Stack {
     // client on every request, not just a cache miss.
     if (props.apiLoadBalancerDnsName) {
       additionalBehaviors['sync*'] = {
+        // Issue 076: the CloudFront default origin readTimeout (30s) sits
+        // between the shape-proxy Lambda's timeout (api-stack.ts's
+        // ShapeProxyFunction, 30s) and Electric's ~20s long-poll hold —
+        // too tight once the Lambda itself takes the full 30s. Raise it to
+        // 60s so CloudFront never clips the origin's (now-longer) response.
+        // Ordering: Electric ~20s < Lambda 30s <= readTimeout 60s.
         origin: new origins.HttpOrigin(props.apiLoadBalancerDnsName, {
           protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+          readTimeout: Duration.seconds(60),
         }),
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
         cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,

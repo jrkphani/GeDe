@@ -230,6 +230,19 @@ describe('HostingStack — API path behavior (issue 047, ending the mixed-conten
     // above); re-assert scoped to this describe block for clarity.
     template.resourceCountIs('AWS::CertificateManager::Certificate', 0);
   });
+
+  it('issue 076: the sync* (shape-proxy) origin sets an explicit 60s OriginReadTimeout — above the shape-proxy Lambda\'s 30s timeout, so CloudFront never clips the (now-longer) response', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Origins: Match.arrayWith([
+          Match.objectLike({
+            CustomOriginConfig: Match.objectLike({ OriginReadTimeout: 60 }),
+          }),
+        ]),
+      }),
+    });
+  });
 });
 
 // issue 041 — the snapshot must not depend on the ambient filesystem.
