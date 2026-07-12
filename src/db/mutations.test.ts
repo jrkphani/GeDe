@@ -1,12 +1,24 @@
+import { eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { openDatabase } from './client'
+import { bindings } from './schema'
 import {
+  addDimension,
+  addParameter,
+  addTier2Entry,
+  addTier2Table,
   archiveProject,
+  bindParameter,
+  createContext,
   createProject,
+  deleteParametersUnbinding,
   listArchivedProjects,
   listProjects,
+  promoteEntries,
   renameProject,
+  restoreParametersWithBindings,
   restoreProject,
+  revertStaleRebind,
 } from './mutations'
 
 async function freshDb() {
@@ -82,5 +94,110 @@ describe('project mutations', () => {
     expect(new Date(renamed.updatedAt).getTime()).toBeGreaterThan(
       new Date(row.updatedAt).getTime(),
     )
+  })
+})
+
+// Issue 078 step 2 (migration 0015) — parameters/bindings/tier2_entries
+// gained their own denormalized workspace_id column so Electric's read-path
+// shape can scope them by a literal predicate instead of the experimental
+// allow_subqueries subquery (src/domain/syncScope.ts). Every insert site for
+// these three tables must stamp a real workspaceId, resolved from the
+// nearest workspace_id-bearing ancestor — exactly like projectWorkspaceId
+// already does for the six tables migration 0008 covered.
+describe('issue 078 step 2 — workspace_id propagation on child tables', () => {
+  it('addParameter stamps the owning dimension\'s workspaceId', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const dim = await addDimension(db, project.id)
+    const param = await addParameter(db, dim.id, 'Comfort')
+    expect(param.workspaceId).toBe(dim.workspaceId)
+  })
+
+  it('bindParameter stamps the owning context\'s workspaceId on insert', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const dim = await addDimension(db, project.id)
+    const param = await addParameter(db, dim.id, 'Comfort')
+    const ctx = await createContext(db, project.id)
+    const rows = await bindParameter(db, ctx.id, dim.id, param.id)
+    expect(rows[0]?.workspaceId).toBe(ctx.workspaceId)
+  })
+
+  it('addTier2Entry stamps the owning table\'s workspaceId', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const table = await addTier2Table(db, project.id, 'Value')
+    const entry = await addTier2Entry(db, table.id, null, 'Buyers')
+    expect(entry.workspaceId).toBe(table.workspaceId)
+  })
+
+  // The TRAP the plan calls out: workspaceId used to be computed only inside
+  // promoteEntries' `target.kind === 'new'` branch — the far more common
+  // `existing` branch (promoting into an already-created dimension) would
+  // otherwise crash on the NOT NULL constraint.
+  it('promoteEntries stamps workspaceId on created parameters for BOTH the new-dimension and existing-dimension branches', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const table = await addTier2Table(db, project.id, 'Value')
+    const entryA = await addTier2Entry(db, table.id, null, 'Buyers')
+    const entryB = await addTier2Entry(db, table.id, null, 'Sellers')
+
+    const created = await promoteEntries(db, {
+      projectId: project.id,
+      entryIds: [entryA.id],
+      target: { kind: 'new', name: 'Value' },
+    })
+    expect(created.createdParameters[0]?.workspaceId).toBe(created.createdDimension?.workspaceId)
+
+    const promotedExisting = await promoteEntries(db, {
+      projectId: project.id,
+      entryIds: [entryB.id],
+      target: { kind: 'existing', dimensionId: created.dimensionId },
+    })
+    expect(promotedExisting.createdParameters[0]?.workspaceId).toBe(created.createdDimension?.workspaceId)
+  })
+
+  it('revertStaleRebind reinserts a retired binding with its captured workspaceId', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const dim = await addDimension(db, project.id)
+    const param = await addParameter(db, dim.id, 'Comfort')
+    const ctx = await createContext(db, project.id)
+    const [binding] = await bindParameter(db, ctx.id, dim.id, param.id)
+    if (!binding) throw new Error('expected a binding')
+
+    // revertStaleRebind's job is to re-insert exactly the captured row —
+    // hard-delete it first to simulate the "retired" state openChildCanvas
+    // would have left it in.
+    await db.delete(bindings).where(eq(bindings.id, binding.id))
+    await revertStaleRebind(db, {
+      childDimensionId: dim.id,
+      fromParameterId: param.id,
+      toParameterId: param.id,
+      fromName: 'Comfort',
+      toName: 'Comfort',
+      retiredBindings: [binding],
+    })
+
+    const reinserted = await db.select().from(bindings).where(eq(bindings.id, binding.id))
+    expect(reinserted[0]?.workspaceId).toBe(ctx.workspaceId)
+  })
+
+  it('restoreParametersWithBindings reinserts a deleted binding with its captured workspaceId', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const dim = await addDimension(db, project.id)
+    const param = await addParameter(db, dim.id, 'Comfort')
+    const ctx = await createContext(db, project.id)
+    const [binding] = await bindParameter(db, ctx.id, dim.id, param.id)
+    if (!binding) throw new Error('expected a binding')
+
+    const result = await deleteParametersUnbinding(db, [param.id])
+    expect(result.deletedBindings).toHaveLength(1)
+
+    await restoreParametersWithBindings(db, result.removedParameters, result.deletedBindings)
+
+    const restored = await db.select().from(bindings).where(eq(bindings.id, binding.id))
+    expect(restored[0]?.workspaceId).toBe(ctx.workspaceId)
   })
 })

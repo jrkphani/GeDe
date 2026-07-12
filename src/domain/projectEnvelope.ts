@@ -24,7 +24,14 @@ import { z } from 'zod'
 // original exporting workspace, which the importer may not even belong to) —
 // see remapEnvelope's targetWorkspaceId parameter. "Backups survive the
 // boundary" (issue 034 implementation notes).
-export const FORMAT_VERSION = 2 as const
+//
+// Issue 078 step 2: bumped 2 -> 3 when tier2_entries/parameters/bindings
+// gained their own denormalized workspace_id column (migration 0015, the
+// Electric shape-scoping fix). A v2 file (workspaceId present on the
+// original six tables, absent on these three) is still importable —
+// upgradeV2ToV3 injects `workspaceId: null` on ONLY these three tables' rows
+// before validation, mirroring upgradeV1ToV2's own shape one version down.
+export const FORMAT_VERSION = 3 as const
 const MIN_SUPPORTED_IMPORT_VERSION = 1
 
 // ── Row schemas — mirror src/db/schema.ts column-for-column (camelCase, as
@@ -93,6 +100,10 @@ const tier2TableRow = z.object({
 const tier2EntryRow = z.object({
   id: z.string(),
   tableId: z.string(),
+  // Issue 078 step 2 (migration 0015) — nullable at the SCHEMA level for the
+  // same reason projectRow's workspaceId is (see FORMAT_VERSION's header):
+  // it accepts an upgraded-in-place v2 file. Never left null after import.
+  workspaceId: z.string().nullable(),
   parentId: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
@@ -119,6 +130,8 @@ const dimensionRow = z.object({
 const parameterRow = z.object({
   id: z.string(),
   dimensionId: z.string(),
+  // Issue 078 step 2 (migration 0015) — see tier2EntryRow.workspaceId's comment.
+  workspaceId: z.string().nullable(),
   parentParamId: z.string().nullable(),
   sourceEntryId: z.string().nullable(),
   name: z.string(),
@@ -150,6 +163,8 @@ const bindingRow = z.object({
   contextId: z.string(),
   dimensionId: z.string(),
   parameterId: z.string(),
+  // Issue 078 step 2 (migration 0015) — see tier2EntryRow.workspaceId's comment.
+  workspaceId: z.string().nullable(),
   tupleHash: z.string(),
   createdAt: iso,
   updatedAt: iso,
@@ -223,19 +238,38 @@ const SELF_PARENT_FIELD: Partial<Record<TableName, string>> = {
   contexts: 'parentId',
 }
 
-// Issue 034 — the tables that carry a denormalized workspace_id column
-// (migration 0008's schema decision: projects + the five directly
-// project_id-scoped tables; tier2_entries/parameters/bindings scope via their
-// parent's FK chain instead — see that migration's header). Used both to
-// upgrade a legacy v1 file in parseEnvelope and to stamp the importer's
-// chosen destination workspace in remapEnvelope.
-const WORKSPACE_SCOPED_TABLES = [
+// Issue 034 — the original six tables that carry a denormalized
+// workspace_id column as of migration 0008 (projects + the five directly
+// project_id-scoped tables). Used by upgradeV1ToV2 to inject workspaceId
+// onto exactly these tables' rows when upgrading a legacy v1 file.
+const V1_WORKSPACE_SCOPED_TABLES = [
   'projects',
   'tier1_purpose',
   'tier1_props',
   'tier2_tables',
   'dimensions',
   'contexts',
+] as const satisfies readonly TableName[]
+
+// Issue 078 step 2 — the three nested tables that gained their OWN
+// denormalized workspace_id column via migration 0015 (they previously
+// scoped only via their parent's FK chain — see that migration's header).
+// Used by upgradeV2ToV3 to inject workspaceId onto exactly these tables'
+// rows when upgrading a legacy v2 file.
+const V2_WORKSPACE_SCOPED_TABLES = [
+  'tier2_entries',
+  'parameters',
+  'bindings',
+] as const satisfies readonly TableName[]
+
+// The full set of workspace-scoped tables as of the CURRENT format — used to
+// stamp the importer's chosen destination workspace in remapEnvelope (every
+// row of every one of these nine tables always carries a real, non-null
+// workspaceId after import, regardless of which legacy version the source
+// file was).
+const WORKSPACE_SCOPED_TABLES = [
+  ...V1_WORKSPACE_SCOPED_TABLES,
+  ...V2_WORKSPACE_SCOPED_TABLES,
 ] as const satisfies readonly TableName[]
 
 export type ProjectRowData = z.infer<typeof projectRow>
@@ -305,14 +339,33 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 // workspace-scoped table gains a `workspaceId: null` (a pre-034 export never
 // had the column at all). Mutates `raw` directly since it's already a
 // throwaway `JSON.parse` result local to parseEnvelope, then bumps the
-// version marker so the rest of this function proceeds as if it always saw
-// the current shape. Validation (envelopeSchema) still catches anything
-// actually malformed beneath this — this only fills in a column that simply
-// didn't exist yet.
+// version marker to 2 so a chained v1->v2->v3 upgrade (parseEnvelope) hands
+// upgradeV2ToV3 a well-formed v2 shape next. Validation (envelopeSchema)
+// still catches anything actually malformed beneath this — this only fills
+// in a column that simply didn't exist yet.
 function upgradeV1ToV2(raw: Record<string, unknown>): void {
   const tables = raw.tables
   if (isRecord(tables)) {
-    for (const name of WORKSPACE_SCOPED_TABLES) {
+    for (const name of V1_WORKSPACE_SCOPED_TABLES) {
+      const rows = tables[name]
+      if (!Array.isArray(rows)) continue
+      for (const row of rows) {
+        if (isRecord(row) && !('workspaceId' in row)) row.workspaceId = null
+      }
+    }
+  }
+  raw.formatVersion = 2
+}
+
+// Issue 078 step 2 — upgrades a legacy formatVersion:2 file in place: every
+// row of tier2_entries/parameters/bindings gains a `workspaceId: null` (a
+// pre-078 export never had the column at all on these three tables — see
+// migration 0015). Mirrors upgradeV1ToV2's shape one version up, scoped to
+// exactly the three tables that changed this time.
+function upgradeV2ToV3(raw: Record<string, unknown>): void {
+  const tables = raw.tables
+  if (isRecord(tables)) {
+    for (const name of V2_WORKSPACE_SCOPED_TABLES) {
       const rows = tables[name]
       if (!Array.isArray(rows)) continue
       for (const row of rows) {
@@ -338,6 +391,9 @@ export function parseEnvelope(text: string): Envelope {
   if (raw.formatVersion > FORMAT_VERSION) throw new NewerVersionError(raw.formatVersion)
   if (raw.formatVersion === MIN_SUPPORTED_IMPORT_VERSION) {
     upgradeV1ToV2(raw)
+    upgradeV2ToV3(raw)
+  } else if (raw.formatVersion === 2) {
+    upgradeV2ToV3(raw)
   } else if (raw.formatVersion !== FORMAT_VERSION) {
     throw new NotGeDeExportError()
   }

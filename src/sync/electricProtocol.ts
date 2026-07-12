@@ -92,6 +92,9 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   tier2_entries: {
     id: 'id',
     table_id: 'tableId',
+    // Issue 078 step 2 (migration 0015) — see parameters/bindings' own
+    // workspace_id entries below for the shared rationale.
+    workspace_id: 'workspaceId',
     parent_id: 'parentId',
     name: 'name',
     description: 'description',
@@ -116,6 +119,13 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
   parameters: {
     id: 'id',
     dimension_id: 'dimensionId',
+    // Issue 078 step 2 (migration 0015) — denormalized onto this table so
+    // the read-path shape can scope it by a literal predicate instead of
+    // the experimental allow_subqueries opt-in (see src/domain/syncScope.ts).
+    // Unmapped SQL columns are SILENTLY DROPPED (toCamelRow below) — an
+    // omission here would make every remote-created parameter row fail this
+    // client's own local NOT NULL insert (src/db/sync.ts), two files away.
+    workspace_id: 'workspaceId',
     parent_param_id: 'parentParamId',
     source_entry_id: 'sourceEntryId',
     name: 'name',
@@ -142,6 +152,9 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     context_id: 'contextId',
     dimension_id: 'dimensionId',
     parameter_id: 'parameterId',
+    // Issue 078 step 2 (migration 0015) — see parameters' own workspace_id
+    // entry above for the shared rationale.
+    workspace_id: 'workspaceId',
     tuple_hash: 'tupleHash',
     created_at: 'createdAt',
     updated_at: 'updatedAt',

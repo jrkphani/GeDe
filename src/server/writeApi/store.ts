@@ -502,15 +502,26 @@ export class PgWriteStore implements WriteStore {
       // Client payloads use Drizzle's camelCase JS field names (the vocabulary
       // electricProtocol.ts's SQL_TO_JS_COLUMNS maps); the DB columns are
       // snake_case. Convert each key to its SQL column name, and drop the
-      // server-stamped columns (id/updated_at/deleted_at — set explicitly via
-      // $1/$2 and the delete branch) AFTER conversion so `updatedAt` is caught
-      // too. Every synced-table column follows the regular camel↔snake pattern
-      // (workspace_id↔workspaceId, source_param_id↔sourceParamId, ...). This
-      // PgWriteStore path was never run against a live DB before (043's contract
-      // test uses a fake pg client that does not parse SQL), so both the
-      // duplicate-id and camel/snake mismatches only surfaced in the 050 live
-      // write test.
-      const SERVER_STAMPED = new Set(['id', 'updated_at', 'deleted_at'])
+      // server-stamped columns (id/updated_at/deleted_at/workspace_id — set
+      // explicitly via $1/$2/$3 and the delete branch) AFTER conversion so
+      // `updatedAt`/`workspaceId` are caught too. Every synced-table column
+      // follows the regular camel↔snake pattern (workspace_id↔workspaceId,
+      // source_param_id↔sourceParamId, ...). This PgWriteStore path was never
+      // run against a live DB before (043's contract test uses a fake pg
+      // client that does not parse SQL), so both the duplicate-id and
+      // camel/snake mismatches only surfaced in the 050 live write test.
+      //
+      // Issue 078 step 2 — `workspace_id` joined SERVER_STAMPED alongside
+      // `id`/`updated_at`/`deleted_at`, closing a latent gap: it used to be
+      // just another payload column, trusted verbatim from whatever the
+      // client sent — which could differ from (or omit) `mutation.workspaceId`,
+      // the value checkTenancy already authorized (tenancy.ts) before
+      // applyIfNew ever runs. Every MutationTable now carries a real
+      // workspace_id column (tier2Entries/parameters/bindings gained theirs
+      // via migration 0015, the same one that let src/domain/syncScope.ts
+      // drop the experimental allow_subqueries read-path scoping), so this
+      // stamp applies unconditionally, on both insert and update.
+      const SERVER_STAMPED = new Set(['id', 'updated_at', 'deleted_at', 'workspace_id'])
       const toSqlColumn = (jsKey: string): string => jsKey.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`)
       const entries = Object.entries(mutation.payload)
         .map(([jsKey, value]) => [toSqlColumn(jsKey), value] as const)
@@ -518,19 +529,20 @@ export class PgWriteStore implements WriteStore {
       const columns = entries.map(([col]) => col)
       const values = entries.map(([, value]) => value)
       if (mutation.op === 'insert') {
-        const placeholders = values.map((_, i) => `$${i + 3}`).join(', ')
+        const placeholders = values.map((_, i) => `$${i + 4}`).join(', ')
         await client.query(
-          `INSERT INTO ${table} (id, updated_at, ${columns.join(', ')}) VALUES ($1, $2, ${placeholders}) ON CONFLICT (id) DO NOTHING`,
-          [mutation.entityId, mutation.clientUpdatedAt, ...values],
+          `INSERT INTO ${table} (id, updated_at, workspace_id, ${columns.join(', ')}) VALUES ($1, $2, $3, ${placeholders}) ON CONFLICT (id) DO NOTHING`,
+          [mutation.entityId, mutation.clientUpdatedAt, mutation.workspaceId, ...values],
         )
         return true
       }
 
       // update
-      const setClause = columns.map((c, i) => `${c} = $${i + 3}`).join(', ')
-      await client.query(`UPDATE ${table} SET ${setClause}, updated_at = $2 WHERE id = $1`, [
+      const setClause = columns.map((c, i) => `${c} = $${i + 4}`).join(', ')
+      await client.query(`UPDATE ${table} SET workspace_id = $3, ${setClause}, updated_at = $2 WHERE id = $1`, [
         mutation.entityId,
         mutation.clientUpdatedAt,
+        mutation.workspaceId,
         ...values,
       ])
       return true

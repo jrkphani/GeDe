@@ -237,16 +237,21 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
 
     // Bug 053: `id` must appear exactly once — the explicit `(id, ...)`
     // prefix column — never re-added from the payload's own echoed `id` key.
+    // Issue 078 step 2: `workspace_id` is ALSO now server-stamped (never
+    // trusted from the payload — see the dedicated test below), landing
+    // right after `updated_at` in the same explicit-prefix style.
     expect(columns.filter((c) => c === 'id')).toHaveLength(1)
     expect(columns[0]).toBe('id')
     expect(columns[1]).toBe('updated_at')
+    expect(columns[2]).toBe('workspace_id')
 
     // Server-stamped columns must never be re-appended from the payload.
-    const appended = columns.slice(2)
+    const appended = columns.slice(3)
     expect(appended).not.toContain('id')
     expect(appended).not.toContain('updated_at')
     expect(appended).not.toContain('deleted_at')
-    expect(appended).toEqual(['name', 'workspace_id', 'created_at'])
+    expect(appended).not.toContain('workspace_id')
+    expect(appended).toEqual(['name', 'created_at'])
 
     // Placeholders line up 1:1 with the column list, and params line up
     // with the placeholders in the same order.
@@ -255,8 +260,8 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     expect(insertCall.params).toEqual([
       entityId, // $1 — id
       clientUpdatedAt, // $2 — updated_at
-      'Acme Rollout', // $3 — name
-      'ws-1', // $4 — workspace_id
+      'ws-1', // $3 — workspace_id, from mutation.workspaceId (matches payload here)
+      'Acme Rollout', // $4 — name
       '2025-12-31T00:00:00.000Z', // $5 — created_at
     ])
   })
@@ -273,7 +278,7 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
       payload: {
         id: entityId, // echoed by the client, same as the insert case
         name: 'Renamed Project',
-        workspaceId: 'ws-2',
+        workspaceId: 'ws-1',
         deletedAt: null, // must not leak into the SET clause either
       },
     })
@@ -294,19 +299,75 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     // Bug 053 (applies to UPDATE's shared column-building code too): the
     // payload's echoed `id` must never appear in the SET clause, and
     // `updated_at`/`deleted_at` must appear at most once (server-stamped).
+    // `workspace_id` is ALSO server-stamped now (issue 078 step 2, below) —
+    // it must appear exactly once too, never duplicated from the payload.
     expect(setColumns).not.toContain('id')
     expect(setColumns.filter((c) => c === 'updated_at')).toHaveLength(1)
     expect(setColumns.filter((c) => c === 'deleted_at')).toHaveLength(0)
-    expect(setColumns).toEqual(['name', 'workspace_id', 'updated_at'])
+    expect(setColumns.filter((c) => c === 'workspace_id')).toHaveLength(1)
+    expect(setColumns).toEqual(['workspace_id', 'name', 'updated_at'])
 
     // Each `col = $N` placeholder must resolve to the correct bound param.
     const paramsByPlaceholder = new Map(
       assignments.map(([, placeholder]) => [placeholder, updateCall.params[Number(placeholder.slice(1)) - 1]]),
     )
-    expect(paramsByPlaceholder.get('$3')).toBe('Renamed Project') // name
-    expect(paramsByPlaceholder.get('$4')).toBe('ws-2') // workspace_id
+    expect(paramsByPlaceholder.get('$3')).toBe('ws-1') // workspace_id, from mutation.workspaceId
+    expect(paramsByPlaceholder.get('$4')).toBe('Renamed Project') // name
     expect(paramsByPlaceholder.get('$2')).toBe(clientUpdatedAt) // updated_at
     expect(updateCall.params[0]).toBe(entityId) // WHERE id = $1
+  })
+
+  // Issue 078 step 2 — closes a latent gap: the payload's own `workspaceId`
+  // used to be trusted verbatim (just another payload key, snake_cased and
+  // appended like any other column) instead of being server-stamped from
+  // `mutation.workspaceId` — the value checkTenancy already authorized
+  // (tenancy.ts) before applyIfNew ever runs. A payload carrying a
+  // different (or missing) workspaceId must never change which workspace a
+  // row lands in / stays in.
+  it('insert: stamps workspace_id from mutation.workspaceId, never from the payload, even when they differ', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const clientUpdatedAt = '2026-01-01T00:00:00.000Z'
+    const mutation = envelope({
+      workspaceId: 'ws-authorized',
+      entityId,
+      clientUpdatedAt,
+      payload: { id: entityId, name: 'Acme Rollout', workspaceId: 'ws-spoofed' },
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const insertCall = calls.find((c) => c.text.includes('INSERT INTO projects'))
+    if (!insertCall) throw new Error('no INSERT INTO projects call was captured')
+    const columns = parseInsertColumns(insertCall.text)
+    expect(columns.filter((c) => c === 'workspace_id')).toHaveLength(1)
+    const workspaceIdIndex = columns.indexOf('workspace_id')
+    expect(insertCall.params[workspaceIdIndex]).toBe('ws-authorized')
+  })
+
+  it('update: stamps workspace_id from mutation.workspaceId even when the payload omits it entirely', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const clientUpdatedAt = '2026-02-02T00:00:00.000Z'
+    const mutation = envelope({
+      workspaceId: 'ws-authorized',
+      op: 'update',
+      entityId,
+      clientUpdatedAt,
+      payload: { id: entityId, name: 'Renamed' }, // no workspaceId at all
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const updateCall = calls.find((c) => c.text.includes('UPDATE projects'))
+    if (!updateCall) throw new Error('no UPDATE projects call was captured')
+    const assignments = parseSetClause(updateCall.text)
+    const workspaceAssignment = assignments.find(([col]) => col === 'workspace_id')
+    if (!workspaceAssignment) throw new Error('no workspace_id assignment in SET clause')
+    const [, placeholder] = workspaceAssignment
+    expect(updateCall.params[Number(placeholder.slice(1)) - 1]).toBe('ws-authorized')
   })
 
   // Issue 056 (055's Cause 2 fix, test-first plan item 5) — extends this same
@@ -426,12 +487,17 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     expect(setColumns).not.toContain('id')
     expect(setColumns.filter((c) => c === 'updated_at')).toHaveLength(1)
     expect(setColumns.filter((c) => c === 'deleted_at')).toHaveLength(0)
-    expect(setColumns).toEqual(['expires_at', 'updated_at'])
+    // Issue 078 step 2 — workspace_id is now server-stamped from
+    // mutation.workspaceId on every UPDATE too (not just INSERT), even
+    // though this payload never carried it at all.
+    expect(setColumns.filter((c) => c === 'workspace_id')).toHaveLength(1)
+    expect(setColumns).toEqual(['workspace_id', 'expires_at', 'updated_at'])
 
     const paramsByPlaceholder = new Map(
       assignments.map(([, placeholder]) => [placeholder, updateCall.params[Number(placeholder.slice(1)) - 1]]),
     )
-    expect(paramsByPlaceholder.get('$3')).toBe('2026-08-15T00:00:00.000Z') // expires_at
+    expect(paramsByPlaceholder.get('$3')).toBe('ws-1') // workspace_id, from mutation.workspaceId
+    expect(paramsByPlaceholder.get('$4')).toBe('2026-08-15T00:00:00.000Z') // expires_at
     expect(paramsByPlaceholder.get('$2')).toBe(clientUpdatedAt) // updated_at
     expect(updateCall.params[0]).toBe(entityId) // WHERE id = $1
   })

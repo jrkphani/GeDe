@@ -78,7 +78,7 @@ function tier2TableMsg() {
   return change('t2t1', T0, { project_id: P, workspace_id: WS, name: 'Value', sort: 0 })
 }
 function tier2EntryMsg() {
-  return change('t2e1', T0, { table_id: 't2t1', parent_id: null, name: 'Entry', description: null, sort: 0 })
+  return change('t2e1', T0, { table_id: 't2t1', workspace_id: WS, parent_id: null, name: 'Entry', description: null, sort: 0 })
 }
 // d1 = root-canvas dimension (contextId null — the "safe" case).
 function dimensionRootMsg() {
@@ -91,13 +91,13 @@ function dimensionChildMsg() {
   return change('d2', T0, { project_id: P, workspace_id: WS, context_id: 'c1', source_param_id: null, name: 'Comfort', color: '#222', sort: 1 })
 }
 function parameterMsg() {
-  return change('pa1', T0, { dimension_id: 'd1', parent_param_id: null, source_entry_id: null, name: 'High', sort: 0 })
+  return change('pa1', T0, { dimension_id: 'd1', workspace_id: WS, parent_param_id: null, source_entry_id: null, name: 'High', sort: 0 })
 }
 function contextMsg() {
   return change('c1', T0, { project_id: P, workspace_id: WS, parent_id: null, symbol: 'α', name: null, justification: null, sort: 0 })
 }
 function bindingMsg() {
-  return change('b1', T0, { context_id: 'c1', dimension_id: 'd1', parameter_id: 'pa1', tuple_hash: 'h1' })
+  return change('b1', T0, { context_id: 'c1', dimension_id: 'd1', parameter_id: 'pa1', workspace_id: WS, tuple_hash: 'h1' })
 }
 
 // Flushes one microtask/macrotask tick — the minimum needed for a single
@@ -284,6 +284,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     })
     const paRegionHigh = change('pa-region-high', T0, {
       dimension_id: 'd-region',
+      workspace_id: WS,
       parent_param_id: null,
       source_entry_id: null,
       name: 'High',
@@ -291,6 +292,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     })
     const paSegmentConsumer = change('pa-segment-consumer', T0, {
       dimension_id: 'd-segment',
+      workspace_id: WS,
       parent_param_id: null,
       source_entry_id: null,
       name: 'Consumer',
@@ -312,12 +314,14 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
       context_id: 'c-tuple1',
       dimension_id: 'd-region',
       parameter_id: 'pa-region-high',
+      workspace_id: WS,
       tuple_hash: 'h1',
     })
     const bindingSegment = change('b-segment', T0, {
       context_id: 'c-tuple1',
       dimension_id: 'd-segment',
       parameter_id: 'pa-segment-consumer',
+      workspace_id: WS,
       tuple_hash: 'h1',
     })
 

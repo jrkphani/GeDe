@@ -79,6 +79,27 @@ describe('toRowDelta — wire normalization', () => {
     expect(delta?.row.deletedAt).toBe('2026-07-07T00:00:02.000Z')
   })
 
+  // Issue 078 step 2 — migration 0015 denormalized workspace_id directly onto
+  // these three tables. SQL_TO_JS_COLUMNS must map their wire `workspace_id`
+  // column to `workspaceId`, or (per this module's own TRAP comment)
+  // Electric's real inbound rows for these tables would silently drop the
+  // column — passing the client's own local NOT NULL insert of a
+  // remote-created row two files away (src/db/sync.ts).
+  it.each(['tier2_entries', 'parameters', 'bindings'] as const)(
+    'maps workspace_id -> workspaceId for %s (issue 078 step 2)',
+    (table) => {
+      const message = change('insert', {
+        id: 'row1',
+        workspace_id: 'ws-1',
+        created_at: '2026-07-12T00:00:00.000Z',
+        updated_at: '2026-07-12T00:00:01.000Z',
+        deleted_at: null,
+      })
+      const delta = toRowDelta(table, message)
+      expect(delta?.row.workspaceId).toBe('ws-1')
+    },
+  )
+
   it('drops an Electric-protocol column this app has no camelCase field for', () => {
     const message = change('insert', {
       id: 'p1',

@@ -9,6 +9,7 @@ import {
   NewerVersionError,
   NotGeDeExportError,
   WORKSPACE_SCOPED_TABLES,
+  type Envelope,
   type EnvelopeTables,
   type Row,
   type TableName,
@@ -45,9 +46,10 @@ function base(id: string) {
   return { id, createdAt: ts, updatedAt: ts, deletedAt: null }
 }
 
-// The six workspace_id-bearing tables (issue 034, migration 0008) — every
-// other table (tier2_entries, parameters, bindings) scopes via its parent's
-// FK chain instead and never carries this field.
+// All nine tables carry a workspaceId field (issue 034/migration 0008 gave
+// the first six their own denormalized column; issue 078 step 2/migration
+// 0015 gave tier2_entries/parameters/bindings theirs too — see
+// WORKSPACE_SCOPED_TABLES' own doc comment in projectEnvelope.ts).
 const WS = 'ws1'
 function baseWs(id: string) {
   return { ...base(id), workspaceId: WS }
@@ -62,26 +64,26 @@ function fixture(): EnvelopeTables {
   t.tier1_props.push({ ...baseWs('pr1'), projectId: 'p1', rank: 1, name: 'Prop', description: null, sort: 0 })
   t.tier2_tables.push({ ...baseWs('tt1'), projectId: 'p1', name: 'Value', sort: 0 })
   // tier2 entries: root → child → grandchild (self-ref chain, depth 3)
-  t.tier2_entries.push({ ...base('te1'), tableId: 'tt1', parentId: null, name: 'E1', description: null, sort: 0 })
-  t.tier2_entries.push({ ...base('te2'), tableId: 'tt1', parentId: 'te1', name: 'E2', description: null, sort: 0 })
-  t.tier2_entries.push({ ...base('te3'), tableId: 'tt1', parentId: 'te2', name: 'E3', description: null, sort: 0 })
+  t.tier2_entries.push({ ...baseWs('te1'), tableId: 'tt1', parentId: null, name: 'E1', description: null, sort: 0 })
+  t.tier2_entries.push({ ...baseWs('te2'), tableId: 'tt1', parentId: 'te1', name: 'E2', description: null, sort: 0 })
+  t.tier2_entries.push({ ...baseWs('te3'), tableId: 'tt1', parentId: 'te2', name: 'E3', description: null, sort: 0 })
   // root-canvas dimensions
   t.dimensions.push({ ...baseWs('d1'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D1', color: '#111', sort: 0 })
   t.dimensions.push({ ...baseWs('d2'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D2', color: '#222', sort: 1 })
   // parameters incl. a self-ref (sub-parameter) and a sourceEntryId cross-link
-  t.parameters.push({ ...base('pa1'), dimensionId: 'd1', parentParamId: null, sourceEntryId: 'te1', name: 'P1', sort: 0 })
-  t.parameters.push({ ...base('pa2'), dimensionId: 'd1', parentParamId: 'pa1', sourceEntryId: null, name: 'P2', sort: 1 })
-  t.parameters.push({ ...base('pa3'), dimensionId: 'd2', parentParamId: null, sourceEntryId: null, name: 'P3', sort: 0 })
+  t.parameters.push({ ...baseWs('pa1'), dimensionId: 'd1', parentParamId: null, sourceEntryId: 'te1', name: 'P1', sort: 0 })
+  t.parameters.push({ ...baseWs('pa2'), dimensionId: 'd1', parentParamId: 'pa1', sourceEntryId: null, name: 'P2', sort: 1 })
+  t.parameters.push({ ...baseWs('pa3'), dimensionId: 'd2', parentParamId: null, sourceEntryId: null, name: 'P3', sort: 0 })
   // contexts: root context + drilled child (self-ref parentId)
   t.contexts.push({ ...baseWs('c1'), projectId: 'p1', parentId: null, symbol: 'α', name: 'root', justification: 'j', sort: 0 })
   t.contexts.push({ ...baseWs('c2'), projectId: 'p1', parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 })
   // child-canvas dimension: contextId + sourceParamId cross-link both set
   t.dimensions.push({ ...baseWs('d3'), projectId: 'p1', contextId: 'c2', sourceParamId: 'pa1', name: 'D3', color: '#333', sort: 0 })
-  t.parameters.push({ ...base('pa4'), dimensionId: 'd3', parentParamId: null, sourceEntryId: null, name: 'P4', sort: 0 })
+  t.parameters.push({ ...baseWs('pa4'), dimensionId: 'd3', parentParamId: null, sourceEntryId: null, name: 'P4', sort: 0 })
   // bindings on both canvases
-  t.bindings.push({ ...base('b1'), contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' })
-  t.bindings.push({ ...base('b2'), contextId: 'c1', dimensionId: 'd2', parameterId: 'pa3', tupleHash: 'h1' })
-  t.bindings.push({ ...base('b3'), contextId: 'c2', dimensionId: 'd3', parameterId: 'pa4', tupleHash: 'h2' })
+  t.bindings.push({ ...baseWs('b1'), contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' })
+  t.bindings.push({ ...baseWs('b2'), contextId: 'c1', dimensionId: 'd2', parameterId: 'pa3', tupleHash: 'h1' })
+  t.bindings.push({ ...baseWs('b3'), contextId: 'c2', dimensionId: 'd3', parameterId: 'pa4', tupleHash: 'h2' })
   return t
 }
 
@@ -114,7 +116,7 @@ const arbTables = fc
     const entryIds: string[] = []
     for (let d = 0; d < entryDepth; d++) {
       const eid = nid('te')
-      t.tier2_entries.push({ ...base(eid), tableId, parentId: parentEntry, name: `E${d}`, description: null, sort: 0 })
+      t.tier2_entries.push({ ...baseWs(eid), tableId, parentId: parentEntry, name: `E${d}`, description: null, sort: 0 })
       entryIds.push(eid)
       parentEntry = eid
     }
@@ -132,7 +134,7 @@ const arbTables = fc
         // First param of first dim links to an entry (cross-link); some params
         // chain into a sub-parameter (self-ref).
         const sourceEntryId = i === 0 && j === 0 ? entryIds[0] ?? null : null
-        t.parameters.push({ ...base(paid), dimensionId: did, parentParamId: prevParam, sourceEntryId, name: `P${j}`, sort: j })
+        t.parameters.push({ ...baseWs(paid), dimensionId: did, parentParamId: prevParam, sourceEntryId, name: `P${j}`, sort: j })
         paramIdsByDim[did].push(paid)
         prevParam = j === 0 ? paid : prevParam
       }
@@ -144,7 +146,7 @@ const arbTables = fc
       t.contexts.push({ ...baseWs(cid), projectId: pid, parentId: null, symbol: `s${c}`, name: null, justification: 'j', sort: c })
       for (const did of dimIds) {
         const paid = (paramIdsByDim[did] ?? [])[0] as string
-        t.bindings.push({ ...base(nid('b')), contextId: cid, dimensionId: did, parameterId: paid, tupleHash: `h${c}` })
+        t.bindings.push({ ...baseWs(nid('b')), contextId: cid, dimensionId: did, parameterId: paid, tupleHash: `h${c}` })
       }
     }
     return t
@@ -305,6 +307,45 @@ describe('projectEnvelope — tampered files rejected atomically with a named er
       b.parentId = a.id ?? null
     }
     expect(() => parseEnvelope(JSON.stringify(broken))).toThrow(CorruptedEnvelopeError)
+  })
+})
+
+// Issue 078 step 2 — FORMAT_VERSION 2 -> 3: tier2_entries/parameters/bindings
+// gained their own workspaceId column (migration 0015). A genuine v2 file
+// (exported before this change) has NO workspaceId key at all on those three
+// tables' rows — mirrors the v1->v2 upgrade test's own shape one version up.
+describe('projectEnvelope — v2 -> v3 upgrade (issue 078 step 2)', () => {
+  // Strips `workspaceId` from a plain row (used below to downgrade a v3
+  // fixture's rows to a genuine v2 shape) by rebuilding from Object.entries
+  // rather than a `{ workspaceId, ...rest }` destructure-and-discard
+  // (unused-var lint) or a dynamic `delete` (no-dynamic-delete lint).
+  function omitWorkspaceId(row: Row): Omit<Row, 'workspaceId'> {
+    return Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'workspaceId'))
+  }
+
+  it('a legacy v2 file (no workspaceId on tier2_entries/parameters/bindings) parses with workspaceId injected as null', () => {
+    const env = serializeEnvelope(fixture())
+    const v3 = JSON.parse(envelopeToJson(env)) as Envelope & { tables: Record<string, Row[]> }
+    // Downgrade to a genuine v2 shape: strip workspaceId from exactly the
+    // three tables that didn't have it pre-078, bump the version marker down.
+    const v2: Record<string, unknown> = {
+      formatVersion: 2,
+      tables: {
+        ...v3.tables,
+        tier2_entries: v3.tables.tier2_entries.map(omitWorkspaceId),
+        parameters: v3.tables.parameters.map(omitWorkspaceId),
+        bindings: v3.tables.bindings.map(omitWorkspaceId),
+      },
+    }
+
+    const parsed = parseEnvelope(JSON.stringify(v2))
+
+    expect(parsed.formatVersion).toBe(FORMAT_VERSION)
+    for (const name of ['tier2_entries', 'parameters', 'bindings'] as const) {
+      expect(parsed.tables[name].every((row) => row.workspaceId === null)).toBe(true)
+    }
+    // The six tables that already had workspaceId in v2 are untouched.
+    expect(parsed.tables.projects[0]?.workspaceId).toBe(WS)
   })
 })
 

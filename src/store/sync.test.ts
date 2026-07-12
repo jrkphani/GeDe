@@ -767,6 +767,7 @@ describe('sync store — parameters delta signal (issue 075 Part B)', () => {
         value: {
           id: 'pa1',
           dimension_id: dim.id,
+          workspace_id: dim.workspaceId,
           parent_param_id: null,
           source_entry_id: null,
           name: 'Comfort',
@@ -846,6 +847,7 @@ describe('sync store — bindings delta signal (issue 075 Part B)', () => {
           context_id: ctx.id,
           dimension_id: dim.id,
           parameter_id: param.id,
+          workspace_id: ctx.workspaceId,
           tuple_hash: 'x',
           created_at: '2026-01-01T00:00:00.000Z',
           updated_at: '2026-01-01T00:00:01.000Z',
@@ -1072,6 +1074,7 @@ describe('sync store — tier2 delta signal (issue 075 Part B)', () => {
         value: {
           id: 'e1',
           table_id: table.id,
+          workspace_id: table.workspaceId,
           parent_id: null,
           name: 'Comfort',
           description: null,
@@ -1293,6 +1296,7 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
         value: {
           id: 'pa1',
           dimension_id: 'd1',
+          workspace_id: project?.workspaceId,
           parent_param_id: null,
           source_entry_id: null,
           name: 'Comfort',
@@ -1358,6 +1362,7 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
         value: {
           id: 'pa1',
           dimension_id: 'd-never-arrives',
+          workspace_id: 'ws-whatever',
           parent_param_id: null,
           source_entry_id: null,
           name: 'Comfort',

@@ -9,6 +9,7 @@ function param(dimensionId: string, id: string, name: string, sort: number): Par
   return {
     id,
     dimensionId,
+    workspaceId: 'ws1',
     parentParamId: null,
     sourceEntryId: null,
     name,

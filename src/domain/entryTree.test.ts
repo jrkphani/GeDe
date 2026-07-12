@@ -7,6 +7,7 @@ function entry(id: string, parentId: string | null, sort: number): Tier2EntryRow
   return {
     id,
     tableId: 't',
+    workspaceId: 'ws1',
     parentId,
     name: id,
     description: null,

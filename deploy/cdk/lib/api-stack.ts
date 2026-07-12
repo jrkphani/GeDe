@@ -283,14 +283,19 @@ export class ApiStack extends Stack {
     });
 
     // --- Real ElectricSQL Fargate service (issue 058) -------------------------
-    // Replaces the nginx:alpine placeholder (issue 030). `ELECTRIC_FEATURE_
-    // FLAGS=allow_subqueries` is a deliberate, flagged opt-in (see
-    // src/domain/syncScope.ts's header) - three of the nine synced tables
-    // (tier2_entries/parameters/bindings) have no direct workspace_id
-    // column, so their shape-scoping WHERE clause needs a subquery, which
-    // Electric otherwise rejects by default (an "experimental" feature per
-    // Electric's own docs). This is a real, monitored risk - flagged
-    // prominently in this issue's report, not silently absorbed.
+    // Replaces the nginx:alpine placeholder (issue 030).
+    //
+    // NOTE (issue 078 step 2): this task definition used to set
+    // `ELECTRIC_FEATURE_FLAGS=allow_subqueries` — three of the nine synced
+    // tables (tier2_entries/parameters/bindings) had no direct workspace_id
+    // column, so their shape-scoping WHERE clause needed a subquery, an
+    // "experimental" Electric feature. 078 diagnosed that experimental
+    // subquery path's shape-cache churn as the root cause of Electric
+    // serving stale/empty shapes to clients. Migration 0015 denormalized
+    // workspace_id directly onto those three tables (see
+    // src/domain/syncScope.ts), so every synced table now uses the same
+    // simple literal predicate and this flag is no longer needed at all —
+    // removed rather than left set-but-unused.
     const electricImage = ecs.ContainerImage.fromRegistry('electricsql/electric:1.7.7');
     // NOTE: PINNED (issue 078 step 1) to the exact build validated as
     // replicating live in issue 058 - was `:latest`, which silently drifts
@@ -308,12 +313,12 @@ export class ApiStack extends Stack {
       containerName: 'sync',
       portMappings: [{ containerPort: ELECTRIC_PORT, protocol: ecs.Protocol.TCP }],
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'gede-sync' }),
-      environment: {
-        // Electric requires logical replication support at the Postgres
-        // level too (data-stack.ts's ParameterGroup, issue 058) - this env
-        // var alone is not sufficient without that.
-        ELECTRIC_FEATURE_FLAGS: 'allow_subqueries',
-      },
+      // NOTE (issue 078 step 2): this used to also set an `environment` block
+      // with `ELECTRIC_FEATURE_FLAGS: 'allow_subqueries'` — see the
+      // container-image comment above for why that's gone. Electric's
+      // logical-replication requirement at the Postgres level
+      // (data-stack.ts's ParameterGroup, issue 058) is unaffected — that was
+      // never behind this flag.
       secrets: {
         // fromSecretsManager (not the *Version variant) resolves to the
         // CURRENT secret value at container launch — no pinned version id —

@@ -169,6 +169,16 @@ export const tier2Entries = pgTable('tier2_entries', {
   tableId: text('table_id')
     .notNull()
     .references(() => tier2Tables.id),
+  // Issue 078 step 2 — denormalized from tier2_tables (migration 0015), so
+  // Electric's read-path shape can scope this table by a literal
+  // `workspace_id = ANY($1::text[])` predicate instead of the experimental
+  // `allow_subqueries` subquery migration 0008's RLS policy still uses (that
+  // subquery form is what 078 diagnosed as Electric's shape-churn root
+  // cause). RLS itself is UNCHANGED (still walks the FK chain) — this column
+  // is read-path scoping only, not a new enforcement point.
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   parentId: text('parent_id').references((): AnyPgColumn => tier2Entries.id),
   name: text('name').notNull(),
   description: text('description'),
@@ -211,6 +221,11 @@ export const parameters = pgTable('parameters', {
   dimensionId: text('dimension_id')
     .notNull()
     .references(() => dimensions.id),
+  // Issue 078 step 2 — denormalized from dimensions (migration 0015); see
+  // tier2Entries.workspaceId's comment above for the full rationale.
+  workspaceId: text('workspace_id')
+    .notNull()
+    .references(() => workspaces.id),
   parentParamId: text('parent_param_id').references((): AnyPgColumn => parameters.id),
   // SPEC invariant 7 (issue 014) — the 2nd-Tier entry this parameter was
   // promoted from; null for parameters authored directly on the canvas. A
@@ -270,6 +285,11 @@ export const bindings = pgTable(
     parameterId: text('parameter_id')
       .notNull()
       .references(() => parameters.id),
+    // Issue 078 step 2 — denormalized from contexts (migration 0015); see
+    // tier2Entries.workspaceId's comment above for the full rationale.
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
     tupleHash: text('tuple_hash').notNull(),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),

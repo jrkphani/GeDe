@@ -116,7 +116,11 @@ describe('resolveShapeRequest (issue 058) — the shape-proxy auth + scoping bou
     expect(url.searchParams.get('params[1]')).toBe('{"ws-own","ws-shared"}')
   })
 
-  it('a table without a direct workspace_id column (e.g. bindings) still resolves to a real FK-chain scope, not a bare table read', async () => {
+  // Issue 078 step 2 (migration 0015) — bindings gained its own denormalized
+  // workspace_id column, so this now resolves to the same direct literal
+  // predicate as every other table, not a subquery against its FK-chain
+  // ancestor (contexts). See src/domain/syncScope.ts's own doc comment.
+  it('a table that used to need a FK-chain subquery (e.g. bindings) now resolves to the same direct literal scope as every other table (issue 078 step 2)', async () => {
     const token = await sign({ sub: 'user-1' })
     const result = await resolveShapeRequest(
       { authorizationHeader: `Bearer ${token}`, table: 'bindings', query: {} },
@@ -125,9 +129,7 @@ describe('resolveShapeRequest (issue 058) — the shape-proxy auth + scoping bou
     expect(result.ok).toBe(true)
     if (!result.ok) return
     const url = new URL(result.url)
-    expect(url.searchParams.get('where')).toBe(
-      'context_id IN (SELECT id FROM contexts WHERE workspace_id = ANY($1::text[]))',
-    )
+    expect(url.searchParams.get('where')).toBe('workspace_id = ANY($1::text[])')
   })
 
   it('forwards only Electric protocol pagination params (offset/handle/live/cursor/cache-buster) — never a client-supplied where/params/table override', async () => {

@@ -27,6 +27,7 @@ function param(dimensionId: string, id: string, sort: number): ParameterRow {
   return {
     id,
     dimensionId,
+    workspaceId: 'ws1',
     parentParamId: null,
     sourceEntryId: null,
     name: id,

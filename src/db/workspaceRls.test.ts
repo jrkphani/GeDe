@@ -99,8 +99,15 @@ describe('workspace RLS isolation (test-first plan #1)', () => {
       sql`INSERT INTO dimensions (id, project_id, workspace_id, name, color, sort)
           VALUES ('dim-a', ${projectA.id}, ${wsA.id}, 'Dim', '#000', 0)`,
     )
+    // Issue 078 step 2 (migration 0015) — parameters now carries its own
+    // workspace_id column (denormalized from dimensions, for Electric's
+    // read-path shape scoping — src/domain/syncScope.ts). RLS itself is
+    // unchanged: parameters_select still walks the dimension_id FK chain
+    // below, so this seed's workspace_id value doesn't affect what this
+    // test is proving — it's here only to satisfy the NOT NULL constraint.
     await db.execute(
-      sql`INSERT INTO parameters (id, dimension_id, name, sort) VALUES ('param-a', 'dim-a', 'Param', 0)`,
+      sql`INSERT INTO parameters (id, dimension_id, workspace_id, name, sort)
+          VALUES ('param-a', 'dim-a', ${wsA.id}, 'Param', 0)`,
     )
 
     const visibleToA = await asUser('sub-a', () => db.execute(sql`SELECT id FROM parameters`))

@@ -194,4 +194,104 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
     expect(result.rows[0]?.name).toBe('After Update')
     expect(result.rows[0]?.workspace_id).toBe(workspaceId)
   })
+
+  // Issue 078 step 2 (migration 0015) — parameters/bindings/tier2_entries
+  // gained their own denormalized workspace_id column, mirroring the
+  // `projects` round-trip above. Real Postgres is the only thing that can
+  // prove the NOT NULL constraint + FK are satisfied and the stamped
+  // workspace_id (never the payload's own, possibly-absent one) actually
+  // lands — the fake `pg` client in pgWriteStore.contract.test.ts only
+  // proves the SQL text is well-formed.
+  it('insert: parameters/bindings/tier2_entries persist with a real workspace_id, server-stamped from mutation.workspaceId', async () => {
+    const store = new PgWriteStore({ pool })
+    const projectId = uuidv7()
+    const dimensionId = uuidv7()
+    const contextId = uuidv7()
+    const tableId = uuidv7()
+    const parameterId = uuidv7()
+    const bindingId = uuidv7()
+    const entryId = uuidv7()
+    const now = new Date().toISOString()
+
+    // Seed the parent rows this test's three inserts FK against — direct
+    // pool queries (test setup, not the assertion under test), mirroring
+    // this file's own "creates a workspace and project row" fixture step.
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      projectId,
+      workspaceId,
+      'Live 078 Project',
+    ])
+    await pool.query(
+      'INSERT INTO dimensions (id, project_id, workspace_id, name, color, sort) VALUES ($1, $2, $3, $4, $5, $6)',
+      [dimensionId, projectId, workspaceId, 'Dim', '#000', 0],
+    )
+    await pool.query(
+      "INSERT INTO contexts (id, project_id, workspace_id, symbol, sort) VALUES ($1, $2, $3, 'α', 0)",
+      [contextId, projectId, workspaceId],
+    )
+    await pool.query('INSERT INTO tier2_tables (id, project_id, workspace_id, name, sort) VALUES ($1, $2, $3, $4, 0)', [
+      tableId,
+      projectId,
+      workspaceId,
+      'Value',
+    ])
+
+    const results = await Promise.all([
+      store.applyIfNew(
+        {
+          id: uuidv7(),
+          workspaceId,
+          table: 'parameters',
+          op: 'insert',
+          entityId: parameterId,
+          payload: { id: parameterId, dimensionId, name: 'Comfort', sort: 0, createdAt: now },
+          clientUpdatedAt: now,
+        },
+        'live-test-user-sub',
+      ),
+      store.applyIfNew(
+        {
+          id: uuidv7(),
+          workspaceId,
+          table: 'tier2Entries',
+          op: 'insert',
+          entityId: entryId,
+          payload: { id: entryId, tableId, name: 'Buyers', sort: 0, createdAt: now },
+          clientUpdatedAt: now,
+        },
+        'live-test-user-sub',
+      ),
+    ])
+    expect(results).toEqual([true, true])
+
+    // bindings depends on parameters having landed first (FK), so sequence it.
+    const bindingApplied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'bindings',
+        op: 'insert',
+        entityId: bindingId,
+        payload: { id: bindingId, contextId, dimensionId, parameterId, tupleHash: 'h1', createdAt: now },
+        clientUpdatedAt: now,
+      },
+      'live-test-user-sub',
+    )
+    expect(bindingApplied).toBe(true)
+
+    const paramRow = await pool.query<{ workspace_id: string }>(
+      'SELECT workspace_id FROM parameters WHERE id = $1',
+      [parameterId],
+    )
+    const bindingRow = await pool.query<{ workspace_id: string }>('SELECT workspace_id FROM bindings WHERE id = $1', [
+      bindingId,
+    ])
+    const entryRow = await pool.query<{ workspace_id: string }>(
+      'SELECT workspace_id FROM tier2_entries WHERE id = $1',
+      [entryId],
+    )
+    expect(paramRow.rows[0]?.workspace_id).toBe(workspaceId)
+    expect(bindingRow.rows[0]?.workspace_id).toBe(workspaceId)
+    expect(entryRow.rows[0]?.workspace_id).toBe(workspaceId)
+  })
 })

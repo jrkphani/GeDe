@@ -197,6 +197,7 @@ describe('startSync — reconcile-retry for cross-table FK races (issue 075 Part
   function parameterChange(id: string, updatedAt: string, dimensionId: string): ElectricMessage {
     return change(id, updatedAt, {
       dimension_id: dimensionId,
+      workspace_id: WS,
       parent_param_id: null,
       source_entry_id: null,
       name: 'Comfort',
@@ -227,6 +228,7 @@ describe('startSync — reconcile-retry for cross-table FK races (issue 075 Part
       context_id: contextId,
       dimension_id: dimensionId,
       parameter_id: parameterId,
+      workspace_id: WS,
       tuple_hash: 'h1',
     })
   }
@@ -409,7 +411,7 @@ describe('startSync — no deltas dropped when a batch buffers mid-drain (issue 
     // parameters races ahead of its dimension parent -> the batch throws in
     // applyInboundDeltas and pa1 is buffered.
     push('parameters', [
-      change('pa1', T1, { dimension_id: 'd1', parent_param_id: null, source_entry_id: null, name: 'Comfort', sort: 0 }),
+      change('pa1', T1, { dimension_id: 'd1', workspace_id: WS, parent_param_id: null, source_entry_id: null, name: 'Comfort', sort: 0 }),
     ])
     await settle()
     expect(await db.select().from(parameters)).toHaveLength(0)
@@ -426,7 +428,7 @@ describe('startSync — no deltas dropped when a batch buffers mid-drain (issue 
     // mid-drain interleave. With the wholesale clear, the release below wipes
     // it; with the reference-identity filter, it survives.
     push('bindings', [
-      change('b1', T1, { context_id: 'c1', dimension_id: 'd1', parameter_id: 'pa1', tuple_hash: 'h1' }),
+      change('b1', T1, { context_id: 'c1', dimension_id: 'd1', parameter_id: 'pa1', workspace_id: WS, tuple_hash: 'h1' }),
     ])
     await settle()
     expect(onError).toHaveBeenCalledWith('bindings', expect.any(Error))

@@ -95,7 +95,7 @@ describe('applyInboundDeltas — read-path round-trip (test-first plan #1)', () 
         table: 'parameters',
         id: 'pa1',
         updatedAt: T0,
-        row: row('pa1', T0, { dimensionId: 'd1', parentParamId: null, sourceEntryId: null, name: 'Comfort', sort: 0 }),
+        row: row('pa1', T0, { dimensionId: 'd1', workspaceId: WS, parentParamId: null, sourceEntryId: null, name: 'Comfort', sort: 0 }),
       },
       {
         table: 'contexts',
@@ -107,7 +107,7 @@ describe('applyInboundDeltas — read-path round-trip (test-first plan #1)', () 
         table: 'bindings',
         id: 'b1',
         updatedAt: T0,
-        row: row('b1', T0, { contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' }),
+        row: row('b1', T0, { contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', workspaceId: WS, tupleHash: 'h1' }),
       },
     ])
     expect(await listBindings(db, 'c1')).toHaveLength(1)
@@ -118,7 +118,7 @@ describe('applyInboundDeltas — read-path round-trip (test-first plan #1)', () 
         table: 'bindings',
         id: 'b1',
         updatedAt: T1,
-        row: row('b1', T1, { contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' }),
+        row: row('b1', T1, { contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', workspaceId: WS, tupleHash: 'h1' }),
       },
     ])
     // Still live — this delta didn't set deletedAt. Now tombstone it for real.
@@ -128,7 +128,7 @@ describe('applyInboundDeltas — read-path round-trip (test-first plan #1)', () 
         id: 'b1',
         updatedAt: T2,
         row: {
-          ...row('b1', T2, { contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' }),
+          ...row('b1', T2, { contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', workspaceId: WS, tupleHash: 'h1' }),
           deletedAt: T2,
         },
       },
@@ -192,7 +192,7 @@ describe('applyInboundDeltas — FK-cycle apply order (issue 015/032)', () => {
         table: 'parameters',
         id: 'pa1',
         updatedAt: T0,
-        row: row('pa1', T0, { dimensionId: 'd1', parentParamId: null, sourceEntryId: null, name: 'Comfort', sort: 0 }),
+        row: row('pa1', T0, { dimensionId: 'd1', workspaceId: WS, parentParamId: null, sourceEntryId: null, name: 'Comfort', sort: 0 }),
       },
     ])
     const rows = await db.select().from(dimensions).where(eq(dimensions.id, 'd2'))
@@ -362,7 +362,7 @@ describe('applyInboundDeltas — cross-table forward-FK race (issue 075 Part A r
       table: 'parameters',
       id: 'pa1',
       updatedAt: T0,
-      row: row('pa1', T0, { dimensionId: 'd-not-yet-local', parentParamId: null, sourceEntryId: null, name: 'Comfort', sort: 0 }),
+      row: row('pa1', T0, { dimensionId: 'd-not-yet-local', workspaceId: WS, parentParamId: null, sourceEntryId: null, name: 'Comfort', sort: 0 }),
     }
     await expect(applyInboundDeltas(db, [delta])).rejects.toThrow()
     const rows = await db.select().from(dimensions)

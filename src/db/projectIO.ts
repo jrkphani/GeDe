@@ -159,7 +159,7 @@ export async function importProject(
 
     // parent_id deferred (self-ref).
     if (tables.tier2_entries.length) {
-      await tx.insert(tier2Entries).values(tables.tier2_entries.map((e) => ({ ...e, parentId: null })))
+      await tx.insert(tier2Entries).values(withWorkspace(tables.tier2_entries).map((e) => ({ ...e, parentId: null })))
     }
 
     // source_param_id deferred (dimensions ↔ parameters cross-cycle).
@@ -171,10 +171,10 @@ export async function importProject(
 
     // parent_param_id deferred (self-ref); dimension_id + source_entry_id resolve now.
     if (tables.parameters.length) {
-      await tx.insert(parameters).values(tables.parameters.map((p) => ({ ...p, parentParamId: null })))
+      await tx.insert(parameters).values(withWorkspace(tables.parameters).map((p) => ({ ...p, parentParamId: null })))
     }
 
-    if (tables.bindings.length) await tx.insert(bindings).values(tables.bindings)
+    if (tables.bindings.length) await tx.insert(bindings).values(withWorkspace(tables.bindings))
 
     // ── Second pass: wire the deferred self/cross references now every row exists.
     for (const c of tables.contexts) {

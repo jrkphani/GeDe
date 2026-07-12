@@ -50,26 +50,27 @@ export const SYNCED_TABLES: readonly TableName[] = [
   'workspace_members',
 ]
 
-// Eight of the eleven synced tables carry `workspace_id` directly
-// (schema.ts); three (`tier2_entries`, `parameters`, `bindings`) don't —
-// their workspace is reachable only by walking the FK chain to a
-// workspace_id-bearing ancestor (tier2_entries -> tier2_tables, parameters ->
-// dimensions, bindings -> contexts). This is the EXACT same FK-chain
-// migration 0008_workspaces_rls.sql's RLS policies already walk for these
-// three tables (see that file's `tier2_entries_select`/`parameters_select`/
-// `bindings_select` policies) — this map is the read-path's mirror of that
-// already-proven scoping logic, not a new invention.
+// Every one of the eleven synced tables now carries `workspace_id` directly
+// (schema.ts) — issue 078 step 2 (migration 0015) denormalized it onto the
+// three that previously didn't (`tier2_entries`, `parameters`, `bindings`;
+// they used to be scoped only by walking the FK chain to a workspace_id-
+// bearing ancestor: tier2_entries -> tier2_tables, parameters -> dimensions,
+// bindings -> contexts — the exact FK-chain migration 0008_workspaces_rls.sql's
+// RLS policies still walk, unchanged, for these three tables; see that
+// file's `tier2_entries_select`/`parameters_select`/`bindings_select`
+// policies. RLS enforcement is independent of this read-path scoping map and
+// was never the problem).
 //
-// ElectricSQL's shape WHERE clause only supports subqueries behind an
-// explicit opt-in (`ELECTRIC_FEATURE_FLAGS=allow_subqueries` — see
-// deploy/cdk/lib/api-stack.ts's Electric task definition, which sets it
-// deliberately for exactly this reason, and node_modules/@electric-sql/
-// client/skills/electric-shapes/references/where-clause.md's "Unsupported"
-// section: "Subqueries (experimental, requires ELECTRIC_FEATURE_FLAGS=
-// allow_subqueries)"). Without that flag, `tier2_entries`/`parameters`/
-// `bindings` could not be correctly scoped at all — flagged prominently in
-// this issue's report as a deliberate, monitored risk (experimental Electric
-// feature), not a silent gap.
+// That subquery-shaped WHERE clause required ElectricSQL's experimental
+// `ELECTRIC_FEATURE_FLAGS=allow_subqueries` opt-in (node_modules/
+// @electric-sql/client/skills/electric-shapes/references/where-clause.md's
+// "Unsupported" section: "Subqueries (experimental, requires
+// ELECTRIC_FEATURE_FLAGS=allow_subqueries)") — issue 078 diagnosed that flag's
+// shape-cache churn as the root cause of Electric serving stale/empty shapes
+// to clients. Migration 0015 removes the need for it entirely: every table
+// now uses the exact same simple literal predicate, so
+// deploy/cdk/lib/api-stack.ts's Electric task definition no longer sets
+// `ELECTRIC_FEATURE_FLAGS` at all.
 const WORKSPACE_SCOPE_SQL: Readonly<Record<TableName, string>> = {
   projects: 'workspace_id = ANY($1::text[])',
   tier1_purpose: 'workspace_id = ANY($1::text[])',
@@ -77,9 +78,9 @@ const WORKSPACE_SCOPE_SQL: Readonly<Record<TableName, string>> = {
   tier2_tables: 'workspace_id = ANY($1::text[])',
   dimensions: 'workspace_id = ANY($1::text[])',
   contexts: 'workspace_id = ANY($1::text[])',
-  tier2_entries: 'table_id IN (SELECT id FROM tier2_tables WHERE workspace_id = ANY($1::text[]))',
-  parameters: 'dimension_id IN (SELECT id FROM dimensions WHERE workspace_id = ANY($1::text[]))',
-  bindings: 'context_id IN (SELECT id FROM contexts WHERE workspace_id = ANY($1::text[]))',
+  tier2_entries: 'workspace_id = ANY($1::text[])',
+  parameters: 'workspace_id = ANY($1::text[])',
+  bindings: 'workspace_id = ANY($1::text[])',
   // `invitations`' base (membership-only) predicate — the fallback used when
   // no caller email is available (see scopeToWorkspaces below for the real,
   // email-OR-membership predicate issue 062 actually ships for this table).

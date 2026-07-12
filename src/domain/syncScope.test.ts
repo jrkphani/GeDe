@@ -8,25 +8,42 @@ describe('scopeToWorkspaces (issue 058) — read-path tenancy scoping', () => {
     expect(scope.params).toEqual(['{"ws-a","ws-b"}'])
   })
 
-  it('every direct workspace_id table (projects, tier1_*, tier2_tables, dimensions, contexts) uses the same simple predicate shape', () => {
-    for (const table of ['projects', 'tier1_purpose', 'tier1_props', 'tier2_tables', 'dimensions', 'contexts'] as const) {
+  it('every direct workspace_id table (projects, tier1_*, tier2_tables, dimensions, contexts, and — since 078 step 2 — tier2_entries/parameters/bindings) uses the same simple predicate shape', () => {
+    for (const table of [
+      'projects',
+      'tier1_purpose',
+      'tier1_props',
+      'tier2_tables',
+      'dimensions',
+      'contexts',
+      'tier2_entries',
+      'parameters',
+      'bindings',
+    ] as const) {
       expect(scopeToWorkspaces(table, ['ws-a']).where).toBe('workspace_id = ANY($1::text[])')
     }
   })
 
-  it('scopes tier2_entries via its tier2_tables FK-chain ancestor (mirrors migration 0008\'s RLS policy)', () => {
+  // Issue 078 step 2 — migration 0015 denormalized workspace_id directly onto
+  // these three tables, so their shape-scoping predicate is now the exact
+  // same literal shape as every other synced table — no more subquery
+  // against the FK-chain ancestor (that subquery shape required the
+  // experimental `ELECTRIC_FEATURE_FLAGS=allow_subqueries` opt-in Electric's
+  // shape-cache churn was traced to). RLS (migration 0008) is unchanged —
+  // it still walks the FK chain; this predicate is read-path scoping only.
+  it('scopes tier2_entries with the same direct literal predicate as every other table (issue 078 step 2)', () => {
     const scope = scopeToWorkspaces('tier2_entries', ['ws-a'])
-    expect(scope.where).toBe('table_id IN (SELECT id FROM tier2_tables WHERE workspace_id = ANY($1::text[]))')
+    expect(scope.where).toBe('workspace_id = ANY($1::text[])')
   })
 
-  it('scopes parameters via its dimensions FK-chain ancestor', () => {
+  it('scopes parameters with the same direct literal predicate as every other table (issue 078 step 2)', () => {
     const scope = scopeToWorkspaces('parameters', ['ws-a'])
-    expect(scope.where).toBe('dimension_id IN (SELECT id FROM dimensions WHERE workspace_id = ANY($1::text[]))')
+    expect(scope.where).toBe('workspace_id = ANY($1::text[])')
   })
 
-  it('scopes bindings via its contexts FK-chain ancestor', () => {
+  it('scopes bindings with the same direct literal predicate as every other table (issue 078 step 2)', () => {
     const scope = scopeToWorkspaces('bindings', ['ws-a'])
-    expect(scope.where).toBe('context_id IN (SELECT id FROM contexts WHERE workspace_id = ANY($1::text[]))')
+    expect(scope.where).toBe('workspace_id = ANY($1::text[])')
   })
 
   it('an empty workspace id set scopes to `false` — fail-closed, never an unscoped/global read', () => {

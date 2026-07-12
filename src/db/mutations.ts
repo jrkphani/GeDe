@@ -43,6 +43,37 @@ async function projectWorkspaceId(db: Database, projectId: string): Promise<stri
   return firstOrThrow(rows, 'project not found').workspaceId
 }
 
+// Issue 078 step 2 (migration 0015) — parameters/bindings/tier2_entries
+// gained their own denormalized workspace_id column so Electric's read-path
+// shape can scope them directly (src/domain/syncScope.ts), dropping the
+// experimental allow_subqueries opt-in their old FK-chain-only scoping
+// required. Every insert into these three tables must resolve and stamp a
+// real workspaceId from the nearest workspace_id-bearing ancestor — these
+// three helpers mirror projectWorkspaceId's own shape, one FK hop closer.
+async function dimensionWorkspaceId(db: Database, dimensionId: string): Promise<string> {
+  const rows = await db
+    .select({ workspaceId: dimensions.workspaceId })
+    .from(dimensions)
+    .where(eq(dimensions.id, dimensionId))
+  return firstOrThrow(rows, 'dimension not found').workspaceId
+}
+
+async function contextWorkspaceId(db: Database, contextId: string): Promise<string> {
+  const rows = await db
+    .select({ workspaceId: contexts.workspaceId })
+    .from(contexts)
+    .where(eq(contexts.id, contextId))
+  return firstOrThrow(rows, 'context not found').workspaceId
+}
+
+async function tier2TableWorkspaceId(db: Database, tableId: string): Promise<string> {
+  const rows = await db
+    .select({ workspaceId: tier2Tables.workspaceId })
+    .from(tier2Tables)
+    .where(eq(tier2Tables.id, tableId))
+  return firstOrThrow(rows, 'tier2 table not found').workspaceId
+}
+
 export async function createProject(
   db: Database,
   input: { name: string; description?: string | null; workspaceId?: string },
@@ -369,11 +400,13 @@ export async function addParameter(
   parentParamId: string | null = null,
 ): Promise<ParameterRow> {
   const existing = await listParameters(db, dimensionId)
+  const workspaceId = await dimensionWorkspaceId(db, dimensionId)
   const rows = await db
     .insert(parameters)
     .values({
       id: uuidv7(),
       dimensionId,
+      workspaceId,
       parentParamId,
       name,
       sort: existing.length,
@@ -621,9 +654,10 @@ export async function bindParameter(
   dimensionId: string,
   parameterId: string,
 ): Promise<BindingRow[]> {
+  const workspaceId = await contextWorkspaceId(db, contextId)
   await db
     .insert(bindings)
-    .values({ id: uuidv7(), contextId, dimensionId, parameterId, tupleHash: '' })
+    .values({ id: uuidv7(), contextId, dimensionId, parameterId, workspaceId, tupleHash: '' })
     .onConflictDoUpdate({
       target: [bindings.contextId, bindings.dimensionId],
       // Bindings are current-state pointers, not history (schema.ts). Since
@@ -794,6 +828,11 @@ export async function revertStaleRebind(db: Database, event: StaleRebindEvent): 
         contextId: r.contextId,
         dimensionId: r.dimensionId,
         parameterId: r.parameterId,
+        // Issue 078 step 2 — the captured BindingRow already carries its own
+        // workspaceId (stamped when it was originally bound); reinsert it
+        // verbatim rather than re-resolving via contextWorkspaceId, since
+        // this row is a faithful restore, not a new bind.
+        workspaceId: r.workspaceId,
         tupleHash: r.tupleHash,
       })),
     )
@@ -1107,11 +1146,13 @@ export async function addTier2Entry(
   name: string,
 ): Promise<Tier2EntryRow> {
   const existing = await listTier2Entries(db, tableId)
+  const workspaceId = await tier2TableWorkspaceId(db, tableId)
   const rows = await db
     .insert(tier2Entries)
     .values({
       id: uuidv7(),
       tableId,
+      workspaceId,
       parentId,
       name,
       description: null,
@@ -1262,9 +1303,17 @@ export async function promoteEntries(db: Database, input: PromoteInput): Promise
 
   let createdDimension: DimensionRow | null = null
   let dimensionId: string
+  // Issue 078 step 2 — hoisted OUT of the `target.kind === 'new'` branch
+  // below: workspaceId used to be computed only there, so the far more
+  // common `existing` branch (promoting into an already-created dimension)
+  // crashed on parameters' new NOT NULL workspace_id constraint. Both
+  // branches now resolve it the same way, just from a different starting
+  // point (a fresh dimension already carries it; an existing one is looked
+  // up the same way addParameter does).
+  let workspaceId: string
   if (target.kind === 'new') {
     const existingDims = await listDimensions(db, projectId)
-    const workspaceId = await projectWorkspaceId(db, projectId)
+    workspaceId = await projectWorkspaceId(db, projectId)
     const rows = await db
       .insert(dimensions)
       .values({
@@ -1280,6 +1329,7 @@ export async function promoteEntries(db: Database, input: PromoteInput): Promise
     dimensionId = createdDimension.id
   } else {
     dimensionId = target.dimensionId
+    workspaceId = await dimensionWorkspaceId(db, dimensionId)
   }
 
   const alreadyLinked = new Set(
@@ -1298,7 +1348,7 @@ export async function promoteEntries(db: Database, input: PromoteInput): Promise
     if (!entry) continue
     const inserted = await db
       .insert(parameters)
-      .values({ id: uuidv7(), dimensionId, name: entry.name, sort, sourceEntryId: entryId })
+      .values({ id: uuidv7(), dimensionId, workspaceId, name: entry.name, sort, sourceEntryId: entryId })
       .returning()
     createdParameters.push(firstOrThrow(inserted))
     sort += 1
@@ -1431,6 +1481,9 @@ export async function restoreParametersWithBindings(
         contextId: b.contextId,
         dimensionId: b.dimensionId,
         parameterId: b.parameterId,
+        // Issue 078 step 2 — reinsert the captured row's own workspaceId
+        // verbatim (see revertStaleRebind's identical comment above).
+        workspaceId: b.workspaceId,
         tupleHash: b.tupleHash,
       })),
     )
