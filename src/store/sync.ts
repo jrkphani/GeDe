@@ -133,6 +133,26 @@ interface SyncState {
   // dbList snapshot (taken before the read-path engine streams anything,
   // 068's restart-safety design) never saw a late-arriving projects delta.
   projectsAppliedAt: number
+  // Issue 075 Part B — the Design-tier analogues of invitationsAppliedAt/
+  // membersAppliedAt/projectsAppliedAt directly above: every remaining
+  // synced table gets its own plain "an inbound delta for THIS table just
+  // applied" timestamp, bumped by onApplied below the same way. Per-field
+  // (not a generic map) to match the existing three exactly — a caller that
+  // only cares about one table subscribes to one primitive number, same as
+  // 062/067/072's own consumers. tier1_purpose/tier1_props share one signal
+  // (tier1AppliedAt) and tier2_tables/tier2_entries share one (tier2AppliedAt):
+  // both store pairs are always read/reloaded together (tier1.ts's load()
+  // fetches purpose+props in one Promise.all; tier2.ts's load() fetches
+  // tables+entries+links together), so a single combined signal per store is
+  // enough — splitting them would just be two listeners doing the same
+  // reload. dimensions.ts/contexts.ts/parameters.ts each got a dedicated
+  // signal since those ARE three independently-loaded stores.
+  dimensionsAppliedAt: number
+  parametersAppliedAt: number
+  contextsAppliedAt: number
+  bindingsAppliedAt: number
+  tier1AppliedAt: number
+  tier2AppliedAt: number
   setWorkspaceId: (workspaceId: string | null) => void
   // Starts the read-path engine if isSyncEnabled() is true; a no-op
   // otherwise (leaves `enabled: false`, `handle: null`) — safe to call
@@ -189,6 +209,12 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     invitationsAppliedAt: 0,
     membersAppliedAt: 0,
     projectsAppliedAt: 0,
+    dimensionsAppliedAt: 0,
+    parametersAppliedAt: 0,
+    contextsAppliedAt: 0,
+    bindingsAppliedAt: 0,
+    tier1AppliedAt: 0,
+    tier2AppliedAt: 0,
 
     setWorkspaceId(workspaceId) {
       set({ workspaceId })
@@ -251,6 +277,15 @@ export const useSyncStore = create<SyncState>()((set, get) => {
           if (table === 'workspace_members') set({ membersAppliedAt: Date.now() })
           // Issue 072 (Defect 2) — same bump, same rationale, for `projects`.
           if (table === 'projects') set({ projectsAppliedAt: Date.now() })
+          // Issue 075 Part B — same bump, same rationale, for every
+          // remaining Design-tier table (see the field doc comments above
+          // for why tier1/tier2 share one combined signal each).
+          if (table === 'dimensions') set({ dimensionsAppliedAt: Date.now() })
+          if (table === 'parameters') set({ parametersAppliedAt: Date.now() })
+          if (table === 'contexts') set({ contextsAppliedAt: Date.now() })
+          if (table === 'bindings') set({ bindingsAppliedAt: Date.now() })
+          if (table === 'tier1_purpose' || table === 'tier1_props') set({ tier1AppliedAt: Date.now() })
+          if (table === 'tier2_tables' || table === 'tier2_entries') set({ tier2AppliedAt: Date.now() })
           recompute()
           if (lostEdits.length > 0) {
             useStatusStore.getState().announce(lostEditMessage(lostEdits.length))
@@ -446,5 +481,11 @@ export function resetSyncStore(): void {
     invitationsAppliedAt: 0,
     membersAppliedAt: 0,
     projectsAppliedAt: 0,
+    dimensionsAppliedAt: 0,
+    parametersAppliedAt: 0,
+    contextsAppliedAt: 0,
+    bindingsAppliedAt: 0,
+    tier1AppliedAt: 0,
+    tier2AppliedAt: 0,
   })
 }

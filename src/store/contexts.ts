@@ -22,7 +22,7 @@ import {
 } from '../db/mutations'
 import { useCommandLogStore } from './commandLog'
 import { requireDatabase } from './database'
-import { enqueueIfSyncing } from './sync'
+import { enqueueIfSyncing, useSyncStore } from './sync'
 
 // Root-canvas contexts for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
@@ -43,6 +43,32 @@ async function fetchBindingsMap(
   }
   return map
 }
+
+// Issue 075 Part B — the shared read shared by load() and the delta-driven
+// re-read below, so the two never drift out of sync with each other.
+async function readCanvas(
+  db: Database,
+  projectId: string,
+  parentId: string | null,
+): Promise<{
+  contexts: ContextRow[]
+  bindingsByContext: Record<string, Record<string, string>>
+  childCountByContext: Record<string, number>
+}> {
+  const contexts = await dbListContexts(db, projectId, parentId)
+  const bindingsByContext = await fetchBindingsMap(
+    db,
+    contexts.map((c) => c.id),
+  )
+  const childCountByContext = await dbChildCounts(db, projectId, parentId)
+  return { contexts, bindingsByContext, childCountByContext }
+}
+
+// Issue 075 Part B — the `useSyncStore.contextsAppliedAt`/`bindingsAppliedAt`
+// subscription below (mirrors src/store/projects.ts's own module-level
+// syncUnsubscribe pattern, 072): re-`load()` re-subscribes rather than
+// accumulating a duplicate listener per canvas navigation.
+let syncUnsubscribe: (() => void) | null = null
 
 interface ContextsState {
   projectId: string | null
@@ -202,14 +228,37 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     // every time) but never locally (load() always won there).
     set({ projectId, parentId, selectedContextId: null })
     const gen = get().generation
-    const contexts = await dbListContexts(db, projectId, parentId)
-    const bindingsByContext = await fetchBindingsMap(
-      db,
-      contexts.map((c) => c.id),
-    )
-    const childCountByContext = await dbChildCounts(db, projectId, parentId)
+    const result = await readCanvas(db, projectId, parentId)
     if (get().generation !== gen) return
-    set({ contexts, bindingsByContext, childCountByContext })
+    set(result)
+
+    // Issue 075 Part B — load() only ever ran once per canvas-open, so a
+    // contexts OR bindings delta that streamed in (or that 075A's own
+    // FK-retry landed) AFTER this resolved never rendered without a
+    // remount. Re-read off this store's own ground-truth signals instead,
+    // mirroring 062/067/072's own refresh wiring. Reuses the SAME
+    // generation guard load() itself relies on, so an in-progress local
+    // mutation (which bumps `generation` before awaiting anything) always
+    // wins over a delta-triggered reload that started before it — no
+    // clobbering of in-flight local edits, and no lost `selectedContextId`
+    // either, since only `contexts`/`bindingsByContext`/`childCountByContext`
+    // are ever overwritten here.
+    syncUnsubscribe?.()
+    syncUnsubscribe = useSyncStore.subscribe((state, prevState) => {
+      if (
+        state.contextsAppliedAt === prevState.contextsAppliedAt &&
+        state.bindingsAppliedAt === prevState.bindingsAppliedAt
+      ) {
+        return
+      }
+      const { projectId: currentProjectId, parentId: currentParentId } = get()
+      if (currentProjectId === null) return
+      const genAtStart = get().generation
+      void readCanvas(requireDatabase(), currentProjectId, currentParentId).then((fresh) => {
+        if (get().generation !== genAtStart) return
+        set(fresh)
+      })
+    })
   },
 
   async create() {
@@ -420,6 +469,8 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
 }))
 
 export function resetContextsStore(): void {
+  syncUnsubscribe?.()
+  syncUnsubscribe = null
   useContextsStore.setState({
     projectId: null,
     parentId: null,

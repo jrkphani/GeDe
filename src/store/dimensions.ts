@@ -15,7 +15,7 @@ import {
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { useContextsStore } from './contexts'
-import { enqueueIfSyncing } from './sync'
+import { enqueueIfSyncing, useSyncStore } from './sync'
 
 // Root-canvas dimensions for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
@@ -46,6 +46,12 @@ function contextIdsOf(rows: readonly BindingRow[]): string[] {
   return [...new Set(rows.map((r) => r.contextId))]
 }
 
+// Issue 075 Part B — the `useSyncStore.dimensionsAppliedAt` subscription
+// below (mirrors src/store/projects.ts's own module-level syncUnsubscribe
+// pattern, 072): re-`load()` re-subscribes rather than accumulating a
+// duplicate listener per canvas navigation.
+let syncUnsubscribe: (() => void) | null = null
+
 export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
   projectId: null,
   contextId: null,
@@ -59,6 +65,21 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
   async load(projectId, contextId = null) {
     const db = requireDatabase()
     set({ projectId, contextId, dimensions: await dbList(db, projectId, contextId), editingId: null })
+    // Issue 075 Part B — load() only ever ran once per canvas-open, so a
+    // dimensions delta that streamed in (or that 075A's own FK-retry landed)
+    // AFTER this resolved never rendered without a remount. Re-list off this
+    // store's own ground-truth signal instead, mirroring 062/067/072's own
+    // refresh wiring. Only touches `dimensions` (never `editingId`), so an
+    // open name editor never gets yanked out from under an in-progress edit.
+    syncUnsubscribe?.()
+    syncUnsubscribe = useSyncStore.subscribe((state, prevState) => {
+      if (state.dimensionsAppliedAt === prevState.dimensionsAppliedAt) return
+      const { projectId: currentProjectId, contextId: currentContextId } = get()
+      if (currentProjectId === null) return
+      void dbList(requireDatabase(), currentProjectId, currentContextId).then((rows) =>
+        set({ dimensions: rows }),
+      )
+    })
   },
 
   async add() {
@@ -207,5 +228,7 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
 }))
 
 export function resetDimensionsStore(): void {
+  syncUnsubscribe?.()
+  syncUnsubscribe = null
   useDimensionsStore.setState({ projectId: null, contextId: null, dimensions: [], editingId: null })
 }

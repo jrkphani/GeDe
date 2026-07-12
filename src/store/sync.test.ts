@@ -5,7 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { uuidv7 } from 'uuidv7'
 import { openDatabase } from '../db/client'
-import { createProject } from '../db/mutations'
+import { addDimension, addParameter, addTier2Table, createContext, createProject } from '../db/mutations'
 import { createWorkspace } from '../db/workspaces'
 import { dimensions, parameters, projects } from '../db/schema'
 import { useCommandLogStore } from './commandLog'
@@ -560,6 +560,561 @@ describe('sync store — projects delta signal (issue 072)', () => {
     useSyncStore.setState({ projectsAppliedAt: 12345 })
     resetSyncStore()
     expect(useSyncStore.getState().projectsAppliedAt).toBe(0)
+  })
+})
+
+// Issue 075 Part B — the Design-tier analogues of invitationsAppliedAt/
+// membersAppliedAt/projectsAppliedAt above: every remaining synced table gets
+// its own re-load signal so src/store/{dimensions,contexts,parameters,tier1,
+// tier2}.ts can each re-`load()` off their own ground truth instead of only
+// ever loading once on mount (the root cause the Design tier never rendered a
+// late-arriving delta — docs/issues/075). A delta on an unrelated table (a
+// `projects` insert, used uniformly below) never bumps any of these.
+function unrelatedTableDelta(ws: { id: string }): ElectricMessage {
+  return {
+    key: '"public"."projects"/"p-other"',
+    value: {
+      id: 'p-other',
+      workspace_id: ws.id,
+      name: 'Unrelated',
+      description: null,
+      created_at: '2026-01-01T00:00:00.000Z',
+      updated_at: '2026-01-01T00:00:02.000Z',
+      deleted_at: null,
+    },
+    headers: { operation: 'insert' },
+  }
+}
+
+describe('sync store — dimensions delta signal (issue 075 Part B)', () => {
+  it('dimensionsAppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().dimensionsAppliedAt).toBe(0)
+  })
+
+  it('bumps dimensionsAppliedAt when an inbound `dimensions` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'dimensions') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().dimensionsAppliedAt).toBe(0)
+
+    box.deliver?.([
+      {
+        key: '"public"."dimensions"/"d1"',
+        value: {
+          id: 'd1',
+          project_id: project.id,
+          workspace_id: project.workspaceId,
+          context_id: null,
+          source_param_id: null,
+          name: 'Value',
+          color: '#111',
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().dimensionsAppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump dimensionsAppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([unrelatedTableDelta(ws)])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().dimensionsAppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets dimensionsAppliedAt back to 0', () => {
+    useSyncStore.setState({ dimensionsAppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().dimensionsAppliedAt).toBe(0)
+  })
+})
+
+describe('sync store — contexts delta signal (issue 075 Part B)', () => {
+  it('contextsAppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().contextsAppliedAt).toBe(0)
+  })
+
+  it('bumps contextsAppliedAt when an inbound `contexts` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'contexts') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().contextsAppliedAt).toBe(0)
+
+    box.deliver?.([
+      {
+        key: '"public"."contexts"/"c1"',
+        value: {
+          id: 'c1',
+          project_id: project.id,
+          workspace_id: project.workspaceId,
+          parent_id: null,
+          symbol: 'α',
+          name: null,
+          justification: null,
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().contextsAppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump contextsAppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([unrelatedTableDelta(ws)])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().contextsAppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets contextsAppliedAt back to 0', () => {
+    useSyncStore.setState({ contextsAppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().contextsAppliedAt).toBe(0)
+  })
+})
+
+describe('sync store — parameters delta signal (issue 075 Part B)', () => {
+  it('parametersAppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().parametersAppliedAt).toBe(0)
+  })
+
+  it('bumps parametersAppliedAt when an inbound `parameters` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const dim = await addDimension(db, project.id)
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'parameters') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().parametersAppliedAt).toBe(0)
+
+    box.deliver?.([
+      {
+        key: '"public"."parameters"/"pa1"',
+        value: {
+          id: 'pa1',
+          dimension_id: dim.id,
+          parent_param_id: null,
+          source_entry_id: null,
+          name: 'Comfort',
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().parametersAppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump parametersAppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([unrelatedTableDelta(ws)])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().parametersAppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets parametersAppliedAt back to 0', () => {
+    useSyncStore.setState({ parametersAppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().parametersAppliedAt).toBe(0)
+  })
+})
+
+describe('sync store — bindings delta signal (issue 075 Part B)', () => {
+  it('bindingsAppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().bindingsAppliedAt).toBe(0)
+  })
+
+  it('bumps bindingsAppliedAt when an inbound `bindings` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const dim = await addDimension(db, project.id)
+    const param = await addParameter(db, dim.id, 'Comfort')
+    const ctx = await createContext(db, project.id)
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'bindings') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    expect(useSyncStore.getState().bindingsAppliedAt).toBe(0)
+
+    box.deliver?.([
+      {
+        key: '"public"."bindings"/"b1"',
+        value: {
+          id: 'b1',
+          context_id: ctx.id,
+          dimension_id: dim.id,
+          parameter_id: param.id,
+          tuple_hash: 'x',
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().bindingsAppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump bindingsAppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([unrelatedTableDelta(ws)])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().bindingsAppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets bindingsAppliedAt back to 0', () => {
+    useSyncStore.setState({ bindingsAppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().bindingsAppliedAt).toBe(0)
+  })
+})
+
+// tier1_purpose and tier1_props deliberately share ONE signal (sync.ts's own
+// field doc comment: tier1.ts's load() always reads both together) — proven
+// below by bumping it from EITHER half of the pair, independently.
+describe('sync store — tier1 delta signal (issue 075 Part B)', () => {
+  it('tier1AppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().tier1AppliedAt).toBe(0)
+  })
+
+  it('bumps tier1AppliedAt when an inbound `tier1_purpose` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'tier1_purpose') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."tier1_purpose"/"tp1"',
+        value: {
+          id: 'tp1',
+          project_id: project.id,
+          workspace_id: project.workspaceId,
+          body: 'Our purpose',
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().tier1AppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('bumps tier1AppliedAt when an inbound `tier1_props` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'tier1_props') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."tier1_props"/"tpr1"',
+        value: {
+          id: 'tpr1',
+          project_id: project.id,
+          workspace_id: project.workspaceId,
+          rank: 1,
+          name: 'Comfort',
+          description: null,
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().tier1AppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump tier1AppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([unrelatedTableDelta(ws)])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().tier1AppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets tier1AppliedAt back to 0', () => {
+    useSyncStore.setState({ tier1AppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().tier1AppliedAt).toBe(0)
+  })
+})
+
+// tier2_tables and tier2_entries deliberately share ONE signal, same
+// rationale as tier1 above (tier2.ts's load() always reads both together) —
+// proven below by bumping it from EITHER half of the pair, independently.
+describe('sync store — tier2 delta signal (issue 075 Part B)', () => {
+  it('tier2AppliedAt starts at 0 — no delta has applied yet', () => {
+    expect(useSyncStore.getState().tier2AppliedAt).toBe(0)
+  })
+
+  it('bumps tier2AppliedAt when an inbound `tier2_tables` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'tier2_tables') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."tier2_tables"/"t1"',
+        value: {
+          id: 't1',
+          project_id: project.id,
+          workspace_id: project.workspaceId,
+          name: 'Value',
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().tier2AppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('bumps tier2AppliedAt when an inbound `tier2_entries` delta applies', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const table = await addTier2Table(db, project.id, 'Value')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (t): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (t === 'tier2_entries') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([
+      {
+        key: '"public"."tier2_entries"/"e1"',
+        value: {
+          id: 'e1',
+          table_id: table.id,
+          parent_id: null,
+          name: 'Comfort',
+          description: null,
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().tier2AppliedAt).toBeGreaterThan(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('does NOT bump tier2AppliedAt for a delta on a different table', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
+    const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
+      subscribe: (callback) => {
+        if (table === 'projects') box.deliver = (messages) => void callback(messages)
+        return () => {
+          box.deliver = null
+        }
+      },
+    })
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    box.deliver?.([unrelatedTableDelta(ws)])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().tier2AppliedAt).toBe(0)
+    vi.unstubAllEnvs()
+  })
+
+  it('resetSyncStore() resets tier2AppliedAt back to 0', () => {
+    useSyncStore.setState({ tier2AppliedAt: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().tier2AppliedAt).toBe(0)
   })
 })
 

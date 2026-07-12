@@ -279,3 +279,64 @@ describe('contexts store — sync enqueue (issue 073 pt1)', () => {
     })
   })
 })
+
+// Issue 075 Part B — contexts.ts was one of the read-path stores with no
+// delta subscription: load() ran once per canvas-open and never re-read
+// PGlite afterward, so a contexts OR bindings row that reached local PGlite
+// AFTER that initial load() never rendered without a full remount. Mirrors
+// 072's projects.ts refresh wiring, scoped to this store's own two table
+// signals (src/store/sync.ts's contextsAppliedAt/bindingsAppliedAt) — a
+// single load() re-read covers both, since load() already fetches contexts +
+// bindingsByContext together.
+describe('contexts store — refresh on inbound delta (issue 075 Part B)', () => {
+  it('a contexts row that lands in PGlite after load() appears once the contexts signal bumps', async () => {
+    expect(useContextsStore.getState().contexts).toEqual([])
+
+    // Simulate a delta landing directly in local PGlite — bypasses the store
+    // entirely, exactly like 075A's apply path (src/db/sync.ts) would.
+    const streamedIn = await mutations.createContext(db, projectId)
+    expect(useContextsStore.getState().contexts.some((c) => c.id === streamedIn.id)).toBe(false)
+
+    useSyncStore.setState({ contextsAppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 && !useContextsStore.getState().contexts.some((c) => c.id === streamedIn.id);
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useContextsStore.getState().contexts.map((c) => c.id)).toContain(streamedIn.id)
+  })
+
+  it('a bindings row that lands in PGlite after load() appears in bindingsByContext once the bindings signal bumps', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const ctxId = (ctx as { id: string }).id
+    expect(useContextsStore.getState().bindingsByContext[ctxId]?.[valueId]).toBeUndefined()
+
+    // Simulate the binding landing directly in PGlite — bypasses the store's
+    // own bind() action, which would already update bindingsByContext itself.
+    await mutations.bindParameter(db, ctxId, valueId, comfortId)
+    expect(useContextsStore.getState().bindingsByContext[ctxId]?.[valueId]).toBeUndefined()
+
+    useSyncStore.setState({ bindingsAppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 && useContextsStore.getState().bindingsByContext[ctxId]?.[valueId] === undefined;
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useContextsStore.getState().bindingsByContext[ctxId]?.[valueId]).toBe(comfortId)
+  })
+
+  it('does not re-read PGlite when neither signal has actually moved (no thrashing)', async () => {
+    const before = useContextsStore.getState().contexts
+    useSyncStore.setState({ contextsAppliedAt: useSyncStore.getState().contextsAppliedAt })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(useContextsStore.getState().contexts).toBe(before)
+  })
+})

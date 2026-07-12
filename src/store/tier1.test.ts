@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase } from '../db/client'
-import { createProject, getTier1Purpose, listTier1Props } from '../db/mutations'
+import { addTier1Prop, createProject, getTier1Purpose, listTier1Props, setTier1Purpose } from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetSyncStore, useSyncStore } from './sync'
@@ -148,5 +148,48 @@ describe('tier1 store — sync enqueue (issue 073 pt1)', () => {
     expect(queued).toContainEqual(expect.objectContaining({ table: 'tier1_props', rowId: cId, op: 'update' }))
     expect(queued.find((e) => e.rowId === aId)).toBeUndefined()
     expect(queued).toHaveLength(2)
+  })
+})
+
+// Issue 075 Part B — tier1.ts was one of the read-path stores with no delta
+// subscription: load() ran once per project-open and never re-read PGlite
+// afterward. Mirrors 072's projects.ts refresh wiring, scoped to this store's
+// combined table signal (src/store/sync.ts's tier1AppliedAt, bumped for
+// EITHER tier1_purpose or tier1_props).
+describe('tier1 store — refresh on inbound delta (issue 075 Part B)', () => {
+  it('a purpose row written directly to PGlite after load() appears once the tier1 signal bumps', async () => {
+    expect(useTier1Store.getState().purpose).toBe('')
+
+    // Simulate a delta landing directly in local PGlite — bypasses the store
+    // entirely, exactly like 075A's apply path (src/db/sync.ts) would.
+    await setTier1Purpose(db, projectId, 'Streamed purpose')
+    expect(useTier1Store.getState().purpose).toBe('')
+
+    useSyncStore.setState({ tier1AppliedAt: Date.now() })
+
+    for (let i = 0; i < 20 && useTier1Store.getState().purpose === ''; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useTier1Store.getState().purpose).toBe('Streamed purpose')
+  })
+
+  it('a prop row written directly to PGlite after load() appears once the tier1 signal bumps', async () => {
+    expect(useTier1Store.getState().props).toEqual([])
+
+    const streamedIn = await addTier1Prop(db, projectId, 'Streamed In')
+    expect(useTier1Store.getState().props.some((p) => p.id === streamedIn.id)).toBe(false)
+
+    useSyncStore.setState({ tier1AppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 && !useTier1Store.getState().props.some((p) => p.id === streamedIn.id);
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useTier1Store.getState().props.map((p) => p.id)).toContain(streamedIn.id)
   })
 })

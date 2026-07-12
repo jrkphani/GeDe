@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase } from '../db/client'
-import { addDimension, createProject, listParameters } from '../db/mutations'
+import { addDimension, addParameter, createProject, listParameters } from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetParametersStore, useParametersStore } from './parameters'
@@ -149,5 +149,49 @@ describe('parameters store — sync enqueue (issue 073 pt2)', () => {
     expect(queued).toContainEqual(expect.objectContaining({ table: 'parameters', rowId: cId, op: 'update' }))
     expect(queued.find((e) => e.rowId === aId)).toBeUndefined()
     expect(queued).toHaveLength(2)
+  })
+})
+
+// Issue 075 Part B — parameters.ts was one of the read-path stores with no
+// delta subscription: load() ran once per dimension and never re-read PGlite
+// afterward, so a parameter row that reached local PGlite AFTER that initial
+// load() never rendered without a full remount. Mirrors 072's projects.ts
+// refresh wiring, scoped to this store's own table signal (src/store/sync.ts's
+// parametersAppliedAt) — re-reads EVERY currently-tracked dimension, since
+// this store is keyed per-dimension.
+describe('parameters store — refresh on inbound delta (issue 075 Part B)', () => {
+  it('a parameter row that lands in PGlite after load() appears once the parameters signal bumps, with no manual load() call', async () => {
+    await useParametersStore.getState().load(dimensionId)
+    expect(useParametersStore.getState().byDimension[dimensionId]).toEqual([])
+
+    // Simulate a delta landing directly in local PGlite — bypasses the store
+    // entirely, exactly like 075A's apply path (src/db/sync.ts) would.
+    const streamedIn = await addParameter(db, dimensionId, 'Streamed In')
+    expect(
+      useParametersStore.getState().byDimension[dimensionId]?.some((p) => p.id === streamedIn.id),
+    ).toBe(false)
+
+    useSyncStore.setState({ parametersAppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 &&
+      !useParametersStore.getState().byDimension[dimensionId]?.some((p) => p.id === streamedIn.id);
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useParametersStore.getState().byDimension[dimensionId]?.map((p) => p.id)).toContain(
+      streamedIn.id,
+    )
+  })
+
+  it('does not re-read PGlite when the signal has not actually moved (no thrashing)', async () => {
+    await useParametersStore.getState().load(dimensionId)
+    const before = useParametersStore.getState().byDimension[dimensionId]
+    useSyncStore.setState({ parametersAppliedAt: useSyncStore.getState().parametersAppliedAt })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    expect(useParametersStore.getState().byDimension[dimensionId]).toBe(before)
   })
 })

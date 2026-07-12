@@ -35,7 +35,13 @@ import {
 import { subtreeIds } from '../domain/entryTree'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
-import { enqueueIfSyncing } from './sync'
+import { enqueueIfSyncing, useSyncStore } from './sync'
+
+// Issue 075 Part B — the `useSyncStore.tier2AppliedAt` subscription below
+// (mirrors src/store/projects.ts's own module-level syncUnsubscribe pattern,
+// 072): re-`load()` re-subscribes rather than accumulating a duplicate
+// listener per project-open.
+let syncUnsubscribe: (() => void) | null = null
 
 // 2nd-Tier Architecture state for the open project (issue 014): nested-row
 // tables + the tier-linkage back to 3rd-Tier dimensions/parameters
@@ -151,6 +157,37 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
     set((s) => ({ generation: s.generation + 1 }))
   }
 
+  // Issue 075 Part B — the exact read `load()` performs, factored out so the
+  // delta-triggered re-read below can reuse it verbatim (never drift out of
+  // sync with what a fresh mount would see).
+  async function readAll(projectId: string): Promise<{
+    tables: Tier2TableRow[]
+    entriesByTable: Record<string, Tier2EntryRow[]>
+    linkByEntryId: Record<string, PromotedLinkView>
+    rootDimensions: DimensionRow[]
+  }> {
+    const [tables, links, rootDimensions] = await Promise.all([
+      dbListTables(db(), projectId),
+      listPromotedLinks(db(), projectId),
+      listDimensions(db(), projectId),
+    ])
+    const entriesByTable: Record<string, Tier2EntryRow[]> = {}
+    await Promise.all(
+      tables.map(async (t) => {
+        entriesByTable[t.id] = await dbListEntries(db(), t.id)
+      }),
+    )
+    const linkByEntryId: Record<string, PromotedLinkView> = {}
+    for (const l of links) {
+      linkByEntryId[l.entryId] = {
+        parameterId: l.parameterId,
+        dimensionId: l.dimensionId,
+        dimensionName: l.dimensionName,
+      }
+    }
+    return { tables, entriesByTable, linkByEntryId, rootDimensions }
+  }
+
   return {
     projectId: null,
     tables: [],
@@ -162,27 +199,29 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
     async load(projectId) {
       const startGen = get().generation
       set({ projectId })
-      const [tables, links, rootDimensions] = await Promise.all([
-        dbListTables(db(), projectId),
-        listPromotedLinks(db(), projectId),
-        listDimensions(db(), projectId),
-      ])
-      const entriesByTable: Record<string, Tier2EntryRow[]> = {}
-      await Promise.all(
-        tables.map(async (t) => {
-          entriesByTable[t.id] = await dbListEntries(db(), t.id)
-        }),
-      )
+      const result = await readAll(projectId)
       if (get().generation !== startGen) return // a mutation landed mid-load
-      const linkByEntryId: Record<string, PromotedLinkView> = {}
-      for (const l of links) {
-        linkByEntryId[l.entryId] = {
-          parameterId: l.parameterId,
-          dimensionId: l.dimensionId,
-          dimensionName: l.dimensionName,
-        }
-      }
-      set({ tables, entriesByTable, linkByEntryId, rootDimensions })
+      set(result)
+
+      // Issue 075 Part B — load() only ever ran once per project-open, so a
+      // tier2_tables OR tier2_entries delta that streamed in (or that 075A's
+      // own FK-retry landed) AFTER this resolved never rendered without a
+      // remount. Re-read off this store's own ground-truth signal instead,
+      // mirroring 062/067/072's own refresh wiring. Reuses the SAME
+      // generation guard load() itself relies on, so an in-progress local
+      // mutation always wins over a delta-triggered reload that started
+      // before it.
+      syncUnsubscribe?.()
+      syncUnsubscribe = useSyncStore.subscribe((state, prevState) => {
+        if (state.tier2AppliedAt === prevState.tier2AppliedAt) return
+        const { projectId: currentProjectId } = get()
+        if (currentProjectId === null) return
+        const genAtStart = get().generation
+        void readAll(currentProjectId).then((fresh) => {
+          if (get().generation !== genAtStart) return
+          set(fresh)
+        })
+      })
     },
 
     async addTable(name) {
@@ -458,6 +497,8 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
 })
 
 export function resetTier2Store(): void {
+  syncUnsubscribe?.()
+  syncUnsubscribe = null
   useTier2Store.setState({
     projectId: null,
     tables: [],

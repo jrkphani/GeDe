@@ -10,7 +10,13 @@ import {
 } from '../db/mutations'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
-import { enqueueIfSyncing } from './sync'
+import { enqueueIfSyncing, useSyncStore } from './sync'
+
+// Issue 075 Part B — the `useSyncStore.parametersAppliedAt` subscription
+// below (mirrors src/store/projects.ts's own module-level syncUnsubscribe
+// pattern, 072): re-`load()` re-subscribes rather than accumulating a
+// duplicate listener per dimension mount.
+let syncUnsubscribe: (() => void) | null = null
 
 // Parameters keyed by their owning dimension — m is unbounded and independent
 // per dimension (SPEC §2), so unlike dimensions there is no floor to bypass:
@@ -48,6 +54,27 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
     const rows = await dbList(db, dimensionId)
     if ((get().generation[dimensionId] ?? 0) !== gen) return
     set({ byDimension: { ...get().byDimension, [dimensionId]: rows } })
+
+    // Issue 075 Part B — load() only ever ran once per dimension mount, so a
+    // parameters delta that streamed in (or that 075A's own FK-retry landed)
+    // AFTER this resolved never rendered without a remount. Re-read off this
+    // store's own ground-truth signal instead, mirroring 062/067/072's own
+    // refresh wiring — every currently-tracked dimension re-reads (this store
+    // is keyed per-dimension), each still guarded by ITS OWN generation
+    // counter so an in-progress local mutation for that dimension always
+    // wins over a delta-triggered reload that started before it.
+    syncUnsubscribe?.()
+    syncUnsubscribe = useSyncStore.subscribe((state, prevState) => {
+      if (state.parametersAppliedAt === prevState.parametersAppliedAt) return
+      const freshDb = requireDatabase()
+      for (const id of Object.keys(get().byDimension)) {
+        const genAtStart = get().generation[id] ?? 0
+        void dbList(freshDb, id).then((freshRows) => {
+          if ((get().generation[id] ?? 0) !== genAtStart) return
+          set({ byDimension: { ...get().byDimension, [id]: freshRows } })
+        })
+      }
+    })
   },
 
   async add(dimensionId, name) {
@@ -164,5 +191,7 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
 }))
 
 export function resetParametersStore(): void {
+  syncUnsubscribe?.()
+  syncUnsubscribe = null
   useParametersStore.setState({ byDimension: {}, generation: {} })
 }

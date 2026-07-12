@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase } from '../db/client'
-import { createProject, listBindings, listDimensions } from '../db/mutations'
+import { addDimension, createProject, listBindings, listDimensions } from '../db/mutations'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
@@ -318,5 +318,44 @@ describe('dimensions store — sync enqueue (issue 073 pt2)', () => {
     const bindingDeletes = queued.filter((e) => e.table === 'bindings' && e.op === 'delete')
     expect(bindingDeletes).toHaveLength(1)
     expect(queued).toHaveLength(3)
+  })
+})
+
+// Issue 075 Part B — dimensions.ts was one of the read-path stores with no
+// delta subscription: load() ran once per canvas-open and never re-read
+// PGlite afterward, so a dimensions row that reached local PGlite AFTER that
+// initial load() (an inbound sync delta, or 075A's own FK-retry landing late)
+// never rendered without a full remount. Mirrors 072's projects.ts refresh
+// wiring, scoped to this store's own table signal (src/store/sync.ts's
+// dimensionsAppliedAt).
+describe('dimensions store — refresh on inbound delta (issue 075 Part B)', () => {
+  it('a dimension row that lands in PGlite after load() appears once the dimensions signal bumps, with no manual load() call', async () => {
+    expect(useDimensionsStore.getState().dimensions).toEqual([])
+
+    // Simulate a delta landing directly in local PGlite — bypasses the store
+    // entirely, exactly like 075A's apply path (src/db/sync.ts) would.
+    const streamedIn = await addDimension(db, projectId)
+    expect(useDimensionsStore.getState().dimensions.some((d) => d.id === streamedIn.id)).toBe(false)
+
+    useSyncStore.setState({ dimensionsAppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 && !useDimensionsStore.getState().dimensions.some((d) => d.id === streamedIn.id);
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useDimensionsStore.getState().dimensions.map((d) => d.id)).toContain(streamedIn.id)
+  })
+
+  it('does not re-read PGlite when the signal has not actually moved (no thrashing)', async () => {
+    const before = useDimensionsStore.getState().dimensions
+    useSyncStore.setState({ dimensionsAppliedAt: useSyncStore.getState().dimensionsAppliedAt })
+    await new Promise((resolve) => setTimeout(resolve, 5))
+    // Same array reference — the subscription's early-return guard never fired
+    // a re-read, so `set()` was never called at all.
+    expect(useDimensionsStore.getState().dimensions).toBe(before)
   })
 })

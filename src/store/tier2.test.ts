@@ -1,6 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase } from '../db/client'
 import {
+  addTier2Entry,
+  addTier2Table,
   createProject,
   listParameters,
   listParametersBySourceEntries,
@@ -227,5 +229,56 @@ describe('tier2 store — sync enqueue (issue 073 pt1)', () => {
     expect(paramEntries.map((e) => e.rowId).sort()).toEqual(
       outcome.createdParameters.map((p) => p.id).sort(),
     )
+  })
+})
+
+// Issue 075 Part B — tier2.ts was one of the read-path stores with no delta
+// subscription: load() ran once per project-open and never re-read PGlite
+// afterward. Mirrors 072's projects.ts refresh wiring, scoped to this store's
+// combined table signal (src/store/sync.ts's tier2AppliedAt, bumped for
+// EITHER tier2_tables or tier2_entries).
+describe('tier2 store — refresh on inbound delta (issue 075 Part B)', () => {
+  it('a table row written directly to PGlite after load() appears once the tier2 signal bumps', async () => {
+    expect(useTier2Store.getState().tables).toEqual([])
+
+    // Simulate a delta landing directly in local PGlite — bypasses the store
+    // entirely, exactly like 075A's apply path (src/db/sync.ts) would.
+    const streamedIn = await addTier2Table(db, projectId, 'Streamed In')
+    expect(useTier2Store.getState().tables.some((t) => t.id === streamedIn.id)).toBe(false)
+
+    useSyncStore.setState({ tier2AppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 && !useTier2Store.getState().tables.some((t) => t.id === streamedIn.id);
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useTier2Store.getState().tables.map((t) => t.id)).toContain(streamedIn.id)
+  })
+
+  it('an entry row written directly to PGlite after load() appears once the tier2 signal bumps', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    expect(useTier2Store.getState().entriesByTable[table.id]).toEqual([])
+
+    const streamedIn = await addTier2Entry(db, table.id, null, 'Streamed In')
+    expect(
+      useTier2Store.getState().entriesByTable[table.id]?.some((e) => e.id === streamedIn.id),
+    ).toBe(false)
+
+    useSyncStore.setState({ tier2AppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 &&
+      !useTier2Store.getState().entriesByTable[table.id]?.some((e) => e.id === streamedIn.id);
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useTier2Store.getState().entriesByTable[table.id]?.map((e) => e.id)).toContain(streamedIn.id)
   })
 })

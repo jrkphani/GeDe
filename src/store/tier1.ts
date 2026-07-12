@@ -13,7 +13,13 @@ import {
 } from '../db/mutations'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
-import { enqueueIfSyncing } from './sync'
+import { enqueueIfSyncing, useSyncStore } from './sync'
+
+// Issue 075 Part B — the `useSyncStore.tier1AppliedAt` subscription below
+// (mirrors src/store/projects.ts's own module-level syncUnsubscribe pattern,
+// 072): re-`load()` re-subscribes rather than accumulating a duplicate
+// listener per project-open.
+let syncUnsubscribe: (() => void) | null = null
 
 // 1st Tier Foundation state for the currently open project (issue 013): one
 // purpose body + a table of ranked value propositions. Every mutating action
@@ -55,6 +61,27 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     const [purpose, props] = await Promise.all([dbGetPurpose(db, projectId), dbList(db, projectId)])
     if (get().generation !== startGen) return // a mutation landed mid-load; it already set fresh state
     set({ purpose: purpose?.body ?? '', props })
+
+    // Issue 075 Part B — load() only ever ran once per project-open, so a
+    // tier1_purpose OR tier1_props delta that streamed in (or that 075A's own
+    // FK-retry landed) AFTER this resolved never rendered without a remount.
+    // Re-read off this store's own ground-truth signal instead, mirroring
+    // 062/067/072's own refresh wiring. Reuses the SAME generation guard
+    // load() itself relies on, so an in-progress local mutation always wins.
+    syncUnsubscribe?.()
+    syncUnsubscribe = useSyncStore.subscribe((state, prevState) => {
+      if (state.tier1AppliedAt === prevState.tier1AppliedAt) return
+      const { projectId: currentProjectId } = get()
+      if (currentProjectId === null) return
+      const genAtStart = get().generation
+      const freshDb = requireDatabase()
+      void Promise.all([dbGetPurpose(freshDb, currentProjectId), dbList(freshDb, currentProjectId)]).then(
+        ([freshPurpose, freshProps]) => {
+          if (get().generation !== genAtStart) return
+          set({ purpose: freshPurpose?.body ?? '', props: freshProps })
+        },
+      )
+    })
   },
 
   async setPurpose(body) {
@@ -232,5 +259,7 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
 }))
 
 export function resetTier1Store(): void {
+  syncUnsubscribe?.()
+  syncUnsubscribe = null
   useTier1Store.setState({ projectId: null, purpose: '', props: [], generation: 0 })
 }
