@@ -1,6 +1,6 @@
 # 071: Every `/write` 502s — the caller's workspace is never provisioned in RDS, so the first project insert FK-fails
 
-- **Status**: IMPLEMENTED (code-complete + verify:fast green; pending live deploy + smoke)
+- **Status**: SHIPPED (deployed + verified live 2026-07-12 — `/write` returns 200 `applied`, workspace self-heals, the FK-violation 502 is gone from the Write Lambda logs)
 - **Milestone**: M11 — cloud write loop (production reliability)
 - **Severity**: **Critical** — no signed-in user whose workspace wasn't provisioned at sign-up can save ANYTHING to the server. Every `POST /write` returns 502; data lives only in local PGlite and is lost on the 063 sign-out wipe. This is the true cause of the user report "project not saved, disappeared after logout."
 - **Found via**: live e2e smoke of the 068 fix (2026-07-11) — the browser saw 5×`/write` 502; the Write Lambda's CloudWatch logs showed the exact Postgres error; a read-only code investigation confirmed the mechanism.

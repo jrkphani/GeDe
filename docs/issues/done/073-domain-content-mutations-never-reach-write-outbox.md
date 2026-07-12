@@ -1,6 +1,6 @@
 # 073: Project content never persists to the server — domain-content mutations are never enqueued to the write outbox
 
-- **Status**: IMPLEMENTED (code-complete + verify:fast green; pending live deploy + smoke)
+- **Status**: SHIPPED (deployed + verified live 2026-07-12 — 17/17 content writes across all domain tables return 200 `applied`; rows confirmed in RDS. NOTE: the write side is done; reading content BACK is blocked downstream by the Electric stale-shape bug 078)
 - **Milestone**: M11 — cloud write loop (completeness)
 - **Severity**: **Critical** — after 068/071/072 the project *shell* persists, but everything INSIDE it (foundation purpose/props, architecture tables/entries, dimensions, parameters, contexts, bindings) is local-only and is permanently lost on the 063 sign-out wipe. The UI shows a false "Synced." Blocks a meaningful sharing test (an invitee receives an empty project).
 - **Found via**: live e2e after 072 (2026-07-11) — a 30s-idle diagnostic after editing content saw ZERO `/write` calls; only the project `insert` ever reached the outbox all session.

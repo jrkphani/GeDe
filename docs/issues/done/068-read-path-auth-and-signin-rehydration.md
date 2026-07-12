@@ -1,6 +1,6 @@
 # 068: Electric read-path is never authenticated + sign-in never rehydrates — projects vanish after sign-out/in, and shared projects never reach invitees
 
-- **Status**: IMPLEMENTED (code-complete + verify:fast green; pending live smoke)
+- **Status**: SHIPPED (deployed + verified live 2026-07-12 — shape reads return 200, no 401s post-sign-in; sign-in rehydrates the project list)
 - **Milestone**: M9/M8 — sharing correctness + cloud read loop (the keystone that closes both)
 - **Severity**: **Critical** — the client Electric read-path has never delivered a single row to a real authenticated client, and sign-in never restarts it. Root cause of GitHub **#11** (projects missing after sign-out/in) **and** GitHub **#8 / issue 055** (invitees never receive the shared project).
 - **Found via**: parallel read-only investigation of GitHub #9/#10/#11 (2026-07-10), then direct code verification.

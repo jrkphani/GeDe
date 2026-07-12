@@ -1,6 +1,6 @@
 # 072: Streamed `projects` rows never render — local FK rejection on apply (no workspace row) + no project-list refresh signal
 
-- **Status**: IMPLEMENTED (code-complete + verify:fast green; pending live deploy + smoke)
+- **Status**: SHIPPED (deployed + verified live 2026-07-12 — projects persist and render across sign-out/in; project-list persistence stable across fresh sessions)
 - **Milestone**: M8/M11 — sync read-path correctness (materialization)
 - **Severity**: **Critical** — the client-side mirror of 071. After 068 (read-path auth) and 071 (write-path self-heal), a project is written to RDS and delivered to the client over an authenticated 200 `/sync` shape, but **never renders in the project list** — so from the user's view, data still "disappears after logout." Blocks the sharing test too (an invitee's shared project streams through this same path).
 - **Found via**: live e2e re-run after 071 (2026-07-11). HAR showed `POST /write` 200 `applied`, the `projects` shape 200 with the row in-body, yet the list stayed empty 20s later in a fresh "Synced" session. Read-only code investigation pinned the mechanism.

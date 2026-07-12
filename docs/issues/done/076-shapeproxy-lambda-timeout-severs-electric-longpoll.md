@@ -1,6 +1,6 @@
 # 076: ShapeProxy Lambda 15s timeout severs Electric's ~20s long-poll → read-path 502s + flaky sync
 
-- **Status**: IMPLEMENTED (code-complete + cdk synth + cdk tests green; pending live deploy + smoke)
+- **Status**: SHIPPED (deployed + verified live 2026-07-12 — ShapeProxy Lambda `Timeout=30` confirmed in AWS; the live-poll 502 storm is gone across 3 fresh sessions)
 - **Milestone**: M8/M11 — cloud read-path reliability (infrastructure)
 - **Severity**: **Critical** — the root cause of the non-deterministic read-path failures dogging the last several smokes. Content is written to RDS and delivered on the initial shape snapshot, but live-poll `502`s + a stuck "Sync error" intermittently prevent materialization; some sessions render, others don't, and previously-working tiers regress run-to-run.
 - **Found via**: live e2e (persistent `502` on `live=true` long-poll + `[Electric] 409 without shape handle header`) → Electric container logs (`Req.TransportError socket closed`) → read-only CDK investigation.
