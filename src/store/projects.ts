@@ -4,7 +4,7 @@ import { getDatabase, type Database } from '../db/client'
 import { resetDatabase, setDatabase } from './database'
 import { useAuthStore } from './auth'
 import { useCommandLogStore } from './commandLog'
-import { useSyncStore } from './sync'
+import { enqueueIfSyncing, useSyncStore } from './sync'
 import {
   archiveProject as dbArchive,
   createProject as dbCreate,
@@ -222,8 +222,11 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     const db = database
     if (!db) return
     const previousName = get().projects.find((p) => p.id === id)?.name ?? name
-    await dbRename(db, id, name)
+    const renamed = await dbRename(db, id, name)
     set({ projects: await dbList(db) })
+    // Issue 073 — an edit of an already-synced row: 'update', never 'upsert'
+    // (the 066-class no-op the op-selection rule warns about).
+    enqueueIfSyncing('projects', renamed.id, 'update', renamed)
     useCommandLogStore.getState().push({
       label: `rename project to "${name}"`,
       async undo() {
@@ -242,6 +245,8 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     if (!db) return
     const row = await dbArchive(db, id)
     set({ projects: get().projects.filter((p) => p.id !== id) })
+    // Issue 073 — archiving is a soft-delete tombstone: 'delete'.
+    enqueueIfSyncing('projects', row.id, 'delete', row)
     useCommandLogStore.getState().push({
       label: `archive "${row.name}"`,
       async undo() {
@@ -270,6 +275,9 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     if (!db) return
     const row = await dbRestore(db, id)
     set({ projects: await dbList(db), archivedProjects: await dbListArchived(db) })
+    // Issue 073 — restoreProject clears deleted_at on an already-synced row:
+    // 'update' (row.deletedAt is already null here, dbRestore's own set()).
+    enqueueIfSyncing('projects', row.id, 'update', row)
     useCommandLogStore.getState().push({
       label: `restore "${row.name}"`,
       async undo() {
@@ -301,6 +309,21 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     // Re-list so the imported clone slots into persisted (updatedAt) order,
     // matching what a reload would show.
     set({ projects: await dbList(db) })
+    // Issue 073 — importProject creates a WHOLE project tree (fresh uuidv7
+    // ids from remapEnvelope — every row genuinely new, never an edit), so
+    // enqueue an 'upsert' for every row it inserted, across all 9 tables, in
+    // the same FK-dependency order the transactional insert itself used
+    // (ENVELOPE_TABLE_NAMES — projects → tier1_*/tier2_tables → tier2_entries
+    // → dimensions → parameters → contexts → bindings, src/domain/
+    // projectEnvelope.ts). gatherProjectRows re-reads the just-inserted clone
+    // (mirrors adoptProject's own post-import gather, src/db/projectIO.ts) —
+    // importProject's own ImportResult never carries the row set itself.
+    const tables = await gatherProjectRows(db, result.project.id)
+    for (const table of ENVELOPE_TABLE_NAMES) {
+      for (const row of tables[table]) {
+        enqueueIfSyncing(table, row.id, 'upsert', row)
+      }
+    }
     return result
   },
 

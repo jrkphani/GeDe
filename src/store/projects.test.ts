@@ -13,6 +13,7 @@ let db: Awaited<ReturnType<typeof openDatabase>>['db']
 beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
   resetProjectsStore()
+  resetSyncStore()
   await useProjectsStore.getState().init(db)
   useCommandLogStore.getState().clear()
 })
@@ -164,6 +165,53 @@ describe('archived projects (issue 070)', () => {
 
     await useProjectsStore.getState().loadArchivedProjects()
     expect(useProjectsStore.getState().archivedProjects.map((p) => p.id)).toEqual([id])
+  })
+})
+
+// Issue 073 pt2 — renameProject/archiveProject/restoreArchivedProject were the
+// still-unwired projects.ts actions (createProject/adoptProject were already
+// wired, issue 050/037): they wrote to local PGlite + the command log but
+// never enqueued to the write outbox. importProject's whole-tree enqueue is
+// covered separately in projectImportExport.test.ts, alongside its sibling
+// adoptProject test.
+describe('projects store — sync enqueue (issue 073 pt2)', () => {
+  it('renameProject enqueues a projects update', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useProjectsStore.getState().renameProject(id, 'New name')
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'projects', rowId: id, op: 'update', status: 'pending' })
+  })
+
+  it('archiveProject enqueues a projects delete', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useProjectsStore.getState().archiveProject(id)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'projects', rowId: id, op: 'delete', status: 'pending' })
+  })
+
+  it('restoreArchivedProject enqueues a projects update carrying deletedAt: null', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    await useProjectsStore.getState().archiveProject(id)
+    resetSyncStore()
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useProjectsStore.getState().restoreArchivedProject(id)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'projects', rowId: id, op: 'update', status: 'pending' })
+    expect((queued[0]?.row as { deletedAt: string | null }).deletedAt).toBeNull()
   })
 })
 

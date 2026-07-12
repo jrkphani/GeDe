@@ -1,6 +1,6 @@
 # 073: Project content never persists to the server — domain-content mutations are never enqueued to the write outbox
 
-- **Status**: IN PROGRESS (pt1: helper + tier1/tier2/contexts wired + tested)
+- **Status**: IMPLEMENTED (code-complete + verify:fast green; pending live deploy + smoke)
 - **Milestone**: M11 — cloud write loop (completeness)
 - **Severity**: **Critical** — after 068/071/072 the project *shell* persists, but everything INSIDE it (foundation purpose/props, architecture tables/entries, dimensions, parameters, contexts, bindings) is local-only and is permanently lost on the 063 sign-out wipe. The UI shows a false "Synced." Blocks a meaningful sharing test (an invitee receives an empty project).
 - **Found via**: live e2e after 072 (2026-07-11) — a 30s-idle diagnostic after editing content saw ZERO `/write` calls; only the project `insert` ever reached the outbox all session.
@@ -56,6 +56,16 @@ Standing gate: `npm run verify:fast` green.
 - **Part 1:** helper in `sync.ts` + wire `tier1.ts`, `tier2.ts`, `contexts.ts` (the natural-key/cascade group) + their enqueue tests. Commit `fix(073) pt1`.
 - **Part 2 (after pt1):** wire `dimensions.ts` (reorder multi-row), `parameters.ts`, `projects.ts` (rename/archive/restore/import) + the cross-cutting integration test. Commit `fix(073) pt2`.
 Sequential (both use the helper); disjoint store files; no worktree needed.
+
+## Part 2 — done
+
+Wired every remaining unwired site using the pt1 `enqueueIfSyncing` helper — no changes to the helper itself:
+
+- `dimensions.ts`: `add` → `'upsert'`; `rename`/`setColor` → `'update'`; `reorder` → `'update'` for every row whose `sort` actually changed (before/after diff, same pattern as tier1's `reorderProp`); `remove` → `'delete'` for the removed row + `'update'` for every shifted sibling + `'delete'` for every cascaded `bindings` tombstone (read from `deletedBindings`, the real cascaded rows `removeDimension` returns).
+- `parameters.ts`: `add` → `'upsert'`; `rename` → `'update'`; `reorder`/`remove` → same before/after sort-diff pattern (no bindings cascade here — `removeParameter` never touches `bindings`).
+- `projects.ts`: `renameProject` → `'update'`; `archiveProject` → `'delete'`; `restoreArchivedProject` → `'update'` (the returned row already carries `deletedAt: null` from `restoreProject`); `importProject` → re-reads the newly-created project's full row set via `gatherProjectRows` (import's own `ImportResult` doesn't carry the rows, mirrors `adoptProject`'s own post-import gather) and enqueues an `'upsert'` for every row across all 9 tables in `ENVELOPE_TABLE_NAMES` order (the same FK-dependency order the transactional insert used) — every row is genuinely new (fresh uuidv7 ids from `remapEnvelope`), never an edit.
+- **Cross-store gaps flagged by pt1, closed:** `contexts.ts`'s `revertStale` now also enqueues an `'update'` for the reverted `dimensions` row (the sourceParamId/name revert `revertStaleRebind` performs alongside the `bindings` restore pt1 already wired). `openChildCanvas` (also in `contexts.ts`) was entirely unwired — it seeds new child-canvas `dimensions` rows (`'upsert'`), rewrites `sourceParamId`/`name`/`sort` on existing ones during a parent re-bind/reorder/rename (`'update'`, via a before/after snapshot — `stale` alone only reports the rebind case), and hard-deletes the child's own retired sub-`bindings` on a stale re-bind (`'delete'`) — all now wired.
+- Added `src/store/syncEnqueue.integration.test.ts` — the cross-cutting regression test driving one mutation through each of the 5 domain-content stores + `renameProject`, asserting the write queue gains all 6.
 
 ## Notes
 

@@ -7,6 +7,7 @@ import { useCommandLogStore } from './commandLog'
 import { resetContextsStore, useContextsStore } from './contexts'
 import { resetDimensionsStore, useDimensionsStore } from './dimensions'
 import { resetParametersStore, useParametersStore } from './parameters'
+import { resetSyncStore, useSyncStore } from './sync'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
@@ -17,6 +18,7 @@ beforeEach(async () => {
   resetDimensionsStore()
   resetContextsStore()
   resetParametersStore()
+  resetSyncStore()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
@@ -205,5 +207,116 @@ describe('dimensions store — command log (issue 006)', () => {
       expect(isComplete(dimIdsAfter, boundAfter)).toBe(false)
       expect(documentedStatus(isComplete(dimIdsAfter, boundAfter), justificationBefore)).toBe('draft')
     })
+  })
+})
+
+// Issue 073 pt2 — dimensions.ts was one of the unwired domain-content stores:
+// add/rename/setColor/reorder/remove wrote to local PGlite + the command log
+// but never enqueued to the write outbox, so content was lost on the 063
+// sign-out wipe. Mirrors tier1.test.ts's own "sync enqueue" describe block.
+describe('dimensions store — sync enqueue (issue 073 pt2)', () => {
+  it('add enqueues a dimensions upsert', async () => {
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    const row = await useDimensionsStore.getState().add()
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({
+      table: 'dimensions',
+      rowId: row?.id,
+      op: 'upsert',
+      status: 'pending',
+    })
+  })
+
+  it('add enqueues nothing when no sync workspace is set (local-only, byte-for-byte unchanged)', async () => {
+    await useDimensionsStore.getState().add()
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+
+  it('rename enqueues a dimensions update', async () => {
+    const row = await useDimensionsStore.getState().add()
+    const id = (row as { id: string }).id
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useDimensionsStore.getState().rename(id, 'Stake')
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'dimensions', rowId: id, op: 'update', status: 'pending' })
+  })
+
+  it('setColor enqueues a dimensions update', async () => {
+    const row = await useDimensionsStore.getState().add()
+    const id = (row as { id: string }).id
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useDimensionsStore.getState().setColor(id, '#123456')
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'dimensions', rowId: id, op: 'update', status: 'pending' })
+  })
+
+  it('reorder enqueues an update for every row whose sort actually changed (Subtlety B)', async () => {
+    await useDimensionsStore.getState().add()
+    await useDimensionsStore.getState().add()
+    await useDimensionsStore.getState().add()
+    const ids = useDimensionsStore.getState().dimensions.map((d) => d.id)
+    const lastId = ids[2] as string
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useDimensionsStore.getState().reorder(lastId, 0)
+
+    // last: 2→0, first two each shift by one — every row's sort moved.
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued.filter((e) => e.table === 'dimensions' && e.op === 'update')).toHaveLength(3)
+    expect(queued.map((e) => e.rowId).sort()).toEqual([...ids].sort())
+  })
+
+  it('reorder enqueues nothing for a row whose sort did not change', async () => {
+    await useDimensionsStore.getState().add()
+    await useDimensionsStore.getState().add()
+    const ids = useDimensionsStore.getState().dimensions.map((d) => d.id)
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    // Moving a row to its own current index changes nothing.
+    await useDimensionsStore.getState().reorder(ids[0] as string, 0)
+
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+
+  it('remove enqueues a dimensions delete, an update for every shifted sibling, and a bindings delete for every cascaded binding', async () => {
+    const value = await useDimensionsStore.getState().add()
+    const stake = await useDimensionsStore.getState().add()
+    const risk = await useDimensionsStore.getState().add()
+    const valueId = (value as { id: string }).id
+    const stakeId = (stake as { id: string }).id
+    const riskId = (risk as { id: string }).id
+    const comfort = await useParametersStore.getState().add(valueId, 'Comfort')
+    const users = await useParametersStore.getState().add(stakeId, 'Users')
+    const low = await useParametersStore.getState().add(riskId, 'Low')
+    await useContextsStore.getState().load(projectId)
+    const ctx = await useContextsStore.getState().create()
+    const ctxId = (ctx as { id: string }).id
+    await useContextsStore.getState().bind(ctxId, valueId, (comfort as { id: string }).id)
+    await useContextsStore.getState().bind(ctxId, stakeId, (users as { id: string }).id)
+    await useContextsStore.getState().bind(ctxId, riskId, (low as { id: string }).id)
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    const result = await useDimensionsStore.getState().remove(stakeId)
+    expect(result.ok).toBe(true)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toContainEqual(
+      expect.objectContaining({ table: 'dimensions', rowId: stakeId, op: 'delete' }),
+    )
+    // risk closes the gap (sort 2→1); value stays at 0 — unchanged, not enqueued.
+    expect(queued).toContainEqual(
+      expect.objectContaining({ table: 'dimensions', rowId: riskId, op: 'update' }),
+    )
+    expect(queued.find((e) => e.table === 'dimensions' && e.rowId === valueId)).toBeUndefined()
+    const bindingDeletes = queued.filter((e) => e.table === 'bindings' && e.op === 'delete')
+    expect(bindingDeletes).toHaveLength(1)
+    expect(queued).toHaveLength(3)
   })
 })

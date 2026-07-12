@@ -15,6 +15,7 @@ import {
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { useContextsStore } from './contexts'
+import { enqueueIfSyncing } from './sync'
 
 // Root-canvas dimensions for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
@@ -71,6 +72,7 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     // published separately, surfaces could swap away mid-gesture (issue 002
     // guided start).
     set({ dimensions: await dbList(db, projectId), editingId: row.id })
+    enqueueIfSyncing('dimensions', row.id, 'upsert', row)
     const orderedIdsAfterAdd = get().dimensions.map((d) => d.id)
     useCommandLogStore.getState().push({
       label: 'add dimension',
@@ -92,8 +94,9 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     if (projectId === null) return
     const db = requireDatabase()
     const previousName = get().dimensions.find((d) => d.id === id)?.name ?? name
-    await dbRename(db, id, name)
+    const renamed = await dbRename(db, id, name)
     set({ dimensions: await dbList(db, projectId, contextId) })
+    enqueueIfSyncing('dimensions', renamed.id, 'update', renamed)
     useCommandLogStore.getState().push({
       label: `rename dimension to "${name}"`,
       async undo() {
@@ -112,8 +115,9 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     if (projectId === null) return
     const db = requireDatabase()
     const previousColor = get().dimensions.find((d) => d.id === id)?.color ?? color
-    await dbSetColor(db, id, color)
+    const updated = await dbSetColor(db, id, color)
     set({ dimensions: await dbList(db, projectId, contextId) })
+    enqueueIfSyncing('dimensions', updated.id, 'update', updated)
     useCommandLogStore.getState().push({
       label: 'recolor dimension',
       async undo() {
@@ -131,8 +135,21 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     const { projectId } = get()
     if (projectId === null) return
     const db = requireDatabase()
-    const fromIndex = get().dimensions.findIndex((d) => d.id === id)
-    set({ dimensions: await dbReorder(db, projectId, id, toIndex) })
+    const before = get().dimensions
+    const fromIndex = before.findIndex((d) => d.id === id)
+    const after = await dbReorder(db, projectId, id, toIndex)
+    set({ dimensions: after })
+    // Issue 073 Subtlety B — reorderDimension's rewriteSort rewrites `sort` on
+    // EVERY sibling row whose position actually moved, not just the one
+    // dragged (db/mutations.ts's rewriteSort). `after` is already in the new
+    // sort order, so each row's index IS its new sort — enqueue an 'update'
+    // for every row whose previous sort disagrees with it, else sibling drift
+    // never reaches the server.
+    const beforeById = new Map(before.map((d) => [d.id, d]))
+    after.forEach((row, index) => {
+      const prevSort = beforeById.get(row.id)?.sort ?? -1
+      if (prevSort !== index) enqueueIfSyncing('dimensions', row.id, 'update', row)
+    })
     useCommandLogStore.getState().push({
       label: 'reorder dimension',
       async undo() {
@@ -148,11 +165,25 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     const { projectId } = get()
     if (projectId === null) return { ok: false }
     const db = requireDatabase()
-    const orderedIds = get().dimensions.map((d) => d.id)
-    const removedName = get().dimensions.find((d) => d.id === id)?.name ?? ''
+    const before = get().dimensions
+    const orderedIds = before.map((d) => d.id)
+    const removedRow = before.find((d) => d.id === id)
+    const removedName = removedRow?.name ?? ''
     try {
-      const { dimensions, deletedBindings } = await dbRemove(db, projectId, id)
-      set({ dimensions })
+      const { dimensions: after, deletedBindings } = await dbRemove(db, projectId, id)
+      set({ dimensions: after })
+      // Issue 073 — the removed row is a soft-delete tombstone; removeDimension
+      // ALSO rewrites `sort` on every surviving sibling (Subtlety B, same
+      // rewriteSort cascade as reorder) AND cascades a tombstone to every
+      // binding that pointed at this dimension — enqueue all three, not just
+      // the delete the user directly triggered.
+      if (removedRow) enqueueIfSyncing('dimensions', id, 'delete', removedRow)
+      const beforeById = new Map(before.map((d) => [d.id, d]))
+      after.forEach((row, index) => {
+        const prevSort = beforeById.get(row.id)?.sort ?? -1
+        if (prevSort !== index) enqueueIfSyncing('dimensions', row.id, 'update', row)
+      })
+      for (const b of deletedBindings) enqueueIfSyncing('bindings', b.id, 'delete', b)
       await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
       useCommandLogStore.getState().push({
         label: `remove dimension "${removedName}"`,

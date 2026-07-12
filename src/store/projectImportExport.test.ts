@@ -114,6 +114,34 @@ describe('projects store — adoptProject (issue 037)', () => {
   })
 })
 
+// Issue 073 pt2 — importProject creates a WHOLE project tree (fresh uuidv7
+// ids from remapEnvelope), but the store action never enqueued any of it to
+// the write outbox — mirrors adoptProject's own sync-enqueue test above.
+describe('projects store — importProject sync enqueue (issue 073 pt2)', () => {
+  it('enqueues an upsert for every created row (project + every child row), all pending', async () => {
+    await useProjectsStore.getState().createProject('Tavalo')
+    const id = useProjectsStore.getState().projects[0]?.id as string
+    const d = await addDimension(db, id)
+    await addParameter(db, d.id, 'Low')
+    const { json } = await useProjectsStore.getState().exportProject(id)
+
+    // Only set the sync workspace AFTER export, so the earlier local-only
+    // createProject/addDimension/addParameter calls above enqueue nothing —
+    // every queue entry asserted below belongs to the import itself.
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    const { project } = await useProjectsStore.getState().importProject(json)
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(
+      queued.some((e) => e.table === 'projects' && e.rowId === project.id && e.op === 'upsert'),
+    ).toBe(true)
+    expect(queued.some((e) => e.table === 'dimensions' && e.op === 'upsert')).toBe(true)
+    expect(queued.some((e) => e.table === 'parameters' && e.op === 'upsert')).toBe(true)
+    expect(queued.every((e) => e.op === 'upsert')).toBe(true)
+    expect(queued.every((e) => e.status === 'pending')).toBe(true)
+  })
+})
+
 // Issue 050 — the "subtle part": a project created while signed in must
 // carry the signed-in user's deterministic cloud workspace id (so the
 // flushed MutationEnvelope is scoped correctly), AND that id's LOCAL

@@ -9,6 +9,7 @@ import {
   getContextsByIds as dbGetByIds,
   listBindings as dbListBindings,
   listContexts as dbListContexts,
+  listDimensions as dbListDimensions,
   openChildCanvas as dbOpenChildCanvas,
   restoreContext as dbRestore,
   revertStaleRebind as dbRevertStale,
@@ -125,7 +126,40 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
 
   async openChildCanvas(parentContextId) {
     const db = requireDatabase()
-    const { stale } = await dbOpenChildCanvas(db, parentContextId)
+    // Issue 073 pt2 — openChildCanvas seeds/reconciles child-canvas dimensions
+    // (brand-new rows on first open; sourceParamId/name/sort rewrites on a
+    // parent re-bind/reorder/rename, db/mutations.ts's own openChildCanvas)
+    // and, on a stale re-bind, hard-deletes the child's own retired
+    // sub-bindings — none of that ever reached the write outbox. Snapshot
+    // "before" so a genuinely NEW child dimension gets 'upsert' and an
+    // existing one whose sourceParamId/name/sort actually changed gets
+    // 'update' (Subtlety A/B) — `stale` alone only reports the rebind case,
+    // never the first-seed or parent-reorder/rename cases.
+    const [parent] = await dbGetByIds(db, [parentContextId])
+    const before = parent ? await dbListDimensions(db, parent.projectId, parentContextId) : []
+    const { dimensions: after, stale } = await dbOpenChildCanvas(db, parentContextId)
+    const beforeById = new Map(before.map((d) => [d.id, d]))
+    for (const row of after) {
+      const prev = beforeById.get(row.id)
+      if (!prev) {
+        enqueueIfSyncing('dimensions', row.id, 'upsert', row)
+      } else if (
+        prev.sourceParamId !== row.sourceParamId ||
+        prev.name !== row.name ||
+        prev.sort !== row.sort
+      ) {
+        enqueueIfSyncing('dimensions', row.id, 'update', row)
+      }
+    }
+    // A stale rebind hard-deletes the child's retired sub-bindings locally
+    // (db.delete, not a tombstone — db/mutations.ts's own openChildCanvas) —
+    // enqueue 'delete' so the server marks the same rows gone; revertStale's
+    // own 'update' (below) is the one path that ever revives them.
+    for (const event of stale) {
+      for (const b of event.retiredBindings) {
+        enqueueIfSyncing('bindings', b.id, 'delete', b)
+      }
+    }
     return stale
   },
 
@@ -138,16 +172,22 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const contexts = await dbListContexts(db, projectId, parentId)
     const bindingsByContext = await fetchBindingsMap(db, contexts.map((c) => c.id))
     set({ contexts, bindingsByContext })
-    // Issue 073 — best-effort: re-syncs the sub-bindings this banner's Undo
-    // re-inserts (event.retiredBindings — previously-existing rows, so
-    // 'update', not 'upsert'). NOT wired here: the child dimension's own
-    // sourceParamId/name change this same event reverts (the `dimensions`
-    // table) — that mutation is triggered by openChildCanvas, which is not in
-    // this store's Part 1 wiring list, so neither side of that pair is
-    // synced yet (flagged in the 073 pt1 report for review).
+    // Issue 073 pt1 — re-syncs the sub-bindings this banner's Undo re-inserts
+    // (event.retiredBindings — previously-existing rows, so 'update', not
+    // 'upsert').
     for (const b of event.retiredBindings) {
       enqueueIfSyncing('bindings', b.id, 'update', b)
     }
+    // Issue 073 pt2 — the OTHER half of the pair pt1 flagged as unwired:
+    // revertStaleRebind ALSO reverts the child dimension's own
+    // sourceParamId/name back to what it was before the parent re-bind (the
+    // `dimensions` table). Read the row back (revertStaleRebind returns void)
+    // and enqueue the 'update' — an edit of an already-synced row, never
+    // 'upsert'.
+    const revertedDim = (await dbListDimensions(db, projectId, parentId)).find(
+      (d) => d.id === event.childDimensionId,
+    )
+    if (revertedDim) enqueueIfSyncing('dimensions', revertedDim.id, 'update', revertedDim)
   },
 
   async load(projectId, parentId = null) {

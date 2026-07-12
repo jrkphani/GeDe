@@ -10,6 +10,7 @@ import {
 } from '../db/mutations'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
+import { enqueueIfSyncing } from './sync'
 
 // Parameters keyed by their owning dimension — m is unbounded and independent
 // per dimension (SPEC §2), so unlike dimensions there is no floor to bypass:
@@ -56,6 +57,7 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
     const row = await dbAdd(db, dimensionId, trimmed)
     set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+    enqueueIfSyncing('parameters', row.id, 'upsert', row)
     const orderedIdsAfterAdd = get().byDimension[dimensionId]?.map((p) => p.id) ?? [row.id]
     useCommandLogStore.getState().push({
       label: `add parameter "${row.name}"`,
@@ -77,8 +79,9 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
     const db = requireDatabase()
     const previousName = get().byDimension[dimensionId]?.find((p) => p.id === id)?.name ?? name
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
-    await dbRename(db, id, name)
+    const renamed = await dbRename(db, id, name)
     set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+    enqueueIfSyncing('parameters', renamed.id, 'update', renamed)
     useCommandLogStore.getState().push({
       label: `rename parameter to "${name}"`,
       async undo() {
@@ -96,10 +99,21 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
 
   async reorder(dimensionId, id, toIndex) {
     const db = requireDatabase()
-    const fromIndex = (get().byDimension[dimensionId] ?? []).findIndex((p) => p.id === id)
+    const before = get().byDimension[dimensionId] ?? []
+    const fromIndex = before.findIndex((p) => p.id === id)
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
     const rows = await dbReorder(db, dimensionId, id, toIndex)
     set({ byDimension: { ...get().byDimension, [dimensionId]: rows } })
+    // Issue 073 Subtlety B — reorderParameter's rewriteParameterSort rewrites
+    // `sort` on EVERY sibling row whose position actually moved, not just the
+    // one dragged (db/mutations.ts's rewriteParameterSort). `rows` is already
+    // in the new sort order, so each row's index IS its new sort — enqueue an
+    // 'update' for every row whose previous sort disagrees with it.
+    const beforeById = new Map(before.map((p) => [p.id, p]))
+    rows.forEach((row, index) => {
+      const prevSort = beforeById.get(row.id)?.sort ?? -1
+      if (prevSort !== index) enqueueIfSyncing('parameters', row.id, 'update', row)
+    })
     useCommandLogStore.getState().push({
       label: 'reorder parameter',
       async undo() {
@@ -117,11 +131,22 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
 
   async remove(dimensionId, id) {
     const db = requireDatabase()
-    const orderedIds = (get().byDimension[dimensionId] ?? []).map((p) => p.id)
-    const removedName = get().byDimension[dimensionId]?.find((p) => p.id === id)?.name ?? ''
+    const before = get().byDimension[dimensionId] ?? []
+    const orderedIds = before.map((p) => p.id)
+    const removedRow = before.find((p) => p.id === id)
+    const removedName = removedRow?.name ?? ''
     set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
     const rows = await dbRemove(db, dimensionId, id)
     set({ byDimension: { ...get().byDimension, [dimensionId]: rows } })
+    // Issue 073 — the removed row is a soft-delete tombstone; removeParameter
+    // ALSO rewrites `sort` on every surviving sibling (Subtlety B, same
+    // rewriteParameterSort cascade as reorder) — enqueue an 'update' for each.
+    if (removedRow) enqueueIfSyncing('parameters', id, 'delete', removedRow)
+    const beforeById = new Map(before.map((p) => [p.id, p]))
+    rows.forEach((row, index) => {
+      const prevSort = beforeById.get(row.id)?.sort ?? -1
+      if (prevSort !== index) enqueueIfSyncing('parameters', row.id, 'update', row)
+    })
     useCommandLogStore.getState().push({
       label: `remove parameter "${removedName}"`,
       async undo() {
