@@ -7,7 +7,7 @@ import { uuidv7 } from 'uuidv7'
 import { openDatabase } from '../db/client'
 import { createProject } from '../db/mutations'
 import { createWorkspace } from '../db/workspaces'
-import { projects } from '../db/schema'
+import { dimensions, parameters, projects } from '../db/schema'
 import { useCommandLogStore } from './commandLog'
 import { useStatusStore } from './status'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
@@ -711,6 +711,131 @@ describe('sync store — lost-edit note (issue 036, test-first plan #3)', () => 
 
     expect(useStatusStore.getState().message).toBe('A local change was replaced by a newer update.')
     expect(useStatusStore.getState().action).toBeNull()
+  })
+})
+
+// Issue 075 Part A — the cross-table FK race, driven end-to-end through the
+// store (this is the one place `hasError` lives — syncEngine.ts itself has no
+// error STATE, only the onError callback). Deliberately does NOT pre-seed the
+// `dimensions`/`parameters` parent rows (unlike this file's other tests,
+// which only ever exercise a single already-satisfiable delta) — the whole
+// point is to trigger the real race: a `parameters` shape resolving before
+// its `dimensions` parent has committed locally.
+describe('sync store — reconcile-retry convergence for cross-table FK races (issue 075 Part A)', () => {
+  it('a parameters delta that races ahead of dimensions is buffered, then lands (no lingering hasError) once the parent applies and all tables report up-to-date', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    await createProject(db, { name: 'Tavalo' })
+    const [project] = await db.select().from(projects)
+    const { factory, deliver, deliverUpToDateAll } = fakeStreamFactory()
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    // parameters arrives first, referencing a dimension not yet local.
+    deliver('parameters', [
+      {
+        key: '"public"."parameters"/"pa1"',
+        value: {
+          id: 'pa1',
+          dimension_id: 'd1',
+          parent_param_id: null,
+          source_entry_id: null,
+          name: 'Comfort',
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().hasError).toBe(true)
+    expect(await db.select().from(parameters)).toHaveLength(0)
+
+    // Its dimension parent lands next, on an independent table stream.
+    deliver('dimensions', [
+      {
+        key: '"public"."dimensions"/"d1"',
+        value: {
+          id: 'd1',
+          project_id: project?.id,
+          workspace_id: project?.workspaceId,
+          context_id: null,
+          source_param_id: null,
+          name: 'Value',
+          color: '#111',
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:02.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // The retry drained: both rows now durably present in local PGlite.
+    expect(await db.select().from(dimensions)).toHaveLength(1)
+    expect(await db.select().from(parameters)).toHaveLength(1)
+    // The successful retry's onApplied cleared hasError, same as any other
+    // successful apply — no lingering error from the earlier race.
+    expect(useSyncStore.getState().hasError).toBe(false)
+
+    // Every table settling up-to-date must not resurrect the (already
+    // resolved) error.
+    deliverUpToDateAll()
+    expect(useSyncStore.getState().hasError).toBe(false)
+    vi.unstubAllEnvs()
+  })
+
+  it('a genuinely orphaned parameters delta (its dimension never arrives) surfaces hasError once every table reports up-to-date, not before', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const { factory, deliver, deliverUpToDateAll } = fakeStreamFactory()
+
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    deliver('parameters', [
+      {
+        key: '"public"."parameters"/"pa1"',
+        value: {
+          id: 'pa1',
+          dimension_id: 'd-never-arrives',
+          parent_param_id: null,
+          source_entry_id: null,
+          name: 'Comfort',
+          sort: 0,
+          created_at: '2026-01-01T00:00:00.000Z',
+          updated_at: '2026-01-01T00:00:01.000Z',
+          deleted_at: null,
+        },
+        headers: { operation: 'insert' },
+      },
+    ])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(useSyncStore.getState().hasError).toBe(true)
+
+    // Every OTHER synced table catches up first — the dimension this row
+    // needs is simply never coming this session. Still buffered/racing until
+    // the LAST table reports up-to-date.
+    const otherTables = SYNCED_TABLES.filter((t) => t !== 'dimensions')
+    for (const table of otherTables) deliver(table, [{ headers: { control: 'up-to-date' } }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // The final table (dimensions) reports up-to-date too — convergence
+    // reached with the buffer still non-empty: a real, surfaced error.
+    deliver('dimensions', [{ headers: { control: 'up-to-date' } }])
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().hasError).toBe(true)
+    expect(await db.select().from(parameters)).toHaveLength(0)
+
+    // deliverUpToDateAll() re-delivering up-to-date again must not loop or
+    // throw — the buffer is already drained/cleared.
+    expect(() => deliverUpToDateAll()).not.toThrow()
+    vi.unstubAllEnvs()
   })
 })
 

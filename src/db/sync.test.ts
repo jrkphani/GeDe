@@ -343,6 +343,33 @@ describe('applyInboundDeltas — invitations / workspace_members (issue 056)', (
   })
 })
 
+// Issue 075 Part A — the confirmed root cause: syncEngine.ts opens one
+// INDEPENDENT ShapeStream per table, each applying its own batch the instant
+// THAT table's network response resolves, with no cross-table ordering. A
+// forward FK to a SIBLING synced table (parameters.dimension_id, unlike the
+// self/cross-referential columns DEFERRED_FK_COLUMN already protects) is NOT
+// deferred here, so if the `parameters` shape resolves before `dimensions`
+// has committed locally, this call must still throw/roll back — that
+// atomicity is exactly what makes 032's convergence property safe, and it is
+// NOT weakened by 075's fix (the retry orchestration lives one layer up, in
+// syncEngine.ts, and re-calls this same function once the parent has landed).
+// This test pins that invariant directly: applyInboundDeltas alone, given a
+// `parameters` delta whose `dimensions` parent was never seeded, must reject.
+describe('applyInboundDeltas — cross-table forward-FK race (issue 075 Part A root cause)', () => {
+  it('a parameters delta whose dimensions parent is not yet local throws (no cross-table ordering at this layer)', async () => {
+    const db = await freshDb()
+    const delta: RowDelta = {
+      table: 'parameters',
+      id: 'pa1',
+      updatedAt: T0,
+      row: row('pa1', T0, { dimensionId: 'd-not-yet-local', parentParamId: null, sourceEntryId: null, name: 'Comfort', sort: 0 }),
+    }
+    await expect(applyInboundDeltas(db, [delta])).rejects.toThrow()
+    const rows = await db.select().from(dimensions)
+    expect(rows).toHaveLength(0)
+  })
+})
+
 // Issue 072 — the client-side mirror of 071. `projects.workspace_id` carries
 // a real, enforced FK (migration 0008), but `workspaces` is NOT itself an
 // Electric-synced table (src/domain/syncScope.ts) — the only other local

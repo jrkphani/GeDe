@@ -18,6 +18,42 @@ import {
 import { SYNCED_TABLES, syncBaseUrl } from './config'
 import { noAuth, type TokenProvider } from './authToken'
 import type { RowDelta, TableName } from '../domain/syncDelta'
+import { ENVELOPE_TABLE_NAMES } from '../domain/projectEnvelope'
+
+// Issue 075 Part A — the FK-dependency apply order for the reconcile-retry
+// buffer below (see startSync's own doc comment). Mirrors the parent-before-
+// child order the docs/issues/075 fix prescribes: ENVELOPE_TABLE_NAMES'
+// existing registry order (projects -> tier1_*/tier2_tables -> tier2_entries
+// -> dimensions -> parameters -> contexts -> bindings), plus the two
+// sync-only tables appended at the end — neither `invitations` nor
+// `workspace_members` carries a forward FK to any OTHER synced table (both
+// `workspace_id`s point outward at `workspaces`, which isn't itself synced),
+// so their position relative to the nine envelope tables never matters for
+// convergence.
+const RETRY_APPLY_ORDER: readonly TableName[] = [...ENVELOPE_TABLE_NAMES, 'invitations', 'workspace_members']
+
+// Sorts a set of buffered deltas into RETRY_APPLY_ORDER so a single retry
+// batch applies parents before children — not a guarantee of success (a
+// child-canvas dimension's nullable `context_id` isn't covered by this single
+// linear order, since dimensions precedes contexts in it), just a good-faith
+// ordering that resolves the common cases in one pass; anything left over
+// simply stays buffered for the NEXT successful apply to retry again (see
+// drainRetryBuffer below) — convergence never depends on getting the order
+// perfect in one shot.
+function byRetryApplyOrder(deltas: readonly RowDelta[]): RowDelta[] {
+  const rank = new Map(RETRY_APPLY_ORDER.map((name, i) => [name, i]))
+  return [...deltas].sort((a, b) => (rank.get(a.table) ?? RETRY_APPLY_ORDER.length) - (rank.get(b.table) ?? RETRY_APPLY_ORDER.length))
+}
+
+function groupByTable(deltas: readonly RowDelta[]): Map<TableName, RowDelta[]> {
+  const out = new Map<TableName, RowDelta[]>()
+  for (const delta of deltas) {
+    const list = out.get(delta.table) ?? []
+    list.push(delta)
+    out.set(delta.table, list)
+  }
+  return out
+}
 
 // A minimal structural subset of @electric-sql/client's ShapeStream — the
 // seam a fake stream implements in tests instead of a live connection.
@@ -82,11 +118,96 @@ export interface SyncHandle {
 
 export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
   const factory = options.streamFactory ?? defaultShapeStreamFactory
+
+  // Issue 075 Part A — the confirmed root cause: this function opens one
+  // INDEPENDENT ShapeStream per table (the loop below), each applying its own
+  // batch in its own db.transaction (src/db/sync.ts) the instant THAT
+  // table's network response resolves — no cross-table ordering. A forward
+  // FK to a sibling synced table (parameters.dimension_id, bindings.*, the
+  // real, NOT-NULL, NOT-deferred FKs docs/issues/075 names) can therefore
+  // resolve before its parent has committed, and applyInboundDeltas
+  // correctly throws + rolls the whole batch back (db/sync.test.ts's
+  // "cross-table forward-FK race" test pins that this is intentional and
+  // must stay true). Previously the batch was then just dropped — Electric
+  // never re-delivers an acked message, so those rows were permanently
+  // missing for the rest of the session.
+  //
+  // The fix: buffer a failed batch's deltas here (scoped to this startSync
+  // call — a fresh buffer every time sync (re)starts, cleared on stop()) and
+  // retry them, sorted parent-before-child (byRetryApplyOrder above), after
+  // every SUBSEQUENT successful apply of ANY table. This is orchestration ON
+  // TOP of applyInboundDeltas — that function's own per-call transaction/
+  // atomicity is completely unchanged; drainRetryBuffer below just calls it
+  // again with the buffered deltas.
+  //
+  // Termination: a retry is only ever triggered by a NEW successful apply
+  // (drainRetryBuffer is called from the .then() of a successful
+  // applyInboundDeltas, never from a timer or from itself) — a batch that
+  // still fails just stays buffered for the NEXT success to try again. Once
+  // every SYNCED_TABLES table has reported its shape caught up
+  // ('up-to-date') and the buffer is STILL non-empty, maybeSurfaceOrphaned
+  // below concludes those rows are genuinely orphaned (not racing a
+  // still-arriving parent) and surfaces the real error via onError exactly
+  // once per table, then clears them from the buffer — no infinite retry,
+  // no silent permanent drop either.
+  let retryBuffer: RowDelta[] = []
+  const upToDateTables = new Set<TableName>()
+
+  function maybeSurfaceOrphaned(): void {
+    if (retryBuffer.length === 0) return
+    if (upToDateTables.size < SYNCED_TABLES.length) return
+    const orphaned = retryBuffer
+    retryBuffer = []
+    for (const [table, deltas] of groupByTable(orphaned)) {
+      options.onError?.(
+        table,
+        new Error(
+          `${deltas.length} buffered "${table}" row(s) never resolved their FK dependency after every synced table reported up-to-date — treating as orphaned, not a transient race`,
+        ),
+      )
+    }
+  }
+
+  async function drainRetryBuffer(): Promise<void> {
+    if (retryBuffer.length === 0) return
+    const batch = byRetryApplyOrder(retryBuffer)
+    try {
+      await applyInboundDeltas(db, batch)
+      // Remove ONLY the deltas we just snapshotted+applied — never clear the
+      // buffer wholesale. Multiple shape streams apply concurrently and this
+      // `await` is a real DB transaction, so ANOTHER table's failed batch can
+      // hit its `.catch` and concat itself onto `retryBuffer` DURING this
+      // await (exactly the burst race this whole fix targets). A wholesale
+      // `retryBuffer = []` here would silently drop those just-buffered
+      // deltas — permanently, since Electric never re-delivers an acked
+      // batch. `batch` holds the SAME delta object references that were in
+      // `retryBuffer`, so reference-identity removal keeps anything that
+      // arrived mid-drain buffered for the next drain.
+      const applied = new Set(batch)
+      retryBuffer = retryBuffer.filter((delta) => !applied.has(delta))
+      for (const [table, deltas] of groupByTable(batch)) options.onApplied?.(table, deltas)
+    } catch {
+      // Still missing a parent (or genuinely orphaned) — stays buffered for
+      // the next successful apply to retry. If every table already reports
+      // up-to-date (this failed drain was itself the "next successful
+      // apply" that triggered the retry), surface it now rather than
+      // waiting for an up-to-date control message that may never come.
+      maybeSurfaceOrphaned()
+    }
+  }
+
   const unsubscribes = SYNCED_TABLES.map((table) => {
     const stream = factory(table, options)
     return stream.subscribe((messages) => {
       for (const message of messages) {
-        if (!isElectricChangeMessage(message)) options.onControl?.(table, message.headers.control)
+        if (!isElectricChangeMessage(message)) {
+          const control = message.headers.control
+          options.onControl?.(table, control)
+          if (control === 'up-to-date') {
+            upToDateTables.add(table)
+            maybeSurfaceOrphaned()
+          }
+        }
       }
       let deltas: RowDelta[]
       try {
@@ -97,8 +218,16 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
       }
       if (deltas.length === 0) return
       applyInboundDeltas(db, deltas)
-        .then(() => options.onApplied?.(table, deltas))
-        .catch((error: unknown) => options.onError?.(table, error))
+        .then(() => {
+          options.onApplied?.(table, deltas)
+          // A successful apply of ANY table may have just landed the parent
+          // a buffered batch was waiting on.
+          return drainRetryBuffer()
+        })
+        .catch((error: unknown) => {
+          retryBuffer = retryBuffer.concat(deltas)
+          options.onError?.(table, error)
+        })
     })
   })
   return {
