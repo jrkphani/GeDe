@@ -8,6 +8,7 @@ import {
 } from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
+import { resetSyncStore, useSyncStore } from './sync'
 import { resetTier2Store, useTier2Store } from './tier2'
 
 // Test helper: the store's create actions return `| null` only when no project
@@ -24,6 +25,7 @@ beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetTier2Store()
+  resetSyncStore()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
@@ -171,5 +173,59 @@ describe('tier2 store — delete with linked parameter surfaces a typed resoluti
     expect(entriesOf(table.id)).toEqual([])
     expect(await listParameters(db, dimensionId)).toHaveLength(0)
     expect(await listTier2Entries(db, table.id)).toEqual([])
+  })
+})
+
+// Issue 073 pt1 — tier2's mutating actions never reached the write outbox.
+// Mirrors tier1.test.ts's own "sync enqueue" describe block: seed a sync
+// workspace, assert the shared enqueueIfSyncing() helper (src/store/sync.ts)
+// queues the right (table, rowId, op).
+describe('tier2 store — sync enqueue (issue 073 pt1)', () => {
+  it('addTable enqueues a tier2_tables upsert', async () => {
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({
+      table: 'tier2_tables',
+      rowId: table.id,
+      op: 'upsert',
+      status: 'pending',
+    })
+  })
+
+  it('addEntry enqueues a tier2_entries upsert', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    const entry = nn(await useTier2Store.getState().addEntry(table.id, null, 'Buyers'))
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({
+      table: 'tier2_entries',
+      rowId: entry.id,
+      op: 'upsert',
+      status: 'pending',
+    })
+  })
+
+  it('promote enqueues an upsert for the created dimension and every created parameter row', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const buyers = nn(await useTier2Store.getState().addEntry(table.id, null, 'Buyers'))
+    const users = nn(await useTier2Store.getState().addEntry(table.id, null, 'Users'))
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    const outcome = await useTier2Store
+      .getState()
+      .promote({ projectId, entryIds: [buyers.id, users.id], target: { kind: 'new', name: 'Stake' } })
+
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(3) // 1 created dimension + 2 created parameters
+    expect(queued.filter((e) => e.table === 'dimensions' && e.op === 'upsert')).toHaveLength(1)
+    expect(queued.find((e) => e.table === 'dimensions')?.rowId).toBe(outcome.dimensionId)
+    const paramEntries = queued.filter((e) => e.table === 'parameters' && e.op === 'upsert')
+    expect(paramEntries).toHaveLength(2)
+    expect(paramEntries.map((e) => e.rowId).sort()).toEqual(
+      outcome.createdParameters.map((p) => p.id).sort(),
+    )
   })
 })

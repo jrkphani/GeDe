@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { uuidv7 } from 'uuidv7'
 import type { Database } from '../db/client'
 import {
   acknowledge,
@@ -9,6 +10,7 @@ import {
   prune,
   reconcileWithDeltas,
   rejectMutation,
+  type MutationOp,
   type MutationQueue,
   type QueuedMutation,
 } from '../domain/mutationQueue'
@@ -386,6 +388,38 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     },
   }
 })
+
+// Issue 073 — the shared choke point every domain-content store action calls
+// after its own local DB write: encapsulates the exact 8-line boilerplate
+// createProject (src/store/projects.ts:189) and every workspace.ts action
+// already hand-roll at each call site (guard on a resolvable sync workspace,
+// build the QueuedMutation envelope, enqueue it). Written/reviewed ONCE here
+// rather than re-derived per store — 073's root cause was that no such choke
+// point existed below the store layer (db/mutations.ts is deliberately
+// store-free), so each of the ~36 mutating call sites across
+// tier1/tier2/dimensions/parameters/contexts/projects.ts calls this instead
+// of reaching into useSyncStore directly. Deliberately does NOT decide the op
+// (upsert/update/delete) — that's the call site's job (see docs/issues/073's
+// op-selection rule); this only owns the guard + envelope shape.
+export function enqueueIfSyncing(
+  table: TableName,
+  rowId: string,
+  op: MutationOp,
+  row: { readonly updatedAt: string } & Readonly<Record<string, unknown>>,
+): void {
+  const workspaceId = useSyncStore.getState().workspaceId
+  if (!workspaceId) return
+  useSyncStore.getState().enqueueLocalMutation({
+    id: uuidv7(),
+    table,
+    rowId,
+    op,
+    row,
+    optimisticUpdatedAt: row.updatedAt,
+    enqueuedAt: new Date().toISOString(),
+    status: 'pending',
+  })
+}
 
 export function resetSyncStore(): void {
   useSyncStore.getState().handle?.stop()

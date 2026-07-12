@@ -35,6 +35,7 @@ import {
 import { subtreeIds } from '../domain/entryTree'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
+import { enqueueIfSyncing } from './sync'
 
 // 2nd-Tier Architecture state for the open project (issue 014): nested-row
 // tables + the tier-linkage back to 3rd-Tier dimensions/parameters
@@ -60,6 +61,30 @@ interface PromotedLinkView {
   parameterId: string
   dimensionId: string
   dimensionName: string
+}
+
+// Issue 073 Subtlety B — removeTier2EntrySubtree soft-deletes every entry in
+// the subtree AND rewrites `sort` on the removed root's surviving siblings to
+// close the gap (rewriteEntrySiblingSort, db/mutations.ts:1095-1101) — shared
+// by removeEntry/resolveKeep/resolveDeleteParams below. Enqueues a 'delete'
+// for every tombstoned row (using its last known pre-delete state — the
+// server's delete branch ignores the payload and stamps deleted_at/updated_at
+// from clientUpdatedAt regardless, src/server/writeApi/store.ts) and an
+// 'update' for every surviving sibling whose sort actually moved.
+function enqueueEntryRemoval(
+  before: readonly Tier2EntryRow[],
+  removedIds: readonly string[],
+  after: readonly Tier2EntryRow[],
+): void {
+  const beforeById = new Map(before.map((e) => [e.id, e]))
+  for (const removedId of removedIds) {
+    const prevRow = beforeById.get(removedId)
+    if (prevRow) enqueueIfSyncing('tier2_entries', removedId, 'delete', prevRow)
+  }
+  for (const row of after) {
+    const prev = beforeById.get(row.id)
+    if (prev && prev.sort !== row.sort) enqueueIfSyncing('tier2_entries', row.id, 'update', row)
+  }
 }
 
 interface Tier2State {
@@ -166,6 +191,7 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       bump()
       const row = await dbAddTable(db(), projectId, name)
       await reloadTables(projectId)
+      enqueueIfSyncing('tier2_tables', row.id, 'upsert', row)
       const orderedIds = get().tables.map((t) => t.id)
       useCommandLogStore.getState().push({
         label: `add table "${name}"`,
@@ -184,8 +210,9 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       if (projectId === null) return
       const previous = get().tables.find((t) => t.id === id)?.name ?? name
       bump()
-      await dbRenameTable(db(), id, name)
+      const renamed = await dbRenameTable(db(), id, name)
       await reloadTables(projectId)
+      enqueueIfSyncing('tier2_tables', renamed.id, 'update', renamed)
       useCommandLogStore.getState().push({
         label: `rename table to "${name}"`,
         async undo() {
@@ -205,6 +232,7 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       bump()
       const row = await dbAddEntry(db(), tableId, parentId, name)
       await reloadEntries(tableId)
+      enqueueIfSyncing('tier2_entries', row.id, 'upsert', row)
       useCommandLogStore.getState().push({
         label: `add "${name}"`,
         async undo() {
@@ -226,8 +254,14 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       const linked = await listParametersBySourceEntries(db(), [id])
       const prevParamNames = linked.map((p) => ({ id: p.id, name: p.name }))
       bump()
-      await dbRenameEntry(db(), id, name)
-      for (const p of linked) await renameParameter(db(), p.id, name)
+      const renamedEntry = await dbRenameEntry(db(), id, name)
+      enqueueIfSyncing('tier2_entries', renamedEntry.id, 'update', renamedEntry)
+      // Issue 073 — invariant 7's rename propagation touches every linked
+      // parameter row too (a genuine edit of an already-synced row → 'update').
+      for (const p of linked) {
+        const renamedParam = await renameParameter(db(), p.id, name)
+        enqueueIfSyncing('parameters', renamedParam.id, 'update', renamedParam)
+      }
       await reloadEntries(tableId)
       await refreshLinks(projectId)
       useCommandLogStore.getState().push({
@@ -253,8 +287,9 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       if (projectId === null) return
       const previous = (get().entriesByTable[tableId] ?? []).find((e) => e.id === id)?.description ?? ''
       bump()
-      await dbSetEntryDescription(db(), id, description)
+      const updated = await dbSetEntryDescription(db(), id, description)
       await reloadEntries(tableId)
+      enqueueIfSyncing('tier2_entries', updated.id, 'update', updated)
       useCommandLogStore.getState().push({
         label: 'edit description',
         async undo() {
@@ -288,6 +323,7 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       bump()
       const { entries: after, removedIds } = await removeTier2EntrySubtree(db(), tableId, id)
       set({ entriesByTable: { ...get().entriesByTable, [tableId]: after } })
+      enqueueEntryRemoval(entries, removedIds, after)
       useCommandLogStore.getState().push({
         label: 'delete entry',
         async undo() {
@@ -307,10 +343,23 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       if (projectId === null) return
       const entries = get().entriesByTable[tableId] ?? []
       const ids = subtreeIds(entries, id)
-      const paramIds = (await listParametersBySourceEntries(db(), ids)).map((p) => p.id)
+      const linkedParams = await listParametersBySourceEntries(db(), ids)
+      const paramIds = linkedParams.map((p) => p.id)
       bump()
       const priorLinks = await unlinkParametersFromEntries(db(), paramIds)
-      const { removedIds } = await removeTier2EntrySubtree(db(), tableId, id)
+      // Issue 073 — unlinkParametersFromEntries clears sourceEntryId on every
+      // linked parameter (a genuine edit of an already-synced row → 'update').
+      // It returns only the prior {id, sourceEntryId} pairs, not the full row,
+      // so the enqueued payload is built from the pre-mutation row we already
+      // fetched (linkedParams) with sourceEntryId nulled — matches exactly
+      // what the DB just wrote; the server stamps updatedAt from this
+      // envelope's own clientUpdatedAt regardless (src/server/writeApi/store.ts).
+      const unlinkedAt = new Date().toISOString()
+      for (const p of linkedParams) {
+        enqueueIfSyncing('parameters', p.id, 'update', { ...p, sourceEntryId: null, updatedAt: unlinkedAt })
+      }
+      const { entries: after, removedIds } = await removeTier2EntrySubtree(db(), tableId, id)
+      enqueueEntryRemoval(entries, removedIds, after)
       await reloadEntries(tableId)
       await refreshLinks(projectId)
       useCommandLogStore.getState().push({
@@ -335,10 +384,25 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       if (projectId === null) return
       const entries = get().entriesByTable[tableId] ?? []
       const ids = subtreeIds(entries, id)
-      const paramIds = (await listParametersBySourceEntries(db(), ids)).map((p) => p.id)
+      const linkedParams = await listParametersBySourceEntries(db(), ids)
+      const paramIds = linkedParams.map((p) => p.id)
       bump()
       const del = await deleteParametersUnbinding(db(), paramIds)
-      const { removedIds } = await removeTier2EntrySubtree(db(), tableId, id)
+      // Issue 073 — deleteParametersUnbinding soft-deletes every linked
+      // parameter and HARD-deletes every binding pointing at them
+      // (db/mutations.ts's own doc comment). A hard local delete still needs
+      // a synced 'delete' envelope so the server tombstones its own row — the
+      // delete branch ignores payload content and stamps deleted_at/updated_at
+      // from clientUpdatedAt regardless, so the last-known row is a safe payload.
+      const deletedAt = new Date().toISOString()
+      for (const p of linkedParams) {
+        enqueueIfSyncing('parameters', p.id, 'delete', { ...p, deletedAt, updatedAt: deletedAt })
+      }
+      for (const b of del.deletedBindings) {
+        enqueueIfSyncing('bindings', b.id, 'delete', b)
+      }
+      const { entries: after, removedIds } = await removeTier2EntrySubtree(db(), tableId, id)
+      enqueueEntryRemoval(entries, removedIds, after)
       await reloadEntries(tableId)
       await refreshLinks(projectId)
       useCommandLogStore.getState().push({
@@ -363,6 +427,12 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       const outcome = await promoteEntries(db(), input)
       const createdParamIds = outcome.createdParameters.map((p) => p.id)
       const createdDim = outcome.createdDimension
+      // Issue 073 Subtlety B — promote can create BOTH a new dimension and N
+      // new parameters in one gesture; promoteEntries returns the full created
+      // rows directly, so enqueue an 'upsert' for every one of them (brand-new
+      // rows, never edits of an existing row).
+      if (createdDim) enqueueIfSyncing('dimensions', createdDim.id, 'upsert', createdDim)
+      for (const p of outcome.createdParameters) enqueueIfSyncing('parameters', p.id, 'upsert', p)
       await refreshLinks(input.projectId)
       if (createdParamIds.length === 0 && createdDim === null) return outcome // nothing created
 

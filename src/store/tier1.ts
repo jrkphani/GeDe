@@ -13,6 +13,7 @@ import {
 } from '../db/mutations'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
+import { enqueueIfSyncing } from './sync'
 
 // 1st Tier Foundation state for the currently open project (issue 013): one
 // purpose body + a table of ranked value propositions. Every mutating action
@@ -64,6 +65,13 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     set((s) => ({ generation: s.generation + 1 }))
     const row = await dbSetPurpose(db, projectId, body)
     set({ purpose: row?.body ?? body })
+    // Issue 073 — setTier1Purpose upserts on the natural key (projectId),
+    // reusing a stable row id across every edit (see db/mutations.ts's own
+    // doc comment). Subtlety A: 'upsert' only on the FIRST save (previous ===
+    // '' — no purpose row existed yet); every subsequent edit of that same
+    // row must be 'update', else the server's `ON CONFLICT (id) DO NOTHING`
+    // silently no-ops the edit (the 066-class bug).
+    if (row) enqueueIfSyncing('tier1_purpose', row.id, previous === '' ? 'upsert' : 'update', row)
     useCommandLogStore.getState().push({
       label: 'edit purpose',
       async undo() {
@@ -84,6 +92,7 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     set((s) => ({ generation: s.generation + 1 }))
     const row = await dbAdd(db, projectId, name)
     set({ props: await dbList(db, projectId) })
+    enqueueIfSyncing('tier1_props', row.id, 'upsert', row)
     const orderedIdsAfterAdd = get().props.map((p) => p.id)
     useCommandLogStore.getState().push({
       label: `add value proposition "${name}"`,
@@ -105,8 +114,9 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     const db = requireDatabase()
     const previous = get().props.find((p) => p.id === id)?.name ?? name
     set((s) => ({ generation: s.generation + 1 }))
-    await dbRename(db, id, name)
+    const renamed = await dbRename(db, id, name)
     set({ props: await dbList(db, projectId) })
+    enqueueIfSyncing('tier1_props', renamed.id, 'update', renamed)
     useCommandLogStore.getState().push({
       label: `rename value proposition to "${name}"`,
       async undo() {
@@ -126,8 +136,9 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     const db = requireDatabase()
     const previous = get().props.find((p) => p.id === id)?.description ?? ''
     set((s) => ({ generation: s.generation + 1 }))
-    await dbSetDescription(db, id, description)
+    const updated = await dbSetDescription(db, id, description)
     set({ props: await dbList(db, projectId) })
+    enqueueIfSyncing('tier1_props', updated.id, 'update', updated)
     useCommandLogStore.getState().push({
       label: 'edit value-proposition description',
       async undo() {
@@ -145,9 +156,29 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     const { projectId } = get()
     if (projectId === null) return
     const db = requireDatabase()
-    const fromIndex = get().props.findIndex((p) => p.id === id)
+    const before = get().props
+    const fromIndex = before.findIndex((p) => p.id === id)
     set((s) => ({ generation: s.generation + 1 }))
-    set({ props: await dbReorder(db, projectId, id, toIndex) })
+    const after = await dbReorder(db, projectId, id, toIndex)
+    set({ props: after })
+    // Issue 073 Subtlety B — reorderTier1Prop's rewriteTier1PropRanks rewrites
+    // sort/rank on EVERY row whose position actually moved, not just the one
+    // the user dragged (db/mutations.ts:939-953). `after` is already in the
+    // new sort order, so each row's index IS its new sort/rank — enqueue an
+    // 'update' for every row whose previous sort/rank disagrees with it,
+    // else sibling drift never reaches the server.
+    const beforeById = new Map(before.map((p) => [p.id, p]))
+    after.forEach((row, index) => {
+      const prev = beforeById.get(row.id)
+      // -1 sentinels for "no prior row" — sort/rank are always >= 0, so a
+      // missing `prev` always counts as changed without an explicit `!prev` /
+      // optional-chain-on-a-narrowed-value lint conflict.
+      const prevSort = prev?.sort ?? -1
+      const prevRank = prev?.rank ?? -1
+      if (prevSort !== index || prevRank !== index + 1) {
+        enqueueIfSyncing('tier1_props', row.id, 'update', row)
+      }
+    })
     useCommandLogStore.getState().push({
       label: 're-rank value proposition',
       async undo() {
@@ -163,10 +194,30 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     const { projectId } = get()
     if (projectId === null) return
     const db = requireDatabase()
-    const orderedIds = get().props.map((p) => p.id)
-    const removedName = get().props.find((p) => p.id === id)?.name ?? ''
+    const before = get().props
+    const orderedIds = before.map((p) => p.id)
+    const removedRow = before.find((p) => p.id === id)
+    const removedName = removedRow?.name ?? ''
     set((s) => ({ generation: s.generation + 1 }))
-    set({ props: await dbRemove(db, projectId, id) })
+    const after = await dbRemove(db, projectId, id)
+    set({ props: after })
+    // Issue 073 — the removed row is a soft-delete tombstone; removeTier1Prop
+    // ALSO rewrites sort/rank on every surviving sibling to close the gap
+    // (same rewriteTier1PropRanks cascade as reorderProp — Subtlety B), so
+    // enqueue an 'update' for every one of those, not just the delete.
+    if (removedRow) enqueueIfSyncing('tier1_props', id, 'delete', removedRow)
+    const beforeById = new Map(before.map((p) => [p.id, p]))
+    after.forEach((row, index) => {
+      const prev = beforeById.get(row.id)
+      // -1 sentinels for "no prior row" — sort/rank are always >= 0, so a
+      // missing `prev` always counts as changed without an explicit `!prev` /
+      // optional-chain-on-a-narrowed-value lint conflict.
+      const prevSort = prev?.sort ?? -1
+      const prevRank = prev?.rank ?? -1
+      if (prevSort !== index || prevRank !== index + 1) {
+        enqueueIfSyncing('tier1_props', row.id, 'update', row)
+      }
+    })
     useCommandLogStore.getState().push({
       label: `remove value proposition "${removedName}"`,
       async undo() {

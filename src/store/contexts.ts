@@ -21,6 +21,7 @@ import {
 } from '../db/mutations'
 import { useCommandLogStore } from './commandLog'
 import { requireDatabase } from './database'
+import { enqueueIfSyncing } from './sync'
 
 // Root-canvas contexts for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
@@ -137,6 +138,16 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const contexts = await dbListContexts(db, projectId, parentId)
     const bindingsByContext = await fetchBindingsMap(db, contexts.map((c) => c.id))
     set({ contexts, bindingsByContext })
+    // Issue 073 — best-effort: re-syncs the sub-bindings this banner's Undo
+    // re-inserts (event.retiredBindings — previously-existing rows, so
+    // 'update', not 'upsert'). NOT wired here: the child dimension's own
+    // sourceParamId/name change this same event reverts (the `dimensions`
+    // table) — that mutation is triggered by openChildCanvas, which is not in
+    // this store's Part 1 wiring list, so neither side of that pair is
+    // synced yet (flagged in the 073 pt1 report for review).
+    for (const b of event.retiredBindings) {
+      enqueueIfSyncing('bindings', b.id, 'update', b)
+    }
   },
 
   async load(projectId, parentId = null) {
@@ -169,6 +180,7 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const row = await dbCreate(db, projectId, parentId)
     const contexts = await dbListContexts(db, projectId, parentId)
     set({ contexts, bindingsByContext: { ...get().bindingsByContext, [row.id]: {} } })
+    enqueueIfSyncing('contexts', row.id, 'upsert', row)
     useCommandLogStore.getState().push({
       label: `create context ${row.symbol}`,
       async undo() {
@@ -194,8 +206,9 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const db = requireDatabase()
     const symbol = get().contexts.find((c) => c.id === id)?.symbol ?? id
     set({ generation: get().generation + 1 })
-    await dbArchive(db, id)
+    const archived = await dbArchive(db, id)
     set({ contexts: await dbListContexts(db, projectId, parentId), selectedContextId: null })
+    enqueueIfSyncing('contexts', archived.id, 'delete', archived)
     useCommandLogStore.getState().push({
       label: `discard draft ${symbol}`,
       async undo() {
@@ -218,8 +231,9 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const previousSymbol = get().contexts.find((c) => c.id === id)?.symbol ?? symbol
     try {
       set({ generation: get().generation + 1 })
-      await dbSetSymbol(db, projectId, id, symbol)
+      const updated = await dbSetSymbol(db, projectId, id, symbol)
       set({ contexts: await dbListContexts(db, projectId, parentId) })
+      enqueueIfSyncing('contexts', updated.id, 'update', updated)
       useCommandLogStore.getState().push({
         label: `rename ${previousSymbol} to ${symbol}`,
         async undo() {
@@ -247,8 +261,9 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const previousText = get().contexts.find((c) => c.id === id)?.justification ?? ''
     const symbol = get().contexts.find((c) => c.id === id)?.symbol ?? id
     set({ generation: get().generation + 1 })
-    await dbSetJustification(db, id, text)
+    const updated = await dbSetJustification(db, id, text)
     set({ contexts: await dbListContexts(db, projectId, parentId) })
+    enqueueIfSyncing('contexts', updated.id, 'update', updated)
     useCommandLogStore.getState().push({
       label: `edit justification for ${symbol}`,
       async undo() {
@@ -275,6 +290,17 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
         [contextId]: Object.fromEntries(rows.map((r) => [r.dimensionId, r.parameterId])),
       },
     })
+    // Issue 073 Subtlety A — bindParameter upserts on the natural key
+    // (contextId, dimensionId), reusing a stable row id across every rebind
+    // of the SAME pair (db/mutations.ts:618-639). 'upsert' only for a
+    // genuinely new pair (no previous live binding for this dimension on this
+    // context); every subsequent rebind of that pair must be 'update', else
+    // the server's `ON CONFLICT (id) DO NOTHING` silently no-ops it (the
+    // 066-class bug).
+    const bindingRow = rows.find((r) => r.dimensionId === dimensionId)
+    if (bindingRow) {
+      enqueueIfSyncing('bindings', bindingRow.id, previousParameterId === null ? 'upsert' : 'update', bindingRow)
+    }
     useCommandLogStore.getState().push({
       label: 'bind parameter',
       async undo() {
@@ -305,6 +331,10 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   async unbind(contextId, dimensionId) {
     const db = requireDatabase()
     const previousParameterId = get().bindingsByContext[contextId]?.[dimensionId] ?? null
+    // unbindParameter tombstones the binding (deleted_at) then returns the
+    // still-live set, which excludes it — read the row back first so the
+    // 'delete' envelope has a real rowId/payload (issue 073).
+    const target = (await dbListBindings(db, contextId)).find((r) => r.dimensionId === dimensionId)
     set({ generation: get().generation + 1 })
     const rows = await dbUnbind(db, contextId, dimensionId)
     set({
@@ -313,6 +343,7 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
         [contextId]: Object.fromEntries(rows.map((r) => [r.dimensionId, r.parameterId])),
       },
     })
+    if (target) enqueueIfSyncing('bindings', target.id, 'delete', target)
     useCommandLogStore.getState().push({
       label: 'unbind parameter',
       async undo() {

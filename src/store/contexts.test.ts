@@ -5,6 +5,7 @@ import { addDimension, addParameter, createProject, listContexts } from '../db/m
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetContextsStore, useContextsStore } from './contexts'
+import { resetSyncStore, useSyncStore } from './sync'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
@@ -17,6 +18,7 @@ beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetContextsStore()
+  resetSyncStore()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
@@ -230,5 +232,50 @@ describe('contexts store — selection (issue 009)', () => {
 
     await useContextsStore.getState().load(projectId)
     expect(useContextsStore.getState().selectedContextId).toBeNull()
+  })
+})
+
+// Issue 073 pt1 — contexts.ts's mutating actions never reached the write
+// outbox. Mirrors tier1/tier2.test.ts's own "sync enqueue" describe blocks:
+// seed a sync workspace, assert the shared enqueueIfSyncing() helper
+// (src/store/sync.ts) queues the right (table, rowId, op) — including
+// Subtlety A (bind's natural-key upsert-vs-update on the (contextId,
+// dimensionId) pair).
+describe('contexts store — sync enqueue (issue 073 pt1)', () => {
+  it('create enqueues a contexts upsert', async () => {
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'contexts', rowId: id, op: 'upsert', status: 'pending' })
+  })
+
+  it('create enqueues nothing when no sync workspace is set (local-only, byte-for-byte unchanged)', async () => {
+    await useContextsStore.getState().create()
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+
+  it('bind enqueues an upsert for a new (context, dimension) pair, then an update on a rebind of the same pair', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useContextsStore.getState().bind(id, valueId, comfortId)
+    let queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'bindings', op: 'upsert', status: 'pending' })
+    const bindingRowId = queued[0]?.rowId
+
+    const otherComfort = await addParameter(db, valueId, 'Mobility')
+    await useContextsStore.getState().bind(id, valueId, otherComfort.id)
+    queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(2)
+    expect(queued[1]).toMatchObject({
+      table: 'bindings',
+      rowId: bindingRowId,
+      op: 'update',
+      status: 'pending',
+    })
   })
 })
