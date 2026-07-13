@@ -87,6 +87,10 @@ describe('PgAcceptStore.findExistingMembership — query shape', () => {
 describe('PgAcceptStore.acceptInvitation — ONE transaction, correct statement sequence (issue 080 core contract)', () => {
   it('BEGIN -> SELECT ... FOR UPDATE (the exact invite, full status predicate) -> INSERT ... ON CONFLICT DO UPDATE -> UPDATE accepted_at -> COMMIT', async () => {
     const { pool, calls } = fakePool({
+      // The FOR UPDATE lock query must find the row for the happy path to
+      // proceed past it (issue 080 TOCTOU fix — a zero-row result now halts
+      // the transaction instead of being ignored).
+      'FROM invitations': [{ id: 'inv-1' }],
       workspace_members: [{ id: 'member-1', workspace_id: 'ws-1', user_sub: 'user-42', role: 'editor', updated_at: '2026-01-01T00:00:00.000Z', deleted_at: null }],
     })
     const store = new PgAcceptStore({ pool: asPool(pool) })
@@ -127,6 +131,7 @@ describe('PgAcceptStore.acceptInvitation — ONE transaction, correct statement 
 
   it('returns the seated member and the accepted invitation', async () => {
     const { pool } = fakePool({
+      'FROM invitations': [{ id: 'inv-1' }],
       workspace_members: [{ id: 'member-1', workspace_id: 'ws-1', user_sub: 'user-42', role: 'viewer', updated_at: '2026-01-01T00:00:00.000Z', deleted_at: null }],
     })
     const store = new PgAcceptStore({ pool: asPool(pool) })
@@ -134,8 +139,9 @@ describe('PgAcceptStore.acceptInvitation — ONE transaction, correct statement 
 
     const result = await store.acceptInvitation(inv, 'user-42')
 
-    expect(result.member).toMatchObject({ id: 'member-1', workspaceId: 'ws-1', userSub: 'user-42', role: 'viewer' })
-    expect(result.invitation.acceptedAt).not.toBeNull()
+    expect(result).not.toBeNull()
+    expect(result?.member).toMatchObject({ id: 'member-1', workspaceId: 'ws-1', userSub: 'user-42', role: 'viewer' })
+    expect(result?.invitation.acceptedAt).not.toBeNull()
   })
 
   it('rolls back and never issues the membership insert if an error occurs mid-transaction', async () => {
@@ -157,5 +163,25 @@ describe('PgAcceptStore.acceptInvitation — ONE transaction, correct statement 
     await expect(store.acceptInvitation(inv, 'user-42')).rejects.toThrow('simulated lock failure')
     expect(calls.at(-1)?.text).toBe('ROLLBACK')
     expect(calls.some((c) => c.text.includes('INSERT INTO workspace_members'))).toBe(false)
+  })
+
+  it('TOCTOU close: returns null and ROLLBACKs — never issues the membership INSERT or the accepted_at UPDATE — when the FOR UPDATE re-check finds the invite no longer valid (revoked/expired/accepted in the window since findPendingInvitation ran)', async () => {
+    // fakePool() with no rowsToReturn entries resolves every query -
+    // including the FOR UPDATE lock - to zero rows, simulating the invite
+    // having been revoked/accepted/expired between the handler's
+    // findPendingInvitation call and this transaction's own lock.
+    const { pool, calls } = fakePool()
+    const store = new PgAcceptStore({ pool: asPool(pool) })
+    const inv = invitation({ id: 'inv-1', workspaceId: 'ws-1' })
+
+    const result = await store.acceptInvitation(inv, 'user-42')
+
+    expect(result).toBeNull()
+    const texts = calls.map((c) => c.text)
+    expect(texts[0]).toBe('BEGIN')
+    expect(texts[1]).toContain('FOR UPDATE')
+    expect(texts.some((t) => t.includes('INSERT INTO workspace_members'))).toBe(false)
+    expect(texts.some((t) => t.includes('UPDATE invitations'))).toBe(false)
+    expect(texts.at(-1)).toBe('ROLLBACK')
   })
 })

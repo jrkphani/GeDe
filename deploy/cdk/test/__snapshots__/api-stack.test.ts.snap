@@ -41,7 +41,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "85a940c57a1e449327473b75ad075a3a131155616fcc3f45e0f2abe5857c0c99.zip",
+          "S3Key": "c5b93f0fd276a959cc03bdfe6464847f8ab95db7abaf23a9ac63ed0091d22e34.zip",
         },
         "Description": "Gede-Test-Api dedicated accept-invite API (issue 080) - verifies the Cognito JWT, loads the pending invite for the caller's VERIFIED email, and atomically seats the membership + marks the invite accepted.",
         "Environment": {

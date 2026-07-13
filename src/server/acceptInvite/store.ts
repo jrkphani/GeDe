@@ -79,10 +79,17 @@ export interface AcceptStore {
    * marks `invite` accepted — ONE atomic operation (a single Postgres
    * transaction in `PgAcceptStore`). `invite` MUST be a value already
    * returned by `findPendingInvitation` (the handler never constructs one
-   * itself) — this method does not re-derive authorization, it applies a
-   * decision already made.
+   * itself) — but that snapshot can go stale: `findPendingInvitation` and
+   * `acceptInvitation` are two separate calls, and the invite can be
+   * revoked/expired/accepted by someone else in the window between them
+   * (TOCTOU). This method therefore MUST re-validate the invite's live
+   * status (the same full pending-status predicate `findPendingInvitation`
+   * uses) under lock immediately before applying anything, and resolve to
+   * `null` — WITHOUT inserting/updating anything — if it no longer holds.
+   * The handler treats `null` exactly like an unauthorized accept (idempotent
+   * check, else reject) — never seats a membership off a stale snapshot.
    */
-  acceptInvitation(invite: PendingInvitation, sub: string): Promise<AcceptInvitationResult>
+  acceptInvitation(invite: PendingInvitation, sub: string): Promise<AcceptInvitationResult | null>
 }
 
 // ── In-memory test double ───────────────────────────────────────────────────
@@ -122,22 +129,32 @@ export class InMemoryAcceptStore implements AcceptStore {
     return Promise.resolve(this.memberships.get(this.membershipKey(workspaceId, sub)) ?? null)
   }
 
-  acceptInvitation(invite: PendingInvitation, sub: string): Promise<AcceptInvitationResult> {
+  acceptInvitation(invite: PendingInvitation, sub: string): Promise<AcceptInvitationResult | null> {
+    // Re-validate against the store's CURRENT state (mirrors PgAcceptStore's
+    // `SELECT ... FOR UPDATE` re-check) rather than trusting the caller's
+    // `invite` snapshot — that snapshot may have gone stale (revoked/
+    // expired/accepted by someone else) between the handler's
+    // findPendingInvitation call and this one.
+    const current = this.invitations.get(invite.id)
+    if (!current || !canAccept(invitationStatus(current))) {
+      return Promise.resolve(null)
+    }
+
     const now = new Date().toISOString()
-    const key = this.membershipKey(invite.workspaceId, sub)
+    const key = this.membershipKey(current.workspaceId, sub)
     const existing = this.memberships.get(key)
     const member: AcceptedMembership = {
       id: existing?.id ?? uuidv7(),
-      workspaceId: invite.workspaceId,
+      workspaceId: current.workspaceId,
       userSub: sub,
-      role: invite.role,
+      role: current.role,
       updatedAt: now,
       deletedAt: null,
     }
     this.memberships.set(key, member)
 
-    const acceptedInvitation: PendingInvitation = { ...invite, acceptedAt: now }
-    this.invitations.set(invite.id, acceptedInvitation)
+    const acceptedInvitation: PendingInvitation = { ...current, acceptedAt: now }
+    this.invitations.set(current.id, acceptedInvitation)
 
     return Promise.resolve({ member, invitation: acceptedInvitation })
   }
@@ -240,31 +257,59 @@ export class PgAcceptStore implements AcceptStore {
    * the invitation's `accepted_at` stamp both happen inside that same lock,
    * so a crash between the two can never leave a "seated but not marked
    * accepted" or "marked accepted but not seated" invitation.
+   *
+   * SECURITY-CRITICAL (this method's own re-validation IS the TOCTOU close):
+   * the `invite` argument is a snapshot returned by a PRIOR, separate
+   * `findPendingInvitation` call — it can be stale by the time this
+   * transaction runs (revoked/expired/accepted by someone else in that
+   * window). The FOR UPDATE result is therefore checked, not just used to
+   * lock: zero rows means the invite is no longer valid, and this method
+   * rolls back and resolves to `null` WITHOUT touching workspace_members or
+   * invitations at all. Never skip this check — it is the difference between
+   * "seat only what's still authorized" and "seat whatever the caller
+   * remembered being authorized a moment ago."
    */
-  async acceptInvitation(invite: PendingInvitation, sub: string): Promise<AcceptInvitationResult> {
-    return this.withTransaction(async (client) => {
-      await client.query(
-        'SELECT id FROM invitations WHERE id = $1 AND deleted_at IS NULL AND accepted_at IS NULL AND expires_at > now() FOR UPDATE',
-        [invite.id],
-      )
+  async acceptInvitation(invite: PendingInvitation, sub: string): Promise<AcceptInvitationResult | null> {
+    try {
+      return await this.withTransaction(async (client) => {
+        const lockResult = await client.query(
+          'SELECT id FROM invitations WHERE id = $1 AND deleted_at IS NULL AND accepted_at IS NULL AND expires_at > now() FOR UPDATE',
+          [invite.id],
+        )
+        if (lockResult.rows.length === 0) {
+          throw new InvitationNoLongerValidError()
+        }
 
-      const memberResult = await client.query<Record<string, unknown>>(
-        'INSERT INTO workspace_members (id, workspace_id, user_sub, role) VALUES ($1, $2, $3, $4) ' +
-          'ON CONFLICT (workspace_id, user_sub) DO UPDATE SET role = $4, deleted_at = NULL, updated_at = now() ' +
-          'RETURNING id, workspace_id, user_sub, role, updated_at, deleted_at',
-        [uuidv7(), invite.workspaceId, sub, invite.role],
-      )
+        const memberResult = await client.query<Record<string, unknown>>(
+          'INSERT INTO workspace_members (id, workspace_id, user_sub, role) VALUES ($1, $2, $3, $4) ' +
+            'ON CONFLICT (workspace_id, user_sub) DO UPDATE SET role = $4, deleted_at = NULL, updated_at = now() ' +
+            'RETURNING id, workspace_id, user_sub, role, updated_at, deleted_at',
+          [uuidv7(), invite.workspaceId, sub, invite.role],
+        )
 
-      const acceptedAt = new Date().toISOString()
-      await client.query('UPDATE invitations SET accepted_at = now(), updated_at = now() WHERE id = $1', [invite.id])
+        const acceptedAt = new Date().toISOString()
+        await client.query('UPDATE invitations SET accepted_at = now(), updated_at = now() WHERE id = $1', [invite.id])
 
-      const memberRow = memberResult.rows[0]
-      if (!memberRow) throw new Error('acceptInvitation: workspace_members upsert returned no row')
+        const memberRow = memberResult.rows[0]
+        if (!memberRow) throw new Error('acceptInvitation: workspace_members upsert returned no row')
 
-      return {
-        member: this.mapMemberRow(memberRow),
-        invitation: { ...invite, acceptedAt },
-      }
-    })
+        return {
+          member: this.mapMemberRow(memberRow),
+          invitation: { ...invite, acceptedAt },
+        }
+      })
+    } catch (err) {
+      // withTransaction already ROLLBACKed (its own catch) before rethrowing
+      // — this only converts that specific, expected "no longer valid at
+      // lock time" case into the null the handler knows how to treat as a
+      // rejection/idempotent-check; every other error still propagates.
+      if (err instanceof InvitationNoLongerValidError) return null
+      throw err
+    }
   }
 }
+
+/** Internal sentinel — never escapes `PgAcceptStore.acceptInvitation`. Lets
+ *  the FOR-UPDATE-returned-zero-rows case reuse `withTransaction`'s existing
+ *  ROLLBACK-on-throw path instead of duplicating rollback logic. */
+class InvitationNoLongerValidError extends Error {}

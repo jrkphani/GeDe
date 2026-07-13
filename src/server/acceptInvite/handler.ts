@@ -102,6 +102,26 @@ const INVITATION_NOT_FOUND_MESSAGE =
  *    report the result. `userSub` passed to the store is `auth.claims.sub`
  *    ONLY — there is no other source.
  */
+/**
+ * The idempotent-retry / fail-closed rejection path, shared by every way an
+ * accept can end up unauthorized (test-first plan item 5): the caller may
+ * already be seated because their OWN prior accept already landed (the
+ * invitation is no longer pending precisely because it succeeded) — that's
+ * success, not a rejection. Otherwise, one deliberately generic rejection
+ * reason (`invitation_not_found`) covers every other cause, so a caller
+ * cannot enumerate invitation state for an email they don't control.
+ */
+async function idempotentOrRejected(deps: AcceptInviteDeps, workspaceId: string, sub: string): Promise<AcceptApiResult> {
+  const existingMembership = await deps.store.findExistingMembership(workspaceId, sub)
+  if (existingMembership) {
+    return {
+      status: 200,
+      outcome: { status: 'applied', workspaceId: existingMembership.workspaceId, role: existingMembership.role },
+    }
+  }
+  return { status: 200, outcome: { status: 'rejected', reason: 'invitation_not_found', message: INVITATION_NOT_FOUND_MESSAGE } }
+}
+
 export async function acceptInvite(request: AcceptInviteRequest, deps: AcceptInviteDeps): Promise<AcceptApiResult> {
   const auth = await verifyBearerToken(request.authorizationHeader, deps.jwt)
   if (!auth.ok) {
@@ -111,7 +131,11 @@ export async function acceptInvite(request: AcceptInviteRequest, deps: AcceptInv
     }
   }
 
-  const email = auth.claims.email
+  // Trimmed, not just truthiness-checked: a token whose `email` claim is
+  // present but whitespace-only (`"   "`) must fail closed the same way an
+  // absent claim does, never fall through and get silently treated as "no
+  // invitation matched" (a real but misleading-reason rejection).
+  const email = auth.claims.email?.trim()
   if (!email) {
     return {
       status: 200,
@@ -127,20 +151,18 @@ export async function acceptInvite(request: AcceptInviteRequest, deps: AcceptInv
   const authorized = invite !== null && invite.id === request.invitationId
 
   if (!authorized) {
-    // Idempotent-retry check (test-first plan item 5): the caller may
-    // already be seated because their OWN prior accept already landed (the
-    // invitation is no longer pending precisely because it succeeded) —
-    // recognize that as success, not a rejection.
-    const existingMembership = await deps.store.findExistingMembership(request.workspaceId, auth.claims.sub)
-    if (existingMembership) {
-      return {
-        status: 200,
-        outcome: { status: 'applied', workspaceId: existingMembership.workspaceId, role: existingMembership.role },
-      }
-    }
-    return { status: 200, outcome: { status: 'rejected', reason: 'invitation_not_found', message: INVITATION_NOT_FOUND_MESSAGE } }
+    return idempotentOrRejected(deps, request.workspaceId, auth.claims.sub)
   }
 
-  const { member } = await deps.store.acceptInvitation(invite, auth.claims.sub)
-  return { status: 200, outcome: { status: 'applied', workspaceId: member.workspaceId, role: member.role } }
+  const result = await deps.store.acceptInvitation(invite, auth.claims.sub)
+  if (result === null) {
+    // TOCTOU close: the invite was valid when findPendingInvitation ran, but
+    // the store's own re-validation (immediately before applying anything)
+    // found it no longer valid — revoked/expired/accepted by someone else in
+    // that window. Treat exactly like the unauthorized path above: never
+    // seat a fresh membership off a stale invitation snapshot.
+    return idempotentOrRejected(deps, request.workspaceId, auth.claims.sub)
+  }
+
+  return { status: 200, outcome: { status: 'applied', workspaceId: result.member.workspaceId, role: result.member.role } }
 }

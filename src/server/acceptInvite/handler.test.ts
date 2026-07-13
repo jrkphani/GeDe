@@ -270,6 +270,118 @@ describe('acceptInvite — claims.email absent (test-first plan item 7, fail clo
     }
     expect(await store.findExistingMembership(WS_A, 'invitee-sub')).toBeNull()
   })
+
+  it('treats a whitespace-only email claim the same as absent — missing_email, never falls through to invitation_not_found (a token with `email: "   "` must not slip past the `if (!email)` guard)', async () => {
+    const store = new InMemoryAcceptStore()
+    const inv = invitation()
+    store.seedInvitation(inv)
+    const token = await tokenFor('invitee-sub', { email: '   ' })
+
+    const result = await acceptInvite(
+      { authorizationHeader: `Bearer ${token}`, invitationId: inv.id, workspaceId: WS_A },
+      deps(store),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcome).toMatchObject({ status: 'rejected', reason: 'missing_email' })
+    }
+    expect(await store.findExistingMembership(WS_A, 'invitee-sub')).toBeNull()
+  })
+})
+
+describe('acceptInvite — TOCTOU close: invitation invalidated between findPendingInvitation and the store\'s own acceptInvitation lock (security-critical fix)', () => {
+  // The store's findPendingInvitation and acceptInvitation are two separate
+  // calls; a concurrent revoke/accept/expiry can land in the window between
+  // them. acceptInvitation's own re-validation (the FOR UPDATE re-check in
+  // PgAcceptStore, mirrored here in InMemoryAcceptStore) is the last line of
+  // defense against that race — these tests drive it via a store double that
+  // mutates the invitation's stored state at the moment acceptInvitation
+  // runs, simulating "someone else raced us" without needing real
+  // concurrency or a live Postgres.
+  it('never seats a fresh membership when the invite was revoked in the race window — rejects invitation_not_found, not applied', async () => {
+    const store = new InMemoryAcceptStore()
+    const inv = invitation()
+    store.seedInvitation(inv)
+    const token = await tokenFor('invitee-sub', { email: 'invitee@example.com' })
+
+    const originalAccept = store.acceptInvitation.bind(store)
+    store.acceptInvitation = (invite, sub) => {
+      // Simulate a concurrent revoke landing after findPendingInvitation
+      // already returned the (now-stale) valid snapshot the handler holds.
+      store.seedInvitation({ ...invite, deletedAt: new Date().toISOString() })
+      return originalAccept(invite, sub)
+    }
+
+    const result = await acceptInvite(
+      { authorizationHeader: `Bearer ${token}`, invitationId: inv.id, workspaceId: WS_A },
+      deps(store),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcome).toMatchObject({ status: 'rejected', reason: 'invitation_not_found' })
+    }
+    expect(await store.findExistingMembership(WS_A, 'invitee-sub')).toBeNull()
+  })
+
+  it('never seats a fresh membership when the invite was accepted by someone else in the race window — rejects invitation_not_found', async () => {
+    const store = new InMemoryAcceptStore()
+    const inv = invitation()
+    store.seedInvitation(inv)
+    const token = await tokenFor('invitee-sub', { email: 'invitee@example.com' })
+
+    const originalAccept = store.acceptInvitation.bind(store)
+    store.acceptInvitation = (invite, sub) => {
+      store.seedInvitation({ ...invite, acceptedAt: new Date().toISOString() })
+      return originalAccept(invite, sub)
+    }
+
+    const result = await acceptInvite(
+      { authorizationHeader: `Bearer ${token}`, invitationId: inv.id, workspaceId: WS_A },
+      deps(store),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcome).toMatchObject({ status: 'rejected', reason: 'invitation_not_found' })
+    }
+    expect(await store.findExistingMembership(WS_A, 'invitee-sub')).toBeNull()
+  })
+
+  it('is idempotent-success (not a rejection) when the race lands but the caller was ALREADY seated by their own earlier accept', async () => {
+    const store = new InMemoryAcceptStore()
+    const inv = invitation({ role: 'viewer' })
+    store.seedInvitation(inv)
+    // The realistic cause of this race: the caller's own prior accept
+    // already landed and this is a client retry hitting a since-consumed
+    // invitation snapshot.
+    store.seedMembership({
+      id: 'member-1',
+      workspaceId: WS_A,
+      userSub: 'invitee-sub',
+      role: 'viewer',
+      updatedAt: new Date().toISOString(),
+      deletedAt: null,
+    })
+    const token = await tokenFor('invitee-sub', { email: 'invitee@example.com' })
+
+    const originalAccept = store.acceptInvitation.bind(store)
+    store.acceptInvitation = (invite, sub) => {
+      store.seedInvitation({ ...invite, acceptedAt: new Date().toISOString() })
+      return originalAccept(invite, sub)
+    }
+
+    const result = await acceptInvite(
+      { authorizationHeader: `Bearer ${token}`, invitationId: inv.id, workspaceId: WS_A },
+      deps(store),
+    )
+
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcome).toMatchObject({ status: 'applied', workspaceId: WS_A, role: 'viewer' })
+    }
+  })
 })
 
 describe('acceptInvite — auth gate (test-first plan item 8)', () => {
