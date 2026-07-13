@@ -48,36 +48,36 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
   if (deltas.length === 0) return
 
   await db.transaction(async (tx) => {
+    // Issue 072 (projects) / 079 (invitations, workspace_members) —
+    // `workspaces` is NOT itself an Electric-synced table (src/domain/
+    // syncScope.ts), so it's never guaranteed to already be present locally
+    // when a row referencing it streams in — e.g. after 063's
+    // clear-on-sign-out wipes local PGlite, or for a first-time
+    // (never-been-a-member) invitee whose local DB has simply never heard of
+    // the inviting workspace. `projects`, `invitations`, and
+    // `workspace_members` are exactly the three synced tables whose
+    // workspace_id FK points OUTWARD at `workspaces` (every other synced
+    // table's own workspace_id FK is already satisfied by the time its row
+    // can apply, since a child row's project_id FK requires that project —
+    // and therefore this same ensure step — to have already run). Shared
+    // here so all three self-heal identically: idempotently ensure the
+    // parent exists first, INSIDE the same tx, mirroring createProject's
+    // ensureWorkspaceRow's own ON CONFLICT DO NOTHING (src/db/
+    // workspaces.ts:35). Guarded on workspaceId being present so a
+    // genuinely local-only row with no workspace never forces a bogus
+    // workspace row into existence.
+    async function ensureWorkspaceStub(workspaceId: string | null | undefined): Promise<void> {
+      if (!workspaceId) return
+      await tx.insert(schema.workspaces).values({ id: workspaceId, name: 'Workspace' }).onConflictDoNothing()
+    }
+
     // Returns whether the row was actually applied (fresh insert, or an
     // update the LWW guard allowed) — a row the guard rejected as stale must
     // be excluded from the second (deferred-FK) pass below.
     async function upsertGuarded(delta: RowDelta): Promise<boolean> {
       switch (delta.table) {
         case 'projects': {
-          // Issue 072 — the client-side mirror of 071's server-side self-heal.
-          // `projects.workspace_id` carries a real, enforced FK (migration
-          // 0008), but `workspaces` is NOT itself an Electric-synced table
-          // (src/domain/syncScope.ts) — the only other local writer of a
-          // workspace row is createProject's ensureWorkspaceRow (src/db/
-          // workspaces.ts:35). After 063's clear-on-sign-out wipes local
-          // PGlite entirely, a fresh sign-in's local DB has no workspaces row
-          // at all, so a streamed project can be the very first thing this
-          // fresh DB has ever heard about its workspace — without this,
-          // the insert below throws a LOCAL FK violation that rolls back the
-          // WHOLE batch transaction (every other table's deltas in it too).
-          // Idempotently ensure the parent exists first, INSIDE the same tx,
-          // mirroring ensureWorkspaceRow's own ON CONFLICT DO NOTHING.
-          // Guarded on workspaceId being present: a genuinely local-only
-          // project (no workspace) must not force a bogus workspace row into
-          // existence. This is the one uncovered parent-FK edge — every
-          // other synced table's own workspace_id FK is already satisfied by
-          // the time its row can apply, since a child row's project_id FK
-          // requires that project (and therefore this same ensure step) to
-          // have already run.
-          const workspaceId = (delta.row as { workspaceId?: string | null }).workspaceId
-          if (workspaceId) {
-            await tx.insert(schema.workspaces).values({ id: workspaceId, name: 'Workspace' }).onConflictDoNothing()
-          }
+          await ensureWorkspaceStub((delta.row as { workspaceId?: string | null }).workspaceId)
           const row = forceDeferredNull(delta) as typeof schema.projects.$inferInsert
           const applied = await tx
             .insert(schema.projects)
@@ -200,7 +200,10 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
         // `workspaces`, never inward — src/db/schema.ts:31-45,59-75), so
         // neither needs forceDeferredNull's two-pass strategy; `row` here is
         // the delta's row verbatim, mirroring every non-cyclic case above.
+        // That outward workspace_id FK does need the ensureWorkspaceStub
+        // self-heal above, though (issue 079) — see that comment.
         case 'invitations': {
+          await ensureWorkspaceStub((delta.row as { workspaceId?: string | null }).workspaceId)
           const row = delta.row as typeof schema.invitations.$inferInsert
           const applied = await tx
             .insert(schema.invitations)
@@ -214,6 +217,7 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
           return applied.length > 0
         }
         case 'workspace_members': {
+          await ensureWorkspaceStub((delta.row as { workspaceId?: string | null }).workspaceId)
           const row = delta.row as typeof schema.workspaceMembers.$inferInsert
           const applied = await tx
             .insert(schema.workspaceMembers)

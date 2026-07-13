@@ -433,3 +433,55 @@ describe('applyInboundDeltas — projects delta with a not-yet-known local works
     expect(invitationRows).toHaveLength(1)
   })
 })
+
+// Issue 079 — invitations.workspace_id and workspace_members.workspace_id
+// carry the identical OUTWARD FK to `workspaces` that projects.workspace_id
+// does (schema.ts:31-45,59-75), but unlike the `projects` case above (072),
+// neither had a self-heal — so a first-time (never-been-a-member) invitee,
+// whose local DB has never heard of the inviting workspace, hit a genuine
+// local FK violation and the streamed invite/membership row was silently
+// dropped. Deliberately does NOT use freshDb() (which pre-seeds WS) — that
+// pre-seed is exactly why this bug went uncaught by every other test in this
+// file; these two prove the apply path is durable even when it's missing.
+describe('applyInboundDeltas — invitations/workspace_members delta with a not-yet-known local workspace (079)', () => {
+  it('an invitations insert whose workspace_id was never seeded locally still applies durably', async () => {
+    const { db } = await openDatabase('memory://')
+    const delta: RowDelta = {
+      table: 'invitations',
+      id: 'inv-unseen-ws',
+      updatedAt: T1,
+      row: row('inv-unseen-ws', T1, {
+        workspaceId: 'ws-unseen-inv',
+        email: 'invitee@example.com',
+        role: 'viewer',
+        invitedBySub: 'sub-owner',
+        expiresAt: '2026-08-01T00:00:00.000Z',
+        acceptedAt: null,
+      }),
+    }
+
+    await expect(applyInboundDeltas(db, [delta])).resolves.toBeUndefined()
+
+    const rows = await db.select().from(invitations).where(eq(invitations.id, 'inv-unseen-ws'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.email).toBe('invitee@example.com')
+    expect(rows[0]?.workspaceId).toBe('ws-unseen-inv')
+  })
+
+  it('a workspace_members insert whose workspace_id was never seeded locally still applies durably', async () => {
+    const { db } = await openDatabase('memory://')
+    const delta: RowDelta = {
+      table: 'workspace_members',
+      id: 'mem-unseen-ws',
+      updatedAt: T1,
+      row: row('mem-unseen-ws', T1, { workspaceId: 'ws-unseen-mem', userSub: 'sub-invitee', role: 'viewer' }),
+    }
+
+    await expect(applyInboundDeltas(db, [delta])).resolves.toBeUndefined()
+
+    const rows = await db.select().from(workspaceMembers).where(eq(workspaceMembers.id, 'mem-unseen-ws'))
+    expect(rows).toHaveLength(1)
+    expect(rows[0]?.role).toBe('viewer')
+    expect(rows[0]?.workspaceId).toBe('ws-unseen-mem')
+  })
+})
