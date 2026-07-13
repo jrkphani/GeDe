@@ -11,6 +11,9 @@ export default tseslint.config(
       'playwright-report',
       'test-results',
       'graphify-out',
+      // Local throwaway working dir (e2e artifacts, probe scripts, HAR dumps) —
+      // never tracked, never linted.
+      'scratchpad',
       // Transient agent worktrees + local Claude state live under .claude/ and
       // are untracked; never lint their source copies (their paths don't match
       // the src/** exemption blocks below, so they'd false-positive).
