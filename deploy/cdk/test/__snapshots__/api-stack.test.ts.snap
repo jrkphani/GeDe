@@ -33,6 +33,259 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
     },
   },
   "Resources": {
+    "AcceptApiFunction9B0C1B40": {
+      "DependsOn": [
+        "AcceptApiFunctionServiceRoleDefaultPolicy2DDEF43B",
+        "AcceptApiFunctionServiceRoleCBE93400",
+      ],
+      "Properties": {
+        "Code": {
+          "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
+          "S3Key": "85a940c57a1e449327473b75ad075a3a131155616fcc3f45e0f2abe5857c0c99.zip",
+        },
+        "Description": "Gede-Test-Api dedicated accept-invite API (issue 080) - verifies the Cognito JWT, loads the pending invite for the caller's VERIFIED email, and atomically seats the membership + marks the invite accepted.",
+        "Environment": {
+          "Variables": {
+            "COGNITO_ISSUER": {
+              "Fn::Join": [
+                "",
+                [
+                  "https://cognito-idp.us-east-1.amazonaws.com/",
+                  {
+                    "Fn::ImportValue": "Gede-Test-Auth:ExportsOutputRefUserPool6BA7E5F296FD7236",
+                  },
+                ],
+              ],
+            },
+            "DATABASE_ENDPOINT": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseB269D8BBEndpointAddressA4DBD059",
+            },
+            "DATABASE_SECRET_ARN": {
+              "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+            },
+          },
+        },
+        "Handler": "index.handler",
+        "MemorySize": 256,
+        "Role": {
+          "Fn::GetAtt": [
+            "AcceptApiFunctionServiceRoleCBE93400",
+            "Arn",
+          ],
+        },
+        "Runtime": "nodejs20.x",
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "Timeout": 10,
+        "VpcConfig": {
+          "SecurityGroupIds": [
+            {
+              "Fn::GetAtt": [
+                "AcceptApiSecurityGroup191F86C9",
+                "GroupId",
+              ],
+            },
+          ],
+          "SubnetIds": [
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet1SubnetCEAD37168693D373",
+            },
+            {
+              "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpcprivateSubnet2Subnet2DE7549CDF5ACE3D",
+            },
+          ],
+        },
+      },
+      "Type": "AWS::Lambda::Function",
+    },
+    "AcceptApiFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HYB6BAC1C3": {
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "AcceptApiFunction9B0C1B40",
+            "Arn",
+          ],
+        },
+        "Principal": "elasticloadbalancing.amazonaws.com",
+      },
+      "Type": "AWS::Lambda::Permission",
+    },
+    "AcceptApiFunctionServiceRoleCBE93400": {
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Statement": [
+            {
+              "Action": "sts:AssumeRole",
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+              ],
+            ],
+          },
+          {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition",
+                },
+                ":iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole",
+              ],
+            ],
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Role",
+    },
+    "AcceptApiFunctionServiceRoleDefaultPolicy2DDEF43B": {
+      "Properties": {
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": [
+                "secretsmanager:GetSecretValue",
+                "secretsmanager:DescribeSecret",
+              ],
+              "Effect": "Allow",
+              "Resource": {
+                "Fn::ImportValue": "Gede-Test-Data:ExportsOutputRefDatabaseSecretAttachmentE5D1B020633AEB73",
+              },
+            },
+          ],
+          "Version": "2012-10-17",
+        },
+        "PolicyName": "AcceptApiFunctionServiceRoleDefaultPolicy2DDEF43B",
+        "Roles": [
+          {
+            "Ref": "AcceptApiFunctionServiceRoleCBE93400",
+          },
+        ],
+      },
+      "Type": "AWS::IAM::Policy",
+    },
+    "AcceptApiSecurityGroup191F86C9": {
+      "Properties": {
+        "GroupDescription": "Gede-Test-Api accept-invite Lambda (issue 080) - egress to Postgres (5432) and the internet (NAT, for Cognito JWKS) only; nothing ingresses to it over the network.",
+        "SecurityGroupEgress": [
+          {
+            "CidrIp": "0.0.0.0/0",
+            "Description": "Allow all outbound traffic by default",
+            "IpProtocol": "-1",
+          },
+        ],
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "VpcId": {
+          "Fn::ImportValue": "Gede-Test-Network:ExportsOutputRefVpc8378EB38272D6E3A",
+        },
+      },
+      "Type": "AWS::EC2::SecurityGroup",
+    },
+    "AcceptApiTargetGroupC0F46B14": {
+      "DependsOn": [
+        "AcceptApiFunctionInvoke2UTWxhlfyqbT5FTn5jvgbLgjFfJwzswGk55DU1HYB6BAC1C3",
+      ],
+      "Properties": {
+        "HealthCheckEnabled": false,
+        "Tags": [
+          {
+            "Key": "Application",
+            "Value": "GeDe",
+          },
+          {
+            "Key": "Environment",
+            "Value": "test",
+          },
+          {
+            "Key": "ManagedBy",
+            "Value": "CDK",
+          },
+          {
+            "Key": "Organization",
+            "Value": "quadnomics",
+          },
+        ],
+        "TargetType": "lambda",
+        "Targets": [
+          {
+            "Id": {
+              "Fn::GetAtt": [
+                "AcceptApiFunction9B0C1B40",
+                "Arn",
+              ],
+            },
+          },
+        ],
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+    },
     "Alb16C2F182": {
       "Properties": {
         "LoadBalancerAttributes": [
@@ -103,6 +356,33 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         "Protocol": "HTTP",
       },
       "Type": "AWS::ElasticLoadBalancingV2::Listener",
+    },
+    "AlbHttpListenerAcceptApiRouteRule78454B49": {
+      "Properties": {
+        "Actions": [
+          {
+            "TargetGroupArn": {
+              "Ref": "AcceptApiTargetGroupC0F46B14",
+            },
+            "Type": "forward",
+          },
+        ],
+        "Conditions": [
+          {
+            "Field": "path-pattern",
+            "PathPatternConfig": {
+              "Values": [
+                "/accept*",
+              ],
+            },
+          },
+        ],
+        "ListenerArn": {
+          "Ref": "AlbHttpListener00C8B33E",
+        },
+        "Priority": 50,
+      },
+      "Type": "AWS::ElasticLoadBalancingV2::ListenerRule",
     },
     "AlbHttpListenerShapeProxyRouteRuleBB61069C": {
       "Properties": {
@@ -200,6 +480,24 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
         },
       },
       "Type": "AWS::EC2::SecurityGroup",
+    },
+    "AllowAcceptApiToPostgres": {
+      "Properties": {
+        "Description": "Accept-invite Lambda (issue 080) to Postgres 5432 - a fourth, distinct ingress rule on the Data security group (alongside the Fargate compute, write-path, and shape-proxy Lambda SG rules); still never 0.0.0.0/0.",
+        "FromPort": 5432,
+        "GroupId": {
+          "Fn::ImportValue": "Gede-Test-Data:ExportsOutputFnGetAttDatabaseSecurityGroup7319C0F6GroupId72A1B827",
+        },
+        "IpProtocol": "tcp",
+        "SourceSecurityGroupId": {
+          "Fn::GetAtt": [
+            "AcceptApiSecurityGroup191F86C9",
+            "GroupId",
+          ],
+        },
+        "ToPort": 5432,
+      },
+      "Type": "AWS::EC2::SecurityGroupIngress",
     },
     "AllowComputeToPostgres": {
       "Properties": {

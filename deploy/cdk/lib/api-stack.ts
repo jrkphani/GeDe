@@ -118,6 +118,9 @@ export class ApiStack extends Stack {
   /** The Tier-2 write-path API (issue 043, ADR-0010) - Lambda, not Fargate: `$0` idle, pay-per-write. */
   public readonly writeApiFunction: lambda.Function;
   public readonly writeApiSecurityGroup: ec2.SecurityGroup;
+  /** The dedicated `/accept` endpoint (issue 080) - a narrowly-scoped, server-authoritative Lambda for redeeming a pending invitation; see src/server/acceptInvite/handler.ts's own doc comment for why this is NOT routed through the generic write-path. */
+  public readonly acceptApiFunction: lambda.Function;
+  public readonly acceptApiSecurityGroup: ec2.SecurityGroup;
   /** The ElectricSQL shape-proxy (issue 058) - the ONLY thing the browser's `/sync*` requests ever reach; Electric itself is VPC-private. */
   public readonly shapeProxyFunction: lambda.Function;
   public readonly shapeProxySecurityGroup: ec2.SecurityGroup;
@@ -478,6 +481,80 @@ export class ApiStack extends Stack {
       priority: 30,
       conditions: [elbv2.ListenerCondition.pathPatterns(['/write*'])],
       action: elbv2.ListenerAction.forward([writeApiTargetGroup]),
+    });
+
+    // --- Accept-invite API (issue 080) ---------------------------------------
+    // A dedicated, server-authoritative endpoint for redeeming a pending
+    // invitation — see src/server/acceptInvite/handler.ts's own doc comment
+    // for why this is NOT routed through the generic `/write` path (the
+    // tenancy guard there gates a `workspace_members` insert on the caller
+    // already being a member of the target workspace, which is necessarily
+    // false for a first-time accept). Mirrors the write-path Lambda's exact
+    // shape (VPC-attached, its own SG, RDS CA bundle, Cognito JWKS
+    // verification) — this is a THIRD, independent least-privilege ingress
+    // grant on the Data stack's Postgres SG, not a reuse of the write-path
+    // Lambda's own SG, so each can be tightened/removed independently.
+    this.acceptApiSecurityGroup = new ec2.SecurityGroup(this, 'AcceptApiSecurityGroup', {
+      vpc: props.vpc,
+      description: `${id} accept-invite Lambda (issue 080) - egress to Postgres (5432) and the internet (NAT, for Cognito JWKS) only; nothing ingresses to it over the network.`,
+      allowAllOutbound: true,
+    });
+
+    new ec2.CfnSecurityGroupIngress(this, 'AllowAcceptApiToPostgres', {
+      groupId: props.databaseSecurityGroup.securityGroupId,
+      ipProtocol: 'tcp',
+      fromPort: 5432,
+      toPort: 5432,
+      sourceSecurityGroupId: this.acceptApiSecurityGroup.securityGroupId,
+      description: 'Accept-invite Lambda (issue 080) to Postgres 5432 - a fourth, distinct ingress rule on the Data security group (alongside the Fargate compute, write-path, and shape-proxy Lambda SG rules); still never 0.0.0.0/0.',
+    });
+
+    this.acceptApiFunction = new nodejs.NodejsFunction(this, 'AcceptApiFunction', {
+      description: `${id} dedicated accept-invite API (issue 080) - verifies the Cognito JWT, loads the pending invite for the caller's VERIFIED email, and atomically seats the membership + marks the invite accepted.`,
+      entry: path.resolve(__dirname, '..', '..', '..', 'src', 'server', 'acceptInvite', 'albAdapter.ts'),
+      handler: 'handler',
+      runtime: lambda.Runtime.NODEJS_20_X,
+      memorySize: 256,
+      timeout: Duration.seconds(10),
+      vpc: props.vpc,
+      vpcSubnets: { subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS },
+      securityGroups: [this.acceptApiSecurityGroup],
+      depsLockFilePath: rootLockFile,
+      environment: {
+        COGNITO_ISSUER: cognitoIssuer,
+        DATABASE_SECRET_ARN: props.databaseSecret.secretArn,
+        DATABASE_ENDPOINT: props.databaseEndpoint,
+      },
+      bundling: {
+        minify: true,
+        sourceMap: false,
+        target: 'node20',
+        forceDockerBundling: false,
+        commandHooks: {
+          beforeBundling: () => [],
+          beforeInstall: () => [],
+          afterBundling: (_inputDir: string, outputDir: string) => [
+            `cp "${RDS_CA_SOURCE}" "${outputDir}/rds-global-bundle.pem"`,
+          ],
+        },
+      },
+    });
+    props.databaseSecret.grantRead(this.acceptApiFunction);
+
+    const acceptApiTargetGroup = new elbv2.ApplicationTargetGroup(this, 'AcceptApiTargetGroup', {
+      vpc: props.vpc,
+      targetType: elbv2.TargetType.LAMBDA,
+      targets: [new targets.LambdaTarget(this.acceptApiFunction)],
+      // Same cost rationale as the write-path target group above - a single-
+      // Lambda-target group with a periodic synthetic health check would
+      // just burn invocations for no benefit.
+      healthCheck: { enabled: false },
+    });
+
+    listener.addAction('AcceptApiRoute', {
+      priority: 50,
+      conditions: [elbv2.ListenerCondition.pathPatterns(['/accept*'])],
+      action: elbv2.ListenerAction.forward([acceptApiTargetGroup]),
     });
 
     // --- ElectricSQL shape-proxy (issue 058) ----------------------------------

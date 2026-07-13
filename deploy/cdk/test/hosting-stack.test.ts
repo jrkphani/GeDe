@@ -231,6 +231,22 @@ describe('HostingStack — API path behavior (issue 047, ending the mixed-conten
     template.resourceCountIs('AWS::CertificateManager::Certificate', 0);
   });
 
+  it('adds an /accept* behavior (issue 080): HTTPS viewer-protocol, caching disabled, ALB origin, full method set, ALL_VIEWER origin-request policy', () => {
+    const template = synth();
+    template.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        CacheBehaviors: Match.arrayWith([
+          Match.objectLike({
+            PathPattern: 'accept*',
+            ViewerProtocolPolicy: 'redirect-to-https',
+            CachePolicyId: '4135ea2d-6df8-44a3-9df3-4b5a84be39ad',
+            AllowedMethods: Match.arrayWith(['GET', 'HEAD', 'OPTIONS', 'PUT', 'PATCH', 'POST', 'DELETE']),
+          }),
+        ]),
+      }),
+    });
+  });
+
   it('issue 076: the sync* (shape-proxy) origin sets an explicit 60s OriginReadTimeout — above the shape-proxy Lambda\'s 30s timeout, so CloudFront never clips the (now-longer) response', () => {
     const template = synth();
     template.hasResourceProperties('AWS::CloudFront::Distribution', {

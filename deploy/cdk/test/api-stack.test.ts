@@ -101,9 +101,9 @@ describe('ApiStack (Gede-Test-Api)', () => {
     });
   });
 
-  it('routes /sync* and /write* via distinct ALB listener rules; there is no /auth* route (Cognito replaces it, issue 033/ADR-0009)', () => {
+  it('routes /sync*, /write*, and /accept* via distinct ALB listener rules; there is no /auth* route (Cognito replaces it, issue 033/ADR-0009)', () => {
     const template = synth();
-    template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
+    template.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 3);
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
       Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/sync*'] } })]),
     });
@@ -116,20 +116,38 @@ describe('ApiStack (Gede-Test-Api)', () => {
     template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
       Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/write*'] } })]),
     });
+    // Issue 080 — the dedicated accept-invite route.
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/accept*'] } })]),
+    });
   });
 
-  it('grants the Data stack\'s RDS security group ingress from exactly the three Api-owned security groups on 5432 — never 0.0.0.0/0', () => {
+  it('routes /accept* to a Lambda target group (issue 080) with health checks disabled', () => {
     const template = synth();
-    // Three rules now: the Fargate compute SG (the real Electric service,
-    // issue 058), the write-path Lambda's own SG (issue 043), and the
+    const acceptRule = template.findResources('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Properties: {
+        Conditions: Match.arrayWith([Match.objectLike({ Field: 'path-pattern', PathPatternConfig: { Values: ['/accept*'] } })]),
+      },
+    });
+    expect(Object.keys(acceptRule)).toHaveLength(1);
+    template.hasResourceProperties('AWS::ElasticLoadBalancingV2::TargetGroup', {
+      TargetType: 'lambda',
+      HealthCheckEnabled: false,
+    });
+  });
+
+  it('grants the Data stack\'s RDS security group ingress from exactly the four Api-owned security groups on 5432 — never 0.0.0.0/0', () => {
+    const template = synth();
+    // Four rules now: the Fargate compute SG (the real Electric service,
+    // issue 058), the write-path Lambda's own SG (issue 043), the
     // shape-proxy Lambda's own SG (issue 058, for workspace-membership
-    // lookups) — each a separate, independent ingress grant rather than
-    // reusing one SG for multiple tiers, so each can be tightened/removed
-    // independently later.
+    // lookups), and the accept-invite Lambda's own SG (issue 080) — each a
+    // separate, independent ingress grant rather than reusing one SG for
+    // multiple tiers, so each can be tightened/removed independently later.
     const rule5432 = template.findResources('AWS::EC2::SecurityGroupIngress', {
       Properties: { FromPort: 5432, ToPort: 5432 },
     });
-    expect(Object.keys(rule5432)).toHaveLength(3);
+    expect(Object.keys(rule5432)).toHaveLength(4);
     for (const rule of Object.values(rule5432) as Array<{
       Properties: { CidrIp?: string; SourceSecurityGroupId?: unknown; GroupId: { 'Fn::ImportValue': string } };
     }>) {
@@ -240,10 +258,11 @@ describe('ApiStack (Gede-Test-Api)', () => {
     it('is a Lambda function, not another Fargate/ECS service — the ECS::Service count stays at 1 (the real Electric sync service, issue 058; auth removed per 033/ADR-0009)', () => {
       const template = synth();
       template.resourceCountIs('AWS::ECS::Service', 1);
-      // write-path + shape-proxy + electric-db-url composer + its
-      // cr.Provider framework Lambda (issue 058; debugApi is off by
-      // default in this describe block's plain `synth()`).
-      template.resourceCountIs('AWS::Lambda::Function', 4);
+      // write-path + accept-invite (issue 080) + shape-proxy +
+      // electric-db-url composer + its cr.Provider framework Lambda (issue
+      // 058; debugApi is off by default in this describe block's plain
+      // `synth()`).
+      template.resourceCountIs('AWS::Lambda::Function', 5);
       template.hasResourceProperties('AWS::Lambda::Function', { Runtime: Match.stringLikeRegexp('nodejs20') });
     });
 
@@ -285,7 +304,7 @@ describe('ApiStack (Gede-Test-Api)', () => {
       expect(fn.Properties.VpcConfig?.SubnetIds).toBeDefined();
     });
 
-    it('the write-path + shape-proxy Lambdas\' security groups each ingress to the Data stack\'s Postgres SG, distinct from the Fargate compute SG\'s rule (issue 058: three distinct SGs now, not two)', () => {
+    it('the write-path + accept-invite + shape-proxy Lambdas\' security groups each ingress to the Data stack\'s Postgres SG, distinct from the Fargate compute SG\'s rule (issue 080: four distinct SGs now, not three)', () => {
       const template = synth();
       const rule5432 = template.findResources('AWS::EC2::SecurityGroupIngress', {
         Properties: { FromPort: 5432, ToPort: 5432 },
@@ -293,7 +312,7 @@ describe('ApiStack (Gede-Test-Api)', () => {
       const sourceIds = (Object.values(rule5432) as Array<{ Properties: { SourceSecurityGroupId: { 'Fn::GetAtt': [string, string] } } }>).map(
         (r) => r.Properties.SourceSecurityGroupId['Fn::GetAtt'][0],
       );
-      expect(new Set(sourceIds).size).toBe(3); // compute (Electric) + write-path + shape-proxy — three distinct security groups
+      expect(new Set(sourceIds).size).toBe(4); // compute (Electric) + write-path + shape-proxy + accept-invite — four distinct security groups
     });
 
     it('is granted read-only access to exactly the Data stack\'s database secret (least privilege — no wildcard resource)', () => {

@@ -22,6 +22,9 @@ interface ImportMetaEnv {
   // The write-path API's endpoint (issue 048) — same-origin '/write' by
   // default; see src/sync/config.ts's writeApiPath().
   readonly VITE_WRITE_API_PATH?: string
+  // The dedicated accept-invite endpoint (issue 080) — same-origin '/accept'
+  // by default; see src/sync/config.ts's acceptApiPath().
+  readonly VITE_ACCEPT_API_PATH?: string
   // Set to 'off' to disable the semantic-search model auto-load (issue 042) —
   // the Playwright dev server sets it so e2e has no external-network dependency.
   readonly VITE_SEMANTIC_SEARCH?: string

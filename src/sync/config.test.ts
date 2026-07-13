@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { shouldSkipReadPath, writeApiPath } from './config'
+import { acceptApiPath, shouldSkipReadPath, writeApiPath } from './config'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -13,6 +13,17 @@ describe('writeApiPath (issue 048)', () => {
   it('is overridable via VITE_WRITE_API_PATH for tests/alternate environments', () => {
     vi.stubEnv('VITE_WRITE_API_PATH', '/api/write')
     expect(writeApiPath()).toBe('/api/write')
+  })
+})
+
+describe('acceptApiPath (issue 080)', () => {
+  it('defaults to the same-origin "/accept" path — never a hardcoded full URL', () => {
+    expect(acceptApiPath()).toBe('/accept')
+  })
+
+  it('is overridable via VITE_ACCEPT_API_PATH for tests/alternate environments', () => {
+    vi.stubEnv('VITE_ACCEPT_API_PATH', '/api/accept')
+    expect(acceptApiPath()).toBe('/api/accept')
   })
 })
 

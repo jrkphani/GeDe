@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { openDatabase, type Database } from '../db/client'
 import { setDatabase } from './database'
 import { createWorkspace } from '../db/workspaces'
@@ -6,6 +6,7 @@ import { createInvitation, getInvitation } from '../db/invitations'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
 import { resetProjectsStore, useProjectsStore } from './projects'
 import { resetSyncStore, useSyncStore } from './sync'
+import { useStatusStore } from './status'
 import { resetWorkspaceStore, useWorkspaceStore } from './workspace'
 import { workspaceIdForSub } from '../domain/workspaceId'
 
@@ -18,6 +19,15 @@ beforeEach(async () => {
   resetWorkspaceStore()
   resetAuthStoreForTests()
   resetSyncStore()
+  useStatusStore.setState({ message: null, action: null })
+})
+
+// Issue 080 — several tests below stub the global `fetch` (there is no DI
+// seam for the HTTP client at the store layer, mirrors sync.ts's own
+// convention/sync.test.ts's own cleanup) to drive acceptInvitation's new
+// `/accept` POST without a live network.
+afterEach(() => {
+  vi.unstubAllGlobals()
 })
 
 describe('load', () => {
@@ -163,13 +173,16 @@ describe('invite / changeRole / removeMember — sync enqueue (issue 056)', () =
   })
 })
 
-// Issue 057 test-first plan item 3 — the accept-flow store test:
-// `acceptInvitation` must enqueue a mutation whose `workspaceId` is the
-// invitation's (inviter's) workspace, NOT the accepting user's own
-// `workspaceIdForSub(sub)` (which is what `useSyncStore.workspaceId` holds
-// once they're signed in — auth.ts's `applyWorkspaceScope`).
-describe('acceptInvitation — sync enqueue scoped to the INVITER\'s workspace (issue 057)', () => {
-  it('enqueues a workspace_members seat mutation whose workspaceId is the inviter\'s workspace, not the accepter\'s own', async () => {
+// Issue 080 — replaces the old enqueueLocalMutation('workspace_members',...)
+// + flush() through the generic write-path (issue 057, now removed): that
+// path's tenancy guard can never authorize a first-time accept. This block
+// covers the store-level wiring to the new dedicated `/accept` endpoint
+// (src/sync/acceptTransport.ts is exhaustively DI-tested in isolation; these
+// drive the store-level seam — the real `fetch`, stubbed globally, mirrors
+// sync.test.ts's own "write-queue flush" describe block's convention, since
+// there is no DI seam for the HTTP client at the store layer).
+describe('acceptInvitation — POSTs to the dedicated /accept endpoint, scoped to the INVITER\'s workspace (issue 080)', () => {
+  it('POSTs { invitationId, workspaceId } where workspaceId is the inviter\'s workspace, not the accepter\'s own — and enqueues NOTHING on the old write-path queue', async () => {
     const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
     const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
 
@@ -182,29 +195,112 @@ describe('acceptInvitation — sync enqueue scoped to the INVITER\'s workspace (
     const accepterOwnWs = workspaceIdForSub('sub-invitee')
     expect(accepterOwnWs).not.toBe(inviterWs.id)
     useSyncStore.setState({ workspaceId: accepterOwnWs })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ outcome: { status: 'applied', workspaceId: inviterWs.id, role: 'editor' } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
 
     await useWorkspaceStore.getState().acceptInvitation(inv.id)
 
-    const queued = useSyncStore.getState().queue.entries
-    expect(queued).toHaveLength(1)
-    expect(queued[0]).toMatchObject({
-      table: 'workspace_members',
-      op: 'upsert',
-      status: 'pending',
-      workspaceId: inviterWs.id,
-    })
-    expect(queued[0]?.workspaceId).not.toBe(accepterOwnWs)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    const [path, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(path).toBe('/accept')
+    const body = JSON.parse(init.body as string) as { invitationId: string; workspaceId: string }
+    expect(body).toEqual({ invitationId: inv.id, workspaceId: inviterWs.id })
+    expect(body.workspaceId).not.toBe(accepterOwnWs)
+
+    // The old generic write-path queue is untouched — this producer no
+    // longer enqueues onto it at all (issue 080 removed that path entirely).
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
   })
 
-  it('enqueues nothing when signed out / sync is off (local-only, byte-for-byte unchanged)', async () => {
+  it('makes no request when signed out / sync is off (local-only, byte-for-byte unchanged)', async () => {
     const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
     const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
     useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-invitee', email: 'invitee@example.com' } })
     // useSyncStore.workspaceId left at its default null — sync never configured.
+    const fetchMock = vi.fn()
+    vi.stubGlobal('fetch', fetchMock)
 
     await useWorkspaceStore.getState().acceptInvitation(inv.id)
 
+    expect(fetchMock).not.toHaveBeenCalled()
     expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+})
+
+// Issue 080 — a server-side rejection of the accept must surface as a calm
+// status-bar announcement, never a thrown error: PendingInvitations.tsx's
+// `InvitationRow` calls acceptInvitation via an unguarded
+// `void acceptInvitation(invitation.id)`, so an uncaught throw here would
+// become an unhandled promise rejection the UI never shows the user.
+describe('acceptInvitation — server rejection surfaces via announce(), never throws (issue 080)', () => {
+  it('a { outcome: rejected } response announces the server\'s message and resolves normally (does not throw)', async () => {
+    const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-invitee', email: 'invitee@example.com' } })
+    useSyncStore.setState({ workspaceId: workspaceIdForSub('sub-invitee') })
+    const rejectionMessage = 'This invitation is no longer valid — it may have expired, been revoked, or already been used.'
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ outcome: { status: 'rejected', reason: 'invitation_not_found', message: rejectionMessage } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(useWorkspaceStore.getState().acceptInvitation(inv.id)).resolves.toBeUndefined()
+
+    expect(useStatusStore.getState().message).toBe(rejectionMessage)
+  })
+
+  it('a wholesale 401 (auth-rejected) response announces the rejection message without throwing', async () => {
+    const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-invitee', email: 'invitee@example.com' } })
+    useSyncStore.setState({ workspaceId: workspaceIdForSub('sub-invitee') })
+    const rejectionMessage = 'Your session has expired or is invalid — sign in again to accept this invitation.'
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ rejection: { reason: 'expired_token', message: rejectionMessage } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(useWorkspaceStore.getState().acceptInvitation(inv.id)).resolves.toBeUndefined()
+
+    expect(useStatusStore.getState().message).toBe(rejectionMessage)
+  })
+
+  it('a network error (fetch throws) announces a calm message without throwing', async () => {
+    const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-invitee', email: 'invitee@example.com' } })
+    useSyncStore.setState({ workspaceId: workspaceIdForSub('sub-invitee') })
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    await expect(useWorkspaceStore.getState().acceptInvitation(inv.id)).resolves.toBeUndefined()
+
+    expect(useStatusStore.getState().message).toMatch(/could not reach the server/i)
+  })
+
+  it('a successful applied response announces nothing (the refreshed project list is itself the confirmation)', async () => {
+    const inviterWs = await createWorkspace(db, 'Acme', 'sub-owner')
+    const inv = await createInvitation(db, inviterWs.id, 'invitee@example.com', 'editor', 'sub-owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-invitee', email: 'invitee@example.com' } })
+    useSyncStore.setState({ workspaceId: workspaceIdForSub('sub-invitee') })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () => Promise.resolve({ outcome: { status: 'applied', workspaceId: inviterWs.id, role: 'editor' } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    await useWorkspaceStore.getState().acceptInvitation(inv.id)
+
+    expect(useStatusStore.getState().message).toBeNull()
   })
 })
 

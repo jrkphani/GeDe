@@ -31,6 +31,18 @@ export function writeApiPath(): string {
   return import.meta.env.VITE_WRITE_API_PATH ?? '/write'
 }
 
+// The dedicated `/accept` endpoint's path (issue 080) — mirrors
+// writeApiPath()'s own same-origin-by-default convention exactly. A
+// SEPARATE endpoint from `/write` on purpose: the generic write-path's
+// tenancy guard cannot authorize a first-time accept (it gates a
+// `workspace_members` insert on the caller already being a member of the
+// target workspace — see src/server/acceptInvite/handler.ts's header for the
+// full rationale), so accepting an invitation is never routed through
+// writeApiPath() at all.
+export function acceptApiPath(): string {
+  return import.meta.env.VITE_ACCEPT_API_PATH ?? '/accept'
+}
+
 // The exact bug-051 crash-on-empty-URL guard (`src/store/sync.ts`'s
 // `start()`), extracted as a pure, directly-testable predicate (issue 058
 // test-first plan item 1). Without a configured VITE_SYNC_URL — and no

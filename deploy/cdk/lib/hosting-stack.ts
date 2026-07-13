@@ -194,6 +194,25 @@ export class HostingStack extends Stack {
       };
     }
 
+    // --- Accept-invite API origin (issue 080) -----------------------------
+    // Same mixed-content rationale as `/write*` above, on the SAME ALB
+    // origin: the dedicated accept-invite Lambda (deploy/cdk/lib/api-stack.ts's
+    // AcceptApiFunction) sits behind the same plain-HTTP-only ALB. Mutating
+    // POSTs must never be cached, and the caller's Cognito JWT must reach
+    // the Lambda — same CachingDisabled/ALLOW_ALL/ALL_VIEWER shape as
+    // `/write*`.
+    if (props.apiLoadBalancerDnsName) {
+      additionalBehaviors['accept*'] = {
+        origin: new origins.HttpOrigin(props.apiLoadBalancerDnsName, {
+          protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        cachePolicy: cloudfront.CachePolicy.CACHING_DISABLED,
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_ALL,
+        originRequestPolicy: cloudfront.OriginRequestPolicy.ALL_VIEWER,
+      };
+    }
+
     // --- ElectricSQL shape-proxy origin (issue 058) ----------------------
     // Same mixed-content rationale as `/write*` above: the shape-proxy
     // Lambda (deploy/cdk/lib/api-stack.ts's ShapeProxyFunction) sits behind

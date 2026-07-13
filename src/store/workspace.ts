@@ -5,6 +5,7 @@ import { requireDatabase } from './database'
 import { useAuthStore } from './auth'
 import { useProjectsStore } from './projects'
 import { useSyncStore } from './sync'
+import { useStatusStore } from './status'
 import {
   getWorkspace as dbGetWorkspace,
   listMembers as dbListMembers,
@@ -22,6 +23,19 @@ import {
   type InvitationRow,
 } from '../db/invitations'
 import { resolveEffectiveRole, type WorkspaceRole } from '../domain/workspaceRole'
+import { acceptApiPath } from '../sync/config'
+import { acceptInvitationOnServer, type AcceptApiHttpClient } from '../sync/acceptTransport'
+import { getAuthHeaders } from '../auth/wireIdentity'
+
+// Issue 080 — the real HTTP client for the dedicated `/accept` endpoint,
+// mirrors src/store/sync.ts's own `defaultHttpClient` convention exactly
+// (real `fetch`, not injectable through the public store API — every accept-
+// transport test drives src/sync/acceptTransport.ts directly instead, which
+// IS fully DI-testable; this module only wires the real implementation once).
+const defaultAcceptHttpClient: AcceptApiHttpClient = async (path, init) => {
+  const response = await fetch(path, init)
+  return { ok: response.ok, status: response.status, json: () => response.json() as Promise<unknown> }
+}
 
 // Issue 060 — the invitee's own view of a pending invitation: the raw row
 // plus a best-effort workspace name (dbGetWorkspace returns null when this
@@ -250,49 +264,46 @@ export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
       ])
       set({ members, invitations, role: computeRole(members) })
     }
-    // Issue 057 (055's Cause 3 fix) — the write-path half of "an accepted
-    // invitee can write into the INVITER's workspace": enqueue the seat row
-    // itself as a sync mutation, mirroring invite/changeRole/removeMember's
+    // Issue 080 — REPLACES the old enqueueLocalMutation('workspace_members',
+    // ...) + flush() through the generic write-path (issue 057): that path's
+    // tenancy guard can never authorize a first-time accept (it gates the
+    // seating INSERT on the caller already being a member of the target
+    // workspace — the very row this accept would create). This calls the
+    // dedicated, server-authoritative `/accept` endpoint instead (src/server/
+    // acceptInvite/handler.ts), mirroring invite/changeRole/removeMember's
     // own signed-in gate (useSyncStore.workspaceId truthy = sync configured
-    // and this sub is authenticated). Unlike those three, this mutation's
-    // target workspace is `member.workspaceId` (the INVITER's workspace,
-    // already resolved server-side by dbAcceptInvitation from the
-    // invitation row) — it is NEVER the accepting user's own
-    // `workspaceIdForSub(sub)`, which is what useSyncStore.workspaceId
-    // itself holds (auth.ts's applyWorkspaceScope). The explicit
-    // `workspaceId` field on the QueuedMutation (domain/mutationQueue.ts,
-    // issue 057) is what lets writeTransport.ts's toMutationEnvelope stamp
-    // THIS mutation with the inviter's workspace instead of the flush-wide
-    // default — see that module's doc comments for why a single global
-    // `useSyncStore.workspaceId` can't express this on its own.
+    // and this sub is authenticated) — signed-out/sync-off stays local-only,
+    // exactly like every other producer in this store.
     if (useSyncStore.getState().workspaceId) {
-      useSyncStore.getState().enqueueLocalMutation({
-        id: uuidv7(),
-        table: 'workspace_members',
-        rowId: member.id,
-        op: 'upsert',
-        row: member,
-        workspaceId: member.workspaceId,
-        optimisticUpdatedAt: member.updatedAt,
-        enqueuedAt: new Date().toISOString(),
-        status: 'pending',
-      })
-      // Issue 060 — best-effort: wait for the flush enqueueLocalMutation just
-      // kicked off before restarting the read-path below, so the seat
-      // mutation has a real chance to reach RDS BEFORE the shape proxy
-      // (058) re-resolves this sub's memberships. flush() is itself
-      // defensive (never throws, retries with backoff on failure) — this
-      // narrows the race for the common online case but does not eliminate
-      // it: a slow/offline flush still leaves the newly-shared project
-      // undelivered until a later retry lands and a subsequent
-      // refresh/reload picks it up (residual gap, docs/issues/060).
-      await useSyncStore.getState().flush()
+      const result = await acceptInvitationOnServer(
+        { invitationId, workspaceId: member.workspaceId },
+        { httpClient: defaultAcceptHttpClient, getAuthHeaders, path: acceptApiPath() },
+      )
+      // Issue 080 — a server-side rejection (or a network/auth failure) must
+      // surface as a calm status-bar announcement, never a thrown error:
+      // PendingInvitations.tsx's `InvitationRow` calls this via an unguarded
+      // `void acceptInvitation(...)`, so an uncaught throw here becomes an
+      // unhandled promise rejection the UI never shows the user.
+      if (result.kind === 'rejected') {
+        useStatusStore.getState().announce(result.outcome.message)
+      } else if (result.kind === 'auth-rejected') {
+        useStatusStore.getState().announce(result.rejection.message)
+      } else if (result.kind === 'network-error') {
+        useStatusStore
+          .getState()
+          .announce('Could not reach the server to accept this invitation — check your connection and try again.')
+      }
+      // 'applied' — no announcement; the newly-shared project appearing
+      // below (refreshProjects) is itself the confirmation.
     }
     // Issue 060 — pick up the newly-joined workspace: reload the local
     // projects list and force a fresh read-path subscription (see
     // useProjectsStore.refreshProjects's own doc comment for why a restart,
     // not just a reload, is required) so the just-accepted project actually
-    // streams in without a manual page reload.
+    // streams in without a manual page reload. Runs regardless of the server
+    // outcome above (mirrors the pre-080 unconditional call) — the LOCAL
+    // optimistic accept already landed either way, and signed-out/sync-off
+    // callers never reach the block above at all.
     await useProjectsStore.getState().refreshProjects()
     // The accepted invite no longer belongs in the invitee's own pending
     // list (acceptInvitation marks it accepted → excluded by canAccept).
