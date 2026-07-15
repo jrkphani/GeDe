@@ -31,7 +31,16 @@ import { z } from 'zod'
 // original six tables, absent on these three) is still importable —
 // upgradeV2ToV3 injects `workspaceId: null` on ONLY these three tables' rows
 // before validation, mirroring upgradeV1ToV2's own shape one version down.
-export const FORMAT_VERSION = 3 as const
+//
+// Issue 081: bumped 3 -> 4 when tier1_purpose gained `existingScenario`
+// (migration 0016) — a JSON-stringified Lexical EditorState, not HTML (see
+// the rich-text-library decision in docs/issues/081-tier1-existing-scenario-
+// rich-text.md: storing the editor's own structured state means the render
+// path never needs dangerouslySetInnerHTML). A v3 file (no existingScenario
+// key at all on any tier1_purpose row) is still importable — upgradeV3ToV4
+// injects `existingScenario: null` before validation, mirroring
+// upgradeV2ToV3's own shape one version up, scoped to one field on one table.
+export const FORMAT_VERSION = 4 as const
 const MIN_SUPPORTED_IMPORT_VERSION = 1
 
 // ── Row schemas — mirror src/db/schema.ts column-for-column (camelCase, as
@@ -68,6 +77,10 @@ const tier1PurposeRow = z.object({
   projectId: z.string(),
   workspaceId: z.string().nullable(),
   body: z.string(),
+  // Issue 081 — a JSON-stringified Lexical EditorState, or null when the
+  // field has never been written (a legitimate terminal state, not a
+  // migration waypoint — see FORMAT_VERSION's header).
+  existingScenario: z.string().nullable(),
   createdAt: iso,
   updatedAt: iso,
   deletedAt: nullableIso,
@@ -373,6 +386,25 @@ function upgradeV2ToV3(raw: Record<string, unknown>): void {
       }
     }
   }
+  raw.formatVersion = 3
+}
+
+// Issue 081 — upgrades a legacy formatVersion:3 file in place: every
+// tier1_purpose row gains an `existingScenario: null` (a pre-081 export
+// never had the column at all — see migration 0016). Scoped to one field on
+// one table, so (unlike upgradeV1ToV2/upgradeV2ToV3) no new "scoped tables"
+// constant array is needed — a single loop over tables.tier1_purpose is
+// enough.
+function upgradeV3ToV4(raw: Record<string, unknown>): void {
+  const tables = raw.tables
+  if (isRecord(tables)) {
+    const rows = tables.tier1_purpose
+    if (Array.isArray(rows)) {
+      for (const row of rows) {
+        if (isRecord(row) && !('existingScenario' in row)) row.existingScenario = null
+      }
+    }
+  }
   raw.formatVersion = FORMAT_VERSION
 }
 
@@ -392,8 +424,12 @@ export function parseEnvelope(text: string): Envelope {
   if (raw.formatVersion === MIN_SUPPORTED_IMPORT_VERSION) {
     upgradeV1ToV2(raw)
     upgradeV2ToV3(raw)
+    upgradeV3ToV4(raw)
   } else if (raw.formatVersion === 2) {
     upgradeV2ToV3(raw)
+    upgradeV3ToV4(raw)
+  } else if (raw.formatVersion === 3) {
+    upgradeV3ToV4(raw)
   } else if (raw.formatVersion !== FORMAT_VERSION) {
     throw new NotGeDeExportError()
   }

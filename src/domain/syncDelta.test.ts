@@ -74,6 +74,23 @@ describe('assertBaseColumnsOnly — derived-state guard (test-first plan #4, ADR
       applyRowDelta(emptySyncState(), delta('c1', '2026-01-01T00:00:01.000Z', { x: 12, y: 34 })),
     ).toThrow(DerivedColumnInDeltaError)
   })
+
+  // Issue 081 test-first plan item 4 — proves ripple checklist item 5's
+  // "inherited, no edit needed" claim with a real assertion: tableColumns
+  // delegates to projectEnvelope.tableColumns() (module doc, :21/:65-67),
+  // which reads tier1PurposeRow's zod shape — adding existingScenario there
+  // (projectEnvelope.ts) is sufficient for this allow-list to accept it too,
+  // with zero edits to this file. Without that shape addition, this throws
+  // DerivedColumnInDeltaError exactly like an actually-derived column would.
+  it('a tier1_purpose delta carrying existingScenario passes assertBaseColumnsOnly (inherited from projectEnvelope)', () => {
+    const tier1PurposeDelta: RowDelta = {
+      table: 'tier1_purpose',
+      id: 'pu1',
+      updatedAt: '2026-07-15T00:00:01.000Z',
+      row: { id: 'pu1', body: 'Purpose text', existingScenario: '{"root":{}}' },
+    }
+    expect(() => assertBaseColumnsOnly(tier1PurposeDelta)).not.toThrow()
+  })
 })
 
 // ── Convergence property (test-first plan #2) ───────────────────────────────

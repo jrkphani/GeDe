@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
 
 const PROPS = [
@@ -82,4 +83,100 @@ test('foundation: enter five value propositions, re-rank by drag, persist across
   await expect(after.nth(0)).toContainText('Spatial economy')
   await expect(after.nth(4)).toContainText('5°')
   await expect(page.getByText('A better way to sit together.')).toBeVisible()
+})
+
+// Issue 081 test-first plan item 10 — the Existing Scenario rich-text field:
+// enter a mix of bold/italic/underline/a bulleted list/indent, reload
+// persists; export/import round-trips the same formatting into a fresh
+// project.
+test('existing scenario: enter formatted prose, reload persists, export/import round-trips it', async ({
+  page,
+  browser,
+}) => {
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+
+  const phantomProject = page.getByPlaceholder(/Name your first project|New project/)
+  await phantomProject.fill('Tavalo')
+  await phantomProject.press('Enter')
+  await page.getByRole('button', { name: 'Open Tavalo' }).click()
+  await expect(page.getByText('1st Tier · Foundation')).toBeVisible()
+
+  const scenario = page.getByLabel('Existing scenario')
+  await scenario.click()
+
+  // Bold + italic + underline on a typed word each, exercised via the
+  // toolbar (Cmd/Ctrl+B/I/U also ship — src/components/ui/rich-text-editor.tsx —
+  // but the toolbar is the primary, always-visible affordance per the design
+  // brief).
+  await page.keyboard.type('Today the ')
+  await page.getByRole('button', { name: 'Bold' }).click()
+  await page.keyboard.type('booking')
+  await page.getByRole('button', { name: 'Bold' }).click()
+  await page.keyboard.type(' desk is ')
+  await page.getByRole('button', { name: 'Italic' }).click()
+  await page.keyboard.type('entirely')
+  await page.getByRole('button', { name: 'Italic' }).click()
+  await page.keyboard.type(' ')
+  await page.getByRole('button', { name: 'Underline' }).click()
+  await page.keyboard.type('manual')
+  await page.getByRole('button', { name: 'Underline' }).click()
+  await page.keyboard.type('.')
+  await page.keyboard.press('Enter')
+
+  // A bulleted list with one indented sub-item.
+  await page.getByRole('button', { name: 'Bulleted list' }).click()
+  await page.keyboard.type('Phone calls only')
+  await page.keyboard.press('Enter')
+  await page.getByRole('button', { name: 'Indent' }).click()
+  await page.keyboard.type('No confirmation email')
+
+  await expect(scenario.locator('strong', { hasText: 'booking' })).toBeVisible()
+  await expect(scenario.locator('em', { hasText: 'entirely' })).toBeVisible()
+  await expect(scenario.locator('u', { hasText: 'manual' })).toBeVisible()
+  await expect(scenario.locator('ul li', { hasText: 'Phone calls only' })).toBeVisible()
+  await expect(scenario.locator('ul li', { hasText: 'No confirmation email' })).toBeVisible()
+
+  // Commit on blur — click elsewhere on the page to leave the editor.
+  await page.getByText('1st Tier · Foundation').click()
+
+  await page.reload()
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const reloaded = page.getByLabel('Existing scenario')
+  await expect(reloaded.locator('strong', { hasText: 'booking' })).toBeVisible()
+  await expect(reloaded.locator('em', { hasText: 'entirely' })).toBeVisible()
+  await expect(reloaded.locator('u', { hasText: 'manual' })).toBeVisible()
+  await expect(reloaded.locator('ul li', { hasText: 'Phone calls only' })).toBeVisible()
+  await expect(reloaded.locator('ul li', { hasText: 'No confirmation email' })).toBeVisible()
+
+  // Export -> import into a fresh project: the same formatting round-trips
+  // through the envelope (FORMAT_VERSION 4, projectEnvelope.ts).
+  await page.getByRole('button', { name: 'Project menu' }).click()
+  const [download] = await Promise.all([
+    page.waitForEvent('download'),
+    page.getByRole('button', { name: 'Export project…' }).click(),
+  ])
+  const filePath = await download.path()
+  const buffer = readFileSync(filePath)
+
+  const cleanContext = await browser.newContext()
+  const cleanPage = await cleanContext.newPage()
+  await cleanPage.goto('/')
+  await expect(cleanPage.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  await cleanPage.locator('input[type="file"]').setInputFiles({
+    name: 'Tavalo.gede.json',
+    mimeType: 'application/json',
+    buffer,
+  })
+  await expect(cleanPage.getByRole('button', { name: 'Open Tavalo' })).toBeVisible()
+  await cleanPage.getByRole('button', { name: 'Open Tavalo' }).click()
+
+  const imported = cleanPage.getByLabel('Existing scenario')
+  await expect(imported.locator('strong', { hasText: 'booking' })).toBeVisible()
+  await expect(imported.locator('em', { hasText: 'entirely' })).toBeVisible()
+  await expect(imported.locator('u', { hasText: 'manual' })).toBeVisible()
+  await expect(imported.locator('ul li', { hasText: 'Phone calls only' })).toBeVisible()
+  await expect(imported.locator('ul li', { hasText: 'No confirmation email' })).toBeVisible()
+
+  await cleanContext.close()
 })

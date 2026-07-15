@@ -60,7 +60,7 @@ function baseWs(id: string) {
 function fixture(): EnvelopeTables {
   const t = empty()
   t.projects.push({ ...baseWs('p1'), name: 'Tavalo', description: 'desc' })
-  t.tier1_purpose.push({ ...baseWs('pu1'), projectId: 'p1', body: 'why' })
+  t.tier1_purpose.push({ ...baseWs('pu1'), projectId: 'p1', body: 'why', existingScenario: null })
   t.tier1_props.push({ ...baseWs('pr1'), projectId: 'p1', rank: 1, name: 'Prop', description: null, sort: 0 })
   t.tier2_tables.push({ ...baseWs('tt1'), projectId: 'p1', name: 'Value', sort: 0 })
   // tier2 entries: root → child → grandchild (self-ref chain, depth 3)
@@ -107,7 +107,7 @@ const arbTables = fc
     const t = empty()
     const pid = nid('p')
     t.projects.push({ ...baseWs(pid), name: `Proj ${pid}`, description: null })
-    t.tier1_purpose.push({ ...baseWs(nid('pu')), projectId: pid, body: 'b' })
+    t.tier1_purpose.push({ ...baseWs(nid('pu')), projectId: pid, body: 'b', existingScenario: null })
 
     const tableId = nid('tt')
     t.tier2_tables.push({ ...baseWs(tableId), projectId: pid, name: 'T', sort: 0 })
@@ -346,6 +346,57 @@ describe('projectEnvelope — v2 -> v3 upgrade (issue 078 step 2)', () => {
     }
     // The six tables that already had workspaceId in v2 are untouched.
     expect(parsed.tables.projects[0]?.workspaceId).toBe(WS)
+  })
+})
+
+// Issue 081 test-first plan item 3 — FORMAT_VERSION 3 -> 4: tier1_purpose
+// gained its own existingScenario column (migration 0016). A genuine v3 file
+// (exported before this change) has NO existingScenario key at all on any
+// tier1_purpose row — mirrors the v2->v3 upgrade test's own shape one
+// version up, scoped to one field on one table.
+describe('projectEnvelope — v3 -> v4 upgrade (issue 081)', () => {
+  function omitExistingScenario(row: Row): Omit<Row, 'existingScenario'> {
+    return Object.fromEntries(Object.entries(row).filter(([key]) => key !== 'existingScenario'))
+  }
+
+  it('a legacy v3 file (no existingScenario on tier1_purpose) parses with existingScenario injected as null', () => {
+    const env = serializeEnvelope(fixture())
+    const v4 = JSON.parse(envelopeToJson(env)) as Envelope & { tables: Record<string, Row[]> }
+    const v3: Record<string, unknown> = {
+      formatVersion: 3,
+      tables: {
+        ...v4.tables,
+        tier1_purpose: v4.tables.tier1_purpose.map(omitExistingScenario),
+      },
+    }
+
+    const parsed = parseEnvelope(JSON.stringify(v3))
+
+    expect(parsed.formatVersion).toBe(FORMAT_VERSION)
+    expect(parsed.tables.tier1_purpose.every((row) => row.existingScenario === null)).toBe(true)
+    // Untouched fields on the same row survive the upgrade.
+    expect(parsed.tables.tier1_purpose[0]?.body).toBe('why')
+  })
+
+  it('a v4 export/import round-trip preserves a non-null Lexical JSON string byte-for-byte', () => {
+    const withScenario = fixture()
+    const lexicalJson = JSON.stringify({
+      root: { children: [{ type: 'paragraph', children: [], version: 1 }], type: 'root', version: 1 },
+    })
+    const purposeRow = withScenario.tier1_purpose[0]
+    if (!purposeRow) throw new Error('expected a tier1_purpose row from fixture()')
+    withScenario.tier1_purpose[0] = { ...purposeRow, existingScenario: lexicalJson }
+
+    const env = serializeEnvelope(withScenario)
+    const json = envelopeToJson(env)
+    const parsed = parseEnvelope(json)
+
+    expect(parsed.tables.tier1_purpose[0]?.existingScenario).toBe(lexicalJson)
+    expect(envelopeToJson(serializeEnvelope(parsed.tables))).toBe(json)
+  })
+
+  it('FORMAT_VERSION is 4', () => {
+    expect(FORMAT_VERSION).toBe(4)
   })
 })
 

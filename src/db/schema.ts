@@ -112,6 +112,12 @@ export const tier1Purpose = pgTable(
       .notNull()
       .references(() => workspaces.id),
     body: text('body').notNull(),
+    // Issue 081 — nullable: NULL legitimately means "not written yet", a
+    // terminal state, not a migration waypoint (unlike 078 step 2's
+    // workspace_id, which needed nullable -> backfill -> NOT NULL). Holds a
+    // JSON-stringified Lexical EditorState, never HTML (see
+    // src/domain/projectEnvelope.ts's tier1PurposeRow comment).
+    existingScenario: text('existing_scenario'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),

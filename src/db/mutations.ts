@@ -904,6 +904,28 @@ export async function setTier1Purpose(
   return getTier1Purpose(db, projectId)
 }
 
+// Issue 081 — Purpose and Existing Scenario are edited independently
+// (separate editors, separate commit gestures per the design brief), so
+// this is its own setter rather than a parameter on setTier1Purpose — the
+// same split as setDescription/renameTier1Prop above. `body` is NOT NULL
+// (schema.ts), so a first-ever save (no purpose row exists yet) must carry
+// the current row's body (or '') into the insert values, never a bare
+// insert of just {id, projectId, workspaceId, existingScenario} — that
+// would violate the NOT NULL constraint.
+export async function setTier1ExistingScenario(
+  db: Database,
+  projectId: string,
+  existingScenario: string | null,
+): Promise<Tier1PurposeRow | null> {
+  const workspaceId = await projectWorkspaceId(db, projectId)
+  const current = await getTier1Purpose(db, projectId)
+  await db
+    .insert(tier1Purpose)
+    .values({ id: uuidv7(), projectId, workspaceId, body: current?.body ?? '', existingScenario })
+    .onConflictDoUpdate({ target: tier1Purpose.projectId, set: { existingScenario, updatedAt: now() } })
+  return getTier1Purpose(db, projectId)
+}
+
 function tier1PropScope(projectId: string) {
   return and(eq(tier1Props.projectId, projectId), isNull(tier1Props.deletedAt))
 }

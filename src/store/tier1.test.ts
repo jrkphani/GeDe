@@ -1,6 +1,13 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 import { openDatabase } from '../db/client'
-import { addTier1Prop, createProject, getTier1Purpose, listTier1Props, setTier1Purpose } from '../db/mutations'
+import {
+  addTier1Prop,
+  createProject,
+  getTier1Purpose,
+  listTier1Props,
+  setTier1ExistingScenario,
+  setTier1Purpose,
+} from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetSyncStore, useSyncStore } from './sync'
@@ -76,6 +83,36 @@ describe('tier1 store — purpose', () => {
   })
 })
 
+// Issue 081 — Existing Scenario shares tier1_purpose's one row with Purpose,
+// but is edited independently (own commit gesture, own undo step).
+describe('tier1 store — existing scenario', () => {
+  it('starts null and setExistingScenario autosaves through the mutation layer and is undoable', async () => {
+    expect(useTier1Store.getState().existingScenario).toBeNull()
+
+    await useTier1Store.getState().setExistingScenario('{"root":{"v":1}}')
+    expect(useTier1Store.getState().existingScenario).toBe('{"root":{"v":1}}')
+    expect((await getTier1Purpose(db, projectId))?.existingScenario).toBe('{"root":{"v":1}}')
+
+    await useTier1Store.getState().setExistingScenario('{"root":{"v":2}}')
+    await useCommandLogStore.getState().undo()
+    expect(useTier1Store.getState().existingScenario).toBe('{"root":{"v":1}}')
+    expect((await getTier1Purpose(db, projectId))?.existingScenario).toBe('{"root":{"v":1}}')
+
+    await useCommandLogStore.getState().redo()
+    expect(useTier1Store.getState().existingScenario).toBe('{"root":{"v":2}}')
+  })
+
+  it('setExistingScenario does not disturb purpose, and vice versa (shared row, independent fields)', async () => {
+    await useTier1Store.getState().setPurpose('A better way to sit together.')
+    await useTier1Store.getState().setExistingScenario('{"root":{}}')
+    expect(useTier1Store.getState().purpose).toBe('A better way to sit together.')
+    expect(useTier1Store.getState().existingScenario).toBe('{"root":{}}')
+
+    await useTier1Store.getState().setPurpose('Comfort, on demand.')
+    expect(useTier1Store.getState().existingScenario).toBe('{"root":{}}')
+  })
+})
+
 // Issue 073 pt1 — domain-content mutations never reached the write outbox
 // (only createProject/adoptProject and workspace.ts's 7 actions were wired).
 // This closes the gap for tier1: every mutating action must call the shared
@@ -100,6 +137,53 @@ describe('tier1 store — sync enqueue (issue 073 pt1)', () => {
 
   it('setPurpose enqueues nothing when no sync workspace is set (local-only, byte-for-byte unchanged)', async () => {
     await useTier1Store.getState().setPurpose('Comfort, on demand.')
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+
+  // Issue 081 — Purpose and Existing Scenario SHARE one tier1_purpose row, so
+  // the upsert/update determination for EITHER field must key off whether
+  // ANY tier1_purpose row already existed (purpose !== '' OR
+  // existingScenario !== null before this edit), not just this field's own
+  // prior emptiness — else a synced edit silently no-ops (066-class bug).
+  it('setExistingScenario enqueues an upsert on the very first tier1_purpose row ever, an update thereafter', async () => {
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useTier1Store.getState().setExistingScenario('{"root":{"v":1}}')
+    let queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(1)
+    expect(queued[0]).toMatchObject({ table: 'tier1_purpose', op: 'upsert', status: 'pending' })
+
+    await useTier1Store.getState().setExistingScenario('{"root":{"v":2}}')
+    queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(2)
+    expect(queued[1]).toMatchObject({ table: 'tier1_purpose', op: 'update', status: 'pending' })
+  })
+
+  it('setExistingScenario enqueues an UPDATE (not upsert) as the first tier1_purpose write of THIS field when Purpose already created the row', async () => {
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    await useTier1Store.getState().setPurpose('A better way to sit together.')
+
+    await useTier1Store.getState().setExistingScenario('{"root":{}}')
+    const queued = useSyncStore.getState().queue.entries
+    // [0] = setPurpose's own upsert (the row's first-ever write); [1] must be
+    // 'update', not 'upsert', even though existingScenario itself was empty
+    // before this call — the row already existed via Purpose.
+    expect(queued).toHaveLength(2)
+    expect(queued[1]).toMatchObject({ table: 'tier1_purpose', op: 'update', status: 'pending' })
+  })
+
+  it('setPurpose enqueues an UPDATE (not upsert) as the first tier1_purpose write of THIS field when Existing Scenario already created the row', async () => {
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    await useTier1Store.getState().setExistingScenario('{"root":{}}')
+
+    await useTier1Store.getState().setPurpose('A better way to sit together.')
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(2)
+    expect(queued[1]).toMatchObject({ table: 'tier1_purpose', op: 'update', status: 'pending' })
+  })
+
+  it('setExistingScenario enqueues nothing when no sync workspace is set (local-only, byte-for-byte unchanged)', async () => {
+    await useTier1Store.getState().setExistingScenario('{"root":{}}')
     expect(useSyncStore.getState().queue.entries).toHaveLength(0)
   })
 
@@ -172,6 +256,25 @@ describe('tier1 store — refresh on inbound delta (issue 075 Part B)', () => {
     }
 
     expect(useTier1Store.getState().purpose).toBe('Streamed purpose')
+  })
+
+  it('an existingScenario write to PGlite after load() appears once the tier1 signal bumps (issue 081)', async () => {
+    expect(useTier1Store.getState().existingScenario).toBeNull()
+
+    await setTier1ExistingScenario(db, projectId, '{"root":{"streamed":true}}')
+    expect(useTier1Store.getState().existingScenario).toBeNull()
+
+    useSyncStore.setState({ tier1AppliedAt: Date.now() })
+
+    for (
+      let i = 0;
+      i < 20 && useTier1Store.getState().existingScenario === null;
+      i++
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+
+    expect(useTier1Store.getState().existingScenario).toBe('{"root":{"streamed":true}}')
   })
 
   it('a prop row written directly to PGlite after load() appears once the tier1 signal bumps', async () => {

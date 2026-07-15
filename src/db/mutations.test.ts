@@ -12,6 +12,7 @@ import {
   createContext,
   createProject,
   deleteParametersUnbinding,
+  getTier1Purpose,
   listArchivedProjects,
   listProjects,
   promoteEntries,
@@ -19,6 +20,8 @@ import {
   restoreParametersWithBindings,
   restoreProject,
   revertStaleRebind,
+  setTier1ExistingScenario,
+  setTier1Purpose,
 } from './mutations'
 
 async function freshDb() {
@@ -199,5 +202,63 @@ describe('issue 078 step 2 — workspace_id propagation on child tables', () => 
 
     const restored = await db.select().from(bindings).where(eq(bindings.id, binding.id))
     expect(restored[0]?.workspaceId).toBe(ctx.workspaceId)
+  })
+})
+
+// Issue 081 test-first plan item 2 — the NOT NULL subtlety this issue's own
+// spec calls out: tier1_purpose.body is NOT NULL (schema.ts), so a naive
+// setTier1ExistingScenario that inserts {id, projectId, workspaceId,
+// existingScenario} on a project's FIRST-EVER tier1_purpose write (no row
+// exists yet) would violate that constraint. Red today because the function
+// doesn't exist yet; the trap is exactly what this test is for.
+describe('setTier1ExistingScenario — NOT NULL subtlety (issue 081)', () => {
+  it('succeeds on a project with no existing tier1_purpose row, leaving body as \'\' (not a NOT NULL violation)', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'Tavalo' })
+    expect(await getTier1Purpose(db, project.id)).toBeNull()
+
+    const lexicalJson = JSON.stringify({
+      root: { children: [{ type: 'paragraph', children: [], version: 1 }], type: 'root', version: 1 },
+    })
+    const row = await setTier1ExistingScenario(db, project.id, lexicalJson)
+
+    expect(row?.body).toBe('')
+    expect(row?.existingScenario).toBe(lexicalJson)
+  })
+
+  it('preserves an already-written body unchanged when a purpose row already exists', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'Tavalo' })
+    await setTier1Purpose(db, project.id, 'A better way to sit together.')
+
+    const lexicalJson = JSON.stringify({
+      root: { children: [{ type: 'paragraph', children: [], version: 1 }], type: 'root', version: 1 },
+    })
+    const row = await setTier1ExistingScenario(db, project.id, lexicalJson)
+
+    expect(row?.body).toBe('A better way to sit together.')
+    expect(row?.existingScenario).toBe(lexicalJson)
+  })
+
+  it('is a true upsert on the same row (project_id unique index) — never a second tier1_purpose row', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'Tavalo' })
+
+    const first = await setTier1ExistingScenario(db, project.id, 'json-1')
+    const second = await setTier1ExistingScenario(db, project.id, 'json-2')
+
+    expect(second?.id).toBe(first?.id)
+    expect(second?.existingScenario).toBe('json-2')
+  })
+
+  it('setting existingScenario back to null clears it without touching body', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'Tavalo' })
+    await setTier1Purpose(db, project.id, 'Purpose text')
+    await setTier1ExistingScenario(db, project.id, 'some-json')
+
+    const cleared = await setTier1ExistingScenario(db, project.id, null)
+    expect(cleared?.existingScenario).toBeNull()
+    expect(cleared?.body).toBe('Purpose text')
   })
 })

@@ -39,11 +39,11 @@ function fakeExecutor(): MigrationSqlExecutor & { readonly executedSql: readonly
 }
 
 describe('listMigrationFiles (issue 045)', () => {
-  it('lists the real src/db/migrations/*.sql files, sorted in filename order (0000 first, 0015 last — issue 078 step 2 added 0015)', () => {
+  it('lists the real src/db/migrations/*.sql files, sorted in filename order (0000 first, 0016 last — issue 081 added 0016)', () => {
     const files = listMigrationFiles(REAL_MIGRATIONS_DIR);
-    expect(files).toHaveLength(16); // 0000-0015
+    expect(files).toHaveLength(17); // 0000-0016
     expect(files[0]).toBe('0000_init.sql');
-    expect(files.at(-1)).toBe('0015_child_workspace_scoping.sql');
+    expect(files.at(-1)).toBe('0016_tier1_existing_scenario.sql');
     expect(files).toEqual([...files].sort());
   });
 });
@@ -98,7 +98,7 @@ describe('applyMigrations (issue 045 test-first plan item 1 — idempotency + or
 
   it('parity guard: the runner reads the SAME migrations directory check-migrations.sh globs — no forked SQL (test-first plan item 3)', () => {
     const files = listMigrationFiles(REAL_MIGRATIONS_DIR);
-    expect(files).toHaveLength(16); // 0000-0015 (issue 078 step 2 added 0015)
+    expect(files).toHaveLength(17); // 0000-0016 (issue 081 added 0016)
 
     const parityScript = fs.readFileSync(
       path.resolve(__dirname, '..', '..', 'migration-parity', 'check-migrations.sh'),

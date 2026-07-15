@@ -15,8 +15,10 @@ import { useWorkspaceRole } from '../store/workspace'
 import { EditableGrid, type GridColumn } from './EditableGrid'
 import { Button } from './ui/button'
 import { MultilineEdit } from './ui/multiline-editor'
+import { RichTextEditor } from './ui/rich-text-editor'
 
 const PURPOSE_GHOST = 'What is this system for?'
+const EXISTING_SCENARIO_GHOST = 'Describe the existing scenario…'
 
 // The rank cell (issue 013) is the one tier-1-specific cell renderer: mono
 // degree notation + a hover drag handle. dnd-kit's sortable node is the cell
@@ -58,9 +60,11 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
   const purpose = useTier1Store((s) => s.purpose)
+  const existingScenario = useTier1Store((s) => s.existingScenario)
   const props = useTier1Store((s) => s.props)
   const load = useTier1Store((s) => s.load)
   const setPurpose = useTier1Store((s) => s.setPurpose)
+  const setExistingScenario = useTier1Store((s) => s.setExistingScenario)
   const addProp = useTier1Store((s) => s.addProp)
   const renameProp = useTier1Store((s) => s.renameProp)
   const setDescription = useTier1Store((s) => s.setDescription)
@@ -169,6 +173,22 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
           displayClassName="tier1-purpose__display"
           inputClassName="tier1-purpose__input"
           ariaLabel="System purpose"
+          readOnly={readOnly}
+        />
+      </section>
+
+      {/* Existing scenario (issue 081): the current reality before this
+          design intervenes — strictly between Purpose and the value
+          architecture table (design brief's canonical reading order: why ->
+          current reality -> proposed value). A rich-text panel, not a flat
+          text blob, since the designer is drafting prose here. */}
+      <section className="panel tier1-existing-scenario">
+        <span className="tier1-existing-scenario__label">Existing scenario</span>
+        <RichTextEditor
+          value={existingScenario}
+          onCommit={(next) => void setExistingScenario(next)}
+          ariaLabel="Existing scenario"
+          placeholder={EXISTING_SCENARIO_GHOST}
           readOnly={readOnly}
         />
       </section>

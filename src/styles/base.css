@@ -1655,6 +1655,104 @@ body {
   overflow: hidden;
 }
 
+/* Existing scenario (issue 081) — a second document-like Foundation panel,
+   between Purpose and the value-propositions table (design brief's canonical
+   reading order: why -> current reality -> proposed value). Reads as the
+   same paper-panel instrument as Purpose (`--panel`/`--hairline`, 0 radius);
+   a second document-like field on the same page needs a visible label to
+   stay distinguishable at a glance (Purpose's own ghost text alone already
+   does that job for the first field on the page). */
+.tier1-existing-scenario {
+  padding: var(--space-4) var(--space-5);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.tier1-existing-scenario__label {
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+  color: var(--ink-muted);
+}
+
+.rich-text-editor {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Toolbar: a hairline rule separates it from the editable region below,
+   mirroring the composer bar's own "hairline top border" pattern
+   (STYLE_GUIDE §7). Only mounted when not read-only. */
+.rich-text-editor__toolbar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-bottom: var(--space-2);
+  margin-bottom: var(--space-2);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.rich-text-editor__toolbar .command-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-1);
+}
+
+/* aria-pressed reflects the active mark/block state at the cursor
+   (STYLE_GUIDE §5/§10) — the accent wash + border is the one place this
+   editor borrows the chrome accent, matching selection-state conventions
+   elsewhere (§2.2) rather than inventing a new toolbar-active color. */
+.rich-text-editor__toolbar .command-button[aria-pressed='true'] {
+  background: var(--accent-wash);
+  border-color: var(--accent);
+  color: var(--accent-strong);
+}
+
+.rich-text-editor__scroller {
+  position: relative;
+}
+
+.rich-text-editor__content {
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  min-height: calc(var(--leading-body) * 3);
+  outline: none;
+}
+
+.rich-text-editor__content:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.rich-text-editor__ghost {
+  position: absolute;
+  top: 0;
+  left: 0;
+  color: var(--ink-muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+  pointer-events: none;
+  user-select: none;
+}
+
+.rich-text-editor__text--underline {
+  text-decoration: underline;
+}
+
+.rich-text-editor__list {
+  margin: 0;
+  padding-left: var(--space-5);
+}
+
+.rich-text-editor__list-item {
+  margin: 0;
+}
+
+.rich-text-editor__list-item--nested {
+  list-style-type: none;
+}
+
 /* Rank: a narrow leading column of mono degree notation (STYLE_GUIDE §3) with
    a drag handle that appears on row hover (§6). */
 .tier1-col--rank {

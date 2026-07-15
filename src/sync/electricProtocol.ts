@@ -63,6 +63,12 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     project_id: 'projectId',
     workspace_id: 'workspaceId',
     body: 'body',
+    // Issue 081 (migration 0016) — REQUIRED, not optional: an unmapped SQL
+    // column is silently dropped by toCamelRow below, which would make
+    // every remote-created/updated tier1_purpose row lose its
+    // existingScenario the moment it round-trips through Electric, even
+    // though the local write worked fine (078 step 2's own risk, repeated).
+    existing_scenario: 'existingScenario',
     created_at: 'createdAt',
     updated_at: 'updatedAt',
     deleted_at: 'deletedAt',

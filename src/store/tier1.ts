@@ -7,6 +7,7 @@ import {
   renameTier1Prop as dbRename,
   reorderTier1Prop as dbReorder,
   restoreTier1Prop as dbRestore,
+  setTier1ExistingScenario as dbSetExistingScenario,
   setTier1PropDescription as dbSetDescription,
   setTier1Purpose as dbSetPurpose,
   type Tier1PropRow,
@@ -30,6 +31,10 @@ interface Tier1State {
   projectId: string | null
   // The single purpose body; '' when the project has none yet.
   purpose: string
+  // Issue 081 — shares tier1_purpose's one row with `purpose`; null when the
+  // field has never been written (a legitimate terminal state). A
+  // JSON-stringified Lexical EditorState, never HTML.
+  existingScenario: string | null
   props: Tier1PropRow[]
   // Mirrors the per-scope generation guard used by contexts.ts (issue 004/007
   // CI race): Foundation's mount effect calls load(projectId) once, but a
@@ -39,6 +44,7 @@ interface Tier1State {
   generation: number
   load: (projectId: string) => Promise<void>
   setPurpose: (body: string) => Promise<void>
+  setExistingScenario: (existingScenario: string | null) => Promise<void>
   addProp: (name: string) => Promise<Tier1PropRow | null>
   renameProp: (id: string, name: string) => Promise<void>
   setDescription: (id: string, description: string) => Promise<void>
@@ -49,6 +55,7 @@ interface Tier1State {
 export const useTier1Store = create<Tier1State>()((set, get) => ({
   projectId: null,
   purpose: '',
+  existingScenario: null,
   props: [],
   generation: 0,
 
@@ -60,7 +67,7 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     const db = requireDatabase()
     const [purpose, props] = await Promise.all([dbGetPurpose(db, projectId), dbList(db, projectId)])
     if (get().generation !== startGen) return // a mutation landed mid-load; it already set fresh state
-    set({ purpose: purpose?.body ?? '', props })
+    set({ purpose: purpose?.body ?? '', existingScenario: purpose?.existingScenario ?? null, props })
 
     // Issue 075 Part B — load() only ever ran once per project-open, so a
     // tier1_purpose OR tier1_props delta that streamed in (or that 075A's own
@@ -78,7 +85,11 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
       void Promise.all([dbGetPurpose(freshDb, currentProjectId), dbList(freshDb, currentProjectId)]).then(
         ([freshPurpose, freshProps]) => {
           if (get().generation !== genAtStart) return
-          set({ purpose: freshPurpose?.body ?? '', props: freshProps })
+          set({
+            purpose: freshPurpose?.body ?? '',
+            existingScenario: freshPurpose?.existingScenario ?? null,
+            props: freshProps,
+          })
         },
       )
     })
@@ -89,16 +100,19 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     if (projectId === null) return
     const db = requireDatabase()
     const previous = get().purpose
+    // Issue 081 — Purpose and Existing Scenario SHARE one tier1_purpose row
+    // (same Subtlety-A-class nuance 073 originally flagged, widened for the
+    // second field): the upsert/update determination must key off whether
+    // ANY tier1_purpose row already existed before this edit, not just
+    // whether `purpose` itself was previously empty — a project whose only
+    // prior write was setExistingScenario already has a row, so this edit
+    // must be 'update', or the server's `ON CONFLICT (id) DO NOTHING`
+    // silently no-ops it (the 066-class bug).
+    const rowExistedBefore = get().purpose !== '' || get().existingScenario !== null
     set((s) => ({ generation: s.generation + 1 }))
     const row = await dbSetPurpose(db, projectId, body)
     set({ purpose: row?.body ?? body })
-    // Issue 073 — setTier1Purpose upserts on the natural key (projectId),
-    // reusing a stable row id across every edit (see db/mutations.ts's own
-    // doc comment). Subtlety A: 'upsert' only on the FIRST save (previous ===
-    // '' — no purpose row existed yet); every subsequent edit of that same
-    // row must be 'update', else the server's `ON CONFLICT (id) DO NOTHING`
-    // silently no-ops the edit (the 066-class bug).
-    if (row) enqueueIfSyncing('tier1_purpose', row.id, previous === '' ? 'upsert' : 'update', row)
+    if (row) enqueueIfSyncing('tier1_purpose', row.id, rowExistedBefore ? 'update' : 'upsert', row)
     useCommandLogStore.getState().push({
       label: 'edit purpose',
       async undo() {
@@ -108,6 +122,37 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
       async redo() {
         const r = await dbSetPurpose(db, projectId, body)
         set({ purpose: r?.body ?? body })
+      },
+    })
+  },
+
+  // Issue 081 — mirrors setPurpose's own upsert/update subtlety, but Purpose
+  // and Existing Scenario SHARE one tier1_purpose row: the enqueued op must
+  // be 'upsert' only when NO tier1_purpose row existed before this edit
+  // (both purpose === '' AND existingScenario === null), else 'update' — a
+  // check on THIS field alone (existingScenario === null) would wrongly
+  // enqueue 'upsert' for a row that already exists because Purpose was
+  // written first, which the server's ON CONFLICT (id) DO NOTHING would
+  // silently no-op (the 066-class bug).
+  async setExistingScenario(existingScenario) {
+    const { projectId } = get()
+    if (projectId === null) return
+    const db = requireDatabase()
+    const previous = get().existingScenario
+    const rowExistedBefore = get().purpose !== '' || get().existingScenario !== null
+    set((s) => ({ generation: s.generation + 1 }))
+    const row = await dbSetExistingScenario(db, projectId, existingScenario)
+    set({ existingScenario: row?.existingScenario ?? existingScenario })
+    if (row) enqueueIfSyncing('tier1_purpose', row.id, rowExistedBefore ? 'update' : 'upsert', row)
+    useCommandLogStore.getState().push({
+      label: 'edit existing scenario',
+      async undo() {
+        const r = await dbSetExistingScenario(db, projectId, previous)
+        set({ existingScenario: r?.existingScenario ?? previous })
+      },
+      async redo() {
+        const r = await dbSetExistingScenario(db, projectId, existingScenario)
+        set({ existingScenario: r?.existingScenario ?? existingScenario })
       },
     })
   },
@@ -261,5 +306,5 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
 export function resetTier1Store(): void {
   syncUnsubscribe?.()
   syncUnsubscribe = null
-  useTier1Store.setState({ projectId: null, purpose: '', props: [], generation: 0 })
+  useTier1Store.setState({ projectId: null, purpose: '', existingScenario: null, props: [], generation: 0 })
 }

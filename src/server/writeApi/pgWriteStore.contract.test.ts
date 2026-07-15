@@ -502,6 +502,50 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     expect(updateCall.params[0]).toBe(entityId) // WHERE id = $1
   })
 
+  // Issue 081 test-first plan item 6 — proves ripple checklist item 6's
+  // "zero code changes needed" claim with a real assertion (not just reading
+  // store.ts and inferring it): a tier1Purpose update payload carrying
+  // existingScenario reaches the generic camelCase->snake_case column
+  // mapping unmodified, exactly like `body` already does — existingScenario
+  // is not in SERVER_STAMPED, so it flows through the same entries/columns/
+  // values pipeline every other payload column does.
+  it('update: a tier1Purpose mutation snake_cases existingScenario onto `tier1_purpose`, unmodified', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const clientUpdatedAt = '2026-07-15T00:00:00.000Z'
+    const lexicalJson = '{"root":{"children":[]}}'
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'update',
+      entityId,
+      clientUpdatedAt,
+      payload: {
+        id: entityId,
+        body: 'Purpose text',
+        existingScenario: lexicalJson,
+      },
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const updateCall = calls.find((c) => c.text.includes('UPDATE tier1_purpose'))
+    if (!updateCall) throw new Error('no UPDATE tier1_purpose call was captured')
+    const assignments = parseSetClause(updateCall.text)
+    const setColumns = assignments.map(([col]) => col)
+
+    expect(setColumns).toContain('existing_scenario')
+    expect(setColumns).not.toContain('existingScenario')
+    expect(setColumns).not.toContain('id')
+
+    const paramsByPlaceholder = new Map(
+      assignments.map(([, placeholder]) => [placeholder, updateCall.params[Number(placeholder.slice(1)) - 1]]),
+    )
+    const existingScenarioAssignment = assignments.find(([col]) => col === 'existing_scenario')
+    if (!existingScenarioAssignment) throw new Error('no existing_scenario assignment in SET clause')
+    expect(paramsByPlaceholder.get(existingScenarioAssignment[1])).toBe(lexicalJson)
+  })
+
   // Issue 066 — revokeInvitation/declineInvitation enqueue a `delete` op.
   // The `delete` branch of applyIfNew (a bare
   // `UPDATE <table> SET deleted_at = $2, updated_at = $2 WHERE id = $1`) had

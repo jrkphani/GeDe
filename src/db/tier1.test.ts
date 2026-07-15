@@ -7,6 +7,7 @@ import {
   listTier1Props,
   removeTier1Prop,
   reorderTier1Prop,
+  setTier1ExistingScenario,
   setTier1Purpose,
 } from './mutations'
 
@@ -28,6 +29,31 @@ describe('tier1 purpose (single body per project)', () => {
     await setTier1Purpose(db, projectId, 'Comfort, on demand.')
     const purpose = await getTier1Purpose(db, projectId)
     expect(purpose?.body).toBe('Comfort, on demand.')
+  })
+})
+
+// Issue 081 test-first plan item 1 — migration 0016 adds a nullable
+// existing_scenario column onto the same tier1_purpose row.
+describe('tier1 purpose — existingScenario (issue 081, migration 0016)', () => {
+  it('a purpose row created without existingScenario succeeds (nullable) and reads back as null', async () => {
+    const { db, projectId } = await freshProject()
+    await setTier1Purpose(db, projectId, 'A better way to sit together.')
+    const purpose = await getTier1Purpose(db, projectId)
+    expect(purpose?.body).toBe('A better way to sit together.')
+    expect(purpose?.existingScenario).toBeNull()
+  })
+
+  it('a Lexical JSON string written to existingScenario round-trips through getTier1Purpose byte-for-byte', async () => {
+    const { db, projectId } = await freshProject()
+    const lexicalJson = JSON.stringify({
+      root: { children: [{ type: 'paragraph', children: [], version: 1 }], type: 'root', version: 1 },
+    })
+    await setTier1Purpose(db, projectId, 'Purpose text')
+    await setTier1ExistingScenario(db, projectId, lexicalJson)
+
+    const purpose = await getTier1Purpose(db, projectId)
+    expect(purpose?.existingScenario).toBe(lexicalJson)
+    expect(purpose?.body).toBe('Purpose text') // untouched by the existingScenario write
   })
 })
 

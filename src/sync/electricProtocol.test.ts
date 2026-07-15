@@ -100,6 +100,43 @@ describe('toRowDelta — wire normalization', () => {
     },
   )
 
+  // Issue 081 — migration 0016 denormalized existing_scenario directly onto
+  // tier1_purpose. SQL_TO_JS_COLUMNS must map the wire `existing_scenario`
+  // column to `existingScenario`, or (per this module's own "unknown columns
+  // are dropped, not thrown on" comment) every remote-created/updated
+  // tier1_purpose row would silently lose its existingScenario the moment it
+  // round-trips through Electric — the exact failure mode 078 step 2 flagged
+  // for workspace_id, repeated here for a different column.
+  it('maps existing_scenario -> existingScenario for tier1_purpose (issue 081)', () => {
+    const message = change('update', {
+      id: 'pu1',
+      project_id: 'p1',
+      workspace_id: 'ws-1',
+      body: 'Purpose text',
+      existing_scenario: '{"root":{}}',
+      created_at: '2026-07-15T00:00:00.000Z',
+      updated_at: '2026-07-15T00:00:01.000Z',
+      deleted_at: null,
+    })
+    const delta = toRowDelta('tier1_purpose', message)
+    expect(delta?.row.existingScenario).toBe('{"root":{}}')
+  })
+
+  it('a null existing_scenario survives the mapping (the schema’s "not written yet" state)', () => {
+    const message = change('insert', {
+      id: 'pu1',
+      project_id: 'p1',
+      workspace_id: 'ws-1',
+      body: 'Purpose text',
+      existing_scenario: null,
+      created_at: '2026-07-15T00:00:00.000Z',
+      updated_at: '2026-07-15T00:00:01.000Z',
+      deleted_at: null,
+    })
+    const delta = toRowDelta('tier1_purpose', message)
+    expect(delta?.row.existingScenario).toBeNull()
+  })
+
   it('drops an Electric-protocol column this app has no camelCase field for', () => {
     const message = change('insert', {
       id: 'p1',

@@ -1,0 +1,18 @@
+-- Issue 081 — adds the Foundation "Existing Scenario" rich-text field onto the
+-- existing tier1_purpose row (SPEC.md:69's single-row-per-project document
+-- table; see schema.ts's tier1Purpose comment). Nullable, no backfill: this is
+-- a genuinely new optional field (unlike 078 step 2's workspace_id, which
+-- needed nullable -> backfill -> NOT NULL because every existing row needed a
+-- real value). NULL means "not written yet" and is a legitimate terminal
+-- state, not a migration waypoint.
+--
+-- Storage format: a JSON-stringified Lexical EditorState (see
+-- src/domain/projectEnvelope.ts's existingScenario comment for why this is
+-- opaque JSON, not HTML). This migration only adds a text column; the shape
+-- of what's inside it is enforced at the editor layer, not by Postgres.
+--
+-- tier1_purpose already has REPLICA IDENTITY FULL (migration 0012, table-
+-- level setting) -- ALTER TABLE ADD COLUMN does not reset it, and Postgres
+-- re-derives the full-row WAL image automatically; no replica-identity
+-- migration needed here (confirmed against 0012_electric_replica_identity.sql:24).
+ALTER TABLE "tier1_purpose" ADD COLUMN "existing_scenario" text;
