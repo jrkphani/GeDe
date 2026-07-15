@@ -11,6 +11,7 @@ import {
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetSyncStore, useSyncStore } from './sync'
+import { useStatusStore } from './status'
 import { resetTier1Store, useTier1Store } from './tier1'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
@@ -67,6 +68,47 @@ describe('tier1 store — props', () => {
 
     await useCommandLogStore.getState().undo()
     expect(useTier1Store.getState().props.map((p) => p.name)).toEqual(['A', 'B', 'C'])
+  })
+})
+
+// Issue 083 — Cause B. FoundationSurface.tsx's `onCreate: (name) => void
+// addProp(name)` discards the promise entirely: a rejection inside addProp
+// (dbAdd's own workspaceId resolution, db/mutations.ts's projectWorkspaceId,
+// hard-throws via firstOrThrow on a missing FK-ancestor row) was previously
+// silently swallowed — indistinguishable from a no-op. The store action
+// itself must catch and announce via useStatusStore, never let the
+// rejection escape unheard.
+describe('tier1 store — a failed addProp announces via useStatusStore, never a silent no-op (issue 083 Cause B)', () => {
+  beforeEach(() => {
+    useStatusStore.setState({ message: null, action: null })
+  })
+
+  it('announces a calm status message when the underlying mutation rejects, and does not throw', async () => {
+    // A projectId the `projects` table has no row for — dbAdd's own
+    // projectWorkspaceId() hard-throws "project not found" via firstOrThrow,
+    // exactly the FK-style rejection the issue diagnoses. The store's own
+    // null-projectId guard only screens out `null`, so this reaches the
+    // real mutation call.
+    useTier1Store.setState({ projectId: 'does-not-exist' })
+
+    await expect(useTier1Store.getState().addProp('Seating-status comfort')).resolves.toBeNull()
+
+    expect(useStatusStore.getState().message).not.toBeNull()
+    expect(useStatusStore.getState().message).toMatch(/could not|failed|couldn.t/i)
+  })
+
+  it('a failed addProp never pushes a command-log entry (nothing to undo)', async () => {
+    useTier1Store.setState({ projectId: 'does-not-exist' })
+    const before = useCommandLogStore.getState().past.length
+
+    await useTier1Store.getState().addProp('Seating-status comfort')
+
+    expect(useCommandLogStore.getState().past.length).toBe(before)
+  })
+
+  it('a successful addProp announces nothing (the row appearing is itself the confirmation)', async () => {
+    await useTier1Store.getState().addProp('Seating-status comfort')
+    expect(useStatusStore.getState().message).toBeNull()
   })
 })
 

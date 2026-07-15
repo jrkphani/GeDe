@@ -11,6 +11,7 @@ import {
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetSyncStore, useSyncStore } from './sync'
+import { useStatusStore } from './status'
 import { resetTier2Store, useTier2Store } from './tier2'
 
 // Test helper: the store's create actions return `| null` only when no project
@@ -59,6 +60,67 @@ describe('tier2 store — tables & entries', () => {
     const entries = entriesOf(table.id)
     expect(entries.map((e) => e.name).sort()).toEqual(['Buyers', 'Superstars'])
     expect(entries.find((e) => e.name === 'Superstars')?.parentId).toBe(buyers.id)
+  })
+})
+
+// Issue 083 — Cause B. Every add call site (ArchitectureSurface.tsx's
+// `void addTable(name)` / `void addEntry(...)`) discards the promise: a
+// rejection inside the store action (addTier2Table/addTier2Entry resolving
+// their workspaceId via `firstOrThrow`, src/db/util.ts:8, which hard-throws
+// on a missing FK-ancestor row) was previously silently swallowed —
+// indistinguishable from a no-op. The store action itself must catch and
+// announce via useStatusStore (the app's one sanctioned feedback channel),
+// never let the rejection escape into a fire-and-forget `void` unheard.
+describe('tier2 store — a failed add announces via useStatusStore, never a silent no-op (issue 083 Cause B)', () => {
+  beforeEach(() => {
+    useStatusStore.setState({ message: null, action: null })
+  })
+
+  it('addTable announces a calm status message when the underlying mutation rejects, and does not throw', async () => {
+    // A projectId the `projects` table has no row for — dbAddTable's own
+    // projectWorkspaceId() (src/db/mutations.ts:38-44) hard-throws
+    // "project not found" via firstOrThrow, exactly the FK/NOT-NULL-style
+    // rejection the issue diagnoses. The store's own null-projectId guard
+    // only screens out `null`, so this reaches the real mutation call.
+    useTier2Store.setState({ projectId: 'does-not-exist' })
+
+    await expect(useTier2Store.getState().addTable('Stakeholders')).resolves.toBeNull()
+
+    expect(useStatusStore.getState().message).not.toBeNull()
+    expect(useStatusStore.getState().message).toMatch(/could not|failed|couldn.t/i)
+  })
+
+  it('addTable returns null (not a thrown rejection) when the mutation fails', async () => {
+    useTier2Store.setState({ projectId: 'does-not-exist' })
+
+    const result = await useTier2Store.getState().addTable('Stakeholders')
+
+    expect(result).toBeNull()
+  })
+
+  it('a failed addTable never pushes a command-log entry (nothing to undo)', async () => {
+    useTier2Store.setState({ projectId: 'does-not-exist' })
+    const before = useCommandLogStore.getState().past.length
+
+    await useTier2Store.getState().addTable('Stakeholders')
+
+    expect(useCommandLogStore.getState().past.length).toBe(before)
+  })
+
+  it('addEntry announces a calm status message when the underlying mutation rejects (bogus tableId), and does not throw', async () => {
+    await expect(useTier2Store.getState().addEntry('does-not-exist', null, 'Buyers')).resolves.toBeNull()
+
+    expect(useStatusStore.getState().message).not.toBeNull()
+  })
+
+  it('addEntry returns null when the mutation fails', async () => {
+    const result = await useTier2Store.getState().addEntry('does-not-exist', null, 'Buyers')
+    expect(result).toBeNull()
+  })
+
+  it('a successful addTable announces nothing (the table appearing is itself the confirmation)', async () => {
+    await useTier2Store.getState().addTable('Stakeholders')
+    expect(useStatusStore.getState().message).toBeNull()
   })
 })
 

@@ -9,6 +9,7 @@ import { resetSyncStore, useSyncStore } from './sync'
 import { useStatusStore } from './status'
 import { resetWorkspaceStore, useWorkspaceStore } from './workspace'
 import { workspaceIdForSub } from '../domain/workspaceId'
+import { canWrite } from '../domain/workspaceRole'
 
 let db: Database
 
@@ -58,6 +59,53 @@ describe('role (computed from members + auth identity)', () => {
     useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-viewer', email: null } })
 
     await useWorkspaceStore.getState().load(ws.id)
+    expect(useWorkspaceStore.getState().role).toBe('viewer')
+  })
+
+  // Issue 083 — Cause A. `members` going non-empty never guaranteed the
+  // signed-in caller's OWN workspace_members row streamed in first (067-
+  // class race): before this fix, that snapshot alone collapsed `role` to a
+  // hard 'viewer', locking a legitimate owner/editor out of every add
+  // affordance across all three tiers until (and unless) their own row
+  // happened to materialize. computeRole must not treat "sync hasn't
+  // caught up on workspace_members yet" the same as "confirmed absent".
+  it('role fails OPEN (not a confirmed viewer) when self is absent but workspace_members has not caught up (still streaming)', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const { addWorkspaceMember } = await import('../db/workspaces')
+    await addWorkspaceMember(db, ws.id, 'sub-owner', 'owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-new-member', email: null } })
+    // Sync is on but the workspace_members shape hasn't reported "up-to-date"
+    // yet — exactly the window where self's own row may still be in flight.
+    useSyncStore.setState({ enabled: true, upToDateTables: new Set() })
+
+    await useWorkspaceStore.getState().load(ws.id)
+
+    const role = useWorkspaceStore.getState().role
+    expect(role).not.toBe('viewer')
+    expect(canWrite(role)).toBe(true)
+  })
+
+  it('role settles to a confirmed viewer once workspace_members has caught up and self is still absent', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const { addWorkspaceMember } = await import('../db/workspaces')
+    await addWorkspaceMember(db, ws.id, 'sub-owner', 'owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-stranger', email: null } })
+    useSyncStore.setState({ enabled: true, upToDateTables: new Set(['workspace_members']) })
+
+    await useWorkspaceStore.getState().load(ws.id)
+
+    expect(useWorkspaceStore.getState().role).toBe('viewer')
+  })
+
+  it('role is a confirmed viewer immediately when sync is not enabled (a local snapshot has nothing further to stream in)', async () => {
+    const ws = await createWorkspace(db, 'Acme', 'sub-owner')
+    const { addWorkspaceMember } = await import('../db/workspaces')
+    await addWorkspaceMember(db, ws.id, 'sub-owner', 'owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-stranger', email: null } })
+    // useSyncStore left at its default (enabled: false) — no streaming to wait for.
+
+    await useWorkspaceStore.getState().load(ws.id)
+
     expect(useWorkspaceStore.getState().role).toBe('viewer')
   })
 })
