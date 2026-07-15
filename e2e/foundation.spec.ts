@@ -102,7 +102,7 @@ test('existing scenario: enter formatted prose, reload persists, export/import r
   await page.getByRole('button', { name: 'Open Tavalo' }).click()
   await expect(page.getByText('1st Tier · Foundation')).toBeVisible()
 
-  const scenario = page.getByLabel('Existing scenario')
+  const scenario = page.getByRole('textbox', { name: 'Existing scenario' })
   await scenario.click()
 
   // Bold + italic + underline on a typed word each, exercised via the
@@ -133,21 +133,50 @@ test('existing scenario: enter formatted prose, reload persists, export/import r
 
   await expect(scenario.locator('strong', { hasText: 'booking' })).toBeVisible()
   await expect(scenario.locator('em', { hasText: 'entirely' })).toBeVisible()
-  await expect(scenario.locator('u', { hasText: 'manual' })).toBeVisible()
+  await expect(
+    scenario.locator('.rich-text-editor__text--underline', { hasText: 'manual' }),
+  ).toBeVisible()
   await expect(scenario.locator('ul li', { hasText: 'Phone calls only' })).toBeVisible()
-  await expect(scenario.locator('ul li', { hasText: 'No confirmation email' })).toBeVisible()
+  await expect(
+    // Indenting wraps the sibling <li> in an outer, non-text-bearing
+    // "nested" <li> that contains the sub-<ul> (see
+    // src/components/ui/rich-text-editor.tsx theme.list.nested.listitem) —
+    // exclude it so this resolves to the single leaf <li> that actually
+    // carries the text, not both.
+    scenario.locator('ul li:not(.rich-text-editor__list-item--nested)', {
+      hasText: 'No confirmation email',
+    }),
+  ).toBeVisible()
 
   // Commit on blur — click elsewhere on the page to leave the editor.
   await page.getByText('1st Tier · Foundation').click()
 
+  // handleBlur's onCommit (rich-text-editor.tsx) is fire-and-forget from the
+  // caller's side — setExistingScenario awaits its own DB write internally,
+  // but nothing here awaits *that* promise, and (unlike e.g. dimension
+  // recolor) the visible content isn't re-driven by the store's post-write
+  // state, since the contenteditable already shows what was typed locally.
+  // So there's no DOM signal to key a wait off of before it's safe to
+  // reload — the write is a fast local IndexedDB commit, so a short,
+  // generous wait (mirrors e2e/canvas-spline.spec.ts's own
+  // waitForTimeout for a similar no-better-signal case) is enough for it to
+  // land before we reload.
+  await page.waitForTimeout(500)
+
   await page.reload()
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
-  const reloaded = page.getByLabel('Existing scenario')
+  const reloaded = page.getByRole('textbox', { name: 'Existing scenario' })
   await expect(reloaded.locator('strong', { hasText: 'booking' })).toBeVisible()
   await expect(reloaded.locator('em', { hasText: 'entirely' })).toBeVisible()
-  await expect(reloaded.locator('u', { hasText: 'manual' })).toBeVisible()
+  await expect(
+    reloaded.locator('.rich-text-editor__text--underline', { hasText: 'manual' }),
+  ).toBeVisible()
   await expect(reloaded.locator('ul li', { hasText: 'Phone calls only' })).toBeVisible()
-  await expect(reloaded.locator('ul li', { hasText: 'No confirmation email' })).toBeVisible()
+  await expect(
+    reloaded.locator('ul li:not(.rich-text-editor__list-item--nested)', {
+      hasText: 'No confirmation email',
+    }),
+  ).toBeVisible()
 
   // Export -> import into a fresh project: the same formatting round-trips
   // through the envelope (FORMAT_VERSION 4, projectEnvelope.ts).
@@ -171,12 +200,18 @@ test('existing scenario: enter formatted prose, reload persists, export/import r
   await expect(cleanPage.getByRole('button', { name: 'Open Tavalo' })).toBeVisible()
   await cleanPage.getByRole('button', { name: 'Open Tavalo' }).click()
 
-  const imported = cleanPage.getByLabel('Existing scenario')
+  const imported = cleanPage.getByRole('textbox', { name: 'Existing scenario' })
   await expect(imported.locator('strong', { hasText: 'booking' })).toBeVisible()
   await expect(imported.locator('em', { hasText: 'entirely' })).toBeVisible()
-  await expect(imported.locator('u', { hasText: 'manual' })).toBeVisible()
+  await expect(
+    imported.locator('.rich-text-editor__text--underline', { hasText: 'manual' }),
+  ).toBeVisible()
   await expect(imported.locator('ul li', { hasText: 'Phone calls only' })).toBeVisible()
-  await expect(imported.locator('ul li', { hasText: 'No confirmation email' })).toBeVisible()
+  await expect(
+    imported.locator('ul li:not(.rich-text-editor__list-item--nested)', {
+      hasText: 'No confirmation email',
+    }),
+  ).toBeVisible()
 
   await cleanContext.close()
 })
