@@ -28,8 +28,4 @@ interface ImportMetaEnv {
   // Set to 'off' to disable the semantic-search model auto-load (issue 042) —
   // the Playwright dev server sets it so e2e has no external-network dependency.
   readonly VITE_SEMANTIC_SEARCH?: string
-  // TEMPORARY (issue 077 diagnosis) — set to 'true' to install
-  // window.__gede on load; see src/main.tsx's installDebugIntrospection().
-  // The `?__introspect=1` URL param does the same without a build-time flag.
-  readonly VITE_DEBUG_INTROSPECT?: string
 }
