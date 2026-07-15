@@ -76,7 +76,7 @@ function RemoveDimensionConfirm({
           Remove
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={4}>
+      <PopoverContent align="start" sideOffset={4} className="remove-dimension-confirm">
         <p className="remove-dimension-confirm__copy">
           Remove <strong>{dimension.name}</strong>? Deletes{' '}
           <span className="font-mono">{bindingCount}</span>{' '}
