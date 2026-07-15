@@ -81,6 +81,7 @@ Three fixed chrome bands; everything between them scrolls per-surface (the page 
 | ⌘Z / ⇧⌘Z | Undo / redo |
 | c | New context (Design, compose mode) |
 | v | Toggle canvas / coverage view (Design) |
+| d | Focus the dimension rail's first phantom (Design, canvas view — issue 082) |
 | Esc | Close popover → clear selection → (never exits a tier) |
 
 Surface-local grammars (grid, canvas, matrix) are defined in their issues; they must not shadow the globals.

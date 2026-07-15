@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
+import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { InlineEdit, PhantomInput } from './inline-editor'
+import { EditableChainProvider, InlineEdit, PhantomInput } from './inline-editor'
 
 describe('InlineEdit', () => {
   it('shows the display node until clicked, then edits with the current value', async () => {
@@ -153,5 +154,100 @@ describe('PhantomInput', () => {
     expect(onSubmit).toHaveBeenCalledTimes(1)
 
     resolveSubmit()
+  })
+})
+
+// Issue 082 Phase 1, test-first plan item 3 — the rail's keyboard model must
+// match EditableGrid's (Enter down, Tab across, Tab-from-phantom continues
+// into the new row, Esc reverts). A minimal two-field-plus-phantom chain
+// stands in for "dimension name -> its parameter names -> its own phantom".
+describe('EditableChainProvider — commit-and-advance grammar (issue 082)', () => {
+  function Chain({ onCreate }: { onCreate: (name: string) => void }) {
+    const [rows, setRows] = useState<string[]>(['Alpha', 'Beta'])
+    const order = [...rows.map((_, i) => `row:${i}`), 'phantom']
+    return (
+      <EditableChainProvider order={order}>
+        {rows.map((value, i) => (
+          <InlineEdit
+            key={i}
+            chainId={`row:${i}`}
+            value={value}
+            onCommit={(next) => {
+              setRows((prev) => prev.map((v, idx) => (idx === i ? next : v)))
+            }}
+            display={value}
+            displayClassName={`row-${i}`}
+          />
+        ))}
+        <PhantomInput
+          placeholder="Type to add"
+          chainId="phantom"
+          onSubmit={(name) => {
+            onCreate(name)
+            setRows((prev) => [...prev, name])
+          }}
+        />
+      </EditableChainProvider>
+    )
+  }
+
+  it('Enter commits and moves editing down to the next field', async () => {
+    const user = userEvent.setup()
+    render(<Chain onCreate={() => {}} />)
+    await user.click(screen.getByText('Alpha'))
+    const input = screen.getByDisplayValue('Alpha')
+    await user.clear(input)
+    await user.type(input, 'Value')
+    await user.keyboard('{Enter}')
+    // Editing moved to the next field (Beta) rather than closing entirely.
+    expect(await screen.findByDisplayValue('Beta')).toHaveFocus()
+    expect(await screen.findByText('Value')).toBeInTheDocument()
+  })
+
+  it('Tab commits and moves right; Shift+Tab moves left', async () => {
+    const user = userEvent.setup()
+    render(<Chain onCreate={() => {}} />)
+    await user.click(screen.getByText('Alpha'))
+    await user.keyboard('{Tab}')
+    expect(await screen.findByDisplayValue('Beta')).toHaveFocus()
+    await user.keyboard('{Shift>}{Tab}{/Shift}')
+    expect(await screen.findByDisplayValue('Alpha')).toHaveFocus()
+  })
+
+  it('Esc reverts the draft without committing or advancing', async () => {
+    const user = userEvent.setup()
+    render(<Chain onCreate={() => {}} />)
+    await user.click(screen.getByText('Alpha'))
+    await user.type(screen.getByDisplayValue('Alpha'), 'xyz')
+    await user.keyboard('{Escape}')
+    expect(screen.getByText('Alpha')).toBeInTheDocument()
+    // Only the phantom's own (always-mounted) input remains — row 0's editor
+    // unmounted without committing "xyz" and without advancing anywhere.
+    expect(screen.queryByDisplayValue('xyzAlpha')).toBeNull()
+    expect(screen.queryByDisplayValue('Alphaxyz')).toBeNull()
+  })
+
+  it('Tab from the phantom (with content) creates a row and continues into it', async () => {
+    const user = userEvent.setup()
+    const onCreate = vi.fn()
+    render(<Chain onCreate={onCreate} />)
+    const phantom = screen.getByPlaceholderText('Type to add')
+    await user.type(phantom, 'Gamma')
+    await user.keyboard('{Tab}')
+    expect(onCreate).toHaveBeenCalledExactlyOnceWith('Gamma')
+    expect(await screen.findByText('Gamma')).toBeInTheDocument()
+    // The default Tab-from-phantom behavior (no onTabSubmit override) is
+    // EditableGrid's own single-column phantom fallback: create + self-refocus.
+    expect(phantom).toHaveFocus()
+  })
+
+  it('arrow-key nav on a focused (non-editing) display moves to the next/previous field', async () => {
+    const user = userEvent.setup()
+    render(<Chain onCreate={() => {}} />)
+    screen.getByText('Alpha').focus()
+    await user.keyboard('{ArrowDown}')
+    expect(screen.getByText('Beta')).toHaveFocus()
+    await user.keyboard('{ArrowUp}')
+    expect(screen.getByText('Alpha')).toHaveFocus()
   })
 })

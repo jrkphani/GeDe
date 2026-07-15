@@ -202,10 +202,15 @@ describe('layout', () => {
 
   // Issue 023 — every dot gains a labelPos outside ARC_RADIUS, on the dot's
   // own radial angle (same angle convention as pointAt: 0 = north, clockwise).
+  // Issue 082 — one param per dimension here deliberately avoids triggering
+  // declutterLabels (append-only placement clusters same-arc dots near their
+  // arc's start, close enough together that 2+ on one arc legitimately
+  // decluter — covered by "spreads crowded same-side parameter labels"
+  // below); this test isolates the plain radial-correspondence invariant.
   it('adds a labelPos for each dot, outside ARC_RADIUS on the dot\'s own radial angle, deterministic across n', () => {
     for (const n of [2, 3]) {
       const dimensions = Array.from({ length: n }, (_, i) => dimension(`d${i}`, i))
-      const parametersByDimension = Object.fromEntries(dimensions.map((d) => [d.id, params(d.id, 2)]))
+      const parametersByDimension = Object.fromEntries(dimensions.map((d) => [d.id, params(d.id, 1)]))
       const input: CanvasLayoutInput = {
         dimensions,
         parametersByDimension,
@@ -281,6 +286,85 @@ describe('layout', () => {
   // 16ms is far too tight a margin to survive that kind of variance. Still
   // tight enough to catch a genuine regression (e.g. an accidental O(n^2)
   // path would blow well past this, not shave a few fractional ms off it).
+  // Issue 082 (throughout — visual stability), test-first plan item 10 — the
+  // north-star clause: adding a parameter must never move an existing one
+  // (or the spoke bound to it). Pre-082 the formula was
+  // `segmentSpan / (params.length + 1)`, which re-divides the WHOLE arc on
+  // every add — every existing dot moves.
+  describe('append-only dot placement (issue 082)', () => {
+    it('adding parameter d to an arc with [a,b,c] leaves a/b/c\'s x/y exactly unchanged; only d is new', () => {
+      const dimensions = [dimension('d0', 0), dimension('d1', 1)]
+      const before = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 3), d1: params('d1', 1) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      const after = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 4), d1: params('d1', 1) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+
+      const beforeById = new Map(before.dots.map((d) => [d.parameterId, d]))
+      for (const [id, dot] of beforeById) {
+        const afterDot = after.dots.find((d) => d.parameterId === id)
+        expect(afterDot).toBeDefined()
+        expect(afterDot?.x).toBe(dot.x)
+        expect(afterDot?.y).toBe(dot.y)
+      }
+      // The new dot (d0-p3) is the only addition.
+      const newIds = after.dots.map((d) => d.parameterId).filter((id) => !beforeById.has(id))
+      expect(newIds).toEqual(['d0-p3'])
+      // The other dimension's dots (and the arcs) are untouched too — a
+      // param added to d0 never reflows d1.
+      expect(after.arcs).toEqual(before.arcs)
+      const d1Before = before.dots.filter((d) => d.dimensionId === 'd1')
+      const d1After = after.dots.filter((d) => d.dimensionId === 'd1')
+      expect(d1After).toEqual(d1Before)
+    })
+
+    it('dot #k sits at the same angle from its arc start regardless of how many dots follow it', () => {
+      const dimensions = [dimension('d0', 0)]
+      const angleOf = (n: number) => {
+        const geometry = layout({
+          dimensions,
+          parametersByDimension: { d0: params('d0', n) },
+          contexts: [],
+          bindingsByContext: {},
+        })
+        const first = geometry.dots.find((d) => d.parameterId === 'd0-p0')
+        return Math.atan2((first?.x ?? 0) - CENTER, -((first?.y ?? 0) - CENTER))
+      }
+      const angleWith1 = angleOf(1)
+      const angleWith2 = angleOf(2)
+      const angleWith5 = angleOf(5)
+      expect(angleWith2).toBeCloseTo(angleWith1, 9)
+      expect(angleWith5).toBeCloseTo(angleWith1, 9)
+    })
+
+    it('bound spokes to pre-existing dots are unmoved when a sibling parameter is appended', () => {
+      const dimensions = [dimension('d0', 0), dimension('d1', 1)]
+      const parametersByDimensionBefore = { d0: params('d0', 2), d1: params('d1', 1) }
+      const contexts = [{ id: 'ctxA', symbol: 'α', parentId: null }]
+      const bindingsByContext = { ctxA: { d0: 'd0-p0', d1: 'd1-p0' } }
+      const before = layout({ dimensions, parametersByDimension: parametersByDimensionBefore, contexts, bindingsByContext })
+      const after = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 3), d1: params('d1', 1) },
+        contexts,
+        bindingsByContext,
+      })
+      // The node position is derived from the centroid of its bound dots
+      // (d0-p0, d1-p0) — both unchanged, so the node itself must not move.
+      const nodeBefore = before.nodes.find((n) => n.contextId === 'ctxA')
+      const nodeAfter = after.nodes.find((n) => n.contextId === 'ctxA')
+      expect(nodeAfter?.x).toBe(nodeBefore?.x)
+      expect(nodeAfter?.y).toBe(nodeBefore?.y)
+    })
+  })
+
   it('lays out 100 contexts across 3 dimensions well within the frame budget', () => {
     const dimensions = [dimension('d0', 0), dimension('d1', 1), dimension('d2', 2)]
     const parametersByDimension = Object.fromEntries(dimensions.map((d) => [d.id, params(d.id, 10)]))

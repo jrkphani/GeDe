@@ -2,7 +2,8 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { addDimension, addParameter, createProject } from '../db/mutations'
 import { addWorkspaceMember } from '../db/workspaces'
@@ -171,7 +172,13 @@ describe('DesignSurface — single empty-state voice (issue 027)', () => {
 })
 
 describe('DesignSurface — context bar hierarchy (issue 027)', () => {
-  it('renders breadcrumb (location), dimension/view controls, and stats as three distinct groups', async () => {
+  // Issue 082 Phase 1 — the "Dimensions" popover trigger that used to live in
+  // context-bar__controls is retired: the dimension manager is now an
+  // always-open rail on the canvas surface itself (never in the context bar
+  // at all), so this test's own "controls: trigger + view toggle" claim is
+  // updated to "controls: just the view toggle" and a new assertion covers
+  // the rail's stable location instead.
+  it('renders breadcrumb (location), the view toggle, and stats as three distinct groups; the dimension rail lives on the canvas surface, not the context bar', async () => {
     renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
     await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
 
@@ -184,18 +191,21 @@ describe('DesignSurface — context bar hierarchy (issue 027)', () => {
 
     // Location: the breadcrumb nav, and only the breadcrumb nav.
     expect(within(location).getByRole('navigation', { name: 'Canvas depth' })).toBeInTheDocument()
-    expect(within(location).queryByRole('button', { name: 'Dimensions' })).not.toBeInTheDocument()
 
-    // Controls: dimension manager trigger + the canvas/coverage toggle — not
-    // the breadcrumb, not the stats.
-    expect(within(controls).getByRole('button', { name: 'Dimensions' })).toBeInTheDocument()
+    // Controls: just the canvas/coverage toggle now — no "Dimensions" trigger
+    // anywhere in the context bar.
     expect(within(controls).getByRole('group', { name: 'Design view' })).toBeInTheDocument()
     expect(within(controls).queryByRole('navigation')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Dimensions' })).not.toBeInTheDocument()
 
     // Stats: documented + draft counts — not controls, not the breadcrumb.
     expect(within(stats).getByText(/documented/)).toBeInTheDocument()
     expect(within(stats).getByText(/draft/)).toBeInTheDocument()
-    expect(within(stats).queryByRole('button', { name: 'Dimensions' })).not.toBeInTheDocument()
+
+    // The rail is a stable panel on the canvas surface, not the context bar.
+    const rail = document.querySelector('.dim-rail')
+    expect(rail).toBeInTheDocument()
+    expect(within(rail as HTMLElement).getByPlaceholderText('Type to add a dimension')).toBeInTheDocument()
   })
 
   it('breadcrumb is the primary depth nav: current crumb is not a link, ancestor crumbs are', async () => {
@@ -237,5 +247,149 @@ describe('DesignSurface — viewer read-only affordance (issue 035)', () => {
     await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
     await waitFor(() => expect(screen.getByRole('button', { name: 'New context' })).toBeInTheDocument())
     expect(document.querySelector('.grid-row--phantom')).toBeInTheDocument()
+  })
+})
+
+// Issue 082 Phase 1, test-first plan item 1 — Decision 3 (soft-hint floor):
+// delete the guided/populated bifurcation (DesignSurface.tsx used to render
+// an entirely different tree — DimensionManagerPanel alone behind a hard
+// placeholder wall — below n=2, then swap to the popover-based tree at n=2).
+// One tree now renders at every dimension count; the rail's own DOM node
+// must never remount crossing the floor.
+describe('DesignSurface — soft-hint floor, no bifurcation (issue 082 Phase 1)', () => {
+  it('the rail is the same DOM node at 0, 1, and 2+ dimensions; no hard placeholder wall at any count', async () => {
+    const db = requireDatabase()
+    const bare = await createProject(db, { name: 'Bare' })
+    useProjectsStore.setState({ projects: [bare], status: 'ready' })
+    resetDimensionsStore()
+    resetParametersStore()
+    resetContextsStore()
+
+    renderDesignSurface({ projectId: bare.id, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+    const railAt0 = document.querySelector('.design-surface-row > .dim-rail')
+    expect(railAt0).toBeInTheDocument()
+    // The old guided branch replaced the whole surface with
+    // `<p className="placeholder">Add at least two dimensions…</p>` — gone.
+    expect(document.querySelector('.placeholder')).not.toBeInTheDocument()
+    expect(screen.getByText('Add a second dimension to start binding contexts.')).toBeInTheDocument()
+
+    await act(async () => {
+      await addDimension(db, bare.id)
+      await useDimensionsStore.getState().load(bare.id, null)
+    })
+    const railAt1 = document.querySelector('.design-surface-row > .dim-rail')
+    expect(railAt1).toBe(railAt0) // same node — no remount crossing 0 -> 1
+    expect(document.querySelector('.placeholder')).not.toBeInTheDocument()
+
+    await act(async () => {
+      await addDimension(db, bare.id)
+      await useDimensionsStore.getState().load(bare.id, null)
+    })
+    const railAt2 = document.querySelector('.design-surface-row > .dim-rail')
+    // The crossing gesture the old `guided` flip fired on exactly here
+    // (dimensions.length >= 2) — the rail must still be the very same node.
+    expect(railAt2).toBe(railAt0)
+    expect(document.querySelector('.placeholder')).not.toBeInTheDocument()
+    // The soft hint itself is gone once the floor is met — it's a hint, not
+    // permanent chrome.
+    expect(screen.queryByText('Add a second dimension to start binding contexts.')).not.toBeInTheDocument()
+  })
+})
+
+// Issue 082 Phase 1, test-first plan item 4.
+describe("DesignSurface — `d` focus shortcut (issue 082 Phase 1)", () => {
+  it("focuses the rail's dimension-add phantom; ignores a modifier and never fires while a text field has focus", async () => {
+    const user = userEvent.setup()
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+
+    await user.keyboard('d')
+    const dimPhantom = screen.getByPlaceholderText('Type to add a dimension')
+    expect(dimPhantom).toHaveFocus()
+
+    // Modifier guard (⌘/Ctrl/Alt): move focus elsewhere first, then confirm
+    // a modified "d" is a no-op rather than stealing focus back.
+    const paramPhantom = screen.getAllByPlaceholderText('Type to add a parameter')[0] as HTMLInputElement
+    paramPhantom.focus()
+    await user.keyboard('{Meta>}d{/Meta}')
+    expect(paramPhantom).toHaveFocus()
+
+    // Text-field guard: typing a literal "d" inside an already-focused field
+    // must not hijack focus back to the dimension phantom.
+    await user.clear(paramPhantom)
+    await user.type(paramPhantom, 'd')
+    expect(paramPhantom).toHaveFocus()
+    expect(paramPhantom).toHaveValue('d')
+  })
+})
+
+// Issue 082 Phase 1, test-first plan item 5 (Decision 4 — tablet). jsdom does
+// not evaluate `@container` queries (no real layout engine), so — mirroring
+// this codebase's own convention for CSS-only assertions (e.g.
+// src/test/commandButtonAudit.test.ts's row-hover-actions grep) — this reads
+// the real, shipped base.css rather than asserting computed style.
+describe('DesignSurface — tablet stack (issue 082 Phase 1, Decision 4)', () => {
+  const css = fs.readFileSync(path.resolve(__dirname, '../styles/base.css'), 'utf-8')
+
+  it('below 640px the rail stacks with canvas + register (column) at full width', () => {
+    const match = /@container \(max-width: 640px\) \{([^]*?)\n\}\n/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1] as string
+    expect(body).toMatch(/\.design-surface-row\s*\{\s*\n\s*flex-direction:\s*column;/)
+    expect(body).toMatch(/\.design-surface-row > \.dim-rail\s*\{\s*\n\s*flex:\s*none;\s*\n\s*width:\s*100%;/)
+  })
+
+  it('the rail is a direct child of .design-surface-row, so it participates in the same stack as canvas + register', async () => {
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+    const row = document.querySelector('.design-surface-row') as HTMLElement
+    const rail = row.querySelector(':scope > .dim-rail')
+    expect(rail).toBeInTheDocument()
+    expect(rail?.parentElement).toBe(row)
+  })
+})
+
+// Issue 082 Phase 1, test-first plan item 6 — the three original complaints,
+// closed together in one place. Each is unit-tested in depth elsewhere
+// (inline-editor.test.tsx for #3's grammar, DimensionManager.test.tsx /
+// canvasLayout.test.ts for the rest); this is the cross-cutting regression
+// guard at the DesignSurface level the spec calls for.
+describe('DesignSurface — complaint regression guards (issue 082 Phase 1, test 6)', () => {
+  it('#1 the add-dimension affordance is stable across n=1<->2 (covered above: same DOM node, no bifurcation)', () => {
+    // See "soft-hint floor, no bifurcation" above — kept as a named pointer
+    // so this guard is discoverable from the complaint list, not duplicated.
+    expect(true).toBe(true)
+  })
+
+  it('#2 dimensions, parameters, and contexts all add via a phantom row — no persistent "Add X" button for any of them', async () => {
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+
+    expect(screen.queryByRole('button', { name: 'Add dimension' })).not.toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Type to add a dimension')).toBeInTheDocument()
+    expect(screen.getAllByPlaceholderText('Type to add a parameter').length).toBeGreaterThan(0)
+    expect(document.querySelector('.grid-row--phantom')).toBeInTheDocument()
+  })
+
+  it('#3 the dimension name editor has the register keyboard contract: Enter commits and advances', async () => {
+    const user = userEvent.setup()
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+
+    // Scoped to the rail — "Dimension 1" also appears as a context-register
+    // column header, which getByText would otherwise ambiguously match too.
+    const rail = document.querySelector('.dim-rail') as HTMLElement
+    await user.click(within(rail).getByText('Dimension 1'))
+    const input = within(rail).getByDisplayValue('Dimension 1')
+    await user.clear(input)
+    await user.type(input, 'Renamed')
+    await user.keyboard('{Enter}')
+
+    expect(await within(rail).findByText('Renamed')).toBeInTheDocument()
+    // Enter advanced focus into the next field in the chain rather than
+    // dead-stopping (inline-editor.tsx `InlineEdit` pre-082: Enter just
+    // called setEditing(false), leaving focus nowhere).
+    expect(document.activeElement).not.toBe(document.body)
   })
 })

@@ -6,12 +6,13 @@ import type { DimensionRow } from '../db/mutations'
 import { computeRemovalImpact } from '../domain/dimensionImpact'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
+import { useParametersStore } from '../store/parameters'
 import { DIMENSION_PALETTE } from '../theme/palette'
 import { ParameterList } from './ParameterList'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { InlineEdit } from './ui/inline-editor'
-import { Popover, PopoverContent, PopoverTrigger, keepPopoverOpenWhileEditing } from './ui/popover'
+import { EditableChainProvider, InlineEdit, PhantomInput, useEditableChain } from './ui/inline-editor'
+import { Popover, PopoverContent, PopoverTrigger } from './ui/popover'
 import { SwatchButton } from './ui/swatch'
 
 const FLOOR_TOOLTIP = 'A canvas needs at least 2 dimensions'
@@ -75,7 +76,7 @@ function RemoveDimensionConfirm({
           Remove
         </Button>
       </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={4} className="remove-dimension-confirm">
+      <PopoverContent align="start" sideOffset={4}>
         <p className="remove-dimension-confirm__copy">
           Remove <strong>{dimension.name}</strong>? Deletes{' '}
           <span className="font-mono">{bindingCount}</span>{' '}
@@ -169,6 +170,7 @@ function DimensionItem({
           </span>
         ) : (
           <InlineEdit
+            chainId={`dim:${dimension.id}`}
             value={dimension.name}
             onCommit={(next) => void rename(dimension.id, next)}
             display={dimension.name}
@@ -188,14 +190,48 @@ function DimensionItem({
   )
 }
 
-// Exported for direct testing and for the guided start (issue 002 design
-// brief: the manager is already open when a canvas has fewer than 2 dims).
+// Issue 082 Phase 1 — unifies the third add grammar onto the same phantom-row
+// pattern parameters/contexts already use (STYLE_GUIDE §6 "New row = start
+// typing in the phantom row"): replaces the old "Add dimension" command
+// button. A separate component (rather than inline JSX in
+// DimensionManagerPanel) because it needs `useEditableChain()`, which only
+// resolves for descendants of the `<EditableChainProvider>` panel renders —
+// not the panel's own top-level scope.
+function DimensionAddPhantom() {
+  const add = useDimensionsStore((s) => s.add)
+  const chain = useEditableChain()
+  return (
+    <div className="dim-manager__add-phantom">
+      <PhantomInput
+        placeholder="Type to add a dimension"
+        ariaLabel="Add dimension"
+        chainId="dimPhantom"
+        onSubmit={(name) => {
+          void add(name)
+        }}
+        // Tab-with-content (Numbers/Excel "continue into the new row"): the
+        // freshly created dimension's own successor in the chain is ITS
+        // parameter phantom (dimension -> its params -> next dimension), so
+        // Tab here starts the new dimension's parameter list instead of
+        // re-focusing this same phantom the way Enter does.
+        onTabSubmit={(name) => {
+          void add(name).then((row) => {
+            if (row) chain?.focusWhenReady(`paramPhantom:${row.id}`)
+          })
+        }}
+      />
+    </div>
+  )
+}
+
+// Exported for direct testing and as the always-open rail panel (issue 082
+// Phase 1 — replaces the guided-start bifurcation, issue 002).
 export function DimensionManagerPanel({ childCanvas = false }: { childCanvas?: boolean }) {
   const dimensions = useDimensionsStore((s) => s.dimensions)
-  const add = useDimensionsStore((s) => s.add)
   const reorder = useDimensionsStore((s) => s.reorder)
   const editingId = useDimensionsStore((s) => s.editingId)
   const setEditingId = useDimensionsStore((s) => s.setEditing)
+  const paramsByDimension = useParametersStore((s) => s.byDimension)
   const canRemove = dimensions.length > 2
 
   function onDragEnd(event: DragEndEvent) {
@@ -205,57 +241,42 @@ export function DimensionManagerPanel({ childCanvas = false }: { childCanvas?: b
     if (toIndex >= 0) void reorder(String(active.id), toIndex)
   }
 
-  return (
-    <div className="dim-manager">
-      <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-        <SortableContext items={dimensions.map((d) => d.id)} strategy={verticalListSortingStrategy}>
-          {dimensions.map((d, i) => (
-            <DimensionItem
-              key={d.id}
-              dimension={d}
-              index={i}
-              editing={editingId === d.id}
-              setEditing={setEditingId}
-              canRemove={canRemove}
-              childCanvas={childCanvas}
-            />
-          ))}
-        </SortableContext>
-      </DndContext>
-      {/* Child-canvas dimensions are derived from the parent's bindings, not
-          freely added (SPEC recursion rule) — only sub-parameters are edited. */}
-      {childCanvas ? null : (
-        <Button
-          variant="command"
-          className="dim-manager__add"
-          onClick={() => {
-            void add() // opens the new row's editor via the same store update
-          }}
-        >
-          Add dimension
-        </Button>
-      )}
-    </div>
-  )
-}
+  // Issue 082 Phase 1 — the rail's full keyboard chain: dimension name -> its
+  // parameter names -> its own "type to add a parameter" phantom -> the next
+  // dimension -> ... -> the dimension-add phantom. Recomputed every render
+  // from live store state (EditableChainProvider's own contract), so a
+  // created/removed row is always reachable without extra wiring. A child
+  // canvas's dimension names aren't part of the chain at all (they're a
+  // plain, non-editable span — only sub-parameters are edited there).
+  const order = dimensions.flatMap((d) => [
+    ...(childCanvas ? [] : [`dim:${d.id}`]),
+    ...(paramsByDimension[d.id] ?? []).map((p) => `param:${d.id}:${p.id}`),
+    `paramPhantom:${d.id}`,
+  ])
+  if (!childCanvas) order.push('dimPhantom')
 
-export function DimensionManager({
-  defaultOpen = false,
-  childCanvas = false,
-}: {
-  defaultOpen?: boolean
-  childCanvas?: boolean
-}) {
   return (
-    <Popover defaultOpen={defaultOpen}>
-      <PopoverTrigger asChild>
-        <Button variant="command">Dimensions</Button>
-      </PopoverTrigger>
-      {/* Esc order (SITEMAP §4): close the in-place editor first, the popover
-          on the next press — never both at once. */}
-      <PopoverContent align="start" sideOffset={4} onEscapeKeyDown={keepPopoverOpenWhileEditing}>
-        <DimensionManagerPanel childCanvas={childCanvas} />
-      </PopoverContent>
-    </Popover>
+    <EditableChainProvider order={order}>
+      <div className="dim-manager">
+        <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+          <SortableContext items={dimensions.map((d) => d.id)} strategy={verticalListSortingStrategy}>
+            {dimensions.map((d, i) => (
+              <DimensionItem
+                key={d.id}
+                dimension={d}
+                index={i}
+                editing={editingId === d.id}
+                setEditing={setEditingId}
+                canRemove={canRemove}
+                childCanvas={childCanvas}
+              />
+            ))}
+          </SortableContext>
+        </DndContext>
+        {/* Child-canvas dimensions are derived from the parent's bindings, not
+            freely added (SPEC recursion rule) — only sub-parameters are edited. */}
+        {childCanvas ? null : <DimensionAddPhantom />}
+      </div>
+    </EditableChainProvider>
   )
 }

@@ -234,6 +234,24 @@ body {
   margin: var(--space-2);
 }
 
+/* Issue 082 Phase 1 — discoverability tell: every InlineEdit display node
+   (dimension/parameter names, project name, etc.) gets a resting-but-quiet
+   affordance so click-to-rename is obvious without shouting (dashed
+   underline, not a full border — STYLE_GUIDE §1 "in-place, always" restraint).
+   `cursor: text` was already implicit via row-specific classes; centralizing
+   it here means every InlineEdit consumer gets the tell, not just the ones
+   this issue touches. Read-only callers skip the class entirely (see
+   inline-editor.tsx), so a viewer never sees a rename affordance that isn't real. */
+.inline-edit-display {
+  cursor: text;
+  border-bottom: 1px dashed transparent;
+}
+
+.inline-edit-display:hover,
+.inline-edit-display:focus-visible {
+  border-bottom-color: var(--ink-muted);
+}
+
 /* Popover (Radix) — the app's single shadow token, zero radius. */
 .popover {
   background: var(--panel);
@@ -388,6 +406,18 @@ body {
 
 .param-row .inplace-input {
   min-height: 32px;
+}
+
+/* Issue 082 Phase 1 polish — Remove is a per-row destructive action
+   (rowAction, STYLE_GUIDE §2.2/§6), quiet until the row is hovered/focused —
+   mirrors .dim-row's own hover-reveal rule just above. */
+.param-row .row-action {
+  visibility: hidden;
+}
+
+.param-row:hover .row-action,
+.param-row:focus-within .row-action {
+  visibility: visible;
 }
 
 .param-row--phantom .inplace-input {
@@ -1154,6 +1184,30 @@ body {
   transition: r var(--motion-fast) ease-out;
 }
 
+/* Issue 082 (throughout — visual stability) — extend the same node-migration
+   easing (STYLE_GUIDE §8, ~120ms, `--motion-migrate`) to dots: append-only
+   placement (canvasLayout.ts) means a dot only ever moves for a genuinely
+   forced reason (arc-span growth on a shared arc, a dimension reorder) —
+   when it does, this eases the move instead of a jump. Position lives on the
+   SVG `cx`/`cy`/`x`/`y` presentation attributes here (unlike nodes, which
+   migrate via a `<g transform>` — dots don't share one group transform with
+   their independently-positioned labels), but both are real CSS properties
+   under SVG2 and animate exactly like `r` already does just above. The
+   blanket prefers-reduced-motion rule near the top of this file disables
+   this for free, snapping straight to the final position. */
+.canvas-dot,
+.canvas-dot-hit {
+  transition:
+    cx var(--motion-migrate) ease-out,
+    cy var(--motion-migrate) ease-out;
+}
+
+.canvas-param-label {
+  transition:
+    x var(--motion-migrate) ease-out,
+    y var(--motion-migrate) ease-out;
+}
+
 .canvas-dot-group--bound .canvas-dot {
   stroke: var(--paper);
   stroke-width: 2px;
@@ -1298,6 +1352,22 @@ body {
   align-items: stretch;
 }
 
+/* Issue 082 Phase 1 — the persistent dimension/parameter rail (design brief:
+   "rail · canvas · register"). A fixed-ish desktop column that never
+   relocates or unmounts across the n=2 floor or any dimension count —
+   replacing the old popover-behind-a-trigger (context bar) + guided-start
+   full-surface-swap (below n=2) bifurcation. `.panel` (already applied in
+   DesignSurface.tsx alongside this class) supplies the opaque chrome;
+   `overflow-y: auto` keeps a long dimension/parameter list from stretching
+   the whole row taller than the canvas/register beside it. */
+.design-surface-row > .dim-rail {
+  flex: 0 0 260px;
+  min-width: 220px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
 .design-surface-row > .canvas-shell {
   flex: 1 1 40%;
   min-width: 0;
@@ -1335,6 +1405,14 @@ body {
 @container (max-width: 640px) {
   .design-surface-row {
     flex-direction: column;
+  }
+
+  /* Issue 082 Phase 1, Decision 4 (tablet) — the rail joins the column stack
+     (rail -> circle -> register, DOM order) at full width instead of its
+     desktop fixed-width column; every child is full-width once stacked. */
+  .design-surface-row > .dim-rail {
+    flex: none;
+    width: 100%;
   }
 }
 
@@ -1490,6 +1568,17 @@ body {
   padding: var(--space-2) var(--space-3);
   background: var(--panel);
   border: 1px dashed var(--hairline);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+}
+
+/* Issue 082 Phase 1, Decision 3 — the soft n=2 floor hint. Deliberately
+   quieter than .canvas-seed-hint's boxed banner above (STYLE_GUIDE §9 "quiet,
+   specific"): it's a passing note, not a gate the surface used to be behind
+   (the old hard placeholder wall this replaces). No background/border — just
+   muted inline text above the still-live rail + circle. */
+.canvas-floor-hint {
+  margin: 0 0 var(--space-3);
   color: var(--ink-muted);
   font-size: var(--text-label);
 }

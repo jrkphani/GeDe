@@ -32,14 +32,36 @@ async function addDimensions(count: number) {
 }
 
 describe('DimensionManagerPanel', () => {
-  it('add creates "Dimension N" ready to edit', async () => {
+  // Issue 082 Phase 1, test-first plan item 2 — the "Add dimension" command
+  // button is retired; adding a dimension is now the same phantom-row "type +
+  // Enter" grammar parameters/contexts already use (STYLE_GUIDE §6).
+  it('add is a phantom-row "type + Enter" that clears and refocuses for the next; no "Add dimension" button in the tree', async () => {
     const user = userEvent.setup()
     render(<DimensionManagerPanel />)
-    await user.click(screen.getByRole('button', { name: 'Add dimension' }))
-    const input = await screen.findByDisplayValue('Dimension 1')
-    expect(input).toHaveFocus()
-    await user.keyboard('Value{Enter}') // focused select-all: typing replaces
+    expect(screen.queryByRole('button', { name: 'Add dimension' })).not.toBeInTheDocument()
+
+    const phantom = screen.getByPlaceholderText('Type to add a dimension')
+    await user.type(phantom, 'Value')
+    await user.keyboard('{Enter}')
+
     expect(useDimensionsStore.getState().dimensions[0]?.name).toBe('Value')
+    expect(await screen.findByText('Value')).toBeInTheDocument()
+    const freshPhantom = screen.getByPlaceholderText('Type to add a dimension')
+    expect(freshPhantom).toHaveValue('')
+    expect(freshPhantom).toHaveFocus()
+  })
+
+  it('Tab from the phantom (with content) creates the dimension and continues into its own parameter phantom', async () => {
+    const user = userEvent.setup()
+    render(<DimensionManagerPanel />)
+    const phantom = screen.getByPlaceholderText('Type to add a dimension')
+    await user.type(phantom, 'Stake')
+    await user.keyboard('{Tab}')
+
+    expect(await screen.findByText('Stake')).toBeInTheDocument()
+    const paramPhantoms = await screen.findAllByPlaceholderText('Type to add a parameter')
+    expect(paramPhantoms).toHaveLength(1)
+    expect(paramPhantoms[0]).toHaveFocus()
   })
 
   it('renames in place from the row label', async () => {

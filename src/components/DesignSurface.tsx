@@ -24,7 +24,7 @@ import { ChildCanvasBanners } from './ChildCanvasBanners'
 import { Composer } from './Composer'
 import { ContextRegister } from './ContextRegister'
 import { CoverageMatrix } from './CoverageMatrix'
-import { DimensionManager, DimensionManagerPanel } from './DimensionManager'
+import { DimensionManagerPanel } from './DimensionManager'
 import type { DesignView } from '../shell/routes'
 
 export function DesignSurface({
@@ -49,14 +49,12 @@ export function DesignSurface({
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const loadedFor = useDimensionsStore((s) => s.projectId)
   const loadedContextId = useDimensionsStore((s) => s.contextId)
-  const editingId = useDimensionsStore((s) => s.editingId)
   const contexts = useContextsStore((s) => s.contexts)
   const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
   const childCountByContext = useContextsStore((s) => s.childCountByContext)
   const breadcrumbs = useContextsStore((s) => s.breadcrumbs)
   const selectedContextId = useContextsStore((s) => s.selectedContextId)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
-  const [guided, setGuided] = useState<boolean | null>(null)
   // Issue 011 — stale parent-rebind banners for the current child canvas.
   const [staleEvents, setStaleEvents] = useState<StaleRebindEvent[]>([])
   // Issue 010 — compose mode. `composeContextId` is the live draft. The active
@@ -79,7 +77,6 @@ export function DesignSurface({
   // — both stores already do. Breadcrumb symbols resolve from the URL path.
   useEffect(() => {
     let cancelled = false
-    setGuided(null)
     // Issue 028(a) — a hover/focus mark from the canvas we're leaving can
     // never refer to anything on the one we're entering; drop it so nothing
     // stays muted/emphasized against stale ids.
@@ -310,6 +307,37 @@ export function DesignSurface({
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [view, projectId])
 
+  // `d` = focus the dimension rail's first phantom (issue 082 Phase 1 test-
+  // first plan item 4) — same capture-phase + text-field-guard grammar as
+  // `c`/`v` above, so bulk keyboard entry can start without the mouse. Design
+  // brief: "the rail's first phantom" — that's the dimension-add phantom when
+  // one exists (root canvas); a child canvas has no add-dimension affordance
+  // (dimensions are derived from the parent's bindings), so it falls back to
+  // the first parameter phantom instead, rather than doing nothing.
+  useEffect(() => {
+    if (view !== 'canvas') return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'd' || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = document.activeElement
+      if (
+        el instanceof HTMLInputElement ||
+        el instanceof HTMLTextAreaElement ||
+        (el instanceof HTMLElement && el.isContentEditable)
+      ) {
+        return
+      }
+      const rail = document.querySelector('.dim-rail')
+      if (!rail) return
+      const dimPhantom = rail.querySelector<HTMLInputElement>('.dim-manager__add-phantom input')
+      const target = dimPhantom ?? rail.querySelector<HTMLInputElement>('.param-row--phantom input')
+      if (!target) return
+      e.preventDefault()
+      target.focus()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [view])
+
   // Live coverage stat + draft count for the context bar (SITEMAP §2). Both
   // derive from store state each render, so any mutation moves them same-frame.
   const coverage = useMemo(() => {
@@ -358,15 +386,6 @@ export function DesignSurface({
   const needsSeeding =
     contextId !== null && dimensions.length > 0 && dimensions.some((d) => (paramsByDimension[d.id]?.length ?? 0) === 0)
 
-  // Guided mode starts when the canvas is below the floor and ends only once
-  // the crossing gesture completes — never unmount an open editor mid-gesture.
-  // Gated on the loaded canvas matching the requested one (project + context).
-  useEffect(() => {
-    if (loadedFor !== projectId || loadedContextId !== contextId) return
-    if (guided === null) setGuided(dimensions.length < 2)
-    else if (guided && dimensions.length >= 2 && editingId === null) setGuided(false)
-  }, [loadedFor, loadedContextId, projectId, contextId, guided, dimensions.length, editingId])
-
   // Drop compose state if the draft vanished (discarded, project switched, or
   // undone) so the canvas never points compose at a context that isn't there.
   useEffect(() => {
@@ -375,22 +394,16 @@ export function DesignSurface({
     }
   }, [composeContextId, contexts])
 
-  if (loadedFor !== projectId || loadedContextId !== contextId || guided === null) return null
-
-  // Guided start (issue 002): below the n = 2 floor the design surface IS the
-  // dimension manager — no dead register/canvas to stare at.
-  if (guided) {
-    return (
-      <main className="projects" data-view={view}>
-        <section className="panel">
-          <p className="placeholder">Add at least two dimensions to begin designing.</p>
-          <DimensionManagerPanel />
-        </section>
-      </main>
-    )
-  }
+  if (loadedFor !== projectId || loadedContextId !== contextId) return null
 
   const dimensionNames = dimensions.map((d) => d.name)
+  // Issue 082 Phase 1, Decision 3 (soft-hint floor) — the guided/populated
+  // bifurcation is gone: one tree renders at every dimension count. Below the
+  // n=2 floor the circle simply renders partial/empty (Canvas already
+  // handles 0/1-dimension geometry) and this quiet inline line replaces the
+  // old hard placeholder wall. Never shown once the seed-hint (child canvas
+  // missing sub-parameters) already owns the surface's one empty-state voice.
+  const belowFloor = !needsSeeding && dimensions.length < 2
 
   return (
     <>
@@ -401,14 +414,14 @@ export function DesignSurface({
             separated by group-level spacing so it parses in one glance
             instead of one flat row at equal weight (SITEMAP §2). */}
         <div className="context-bar__location">
-          {/* SITEMAP §2: breadcrumbs · dimension-manager trigger. On a child
-              canvas the trigger auto-opens while sub-parameters are still
-              needed (design brief). Root-canvas dimension names trail the
-              crumbs as muted context. */}
+          {/* SITEMAP §2: breadcrumbs. Issue 082 Phase 1 — the dimension
+              manager is no longer a popover trigger here; it's an
+              always-open rail on the canvas surface itself (below), so
+              there's nothing to open from the context bar anymore.
+              Root-canvas dimension names trail the crumbs as muted context. */}
           <Breadcrumbs projectId={projectId} crumbs={breadcrumbs} dimensionNames={dimensionNames} />
         </div>
         <div className="context-bar__controls">
-          <DimensionManager defaultOpen={needsSeeding} childCanvas={contextId !== null} />
           <div className="design-view-toggle" role="group" aria-label="Design view">
             <Button
               variant="bare"
@@ -465,6 +478,16 @@ export function DesignSurface({
                   sub-parameters in the dimension manager.
                 </p>
               ) : null}
+              {/* Issue 082 Phase 1, Decision 3 — a quiet inline hint, not a
+                  gate: the rail and circle are both live below the n=2 floor
+                  too (Canvas already renders 0/1-dimension geometry); this
+                  replaces the old hard placeholder wall that used to swap
+                  the whole surface out for the dimension manager alone. */}
+              {belowFloor ? (
+                <p className="canvas-floor-hint" role="status">
+                  Add a second dimension to start binding contexts.
+                </p>
+              ) : null}
               {/* Issue 035 — a viewer never sees the write-only "New context"
                   affordance at all (not merely disabled); the read surface
                   otherwise looks identical. */}
@@ -489,6 +512,15 @@ export function DesignSurface({
                 // since Canvas.tsx itself is out of scope for this issue.
                 data-suppress-canvas-empty={needsSeeding || undefined}
               >
+                {/* Issue 082 Phase 1 — the persistent, always-anchored rail
+                    (rail · canvas · register, design brief): a stable panel
+                    that never unmounts across the n=2 floor or any dimension
+                    count, replacing the old popover-behind-a-trigger + guided-
+                    start-panel bifurcation. <640px it joins the column stack
+                    below the other two (base.css). */}
+                <section className="panel dim-rail" aria-label="Dimensions and parameters">
+                  <DimensionManagerPanel childCanvas={contextId !== null} />
+                </section>
                 {/* Design brief (issue 008): the circle sits directly on the
                     graph-paper ground, no panel — unlike the register, which
                     stays opaque per STYLE_GUIDE's table convention. */}

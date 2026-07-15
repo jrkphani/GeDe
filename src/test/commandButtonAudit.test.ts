@@ -12,10 +12,13 @@ const STANDALONE_COMMAND_BUTTONS: readonly { file: string; label: string }[] = [
   { file: 'src/components/ArchitectureSurface.tsx', label: 'Promote' },
   { file: 'src/components/ArchitectureSurface.tsx', label: 'Keep parameter as unlinked copy' },
   { file: 'src/components/ProjectsList.tsx', label: 'Import project' },
-  { file: 'src/components/DimensionManager.tsx', label: 'Add dimension' },
-  { file: 'src/components/DimensionManager.tsx', label: 'Dimensions' },
+  // Issue 082 Phase 1 — "Add dimension" (a command button) and "Dimensions"
+  // (the popover trigger it lived behind) are both retired: the dimension
+  // rail is now an always-open panel with a phantom-row "type to add a
+  // dimension" input, the same grammar parameters/contexts already use — no
+  // command button remains to audit. "Cancel" (RemoveDimensionConfirm) is
+  // unaffected and stays below.
   { file: 'src/components/DimensionManager.tsx', label: 'Cancel' },
-  { file: 'src/components/ParameterList.tsx', label: 'Remove' },
   // Issue 064 (evolving issue 033): the hero/landing page's per-mode submit
   // is each a standalone, always-visible action — never a row affordance.
   { file: 'src/components/HeroLanding.tsx', label: 'Sign in' },

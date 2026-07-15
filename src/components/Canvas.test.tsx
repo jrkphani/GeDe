@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { useState } from 'react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen } from '@testing-library/react'
@@ -765,5 +767,45 @@ describe('Canvas', () => {
       await user.hover(dot)
       expect(container.querySelectorAll('.canvas--muted')).toHaveLength(0)
     })
+  })
+})
+
+// Issue 082 (throughout — visual stability), test-first plan item 11 — a dot
+// forced to move (arc-span growth, reorder) eases via the same
+// `--motion-migrate` (~120ms) transition already proven on node position
+// (`.canvas-node { transition: transform ... }`), extended to the SVG
+// `cx`/`cy`/`x`/`y` properties dots and their labels actually move on. A
+// source-grep test (mirroring src/test/commandButtonAudit.test.ts's own
+// pattern) rather than a jsdom computed-style assertion — jsdom does not
+// reliably resolve CSS transitions on SVG geometry properties, and the
+// existing node-migration easing has no jsdom-level test of its own either;
+// the real, shipped base.css is the source of truth either way. The blanket
+// `prefers-reduced-motion` rule (verified below) is what disables it — same
+// mechanism the node transition already relies on (Canvas.tsx's own comment
+// at the node transform, base.css).
+describe('dot position easing (issue 082)', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
+
+  it('.canvas-dot and .canvas-dot-hit transition cx/cy with --motion-migrate', () => {
+    const match = /\.canvas-dot,\s*\n\.canvas-dot-hit\s*\{([^}]*)\}/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1] as string
+    expect(body).toMatch(/cx\s+var\(--motion-migrate\)/)
+    expect(body).toMatch(/cy\s+var\(--motion-migrate\)/)
+  })
+
+  it('.canvas-param-label transitions x/y with --motion-migrate', () => {
+    const match = /\.canvas-param-label\s*\{([^}]*transition:[^}]*)\}/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1] as string
+    expect(body).toMatch(/x\s+var\(--motion-migrate\)/)
+    expect(body).toMatch(/y\s+var\(--motion-migrate\)/)
+  })
+
+  it('prefers-reduced-motion still disables every transition, including the new dot easing (blanket rule)', () => {
+    const match = /@media \(prefers-reduced-motion: reduce\)\s*\{([^]*?)\n\}/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1] as string
+    expect(body).toMatch(/transition:\s*none\s*!important/)
   })
 })
