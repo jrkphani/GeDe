@@ -29,6 +29,26 @@ const LABEL_RADIUS = ARC_RADIUS - 40
 // which only needs to clear the stroke.
 export const DOT_RADIUS = 8
 const DOT_LABEL_RADIUS = ARC_RADIUS + 32
+// Issue 082 (throughout — visual stability) — append-only dot placement.
+// Dot #k (0-indexed, in sort order) sits at a FIXED angular offset from its
+// arc's own start, independent of how many parameters follow it: adding
+// parameter #k+1 never changes dot #k's angle (the pre-082 formula,
+// `segmentSpan / (params.length + 1)`, re-divided the WHOLE arc on every
+// add, moving every existing dot and its bound spoke). `startAngle` and
+// `segmentSpan` (below) depend only on the dimension COUNT and this
+// dimension's index — never on any dimension's own parameter count — so a
+// param added to dimension A also never moves dimension B's dots.
+// 4deg clears DOT_RADIUS's (8 unit) touching threshold at ARC_RADIUS (~2.3deg)
+// with comfortable margin, and still fits ~2 dozen dots on the smallest
+// segment (n=8 dimensions) before the soft clamp below engages — a param
+// count that far outside ADR-0002's optimized range is accepted degradation
+// (clamped, not colliding at a single point), not a correctness bug.
+const DOT_ANGLE_STEP = (4 * Math.PI) / 180
+const DOT_START_OFFSET = DOT_ANGLE_STEP
+// Safety margin kept clear at the far end of the arc's segment so a
+// pathologically long parameter list clamps against its own dimension's
+// boundary rather than bleeding angle into the next dimension's gap.
+const DOT_END_MARGIN = DOT_ANGLE_STEP / 2
 // Minimum vertical gap between two labels on the same side of the ring, in
 // viewBox user units. The label font is 13 user units tall (--text-mono, sized
 // in the SVG's own coordinate space, so it does not change with container
@@ -275,9 +295,16 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
     })
 
     const positions = new Map<string, Point>()
-    const slot = segmentSpan / (params.length + 1)
+    // Fixed increments from the arc start (append-only, see DOT_ANGLE_STEP
+    // above): dot #j's angle is a pure function of (startAngle, j) — never of
+    // params.length — so existing dots (and the spokes bound to them) never
+    // move when a later parameter is appended. Soft-clamped to this arc's own
+    // segment so an unusually long list still degrades gracefully instead of
+    // bleeding into the neighboring dimension's territory.
+    const maxOffset = Math.max(segmentSpan - DOT_END_MARGIN, DOT_START_OFFSET)
     params.forEach((param, j) => {
-      const angle = startAngle + slot * (j + 1)
+      const offset = Math.min(DOT_START_OFFSET + j * DOT_ANGLE_STEP, maxOffset)
+      const angle = startAngle + offset
       const pos = pointAt(ARC_RADIUS, angle)
       positions.set(param.id, pos)
       dots.push({

@@ -32,16 +32,3 @@ export function PopoverContent({
     </PopoverPrimitive.Portal>
   )
 }
-
-/*
- * Esc order (SITEMAP §4): when an in-place <input> editor inside the popover is
- * focused, the first Esc closes that editor (its own handler) — this stops
- * Radix from also closing the popover in the same keystroke; the next Esc closes
- * the popover. Pass as `onEscapeKeyDown` on a PopoverContent that hosts editors.
- */
-export function keepPopoverOpenWhileEditing(event: KeyboardEvent) {
-  const target = event.target
-  if (target instanceof HTMLElement && target.tagName === 'INPUT') {
-    event.preventDefault()
-  }
-}

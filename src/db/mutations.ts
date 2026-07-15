@@ -170,7 +170,12 @@ export async function listDimensions(
   return db.select().from(dimensions).where(canvasScope(projectId, contextId)).orderBy(asc(dimensions.sort))
 }
 
-export async function addDimension(db: Database, projectId: string): Promise<DimensionRow> {
+// Issue 082 Phase 1 — `name` lets the phantom-row add grammar (the same
+// pattern parameters/contexts already use) commit the typed name in the same
+// insert, one undo step, instead of add-then-rename as two. Omitted entirely
+// (every pre-082 caller), the default-numbered "Dimension N" behavior is
+// unchanged byte-for-byte.
+export async function addDimension(db: Database, projectId: string, name?: string): Promise<DimensionRow> {
   const existing = await listDimensions(db, projectId)
   // Default name continues past the highest default-numbered live row so a
   // middle removal never produces a duplicate (never "Untitled").
@@ -179,13 +184,16 @@ export async function addDimension(db: Database, projectId: string): Promise<Dim
     return m ? Math.max(max, Number(m[1])) : max
   }, 0)
   const workspaceId = await projectWorkspaceId(db, projectId)
+  const defaultName = `Dimension ${Math.max(maxDefault, existing.length) + 1}`
+  const trimmedName = name?.trim()
+  const finalName = trimmedName === undefined || trimmedName === '' ? defaultName : trimmedName
   const rows = await db
     .insert(dimensions)
     .values({
       id: uuidv7(),
       projectId,
       workspaceId,
-      name: `Dimension ${Math.max(maxDefault, existing.length) + 1}`,
+      name: finalName,
       color: paletteColor(existing.length),
       sort: existing.length,
     })

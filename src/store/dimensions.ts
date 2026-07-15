@@ -35,7 +35,11 @@ interface DimensionsState {
   editingId: string | null
   setEditing: (id: string | null) => void
   load: (projectId: string, contextId?: string | null) => Promise<void>
-  add: () => Promise<DimensionRow | null>
+  // Issue 082 Phase 1 — `name` lets the rail's phantom-row grammar commit the
+  // typed name in the same gesture (mirrors parameters.add(dimensionId,
+  // name)); omitted, this is byte-identical to the pre-082 "Dimension N" +
+  // open-for-rename behavior every existing caller/test relies on.
+  add: (name?: string) => Promise<DimensionRow | null>
   rename: (id: string, name: string) => Promise<void>
   setColor: (id: string, color: string) => Promise<void>
   reorder: (id: string, toIndex: number) => Promise<void>
@@ -82,17 +86,18 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     })
   },
 
-  async add() {
+  async add(name) {
     const { projectId, contextId } = get()
     // Child-canvas dimensions are derived from the parent's bindings — not
     // freely added (SPEC recursion rule). Guarded; the UI hides the affordance.
     if (projectId === null || contextId !== null) return null
     const db = requireDatabase()
-    const row = await dbAdd(db, projectId)
+    const row = await dbAdd(db, projectId, name)
     // Ready-to-edit is part of the same state transition as the new row —
-    // published separately, surfaces could swap away mid-gesture (issue 002
-    // guided start).
-    set({ dimensions: await dbList(db, projectId), editingId: row.id })
+    // published separately, surfaces could swap away mid-gesture. A caller
+    // that already supplied a name (the phantom-row grammar, issue 082) has
+    // nothing left to edit, so it doesn't open the row's own name editor.
+    set({ dimensions: await dbList(db, projectId), editingId: name ? null : row.id })
     enqueueIfSyncing('dimensions', row.id, 'upsert', row)
     const orderedIdsAfterAdd = get().dimensions.map((d) => d.id)
     useCommandLogStore.getState().push({

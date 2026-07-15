@@ -41,6 +41,7 @@ function ParameterRowView({
     <div className="param-row">
       <span className="param-row__index">{index + 1}</span>
       <InlineEdit
+        chainId={`param:${dimensionId}:${param.id}`}
         value={param.name}
         onCommit={(next) => void rename(dimensionId, param.id, next)}
         display={param.name}
@@ -57,8 +58,13 @@ function ParameterRowView({
           <Link2 size={14} />
         </span>
       )}
+      {/* Issue 082 Phase 1 polish — a per-row destructive action is the
+          `rowAction` variant (STYLE_GUIDE §2.2/§6: quiet until the row is
+          hovered/focused), not `command` (always-visible, reserved for
+          standalone actions like the dimension rail's own phantom). This
+          previously competed with the parameter name at full weight on
+          every row. */}
       <Button
-        variant="command"
         aria-label={`Remove ${param.name}`}
         onClick={() => void remove(dimensionId, param.id)}
       >
@@ -68,7 +74,8 @@ function ParameterRowView({
   )
 }
 
-// Nested inside each dimension's section of the manager popover (issue 003).
+// Nested inside each dimension's section of the dimension rail (issue 003;
+// the rail replaced the popover it used to live in — issue 082 Phase 1).
 export function ParameterList({ dimensionId }: { dimensionId: string }) {
   const params = useParametersStore((s) => s.byDimension[dimensionId] ?? NO_PARAMETERS)
   const load = useParametersStore((s) => s.load)
@@ -86,6 +93,7 @@ export function ParameterList({ dimensionId }: { dimensionId: string }) {
       <div className="param-row param-row--phantom">
         <PhantomInput
           placeholder="Type to add a parameter"
+          chainId={`paramPhantom:${dimensionId}`}
           onSubmit={(name) => void add(dimensionId, name)}
           stopPropagation
         />
