@@ -25,23 +25,37 @@ import type { RowDelta, TableName } from '../domain/syncDelta'
 // not-yet-existing parent when two different shapes race, so every batch is
 // applied inside ONE transaction using the same two-pass strategy
 // src/db/projectIO.ts's importProject established for the identical FK
-// cycles: the deferred self/cross-referential column
+// cycles: every deferred self/cross-referential column
 // (contexts.parentId, tier2_entries.parentId, parameters.parentParamId,
-// dimensions.sourceParamId) is forced NULL on the first pass, then restored
-// to its real value on a second pass — but ONLY for rows the guard above
-// actually applied (a row skipped as stale must not have its deferred column
-// clobbered by an already-rejected update).
-const DEFERRED_FK_COLUMN: Partial<Record<TableName, string>> = {
-  contexts: 'parentId',
-  tier2_entries: 'parentId',
-  parameters: 'parentParamId',
-  dimensions: 'sourceParamId',
+// dimensions.sourceParamId + dimensions.contextId) is forced NULL on the
+// first pass, then restored to its real value on a second pass — but ONLY
+// for rows the guard above actually applied (a row skipped as stale must not
+// have its deferred column clobbered by an already-rejected update).
+//
+// Issue 077 — `dimensions` carries TWO independently-nullable forward FKs
+// (sourceParamId, a same-table self-cycle for child-canvas dimensions; and
+// contextId, a cross-table forward FK to `contexts` for a child-canvas
+// dimension bound to a drill-down tuple). RETRY_APPLY_ORDER
+// (syncEngine.ts:33) is a single static order that can't simultaneously put
+// `dimensions` after both `parameters` (its self-cycle parent) and
+// `contexts` (its contextId parent) when contexts itself comes later in that
+// same list — so contextId needs the SAME null-then-restore treatment
+// sourceParamId already gets, making convergence independent of apply order
+// entirely. Each table entry is therefore a LIST of deferred columns, not a
+// single column.
+const DEFERRED_FK_COLUMN: Partial<Record<TableName, readonly string[]>> = {
+  contexts: ['parentId'],
+  tier2_entries: ['parentId'],
+  parameters: ['parentParamId'],
+  dimensions: ['sourceParamId', 'contextId'],
 }
 
 function forceDeferredNull(delta: RowDelta): Record<string, unknown> {
-  const column = DEFERRED_FK_COLUMN[delta.table]
-  if (!column) return { ...delta.row }
-  return { ...delta.row, [column]: null }
+  const columns = DEFERRED_FK_COLUMN[delta.table]
+  if (!columns || columns.length === 0) return { ...delta.row }
+  const row: Record<string, unknown> = { ...delta.row }
+  for (const column of columns) row[column] = null
+  return row
 }
 
 export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta[]): Promise<void> {
@@ -234,32 +248,39 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
     }
 
     async function restoreDeferredColumn(delta: RowDelta): Promise<void> {
-      const column = DEFERRED_FK_COLUMN[delta.table]
-      if (!column) return
-      const value = delta.row[column]
+      const columns = DEFERRED_FK_COLUMN[delta.table]
+      if (!columns || columns.length === 0) return
       switch (delta.table) {
         case 'contexts':
           await tx
             .update(schema.contexts)
-            .set({ parentId: value as string | null })
+            .set({ parentId: delta.row.parentId as string | null })
             .where(eq(schema.contexts.id, delta.id))
           return
         case 'tier2_entries':
           await tx
             .update(schema.tier2Entries)
-            .set({ parentId: value as string | null })
+            .set({ parentId: delta.row.parentId as string | null })
             .where(eq(schema.tier2Entries.id, delta.id))
           return
         case 'parameters':
           await tx
             .update(schema.parameters)
-            .set({ parentParamId: value as string | null })
+            .set({ parentParamId: delta.row.parentParamId as string | null })
             .where(eq(schema.parameters.id, delta.id))
           return
         case 'dimensions':
+          // Both deferred columns restore together, in one UPDATE — sourceParamId
+          // (same-table self-cycle) and contextId (issue 077's cross-table
+          // forward FK to `contexts`) are independent and each may legitimately
+          // be null on the real row, so both are always set from the delta's
+          // own values here rather than conditionally.
           await tx
             .update(schema.dimensions)
-            .set({ sourceParamId: value as string | null })
+            .set({
+              sourceParamId: delta.row.sourceParamId as string | null,
+              contextId: delta.row.contextId as string | null,
+            })
             .where(eq(schema.dimensions.id, delta.id))
           return
         default:
