@@ -92,9 +92,23 @@ interface WorkspaceState {
   declineInvitation: (invitationId: string) => Promise<void>
 }
 
+// Issue 083 — Cause A. "Is the local `workspace_members` snapshot complete
+// enough to trust a self-absence as CONFIRMED, not just not-yet-streamed?"
+// Sync disabled (or never started): there's no further streaming to wait
+// on, so the local PGlite read IS the complete picture — trivially known.
+// Once sync is enabled, `workspace_members` is only known-complete once its
+// shape reports "up-to-date" (issue 067's own upToDateTables/membersAppliedAt
+// wiring, src/store/sync.ts's onControl) — before that, the caller's own row
+// may simply not have streamed in yet (the exact race resolveEffectiveRole's
+// `membersKnown` param exists to distinguish from a confirmed viewer).
+function membersKnown(): boolean {
+  const sync = useSyncStore.getState()
+  return !sync.enabled || sync.upToDateTables.has('workspace_members')
+}
+
 function computeRole(members: WorkspaceMemberRow[]): WorkspaceRole {
   const { user, configured } = useAuthStore.getState()
-  return resolveEffectiveRole(members, user?.sub ?? null, configured)
+  return resolveEffectiveRole(members, user?.sub ?? null, configured, membersKnown())
 }
 
 export const useWorkspaceStore = create<WorkspaceState>()((set, get) => ({
@@ -370,12 +384,21 @@ export function useWorkspaceRole(projectId: string): { role: WorkspaceRole; work
   // per-client divergence this issue exists to close. Mirrors 062's
   // `invitationsAppliedAt` → PendingInvitations.tsx wiring.
   const membersAppliedAt = useSyncStore((s) => s.membersAppliedAt)
+  // Issue 083 — Cause A. `membersAppliedAt` only bumps when a `workspace_
+  // members` DELTA lands (src/store/sync.ts's onApplied), not when the
+  // shape's initial catch-up finishes with no further self-row delta to
+  // apply (onControl's "up-to-date", tracked in upToDateTables). Without
+  // also depending on that transition, a caller whose own row is genuinely
+  // absent (a real viewer, or a removed member) would keep the fail-open
+  // 'editor' from computeRole's `membersKnown` gate indefinitely once catch-
+  // up completes, instead of settling to the confirmed 'viewer' promptly.
+  const membersUpToDate = useSyncStore((s) => s.upToDateTables.has('workspace_members'))
   // Mirrors every other surface's own store-load effect (tier1/tier2/contexts/
   // dimensions) — a render-phase side effect would violate React's render
   // purity, so the (re)load is kicked off here, not inline above.
   useEffect(() => {
     if (workspaceId) void useWorkspaceStore.getState().load(workspaceId)
-  }, [workspaceId, membersAppliedAt])
+  }, [workspaceId, membersAppliedAt, membersUpToDate])
   return { role: workspaceId ? role : 'owner', workspaceId }
 }
 

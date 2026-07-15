@@ -11,6 +11,7 @@ import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
 import { useProjectsStore } from '../store/projects'
+import { resetSyncStore, useSyncStore } from '../store/sync'
 import { resetTier2Store } from '../store/tier2'
 import { resetWorkspaceStore } from '../store/workspace'
 import { ArchitectureSurface } from './ArchitectureSurface'
@@ -25,6 +26,7 @@ beforeEach(async () => {
   resetTier2Store()
   resetWorkspaceStore()
   resetAuthStoreForTests()
+  resetSyncStore()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
@@ -182,6 +184,31 @@ describe('ArchitectureSurface — viewer read-only affordance (issue 035)', () =
     expect(await screen.findByRole('button', { name: 'Select Buyers' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Name an entry')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Add table')).toBeInTheDocument()
+  })
+})
+
+// Issue 083 — Cause A. `members` going non-empty (someone else's row
+// streamed in) never guaranteed the signed-in caller's OWN workspace_members
+// row arrived first (a 067-class materialization race). Before this fix,
+// that snapshot alone collapsed `role` to a hard 'viewer', so a legitimate
+// owner/editor lost the "Add table" affordance for as long as their own
+// membership row hadn't yet streamed in — with no error and no visible
+// cause. The surface must stay interactive while role is still resolving,
+// not silently collapse to read-only.
+describe('ArchitectureSurface — add-table affordance survives role-still-resolving (issue 083 Cause A)', () => {
+  it('keeps the "Add table" affordance while the caller\'s own membership row has not yet streamed in', async () => {
+    await addWorkspaceMember(db, workspaceId, 'sub-owner', 'owner')
+    useAuthStore.setState({ status: 'authenticated', configured: true, user: { sub: 'sub-new-member', email: null } })
+    // Sync is on, but workspace_members hasn't reported "up-to-date" yet —
+    // exactly the window where the signed-in caller's own row may still be
+    // in flight, indistinguishable from a single snapshot from "confirmed
+    // not a member".
+    useSyncStore.setState({ enabled: true, upToDateTables: new Set() })
+
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('2nd Tier · Architecture')
+
+    expect(await screen.findByPlaceholderText('Add table')).toBeInTheDocument()
   })
 })
 

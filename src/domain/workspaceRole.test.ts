@@ -63,4 +63,34 @@ describe('resolveEffectiveRole (issue 035 — client-side UI affordance, not the
     const members = [{ userSub: 'sub-owner', role: 'owner' as const }]
     expect(resolveEffectiveRole(members, 'sub-stranger', true)).toBe('viewer')
   })
+
+  // Issue 083 — Cause A. A signed-in caller absent from a non-empty members
+  // list is indistinguishable, from a single snapshot, from "my own
+  // workspace_members row hasn't streamed into local PGlite yet" (a
+  // 067-class materialization race). `membersKnown` (default true, so every
+  // pre-existing call site above is unaffected) is the caller's signal for
+  // which case this is — false means "still catching up", and the function
+  // must fail OPEN (keep the surface interactive) instead of snapping to a
+  // confirmed 'viewer'.
+  it('self absent from non-empty members while membersKnown is false (still streaming) fails OPEN, not a hard viewer', () => {
+    const members = [{ userSub: 'sub-owner', role: 'owner' as const }]
+    const resolved = resolveEffectiveRole(members, 'sub-new-member', true, false)
+    expect(resolved).not.toBe('viewer')
+    expect(canWrite(resolved)).toBe(true)
+  })
+
+  it('self absent from non-empty members once membersKnown is true (confirmed complete) is a hard viewer, exactly as before', () => {
+    const members = [{ userSub: 'sub-owner', role: 'owner' as const }]
+    expect(resolveEffectiveRole(members, 'sub-stranger', true, true)).toBe('viewer')
+  })
+
+  it('membersKnown defaults to true (existing call sites keep their pre-083 behavior unchanged)', () => {
+    const members = [{ userSub: 'sub-owner', role: 'owner' as const }]
+    expect(resolveEffectiveRole(members, 'sub-stranger', true)).toBe('viewer')
+  })
+
+  it('self actually present in members resolves to their own row regardless of membersKnown', () => {
+    const members = [{ userSub: 'sub-owner', role: 'owner' as const }, { userSub: 'sub-editor', role: 'editor' as const }]
+    expect(resolveEffectiveRole(members, 'sub-editor', true, false)).toBe('editor')
+  })
 })

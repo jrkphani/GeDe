@@ -48,6 +48,14 @@ export function resolveEffectiveRole(
   members: readonly { userSub: string; role: WorkspaceRole }[],
   userSub: string | null,
   authConfigured: boolean,
+  // Issue 083 — "is the `members` snapshot complete enough to trust a
+  // self-absence as CONFIRMED, not just not-yet-arrived". Defaults to true
+  // so every pre-083 call site (and every existing test above) keeps its
+  // exact prior behavior — only a caller that explicitly knows it's mid-
+  // catch-up (src/store/workspace.ts's computeRole, driven off
+  // useSyncStore's upToDateTables/enabled) passes false. See the branch
+  // below for what changes when it does.
+  membersKnown = true,
 ): WorkspaceRole {
   // Solo/local mode (no Cognito configured, or signed out): the pre-035
   // single-user experience is untouched — always full control.
@@ -57,7 +65,21 @@ export function resolveEffectiveRole(
   // seated. Treat as owner rather than stranding it read-only.
   if (members.length === 0) return 'owner'
   const mine = members.find((m) => m.userSub === userSub)
-  // Authenticated, other members exist, but the caller isn't among them:
-  // least privilege, not a guess at ownership.
-  return mine?.role ?? 'viewer'
+  if (mine) return mine.role
+  // Issue 083 — authenticated, other members exist, but the caller isn't
+  // among them. A single snapshot can't tell "confirmed not a member" apart
+  // from "my own workspace_members row hasn't streamed into local PGlite
+  // yet" (a 067-class materialization race — `members` going non-empty
+  // never guaranteed self arrives first, or even at all in the same batch).
+  // While the caller can't yet vouch the snapshot is complete
+  // (`membersKnown === false`), fail OPEN to 'editor' rather than snapping
+  // the whole UI read-only for a race that resolves itself within moments —
+  // this is a UX gate, not the enforcement boundary (module doc comment
+  // above), so a false-open 'editor' here can never actually write past a
+  // real server-side rejection once sync's write-path (043) rejects it (and
+  // issue 083's own Cause B fix now surfaces that rejection as a calm
+  // status message instead of a silent no-op). Once membersKnown is true,
+  // absence is confirmed and least-privilege applies exactly as before.
+  if (!membersKnown) return 'editor'
+  return 'viewer'
 }

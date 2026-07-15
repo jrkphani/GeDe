@@ -15,6 +15,7 @@ import {
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { enqueueIfSyncing, useSyncStore } from './sync'
+import { useStatusStore } from './status'
 
 // Issue 075 Part B — the `useSyncStore.tier1AppliedAt` subscription below
 // (mirrors src/store/projects.ts's own module-level syncUnsubscribe pattern,
@@ -162,7 +163,22 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     if (projectId === null) return null
     const db = requireDatabase()
     set((s) => ({ generation: s.generation + 1 }))
-    const row = await dbAdd(db, projectId, name)
+    // Issue 083 Cause B — FoundationSurface.tsx's `onCreate: (name) => void
+    // addProp(name)` discards this promise entirely: a rejection here
+    // (dbAdd's own workspaceId resolution, db/mutations.ts's
+    // projectWorkspaceId, hard-throws via firstOrThrow on a missing
+    // FK-ancestor row) would otherwise vanish into the void, indistinguishable
+    // from a silent no-op. Catch it here — the one place guaranteed to run
+    // regardless of how the caller awaits — and announce via useStatusStore,
+    // the app's one sanctioned feedback channel (mirrors tier2.ts's own
+    // addTable/addEntry handling and workspace.ts's acceptInvitation).
+    let row: Tier1PropRow
+    try {
+      row = await dbAdd(db, projectId, name)
+    } catch {
+      useStatusStore.getState().announce(`Couldn't add "${name}" — please try again.`)
+      return null
+    }
     set({ props: await dbList(db, projectId) })
     enqueueIfSyncing('tier1_props', row.id, 'upsert', row)
     const orderedIdsAfterAdd = get().props.map((p) => p.id)

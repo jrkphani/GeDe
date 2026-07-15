@@ -36,6 +36,7 @@ import { subtreeIds } from '../domain/entryTree'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { enqueueIfSyncing, useSyncStore } from './sync'
+import { useStatusStore } from './status'
 
 // Issue 075 Part B — the `useSyncStore.tier2AppliedAt` subscription below
 // (mirrors src/store/projects.ts's own module-level syncUnsubscribe pattern,
@@ -228,7 +229,23 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       const { projectId } = get()
       if (projectId === null) return null
       bump()
-      const row = await dbAddTable(db(), projectId, name)
+      // Issue 083 Cause B — the add call sites (ArchitectureSurface.tsx's
+      // `onSubmit={(name) => void addTable(name)}`) discard this promise
+      // entirely: a rejection here (dbAddTable's own workspaceId resolution,
+      // db/mutations.ts's projectWorkspaceId, hard-throws via firstOrThrow on
+      // a missing FK-ancestor row) would otherwise vanish into the void,
+      // indistinguishable from a silent no-op. Catch it here — the one place
+      // that's guaranteed to run regardless of how the caller awaits — and
+      // announce via useStatusStore, the app's one sanctioned feedback
+      // channel (mirrors acceptInvitation's own server-rejection handling,
+      // workspace.ts:287-295).
+      let row: Tier2TableRow
+      try {
+        row = await dbAddTable(db(), projectId, name)
+      } catch {
+        useStatusStore.getState().announce(`Couldn't add "${name}" — please try again.`)
+        return null
+      }
       await reloadTables(projectId)
       enqueueIfSyncing('tier2_tables', row.id, 'upsert', row)
       const orderedIds = get().tables.map((t) => t.id)
@@ -269,7 +286,18 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       const { projectId } = get()
       if (projectId === null) return null
       bump()
-      const row = await dbAddEntry(db(), tableId, parentId, name)
+      // Issue 083 Cause B — same rationale as addTable above: addEntry's
+      // fire-and-forget call sites (ArchitectureSurface.tsx's `onCreate`,
+      // EditableGrid's PhantomCell) discard this promise, so a rejection
+      // (dbAddEntry's tier2TableWorkspaceId, same firstOrThrow shape) must be
+      // caught and announced here, not left to vanish silently.
+      let row: Tier2EntryRow
+      try {
+        row = await dbAddEntry(db(), tableId, parentId, name)
+      } catch {
+        useStatusStore.getState().announce(`Couldn't add "${name}" — please try again.`)
+        return null
+      }
       await reloadEntries(tableId)
       enqueueIfSyncing('tier2_entries', row.id, 'upsert', row)
       useCommandLogStore.getState().push({
