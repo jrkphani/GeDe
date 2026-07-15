@@ -18,6 +18,7 @@
 // concurrent ShapeStreams + a 401-cold-start-then-retry actually would in
 // production is the one thing missing from the existing suite.
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { eq } from 'drizzle-orm'
 import { openDatabase } from '../db/client'
 import * as schema from '../db/schema'
 import { startSync, type ShapeStreamFactory, type ShapeStreamLike } from './syncEngine'
@@ -29,7 +30,6 @@ import { resetDimensionsStore, useDimensionsStore } from '../store/dimensions'
 import { resetTier1Store, useTier1Store } from '../store/tier1'
 
 const T0 = '2026-07-12T00:00:00.000Z'
-const T1 = '2026-07-12T00:00:01.000Z'
 
 // ── Fixture plumbing — mirrors syncEngine.test.ts's fakeStreamFactory, but
 // generalized to build a change message for ANY table (that file's `change()`
@@ -168,7 +168,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     handle.stop()
   })
 
-  it('SCENARIO B (ROOT CAUSE, proven): a child-canvas dimension racing its own context permanently poisons the ENTIRE retry batch — Design tier AND tier1/tier2 bycatch never converge', async () => {
+  it('SCENARIO B (issue 077, FIXED): a child-canvas dimension racing its own context converges within the same retry drain — Design tier AND tier1/tier2 bycatch all land', async () => {
     const db = await freshSignInDb()
     const { factory, push } = fakeStreamFactory()
     const onError = vi.fn()
@@ -195,57 +195,29 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     push('projects', [projectsMsg()])
     await settle()
 
-    // THE FAILING ASSERTION (this is the bug): the retry buffer sorts the
-    // WHOLE buffered batch by the static RETRY_APPLY_ORDER, which places
-    // `dimensions` BEFORE `contexts` (src/sync/syncEngine.ts's
-    // RETRY_APPLY_ORDER = [...ENVELOPE_TABLE_NAMES, ...] — dimensions is
-    // index 5, contexts is index 7). d2's `context_id` FK is real and NOT
-    // covered by DEFERRED_FK_COLUMN (src/db/sync.ts:34-39 only nulls
-    // dimensions.sourceParamId), so within the SAME transaction, d2's insert
-    // throws a genuine FK violation against a not-yet-inserted `contexts`
-    // row — which rolls back the ENTIRE transaction per applyInboundDeltas'
-    // atomicity (src/db/sync.ts:50, "ONE transaction"). Every OTHER row in
-    // that same drain batch — tier1_purpose, tier1_props, tier2_tables,
-    // tier2_entries, d1, pa1 — is bycatch: individually FK-resolvable, but
-    // rolled back anyway because they share one transaction with d2.
-    expect(await db.select().from(schema.projects)).toHaveLength(1) // the parent itself DID land
-    expect(await db.select().from(schema.dimensions)).toHaveLength(0) // d1 (safe!) + d2 both gone
-    expect(await db.select().from(schema.contexts)).toHaveLength(0)
-    expect(await db.select().from(schema.parameters)).toHaveLength(0)
-    expect(await db.select().from(schema.bindings)).toHaveLength(0)
-    // The bycatch — tier1/tier2 have NOTHING to do with contexts/dimensions,
-    // yet they are poisoned too, purely because they rode in the same
-    // buffered batch. This is the flakiness mechanism: whether tier1/tier2
-    // survive is pure luck of whether they got bundled into THIS batch.
-    expect(await db.select().from(schema.tier1Purpose)).toHaveLength(0)
-    expect(await db.select().from(schema.tier1Props)).toHaveLength(0)
-    expect(await db.select().from(schema.tier2Tables)).toHaveLength(0)
-    expect(await db.select().from(schema.tier2Entries)).toHaveLength(0)
+    // DESIRED behavior (issue 077 fix): `dimensions.contextId` now joins
+    // `dimensions.sourceParamId` in DEFERRED_FK_COLUMN (src/db/sync.ts), so
+    // d2's real-but-not-yet-committed `context_id` FK is nulled on the first
+    // pass and restored on the second pass of the SAME transaction — no FK
+    // violation, no rollback, regardless of RETRY_APPLY_ORDER placing
+    // `dimensions` before `contexts`. Every row in the drain batch lands,
+    // including the tier1/tier2 bycatch that has nothing to do with
+    // contexts/dimensions at all.
+    expect(await db.select().from(schema.projects)).toHaveLength(1)
+    expect(await db.select().from(schema.dimensions)).toHaveLength(2) // d1 + d2 (child-canvas)
+    expect(await db.select().from(schema.contexts)).toHaveLength(1)
+    expect(await db.select().from(schema.parameters)).toHaveLength(1)
+    expect(await db.select().from(schema.bindings)).toHaveLength(1)
+    expect(await db.select().from(schema.tier1Purpose)).toHaveLength(1)
+    expect(await db.select().from(schema.tier1Props)).toHaveLength(1)
+    expect(await db.select().from(schema.tier2Tables)).toHaveLength(1)
+    expect(await db.select().from(schema.tier2Entries)).toHaveLength(1)
 
-    // PERMANENCE: RETRY_APPLY_ORDER is a static module-level constant — it
-    // never reorders itself, so every SUBSEQUENT drain attempt fails
-    // IDENTICALLY. Prove this isn't "just needs one more retry" by forcing
-    // several more successful applies (each of which calls drainRetryBuffer)
-    // via unrelated tables, and confirming nothing ever lands.
-    push('invitations', [
-      change('inv1', T1, { workspace_id: WS, email: 'x@example.com', role: 'viewer', invited_by_sub: 'sub-1', expires_at: '2026-08-01T00:00:00.000Z', accepted_at: null }),
-    ])
-    await settle()
-    push('workspace_members', [change('mem1', T1, { workspace_id: WS, user_sub: 'sub-1', role: 'owner' })])
-    await settle()
-    push('invitations', [change('inv2', T1, { workspace_id: WS, email: 'y@example.com', role: 'viewer', invited_by_sub: 'sub-1', expires_at: '2026-08-01T00:00:00.000Z', accepted_at: null })])
-    await settle()
-
-    expect(await db.select().from(schema.dimensions)).toHaveLength(0)
-    expect(await db.select().from(schema.tier1Purpose)).toHaveLength(0)
-    expect(await db.select().from(schema.tier2Tables)).toHaveLength(0)
-    // The orphan-surfacing safety net never fires either — every synced
-    // table has NOT reported up-to-date, so onError for these tables was
-    // called only once each (the FIRST failure), never re-surfaced as
-    // "orphaned" — this is a SILENT, permanent stall for the rest of the
-    // session, not even a visible repeated error.
-    const dimensionsErrorCalls = onError.mock.calls.filter((c) => c[0] === 'dimensions').length
-    expect(dimensionsErrorCalls).toBe(1)
+    // d2's contextId must have been RESTORED (the second pass), not left
+    // null forever — this is the whole point of the deferred-column
+    // treatment, not just "insert succeeds with a dangling null FK".
+    const d2Rows = await db.select().from(schema.dimensions).where(eq(schema.dimensions.id, 'd2'))
+    expect(d2Rows[0]?.contextId).toBe('c1')
 
     handle.stop()
   })
@@ -458,7 +430,7 @@ describe('Materialization repro — store layer (075B) mirrors PGlite faithfully
     expect(useDimensionsStore.getState().dimensions.map((d) => d.id)).toContain('d1')
   })
 
-  it('when PGlite is poisoned (Scenario B shape), useDimensionsStore/useTier1Store faithfully show EMPTY — proving the gap is upstream of the store layer, not in 075B', async () => {
+  it('when PGlite converges (Scenario B shape, issue 077 FIXED), useDimensionsStore/useTier1Store faithfully reflect the landed rows', async () => {
     const db = await freshSignInDb()
     setDatabase(db)
     const { factory, push } = fakeStreamFactory()
@@ -476,15 +448,22 @@ describe('Materialization repro — store layer (075B) mirrors PGlite faithfully
     await dimLoad
     await tier1Load
 
-    // PGlite itself has nothing for either (Scenario B's proven poisoning) —
-    // the stores correctly show empty, matching the DB exactly. This is the
-    // "table shell with no entry row" the bug report describes: the
-    // component mounts and calls load() successfully (no crash, no stale
-    // data), it's just reading a PGlite that never received the rows.
-    expect(await db.select().from(schema.dimensions)).toHaveLength(0)
-    expect(useDimensionsStore.getState().dimensions).toEqual([])
-    expect(await db.select().from(schema.tier1Purpose)).toHaveLength(0)
-    expect(useTier1Store.getState().purpose).toBe('')
+    // PGlite now genuinely has both rows (issue 077's fix: dimensions.
+    // contextId joins DEFERRED_FK_COLUMN's null-then-restore treatment, so
+    // d2's real-but-not-yet-committed context FK no longer poisons the whole
+    // drain batch). useDimensionsStore.load(P) — with its default
+    // contextId=null — scopes to the PROJECT'S ROOT canvas only (src/store/
+    // dimensions.ts:65-67), so it correctly lists d1 (root, contextId null)
+    // and correctly excludes d2 (a CHILD canvas, contextId='c1') — that's
+    // the store's own canvas-scoping contract, not a materialization gap.
+    // The fix is proven at the PGlite layer directly: both rows landed, and
+    // d2's contextId was actually RESTORED to 'c1' (not left dangling null).
+    expect(await db.select().from(schema.dimensions)).toHaveLength(2)
+    expect(useDimensionsStore.getState().dimensions.map((d) => d.id)).toEqual(['d1'])
+    const d2Rows = await db.select().from(schema.dimensions).where(eq(schema.dimensions.id, 'd2'))
+    expect(d2Rows[0]?.contextId).toBe('c1')
+    expect(await db.select().from(schema.tier1Purpose)).toHaveLength(1)
+    expect(useTier1Store.getState().purpose).toBe('Because reasons')
 
     useSyncStore.getState().stop()
   })
