@@ -273,10 +273,17 @@ function TablePanel({
         // Source badge rides inline on the Name cell (issue 084) — both sides of
         // the tier link stay visible (invariant 7) without a data column of its
         // own. Read-mode only; the grid hides it while the name is being edited.
+        // `aria-hidden`: the badge is a decorative derived cue, so it must NOT
+        // join the cell's accessible name (else the cell reads "Users → Stake"
+        // and `getByRole('cell', {name})` exact lookups break — e2e + AT noise).
         adornment: (entry) => {
           const link = linkByEntryId[entry.id]
           return link ? (
-            <span className="t2-source-badge font-mono" title={`Promoted to ${link.dimensionName}`}>
+            <span
+              className="t2-source-badge font-mono"
+              title={`Promoted to ${link.dimensionName}`}
+              aria-hidden="true"
+            >
               → {link.dimensionName}
             </span>
           ) : null
