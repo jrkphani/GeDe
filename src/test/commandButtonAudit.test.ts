@@ -66,11 +66,11 @@ describe('command-button audit (issue 026 test-first plan item 3)', () => {
 describe('row-hover actions remain quiet (issue 026 test-first plan item 4 — regression)', () => {
   const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
 
-  it('table row actions (.t2-row-action) stay visibility: hidden at rest', () => {
-    const match = /\.t2-row-action\s*\{([^}]*)\}/.exec(css)
+  it('table row actions (.t2-meta .row-action) stay visibility: hidden at rest', () => {
+    const match = /\.t2-meta \.row-action\s*\{([^}]*)\}/.exec(css)
     expect(match).not.toBeNull()
     expect((match as RegExpMatchArray)[1]).toMatch(/visibility:\s*hidden/)
-    expect(css).toContain('.t2-table tbody tr:hover .t2-row-action,')
+    expect(css).toContain('.t2-table tbody tr:hover .t2-meta .row-action,')
   })
 
   it('project row actions (.project-row .row-action) stay visibility: hidden at rest', () => {

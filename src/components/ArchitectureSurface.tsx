@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronRight, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Tier2EntryRow, Tier2TableRow } from '../db/mutations'
 import { buildEntryTree, flattenEntryTree } from '../domain/entryTree'
@@ -38,7 +38,6 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
   const tables = useTier2Store((s) => s.tables)
   const load = useTier2Store((s) => s.load)
   const addTable = useTier2Store((s) => s.addTable)
-  const addTableRef = useRef<HTMLElement>(null)
 
   useEffect(() => {
     void load(projectId)
@@ -52,6 +51,9 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
     <main className="architecture">
       <ContextBar>
         <div className="t2-contextbar">
+          {/* Navigate-only (issue 084 finding 5): the quick-jump list stays,
+              but creation no longer lives in this bar — it moved to the stable
+              top add-row below. */}
           {tables.map((t) => (
             <Button
               key={t.id}
@@ -63,34 +65,41 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
               {t.name}
             </Button>
           ))}
-          <Button
-            variant="bare"
-            className="t2-quickjump t2-quickjump--add"
-            onClick={() => addTableRef.current?.querySelector('input')?.focus()}
-          >
-            Add table
-          </Button>
         </div>
       </ContextBar>
 
       <h2 className="tier2-header">2nd Tier · Architecture</h2>
 
-      {tables.map((table) => (
-        <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
-      ))}
-
-      {/* A quiet ghost panel at the end names the next table (design brief);
-          a viewer never sees this write-only affordance at all (issue 035). */}
+      {/* D1 (issue 084) — the single create path: a stable, always-visible typed
+          add-row fixed directly under the header. It never relocates as tables
+          accumulate and is the only "add table" affordance (the old
+          context-bar focus-only button is gone, finding 2). A viewer never sees
+          this write-only affordance (issue 035). */}
       {readOnly ? null : (
-        <section className="panel t2-add-table" ref={addTableRef}>
+        <div className="t2-add-table">
+          <span className="t2-add-table__glyph" aria-hidden>
+            +
+          </span>
           <PhantomInput
-            placeholder="Add table"
+            placeholder="Name a table"
             ariaLabel="Add architecture table"
             inputClassName="t2-add-table__input"
             onSubmit={(name) => void addTable(name)}
           />
-        </section>
+        </div>
       )}
+
+      {/* Empty-state guidance (issue 084 finding 1): one orienting line so a
+          first-run project is never a bare input with nothing actionable. */}
+      {tables.length === 0 && !readOnly ? (
+        <p className="t2-empty">
+          No tables yet. Name your first dimension above — e.g. “Stakeholders”, “Value”.
+        </p>
+      ) : null}
+
+      {tables.map((table) => (
+        <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
+      ))}
     </main>
   )
 }
@@ -116,7 +125,11 @@ function TablePanel({
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
   const anchorRef = useRef<string | null>(null)
   // The row whose delete surfaced a linked-parameter resolution (never silent).
-  const [resolving, setResolving] = useState<{ id: string; links: EntryLink[] } | null>(null)
+  const [resolving, setResolving] = useState<{ entry: Tier2EntryRow; links: EntryLink[] } | null>(
+    null,
+  )
+  // The entry whose "Add child" opened a typed phantom (never a literal row).
+  const [addingChildTo, setAddingChildTo] = useState<string | null>(null)
 
   const flat = useMemo(
     () => flattenEntryTree(buildEntryTree(entries), collapsed),
@@ -161,7 +174,7 @@ function TablePanel({
   async function handleDelete(entry: Tier2EntryRow) {
     const result = await removeEntry(table.id, entry.id)
     if (result.kind === 'needs-resolution') {
-      setResolving({ id: entry.id, links: result.links })
+      setResolving({ entry, links: result.links })
     } else {
       useStatusStore.getState().announce(`Deleted ${entry.name}`)
     }
@@ -179,7 +192,11 @@ function TablePanel({
           const meta = metaById.get(entry.id) ?? { depth: 0, hasChildren: false }
           const isSelected = selected.has(entry.id)
           return (
-            <div className="t2-tree" data-depth={meta.depth} style={{ paddingLeft: meta.depth * 24 }}>
+            <div
+              className="t2-tree"
+              data-depth={meta.depth}
+              style={{ paddingLeft: `calc(var(--space-5) * ${meta.depth})` }}
+            >
               {meta.hasChildren ? (
                 <Button
                   variant="bare"
@@ -247,46 +264,47 @@ function TablePanel({
               )}
               {readOnly ? null : (
                 <>
-                  <Button
-                    variant="bare"
-                    className="t2-row-action"
-                    aria-label={`Add child to ${entry.name}`}
-                    onClick={() => {
-                      setCollapsed((prev) => {
-                        const next = new Set(prev)
-                        next.delete(entry.id)
-                        return next
-                      })
-                      void addEntry(table.id, entry.id, 'New entry')
-                    }}
-                  >
-                    <Plus size={16} />
-                  </Button>
+                  {/* Typed add-child (issue 084 finding 4): opens a phantom —
+                      type → Enter — instead of inserting a literal 'New entry'
+                      row the user then has to find and rename. Same type-first
+                      grammar as every other add on this surface. */}
                   <Popover
-                    open={resolving?.id === entry.id}
-                    onOpenChange={(open) => {
-                      if (!open) setResolving(null)
-                    }}
+                    open={addingChildTo === entry.id}
+                    onOpenChange={(open) => setAddingChildTo(open ? entry.id : null)}
                   >
-                    <PopoverAnchor asChild>
+                    <PopoverTrigger asChild>
                       <Button
-                        variant="bare"
-                        className="t2-row-action"
-                        aria-label={`Delete ${entry.name}`}
-                        onClick={() => void handleDelete(entry)}
+                        aria-label={`Add child to ${entry.name}`}
+                        onClick={() =>
+                          setCollapsed((prev) => {
+                            const next = new Set(prev)
+                            next.delete(entry.id)
+                            return next
+                          })
+                        }
                       >
-                        <Trash2 size={16} />
+                        Add child
                       </Button>
-                    </PopoverAnchor>
-                    {resolving?.id === entry.id && (
-                      <ResolutionPopover
-                        tableId={table.id}
-                        entry={entry}
-                        links={resolving.links}
-                        onClose={() => setResolving(null)}
+                    </PopoverTrigger>
+                    <PopoverContent align="end" sideOffset={4} className="t2-add-child">
+                      <PhantomInput
+                        placeholder={`Name a child of ${entry.name}`}
+                        ariaLabel={`Name a child of ${entry.name}`}
+                        onSubmit={(name) => void addEntry(table.id, entry.id, name)}
                       />
-                    )}
+                    </PopoverContent>
                   </Popover>
+                  {/* Quiet-text Remove (issue 084): the same rowAction pattern
+                      the Design route uses (ParameterList), replacing the trash
+                      icon. A promoted entry still routes through the resolution
+                      flow (rehomed to the panel level, below) — never a silent
+                      cascade. */}
+                  <Button
+                    aria-label={`Remove ${entry.name}`}
+                    onClick={() => void handleDelete(entry)}
+                  >
+                    Remove
+                  </Button>
                 </>
               )}
             </div>
@@ -319,6 +337,25 @@ function TablePanel({
         selectOnFocus
         readOnly={readOnly}
       />
+      {/* Delete-with-link resolution rehomed out of the cramped .t2-meta icon
+          strip (issue 084): it anchors at the panel level now, opened by any
+          row's quiet-text Remove. */}
+      {resolving && (
+        <Popover
+          open
+          onOpenChange={(open) => {
+            if (!open) setResolving(null)
+          }}
+        >
+          <PopoverAnchor className="t2-resolution-anchor" />
+          <ResolutionPopover
+            tableId={table.id}
+            entry={resolving.entry}
+            links={resolving.links}
+            onClose={() => setResolving(null)}
+          />
+        </Popover>
+      )}
       <EditableGrid
         rows={rows}
         columns={columns}

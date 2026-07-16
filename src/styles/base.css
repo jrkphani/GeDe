@@ -2098,10 +2098,6 @@ body {
   color: var(--ink);
 }
 
-.t2-quickjump--add {
-  color: var(--accent);
-}
-
 .t2-table {
   padding: var(--space-4) var(--space-5) var(--space-3);
   display: flex;
@@ -2194,23 +2190,18 @@ body {
   white-space: nowrap;
 }
 
-.t2-row-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  color: var(--ink-muted);
+/* Quiet-text row verbs (issue 084): Add child + Remove use the shared
+   `.row-action` pattern (STYLE_GUIDE §2.2/§6), hidden until the row is
+   hovered/focused — mirrors the Design route's ParameterList Remove. The
+   per-row trash/plus icons are gone. */
+.t2-meta .row-action {
   visibility: hidden;
 }
 
-.t2-table tbody tr:hover .t2-row-action,
-.t2-row-action:focus-visible {
+.t2-table tbody tr:hover .t2-meta .row-action,
+.t2-meta .row-action:focus-within,
+.t2-meta .row-action:focus-visible {
   visibility: visible;
-}
-
-.t2-row-action:hover {
-  color: var(--ink);
 }
 
 /* Selection bar (issue 025): sticky within the panel's scroll viewport, not
@@ -2314,14 +2305,53 @@ body {
   gap: var(--space-2);
 }
 
+/* Stable top add-row (issue 084 D1): the single, always-visible typed create
+   path for tables, fixed directly under the header — it never relocates as
+   tables accumulate. */
 .t2-add-table {
-  padding: var(--space-3) var(--space-5);
-  border-style: dashed;
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.t2-add-table__glyph {
+  flex: none;
+  color: var(--accent);
+  font-size: var(--text-header);
+  line-height: 1;
 }
 
 .t2-add-table__input {
+  flex: 1;
   width: 100%;
   color: var(--ink-muted);
+}
+
+/* Empty-state guidance (issue 084 finding 1): one orienting line beneath the
+   add-row when no table exists yet — a bare input alone left a first-run
+   project with nothing actionable. */
+.t2-empty {
+  margin: 0;
+  padding: 0 var(--space-1);
+  color: var(--ink-muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
+}
+
+/* Typed add-child phantom (issue 084 finding 4). */
+.t2-add-child {
+  min-width: 220px;
+}
+
+/* Panel-level anchor for the rehomed delete-resolution popover (issue 084) —
+   zero-size, no layout footprint; present only while a resolution is open. */
+.t2-resolution-anchor {
+  display: block;
+  height: 0;
 }
 
 /* Parameter side of the tier link (ParameterList): a quiet link glyph. */

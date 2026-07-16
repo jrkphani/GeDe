@@ -12,7 +12,9 @@ function tablePanel(page: Page, tableName: string) {
 }
 
 async function addTable(page: Page, name: string) {
-  const ghost = page.getByPlaceholder('Add table')
+  // Issue 084 (D1): the create control is the stable top add-row's typed
+  // input ("Name a table"), no longer the trailing "Add table" ghost.
+  const ghost = page.getByPlaceholder('Name a table')
   await ghost.fill(name)
   await ghost.press('Enter')
   await expect(page.locator('.t2-table__name', { hasText: name })).toBeVisible()

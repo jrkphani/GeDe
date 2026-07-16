@@ -150,6 +150,23 @@ Standing gate: `npm run verify:fast` green (`npx tsc --noEmit`, `npx eslint . --
 3. **Add-child behavior (finding 4):** keep "insert `'New entry'`, then rename" (`:254-261`), or switch to an inline typed child row? The latter matches every other add but changes the "+"-button interaction.
 4. **Selection semantics (finding 8):** is the promote multi-select worth re-expressing as a labeled listbox (`role="option"`/`aria-selected`), or is the current `aria-pressed` toggle acceptable for this slice?
 
+## Addendum (2026-07-16): the per-row **delete/trash** control + resolution popover (the audit's blind spot)
+
+The audit above documents the per-row **add-child "+"** (finding 4) but never the **delete "trash"** control that sits right beside it. Both live in the same right-aligned meta cell, so a critique of "controls crammed into the table rows" is incomplete without the delete half.
+
+- **Two icon-only controls co-inhabit one right-aligned `.t2-meta` cell**, alongside the `→ dimensionName` promoted-source badge. `src/components/ArchitectureSurface.tsx:232-296` defines the `meta` column; `.t2-meta` is `justify-content: flex-end` (`base.css:2183-2189`). On hover, up to **three** things (source badge, `+`, trash) compete in a ~40px-min strip on **every** entry row.
+- **Add-sub-row "+"** — `:250-264`. `onClick` un-collapses the parent (`setCollapsed`) then fires `addEntry(table.id, entry.id, 'New entry')` — the hardcoded literal already captured as finding 4.
+- **Delete "trash"** — `:265-289` (NEW; not in the audit above). `onClick` → `handleDelete(entry)` (`:161-168`) → `removeEntry(table.id, entry.id)`. If the entry was promoted to a Tier-3 parameter (invariant 7) the store returns `needs-resolution`, which sets `resolving` state (`:119`) and opens an inline `ResolutionPopover` (`:348-396`) **anchored to the trash button**, offering "Keep parameter as unlinked copy" (`resolveKeep`) vs "Delete parameter — unbinds N contexts" (`resolveDeleteParams`); otherwise it announces `Deleted {name}`. So delete is never silent, but it fires a **destructive, cascade-carrying popover from inside a data-grid cell**.
+- **Both are hover/focus-revealed, not always-on** — `.t2-row-action { visibility: hidden }`, shown only on `.t2-table tbody tr:hover` / `:focus-visible` (`base.css:2197-2214`). Milder than always-on clutter, but the two affordances still stack per row, and the destructive one shares the hover strip with a create one.
+- **Both gated by `readOnly`** (`:248`, the 083/035 role gate) — viewers never see them.
+
+**Divergence from the 085 Design editing-zone model** (shipped, `done/085-design-route-consolidated-editing.md`): `DesignSurface.tsx` has **no** per-row add/delete icon buttons inside grid cells at all. Deletion in Design is a quiet text **"Remove"** `rowAction` in the dimension rail (`ParameterList.tsx:67-72`, STYLE_GUIDE §2.2/§6 — quiet until row hover/focus), and adds are type-first phantoms. So Architecture's grid-cell-embedded destructive **icon** + inline resolution popover has no analogue in the cleaner model 085 established for the sibling route — it should be reconsidered alongside the add-child unification, not treated as settled.
+
+**New ranked finding (slots beside finding 4):**
+- **4b. Destructive delete icon + resolution popover embedded in the grid cell** — `:265-289`, `:161-168`, `:348-396`, CSS `:2197-2214`. A cascade-carrying destructive action fires from inside a data-grid row cell, sharing the hover strip with the create "+". Consider moving row deletion to the same quiet-text `rowAction` pattern the Design route uses (`ParameterList.tsx:67-72`) rather than a per-cell trash icon, and rehoming the linked-parameter resolution to a less cramped surface.
+
+**New open question (extends fork 3):** should the row **delete** affordance follow Design's quiet-text "Remove" `rowAction` (moving the destructive control + resolution flow out of the `.t2-meta` icon strip), or stay a per-row trash icon? This forks together with the add-child grammar decision, since both controls share the one meta cell.
+
 ## References
 
 - Code (audited, verified file:line): `src/components/ArchitectureSurface.tsx:53-73,66-72,69,84-93,86-91,182,198-206,254-261,320,327-332,333-343,398-500`, `src/components/FoundationSurface.tsx:196-214`, `src/components/EditableGrid.tsx:300-307,565-614,594-608,668,714-749`, `src/components/ui/inline-editor.tsx:125-161`, `src/components/Canvas.tsx:415-426` (empty-state precedent).

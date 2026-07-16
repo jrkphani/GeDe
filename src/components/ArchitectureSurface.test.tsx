@@ -50,7 +50,7 @@ describe('ArchitectureSurface', () => {
     expect(await screen.findByText('Buyers')).toBeInTheDocument()
   })
 
-  it('indents nested rows by 24px per level (STYLE_GUIDE §6)', async () => {
+  it('indents nested rows off a --space token per level (STYLE_GUIDE §11, issue 084 finding 6)', async () => {
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
     await addTier2Entry(db, table.id, buyers.id, 'Superstars')
@@ -59,8 +59,9 @@ describe('ArchitectureSurface', () => {
 
     const rootTree = container.querySelector('[data-depth="0"]') as HTMLElement
     const childTree = container.querySelector('[data-depth="1"]') as HTMLElement
-    expect(rootTree.style.paddingLeft).toBe('0px')
-    expect(childTree.style.paddingLeft).toBe('24px')
+    // No raw pixel literal — indentation derives from the --space-5 (24px) token.
+    expect(rootTree.style.paddingLeft).toBe('calc(var(--space-5) * 0)')
+    expect(childTree.style.paddingLeft).toBe('calc(var(--space-5) * 1)')
   })
 
   it('promote selection spans nesting levels and previews the parameter count', async () => {
@@ -84,13 +85,16 @@ describe('ArchitectureSurface', () => {
     expect(await screen.findByText(/Creates 2 parameters/)).toBeInTheDocument()
   })
 
-  it('adds a new table via the ghost "Add table" affordance', async () => {
+  it('adds a table via the single top add-row (type + Enter clears + refocuses)', async () => {
     const user = userEvent.setup()
     render(<ArchitectureSurface projectId={projectId} />)
-    const addField = await screen.findByPlaceholderText('Add table')
+    const addField = await screen.findByPlaceholderText('Name a table')
     await user.type(addField, 'Process')
     await user.keyboard('{Enter}')
     await waitFor(() => expect(screen.getAllByText('Process').length).toBeGreaterThan(0))
+    // One grammar: the input clears and keeps focus for the next table.
+    expect(addField).toHaveValue('')
+    expect(addField).toHaveFocus()
   })
 
   it('renders the promoted source badge on a linked entry', async () => {
@@ -167,9 +171,9 @@ describe('ArchitectureSurface — viewer read-only affordance (issue 035)', () =
 
     expect(screen.queryByRole('button', { name: 'Select Buyers' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add child to Buyers' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Delete Buyers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Remove Buyers' })).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Name an entry')).not.toBeInTheDocument()
-    expect(screen.queryByPlaceholderText('Add table')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Name a table')).not.toBeInTheDocument()
   })
 
   it('an editor still sees the full write surface', async () => {
@@ -183,7 +187,7 @@ describe('ArchitectureSurface — viewer read-only affordance (issue 035)', () =
 
     expect(await screen.findByRole('button', { name: 'Select Buyers' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Name an entry')).toBeInTheDocument()
-    expect(screen.getByPlaceholderText('Add table')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Name a table')).toBeInTheDocument()
   })
 })
 
@@ -208,7 +212,99 @@ describe('ArchitectureSurface — add-table affordance survives role-still-resol
     render(<ArchitectureSurface projectId={projectId} />)
     await screen.findByText('2nd Tier · Architecture')
 
-    expect(await screen.findByPlaceholderText('Add table')).toBeInTheDocument()
+    expect(await screen.findByPlaceholderText('Name a table')).toBeInTheDocument()
+  })
+})
+
+// Issue 084 (2nd Tier — Architecture UX), Phase 1 — Direction 1: a stable top
+// add-row, a real empty state, one add grammar, typed add-child, and a
+// quiet-text Remove that still routes promoted entries through the resolution
+// flow. Owner-approved slice; keyboard Tab-chain (Phase 2) is out of scope.
+describe('ArchitectureSurface — empty-state guidance (issue 084 finding 1)', () => {
+  it('shows a labeled add affordance AND orienting copy, not just a bare input', async () => {
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('2nd Tier · Architecture')
+    // Labeled add affordance (the stable top add-row).
+    expect(screen.getByPlaceholderText('Name a table')).toBeInTheDocument()
+    // One orienting line naming example dimensions — the thing that was missing.
+    expect(screen.getByText(/No tables yet/i)).toBeInTheDocument()
+    expect(screen.getByText(/Stakeholders/)).toBeInTheDocument()
+  })
+
+  it('drops the orienting copy once a table exists, but keeps the stable add-row', async () => {
+    await addTier2Table(db, projectId, 'Stakeholders')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Stakeholders')
+    expect(screen.queryByText(/No tables yet/i)).not.toBeInTheDocument()
+    // The add-row never relocates — still present above the tables.
+    expect(screen.getByPlaceholderText('Name a table')).toBeInTheDocument()
+  })
+})
+
+describe('ArchitectureSurface — single add grammar (issue 084 finding 2)', () => {
+  it('has exactly one create path and no second focus-only "Add table" control', async () => {
+    await addTier2Table(db, projectId, 'Stakeholders')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Stakeholders')
+    // The old context-bar focus-only pseudo-button (labeled "Add table") is gone.
+    expect(screen.queryByRole('button', { name: 'Add table' })).not.toBeInTheDocument()
+    // Exactly one typed create input for tables.
+    expect(screen.getAllByPlaceholderText('Name a table')).toHaveLength(1)
+  })
+})
+
+describe('ArchitectureSurface — typed add-child (issue 084 finding 4)', () => {
+  it('opens a typed phantom instead of inserting a literal "New entry" row', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(await screen.findByRole('button', { name: 'Add child to Buyers' }))
+    const childField = await screen.findByPlaceholderText('Name a child of Buyers')
+    await user.type(childField, 'Superstars')
+    await user.keyboard('{Enter}')
+
+    await screen.findByText('Superstars')
+    // The literal placeholder row is never created.
+    expect(screen.queryByText('New entry')).not.toBeInTheDocument()
+  })
+})
+
+describe('ArchitectureSurface — quiet-text Remove + rehomed resolution (issue 084)', () => {
+  it('deletes an unlinked entry via a quiet-text "Remove" action, with no trash icon in the meta cell', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    const { container } = render(<ArchitectureSurface projectId={projectId} />)
+
+    const removeBtn = await screen.findByRole('button', { name: 'Remove Buyers' })
+    expect(removeBtn).toHaveTextContent('Remove')
+    // No per-row icon (Trash2/Plus rendered <svg>) survives in the meta strip.
+    expect(container.querySelector('.t2-meta svg')).toBeNull()
+
+    await user.click(removeBtn)
+    await waitFor(() => expect(screen.queryByText('Buyers')).not.toBeInTheDocument())
+  })
+
+  it('routes a promoted entry through the resolution flow (never a silent cascade)', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const users = await addTier2Entry(db, table.id, null, 'Users')
+    const { useTier2Store } = await import('../store/tier2')
+    await useTier2Store.getState().load(projectId)
+    await useTier2Store
+      .getState()
+      .promote({ projectId, entryIds: [users.id], target: { kind: 'new', name: 'Stake' } })
+
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Users')
+
+    await user.click(await screen.findByRole('button', { name: 'Remove Users' }))
+    // The linked-parameter resolution surfaces instead of a silent delete.
+    expect(await screen.findByText(/Keep parameter as unlinked copy/)).toBeInTheDocument()
+    expect(screen.getByText(/It is linked to/)).toBeInTheDocument()
   })
 })
 

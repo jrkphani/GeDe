@@ -52,7 +52,7 @@ describe('.command-button CSS — resting affordance + contrast (STYLE_GUIDE §1
   it('does not touch .row-action visibility:hidden (row-hover progressive disclosure, unchanged)', () => {
     expect(css).toMatch(/\.row-action\s*\{[^}]*}/)
     // The row-hover reveal rules must still exist verbatim.
-    expect(css).toContain('.t2-table tbody tr:hover .t2-row-action,')
+    expect(css).toContain('.t2-table tbody tr:hover .t2-meta .row-action,')
     expect(css).toContain('.project-row:hover .row-action,')
     expect(css).toContain('.dim-row:hover .row-action,')
   })
