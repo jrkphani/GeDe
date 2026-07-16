@@ -1,6 +1,6 @@
 # 077: One FK-blocked row rolls back the entire retry drain → streamed content never materializes (Design 3/3, tier1/tier2 flaky)
 
-- **Status**: OPEN
+- **Status**: ✅ SHIPPED (deployed `5bbc8bc`)
 - **Milestone**: M8 — sync read-path materialization (convergence)
 - **Severity**: **Critical** — the remaining, deterministically-reproduced cause of content not rendering after sign-in, once 076 removed the infra 502 noise. Design tier fails 3/3 (deterministic); Foundation/Architecture flaky (bycatch). Data reaches the client (0 502s, rows on the wire) but never lands in local PGlite for the affected tiers.
 - **Found via**: a real-PGlite integration harness (`src/sync/materialization.integration.test.ts`) that reproduces it deterministically (6/6, 3×) — built specifically because the production build exposes no PGlite/sync-store introspection.

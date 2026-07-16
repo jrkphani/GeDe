@@ -1,6 +1,6 @@
 # 081: Tier 1 Foundation — "Existing Scenario" rich-text field
 
-- **Status**: OPEN
+- **Status**: ✅ SHIPPED — verified live (`index-Dx06m7JR.js`)
 - **Milestone**: M6 (Foundation UI polish, same track as 013/021/024) — no sync/infra blocker; independent of 077/078/080
 - **Blocked by**: none (013 shipped; tier1_purpose is a stable synced table). Sized to land after 078/080 close, only so `verify:fast`'s live-sync fixtures aren't fighting an unrelated red build — not a hard dependency.
 

@@ -1,6 +1,6 @@
 # 085: Design route — one editing zone, canvas-as-visual, proportional even-fill ring
 
-- **Status**: OPEN
+- **Status**: ✅ SHIPPED — verified live (`index-CM_ZSx3K.js`, 2026-07-16)
 - **Milestone**: M6 (UI polish, same track as 013/021/024/027/081/082). Design-route surgery only. Phase A is a pure client/render change (`layout` stays `fn(tree)`, ADR-0005 — no schema, no synced-column ripple). Phases B/C touch component structure + one store-selection wire, still client-only.
 - **Blocked by**: none. **Sequences after 082 Phase 1** (shipped, `d413c03`) and the two canvas regression fixes (shipped, `5bbc8bc`: `MAX_DOT_HIT_RADIUS` hit-cap + spoke `pointer-events`). This issue reworks the same Design-route source, so land it on a green `main`.
 - **Supersedes**: **082 Phase 2 (on-ring authoring — Direction C).** That phase turns the ring *into* an editing surface (ghost "+" gap segments, on-ring `foreignObject` rename). This issue makes the opposite, owner-chosen call — **the canvas is a visual representation only; all editing lives in the tables** — so 082 Phase 2 is formally shelved, not merely deferred. This issue also **completes 082's own unbuilt "Throughout — visual stability" clause** (`082:64-67`: "arc-span growth as an arc fills" + "ease any residual dot movement"), which Phase 1 dropped.

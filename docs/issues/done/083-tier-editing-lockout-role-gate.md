@@ -1,6 +1,6 @@
 # 083: Tier editing lockout — a not-yet-streamed self-membership row snaps the whole app read-only
 
-- **Status**: OPEN — diagnosed, not yet fixed (filed file-only; no source edits in this issue).
+- **Status**: ✅ SHIPPED (deployed `5bbc8bc`)
 - **Severity**: High — a signed-in user can be locked out of editing their own or a shared project across **all three tiers at once** (Foundation, Architecture, Design), with no error and no visible cause.
 - **Milestone**: M6 (sharing hardening, same track as 067/078/080) — client role-resolution + a store-action feedback gap. No schema change; no synced-column ripple.
 - **Blocked by**: none. Independent of the 082 Design-route worktree — the fix lives in `workspace.ts`/`workspaceRole.ts` and the tier store actions, **not** in the shared `inline-editor.tsx` primitives 082 is editing (coordination note below).
