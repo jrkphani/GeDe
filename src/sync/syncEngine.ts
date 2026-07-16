@@ -279,16 +279,19 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
     }
   }
 
-  // Returns the number of rows this drain applied (removed from the buffer) —
-  // the progress signal maybeSurfaceOrphaned's loop terminates on (issue 088
-  // Finding A). A successful apply is atomic, so it applies the WHOLE sorted
-  // batch (>= 1); a failed apply applies nothing (0). Never rejects: an apply
-  // failure stays buffered and any orphan surfacing is swallowed, so the
-  // caller's fire-and-forget `.then(drain)` chain can't produce an unhandled
-  // rejection (Finding B).
-  async function drainRetryBuffer(): Promise<number> {
+  // One pass over the buffer. Returns the number of rows this pass applied
+  // (removed from the buffer) — the progress signal maybeSurfaceOrphaned's loop
+  // terminates on (issue 088 Finding A). Never rejects: an apply failure stays
+  // buffered and any orphan surfacing is swallowed, so the caller's
+  // fire-and-forget `.then(drain)` chain can't produce an unhandled rejection
+  // (Finding B). ALWAYS reached through drainRetryBuffer (below), never called
+  // directly, so its coalescing guard serialises every pass.
+  async function drainOnce(): Promise<number> {
     if (retryBuffer.length === 0) return 0
     const batch = byRetryApplyOrder(retryBuffer)
+    // FAST PATH — the whole sorted batch applies atomically (the common case:
+    // every buffered row's FK is now satisfiable, e.g. a buffered parent and
+    // child converging together, SCENARIO E). One transaction, one round trip.
     try {
       await applyBatch(batch)
       // Remove ONLY the deltas we just snapshotted+applied — never clear the
@@ -306,15 +309,102 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
       for (const [table, deltas] of groupByTable(batch)) options.onApplied?.(table, deltas)
       return batch.length
     } catch {
-      // Still missing a parent (or genuinely orphaned) — stays buffered for
-      // the next successful apply to retry. If every table already reports
-      // up-to-date (this failed drain was itself the "next successful
-      // apply" that triggered the retry), surface it now rather than
-      // waiting for an up-to-date control message that may never come.
-      // `.catch(() => {/* swallow: fire-and-forget, never an unhandled rejection */})` — a consumer's onError throwing inside the surfacing
+      // Issue 088 mechanism (A) / 077-class: the batch is ONE atomic
+      // transaction, so a SINGLE genuinely-blocked forward-FK row (its parent
+      // truly absent — e.g. a bindings.parameter_id pointing at a parameter
+      // that will never stream) rolls back the ENTIRE transaction, dropping
+      // every RESOLVABLE sibling with it and reporting 0 progress → a FALSE
+      // orphan. Fall back to applying each buffered row in its OWN transaction,
+      // in retry-apply order, so a row whose parent now exists commits
+      // regardless of a blocked sibling. Parent-before-child order is preserved
+      // by byRetryApplyOrder, so a buffered parent still lands before its
+      // buffered child (each in its own tx). Only rows that STILL fail stay
+      // buffered for the next drain / orphan decision.
+      const appliedRows: RowDelta[] = []
+      for (const delta of batch) {
+        try {
+          await applyBatch([delta])
+          appliedRows.push(delta)
+        } catch {
+          // still blocked — leave it buffered
+        }
+      }
+      if (appliedRows.length > 0) {
+        const applied = new Set(appliedRows)
+        retryBuffer = retryBuffer.filter((delta) => !applied.has(delta))
+        for (const [table, deltas] of groupByTable(appliedRows)) options.onApplied?.(table, deltas)
+        return appliedRows.length
+      }
+      // Genuine no-progress even row-by-row — nothing buffered can resolve now.
+      // If every table already reports up-to-date (this failed drain was itself
+      // the "next successful apply" that triggered the retry), surface it now
+      // rather than waiting for an up-to-date control message that may never
+      // come. `.catch(...)` — a consumer's onError throwing inside the surfacing
       // pass must not turn into an unhandled rejection here (Finding B).
       await maybeSurfaceOrphaned().catch(() => {/* swallow: fire-and-forget, never an unhandled rejection */})
       return 0
+    }
+  }
+
+  // Issue 088 (concurrency hardening) — drainRetryBuffer is invoked from two
+  // UNSYNCHRONISED sites: every successful applyBatch's `.then()` chain (below)
+  // and maybeSurfaceOrphaned's `while` loop (above). A JS async fn runs
+  // synchronously up to its first await, so two overlapping calls would each
+  // snapshot the SAME retryBuffer (via byRetryApplyOrder inside drainOnce) and
+  // both apply the overlapping rows → onApplied fires TWICE for one delta and a
+  // redundant PGlite transaction runs, under exactly the heavy-account burst 088
+  // targets. Writes are idempotent LWW so nothing corrupts, but it breaks the
+  // "onApplied fires once per delta" invariant and wastes transactions.
+  //
+  // Single-flight COALESCING guard: only one drainOnce runs at a time. A
+  // concurrent caller must NOT simply no-op-return — a naive `if (draining)
+  // return` could strand a row whose parent commits AFTER the in-flight
+  // drainOnce already snapshotted the buffer. Instead it flags `drainRequested`
+  // and returns 0; the owner then runs ONE trailing drainOnce after its current
+  // pass resolves. That trailing pass re-snapshots the buffer, so a row
+  // unblocked by a concurrent apply mid-drain still lands (the .then that landed
+  // the parent is exactly the concurrent caller that set the flag).
+  //
+  // Termination / no livelock: `drainRequested` is set ONLY by external callers
+  // (their number is bounded by the concurrent applies in flight — finite) and
+  // is NEVER self-regenerated by drainOnce. A no-progress drainOnce with no
+  // pending request leaves the flag clear and the do/while exits, so a genuine
+  // permanent orphan does not spin. The return value stays the total applied
+  // across the coalesced run, so maybeSurfaceOrphaned's `if (n === 0) break`
+  // still gets a correct progress signal (0 iff nothing landed).
+  //
+  // Composition with maybeSurfaceOrphaned: when it owns the drain and a
+  // concurrent table `.then()` fires, that .then's drainRetryBuffer sees
+  // draining === true, flags a re-run, and returns 0 WITHOUT surfacing — so the
+  // owner alone decides orphaning, and its trailing re-run first re-drains any
+  // row the concurrent (successful) apply just unblocked, preventing a premature
+  // false-orphan surface.
+  let draining = false
+  let drainRequested = false
+  async function drainRetryBuffer(): Promise<number> {
+    // A pass is already in flight — coalesce onto it: flag a trailing re-run so
+    // the owner re-snapshots the buffer after its current drainOnce (catching a
+    // parent that commits after that snapshot), then return 0 without touching
+    // the buffer (no double-apply, and no surfacing from this nested call).
+    if (draining) {
+      drainRequested = true
+      return 0
+    }
+    draining = true
+    try {
+      let total = 0
+      do {
+        // Clear BEFORE the pass: any request arriving during this drainOnce's
+        // await (a concurrent apply landing a parent) re-sets the flag and earns
+        // exactly one more trailing pass. Only drainRequested continues the loop
+        // — a permanent orphan (no request, no progress) exits after one pass.
+        drainRequested = false
+        total += await drainOnce()
+        // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- reassigned by a CONCURRENT drainRetryBuffer call during the await above (the coalescing path sets drainRequested = true); flow analysis can't model the cross-invocation write, so it wrongly narrows this to always-false.
+      } while (drainRequested)
+      return total
+    } finally {
+      draining = false
     }
   }
 

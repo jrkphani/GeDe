@@ -481,6 +481,158 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
 
     handle.stop()
   })
+
+  // ── Issue 088 mechanism (A) — the 077-class whole-batch rollback that the
+  // drain-first hardening (SCENARIO E) does NOT cover, and the likely live
+  // cause on a heavy account. `drainRetryBuffer` applies the ENTIRE retry
+  // buffer in ONE atomic transaction (applyInboundDeltas wraps all deltas in a
+  // single db.transaction). So when the buffer holds BOTH a now-RESOLVABLE row
+  // (its parent has already committed) AND a genuinely-BLOCKED sibling (a
+  // forward FK whose parent will never arrive), the blocked row's FK failure
+  // rolls the whole transaction back — dropping the resolvable row too. The
+  // drain reports 0 progress, and maybeSurfaceOrphaned then declares the
+  // RESOLVABLE row orphaned as well: a FALSE orphan poisoned by an unrelated
+  // blocked sibling. On the heavy test account the buffer is exactly this kind
+  // of mix at the all-up-to-date instant, which SCENARIO E's clean 2-row
+  // converge-together repro never exercises.
+  it('mechanism A (issue 088): a genuinely-orphaned sibling must NOT poison a resolvable buffered row in the same atomic drain', async () => {
+    const db = await freshSignInDb()
+    const { factory, push } = fakeStreamFactory()
+    const onError = vi.fn()
+    const onApplied = vi.fn()
+    const handle = startSync(db, { streamFactory: factory, onError, onApplied })
+
+    // projects + context c1 land first (isolates the sibling-table FK races).
+    push('projects', [projectsMsg()])
+    push('contexts', [contextMsg()])
+    await settle()
+
+    // pa1 -> d1 buffers (d1 absent). b9 -> pa_missing buffers PERMANENTLY:
+    // pa_missing is a parameter that never streams, so b9's parameter_id FK can
+    // never resolve — a genuine orphan. (c1/d1 are present/coming; only
+    // parameter_id blocks it.)
+    const bMissingParam = change('b9', T0, {
+      context_id: 'c1',
+      dimension_id: 'd1',
+      parameter_id: 'pa_missing',
+      workspace_id: WS,
+      tuple_hash: 'h9',
+    })
+    push('parameters', [parameterMsg()])
+    push('bindings', [bMissingParam])
+    await settle()
+    expect(onError).toHaveBeenCalledWith('parameters', expect.any(Error))
+    expect(onError).toHaveBeenCalledWith('bindings', expect.any(Error))
+    expect(await db.select().from(schema.parameters)).toHaveLength(0)
+    expect(await db.select().from(schema.bindings)).toHaveLength(0)
+    onError.mockClear()
+
+    // d1 lands and FULLY commits (no up-to-date in this batch) — pa1 is now
+    // genuinely resolvable. The drain triggered off d1's apply attempts the
+    // WHOLE buffer [pa1, b9] atomically; b9's dead FK rolls it back, so on the
+    // CURRENT (whole-batch) drain pa1 stays stuck despite its parent existing.
+    push('dimensions', [dimensionRootMsg()])
+    await settle()
+    expect(await db.select().from(schema.dimensions)).toHaveLength(1)
+
+    // Every shape reports up-to-date — the orphan-surfacing edge. b9 is a true
+    // orphan and SHOULD surface; pa1 must NOT, because its parent d1 exists.
+    const allTables: TableName[] = [
+      'projects',
+      'tier1_purpose',
+      'tier1_props',
+      'tier2_tables',
+      'tier2_entries',
+      'dimensions',
+      'parameters',
+      'contexts',
+      'bindings',
+      'invitations',
+      'workspace_members',
+    ]
+    for (const table of allTables) push(table, [upToDate()])
+    await settle()
+
+    // GREEN (mechanism-A fix): the resolvable row applied independently of the
+    // blocked sibling; only the genuine orphan surfaced.
+    expect(onError).not.toHaveBeenCalledWith('parameters', expect.any(Error))
+    const pa = await db.select().from(schema.parameters).where(eq(schema.parameters.id, 'pa1'))
+    expect(pa).toHaveLength(1)
+    expect(pa[0]?.dimensionId).toBe('d1')
+    // The genuinely-orphaned binding is correctly surfaced and not applied.
+    expect(onError).toHaveBeenCalledWith('bindings', expect.any(Error))
+    expect(await db.select().from(schema.bindings)).toHaveLength(0)
+
+    handle.stop()
+  })
+
+  it('mechanism A concurrency (issue 088): a resolvable row still buffered under a burst of overlapping drains fires onApplied EXACTLY ONCE (single-flight coalescing, not double-apply)', async () => {
+    // drainRetryBuffer is called from two unsynchronised sites — every
+    // successful apply's `.then()` chain and maybeSurfaceOrphaned's loop. A JS
+    // async fn runs synchronously up to its first await, so two overlapping
+    // drains would each snapshot the SAME retryBuffer (via byRetryApplyOrder,
+    // before the first removes what it applied) and both apply the overlapping
+    // row → onApplied fires TWICE for one delta. Writes are idempotent LWW so
+    // PGlite ends up correct either way, but the "onApplied fires once per delta"
+    // invariant (which downstream store refresh-counting relies on) breaks. This
+    // asserts the invariant directly: under a burst that fans several drains
+    // across ticks while a resolvable row sits buffered, its onApplied fires once.
+    const db = await freshSignInDb()
+    const { factory, push } = fakeStreamFactory()
+    const onError = vi.fn()
+    const onApplied = vi.fn()
+    const handle = startSync(db, { streamFactory: factory, onError, onApplied })
+
+    // Parents present; isolates the sibling-table FK races.
+    push('projects', [projectsMsg()])
+    push('contexts', [contextMsg()])
+    await settle()
+
+    // pa1 -> d1 buffers (d1 absent). b9 -> pa_missing buffers PERMANENTLY (a
+    // genuine orphan: its parameter_id never streams). b9 is the poison that
+    // keeps the WHOLE-batch fast path rolling back even once d1 lands, so pa1
+    // stays BUFFERED-yet-RESOLVABLE — precisely the row a second concurrent drain
+    // could re-snapshot and double-apply.
+    const bMissingParam = change('b9', T0, {
+      context_id: 'c1',
+      dimension_id: 'd1',
+      parameter_id: 'pa_missing',
+      workspace_id: WS,
+      tuple_hash: 'h9',
+    })
+    push('parameters', [parameterMsg()])
+    push('bindings', [bMissingParam])
+    await settle()
+    onError.mockClear()
+
+    // d1 lands (pa1 now resolvable), and in the SAME push burst several further
+    // independently-successful rows land too. Each of their `.then()` chains ALSO
+    // calls drainRetryBuffer — the unsynchronised extra drain sites. Their applies
+    // resolve AFTER d1 commits but while d1's own drain is still mid-flight (its
+    // fast path rolls back on b9, then per-row lands pa1 across multiple awaits),
+    // so the extra drains overlap the window in which pa1 is applied-but-not-yet-
+    // removed. Without the single-flight guard an overlapping drain re-applies pa1
+    // → a second onApplied('parameters', [pa1]).
+    push('dimensions', [dimensionRootMsg()])
+    push('tier1_purpose', [tier1PurposeMsg()])
+    push('tier1_props', [tier1PropMsg()])
+    push('tier2_tables', [tier2TableMsg()])
+    await settle()
+
+    // pa1 landed and is resolvable...
+    const pa = await db.select().from(schema.parameters).where(eq(schema.parameters.id, 'pa1'))
+    expect(pa).toHaveLength(1)
+    expect(pa[0]?.dimensionId).toBe('d1')
+    // ...and onApplied fired for it EXACTLY ONCE across the whole burst (the
+    // coalescing invariant — 2 here would be the double-apply bug).
+    const pa1Applies = onApplied.mock.calls.filter((call) => {
+      const [table, rows] = call as [TableName, readonly { id: string }[]]
+      return table === 'parameters' && rows.some((r) => r.id === 'pa1')
+    })
+    expect(pa1Applies).toHaveLength(1)
+
+    handle.stop()
+  })
 })
 
 describe('Materialization repro — store layer (075B) mirrors PGlite faithfully either way', () => {
