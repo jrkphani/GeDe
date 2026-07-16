@@ -1,6 +1,6 @@
 # 082: Design route (tier 2) — stable, consistent, keyboard-fast dimension/parameter entry + on-ring authoring
 
-- **Status**: OPEN
+- **Status**: **Phase 1 SHIPPED** (deployed in `5bbc8bc`: soft-hint floor, persistent keyboard-fast rail, unified add grammar, append-only dots + the two canvas regression fixes). **Phase 2 (on-ring authoring — Direction C) SUPERSEDED by [085](085-design-route-consolidated-editing.md)** — the owner chose canvas-as-visual (all editing in the tables), which is incompatible with turning the ring into an editing surface. Do not build Phase 2. 085 also completes this issue's unbuilt "arc-span growth + ease residual movement" clause (§Throughout).
 - **Milestone**: M6 (UI polish, same track as 013/021/024/027/081) — no sync/infra blocker. Design-route surgery only; no schema, no synced-column ripple (unlike 081), so it is a pure client/render change.
 - **Blocked by**: none hard. **Sequence after 081 lands** — 081 edits Foundation (tier 1) source; this issue edits Design (tier 2) source; different files, no merge conflict, but running both red at once fights `verify:fast` for no reason. Phase 2 (on-ring editing) additionally wants Phase 1's stable canvas box in place first.
 
