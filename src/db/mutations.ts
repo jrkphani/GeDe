@@ -4,6 +4,7 @@ import type { Database } from './client'
 import { firstOrThrow } from './util'
 import {
   bindings,
+  canvases,
   contexts,
   dimensions,
   parameters,
@@ -83,7 +84,19 @@ export async function createProject(
     .insert(projects)
     .values({ id: uuidv7(), workspaceId, name: input.name, description: input.description ?? null })
     .returning()
-  return firstOrThrow(rows)
+  const project = firstOrThrow(rows)
+  // Issue 090 Correction 1 — seed the project's root canvas in the same call
+  // (creation seeded nothing before; a canvas is now a real row). The same
+  // path covers local + cloud, enqueued like any other create (Open Question 6).
+  await db.insert(canvases).values({
+    id: uuidv7(),
+    projectId: project.id,
+    workspaceId,
+    parentContextId: null,
+    name: 'Canvas 1',
+    sort: 0,
+  })
+  return project
 }
 
 export async function renameProject(db: Database, id: string, name: string): Promise<ProjectRow> {
@@ -135,6 +148,118 @@ export async function listArchivedProjects(db: Database): Promise<ProjectRow[]> 
     .orderBy(desc(projects.deletedAt), asc(projects.name))
 }
 
+// ── Canvases (issue 090) ──────────────────────────────────────────────────────
+// A canvas is now a first-class row (was an implicit `(project_id, context_id)`
+// composite key). parent_context_id NULL = a root canvas (many per project);
+// set = the child canvas of that context (issue 011, one per context). The
+// read/filter path (canvasScope/contextCanvasScope) still keys on
+// context_id/parent_id in this phase — these functions only ADD canvas CRUD and
+// STAMP canvas_id on writes; the read path is repointed in a later phase.
+
+export type CanvasRow = typeof canvases.$inferSelect
+
+// Mirrors projectWorkspaceId one FK hop closer — resolves a canvas's workspace
+// from its own row (for canvas-scoped writes that only carry a canvasId).
+export async function canvasWorkspaceId(db: Database, canvasId: string): Promise<string> {
+  const rows = await db
+    .select({ workspaceId: canvases.workspaceId })
+    .from(canvases)
+    .where(eq(canvases.id, canvasId))
+  return firstOrThrow(rows, 'canvas not found').workspaceId
+}
+
+// The project's default (first live) root canvas. Every pre-090 write path that
+// operated on "the root canvas" (addDimension, createContext for root contexts)
+// stamps this. A project always has at least one — createProject seeds it.
+async function rootCanvasId(db: Database, projectId: string): Promise<string> {
+  const rows = await db
+    .select({ id: canvases.id })
+    .from(canvases)
+    .where(and(eq(canvases.projectId, projectId), isNull(canvases.parentContextId), isNull(canvases.deletedAt)))
+    .orderBy(asc(canvases.sort), asc(canvases.createdAt))
+  return firstOrThrow(rows, 'root canvas not found').id
+}
+
+// The child canvas of a context, created on first drill-in (issue 011). Idempotent:
+// returns the existing live child canvas if present, else inserts one. The
+// partial unique index guarantees at most one live child canvas per context.
+async function childCanvasId(db: Database, parentContextId: string): Promise<string> {
+  const existing = await db
+    .select({ id: canvases.id })
+    .from(canvases)
+    .where(and(eq(canvases.parentContextId, parentContextId), isNull(canvases.deletedAt)))
+  const found = existing[0]
+  if (found) return found.id
+  const parent = firstOrThrow(
+    await db.select().from(contexts).where(eq(contexts.id, parentContextId)),
+    'parent context not found',
+  )
+  const rows = await db
+    .insert(canvases)
+    .values({
+      id: uuidv7(),
+      projectId: parent.projectId,
+      workspaceId: parent.workspaceId,
+      parentContextId,
+      // name NULL ⇒ derive from the context symbol at render (Open Question 1).
+      name: null,
+      sort: 0,
+    })
+    .returning({ id: canvases.id })
+  return firstOrThrow(rows).id
+}
+
+// A new root canvas in a project's Design lane (issue 090 switcher). Appends at
+// the tail of the live root canvases by sort.
+export async function createCanvas(
+  db: Database,
+  projectId: string,
+  name?: string | null,
+): Promise<CanvasRow> {
+  const workspaceId = await projectWorkspaceId(db, projectId)
+  const existing = await listCanvases(db, projectId)
+  const rows = await db
+    .insert(canvases)
+    .values({
+      id: uuidv7(),
+      projectId,
+      workspaceId,
+      parentContextId: null,
+      name: name?.trim() ? name.trim() : null,
+      sort: existing.length,
+    })
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function archiveCanvas(db: Database, id: string): Promise<CanvasRow> {
+  const rows = await db
+    .update(canvases)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(eq(canvases.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function restoreCanvas(db: Database, id: string): Promise<CanvasRow> {
+  const rows = await db
+    .update(canvases)
+    .set({ deletedAt: null, updatedAt: now() })
+    .where(eq(canvases.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+// Live ROOT canvases of a project, in lane order. Child canvases are entered by
+// drilling into a context (011), not listed here.
+export async function listCanvases(db: Database, projectId: string): Promise<CanvasRow[]> {
+  return db
+    .select()
+    .from(canvases)
+    .where(and(eq(canvases.projectId, projectId), isNull(canvases.parentContextId), isNull(canvases.deletedAt)))
+    .orderBy(asc(canvases.sort), asc(canvases.createdAt))
+}
+
 // ── Dimensions (issue 002) ────────────────────────────────────────────────────
 // contextId scoping (child canvases) arrives with issue 011; everything below
 // operates on the root canvas (context_id IS NULL).
@@ -184,6 +309,8 @@ export async function addDimension(db: Database, projectId: string, name?: strin
     return m ? Math.max(max, Number(m[1])) : max
   }, 0)
   const workspaceId = await projectWorkspaceId(db, projectId)
+  // Issue 090 — stamp the project's root canvas (this path is root-canvas only).
+  const canvasId = await rootCanvasId(db, projectId)
   const defaultName = `Dimension ${Math.max(maxDefault, existing.length) + 1}`
   const trimmedName = name?.trim()
   const finalName = trimmedName === undefined || trimmedName === '' ? defaultName : trimmedName
@@ -193,6 +320,7 @@ export async function addDimension(db: Database, projectId: string, name?: strin
       id: uuidv7(),
       projectId,
       workspaceId,
+      canvasId,
       name: finalName,
       color: paletteColor(existing.length),
       sort: existing.length,
@@ -555,12 +683,16 @@ export async function createContext(
   const taken = new Set(existing.map((c) => c.symbol))
   const symbol = parentSymbol ? nextChildSymbol(parentSymbol, taken) : nextRootSymbol(taken)
   const workspaceId = await projectWorkspaceId(db, projectId)
+  // Issue 090 — a root context lives on the project's root canvas; a child
+  // context lives on its parent context's child canvas (created if absent).
+  const canvasId = parentId ? await childCanvasId(db, parentId) : await rootCanvasId(db, projectId)
   const rows = await db
     .insert(contexts)
     .values({
       id: uuidv7(),
       projectId,
       workspaceId,
+      canvasId,
       parentId,
       symbol,
       sort: existing.length,
@@ -745,6 +877,8 @@ export async function openChildCanvas(
 ): Promise<ChildCanvasResult> {
   const parent = firstOrThrow(await db.select().from(contexts).where(eq(contexts.id, parentContextId)))
   const projectId = parent.projectId
+  // Issue 090 — the child canvas backing this drill-in (created on first open).
+  const canvasId = await childCanvasId(db, parentContextId)
   const parentDims = await listDimensions(db, projectId, parent.parentId)
   const parentBindings = await listBindings(db, parentContextId)
   const boundByDim = new Map(parentBindings.map((b) => [b.dimensionId, b.parameterId]))
@@ -778,6 +912,7 @@ export async function openChildCanvas(
         id: uuidv7(),
         projectId,
         workspaceId: parent.workspaceId,
+        canvasId,
         contextId: parentContextId,
         sourceParamId: slot.parameterId,
         name: paramRow.name,
@@ -1344,12 +1479,15 @@ export async function promoteEntries(db: Database, input: PromoteInput): Promise
   if (target.kind === 'new') {
     const existingDims = await listDimensions(db, projectId)
     workspaceId = await projectWorkspaceId(db, projectId)
+    // Issue 090 — promotion seeds a root-canvas dimension; stamp the root canvas.
+    const canvasId = await rootCanvasId(db, projectId)
     const rows = await db
       .insert(dimensions)
       .values({
         id: uuidv7(),
         projectId,
         workspaceId,
+        canvasId,
         name: target.name,
         color: paletteColor(existingDims.length),
         sort: existingDims.length,

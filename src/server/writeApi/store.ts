@@ -45,13 +45,18 @@ export type FkReferenceTable = MutationTable | 'workspaces'
  */
 export const FK_SCHEMA: Readonly<Record<MutationTable, Readonly<Record<string, FkReferenceTable>>>> = {
   projects: {},
+  // Issue 090 — `parentContextId` is the nullable half of the canvases↔contexts
+  // FK cycle (a child canvas points at its parent context); `projectId` is the
+  // NOT-NULL project owner. `dimensions`/`contexts` gain `canvasId` (their
+  // NOT-NULL membership FK) below so the pre-check accepts a client canvas write.
+  canvases: { projectId: 'projects', parentContextId: 'contexts' },
   tier1Purpose: { projectId: 'projects' },
   tier1Props: { projectId: 'projects' },
   tier2Tables: { projectId: 'projects' },
   tier2Entries: { tableId: 'tier2Tables', parentId: 'tier2Entries' },
-  dimensions: { projectId: 'projects', contextId: 'contexts', sourceParamId: 'parameters' },
+  dimensions: { projectId: 'projects', canvasId: 'canvases', contextId: 'contexts', sourceParamId: 'parameters' },
   parameters: { dimensionId: 'dimensions', parentParamId: 'parameters', sourceEntryId: 'tier2Entries' },
-  contexts: { projectId: 'projects', parentId: 'contexts' },
+  contexts: { projectId: 'projects', canvasId: 'canvases', parentId: 'contexts' },
   bindings: { contextId: 'contexts', dimensionId: 'dimensions', parameterId: 'parameters' },
   // Issue 056 — both point OUTWARD at `workspaces` (never at each other or
   // at another mutable table), matching src/db/schema.ts:31-45,59-75.
@@ -289,6 +294,7 @@ export class InMemoryWriteStore implements WriteStore {
 /** Snake-cased table names, matching src/db/schema.ts's `pgTable(...)` first argument. */
 const SQL_TABLE_NAMES: Readonly<Record<MutationTable, string>> = {
   projects: 'projects',
+  canvases: 'canvases',
   tier1Purpose: 'tier1_purpose',
   tier1Props: 'tier1_props',
   tier2Tables: 'tier2_tables',

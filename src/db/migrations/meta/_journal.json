@@ -99,6 +99,13 @@
       "when": 1784110699019,
       "tag": "0016_tier1_existing_scenario",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1784206359412,
+      "tag": "0017_canvases",
+      "breakpoints": true
     }
   ]
 }

@@ -8,7 +8,7 @@ import { uuidv7 } from 'uuidv7'
 import { openDatabase } from '../db/client'
 import { addDimension, addParameter, addTier2Table, createContext, createProject } from '../db/mutations'
 import { createWorkspace } from '../db/workspaces'
-import { dimensions, parameters, projects } from '../db/schema'
+import { canvases, dimensions, parameters, projects } from '../db/schema'
 import { useCommandLogStore } from './commandLog'
 import { useStatusStore } from './status'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
@@ -200,6 +200,7 @@ describe('sync store — engine lifecycle (driven by a fake stream, no live Elec
     // Seed the project the incoming context row's FK requires.
     await createProject(db, { name: 'Tavalo' })
     const [project] = await db.select().from(projects)
+    const [canvas] = await db.select().from(canvases)
     const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
     const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
       subscribe: (callback) => {
@@ -222,6 +223,7 @@ describe('sync store — engine lifecycle (driven by a fake stream, no live Elec
           id: 'c1',
           project_id: project?.id,
           workspace_id: project?.workspaceId,
+          canvas_id: canvas?.id,
           parent_id: null,
           symbol: 'α',
           name: null,
@@ -612,6 +614,7 @@ describe('sync store — dimensions delta signal (issue 075 Part B)', () => {
     vi.stubEnv('VITE_SYNC_ENABLED', 'true')
     const { db } = await openDatabase('memory://')
     const project = await createProject(db, { name: 'Tavalo' })
+    const [canvas] = await db.select().from(canvases)
     const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
     const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
       subscribe: (callback) => {
@@ -632,6 +635,7 @@ describe('sync store — dimensions delta signal (issue 075 Part B)', () => {
           id: 'd1',
           project_id: project.id,
           workspace_id: project.workspaceId,
+          canvas_id: canvas?.id,
           context_id: null,
           source_param_id: null,
           name: 'Value',
@@ -688,6 +692,7 @@ describe('sync store — contexts delta signal (issue 075 Part B)', () => {
     vi.stubEnv('VITE_SYNC_ENABLED', 'true')
     const { db } = await openDatabase('memory://')
     const project = await createProject(db, { name: 'Tavalo' })
+    const [canvas] = await db.select().from(canvases)
     const box: { deliver: ((messages: readonly ElectricMessage[]) => void) | null } = { deliver: null }
     const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
       subscribe: (callback) => {
@@ -708,6 +713,7 @@ describe('sync store — contexts delta signal (issue 075 Part B)', () => {
           id: 'c1',
           project_id: project.id,
           workspace_id: project.workspaceId,
+          canvas_id: canvas?.id,
           parent_id: null,
           symbol: 'α',
           name: null,
@@ -1166,6 +1172,7 @@ describe('sync store — status derivation (issue 036)', () => {
     const { db } = await openDatabase('memory://')
     await createProject(db, { name: 'Tavalo' })
     const [project] = await db.select().from(projects)
+    const [canvas] = await db.select().from(canvases)
     const { factory, deliver, deliverUpToDateAll } = fakeStreamFactory()
 
     useSyncStore.getState().start(db, { streamFactory: factory })
@@ -1207,6 +1214,7 @@ describe('sync store — status derivation (issue 036)', () => {
           id: 'c1',
           project_id: project?.id,
           workspace_id: project?.workspaceId,
+          canvas_id: canvas?.id,
           parent_id: null,
           symbol: 'α',
           name: null,
@@ -1337,6 +1345,7 @@ describe('sync store — lost-edit note (issue 036, test-first plan #3)', () => 
     const { db } = await openDatabase('memory://')
     await createProject(db, { name: 'Tavalo' })
     const [project] = await db.select().from(projects)
+    const [canvas] = await db.select().from(canvases)
     const { factory, deliver } = fakeStreamFactory()
 
     useSyncStore.getState().enqueueLocalMutation({
@@ -1358,6 +1367,7 @@ describe('sync store — lost-edit note (issue 036, test-first plan #3)', () => 
           id: 'c1',
           project_id: project?.id,
           workspace_id: project?.workspaceId,
+          canvas_id: canvas?.id,
           parent_id: null,
           symbol: 'α',
           name: 'Someone else renamed it',
@@ -1393,6 +1403,7 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
     const { db } = await openDatabase('memory://')
     await createProject(db, { name: 'Tavalo' })
     const [project] = await db.select().from(projects)
+    const [canvas] = await db.select().from(canvases)
     const { factory, deliver, deliverUpToDateAll } = fakeStreamFactory()
 
     useSyncStore.getState().start(db, { streamFactory: factory })
@@ -1429,6 +1440,7 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
           id: 'd1',
           project_id: project?.id,
           workspace_id: project?.workspaceId,
+          canvas_id: canvas?.id,
           context_id: null,
           source_param_id: null,
           name: 'Value',

@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm'
 import {
   type AnyPgColumn,
   integer,
@@ -194,6 +195,41 @@ export const tier2Entries = pgTable('tier2_entries', {
   deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
 })
 
+// Issue 090 — a canvas becomes a first-class row (was an implicit composite
+// key `(project_id, context_id/parent_id)`). parent_context_id NULL = a ROOT
+// canvas (now MANY per project, stacked in the Design lane); set = the child
+// canvas of that context (exactly one — the partial unique index enforces it,
+// mirroring issue 011's recursion model). Carries its own workspace_id (0015
+// convention) so Electric's read-path shape and RLS scope it with a literal
+// predicate, no join. `name` NULL on child canvases ⇒ derive from the context
+// symbol. Migration 0017 backfills one root canvas per existing project (even
+// empty ones) and one child canvas per distinct child context.
+export const canvases = pgTable(
+  'canvases',
+  {
+    id: text('id').primaryKey(),
+    projectId: text('project_id')
+      .notNull()
+      .references(() => projects.id),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    parentContextId: text('parent_context_id').references((): AnyPgColumn => contexts.id),
+    name: text('name'),
+    sort: integer('sort').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    // At most one live child canvas per context (issue 011 invariant). Root
+    // canvases (parent_context_id NULL) are exempt — a project holds many.
+    uniqueIndex('canvases_parent_context_idx')
+      .on(table.parentContextId)
+      .where(sql`${table.deletedAt} IS NULL AND ${table.parentContextId} IS NOT NULL`),
+  ],
+)
+
 // SPEC.md §3 — context_id null = root canvas; a context's child canvas gets its
 // own rows (issue 011). Dimension count is pure row data: nothing encodes "3".
 // source_param_id (issue 011) records which of the parent context's bound
@@ -209,6 +245,12 @@ export const dimensions = pgTable('dimensions', {
   workspaceId: text('workspace_id')
     .notNull()
     .references(() => workspaces.id),
+  // Issue 090 — the explicit canvas membership FK. Supersedes context_id
+  // (kept transitionally per the doc's Transition strategy — dropped in a
+  // later cleanup migration once the read path is fully on canvas_id).
+  canvasId: text('canvas_id')
+    .notNull()
+    .references(() => canvases.id),
   contextId: text('context_id').references((): AnyPgColumn => contexts.id),
   sourceParamId: text('source_param_id').references((): AnyPgColumn => parameters.id),
   name: text('name').notNull(),
@@ -256,6 +298,12 @@ export const contexts = pgTable('contexts', {
   workspaceId: text('workspace_id')
     .notNull()
     .references(() => workspaces.id),
+  // Issue 090 — explicit canvas membership FK (supersedes parent_id, kept
+  // transitionally). Root contexts point at a root canvas; a child context
+  // points at its parent's child canvas.
+  canvasId: text('canvas_id')
+    .notNull()
+    .references(() => canvases.id),
   parentId: text('parent_id').references((): AnyPgColumn => contexts.id),
   symbol: text('symbol').notNull(),
   name: text('name'),

@@ -43,7 +43,16 @@ import type { RowDelta, TableName } from '../domain/syncDelta'
 // sourceParamId already gets, making convergence independent of apply order
 // entirely. Each table entry is therefore a LIST of deferred columns, not a
 // single column.
+// Issue 090 — `canvases.parentContextId` is the ONLY new deferred column. It is
+// the nullable half of the canvases↔contexts FK cycle (canvases.parent_context_id
+// → contexts, and contexts.canvas_id / dimensions.canvas_id → canvases). The
+// NOT-NULL half (canvas_id) is NOT deferrable — nulling then failing to restore
+// would leave a permanent dangling FK (the hazard warned about below) — so it is
+// satisfied by apply ORDER instead: `canvases` precedes `contexts`/`dimensions`
+// in ENVELOPE_TABLE_NAMES → RETRY_APPLY_ORDER, so a canvas commits before any
+// child that references it.
 const DEFERRED_FK_COLUMN: Partial<Record<TableName, readonly string[]>> = {
+  canvases: ['parentContextId'],
   contexts: ['parentId'],
   tier2_entries: ['parentId'],
   parameters: ['parentParamId'],
@@ -102,6 +111,25 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
               setWhere: sql`${schema.projects.updatedAt} < ${delta.updatedAt}`,
             })
             .returning({ id: schema.projects.id })
+          return applied.length > 0
+        }
+        // Issue 090 — canvases mirrors the dimensions/contexts pattern (NOT the
+        // projects/invitations outward-workspace pattern): NO ensureWorkspaceStub
+        // is needed, because canvases.project_id FKs `projects`, which guarantees
+        // that project's own ensureWorkspaceStub already committed. Its deferred
+        // `parentContextId` (nullable half of the canvases↔contexts cycle) is
+        // forced null here and restored in the second pass below.
+        case 'canvases': {
+          const row = forceDeferredNull(delta) as typeof schema.canvases.$inferInsert
+          const applied = await tx
+            .insert(schema.canvases)
+            .values(row)
+            .onConflictDoUpdate({
+              target: schema.canvases.id,
+              set: row,
+              setWhere: sql`${schema.canvases.updatedAt} < ${delta.updatedAt}`,
+            })
+            .returning({ id: schema.canvases.id })
           return applied.length > 0
         }
         case 'tier1_purpose': {
@@ -251,6 +279,15 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
       const columns = DEFERRED_FK_COLUMN[delta.table]
       if (!columns || columns.length === 0) return
       switch (delta.table) {
+        case 'canvases':
+          // Issue 090 — restore the deferred `parentContextId` now that the
+          // referenced context (if any) has been applied earlier in this same
+          // transaction; null on a root canvas restores cleanly to null.
+          await tx
+            .update(schema.canvases)
+            .set({ parentContextId: delta.row.parentContextId as string | null })
+            .where(eq(schema.canvases.id, delta.id))
+          return
         case 'contexts':
           await tx
             .update(schema.contexts)

@@ -36,6 +36,10 @@
  */
 export type MutationTable =
   | 'projects'
+  // Issue 090 (migration 0017) — a canvas is a first-class row a client may
+  // create/rename/archive via /write; it joins the same camelCase (protocol)
+  // vocabulary the other project-content tables use here.
+  | 'canvases'
   | 'tier1Purpose'
   | 'tier1Props'
   | 'tier2Tables'

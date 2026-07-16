@@ -58,6 +58,22 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     updated_at: 'updatedAt',
     deleted_at: 'deletedAt',
   },
+  // Issue 090 (migration 0017) — a first-class synced table. `parent_context_id`
+  // is the nullable, deferred half of the canvases↔contexts FK cycle
+  // (src/db/sync.ts); every column below MUST be mapped or toCamelRow silently
+  // drops it, which would make a remote-created canvas lose the column the
+  // moment it round-trips through Electric (078/081's own repeated risk).
+  canvases: {
+    id: 'id',
+    project_id: 'projectId',
+    workspace_id: 'workspaceId',
+    parent_context_id: 'parentContextId',
+    name: 'name',
+    sort: 'sort',
+    created_at: 'createdAt',
+    updated_at: 'updatedAt',
+    deleted_at: 'deletedAt',
+  },
   tier1_purpose: {
     id: 'id',
     project_id: 'projectId',
@@ -113,6 +129,11 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     id: 'id',
     project_id: 'projectId',
     workspace_id: 'workspaceId',
+    // Issue 090 (migration 0017) — REQUIRED: `canvas_id` is NOT NULL on this
+    // table (schema.ts), so an unmapped column here would make every
+    // remote-created/updated dimension fail this client's own local insert
+    // (src/db/sync.ts), the exact silent-drop hazard 078/081 warn about.
+    canvas_id: 'canvasId',
     context_id: 'contextId',
     source_param_id: 'sourceParamId',
     name: 'name',
@@ -144,6 +165,8 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     id: 'id',
     project_id: 'projectId',
     workspace_id: 'workspaceId',
+    // Issue 090 (migration 0017) — REQUIRED (NOT NULL, see dimensions.canvas_id).
+    canvas_id: 'canvasId',
     parent_id: 'parentId',
     symbol: 'symbol',
     name: 'name',

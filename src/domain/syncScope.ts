@@ -38,6 +38,9 @@ import type { TableName } from './syncDelta'
 // general pattern; see the workspace_members tests in syncScope.test.ts).
 export const SYNCED_TABLES: readonly TableName[] = [
   'projects',
+  // Issue 090 (migration 0017) — canvases carries its own workspace_id, so it
+  // scopes by the same literal predicate as every other table (below).
+  'canvases',
   'tier1_purpose',
   'tier1_props',
   'tier2_tables',
@@ -73,6 +76,7 @@ export const SYNCED_TABLES: readonly TableName[] = [
 // `ELECTRIC_FEATURE_FLAGS` at all.
 const WORKSPACE_SCOPE_SQL: Readonly<Record<TableName, string>> = {
   projects: 'workspace_id = ANY($1::text[])',
+  canvases: 'workspace_id = ANY($1::text[])',
   tier1_purpose: 'workspace_id = ANY($1::text[])',
   tier1_props: 'workspace_id = ANY($1::text[])',
   tier2_tables: 'workspace_id = ANY($1::text[])',

@@ -21,7 +21,8 @@ import {
 } from './projectEnvelope'
 
 // ── Fixture / arbitrary builders ─────────────────────────────────────────────
-// Build a self-consistent project graph exercising all 9 tables, both
+// Build a self-consistent project graph exercising all 10 tables (issue 090
+// added `canvases`), both
 // self-referential chains (parameters.parentParamId, tier2_entries.parentId,
 // contexts.parentId) and both cross-links (dimensions.sourceParamId,
 // parameters.sourceEntryId), at recursion depth ≤ 4.
@@ -31,6 +32,7 @@ const ts = '2026-07-05T00:00:00.000Z'
 function empty(): EnvelopeTables {
   return {
     projects: [],
+    canvases: [],
     tier1_purpose: [],
     tier1_props: [],
     tier2_tables: [],
@@ -60,6 +62,14 @@ function baseWs(id: string) {
 function fixture(): EnvelopeTables {
   const t = empty()
   t.projects.push({ ...baseWs('p1'), name: 'Tavalo', description: 'desc' })
+  // Issue 090 — canvases: one root canvas (parentContextId null) plus a child
+  // canvas per drilled context. The canvases↔contexts FK cycle is fine in the
+  // envelope (validateReferences is order-independent; canvases have no
+  // SELF_PARENT_FIELD so validateAcyclic ignores them). Every dimension/context
+  // below now carries a resolving canvasId.
+  t.canvases.push({ ...baseWs('cv1'), projectId: 'p1', parentContextId: null, name: 'Canvas 1', sort: 0 })
+  t.canvases.push({ ...baseWs('cvc1'), projectId: 'p1', parentContextId: 'c1', name: null, sort: 0 })
+  t.canvases.push({ ...baseWs('cvc2'), projectId: 'p1', parentContextId: 'c2', name: null, sort: 0 })
   t.tier1_purpose.push({ ...baseWs('pu1'), projectId: 'p1', body: 'why', existingScenario: null })
   t.tier1_props.push({ ...baseWs('pr1'), projectId: 'p1', rank: 1, name: 'Prop', description: null, sort: 0 })
   t.tier2_tables.push({ ...baseWs('tt1'), projectId: 'p1', name: 'Value', sort: 0 })
@@ -68,17 +78,19 @@ function fixture(): EnvelopeTables {
   t.tier2_entries.push({ ...baseWs('te2'), tableId: 'tt1', parentId: 'te1', name: 'E2', description: null, sort: 0 })
   t.tier2_entries.push({ ...baseWs('te3'), tableId: 'tt1', parentId: 'te2', name: 'E3', description: null, sort: 0 })
   // root-canvas dimensions
-  t.dimensions.push({ ...baseWs('d1'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D1', color: '#111', sort: 0 })
-  t.dimensions.push({ ...baseWs('d2'), projectId: 'p1', contextId: null, sourceParamId: null, name: 'D2', color: '#222', sort: 1 })
+  t.dimensions.push({ ...baseWs('d1'), projectId: 'p1', canvasId: 'cv1', contextId: null, sourceParamId: null, name: 'D1', color: '#111', sort: 0 })
+  t.dimensions.push({ ...baseWs('d2'), projectId: 'p1', canvasId: 'cv1', contextId: null, sourceParamId: null, name: 'D2', color: '#222', sort: 1 })
   // parameters incl. a self-ref (sub-parameter) and a sourceEntryId cross-link
   t.parameters.push({ ...baseWs('pa1'), dimensionId: 'd1', parentParamId: null, sourceEntryId: 'te1', name: 'P1', sort: 0 })
   t.parameters.push({ ...baseWs('pa2'), dimensionId: 'd1', parentParamId: 'pa1', sourceEntryId: null, name: 'P2', sort: 1 })
   t.parameters.push({ ...baseWs('pa3'), dimensionId: 'd2', parentParamId: null, sourceEntryId: null, name: 'P3', sort: 0 })
-  // contexts: root context + drilled child (self-ref parentId)
-  t.contexts.push({ ...baseWs('c1'), projectId: 'p1', parentId: null, symbol: 'α', name: 'root', justification: 'j', sort: 0 })
-  t.contexts.push({ ...baseWs('c2'), projectId: 'p1', parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 })
-  // child-canvas dimension: contextId + sourceParamId cross-link both set
-  t.dimensions.push({ ...baseWs('d3'), projectId: 'p1', contextId: 'c2', sourceParamId: 'pa1', name: 'D3', color: '#333', sort: 0 })
+  // contexts: root context (on root canvas cv1) + drilled child (on c1's child
+  // canvas cvc1; self-ref parentId kept transitionally alongside canvasId)
+  t.contexts.push({ ...baseWs('c1'), projectId: 'p1', canvasId: 'cv1', parentId: null, symbol: 'α', name: 'root', justification: 'j', sort: 0 })
+  t.contexts.push({ ...baseWs('c2'), projectId: 'p1', canvasId: 'cvc1', parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 })
+  // child-canvas dimension: lives on c2's child canvas cvc2; contextId +
+  // sourceParamId cross-link both set
+  t.dimensions.push({ ...baseWs('d3'), projectId: 'p1', canvasId: 'cvc2', contextId: 'c2', sourceParamId: 'pa1', name: 'D3', color: '#333', sort: 0 })
   t.parameters.push({ ...baseWs('pa4'), dimensionId: 'd3', parentParamId: null, sourceEntryId: null, name: 'P4', sort: 0 })
   // bindings on both canvases
   t.bindings.push({ ...baseWs('b1'), contextId: 'c1', dimensionId: 'd1', parameterId: 'pa1', tupleHash: 'h1' })
@@ -107,6 +119,11 @@ const arbTables = fc
     const t = empty()
     const pid = nid('p')
     t.projects.push({ ...baseWs(pid), name: `Proj ${pid}`, description: null })
+    // Issue 090 — one root canvas per project; every root dimension/context
+    // below (arbTables only builds root ones — contextId/parentId null) hangs
+    // off it via canvasId.
+    const rootCanvas = nid('cv')
+    t.canvases.push({ ...baseWs(rootCanvas), projectId: pid, parentContextId: null, name: 'Canvas 1', sort: 0 })
     t.tier1_purpose.push({ ...baseWs(nid('pu')), projectId: pid, body: 'b', existingScenario: null })
 
     const tableId = nid('tt')
@@ -125,7 +142,7 @@ const arbTables = fc
     const paramIdsByDim: Record<string, string[]> = {}
     for (let i = 0; i < 2; i++) {
       const did = nid('d')
-      t.dimensions.push({ ...baseWs(did), projectId: pid, contextId: null, sourceParamId: null, name: `D${i}`, color: '#000', sort: i })
+      t.dimensions.push({ ...baseWs(did), projectId: pid, canvasId: rootCanvas, contextId: null, sourceParamId: null, name: `D${i}`, color: '#000', sort: i })
       dimIds.push(did)
       paramIdsByDim[did] = []
       let prevParam: string | null = null
@@ -143,7 +160,7 @@ const arbTables = fc
     // Root contexts, each fully bound → complete tuple.
     for (let c = 0; c < ctxCount; c++) {
       const cid = nid('c')
-      t.contexts.push({ ...baseWs(cid), projectId: pid, parentId: null, symbol: `s${c}`, name: null, justification: 'j', sort: c })
+      t.contexts.push({ ...baseWs(cid), projectId: pid, canvasId: rootCanvas, parentId: null, symbol: `s${c}`, name: null, justification: 'j', sort: c })
       for (const did of dimIds) {
         const paid = (paramIdsByDim[did] ?? [])[0] as string
         t.bindings.push({ ...baseWs(nid('b')), contextId: cid, dimensionId: did, parameterId: paid, tupleHash: `h${c}` })
@@ -395,8 +412,11 @@ describe('projectEnvelope — v3 -> v4 upgrade (issue 081)', () => {
     expect(envelopeToJson(serializeEnvelope(parsed.tables))).toBe(json)
   })
 
-  it('FORMAT_VERSION is 4', () => {
-    expect(FORMAT_VERSION).toBe(4)
+  it('FORMAT_VERSION is 5', () => {
+    // Issue 090 — bumped 4 -> 5 when canvases joined the envelope and canvasId
+    // was added to dimension/context rows (upgradeV4ToV5 synthesizes the canvas
+    // layer for a legacy v4 export).
+    expect(FORMAT_VERSION).toBe(5)
   })
 })
 

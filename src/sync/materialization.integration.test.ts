@@ -64,9 +64,16 @@ function change(id: string, updatedAt: string, extra: Record<string, unknown>): 
 // canvas), which is what turns "a transient race" into "permanent, 3/3".
 const WS = 'ws-fresh'
 const P = 'p1'
+// Issue 090 — the project's root canvas. Every dimension/context now carries a
+// NOT-NULL canvas_id FK, so a root canvas must land before (or drain alongside)
+// them. `parent_context_id` NULL = a root canvas.
+const CV = 'cv1'
 
 function projectsMsg() {
   return change(P, T0, { workspace_id: WS, name: 'Tavalo', description: null })
+}
+function rootCanvasMsg() {
+  return change(CV, T0, { project_id: P, workspace_id: WS, parent_context_id: null, name: 'Canvas 1', sort: 0 })
 }
 function tier1PurposeMsg() {
   return change('t1p1', T0, { project_id: P, workspace_id: WS, body: 'Because reasons' })
@@ -80,21 +87,23 @@ function tier2TableMsg() {
 function tier2EntryMsg() {
   return change('t2e1', T0, { table_id: 't2t1', workspace_id: WS, parent_id: null, name: 'Entry', description: null, sort: 0 })
 }
-// d1 = root-canvas dimension (contextId null — the "safe" case).
+// d1 = root-canvas dimension (contextId null — the "safe" case). canvas_id = CV
+// (the root canvas).
 function dimensionRootMsg() {
-  return change('d1', T0, { project_id: P, workspace_id: WS, context_id: null, source_param_id: null, name: 'Value', color: '#111', sort: 0 })
+  return change('d1', T0, { project_id: P, workspace_id: WS, canvas_id: CV, context_id: null, source_param_id: null, name: 'Value', color: '#111', sort: 0 })
 }
 // d2 = CHILD-canvas dimension bound to context c1 — a real, NOT-nulled
 // forward FK (dimensions.contextId is NOT in DEFERRED_FK_COLUMN, unlike
-// sourceParamId — src/db/sync.ts:34-39).
+// sourceParamId — src/db/sync.ts). Its canvas_id is the root canvas here: these
+// legacy scenarios assert contextId restoration, orthogonal to canvas membership.
 function dimensionChildMsg() {
-  return change('d2', T0, { project_id: P, workspace_id: WS, context_id: 'c1', source_param_id: null, name: 'Comfort', color: '#222', sort: 1 })
+  return change('d2', T0, { project_id: P, workspace_id: WS, canvas_id: CV, context_id: 'c1', source_param_id: null, name: 'Comfort', color: '#222', sort: 1 })
 }
 function parameterMsg() {
   return change('pa1', T0, { dimension_id: 'd1', workspace_id: WS, parent_param_id: null, source_entry_id: null, name: 'High', sort: 0 })
 }
 function contextMsg() {
-  return change('c1', T0, { project_id: P, workspace_id: WS, parent_id: null, symbol: 'α', name: null, justification: null, sort: 0 })
+  return change('c1', T0, { project_id: P, workspace_id: WS, canvas_id: CV, parent_id: null, symbol: 'α', name: null, justification: null, sort: 0 })
 }
 function bindingMsg() {
   return change('b1', T0, { context_id: 'c1', dimension_id: 'd1', parameter_id: 'pa1', workspace_id: WS, tuple_hash: 'h1' })
@@ -137,6 +146,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     // Every child table arrives and fails BEFORE `projects` (and therefore
     // before `workspaces`) has ever been seen locally — the 11-independent-
     // concurrent-ShapeStreams race the bug report describes.
+    push('canvases', [rootCanvasMsg()])
     push('tier1_purpose', [tier1PurposeMsg()])
     push('tier1_props', [tier1PropMsg()])
     push('tier2_tables', [tier2TableMsg()])
@@ -156,12 +166,15 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     expect(await db.select().from(schema.dimensions)).toHaveLength(0)
 
     // `projects` finally lands — ensures `workspaces` (072) then inserts the
-    // project, triggering drainRetryBuffer().
+    // project, triggering drainRetryBuffer(). The root canvas drains first
+    // (RETRY_APPLY_ORDER puts `canvases` right after `projects`), so the
+    // dimension/context canvas_id FKs resolve within the same sorted pass.
     push('projects', [projectsMsg()])
     await settle()
 
     // With no context/dimension ordering conflict, the retry buffer's single
     // parent-before-child sorted pass (RETRY_APPLY_ORDER) converges cleanly.
+    expect(await db.select().from(schema.canvases)).toHaveLength(1)
     expect(await db.select().from(schema.tier1Purpose)).toHaveLength(1)
     expect(await db.select().from(schema.tier1Props)).toHaveLength(1)
     expect(await db.select().from(schema.tier2Tables)).toHaveLength(1)
@@ -184,6 +197,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     // Same race as Scenario A, but this project has ONE child-canvas
     // dimension (d2, contextId='c1') — utterly ordinary content (any project
     // with a single drill-down). d1/d2 both race ahead of `projects`.
+    push('canvases', [rootCanvasMsg()])
     push('tier1_purpose', [tier1PurposeMsg()])
     push('tier1_props', [tier1PropMsg()])
     push('tier2_tables', [tier2TableMsg()])
@@ -245,6 +259,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     const dRegion = change('d-region', T0, {
       project_id: P,
       workspace_id: WS,
+      canvas_id: CV,
       context_id: null,
       source_param_id: null,
       name: 'Region',
@@ -254,6 +269,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     const dSegment = change('d-segment', T0, {
       project_id: P,
       workspace_id: WS,
+      canvas_id: CV,
       context_id: null,
       source_param_id: null,
       name: 'Segment',
@@ -282,6 +298,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     const contextRegister = change('c-tuple1', T0, {
       project_id: P,
       workspace_id: WS,
+      canvas_id: CV,
       parent_id: null,
       symbol: 'α',
       name: null,
@@ -307,6 +324,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     // arrives before `projects` (and therefore before `workspaces`) has ever
     // been seen locally, exactly like the 11-independent-concurrent-
     // ShapeStreams race the other scenarios in this file drive.
+    push('canvases', [rootCanvasMsg()])
     push('tier1_purpose', [tier1PurposeMsg()])
     push('tier1_props', [tier1PropMsg()])
     push('tier2_tables', [tier2TableMsg()])
@@ -413,11 +431,13 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     const onApplied = vi.fn()
     const handle = startSync(db, { streamFactory: factory, onError, onApplied })
 
-    // projects + workspace + context c1 land first, isolating the
+    // projects + workspace + root canvas + context c1 land first, isolating the
     // parameters->dimensions and bindings->{contexts,dimensions,parameters}
     // SIBLING-table forward-FK race (issue 088) from the projects/workspace
-    // parent race (Scenario A/075A).
+    // parent race (Scenario A/075A). The root canvas lands ahead of the
+    // context (contexts.canvas_id is NOT NULL).
     push('projects', [projectsMsg()])
+    push('canvases', [rootCanvasMsg()])
     push('contexts', [contextMsg()])
     await settle()
     expect(await db.select().from(schema.contexts)).toHaveLength(1)
@@ -438,6 +458,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     // may surface yet — the buffer is a live race, not a dead end.
     const others: TableName[] = [
       'projects',
+      'canvases',
       'tier1_purpose',
       'tier1_props',
       'tier2_tables',
@@ -502,8 +523,10 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     const onApplied = vi.fn()
     const handle = startSync(db, { streamFactory: factory, onError, onApplied })
 
-    // projects + context c1 land first (isolates the sibling-table FK races).
+    // projects + root canvas + context c1 land first (isolates the
+    // sibling-table FK races).
     push('projects', [projectsMsg()])
+    push('canvases', [rootCanvasMsg()])
     push('contexts', [contextMsg()])
     await settle()
 
@@ -539,6 +562,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     // orphan and SHOULD surface; pa1 must NOT, because its parent d1 exists.
     const allTables: TableName[] = [
       'projects',
+      'canvases',
       'tier1_purpose',
       'tier1_props',
       'tier2_tables',
@@ -585,6 +609,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
 
     // Parents present; isolates the sibling-table FK races.
     push('projects', [projectsMsg()])
+    push('canvases', [rootCanvasMsg()])
     push('contexts', [contextMsg()])
     await settle()
 
@@ -633,6 +658,124 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
 
     handle.stop()
   })
+
+  // ── Issue 090 — the NEW forward-FK cycle a first-class `canvases` table adds:
+  //   canvases.parent_context_id → contexts   (nullable, DEFERRED column)
+  //   contexts.canvas_id         → canvases   (NOT NULL, satisfied by apply ORDER)
+  //   dimensions.canvas_id       → canvases   (NOT NULL, satisfied by apply ORDER)
+  // This stages the WORST adverse interleave across independent shape streams —
+  // a child canvas before its parent context, the root canvas AFTER its child,
+  // and a dimension before its canvas — with the unblocking parent (`projects`)
+  // arriving LAST, carrying its own up-to-date in the same batch (the exact 088
+  // synchronous-edge race). It must converge with REAL FK values and surface NO
+  // false orphan, proving the 088 drain-first hardening still holds for the new
+  // cycle and that `canvases`' position in RETRY_APPLY_ORDER (right after
+  // `projects`) resolves the NOT-NULL half while the deferred column resolves the
+  // nullable half.
+  it('SCENARIO F (issue 090): the canvases↔contexts FK cycle converges under adverse ordering (child canvas before parent context, dimension before its canvas) with NO false orphan', async () => {
+    const db = await freshSignInDb()
+    const { factory, push } = fakeStreamFactory()
+    const onError = vi.fn()
+    const onApplied = vi.fn()
+    const handle = startSync(db, { streamFactory: factory, onError, onApplied })
+
+    const R = 'cv-root' // root canvas (parent_context_id null)
+    const X = 'ctx-x' // root context, lives on R
+    const C = 'cv-child' // child canvas of context X (parent_context_id = X)
+    // Child-canvas dimension living on child canvas C, bound to context X. Its
+    // canvas_id (C) is a NOT-NULL forward FK; its context_id (X) is DEFERRED.
+    const dimOnChild = change('d-child', T0, {
+      project_id: P,
+      workspace_id: WS,
+      canvas_id: C,
+      context_id: X,
+      source_param_id: null,
+      name: 'Comfort',
+      color: '#333',
+      sort: 0,
+    })
+    // Root-canvas dimension on R.
+    const dimOnRoot = change('d-root', T0, {
+      project_id: P,
+      workspace_id: WS,
+      canvas_id: R,
+      context_id: null,
+      source_param_id: null,
+      name: 'Value',
+      color: '#111',
+      sort: 1,
+    })
+    const rootCanvas = change(R, T0, { project_id: P, workspace_id: WS, parent_context_id: null, name: 'Canvas 1', sort: 0 })
+    const childCanvas = change(C, T0, { project_id: P, workspace_id: WS, parent_context_id: X, name: null, sort: 0 })
+    const rootContext = change(X, T0, { project_id: P, workspace_id: WS, canvas_id: R, parent_id: null, symbol: 'α', name: null, justification: null, sort: 0 })
+
+    // Stream children in the WORST order across independent shapes, all before
+    // `projects` (so all FK-fail and buffer): a dimension before its canvas; the
+    // child canvas before its parent context X AND before the root canvas R.
+    push('dimensions', [dimOnChild]) // canvas_id=C absent, context_id=X absent
+    push('canvases', [childCanvas]) // parent_context_id=X absent; project absent
+    push('contexts', [rootContext]) // canvas_id=R absent; project absent
+    push('canvases', [rootCanvas]) // ROOT canvas arrives AFTER its own child
+    push('dimensions', [dimOnRoot]) // canvas_id=R absent
+    await settle()
+
+    // All buffered — the race is real, not a fixture mistake. Every initial
+    // apply FK-failed and surfaced via onError; clear it so the assertions below
+    // measure only whether a FALSE orphan surfaces at the up-to-date edge.
+    expect(await db.select().from(schema.canvases)).toHaveLength(0)
+    expect(await db.select().from(schema.contexts)).toHaveLength(0)
+    expect(await db.select().from(schema.dimensions)).toHaveLength(0)
+    onError.mockClear()
+
+    // Every table EXCEPT `projects` reports up-to-date first — so `projects`
+    // (which every buffered row transitively needs) is the LAST to reach
+    // up-to-date, and `canvases`/`contexts`/`dimensions` announce "no more rows
+    // coming" while their rows still sit buffered (the 088 edge).
+    const othersF: TableName[] = [
+      'canvases',
+      'tier1_purpose',
+      'tier1_props',
+      'tier2_tables',
+      'tier2_entries',
+      'dimensions',
+      'parameters',
+      'contexts',
+      'bindings',
+      'invitations',
+      'workspace_members',
+    ]
+    for (const table of othersF) push(table, [upToDate()])
+    await settle()
+    expect(onError).not.toHaveBeenCalled()
+
+    // `projects` delivers its row AND up-to-date in the SAME batch — the 11th
+    // (last) up-to-date fires synchronously, BEFORE `projects`' own apply (and
+    // the drain it triggers) has committed. The orphan decision must wait it out.
+    push('projects', [projectsMsg(), upToDate()])
+    await settle()
+
+    // GREEN: no false orphan — the whole cycle converged in the drain. `canvases`
+    // sorts right after `projects` in RETRY_APPLY_ORDER, so within the sorted
+    // batch R and C insert (C's parent_context_id forced NULL) before the
+    // dimensions/contexts whose NOT-NULL canvas_id points at them; the deferred
+    // parent_context_id / context_id are then restored in pass 2.
+    expect(onError).not.toHaveBeenCalled()
+    expect(await db.select().from(schema.canvases)).toHaveLength(2) // R + C
+    expect(await db.select().from(schema.contexts)).toHaveLength(1) // X
+    expect(await db.select().from(schema.dimensions)).toHaveLength(2) // d-child + d-root
+
+    // REAL FK values throughout — never nulled/dropped (a null here would be a
+    // materialization bug, not a fix).
+    const cRow = await db.select().from(schema.canvases).where(eq(schema.canvases.id, C))
+    expect(cRow[0]?.parentContextId).toBe(X) // deferred column RESTORED
+    const xRow = await db.select().from(schema.contexts).where(eq(schema.contexts.id, X))
+    expect(xRow[0]?.canvasId).toBe(R) // NOT-NULL half, satisfied by order
+    const dChild = await db.select().from(schema.dimensions).where(eq(schema.dimensions.id, 'd-child'))
+    expect(dChild[0]?.canvasId).toBe(C)
+    expect(dChild[0]?.contextId).toBe(X) // deferred column RESTORED
+
+    handle.stop()
+  })
 })
 
 describe('Materialization repro — store layer (075B) mirrors PGlite faithfully either way', () => {
@@ -665,6 +808,7 @@ describe('Materialization repro — store layer (075B) mirrors PGlite faithfully
     // shows it, which can be before Design tier has landed).
     const loadPromise = useDimensionsStore.getState().load(P)
 
+    push('canvases', [rootCanvasMsg()])
     push('dimensions', [dimensionRootMsg()])
     await settle()
     push('projects', [projectsMsg()])
@@ -686,6 +830,7 @@ describe('Materialization repro — store layer (075B) mirrors PGlite faithfully
     const dimLoad = useDimensionsStore.getState().load(P)
     const tier1Load = useTier1Store.getState().load(P)
 
+    push('canvases', [rootCanvasMsg()])
     push('tier1_purpose', [tier1PurposeMsg()])
     push('dimensions', [dimensionRootMsg(), dimensionChildMsg()])
     push('contexts', [contextMsg()])

@@ -36,6 +36,9 @@ export type WriteApiHttpClient = (
 // to neither. This bridges it rather than inventing a third vocabulary.
 const TABLE_TO_MUTATION_TABLE: Readonly<Record<TableName, MutationTable>> = {
   projects: 'projects',
+  // Issue 090 — canvases joins the same snake_case (queue) <-> camelCase
+  // (protocol) bridge as the original nine.
+  canvases: 'canvases',
   tier1_purpose: 'tier1Purpose',
   tier1_props: 'tier1Props',
   tier2_tables: 'tier2Tables',

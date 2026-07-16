@@ -95,9 +95,16 @@ describe('workspace RLS isolation (test-first plan #1)', () => {
     await createProject(db, { name: 'B', workspaceId: wsB.id })
 
     // Seed directly (superuser/owner — bypasses RLS, this is test setup).
+    // Issue 090 — dimensions now carry a NOT-NULL canvas_id membership FK, so
+    // a canvas row must exist first (createProject already seeds one, but seed
+    // an explicit one here to keep the raw-SQL fixture self-contained).
     await db.execute(
-      sql`INSERT INTO dimensions (id, project_id, workspace_id, name, color, sort)
-          VALUES ('dim-a', ${projectA.id}, ${wsA.id}, 'Dim', '#000', 0)`,
+      sql`INSERT INTO canvases (id, project_id, workspace_id, sort)
+          VALUES ('cv-a', ${projectA.id}, ${wsA.id}, 1)`,
+    )
+    await db.execute(
+      sql`INSERT INTO dimensions (id, project_id, workspace_id, canvas_id, name, color, sort)
+          VALUES ('dim-a', ${projectA.id}, ${wsA.id}, 'cv-a', 'Dim', '#000', 0)`,
     )
     // Issue 078 step 2 (migration 0015) — parameters now carries its own
     // workspace_id column (denormalized from dimensions, for Electric's

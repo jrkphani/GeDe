@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { openDatabase } from './client'
-import { bindings, contexts, dimensions, invitations, projects, workspaceMembers, workspaces } from './schema'
+import { bindings, canvases, contexts, dimensions, invitations, projects, workspaceMembers, workspaces } from './schema'
 import { applyInboundDeltas } from './sync'
 import { listBindings } from './mutations'
 import type { RowDelta } from '../domain/syncDelta'
@@ -85,11 +85,14 @@ describe('applyInboundDeltas — read-path round-trip (test-first plan #1)', () 
     const db = await freshDb()
     await applyInboundDeltas(db, [
       { table: 'projects', id: 'p1', updatedAt: T0, row: row('p1', T0, { name: 'Tavalo', description: null, workspaceId: WS }) },
+      // Issue 090 — the project's root canvas; every dimension/context below now
+      // carries a NOT-NULL canvasId FK to it.
+      { table: 'canvases', id: 'cv1', updatedAt: T0, row: row('cv1', T0, { projectId: 'p1', workspaceId: WS, parentContextId: null, name: 'Canvas 1', sort: 0 }) },
       {
         table: 'dimensions',
         id: 'd1',
         updatedAt: T0,
-        row: row('d1', T0, { projectId: 'p1', workspaceId: WS, contextId: null, sourceParamId: null, name: 'Value', color: '#111', sort: 0 }),
+        row: row('d1', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', contextId: null, sourceParamId: null, name: 'Value', color: '#111', sort: 0 }),
       },
       {
         table: 'parameters',
@@ -101,7 +104,7 @@ describe('applyInboundDeltas — read-path round-trip (test-first plan #1)', () 
         table: 'contexts',
         id: 'c1',
         updatedAt: T0,
-        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
+        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
       },
       {
         table: 'bindings',
@@ -146,18 +149,19 @@ describe('applyInboundDeltas — FK-cycle apply order (issue 015/032)', () => {
     const db = await freshDb()
     await applyInboundDeltas(db, [
       { table: 'projects', id: 'p1', updatedAt: T0, row: row('p1', T0, { name: 'Tavalo', description: null, workspaceId: WS }) },
+      { table: 'canvases', id: 'cv1', updatedAt: T0, row: row('cv1', T0, { projectId: 'p1', workspaceId: WS, parentContextId: null, name: 'Canvas 1', sort: 0 }) },
       // child FIRST, parent SECOND, in the same batch — the deadlock 015 solved for import.
       {
         table: 'contexts',
         id: 'c2',
         updatedAt: T0,
-        row: row('c2', T0, { projectId: 'p1', workspaceId: WS, parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 }),
+        row: row('c2', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 }),
       },
       {
         table: 'contexts',
         id: 'c1',
         updatedAt: T0,
-        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
+        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
       },
     ])
     const rows = await db.select().from(contexts).where(eq(contexts.id, 'c2'))
@@ -168,11 +172,12 @@ describe('applyInboundDeltas — FK-cycle apply order (issue 015/032)', () => {
     const db = await freshDb()
     await applyInboundDeltas(db, [
       { table: 'projects', id: 'p1', updatedAt: T0, row: row('p1', T0, { name: 'Tavalo', description: null, workspaceId: WS }) },
+      { table: 'canvases', id: 'cv1', updatedAt: T0, row: row('cv1', T0, { projectId: 'p1', workspaceId: WS, parentContextId: null, name: 'Canvas 1', sort: 0 }) },
       {
         table: 'contexts',
         id: 'c1',
         updatedAt: T0,
-        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
+        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
       },
       // child-canvas dimension referencing a parameter that arrives AFTER it
       // in the same batch (dimensions.sourceParamId cross-cycle, issue 011).
@@ -180,13 +185,13 @@ describe('applyInboundDeltas — FK-cycle apply order (issue 015/032)', () => {
         table: 'dimensions',
         id: 'd2',
         updatedAt: T0,
-        row: row('d2', T0, { projectId: 'p1', workspaceId: WS, contextId: 'c1', sourceParamId: 'pa1', name: 'Comfort', color: '#111', sort: 0 }),
+        row: row('d2', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', contextId: 'c1', sourceParamId: 'pa1', name: 'Comfort', color: '#111', sort: 0 }),
       },
       {
         table: 'dimensions',
         id: 'd1',
         updatedAt: T0,
-        row: row('d1', T0, { projectId: 'p1', workspaceId: WS, contextId: null, sourceParamId: null, name: 'Value', color: '#222', sort: 0 }),
+        row: row('d1', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', contextId: null, sourceParamId: null, name: 'Value', color: '#222', sort: 0 }),
       },
       {
         table: 'parameters',
@@ -199,21 +204,52 @@ describe('applyInboundDeltas — FK-cycle apply order (issue 015/032)', () => {
     expect(rows[0]?.sourceParamId).toBe('pa1')
   })
 
+  // Issue 090 — the canvases↔contexts FK cycle: canvases.parent_context_id →
+  // contexts (nullable, DEFERRED) and contexts.canvas_id → canvases (NOT NULL,
+  // NOT deferred → satisfied by apply order). A child canvas delivered BEFORE
+  // its parent context, in the same batch, must converge: the deferred
+  // parentContextId is nulled on pass 1 and restored on pass 2 once the context
+  // (which itself needs the root canvas, present) has landed.
+  it('a child canvas delivered before its parent context survives (parentContextId NULL-then-restore)', async () => {
+    const db = await freshDb()
+    await applyInboundDeltas(db, [
+      { table: 'projects', id: 'p1', updatedAt: T0, row: row('p1', T0, { name: 'Tavalo', description: null, workspaceId: WS }) },
+      // Root canvas first (a context needs its NOT-NULL canvas_id).
+      { table: 'canvases', id: 'cv-root', updatedAt: T0, row: row('cv-root', T0, { projectId: 'p1', workspaceId: WS, parentContextId: null, name: 'Canvas 1', sort: 0 }) },
+      // CHILD canvas BEFORE its parent context cx — parent_context_id points
+      // forward at a context that arrives later in the same batch.
+      { table: 'canvases', id: 'cv-child', updatedAt: T0, row: row('cv-child', T0, { projectId: 'p1', workspaceId: WS, parentContextId: 'cx', name: null, sort: 0 }) },
+      // The parent context cx (lives on the root canvas).
+      {
+        table: 'contexts',
+        id: 'cx',
+        updatedAt: T0,
+        row: row('cx', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv-root', parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
+      },
+    ])
+    const rows = await db.select().from(contexts).where(eq(contexts.id, 'cx'))
+    expect(rows).toHaveLength(1)
+    const childCanvas = await db.select().from(canvases).where(eq(canvases.id, 'cv-child'))
+    // parentContextId RESTORED to its real value (pass 2), not left null.
+    expect(childCanvas[0]?.parentContextId).toBe('cx')
+  })
+
   it('a stale (rejected) row never has its deferred FK column clobbered by the second pass', async () => {
     const db = await freshDb()
     await applyInboundDeltas(db, [
       { table: 'projects', id: 'p1', updatedAt: T0, row: row('p1', T0, { name: 'Tavalo', description: null, workspaceId: WS }) },
+      { table: 'canvases', id: 'cv1', updatedAt: T0, row: row('cv1', T0, { projectId: 'p1', workspaceId: WS, parentContextId: null, name: 'Canvas 1', sort: 0 }) },
       {
         table: 'contexts',
         id: 'c1',
         updatedAt: T0,
-        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
+        row: row('c1', T0, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', parentId: null, symbol: 'α', name: null, justification: null, sort: 0 }),
       },
       {
         table: 'contexts',
         id: 'c2',
         updatedAt: T2,
-        row: row('c2', T2, { projectId: 'p1', workspaceId: WS, parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 }),
+        row: row('c2', T2, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', parentId: 'c1', symbol: 'α1', name: null, justification: null, sort: 0 }),
       },
     ])
     // A stale re-delivery of c2 with an OLDER updatedAt and a different
@@ -224,7 +260,7 @@ describe('applyInboundDeltas — FK-cycle apply order (issue 015/032)', () => {
         table: 'contexts',
         id: 'c2',
         updatedAt: T1,
-        row: row('c2', T1, { projectId: 'p1', workspaceId: WS, parentId: null, symbol: 'stale', name: null, justification: null, sort: 0 }),
+        row: row('c2', T1, { projectId: 'p1', workspaceId: WS, canvasId: 'cv1', parentId: null, symbol: 'stale', name: null, justification: null, sort: 0 }),
       },
     ])
     const rows = await db.select().from(contexts).where(eq(contexts.id, 'c2'))

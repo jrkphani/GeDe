@@ -114,6 +114,7 @@ const NO_ENTRIES: Readonly<Record<string, SyncEntry>> = {}
 export function emptySyncState(): SyncState {
   return {
     projects: NO_ENTRIES,
+    canvases: NO_ENTRIES,
     tier1_purpose: NO_ENTRIES,
     tier1_props: NO_ENTRIES,
     tier2_tables: NO_ENTRIES,

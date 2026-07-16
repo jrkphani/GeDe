@@ -40,7 +40,18 @@ import { z } from 'zod'
 // key at all on any tier1_purpose row) is still importable — upgradeV3ToV4
 // injects `existingScenario: null` before validation, mirroring
 // upgradeV2ToV3's own shape one version up, scoped to one field on one table.
-export const FORMAT_VERSION = 4 as const
+//
+// Issue 090: bumped 4 -> 5 when a canvas became a first-class row (migration
+// 0017) and `dimensions`/`contexts` gained a NOT-NULL `canvas_id` membership FK.
+// A v4 file has no `canvases` table at all and no `canvasId` on any
+// dimension/context row — importing it verbatim would fail validation
+// (`canvases` array absent) and, if forced in, strand every row with a null
+// canvas_id. upgradeV4ToV5 SYNTHESIZES the canvas layer at import time, exactly
+// replicating migration 0017's backfill (one root canvas per project, one child
+// canvas per DISTINCT child context — the union of `dimensions.contextId` and
+// `contexts.parentId` — then repointing every dimension/context's canvasId), so
+// a legacy export still imports losslessly.
+export const FORMAT_VERSION = 5 as const
 const MIN_SUPPORTED_IMPORT_VERSION = 1
 
 // ── Row schemas — mirror src/db/schema.ts column-for-column (camelCase, as
@@ -67,6 +78,27 @@ const projectRow = z.object({
   workspaceId: z.string().nullable(),
   name: z.string(),
   description: z.string().nullable(),
+  createdAt: iso,
+  updatedAt: iso,
+  deletedAt: nullableIso,
+})
+
+// Issue 090 (migration 0017) — a canvas is now a first-class row (was an
+// implicit `(project_id, context_id/parent_id)` composite key). Mirrors
+// src/db/schema.ts's `canvases` pgTable column-for-column (camelCase). Carries
+// its own workspace_id (0015 convention). workspaceId is nullable at the SCHEMA
+// level for the same reason projectRow's is (accepting a legacy upgraded-in-
+// place file — see FORMAT_VERSION's header); it is never left null after
+// import. parent_context_id NULL = a root canvas; set = the child canvas of
+// that context (the canvases→contexts→canvases FK cycle the sync apply layer
+// breaks via a deferred column, src/db/sync.ts).
+const canvasRow = z.object({
+  id: z.string(),
+  projectId: z.string(),
+  workspaceId: z.string().nullable(),
+  parentContextId: z.string().nullable(),
+  name: z.string().nullable(),
+  sort: z.number().int(),
   createdAt: iso,
   updatedAt: iso,
   deletedAt: nullableIso,
@@ -130,6 +162,13 @@ const dimensionRow = z.object({
   id: z.string(),
   projectId: z.string(),
   workspaceId: z.string().nullable(),
+  // Issue 090 (migration 0017) — the explicit canvas membership FK. NOT NULL in
+  // the live DB, but nullable at the SCHEMA level here (like workspaceId — see
+  // FORMAT_VERSION's header) so a pre-090 file that predates the column stays
+  // structurally acceptable once a FORMAT_VERSION upgrader injects it. Kept
+  // alongside the transitional `contextId` (dropped in a later cleanup
+  // migration once the read path is fully on canvas_id).
+  canvasId: z.string().nullable(),
   contextId: z.string().nullable(),
   sourceParamId: z.string().nullable(),
   name: z.string(),
@@ -158,6 +197,10 @@ const contextRow = z.object({
   id: z.string(),
   projectId: z.string(),
   workspaceId: z.string().nullable(),
+  // Issue 090 (migration 0017) — explicit canvas membership FK; see
+  // dimensionRow.canvasId's comment for the nullable-at-schema-level rationale.
+  // Kept alongside the transitional `parentId`.
+  canvasId: z.string().nullable(),
   parentId: z.string().nullable(),
   symbol: z.string(),
   name: z.string().nullable(),
@@ -190,6 +233,7 @@ const bindingRow = z.object({
 // so a new table breaks the build loudly, as required.
 const rowSchemas = {
   projects: projectRow,
+  canvases: canvasRow,
   tier1_purpose: tier1PurposeRow,
   tier1_props: tier1PropRow,
   tier2_tables: tier2TableRow,
@@ -204,6 +248,14 @@ export type TableName = keyof typeof rowSchemas
 
 export const ENVELOPE_TABLE_NAMES = [
   'projects',
+  // Issue 090 — positioned immediately after `projects` and before the
+  // tier/dimensions/contexts tables. This ordering DRIVES RETRY_APPLY_ORDER
+  // (src/sync/syncEngine.ts, `[...ENVELOPE_TABLE_NAMES, ...]`): a canvas row
+  // commits before any `dimensions`/`contexts` child whose NOT-NULL (hence
+  // NOT-deferrable) `canvas_id` FK points at it, while the reverse edge
+  // (`canvases.parent_context_id → contexts`, nullable) is broken by the
+  // deferred column instead (src/db/sync.ts's DEFERRED_FK_COLUMN).
+  'canvases',
   'tier1_purpose',
   'tier1_props',
   'tier2_tables',
@@ -218,13 +270,14 @@ export const ENVELOPE_TABLE_NAMES = [
 // rewrites exactly these; validation resolves exactly these (minus `id`).
 const ID_FIELDS = {
   projects: ['id'],
+  canvases: ['id', 'projectId', 'parentContextId'],
   tier1_purpose: ['id', 'projectId'],
   tier1_props: ['id', 'projectId'],
   tier2_tables: ['id', 'projectId'],
   tier2_entries: ['id', 'tableId', 'parentId'],
-  dimensions: ['id', 'projectId', 'contextId', 'sourceParamId'],
+  dimensions: ['id', 'projectId', 'canvasId', 'contextId', 'sourceParamId'],
   parameters: ['id', 'dimensionId', 'parentParamId', 'sourceEntryId'],
-  contexts: ['id', 'projectId', 'parentId'],
+  contexts: ['id', 'projectId', 'canvasId', 'parentId'],
   bindings: ['id', 'contextId', 'dimensionId', 'parameterId'],
 } as const satisfies Record<TableName, readonly string[]>
 
@@ -234,13 +287,20 @@ const ID_FIELDS = {
 // remap/validation treat them uniformly through the global id map.
 const FK_TARGETS: Record<TableName, Record<string, TableName>> = {
   projects: {},
+  // Issue 090 — canvases.parent_context_id → contexts is the nullable, deferred
+  // half of the canvases↔contexts FK cycle (src/db/sync.ts breaks it by nulling
+  // then restoring parentContextId); dimensions/contexts .canvasId → canvases is
+  // the NOT-NULL half, satisfied by apply ORDER (canvases precedes both in
+  // ENVELOPE_TABLE_NAMES). workspace_id is intentionally absent here (it points
+  // at `workspaces`, not an envelope table — stamped via WORKSPACE_SCOPED_TABLES).
+  canvases: { projectId: 'projects', parentContextId: 'contexts' },
   tier1_purpose: { projectId: 'projects' },
   tier1_props: { projectId: 'projects' },
   tier2_tables: { projectId: 'projects' },
   tier2_entries: { tableId: 'tier2_tables', parentId: 'tier2_entries' },
-  dimensions: { projectId: 'projects', contextId: 'contexts', sourceParamId: 'parameters' },
+  dimensions: { projectId: 'projects', canvasId: 'canvases', contextId: 'contexts', sourceParamId: 'parameters' },
   parameters: { dimensionId: 'dimensions', parentParamId: 'parameters', sourceEntryId: 'tier2_entries' },
-  contexts: { projectId: 'projects', parentId: 'contexts' },
+  contexts: { projectId: 'projects', canvasId: 'canvases', parentId: 'contexts' },
   bindings: { contextId: 'contexts', dimensionId: 'dimensions', parameterId: 'parameters' },
 }
 
@@ -280,9 +340,16 @@ const V2_WORKSPACE_SCOPED_TABLES = [
 // row of every one of these nine tables always carries a real, non-null
 // workspaceId after import, regardless of which legacy version the source
 // file was).
+// Issue 090 (migration 0017) — `canvases` carries its own workspace_id from
+// creation (it never existed pre-090, so no legacy-upgrade group injects it;
+// a future FORMAT_VERSION bump's own upgrader will handle a pre-090 file that
+// has no canvases table at all — see FORMAT_VERSION's header / Phase 3).
+const V3_WORKSPACE_SCOPED_TABLES = ['canvases'] as const satisfies readonly TableName[]
+
 const WORKSPACE_SCOPED_TABLES = [
   ...V1_WORKSPACE_SCOPED_TABLES,
   ...V2_WORKSPACE_SCOPED_TABLES,
+  ...V3_WORKSPACE_SCOPED_TABLES,
 ] as const satisfies readonly TableName[]
 
 export type ProjectRowData = z.infer<typeof projectRow>
@@ -299,6 +366,7 @@ const envelopeSchema = z.object({
   formatVersion: z.literal(FORMAT_VERSION),
   tables: z.object({
     projects: z.array(projectRow),
+    canvases: z.array(canvasRow),
     tier1_purpose: z.array(tier1PurposeRow),
     tier1_props: z.array(tier1PropRow),
     tier2_tables: z.array(tier2TableRow),
@@ -405,6 +473,118 @@ function upgradeV3ToV4(raw: Record<string, unknown>): void {
       }
     }
   }
+  raw.formatVersion = 4
+}
+
+// Issue 090 — upgrades a legacy formatVersion:4 file in place by SYNTHESIZING
+// the whole canvas layer a pre-090 export never had (no `canvases` table, no
+// `canvasId` on any dimension/context). This exactly replicates migration
+// 0017's deterministic backfill so a v4 file and a v4→v5-upgraded file describe
+// the identical canvas graph:
+//   1. one ROOT canvas per project (id `canvas-<projectId>`), even projects
+//      with zero dimensions;
+//   2. one CHILD canvas per DISTINCT child context (id `canvas-ctx-<contextId>`)
+//      — the UNION of `dimensions.contextId` and `contexts.parentId` (a child
+//      canvas may hold contexts but no seeded dimensions, or vice-versa);
+//   3. repoint every dimension/context `canvasId`: root rows (contextId/parentId
+//      null) → their project's root canvas, child rows → their context's child
+//      canvas.
+// The synthesized ids are RAW envelope ids; importProject's remapEnvelope
+// rewrites them to fresh uuids uniformly (canvasId is in ID_FIELDS), so no
+// backfilled id ever collides with a live row. Timestamps are borrowed from the
+// owning project/context row (deterministic, and never null on those tables) so
+// the synthesized rows satisfy the ISO-string schema without inventing a clock.
+function upgradeV4ToV5(raw: Record<string, unknown>): void {
+  const tables = raw.tables
+  if (isRecord(tables)) {
+    const projects = Array.isArray(tables.projects) ? tables.projects : []
+    const dimensions = Array.isArray(tables.dimensions) ? tables.dimensions : []
+    const contexts = Array.isArray(tables.contexts) ? tables.contexts : []
+
+    const str = (v: unknown): string | null => (typeof v === 'string' ? v : null)
+    const ts = (row: Record<string, unknown>, field: string): string =>
+      typeof row[field] === 'string' ? row[field] : new Date(0).toISOString()
+
+    const contextById = new Map<string, Record<string, unknown>>()
+    for (const c of contexts) {
+      if (isRecord(c)) {
+        const id = str(c.id)
+        if (id !== null) contextById.set(id, c)
+      }
+    }
+
+    // Distinct child contexts = union of dimensions.contextId and contexts.parentId.
+    const childContextIds = new Set<string>()
+    for (const d of dimensions) {
+      if (isRecord(d)) {
+        const ctxId = str(d.contextId)
+        if (ctxId !== null) childContextIds.add(ctxId)
+      }
+    }
+    for (const c of contexts) {
+      if (isRecord(c)) {
+        const parentId = str(c.parentId)
+        if (parentId !== null) childContextIds.add(parentId)
+      }
+    }
+
+    const canvases: Record<string, unknown>[] = []
+    const rootCanvasIdByProject = new Map<string, string>()
+    for (const p of projects) {
+      if (!isRecord(p)) continue
+      const projectId = str(p.id)
+      if (projectId === null) continue
+      const rootId = `canvas-${projectId}`
+      rootCanvasIdByProject.set(projectId, rootId)
+      canvases.push({
+        id: rootId,
+        projectId,
+        workspaceId: str(p.workspaceId),
+        parentContextId: null,
+        name: 'Canvas 1',
+        sort: 0,
+        createdAt: ts(p, 'createdAt'),
+        updatedAt: ts(p, 'updatedAt'),
+        deletedAt: null,
+      })
+    }
+
+    const childCanvasIdByContext = new Map<string, string>()
+    for (const ctxId of childContextIds) {
+      const ctx = contextById.get(ctxId)
+      if (!ctx) continue
+      const childId = `canvas-ctx-${ctxId}`
+      childCanvasIdByContext.set(ctxId, childId)
+      canvases.push({
+        id: childId,
+        projectId: str(ctx.projectId),
+        workspaceId: str(ctx.workspaceId),
+        parentContextId: ctxId,
+        name: null,
+        sort: 0,
+        createdAt: ts(ctx, 'createdAt'),
+        updatedAt: ts(ctx, 'updatedAt'),
+        deletedAt: null,
+      })
+    }
+
+    for (const d of dimensions) {
+      if (!isRecord(d)) continue
+      const ctxId = str(d.contextId)
+      d.canvasId =
+        ctxId !== null ? (childCanvasIdByContext.get(ctxId) ?? null) : (rootCanvasIdByProject.get(str(d.projectId) ?? '') ?? null)
+    }
+    for (const c of contexts) {
+      if (!isRecord(c)) continue
+      const parentId = str(c.parentId)
+      c.canvasId =
+        parentId !== null
+          ? (childCanvasIdByContext.get(parentId) ?? null)
+          : (rootCanvasIdByProject.get(str(c.projectId) ?? '') ?? null)
+    }
+
+    tables.canvases = canvases
+  }
   raw.formatVersion = FORMAT_VERSION
 }
 
@@ -425,11 +605,16 @@ export function parseEnvelope(text: string): Envelope {
     upgradeV1ToV2(raw)
     upgradeV2ToV3(raw)
     upgradeV3ToV4(raw)
+    upgradeV4ToV5(raw)
   } else if (raw.formatVersion === 2) {
     upgradeV2ToV3(raw)
     upgradeV3ToV4(raw)
+    upgradeV4ToV5(raw)
   } else if (raw.formatVersion === 3) {
     upgradeV3ToV4(raw)
+    upgradeV4ToV5(raw)
+  } else if (raw.formatVersion === 4) {
+    upgradeV4ToV5(raw)
   } else if (raw.formatVersion !== FORMAT_VERSION) {
     throw new NotGeDeExportError()
   }

@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { eq } from 'drizzle-orm'
 import { openDatabase } from '../db/client'
-import { bindings, dimensions, parameters, projects, workspaces } from '../db/schema'
+import { bindings, canvases, dimensions, parameters, projects, workspaces } from '../db/schema'
 import { applyInboundDeltas } from '../db/sync'
 import { FetchError, FetchBackoffAbortError } from '@electric-sql/client'
 import { isIgnorableReadError, startSync, type ShapeStreamFactory, type ShapeStreamLike } from './syncEngine'
@@ -246,12 +246,28 @@ describe('startSync — reconcile-retry for cross-table FK races (issue 075 Part
     return change(id, updatedAt, {
       project_id: 'p1',
       workspace_id: WS,
+      // Issue 090 — canvas_id is a NOT-NULL membership FK; the root canvas cv1
+      // is seeded (via a canvas delta) before any dimension/context applies.
+      canvas_id: 'cv1',
       context_id: null,
       source_param_id: null,
       name: 'Value',
       color: '#111',
       sort: 0,
       ...extra,
+    })
+  }
+
+  // A root canvas delta for p1 — pushed right after the project lands so every
+  // dimension/context's NOT-NULL canvas_id resolves (Electric streams canvases
+  // too; canvases precedes dimensions/contexts in apply order).
+  function canvasChange(id: string, updatedAt: string): ElectricMessage {
+    return change(id, updatedAt, {
+      project_id: 'p1',
+      workspace_id: WS,
+      parent_context_id: null,
+      name: 'Canvas 1',
+      sort: 0,
     })
   }
 
@@ -270,6 +286,7 @@ describe('startSync — reconcile-retry for cross-table FK races (issue 075 Part
     return change(id, updatedAt, {
       project_id: 'p1',
       workspace_id: WS,
+      canvas_id: 'cv1',
       parent_id: null,
       symbol: 'α',
       name: null,
@@ -303,6 +320,9 @@ describe('startSync — reconcile-retry for cross-table FK races (issue 075 Part
 
     push('projects', [change('p1', T0, { workspace_id: WS, name: 'Tavalo', description: null })])
     await flush()
+    // The project's root canvas lands (dimension/context deltas below FK it).
+    push('canvases', [canvasChange('cv1', T0)])
+    await flush()
 
     // parameters races ahead of its dimension parent — currently missing
     // locally, so this batch throws inside applyInboundDeltas and rolls back.
@@ -332,6 +352,8 @@ describe('startSync — reconcile-retry for cross-table FK races (issue 075 Part
     const handle = startSync(db, { streamFactory: factory, onApplied, onError })
 
     push('projects', [change('p1', T0, { workspace_id: WS, name: 'Tavalo', description: null })])
+    await flush()
+    push('canvases', [canvasChange('cv1', T0)])
     await flush()
 
     // bindings arrives before ANY of its three parents.
@@ -468,6 +490,9 @@ describe('startSync — no deltas dropped when a batch buffers mid-drain (issue 
 
     push('projects', [change('p1', T0, { workspace_id: WS, name: 'Tavalo', description: null })])
     await settle()
+    // The root canvas lands (issue 090 — dimension/context NOT-NULL canvas_id FK).
+    push('canvases', [change('cv1', T0, { project_id: 'p1', workspace_id: WS, parent_context_id: null, name: 'Canvas 1', sort: 0 })])
+    await settle()
 
     // parameters races ahead of its dimension parent -> the batch throws in
     // applyInboundDeltas and pa1 is buffered.
@@ -480,7 +505,7 @@ describe('startSync — no deltas dropped when a batch buffers mid-drain (issue 
     // The dimension parent lands -> its apply succeeds -> triggers the pa1
     // drain. The gated mock writes pa1 then holds the drain's promise open.
     push('dimensions', [
-      change('d1', T2, { project_id: 'p1', workspace_id: WS, context_id: null, source_param_id: null, name: 'Value', color: '#111', sort: 0 }),
+      change('d1', T2, { project_id: 'p1', workspace_id: WS, canvas_id: 'cv1', context_id: null, source_param_id: null, name: 'Value', color: '#111', sort: 0 }),
     ])
     await drainReachedP // deterministically: drain is now in flight (holding)
 
@@ -505,7 +530,7 @@ describe('startSync — no deltas dropped when a batch buffers mid-drain (issue 
     // wholesale clear, nothing is left to retry and it never applies (RED).
     // If it survived the mid-drain interleave, it applies now (GREEN).
     push('contexts', [
-      change('c1', T2, { project_id: 'p1', workspace_id: WS, parent_id: null, symbol: 'α', name: null, justification: null, sort: 0 }),
+      change('c1', T2, { project_id: 'p1', workspace_id: WS, canvas_id: 'cv1', parent_id: null, symbol: 'α', name: null, justification: null, sort: 0 }),
     ])
     await settle()
 
@@ -551,7 +576,9 @@ describe('startSync — surfacing drain loop terminates on progress, not length 
     return p
   }
   function dimChange(id: string, updatedAt: string): ElectricMessage {
-    return change(id, updatedAt, { project_id: 'p1', workspace_id: WS, context_id: null, source_param_id: null, name: 'Value', color: '#111', sort: 0 })
+    // Issue 090 — canvas_id is a NOT-NULL membership FK; the root canvas cv1 is
+    // made present (direct insert below) before this dimension is drained.
+    return change(id, updatedAt, { project_id: 'p1', workspace_id: WS, canvas_id: 'cv1', context_id: null, source_param_id: null, name: 'Value', color: '#111', sort: 0 })
   }
   function paramChange(id: string, updatedAt: string, dimensionId: string): ElectricMessage {
     return change(id, updatedAt, { dimension_id: dimensionId, workspace_id: WS, parent_param_id: null, source_entry_id: null, name: 'High', sort: 0 })
@@ -591,6 +618,9 @@ describe('startSync — surfacing drain loop terminates on progress, not length 
     // drain fires; d1 stays buffered but is now RESOLVABLE, and the ONLY thing
     // that will drain it is maybeSurfaceOrphaned's own loop below.
     await db.insert(projects).values({ id: 'p1', workspaceId: WS, name: 'Tavalo' })
+    // Issue 090 — d1/d9's NOT-NULL canvas_id FK also needs the root canvas
+    // present for the drain to resolve (both parents committed out-of-band).
+    await db.insert(canvases).values({ id: 'cv1', projectId: 'p1', workspaceId: WS, parentContextId: null, name: 'Canvas 1', sort: 0 })
 
     // Every shape reports up-to-date -> the last one triggers the surfacing
     // loop, whose drain of [d1] commits d1 then holds (gated).
@@ -605,7 +635,7 @@ describe('startSync — surfacing drain loop terminates on progress, not length 
     // [pa9]: SAME length across the drain — the equal-count trap.
     push('parameters', [paramChange('pa9', T1, 'd9')])
     await settle()
-    await db.insert(dimensions).values({ id: 'd9', projectId: 'p1', workspaceId: WS, name: 'D9', color: '#222', sort: 0 })
+    await db.insert(dimensions).values({ id: 'd9', projectId: 'p1', workspaceId: WS, canvasId: 'cv1', name: 'D9', color: '#222', sort: 0 })
 
     releaseDrain()
     await settle()
