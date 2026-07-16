@@ -1,6 +1,6 @@
 # 086: Sync status over-sensitivity — "Sync error" flips on any transient read blip
 
-- **Status**: OPEN
+- **Status**: ✅ SHIPPED — verified live (`index-CM_ZSx3K.js`, 2026-07-16): the boot-race 401 storm no longer flips the banner, and the debounce holds. The residual genuine "Sync error" on fresh-project load (a real sustained shape-delivery failure this fix correctly surfaces after the grace) is split to **088**.
 - **Milestone**: M8 (sync-state UI; extends 036). Client-only; no schema, no CDK.
 - **Blocked by**: none.
 - **Related**: **087** (deferred here by owner decision) — genuine WRITE-outbox failures currently retry silently and never surface in the status; that half of the miscalibration is its own follow-up. This issue fixes only the over-sensitive READ-error banner (the reported symptom).
