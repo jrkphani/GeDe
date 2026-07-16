@@ -337,6 +337,48 @@ export function DesignSurface({
     return () => window.removeEventListener('keydown', onKeyDown, true)
   }, [view])
 
+  // Issue 085 Phase C — bridges the rail -> register keyboard seam (design
+  // brief: "dimensions -> parameters -> contexts is one uninterrupted tab
+  // order"). PhantomInput's own 082 Phase 1 grammar already lets Tab escape
+  // NATIVELY out of an EMPTY phantom rather than trapping the user on it
+  // (inline-editor.tsx PhantomInput, "let native Tab move focus out"); before
+  // this issue that native escape landed wherever the DOM put it next — the
+  // canvas, since it used to sit between the rail and the register (085's own
+  // #1 complaint). Now the canvas moves outside the editing zone entirely, so
+  // native order alone would land on the FIRST EXISTING register row rather
+  // than the "new context" phantom row the design brief calls out by name
+  // (existing rows render before the phantom row in EditableGrid's DOM). This
+  // explicitly redirects that one escape onto the register's phantom row
+  // instead of trusting native order — the minimal bridge across the seam.
+  // Root and child canvases have different "last phantom" (the dimension-add
+  // phantom vs. the last dimension's own parameter-add phantom, since a child
+  // canvas has no dimension-add affordance at all — DimensionManagerPanel
+  // above); querying the rail's phantoms in DOM order and comparing against
+  // the focused one covers both without hardcoding which.
+  useEffect(() => {
+    if (view !== 'canvas') return
+    function onKeyDown(e: KeyboardEvent) {
+      if (e.key !== 'Tab' || e.shiftKey || e.metaKey || e.ctrlKey || e.altKey) return
+      const el = document.activeElement
+      if (!(el instanceof HTMLInputElement) || el.value !== '') return
+      const rail = document.querySelector('.dim-rail')
+      if (!rail) return
+      const phantoms = rail.querySelectorAll<HTMLInputElement>(
+        '.dim-manager__add-phantom input, .param-row--phantom input',
+      )
+      const last = phantoms[phantoms.length - 1]
+      if (!last || last !== el) return
+      const registerPhantom = document.querySelector<HTMLInputElement>(
+        '.context-register-shell .grid-row--phantom input',
+      )
+      if (!registerPhantom) return
+      e.preventDefault()
+      registerPhantom.focus()
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    return () => window.removeEventListener('keydown', onKeyDown, true)
+  }, [view])
+
   // Live coverage stat + draft count for the context bar (SITEMAP §2). Both
   // derive from store state each render, so any mutation moves them same-frame.
   const coverage = useMemo(() => {
@@ -506,18 +548,42 @@ export function DesignSurface({
                 // since Canvas.tsx itself is out of scope for this issue.
                 data-suppress-canvas-empty={needsSeeding || undefined}
               >
-                {/* Issue 082 Phase 1 — the persistent, always-anchored rail
-                    (rail · canvas · register, design brief): a stable panel
-                    that never unmounts across the n=2 floor or any dimension
-                    count, replacing the old popover-behind-a-trigger + guided-
-                    start-panel bifurcation. <640px it joins the column stack
-                    below the other two (base.css). */}
-                <section className="panel dim-rail" aria-label="Dimensions and parameters">
-                  <DimensionManagerPanel childCanvas={contextId !== null} />
-                </section>
-                {/* Design brief (issue 008): the circle sits directly on the
-                    graph-paper ground, no panel — unlike the register, which
-                    stays opaque per STYLE_GUIDE's table convention. */}
+                {/* Issue 085 Phase C — one editing zone: the rail and the
+                    register are grouped into a single bordered surface with
+                    one continuous tab order (dimensions -> parameters ->
+                    contexts). The canvas (below) moves OUT from between them
+                    to a side visual panel — it is never rendered inside this
+                    container, at any dimension count. */}
+                <div className="editing-zone" role="group" aria-label="Dimensions, parameters, and contexts">
+                  {/* Issue 082 Phase 1 — the persistent, always-anchored rail:
+                      a stable panel that never unmounts across the n=2 floor
+                      or any dimension count, replacing the old popover-
+                      behind-a-trigger + guided-start-panel bifurcation.
+                      <640px the editing zone itself stacks rail -> register
+                      (base.css); the whole zone then stacks above the canvas. */}
+                  {/* Issue 085 Phase C — `.panel`'s own border/background move
+                      to the wrapping `.editing-zone` (single bordered
+                      surface, Decision 1); the rail and register no longer
+                      carry their own separate `.panel` chrome. */}
+                  <section className="dim-rail" aria-label="Dimensions and parameters">
+                    <DimensionManagerPanel childCanvas={contextId !== null} />
+                  </section>
+                  <section className="context-register-shell">
+                    <ContextRegister
+                      projectId={projectId}
+                      contextId={contextId}
+                      onDrillIn={handleDrillIn}
+                      readOnly={readOnly}
+                    />
+                  </section>
+                </div>
+                {/* Design brief (issue 008, reworked 085 Phase C): the circle
+                    sits directly on the graph-paper ground, no panel — a
+                    side visual-only panel now, out of the editing tab path
+                    entirely (Decision 2). It is deliberately the LAST child
+                    of the row (not between the rail and the register) so
+                    native/roving focus in the canvas never sits mid-flow
+                    between the two editing surfaces. */}
                 <Canvas
                   dimensions={dimensions}
                   parametersByDimension={paramsByDimension}
@@ -539,14 +605,6 @@ export function DesignSurface({
                   hoveredMark={hoveredMark}
                   onHoverChange={setHoveredMark}
                 />
-                <section className="panel context-register-shell">
-                  <ContextRegister
-                    projectId={projectId}
-                    contextId={contextId}
-                    onDrillIn={handleDrillIn}
-                    readOnly={readOnly}
-                  />
-                </section>
               </div>
             </div>
           </>

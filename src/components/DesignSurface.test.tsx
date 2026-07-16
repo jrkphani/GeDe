@@ -103,8 +103,8 @@ async function createCompleteRootContextAndReturnId(): Promise<string> {
   return row.id
 }
 
-describe('DesignSurface — two-pane layout (issue 027)', () => {
-  it('mounts the canvas and register side by side in the same two-pane row, even when both are empty', async () => {
+describe('DesignSurface — two-pane layout (issue 027), reworked to editing zone + side canvas (issue 085 Phase C)', () => {
+  it('mounts the canvas as a row-level sibling of the editing zone that holds the register, even when both are empty', async () => {
     renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
     await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
     const row = document.querySelector('.design-surface-row') as HTMLElement
@@ -113,10 +113,13 @@ describe('DesignSurface — two-pane layout (issue 027)', () => {
     const register = row.querySelector('.context-register-shell')
     expect(canvas).toBeInTheDocument()
     expect(register).toBeInTheDocument()
-    // Structural balance: both panes are direct children of the same row —
-    // the register is not a floating panel outside the canvas's layout.
+    // Issue 085 Phase C — the canvas is a direct child of the row (a side
+    // visual panel, Decision 2); the register now lives one level deeper,
+    // inside the editing zone it shares with the rail (Decision 1), not
+    // directly on the row beside the canvas the way it used to.
     expect(canvas?.parentElement).toBe(row)
-    expect(register?.parentElement).toBe(row)
+    expect(register?.parentElement).not.toBe(row)
+    expect(register?.parentElement).toHaveClass('editing-zone')
   })
 })
 
@@ -267,7 +270,10 @@ describe('DesignSurface — soft-hint floor, no bifurcation (issue 082 Phase 1)'
 
     renderDesignSurface({ projectId: bare.id, contextPath: [], view: 'canvas' })
     await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
-    const railAt0 = document.querySelector('.design-surface-row > .dim-rail')
+    // Issue 085 Phase C — the rail is now a child of the editing zone, not
+    // directly of the row (the row's direct children are the editing zone
+    // and the side canvas).
+    const railAt0 = document.querySelector('.editing-zone > .dim-rail')
     expect(railAt0).toBeInTheDocument()
     // The old guided branch replaced the whole surface with
     // `<p className="placeholder">Add at least two dimensions…</p>` — gone.
@@ -278,7 +284,7 @@ describe('DesignSurface — soft-hint floor, no bifurcation (issue 082 Phase 1)'
       await addDimension(db, bare.id)
       await useDimensionsStore.getState().load(bare.id, null)
     })
-    const railAt1 = document.querySelector('.design-surface-row > .dim-rail')
+    const railAt1 = document.querySelector('.editing-zone > .dim-rail')
     expect(railAt1).toBe(railAt0) // same node — no remount crossing 0 -> 1
     expect(document.querySelector('.placeholder')).not.toBeInTheDocument()
 
@@ -286,7 +292,7 @@ describe('DesignSurface — soft-hint floor, no bifurcation (issue 082 Phase 1)'
       await addDimension(db, bare.id)
       await useDimensionsStore.getState().load(bare.id, null)
     })
-    const railAt2 = document.querySelector('.design-surface-row > .dim-rail')
+    const railAt2 = document.querySelector('.editing-zone > .dim-rail')
     // The crossing gesture the old `guided` flip fired on exactly here
     // (dimensions.length >= 2) — the rail must still be the very same node.
     expect(railAt2).toBe(railAt0)
@@ -332,21 +338,28 @@ describe("DesignSurface — `d` focus shortcut (issue 082 Phase 1)", () => {
 describe('DesignSurface — tablet stack (issue 082 Phase 1, Decision 4)', () => {
   const css = fs.readFileSync(path.resolve(__dirname, '../styles/base.css'), 'utf-8')
 
-  it('below 640px the rail stacks with canvas + register (column) at full width', () => {
+  it('below 640px the editing zone stacks (rail -> register), the row stacks the zone above the canvas, all at full width', () => {
     const match = /@container \(max-width: 640px\) \{([^]*?)\n\}\n/.exec(css)
     expect(match).not.toBeNull()
     const body = (match as RegExpMatchArray)[1] as string
     expect(body).toMatch(/\.design-surface-row\s*\{\s*\n\s*flex-direction:\s*column;/)
-    expect(body).toMatch(/\.design-surface-row > \.dim-rail\s*\{\s*\n\s*flex:\s*none;\s*\n\s*width:\s*100%;/)
+    // Issue 085 Phase C — the editing zone itself also stacks internally
+    // (rail -> register) once narrow, and the rail (now a child of the
+    // editing zone, not the row) goes full width within that stack.
+    expect(body).toMatch(/\.design-surface-row > \.editing-zone\s*\{\s*\n\s*flex-direction:\s*column;/)
+    expect(body).toMatch(/\.editing-zone > \.dim-rail\s*\{\s*\n\s*flex:\s*none;\s*\n\s*width:\s*100%;/)
   })
 
-  it('the rail is a direct child of .design-surface-row, so it participates in the same stack as canvas + register', async () => {
+  it('the editing zone is a direct child of .design-surface-row (rail/register stack together, above the canvas)', async () => {
     renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
     await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
     const row = document.querySelector('.design-surface-row') as HTMLElement
-    const rail = row.querySelector(':scope > .dim-rail')
+    const zone = row.querySelector(':scope > .editing-zone')
+    expect(zone).toBeInTheDocument()
+    expect(zone?.parentElement).toBe(row)
+    const rail = (zone as HTMLElement).querySelector(':scope > .dim-rail')
     expect(rail).toBeInTheDocument()
-    expect(rail?.parentElement).toBe(row)
+    expect(rail?.parentElement).toBe(zone)
   })
 })
 
@@ -436,5 +449,126 @@ describe('DesignSurface — Composer strip removed, selection highlights the reg
     await waitFor(() => expect(row).toHaveAttribute('aria-selected', 'true'))
     expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' })
     scrollSpy.mockRestore()
+  })
+})
+
+// Issue 085 Phase C, test-first plan item 9 — Decision 1: the rail and
+// register are grouped into ONE bordered editing-zone container; the canvas
+// is outside it (not between them), at every dimension count (including
+// below the n=2 floor, where the rail/register still both render — 082
+// Phase 1's soft-hint floor).
+describe('DesignSurface — one editing zone, canvas outside it (issue 085 Phase C, test 9)', () => {
+  it('rail and register share one editing-zone container; the canvas is a sibling of that zone, not between them', async () => {
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+
+    const row = document.querySelector('.design-surface-row') as HTMLElement
+    const zone = row.querySelector(':scope > .editing-zone') as HTMLElement
+    expect(zone).toBeInTheDocument()
+
+    const rail = zone.querySelector(':scope > .dim-rail')
+    const register = zone.querySelector(':scope > .context-register-shell')
+    expect(rail).toBeInTheDocument()
+    expect(register).toBeInTheDocument()
+    expect(rail?.parentElement).toBe(zone)
+    expect(register?.parentElement).toBe(zone)
+
+    // The canvas is a sibling of the editing zone (a row-level child), never
+    // nested inside it, and — critically — it is not positioned between the
+    // rail and the register in DOM order: it comes AFTER the whole zone.
+    const canvas = row.querySelector(':scope > .canvas-shell') as HTMLElement
+    expect(canvas).toBeInTheDocument()
+    expect(canvas.parentElement).toBe(row)
+    expect(zone.contains(canvas)).toBe(false)
+    const rowChildren = Array.from(row.children)
+    expect(rowChildren.indexOf(zone)).toBeLessThan(rowChildren.indexOf(canvas))
+  })
+
+  it('holds below the n=2 floor too (0 dimensions) — same editing-zone/canvas split', async () => {
+    const db = requireDatabase()
+    const bare = await createProject(db, { name: 'Bare' })
+    useProjectsStore.setState({ projects: [bare], status: 'ready' })
+    resetDimensionsStore()
+    resetParametersStore()
+    resetContextsStore()
+
+    renderDesignSurface({ projectId: bare.id, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+
+    const row = document.querySelector('.design-surface-row') as HTMLElement
+    const zone = row.querySelector(':scope > .editing-zone') as HTMLElement
+    expect(zone.querySelector(':scope > .dim-rail')).toBeInTheDocument()
+    expect(zone.querySelector(':scope > .context-register-shell')).toBeInTheDocument()
+    const canvas = row.querySelector(':scope > .canvas-shell')
+    expect(canvas).toBeInTheDocument()
+    expect(zone.contains(canvas)).toBe(false)
+  })
+})
+
+// Issue 085 Phase C, test-first plan item 10 — Decision 1: dimensions ->
+// parameters -> contexts is one uninterrupted tab order. PhantomInput's own
+// 082 Phase 1 grammar lets Tab escape natively out of an EMPTY phantom
+// (inline-editor.tsx, "let native Tab move focus out"); before this issue
+// that escape landed on the canvas (it used to sit between the rail and the
+// register — 085's own #1 complaint). This suite proves the bridge lands on
+// the register's "new context" phantom row instead — even when existing rows
+// would otherwise put themselves first in native DOM tab order — and that
+// focus never strands on the now-side canvas.
+describe('DesignSurface — continuous tab order: rail -> register, never the canvas (issue 085 Phase C, test 10)', () => {
+  it("Tab out of the rail's last (empty) phantom lands in the register's new-context row, not the first existing row or the canvas", async () => {
+    // An existing, complete context — proves the bridge beats native
+    // row-before-phantom DOM order (EditableGrid renders existing rows
+    // before the phantom row).
+    await createCompleteRootContextAndReturnId()
+    const user = userEvent.setup()
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+    const register = document.querySelector('.context-register-shell') as HTMLElement
+    await within(register).findByText('α')
+
+    const dimPhantom = screen.getByPlaceholderText('Type to add a dimension')
+    dimPhantom.focus()
+    expect(dimPhantom).toHaveValue('')
+
+    await user.tab()
+
+    const registerPhantomInput = document.querySelector('.grid-row--phantom input') as HTMLElement
+    expect(registerPhantomInput).toBeInTheDocument()
+    expect(document.activeElement).toBe(registerPhantomInput)
+    // Never the first existing row (α) and never the canvas.
+    expect(document.activeElement?.closest('.canvas-shell')).toBeNull()
+    expect(document.activeElement?.closest(`[data-row-id]`)).toBeNull()
+  })
+
+  it('Tab across register cells keeps working, and continues past the bridged phantom row without ever landing on the canvas', async () => {
+    const user = userEvent.setup()
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+
+    const dimPhantom = screen.getByPlaceholderText('Type to add a dimension')
+    dimPhantom.focus()
+    await user.tab()
+
+    const registerPhantomInput = document.activeElement as HTMLInputElement
+    expect(registerPhantomInput.closest('.grid-row--phantom')).not.toBeNull()
+
+    // Tab-with-content on the phantom row creates the context and continues
+    // into the newly created row's next editable cell (existing EditableGrid
+    // grammar, issue 022) — still inside the register, never the canvas.
+    await user.type(registerPhantomInput, 'because reasons')
+    await user.tab()
+    expect(document.activeElement?.closest('.canvas-shell')).toBeNull()
+    expect(document.activeElement?.closest('.context-register-shell')).not.toBeNull()
+  })
+
+  it('a modified Tab (e.g. Shift+Tab) is left alone — the bridge only redirects a plain forward Tab', async () => {
+    const user = userEvent.setup()
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+
+    const dimPhantom = screen.getByPlaceholderText('Type to add a dimension')
+    dimPhantom.focus()
+    await user.tab({ shift: true })
+    expect(document.activeElement?.closest('.context-register-shell')).toBeNull()
   })
 })

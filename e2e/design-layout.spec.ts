@@ -58,30 +58,121 @@ async function setUpTwoDimensionCanvas(page: Page) {
   await addParameterTo('Stake', 'Users')
 }
 
-test('at >=640px the register keeps a real min-width beside the canvas; below 640px they stack', async ({
+// Issue 085 Phase C — the canvas moves OUT from between the rail and the
+// register to a side visual panel; the rail + register now share one
+// bordered editing zone. Rewritten from the pre-085 "register beside the
+// canvas" geometry (the canvas used to be the middle column) to the new
+// "canvas beside the editing zone" geometry.
+test('at >=640px the canvas sits beside the editing zone (not between rail and register); below 640px they stack', async ({
   page,
 }) => {
   await setUpTwoDimensionCanvas(page)
 
-  // Wide: side by side, register with a real (not collapsed) width.
+  // Wide: editing zone (rail + register) and the canvas are side by side,
+  // canvas last — never sandwiched between the two editing surfaces.
   await page.setViewportSize({ width: 1400, height: 900 })
+  const zoneBox = await requireBox(page.locator('.editing-zone'))
   const canvasBox = await requireBox(page.locator('.canvas-shell'))
   const registerBox = await requireBox(page.locator('.context-register-shell'))
-  // Side by side: register starts to the right of where the canvas ends.
-  expect(registerBox.x).toBeGreaterThanOrEqual(canvasBox.x + canvasBox.width - 1)
-  // A real floor, not a short floating strip (design brief: "sensible
-  // min-width") — comfortably above the 320px CSS floor with viewport slack.
+  expect(canvasBox.x).toBeGreaterThanOrEqual(zoneBox.x + zoneBox.width - 1)
+  expect(canvasBox.x).toBeGreaterThanOrEqual(registerBox.x + registerBox.width - 1)
+  // The register keeps a real (not collapsed) min-width inside the zone
+  // (design brief: "sensible min-width") — comfortably above the 320px CSS
+  // floor with viewport slack.
   expect(registerBox.width).toBeGreaterThanOrEqual(300)
-  // The two panes read as balanced, not "canvas fills the space, register is
-  // an afterthought": the register's panel height is within the same order
-  // of magnitude as the canvas's (align-items: stretch — issue 027).
-  expect(registerBox.height).toBeGreaterThanOrEqual(canvasBox.height * 0.9)
+  // The editing zone and the canvas read as balanced (align-items: stretch,
+  // issue 027), and the canvas keeps its min-height floor even as a
+  // narrower side column (design brief: "legible without being the hero").
+  expect(zoneBox.height).toBeGreaterThanOrEqual(canvasBox.height * 0.9)
+  expect(canvasBox.height).toBeGreaterThanOrEqual(300)
 
-  // Narrow: stacked — register now starts below the canvas, not beside it.
+  // Narrow: stacked — the editing zone stacks first (rail -> register), the
+  // canvas moves below the whole zone, not beside it.
   await page.setViewportSize({ width: 500, height: 900 })
+  const zoneBoxNarrow = await requireBox(page.locator('.editing-zone'))
   const canvasBoxNarrow = await requireBox(page.locator('.canvas-shell'))
+  const railBoxNarrow = await requireBox(page.locator('.dim-rail'))
   const registerBoxNarrow = await requireBox(page.locator('.context-register-shell'))
-  expect(registerBoxNarrow.y).toBeGreaterThanOrEqual(canvasBoxNarrow.y + canvasBoxNarrow.height - 1)
+  expect(canvasBoxNarrow.y).toBeGreaterThanOrEqual(zoneBoxNarrow.y + zoneBoxNarrow.height - 1)
+  expect(registerBoxNarrow.y).toBeGreaterThanOrEqual(railBoxNarrow.y + railBoxNarrow.height - 1)
+})
+
+// Issue 085 Phase C, test-first plan item 11 — the whole point of one
+// editing zone with a continuous tab order: pour in dimensions + their
+// parameters, then tab straight into defining contexts, without the mouse
+// ever crossing to the canvas. The canvas stays a side visual the whole time.
+test('dimensions, parameters, and contexts can all be defined by keyboard alone — Tab bridges rail -> register without ever touching the canvas', async ({
+  page,
+}) => {
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill('Tavalo')
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: 'Open Tavalo' }).click()
+  await page.getByRole('link', { name: 'Design' }).click()
+
+  // Two dimensions with a parameter each — via the working type+Enter phantom
+  // grammar (082 Phase 1). NB: the richer "Tab on a content-filled phantom
+  // creates it and continues straight into the parameter phantom" chain is an
+  // 082 Phase 1 keyboard follow-up, out of 085 Phase C scope. Phase C's
+  // deliverable is the rail -> register BRIDGE below — that is what removes the
+  // mouse trip across the canvas (085's core complaint).
+  const dimPhantom = page.getByPlaceholder('Type to add a dimension')
+  await dimPhantom.fill('Value')
+  await dimPhantom.press('Enter') // creates Value, refocuses the dimension phantom
+  await dimPhantom.fill('Stake')
+  await dimPhantom.press('Enter') // creates Stake
+  await expect(page.locator('.dim-row')).toHaveCount(2)
+
+  // One parameter per dimension, by keyboard, via each dimension's own param
+  // phantom (indexed, no dependence on the dimension's rendered name). Param
+  // names render in both the rail (param row) and the canvas (dot label), so
+  // scope the assertions to the rail.
+  const firstParam = page.getByPlaceholder('Type to add a parameter').first()
+  await firstParam.fill('Comfort')
+  await firstParam.press('Enter')
+  await expect(page.locator('.dim-rail').getByText('Comfort', { exact: true })).toBeVisible()
+  const secondParam = page.getByPlaceholder('Type to add a parameter').nth(1)
+  await secondParam.fill('Users')
+  await secondParam.press('Enter')
+  await expect(page.locator('.dim-rail').getByText('Users', { exact: true })).toBeVisible()
+
+  // Bridge (issue 085 Phase C): focus the rail's LAST phantom — the empty
+  // dimension-add phantom — and press Tab. It must land in the register's
+  // "new context" phantom row, NOT the canvas (which now sits OUTSIDE the
+  // editing zone, as the last child of the row). This is the mouse-free
+  // rail -> register hop that Phase C adds; without it, native focus order
+  // would land on the canvas that used to sit between the two surfaces.
+  await dimPhantom.focus()
+  await expect(dimPhantom).toHaveValue('')
+  await page.keyboard.press('Tab')
+  const registerPhantom = page.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
+  await expect(registerPhantom).toBeFocused()
+
+  // Define a context entirely by keyboard, still without touching the mouse.
+  await page.keyboard.type('Because reasons')
+  await page.keyboard.press('Enter')
+  // α renders in both the register (symbol cell) and the canvas (context node);
+  // scope to the register so the assertion is unambiguous.
+  await expect(page.locator('.context-register-shell').getByText('α', { exact: true })).toBeVisible()
+
+  // The canvas never received focus or a click during this flow, and it
+  // sits beside the editing zone, never between the rail and the register.
+  const zoneBox = await requireBox(page.locator('.editing-zone'))
+  const canvasBox = await requireBox(page.locator('.canvas-shell'))
+  expect(canvasBox.x).toBeGreaterThanOrEqual(zoneBox.x + zoneBox.width - 1)
+
+  // The ring renders — proportional arcs (Phase A): one arc + one dot per
+  // dimension/parameter defined above.
+  await expect(page.locator('.canvas-arc')).toHaveCount(2)
+  await expect(page.locator('.canvas-dot')).toHaveCount(2)
+
+  // Reload persists — a real store write, not just in-memory React state.
+  await page.reload()
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.context-register-shell').getByText('α', { exact: true })).toBeVisible()
+  await expect(page.locator('.canvas-arc')).toHaveCount(2)
 })
 
 test('child canvas needing sub-parameters shows exactly one empty-state prompt, not the canvas prompt too', async ({

@@ -1361,28 +1361,42 @@ body {
   fill: var(--ink-muted);
 }
 
-/* SPEC §4.1 — register + canvas are two projections of the same tree, side by
-   side on wide screens; STYLE_GUIDE §7's 640px tier stacks them on narrow
-   containers instead. Issue 027: `align-items: stretch` (not the previous
-   `flex-start`) so the register's panel matches the canvas's height instead
-   of shrinking to its own (often short) content — an empty/near-empty
-   register then reads as a deliberate, fully-bordered column with room to
-   grow into, not a short strip floating over dead space beneath it. */
+/* SPEC §4.1 — register + canvas are two projections of the same tree.
+   Issue 085 Phase C reworks this row: the rail and the register are grouped
+   into one bordered "editing zone" (Decision 1 — one continuous tab order,
+   dimensions -> parameters -> contexts); the canvas is a side visual-only
+   panel (Decision 2), no longer sandwiched between them. `align-items:
+   stretch` (issue 027) keeps the editing zone and the canvas the same
+   height instead of either shrinking to its own (often short) content. */
 .design-surface-row {
   display: flex;
   gap: var(--space-5);
   align-items: stretch;
 }
 
-/* Issue 082 Phase 1 — the persistent dimension/parameter rail (design brief:
-   "rail · canvas · register"). A fixed-ish desktop column that never
-   relocates or unmounts across the n=2 floor or any dimension count —
-   replacing the old popover-behind-a-trigger (context bar) + guided-start
-   full-surface-swap (below n=2) bifurcation. `.panel` (already applied in
-   DesignSurface.tsx alongside this class) supplies the opaque chrome;
+/* Issue 085 Phase C — the single bordered editing-zone surface: rail +
+   register share ONE opaque chrome (border/background/radius, matching
+   `.panel`'s own tokens) instead of two separately-bordered panels, so the
+   pair reads as one editing place, not two panes either side of the canvas. */
+.design-surface-row > .editing-zone {
+  flex: 1 1 66%;
+  min-width: 0;
+  display: flex;
+  gap: var(--space-5);
+  align-items: stretch;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+/* Issue 082 Phase 1 — the persistent dimension/parameter rail. A fixed-ish
+   desktop column that never relocates or unmounts across the n=2 floor or
+   any dimension count — replacing the old popover-behind-a-trigger (context
+   bar) + guided-start full-surface-swap (below n=2) bifurcation.
    `overflow-y: auto` keeps a long dimension/parameter list from stretching
-   the whole row taller than the canvas/register beside it. */
-.design-surface-row > .dim-rail {
+   the whole zone taller than the register beside it. */
+.editing-zone > .dim-rail {
   flex: 0 0 260px;
   min-width: 220px;
   display: flex;
@@ -1390,16 +1404,22 @@ body {
   overflow-y: auto;
 }
 
+/* Issue 085 Phase C — the canvas is a side visual panel (Decision 2:
+   "primarily a visual representation… not an editing surface"), the LAST
+   child of the row so it never sits between the rail and the register in
+   tab order either. A min-height floor keeps the ring legible without
+   letting it dominate the row (design brief: "without being the hero"). */
 .design-surface-row > .canvas-shell {
-  flex: 1 1 40%;
-  min-width: 0;
+  flex: 1 1 34%;
+  min-width: 260px;
+  min-height: 320px;
 }
 
-.design-surface-row > .context-register-shell {
+.editing-zone > .context-register-shell {
   flex: 1 1 60%;
   /* A real floor (design brief: "keeps a sensible min-width, doesn't collapse
      to a floating strip") — `min(…, 100%)` still yields to the <640px
-     container query below, which switches the row to a column and gives
+     container query below, which switches the zone to a column and gives
      every child 100% width anyway. */
   min-width: min(320px, 100%);
   display: flex;
@@ -1408,7 +1428,7 @@ body {
 
 /* The register's own scroll panel (rendered by EditableGrid) grows to fill
    the stretched shell above, so its opaque panel — not just its content —
-   spans the full row height alongside the canvas. */
+   spans the full editing-zone height alongside the rail. */
 .context-register-shell > .register-scroll {
   flex: 1;
   min-height: 0;
@@ -1425,14 +1445,21 @@ body {
 }
 
 @container (max-width: 640px) {
+  /* Issue 085 Phase C, tablet (Decision 1 tablet clause) — the editing zone
+     stacks first (DOM order: rail -> register), the canvas moves below the
+     whole zone as a collapsible visual, matching the design brief. */
   .design-surface-row {
     flex-direction: column;
   }
 
+  .design-surface-row > .editing-zone {
+    flex-direction: column;
+  }
+
   /* Issue 082 Phase 1, Decision 4 (tablet) — the rail joins the column stack
-     (rail -> circle -> register, DOM order) at full width instead of its
-     desktop fixed-width column; every child is full-width once stacked. */
-  .design-surface-row > .dim-rail {
+     (rail -> register, DOM order) at full width instead of its desktop
+     fixed-width column; every child is full-width once stacked. */
+  .editing-zone > .dim-rail {
     flex: none;
     width: 100%;
   }
