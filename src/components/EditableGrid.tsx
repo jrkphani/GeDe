@@ -23,6 +23,11 @@ export interface TextCellKind<TRow> {
   kind: 'text'
   getValue: (row: TRow) => string
   onCommit: (row: TRow, value: string) => Promise<boolean> | void
+  // Issue 084 — an optional read-mode adornment rendered inline immediately
+  // after the value text (e.g. a "→ dimension" source badge). Never shown
+  // while the cell is being edited. Additive: omit → identical to before, so
+  // every other table (tier1/tier3) is unaffected.
+  adornment?: (row: TRow) => React.ReactNode
 }
 
 export interface MonoCellKind<TRow> {
@@ -262,6 +267,9 @@ function TextOrMonoCell<TRow>({
   name: string
 }) {
   const value = cellDef.getValue(row)
+  // Only text cells carry an adornment; a mono cell never does. Rendered in the
+  // read-mode branches below, never while editing (issue 084).
+  const adornment = cellDef.kind === 'text' ? cellDef.adornment : undefined
   const editing = !nav.readOnly && nav.editing?.rowId === rowId && nav.editing.columnId === columnId
   const [draft, setDraft] = useState(value)
   const cancelling = useRef(false)
@@ -289,6 +297,7 @@ function TextOrMonoCell<TRow>({
             —
           </span>
         )}
+        {adornment?.(row)}
       </div>
     )
   }
@@ -349,6 +358,7 @@ function TextOrMonoCell<TRow>({
       }}
     >
       {value || <span className="grid-cell__placeholder" aria-hidden="true">—</span>}
+      {adornment?.(row)}
     </div>
   )
 }

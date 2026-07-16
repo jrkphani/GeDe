@@ -51,8 +51,11 @@ describe('.command-button CSS — resting affordance + contrast (STYLE_GUIDE §1
 
   it('does not touch .row-action visibility:hidden (row-hover progressive disclosure, unchanged)', () => {
     expect(css).toMatch(/\.row-action\s*\{[^}]*}/)
-    // The row-hover reveal rules must still exist verbatim.
-    expect(css).toContain('.t2-table tbody tr:hover .t2-meta .row-action,')
+    // The row-hover reveal rules must still exist verbatim. (Issue 084 moved
+    // the tier-2 row verb to the trailing .t2-col--actions gutter; the reveal
+    // pattern is unchanged, only the selector was renamed off the deleted
+    // .t2-meta data column.)
+    expect(css).toContain('.t2-table tbody tr:hover .t2-col--actions .t2-add-child-trigger,')
     expect(css).toContain('.project-row:hover .row-action,')
     expect(css).toContain('.dim-row:hover .row-action,')
   })

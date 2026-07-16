@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen } from '@testing-library/react'
+import { render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { EditableGrid, PHANTOM_ROW_ID, nextEditableCell, type GridColumn, type GridNav } from './EditableGrid'
 
@@ -214,6 +214,48 @@ describe('EditableGrid — multiline cell', () => {
     await user.keyboard('changed{Escape}')
     expect(onCommit).not.toHaveBeenCalled()
     expect(await screen.findByText('A short justification')).toBeInTheDocument()
+  })
+})
+
+describe('text cell adornment (issue 084)', () => {
+  const oneRow: Task[] = [{ id: '1', title: 'Alpha', priority: 'P1', category: null }]
+
+  function adornedColumns(): GridColumn<Task>[] {
+    return [
+      {
+        id: 'title',
+        header: 'Title',
+        cell: {
+          kind: 'text',
+          getValue: (t) => t.title,
+          onCommit: () => {},
+          adornment: (t) => <span data-testid="adorn">badge-{t.id}</span>,
+        },
+      },
+    ]
+  }
+
+  it('renders the adornment inline in read mode, inside the value cell after the text', () => {
+    render(<EditableGrid rows={oneRow} columns={adornedColumns()} getRowId={(r) => r.id} />)
+    const cell = screen.getByText('Alpha').closest('.grid-cell') as HTMLElement
+    expect(within(cell).getByTestId('adorn')).toHaveTextContent('badge-1')
+  })
+
+  it('does NOT render the adornment while the cell is being edited', async () => {
+    const user = userEvent.setup()
+    render(<EditableGrid rows={oneRow} columns={adornedColumns()} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.getByDisplayValue('Alpha')).toHaveFocus()
+    // The editor replaces the display cell — the adornment is gone while editing.
+    expect(screen.queryByTestId('adorn')).not.toBeInTheDocument()
+  })
+
+  it('a text column WITHOUT adornment is unchanged (no adornment node injected)', () => {
+    render(<EditableGrid rows={oneRow} columns={makeColumns()} getRowId={(r) => r.id} />)
+    expect(screen.queryByTestId('adorn')).not.toBeInTheDocument()
+    const cell = screen.getByText('Alpha').closest('.grid-cell') as HTMLElement
+    // Only the value text node — no extra element beyond the (unused) placeholder path.
+    expect(cell.querySelector('span:not(.grid-cell__placeholder)')).toBeNull()
   })
 })
 

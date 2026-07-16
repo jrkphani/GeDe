@@ -97,7 +97,7 @@ describe('ArchitectureSurface', () => {
     expect(addField).toHaveFocus()
   })
 
-  it('renders the promoted source badge on a linked entry', async () => {
+  it('renders the promoted source badge INLINE within the Name cell, not a separate meta column (issue 084 test a)', async () => {
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     const users = await addTier2Entry(db, table.id, null, 'Users')
     // Promote via the store so the link exists before the surface loads.
@@ -109,7 +109,15 @@ describe('ArchitectureSurface', () => {
 
     render(<ArchitectureSurface projectId={projectId} />)
     const row = (await screen.findByText('Users')).closest('tr') as HTMLElement
-    expect(within(row).getByText('→ Stake')).toBeInTheDocument()
+    const badge = within(row).getByText('→ Stake')
+    expect(badge).toBeInTheDocument()
+    // The badge sits inside the same Name cell as the entry text — inline
+    // adornment, not its own data column.
+    const nameCell = within(row).getByText('Users').closest('.grid-cell') as HTMLElement
+    expect(nameCell).toContainElement(badge)
+    // The meta data column is gone entirely.
+    expect(row.querySelector('.t2-col--meta')).toBeNull()
+    expect(row.querySelector('.t2-meta')).toBeNull()
   })
 })
 
@@ -253,15 +261,24 @@ describe('ArchitectureSurface — single add grammar (issue 084 finding 2)', () 
   })
 })
 
-describe('ArchitectureSurface — typed add-child (issue 084 finding 4)', () => {
-  it('opens a typed phantom instead of inserting a literal "New entry" row', async () => {
+describe('ArchitectureSurface — typed add-child in the trailing gutter (issue 084 finding 4, test b)', () => {
+  it('opens a typed phantom from the trailing row action instead of inserting a literal "New entry" row', async () => {
     const user = userEvent.setup()
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     await addTier2Entry(db, table.id, null, 'Buyers')
     render(<ArchitectureSurface projectId={projectId} />)
-    await screen.findByText('Buyers')
+    const buyersRow = (await screen.findByText('Buyers')).closest('tr') as HTMLElement
 
-    await user.click(await screen.findByRole('button', { name: 'Add child to Buyers' }))
+    // Add child is a trailing row action, not wedged between data columns: it
+    // lives in the last cell (.t2-col--actions), after Name and Description.
+    // (Looked up by aria-label within the cell — a role query here is fragile
+    // against a pre-existing cross-file Radix-overlay leak that spuriously
+    // marks the document aria-hidden; the button itself is correctly labeled.)
+    const actionsCell = buyersRow.querySelector('.t2-col--actions') as HTMLElement
+    const addChildBtn = within(actionsCell).getByLabelText('Add child to Buyers')
+    expect(actionsCell).toContainElement(addChildBtn)
+
+    await user.click(addChildBtn)
     const childField = await screen.findByPlaceholderText('Name a child of Buyers')
     await user.type(childField, 'Superstars')
     await user.keyboard('{Enter}')
@@ -272,23 +289,41 @@ describe('ArchitectureSurface — typed add-child (issue 084 finding 4)', () => 
   })
 })
 
-describe('ArchitectureSurface — quiet-text Remove + rehomed resolution (issue 084)', () => {
-  it('deletes an unlinked entry via a quiet-text "Remove" action, with no trash icon in the meta cell', async () => {
+describe('ArchitectureSurface — Remove moved to the selection bar (issue 084, tests c/d/e)', () => {
+  it('has NO per-row "Remove" button in the row (test c)', async () => {
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    const { container } = render(<ArchitectureSurface projectId={projectId} />)
+    const buyersRow = (await screen.findByText('Buyers')).closest('tr') as HTMLElement
+    // The old per-row verb is gone — no row-scoped Remove affordance of any kind
+    // (structural checks, immune to the aria-hidden overlay-leak flake).
+    expect(within(buyersRow).queryByText('Remove')).toBeNull()
+    expect(buyersRow.querySelector('[aria-label^="Remove"]')).toBeNull()
+    // And with nothing selected, no selection bar (hence no Remove) exists at all.
+    expect(container.querySelector('.t2-selection-bar')).toBeNull()
+  })
+
+  it('selecting a row surfaces a "Remove" control in the selection bar that deletes the entry (test d)', async () => {
     const user = userEvent.setup()
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     await addTier2Entry(db, table.id, null, 'Buyers')
     const { container } = render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
 
-    const removeBtn = await screen.findByRole('button', { name: 'Remove Buyers' })
-    expect(removeBtn).toHaveTextContent('Remove')
-    // No per-row icon (Trash2/Plus rendered <svg>) survives in the meta strip.
-    expect(container.querySelector('.t2-meta svg')).toBeNull()
+    await user.click(await screen.findByLabelText('Select Buyers'))
+    // The Remove control lives in the selection bar, not in a table row.
+    const bar = (await screen.findByText(/1 selected/)).closest('.t2-selection-bar') as HTMLElement
+    expect(bar).toBe(container.querySelector('.t2-selection-bar'))
+    const removeBtn = within(bar).getByText('Remove')
+    expect(removeBtn.closest('table')).toBeNull()
 
     await user.click(removeBtn)
     await waitFor(() => expect(screen.queryByText('Buyers')).not.toBeInTheDocument())
+    // A clean sweep clears the selection, so the bar disappears.
+    await waitFor(() => expect(screen.queryByText(/1 selected/)).not.toBeInTheDocument())
   })
 
-  it('routes a promoted entry through the resolution flow (never a silent cascade)', async () => {
+  it('removing a PROMOTED selected entry still surfaces the resolution popover — never a silent cascade (test e)', async () => {
     const user = userEvent.setup()
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     const users = await addTier2Entry(db, table.id, null, 'Users')
@@ -301,7 +336,9 @@ describe('ArchitectureSurface — quiet-text Remove + rehomed resolution (issue 
     render(<ArchitectureSurface projectId={projectId} />)
     await screen.findByText('Users')
 
-    await user.click(await screen.findByRole('button', { name: 'Remove Users' }))
+    await user.click(await screen.findByLabelText('Select Users'))
+    const bar = (await screen.findByText(/1 selected/)).closest('.t2-selection-bar') as HTMLElement
+    await user.click(within(bar).getByText('Remove'))
     // The linked-parameter resolution surfaces instead of a silent delete.
     expect(await screen.findByText(/Keep parameter as unlinked copy/)).toBeInTheDocument()
     expect(screen.getByText(/It is linked to/)).toBeInTheDocument()

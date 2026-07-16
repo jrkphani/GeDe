@@ -171,13 +171,39 @@ function TablePanel({
     anchorRef.current = id
   }
 
-  async function handleDelete(entry: Tier2EntryRow) {
+  // Returns whether the delete completed cleanly or surfaced the linked-parameter
+  // resolution (invariant 7 — never a silent cascade). The selection-bar Remove
+  // drives this per selected entry and uses the outcome to know when to stop
+  // (a promoted entry pauses the batch until the user resolves it) and when to
+  // clear the selection.
+  async function handleDelete(entry: Tier2EntryRow): Promise<'deleted' | 'needs-resolution'> {
     const result = await removeEntry(table.id, entry.id)
     if (result.kind === 'needs-resolution') {
       setResolving({ entry, links: result.links })
-    } else {
-      useStatusStore.getState().announce(`Deleted ${entry.name}`)
+      return 'needs-resolution'
     }
+    useStatusStore.getState().announce(`Deleted ${entry.name}`)
+    return 'deleted'
+  }
+
+  // Remove every selected entry (issue 084) — the verb moved out of a per-row
+  // data-column button into the selection bar. Promoted entries still route
+  // through the resolution popover one at a time: on the first that needs
+  // resolution we stop, keeping it (and the still-unprocessed rest) selected so
+  // the user can resolve and re-run; already-removed entries drop out. A clean
+  // sweep clears the whole selection.
+  async function removeSelected() {
+    const ids = [...selected]
+    for (let i = 0; i < ids.length; i++) {
+      const entry = entries.find((e) => e.id === ids[i])
+      if (!entry) continue
+      const outcome = await handleDelete(entry)
+      if (outcome === 'needs-resolution') {
+        setSelected(new Set(ids.slice(i)))
+        return
+      }
+    }
+    setSelected(new Set())
   }
 
   const columns: GridColumn<Tier2EntryRow>[] = [
@@ -244,71 +270,16 @@ function TablePanel({
           }
           return value.length > 0
         },
-      },
-    },
-    {
-      id: 'meta',
-      header: '',
-      headClassName: 't2-col--meta',
-      cellClassName: 't2-col--meta',
-      cell: {
-        kind: 'static',
-        render: (entry) => {
+        // Source badge rides inline on the Name cell (issue 084) — both sides of
+        // the tier link stay visible (invariant 7) without a data column of its
+        // own. Read-mode only; the grid hides it while the name is being edited.
+        adornment: (entry) => {
           const link = linkByEntryId[entry.id]
-          return (
-            <div className="t2-meta">
-              {link && (
-                <span className="t2-source-badge font-mono" title={`Promoted to ${link.dimensionName}`}>
-                  → {link.dimensionName}
-                </span>
-              )}
-              {readOnly ? null : (
-                <>
-                  {/* Typed add-child (issue 084 finding 4): opens a phantom —
-                      type → Enter — instead of inserting a literal 'New entry'
-                      row the user then has to find and rename. Same type-first
-                      grammar as every other add on this surface. */}
-                  <Popover
-                    open={addingChildTo === entry.id}
-                    onOpenChange={(open) => setAddingChildTo(open ? entry.id : null)}
-                  >
-                    <PopoverTrigger asChild>
-                      <Button
-                        aria-label={`Add child to ${entry.name}`}
-                        onClick={() =>
-                          setCollapsed((prev) => {
-                            const next = new Set(prev)
-                            next.delete(entry.id)
-                            return next
-                          })
-                        }
-                      >
-                        Add child
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent align="end" sideOffset={4} className="t2-add-child">
-                      <PhantomInput
-                        placeholder={`Name a child of ${entry.name}`}
-                        ariaLabel={`Name a child of ${entry.name}`}
-                        onSubmit={(name) => void addEntry(table.id, entry.id, name)}
-                      />
-                    </PopoverContent>
-                  </Popover>
-                  {/* Quiet-text Remove (issue 084): the same rowAction pattern
-                      the Design route uses (ParameterList), replacing the trash
-                      icon. A promoted entry still routes through the resolution
-                      flow (rehomed to the panel level, below) — never a silent
-                      cascade. */}
-                  <Button
-                    aria-label={`Remove ${entry.name}`}
-                    onClick={() => void handleDelete(entry)}
-                  >
-                    Remove
-                  </Button>
-                </>
-              )}
-            </div>
-          )
+          return link ? (
+            <span className="t2-source-badge font-mono" title={`Promoted to ${link.dimensionName}`}>
+              → {link.dimensionName}
+            </span>
+          ) : null
         },
       },
     },
@@ -322,6 +293,53 @@ function TablePanel({
           await setEntryDescription(table.id, entry.id, value)
           return true
         },
+      },
+    },
+    {
+      // Trailing row-command gutter (issue 084): row verbs are never a data
+      // column. The typed "Add child" affordance lives here, quiet at rest and
+      // revealed on row hover/focus (see .t2-col--actions). Remove moved to the
+      // selection bar. A viewer (issue 035) sees no affordance at all.
+      id: 'actions',
+      header: '',
+      headClassName: 't2-col--actions',
+      cellClassName: 't2-col--actions',
+      cell: {
+        kind: 'static',
+        render: (entry) =>
+          readOnly ? null : (
+            // Typed add-child (issue 084 finding 4): un-collapses the parent then
+            // opens a phantom — type → Enter — instead of inserting a literal
+            // 'New entry' row the user then has to find and rename. Same
+            // type-first grammar as every other add on this surface.
+            <Popover
+              open={addingChildTo === entry.id}
+              onOpenChange={(open) => setAddingChildTo(open ? entry.id : null)}
+            >
+              <PopoverTrigger asChild>
+                <Button
+                  className="t2-add-child-trigger"
+                  aria-label={`Add child to ${entry.name}`}
+                  onClick={() =>
+                    setCollapsed((prev) => {
+                      const next = new Set(prev)
+                      next.delete(entry.id)
+                      return next
+                    })
+                  }
+                >
+                  <span aria-hidden>＋ </span>Add child
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent align="end" sideOffset={4} className="t2-add-child">
+                <PhantomInput
+                  placeholder={`Name a child of ${entry.name}`}
+                  ariaLabel={`Name a child of ${entry.name}`}
+                  onSubmit={(name) => void addEntry(table.id, entry.id, name)}
+                />
+              </PopoverContent>
+            </Popover>
+          ),
       },
     },
   ]
@@ -376,6 +394,16 @@ function TablePanel({
             entryIds={[...selected]}
             onDone={() => setSelected(new Set())}
           />
+          {/* Remove moved off the row into the selection bar (issue 084). It
+              deletes every selected entry, routing any promoted one through the
+              resolution flow above — never a silent cascade. */}
+          <Button
+            variant="command"
+            className="t2-selection-bar__remove"
+            onClick={() => void removeSelected()}
+          >
+            Remove
+          </Button>
         </div>
       )}
     </section>

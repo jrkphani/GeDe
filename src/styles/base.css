@@ -2120,8 +2120,23 @@ body {
   width: 96px;
 }
 
-.t2-col--meta {
+/* Trailing row-command gutter (issue 084): row verbs are never a data column.
+   The per-row "Add child" affordance lives here, quiet at rest and revealed
+   only on row hover / focus-within — mirrors the removed meta-cell row-action
+   reveal (STYLE_GUIDE §6). */
+.t2-col--actions {
   width: 132px;
+  text-align: right;
+}
+
+.t2-col--actions .t2-add-child-trigger {
+  visibility: hidden;
+}
+
+.t2-table tbody tr:hover .t2-col--actions .t2-add-child-trigger,
+.t2-col--actions .t2-add-child-trigger:focus-visible,
+.t2-col--actions:focus-within .t2-add-child-trigger {
+  visibility: visible;
 }
 
 .t2-tree {
@@ -2174,34 +2189,14 @@ body {
   border-color: var(--accent);
 }
 
-/* Meta cell: source badge (both sides of the link visible, invariant 7) + the
-   hover row verbs (add child, delete). */
-.t2-meta {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: var(--space-2);
-  min-height: 40px;
-}
-
+/* Source badge (invariant 7 — both sides of the tier link stay visible): now
+   rides inline on the Name cell immediately after the entry name, a quiet mono
+   hint that this entry is promoted. The leading gap separates it from the name. */
 .t2-source-badge {
+  margin-left: var(--space-2);
   font-size: var(--text-mono);
   color: var(--ink-muted);
   white-space: nowrap;
-}
-
-/* Quiet-text row verbs (issue 084): Add child + Remove use the shared
-   `.row-action` pattern (STYLE_GUIDE §2.2/§6), hidden until the row is
-   hovered/focused — mirrors the Design route's ParameterList Remove. The
-   per-row trash/plus icons are gone. */
-.t2-meta .row-action {
-  visibility: hidden;
-}
-
-.t2-table tbody tr:hover .t2-meta .row-action,
-.t2-meta .row-action:focus-within,
-.t2-meta .row-action:focus-visible {
-  visibility: visible;
 }
 
 /* Selection bar (issue 025): sticky within the panel's scroll viewport, not
@@ -2229,6 +2224,14 @@ body {
 .t2-selection-bar__count {
   font-size: var(--text-label);
   color: var(--ink-muted);
+}
+
+/* Destructive command in the selection bar (issue 084): removes every selected
+   entry, routing any promoted entry through the resolution flow — never a
+   silent cascade. Danger-tinted text on the shared always-visible command
+   chrome (it must read as clickable at rest, not a hover-revealed row verb). */
+.t2-selection-bar__remove {
+  color: var(--danger);
 }
 
 .t2-promote-trigger {
