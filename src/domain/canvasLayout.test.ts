@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ARC_RADIUS, layout, MAX_DOT_HIT_RADIUS, NODE_RADIUS, spokePath, type CanvasLayoutInput } from './canvasLayout'
+import { ARC_RADIUS, layout, NODE_RADIUS, spokePath, type CanvasLayoutInput } from './canvasLayout'
 import { dotHitRadiusUnits } from './canvasResponsive'
 
 const CENTER = 500
@@ -18,6 +18,45 @@ function params(dimensionId: string, count: number) {
 
 function distanceFromCenter(x: number, y: number): number {
   return Math.hypot(x - CENTER, y - CENTER)
+}
+
+// Issue 085 Phase A adversarial-review helper — the TRUE global minimum
+// distance over EVERY pair of dots (O(n²)), not just array-adjacent ones. The
+// earlier MIN_DOT_SLOT-floor bug let over-dense dots overflow the arc, wrap the
+// 12-o'clock seam, and coincide with a same-dimension early dot; a global scan
+// is what exposes that (array-adjacent scans stay green through a distance-0
+// coincidence between non-adjacent indices).
+function globalMinPairwise(dots: readonly { x: number; y: number }[]): number {
+  let min = Infinity
+  for (let i = 0; i < dots.length; i++) {
+    for (let j = i + 1; j < dots.length; j++) {
+      const a = dots[i] as { x: number; y: number }
+      const b = dots[j] as { x: number; y: number }
+      min = Math.min(min, Math.hypot(a.x - b.x, a.y - b.y))
+    }
+  }
+  return min
+}
+
+// Tightest distance between two dots of the SAME dimension that are adjacent in
+// sort order — the value maxDotHitRadius is derived from. With pure even-fill
+// this must equal globalMinPairwise (cross-gap pairs are always wider).
+function withinDimAdjacentMin(dots: readonly { x: number; y: number; dimensionId: string }[]): number {
+  const byDim = new Map<string, { x: number; y: number }[]>()
+  for (const d of dots) {
+    const list = byDim.get(d.dimensionId) ?? []
+    list.push(d)
+    byDim.set(d.dimensionId, list)
+  }
+  let min = Infinity
+  for (const list of byDim.values()) {
+    for (let i = 1; i < list.length; i++) {
+      const a = list[i - 1] as { x: number; y: number }
+      const b = list[i] as { x: number; y: number }
+      min = Math.min(min, Math.hypot(a.x - b.x, a.y - b.y))
+    }
+  }
+  return min
 }
 
 describe('layout', () => {
@@ -148,7 +187,7 @@ describe('layout', () => {
       contexts: [],
       bindingsByContext: {},
     }
-    expect(layout(input)).toEqual({ viewBox: '0 0 1000 1000', arcs: [], dots: [], nodes: [] })
+    expect(layout(input)).toEqual({ viewBox: '0 0 1000 1000', arcs: [], dots: [], nodes: [], maxDotHitRadius: ARC_RADIUS })
   })
 
   it('adding one context changes only that context\'s node geometry, nothing else (no global reshuffle)', () => {
@@ -281,100 +320,204 @@ describe('layout', () => {
     }
   })
 
-  // Design brief targets a 16ms (one-frame) budget for 100 contexts. Asserted
-  // here with generous headroom (200ms) for shared/noisy CI hardware — even
-  // the 40ms threshold this replaced still flaked (43.6ms on a loaded
-  // runner). This is a guard against pathological blowups (e.g. an
-  // accidental O(n^2) path, which would land in the hundreds of ms or
-  // seconds), not a tight micro-benchmark, so it shouldn't flake again.
-  // Issue 082 (throughout — visual stability), test-first plan item 10 — the
-  // north-star clause: adding a parameter must never move an existing one
-  // (or the spoke bound to it). Pre-082 the formula was
-  // `segmentSpan / (params.length + 1)`, which re-divides the WHOLE arc on
-  // every add — every existing dot moves.
-  describe('append-only dot placement (issue 082)', () => {
-    it('adding parameter d to an arc with [a,b,c] leaves a/b/c\'s x/y exactly unchanged; only d is new', () => {
-      const dimensions = [dimension('d0', 0), dimension('d1', 1)]
+  // Issue 085 Phase A test-plan item 1 — proportional arcs. Each dimension's
+  // arc span is proportional to its parameter count; a sparse dimension gets a
+  // short arc (Decision 5). Red before 085 (equal slices at `:300`).
+  describe('proportional arcs (issue 085 Phase A)', () => {
+    it('sizes each arc proportional to its parameter count; the 1-param dimension is smallest', () => {
+      const counts = [4, 3, 2, 1]
+      const dimensions = counts.map((_, i) => dimension(`d${i}`, i))
+      const parametersByDimension = Object.fromEntries(
+        dimensions.map((d, i) => [d.id, params(d.id, counts[i] as number)]),
+      )
+      const geometry = layout({ dimensions, parametersByDimension, contexts: [], bindingsByContext: {} })
+
+      // Recover each arc's angular span from its start/end. The arcs are laid
+      // out in sort order, and each start is the running sum of prior spans +
+      // gaps; the span itself is independent of the gaps, so measure it from
+      // the mid-angle geometry the layout exposes indirectly via the dots.
+      // Simplest exact recovery: re-derive spans from the known total.
+      const GAP = (6 * Math.PI) / 180
+      const availableSpan = 2 * Math.PI - counts.length * GAP
+      const totalParams = counts.reduce((s, c) => s + c, 0)
+      const expectedSpans = counts.map((c) => availableSpan * (c / totalParams))
+
+      // The dots of a dimension span exactly `slot·(m)` of its arc where
+      // `slot = span/(m+1)`; the angular extent from first to last dot is
+      // `slot·(m-1) = span·(m-1)/(m+1)`. Invert to recover each span and
+      // confirm proportionality without reaching into private layout state.
+      for (let i = 0; i < counts.length; i++) {
+        const m = counts[i] as number
+        const dimDots = geometry.dots.filter((d) => d.dimensionId === `d${i}`)
+        expect(dimDots).toHaveLength(m)
+        if (m < 2) continue
+        const angles = dimDots.map((d) => Math.atan2(d.x - CENTER, -(d.y - CENTER)))
+        // atan2 wraps at π; every arc here sits in [0, ~2π) so unwrap by
+        // adding 2π to any angle that dipped negative relative to the first.
+        const first = angles[0] as number
+        const unwrapped = angles.map((a) => (a < first ? a + 2 * Math.PI : a))
+        const extent = (unwrapped[unwrapped.length - 1] as number) - (unwrapped[0] as number)
+        const recoveredSpan = (extent * (m + 1)) / (m - 1)
+        expect(recoveredSpan).toBeCloseTo(expectedSpans[i] as number, 6)
+      }
+
+      // Proportionality + ordering: 4-param arc is the largest, 1-param the
+      // smallest, monotonically decreasing with count.
+      const spans = expectedSpans
+      expect(spans[0]).toBeGreaterThan(spans[1] as number)
+      expect(spans[1]).toBeGreaterThan(spans[2] as number)
+      expect(spans[2]).toBeGreaterThan(spans[3] as number)
+      // The spans sum to the full ring minus the gaps.
+      expect(spans.reduce((s, x) => s + x, 0)).toBeCloseTo(availableSpan, 9)
+    })
+
+    it('falls back to equal arcs when every dimension is still empty (Σm = 0, no divide-by-zero)', () => {
+      const dimensions = [dimension('d0', 0), dimension('d1', 1), dimension('d2', 2)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: { d0: [], d1: [], d2: [] },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      expect(geometry.arcs).toHaveLength(3)
+      for (const arc of geometry.arcs) {
+        expect(arc.empty).toBe(true)
+        expect(Number.isFinite(arc.labelPos.x)).toBe(true)
+        expect(Number.isFinite(arc.labelPos.y)).toBe(true)
+      }
+      // Equal-arc fallback: the three dimension labels sit at equal angular
+      // spacing around the ring (their mid-angles differ by a constant, modulo
+      // the 2π wrap atan2 introduces past the south pole).
+      const norm = (x: number) => ((x % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI)
+      const labelAngles = geometry.arcs.map((a) => Math.atan2(a.labelPos.x - CENTER, -(a.labelPos.y - CENTER)))
+      const gap01 = norm((labelAngles[1] as number) - (labelAngles[0] as number))
+      const gap12 = norm((labelAngles[2] as number) - (labelAngles[1] as number))
+      expect(gap01).toBeCloseTo(gap12, 6)
+    })
+  })
+
+  // Issue 085 Phase A test-plan item 2 — even-fill. m params land at
+  // `startAngle + slot·(j+1)` with `slot = span/(m+1)`, spread across the whole
+  // arc (last dot near the arc end, not ~16° in). Red before 085 (fixed 4°
+  // step from the arc start left ~81% of the arc empty).
+  describe('even-fill dots (issue 085 Phase A)', () => {
+    it('distributes m dots evenly across the arc with uniform adjacent gaps', () => {
+      const dimensions = [dimension('d0', 0)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 5) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      // Unwrap the clockwise-increasing dot angles past atan2's ±π seam so
+      // adjacent gaps are comparable.
+      const raw = geometry.dots.map((d) => Math.atan2(d.x - CENTER, -(d.y - CENTER)))
+      const angles: number[] = []
+      let prev = -Infinity
+      for (const a of raw) {
+        let v = a
+        while (v < prev) v += 2 * Math.PI
+        angles.push(v)
+        prev = v
+      }
+      const gaps = angles.slice(1).map((a, i) => a - (angles[i] as number))
+      for (const gap of gaps) expect(gap).toBeCloseTo(gaps[0] as number, 9)
+
+      // The first dot sits one slot in from the arc start (angle 0 here) and
+      // the leading gap equals the inter-dot gap — i.e. dots fill the arc
+      // rather than bunching at the start.
+      expect(angles[0]).toBeCloseTo(gaps[0] as number, 9)
+    })
+
+    it('spreads dots across the whole arc: the last dot is near the arc end, not ~16° in', () => {
+      // Single dimension → the arc is the full ring minus one gap (~354°).
+      const dimensions = [dimension('d0', 0)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 4) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      const angles = geometry.dots
+        .map((d) => Math.atan2(d.x - CENTER, -(d.y - CENTER)))
+        .map((a) => (a < 0 ? a + 2 * Math.PI : a))
+      const last = Math.max(...angles)
+      // With even-fill the last of 4 dots sits at 4/5 of a ~354° arc (~283°) —
+      // the pre-085 fixed-step formula left it at ~16° (four 4° steps). Assert
+      // it is well past a quarter-turn to prove the arc is actually filled.
+      expect(last).toBeGreaterThan(Math.PI) // > 180°
+    })
+
+    it('re-flows the whole arc when a parameter is added: existing dots move (settle), all stay on ARC_RADIUS', () => {
+      // The inverse of 082's now-retired append-only invariant: adding a
+      // parameter re-divides the arc, so every existing dot moves. The CSS
+      // cx/cy transition (base.css, asserted in Canvas.test.tsx) is what makes
+      // that a settle rather than a jump; here we assert the re-flow itself.
+      const dimensions = [dimension('d0', 0)]
       const before = layout({
         dimensions,
-        parametersByDimension: { d0: params('d0', 3), d1: params('d1', 1) },
+        parametersByDimension: { d0: params('d0', 3) },
         contexts: [],
         bindingsByContext: {},
       })
       const after = layout({
         dimensions,
-        parametersByDimension: { d0: params('d0', 4), d1: params('d1', 1) },
+        parametersByDimension: { d0: params('d0', 4) },
         contexts: [],
         bindingsByContext: {},
       })
 
       const beforeById = new Map(before.dots.map((d) => [d.parameterId, d]))
+      let moved = 0
       for (const [id, dot] of beforeById) {
         const afterDot = after.dots.find((d) => d.parameterId === id)
         expect(afterDot).toBeDefined()
-        expect(afterDot?.x).toBe(dot.x)
-        expect(afterDot?.y).toBe(dot.y)
+        // Every pre-existing dot stays on the ring…
+        expect(distanceFromCenter(afterDot?.x ?? 0, afterDot?.y ?? 0)).toBeCloseTo(ARC_RADIUS, 6)
+        // …but re-spaces (moves) — even-fill, not append-only.
+        if (Math.hypot((afterDot?.x ?? 0) - dot.x, (afterDot?.y ?? 0) - dot.y) > 1e-6) moved++
       }
-      // The new dot (d0-p3) is the only addition.
+      expect(moved).toBe(beforeById.size)
+      // The one new dot is the only addition.
       const newIds = after.dots.map((d) => d.parameterId).filter((id) => !beforeById.has(id))
       expect(newIds).toEqual(['d0-p3'])
-      // The other dimension's dots (and the arcs) are untouched too — a
-      // param added to d0 never reflows d1.
-      expect(after.arcs).toEqual(before.arcs)
-      const d1Before = before.dots.filter((d) => d.dimensionId === 'd1')
-      const d1After = after.dots.filter((d) => d.dimensionId === 'd1')
-      expect(d1After).toEqual(d1Before)
     })
 
-    it('dot #k sits at the same angle from its arc start regardless of how many dots follow it', () => {
-      const dimensions = [dimension('d0', 0)]
-      const angleOf = (n: number) => {
-        const geometry = layout({
-          dimensions,
-          parametersByDimension: { d0: params('d0', n) },
-          contexts: [],
-          bindingsByContext: {},
-        })
-        const first = geometry.dots.find((d) => d.parameterId === 'd0-p0')
-        return Math.atan2((first?.x ?? 0) - CENTER, -((first?.y ?? 0) - CENTER))
-      }
-      const angleWith1 = angleOf(1)
-      const angleWith2 = angleOf(2)
-      const angleWith5 = angleOf(5)
-      expect(angleWith2).toBeCloseTo(angleWith1, 9)
-      expect(angleWith5).toBeCloseTo(angleWith1, 9)
-    })
-
-    it('bound spokes to pre-existing dots are unmoved when a sibling parameter is appended', () => {
+    it('a bound context node settles to a new centroid when its bound dot re-spaces', () => {
+      // Confirms the flagged assumption end-to-end: the node sits at the
+      // centroid of its bound dots, so re-spacing the dot moves the node too
+      // (the settle the ~120ms transform transition eases on the node).
       const dimensions = [dimension('d0', 0), dimension('d1', 1)]
-      const parametersByDimensionBefore = { d0: params('d0', 2), d1: params('d1', 1) }
       const contexts = [{ id: 'ctxA', symbol: 'α', parentId: null }]
       const bindingsByContext = { ctxA: { d0: 'd0-p0', d1: 'd1-p0' } }
-      const before = layout({ dimensions, parametersByDimension: parametersByDimensionBefore, contexts, bindingsByContext })
+      const before = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 2), d1: params('d1', 1) },
+        contexts,
+        bindingsByContext,
+      })
       const after = layout({
         dimensions,
         parametersByDimension: { d0: params('d0', 3), d1: params('d1', 1) },
         contexts,
         bindingsByContext,
       })
-      // The node position is derived from the centroid of its bound dots
-      // (d0-p0, d1-p0) — both unchanged, so the node itself must not move.
       const nodeBefore = before.nodes.find((n) => n.contextId === 'ctxA')
       const nodeAfter = after.nodes.find((n) => n.contextId === 'ctxA')
-      expect(nodeAfter?.x).toBe(nodeBefore?.x)
-      expect(nodeAfter?.y).toBe(nodeBefore?.y)
+      // d0-p0 re-spaced (2→3 params on d0), so its centroid — and the node —
+      // moved. This is the settle 085 accepts, not the freeze 082 guaranteed.
+      const delta = Math.hypot((nodeAfter?.x ?? 0) - (nodeBefore?.x ?? 0), (nodeAfter?.y ?? 0) - (nodeBefore?.y ?? 0))
+      expect(delta).toBeGreaterThan(1e-6)
     })
   })
 
-  // Issue 082 Phase 1 regression — hit-circle overlap. DOT_ANGLE_STEP's fixed
-  // 4deg within-dimension step packs adjacent dots ~28 viewBox units apart at
-  // ARC_RADIUS, but STYLE_GUIDE §7's 44px hit circle (canvasResponsive's
-  // dotHitRadiusUnits) is ~44 units at typical canvas widths — neighboring
-  // hit circles overlap each other's centers and steal clicks. MAX_DOT_HIT_RADIUS
-  // is the largest hit radius that keeps two adjacent hit circles from
-  // overlapping: half the chord between two dots one DOT_ANGLE_STEP apart.
-  describe('MAX_DOT_HIT_RADIUS (issue 082 Phase 1 regression — hit-circle overlap)', () => {
-    it('is at most half the actual minimum pairwise spacing between adjacent within-dimension dots', () => {
+  // Issue 085 Phase A test-plan item 3 (+ adversarial review) — per-layout hit
+  // radius under PURE even-fill. The cap must equal half the TRUE global-minimum
+  // pairwise dot distance, so no two hit circles ever overlap at any density;
+  // and no two dots ever coincide (the MIN_DOT_SLOT-floor bug produced a
+  // distance-0 seam-wrap coincidence that an array-adjacent-only scan missed).
+  describe('per-layout maxDotHitRadius (issue 085 Phase A)', () => {
+    it('reports maxDotHitRadius as exactly half the TRUE global-minimum pairwise dot distance', () => {
       const dimensions = [dimension('d0', 0)]
       const geometry = layout({
         dimensions,
@@ -382,38 +525,135 @@ describe('layout', () => {
         contexts: [],
         bindingsByContext: {},
       })
-      const [a, b] = geometry.dots
-      const spacing = Math.hypot((a as { x: number }).x - (b as { x: number }).x, (a as { y: number }).y - (b as { y: number }).y)
-      // Capping at exactly half the spacing means two neighboring hit
-      // circles at that radius touch but never overlap past each other's
-      // center.
-      expect(MAX_DOT_HIT_RADIUS).toBeCloseTo(spacing / 2, 9)
+      expect(geometry.maxDotHitRadius).toBeCloseTo(globalMinPairwise(geometry.dots) / 2, 9)
     })
 
-    it('is floored above zero and cannot go negative', () => {
-      expect(MAX_DOT_HIT_RADIUS).toBeGreaterThan(0)
+    it('sparse arc: dots spread wide, so the cap does not bite and the full 44px target is honored at ~500px', () => {
+      // 3 dots on a full single-dimension arc are ~120° apart — far wider than
+      // the 44px target, so min(dotHitRadiusUnits, cap) = the 44px radius.
+      const dimensions = [dimension('d0', 0)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 3) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      const uncapped = dotHitRadiusUnits(500)
+      expect(geometry.maxDotHitRadius).toBeGreaterThan(uncapped)
+      expect(Math.min(uncapped, geometry.maxDotHitRadius)).toBe(uncapped)
     })
 
-    it('caps the effective hit radius below the 44px-based radius at a typical (~500px) canvas width', () => {
-      // 500px is the e2e-representative measured canvas width (see
-      // Canvas.test.tsx's "compose mode: every dot exposes an invisible hit
-      // circle" fixture and HIT_REFERENCE_WIDTH in Canvas.tsx).
-      const typicalWidthPx = 500
-      const uncapped = dotHitRadiusUnits(typicalWidthPx)
-      const effective = Math.min(uncapped, MAX_DOT_HIT_RADIUS)
-      expect(uncapped).toBeGreaterThan(MAX_DOT_HIT_RADIUS) // the overlap this bug fixes
-      expect(effective).toBe(MAX_DOT_HIT_RADIUS)
+    // Adversarial-review case 1 — high density, single dimension (Σm = 100,
+    // far past ADR-0002's optimized 2–8 range: m is unbounded). This FAILS
+    // against the MIN_DOT_SLOT-floor code (last dot at 400° wraps the seam onto
+    // an early dot ⇒ global min = 0, and array-adjacent scans stay green).
+    it('high-density single dimension: no dot coincides, none overflows its arc, and the cap = half the true global min', () => {
+      const dimensions = [dimension('d0', 0)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 100) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+
+      // No coincidence anywhere (the seam-wrap bug drives this to 0).
+      const globalMin = globalMinPairwise(geometry.dots)
+      expect(globalMin).toBeGreaterThan(0)
+      // Pure even-fill ⇒ within-dimension adjacency IS the global minimum.
+      expect(withinDimAdjacentMin(geometry.dots)).toBeCloseTo(globalMin, 9)
+
+      // Every dot stays within its arc [startAngle, endAngle]: the arc is a
+      // single dimension, so [0, availableSpan]. Unwrapping the clockwise angles
+      // from the first dot must stay strictly monotonic (no seam wrap) and end
+      // below the arc's own span — the buggy code overflowed to > availableSpan.
+      const availableSpan = 2 * Math.PI - 1 * ((6 * Math.PI) / 180)
+      const raw = geometry.dots.map((d) => Math.atan2(d.x - CENTER, -(d.y - CENTER)))
+      let prev = -Infinity
+      const unwrapped: number[] = []
+      for (const a of raw) {
+        let v = a
+        while (v < prev + 1e-9) v += 2 * Math.PI
+        unwrapped.push(v)
+        prev = v
+      }
+      expect((unwrapped[0] as number)).toBeGreaterThan(0)
+      expect((unwrapped[unwrapped.length - 1] as number)).toBeLessThan(availableSpan)
+
+      // Cap is exactly half the true global min ⇒ hit circles touch but never
+      // overlap; and it bites below the 44px target at 500px.
+      expect(geometry.maxDotHitRadius).toBeCloseTo(globalMin / 2, 9)
+      expect(geometry.maxDotHitRadius).toBeLessThanOrEqual(globalMin / 2 + 1e-9)
+      const uncapped = dotHitRadiusUnits(500)
+      expect(uncapped).toBeGreaterThan(geometry.maxDotHitRadius)
+      expect(Math.min(uncapped, geometry.maxDotHitRadius)).toBe(geometry.maxDotHitRadius)
     })
 
-    it('does not cap the effective hit radius on a wide canvas where the uncapped 44px radius already fits', () => {
-      const wideCanvasPx = 2000
-      const uncapped = dotHitRadiusUnits(wideCanvasPx)
-      const effective = Math.min(uncapped, MAX_DOT_HIT_RADIUS)
-      expect(uncapped).toBeLessThan(MAX_DOT_HIT_RADIUS)
-      expect(effective).toBe(uncapped)
+    // Adversarial-review case 2 — high density across MULTIPLE dimensions, the
+    // configuration where a cross-gap pair (A's last dot ↔ B's first dot) could
+    // in principle be the tightest. Proves it is NOT: with pure even-fill the
+    // cross-gap distance is slotA + GAP + slotB > either slot, so the global
+    // minimum still lives strictly within a dimension, and the cap tracks it.
+    it('high-density multi-dimension: the global-min pair is within a dimension (never cross-gap), cap = half it', () => {
+      const dimensions = [dimension('d0', 0), dimension('d1', 1), dimension('d2', 2)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: {
+          d0: params('d0', 40),
+          d1: params('d1', 40),
+          d2: params('d2', 40),
+        },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      const globalMin = globalMinPairwise(geometry.dots)
+      expect(globalMin).toBeGreaterThan(0)
+      // The tightest pair anywhere equals the tightest same-dimension adjacent
+      // pair — cross-gap pairs are provably wider.
+      expect(withinDimAdjacentMin(geometry.dots)).toBeCloseTo(globalMin, 9)
+      expect(geometry.maxDotHitRadius).toBeCloseTo(globalMin / 2, 9)
+      expect(geometry.maxDotHitRadius).toBeLessThanOrEqual(globalMin / 2 + 1e-9)
+    })
+
+    it('defaults the cap to ARC_RADIUS (uncapped) when no dimension has two dots to overlap', () => {
+      const dimensions = [dimension('d0', 0), dimension('d1', 1)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 1), d1: params('d1', 1) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      expect(geometry.maxDotHitRadius).toBe(ARC_RADIUS)
     })
   })
 
+  // Issue 085 Phase A test-plan item 5 — contexts spread (owner #6). With dots
+  // even-filled, two contexts binding different parameters get centroid nodes
+  // in different arc regions, not the same wedge. Red before 085 (fixed-step
+  // dots clustered near each arc's start ⇒ clustered centroids ⇒ one wedge).
+  it('places two contexts binding different parameters in different arc regions (owner #6)', () => {
+    // Single-binding contexts so each node IS its one dot's centroid: ctxA on
+    // d0's first parameter, ctxB on d0's last — even-fill spreads these to
+    // opposite ends of the arc.
+    const dimensions = [dimension('d0', 0)]
+    const parametersByDimension = { d0: params('d0', 6) }
+    const contexts = [
+      { id: 'ctxA', symbol: 'α', parentId: null },
+      { id: 'ctxB', symbol: 'β', parentId: null },
+    ]
+    const bindingsByContext = { ctxA: { d0: 'd0-p0' }, ctxB: { d0: 'd0-p5' } }
+    const geometry = layout({ dimensions, parametersByDimension, contexts, bindingsByContext })
+    const nodeA = geometry.nodes.find((n) => n.contextId === 'ctxA')
+    const nodeB = geometry.nodes.find((n) => n.contextId === 'ctxB')
+    const separation = Math.hypot((nodeA?.x ?? 0) - (nodeB?.x ?? 0), (nodeA?.y ?? 0) - (nodeB?.y ?? 0))
+    // Far more than collision-jitter apart — they occupy genuinely different
+    // regions of the ring, not one narrow wedge.
+    expect(separation).toBeGreaterThan(NODE_RADIUS * 8)
+  })
+
+  // Design brief targets a 16ms (one-frame) budget for 100 contexts. Asserted
+  // here with generous headroom (200ms) for shared/noisy CI hardware; this is
+  // a guard against pathological blowups (e.g. an accidental O(n^2) path), not
+  // a tight micro-benchmark.
   it('lays out 100 contexts across 3 dimensions well within the frame budget', () => {
     const dimensions = [dimension('d0', 0), dimension('d1', 1), dimension('d2', 2)]
     const parametersByDimension = Object.fromEntries(dimensions.map((d) => [d.id, params(d.id, 10)]))

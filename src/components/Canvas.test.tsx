@@ -7,7 +7,8 @@ import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Canvas, type CanvasProps } from './Canvas'
 import type { CanvasEmphasis } from '../domain/canvasAdjacency'
-import { MAX_DOT_HIT_RADIUS } from '../domain/canvasLayout'
+import { layout } from '../domain/canvasLayout'
+import { dotHitRadiusUnits } from '../domain/canvasResponsive'
 import type { ContextRow, DimensionRow, ParameterRow } from '../db/mutations'
 
 function dim(id: string, sort: number, color = '#6f5bd6'): DimensionRow {
@@ -547,14 +548,13 @@ describe('Canvas', () => {
       )
     })
 
-    it('compose mode: every dot exposes an invisible hit circle sized to the measured canvas width, capped so neighbors never overlap', () => {
-      // Fake ResizeObserver → 500px measured width. The uncapped 44px-based
-      // radius would be 44 viewBox units, but d0's two dots are only
-      // DOT_ANGLE_STEP apart (issue 082's fixed 4deg step) — at 44 units
-      // those hit circles overlap each other's centers (issue 082 Phase 1
-      // regression). The rendered radius must be capped at
-      // MAX_DOT_HIT_RADIUS instead, per Canvas.tsx's `min(dotHitRadiusUnits,
-      // MAX_DOT_HIT_RADIUS)`.
+    // Issue 085 Phase A — the hit radius is now `min(dotHitRadiusUnits(width),
+    // geometry.maxDotHitRadius)`, where the cap is computed per layout from the
+    // actual (variable) even-fill spacing rather than a module constant. On
+    // this sparse fixture (d0's 2 params spread wide across a proportional arc)
+    // the cap does NOT bite: the dots are far enough apart that the full 44px
+    // target fits, so the rendered radius equals the uncapped dotHitRadiusUnits.
+    it('compose mode: every dot exposes an invisible hit circle = min(44px target, per-layout cap); a sparse arc is uncapped', () => {
       type ResizeCallback = (entries: { contentRect: { width: number } }[]) => void
       let observed: ResizeCallback | null = null
       const Original = window.ResizeObserver
@@ -565,9 +565,87 @@ describe('Canvas', () => {
       try {
         const { container } = renderCompose({ composeContextId: 'draft' })
         act(() => observed?.([{ contentRect: { width: 500 } }]))
+        const geometry = layout({
+          dimensions: composeDims,
+          parametersByDimension: composeParams,
+          contexts: [],
+          bindingsByContext: {},
+        })
+        const uncapped = dotHitRadiusUnits(500)
+        const expected = Math.min(uncapped, geometry.maxDotHitRadius)
+        // Sparse even-fill: the cap is wider than the 44px target, so it does
+        // not bite here (the pre-085 fixed-4°-step fixture WAS capped).
+        expect(geometry.maxDotHitRadius).toBeGreaterThan(uncapped)
+        expect(expected).toBe(uncapped)
         const hit = container.querySelector('.canvas-dot-hit') as SVGCircleElement
         expect(hit).not.toBeNull()
-        expect(Number(hit.getAttribute('r'))).toBeCloseTo(MAX_DOT_HIT_RADIUS)
+        expect(Number(hit.getAttribute('r'))).toBeCloseTo(expected)
+      } finally {
+        window.ResizeObserver = Original
+      }
+    })
+
+    // The complement of the sparse case: on a crowded arc the per-layout cap
+    // DOES bite, and Canvas.tsx must render that capped radius — proving it
+    // reads `geometry.maxDotHitRadius`, preserving 5bbc8bc's no-overlap
+    // guarantee under 085's variable spacing.
+    it('compose mode: a crowded arc caps the hit circle at the per-layout maxDotHitRadius (no neighbor overlap)', () => {
+      const crowdedDims = [dim('d0', 0)]
+      const crowdedParams = {
+        d0: Array.from({ length: 100 }, (_, i) => param('d0', `d0-p${i}`, i)),
+      }
+      type ResizeCallback = (entries: { contentRect: { width: number } }[]) => void
+      let observed: ResizeCallback | null = null
+      const Original = window.ResizeObserver
+      window.ResizeObserver = function (cb: ResizeCallback) {
+        observed = cb
+        return { observe: () => {}, unobserve: () => {}, disconnect: () => {} }
+      } as unknown as typeof ResizeObserver
+      try {
+        const { container } = render(
+          <Canvas
+            dimensions={crowdedDims}
+            parametersByDimension={crowdedParams}
+            contexts={[draft]}
+            bindingsByContext={{ draft: {} }}
+            selectedContextId="draft"
+            onSelect={() => {}}
+            composeContextId="draft"
+            activeDimensionId="d0"
+          />,
+        )
+        act(() => observed?.([{ contentRect: { width: 500 } }]))
+        const geometry = layout({
+          dimensions: crowdedDims,
+          parametersByDimension: crowdedParams,
+          contexts: [],
+          bindingsByContext: {},
+        })
+        // The rendered hit radius must not exceed HALF the TRUE global-minimum
+        // pairwise dot distance, or two neighbours' hit circles overlap and
+        // steal each other's clicks (5bbc8bc). Under the MIN_DOT_SLOT-floor bug
+        // an over-dense arc wrapped the seam onto an early dot ⇒ global min 0 ⇒
+        // guaranteed overlap; pure even-fill keeps this positive and the cap at
+        // exactly half it.
+        let globalMin = Infinity
+        for (let i = 0; i < geometry.dots.length; i++) {
+          for (let j = i + 1; j < geometry.dots.length; j++) {
+            const a = geometry.dots[i] as { x: number; y: number }
+            const b = geometry.dots[j] as { x: number; y: number }
+            globalMin = Math.min(globalMin, Math.hypot(a.x - b.x, a.y - b.y))
+          }
+        }
+        expect(globalMin).toBeGreaterThan(0) // no two dots coincide
+        expect(geometry.maxDotHitRadius).toBeLessThanOrEqual(globalMin / 2 + 1e-9)
+        const uncapped = dotHitRadiusUnits(500)
+        expect(uncapped).toBeGreaterThan(geometry.maxDotHitRadius) // cap bites
+        const hit = container.querySelector('.canvas-dot-hit') as SVGCircleElement
+        expect(hit).not.toBeNull()
+        // The rendered hit circle is the capped radius, and being ≤ half the
+        // global min it cannot overlap a neighbour's.
+        const rendered = Number(hit.getAttribute('r'))
+        expect(rendered).toBeCloseTo(geometry.maxDotHitRadius)
+        expect(rendered).toBeLessThanOrEqual(globalMin / 2 + 1e-9)
       } finally {
         window.ResizeObserver = Original
       }

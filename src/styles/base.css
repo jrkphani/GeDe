@@ -1180,17 +1180,19 @@ body {
   transition: r var(--motion-fast) ease-out;
 }
 
-/* Issue 082 (throughout — visual stability) — extend the same node-migration
-   easing (STYLE_GUIDE §8, ~120ms, `--motion-migrate`) to dots: append-only
-   placement (canvasLayout.ts) means a dot only ever moves for a genuinely
-   forced reason (arc-span growth on a shared arc, a dimension reorder) —
-   when it does, this eases the move instead of a jump. Position lives on the
-   SVG `cx`/`cy`/`x`/`y` presentation attributes here (unlike nodes, which
+/* Issue 082 / 085 Phase A (visual stability) — extend the same node-migration
+   easing (STYLE_GUIDE §8, ~120ms, `--motion-migrate`) to dots. 085 replaces
+   082's append-only placement with proportional arcs + even-fill dots
+   (canvasLayout.ts), so a dot re-flows whenever a parameter is added/removed
+   (or a dimension reordered) — this transition is what makes it settle rather
+   than jump (082's dropped "ease residual movement" clause). Position lives on
+   the SVG `cx`/`cy`/`x`/`y` presentation attributes here (unlike nodes, which
    migrate via a `<g transform>` — dots don't share one group transform with
-   their independently-positioned labels), but both are real CSS properties
-   under SVG2 and animate exactly like `r` already does just above. The
-   blanket prefers-reduced-motion rule near the top of this file disables
-   this for free, snapping straight to the final position. */
+   their independently-positioned labels, which sit at a different radius on the
+   same ray), but both are real CSS properties under SVG2 and animate exactly
+   like `r` already does just above. The blanket prefers-reduced-motion rule
+   near the top of this file disables this for free, snapping straight to the
+   final position. */
 .canvas-dot,
 .canvas-dot-hit {
   transition:

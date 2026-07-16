@@ -29,58 +29,58 @@ const LABEL_RADIUS = ARC_RADIUS - 40
 // which only needs to clear the stroke.
 export const DOT_RADIUS = 8
 const DOT_LABEL_RADIUS = ARC_RADIUS + 32
-// Issue 082 (throughout — visual stability) — append-only dot placement.
-// Dot #k (0-indexed, in sort order) sits at a FIXED angular offset from its
-// arc's own start, independent of how many parameters follow it: adding
-// parameter #k+1 never changes dot #k's angle (the pre-082 formula,
-// `segmentSpan / (params.length + 1)`, re-divided the WHOLE arc on every
-// add, moving every existing dot and its bound spoke). `startAngle` and
-// `segmentSpan` (below) depend only on the dimension COUNT and this
-// dimension's index — never on any dimension's own parameter count — so a
-// param added to dimension A also never moves dimension B's dots.
-// 4deg clears DOT_RADIUS's (8 unit) touching threshold at ARC_RADIUS (~2.3deg)
-// with comfortable margin, and still fits ~2 dozen dots on the smallest
-// segment (n=8 dimensions) before the soft clamp below engages — a param
-// count that far outside ADR-0002's optimized range is accepted degradation
-// (clamped, not colliding at a single point), not a correctness bug.
-const DOT_ANGLE_STEP = (4 * Math.PI) / 180
-const DOT_START_OFFSET = DOT_ANGLE_STEP
-// Safety margin kept clear at the far end of the arc's segment so a
-// pathologically long parameter list clamps against its own dimension's
-// boundary rather than bleeding angle into the next dimension's gap.
-const DOT_END_MARGIN = DOT_ANGLE_STEP / 2
-// Issue 082 Phase 1 regression fix — hit-circle overlap. STYLE_GUIDE §7 wants
-// every dot's invisible hit circle to be >= 44px on screen
-// (canvasResponsive.dotHitRadiusUnits), but at DOT_ANGLE_STEP's fixed 4deg
-// within-dimension step, two adjacent dots sit only ~28 viewBox units apart
-// at ARC_RADIUS — well inside a 44-unit hit radius at any realistic canvas
-// width. Overlapping hit circles cover each other's centers, so whichever
-// dot paints last steals clicks aimed at its neighbor (this is exactly the
-// risk the issue 082 design brief flagged and deferred:
-// docs/issues/082-design-route-ux.md:133, "touch hit targets ... must not
-// overlap ... the invisible dot hit circles at small radii on a crowded
-// ring").
+// Issue 085 Phase A — proportional arcs + PURE even-fill dots (supersedes 082
+// Phase 1's append-only placement). Each dimension's arc span is proportional
+// to its parameter count and its m dots are evenly distributed across that arc
+// with NO lower clamp: `slot = segmentSpan / (m + 1)`, dot j at
+// `startAngle + slot·(j+1)`. So the last dot lands at
+// `startAngle + span·m/(m+1) < endAngle` for every m — dots can never overflow
+// the arc, wrap the 12-o'clock seam, or coincide with an early dot. On an
+// over-dense arc (far past ADR-0002's optimized 2–8 range) the dots simply
+// compress evenly; that is honest degradation (you physically cannot fit
+// dozens of 44px targets on one ring), never a collision. The ring reads as a
+// balanced chord diagram instead of bunching every dot near each arc's start.
+// Adding/removing a parameter re-flows the whole ring; the CSS `cx`/`cy`
+// transition (base.css) eases the move so dots settle rather than jump (082's
+// dropped "ease residual movement" clause, finally implemented). The
+// cross-dimension stability 082 Phase 1 bought is deliberately traded for the
+// proportional aesthetic (owner-accepted, see 085 "Open tensions").
 //
-// MAX_DOT_HIT_RADIUS is the largest hit-circle radius that still guarantees
-// no two neighboring hit circles overlap: half the chord length between two
-// dots exactly one DOT_ANGLE_STEP apart (`2 * ARC_RADIUS *
-// sin(DOT_ANGLE_STEP / 2)` is the chord; half of it sits exactly at the
-// midpoint between the two dots, so two circles of this radius touch but
-// never overlap past each other's center). Within-dimension spacing is the
-// tightest case anywhere on the canvas by construction — GAP_RADIANS keeps
-// across-dimension gaps strictly wider — so it's the only case that needs
-// guarding; it does not change if dots pile up against `maxOffset`'s soft
-// clamp (that's a fixed constant, not derived from any per-call layout
-// state, so it can never divide by zero or go negative). Floored at
-// DOT_RADIUS purely as a belt-and-suspenders guard so a future change to
-// these constants can never shrink the hit circle below the *visible* dot
-// itself.
+// NB: an earlier draft floored `slot` at a MIN_DOT_SLOT (4°) to keep a minimum
+// pitch. That was WRONG — it clamped the pitch but not the placed angle, so an
+// over-dense arc's dots ran past `endAngle`, wrapped the seam, and became
+// exactly coincident with the same dimension's early dots (single dim, m=100:
+// last dot at 400°, p1≡p91 at distance 0). Pure even-fill removes that failure
+// mode entirely.
+
+// Issue 082 Phase 1 regression fix, generalized for 085 Phase A's variable
+// spacing — hit-circle overlap. STYLE_GUIDE §7 wants every dot's invisible
+// hit circle to be >= 44px on screen (canvasResponsive.dotHitRadiusUnits),
+// but two adjacent dots on a dense arc can sit far closer than that at
+// ARC_RADIUS — well inside a 44-unit hit radius. Overlapping hit circles cover
+// each other's centers, so whichever dot paints last steals clicks aimed at
+// its neighbor (docs/issues/082-design-route-ux.md:133).
+//
+// Under 085's even-fill the tightest spacing is no longer a constant (a sparse
+// arc spreads its dots wide, a dense one compresses them), so the safe cap is
+// computed PER LAYOUT: `CanvasGeometry.maxDotHitRadius` is HALF the tightest
+// chord between two adjacent within-dimension dots this call produced (half of
+// it sits exactly at the midpoint between the two dots, so two circles of that
+// radius touch but never overlap past each other's center). Because pure
+// even-fill can never overflow an arc, within-dimension adjacency is provably
+// the GLOBAL minimum pairwise distance over all dots: the cross-gap distance
+// between dimension A's last dot and B's first is `slotA + GAP_RADIANS + slotB`
+// angular — strictly greater than either slot alone — so no cross-dimension
+// pair is ever tighter than the within-dimension minimum. There is therefore
+// no DOT_RADIUS floor: flooring would let the cap exceed half the true spacing
+// on an over-dense arc and re-introduce the exact overlap 5bbc8bc fixed. When
+// no dimension has two dots there is no pair to overlap, so the cap defaults to
+// ARC_RADIUS (effectively uncapped — the 44px target wins).
 //
 // Consumers (Canvas.tsx) take `min(dotHitRadiusUnits(width),
-// MAX_DOT_HIT_RADIUS)`. This deliberately lets the effective hit radius fall
-// below STYLE_GUIDE §7's 44px floor on a crowded ring — honoring 44px there
-// is physically impossible without overlap at this angular step.
-export const MAX_DOT_HIT_RADIUS = Math.max(DOT_RADIUS, ARC_RADIUS * Math.sin(DOT_ANGLE_STEP / 2))
+// geometry.maxDotHitRadius)`. This deliberately lets the effective hit radius
+// fall below STYLE_GUIDE §7's 44px floor on a dense ring — honoring 44px there
+// is physically impossible without overlap.
 // Minimum vertical gap between two labels on the same side of the ring, in
 // viewBox user units. The label font is 13 user units tall (--text-mono, sized
 // in the SVG's own coordinate space, so it does not change with container
@@ -178,6 +178,11 @@ export interface CanvasGeometry {
   arcs: ArcGeometry[]
   dots: DotGeometry[]
   nodes: NodeGeometry[]
+  // Issue 085 Phase A — the largest dot hit-circle radius (viewBox units) that
+  // keeps two adjacent within-dimension hit circles from overlapping, given
+  // THIS layout's actual (variable) dot spacing. Consumed by Canvas.tsx as the
+  // cap in `min(dotHitRadiusUnits(width), maxDotHitRadius)`.
+  maxDotHitRadius: number
 }
 
 // A point on the circle at the given radius/angle, using d3's angle
@@ -292,19 +297,48 @@ function seededStart(id: string, base: Point): Point {
 export function layout(input: CanvasLayoutInput): CanvasGeometry {
   const { dimensions, parametersByDimension, contexts, bindingsByContext, childCountByContext } = input
   const viewBox = `0 0 ${SIZE} ${SIZE}`
-  if (dimensions.length === 0) return { viewBox, arcs: [], dots: [], nodes: [] }
+  if (dimensions.length === 0)
+    return { viewBox, arcs: [], dots: [], nodes: [], maxDotHitRadius: ARC_RADIUS }
 
   const sortedDimensions = [...dimensions].sort((a, b) => a.sort - b.sort)
   const n = sortedDimensions.length
   const totalGap = n * GAP_RADIANS
-  const segmentSpan = (2 * Math.PI - totalGap) / n
+  const availableSpan = 2 * Math.PI - totalGap
+
+  // Issue 085 Phase A — arc span proportional to this dimension's parameter
+  // count (chord-diagram sizing): `segmentSpan_i = availableSpan · m_i / Σm`.
+  // Guards: Σm === 0 (every dimension still empty) has no proportion to
+  // compute, so fall back to equal arcs — matching the pre-085 equal-slice
+  // behaviour until the first parameter exists. A single dimension (n === 1)
+  // needs no special case: its share is availableSpan · m/m = the full ring
+  // minus one gap. An empty dimension among non-empty ones gets a zero-width
+  // arc by construction (a sparse dimension gets a short arc — 085 Decision 5,
+  // explicitly accepted); its label still renders so it stays discoverable.
+  const paramCounts = sortedDimensions.map((dim) => (parametersByDimension[dim.id] ?? []).length)
+  const totalParams = paramCounts.reduce((sum, c) => sum + c, 0)
+  const spanFor = (i: number): number =>
+    totalParams === 0 ? availableSpan / n : availableSpan * ((paramCounts[i] as number) / totalParams)
+
+  // Cumulative start angles: with variable spans a dimension's start is the
+  // running sum of every prior span plus one gap each, not `i · (span + gap)`.
+  let runningAngle = 0
+  const startAngles = sortedDimensions.map((_, i) => {
+    const start = runningAngle
+    runningAngle += spanFor(i) + GAP_RADIANS
+    return start
+  })
 
   const arcs: ArcGeometry[] = []
   const dots: DotGeometry[] = []
   const dotPositionsByDimension = new Map<string, Map<string, Point>>()
+  // Tightest chord between two adjacent within-dimension dots this call
+  // produced; drives maxDotHitRadius below. Infinity until a dimension with
+  // >= 2 dots is seen (a lone or absent dot has no neighbour to overlap).
+  let minAdjacentChord = Infinity
 
   sortedDimensions.forEach((dim, i) => {
-    const startAngle = i * (segmentSpan + GAP_RADIANS)
+    const segmentSpan = spanFor(i)
+    const startAngle = startAngles[i] as number
     const endAngle = startAngle + segmentSpan
     const midAngle = (startAngle + endAngle) / 2
 
@@ -327,16 +361,19 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
     })
 
     const positions = new Map<string, Point>()
-    // Fixed increments from the arc start (append-only, see DOT_ANGLE_STEP
-    // above): dot #j's angle is a pure function of (startAngle, j) — never of
-    // params.length — so existing dots (and the spokes bound to them) never
-    // move when a later parameter is appended. Soft-clamped to this arc's own
-    // segment so an unusually long list still degrades gracefully instead of
-    // bleeding into the neighboring dimension's territory.
-    const maxOffset = Math.max(segmentSpan - DOT_END_MARGIN, DOT_START_OFFSET)
+    // Issue 085 Phase A — pure even-fill: evenly distribute m dots across the
+    // arc, `slot = segmentSpan / (m + 1)`, dot j at `startAngle + slot·(j+1)`.
+    // The first and last dot each sit one slot in from an edge, so the dots
+    // span the whole arc (never bunching at the start) and the last dot lands
+    // at `startAngle + span·m/(m+1) < endAngle` — no overflow, no seam wrap, no
+    // coincidence — for every m. No lower clamp: an over-dense arc compresses
+    // evenly (honest degradation), and the maxDotHitRadius cap below tracks
+    // whatever spacing this actually produces so hit circles never overlap.
+    const m = params.length
+    const slot = m > 0 ? segmentSpan / (m + 1) : 0
+    if (m >= 2) minAdjacentChord = Math.min(minAdjacentChord, 2 * ARC_RADIUS * Math.sin(slot / 2))
     params.forEach((param, j) => {
-      const offset = Math.min(DOT_START_OFFSET + j * DOT_ANGLE_STEP, maxOffset)
-      const angle = startAngle + offset
+      const angle = startAngle + slot * (j + 1)
       const pos = pointAt(ARC_RADIUS, angle)
       positions.set(param.id, pos)
       dots.push({
@@ -406,5 +443,16 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
     }
   })
 
-  return { viewBox, arcs, dots, nodes }
+  // Half the tightest adjacent-dot chord keeps two neighbouring hit circles
+  // touching but never overlapping. `minAdjacentChord` is the global minimum
+  // pairwise distance over ALL dots (pure even-fill can't overflow, so
+  // within-dimension adjacency is provably tightest — see the block comment
+  // above), so half of it is a hard no-overlap cap at any density. No
+  // DOT_RADIUS floor: flooring would let the cap exceed half the true spacing
+  // on an over-dense arc and re-admit the overlap 5bbc8bc fixed. When no
+  // dimension has two dots there is nothing to overlap, so leave the cap
+  // effectively open (ARC_RADIUS) and let dotHitRadiusUnits' 44px target win.
+  const maxDotHitRadius = Number.isFinite(minAdjacentChord) ? minAdjacentChord / 2 : ARC_RADIUS
+
+  return { viewBox, arcs, dots, nodes, maxDotHitRadius }
 }
