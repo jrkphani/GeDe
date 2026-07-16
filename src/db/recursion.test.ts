@@ -62,7 +62,7 @@ describe('openChildCanvas — seeding (test-first plan 1)', () => {
     const first = await openChildCanvas(db, alpha.id)
     const second = await openChildCanvas(db, alpha.id)
     expect(second.dimensions.map((d) => d.id)).toEqual(first.dimensions.map((d) => d.id))
-    expect(await listDimensions(db, alpha.projectId, alpha.id)).toHaveLength(2)
+    expect(await listDimensions(db, alpha.projectId, second.canvasId)).toHaveLength(2)
   })
 
   it('child-dimension parameters are the source parameter’s sub-parameters (dimension-scoped)', async () => {
@@ -119,11 +119,13 @@ describe('openChildCanvas — stale parent re-bind (test-first plan 1)', () => {
     const child = await createContext(db, alpha.projectId, alpha.id)
     await bindParameter(db, child.id, usersDim.id, inner.id)
     await bindParameter(db, alpha.id, stake.id, buyers.id)
-    const { stale } = await openChildCanvas(db, alpha.id)
+    const { stale, canvasId: alphaCanvasId } = await openChildCanvas(db, alpha.id)
 
     await revertStaleRebind(db, must(stale[0]))
 
-    const restored = must((await listDimensions(db, alpha.projectId, alpha.id)).find((d) => d.id === usersDim.id))
+    const restored = must(
+      (await listDimensions(db, alpha.projectId, alphaCanvasId)).find((d) => d.id === usersDim.id),
+    )
     expect(restored.sourceParamId).toBe(users.id)
     expect(restored.name).toBe('Users')
     const childBindings = await import('./mutations').then((m) => m.listBindings(db, child.id))
@@ -148,7 +150,8 @@ describe('child context lineage (test-first plan 2)', () => {
     const next = await createContext(db, alpha.projectId, parent)
     expect(a1.symbol).toBe('α1')
     expect(a3.symbol).toBe('α3')
-    expect((await listContexts(db, alpha.projectId, alpha.id)).find((c) => c.id === a3.id)?.symbol).toBe(
+    // a1.canvasId is α's child canvas — all of α's children share it.
+    expect((await listContexts(db, alpha.projectId, a1.canvasId)).find((c) => c.id === a3.id)?.symbol).toBe(
       'α3',
     )
     expect(next.symbol).toBe('α2') // gap-fills the freed slot, does not touch α3
@@ -162,8 +165,8 @@ describe('child context lineage (test-first plan 2)', () => {
     expect(a1.symbol).toBe('α1')
     expect(b1.symbol).toBe('β1')
     // Listing α's canvas returns only α's children.
-    expect((await listContexts(db, projectId, alpha.id)).map((c) => c.symbol)).toEqual(['α1'])
-    expect((await listContexts(db, projectId, beta.id)).map((c) => c.symbol)).toEqual(['β1'])
+    expect((await listContexts(db, projectId, a1.canvasId)).map((c) => c.symbol)).toEqual(['α1'])
+    expect((await listContexts(db, projectId, b1.canvasId)).map((c) => c.symbol)).toEqual(['β1'])
     // A per-canvas symbol collision on a child canvas is still rejected.
     await expect(setContextSymbol(db, projectId, b1.id, 'β1')).resolves.toBeDefined()
   })
@@ -173,7 +176,7 @@ describe('recursion depth — per-canvas scoping (test-first plan 3)', () => {
   it('a depth-chain keeps dimensions and contexts scoped with no cross-level leakage', async () => {
     const { db, projectId, alpha, value, stake, comfort, users } = await projectWithBoundAlpha()
     // Build α → α1 (bound) → α1a (child) three levels deep.
-    const { dimensions: l1 } = await openChildCanvas(db, alpha.id)
+    const { dimensions: l1, canvasId: alphaCanvasId } = await openChildCanvas(db, alpha.id)
     const comfortDim = must(l1.find((d) => d.sourceParamId === comfort.id))
     const usersDim = must(l1.find((d) => d.sourceParamId === users.id))
     const warm = await addParameter(db, comfortDim.id, 'Warm', comfort.id)
@@ -182,16 +185,16 @@ describe('recursion depth — per-canvas scoping (test-first plan 3)', () => {
     await bindParameter(db, a1.id, comfortDim.id, warm.id)
     await bindParameter(db, a1.id, usersDim.id, inner.id)
 
-    const { dimensions: l2 } = await openChildCanvas(db, a1.id)
+    const { dimensions: l2, canvasId: a1CanvasId } = await openChildCanvas(db, a1.id)
     expect(l2).toHaveLength(2)
     expect(new Set(l2.map((d) => d.sourceParamId))).toEqual(new Set([warm.id, inner.id]))
 
     // Each level's dimension list is exactly its own — no leakage up or down.
     expect((await listDimensions(db, projectId, null)).map((d) => d.id)).toEqual([value.id, stake.id])
-    expect((await listDimensions(db, projectId, alpha.id)).map((d) => d.id).sort()).toEqual(
+    expect((await listDimensions(db, projectId, alphaCanvasId)).map((d) => d.id).sort()).toEqual(
       [comfortDim.id, usersDim.id].sort(),
     )
-    expect((await listDimensions(db, projectId, a1.id)).map((d) => d.id).sort()).toEqual(
+    expect((await listDimensions(db, projectId, a1CanvasId)).map((d) => d.id).sort()).toEqual(
       l2.map((d) => d.id).sort(),
     )
     // Root canvas contexts don't include the deep children.

@@ -1,16 +1,23 @@
 import { PGlite } from '@electric-sql/pglite'
-import { eq, isNull } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/pglite'
 import { describe, expect, it } from 'vitest'
 import { openDatabase } from './client'
-import { canvases, contexts, dimensions } from './schema'
+import { bindings, canvases, contexts, dimensions } from './schema'
 import {
   addDimension,
+  archiveCanvasCascade,
   bindParameter,
   addParameter,
+  createCanvas,
   createContext,
   createProject,
+  listCanvases,
+  listContexts,
+  listDimensions,
   openChildCanvas,
+  restoreCanvasCascade,
+  RootCanvasFloorError,
 } from './mutations'
 
 function must<T>(value: T | null | undefined, label = 'value'): T {
@@ -332,5 +339,132 @@ describe('canvases migration 0017 — backfill of legacy data', () => {
       'child canvas A',
     )
     expect(canvasA.id).toBe('canvas-ctx-ctx-A')
+  })
+})
+
+// ── Phase 4a: read path keys on canvas_id (the load-bearing correctness change) ─
+// Before Phase 4a the read/scope path filtered `context_id IS NULL` for the
+// root canvas, so TWO root canvases in one project both matched and leaked
+// rows into each other. These assert the repoint to canvas_id.
+describe('canvases read scope — independent root canvases (issue 090 Phase 4a)', () => {
+  async function twoRootCanvases() {
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    // createProject seeded canvas A; add a second root canvas B.
+    const canvasA = must((await listCanvases(db, project.id))[0], 'canvas A')
+    const canvasB = await createCanvas(db, project.id, 'Alt')
+    return { db, projectId: project.id, canvasA, canvasB }
+  }
+
+  it('two root canvases hold independent dimension sets (no context_id IS NULL leak)', async () => {
+    const { db, projectId, canvasA, canvasB } = await twoRootCanvases()
+    const dimA = await addDimension(db, projectId, undefined, canvasA.id)
+    const dimB = await addDimension(db, projectId, undefined, canvasB.id)
+
+    const listA = await listDimensions(db, projectId, canvasA.id)
+    const listB = await listDimensions(db, projectId, canvasB.id)
+    expect(listA.map((d) => d.id)).toEqual([dimA.id])
+    expect(listB.map((d) => d.id)).toEqual([dimB.id])
+    // Explicit cross-exclusion: each canvas excludes the other's rows.
+    expect(listA.some((d) => d.id === dimB.id)).toBe(false)
+    expect(listB.some((d) => d.id === dimA.id)).toBe(false)
+  })
+
+  it('two root canvases hold independent context sets (no parent_id IS NULL leak)', async () => {
+    const { db, projectId, canvasA, canvasB } = await twoRootCanvases()
+    const ctxA = await createContext(db, projectId, null, canvasA.id)
+    const ctxB = await createContext(db, projectId, null, canvasB.id)
+
+    const listA = await listContexts(db, projectId, canvasA.id)
+    const listB = await listContexts(db, projectId, canvasB.id)
+    expect(listA.map((c) => c.id)).toEqual([ctxA.id])
+    expect(listB.map((c) => c.id)).toEqual([ctxB.id])
+    expect(listA.some((c) => c.id === ctxB.id)).toBe(false)
+    expect(listB.some((c) => c.id === ctxA.id)).toBe(false)
+  })
+
+  it('addDimension / createContext land on the explicitly targeted canvas only', async () => {
+    const { db, projectId, canvasA, canvasB } = await twoRootCanvases()
+    const dimB = await addDimension(db, projectId, 'Only B', canvasB.id)
+    const ctxB = await createContext(db, projectId, null, canvasB.id)
+    expect(dimB.canvasId).toBe(canvasB.id)
+    expect(ctxB.canvasId).toBe(canvasB.id)
+    // Canvas A stays empty.
+    expect(await listDimensions(db, projectId, canvasA.id)).toHaveLength(0)
+    expect(await listContexts(db, projectId, canvasA.id)).toHaveLength(0)
+  })
+})
+
+// ── Phase 4a: cascade archive/restore + root-canvas floor guard ───────────────
+describe('canvases cascade + floor (issue 090 Phase 4a)', () => {
+  async function projectWithSecondCanvas() {
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Tavalo' })
+    const canvasA = must((await listCanvases(db, project.id))[0], 'canvas A')
+    const canvasB = await createCanvas(db, project.id, 'Alt')
+    // Populate canvas B with a dimension, a context, and a binding.
+    const value = await addDimension(db, project.id, 'Value', canvasB.id)
+    const param = await addParameter(db, value.id, 'Cheap')
+    const ctx = await createContext(db, project.id, null, canvasB.id)
+    await bindParameter(db, ctx.id, value.id, param.id)
+    return { db, projectId: project.id, canvasA, canvasB, value, ctx }
+  }
+
+  it('archiveCanvasCascade tombstones the canvas + its dimensions/contexts/bindings', async () => {
+    const { db, canvasB, value, ctx } = await projectWithSecondCanvas()
+    const result = await archiveCanvasCascade(db, canvasB.id)
+    // Returned rows verbatim so a store can enqueue + undo each.
+    expect(result.canvas.id).toBe(canvasB.id)
+    expect(result.dimensions.map((d) => d.id)).toContain(value.id)
+    expect(result.contexts.map((c) => c.id)).toContain(ctx.id)
+    expect(result.bindings).toHaveLength(1)
+
+    const liveCanvas = await db.select().from(canvases).where(eq(canvases.id, canvasB.id))
+    expect(liveCanvas[0]?.deletedAt).not.toBeNull()
+    const liveDims = await db
+      .select()
+      .from(dimensions)
+      .where(and(eq(dimensions.canvasId, canvasB.id), isNull(dimensions.deletedAt)))
+    expect(liveDims).toHaveLength(0)
+    const liveCtxs = await db
+      .select()
+      .from(contexts)
+      .where(and(eq(contexts.canvasId, canvasB.id), isNull(contexts.deletedAt)))
+    expect(liveCtxs).toHaveLength(0)
+    const liveBindings = await db
+      .select()
+      .from(bindings)
+      .where(and(eq(bindings.contextId, ctx.id), isNull(bindings.deletedAt)))
+    expect(liveBindings).toHaveLength(0)
+  })
+
+  it('restoreCanvasCascade revives exactly the tombstoned rows', async () => {
+    const { db, canvasB, value, ctx } = await projectWithSecondCanvas()
+    const captured = await archiveCanvasCascade(db, canvasB.id)
+    await restoreCanvasCascade(db, captured)
+
+    const liveCanvas = must((await db.select().from(canvases).where(eq(canvases.id, canvasB.id)))[0], 'canvas')
+    expect(liveCanvas.deletedAt).toBeNull()
+    expect(await listDimensions(db, liveCanvas.projectId, canvasB.id)).toHaveLength(1)
+    expect(await listContexts(db, liveCanvas.projectId, canvasB.id)).toHaveLength(1)
+    const liveBindings = await db
+      .select()
+      .from(bindings)
+      .where(and(eq(bindings.contextId, ctx.id), isNull(bindings.deletedAt)))
+    expect(liveBindings).toHaveLength(1)
+    expect(value.canvasId).toBe(canvasB.id)
+  })
+
+  it('deleting the last live root canvas throws RootCanvasFloorError', async () => {
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Solo' })
+    const only = must((await listCanvases(db, project.id))[0], 'only root canvas')
+    await expect(archiveCanvasCascade(db, only.id)).rejects.toBeInstanceOf(RootCanvasFloorError)
+  })
+
+  it('archiving a root canvas is allowed while another live root canvas remains', async () => {
+    const { db, canvasB } = await projectWithSecondCanvas()
+    // Two live root canvases (A seeded, B created) — archiving B is fine.
+    await expect(archiveCanvasCascade(db, canvasB.id)).resolves.toBeDefined()
   })
 })

@@ -3,14 +3,15 @@ import type { Database } from '../db/client'
 import {
   archiveContext as dbArchive,
   bindParameter as dbBind,
-  childCountsByContext as dbChildCounts,
+  childCountsByContext as rawChildCounts,
   ContextSymbolCollisionError,
   createContext as dbCreate,
   getContextsByIds as dbGetByIds,
   listBindings as dbListBindings,
-  listContexts as dbListContexts,
-  listDimensions as dbListDimensions,
+  listContexts as rawListContexts,
+  listDimensions as rawListDimensions,
   openChildCanvas as dbOpenChildCanvas,
+  resolveReadCanvasId,
   restoreContext as dbRestore,
   revertStaleRebind as dbRevertStale,
   setContextJustification as dbSetJustification,
@@ -23,6 +24,42 @@ import {
 import { useCommandLogStore } from './commandLog'
 import { requireDatabase } from './database'
 import { enqueueIfSyncing, useSyncStore } from './sync'
+
+// Issue 090 Phase 4a (FLAG for Phase 4b) — the DB read path now keys on
+// canvas_id, but this store still navigates by the pre-090 context selector
+// (`parentId`: null = root canvas, a context id = its child canvas). Resolve
+// that selector to the concrete canvas id at the read boundary so every read
+// below stays canvas-scoped without touching a single call site. Phase 4b
+// replaces this by threading a real (root) canvas id through the switcher/URL.
+async function dbListContexts(
+  db: Database,
+  projectId: string,
+  parentId: string | null = null,
+): Promise<ContextRow[]> {
+  const canvasId = await resolveReadCanvasId(db, projectId, parentId)
+  if (canvasId === null) return []
+  return rawListContexts(db, projectId, canvasId)
+}
+
+async function dbListDimensions(
+  db: Database,
+  projectId: string,
+  parentId: string | null = null,
+) {
+  const canvasId = await resolveReadCanvasId(db, projectId, parentId)
+  if (canvasId === null) return []
+  return rawListDimensions(db, projectId, canvasId)
+}
+
+async function dbChildCounts(
+  db: Database,
+  projectId: string,
+  parentId: string | null = null,
+): Promise<Record<string, number>> {
+  const canvasId = await resolveReadCanvasId(db, projectId, parentId)
+  if (canvasId === null) return {}
+  return rawChildCounts(db, projectId, canvasId)
+}
 
 // Root-canvas contexts for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log

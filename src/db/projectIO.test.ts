@@ -67,8 +67,8 @@ async function seedRichProject(db: Database): Promise<string> {
   await setContextJustification(db, c1.id, 'Because.')
 
   // Drill in: seeds child-canvas dimensions (contextId + sourceParamId set).
-  await openChildCanvas(db, c1.id)
-  const childDims = await listDimensions(db, projectId, c1.id)
+  const { canvasId: c1CanvasId } = await openChildCanvas(db, c1.id)
+  const childDims = await listDimensions(db, projectId, c1CanvasId)
   const childDim = childDims[0]
   if (childDim) {
     const subParam = await addParameter(db, childDim.id, 'Sub', childDim.sourceParamId)

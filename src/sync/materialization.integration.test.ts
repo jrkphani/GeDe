@@ -68,12 +68,20 @@ const P = 'p1'
 // NOT-NULL canvas_id FK, so a root canvas must land before (or drain alongside)
 // them. `parent_context_id` NULL = a root canvas.
 const CV = 'cv1'
+// Issue 090 — c1's child canvas (parent_context_id = c1). The child-canvas
+// dimension d2 lives HERE, not on the root canvas, so `parent_context_id` is a
+// deferred forward FK (canvases.parentContextId ∈ DEFERRED_FK_COLUMN) that
+// races its own context exactly as d2.context_id does.
+const CVC = 'cv-c1'
 
 function projectsMsg() {
   return change(P, T0, { workspace_id: WS, name: 'Tavalo', description: null })
 }
 function rootCanvasMsg() {
   return change(CV, T0, { project_id: P, workspace_id: WS, parent_context_id: null, name: 'Canvas 1', sort: 0 })
+}
+function childCanvasMsg() {
+  return change(CVC, T0, { project_id: P, workspace_id: WS, parent_context_id: 'c1', name: null, sort: 0 })
 }
 function tier1PurposeMsg() {
   return change('t1p1', T0, { project_id: P, workspace_id: WS, body: 'Because reasons' })
@@ -94,10 +102,11 @@ function dimensionRootMsg() {
 }
 // d2 = CHILD-canvas dimension bound to context c1 — a real, NOT-nulled
 // forward FK (dimensions.contextId is NOT in DEFERRED_FK_COLUMN, unlike
-// sourceParamId — src/db/sync.ts). Its canvas_id is the root canvas here: these
-// legacy scenarios assert contextId restoration, orthogonal to canvas membership.
+// sourceParamId — src/db/sync.ts). Issue 090 Phase 4a: its canvas_id is c1's
+// CHILD canvas (CVC), so the repointed read path correctly scopes it OFF the
+// root canvas — d2 must land on a canvas of its own, not CV.
 function dimensionChildMsg() {
-  return change('d2', T0, { project_id: P, workspace_id: WS, canvas_id: CV, context_id: 'c1', source_param_id: null, name: 'Comfort', color: '#222', sort: 1 })
+  return change('d2', T0, { project_id: P, workspace_id: WS, canvas_id: CVC, context_id: 'c1', source_param_id: null, name: 'Comfort', color: '#222', sort: 1 })
 }
 function parameterMsg() {
   return change('pa1', T0, { dimension_id: 'd1', workspace_id: WS, parent_param_id: null, source_entry_id: null, name: 'High', sort: 0 })
@@ -197,7 +206,7 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
     // Same race as Scenario A, but this project has ONE child-canvas
     // dimension (d2, contextId='c1') — utterly ordinary content (any project
     // with a single drill-down). d1/d2 both race ahead of `projects`.
-    push('canvases', [rootCanvasMsg()])
+    push('canvases', [rootCanvasMsg(), childCanvasMsg()])
     push('tier1_purpose', [tier1PurposeMsg()])
     push('tier1_props', [tier1PropMsg()])
     push('tier2_tables', [tier2TableMsg()])
@@ -830,7 +839,7 @@ describe('Materialization repro — store layer (075B) mirrors PGlite faithfully
     const dimLoad = useDimensionsStore.getState().load(P)
     const tier1Load = useTier1Store.getState().load(P)
 
-    push('canvases', [rootCanvasMsg()])
+    push('canvases', [rootCanvasMsg(), childCanvasMsg()])
     push('tier1_purpose', [tier1PurposeMsg()])
     push('dimensions', [dimensionRootMsg(), dimensionChildMsg()])
     push('contexts', [contextMsg()])

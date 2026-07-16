@@ -171,13 +171,31 @@ export async function canvasWorkspaceId(db: Database, canvasId: string): Promise
 // The project's default (first live) root canvas. Every pre-090 write path that
 // operated on "the root canvas" (addDimension, createContext for root contexts)
 // stamps this. A project always has at least one — createProject seeds it.
-async function rootCanvasId(db: Database, projectId: string): Promise<string> {
+async function rootCanvasIdOrNull(db: Database, projectId: string): Promise<string | null> {
   const rows = await db
     .select({ id: canvases.id })
     .from(canvases)
     .where(and(eq(canvases.projectId, projectId), isNull(canvases.parentContextId), isNull(canvases.deletedAt)))
     .orderBy(asc(canvases.sort), asc(canvases.createdAt))
-  return firstOrThrow(rows, 'root canvas not found').id
+  return rows[0]?.id ?? null
+}
+
+async function rootCanvasId(db: Database, projectId: string): Promise<string> {
+  const id = await rootCanvasIdOrNull(db, projectId)
+  if (id === null) throw new Error('root canvas not found')
+  return id
+}
+
+// The live child canvas of a context, WITHOUT creating one (unlike
+// childCanvasId). The read path uses this so a read never has the side effect
+// of materializing a canvas; returns null when the context has no child canvas
+// yet (e.g. never drilled, or the context row hasn't synced).
+async function liveChildCanvasIdOrNull(db: Database, parentContextId: string): Promise<string | null> {
+  const rows = await db
+    .select({ id: canvases.id })
+    .from(canvases)
+    .where(and(eq(canvases.parentContextId, parentContextId), isNull(canvases.deletedAt)))
+  return rows[0]?.id ?? null
 }
 
 // The child canvas of a context, created on first drill-in (issue 011). Idempotent:
@@ -260,6 +278,143 @@ export async function listCanvases(db: Database, projectId: string): Promise<Can
     .orderBy(asc(canvases.sort), asc(canvases.createdAt))
 }
 
+// Issue 090 Phase 4a — resolve a legacy CONTEXT selector (the pre-090
+// navigation key the store still carries: null = the project's default root
+// canvas; a context id = that context's child canvas) into the concrete
+// canvas id the read path now keys on. This is the seam the store layer reads
+// through until Phase 4b threads a real canvas id through the URL/switcher.
+// READ-only: never creates a canvas, and returns null when none exists yet
+// (root canvas or the child canvas hasn't synced), so a store read before the
+// canvas lands yields [] exactly as the pre-090 `IS NULL` predicate did.
+export async function resolveReadCanvasId(
+  db: Database,
+  projectId: string,
+  contextId: string | null | undefined,
+): Promise<string | null> {
+  if (contextId === null || contextId === undefined) return rootCanvasIdOrNull(db, projectId)
+  return liveChildCanvasIdOrNull(db, contextId)
+}
+
+// SPEC — a project must always keep at least one live ROOT canvas (createProject
+// seeds one; the switcher can never delete the last). Typed rejection mirroring
+// DimensionFloorError so the UI disable and the store share one source of truth.
+export class RootCanvasFloorError extends Error {
+  constructor() {
+    super('A project needs at least one design canvas')
+    this.name = 'RootCanvasFloorError'
+  }
+}
+
+// The verbatim rows a cascade touched, so a store can enqueue a sync op per row
+// AND restore each exactly on undo (mirrors DimensionRemoveResult's contract).
+export interface CanvasCascadeResult {
+  canvas: CanvasRow
+  dimensions: DimensionRow[]
+  contexts: ContextRow[]
+  bindings: BindingRow[]
+}
+
+async function liveRootCanvasCount(db: Database, projectId: string): Promise<number> {
+  const rows = await db
+    .select({ id: canvases.id })
+    .from(canvases)
+    .where(and(eq(canvases.projectId, projectId), isNull(canvases.parentContextId), isNull(canvases.deletedAt)))
+  return rows.length
+}
+
+// Soft-delete a canvas AND everything on it — its dimensions, contexts, and
+// those contexts' bindings — in one gesture (mirrors
+// cascadeDeleteBindingsForDimension's tombstone-and-return shape). Returns the
+// affected rows verbatim (as they were live) so a store can enqueue a delete
+// per row and undo via restoreCanvasCascade. Archiving a ROOT canvas is floor-
+// guarded: a project must keep >= 1 live root canvas (RootCanvasFloorError).
+// Child canvases (parent_context_id set) have no floor.
+export async function archiveCanvasCascade(db: Database, id: string): Promise<CanvasCascadeResult> {
+  const canvasRow = firstOrThrow(
+    await db.select().from(canvases).where(eq(canvases.id, id)),
+    'canvas not found',
+  )
+  if (canvasRow.parentContextId === null && (await liveRootCanvasCount(db, canvasRow.projectId)) <= 1) {
+    throw new RootCanvasFloorError()
+  }
+  const affectedDimensions = await db
+    .select()
+    .from(dimensions)
+    .where(and(eq(dimensions.canvasId, id), isNull(dimensions.deletedAt)))
+  const affectedContexts = await db
+    .select()
+    .from(contexts)
+    .where(and(eq(contexts.canvasId, id), isNull(contexts.deletedAt)))
+  const contextIds = affectedContexts.map((c) => c.id)
+  const affectedBindings =
+    contextIds.length > 0
+      ? await db
+          .select()
+          .from(bindings)
+          .where(and(inArray(bindings.contextId, contextIds), isNull(bindings.deletedAt)))
+      : []
+  const ts = now()
+  const canvasRows = await db
+    .update(canvases)
+    .set({ deletedAt: ts, updatedAt: ts })
+    .where(eq(canvases.id, id))
+    .returning()
+  if (affectedDimensions.length > 0) {
+    await db
+      .update(dimensions)
+      .set({ deletedAt: ts, updatedAt: ts })
+      .where(inArray(dimensions.id, affectedDimensions.map((d) => d.id)))
+  }
+  if (affectedContexts.length > 0) {
+    await db
+      .update(contexts)
+      .set({ deletedAt: ts, updatedAt: ts })
+      .where(inArray(contexts.id, contextIds))
+  }
+  if (affectedBindings.length > 0) {
+    await db
+      .update(bindings)
+      .set({ deletedAt: ts, updatedAt: ts })
+      .where(inArray(bindings.id, affectedBindings.map((b) => b.id)))
+  }
+  return {
+    canvas: firstOrThrow(canvasRows),
+    dimensions: affectedDimensions,
+    contexts: affectedContexts,
+    bindings: affectedBindings,
+  }
+}
+
+// Undo of archiveCanvasCascade: revive exactly the rows it tombstoned (the
+// captured result), clearing deleted_at on each. Mirrors restoreDimension —
+// no floor check, it's a mechanical inverse.
+export async function restoreCanvasCascade(
+  db: Database,
+  captured: CanvasCascadeResult,
+): Promise<CanvasCascadeResult> {
+  const ts = now()
+  await db.update(canvases).set({ deletedAt: null, updatedAt: ts }).where(eq(canvases.id, captured.canvas.id))
+  if (captured.dimensions.length > 0) {
+    await db
+      .update(dimensions)
+      .set({ deletedAt: null, updatedAt: ts })
+      .where(inArray(dimensions.id, captured.dimensions.map((d) => d.id)))
+  }
+  if (captured.contexts.length > 0) {
+    await db
+      .update(contexts)
+      .set({ deletedAt: null, updatedAt: ts })
+      .where(inArray(contexts.id, captured.contexts.map((c) => c.id)))
+  }
+  if (captured.bindings.length > 0) {
+    await db
+      .update(bindings)
+      .set({ deletedAt: null, updatedAt: ts })
+      .where(inArray(bindings.id, captured.bindings.map((b) => b.id)))
+  }
+  return captured
+}
+
 // ── Dimensions (issue 002) ────────────────────────────────────────────────────
 // contextId scoping (child canvases) arrives with issue 011; everything below
 // operates on the root canvas (context_id IS NULL).
@@ -275,24 +430,33 @@ export class DimensionFloorError extends Error {
   }
 }
 
-// A canvas is identified by (projectId, contextId): contextId null = the
-// project's root canvas; a context id = that context's child canvas (issue
-// 011). Every dimension query is canvas-scoped; the default null keeps every
-// pre-011 caller pinned to the root canvas.
-function canvasScope(projectId: string, contextId: string | null) {
+// Issue 090 Phase 4a — the read/scope path now keys on the explicit
+// `canvas_id` membership FK, NOT `context_id IS NULL`. The old predicate made
+// every root canvas of a project (all `context_id NULL`) collide, leaking rows
+// between them; keying on canvas_id makes the N root canvases fully
+// independent. projectId stays in the predicate as a cheap guard — the
+// canvasId is the real key.
+function canvasScope(projectId: string, canvasId: string) {
   return and(
     eq(dimensions.projectId, projectId),
-    contextId === null ? isNull(dimensions.contextId) : eq(dimensions.contextId, contextId),
+    eq(dimensions.canvasId, canvasId),
     isNull(dimensions.deletedAt),
   )
 }
 
+// `canvasId` omitted (or null) means "the project's default root canvas" — the
+// pre-090 root-canvas default, resolved to a concrete canvas id here so every
+// caller that only knows a projectId keeps working unchanged.
 export async function listDimensions(
   db: Database,
   projectId: string,
-  contextId: string | null = null,
+  canvasId: string | null = null,
 ): Promise<DimensionRow[]> {
-  return db.select().from(dimensions).where(canvasScope(projectId, contextId)).orderBy(asc(dimensions.sort))
+  // Tolerant default: a read before the root canvas has synced yields [] (the
+  // pre-090 `isNull(context_id)` behavior), never a throw.
+  const resolved = canvasId ?? (await rootCanvasIdOrNull(db, projectId))
+  if (resolved === null) return []
+  return db.select().from(dimensions).where(canvasScope(projectId, resolved)).orderBy(asc(dimensions.sort))
 }
 
 // Issue 082 Phase 1 — `name` lets the phantom-row add grammar (the same
@@ -300,8 +464,17 @@ export async function listDimensions(
 // insert, one undo step, instead of add-then-rename as two. Omitted entirely
 // (every pre-082 caller), the default-numbered "Dimension N" behavior is
 // unchanged byte-for-byte.
-export async function addDimension(db: Database, projectId: string, name?: string): Promise<DimensionRow> {
-  const existing = await listDimensions(db, projectId)
+// Issue 090 Phase 4a — `targetCanvasId` names the canvas the new dimension
+// lands on; omitted, it defaults to the project's root canvas, so every
+// pre-090 caller (`addDimension(db, projectId, name?)`) is unchanged.
+export async function addDimension(
+  db: Database,
+  projectId: string,
+  name?: string,
+  targetCanvasId?: string,
+): Promise<DimensionRow> {
+  const canvasId = targetCanvasId ?? (await rootCanvasId(db, projectId))
+  const existing = await listDimensions(db, projectId, canvasId)
   // Default name continues past the highest default-numbered live row so a
   // middle removal never produces a duplicate (never "Untitled").
   const maxDefault = existing.reduce((max, d) => {
@@ -309,8 +482,6 @@ export async function addDimension(db: Database, projectId: string, name?: strin
     return m ? Math.max(max, Number(m[1])) : max
   }, 0)
   const workspaceId = await projectWorkspaceId(db, projectId)
-  // Issue 090 — stamp the project's root canvas (this path is root-canvas only).
-  const canvasId = await rootCanvasId(db, projectId)
   const defaultName = `Dimension ${Math.max(maxDefault, existing.length) + 1}`
   const trimmedName = name?.trim()
   const finalName = trimmedName === undefined || trimmedName === '' ? defaultName : trimmedName
@@ -645,47 +816,59 @@ export class ContextSymbolCollisionError extends Error {
   }
 }
 
-// Contexts are scoped to a canvas by parent_id: null = the root canvas; a
-// context id = that context's child canvas (issue 011). Symbols are unique
-// per canvas, so the collision check and the auto-assign both scope here.
-function contextCanvasScope(projectId: string, parentId: string | null) {
+// Issue 090 Phase 4a — the exact analog of canvasScope: contexts are now
+// scoped by the explicit `canvas_id` FK, not `parent_id IS NULL`. Symbols are
+// unique per canvas, so the collision check and the auto-assign both scope
+// here. projectId is a cheap guard; canvasId is the real key.
+function contextCanvasScope(projectId: string, canvasId: string) {
   return and(
     eq(contexts.projectId, projectId),
-    parentId === null ? isNull(contexts.parentId) : eq(contexts.parentId, parentId),
+    eq(contexts.canvasId, canvasId),
     isNull(contexts.deletedAt),
   )
 }
 
+// `canvasId` omitted (or null) = the project's default root canvas.
 export async function listContexts(
   db: Database,
   projectId: string,
-  parentId: string | null = null,
+  canvasId: string | null = null,
 ): Promise<ContextRow[]> {
+  // Tolerant default (see listDimensions): [] before the root canvas has synced.
+  const resolved = canvasId ?? (await rootCanvasIdOrNull(db, projectId))
+  if (resolved === null) return []
   return db
     .select()
     .from(contexts)
-    .where(contextCanvasScope(projectId, parentId))
+    .where(contextCanvasScope(projectId, resolved))
     .orderBy(asc(contexts.sort))
 }
 
 // Root contexts cycle the Greek alphabet; a child context (parent set) is named
 // parent-symbol + index (α1, α2 — SPEC §3, issue 011), both scoped to the
 // canvas's live siblings so a deleted gap never collides on reassignment.
+// Issue 090 Phase 4a — the root branch accepts an explicit `targetCanvasId`
+// (which root canvas to create the context on); omitted, it defaults to the
+// project's root canvas. The child branch always resolves the parent context's
+// child canvas (childCanvasId), so `targetCanvasId` is ignored there.
 export async function createContext(
   db: Database,
   projectId: string,
   parentId: string | null = null,
+  targetCanvasId?: string,
 ): Promise<ContextRow> {
   const parentSymbol = parentId
     ? firstOrThrow(await db.select().from(contexts).where(eq(contexts.id, parentId))).symbol
     : null
-  const existing = await listContexts(db, projectId, parentId)
+  // Resolve the canvas the new context lives on FIRST, then scope siblings +
+  // the symbol namespace to it (symbols are unique per canvas).
+  const canvasId = parentId
+    ? await childCanvasId(db, parentId)
+    : (targetCanvasId ?? (await rootCanvasId(db, projectId)))
+  const existing = await listContexts(db, projectId, canvasId)
   const taken = new Set(existing.map((c) => c.symbol))
   const symbol = parentSymbol ? nextChildSymbol(parentSymbol, taken) : nextRootSymbol(taken)
   const workspaceId = await projectWorkspaceId(db, projectId)
-  // Issue 090 — a root context lives on the project's root canvas; a child
-  // context lives on its parent context's child canvas (created if absent).
-  const canvasId = parentId ? await childCanvasId(db, parentId) : await rootCanvasId(db, projectId)
   const rows = await db
     .insert(contexts)
     .values({
@@ -708,7 +891,8 @@ export async function setContextSymbol(
   symbol: string,
 ): Promise<ContextRow> {
   const target = firstOrThrow(await db.select().from(contexts).where(eq(contexts.id, id)))
-  const existing = await listContexts(db, projectId, target.parentId)
+  // Issue 090 Phase 4a — scope the collision check to the target's canvas.
+  const existing = await listContexts(db, projectId, target.canvasId)
   if (existing.some((c) => c.id !== id && c.symbol === symbol)) {
     throw new ContextSymbolCollisionError(symbol)
   }
@@ -771,10 +955,10 @@ export async function listBindings(db: Database, contextId: string): Promise<Bin
 async function recomputeTupleHash(db: Database, contextId: string): Promise<void> {
   const contextRows = await db.select().from(contexts).where(eq(contexts.id, contextId))
   const contextRow = firstOrThrow(contextRows)
-  // A context's tuple is over the dimensions of ITS canvas (its parent_id),
+  // A context's tuple is over the dimensions of ITS canvas (its canvas_id),
   // not the project's root canvas — critical once bindings live on a child
-  // canvas (issue 011).
-  const dims = await listDimensions(db, contextRow.projectId, contextRow.parentId)
+  // canvas (issue 011). Issue 090 Phase 4a: key on canvas_id, not parent_id.
+  const dims = await listDimensions(db, contextRow.projectId, contextRow.canvasId)
   const rows = await listBindings(db, contextId)
   const byDimension = new Map(rows.map((r) => [r.dimensionId, r.parameterId]))
   const ordered = dims.filter((d) => byDimension.has(d.id)).map((d) => byDimension.get(d.id) as string)
@@ -859,6 +1043,9 @@ export interface StaleRebindEvent {
 }
 
 export interface ChildCanvasResult {
+  // Issue 090 Phase 4a — the resolved child canvas id (created on first open),
+  // so the UI/store can load this canvas's stores by its real id later.
+  canvasId: string
   dimensions: DimensionRow[]
   stale: StaleRebindEvent[]
 }
@@ -879,7 +1066,9 @@ export async function openChildCanvas(
   const projectId = parent.projectId
   // Issue 090 — the child canvas backing this drill-in (created on first open).
   const canvasId = await childCanvasId(db, parentContextId)
-  const parentDims = await listDimensions(db, projectId, parent.parentId)
+  // Parent dimensions live on the PARENT context's canvas (Phase 4a: key on
+  // canvas_id, not parent_id).
+  const parentDims = await listDimensions(db, projectId, parent.canvasId)
   const parentBindings = await listBindings(db, parentContextId)
   const boundByDim = new Map(parentBindings.map((b) => [b.dimensionId, b.parameterId]))
   // One prospective child dimension per parent binding, in parent dim order.
@@ -892,7 +1081,7 @@ export async function openChildCanvas(
       sort: i,
     }))
 
-  const existing = await listDimensions(db, projectId, parentContextId)
+  const existing = await listDimensions(db, projectId, canvasId)
   // Each existing child dimension maps to a parent dimension via its source
   // parameter (a parameter belongs to exactly one dimension, stable across a
   // re-bind since parameters never change dimension).
@@ -954,7 +1143,7 @@ export async function openChildCanvas(
     }
   }
 
-  return { dimensions: await listDimensions(db, projectId, parentContextId), stale }
+  return { canvasId, dimensions: await listDimensions(db, projectId, canvasId), stale }
 }
 
 // The banner Undo (issue 011): restores a child dimension to the parameter it
@@ -998,16 +1187,24 @@ export async function getContextsByIds(db: Database, ids: readonly string[]): Pr
 }
 
 // Child count per context on a canvas — backs the node's child badge (SPEC
-// §4.2) and the register's Children column (issue 011).
+// §4.2) and the register's Children column (issue 011). Issue 090 Phase 4a:
+// the canvas being viewed is now keyed by `canvasId` (null = root canvas); a
+// context's child count is the number of live contexts whose `parent_id`
+// points at it (the kept parent_id column IS the child-membership pointer —
+// see doc Correction 2), so counting children never needs to materialize a
+// child canvas.
 export async function childCountsByContext(
   db: Database,
   projectId: string,
-  parentId: string | null,
+  canvasId: string | null = null,
 ): Promise<Record<string, number>> {
-  const canvasContexts = await listContexts(db, projectId, parentId)
+  const canvasContexts = await listContexts(db, projectId, canvasId)
   const counts: Record<string, number> = {}
   for (const ctx of canvasContexts) {
-    const kids = await listContexts(db, projectId, ctx.id)
+    const kids = await db
+      .select({ id: contexts.id })
+      .from(contexts)
+      .where(and(eq(contexts.parentId, ctx.id), isNull(contexts.deletedAt)))
     if (kids.length > 0) counts[ctx.id] = kids.length
   }
   return counts

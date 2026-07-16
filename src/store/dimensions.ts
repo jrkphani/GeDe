@@ -1,11 +1,13 @@
 import { create } from 'zustand'
+import type { Database } from '../db/client'
 import {
   addDimension as dbAdd,
   DimensionFloorError,
-  listDimensions as dbList,
+  listDimensions as rawListDimensions,
   removeDimension as dbRemove,
   renameDimension as dbRename,
   reorderDimension as dbReorder,
+  resolveReadCanvasId,
   restoreDimension as dbRestore,
   setDimensionColor as dbSetColor,
   undoAddDimension,
@@ -13,6 +15,22 @@ import {
   type DimensionRow,
 } from '../db/mutations'
 import { requireDatabase } from './database'
+
+// Issue 090 Phase 4a (FLAG for Phase 4b) — the DB read path now keys on
+// canvas_id, but this store still navigates by the pre-090 context selector
+// (`contextId`: null = root canvas, a context id = its child canvas). Resolve
+// that selector to the concrete canvas id at the read boundary so every read
+// below is canvas-scoped without touching a single call site. Phase 4b replaces
+// this by threading a real (root) canvas id through the switcher/URL.
+async function dbList(
+  db: Database,
+  projectId: string,
+  contextId: string | null = null,
+): Promise<DimensionRow[]> {
+  const canvasId = await resolveReadCanvasId(db, projectId, contextId)
+  if (canvasId === null) return []
+  return rawListDimensions(db, projectId, canvasId)
+}
 import { useCommandLogStore } from './commandLog'
 import { useContextsStore } from './contexts'
 import { enqueueIfSyncing, useSyncStore } from './sync'
