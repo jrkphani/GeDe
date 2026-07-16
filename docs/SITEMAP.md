@@ -8,6 +8,8 @@ Decisions locked 2026-07-05: app-only routes (`/` is the app) · top tier tabs +
 
 ## 1. Route map
 
+> **Pending supersession — issues 089 / 090 (proposal).** The unified-canvas workspace (`docs/issues/089-unified-canvas-workspace.md`) collapses the per-tier routes and the `design/:ctx…?view=` depth/view segments below into **one workspace route** (`/p/:projectId` = the canvas), where **tier, canvas depth, and view become spatial state** (pan / zoom / focused cluster), not URL segments; deep links target a **viewport + node/cluster id**. **090** (multiple design canvases) adds a **root-canvas id** to that target. This section stays authoritative until 089 ships — the full change list is in 089 → "SITEMAP & routing impact".
+
 ```text
 /                                   Projects list (root; last-opened project is one Enter away)
 /p/:projectId                       → redirects to the last-visited tier (default: foundation)

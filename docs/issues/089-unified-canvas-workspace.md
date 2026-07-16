@@ -40,6 +40,18 @@ Two Design-tier features are today *view/route swaps* that fight the "one canvas
 
 **Canvas-node internal layout — stack register over ring (owner, 2026-07-16).** Today the Design surface is horizontal: `[rail | register | ring]` (085's editing-zone + canvas-as-side, optimized for a fixed non-scrolling viewport, `SITEMAP §32`). On the canvas, **stack them vertically instead** — `[rail | register]` on top, **ring below** — so a Design canvas node reads top-to-bottom and is a **narrow vertical column** rather than a wide band. Rationale: the drill-in child cluster expands **rightward** (edge), so a narrower core frees horizontal room and fits more drill *depth* per screen; it also suits the "lanes grow down / zoom a frame" model. This is **consistent with 085, not a reversal**: 085's intent was "one editing zone, canvas out of the tab path" — ring-*below* still keeps the canvas out from *between* editing elements and preserves the rail→register Tab bridge; only the *fixed-viewport* constraint 085 optimized for is gone. Orientation: register on top (the authoring/keyboard surface), ring below (derived visual). **Caveat:** the register can be wide (one column per dimension), so stacking removes the ring's width but the table still drives cluster width — the lever if footprint bites at depth is a **level-of-detail register** (compact when zoomed out, full grid zoomed in), reusing the same LOD machinery recursion depth and the coverage matrix already require.
 
+## SITEMAP & routing impact (must land WITH this issue — `docs/SITEMAP.md`)
+
+This proposal rewrites the route model SITEMAP §1 locks; per SITEMAP §6, "deviations are spec changes," so **`docs/SITEMAP.md` must be updated in lockstep when this ships** (a forward-pointer note is already parked at the top of SITEMAP §1). Precise changes:
+
+- **§1 Route map (`SITEMAP.md:14-18`)** — the per-tier routes plus the recursion/view segments collapse into **one workspace route**. `/p/:projectId/foundation|architecture|design`, the `/design/:ctx/:ctx…` child-canvas segments, and `?view=canvas|coverage` are all removed; `/p/:projectId` **is** the canvas. **Tier, canvas depth, and view stop being URL state** and become viewport/cluster state (`routes.ts:6,12` — `DesignView` + `contextPath` go away).
+- **Deep-link semantics (`SITEMAP.md:25`)** — "restore tier, canvas depth, view, and selection" → "restore **viewport + focused cluster/node id**" (and, with **090**, the **root-canvas id**). A shareable link encodes a region + zoom, not a path.
+- **§2 Design context bar (`SITEMAP.md:58`)** — the **canvas/coverage view toggle** and URL-backed breadcrumbs change: coverage is an adjacent companion node (open/collapse), depth is spatial; breadcrumbs become a pan/collapse HUD, not route state.
+- **§4 Keyboard map (`SITEMAP.md:80,83`)** — **⌘1/2/3** become *pan/zoom-to-lane* (Foundation/Architecture/Design lanes) rather than route switches; **`v`** becomes *open/collapse the coverage companion* rather than a `?view=` toggle.
+- **§3 Command palette (`SITEMAP.md:72`)** — "canvases (by lineage `α ▸ α2`)" resolves to **pan-to-cluster** rather than a route push; add "jump to lane" and (090) "jump to canvas" sources.
+
+Net: the tier-tab + design-route model becomes **one pannable surface with spatial state**; SITEMAP §1's route table is replaced by a "canvas regions + viewport deep-link" description, and §2/§3/§4 are amended as above. Keep SITEMAP authoritative until this ships.
+
 ## Current state (file:line)
 
 ### How the three routes work today
