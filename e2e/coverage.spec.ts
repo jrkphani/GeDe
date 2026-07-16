@@ -14,15 +14,20 @@ async function setUpCanvas(page: Page) {
   await page.getByRole('link', { name: 'Design' }).click()
 
   async function addWithDefaultName() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor()
-    await page.keyboard.press('Escape')
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    // No blank-add affordance remains, so we type the same default name the
+    // old flow used to leave behind.
+    const phantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await phantom.fill(`Dimension ${count + 1}`)
+    await phantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
 
   await addWithDefaultName()
   await addWithDefaultName()
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
-  await page.getByRole('button', { name: 'Dimensions' }).click()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
   await addWithDefaultName()
 
   async function renameDimension(oldName: string, newName: string) {
@@ -49,8 +54,6 @@ async function setUpCanvas(page: Page) {
   await addParameterTo('Stake', 'Admins')
   await addParameterTo('Process', 'Engagement')
   await addParameterTo('Process', 'Onboarding')
-
-  await page.getByRole('button', { name: 'Dimensions' }).click() // close the popover
 }
 
 test('coverage matrix: a hollow cell composes pre-filled, and justifying fills it + increments the stat', async ({

@@ -12,16 +12,23 @@ test('parameters: build the Stake dimension (Buyers, Maintainer, Users) — pers
   await page.getByRole('link', { name: 'Design' }).click()
 
   async function addWithDefaultName() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor()
-    await page.keyboard.press('Escape')
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    // No blank-add affordance remains, so we type the same default name the
+    // old flow used to leave behind.
+    const dimPhantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await dimPhantom.fill(`Dimension ${count + 1}`)
+    await dimPhantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
 
-  // Cross the n = 2 floor (issue 002 guided start), then reopen the manager.
+  // Cross the n = 2 floor (issue 002 guided start). Issue 082 Phase 1 — the
+  // dimension manager is an always-open rail now, so there's no popover to
+  // reopen here.
   await addWithDefaultName()
   await addWithDefaultName()
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
-  await page.getByRole('button', { name: 'Dimensions' }).click()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
 
   // Rename the first dimension to Stake.
   await page.locator('.dim-row__name', { hasText: 'Dimension 1' }).click()
@@ -45,10 +52,10 @@ test('parameters: build the Stake dimension (Buyers, Maintainer, Users) — pers
   await expect(rows.nth(1)).toContainText('Maintainer')
   await expect(rows.nth(2)).toContainText('Users')
 
-  // Reload: parameters and their order persist.
+  // Reload: parameters and their order persist. The rail is always open, so
+  // nothing needs reopening after reload.
   await page.reload()
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
-  await page.getByRole('button', { name: 'Dimensions' }).click()
 
   const stakeAfter = page.locator('.dim-section', { has: page.getByText('Stake', { exact: true }) })
   const rowsAfter = stakeAfter.locator('.param-row:not(.param-row--phantom)')

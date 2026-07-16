@@ -15,16 +15,21 @@ async function setUpCanvas(page: Page) {
   await page.getByRole('link', { name: 'Design' }).click()
 
   async function addWithDefaultName() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor()
-    await page.keyboard.press('Escape')
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    // No blank-add affordance remains, so we type the same default name the
+    // old flow used to leave behind.
+    const phantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await phantom.fill(`Dimension ${count + 1}`)
+    await phantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
 
   // Cross the n = 2 floor, then add the example's third dimension.
   await addWithDefaultName()
   await addWithDefaultName()
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
-  await page.getByRole('button', { name: 'Dimensions' }).click()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
   await addWithDefaultName()
 
   async function renameDimension(oldName: string, newName: string) {
@@ -48,8 +53,6 @@ async function setUpCanvas(page: Page) {
   await addParameterTo('Value', 'Comfort')
   await addParameterTo('Stake', 'Users')
   await addParameterTo('Process', 'Engagement')
-
-  await page.getByRole('button', { name: 'Dimensions' }).click() // close the popover
 }
 
 test('canvas renders one arc per dimension and the empty-state prompt before any context exists', async ({
@@ -101,14 +104,17 @@ test('the canvas label tier switches as the container crosses the 640px/400px br
   await setUpCanvas(page)
   const shell = page.locator('.canvas-shell')
 
-  // canvas-shell is ~40% of the side-by-side row (design-surface-row), which
-  // is itself the viewport minus page padding/gap — these viewport sizes are
-  // chosen so the *shell's own measured width* (not the viewport) lands
-  // solidly within each STYLE_GUIDE §7 tier.
-  await page.setViewportSize({ width: 1800, height: 900 })
+  // canvas-shell is ~40% of the side-by-side row (design-surface-row), minus
+  // the persistent dimension rail's own fixed ~260px column (issue 082 Phase
+  // 1 — the rail now always occupies a flex-basis in this row alongside the
+  // canvas and register, so the shell's measured width at a given viewport
+  // is smaller than it was pre-082). These viewport sizes are chosen so the
+  // *shell's own measured width* (not the viewport) lands solidly within
+  // each STYLE_GUIDE §7 tier.
+  await page.setViewportSize({ width: 2200, height: 900 })
   await expect(shell).toHaveAttribute('data-label-tier', 'full')
 
-  await page.setViewportSize({ width: 1280, height: 900 })
+  await page.setViewportSize({ width: 1700, height: 900 })
   await expect(shell).toHaveAttribute('data-label-tier', 'truncated')
 
   await page.setViewportSize({ width: 380, height: 900 })

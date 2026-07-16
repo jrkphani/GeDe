@@ -12,16 +12,21 @@ async function setUpCanvas(page: Page) {
   await page.getByRole('link', { name: 'Design' }).click()
 
   async function addWithDefaultName() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor()
-    await page.keyboard.press('Escape')
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    // No blank-add affordance remains, so we type the same default name the
+    // old flow used to leave behind.
+    const phantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await phantom.fill(`Dimension ${count + 1}`)
+    await phantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
 
   // Cross the n = 2 floor, then add the example's third dimension.
   await addWithDefaultName()
   await addWithDefaultName()
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
-  await page.getByRole('button', { name: 'Dimensions' }).click()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
   await addWithDefaultName()
 
   async function renameDimension(oldName: string, newName: string) {
@@ -47,9 +52,6 @@ async function setUpCanvas(page: Page) {
   await addParameterTo('Value', 'Comfort')
   await addParameterTo('Stake', 'Users')
   await addParameterTo('Process', 'Engagement')
-
-  // Close the dimension manager popover — the register underneath is unaffected.
-  await page.getByRole('button', { name: 'Dimensions' }).click()
 }
 
 async function createContext(page: Page, justification: string) {
@@ -183,10 +185,16 @@ test('adding a 4th dimension demotes a complete context to draft; binding it res
 
   // Add a 4th dimension (with its own parameter) — α is now missing a
   // binding on it and drops to draft, with no separate "demote" step.
-  await page.getByRole('button', { name: 'Dimensions' }).click()
-  await page.getByRole('button', { name: 'Add dimension' }).click()
-  await page.locator('.dim-row input').first().waitFor()
-  await page.keyboard.press('Escape') // keep the default name "Dimension 4"
+  // Issue 082 Phase 1 — the old "Add dimension" command button was replaced
+  // by a persistent phantom-row rail (type a name, press Enter).
+  const dim4Phantom = page.getByPlaceholder('Type to add a dimension')
+  await dim4Phantom.fill('Dimension 4')
+  await dim4Phantom.press('Enter')
+  // Issue 082 Phase 1 — "Dimension 4" now renders in three places (rail row,
+  // canvas arc label, register column header), so a bare getByText is
+  // ambiguous (strict-mode violation). Scope to the rail row specifically —
+  // the test's intent here is just "the 4th dimension was added".
+  await expect(page.locator('.dim-row__name', { hasText: 'Dimension 4' })).toBeVisible()
 
   const section = page.locator('.dim-section', {
     has: page.locator('.dim-row__name', { hasText: 'Dimension 4' }),
@@ -195,7 +203,6 @@ test('adding a 4th dimension demotes a complete context to draft; binding it res
   await paramPhantom.fill('Low')
   await paramPhantom.press('Enter')
   await expect(section.getByText('Low', { exact: true })).toBeVisible()
-  await page.getByRole('button', { name: 'Dimensions' }).click() // close the popover
 
   await expect(row).toHaveClass(/grid-row--draft/)
 

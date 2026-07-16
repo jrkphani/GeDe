@@ -1309,6 +1309,16 @@ body {
   fill: none;
   stroke-width: 2px;
   opacity: 1;
+  /* Spokes are purely decorative connective curves (no click/hover handler
+     anywhere in Canvas.tsx). In SVG paint order they render AFTER the dots,
+     and a hover-emphasis fan-in spoke terminates its path exactly on the
+     dot's centre pixel — the same point the pointer rests on. Without this,
+     the spoke steals the hit-test the instant it mounts, firing mouseout on
+     the dot → spokes unmount → dot topmost again → mouseover → remount, an
+     infinite flicker loop on any densely-bound dot (regression latent since
+     028(a)/039, surfaced by the dense-fan canvas-spline e2e). Letting the
+     pointer fall through to the dot/node underneath breaks the loop. */
+  pointer-events: none;
   animation: canvas-spoke-in var(--motion-fast) ease-out;
 }
 

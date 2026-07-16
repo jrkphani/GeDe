@@ -13,16 +13,21 @@ async function setUpCanvas(page: Page) {
   await page.getByRole('link', { name: 'Design' }).click()
 
   async function addWithDefaultName() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor()
-    await page.keyboard.press('Escape')
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    // No blank-add affordance remains, so we type the same default name the
+    // old flow used to leave behind.
+    const phantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await phantom.fill(`Dimension ${count + 1}`)
+    await phantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
 
   // Cross the n = 2 floor (issue 002 guided start), then reopen the manager.
   await addWithDefaultName()
   await addWithDefaultName()
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
-  await page.getByRole('button', { name: 'Dimensions' }).click()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
 
   async function renameDimension(oldName: string, newName: string) {
     await page.locator('.dim-row__name', { hasText: oldName }).click()
@@ -45,16 +50,17 @@ async function setUpCanvas(page: Page) {
   await addParameterTo('Value', 'Warmth')
   await addParameterTo('Stake', 'Users')
   await addParameterTo('Stake', 'Buyers')
-
-  await page.getByRole('button', { name: 'Dimensions' }).click() // close the popover
 }
 
 test('every parameter dot on the canvas carries a visible label with its name', async ({ page }) => {
   await setUpCanvas(page)
 
   // Ensure the canvas measures wide enough for the 'full' label tier
-  // (STYLE_GUIDE §7: ≥640px).
-  await page.setViewportSize({ width: 1800, height: 900 })
+  // (STYLE_GUIDE §7: shell width ≥640px). Issue 082 Phase 1's persistent
+  // dimension rail now takes a fixed ~260px column in this row too, so a
+  // wider viewport than pre-082 is needed to clear the shell's own 640px
+  // threshold.
+  await page.setViewportSize({ width: 2200, height: 900 })
   await expect(page.locator('.canvas-shell')).toHaveAttribute('data-label-tier', 'full')
 
   await expect(page.locator('.canvas-dot')).toHaveCount(4)
@@ -69,7 +75,7 @@ test('parameter labels degrade with the canvas width, per the label-tier machine
   await setUpCanvas(page)
   const shell = page.locator('.canvas-shell')
 
-  await page.setViewportSize({ width: 1800, height: 900 })
+  await page.setViewportSize({ width: 2200, height: 900 })
   await expect(shell).toHaveAttribute('data-label-tier', 'full')
   await expect(page.locator('.canvas-param-label', { hasText: 'Comfort' })).toBeVisible()
 

@@ -7,6 +7,7 @@ import { act, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Canvas, type CanvasProps } from './Canvas'
 import type { CanvasEmphasis } from '../domain/canvasAdjacency'
+import { MAX_DOT_HIT_RADIUS } from '../domain/canvasLayout'
 import type { ContextRow, DimensionRow, ParameterRow } from '../db/mutations'
 
 function dim(id: string, sort: number, color = '#6f5bd6'): DimensionRow {
@@ -546,8 +547,14 @@ describe('Canvas', () => {
       )
     })
 
-    it('compose mode: every dot exposes an invisible hit circle sized to the measured canvas width', () => {
-      // Fake ResizeObserver → 500px measured width → 44-unit hit radius.
+    it('compose mode: every dot exposes an invisible hit circle sized to the measured canvas width, capped so neighbors never overlap', () => {
+      // Fake ResizeObserver → 500px measured width. The uncapped 44px-based
+      // radius would be 44 viewBox units, but d0's two dots are only
+      // DOT_ANGLE_STEP apart (issue 082's fixed 4deg step) — at 44 units
+      // those hit circles overlap each other's centers (issue 082 Phase 1
+      // regression). The rendered radius must be capped at
+      // MAX_DOT_HIT_RADIUS instead, per Canvas.tsx's `min(dotHitRadiusUnits,
+      // MAX_DOT_HIT_RADIUS)`.
       type ResizeCallback = (entries: { contentRect: { width: number } }[]) => void
       let observed: ResizeCallback | null = null
       const Original = window.ResizeObserver
@@ -560,7 +567,7 @@ describe('Canvas', () => {
         act(() => observed?.([{ contentRect: { width: 500 } }]))
         const hit = container.querySelector('.canvas-dot-hit') as SVGCircleElement
         expect(hit).not.toBeNull()
-        expect(Number(hit.getAttribute('r'))).toBeCloseTo(44)
+        expect(Number(hit.getAttribute('r'))).toBeCloseTo(MAX_DOT_HIT_RADIUS)
       } finally {
         window.ResizeObserver = Original
       }

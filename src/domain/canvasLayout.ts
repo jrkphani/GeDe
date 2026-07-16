@@ -49,6 +49,38 @@ const DOT_START_OFFSET = DOT_ANGLE_STEP
 // pathologically long parameter list clamps against its own dimension's
 // boundary rather than bleeding angle into the next dimension's gap.
 const DOT_END_MARGIN = DOT_ANGLE_STEP / 2
+// Issue 082 Phase 1 regression fix — hit-circle overlap. STYLE_GUIDE §7 wants
+// every dot's invisible hit circle to be >= 44px on screen
+// (canvasResponsive.dotHitRadiusUnits), but at DOT_ANGLE_STEP's fixed 4deg
+// within-dimension step, two adjacent dots sit only ~28 viewBox units apart
+// at ARC_RADIUS — well inside a 44-unit hit radius at any realistic canvas
+// width. Overlapping hit circles cover each other's centers, so whichever
+// dot paints last steals clicks aimed at its neighbor (this is exactly the
+// risk the issue 082 design brief flagged and deferred:
+// docs/issues/082-design-route-ux.md:133, "touch hit targets ... must not
+// overlap ... the invisible dot hit circles at small radii on a crowded
+// ring").
+//
+// MAX_DOT_HIT_RADIUS is the largest hit-circle radius that still guarantees
+// no two neighboring hit circles overlap: half the chord length between two
+// dots exactly one DOT_ANGLE_STEP apart (`2 * ARC_RADIUS *
+// sin(DOT_ANGLE_STEP / 2)` is the chord; half of it sits exactly at the
+// midpoint between the two dots, so two circles of this radius touch but
+// never overlap past each other's center). Within-dimension spacing is the
+// tightest case anywhere on the canvas by construction — GAP_RADIANS keeps
+// across-dimension gaps strictly wider — so it's the only case that needs
+// guarding; it does not change if dots pile up against `maxOffset`'s soft
+// clamp (that's a fixed constant, not derived from any per-call layout
+// state, so it can never divide by zero or go negative). Floored at
+// DOT_RADIUS purely as a belt-and-suspenders guard so a future change to
+// these constants can never shrink the hit circle below the *visible* dot
+// itself.
+//
+// Consumers (Canvas.tsx) take `min(dotHitRadiusUnits(width),
+// MAX_DOT_HIT_RADIUS)`. This deliberately lets the effective hit radius fall
+// below STYLE_GUIDE §7's 44px floor on a crowded ring — honoring 44px there
+// is physically impossible without overlap at this angular step.
+export const MAX_DOT_HIT_RADIUS = Math.max(DOT_RADIUS, ARC_RADIUS * Math.sin(DOT_ANGLE_STEP / 2))
 // Minimum vertical gap between two labels on the same side of the ring, in
 // viewBox user units. The label font is 13 user units tall (--text-mono, sized
 // in the SVG's own coordinate space, so it does not change with container

@@ -17,15 +17,19 @@ async function setUpBoundAlpha(page: Page) {
   await page.getByRole('link', { name: 'Design' }).click()
 
   async function addWithDefaultName() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor()
-    await page.keyboard.press('Escape')
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    // No blank-add affordance remains, so we type the same default name the
+    // old flow used to leave behind.
+    const phantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await phantom.fill(`Dimension ${count + 1}`)
+    await phantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
   await addWithDefaultName()
   await addWithDefaultName()
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
-
-  await page.getByRole('button', { name: 'Dimensions' }).click()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
   async function renameDimension(oldName: string, newName: string) {
     await page.locator('.dim-row__name', { hasText: oldName }).click()
     await page.locator('.dim-row input').first().fill(newName)
@@ -45,7 +49,6 @@ async function setUpBoundAlpha(page: Page) {
   }
   await addParameterTo('Value', 'Comfort')
   await addParameterTo('Stake', 'Users')
-  await page.getByRole('button', { name: 'Dimensions' }).click() // close popover
 
   // Compose α on the canvas: bind both dots (waiting for each spoke so the
   // binding is deterministic), then exit compose keeping the complete draft.
@@ -96,7 +99,6 @@ test('drill into α, refine it, create children, and breadcrumb back to an uncha
   }
   await addSubParam('Inner Circle')
   await addSubParam('Outer Circle')
-  await page.getByRole('button', { name: 'Dimensions' }).click() // close the manager
 
   // Create child contexts α1, α2 via the register phantom row.
   const registerPhantom = page.getByPlaceholder(/first context on this canvas|New context/)

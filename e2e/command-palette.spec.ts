@@ -13,13 +13,17 @@ async function openDesignWithTwoDimensions(page: Page) {
   await page.getByRole('link', { name: 'Design' }).click()
 
   async function addDimension() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor()
-    await page.keyboard.press('Escape')
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    const dimPhantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await dimPhantom.fill(`Dimension ${count + 1}`)
+    await dimPhantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
   await addDimension()
   await addDimension()
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
 }
 
 test('⌘K opens the centered palette; Escape closes it', async ({ page }) => {

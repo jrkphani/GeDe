@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { ARC_RADIUS, layout, NODE_RADIUS, spokePath, type CanvasLayoutInput } from './canvasLayout'
+import { ARC_RADIUS, layout, MAX_DOT_HIT_RADIUS, NODE_RADIUS, spokePath, type CanvasLayoutInput } from './canvasLayout'
+import { dotHitRadiusUnits } from './canvasResponsive'
 
 const CENTER = 500
 
@@ -362,6 +363,54 @@ describe('layout', () => {
       const nodeAfter = after.nodes.find((n) => n.contextId === 'ctxA')
       expect(nodeAfter?.x).toBe(nodeBefore?.x)
       expect(nodeAfter?.y).toBe(nodeBefore?.y)
+    })
+  })
+
+  // Issue 082 Phase 1 regression — hit-circle overlap. DOT_ANGLE_STEP's fixed
+  // 4deg within-dimension step packs adjacent dots ~28 viewBox units apart at
+  // ARC_RADIUS, but STYLE_GUIDE §7's 44px hit circle (canvasResponsive's
+  // dotHitRadiusUnits) is ~44 units at typical canvas widths — neighboring
+  // hit circles overlap each other's centers and steal clicks. MAX_DOT_HIT_RADIUS
+  // is the largest hit radius that keeps two adjacent hit circles from
+  // overlapping: half the chord between two dots one DOT_ANGLE_STEP apart.
+  describe('MAX_DOT_HIT_RADIUS (issue 082 Phase 1 regression — hit-circle overlap)', () => {
+    it('is at most half the actual minimum pairwise spacing between adjacent within-dimension dots', () => {
+      const dimensions = [dimension('d0', 0)]
+      const geometry = layout({
+        dimensions,
+        parametersByDimension: { d0: params('d0', 3) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      const [a, b] = geometry.dots
+      const spacing = Math.hypot((a as { x: number }).x - (b as { x: number }).x, (a as { y: number }).y - (b as { y: number }).y)
+      // Capping at exactly half the spacing means two neighboring hit
+      // circles at that radius touch but never overlap past each other's
+      // center.
+      expect(MAX_DOT_HIT_RADIUS).toBeCloseTo(spacing / 2, 9)
+    })
+
+    it('is floored above zero and cannot go negative', () => {
+      expect(MAX_DOT_HIT_RADIUS).toBeGreaterThan(0)
+    })
+
+    it('caps the effective hit radius below the 44px-based radius at a typical (~500px) canvas width', () => {
+      // 500px is the e2e-representative measured canvas width (see
+      // Canvas.test.tsx's "compose mode: every dot exposes an invisible hit
+      // circle" fixture and HIT_REFERENCE_WIDTH in Canvas.tsx).
+      const typicalWidthPx = 500
+      const uncapped = dotHitRadiusUnits(typicalWidthPx)
+      const effective = Math.min(uncapped, MAX_DOT_HIT_RADIUS)
+      expect(uncapped).toBeGreaterThan(MAX_DOT_HIT_RADIUS) // the overlap this bug fixes
+      expect(effective).toBe(MAX_DOT_HIT_RADIUS)
+    })
+
+    it('does not cap the effective hit radius on a wide canvas where the uncapped 44px radius already fits', () => {
+      const wideCanvasPx = 2000
+      const uncapped = dotHitRadiusUnits(wideCanvasPx)
+      const effective = Math.min(uncapped, MAX_DOT_HIT_RADIUS)
+      expect(uncapped).toBeLessThan(MAX_DOT_HIT_RADIUS)
+      expect(effective).toBe(uncapped)
     })
   })
 

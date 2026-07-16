@@ -12,23 +12,30 @@ test('guided start, add three dimensions, reorder, recolor — all persist acros
   await page.getByRole('link', { name: 'Design' }).click()
 
   // Guided start: below the floor, the surface IS the manager.
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeVisible()
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeVisible()
 
   async function addWithDefaultName() {
-    await page.getByRole('button', { name: 'Add dimension' }).click()
-    await page.locator('.dim-row input').first().waitFor() // editor opens ready-to-edit
-    await page.keyboard.press('Escape') // keep the default name
+    // Issue 082 Phase 1 — the old "Add dimension" command button was
+    // replaced by a persistent phantom-row rail (type a name, press Enter).
+    // No blank-add affordance remains, so we type the same default name the
+    // old flow used to leave behind.
+    const dimPhantom = page.getByPlaceholder('Type to add a dimension')
+    const count = await page.locator('.dim-row').count()
+    await dimPhantom.fill(`Dimension ${count + 1}`)
+    await dimPhantom.press('Enter')
+    await expect(page.locator('.dim-row').nth(count)).toBeVisible()
   }
 
   await addWithDefaultName()
   await addWithDefaultName()
 
   // Floor reached: guided prompt is replaced by the design placeholder + context bar.
-  await expect(page.getByText('Add at least two dimensions to begin designing.')).toBeHidden()
-  await expect(page.getByRole('button', { name: 'Dimensions' })).toBeVisible()
+  // Issue 082 Phase 1 — the dimension manager is an always-open rail now (no
+  // popover trigger to assert or click); the floor-hint going hidden is
+  // itself proof the floor was crossed.
+  await expect(page.getByText('Add a second dimension to start binding contexts.')).toBeHidden()
 
-  // Third dimension via the context-bar popover.
-  await page.getByRole('button', { name: 'Dimensions' }).click()
+  // Third dimension via the always-open rail.
   await addWithDefaultName()
   const rows = page.locator('.dim-row')
   await expect(rows).toHaveCount(3)
@@ -48,10 +55,10 @@ test('guided start, add three dimensions, reorder, recolor — all persist acros
   await page.getByRole('button', { name: 'Use #3D6BD6' }).click()
   await expect(rows.nth(0)).toHaveAttribute('data-color', '#3D6BD6')
 
-  // Reload: order and colors persist.
+  // Reload: order and colors persist. The rail is always open, so nothing
+  // needs reopening after reload.
   await page.reload()
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
-  await page.getByRole('button', { name: 'Dimensions' }).click()
   const after = page.locator('.dim-row')
   await expect(after.nth(0).getByText('Dimension 1')).toBeVisible()
   await expect(after.nth(1).getByText('Dimension 3')).toBeVisible()

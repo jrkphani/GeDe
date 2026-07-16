@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { adjacentSet, dotKey, type CanvasEmphasis } from '../domain/canvasAdjacency'
-import { CENTER, DOT_RADIUS, layout, NODE_RADIUS, spokePath } from '../domain/canvasLayout'
+import { CENTER, DOT_RADIUS, layout, MAX_DOT_HIT_RADIUS, NODE_RADIUS, spokePath } from '../domain/canvasLayout'
 import { dotHitRadiusUnits, labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
@@ -113,8 +113,18 @@ export function Canvas({
   const composing = composeContextId !== null
   const draftBindings = composeContextId ? (bindingsByContext[composeContextId] ?? {}) : {}
   // Invisible ≥44px hit circle in viewBox units (STYLE_GUIDE §7), derived from
-  // the *measured* on-screen width so the target stays 44px at any scale.
-  const hitRadius = dotHitRadiusUnits(width && width > 0 ? width : HIT_REFERENCE_WIDTH)
+  // the *measured* on-screen width so the target stays 44px at any scale —
+  // but capped at MAX_DOT_HIT_RADIUS (canvasLayout.ts) so neighboring hit
+  // circles on a crowded ring never overlap and steal each other's clicks
+  // (issue 082 Phase 1 regression; see MAX_DOT_HIT_RADIUS's comment and
+  // docs/issues/082-design-route-ux.md:133). This deliberately falls below
+  // STYLE_GUIDE §7's 44px floor at typical canvas widths — honoring 44px
+  // there is physically impossible without overlap at the fixed 4deg
+  // within-dimension dot step.
+  const hitRadius = Math.min(
+    dotHitRadiusUnits(width && width > 0 ? width : HIT_REFERENCE_WIDTH),
+    MAX_DOT_HIT_RADIUS,
+  )
 
   const geometry = useMemo(
     () => layout({ dimensions, parametersByDimension, contexts, bindingsByContext, childCountByContext }),

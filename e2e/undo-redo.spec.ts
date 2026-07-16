@@ -11,21 +11,20 @@ test('⌘Z reverts a justification edit; the reverted value survives a reload', 
   await page.getByRole('button', { name: 'Open Tavalo' }).click()
   await page.getByRole('link', { name: 'Design' }).click()
 
-  // Cross the n = 2 floor so the register is live.
-  await page.getByRole('button', { name: 'Add dimension' }).click()
-  await page.locator('.dim-row input').first().waitFor()
-  await page.keyboard.press('Escape')
-  await page.getByRole('button', { name: 'Add dimension' }).click()
-  await page.locator('.dim-row input').first().waitFor()
-  await page.keyboard.press('Escape')
-  // Crossing the floor swaps the guided panel for the real DesignSurface,
-  // where "Dimensions" is a closed-by-default popover trigger in the context
-  // bar — this test never needs to open it. (A stray click here used to
-  // open it, since it's the trigger's first toggle, not a close; the very
-  // next action then dismissed it as an "outside click" and Radix's default
-  // onCloseAutoFocus raced the following keystrokes back to the trigger
-  // button instead of the register's phantom input — reliable on CI's
-  // slower timing, invisible locally. No app bug; just don't touch it.)
+  // Cross the n = 2 floor so the register is live. Issue 082 Phase 1 — the
+  // old "Add dimension" command button was replaced by a persistent
+  // phantom-row rail (type a name, press Enter).
+  const dimPhantom = page.getByPlaceholder('Type to add a dimension')
+  await dimPhantom.fill('Dimension 1')
+  await dimPhantom.press('Enter')
+  await expect(page.locator('.dim-row')).toHaveCount(1)
+  await dimPhantom.fill('Dimension 2')
+  await dimPhantom.press('Enter')
+  await expect(page.locator('.dim-row')).toHaveCount(2)
+  // Crossing the floor swaps the guided panel for the real DesignSurface.
+  // Issue 082 Phase 1 retired the "Dimensions" popover trigger entirely — the
+  // dimension manager is now an always-open rail, so there's nothing to open
+  // or accidentally toggle here anymore.
 
   const registerPhantom = page.getByPlaceholder('Type to create your first context — it becomes α')
   await registerPhantom.click()
