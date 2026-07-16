@@ -2,8 +2,10 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { openDatabase } from '../db/client'
 import { bindings, dimensions, parameters, projects, workspaces } from '../db/schema'
 import { applyInboundDeltas } from '../db/sync'
-import { startSync, type ShapeStreamFactory, type ShapeStreamLike } from './syncEngine'
+import { FetchError, FetchBackoffAbortError } from '@electric-sql/client'
+import { isIgnorableReadError, startSync, type ShapeStreamFactory, type ShapeStreamLike } from './syncEngine'
 import { SYNCED_TABLES } from './config'
+import { MalformedElectricMessageError } from './electricProtocol'
 import type { ElectricMessage } from './electricProtocol'
 import type { RowDelta, TableName } from '../domain/syncDelta'
 import type { Database } from '../db/client'
@@ -65,6 +67,64 @@ async function freshDb() {
   await db.insert(workspaces).values({ id: 'ws1', name: 'Test Workspace' })
   return db
 }
+
+// Issue 086 — the read-error classifier. The "Sync error" banner was over-
+// sensitive: it flipped on any transient/boot-race read blip and self-cleared
+// a second later. isIgnorableReadError draws the boundary the store uses to
+// decide which read errors it hard-ignores (never debounces at all): the pre-
+// signin boot-race (401 / missing_token, self-heals on sign-in) and transient
+// transport Electric retries on its own (aborted long-poll / socket closed).
+// A genuine apply/parse failure (MalformedElectricMessageError, a PGlite FK/
+// constraint throw, the synthetic orphaned-row Error) is NOT ignorable — it
+// gets debounced by the store and surfaces only if it stays unresolved.
+describe('isIgnorableReadError — transient/boot-race vs genuine (issue 086)', () => {
+  it('a boot-race 401 FetchError (missing_token before the auth token attaches) is ignorable', () => {
+    const err = new FetchError(
+      401,
+      JSON.stringify({ error: 'missing_token' }),
+      { error: 'missing_token' },
+      {},
+      'https://sync.example/v1/shape',
+      'missing_token',
+    )
+    expect(isIgnorableReadError(err)).toBe(true)
+  })
+
+  it('a 403 FetchError (auth not yet resolved) is ignorable', () => {
+    const err = new FetchError(403, undefined, undefined, {}, 'https://sync.example/v1/shape')
+    expect(isIgnorableReadError(err)).toBe(true)
+  })
+
+  it('a transient long-poll abort (FetchBackoffAbortError, Electric retries it) is ignorable', () => {
+    expect(isIgnorableReadError(new FetchBackoffAbortError())).toBe(true)
+  })
+
+  it('a bare AbortError / socket-closed transport blip is ignorable', () => {
+    const abort = new Error('The operation was aborted')
+    abort.name = 'AbortError'
+    expect(isIgnorableReadError(abort)).toBe(true)
+    expect(isIgnorableReadError(new Error('net::ERR_ABORTED'))).toBe(true)
+  })
+
+  it('a genuine parse failure (MalformedElectricMessageError) is NOT ignorable', () => {
+    expect(isIgnorableReadError(new MalformedElectricMessageError('row x has no "id"'))).toBe(false)
+  })
+
+  it('a genuine local FK/constraint apply failure is NOT ignorable', () => {
+    const fk = new Error('insert or update on table "parameters" violates foreign key constraint')
+    expect(isIgnorableReadError(fk)).toBe(false)
+  })
+
+  it('the synthetic orphaned-row error (surfaced after every table is up-to-date) is NOT ignorable', () => {
+    const orphan = new Error('2 buffered "parameters" row(s) never resolved their FK dependency')
+    expect(isIgnorableReadError(orphan)).toBe(false)
+  })
+
+  it('a 5xx server FetchError is NOT ignorable (a sustained server outage should surface)', () => {
+    const err = new FetchError(500, undefined, undefined, {}, 'https://sync.example/v1/shape')
+    expect(isIgnorableReadError(err)).toBe(false)
+  })
+})
 
 describe('startSync — orchestration (test-first plan #1, driven by a fake stream)', () => {
   it('normalizes and applies an inbound message to PGlite, then calls onApplied', async () => {

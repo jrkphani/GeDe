@@ -14,9 +14,15 @@ import {
   type MutationQueue,
   type QueuedMutation,
 } from '../domain/mutationQueue'
-import { deriveSyncStatus, detectLostEdits, lostEditMessage, type SyncStatus } from '../domain/syncStatus'
+import {
+  deriveSyncStatus,
+  detectLostEdits,
+  lostEditMessage,
+  SYNC_ERROR_GRACE_MS,
+  type SyncStatus,
+} from '../domain/syncStatus'
 import type { TableName } from '../domain/syncDelta'
-import { startSync, type SyncHandle, type SyncOptions } from '../sync/syncEngine'
+import { isIgnorableReadError, startSync, type SyncHandle, type SyncOptions } from '../sync/syncEngine'
 import { isSyncEnabled, shouldSkipReadPath, SYNCED_TABLES, writeApiPath } from '../sync/config'
 import { flushMutations, type WriteApiHttpClient } from '../sync/writeTransport'
 import { getAuthHeaders } from '../auth/wireIdentity'
@@ -49,6 +55,21 @@ let backoffMs = INITIAL_BACKOFF_MS
 function clearFlushTimer(): void {
   if (flushTimer !== null) clearTimeout(flushTimer)
   flushTimer = null
+}
+
+// Issue 086 — the debounce timer for a genuine, still-unresolved read error.
+// Module-level (like flushTimer above) so it survives across store actions
+// without bloating SyncState with timer plumbing. onError schedules exactly
+// ONE recompute() SYNC_ERROR_GRACE_MS after a genuine error first begins, so
+// the "Sync error" banner appears once the grace elapses if nothing has
+// cleared it; any success (onApplied / onControl up-to-date / start) cancels
+// it. Never reset while an error persists — the clock runs from when the
+// error FIRST began, not from each repeat.
+let errorGraceTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearErrorGraceTimer(): void {
+  if (errorGraceTimer !== null) clearTimeout(errorGraceTimer)
+  errorGraceTimer = null
 }
 
 function resetBackoff(): void {
@@ -92,7 +113,12 @@ interface SyncState {
   pendingCount: number
   // Issue 036 — the raw signals deriveSyncStatus() folds into `status`.
   online: boolean
-  hasError: boolean
+  // Issue 086 — the timestamp (ms) a genuine, still-unresolved read error
+  // began, or `null` when there is none. Replaces 036's `hasError: boolean`:
+  // transient/boot-race read blips (isIgnorableReadError) never set it, and a
+  // genuine error only surfaces the banner once it has stayed set for
+  // SYNC_ERROR_GRACE_MS (the debounce that kills the observed flicker).
+  errorSince: number | null
   reconnecting: boolean
   upToDateTables: ReadonlySet<TableName>
   status: SyncStatus
@@ -186,7 +212,12 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     const status = deriveSyncStatus({
       enabled: s.enabled,
       online: s.online,
-      hasError: s.hasError,
+      // Issue 086 — plumb the error timestamp + the live clock; the pure
+      // deriveSyncStatus does the grace-window comparison (never reads a clock
+      // itself). A scheduled recompute() after the grace re-evaluates this
+      // once the window has elapsed.
+      errorSince: s.errorSince,
+      now: Date.now(),
       reconnecting,
       upToDate,
       pendingCount: s.pendingCount,
@@ -200,7 +231,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     queue: emptyQueue(),
     pendingCount: 0,
     online: true,
-    hasError: false,
+    errorSince: null,
     reconnecting: false,
     upToDateTables: new Set<TableName>(),
     status: 'disabled',
@@ -249,10 +280,12 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       // unchanged from 051, still defensive rather than deleted.
       if (shouldSkipReadPath(Boolean(options.streamFactory))) return
       get().handle?.stop()
+      // Issue 086 — a (re)start is a clean slate for the read-error debounce.
+      clearErrorGraceTimer()
       set({
         enabled: true,
         online: initialOnline(),
-        hasError: false,
+        errorSince: null,
         reconnecting: false,
         upToDateTables: new Set<TableName>(),
       })
@@ -267,7 +300,10 @@ export const useSyncStore = create<SyncState>()((set, get) => {
           // additional read of the same batch for UI purposes only).
           const lostEdits = detectLostEdits(get().queue, deltas)
           const queue = reconcileWithDeltas(get().queue, deltas)
-          set({ queue, pendingCount: pendingCount(queue), hasError: false })
+          // Issue 086 — a successful apply resolves any pending read error:
+          // clear the timestamp and cancel a debounce that hasn't fired yet.
+          clearErrorGraceTimer()
+          set({ queue, pendingCount: pendingCount(queue), errorSince: null })
           // Issue 062 — a plain timestamp bump, not a counter: any store
           // subscribing to this only cares "did this change since I last
           // looked", which a monotonically-updated Date.now() answers just
@@ -296,14 +332,35 @@ export const useSyncStore = create<SyncState>()((set, get) => {
           if (control === 'up-to-date') {
             const next = new Set(get().upToDateTables)
             next.add(table)
-            set({ upToDateTables: next, hasError: false })
+            // Issue 086 — a shape reporting caught-up is a success: resolve
+            // any pending read error and cancel a not-yet-fired debounce.
+            clearErrorGraceTimer()
+            set({ upToDateTables: next, errorSince: null })
             recompute()
           }
         },
         onError: (table, error) => {
           options.onError?.(table, error)
-          set({ hasError: true })
-          recompute()
+          // Issue 086 — classify before reacting. Transient/boot-race read
+          // blips (a pre-signin 401 missing_token, an aborted long-poll
+          // Electric retries) are HARD-IGNORED: they never set errorSince, so
+          // they can never surface the "Sync error" banner. This is what kills
+          // the observed flicker (docs/issues/086).
+          if (isIgnorableReadError(error)) return
+          // A genuine error. Start the clock from when it FIRST began (don't
+          // keep resetting it on repeats), recompute (still calm — within the
+          // grace window deriveSyncStatus reports 'syncing', not 'error'), and
+          // schedule ONE recompute() after the grace so the banner surfaces if
+          // nothing has cleared it by then.
+          if (get().errorSince === null) {
+            set({ errorSince: Date.now() })
+            recompute()
+            clearErrorGraceTimer()
+            errorGraceTimer = setTimeout(() => {
+              errorGraceTimer = null
+              recompute()
+            }, SYNC_ERROR_GRACE_MS)
+          }
         },
       })
 
@@ -347,6 +404,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       onlineHandler = null
       offlineHandler = null
       clearFlushTimer()
+      clearErrorGraceTimer()
       resetBackoff()
       set({ enabled: false, handle: null })
       recompute()
@@ -465,6 +523,7 @@ export function resetSyncStore(): void {
   onlineHandler = null
   offlineHandler = null
   clearFlushTimer()
+  clearErrorGraceTimer()
   resetBackoff()
   useSyncStore.setState({
     enabled: false,
@@ -472,7 +531,7 @@ export function resetSyncStore(): void {
     queue: emptyQueue(),
     pendingCount: 0,
     online: true,
-    hasError: false,
+    errorSince: null,
     reconnecting: false,
     upToDateTables: new Set<TableName>(),
     status: 'disabled',

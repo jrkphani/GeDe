@@ -3,6 +3,7 @@
 // this file's pre-existing 032 tests are jsdom-agnostic so this is a safe
 // widening (HANDOFF gotcha: plain src/store/*.test.ts otherwise run in node).
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { FetchError, FetchBackoffAbortError } from '@electric-sql/client'
 import { uuidv7 } from 'uuidv7'
 import { openDatabase } from '../db/client'
 import { addDimension, addParameter, addTier2Table, createContext, createProject } from '../db/mutations'
@@ -18,6 +19,7 @@ import type { TokenProvider } from '../sync/authToken'
 import type { ElectricMessage } from '../sync/electricProtocol'
 import type { QueuedMutation } from '../domain/mutationQueue'
 import type { TableName } from '../domain/syncDelta'
+import { SYNC_ERROR_GRACE_MS } from '../domain/syncStatus'
 
 // Issue 048 — signs the store into "authenticated" without ever touching the
 // real amazon-cognito-identity-js client: getAuthHeaders() (src/auth/
@@ -52,10 +54,19 @@ function signIn(): void {
 // individual control-message deliveries per test.
 function fakeStreamFactory() {
   const subscribers = new Map<TableName, (messages: readonly ElectricMessage[]) => void>()
+  // Issue 086 — capture the subscribe-level onError so a test can simulate a
+  // transport/auth error Electric surfaces through that channel (a boot-race
+  // 401, an aborted long-poll), distinct from the apply/parse errors a
+  // delivered message triggers.
+  const errorHandlers = new Map<TableName, (error: unknown) => void>()
   const factory: ShapeStreamFactory = (table): ShapeStreamLike => ({
-    subscribe(callback) {
+    subscribe(callback, onError) {
       subscribers.set(table, (messages) => void callback(messages))
-      return () => subscribers.delete(table)
+      if (onError) errorHandlers.set(table, onError)
+      return () => {
+        subscribers.delete(table)
+        errorHandlers.delete(table)
+      }
     },
   })
   function deliver(table: TableName, messages: readonly ElectricMessage[]): void {
@@ -64,7 +75,10 @@ function fakeStreamFactory() {
   function deliverUpToDateAll(): void {
     for (const table of SYNCED_TABLES) deliver(table, [{ headers: { control: 'up-to-date' } }])
   }
-  return { factory, deliver, deliverUpToDateAll }
+  function deliverError(table: TableName, error: unknown): void {
+    errorHandlers.get(table)?.(error)
+  }
+  return { factory, deliver, deliverUpToDateAll, deliverError }
 }
 
 function mutation(overrides: Partial<QueuedMutation> = {}): QueuedMutation {
@@ -93,6 +107,9 @@ afterEach(() => {
   resetAuthStoreForTests()
   vi.unstubAllEnvs()
   vi.unstubAllGlobals()
+  // Issue 086 — the debounce tests below opt into fake timers per-test; make
+  // sure a failure mid-test never leaks them into an unrelated test.
+  vi.useRealTimers()
 })
 
 describe('sync store — feature-flag gate (test-first plan #6)', () => {
@@ -1208,7 +1225,13 @@ describe('sync store — status derivation (issue 036)', () => {
     expect(useSyncStore.getState().status).toBe('synced')
   })
 
-  it('onError -> "error", self-heals to "synced" on the next successful apply', async () => {
+  // Issue 086 — a genuine read error is now DEBOUNCED: it must not flash
+  // "Sync error" instantly, only after it stays unresolved past the grace
+  // window. A malformed message (toRowDeltas parse throw) is a genuine,
+  // non-ignorable error (isIgnorableReadError === false), so it exercises the
+  // debounce end-to-end. Fake timers keep the grace deterministic — no
+  // wall-clock waits.
+  it('a genuine onError debounces: NOT "error" within the grace window, "error" only after it elapses (issue 086)', async () => {
     vi.stubEnv('VITE_SYNC_ENABLED', 'true')
     const { db } = await openDatabase('memory://')
     const { factory, deliver, deliverUpToDateAll } = fakeStreamFactory()
@@ -1216,13 +1239,95 @@ describe('sync store — status derivation (issue 036)', () => {
     deliverUpToDateAll()
     expect(useSyncStore.getState().status).toBe('synced')
 
-    // A malformed message triggers syncEngine's onError.
+    vi.useFakeTimers()
+    // A malformed message triggers syncEngine's onError synchronously
+    // (toRowDeltas throws before any async apply).
     deliver('contexts', [{ key: 'bad', value: { name: 'no id' }, headers: { operation: 'insert' } }])
-    await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(useSyncStore.getState().status).toBe('error')
+    // Within the grace window the banner stays calm — not "error".
+    expect(useSyncStore.getState().errorSince).not.toBeNull()
+    expect(useSyncStore.getState().status).not.toBe('error')
+    expect(useSyncStore.getState().status).toBe('syncing')
 
+    // The grace elapses with no success to clear it -> the banner surfaces.
+    vi.advanceTimersByTime(SYNC_ERROR_GRACE_MS)
+    expect(useSyncStore.getState().status).toBe('error')
+    vi.useRealTimers()
+  })
+
+  it('a success within the grace window clears the debounced error and the banner never appears (issue 086, plan #5)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const { factory, deliver, deliverUpToDateAll } = fakeStreamFactory()
+    useSyncStore.getState().start(db, { streamFactory: factory })
     deliverUpToDateAll()
     expect(useSyncStore.getState().status).toBe('synced')
+
+    vi.useFakeTimers()
+    deliver('contexts', [{ key: 'bad', value: { name: 'no id' }, headers: { operation: 'insert' } }])
+    expect(useSyncStore.getState().errorSince).not.toBeNull()
+    expect(useSyncStore.getState().status).not.toBe('error')
+
+    // A success arrives before the grace elapses: errorSince clears and the
+    // pending grace timer is cancelled.
+    deliverUpToDateAll()
+    expect(useSyncStore.getState().errorSince).toBeNull()
+    expect(useSyncStore.getState().status).toBe('synced')
+
+    // Advancing past the grace must NOT resurrect the (already cleared) error.
+    vi.advanceTimersByTime(SYNC_ERROR_GRACE_MS * 2)
+    expect(useSyncStore.getState().status).toBe('synced')
+    vi.useRealTimers()
+  })
+
+  // Issue 086 plan #2 — the pre-signin boot-race (a 401 missing_token before
+  // the Cognito token attaches) is hard-ignored: it never sets errorSince, so
+  // it can never surface the banner, even after the grace window elapses.
+  it('a boot-race missing_token/401 onError never sets errorSince and never shows "error" (issue 086, plan #2)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const { factory, deliverError, deliverUpToDateAll } = fakeStreamFactory()
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    vi.useFakeTimers()
+    deliverError(
+      'contexts',
+      new FetchError(
+        401,
+        JSON.stringify({ error: 'missing_token' }),
+        { error: 'missing_token' },
+        {},
+        'https://sync.example/v1/shape',
+        'missing_token',
+      ),
+    )
+    expect(useSyncStore.getState().errorSince).toBeNull()
+    expect(useSyncStore.getState().status).not.toBe('error')
+
+    // Even after well past the grace window, the boot-race never surfaces.
+    vi.advanceTimersByTime(SYNC_ERROR_GRACE_MS * 2)
+    expect(useSyncStore.getState().status).not.toBe('error')
+    vi.useRealTimers()
+
+    // And a normal catch-up afterwards settles cleanly to synced.
+    deliverUpToDateAll()
+    expect(useSyncStore.getState().status).toBe('synced')
+  })
+
+  // Issue 086 plan #3 — normal long-poll churn Electric retries on its own
+  // (an aborted long-poll / closed socket) is hard-ignored too.
+  it('a transient transport abort onError never sets errorSince (issue 086, plan #3)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    const { db } = await openDatabase('memory://')
+    const { factory, deliverError } = fakeStreamFactory()
+    useSyncStore.getState().start(db, { streamFactory: factory })
+
+    vi.useFakeTimers()
+    deliverError('dimensions', new FetchBackoffAbortError())
+    expect(useSyncStore.getState().errorSince).toBeNull()
+
+    vi.advanceTimersByTime(SYNC_ERROR_GRACE_MS * 2)
+    expect(useSyncStore.getState().status).not.toBe('error')
+    vi.useRealTimers()
   })
 })
 
@@ -1273,14 +1378,17 @@ describe('sync store — lost-edit note (issue 036, test-first plan #3)', () => 
 })
 
 // Issue 075 Part A — the cross-table FK race, driven end-to-end through the
-// store (this is the one place `hasError` lives — syncEngine.ts itself has no
-// error STATE, only the onError callback). Deliberately does NOT pre-seed the
-// `dimensions`/`parameters` parent rows (unlike this file's other tests,
-// which only ever exercise a single already-satisfiable delta) — the whole
-// point is to trigger the real race: a `parameters` shape resolving before
-// its `dimensions` parent has committed locally.
+// store (this is the one place the read-error STATE lives — syncEngine.ts
+// itself has no error state, only the onError callback). Deliberately does NOT
+// pre-seed the `dimensions`/`parameters` parent rows (unlike this file's other
+// tests, which only ever exercise a single already-satisfiable delta) — the
+// whole point is to trigger the real race: a `parameters` shape resolving
+// before its `dimensions` parent has committed locally. Issue 086 renamed the
+// raw signal `hasError: boolean` -> `errorSince: number | null` (a genuine
+// apply error is a real, non-ignorable failure, so it DOES set errorSince —
+// asserted here on the raw signal, independent of the debounced banner).
 describe('sync store — reconcile-retry convergence for cross-table FK races (issue 075 Part A)', () => {
-  it('a parameters delta that races ahead of dimensions is buffered, then lands (no lingering hasError) once the parent applies and all tables report up-to-date', async () => {
+  it('a parameters delta that races ahead of dimensions is buffered, then lands (no lingering error) once the parent applies and all tables report up-to-date', async () => {
     vi.stubEnv('VITE_SYNC_ENABLED', 'true')
     const { db } = await openDatabase('memory://')
     await createProject(db, { name: 'Tavalo' })
@@ -1310,7 +1418,7 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
     ])
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(useSyncStore.getState().hasError).toBe(true)
+    expect(useSyncStore.getState().errorSince).not.toBeNull()
     expect(await db.select().from(parameters)).toHaveLength(0)
 
     // Its dimension parent lands next, on an independent table stream.
@@ -1338,18 +1446,18 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
     // The retry drained: both rows now durably present in local PGlite.
     expect(await db.select().from(dimensions)).toHaveLength(1)
     expect(await db.select().from(parameters)).toHaveLength(1)
-    // The successful retry's onApplied cleared hasError, same as any other
+    // The successful retry's onApplied cleared errorSince, same as any other
     // successful apply — no lingering error from the earlier race.
-    expect(useSyncStore.getState().hasError).toBe(false)
+    expect(useSyncStore.getState().errorSince).toBeNull()
 
     // Every table settling up-to-date must not resurrect the (already
     // resolved) error.
     deliverUpToDateAll()
-    expect(useSyncStore.getState().hasError).toBe(false)
+    expect(useSyncStore.getState().errorSince).toBeNull()
     vi.unstubAllEnvs()
   })
 
-  it('a genuinely orphaned parameters delta (its dimension never arrives) surfaces hasError once every table reports up-to-date, not before', async () => {
+  it('a genuinely orphaned parameters delta (its dimension never arrives) surfaces a real error once every table reports up-to-date, not before', async () => {
     vi.stubEnv('VITE_SYNC_ENABLED', 'true')
     const { db } = await openDatabase('memory://')
     const { factory, deliver, deliverUpToDateAll } = fakeStreamFactory()
@@ -1375,7 +1483,7 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
       },
     ])
     await new Promise((resolve) => setTimeout(resolve, 0))
-    expect(useSyncStore.getState().hasError).toBe(true)
+    expect(useSyncStore.getState().errorSince).not.toBeNull()
 
     // Every OTHER synced table catches up first — the dimension this row
     // needs is simply never coming this session. Still buffered/racing until
@@ -1389,7 +1497,7 @@ describe('sync store — reconcile-retry convergence for cross-table FK races (i
     deliver('dimensions', [{ headers: { control: 'up-to-date' } }])
     await new Promise((resolve) => setTimeout(resolve, 0))
 
-    expect(useSyncStore.getState().hasError).toBe(true)
+    expect(useSyncStore.getState().errorSince).not.toBeNull()
     expect(await db.select().from(parameters)).toHaveLength(0)
 
     // deliverUpToDateAll() re-delivering up-to-date again must not loop or

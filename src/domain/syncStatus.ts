@@ -9,6 +9,14 @@ import type { RowDelta, TableName } from './syncDelta'
 
 export type SyncStatus = 'disabled' | 'offline' | 'reconnecting' | 'syncing' | 'error' | 'synced'
 
+// Issue 086 — a genuine read error must stay unresolved this long before the
+// "Sync error" banner surfaces. The observed flicker (docs/issues/086: boot-
+// race 401s, aborted long-polls, and the boot-time cross-table FK race) all
+// self-heal within 1–3s, so a ~5s debounce keeps the footer calm through them
+// while still surfacing a sustained failure. Tuning knob, not a contract —
+// see the issue's "Open tension" note.
+export const SYNC_ERROR_GRACE_MS = 5000
+
 export interface SyncStatusInput {
   // Whether the sync engine is running at all (isSyncEnabled(), issue 032).
   // v1's default — the indicator doesn't mount when this is false (no status
@@ -16,10 +24,17 @@ export interface SyncStatusInput {
   readonly enabled: boolean
   // Browser network reachability (navigator.onLine + online/offline events).
   readonly online: boolean
-  // A batch failed to apply, or a message failed to normalize, since the
-  // last successful apply/control message (src/sync/syncEngine.ts's
-  // onError). Self-heals on the next successful onApplied/onControl.
-  readonly hasError: boolean
+  // Issue 086 — the timestamp (ms) the current GENUINE, still-unresolved read
+  // error began, or `null` when there is none. Transient/boot-race read blips
+  // (src/sync/syncEngine.ts's isIgnorableReadError) never set this; a real
+  // apply/parse failure does. Kept as data (not a live clock read) so this
+  // function stays pure and unit-testable. Cleared to `null` by the store on
+  // the next successful onApplied/onControl. Replaces 036's `hasError`.
+  readonly errorSince: number | null
+  // Issue 086 — the current wall-clock time (ms), passed in by the caller so
+  // the grace-window comparison below is a pure function of its inputs (the
+  // store plumbs `Date.now()`; tests pass a fixed value / fake-timer clock).
+  readonly now: number
   // Set the moment the browser comes back online after having gone offline,
   // cleared once the engine has both caught up (upToDate) and drained the
   // local queue (pendingCount === 0). Distinguishes "just reconnected, still
@@ -40,9 +55,16 @@ export interface SyncStatusInput {
 export function deriveSyncStatus(input: SyncStatusInput): SyncStatus {
   if (!input.enabled) return 'disabled'
   if (!input.online) return 'offline'
-  if (input.hasError) return 'error'
+  // Issue 086 — only surface the banner once a genuine error has stayed
+  // unresolved for the full grace window; within it, fall through to calm
+  // activity below (never an instant flash).
+  if (input.errorSince !== null && input.now - input.errorSince >= SYNC_ERROR_GRACE_MS) return 'error'
   if (input.reconnecting) return 'reconnecting'
   if (!input.upToDate || input.pendingCount > 0) return 'syncing'
+  // Issue 086 — a still-debouncing error (within grace) means something IS in
+  // flight; reporting 'synced' here would be reassuring-over-truthful. Report
+  // calm activity ('syncing') instead until it either clears or surfaces.
+  if (input.errorSince !== null) return 'syncing'
   return 'synced'
 }
 

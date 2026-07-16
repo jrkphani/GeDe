@@ -6,7 +6,7 @@
 // fake stream; no live Electric server is reachable in this repo's tests,
 // HANDOFF/issue 032 constraints) and is never called unless
 // `src/sync/config.ts`'s isSyncEnabled() is true.
-import { ShapeStream } from '@electric-sql/client'
+import { FetchBackoffAbortError, FetchError, ShapeStream } from '@electric-sql/client'
 import type { Database } from '../db/client'
 import { applyInboundDeltas } from '../db/sync'
 import {
@@ -56,9 +56,18 @@ function groupByTable(deltas: readonly RowDelta[]): Map<TableName, RowDelta[]> {
 }
 
 // A minimal structural subset of @electric-sql/client's ShapeStream — the
-// seam a fake stream implements in tests instead of a live connection.
+// seam a fake stream implements in tests instead of a live connection. The
+// optional second `onError` mirrors the real ShapeStream.subscribe(cb, onError)
+// signature (issue 086): Electric surfaces TRANSPORT/AUTH errors (a boot-race
+// 401, an aborted long-poll — a FetchError/FetchBackoffAbortError) through this
+// callback, distinct from the apply/parse errors startSync raises itself. Both
+// funnel into SyncOptions.onError; the store classifies them (isIgnorableRead-
+// Error) so the transient ones never reach the "Sync error" banner.
 export interface ShapeStreamLike {
-  subscribe(callback: (messages: readonly ElectricMessage[]) => void | Promise<void>): () => void
+  subscribe(
+    callback: (messages: readonly ElectricMessage[]) => void | Promise<void>,
+    onError?: (error: unknown) => void,
+  ): () => void
 }
 
 export type ShapeStreamFactory = (table: TableName, options: SyncOptions) => ShapeStreamLike
@@ -90,6 +99,42 @@ export interface SyncOptions {
   // "syncing" distinction) — never fires for a change message, and never
   // implies onApplied (a control-only batch carries no RowDelta).
   onControl?: (table: TableName, control: ElectricControlMessage['headers']['control']) => void
+}
+
+// Issue 086 — the read-error classification boundary the store (src/store/
+// sync.ts) uses to keep the "Sync error" banner calm. Returns true for errors
+// that must be HARD-IGNORED (never even debounced), because they are expected/
+// transient and self-heal on their own:
+//   - the pre-signin BOOT-RACE: a shape request fires before the Cognito token
+//     is attached, so the shape proxy 401/403s (`missing_token`); it clears the
+//     instant the user is signed in (src/store/sync.ts wires the real JWT).
+//   - TRANSIENT TRANSPORT Electric retries itself: an aborted long-poll or a
+//     closed socket on a live stream (FetchBackoffAbortError / AbortError /
+//     net::ERR_ABORTED) — normal churn, not a failure.
+// Everything else — a MalformedElectricMessageError parse throw, a genuine
+// PGlite FK/constraint apply failure, the synthetic orphaned-row Error
+// (maybeSurfaceOrphaned below), a 5xx server outage — is NOT ignorable: the
+// store debounces it and surfaces the banner only if it stays unresolved past
+// SYNC_ERROR_GRACE_MS. The transient boot-time cross-table FK race (075) throws
+// the SAME PGlite shape as a genuine orphan and so is deliberately NOT
+// classified apart here — the store's grace window separates them by time (the
+// race self-heals within it; a true orphan does not), which is exactly the
+// "debounce everything, hard-ignore only the boot-race/transport" resolution
+// docs/issues/086's Open tension prescribes.
+export function isIgnorableReadError(error: unknown): boolean {
+  // Boot-race / auth-not-yet-resolved: Electric retries these with backoff and
+  // they clear once the token attaches (401/403), or carry the proxy's
+  // explicit `missing_token` reason.
+  if (error instanceof FetchError && (error.status === 401 || error.status === 403)) return true
+  // Transient transport Electric self-retries.
+  if (error instanceof FetchBackoffAbortError) return true
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') return true
+    const message = error.message
+    if (/missing_token/i.test(message)) return true
+    if (/\baborted\b/i.test(message) || /ERR_ABORTED/i.test(message)) return true
+  }
+  return false
 }
 
 function defaultShapeStreamFactory(table: TableName, options: SyncOptions): ShapeStreamLike {
@@ -228,7 +273,12 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
           retryBuffer = retryBuffer.concat(deltas)
           options.onError?.(table, error)
         })
-    })
+    },
+    // Issue 086 — Electric surfaces TRANSPORT/AUTH errors (boot-race 401,
+    // aborted long-poll) through subscribe's own error channel, separate from
+    // the apply/parse errors above. Forward them to the same onError seam; the
+    // store hard-ignores the transient/boot-race ones (isIgnorableReadError).
+    (error) => options.onError?.(table, error))
   })
   return {
     stop() {

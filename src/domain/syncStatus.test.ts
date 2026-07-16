@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import { uuidv7 } from 'uuidv7'
-import { deriveSyncStatus, detectLostEdits, lostEditMessage, syncStatusLabel } from './syncStatus'
+import {
+  deriveSyncStatus,
+  detectLostEdits,
+  lostEditMessage,
+  syncStatusLabel,
+  SYNC_ERROR_GRACE_MS,
+} from './syncStatus'
 import { emptyQueue, enqueue, type QueuedMutation } from './mutationQueue'
 import type { RowDelta } from './syncDelta'
 
@@ -9,12 +15,18 @@ import type { RowDelta } from './syncDelta'
 // like syncDelta.ts/mutationQueue.ts — so the state machine itself is
 // unit-tested in isolation from the store wiring (src/store/sync.ts) and the
 // UI (src/shell/SyncIndicator.tsx).
+//
+// Issue 086 — `hasError: boolean` was replaced by `errorSince: number | null`
+// + `now: number` so the "Sync error" banner debounces: a genuine read error
+// only surfaces once it has stayed unresolved for SYNC_ERROR_GRACE_MS. Time is
+// passed as data (`now`), never read here — the function stays pure.
 
 function input(overrides: Partial<Parameters<typeof deriveSyncStatus>[0]> = {}) {
   return {
     enabled: true,
     online: true,
-    hasError: false,
+    errorSince: null,
+    now: 0,
     reconnecting: false,
     upToDate: true,
     pendingCount: 0,
@@ -22,23 +34,27 @@ function input(overrides: Partial<Parameters<typeof deriveSyncStatus>[0]> = {}) 
   }
 }
 
+// A genuine error that began at t=0 and has now stayed unresolved past the
+// grace window — the only shape that should surface the banner.
+function pastGrace(overrides: Partial<Parameters<typeof deriveSyncStatus>[0]> = {}) {
+  return input({ errorSince: 0, now: SYNC_ERROR_GRACE_MS, ...overrides })
+}
+
 describe('deriveSyncStatus — state mapping (test-first plan #1)', () => {
   it('sync not enabled (v1 default) -> disabled, regardless of other flags', () => {
-    expect(deriveSyncStatus(input({ enabled: false, hasError: true, online: false }))).toBe(
-      'disabled',
-    )
+    expect(deriveSyncStatus(pastGrace({ enabled: false, online: false }))).toBe('disabled')
   })
 
   it('enabled + fully caught up + nothing pending -> synced', () => {
     expect(deriveSyncStatus(input())).toBe('synced')
   })
 
-  it('enabled + browser offline -> offline, even if an error is also latent', () => {
-    expect(deriveSyncStatus(input({ online: false, hasError: true }))).toBe('offline')
+  it('enabled + browser offline -> offline, even if an error is also past its grace window', () => {
+    expect(deriveSyncStatus(pastGrace({ online: false }))).toBe('offline')
   })
 
-  it('enabled + online + a batch failed to apply -> error', () => {
-    expect(deriveSyncStatus(input({ hasError: true }))).toBe('error')
+  it('enabled + online + a batch failed to apply, unresolved past the grace window -> error', () => {
+    expect(deriveSyncStatus(pastGrace())).toBe('error')
   })
 
   it('enabled + online + first catch-up not finished yet -> syncing', () => {
@@ -59,8 +75,44 @@ describe('deriveSyncStatus — state mapping (test-first plan #1)', () => {
     expect(deriveSyncStatus(input({ reconnecting: true, upToDate: false }))).toBe('reconnecting')
   })
 
-  it('an error while reconnecting is still truthfully reported as error', () => {
-    expect(deriveSyncStatus(input({ reconnecting: true, hasError: true }))).toBe('error')
+  it('an error past its grace while reconnecting is still truthfully reported as error', () => {
+    expect(deriveSyncStatus(pastGrace({ reconnecting: true }))).toBe('error')
+  })
+})
+
+// Issue 086, test-first plan #1 — the debounce grace window. A genuine read
+// error must NOT flash the banner instantly; it only becomes 'error' after it
+// has stayed unresolved for SYNC_ERROR_GRACE_MS. During the grace it falls
+// through to calm activity (reconnecting/syncing), never to a dishonest
+// 'synced'. `errorSince === null` is never an error at any `now`.
+describe('deriveSyncStatus — error debounce grace window (issue 086)', () => {
+  it('within the grace window a genuine error is NOT yet reported as error', () => {
+    const status = deriveSyncStatus(input({ errorSince: 1000, now: 1000 + SYNC_ERROR_GRACE_MS - 1 }))
+    expect(status).not.toBe('error')
+  })
+
+  it('within the grace window an otherwise-idle store reports syncing, never a dishonest synced', () => {
+    // upToDate + nothing pending would be 'synced' without an error — but an
+    // unresolved (still-debouncing) error means something IS in flight.
+    const status = deriveSyncStatus(
+      input({ errorSince: 1000, now: 1000 + SYNC_ERROR_GRACE_MS - 1, upToDate: true, pendingCount: 0 }),
+    )
+    expect(status).toBe('syncing')
+  })
+
+  it('reconnecting still takes priority over a within-grace error', () => {
+    const status = deriveSyncStatus(
+      input({ errorSince: 1000, now: 1000 + SYNC_ERROR_GRACE_MS - 1, reconnecting: true }),
+    )
+    expect(status).toBe('reconnecting')
+  })
+
+  it('once the grace window has fully elapsed the error surfaces', () => {
+    expect(deriveSyncStatus(input({ errorSince: 1000, now: 1000 + SYNC_ERROR_GRACE_MS }))).toBe('error')
+  })
+
+  it('errorSince === null is never an error, no matter how large now is', () => {
+    expect(deriveSyncStatus(input({ errorSince: null, now: 1e12 }))).toBe('synced')
   })
 })
 
