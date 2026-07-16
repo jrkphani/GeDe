@@ -1,4 +1,6 @@
 // @vitest-environment jsdom
+import fs from 'node:fs'
+import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -220,6 +222,71 @@ describe('ContextRegister', () => {
 
     useContextsStore.getState().select(alphaId)
     await waitFor(() => expect(rowAlpha).toHaveClass('grid-row--selected'))
+  })
+})
+
+// Issue 085 Phase B, test-first plan items 7-8. Decision 4 rehomes the
+// Composer's one non-redundant capability (a roomier prose editor than a
+// cramped cell) directly into the register's own justification cell; Decision
+// 3's compose flow (per-dimension binds + justification-first phantom row)
+// already lives in the row, with no Composer pickers needed.
+describe('justification expand-on-focus (issue 085 Phase B, Decision 4)', () => {
+  it('focusing/editing the justification cell grows it to the multiline editor; blur commits and collapses back to a clamped summary', async () => {
+    const user = userEvent.setup()
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'Reason')
+    await user.keyboard('{Enter}')
+    const row = (await screen.findByText('α')).closest('tr') as HTMLElement
+    const alphaId = useContextsStore.getState().contexts.find((c) => c.symbol === 'α')?.id as string
+
+    // Idle: a clamped summary, not yet the roomy editor.
+    const summary = within(row).getByText('Reason')
+    expect(summary).toHaveClass('grid-cell__clamp')
+
+    // Focusing grows the cell into the multiline editor (the same shared
+    // grammar every other in-place editor uses — no separate component).
+    await user.click(summary)
+    const textarea = within(row).getByDisplayValue('Reason')
+    expect(textarea).toHaveClass('grid-cell__input--multiline')
+
+    await user.clear(textarea)
+    await user.type(textarea, 'Expanded reason')
+    await user.keyboard('{Enter}')
+
+    // Blur collapses back to the clamped summary; the edit persisted via the
+    // same mutation the grid always used.
+    await waitFor(() => expect(within(row).getByText('Expanded reason')).toHaveClass('grid-cell__clamp'))
+    expect(useContextsStore.getState().contexts.find((c) => c.id === alphaId)?.justification).toBe(
+      'Expanded reason',
+    )
+  })
+
+  it('the collapsed summary clamps to a single line; the editor carries a comfortable min-width/height floor (Decision 4)', () => {
+    const css = fs.readFileSync(path.resolve(__dirname, '../styles/base.css'), 'utf-8')
+    expect(css).toMatch(/\.grid-cell__clamp\s*\{[^}]*-webkit-line-clamp:\s*1;/)
+    expect(css).toMatch(/\.grid-cell__input--multiline\s*\{[^}]*min-height:/)
+    expect(css).toMatch(/\.grid-cell__input--multiline\s*\{[^}]*min-width:/)
+  })
+
+  it('composes a new context justification-first via the phantom row, then binds each dimension via its own combobox — no Composer strip needed', async () => {
+    const user = userEvent.setup()
+    render(<ContextRegister projectId={projectId} />)
+    const phantom = await screen.findByPlaceholderText(FIRST_CONTEXT_PLACEHOLDER)
+    await user.type(phantom, 'Composed inline')
+    await user.keyboard('{Enter}')
+
+    const row = (await screen.findByText('α')).closest('tr') as HTMLElement
+    expect(row).toHaveClass('grid-row--draft')
+    expect(within(row).getByText('Composed inline')).toBeInTheDocument()
+
+    const buttons = within(row).getAllByRole('button')
+    await user.click(buttons[0] as HTMLElement)
+    await user.click(screen.getByRole('option', { name: 'Comfort' }))
+    await user.click(buttons[1] as HTMLElement)
+    await user.click(screen.getByRole('option', { name: 'Users' }))
+
+    await waitFor(() => expect(row).not.toHaveClass('grid-row--draft'))
   })
 })
 

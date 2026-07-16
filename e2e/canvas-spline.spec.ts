@@ -8,8 +8,10 @@ import { expect, test, type Page } from '@playwright/test'
 // screenshot, not just component data") — manual review, not a CI gate.
 // Mirrors canvas-focus.spec.ts's setup and its paid-for compose gotcha: wait
 // for each .canvas-spoke between dot clicks and for
-// .composer-bar[data-composing="true"] to clear before treating a draft as
-// finished (HANDOFF Gotchas).
+// .canvas-dot-group--compose (Canvas's own compose-mode marker, issue 010) to
+// clear before treating a draft as finished (HANDOFF Gotchas). Issue 085
+// Phase B retired the Composer strip and its `.composer-bar[data-composing]`
+// gate — the canvas's own compose marker is the equivalent signal now.
 async function setUpCanvas(page: Page) {
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
@@ -71,7 +73,7 @@ async function setUpCanvas(page: Page) {
 async function composeContext(page: Page, dotIndexes: [number, number, number]) {
   await page.getByRole('button', { name: 'New context' }).click()
   await expect(page.locator('.canvas-node--draft')).toHaveCount(1)
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
 
   for (const dotIndex of dotIndexes) {
     const beforeCount = await page.locator('.canvas-spoke').count()
@@ -85,7 +87,7 @@ async function composeContext(page: Page, dotIndexes: [number, number, number]) 
   }
   await expect(page.locator('.canvas-node--draft')).toHaveCount(0)
   await page.keyboard.press('Escape') // exit compose, keep the draft
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toHaveCount(0)
+  await expect(page.locator('.canvas-dot-group--compose')).toHaveCount(0)
 }
 
 test('a dense canvas (many contexts x many bindings) renders legible bundled spline spokes, not a straight-line knot', async ({

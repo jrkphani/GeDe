@@ -1059,7 +1059,9 @@ body {
 }
 
 /* Multiline justification (issue 005): the one sanctioned row-height
-   exception — grows to fit while editing; display truncates to 2 lines. */
+   exception — grows to fit while editing; idle display clamps to a single-
+   line summary (issue 085 Phase B, Decision 4 — see the expand-on-focus rules
+   below for the roomier editing state this collapses from/to). */
 .grid-cell--multiline {
   align-items: flex-start;
   padding-top: var(--space-2);
@@ -1068,17 +1070,29 @@ body {
 
 .grid-cell__clamp {
   display: -webkit-box;
-  -webkit-line-clamp: 2;
+  -webkit-line-clamp: 1;
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
 
+/* Issue 085 Phase B, Decision 4 — "justification expand-on-focus": the
+   (now-removed) Composer strip's one genuinely non-redundant capability was a
+   roomier prose editor than the register's cramped column. Rehomed here: the
+   editing textarea gets a comfortable min-width/height floor instead of
+   staying pinned to the ambient column width, so there's room to read/write
+   a few sentences without scrolling; it still wraps + auto-grows taller via
+   the existing scrollHeight measurement (MultilineCell, EditableGrid.tsx).
+   Blurring commits and the row collapses back to `.grid-cell__clamp`'s
+   single-line summary above — no separate element, same shared primitive
+   every other in-place editor in this grid uses. */
 .grid-cell__input--multiline {
   resize: none;
   overflow: hidden;
   padding-top: var(--space-2);
   padding-bottom: var(--space-2);
   font: inherit;
+  min-width: 320px;
+  min-height: 72px;
 }
 
 /* Duplicate-tuple badge (issue 005, invariant 2): quiet, non-blocking, mono —
@@ -1424,18 +1438,6 @@ body {
   }
 }
 
-/* Composer bar (issue 009, STYLE_GUIDE §7): full-width panel under the
-   canvas, hairline top border — read mode only (parameter pickers arrive in
-   issue 010). Absent entirely from the DOM when nothing is selected
-   (Composer.tsx returns null), so no "empty" state to style here. */
-.composer-bar {
-  margin-top: var(--space-5);
-  padding: var(--space-4) var(--space-5);
-  background: var(--panel);
-  border-top: 1px solid var(--hairline);
-  border-radius: var(--radius);
-}
-
 /* Canvas toolbar (issue 010): "New context" entry to compose mode, above the
    canvas + register row. */
 .canvas-toolbar {
@@ -1597,111 +1599,6 @@ body {
   color: var(--accent);
 }
 
-.composer-legend {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-5);
-  margin-bottom: var(--space-3);
-}
-
-/* Compose/edit mode (issue 010): one parameter picker per dimension. The
-   active dimension's picker reads at full strength (accent border); the rest
-   rest quietly. Each picker shows the dimension label + bound parameter. */
-.composer-pickers {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  margin-bottom: var(--space-3);
-}
-
-.composer-picker {
-  display: inline-flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  align-items: flex-start;
-  padding: var(--space-2) var(--space-3);
-  background: var(--panel);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius);
-  cursor: pointer;
-  font: inherit;
-  color: var(--ink);
-}
-
-.composer-picker--active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
-}
-
-.composer-picker__dimension {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-  font-size: var(--text-label);
-  color: var(--ink-muted);
-}
-
-.composer-picker__value {
-  font-family: var(--font-mono);
-  font-size: var(--text-mono);
-  color: var(--ink);
-}
-
-.composer-tuple-row {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-3);
-}
-
-/* Live, non-blocking duplicate-tuple indicator (invariant 2, issue 005): the
-   pending tuple already exists on another context. Informational only. */
-.composer-duplicate {
-  font-family: var(--font-mono);
-  font-size: var(--text-mono);
-  color: var(--ink-muted);
-  margin-bottom: var(--space-3);
-}
-
-.composer-legend__item {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
-}
-
-.composer-legend__dimension {
-  font-size: var(--text-label);
-  color: var(--ink-muted);
-}
-
-.composer-legend__parameter {
-  font-family: var(--font-mono);
-  font-size: var(--text-mono);
-  color: var(--ink);
-}
-
-.composer-tuple {
-  font-family: var(--font-mono);
-  font-size: var(--text-mono);
-  color: var(--ink-muted);
-  margin-bottom: var(--space-3);
-}
-
-.composer-justification {
-  display: block;
-  font-size: var(--text-body);
-  color: var(--ink);
-  cursor: text;
-}
-
-.composer-justification__input {
-  display: block;
-  width: 100%;
-  font: inherit;
-  color: var(--ink);
-  resize: none;
-  overflow: hidden;
-}
-
 /* ── 1st Tier · Foundation (issue 013) ──────────────────────────────────────
    The most document-like tier (SPEC §4.6): a single reading column on the
    graph-paper ground — purpose statement above the propositions table, with
@@ -1777,9 +1674,9 @@ body {
   flex-direction: column;
 }
 
-/* Toolbar: a hairline rule separates it from the editable region below,
-   mirroring the composer bar's own "hairline top border" pattern
-   (STYLE_GUIDE §7). Only mounted when not read-only. */
+/* Toolbar: a hairline rule separates it from the editable region below
+   (STYLE_GUIDE §7's "hairline top border" pattern). Only mounted when not
+   read-only. */
 .rich-text-editor__toolbar {
   display: flex;
   align-items: center;

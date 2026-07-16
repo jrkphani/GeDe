@@ -93,7 +93,7 @@ test('child canvas needing sub-parameters shows exactly one empty-state prompt, 
   // seeded child canvas has dimensions but no sub-parameters yet (design
   // brief's "child, no params" state).
   await page.getByRole('button', { name: 'New context' }).click()
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
   const dots = page.locator('.canvas-dot-group')
   await expect(dots).toHaveCount(2)
   // Wait for each spoke so the bind is committed before the next click (the
@@ -104,7 +104,7 @@ test('child canvas needing sub-parameters shows exactly one empty-state prompt, 
   await expect(page.locator('.canvas-spoke')).toHaveCount(2)
   await expect(page.locator('.canvas-node--draft')).toHaveCount(0)
   await page.keyboard.press('Escape') // exit compose
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toHaveCount(0)
+  await expect(page.locator('.canvas-dot-group--compose')).toHaveCount(0)
 
   await page.locator('.children-drill').first().click()
   await expect(page.locator('.breadcrumb--current')).toHaveText('α')

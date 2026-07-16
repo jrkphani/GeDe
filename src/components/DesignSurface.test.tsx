@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import fs from 'node:fs'
 import path from 'node:path'
-import { beforeAll, beforeEach, describe, expect, it } from 'vitest'
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
@@ -391,5 +391,50 @@ describe('DesignSurface — complaint regression guards (issue 082 Phase 1, test
     // dead-stopping (inline-editor.tsx `InlineEdit` pre-082: Enter just
     // called setEditing(false), leaving focus nowhere).
     expect(document.activeElement).not.toBe(document.body)
+  })
+})
+
+// Issue 085 Phase B, test-first plan item 6 — the Composer strip is a
+// redundant echo of the register row (Decision 3); it's removed outright and
+// selection re-points at scrolling/highlighting the matching register row
+// instead of surfacing a second element.
+describe('DesignSurface — Composer strip removed, selection highlights the register row (issue 085 Phase B)', () => {
+  it('never mounts the Composer strip, selected or not', async () => {
+    await createCompleteRootContextAndReturnId()
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+    const register = document.querySelector('.context-register-shell') as HTMLElement
+    await within(register).findByText('α')
+
+    expect(document.querySelector('.composer-bar')).not.toBeInTheDocument()
+
+    const node = document.querySelector('.canvas-node[data-context-id]') as HTMLElement
+    const user = userEvent.setup()
+    await user.click(node)
+    expect(document.querySelector('.composer-bar')).not.toBeInTheDocument()
+  })
+
+  it('selecting a context on the canvas highlights and scrolls to its register row (Decision 3)', async () => {
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {})
+    const alphaId = await createCompleteRootContextAndReturnId()
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
+    const register = document.querySelector('.context-register-shell') as HTMLElement
+    await within(register).findByText('α')
+
+    const node = document.querySelector(`.canvas-node[data-context-id="${alphaId}"]`) as HTMLElement
+    expect(node).toBeInTheDocument()
+    const user = userEvent.setup()
+    scrollSpy.mockClear()
+    await user.click(node)
+
+    const row = document.querySelector(`[data-row-id="${alphaId}"]`) as HTMLElement
+    await waitFor(() => expect(row).toHaveClass('grid-row--selected'))
+    // Non-color-only (STYLE_GUIDE §10): an aria signal accompanies the visual
+    // left rule, and the row is scrolled into view rather than requiring the
+    // user to hunt for it.
+    await waitFor(() => expect(row).toHaveAttribute('aria-selected', 'true'))
+    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' })
+    scrollSpy.mockRestore()
   })
 })

@@ -1,6 +1,9 @@
 import { expect, test, type Page } from '@playwright/test'
 
-// Issue 009 — canvas selection, spokes, composer bar, register sync.
+// Issue 009 — canvas selection, spokes, register sync. Issue 085 Phase B
+// retires the Composer strip: selecting on the canvas highlights + scrolls
+// to the register row instead of surfacing a second element, and the
+// register's own justification cell is the (only) editing surface now.
 // Mirrors canvas.spec.ts's setup (3 dimensions, one parameter each).
 async function setUpCanvas(page: Page) {
   await page.goto('/')
@@ -74,7 +77,7 @@ async function createAndBindAlpha(page: Page, justification: string) {
   return row
 }
 
-test('selecting a context on the canvas populates the composer; editing justification there updates the register', async ({
+test('selecting a context on the canvas highlights + scrolls to its register row; the row is the one editing surface', async ({
   page,
 }) => {
   await setUpCanvas(page)
@@ -82,20 +85,23 @@ test('selecting a context on the canvas populates the composer; editing justific
 
   await page.locator('.canvas-node[data-context-id]').first().click()
 
-  await expect(page.locator('.composer-bar')).toBeVisible()
-  await expect(page.locator('.composer-tuple')).toHaveText('{Comfort} {Users} {Engagement}')
-  await expect(page.locator('.composer-justification')).toHaveText('Original reason')
-  await expect(page.locator('.canvas-spoke')).toHaveCount(3)
+  // Issue 085 Phase B, Decision 3 — no separate Composer strip; selection
+  // re-points at the register row itself (left rule + aria, non-color-only).
+  await expect(page.locator('.composer-bar')).toHaveCount(0)
   await expect(row).toHaveClass(/grid-row--selected/)
+  await expect(row).toHaveAttribute('aria-selected', 'true')
+  await expect(page.locator('.canvas-spoke')).toHaveCount(3)
+  await expect(row.locator('td').nth(5)).toContainText('Original reason')
 
-  await page.locator('.composer-justification').click()
-  const composerTextarea = page.locator('.composer-justification__input')
-  await composerTextarea.fill('Revised via composer')
-  await composerTextarea.press('Enter')
+  // Decision 4 — the justification cell itself is the roomier editor now
+  // (expand-on-focus), reached by focusing/clicking the cell in place.
+  const justificationCell = row.locator('td').nth(5)
+  await justificationCell.click()
+  const textarea = row.locator('.grid-cell__input--multiline')
+  await textarea.fill('Revised in the register')
+  await textarea.press('Enter')
 
-  // The register's own justification cell reflects the composer's edit —
-  // same underlying context, one store field.
-  await expect(row.locator('td').nth(5)).toContainText('Revised via composer')
+  await expect(justificationCell).toContainText('Revised in the register')
 })
 
 test('clicking a register row selects it on the canvas — spokes and the accent ring appear, non-selected contexts dim', async ({

@@ -34,9 +34,9 @@ export function canManageMembers(role: WorkspaceRole): boolean {
 }
 
 // Issue 035 — the client-side role gate for read-only UI affordances
-// (EditableGrid's phantom row/editing, Composer's pickers/justification,
-// "New context"). IMPORTANT: this is a UX signal, not the enforcement
-// boundary — this app's own PGlite connection is always the table OWNER
+// (EditableGrid's phantom row/editing, "New context"). IMPORTANT: this is a
+// UX signal, not the enforcement boundary — this app's own PGlite connection
+// is always the table OWNER
 // (see migration 0008's header), so RLS is inert against it regardless of
 // what this function returns. The actual boundary is server Postgres RLS
 // (workspaceRls.test.ts/invitationRls.test.ts, exercised via `SET ROLE

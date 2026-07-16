@@ -55,19 +55,27 @@ async function seedAndCompose(page: Page) {
   await addParameterTo('Stake', 'Users')
   await addParameterTo('Process', 'Engagement')
 
-  // Compose α: bind all three dots, justify (mirrors canvas-compose.spec.ts —
-  // gate on the draft node + composer being live before touching the dots).
+  // Compose α: bind all three dots, justify in the register row (mirrors
+  // canvas-compose.spec.ts — gate on the draft node + the canvas's own
+  // compose-mode marker being live before touching the dots; issue 085 Phase
+  // B retired the Composer strip, so the draft's row is where binding +
+  // justification happen now).
   await page.getByRole('button', { name: 'New context' }).click()
   await expect(page.locator('.canvas-node--draft')).toHaveCount(1)
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
   const dots = page.locator('.canvas-dot-group')
   await expect(dots).toHaveCount(3)
   await dots.nth(0).click()
   await dots.nth(1).click()
   await dots.nth(2).click()
-  await expect(page.locator('.composer-tuple')).toHaveText('{Comfort} {Users} {Engagement}')
-  await page.locator('.composer-justification').click()
-  const justify = page.locator('.composer-justification__input')
+
+  const row = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
+  await expect(row.locator('td').nth(2)).toContainText('Comfort')
+  await expect(row.locator('td').nth(3)).toContainText('Users')
+  await expect(row.locator('td').nth(4)).toContainText('Engagement')
+  const justificationCell = row.locator('td').nth(5)
+  await justificationCell.click()
+  const justify = row.locator('.grid-cell__input--multiline')
   await justify.fill('First real context')
   await justify.press('Enter')
 }

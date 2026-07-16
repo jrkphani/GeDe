@@ -3,12 +3,13 @@ import { cn } from '@/lib/utils'
 
 /*
  * Multiline in-place editor (issue 009) — the auto-grow textarea grammar,
- * extracted for reuse outside `EditableGrid` (the composer's justification
- * field isn't a grid cell, so it's bound by the "compose the shared
- * primitives" lint rule `EditableGrid.tsx` is explicitly exempted from).
- * Modeled on `InlineEdit` (ui/inline-editor.tsx) but deliberately NOT
- * reusing it: unlike a name/label, justification is nullable and clearable,
- * so Enter must commit an emptied value too, not refuse it.
+ * extracted for reuse outside `EditableGrid` for standalone prose fields that
+ * aren't a grid cell (e.g. Foundation's purpose statement, FoundationSurface.tsx)
+ * — bound by the "compose the shared primitives" lint rule `EditableGrid.tsx`
+ * is explicitly exempted from. Modeled on `InlineEdit` (ui/inline-editor.tsx)
+ * but deliberately NOT reusing it: unlike a name/label, this content is
+ * nullable and clearable, so Enter must commit an emptied value too, not
+ * refuse it.
  */
 export interface MultilineEditProps {
   /** Current committed value (also the initial draft when editing starts). */

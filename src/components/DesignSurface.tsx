@@ -5,7 +5,6 @@ import { composeReducer, firstUnbound } from '../domain/composeMode'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
 import { coverageStat } from '../domain/coverage'
-import { findDuplicateContextIds } from '../domain/duplicates'
 import type { ContextRow } from '../db/mutations'
 import { navigate } from '../shell/router'
 import { canWrite } from '../domain/workspaceRole'
@@ -21,7 +20,6 @@ import { Button } from './ui/button'
 import { Breadcrumbs } from './Breadcrumbs'
 import { Canvas } from './Canvas'
 import { ChildCanvasBanners } from './ChildCanvasBanners'
-import { Composer } from './Composer'
 import { ContextRegister } from './ContextRegister'
 import { CoverageMatrix } from './CoverageMatrix'
 import { DimensionManagerPanel } from './DimensionManager'
@@ -40,10 +38,11 @@ export function DesignSurface({
   // context whose child canvas we're inside (issue 011).
   const contextId = contextPath.length > 0 ? (contextPath[contextPath.length - 1] as string) : null
   // Issue 035 — a viewer's read surface renders unchanged, minus every write
-  // affordance: EditableGrid's phantom row/in-place edit, Composer's pickers/
-  // justification, and "New context" (compose is never entered at all, so
-  // Canvas's own compose-mode dot interactivity is moot — it's only reachable
-  // via `composeContextId`, which stays null for a read-only caller below).
+  // affordance: EditableGrid's phantom row/in-place edit (including the
+  // register's own justification cell, issue 085 Phase B), and "New context"
+  // (compose is never entered at all, so Canvas's own compose-mode dot
+  // interactivity is moot — it's only reachable via `composeContextId`, which
+  // stays null for a read-only caller below).
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
   const dimensions = useDimensionsStore((s) => s.dimensions)
@@ -359,20 +358,15 @@ export function DesignSurface({
     [contexts, dimensionIds, bindingsByContext],
   )
 
-  const selectedContext = selectedContextId ? (contexts.find((c) => c.id === selectedContextId) ?? null) : null
-  const selectedBindings = selectedContextId ? (bindingsByContext[selectedContextId] ?? {}) : {}
   const composing = composeContextId !== null && composeContextId === selectedContextId
   // Derived, race-free: the next dimension to bind is simply the first unbound
   // one in sort order given the draft's current (store-authoritative) bindings.
+  // Still consumed by Canvas (its own compose-mode dot interactivity/highlight,
+  // issue 010) even after the Composer strip's removal (issue 085 Phase B) —
+  // the register hosts the guided binding now, Canvas keeps its own pointer.
   const activeDimensionId = composeContextId
     ? firstUnbound(orderedDimensionIds, bindingsByContext[composeContextId] ?? {})
     : null
-  const duplicateSiblingSymbols = useMemo(() => {
-    if (!selectedContextId) return []
-    const dupes = findDuplicateContextIds(dimensionIds, bindingsByContext)[selectedContextId] ?? []
-    const symbolById = new Map(contexts.map((c) => [c.id, c.symbol]))
-    return dupes.map((sid) => symbolById.get(sid) ?? '?')
-  }, [selectedContextId, dimensionIds, bindingsByContext, contexts])
 
   // Drill into a context's child canvas (SPEC §4.2, issue 011): push a deeper
   // route. Browser back/forward mirror it since every push is a history entry.
@@ -555,22 +549,6 @@ export function DesignSurface({
                 </section>
               </div>
             </div>
-            <Composer
-              dimensions={dimensions}
-              selected={selectedContext}
-              bindings={selectedBindings}
-              paramNameById={paramNameById}
-              composing={composing}
-              activeDimensionId={activeDimensionId}
-              parametersByDimension={paramsByDimension}
-              onBindParameter={(d, p) => void handleBindParameter(d, p)}
-              onUnbindParameter={(d) => void handleUnbindParameter(d)}
-              duplicateSiblingSymbols={duplicateSiblingSymbols}
-              readOnly={readOnly}
-              onJustificationCommit={(text) => {
-                if (selectedContextId) void useContextsStore.getState().setJustification(selectedContextId, text)
-              }}
-            />
           </>
         ) : (
           <CoverageMatrix

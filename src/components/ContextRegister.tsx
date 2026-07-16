@@ -101,10 +101,14 @@ export function ContextRegister({
     for (const d of dimensions) void loadParams(d.id)
   }, [dimensions, loadParams])
 
-  // Issue 009 sync rule — selecting in either projection scrolls the other
-  // to reveal. Canvas-driven selection must not steal keyboard focus from
-  // the canvas, so this only scrolls (no .focus()); register-driven
-  // selection already has focus here, so the call is a harmless no-op.
+  // Issue 009 sync rule, re-pointed by issue 085 Phase B (Decision 3 — the
+  // Composer strip is retired, selection now scrolls+highlights the register
+  // row directly instead of surfacing a second element): selecting in either
+  // projection scrolls the other to reveal. Canvas-driven selection must not
+  // steal keyboard focus from the canvas, so this only scrolls (no .focus());
+  // register-driven selection already has focus here, so the call is a
+  // harmless no-op. `grid-row--selected` (rowClassName below) draws the left
+  // rule; `isRowSelected` below pairs it with a non-color-only aria signal.
   useEffect(() => {
     if (!selectedContextId) return
     const escaped = typeof CSS !== 'undefined' ? CSS.escape(selectedContextId) : selectedContextId
@@ -262,6 +266,9 @@ export function ContextRegister({
         ].filter((c): c is string => c !== null)
         return classes.length > 0 ? classes.join(' ') : undefined
       }}
+      // Issue 085 Phase B, Decision 3 — the left rule (`grid-row--selected`
+      // above) is joined by this non-color-only aria signal.
+      isRowSelected={(ctx) => ctx.id === selectedContextId}
       onRowClick={(ctx) => select(ctx.id)}
       phantom={{
         columnId: 'justification',

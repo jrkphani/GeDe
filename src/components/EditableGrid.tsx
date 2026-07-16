@@ -85,6 +85,12 @@ export interface EditableGridProps<TRow> {
   // cell's own click does (e.g. entering edit mode); callers use this for
   // "select this row" gestures without EditableGrid knowing what selection is.
   onRowClick?: (row: TRow) => void
+  // Issue 085 Phase B, Decision 3 — selection state must be non-color-only
+  // (STYLE_GUIDE §10): `rowClassName`'s selected class already draws the left
+  // rule; this feeds the matching `aria-selected` so it isn't a visual-only
+  // signal. EditableGrid stays agnostic of what "selected" means — the caller
+  // supplies the predicate, same shape as `rowClassName`.
+  isRowSelected?: (row: TRow) => boolean
   // Issue 035 — viewer-role affordance: every cell renders its display state
   // only (no click-to-edit, no keyboard editing grammar) and the phantom row
   // never renders, regardless of whether `phantom` is passed. Defaults to
@@ -660,6 +666,7 @@ export function EditableGrid<TRow>({
   rowClassName,
   getRowLabel,
   onRowClick,
+  isRowSelected,
   readOnly = false,
   onEditingChange,
 }: EditableGridProps<TRow>) {
@@ -799,6 +806,7 @@ export function EditableGrid<TRow>({
                 key={row.id}
                 className={classes || undefined}
                 data-row-id={getRowId(row.original)}
+                aria-selected={isRowSelected?.(row.original) ?? undefined}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
               >
                 {row.getVisibleCells().map((cell, i) => (

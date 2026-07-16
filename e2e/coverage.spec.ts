@@ -67,20 +67,26 @@ test('coverage matrix: a hollow cell composes pre-filled, and justifying fills i
   await expect(page.locator('.coverage-stat--lead')).toHaveText('0 / 8 documented')
 
   // The whole page is hollow — pick the Comfort × Users cell on the default
-  // Process = Engagement page and open the composer from the gap.
+  // Process = Engagement page and open compose, pre-filled, from the gap.
   const gap = page.getByRole('gridcell', { name: 'Unexplored — Comfort · Users · Engagement' })
   await expect(gap).toHaveAttribute('data-documented', 'false')
   await gap.click()
 
-  // We jump to the canvas in compose mode, pre-filled with that tuple.
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
-  await expect(page.locator('.composer-tuple')).toHaveText('{Comfort} {Users} {Engagement}')
+  // We jump to the canvas in compose mode, pre-filled with that tuple; the
+  // draft's own register row (issue 085 Phase B — no separate Composer
+  // strip) shows it selected and already bound.
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
+  const row = page.locator('.editable-grid tbody tr.grid-row--selected')
+  await expect(row.locator('td').nth(2)).toContainText('Comfort')
+  await expect(row.locator('td').nth(3)).toContainText('Users')
+  await expect(row.locator('td').nth(4)).toContainText('Engagement')
 
   // Justify — required to count as documented (SPEC invariant 2).
-  await page.locator('.composer-justification').click()
-  const composerTextarea = page.locator('.composer-justification__input')
-  await composerTextarea.fill('First documented tuple')
-  await composerTextarea.press('Enter')
+  const justificationCell = row.locator('td').nth(5)
+  await justificationCell.click()
+  const textarea = row.locator('.grid-cell__input--multiline')
+  await textarea.fill('First documented tuple')
+  await textarea.press('Enter')
 
   // Back to coverage: the cell now carries the symbol and the stat incremented.
   await page.getByRole('button', { name: 'Coverage' }).click()

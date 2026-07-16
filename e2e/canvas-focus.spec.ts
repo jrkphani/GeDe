@@ -4,8 +4,10 @@ import { expect, test, type Page } from '@playwright/test'
 // amended). Mirrors canvas.spec.ts / recursion.spec.ts's setup (three
 // dimensions, one parameter each to start) and the paid-for compose gotcha:
 // wait for each .canvas-spoke between dot clicks and for
-// .composer-bar[data-composing="true"] to clear before treating a draft as
-// finished (HANDOFF Gotchas).
+// .canvas-dot-group--compose (Canvas's own compose-mode marker, issue 010) to
+// clear before treating a draft as finished (HANDOFF Gotchas). Issue 085
+// Phase B retired the Composer strip and its `.composer-bar[data-composing]`
+// gate — the canvas's own compose marker is the equivalent signal now.
 async function setUpCanvas(page: Page) {
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
@@ -61,7 +63,7 @@ async function setUpCanvas(page: Page) {
 async function composeContext(page: Page) {
   await page.getByRole('button', { name: 'New context' }).click()
   await expect(page.locator('.canvas-node--draft')).toHaveCount(1)
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
 
   const dots = page.locator('.canvas-dot-group')
   await expect(dots).toHaveCount(3)
@@ -74,7 +76,7 @@ async function composeContext(page: Page) {
   await expect(page.locator('.canvas-node--draft')).toHaveCount(0)
 
   await page.keyboard.press('Escape') // exit compose, keep the draft
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toHaveCount(0)
+  await expect(page.locator('.canvas-dot-group--compose')).toHaveCount(0)
 }
 
 test('hovering a parameter dot emphasizes the contexts bound to it and mutes an unrelated arc', async ({ page }) => {
@@ -84,7 +86,7 @@ test('hovering a parameter dot emphasizes the contexts bound to it and mutes an 
   // A second context sharing the same Comfort binding as α, on a different
   // Users/Engagement pair — the "who else uses Comfort" read.
   await page.getByRole('button', { name: 'New context' }).click()
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
   const dots = page.locator('.canvas-dot-group')
   await expect(dots).toHaveCount(3)
   // Comfort has only one parameter seeded so far, so dot 0 (Value's arc) is
@@ -97,7 +99,7 @@ test('hovering a parameter dot emphasizes the contexts bound to it and mutes an 
   await dots.nth(2).click()
   await expect(page.locator('.canvas-spoke')).toHaveCount(3)
   await page.keyboard.press('Escape')
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toHaveCount(0)
+  await expect(page.locator('.canvas-dot-group--compose')).toHaveCount(0)
 
   // Clear selection (click-away) so we're testing hover-only emphasis, not a
   // locked selection's own view.
@@ -129,9 +131,9 @@ test('hovering a context node mutes the unrelated context and both arcs; leaving
   // β — draft, unbound (nothing composed for it), so it's a distinct node
   // with no shared bindings to α.
   await page.getByRole('button', { name: 'New context' }).click()
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
   await page.keyboard.press('Escape')
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toHaveCount(0)
+  await expect(page.locator('.canvas-dot-group--compose')).toHaveCount(0)
 
   await page.locator('.canvas-svg').click({ position: { x: 10, y: 10 } }) // clear selection
   await expect(page.locator('.canvas--muted')).toHaveCount(0)
@@ -163,8 +165,12 @@ test('existing canvas/selection/compose behaviour is unaffected: selecting still
   await setUpCanvas(page)
   await composeContext(page)
 
-  await page.locator('.canvas-node[data-context-id]').first().click()
+  const node = page.locator('.canvas-node[data-context-id]').first()
+  const contextId = await node.getAttribute('data-context-id')
+  await node.click()
   await expect(page.locator('.canvas-node[aria-pressed="true"]')).toHaveCount(1)
   await expect(page.locator('.canvas-spoke')).toHaveCount(3)
-  await expect(page.locator('.composer-bar')).toBeVisible()
+  // Issue 085 Phase B — no separate Composer strip; selecting on the canvas
+  // highlights the matching register row instead.
+  await expect(page.locator(`[data-row-id="${contextId}"]`)).toHaveClass(/grid-row--selected/)
 })

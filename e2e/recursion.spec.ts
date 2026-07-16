@@ -54,7 +54,7 @@ async function setUpBoundAlpha(page: Page) {
   // binding is deterministic), then exit compose keeping the complete draft.
   await page.getByRole('button', { name: 'New context' }).click()
   await expect(page.locator('.canvas-node--draft')).toHaveCount(1) // compose ready
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toBeVisible()
+  await expect(page.locator('.canvas-dot-group--compose').first()).toBeVisible()
   const dots = page.locator('.canvas-dot-group')
   await expect(dots).toHaveCount(2)
   await dots.nth(0).click()
@@ -63,7 +63,7 @@ async function setUpBoundAlpha(page: Page) {
   await expect(page.locator('.canvas-spoke')).toHaveCount(2)
   await expect(page.locator('.canvas-node--draft')).toHaveCount(0) // α is complete
   await page.keyboard.press('Escape') // exit compose
-  await expect(page.locator('.composer-bar[data-composing="true"]')).toHaveCount(0)
+  await expect(page.locator('.canvas-dot-group--compose')).toHaveCount(0)
 }
 
 test('drill into α, refine it, create children, and breadcrumb back to an unchanged root', async ({
