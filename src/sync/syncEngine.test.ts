@@ -1,4 +1,5 @@
 import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
+import { eq } from 'drizzle-orm'
 import { openDatabase } from '../db/client'
 import { bindings, dimensions, parameters, projects, workspaces } from '../db/schema'
 import { applyInboundDeltas } from '../db/sync'
@@ -509,6 +510,115 @@ describe('startSync — no deltas dropped when a batch buffers mid-drain (issue 
     await settle()
 
     expect(await db.select().from(bindings)).toHaveLength(1)
+
+    handle.stop()
+  })
+})
+
+// Issue 088 Finding A — the surfacing drain loop must terminate on ACTUAL drain
+// PROGRESS, not on raw buffer-length equality. The failure it guards: while a
+// full-success drain (inside maybeSurfaceOrphaned's loop, after every table is
+// up-to-date) removes K rows, exactly K new FK-failing-BUT-RESOLVABLE rows are
+// concatenated from a concurrent stream's `.catch` during that drain's await —
+// the buffer length is unchanged, so a length-based `while` exits and the K
+// newly-arrived (resolvable) rows are surfaced-as-orphaned and dropped
+// permanently. This is the exact false-orphan-drop class 088 exists to kill.
+// The test stages that equal-count interleave deterministically with the same
+// gated-apply harness the 075A drain-race test uses: it gates a surfacing-loop
+// drain of one buffered row (d1) open, then — during the hold — buffers one new
+// row (pa9) whose parent (d9) it makes present via a direct insert (standing in
+// for a parent committed by a concurrent path during the await). Net buffer
+// length is unchanged across the drain (d1 out, pa9 in). With a length-based
+// exit pa9 would be surfaced-orphaned; with the progress-based terminator the
+// loop keeps going and pa9 converges.
+describe('startSync — surfacing drain loop terminates on progress, not length (issue 088 Finding A)', () => {
+  const WS = 'ws1'
+  const T0 = '2026-07-07T00:00:00.000Z'
+  const T1 = '2026-07-07T00:00:01.000Z'
+
+  let realApply: (db: Database, deltas: readonly RowDelta[]) => Promise<void>
+  beforeAll(async () => {
+    const actual = await vi.importActual<typeof import('../db/sync')>('../db/sync')
+    realApply = actual.applyInboundDeltas
+  })
+  afterEach(() => {
+    vi.mocked(applyInboundDeltas).mockImplementation((db, deltas) => realApply(db, deltas))
+  })
+
+  function settle(times = 8): Promise<void> {
+    let p = Promise.resolve()
+    for (let i = 0; i < times; i++) p = p.then(() => new Promise((resolve) => setTimeout(resolve, 0)))
+    return p
+  }
+  function dimChange(id: string, updatedAt: string): ElectricMessage {
+    return change(id, updatedAt, { project_id: 'p1', workspace_id: WS, context_id: null, source_param_id: null, name: 'Value', color: '#111', sort: 0 })
+  }
+  function paramChange(id: string, updatedAt: string, dimensionId: string): ElectricMessage {
+    return change(id, updatedAt, { dimension_id: dimensionId, workspace_id: WS, parent_param_id: null, source_entry_id: null, name: 'High', sort: 0 })
+  }
+
+  it('an equal-count mid-drain concat of a RESOLVABLE row is not surfaced-orphaned — the loop keeps draining until a drain applies nothing', async () => {
+    const db = await freshDb()
+    const { factory, push } = fakeStreamFactory()
+    const onError = vi.fn()
+    const handle = startSync(db, { streamFactory: factory, onError })
+
+    // Gate the surfacing-loop drain of d1 open (after it has committed d1) so a
+    // second buffered row can be staged during the hold.
+    let releaseDrain!: () => void
+    const drainGate = new Promise<void>((resolve) => {
+      releaseDrain = resolve
+    })
+    let drainReached!: () => void
+    const drainReachedP = new Promise<void>((resolve) => {
+      drainReached = resolve
+    })
+    vi.mocked(applyInboundDeltas).mockImplementation(async (db2, deltas) => {
+      await realApply(db2, deltas) // the initial d1 apply rejects here (p1 absent); the drain succeeds (p1 present)
+      if (deltas.length === 1 && deltas[0]?.id === 'd1') {
+        drainReached()
+        await drainGate
+      }
+    })
+
+    // d1 races ahead of its project parent -> FK-fails and buffers.
+    push('dimensions', [dimChange('d1', T0)])
+    await settle()
+    expect(await db.select().from(dimensions)).toHaveLength(0)
+    onError.mockClear()
+
+    // p1 becomes present WITHOUT a sync apply (direct insert) — so no normal
+    // drain fires; d1 stays buffered but is now RESOLVABLE, and the ONLY thing
+    // that will drain it is maybeSurfaceOrphaned's own loop below.
+    await db.insert(projects).values({ id: 'p1', workspaceId: WS, name: 'Tavalo' })
+
+    // Every shape reports up-to-date -> the last one triggers the surfacing
+    // loop, whose drain of [d1] commits d1 then holds (gated).
+    for (const table of SYNCED_TABLES) push(table, [{ headers: { control: 'up-to-date' } }])
+    await drainReachedP
+
+    // DURING the hold: pa9 (-> d9) streams and FK-fails (d9 absent) -> concats
+    // onto the buffer (this initial FK failure legitimately calls onError —
+    // it's the normal "buffered, will retry" signal, NOT an orphan verdict).
+    // Then d9 is made present (direct insert = a parent committed by a
+    // concurrent path). Buffer goes [d1] -> (drain removes d1, pa9 added) ->
+    // [pa9]: SAME length across the drain — the equal-count trap.
+    push('parameters', [paramChange('pa9', T1, 'd9')])
+    await settle()
+    await db.insert(dimensions).values({ id: 'd9', projectId: 'p1', workspaceId: WS, name: 'D9', color: '#222', sort: 0 })
+
+    releaseDrain()
+    await settle()
+
+    // GREEN (progress-based terminator): the loop did NOT stop on the unchanged
+    // length — it kept draining and pa9 converged with its REAL dimension_id.
+    // A length-based exit would have surfaced pa9 as a false orphan and dropped
+    // it permanently (RED): pa9 absent from PGlite + an "orphaned" error.
+    const pa = await db.select().from(parameters).where(eq(parameters.id, 'pa9'))
+    expect(pa).toHaveLength(1)
+    expect(pa[0]?.dimensionId).toBe('d9')
+    const orphanErrors = onError.mock.calls.filter(([, err]) => err instanceof Error && err.message.includes('orphaned'))
+    expect(orphanErrors).toHaveLength(0)
 
     handle.stop()
   })

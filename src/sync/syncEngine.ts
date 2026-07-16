@@ -197,27 +197,100 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
   // no silent permanent drop either.
   let retryBuffer: RowDelta[] = []
   const upToDateTables = new Set<TableName>()
+  // Issue 088 — the count of applyInboundDeltas calls (both a table's own
+  // inbound batch and a retry drain) currently in flight. An `up-to-date`
+  // control message for a table is processed SYNCHRONOUSLY, ahead of that same
+  // callback's own apply (which is kicked off after the control loop) — so the
+  // instant every shape reports up-to-date can arrive while a parent-carrying
+  // apply is still mid-transaction. Surfacing an orphan then is a false
+  // positive: the "missing" parent is about to commit. A buffered forward-FK
+  // row is therefore only ever declared orphaned once NO apply is in flight
+  // that could still land its parent (see maybeSurfaceOrphaned).
+  let inFlightApplies = 0
+  // Re-entrancy guard: maybeSurfaceOrphaned itself drains (below), whose catch
+  // calls maybeSurfaceOrphaned again — the guard collapses that recursion so a
+  // single surfacing pass owns the decision.
+  let surfacing = false
 
-  function maybeSurfaceOrphaned(): void {
-    if (retryBuffer.length === 0) return
-    if (upToDateTables.size < SYNCED_TABLES.length) return
-    const orphaned = retryBuffer
-    retryBuffer = []
-    for (const [table, deltas] of groupByTable(orphaned)) {
-      options.onError?.(
-        table,
-        new Error(
-          `${deltas.length} buffered "${table}" row(s) never resolved their FK dependency after every synced table reported up-to-date — treating as orphaned, not a transient race`,
-        ),
-      )
+  // The single seam through which every apply flows, so `inFlightApplies`
+  // brackets both the per-table inbound apply and the retry-drain apply.
+  async function applyBatch(deltas: readonly RowDelta[]): Promise<void> {
+    inFlightApplies++
+    try {
+      await applyInboundDeltas(db, deltas)
+    } finally {
+      inFlightApplies--
     }
   }
 
-  async function drainRetryBuffer(): Promise<void> {
+  // Issue 088 — a genuinely-buffered forward-FK row (parameters.dimension_id or
+  // bindings.{context,dimension,parameter}_id — all NOT NULL, so NOT
+  // deferrable: forcing them null then failing to restore would leave a
+  // permanent dangling FK, a worse bug) is only a TRUE orphan once its parent
+  // will PROVABLY never arrive. That requires (a) every shape up-to-date — no
+  // more rows are coming over the wire — AND (b) no apply still in flight that
+  // could commit a missing parent — AND (c) a fresh drain that makes NO
+  // progress (its parent is neither already in PGlite nor itself still
+  // buffered, so byRetryApplyOrder can't converge it). Until all three hold, a
+  // non-empty buffer is just a race mid-flight and must keep retrying — never
+  // be cleared/surfaced, which would drop the rows permanently (Electric never
+  // re-delivers an acked batch). This still catches the genuine permanent
+  // orphan (075/syncEngine.test.ts): a parent that never streams fails the
+  // drain, the buffer doesn't shrink, and it surfaces after that one
+  // no-progress drain — exactly once, no loop.
+  async function maybeSurfaceOrphaned(): Promise<void> {
+    if (surfacing) return
     if (retryBuffer.length === 0) return
+    if (upToDateTables.size < SYNCED_TABLES.length) return
+    if (inFlightApplies > 0) return
+    surfacing = true
+    try {
+      // Drain while each drain makes REAL progress. Buffered rows can still
+      // satisfy each other (a buffered parent applied before its buffered child
+      // by byRetryApplyOrder, in one sorted batch), so keep going while a drain
+      // applies something. Terminate on a drain that applied NOTHING, not on
+      // raw length equality (issue 088 Finding A): a full-success drain that
+      // removes K rows while exactly K new FK-failing-but-resolvable rows are
+      // concatenated from a concurrent stream's `.catch` during its await
+      // leaves the length unchanged yet has more to do — a length-based exit
+      // would drop those K rows as false orphans. drainRetryBuffer reports how
+      // many rows it applied; only a genuine no-progress drain (0 applied)
+      // stops the loop, and a coincidental equal count can't defeat it.
+      while (retryBuffer.length > 0 && inFlightApplies === 0) {
+        const appliedCount = await drainRetryBuffer()
+        if (appliedCount === 0) break
+      }
+      // A parent-carrying apply that started while we were draining still might
+      // land the last missing FK — don't surface until it settles (it will
+      // re-trigger a drain on success). And an empty buffer means we converged.
+      if (retryBuffer.length === 0 || inFlightApplies > 0) return
+      const orphaned = retryBuffer
+      retryBuffer = []
+      for (const [table, deltas] of groupByTable(orphaned)) {
+        options.onError?.(
+          table,
+          new Error(
+            `${deltas.length} buffered "${table}" row(s) never resolved their FK dependency after every synced table reported up-to-date — treating as orphaned, not a transient race`,
+          ),
+        )
+      }
+    } finally {
+      surfacing = false
+    }
+  }
+
+  // Returns the number of rows this drain applied (removed from the buffer) —
+  // the progress signal maybeSurfaceOrphaned's loop terminates on (issue 088
+  // Finding A). A successful apply is atomic, so it applies the WHOLE sorted
+  // batch (>= 1); a failed apply applies nothing (0). Never rejects: an apply
+  // failure stays buffered and any orphan surfacing is swallowed, so the
+  // caller's fire-and-forget `.then(drain)` chain can't produce an unhandled
+  // rejection (Finding B).
+  async function drainRetryBuffer(): Promise<number> {
+    if (retryBuffer.length === 0) return 0
     const batch = byRetryApplyOrder(retryBuffer)
     try {
-      await applyInboundDeltas(db, batch)
+      await applyBatch(batch)
       // Remove ONLY the deltas we just snapshotted+applied — never clear the
       // buffer wholesale. Multiple shape streams apply concurrently and this
       // `await` is a real DB transaction, so ANOTHER table's failed batch can
@@ -231,13 +304,17 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
       const applied = new Set(batch)
       retryBuffer = retryBuffer.filter((delta) => !applied.has(delta))
       for (const [table, deltas] of groupByTable(batch)) options.onApplied?.(table, deltas)
+      return batch.length
     } catch {
       // Still missing a parent (or genuinely orphaned) — stays buffered for
       // the next successful apply to retry. If every table already reports
       // up-to-date (this failed drain was itself the "next successful
       // apply" that triggered the retry), surface it now rather than
       // waiting for an up-to-date control message that may never come.
-      maybeSurfaceOrphaned()
+      // `.catch(() => {/* swallow: fire-and-forget, never an unhandled rejection */})` — a consumer's onError throwing inside the surfacing
+      // pass must not turn into an unhandled rejection here (Finding B).
+      await maybeSurfaceOrphaned().catch(() => {/* swallow: fire-and-forget, never an unhandled rejection */})
+      return 0
     }
   }
 
@@ -250,7 +327,10 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
           options.onControl?.(table, control)
           if (control === 'up-to-date') {
             upToDateTables.add(table)
-            maybeSurfaceOrphaned()
+            // Fire-and-forget: swallow any rejection (e.g. a consumer's onError
+            // throwing during a surfacing pass) so it can't escape as an
+            // unhandled promise rejection (Finding B).
+            void maybeSurfaceOrphaned().catch(() => {/* swallow: fire-and-forget, never an unhandled rejection */})
           }
         }
       }
@@ -262,7 +342,7 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
         return
       }
       if (deltas.length === 0) return
-      applyInboundDeltas(db, deltas)
+      applyBatch(deltas)
         .then(() => {
           options.onApplied?.(table, deltas)
           // A successful apply of ANY table may have just landed the parent
@@ -273,6 +353,10 @@ export function startSync(db: Database, options: SyncOptions = {}): SyncHandle {
           retryBuffer = retryBuffer.concat(deltas)
           options.onError?.(table, error)
         })
+        // Terminal guard: if the onError handler above (a consumer callback)
+        // itself throws, that must not escape this fire-and-forget chain as an
+        // unhandled promise rejection (Finding B).
+        .catch(() => {/* swallow: fire-and-forget, never an unhandled rejection */})
     },
     // Issue 086 — Electric surfaces TRANSPORT/AUTH errors (boot-race 401,
     // aborted long-poll) through subscribe's own error channel, separate from

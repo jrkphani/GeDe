@@ -99,6 +99,12 @@ function contextMsg() {
 function bindingMsg() {
   return change('b1', T0, { context_id: 'c1', dimension_id: 'd1', parameter_id: 'pa1', workspace_id: WS, tuple_hash: 'h1' })
 }
+// An Electric control message announcing a shape has fully caught up. Issue 088
+// scenarios need these to drive `maybeSurfaceOrphaned`'s all-`up-to-date`
+// trigger, which the earlier scenarios (data-only pushes) never exercise.
+function upToDate(): ElectricMessage {
+  return { headers: { control: 'up-to-date' } }
+}
 
 // Flushes one microtask/macrotask tick — the minimum needed for a single
 // applyInboundDeltas().then(...) chain to resolve, mirroring syncEngine.
@@ -383,6 +389,95 @@ describe('Materialization repro — post-sign-in read-path race (real PGlite, re
 
     expect(await db.select().from(schema.projects)).toHaveLength(1)
     expect(onApplied).toHaveBeenCalledWith('projects', expect.arrayContaining([expect.objectContaining({ id: P })]))
+
+    handle.stop()
+  })
+
+  // ── Issue 088 — the residual genuine "Sync error" on a fresh load. The bug:
+  // `parameters.dimension_id` and every `bindings` forward FK are NOT NULL
+  // (schema.ts) and therefore NOT in DEFERRED_FK_COLUMN — deferring them would
+  // leave a permanent NULL FK, which is why the fix is NOT to defer but to
+  // harden the orphan decision. Those child rows rely entirely on the retry
+  // drain to converge once their sibling parent lands. The failure is a pure
+  // TIMING race: `maybeSurfaceOrphaned` fires SYNCHRONOUSLY from the last
+  // table's `up-to-date` control handler — BEFORE that same callback's own
+  // parent-carrying apply has committed — so it wrongly declares the buffered
+  // child rows orphaned, clears them from the buffer (permanently — Electric
+  // never re-delivers an acked batch), and surfaces the banner with no further
+  // retry. This test stages that exact interleave for BOTH the
+  // `parameters.dimension_id` and the `bindings.*` cases.
+  it('SCENARIO E (issue 088): a parameters/bindings row buffered when the LAST table reaches up-to-date must NOT be declared orphaned while its parent apply is still pending — it converges with its REAL forward FKs', async () => {
+    const db = await freshSignInDb()
+    const { factory, push } = fakeStreamFactory()
+    const onError = vi.fn()
+    const onApplied = vi.fn()
+    const handle = startSync(db, { streamFactory: factory, onError, onApplied })
+
+    // projects + workspace + context c1 land first, isolating the
+    // parameters->dimensions and bindings->{contexts,dimensions,parameters}
+    // SIBLING-table forward-FK race (issue 088) from the projects/workspace
+    // parent race (Scenario A/075A).
+    push('projects', [projectsMsg()])
+    push('contexts', [contextMsg()])
+    await settle()
+    expect(await db.select().from(schema.contexts)).toHaveLength(1)
+
+    // parameters (pa1 -> d1) and bindings (b1 -> c1/d1/pa1) stream BEFORE the
+    // dimensions shape delivers d1: both FK-fail and buffer.
+    push('parameters', [parameterMsg()])
+    push('bindings', [bindingMsg()])
+    await settle()
+    expect(onError).toHaveBeenCalledWith('parameters', expect.any(Error))
+    expect(onError).toHaveBeenCalledWith('bindings', expect.any(Error))
+    expect(await db.select().from(schema.parameters)).toHaveLength(0)
+    expect(await db.select().from(schema.bindings)).toHaveLength(0)
+    onError.mockClear()
+
+    // Every OTHER shape reports up-to-date first, so `dimensions` (whose d1 the
+    // buffered rows wait on) is the LAST table to reach up-to-date. No orphan
+    // may surface yet — the buffer is a live race, not a dead end.
+    const others: TableName[] = [
+      'projects',
+      'tier1_purpose',
+      'tier1_props',
+      'tier2_tables',
+      'tier2_entries',
+      'parameters',
+      'contexts',
+      'bindings',
+      'invitations',
+      'workspace_members',
+    ]
+    for (const table of others) push(table, [upToDate()])
+    await settle()
+    expect(onError).not.toHaveBeenCalled()
+
+    // dimensions delivers d1 AND announces up-to-date in the SAME batch — the
+    // production race: the 11th (last) up-to-date fires synchronously, BEFORE
+    // d1's own apply (kicked off later in the same callback) has committed. The
+    // pre-088 maybeSurfaceOrphaned declared pa1/b1 orphaned right here and
+    // cleared them from the buffer -> permanently lost, banner surfaced.
+    push('dimensions', [dimensionRootMsg(), upToDate()])
+    await settle()
+
+    // GREEN (issue 088 fix): no orphan surfaced — the buffered rows converged
+    // once d1 landed, because the orphan decision now waits for the pending
+    // parent apply + a no-progress drain instead of firing on the raw
+    // all-up-to-date edge.
+    expect(onError).not.toHaveBeenCalled()
+    expect(await db.select().from(schema.dimensions)).toHaveLength(1)
+    expect(await db.select().from(schema.parameters)).toHaveLength(1)
+    expect(await db.select().from(schema.bindings)).toHaveLength(1)
+
+    // The child rows carry their REAL forward FK values (never nulled/dropped)
+    // — the whole point: a NULL parameters.dimension_id / bindings.* would be a
+    // materialization bug, not a fix.
+    const pa = await db.select().from(schema.parameters).where(eq(schema.parameters.id, 'pa1'))
+    expect(pa[0]?.dimensionId).toBe('d1')
+    const b = await db.select().from(schema.bindings).where(eq(schema.bindings.id, 'b1'))
+    expect(b[0]?.contextId).toBe('c1')
+    expect(b[0]?.dimensionId).toBe('d1')
+    expect(b[0]?.parameterId).toBe('pa1')
 
     handle.stop()
   })
