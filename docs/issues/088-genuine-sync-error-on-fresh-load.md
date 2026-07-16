@@ -1,6 +1,6 @@
 # 088: a genuine "Sync error" still surfaces for ~5s on fresh-project load
 
-- **Status**: OPEN
+- **Status**: FIX COMMITTED (`69562d6`, local on `main`) — pending deploy + live-verify. Root cause + fix below; the drain-first in-flight-aware orphan surfacing landed, adversarially reviewed, verify:fast green. Archive to `done/` once the fresh-load "Sync error" is confirmed gone on the live build after the next deploy.
 - **Milestone**: M8 (sync read-path / shape delivery). Likely infra/timing, not pure client.
 - **Related**: **086** (which correctly *ignores* the boot-race and *debounces* — this is the residual genuine error 086 honestly surfaces, NOT a 086 regression) · the LIVE-VERIFY sync anomaly triaged earlier (0 dims + "Sync error" on reload) is very likely the same root cause.
 
