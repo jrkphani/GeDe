@@ -278,6 +278,46 @@ export async function listCanvases(db: Database, projectId: string): Promise<Can
     .orderBy(asc(canvases.sort), asc(canvases.createdAt))
 }
 
+// Rename a root canvas (issue 090 switcher). Empty/whitespace name ⇒ NULL, so
+// the render layer falls back to deriving a label (mirrors createCanvas).
+export async function renameCanvas(db: Database, id: string, name: string): Promise<CanvasRow> {
+  const trimmed = name.trim()
+  const rows = await db
+    .update(canvases)
+    .set({ name: trimmed === '' ? null : trimmed, updatedAt: now() })
+    .where(eq(canvases.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+// Rewrites `sort` on every root canvas whose ordinal actually moved (mirrors
+// the dimensions `rewriteSort` cascade — only touches rows that changed).
+async function rewriteCanvasSort(db: Database, ordered: CanvasRow[]): Promise<void> {
+  for (const [index, row] of ordered.entries()) {
+    if (row.sort !== index) {
+      await db.update(canvases).set({ sort: index, updatedAt: now() }).where(eq(canvases.id, row.id))
+    }
+  }
+}
+
+// Move a root canvas to `toIndex` within its project's Design lane (mirrors
+// reorderDimension). Returns the full re-sorted list so the store can diff it.
+export async function reorderCanvas(
+  db: Database,
+  projectId: string,
+  id: string,
+  toIndex: number,
+): Promise<CanvasRow[]> {
+  const rows = await listCanvases(db, projectId)
+  const from = rows.findIndex((c) => c.id === id)
+  if (from === -1) return rows
+  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
+  const moved = firstOrThrow(rows.splice(from, 1))
+  rows.splice(target, 0, moved)
+  await rewriteCanvasSort(db, rows)
+  return listCanvases(db, projectId)
+}
+
 // Issue 090 Phase 4a — resolve a legacy CONTEXT selector (the pre-090
 // navigation key the store still carries: null = the project's default root
 // canvas; a context id = that context's child canvas) into the concrete
@@ -293,6 +333,42 @@ export async function resolveReadCanvasId(
 ): Promise<string | null> {
   if (contextId === null || contextId === undefined) return rootCanvasIdOrNull(db, projectId)
   return liveChildCanvasIdOrNull(db, contextId)
+}
+
+// A single live canvas by id (root or child), or null if absent/tombstoned.
+export async function getCanvas(db: Database, id: string): Promise<CanvasRow | null> {
+  const rows = await db
+    .select()
+    .from(canvases)
+    .where(and(eq(canvases.id, id), isNull(canvases.deletedAt)))
+  return rows[0] ?? null
+}
+
+// Issue 090 Phase 4b — resolve a canvas NAVIGATION SELECTOR to its concrete
+// canvas ROW, spanning the whole 090 transition in one place:
+//   • null/undefined  → the project's default root canvas (the pre-090 default);
+//   • a live canvas id → that canvas (the root switcher / a real Phase 4b
+//     canvasId, root OR child);
+//   • otherwise        → a legacy CONTEXT-id selector (the still-unmigrated
+//     DesignSurface drill-in, which passes the URL context id): resolve it to
+//     that context's child canvas.
+// Returns null when nothing resolves yet (root/child canvas not synced), so a
+// store read before the canvas lands yields [] exactly as before. Phase 4c
+// collapses this to a plain id pass-through once the surface threads real
+// canvas ids for both root and child navigation.
+export async function resolveCanvasScope(
+  db: Database,
+  projectId: string,
+  selector: string | null | undefined,
+): Promise<CanvasRow | null> {
+  if (selector === null || selector === undefined) {
+    const rootId = await rootCanvasIdOrNull(db, projectId)
+    return rootId === null ? null : getCanvas(db, rootId)
+  }
+  const direct = await getCanvas(db, selector)
+  if (direct) return direct
+  const childId = await liveChildCanvasIdOrNull(db, selector)
+  return childId === null ? null : getCanvas(db, childId)
 }
 
 // SPEC — a project must always keep at least one live ROOT canvas (createProject

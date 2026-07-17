@@ -1,13 +1,12 @@
 import { create } from 'zustand'
-import type { Database } from '../db/client'
 import {
   addDimension as dbAdd,
   DimensionFloorError,
-  listDimensions as rawListDimensions,
+  listDimensions as dbList,
   removeDimension as dbRemove,
   renameDimension as dbRename,
   reorderDimension as dbReorder,
-  resolveReadCanvasId,
+  resolveCanvasScope,
   restoreDimension as dbRestore,
   setDimensionColor as dbSetColor,
   undoAddDimension,
@@ -15,22 +14,6 @@ import {
   type DimensionRow,
 } from '../db/mutations'
 import { requireDatabase } from './database'
-
-// Issue 090 Phase 4a (FLAG for Phase 4b) — the DB read path now keys on
-// canvas_id, but this store still navigates by the pre-090 context selector
-// (`contextId`: null = root canvas, a context id = its child canvas). Resolve
-// that selector to the concrete canvas id at the read boundary so every read
-// below is canvas-scoped without touching a single call site. Phase 4b replaces
-// this by threading a real (root) canvas id through the switcher/URL.
-async function dbList(
-  db: Database,
-  projectId: string,
-  contextId: string | null = null,
-): Promise<DimensionRow[]> {
-  const canvasId = await resolveReadCanvasId(db, projectId, contextId)
-  if (canvasId === null) return []
-  return rawListDimensions(db, projectId, canvasId)
-}
 import { useCommandLogStore } from './commandLog'
 import { useContextsStore } from './contexts'
 import { enqueueIfSyncing, useSyncStore } from './sync'
@@ -41,18 +24,25 @@ import { enqueueIfSyncing, useSyncStore } from './sync'
 
 interface DimensionsState {
   projectId: string | null
-  // The canvas currently loaded: null = the project's root canvas, a context
-  // id = that context's child canvas (issue 011). Child-canvas dimensions are
-  // DERIVED from the parent's bindings (seeded via openChildCanvas), so the
-  // add/remove/reorder gestures are root-only here — the UI hides them on a
-  // child canvas and the store guards against them defensively.
+  // Issue 090 Phase 4b — the canvas currently loaded, keyed on the real
+  // `canvas_id` FK now (null ⇒ the project's default root canvas, the tolerant
+  // pre-090 default). `isChildCanvas` replaces the old "contextId !== null"
+  // signal: child-canvas dimensions are DERIVED from the parent's bindings
+  // (seeded via openChildCanvas), so add() is guarded off this flag (the UI
+  // hides the affordance on a child canvas).
+  canvasId: string | null
+  isChildCanvas: boolean
+  // Transitional compat field for DesignSurface.tsx's render gate
+  // (`loadedContextId !== contextId`, DesignSurface.tsx:50/433) — mirrors the
+  // navigation selector the caller passed to load(). Dropped in Phase 4c once
+  // the surface reads `canvasId` and passes a real canvas id.
   contextId: string | null
   dimensions: DimensionRow[]
   // The row whose name editor is open. Shared state (not component-local) so
   // surfaces can avoid unmounting an editor mid-gesture (guided start swap).
   editingId: string | null
   setEditing: (id: string | null) => void
-  load: (projectId: string, contextId?: string | null) => Promise<void>
+  load: (projectId: string, canvasId?: string | null, isChildCanvas?: boolean) => Promise<void>
   // Issue 082 Phase 1 — `name` lets the rail's phantom-row grammar commit the
   // typed name in the same gesture (mirrors parameters.add(dimensionId,
   // name)); omitted, this is byte-identical to the pre-082 "Dimension N" +
@@ -76,6 +66,8 @@ let syncUnsubscribe: (() => void) | null = null
 
 export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
   projectId: null,
+  canvasId: null,
+  isChildCanvas: false,
   contextId: null,
   dimensions: [],
   editingId: null,
@@ -84,9 +76,24 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     set({ editingId: id })
   },
 
-  async load(projectId, contextId = null) {
+  async load(projectId, canvasId = null, isChildCanvas) {
     const db = requireDatabase()
-    set({ projectId, contextId, dimensions: await dbList(db, projectId, contextId), editingId: null })
+    // Resolve the navigation selector (null root default / a real canvas id /
+    // a legacy context-id drill-in) to its concrete canvas. `isChildCanvas`,
+    // when omitted, is derived from the resolved canvas so the child-canvas
+    // add-guard is correct even for the un-migrated DesignSurface drill-in.
+    const canvas = await resolveCanvasScope(db, projectId, canvasId)
+    const resolvedCanvasId = canvas?.id ?? null
+    set({
+      projectId,
+      canvasId: resolvedCanvasId,
+      isChildCanvas: isChildCanvas ?? canvas?.parentContextId != null,
+      // Compat: the render-gate field tracks the caller's raw selector
+      // (DesignSurface.tsx:50/433), dropped in Phase 4c.
+      contextId: canvasId,
+      dimensions: await dbList(db, projectId, resolvedCanvasId),
+      editingId: null,
+    })
     // Issue 075 Part B — load() only ever ran once per canvas-open, so a
     // dimensions delta that streamed in (or that 075A's own FK-retry landed)
     // AFTER this resolved never rendered without a remount. Re-list off this
@@ -96,26 +103,28 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     syncUnsubscribe?.()
     syncUnsubscribe = useSyncStore.subscribe((state, prevState) => {
       if (state.dimensionsAppliedAt === prevState.dimensionsAppliedAt) return
-      const { projectId: currentProjectId, contextId: currentContextId } = get()
+      const { projectId: currentProjectId, canvasId: currentCanvasId } = get()
       if (currentProjectId === null) return
-      void dbList(requireDatabase(), currentProjectId, currentContextId).then((rows) =>
+      void dbList(requireDatabase(), currentProjectId, currentCanvasId).then((rows) =>
         set({ dimensions: rows }),
       )
     })
   },
 
   async add(name) {
-    const { projectId, contextId } = get()
+    const { projectId, canvasId, isChildCanvas } = get()
     // Child-canvas dimensions are derived from the parent's bindings — not
     // freely added (SPEC recursion rule). Guarded; the UI hides the affordance.
-    if (projectId === null || contextId !== null) return null
+    if (projectId === null || isChildCanvas) return null
     const db = requireDatabase()
-    const row = await dbAdd(db, projectId, name)
+    // Issue 090 Phase 4b — land the new dimension on the currently-selected
+    // canvas (canvasId omitted ⇒ the project's default root canvas).
+    const row = await dbAdd(db, projectId, name, canvasId ?? undefined)
     // Ready-to-edit is part of the same state transition as the new row —
     // published separately, surfaces could swap away mid-gesture. A caller
     // that already supplied a name (the phantom-row grammar, issue 082) has
     // nothing left to edit, so it doesn't open the row's own name editor.
-    set({ dimensions: await dbList(db, projectId), editingId: name ? null : row.id })
+    set({ dimensions: await dbList(db, projectId, canvasId), editingId: name ? null : row.id })
     enqueueIfSyncing('dimensions', row.id, 'upsert', row)
     const orderedIdsAfterAdd = get().dimensions.map((d) => d.id)
     useCommandLogStore.getState().push({
@@ -123,54 +132,54 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
       async undo() {
         // Bypasses the n=2 floor deliberately — see undoAddDimension's doc.
         await undoAddDimension(db, projectId, row.id)
-        set({ dimensions: await dbList(db, projectId) })
+        set({ dimensions: await dbList(db, projectId, canvasId) })
       },
       async redo() {
         await dbRestore(db, projectId, row.id, orderedIdsAfterAdd)
-        set({ dimensions: await dbList(db, projectId) })
+        set({ dimensions: await dbList(db, projectId, canvasId) })
       },
     })
     return row
   },
 
   async rename(id, name) {
-    const { projectId, contextId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const previousName = get().dimensions.find((d) => d.id === id)?.name ?? name
     const renamed = await dbRename(db, id, name)
-    set({ dimensions: await dbList(db, projectId, contextId) })
+    set({ dimensions: await dbList(db, projectId, canvasId) })
     enqueueIfSyncing('dimensions', renamed.id, 'update', renamed)
     useCommandLogStore.getState().push({
       label: `rename dimension to "${name}"`,
       async undo() {
         await dbRename(db, id, previousName)
-        set({ dimensions: await dbList(db, projectId, contextId) })
+        set({ dimensions: await dbList(db, projectId, canvasId) })
       },
       async redo() {
         await dbRename(db, id, name)
-        set({ dimensions: await dbList(db, projectId, contextId) })
+        set({ dimensions: await dbList(db, projectId, canvasId) })
       },
     })
   },
 
   async setColor(id, color) {
-    const { projectId, contextId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const previousColor = get().dimensions.find((d) => d.id === id)?.color ?? color
     const updated = await dbSetColor(db, id, color)
-    set({ dimensions: await dbList(db, projectId, contextId) })
+    set({ dimensions: await dbList(db, projectId, canvasId) })
     enqueueIfSyncing('dimensions', updated.id, 'update', updated)
     useCommandLogStore.getState().push({
       label: 'recolor dimension',
       async undo() {
         await dbSetColor(db, id, previousColor)
-        set({ dimensions: await dbList(db, projectId, contextId) })
+        set({ dimensions: await dbList(db, projectId, canvasId) })
       },
       async redo() {
         await dbSetColor(db, id, color)
-        set({ dimensions: await dbList(db, projectId, contextId) })
+        set({ dimensions: await dbList(db, projectId, canvasId) })
       },
     })
   },
@@ -253,5 +262,12 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
 export function resetDimensionsStore(): void {
   syncUnsubscribe?.()
   syncUnsubscribe = null
-  useDimensionsStore.setState({ projectId: null, contextId: null, dimensions: [], editingId: null })
+  useDimensionsStore.setState({
+    projectId: null,
+    canvasId: null,
+    isChildCanvas: false,
+    contextId: null,
+    dimensions: [],
+    editingId: null,
+  })
 }

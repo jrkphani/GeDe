@@ -179,6 +179,11 @@ interface SyncState {
   bindingsAppliedAt: number
   tier1AppliedAt: number
   tier2AppliedAt: number
+  // Issue 090 Phase 4b — the `canvases` analogue of dimensionsAppliedAt/
+  // contextsAppliedAt above: a plain "an inbound `canvases` delta just applied"
+  // timestamp, bumped by onApplied below. src/store/canvases.ts subscribes to
+  // it to re-list its root canvases off this ground-truth signal.
+  canvasesAppliedAt: number
   setWorkspaceId: (workspaceId: string | null) => void
   // Starts the read-path engine if isSyncEnabled() is true; a no-op
   // otherwise (leaves `enabled: false`, `handle: null`) — safe to call
@@ -246,6 +251,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     bindingsAppliedAt: 0,
     tier1AppliedAt: 0,
     tier2AppliedAt: 0,
+    canvasesAppliedAt: 0,
 
     setWorkspaceId(workspaceId) {
       set({ workspaceId })
@@ -322,6 +328,8 @@ export const useSyncStore = create<SyncState>()((set, get) => {
           if (table === 'bindings') set({ bindingsAppliedAt: Date.now() })
           if (table === 'tier1_purpose' || table === 'tier1_props') set({ tier1AppliedAt: Date.now() })
           if (table === 'tier2_tables' || table === 'tier2_entries') set({ tier2AppliedAt: Date.now() })
+          // Issue 090 Phase 4b — same bump, same rationale, for `canvases`.
+          if (table === 'canvases') set({ canvasesAppliedAt: Date.now() })
           recompute()
           if (lostEdits.length > 0) {
             useStatusStore.getState().announce(lostEditMessage(lostEdits.length))
@@ -546,5 +554,6 @@ export function resetSyncStore(): void {
     bindingsAppliedAt: 0,
     tier1AppliedAt: 0,
     tier2AppliedAt: 0,
+    canvasesAppliedAt: 0,
   })
 }

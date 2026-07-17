@@ -6,6 +6,7 @@ import {
   bindParameter,
   createContext,
   createProject,
+  resolveReadCanvasId,
 } from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
@@ -51,8 +52,9 @@ describe('contexts store — child canvas (issue 011)', () => {
     // Drill into α: seed + load its child canvas.
     const stale = await useContextsStore.getState().openChildCanvas(alphaId)
     expect(stale).toEqual([])
-    await useDimensionsStore.getState().load(projectId, alphaId)
-    await useContextsStore.getState().load(projectId, alphaId)
+    const alphaCanvasId = must(await resolveReadCanvasId(db, projectId, alphaId), 'alpha child canvas')
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
+    await useContextsStore.getState().load(projectId, alphaCanvasId, alphaId)
 
     expect(useDimensionsStore.getState().dimensions).toHaveLength(2)
     expect(useContextsStore.getState().contexts).toEqual([]) // no children yet
@@ -69,12 +71,13 @@ describe('contexts store — child canvas (issue 011)', () => {
 
   it('stale parent re-bind surfaces an event; revertStale restores the child dimension + sub-bindings', async () => {
     await useContextsStore.getState().openChildCanvas(alphaId)
-    await useDimensionsStore.getState().load(projectId, alphaId)
+    const alphaCanvasId = must(await resolveReadCanvasId(db, projectId, alphaId), 'alpha child canvas')
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
     const usersDim = must(
       useDimensionsStore.getState().dimensions.find((d) => d.sourceParamId === usersId),
     )
     const inner = await addParameter(db, usersDim.id, 'Inner', usersId)
-    await useContextsStore.getState().load(projectId, alphaId)
+    await useContextsStore.getState().load(projectId, alphaCanvasId, alphaId)
     const child = must(await useContextsStore.getState().create())
     await useContextsStore.getState().bind(child.id, usersDim.id, inner.id)
 
@@ -85,15 +88,15 @@ describe('contexts store — child canvas (issue 011)', () => {
     const event = must(stale[0])
     expect(event.toName).toBe('Buyers')
 
-    await useDimensionsStore.getState().load(projectId, alphaId)
-    await useContextsStore.getState().load(projectId, alphaId)
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
+    await useContextsStore.getState().load(projectId, alphaCanvasId, alphaId)
     // Child dimension followed the new parameter; sub-binding retired.
     expect(useDimensionsStore.getState().dimensions.find((d) => d.id === usersDim.id)?.name).toBe('Buyers')
     expect(useContextsStore.getState().bindingsByContext[child.id]?.[usersDim.id]).toBeUndefined()
 
     // Banner Undo.
     await useContextsStore.getState().revertStale(event)
-    await useDimensionsStore.getState().load(projectId, alphaId)
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
     expect(useDimensionsStore.getState().dimensions.find((d) => d.id === usersDim.id)?.name).toBe('Users')
     expect(useContextsStore.getState().bindingsByContext[child.id]?.[usersDim.id]).toBe(inner.id)
   })
@@ -108,7 +111,8 @@ describe('contexts store — child canvas sync enqueue (issue 073 pt2)', () => {
     useSyncStore.setState({ workspaceId: 'ws1' })
 
     await useContextsStore.getState().openChildCanvas(alphaId)
-    await useDimensionsStore.getState().load(projectId, alphaId)
+    const alphaCanvasId = must(await resolveReadCanvasId(db, projectId, alphaId), 'alpha child canvas')
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
     const childIds = useDimensionsStore.getState().dimensions.map((d) => d.id)
     expect(childIds).toHaveLength(2)
 
@@ -128,12 +132,13 @@ describe('contexts store — child canvas sync enqueue (issue 073 pt2)', () => {
 
   it('a stale parent re-bind enqueues a dimensions update + a bindings delete for the retired sub-binding', async () => {
     await useContextsStore.getState().openChildCanvas(alphaId)
-    await useDimensionsStore.getState().load(projectId, alphaId)
+    const alphaCanvasId = must(await resolveReadCanvasId(db, projectId, alphaId), 'alpha child canvas')
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
     const usersDim = must(
       useDimensionsStore.getState().dimensions.find((d) => d.sourceParamId === usersId),
     )
     const inner = await addParameter(db, usersDim.id, 'Inner', usersId)
-    await useContextsStore.getState().load(projectId, alphaId)
+    await useContextsStore.getState().load(projectId, alphaCanvasId, alphaId)
     const child = must(await useContextsStore.getState().create())
     await useContextsStore.getState().bind(child.id, usersDim.id, inner.id)
 
@@ -154,20 +159,21 @@ describe('contexts store — child canvas sync enqueue (issue 073 pt2)', () => {
 
   it('revertStale enqueues an update for the reverted dimensions row + an update for each restored binding', async () => {
     await useContextsStore.getState().openChildCanvas(alphaId)
-    await useDimensionsStore.getState().load(projectId, alphaId)
+    const alphaCanvasId = must(await resolveReadCanvasId(db, projectId, alphaId), 'alpha child canvas')
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
     const usersDim = must(
       useDimensionsStore.getState().dimensions.find((d) => d.sourceParamId === usersId),
     )
     const inner = await addParameter(db, usersDim.id, 'Inner', usersId)
-    await useContextsStore.getState().load(projectId, alphaId)
+    await useContextsStore.getState().load(projectId, alphaCanvasId, alphaId)
     const child = must(await useContextsStore.getState().create())
     await useContextsStore.getState().bind(child.id, usersDim.id, inner.id)
 
     await bindParameter(db, alphaId, stakeId, buyersId)
     const stale = await useContextsStore.getState().openChildCanvas(alphaId)
     const event = must(stale[0])
-    await useDimensionsStore.getState().load(projectId, alphaId)
-    await useContextsStore.getState().load(projectId, alphaId)
+    await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
+    await useContextsStore.getState().load(projectId, alphaCanvasId, alphaId)
 
     useSyncStore.setState({ workspaceId: 'ws1' })
     await useContextsStore.getState().revertStale(event)

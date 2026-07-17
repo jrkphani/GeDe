@@ -11,6 +11,7 @@ import {
   listContexts as rawListContexts,
   listDimensions as rawListDimensions,
   openChildCanvas as dbOpenChildCanvas,
+  resolveCanvasScope,
   resolveReadCanvasId,
   restoreContext as dbRestore,
   revertStaleRebind as dbRevertStale,
@@ -25,41 +26,14 @@ import { useCommandLogStore } from './commandLog'
 import { requireDatabase } from './database'
 import { enqueueIfSyncing, useSyncStore } from './sync'
 
-// Issue 090 Phase 4a (FLAG for Phase 4b) — the DB read path now keys on
-// canvas_id, but this store still navigates by the pre-090 context selector
-// (`parentId`: null = root canvas, a context id = its child canvas). Resolve
-// that selector to the concrete canvas id at the read boundary so every read
-// below stays canvas-scoped without touching a single call site. Phase 4b
-// replaces this by threading a real (root) canvas id through the switcher/URL.
-async function dbListContexts(
-  db: Database,
-  projectId: string,
-  parentId: string | null = null,
-): Promise<ContextRow[]> {
-  const canvasId = await resolveReadCanvasId(db, projectId, parentId)
-  if (canvasId === null) return []
-  return rawListContexts(db, projectId, canvasId)
-}
-
-async function dbListDimensions(
-  db: Database,
-  projectId: string,
-  parentId: string | null = null,
-) {
-  const canvasId = await resolveReadCanvasId(db, projectId, parentId)
-  if (canvasId === null) return []
-  return rawListDimensions(db, projectId, canvasId)
-}
-
-async function dbChildCounts(
-  db: Database,
-  projectId: string,
-  parentId: string | null = null,
-): Promise<Record<string, number>> {
-  const canvasId = await resolveReadCanvasId(db, projectId, parentId)
-  if (canvasId === null) return {}
-  return rawChildCounts(db, projectId, canvasId)
-}
+// Issue 090 Phase 4b — the reads below now key on the real `canvas_id` FK,
+// threaded in via load()'s `canvasId` argument (null ⇒ the project's default
+// root canvas — the tolerant pre-090 default the raw list functions already
+// honor). rawListContexts/rawListDimensions/rawChildCounts each accept a
+// `canvasId | null`, so the store calls them directly — the Phase 4a selector
+// seam (which resolved a context id to a child canvas) is gone. The one place
+// that still resolves a context → its child canvas is openChildCanvas's
+// pre-seed snapshot below (resolveReadCanvasId).
 
 // Root-canvas contexts for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
@@ -86,18 +60,18 @@ async function fetchBindingsMap(
 async function readCanvas(
   db: Database,
   projectId: string,
-  parentId: string | null,
+  canvasId: string | null,
 ): Promise<{
   contexts: ContextRow[]
   bindingsByContext: Record<string, Record<string, string>>
   childCountByContext: Record<string, number>
 }> {
-  const contexts = await dbListContexts(db, projectId, parentId)
+  const contexts = await rawListContexts(db, projectId, canvasId)
   const bindingsByContext = await fetchBindingsMap(
     db,
     contexts.map((c) => c.id),
   )
-  const childCountByContext = await dbChildCounts(db, projectId, parentId)
+  const childCountByContext = await rawChildCounts(db, projectId, canvasId)
   return { contexts, bindingsByContext, childCountByContext }
 }
 
@@ -109,10 +83,15 @@ let syncUnsubscribe: (() => void) | null = null
 
 interface ContextsState {
   projectId: string | null
-  // The canvas currently loaded: null = the project's root canvas, a context
-  // id = that context's child canvas (issue 011). `contexts` are the contexts
-  // ON this canvas (parent_id = parentId).
-  parentId: string | null
+  // Issue 090 Phase 4b — the canvas currently loaded, keyed on the real
+  // `canvas_id` FK (null ⇒ the project's default root canvas). `contexts` are
+  // the contexts ON this canvas.
+  canvasId: string | null
+  // The parent context of the current canvas (== the pre-090 `parentId`):
+  // null on a root canvas, the owning context on a child canvas (issue 011).
+  // RETAINED (not superseded by canvasId) because create() still needs it to
+  // stamp `parent_id` and derive a child symbol (α1, α2 — SPEC §3).
+  parentContextId: string | null
   contexts: ContextRow[]
   // contextId -> number of children on its own child canvas (node/register
   // "Children" badge — SPEC §4.2/§4.3, issue 011). Recomputed on load.
@@ -138,7 +117,7 @@ interface ContextsState {
   // than owning a local notion of "selected".
   selectedContextId: string | null
   select: (id: string | null) => void
-  load: (projectId: string, parentId?: string | null) => Promise<void>
+  load: (projectId: string, canvasId?: string | null, parentContextId?: string | null) => Promise<void>
   // Issue 011 — resolve the URL's context-id path to breadcrumb {id, symbol}.
   loadBreadcrumbs: (contextPath: readonly string[]) => Promise<void>
   // Issue 011 — seed/reconcile a context's child canvas (idempotent). Returns
@@ -165,7 +144,8 @@ interface ContextsState {
 
 export const useContextsStore = create<ContextsState>()((set, get) => ({
   projectId: null,
-  parentId: null,
+  canvasId: null,
+  parentContextId: null,
   contexts: [],
   childCountByContext: {},
   breadcrumbs: [],
@@ -199,7 +179,14 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     // 'update' (Subtlety A/B) — `stale` alone only reports the rebind case,
     // never the first-seed or parent-reorder/rename cases.
     const [parent] = await dbGetByIds(db, [parentContextId])
-    const before = parent ? await dbListDimensions(db, parent.projectId, parentContextId) : []
+    // The child canvas of `parentContextId` may not exist yet (first open) —
+    // resolveReadCanvasId returns null then, so `before` is [] and every
+    // seeded dimension below is correctly treated as new ('upsert').
+    const childCanvasId = parent
+      ? await resolveReadCanvasId(db, parent.projectId, parentContextId)
+      : null
+    const before =
+      parent && childCanvasId ? await rawListDimensions(db, parent.projectId, childCanvasId) : []
     const { dimensions: after, stale } = await dbOpenChildCanvas(db, parentContextId)
     const beforeById = new Map(before.map((d) => [d.id, d]))
     for (const row of after) {
@@ -227,12 +214,12 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   },
 
   async revertStale(event) {
-    const { projectId, parentId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     set({ generation: get().generation + 1 })
     await dbRevertStale(db, event)
-    const contexts = await dbListContexts(db, projectId, parentId)
+    const contexts = await rawListContexts(db, projectId, canvasId)
     const bindingsByContext = await fetchBindingsMap(db, contexts.map((c) => c.id))
     set({ contexts, bindingsByContext })
     // Issue 073 pt1 — re-syncs the sub-bindings this banner's Undo re-inserts
@@ -247,25 +234,31 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     // `dimensions` table). Read the row back (revertStaleRebind returns void)
     // and enqueue the 'update' — an edit of an already-synced row, never
     // 'upsert'.
-    const revertedDim = (await dbListDimensions(db, projectId, parentId)).find(
+    const revertedDim = (await rawListDimensions(db, projectId, canvasId)).find(
       (d) => d.id === event.childDimensionId,
     )
     if (revertedDim) enqueueIfSyncing('dimensions', revertedDim.id, 'update', revertedDim)
   },
 
-  async load(projectId, parentId = null) {
+  async load(projectId, canvasId = null, parentContextId) {
     const db = requireDatabase()
-    // Set synchronously, before any await (issue 007 CI bug, real root
-    // cause): create() etc. read get().projectId internally rather than
-    // taking it as an argument, so if it were only set after this
-    // function's own DB round-trip, a mutation fired very soon after mount
+    // Set projectId synchronously, before any await (issue 007 CI bug, real
+    // root cause): create() etc. read get().projectId internally rather than
+    // taking it as an argument, so if it were only set after this function's
+    // own DB round-trip, a mutation fired very soon after mount
     // (ContextRegister's own load() effect) could run while projectId was
-    // still null and silently no-op — no error, since create()'s guard
-    // just returns null. Reproduced on CI (slow enough to lose the race
-    // every time) but never locally (load() always won there).
-    set({ projectId, parentId, selectedContextId: null })
+    // still null and silently no-op. Reproduced on CI, never locally.
+    set({ projectId, selectedContextId: null })
+    // Resolve the navigation selector to its concrete canvas; derive
+    // parentContextId (for create()'s parent stamping + child symbol) from the
+    // resolved canvas when the caller didn't pass one — this is what makes the
+    // un-migrated DesignSurface drill-in (which passes only the context id)
+    // still create child contexts correctly.
+    const canvas = await resolveCanvasScope(db, projectId, canvasId)
+    const resolvedCanvasId = canvas?.id ?? null
+    set({ canvasId: resolvedCanvasId, parentContextId: parentContextId ?? canvas?.parentContextId ?? null })
     const gen = get().generation
-    const result = await readCanvas(db, projectId, parentId)
+    const result = await readCanvas(db, projectId, resolvedCanvasId)
     if (get().generation !== gen) return
     set(result)
 
@@ -288,10 +281,10 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
       ) {
         return
       }
-      const { projectId: currentProjectId, parentId: currentParentId } = get()
+      const { projectId: currentProjectId, canvasId: currentCanvasId } = get()
       if (currentProjectId === null) return
       const genAtStart = get().generation
-      void readCanvas(requireDatabase(), currentProjectId, currentParentId).then((fresh) => {
+      void readCanvas(requireDatabase(), currentProjectId, currentCanvasId).then((fresh) => {
         if (get().generation !== genAtStart) return
         set(fresh)
       })
@@ -299,12 +292,16 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   },
 
   async create() {
-    const { projectId, parentId } = get()
+    const { projectId, canvasId, parentContextId } = get()
     if (projectId === null) return null
     const db = requireDatabase()
     set({ generation: get().generation + 1 })
-    const row = await dbCreate(db, projectId, parentId)
-    const contexts = await dbListContexts(db, projectId, parentId)
+    // parentContextId stamps `parent_id` + drives the child symbol; canvasId
+    // (as targetCanvasId) names WHICH root canvas a root context lands on. On a
+    // child canvas createContext resolves the parent's own child canvas and
+    // ignores targetCanvasId (db/mutations.ts's createContext).
+    const row = await dbCreate(db, projectId, parentContextId, canvasId ?? undefined)
+    const contexts = await rawListContexts(db, projectId, canvasId)
     set({ contexts, bindingsByContext: { ...get().bindingsByContext, [row.id]: {} } })
     enqueueIfSyncing('contexts', row.id, 'upsert', row)
     useCommandLogStore.getState().push({
@@ -312,13 +309,13 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
       async undo() {
         set({ generation: get().generation + 1 })
         await dbArchive(db, row.id)
-        set({ contexts: await dbListContexts(db, projectId, parentId) })
+        set({ contexts: await rawListContexts(db, projectId, canvasId) })
       },
       async redo() {
         set({ generation: get().generation + 1 })
         await dbRestore(db, row.id)
         set({
-          contexts: await dbListContexts(db, projectId, parentId),
+          contexts: await rawListContexts(db, projectId, canvasId),
           bindingsByContext: { ...get().bindingsByContext, [row.id]: get().bindingsByContext[row.id] ?? {} },
         })
       },
@@ -327,50 +324,50 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   },
 
   async discard(id) {
-    const { projectId, parentId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const symbol = get().contexts.find((c) => c.id === id)?.symbol ?? id
     set({ generation: get().generation + 1 })
     const archived = await dbArchive(db, id)
-    set({ contexts: await dbListContexts(db, projectId, parentId), selectedContextId: null })
+    set({ contexts: await rawListContexts(db, projectId, canvasId), selectedContextId: null })
     enqueueIfSyncing('contexts', archived.id, 'delete', archived)
     useCommandLogStore.getState().push({
       label: `discard draft ${symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
         await dbRestore(db, id)
-        set({ contexts: await dbListContexts(db, projectId, parentId) })
+        set({ contexts: await rawListContexts(db, projectId, canvasId) })
       },
       async redo() {
         set({ generation: get().generation + 1 })
         await dbArchive(db, id)
-        set({ contexts: await dbListContexts(db, projectId, parentId), selectedContextId: null })
+        set({ contexts: await rawListContexts(db, projectId, canvasId), selectedContextId: null })
       },
     })
   },
 
   async setSymbol(id, symbol) {
-    const { projectId, parentId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return { ok: false }
     const db = requireDatabase()
     const previousSymbol = get().contexts.find((c) => c.id === id)?.symbol ?? symbol
     try {
       set({ generation: get().generation + 1 })
       const updated = await dbSetSymbol(db, projectId, id, symbol)
-      set({ contexts: await dbListContexts(db, projectId, parentId) })
+      set({ contexts: await rawListContexts(db, projectId, canvasId) })
       enqueueIfSyncing('contexts', updated.id, 'update', updated)
       useCommandLogStore.getState().push({
         label: `rename ${previousSymbol} to ${symbol}`,
         async undo() {
           set({ generation: get().generation + 1 })
           await dbSetSymbol(db, projectId, id, previousSymbol)
-          set({ contexts: await dbListContexts(db, projectId, parentId) })
+          set({ contexts: await rawListContexts(db, projectId, canvasId) })
         },
         async redo() {
           set({ generation: get().generation + 1 })
           await dbSetSymbol(db, projectId, id, symbol)
-          set({ contexts: await dbListContexts(db, projectId, parentId) })
+          set({ contexts: await rawListContexts(db, projectId, canvasId) })
         },
       })
       return { ok: true }
@@ -381,26 +378,26 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
   },
 
   async setJustification(id, text) {
-    const { projectId, parentId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const previousText = get().contexts.find((c) => c.id === id)?.justification ?? ''
     const symbol = get().contexts.find((c) => c.id === id)?.symbol ?? id
     set({ generation: get().generation + 1 })
     const updated = await dbSetJustification(db, id, text)
-    set({ contexts: await dbListContexts(db, projectId, parentId) })
+    set({ contexts: await rawListContexts(db, projectId, canvasId) })
     enqueueIfSyncing('contexts', updated.id, 'update', updated)
     useCommandLogStore.getState().push({
       label: `edit justification for ${symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
         await dbSetJustification(db, id, previousText)
-        set({ contexts: await dbListContexts(db, projectId, parentId) })
+        set({ contexts: await rawListContexts(db, projectId, canvasId) })
       },
       async redo() {
         set({ generation: get().generation + 1 })
         await dbSetJustification(db, id, text)
-        set({ contexts: await dbListContexts(db, projectId, parentId) })
+        set({ contexts: await rawListContexts(db, projectId, canvasId) })
       },
     })
   },
@@ -510,7 +507,8 @@ export function resetContextsStore(): void {
   syncUnsubscribe = null
   useContextsStore.setState({
     projectId: null,
-    parentId: null,
+    canvasId: null,
+    parentContextId: null,
     contexts: [],
     childCountByContext: {},
     breadcrumbs: [],
