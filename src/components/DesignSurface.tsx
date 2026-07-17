@@ -8,6 +8,7 @@ import { coverageStat } from '../domain/coverage'
 import type { ContextRow } from '../db/mutations'
 import { navigate } from '../shell/router'
 import { canWrite } from '../domain/workspaceRole'
+import { useActiveLaneStore } from '../store/activeLane'
 import { useCommandLogStore } from '../store/commandLog'
 import { useCanvasesStore } from '../store/canvases'
 import { useContextsStore } from '../store/contexts'
@@ -312,6 +313,11 @@ export function DesignSurface({
     if (view !== 'canvas') return
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'c' || e.metaKey || e.ctrlKey || e.altKey) return
+      // 089 D2 P3 — the workspace co-mounts all three lanes, so this global
+      // listener must self-scope: `c` is a Design verb only. Read the slice
+      // non-reactively (getState) so the capture listener never re-subscribes
+      // on lane changes. Null (no lane active) ⇒ no-op, by design.
+      if (useActiveLaneStore.getState().activeLane !== 'design') return
       const el = document.activeElement
       if (
         el instanceof HTMLInputElement ||
@@ -353,6 +359,8 @@ export function DesignSurface({
   useEffect(() => {
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'v' || e.metaKey || e.ctrlKey || e.altKey) return
+      // 089 D2 P3 — Design-only verb; self-scope to the active lane (see `c`).
+      if (useActiveLaneStore.getState().activeLane !== 'design') return
       const el = document.activeElement
       if (
         el instanceof HTMLInputElement ||
@@ -385,6 +393,8 @@ export function DesignSurface({
     if (view !== 'canvas') return
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'd' || e.metaKey || e.ctrlKey || e.altKey) return
+      // 089 D2 P3 — Design-only verb; self-scope to the active lane (see `c`).
+      if (useActiveLaneStore.getState().activeLane !== 'design') return
       const el = document.activeElement
       if (
         el instanceof HTMLInputElement ||

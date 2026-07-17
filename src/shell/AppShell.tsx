@@ -5,6 +5,7 @@ import { useCommandRegistryStore } from '../store/commandRegistry'
 import { useSemanticSearchStore } from '../store/semanticSearch'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
+import { useActiveLaneStore } from '../store/activeLane'
 import { useFocusedEditorStore } from '../store/focusedEditor'
 import { Button } from '../components/ui/button'
 import { FormatStrip } from '../components/FormatStrip'
@@ -318,6 +319,12 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
       // / tab-clicks / back-forward); same lane, idempotent scrollIntoView.
       navigate(routeForTab(projectId, tab))
       scrollToLane(tab)
+      // 089 D2 P3 — the keyboard lane-jump also makes the target lane ACTIVE,
+      // so Design's `c` / `v` / `d` verbs are immediately scoped to it without
+      // needing a focusable element to receive focus. `tab` (`Tier | 'design'`)
+      // is exactly the `Lane` union. Deterministic even when the jumped-to lane
+      // has nothing focusable to land on (e.g. Design's non-focusable canvas).
+      useActiveLaneStore.getState().setActiveLane(tab)
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)

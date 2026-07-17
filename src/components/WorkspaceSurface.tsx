@@ -1,6 +1,7 @@
 import { ArchitectureSurface } from './ArchitectureSurface'
 import { DesignSurface } from './DesignSurface'
 import { FoundationSurface } from './FoundationSurface'
+import { useActiveLaneStore } from '../store/activeLane'
 import type { AppRoute } from '../shell/routes'
 
 // Issue 089 D2 Phase 1 — the unified workspace. The three tier surfaces that
@@ -33,15 +34,43 @@ export function WorkspaceSurface({ route }: { route: WorkspaceRoute }) {
       ? { contextPath: route.contextPath, view: route.view, canvasId: route.canvasId }
       : { contextPath: [] as string[], view: 'canvas' as const, canvasId: undefined }
 
+  // 089 D2 P3 — the active-lane setter (a stable Zustand action, so selecting
+  // it never re-renders this component on lane changes). Each lane records
+  // itself as active on BOTH focusin and pointerdown:
+  //   • focusin — the keyboard path: Tab/click into any focusable control in a
+  //     lane makes that lane active. React's onFocusCapture maps to the
+  //     bubbling focusin (capture phase), so it fires for focus landing on any
+  //     descendant.
+  //   • pointerdown — the mouse path, and the ROBUSTNESS the Design lane needs:
+  //     its Canvas is a non-focusable <svg>, so clicking a node fires no focus
+  //     event at all. pointerdown on the lane still sets it active even when
+  //     the click target can't take focus.
+  // Both set the SAME lane for a given section, so their firing order on a
+  // focusable click (pointerdown → focus) is immaterial — idempotent, never a
+  // fight. Design's `c` / `v` / `d` verbs read this slice non-reactively.
+  const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
+
   return (
     <div className="workspace">
-      <section className="workspace__lane workspace__lane--foundation">
+      <section
+        className="workspace__lane workspace__lane--foundation"
+        onFocusCapture={() => setActiveLane('foundation')}
+        onPointerDown={() => setActiveLane('foundation')}
+      >
         <FoundationSurface projectId={projectId} />
       </section>
-      <section className="workspace__lane workspace__lane--architecture">
+      <section
+        className="workspace__lane workspace__lane--architecture"
+        onFocusCapture={() => setActiveLane('architecture')}
+        onPointerDown={() => setActiveLane('architecture')}
+      >
         <ArchitectureSurface projectId={projectId} />
       </section>
-      <section className="workspace__lane workspace__lane--design">
+      <section
+        className="workspace__lane workspace__lane--design"
+        onFocusCapture={() => setActiveLane('design')}
+        onPointerDown={() => setActiveLane('design')}
+      >
         <DesignSurface
           key={projectId}
           projectId={projectId}

@@ -2,8 +2,9 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { act, render, screen, waitFor, within } from '@testing-library/react'
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import * as router from '../shell/router'
 import { openDatabase } from '../db/client'
 import { addDimension, addParameter, createProject } from '../db/mutations'
 import { addWorkspaceMember } from '../db/workspaces'
@@ -18,8 +19,10 @@ import { useProjectsStore } from '../store/projects'
 import { resetTier2Store } from '../store/tier2'
 import { useStatusStore } from '../store/status'
 import { resetWorkspaceStore } from '../store/workspace'
+import { resetActiveLane, useActiveLaneStore } from '../store/activeLane'
 import { ContextBarProvider, ContextBarSlot } from '../shell/slots'
 import { DesignSurface } from './DesignSurface'
+import { WorkspaceSurface } from './WorkspaceSurface'
 
 // Issue 027 — layout cleanup + navigation clarity. These tests exercise
 // DesignSurface directly (it has never had its own test file), covering the
@@ -73,6 +76,14 @@ beforeEach(async () => {
   resetAuthStoreForTests()
   useCommandLogStore.getState().clear()
   useStatusStore.setState({ message: null, action: null })
+  // 089 D2 P3 — these suites render DesignSurface in ISOLATION (not inside the
+  // three-lane WorkspaceSurface), which historically was the whole surface. The
+  // Design lane's `c` / `v` / `d` verbs now self-scope to `activeLane ===
+  // 'design'`, so seed the active lane accordingly: a standalone DesignSurface
+  // IS the Design lane being worked in. The co-mount suite below overrides this
+  // per-test via real pointerdown clicks into a specific lane.
+  resetActiveLane()
+  useActiveLaneStore.getState().setActiveLane('design')
 
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
@@ -590,5 +601,88 @@ describe('DesignSurface — continuous tab order: rail -> register, never the ca
     dimPhantom.focus()
     await user.tab({ shift: true })
     expect(document.activeElement?.closest('.context-register-shell')).toBeNull()
+  })
+})
+
+// Issue 089 D2 Phase 3 — active-lane scoping (the hard part). With all three
+// tier lanes co-mounted on ONE page (WorkspaceSurface), Design's capture-phase
+// GLOBAL `c` / `v` / `d` handlers can no longer assume Design is the only
+// surface. They now self-scope to `activeLane === 'design'`, which
+// WorkspaceSurface sets on each lane's focusin / pointerdown (and AppShell on
+// ⌘1/2/3). This is the red-first proof: the Design verbs fire ONLY when the
+// Design lane is active — not when the user is working in Foundation.
+//
+// pointerdown (not focus) is the load-bearing path here: the Design lane's
+// Canvas is a non-focusable <svg>, and Foundation/Architecture clicks likewise
+// may not land on a focusable element — pointerdown on the lane sets it active
+// regardless, exactly the robustness the mouse path needs.
+describe('WorkspaceSurface — active-lane scoping of Design global verbs (issue 089 D2 P3)', () => {
+  function renderWorkspace() {
+    return render(
+      <ContextBarProvider>
+        <ContextBarSlot />
+        <WorkspaceSurface route={{ kind: 'design', projectId, contextPath: [], view: 'canvas' }} />
+      </ContextBarProvider>,
+    )
+  }
+
+  async function mountedLanes() {
+    renderWorkspace()
+    // The Design lane resolves its canvas (canvasReady) and mounts the canvas
+    // shell; that's our signal all three lanes are live.
+    await waitFor(() =>
+      expect(document.querySelector('.workspace__lane--design .canvas-shell')).toBeInTheDocument(),
+    )
+    return {
+      foundation: document.querySelector('.workspace__lane--foundation') as HTMLElement,
+      design: document.querySelector('.workspace__lane--design') as HTMLElement,
+    }
+  }
+
+  it('`c` from the Foundation lane does NOT create a Design draft; from the Design lane it does', async () => {
+    const user = userEvent.setup()
+    const { foundation, design } = await mountedLanes()
+
+    // Click into Foundation — pointerdown makes it the active lane.
+    fireEvent.pointerDown(foundation)
+    expect(useActiveLaneStore.getState().activeLane).toBe('foundation')
+
+    expect(useContextsStore.getState().contexts).toHaveLength(0)
+    await user.keyboard('c')
+    // The `c` handler returns synchronously at the active-lane guard — no
+    // compose draft is ever created from the Foundation lane.
+    expect(useContextsStore.getState().contexts).toHaveLength(0)
+    expect(document.querySelector('.canvas-node--draft')).not.toBeInTheDocument()
+
+    // Now click into the Design lane — pointerdown flips the active lane even
+    // though the click target (the SVG canvas / lane chrome) isn't focusable.
+    fireEvent.pointerDown(design)
+    expect(useActiveLaneStore.getState().activeLane).toBe('design')
+    await user.keyboard('c')
+    await waitFor(() => expect(useContextsStore.getState().contexts).toHaveLength(1))
+  })
+
+  it('`v` from the Foundation lane does NOT toggle the Design view; from the Design lane it navigates to coverage', async () => {
+    const user = userEvent.setup()
+    const navSpy = vi.spyOn(router, 'navigate').mockImplementation(() => {})
+    try {
+      const { foundation, design } = await mountedLanes()
+
+      fireEvent.pointerDown(foundation)
+      navSpy.mockClear()
+      await user.keyboard('v')
+      // Active lane is Foundation — the Design view-toggle verb is inert.
+      expect(navSpy).not.toHaveBeenCalled()
+
+      fireEvent.pointerDown(design)
+      navSpy.mockClear()
+      await user.keyboard('v')
+      // Active lane is Design — `v` toggles canvas → coverage via navigate.
+      expect(navSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ kind: 'design', view: 'coverage' }),
+      )
+    } finally {
+      navSpy.mockRestore()
+    }
   })
 })
