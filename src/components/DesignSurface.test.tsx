@@ -6,7 +6,7 @@ import { act, fireEvent, render, screen, waitFor, within } from '@testing-librar
 import userEvent from '@testing-library/user-event'
 import * as router from '../shell/router'
 import { openDatabase } from '../db/client'
-import { addDimension, addParameter, createProject } from '../db/mutations'
+import { addDimension, addParameter, addTier2Table, createProject } from '../db/mutations'
 import { addWorkspaceMember } from '../db/workspaces'
 import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
@@ -684,5 +684,66 @@ describe('WorkspaceSurface — active-lane scoping of Design global verbs (issue
     } finally {
       navSpy.mockRestore()
     }
+  })
+})
+
+// Issue 089 D2 Phase 4 — per-lane sticky context headers. Before P4 every
+// surface portaled its context content into the ONE shared shell `.context-bar`
+// slot (slots.tsx); with all three lanes co-mounted, Architecture's quick-jump
+// and Design's breadcrumbs/switcher/coverage landed in the SAME div and
+// jumbled. P4 moves each surface's context content into its own in-lane sticky
+// header (.workspace__lane-header), so the two now render simultaneously, each
+// scoped to its own lane. This is the red-first proof: a per-lane header exists
+// in BOTH lanes at once (impossible with a single slot), and the shell slot no
+// longer receives any surface context content (reserved for the D1 FormatStrip).
+describe('WorkspaceSurface — per-lane sticky context headers (issue 089 D2 P4)', () => {
+  async function renderWithArchTable() {
+    await addTier2Table(requireDatabase(), projectId, 'Stakeholders')
+    render(
+      <ContextBarProvider>
+        <ContextBarSlot />
+        <WorkspaceSurface route={{ kind: 'design', projectId, contextPath: [], view: 'canvas' }} />
+      </ContextBarProvider>,
+    )
+    // The Design lane resolving its canvas (canvas-shell) signals all lanes live.
+    await waitFor(() =>
+      expect(document.querySelector('.workspace__lane--design .canvas-shell')).toBeInTheDocument(),
+    )
+  }
+
+  it("renders Architecture's quick-jump AND Design's breadcrumbs/switcher/coverage simultaneously, each in its OWN lane's sticky header — not jumbled in one shared slot", async () => {
+    await renderWithArchTable()
+
+    // Architecture's quick-jump lives in the Architecture lane's own header.
+    const archHeader = document.querySelector(
+      '.workspace__lane--architecture .workspace__lane-header',
+    ) as HTMLElement
+    expect(archHeader).toBeInTheDocument()
+    expect(
+      within(archHeader).getByRole('button', { name: 'Jump to Stakeholders' }),
+    ).toBeInTheDocument()
+
+    // Design's location (breadcrumb + switcher), controls (view toggle) and stats
+    // (coverage) all live in the Design lane's own header, at the same time.
+    const designHeader = document.querySelector(
+      '.workspace__lane--design .workspace__lane-header',
+    ) as HTMLElement
+    expect(designHeader).toBeInTheDocument()
+    expect(
+      within(designHeader).getByRole('navigation', { name: 'Canvas depth' }),
+    ).toBeInTheDocument()
+    expect(within(designHeader).getByRole('button', { name: /^Canvas:/ })).toBeInTheDocument()
+    expect(within(designHeader).getByText(/documented/)).toBeInTheDocument()
+
+    // They are DISTINCT headers in DISTINCT lanes — the whole point of P4.
+    expect(archHeader).not.toBe(designHeader)
+
+    // The shell `.context-bar` slot no longer receives any surface context
+    // content — it is reserved for the focus-revealed D1 FormatStrip and stays
+    // empty (hidden) while no rich editor is focused.
+    const slot = document.querySelector('.context-bar')
+    expect(slot?.querySelector('.t2-quickjump')).toBeNull()
+    expect(slot?.querySelector('.coverage-stat')).toBeNull()
+    expect(slot?.querySelector('.context-bar__location')).toBeNull()
   })
 })

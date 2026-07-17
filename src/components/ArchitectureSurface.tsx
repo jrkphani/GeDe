@@ -3,7 +3,6 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import type { Tier2EntryRow, Tier2TableRow } from '../db/mutations'
 import { buildEntryTree, flattenEntryTree } from '../domain/entryTree'
 import { canWrite } from '../domain/workspaceRole'
-import { ContextBar } from '../shell/slots'
 import { useStatusStore } from '../store/status'
 import { useTier2Store, type EntryLink } from '../store/tier2'
 import { useWorkspaceRole } from '../store/workspace'
@@ -48,8 +47,13 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
   }
 
   return (
-    <main className="architecture">
-      <ContextBar>
+    <>
+      {/* 089 D2 P4 — the quick-jump used to portal into the ONE shared shell
+          `.context-bar` slot; with three lanes co-mounted that jumbled it with
+          Design's context groups. It now renders as this Architecture lane's OWN
+          in-lane sticky header (.workspace__lane-header), leaving the shell slot
+          to host only the focus-revealed D1 FormatStrip. */}
+      <div className="workspace__lane-header">
         <div className="t2-contextbar">
           {/* Navigate-only (issue 084 finding 5): the quick-jump list stays,
               but creation no longer lives in this bar — it moved to the stable
@@ -66,41 +70,43 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
             </Button>
           ))}
         </div>
-      </ContextBar>
+      </div>
 
-      <h2 className="tier2-header">2nd Tier · Architecture</h2>
+      <main className="architecture">
+        <h2 className="tier2-header">2nd Tier · Architecture</h2>
 
-      {/* D1 (issue 084) — the single create path: a stable, always-visible typed
-          add-row fixed directly under the header. It never relocates as tables
-          accumulate and is the only "add table" affordance (the old
-          context-bar focus-only button is gone, finding 2). A viewer never sees
-          this write-only affordance (issue 035). */}
-      {readOnly ? null : (
-        <div className="t2-add-table">
-          <span className="t2-add-table__glyph" aria-hidden>
-            +
-          </span>
-          <PhantomInput
-            placeholder="Name a table"
-            ariaLabel="Add architecture table"
-            inputClassName="t2-add-table__input"
-            onSubmit={(name) => void addTable(name)}
-          />
-        </div>
-      )}
+        {/* D1 (issue 084) — the single create path: a stable, always-visible typed
+            add-row fixed directly under the header. It never relocates as tables
+            accumulate and is the only "add table" affordance (the old
+            context-bar focus-only button is gone, finding 2). A viewer never sees
+            this write-only affordance (issue 035). */}
+        {readOnly ? null : (
+          <div className="t2-add-table">
+            <span className="t2-add-table__glyph" aria-hidden>
+              +
+            </span>
+            <PhantomInput
+              placeholder="Name a table"
+              ariaLabel="Add architecture table"
+              inputClassName="t2-add-table__input"
+              onSubmit={(name) => void addTable(name)}
+            />
+          </div>
+        )}
 
-      {/* Empty-state guidance (issue 084 finding 1): one orienting line so a
-          first-run project is never a bare input with nothing actionable. */}
-      {tables.length === 0 && !readOnly ? (
-        <p className="t2-empty">
-          No tables yet. Name your first dimension above — e.g. “Stakeholders”, “Value”.
-        </p>
-      ) : null}
+        {/* Empty-state guidance (issue 084 finding 1): one orienting line so a
+            first-run project is never a bare input with nothing actionable. */}
+        {tables.length === 0 && !readOnly ? (
+          <p className="t2-empty">
+            No tables yet. Name your first dimension above — e.g. “Stakeholders”, “Value”.
+          </p>
+        ) : null}
 
-      {tables.map((table) => (
-        <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
-      ))}
-    </main>
+        {tables.map((table) => (
+          <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
+        ))}
+      </main>
+    </>
   )
 }
 

@@ -256,7 +256,9 @@ describe('ArchitectureSurface — empty-state guidance (issue 084 finding 1)', (
   it('drops the orienting copy once a table exists, but keeps the stable add-row', async () => {
     await addTier2Table(db, projectId, 'Stakeholders')
     render(<ArchitectureSurface projectId={projectId} />)
-    await screen.findByText('Stakeholders')
+    // 089 D2 P4 — the table name now also appears as a quick-jump button in the
+    // lane header, so disambiguate to the table panel's own name display.
+    await screen.findByText('Stakeholders', { selector: '.t2-table__name' })
     expect(screen.queryByText(/No tables yet/i)).not.toBeInTheDocument()
     // The add-row never relocates — still present above the tables.
     expect(screen.getByPlaceholderText('Name a table')).toBeInTheDocument()
@@ -267,7 +269,9 @@ describe('ArchitectureSurface — single add grammar (issue 084 finding 2)', () 
   it('has exactly one create path and no second focus-only "Add table" control', async () => {
     await addTier2Table(db, projectId, 'Stakeholders')
     render(<ArchitectureSurface projectId={projectId} />)
-    await screen.findByText('Stakeholders')
+    // 089 D2 P4 — the table name now also appears as a quick-jump button in the
+    // lane header, so disambiguate to the table panel's own name display.
+    await screen.findByText('Stakeholders', { selector: '.t2-table__name' })
     // The old context-bar focus-only pseudo-button (labeled "Add table") is gone.
     expect(screen.queryByRole('button', { name: 'Add table' })).not.toBeInTheDocument()
     // Exactly one typed create input for tables.

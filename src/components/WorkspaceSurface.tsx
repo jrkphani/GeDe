@@ -11,8 +11,18 @@ import type { AppRoute } from '../shell/routes'
 // parses/serializes exactly as before and still carries Design's
 // contextPath / view / canvasId — this component only changes WHAT the route
 // mounts (all three lanes at once instead of the single-surface switch in
-// App.tsx). Scroll-to-lane deep-linking (P2), active-lane handler scoping (P3),
-// and per-lane sticky context headers (P4) are later phases.
+// App.tsx). Scroll-to-lane deep-linking (P2) and active-lane handler scoping
+// (P3) are earlier phases.
+//
+// 089 D2 P4 — per-lane sticky context headers: each surface now renders its own
+// context content as an in-lane `.workspace__lane-header` (position: sticky) at
+// the top of its lane column, instead of portaling into the single shared shell
+// `.context-bar` slot (which co-mounting made jumble Architecture's quick-jump
+// with Design's breadcrumbs/switcher/coverage). The shell slot is left to host
+// ONLY the focus-revealed D1 FormatStrip. Each lane's own content scrolls under
+// its sticky header within the shared `.surface` scroll region; below ~1024px
+// the `.workspace` row reflows to a stacked single column (base.css), where
+// ⌘1/2/3 scroll-to-lane is the load-bearing navigation.
 //
 // All three surfaces' load effects are idempotent and projectId-keyed
 // (FoundationSurface tier1, ArchitectureSurface tier2, DesignSurface canvases /

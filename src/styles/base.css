@@ -308,6 +308,50 @@ body {
   margin: 0;
 }
 
+/* ── Issue 089 D2 Phase 4 · per-lane sticky context headers ──────────────────
+   Each lane surface (Design, Architecture) renders its own context content as
+   the FIRST child of its lane column — an in-lane header that sticks to the top
+   of the shared `.surface` scroll region as that lane's content scrolls under
+   it. This replaces the old single shared `.context-bar` portal (slots.tsx),
+   which co-mounting three lanes made jumble each surface's groups together. The
+   shell `.context-bar` slot now hosts ONLY the focus-revealed D1 FormatStrip.
+   Reuses the `.context-bar` band idiom (panel fill, hairline rule, label size,
+   space-5 between groups) so the lane headers read the same as the old bar. */
+.workspace__lane-header {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  min-height: 32px;
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-5);
+  padding: var(--space-1) var(--space-4);
+  background: var(--panel);
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--text-label);
+}
+
+/* Below the narrow breakpoint the three-column row reflows to a stacked single
+   column: each lane spans the full width and the lanes read top-to-bottom
+   (Foundation · Architecture · Design). Horizontal scroll is dropped (the
+   `min-width: min-content` that forces it in the row layout is neutralized); the
+   tab bar + ⌘1/2/3 scroll-to-lane stay the load-bearing lane navigation. Each
+   lane keeps its own sticky header stacking at the top of the scroll region. */
+@media (max-width: 1024px) {
+  .workspace {
+    flex-direction: column;
+    min-width: 0;
+  }
+
+  .workspace__lane,
+  .workspace__lane--foundation,
+  .workspace__lane--architecture,
+  .workspace__lane--design {
+    width: 100%;
+  }
+}
+
 .status-bar {
   height: 28px;
   flex: none;
@@ -2197,12 +2241,17 @@ body {
   color: var(--ink);
 }
 
-.context-bar .coverage-stat {
+/* 089 D2 P4 — Design's stats group now lives in the Design lane's own sticky
+   header (.workspace__lane-header), not the shell `.context-bar` portal, so
+   match both ancestors. */
+.context-bar .coverage-stat,
+.workspace__lane-header .coverage-stat {
   font-size: 12px;
   color: var(--ink);
 }
 
-.context-bar .draft-count {
+.context-bar .draft-count,
+.workspace__lane-header .draft-count {
   font-size: 12px;
   color: var(--ink-muted);
 }

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ContextBar } from '../shell/slots'
 import type { CanvasEmphasis } from '../domain/canvasAdjacency'
 import { composeReducer, firstUnbound } from '../domain/composeMode'
 import { documentedStatus, isComplete } from '../domain/completeness'
@@ -529,7 +528,12 @@ export function DesignSurface({
 
   return (
     <>
-      <ContextBar>
+      {/* 089 D2 P4 — this context content used to portal into the ONE shared
+          shell `.context-bar` slot; with three lanes co-mounted that jumbled
+          Design's groups together with Architecture's quick-jump. It now renders
+          as this Design lane's OWN in-lane sticky header (.workspace__lane-header),
+          leaving the shell slot to host only the focus-revealed D1 FormatStrip. */}
+      <div className="workspace__lane-header design-lane-header">
         {/* Design brief (issue 027): the bar reads as three distinct groups —
             location (breadcrumb, the primary depth nav) · controls (dimension
             manager, canvas/coverage toggle) · stats (documented, drafts) —
@@ -598,7 +602,7 @@ export function DesignSurface({
             {draftCount} draft{draftCount === 1 ? '' : 's'}
           </span>
         </div>
-      </ContextBar>
+      </div>
       <main className="design-main" data-view={view}>
         {view === 'canvas' ? (
           <>
