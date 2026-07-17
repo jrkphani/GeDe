@@ -1,7 +1,35 @@
 # 089: Unified canvas workspace — three tiers as one zoomable canvas + a global rich-text toolbar
 
-- **Status**: OPEN — exploration / proposal, not started. No code written. This doc is the design cycle that must precede any implementation (mirrors how 085 got a full spec before a line changed).
-- **Milestone**: post-M6 (call it **M7 — workspace unification**). No sync/infra blocker for the toolbar half; the zoom-canvas half is the largest client-side surgery the app has attempted and should be gated behind a spike (see Recommended sequencing). This supersedes nothing yet — it *proposes* to partially supersede the tier-tab routing model (SITEMAP §1) and re-open a tension 085 explicitly closed (canvas-as-visual). Both are named honestly below.
+- **Status**: **D1 SHIPPED** (2026-07-17) — the global rich-text toolbar is merged to `main` and deploying (frontend-only + a value-gated heal-on-load; **no schema migration**). **D2** (single scrollable lane page), **D3** (pan/zoom canvas), and **rich identifier columns** remain **OPEN**. See `## D1 — SHIPPED (implementation notes)` below. The rest of this doc is the design cycle that must precede any canvas implementation (mirrors how 085 got a full spec before a line changed).
+- **Milestone**: post-M6 (call it **M7 — workspace unification**). No sync/infra blocker for the toolbar half (D1 — now shipped); the zoom-canvas half is the largest client-side surgery the app has attempted and should be gated behind a spike (see Recommended sequencing). This supersedes nothing yet — it *proposes* to partially supersede the tier-tab routing model (SITEMAP §1) and re-open a tension 085 explicitly closed (canvas-as-visual). Both are named honestly below.
+
+## D1 — SHIPPED (implementation notes)
+
+**Shipped 2026-07-17** — the global rich-text toolbar (the vision's second half) is merged to `main` and deploying. Commits: `feat(089-D1)` phases 1-5 + `fix(089-D1)` P6 (latest `ded2ff4`). **No schema migration** (the target columns were already `text`; migration count untouched). **Verify:fast 1424 tests + full e2e 51/0.**
+
+### What landed
+- **A global `FormatStrip`** (`src/components/FormatStrip.tsx`) in the context bar, bound to whichever rich editor is focused via a **focused-editor registry** (`src/store/focusedEditor.ts`). Focus-reveal: the band appears when a rich editor takes focus, no always-on chrome (a softer read than a permanent format band, keeping the drafting-table restraint).
+- **Every PROSE field is now rich**: `tier1_purpose.body` (Purpose is now a standalone `RichTextEditor`, like existing-scenario, replacing the old `MultilineEdit`), `tier1_props.description`, `tier2_entries.description`, and `contexts.justification` (a new **`richtext` `EditableGrid` cell kind** with an explicit escape grammar — **Cmd+Enter = commit-down**, **Esc = revert**, **Tab stays out** — so a Lexical editor swallowing Enter/Tab no longer breaks the Numbers grammar).
+- **A plain↔Lexical bridge** (`src/domain/richText.ts`: `richTextToPlainText` / `plainTextToRichJson`) plus the repaired search/status consumers of justification (they now extract plain text from the Lexical state rather than reading the raw string).
+- **A repeatable, value-gated heal-on-load** (`src/store/richTextConvert.ts`, wired in `DesignSurface`): converts legacy plain-string prose to Lexical JSON on project open, `op='update'`, idempotent, **bypasses the command log**, and **re-heals** cells that an un-upgraded peer clobbers back — because LWW is **value-blind** and would otherwise let an old client overwrite the converted value with plain text again.
+
+### Owner's locked choices (the forks D1 resolved)
+- **Toolbar form: persistent context-bar strip** (fork 2), not a selection popover — most discoverable, no transform math, and it drops straight into the existing context bar. Realized as focus-reveal rather than always-on.
+- **Back-compat: a one-time convert, realized as a *repeatable* value-gated heal** (fork 3), *not* the display-only fallback the original doc recommended. The convert had to become repeatable precisely because LWW is value-blind (an un-upgraded peer re-clobbers), so a one-shot migration would silently regress; the heal re-converts on every load until every peer is upgraded.
+- **Which fields: prose now, identifiers deferred** (fork 4) — all four prose columns are rich; the `*.name` / `contexts.symbol` identifier columns are **deferred pending an owner decision** (see below).
+
+### Corrections the build proved vs the original doc
+The build confirmed three things the doc's plan had already flagged as likely, plus surfaced one it hadn't:
+1. **No migration needed** — the columns were already `text`, so Lexical JSON fits with zero schema change (the plan predicted this; the build confirmed it — migration count untouched).
+2. **`contexts` has no `name` column** — only `justification` is the rich target on the Design grid (the "make every cell rich" framing over-reached; there was no name cell to convert).
+3. **Only `justification` was actually searched** — the search/semantic consumers touched justification, not every description, so the plain-text-extraction repair was scoped to it.
+4. **The strip's auto-bind had an effect-ordering bug** (surfaced by the pre-push gate, not the plan/tests): the strip failed to auto-bind on grid cells because of effect ordering; **fixed by having the registry reconcile the currently-active editor** on register rather than relying on the focus event alone. The gate also caught two smaller misses the plan/tests didn't: a hardcoded `"Add justification…"` placeholder, and 4 e2e specs still driving justification as a `<textarea>`.
+
+### Identifier columns — deferred, owner decision pending
+Making `*.name` / `contexts.symbol` rich is **hazardous** and is intentionally left out of D1:
+- They feed the **duplicate-detection tuple hash** — any comparison site would need plain-text extraction *everywhere* they're compared, or the hash silently changes for identical-looking values.
+- The `InlineEdit` callers (`DimensionManager`, `ParameterList`) **lack `readOnly` threading**, so a rich variant can't cleanly express a read-only state there without new plumbing.
+- **Recommendation:** keep identifiers **plain**, OR — if a rich identifier is truly wanted — introduce a **lists/indent-disabled, single-line-rich variant** (no block formatting, no newline) so identifiers stay hashable and single-line. This is an explicit owner call, not a D1 follow-through.
 
 ## Vision (owner)
 
@@ -28,6 +56,8 @@ Resolved after the library research below (which had defaulted to "reject React 
 - **The rich-text toolbar half is unaffected** by this decision and should still ship first (D1), decoupled from the canvas merge — see Recommended sequencing.
 
 Open sub-questions this decision leaves (for the spike): dagre vs elk; how a lane's internal tree (Tier-2 nested entries) renders inside a node vs as its own subflow; Radix popovers anchored inside a zoomed React Flow node (Floating-UI-under-transform, below); and level-of-detail perf when all three lanes are mounted.
+
+> **UNRESOLVED — canvas substrate contradiction (must reconcile before any D2/D3 build).** This owner Decision picks **React Flow (`@xyflow/react`)**, but the library research appended later (**§5 "React Flow as an all-in-one — the decisive tradeoff"**) reaches the *opposite* conclusion: **reject React Flow** as the substrate in favor of a **CSS-transform plane + a small gesture lib (front-runner `@panzoom/panzoom`)**, on the grounds that React Flow is position-authoritative (fights "position is derived") and only relocates GeDe's hard problems. The two halves of this doc therefore disagree on the single most consequential canvas choice. Per the doc's own **Recommended sequencing** ("spike D3 before committing"), this is exactly what the spike must settle — **do not start any canvas build until the React-Flow-vs-CSS-transform question is reconciled.** D1 (shipped) is unaffected; it depends on neither.
 
 ## Recursion (drill-in) & coverage on the canvas (owner decisions, 2026-07-16)
 
@@ -201,10 +231,10 @@ Today `Toolbar` is constructed with a specific `editor` and reads its state via 
 
 ## Open design forks (owner decisions — each changes the build)
 
-1. **Ship the toolbar independently of the canvas merge?** (Recommend **yes** — D1 is high-value, low-risk, and needs none of the canvas work.)
-2. **Toolbar form:** persistent context-bar strip, selection popover, or both? (Recommend strip first; popover if D3 ships.)
-3. **Rich-text back-compat:** display-only fallback for existing plain strings, or a one-time convert migration? (Recommend fallback.)
-4. **Which fields become rich?** all descriptions + justification + purpose, or a chosen subset? (Purpose and justification are prose — clear yes; short name cells — probably no.)
+1. ~~**Ship the toolbar independently of the canvas merge?**~~ **RESOLVED — yes (D1 shipped 2026-07-17).** The toolbar shipped standalone with none of the canvas work.
+2. ~~**Toolbar form:** persistent context-bar strip, selection popover, or both?~~ **RESOLVED — persistent context-bar strip** (`FormatStrip`), realized as focus-reveal (appears on rich-editor focus). Popover still reconsiderable if D3 ships.
+3. ~~**Rich-text back-compat:** display-only fallback or a one-time convert migration?~~ **RESOLVED — convert, realized as a *repeatable* value-gated heal-on-load** (`richTextConvert.ts`), not the display-only fallback the doc originally recommended. It must repeat because LWW is value-blind (an un-upgraded peer re-clobbers the converted value with plain text).
+4. ~~**Which fields become rich?**~~ **RESOLVED — prose now, identifiers deferred.** All four prose columns (Purpose, both descriptions, justification) are rich; `*.name` / `contexts.symbol` identifiers are deferred pending an owner call (see "Identifier columns — deferred" above).
 5. **Zoom/pan tech:** CSS transform + `@use-gesture` (recommended), `react-zoom-pan-pinch`, or a scene-graph lib (tldraw/react-flow, not recommended for tables)?
 6. **Do lanes share one scroll/plane or stay independent?** i.e. is D2's page one scroll region or three lane-local scrolls under a shared header?
 7. **Is the Design ring still canvas-as-visual (085) inside its lane, or does the whole page-canvas replace that role?** (The 085 tension — needs an explicit call.)
