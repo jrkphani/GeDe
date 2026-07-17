@@ -131,11 +131,13 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
       label: 'add dimension',
       async undo() {
         // Bypasses the n=2 floor deliberately — see undoAddDimension's doc.
-        await undoAddDimension(db, projectId, row.id)
+        // Scoped to this canvas (090 Phase 4c) so the sibling-sort rewrite
+        // touches only this canvas's rows.
+        await undoAddDimension(db, projectId, row.id, canvasId ?? undefined)
         set({ dimensions: await dbList(db, projectId, canvasId) })
       },
       async redo() {
-        await dbRestore(db, projectId, row.id, orderedIdsAfterAdd)
+        await dbRestore(db, projectId, row.id, orderedIdsAfterAdd, [], canvasId ?? undefined)
         set({ dimensions: await dbList(db, projectId, canvasId) })
       },
     })
@@ -185,12 +187,12 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
   },
 
   async reorder(id, toIndex) {
-    const { projectId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return
     const db = requireDatabase()
     const before = get().dimensions
     const fromIndex = before.findIndex((d) => d.id === id)
-    const after = await dbReorder(db, projectId, id, toIndex)
+    const after = await dbReorder(db, projectId, id, toIndex, canvasId ?? undefined)
     set({ dimensions: after })
     // Issue 073 Subtlety B — reorderDimension's rewriteSort rewrites `sort` on
     // EVERY sibling row whose position actually moved, not just the one
@@ -206,16 +208,16 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: 'reorder dimension',
       async undo() {
-        set({ dimensions: await dbReorder(db, projectId, id, fromIndex) })
+        set({ dimensions: await dbReorder(db, projectId, id, fromIndex, canvasId ?? undefined) })
       },
       async redo() {
-        set({ dimensions: await dbReorder(db, projectId, id, toIndex) })
+        set({ dimensions: await dbReorder(db, projectId, id, toIndex, canvasId ?? undefined) })
       },
     })
   },
 
   async remove(id) {
-    const { projectId } = get()
+    const { projectId, canvasId } = get()
     if (projectId === null) return { ok: false }
     const db = requireDatabase()
     const before = get().dimensions
@@ -223,7 +225,7 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     const removedRow = before.find((d) => d.id === id)
     const removedName = removedRow?.name ?? ''
     try {
-      const { dimensions: after, deletedBindings } = await dbRemove(db, projectId, id)
+      const { dimensions: after, deletedBindings } = await dbRemove(db, projectId, id, canvasId ?? undefined)
       set({ dimensions: after })
       // Issue 073 — the removed row is a soft-delete tombstone; removeDimension
       // ALSO rewrites `sort` on every surviving sibling (Subtlety B, same
@@ -241,12 +243,12 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
       useCommandLogStore.getState().push({
         label: `remove dimension "${removedName}"`,
         async undo() {
-          const restored = await dbRestore(db, projectId, id, orderedIds, deletedBindings)
+          const restored = await dbRestore(db, projectId, id, orderedIds, deletedBindings, canvasId ?? undefined)
           set({ dimensions: restored })
           await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
         },
         async redo() {
-          const result = await dbRemove(db, projectId, id)
+          const result = await dbRemove(db, projectId, id, canvasId ?? undefined)
           set({ dimensions: result.dimensions })
           await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(result.deletedBindings))
         },

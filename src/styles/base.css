@@ -179,6 +179,76 @@ body {
   flex: none;
 }
 
+/* Issue 090 Phase 4c — the root-canvas switcher, in the location group. The
+   trigger stays compact (max-width + ellipsis) so it never overflows the 32px
+   bar; the menu reuses the .popover chrome with a row idiom mirroring
+   .project-row (rowAction rename/delete + a "type to create" phantom row). */
+.canvas-switcher__trigger {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  max-width: 220px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--ink-muted);
+  border-radius: var(--radius);
+  color: var(--ink);
+  background: var(--paper);
+  cursor: pointer;
+  font: inherit;
+  font-size: var(--text-label);
+}
+
+.canvas-switcher__trigger:hover {
+  background: var(--grid-minor);
+}
+
+.canvas-switcher__current {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-switcher__chevron {
+  flex-shrink: 0;
+  color: var(--ink-muted);
+}
+
+.canvas-switcher__list {
+  display: flex;
+  flex-direction: column;
+}
+
+.canvas-switcher__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 32px;
+  padding: 0 var(--space-1);
+  cursor: pointer;
+}
+
+.canvas-switcher__row:hover,
+.canvas-switcher__row:focus-visible,
+.canvas-switcher__row--selected {
+  background: var(--row-zebra);
+  outline: none;
+}
+
+.canvas-switcher__name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.canvas-switcher__row--phantom {
+  cursor: text;
+}
+
+.canvas-switcher__row--phantom:hover {
+  background: none;
+}
+
 .surface {
   flex: 1;
   overflow: auto;

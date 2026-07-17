@@ -35,6 +35,32 @@ describe('parseRoute', () => {
     })
   })
 
+  it('parses ?canvas= at depth 0 (issue 090 Phase 4c root-canvas switcher)', () => {
+    expect(parseRoute('/p/abc/design', '?canvas=c9')).toEqual({
+      kind: 'design',
+      projectId: 'abc',
+      contextPath: [],
+      view: 'canvas',
+      canvasId: 'c9',
+    })
+    expect(parseRoute('/p/abc/design', '?view=coverage&canvas=c9')).toEqual({
+      kind: 'design',
+      projectId: 'abc',
+      contextPath: [],
+      view: 'coverage',
+      canvasId: 'c9',
+    })
+  })
+
+  it('ignores ?canvas= at depth>0 (the context chain pins the canvas)', () => {
+    expect(parseRoute('/p/abc/design/c1', '?canvas=c9')).toEqual({
+      kind: 'design',
+      projectId: 'abc',
+      contextPath: ['c1'],
+      view: 'canvas',
+    })
+  })
+
   it('parses the v2 auth on-ramp routes (issue 033, SITEMAP §1)', () => {
     expect(parseRoute('/welcome', '')).toEqual({ kind: 'welcome' })
     expect(parseRoute('/login', '')).toEqual({ kind: 'login' })
@@ -67,6 +93,8 @@ describe('serializeRoute round-trips', () => {
     { kind: 'tier', projectId: 'abc', tier: 'foundation' },
     { kind: 'tier', projectId: 'abc', tier: 'architecture' },
     { kind: 'design', projectId: 'abc', contextPath: [], view: 'canvas' },
+    { kind: 'design', projectId: 'abc', contextPath: [], view: 'canvas', canvasId: 'c9' },
+    { kind: 'design', projectId: 'abc', contextPath: [], view: 'coverage', canvasId: 'c9' },
     { kind: 'design', projectId: 'abc', contextPath: ['c1', 'c2'], view: 'coverage' },
     { kind: 'design', projectId: 'a b', contextPath: ['c/1'], view: 'canvas' },
     { kind: 'welcome' },
@@ -89,5 +117,15 @@ describe('serializeRoute round-trips', () => {
     expect(
       serializeRoute({ kind: 'design', projectId: 'abc', contextPath: [], view: 'coverage' }),
     ).toBe('/p/abc/design?view=coverage')
+  })
+
+  it('serializes ?canvas= at depth 0 but omits it at depth>0', () => {
+    expect(
+      serializeRoute({ kind: 'design', projectId: 'abc', contextPath: [], view: 'canvas', canvasId: 'c9' }),
+    ).toBe('/p/abc/design?canvas=c9')
+    // Depth>0: the canvas is pinned by the context chain, so `canvas` is dropped.
+    expect(
+      serializeRoute({ kind: 'design', projectId: 'abc', contextPath: ['c1'], view: 'canvas', canvasId: 'c9' }),
+    ).toBe('/p/abc/design/c1')
   })
 })

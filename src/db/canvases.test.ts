@@ -12,10 +12,13 @@ import {
   createCanvas,
   createContext,
   createProject,
+  DimensionFloorError,
   listCanvases,
   listContexts,
   listDimensions,
   openChildCanvas,
+  removeDimension,
+  reorderDimension,
   restoreCanvasCascade,
   RootCanvasFloorError,
 } from './mutations'
@@ -466,5 +469,73 @@ describe('canvases cascade + floor (issue 090 Phase 4a)', () => {
     const { db, canvasB } = await projectWithSecondCanvas()
     // Two live root canvases (A seeded, B created) — archiving B is fine.
     await expect(archiveCanvasCascade(db, canvasB.id)).resolves.toBeDefined()
+  })
+})
+
+// ── Phase 4c: dimension remove/reorder scope to their canvas ──────────────────
+// Before Phase 4c, removeDimension/reorderDimension took only (db, projectId)
+// and listed the DEFAULT root canvas, so a remove/reorder on a NON-default root
+// canvas mis-scoped: the floor counted the wrong canvas's dimensions and the
+// sibling-sort rewrite touched the wrong canvas. These assert the canvasId
+// thread-through fixes both.
+describe('dimension mutations scope to their canvas (issue 090 Phase 4c)', () => {
+  async function twoRootCanvases() {
+    const { db } = await openDatabase('memory://')
+    const project = await createProject(db, { name: 'Scoped' })
+    // createProject seeds canvas A (the default); add a second root canvas B.
+    const canvasA = must((await listCanvases(db, project.id))[0], 'canvas A')
+    const canvasB = await createCanvas(db, project.id, 'B')
+    return { db, projectId: project.id, canvasA, canvasB }
+  }
+
+  it('removing a dimension on canvas B leaves canvas A untouched', async () => {
+    const { db, projectId, canvasA, canvasB } = await twoRootCanvases()
+    const a1 = await addDimension(db, projectId, 'A1', canvasA.id)
+    const a2 = await addDimension(db, projectId, 'A2', canvasA.id)
+    const b1 = await addDimension(db, projectId, 'B1', canvasB.id)
+    const b2 = await addDimension(db, projectId, 'B2', canvasB.id)
+    const b3 = await addDimension(db, projectId, 'B3', canvasB.id)
+
+    // Remove a dimension from B (3 → 2, above floor), scoped to canvas B.
+    const { dimensions: afterB } = await removeDimension(db, projectId, b2.id, canvasB.id)
+    expect(afterB.map((d) => d.id)).toEqual([b1.id, b3.id])
+
+    // Canvas A is completely untouched — same rows, same order/sort.
+    const afterA = await listDimensions(db, projectId, canvasA.id)
+    expect(afterA.map((d) => d.id)).toEqual([a1.id, a2.id])
+    expect(afterA.map((d) => d.sort)).toEqual([0, 1])
+  })
+
+  it('the floor check counts the TARGET canvas B, not the default canvas A', async () => {
+    const { db, projectId, canvasA, canvasB } = await twoRootCanvases()
+    // A (the default) has 3 dims — comfortably above the floor.
+    await addDimension(db, projectId, 'A1', canvasA.id)
+    await addDimension(db, projectId, 'A2', canvasA.id)
+    await addDimension(db, projectId, 'A3', canvasA.id)
+    // B has exactly 2 — removing one would break B's floor.
+    const b1 = await addDimension(db, projectId, 'B1', canvasB.id)
+    await addDimension(db, projectId, 'B2', canvasB.id)
+
+    // Must throw: B is AT the floor (2), even though the default canvas A has 3.
+    await expect(removeDimension(db, projectId, b1.id, canvasB.id)).rejects.toBeInstanceOf(
+      DimensionFloorError,
+    )
+    // Nothing was removed from B.
+    expect(await listDimensions(db, projectId, canvasB.id)).toHaveLength(2)
+  })
+
+  it('reorder on canvas B does not renumber canvas A', async () => {
+    const { db, projectId, canvasA, canvasB } = await twoRootCanvases()
+    const a1 = await addDimension(db, projectId, 'A1', canvasA.id)
+    const a2 = await addDimension(db, projectId, 'A2', canvasA.id)
+    const b1 = await addDimension(db, projectId, 'B1', canvasB.id)
+    const b2 = await addDimension(db, projectId, 'B2', canvasB.id)
+
+    const afterB = await reorderDimension(db, projectId, b1.id, 1, canvasB.id)
+    expect(afterB.map((d) => d.id)).toEqual([b2.id, b1.id])
+    // A keeps its original order and contiguous sorts.
+    const afterA = await listDimensions(db, projectId, canvasA.id)
+    expect(afterA.map((d) => d.id)).toEqual([a1.id, a2.id])
+    expect(afterA.map((d) => d.sort)).toEqual([0, 1])
   })
 })

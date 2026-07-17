@@ -9,6 +9,7 @@ import type { ContextRow } from '../db/mutations'
 import { navigate } from '../shell/router'
 import { canWrite } from '../domain/workspaceRole'
 import { useCommandLogStore } from '../store/commandLog'
+import { useCanvasesStore } from '../store/canvases'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
@@ -23,20 +24,61 @@ import { ChildCanvasBanners } from './ChildCanvasBanners'
 import { ContextRegister } from './ContextRegister'
 import { CoverageMatrix } from './CoverageMatrix'
 import { DimensionManagerPanel } from './DimensionManager'
+import { CanvasSwitcher } from './CanvasSwitcher'
 import type { DesignView } from '../shell/routes'
 
 export function DesignSurface({
   projectId,
   contextPath,
   view,
+  canvasId,
 }: {
   projectId: string
   contextPath: string[]
   view: DesignView
+  // Issue 090 Phase 4c — the root-canvas selector from `?canvas=` (depth 0
+  // only). Undefined ⇒ the project's default (first) root canvas.
+  canvasId?: string | undefined
 }) {
   // The canvas currently open: null = root canvas; the last path segment = the
   // context whose child canvas we're inside (issue 011).
   const contextId = contextPath.length > 0 ? (contextPath[contextPath.length - 1] as string) : null
+  const atRoot = contextPath.length === 0
+  // Issue 090 Phase 4c — the live root canvases of this project, so the switcher
+  // and the active-canvas resolution share one source of truth.
+  const canvases = useCanvasesStore((s) => s.canvases)
+  const storeSelectedCanvasId = useCanvasesStore((s) => s.selectedCanvasId)
+  useEffect(() => {
+    void useCanvasesStore.getState().load(projectId)
+  }, [projectId])
+  // At depth 0 the active root canvas is `?canvas=` validated against the live
+  // list (a stale/deleted id falls back to the first root canvas); at depth>0
+  // the canvas is pinned by the context chain, so this is null and the load
+  // selector is the URL context id instead (resolved to that context's child
+  // canvas by the store's resolveCanvasScope).
+  const activeRootCanvasId = useMemo(() => {
+    if (!atRoot || canvases.length === 0) return null
+    const fromRoute = canvasId && canvases.some((c) => c.id === canvasId) ? canvasId : null
+    return fromRoute ?? canvases[0]?.id ?? null
+  }, [atRoot, canvases, canvasId])
+  // Keep the store's selection aligned with the URL so archive's reselect and
+  // create's "append after" reason from the canvas the user is actually on.
+  useEffect(() => {
+    if (activeRootCanvasId) useCanvasesStore.getState().select(activeRootCanvasId)
+  }, [activeRootCanvasId])
+  // The concrete selector threaded into the two content stores' load(): a real
+  // root canvas id at depth 0, the URL context id at depth>0.
+  const canvasSelector = atRoot ? activeRootCanvasId : contextId
+  // At depth 0 the selector isn't settled until the canvases list has loaded
+  // (a project always has ≥1 root canvas). Loading the content stores with the
+  // transient `null` selector first and the resolved id second would race —
+  // whichever SELECT resolves last wins, and a late null-load would strand the
+  // render gate. So hold the load until the selector is settled.
+  const canLoad = !atRoot || activeRootCanvasId !== null
+  // Preserved across the view-toggle navigates below (which always target
+  // contextPath:[]) so Canvas/Coverage + `v` never drop back to canvas 1 — at
+  // depth>0 fall back to the store's last root selection.
+  const preservedCanvasId = activeRootCanvasId ?? storeSelectedCanvasId
   // Issue 035 — a viewer's read surface renders unchanged, minus every write
   // affordance: EditableGrid's phantom row/in-place edit (including the
   // register's own justification cell, issue 085 Phase B), and "New context"
@@ -48,6 +90,12 @@ export function DesignSurface({
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const loadedFor = useDimensionsStore((s) => s.projectId)
   const loadedContextId = useDimensionsStore((s) => s.contextId)
+  // Issue 090 Phase 4c — the RESOLVED canvas id the store last loaded. At depth
+  // 0 the same root canvas is addressable by two selectors (null ⇒ default, or
+  // its real id), both of which resolve here to the same concrete id — so the
+  // render gate keys on this resolved id, not the raw selector, and never
+  // false-blocks when a caller reloads with `null`.
+  const loadedCanvasId = useDimensionsStore((s) => s.canvasId)
   const contexts = useContextsStore((s) => s.contexts)
   const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
   const childCountByContext = useContextsStore((s) => s.childCountByContext)
@@ -87,18 +135,21 @@ export function DesignSurface({
       } else if (!cancelled) {
         setStaleEvents([])
       }
-      await useDimensionsStore.getState().load(projectId, contextId)
-      await useContextsStore.getState().load(projectId, contextId)
+      await useDimensionsStore.getState().load(projectId, canvasSelector)
+      await useContextsStore.getState().load(projectId, canvasSelector)
       void useContextsStore.getState().loadBreadcrumbs(contextPath)
     }
-    void openCanvas()
+    // Only load once the canvas selector is settled (see canLoad above) — this
+    // avoids the transient null-load → resolved-load race at depth 0.
+    if (canLoad) void openCanvas()
     return () => {
       cancelled = true
     }
-    // contextPath identity changes each navigation; contextId is the meaningful
-    // key, and contextPath is only read inside for breadcrumb symbols.
+    // canvasSelector is the meaningful key (a real root canvas id at depth 0,
+    // the URL context id at depth>0); contextId still drives the child-canvas
+    // seed above, and contextPath is only read for breadcrumb symbols.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, contextId])
+  }, [projectId, contextId, canvasSelector, canLoad])
 
   // Tier-2 linkage projection (issue 014): loaded so a promoted parameter's
   // link glyph in ParameterList can name its source entry. Read-only here.
@@ -193,7 +244,13 @@ export function DesignSurface({
   // with that tuple (SPEC §4.5 "gap → composer"). View switch + compose entry
   // happen together; enterCompose is a no-op if a draft is already open.
   function handleComposeTuple(bindings: Record<string, string>) {
-    navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })
+    navigate({
+      kind: 'design',
+      projectId,
+      contextPath: [],
+      view: 'canvas',
+      canvasId: preservedCanvasId ?? undefined,
+    })
     void enterCompose(bindings)
   }
 
@@ -300,11 +357,12 @@ export function DesignSurface({
         projectId,
         contextPath: [],
         view: view === 'canvas' ? 'coverage' : 'canvas',
+        canvasId: preservedCanvasId ?? undefined,
       })
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [view, projectId])
+  }, [view, projectId, preservedCanvasId])
 
   // `d` = focus the dimension rail's first phantom (issue 082 Phase 1 test-
   // first plan item 4) — same capture-phase + text-field-guard grammar as
@@ -430,7 +488,15 @@ export function DesignSurface({
     }
   }, [composeContextId, contexts])
 
-  if (loadedFor !== projectId || loadedContextId !== contextId) return null
+  // Render-gate (issue 090 Phase 4c) — blocks the frame between a canvas switch
+  // and its load resolving. At depth 0 it compares the RESOLVED canvas id (so a
+  // reload via the null-default selector still matches the active root canvas);
+  // at depth>0 the raw context selector is the key (its resolved child canvas id
+  // isn't known here until the store resolves it).
+  const canvasReady = atRoot
+    ? loadedFor === projectId && loadedCanvasId === activeRootCanvasId
+    : loadedFor === projectId && loadedContextId === contextId
+  if (!canvasReady) return null
 
   const dimensionNames = dimensions.map((d) => d.name)
   // Issue 082 Phase 1, Decision 3 (soft-hint floor) — the guided/populated
@@ -456,6 +522,12 @@ export function DesignSurface({
               there's nothing to open from the context bar anymore.
               Root-canvas dimension names trail the crumbs as muted context. */}
           <Breadcrumbs projectId={projectId} crumbs={breadcrumbs} dimensionNames={dimensionNames} />
+          {/* Issue 090 Phase 4c — the root-canvas switcher, depth 0 only. At
+              depth>0 the breadcrumb owns navigation and the canvas is pinned by
+              the context chain, so the switcher would be meaningless there. */}
+          {atRoot ? (
+            <CanvasSwitcher projectId={projectId} view={view} currentCanvasId={activeRootCanvasId} />
+          ) : null}
         </div>
         <div className="context-bar__controls">
           <div className="design-view-toggle" role="group" aria-label="Design view">
@@ -464,7 +536,15 @@ export function DesignSurface({
               className="view-toggle__btn"
               data-active={view === 'canvas' || undefined}
               aria-pressed={view === 'canvas'}
-              onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })}
+              onClick={() =>
+                navigate({
+                  kind: 'design',
+                  projectId,
+                  contextPath: [],
+                  view: 'canvas',
+                  canvasId: preservedCanvasId ?? undefined,
+                })
+              }
             >
               Canvas
             </Button>
@@ -473,7 +553,15 @@ export function DesignSurface({
               className="view-toggle__btn"
               data-active={view === 'coverage' || undefined}
               aria-pressed={view === 'coverage'}
-              onClick={() => navigate({ kind: 'design', projectId, contextPath: [], view: 'coverage' })}
+              onClick={() =>
+                navigate({
+                  kind: 'design',
+                  projectId,
+                  contextPath: [],
+                  view: 'coverage',
+                  canvasId: preservedCanvasId ?? undefined,
+                })
+              }
             >
               Coverage
             </Button>
@@ -497,7 +585,14 @@ export function DesignSurface({
             {/* One choreographed zoom (STYLE_GUIDE §8 drill-down exception):
                 keyed on the canvas so the child fades/scales in on the same
                 graph paper; reduced-motion snaps straight to the rested state. */}
-            <div className="canvas-zoom" key={contextId ?? 'root'} data-depth={contextPath.length}>
+            <div
+              className="canvas-zoom"
+              // Issue 090 Phase 4c — key on the active canvas so switching root
+              // canvases re-triggers the drill/zoom choreography, not just
+              // drilling into a child.
+              key={canvasSelector ?? 'root'}
+              data-depth={contextPath.length}
+            >
               <ChildCanvasBanners
                 events={staleEvents}
                 onUndo={(event) => {

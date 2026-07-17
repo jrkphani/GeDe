@@ -9,7 +9,19 @@ export type AppRoute =
   | { kind: 'projects' }
   | { kind: 'project'; projectId: string } // redirects to the last-visited tier
   | { kind: 'tier'; projectId: string; tier: Tier }
-  | { kind: 'design'; projectId: string; contextPath: string[]; view: DesignView }
+  // Issue 090 Phase 4c — `canvasId` selects among a project's N root canvases
+  // (the switcher). Only meaningful at depth 0 (contextPath empty); at depth>0
+  // the open canvas is fully determined by the context chain, so it is neither
+  // parsed nor serialized there.
+  | {
+      kind: 'design'
+      projectId: string
+      contextPath: string[]
+      view: DesignView
+      // `| undefined` (not just `?`) so callers may pass an explicit
+      // `canvasId: maybeUndefined` under exactOptionalPropertyTypes.
+      canvasId?: string | undefined
+    }
   // v2 (issue 033, ADR-0009) — the hero/login on-ramp. Never gates `/` or any
   // project route; the account-free local app is reachable regardless.
   | { kind: 'welcome' }
@@ -42,8 +54,19 @@ export function parseRoute(pathname: string, search: string): AppRoute {
   if (section === 'design') {
     // Unknown view values degrade to the canvas default rather than 404ing —
     // the path still identifies a real canvas.
-    const view = new URLSearchParams(search).get('view') === 'coverage' ? 'coverage' : 'canvas'
-    return { kind: 'design', projectId, contextPath: segments.slice(3), view }
+    const params = new URLSearchParams(search)
+    const view = params.get('view') === 'coverage' ? 'coverage' : 'canvas'
+    const contextPath = segments.slice(3)
+    // `?canvas=` is only meaningful at depth 0 — a deeper path already pins the
+    // canvas via its context chain, so ignore the param there.
+    const canvasParam = contextPath.length === 0 ? params.get('canvas') : null
+    return {
+      kind: 'design',
+      projectId,
+      contextPath,
+      view,
+      ...(canvasParam ? { canvasId: canvasParam } : {}),
+    }
   }
   return { kind: 'not-found', path: pathname }
 }
@@ -59,8 +82,14 @@ export function serializeRoute(route: AppRoute): string {
       return `/p/${enc(route.projectId)}/${route.tier}`
     case 'design': {
       const depth = route.contextPath.map((c) => `/${enc(c)}`).join('')
-      const view = route.view === 'coverage' ? '?view=coverage' : ''
-      return `/p/${enc(route.projectId)}/design${depth}${view}`
+      const params = new URLSearchParams()
+      if (route.view === 'coverage') params.set('view', 'coverage')
+      // Serialize `canvas` only at depth 0 (contextPath empty) — deeper routes
+      // derive the canvas from the context chain, so the param is redundant and
+      // omitted to keep the URL identity stable across a drill-in.
+      if (route.canvasId && route.contextPath.length === 0) params.set('canvas', route.canvasId)
+      const query = params.toString()
+      return `/p/${enc(route.projectId)}/design${depth}${query ? `?${query}` : ''}`
     }
     case 'welcome':
       return '/welcome'

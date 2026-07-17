@@ -10,6 +10,7 @@ import { addWorkspaceMember } from '../db/workspaces'
 import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { requireDatabase, setDatabase } from '../store/database'
+import { resetCanvasesStore } from '../store/canvases'
 import { resetDimensionsStore, useDimensionsStore } from '../store/dimensions'
 import { resetParametersStore } from '../store/parameters'
 import { resetContextsStore, useContextsStore } from '../store/contexts'
@@ -64,6 +65,7 @@ beforeEach(async () => {
   const { db } = await openDatabase('memory://')
   setDatabase(db)
   resetDimensionsStore()
+  resetCanvasesStore()
   resetParametersStore()
   resetContextsStore()
   resetTier2Store()
@@ -218,6 +220,24 @@ describe('DesignSurface — context bar hierarchy (issue 027)', () => {
     const current = await screen.findByText('α', { selector: '.breadcrumb--current' })
     expect(current).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Root' })).toBeInTheDocument()
+  })
+
+  // Issue 090 Phase 4c — the root-canvas switcher lives in the location group,
+  // and ONLY at depth 0 (at depth>0 the breadcrumb owns navigation).
+  it('renders the canvas switcher at depth 0 (default canvas named "Canvas 1")', async () => {
+    renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
+    const trigger = await screen.findByRole('button', { name: /^Canvas:/ })
+    expect(trigger).toHaveTextContent('Canvas 1')
+    // It lives in the location group, beside the breadcrumb.
+    const location = document.querySelector('.context-bar__location') as HTMLElement
+    expect(location).toContainElement(trigger)
+  })
+
+  it('does NOT render the canvas switcher at depth>0', async () => {
+    const alphaId = await createCompleteRootContextAndReturnId()
+    renderDesignSurface({ projectId, contextPath: [alphaId], view: 'canvas' })
+    await screen.findByText('α', { selector: '.breadcrumb--current' })
+    expect(screen.queryByRole('button', { name: /^Canvas:/ })).not.toBeInTheDocument()
   })
 })
 

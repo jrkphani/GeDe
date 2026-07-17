@@ -614,20 +614,25 @@ async function rewriteSort(db: Database, ordered: DimensionRow[]): Promise<void>
 }
 
 // One gesture = one call = one future undo step (command log lands in 006).
+// Issue 090 Phase 4c — `canvasId` scopes the reorder to a specific root canvas
+// (omitted ⇒ the project's default root canvas, so every pre-4c caller that
+// only knows a projectId is unchanged). Without it a reorder on a non-default
+// root canvas would list/rewrite the DEFAULT canvas's dimensions instead.
 export async function reorderDimension(
   db: Database,
   projectId: string,
   id: string,
   toIndex: number,
+  canvasId?: string,
 ): Promise<DimensionRow[]> {
-  const rows = await listDimensions(db, projectId)
+  const rows = await listDimensions(db, projectId, canvasId ?? null)
   const from = rows.findIndex((d) => d.id === id)
   if (from === -1) return rows
   const target = Math.max(0, Math.min(rows.length - 1, toIndex))
   const moved = firstOrThrow(rows.splice(from, 1))
   rows.splice(target, 0, moved)
   await rewriteSort(db, rows)
-  return listDimensions(db, projectId)
+  return listDimensions(db, projectId, canvasId ?? null)
 }
 
 export interface DimensionRemoveResult {
@@ -677,12 +682,15 @@ async function cascadeDeleteBindingsForDimension(
 // add() — that can legitimately take the count back through 1 or 0, the same
 // below-floor guided-start states issue 002 already allows before the first
 // crossing. removeDimensionUnchecked is that mechanical-replay primitive.
+// Issue 090 Phase 4c — `canvasId` scopes the removal (and its sibling-sort
+// rewrite) to a specific root canvas; omitted ⇒ the default root canvas.
 async function removeDimensionUnchecked(
   db: Database,
   projectId: string,
   id: string,
+  canvasId?: string,
 ): Promise<DimensionRemoveResult> {
-  const rows = await listDimensions(db, projectId)
+  const rows = await listDimensions(db, projectId, canvasId ?? null)
   const deletedBindings = await cascadeDeleteBindingsForDimension(db, id)
   await db
     .update(dimensions)
@@ -692,20 +700,24 @@ async function removeDimensionUnchecked(
     db,
     rows.filter((d) => d.id !== id),
   )
-  return { dimensions: await listDimensions(db, projectId), deletedBindings }
+  return { dimensions: await listDimensions(db, projectId, canvasId ?? null), deletedBindings }
 }
 
+// Issue 090 Phase 4c — the floor count MUST be scoped to `canvasId`, else
+// removing from a non-default root canvas would count the DEFAULT canvas's
+// dimensions and mis-apply (or mis-skip) the n=2 floor.
 export async function removeDimension(
   db: Database,
   projectId: string,
   id: string,
+  canvasId?: string,
 ): Promise<DimensionRemoveResult> {
-  const rows = await listDimensions(db, projectId)
+  const rows = await listDimensions(db, projectId, canvasId ?? null)
   // Shared with the server write-path (src/domain/writeInvariants.ts, issue
   // 043) — one predicate, enforced identically client-side (here) and
   // server-side, per ADR-0010's "share the rules, don't fork them".
   if (violatesDimensionFloor(rows.length)) throw new DimensionFloorError()
-  return removeDimensionUnchecked(db, projectId, id)
+  return removeDimensionUnchecked(db, projectId, id, canvasId)
 }
 
 // Exported specifically for the command log's undo-of-add (issue 006) — see
@@ -723,18 +735,21 @@ export { removeDimensionUnchecked as undoAddDimension }
 // `deleted_at` on the same row ids (they still exist) rather than
 // re-inserting fresh rows — and recomputes their contexts' tuple hashes back
 // to the original.
+// Issue 090 Phase 4c — `canvasId` scopes the sibling-sort rewrite to the same
+// root canvas the removal came from; omitted ⇒ the default root canvas.
 export async function restoreDimension(
   db: Database,
   projectId: string,
   id: string,
   orderedIds: readonly string[],
   bindingsToRestore: readonly BindingRow[] = [],
+  canvasId?: string,
 ): Promise<DimensionRow[]> {
   await db
     .update(dimensions)
     .set({ deletedAt: null, updatedAt: now() })
     .where(eq(dimensions.id, id))
-  const rows = await listDimensions(db, projectId)
+  const rows = await listDimensions(db, projectId, canvasId ?? null)
   const byId = new Map(rows.map((d) => [d.id, d]))
   const ordered = orderedIds
     .map((oid) => byId.get(oid))
@@ -758,7 +773,7 @@ export async function restoreDimension(
     const contextIds = [...new Set(bindingsToRestore.map((r) => r.contextId))]
     for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
   }
-  return listDimensions(db, projectId)
+  return listDimensions(db, projectId, canvasId ?? null)
 }
 
 // ── Parameters (issue 003) ────────────────────────────────────────────────────

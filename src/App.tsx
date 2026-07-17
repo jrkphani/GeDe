@@ -54,6 +54,7 @@ function Surface({ route }: { route: AppRoute }) {
           projectId={route.projectId}
           contextPath={route.contextPath}
           view={route.view}
+          canvasId={route.canvasId}
         />
       )
     // Issue 064: /welcome and /login both render the same hero/landing
