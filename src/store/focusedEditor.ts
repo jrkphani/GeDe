@@ -30,7 +30,15 @@ export const useFocusedEditorStore = create<FocusedEditorState>()((set) => ({
   activeEditor: null,
 
   register(id, editor) {
-    set((s) => ({ editors: { ...s.editors, [id]: editor } }))
+    set((s) => ({
+      editors: { ...s.editors, [id]: editor },
+      // Order-independent binding (089 D1 pre-push blocker 1): the autoFocus
+      // path fires focusin → setFocused(id) BEFORE this register effect runs,
+      // so setFocused resolved activeEditor to null (editors[id] was absent).
+      // Reconcile here: a register that lands after setFocused for the same id
+      // still binds the FormatStrip. Non-focused ids never hijack activeEditor.
+      ...(s.focusedId === id ? { activeEditor: editor } : {}),
+    }))
   },
 
   unregister(id) {

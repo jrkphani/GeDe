@@ -147,6 +147,7 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
         // string value contract in/out; legacy plain strings still render and
         // wrap-on-edit. The global FormatStrip binds when this cell is focused.
         kind: 'richtext',
+        placeholder: 'Add description…',
         getValue: (prop) => prop.description ?? '',
         onCommit: async (prop, value) => {
           await setDescription(prop.id, value)

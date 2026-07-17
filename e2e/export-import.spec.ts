@@ -75,9 +75,11 @@ async function seedAndCompose(page: Page) {
   await expect(row.locator('td').nth(4)).toContainText('Engagement')
   const justificationCell = row.locator('td').nth(5)
   await justificationCell.click()
-  const justify = row.locator('.grid-cell__input--multiline')
-  await justify.fill('First real context')
-  await justify.press('Enter')
+  // Issue 089 D1 P3 — justification is a rich Lexical editor; commit is
+  // Cmd/Ctrl+Enter (plain Enter is a newline).
+  const editor = row.locator('.rich-text-editor__content')
+  await editor.fill('First real context')
+  await editor.press('ControlOrMeta+Enter')
 }
 
 // Assert the Design surface shows the composed α exactly (register projection +

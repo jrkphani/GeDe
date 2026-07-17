@@ -516,6 +516,7 @@ describe('EditableGrid — richtext cell (089 D1 Phase 3)', () => {
         header: 'Body',
         cell: {
           kind: 'richtext',
+          placeholder: 'Add note…',
           getValue: (n) => n.body,
           onCommit: (n, v) => {
             onCommit(n, v)
@@ -603,6 +604,19 @@ describe('EditableGrid — richtext cell (089 D1 Phase 3)', () => {
     expect(screen.getByText('Legacy plain justification')).toBeInTheDocument()
     // …and never re-persisted merely by rendering it (the editor never mounts).
     expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('an empty richtext cell shows its per-column placeholder, not "Add justification…"', async () => {
+    const user = userEvent.setup()
+    const noteRows: Note[] = [{ id: 'r1', body: '' }]
+    render(<EditableGrid rows={noteRows} columns={makeCols()} getRowId={(r) => r.id} />)
+
+    // Open the editor on the empty cell — the ghost renders inside it.
+    await user.click(screen.getByLabelText('Body, empty'))
+    expect(await screen.findByText('Add note…')).toBeInTheDocument()
+    // Blocker 3 (089 D1): the hardcoded justification ghost must be gone for
+    // non-justification (e.g. description) rich columns.
+    expect(screen.queryByText('Add justification…')).toBeNull()
   })
 
   it('the phantom row on a richtext column stays a plain input and still creates', async () => {

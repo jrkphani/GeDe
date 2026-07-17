@@ -84,9 +84,11 @@ test('coverage matrix: a hollow cell composes pre-filled, and justifying fills i
   // Justify — required to count as documented (SPEC invariant 2).
   const justificationCell = row.locator('td').nth(5)
   await justificationCell.click()
-  const textarea = row.locator('.grid-cell__input--multiline')
-  await textarea.fill('First documented tuple')
-  await textarea.press('Enter')
+  // Issue 089 D1 P3 — justification is a rich Lexical editor; commit + move on
+  // is Cmd/Ctrl+Enter (plain Enter is a newline).
+  const editor = row.locator('.rich-text-editor__content')
+  await editor.fill('First documented tuple')
+  await editor.press('ControlOrMeta+Enter')
 
   // Back to coverage: the cell now carries the symbol and the stat incremented.
   await page.getByRole('button', { name: 'Coverage' }).click()

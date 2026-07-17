@@ -299,6 +299,7 @@ function TablePanel({
         // value contract in/out; legacy plain strings still render and
         // wrap-on-edit. The global FormatStrip binds when this cell is focused.
         kind: 'richtext',
+        placeholder: 'Add description…',
         getValue: (entry) => entry.description ?? '',
         onCommit: async (entry, value) => {
           await setEntryDescription(table.id, entry.id, value)

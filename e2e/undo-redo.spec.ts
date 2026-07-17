@@ -37,11 +37,14 @@ test('⌘Z reverts a justification edit; the reverted value survives a reload', 
   // before this, the register's first content assertion, renders anything.
   await expect(justificationCell).toContainText('Original justification', { timeout: 15_000 })
 
-  // Edit the cell.
+  // Edit the cell. Issue 089 D1 P3: justification is now a rich Lexical
+  // contentEditable (plain Enter is a newline), so commit is Cmd/Ctrl+Enter —
+  // which also collapses the cell back to its read-mode display, so the ensuing
+  // ⌘Z reaches the app's undo, not Lexical's in-editor history.
   await justificationCell.click()
-  const textarea = row.locator('textarea')
-  await textarea.fill('Changed justification')
-  await page.keyboard.press('Enter')
+  const editor = row.locator('.rich-text-editor__content')
+  await editor.fill('Changed justification')
+  await editor.press('ControlOrMeta+Enter')
   await expect(justificationCell).toContainText('Changed justification', { timeout: 15_000 })
 
   // ⇧⌘Z first (a no-op — nothing to redo yet), sanity-checking it doesn't

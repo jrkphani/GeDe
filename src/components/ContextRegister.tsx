@@ -187,6 +187,7 @@ export function ContextRegister({
         // phantom-row's plain-input create below) still render. The global
         // FormatStrip (089 D1 P1) binds to this cell's editor when focused.
         kind: 'richtext',
+        placeholder: 'Add justification…',
         getValue: (ctx) => ctx.justification ?? '',
         onCommit: async (ctx, value) => {
           await setJustification(ctx.id, value)

@@ -77,4 +77,33 @@ describe('focusedEditor store', () => {
     useFocusedEditorStore.getState().setFocused('ghost')
     expect(useFocusedEditorStore.getState().activeEditor).toBeNull()
   })
+
+  // Regression (089 D1 pre-push blocker 1): the autoFocus path fires focusin →
+  // setFocused(id) BEFORE the register effect has put this editor into
+  // `editors[id]`, so setFocused resolves activeEditor to null. A register that
+  // lands AFTER setFocused must reconcile — otherwise the global FormatStrip
+  // never binds to a grid rich cell (count stays 0) until a manual blur+refocus.
+  it('registering the already-focused id reconciles it as the active editor', () => {
+    const a = makeEditor()
+    const store = useFocusedEditorStore.getState()
+    store.setFocused('a')
+    // Nothing registered yet — active is null, exactly the autoFocus race.
+    expect(useFocusedEditorStore.getState().activeEditor).toBeNull()
+    store.register('a', a)
+    // The late register reconciles the pending focus.
+    expect(useFocusedEditorStore.getState().activeEditor).toBe(a)
+    expect(useFocusedEditorStore.getState().focusedId).toBe('a')
+  })
+
+  it('registering a non-focused id does not become active', () => {
+    const a = makeEditor()
+    const b = makeEditor()
+    const store = useFocusedEditorStore.getState()
+    store.setFocused('a')
+    store.register('b', b)
+    // b is not the focused id — it must not hijack the active binding.
+    expect(useFocusedEditorStore.getState().activeEditor).toBeNull()
+    store.register('a', a)
+    expect(useFocusedEditorStore.getState().activeEditor).toBe(a)
+  })
 })

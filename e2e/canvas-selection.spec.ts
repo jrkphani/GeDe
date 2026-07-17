@@ -97,9 +97,11 @@ test('selecting a context on the canvas highlights + scrolls to its register row
   // (expand-on-focus), reached by focusing/clicking the cell in place.
   const justificationCell = row.locator('td').nth(5)
   await justificationCell.click()
-  const textarea = row.locator('.grid-cell__input--multiline')
-  await textarea.fill('Revised in the register')
-  await textarea.press('Enter')
+  // Issue 089 D1 P3 — justification is a rich Lexical editor; commit is
+  // Cmd/Ctrl+Enter (plain Enter is a newline).
+  const editor = row.locator('.rich-text-editor__content')
+  await editor.fill('Revised in the register')
+  await editor.press('ControlOrMeta+Enter')
 
   await expect(justificationCell).toContainText('Revised in the register')
 })

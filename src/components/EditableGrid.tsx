@@ -64,6 +64,10 @@ export interface RichTextCellKind<TRow> {
   kind: 'richtext'
   getValue: (row: TRow) => string
   onCommit: (row: TRow, value: string) => Promise<boolean> | void
+  // Ghost text shown when the cell is empty (089 D1 blocker 3). Per-column so a
+  // Foundation/Architecture *description* cell no longer inherits the
+  // justification column's "Add justification…" ghost.
+  placeholder: string
 }
 
 export type GridCellKind<TRow> =
@@ -590,7 +594,7 @@ function RichTextCell<TRow>({
           value={seedRichValue(stored)}
           namespace={`gede-justification-${rowId}`}
           ariaLabel={name}
-          placeholder="Add justification…"
+          placeholder={cellDef.placeholder}
           autoFocus
           onCommit={(next) => {
             void cellDef.onCommit(row, next ?? '')

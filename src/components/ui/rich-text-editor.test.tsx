@@ -16,11 +16,12 @@
 // Range/Selection APIs jsdom DOES implement — both are the actual code paths
 // a user exercises, just without simulating the keystrokes that build the
 // initial text.
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
 import { RICH_TEXT_NODES } from '../../domain/richText'
 import { RichTextEditor } from './rich-text-editor'
+import { resetFocusedEditor, useFocusedEditorStore } from '../../store/focusedEditor'
 
 function plainTextEditorStateJson(text: string): string {
   const editor = createEditor({
@@ -143,5 +144,30 @@ describe('RichTextEditor — readOnly (issue 035 precedent)', () => {
       />,
     )
     expect(await screen.findByText('Comfort, on demand.')).toBeInTheDocument()
+  })
+})
+
+// Regression guard (089 D1 pre-push blocker 1): the real end-to-end shape of
+// the bug. A rich grid cell mounts its editor with autoFocus; that fires
+// focusin → setFocused BEFORE the register effect runs. The global FormatStrip
+// binds off `activeEditor`, so it MUST be non-null right after mount — no
+// manual blur+refocus. This failed before the store's register-reconciliation.
+describe('RichTextEditor — autoFocus binds the global FormatStrip (blocker 1)', () => {
+  beforeEach(() => resetFocusedEditor())
+
+  it('mounting with autoFocus makes this editor the active (strip-bound) editor', async () => {
+    render(
+      <RichTextEditor
+        value={null}
+        onCommit={vi.fn()}
+        ariaLabel="Justification"
+        placeholder="Add justification…"
+        autoFocus
+      />,
+    )
+    // The strip reads activeEditor; without a manual re-focus it must be bound.
+    await waitFor(() => {
+      expect(useFocusedEditorStore.getState().activeEditor).not.toBeNull()
+    })
   })
 })
