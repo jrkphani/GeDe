@@ -31,6 +31,87 @@ Making `*.name` / `contexts.symbol` rich is **hazardous** and is intentionally l
 - The `InlineEdit` callers (`DimensionManager`, `ParameterList`) **lack `readOnly` threading**, so a rich variant can't cleanly express a read-only state there without new plumbing.
 - **Recommendation:** keep identifiers **plain**, OR — if a rich identifier is truly wanted — introduce a **lists/indent-disabled, single-line-rich variant** (no block formatting, no newline) so identifiers stay hashable and single-line. This is an explicit owner call, not a D1 follow-through.
 
+## D2 — approved implementation plan (2026-07-17)
+
+> Code-grounded, owner-approved plan for **Direction D2 (single lane page)** so a future session can execute it. This supersedes the framing in `### D2 — One scrollable page…` below where the two differ — the key difference is called out first. D1 (shipped) is unaffected.
+
+### Key correction vs the doc's D2 framing
+
+**Do NOT collapse the route grammar.** Keep `/p/:id/foundation|architecture|design[/:ctx…]?view=…&canvas=…` exactly as `routes.ts:32-103` parses today — it carries Design's `contextPath` / `view` / `canvasId` state that **011** (recursion), **012** (coverage), and **090** (shipped `canvases` + `?canvas=` switcher) and their e2e all depend on.
+
+D2 changes only **WHAT the route mounts**: one `WorkspaceSurface` rendering all three lanes, instead of `App.tsx:41-86`'s switch picking a single surface. It **ADDS** a scroll-to-lane effect keyed on the route. Tabs + ⌘1/2/3 still `navigate()` (preserving back/forward + `tab--active`) and merely *also* scroll. This is the minimal reading of fork 8 and shrinks the e2e blast radius.
+
+### Two settled tensions
+
+- **"Page never scrolls"** (`SITEMAP.md:34` — the doc body cites `:32`, now stale): the fixed app-bar / context-bar / status-bar chrome is preserved; the single existing `.surface` scroll region (`base.css:252-255`) now hosts three co-scrolling lanes (horizontal at narrow widths). This is a **deliberate SITEMAP §2 spec change**.
+- **Does NOT re-open 085.** D2 adds **zero** on-ring authoring; the Design lane keeps its `[editing-zone | canvas]` layout (`DesignSurface.tsx:645-713`). The 089-doc "stack register over ring" idea is a **D3** concern, out of scope for D2.
+
+### Fork resolutions
+
+| Fork | Resolution |
+|---|---|
+| **Fork 6** (one plane vs three scrolls) | **ONE shared page scroll** (the existing `.surface`); lanes are non-stretching flex columns. Lane-local scroll rejected — nested-scroll traps fight `EditableGrid` + capture-phase handlers. |
+| **Fork 8** (routes as deep-links) | **Keep all 3 routes** as scroll-to-lane deep-links via a pure `laneForRoute(route)`. |
+| **Fork 9** (cross-lane keyboard) | **Independent per-lane Tab scopes** + ⌘1/2/3 as the explicit "go to lane" key; no continuous cross-lane Tab chain. |
+| **Context bar** | **PER-LANE STICKY HEADERS.** The single `.context-bar` slot in `slots.tsx` can't host three tiers' bars — Design's (`DesignSurface.tsx:522-591`) and Architecture's (`ArchitectureSurface.tsx:52-69`) would jumble. The shell `.context-bar` band hosts only the global `FormatStrip` (focus-revealed). |
+
+### Phases (≤5 files each, red-first)
+
+**P1 — mount all three lanes on one route**
+- NEW `src/components/WorkspaceSurface.tsx` — 3 lanes in a `.workspace` flex row; passes Design its `contextPath` / `view` / `canvasId`.
+- `src/App.tsx` — route project / tier / design → `WorkspaceSurface`; keep the `lastTierRoute` redirect.
+- `src/styles/base.css` — `.workspace` row + lane framing; neutralize `.foundation` max-width (`:1721-1724`) and `.architecture` (`:2161-2164`) inside a lane.
+- NEW `e2e/workspace.spec.ts`.
+- **Red:** all three tier headings + the Design editing-zone visible on **one** URL.
+- Note: all load effects (tier1, tier2 ×2, canvases, dimensions, contexts, parameters, `healRichTextOnLoad`) are idempotent / projectId-keyed — **no orchestration rewrite**.
+
+**P2 — scroll-to-lane deep-links**
+- NEW `src/shell/laneTarget.ts` (`laneForRoute`) + test.
+- `src/App.tsx` — scroll-to-lane effect.
+- `AppShell.tsx` — tabs + ⌘1/2/3 still `navigate()` (now *also* scroll).
+- `shell.test.tsx` — adjust.
+- Keeps `shell.spec` `goBack` / `goForward` + `tab--active` + command-palette tier-jump green.
+
+**P3 (the hard part) — scope Design's global handlers to the active lane**
+- NEW `src/store/activeLane.ts` slice (mirror `focusedEditor.ts`).
+- `WorkspaceSurface` sets `activeLane` on each lane's `focusin` / `pointerdown` + ⌘1/2/3.
+- Gate Design's global handlers: `c` (`DesignSurface.tsx:311-328`), `v` (`:353-375`), `d` (`:384-406`) → gate on `activeLane === 'design'`.
+- `Esc` (`:338-349`) keep as-is (already `composeContextId`-gated); `Tab` seam (`:426-448`) no change (self-scopes via unique `.dim-rail`).
+- **Behavior flag:** with no lane active, `c` / `v` / `d` are no-ops until a lane is focused / ⌘3'd.
+- **Red:** `c` from the Foundation lane does NOT create a Design draft; from the Design lane it does.
+
+**P4 — per-lane sticky context headers + narrow reflow**
+- Move Design's `ContextBar` (`:522-591`) + Architecture's `ContextBar` (`:52-69`) into in-lane sticky headers.
+- `base.css` — `.workspace__lane-header { position: sticky; top: 0 }` + a `<1024px` reflow from 3-col row to stacked column (⌘1/2/3 scroll-to-lane becomes load-bearing).
+- Shell context bar now shows **only** `FormatStrip`.
+- **Red:** Design breadcrumbs / switcher / coverage AND Architecture quick-jump visible simultaneously in their lanes; `FormatStrip` still binds on rich-editor focus in any lane. **Screenshot-verify.**
+
+**P5 — Rule-12 e2e/unit sweep**
+- Most (~18) `getByRole('link', { name: 'Design' })` setups + URL / `tab--active` assertions keep passing (routes retained).
+- Real work = strict-mode selector collisions now that 3 surfaces co-mount → scope queries to a lane container (e.g. `.workspace__lane--design`).
+- Sub-batches:
+  - **5a** selector scoping (`canvas*` / `dimensions` / `parameters` / `coverage` / `context-register` / `recursion` specs).
+  - **5b** genuine URL/history (`shell.spec`, `recursion.spec:77-137`, `canvas-switcher.spec:19,52`, `projects.spec:20`, `sync-status.spec:23`).
+  - **5c** unit + palette (`shell.test.tsx:64-72`, `command-palette.spec:40-49`).
+- **Gate:** full `verify:fast` (1424 unit) + full e2e (D1 baseline **51/0**).
+
+### Risks & open sub-decisions (owner)
+
+1. **Shared lockstep scroll** — a short lane trails whitespace. Ship it; revisit only if it bites.
+2. **`activeLane` null** → `c` / `v` / `d` are no-ops until a lane is active (vs defaulting to Design).
+3. **`v` from another lane** navigates + scrolls to Design.
+4. **`DesignSurface` null render-gate** (`:509`) → Design lane briefly empty; maybe hoist a skeleton.
+5. **tier2 double-load** — cosmetic, idempotent.
+6. **Narrow breakpoint value** + always-show tab bar in stacked mode.
+7. **Strict-mode e2e collisions** — the largest effort unknown until 5a.
+
+### SITEMAP sections to update in lockstep (§6: deviations are spec changes)
+
+- **§1 route map** — routes retained as scroll-to-lane deep-links.
+- **§2 shell anatomy** — nuance "page never scrolls"; context content → per-lane sticky headers; shell bar hosts only `FormatStrip`.
+- **§4 keyboard** — ⌘1/2/3 = navigate + scroll; `c` / `v` / `d` active-lane-scoped.
+- **§5 responsive** — 3-col → stacked breakpoint.
+
 ## Vision (owner)
 
 Merge GeDe's three separate routes — **Foundation** (Tier 1), **Architecture** (Tier 2), **Design** (Tier 3) — into **one open, zoomable canvas page**. Each tier is its own vertical **lane**; lanes sit side by side on an infinite grid canvas and **grow downward** as more tables/rows are added. The whole page **pans and zooms** — zoom into the section you want to focus on, zoom out for the overview — like Figma / Miro / tldraw, but with *structured table content* inside the lanes rather than free-floating shapes.
