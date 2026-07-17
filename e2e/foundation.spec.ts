@@ -43,11 +43,18 @@ test('foundation: enter five value propositions, re-rank by drag, persist across
   // Opening a project lands on Foundation (default tier).
   await expect(page.getByText('1st Tier · Foundation')).toBeVisible()
 
-  // Purpose block: edit in place, autosaved.
-  await page.getByText('What is this system for?').click()
-  const purpose = page.getByLabel('System purpose')
-  await purpose.fill('A better way to sit together.')
-  await purpose.press('Enter')
+  // Purpose block: a rich-text editor now (issue 089 D1 Phase 5, like the
+  // sibling Existing Scenario). Type into the contentEditable and commit on
+  // blur (Enter is a newline in a rich editor, never a commit) — clicking the
+  // header leaves the editor and fires the blur-commit.
+  const purpose = page.getByRole('textbox', { name: 'System purpose' })
+  await purpose.click()
+  await page.keyboard.type('A better way to sit together.')
+  await expect(purpose).toContainText('A better way to sit together.')
+  await page.getByText('1st Tier · Foundation').click()
+  // Fast local IndexedDB commit; a short wait lets the blur-commit land before
+  // the reload later (mirrors the Existing Scenario test's own note below).
+  await page.waitForTimeout(500)
   await expect(page.getByText('A better way to sit together.')).toBeVisible()
 
   // Enter the five value propositions through the phantom row.

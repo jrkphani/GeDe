@@ -294,7 +294,11 @@ function TablePanel({
       id: 'description',
       header: 'Description',
       cell: {
-        kind: 'multiline',
+        // Issue 089 D1 Phase 5 — the entry description is now a rich cell
+        // (Lexical), mirroring the justification column (P3). Same stored-string
+        // value contract in/out; legacy plain strings still render and
+        // wrap-on-edit. The global FormatStrip binds when this cell is focused.
+        kind: 'richtext',
         getValue: (entry) => entry.description ?? '',
         onCommit: async (entry, value) => {
           await setEntryDescription(table.id, entry.id, value)

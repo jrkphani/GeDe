@@ -14,7 +14,6 @@ import { useTier1Store } from '../store/tier1'
 import { useWorkspaceRole } from '../store/workspace'
 import { EditableGrid, type GridColumn } from './EditableGrid'
 import { Button } from './ui/button'
-import { MultilineEdit } from './ui/multiline-editor'
 import { RichTextEditor } from './ui/rich-text-editor'
 
 const PURPOSE_GHOST = 'What is this system for?'
@@ -143,7 +142,11 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
       id: 'description',
       header: 'Description',
       cell: {
-        kind: 'multiline',
+        // Issue 089 D1 Phase 5 — the value-proposition description is now a rich
+        // cell (Lexical), mirroring the justification column (P3). Same stored-
+        // string value contract in/out; legacy plain strings still render and
+        // wrap-on-edit. The global FormatStrip binds when this cell is focused.
+        kind: 'richtext',
         getValue: (prop) => prop.description ?? '',
         onCommit: async (prop, value) => {
           await setDescription(prop.id, value)
@@ -157,22 +160,23 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
     <main className="foundation">
       <h2 className="tier1-header">1st Tier · Foundation</h2>
 
-      {/* Purpose: a paper panel that reads as a paragraph, edited in place and
-          autosaved through the mutation layer like any cell (design brief). */}
+      {/* Purpose: a paper panel that reads as a paragraph. Issue 089 D1 Phase 5
+          — now a standalone rich-text editor (Lexical), exactly like the
+          sibling Existing Scenario below; the two coexist and both bind to the
+          global FormatStrip when focused. Commit-on-blur → setPurpose, storing
+          the editor's own JSON (a legacy plain string still renders and
+          wraps-on-edit). Purpose and Existing Scenario SHARE one tier1_purpose
+          row but are edited through independent setters, so a purpose edit
+          never disturbs the scenario prose (setTier1Purpose sets `body` only).
+          setPurpose keeps the '' empty convention, so onCommit's null (an
+          emptied editor) maps back to ''. */}
       <section className="panel tier1-purpose">
-        <MultilineEdit
-          value={purpose}
-          onCommit={(next) => void setPurpose(next)}
-          display={
-            purpose ? (
-              <span className="tier1-purpose__body">{purpose}</span>
-            ) : (
-              <span className="tier1-purpose__ghost">{PURPOSE_GHOST}</span>
-            )
-          }
-          displayClassName="tier1-purpose__display"
-          inputClassName="tier1-purpose__input"
+        <RichTextEditor
+          value={purpose || null}
+          onCommit={(next) => void setPurpose(next ?? '')}
           ariaLabel="System purpose"
+          placeholder={PURPOSE_GHOST}
+          namespace="gede-tier1-purpose"
           readOnly={readOnly}
         />
       </section>

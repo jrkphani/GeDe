@@ -2,19 +2,32 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor, within } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
-import { addTier2Entry, addTier2Table, createProject } from '../db/mutations'
+import { addTier2Entry, addTier2Table, createProject, setTier2EntryDescription } from '../db/mutations'
 import { addWorkspaceMember } from '../db/workspaces'
 import { resetAuthStoreForTests, useAuthStore } from '../store/auth'
 import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
+import { resetFocusedEditor } from '../store/focusedEditor'
 import { useProjectsStore } from '../store/projects'
 import { resetSyncStore, useSyncStore } from '../store/sync'
-import { resetTier2Store } from '../store/tier2'
+import { resetTier2Store, useTier2Store } from '../store/tier2'
 import { resetWorkspaceStore } from '../store/workspace'
 import { ArchitectureSurface } from './ArchitectureSurface'
+
+// Selects all text in a contentEditable via the real DOM Selection/Range APIs
+// (mirrors ContextRegister.test.tsx) — jsdom can't process realistic keyboard
+// input into a Lexical editor, so drive it through selection instead.
+function selectAllTextIn(container: Element) {
+  const range = document.createRange()
+  range.selectNodeContents(container)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  document.dispatchEvent(new Event('selectionchange'))
+}
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
@@ -27,6 +40,7 @@ beforeEach(async () => {
   resetWorkspaceStore()
   resetAuthStoreForTests()
   resetSyncStore()
+  resetFocusedEditor()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
@@ -357,5 +371,42 @@ describe('.t2-selection-bar CSS — sticky within the panel (issue 025)', () => 
     // An opaque fill so grid rows scrolling underneath the pinned bar don't
     // show through (it now floats over content instead of sitting in flow).
     expect(body).toMatch(/background:\s*var\(--panel\)/)
+  })
+})
+
+// Issue 089 D1 Phase 5 — the entry Description becomes a rich grid cell (like
+// the justification column, P3), mirroring the two other prose descriptions.
+describe('ArchitectureSurface — entry Description is a rich cell (issue 089 D1 Phase 5)', () => {
+  it('renders a legacy plain description, swaps to the rich editor on click, and commits via Cmd+Enter', async () => {
+    const table = await addTier2Table(db, projectId, 'Value')
+    const entry = await addTier2Entry(db, table.id, null, 'Comfort')
+    await setTier2EntryDescription(db, entry.id, 'The rider stays comfortable.')
+    const user = userEvent.setup()
+    render(<ArchitectureSurface projectId={projectId} />)
+
+    const row = (await screen.findByText('Comfort')).closest('tr') as HTMLElement
+    // Legacy plain string renders as a clamped read-mode summary.
+    const summary = within(row).getByText('The rider stays comfortable.')
+    expect(summary).toHaveClass('grid-cell__clamp')
+
+    // Click swaps to a live Lexical contentEditable (NOT a textarea).
+    await user.click(summary)
+    const editable = within(row).getByLabelText('Description')
+    expect(editable).toHaveAttribute('contenteditable', 'true')
+    expect(editable).toHaveTextContent('The rider stays comfortable.')
+
+    // Empty it and commit with Cmd/Ctrl+Enter — persisted via setEntryDescription,
+    // and the cell collapses back to read mode.
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+    fireEvent.keyDown(editable, { key: 'Enter', metaKey: true })
+
+    await waitFor(() => {
+      const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+      expect(entries.find((e) => e.id === entry.id)?.description ?? '').toBe('')
+    })
+    await waitFor(() => expect(within(row).queryByLabelText('Description')).not.toBeInTheDocument())
   })
 })

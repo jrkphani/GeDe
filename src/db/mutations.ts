@@ -1334,6 +1334,20 @@ export async function getTier1Purpose(
   return rows[0] ?? null
 }
 
+// Issue 089 D1 Phase 5 — the rich-text heal reader for tier1_purpose.body. The
+// unique project_id index means there is at most ONE purpose row per project,
+// so this returns [] or [row], mirroring listContextsForHeal's live-rows-only
+// contract (getTier1Purpose already excludes tombstones). The heal converts
+// `body` in place; `existing_scenario` on the same row is already rich and is
+// never touched by the body write (setTier1Purpose's upsert sets body only).
+export async function listTier1PurposeForHeal(
+  db: Database,
+  projectId: string,
+): Promise<Tier1PurposeRow[]> {
+  const row = await getTier1Purpose(db, projectId)
+  return row ? [row] : []
+}
+
 export async function setTier1Purpose(
   db: Database,
   projectId: string,
@@ -1590,6 +1604,21 @@ function tier2EntryScope(tableId: string) {
 // domain/entryTree.ts. `sort` orders siblings within a parent.
 export async function listTier2Entries(db: Database, tableId: string): Promise<Tier2EntryRow[]> {
   return db.select().from(tier2Entries).where(tier2EntryScope(tableId)).orderBy(asc(tier2Entries.sort))
+}
+
+// Issue 089 D1 Phase 5 — every LIVE entry across ALL of the project's live
+// tables (listTier2Entries is scoped to one table). The rich-text heal-on-load
+// normalizes the whole project's description prose in one pass, so it walks
+// each live table's entries. Live rows only (both table and entry): a
+// tombstoned entry's prose never renders, so it never needs converting.
+export async function listTier2EntriesForHeal(
+  db: Database,
+  projectId: string,
+): Promise<Tier2EntryRow[]> {
+  const tables = await listTier2Tables(db, projectId)
+  const all: Tier2EntryRow[] = []
+  for (const table of tables) all.push(...(await listTier2Entries(db, table.id)))
+  return all
 }
 
 function siblingsOf(entries: Tier2EntryRow[], parentId: string | null): Tier2EntryRow[] {

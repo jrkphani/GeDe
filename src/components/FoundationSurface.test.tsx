@@ -1,12 +1,21 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor, fireEvent } from '@testing-library/react'
+import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
 import { openDatabase } from '../db/client'
-import { addTier1Prop, createProject, getTier1Purpose, setTier1ExistingScenario } from '../db/mutations'
+import {
+  addTier1Prop,
+  createProject,
+  getTier1Purpose,
+  setTier1ExistingScenario,
+  setTier1PropDescription,
+  setTier1Purpose,
+} from '../db/mutations'
 import { addWorkspaceMember } from '../db/workspaces'
 import { RICH_TEXT_NODES } from '../domain/richText'
+import { resetFocusedEditor } from '../store/focusedEditor'
+import { FormatStrip } from './FormatStrip'
 
 // Builds a real Lexical EditorState JSON containing plain text, the same way
 // rich-text-editor.test.tsx does — used to seed a project with pre-existing
@@ -45,7 +54,7 @@ import { useCommandLogStore } from '../store/commandLog'
 import { setDatabase } from '../store/database'
 import { useProjectsStore } from '../store/projects'
 import { resetSyncStore, useSyncStore } from '../store/sync'
-import { resetTier1Store } from '../store/tier1'
+import { resetTier1Store, useTier1Store } from '../store/tier1'
 import { resetWorkspaceStore } from '../store/workspace'
 import { FoundationSurface } from './FoundationSurface'
 
@@ -61,6 +70,7 @@ beforeEach(async () => {
   resetAuthStoreForTests()
   resetSyncStore()
   useCommandLogStore.getState().clear()
+  resetFocusedEditor()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
   workspaceId = project.workspaceId
@@ -121,15 +131,11 @@ describe('FoundationSurface', () => {
 
     expect(screen.queryByPlaceholderText('Name a value proposition')).not.toBeInTheDocument()
     await user.click(screen.getByText('What is this system for?'))
-    // Purpose's editor is a real <textarea> (multiline-editor.tsx) — clicking
-    // its ghost text never opens one for a viewer. Queried by tag rather than
-    // role="textbox": issue 081's Existing Scenario field is a Lexical
-    // contentEditable div that is ALSO always mounted with role="textbox"
-    // (even read-only — it renders formatted content, just not editable —
-    // see the dedicated assertion below), so role alone can no longer
-    // distinguish "no purpose editor" from "the existing-scenario panel is
-    // present but non-editable".
+    // Issue 089 D1 Phase 5 — Purpose is now a standalone Lexical rich editor
+    // (like Existing Scenario), not a <textarea>. A viewer sees it rendered but
+    // never contentEditable=true, so clicking the ghost opens nothing.
     expect(container.querySelector('textarea')).not.toBeInTheDocument()
+    expect(screen.getByLabelText('System purpose')).toHaveAttribute('contenteditable', 'false')
   })
 
   // Issue 081 — mirrors Purpose's own readOnly contract (issue 035): a
@@ -232,5 +238,78 @@ describe('FoundationSurface — existing scenario (issue 081)', () => {
     const editable = await screen.findByLabelText('Existing scenario')
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument()
     expect(editable).toHaveAttribute('contenteditable', 'false')
+  })
+})
+
+// Issue 089 D1 Phase 5 — Purpose becomes a standalone rich editor (like the
+// sibling Existing Scenario), and the value-proposition Description becomes a
+// rich grid cell (like the justification column).
+describe('FoundationSurface — Purpose is a rich editor bound to the global FormatStrip (issue 089 D1 Phase 5)', () => {
+  it('shows the Purpose ghost as a live Lexical editor, not a textarea', async () => {
+    const { container } = render(<FoundationSurface projectId={projectId} />)
+    const editable = await screen.findByLabelText('System purpose')
+    // A Lexical contentEditable, never a <textarea> (the retired MultilineEdit).
+    expect(editable).toHaveAttribute('contenteditable', 'true')
+    expect(container.querySelector('textarea')).not.toBeInTheDocument()
+    expect(screen.getByText('What is this system for?')).toBeInTheDocument()
+  })
+
+  it('bold via the global FormatStrip applies to the focused Purpose editor', async () => {
+    const user = userEvent.setup()
+    await setTier1Purpose(db, projectId, plainTextEditorStateJson('Ground the persona.'))
+    render(
+      <>
+        <FormatStrip />
+        <FoundationSurface projectId={projectId} />
+      </>,
+    )
+    const editable = await screen.findByLabelText('System purpose')
+    await waitFor(() => expect(editable.textContent).toBe('Ground the persona.'))
+
+    const bold = screen.getByRole('button', { name: 'Bold' })
+    expect(bold).toHaveAttribute('aria-disabled', 'true')
+
+    // Focusing Purpose lights the strip (the P1 focused-editor registry binds it
+    // to whichever rich editor is focused — Purpose and Existing Scenario share
+    // the same global strip).
+    fireEvent.focus(editable)
+    await waitFor(() => expect(bold).not.toHaveAttribute('aria-disabled'))
+
+    selectAllTextIn(editable)
+    await user.click(bold)
+    await waitFor(() => expect(editable.querySelector('strong')).toBeInTheDocument())
+  })
+})
+
+describe('FoundationSurface — value-proposition Description is a rich cell (issue 089 D1 Phase 5)', () => {
+  it('renders a legacy plain description, swaps to the rich editor on click, and commits via Cmd+Enter', async () => {
+    const prop = await addTier1Prop(db, projectId, 'Seating comfort')
+    await setTier1PropDescription(db, prop.id, 'Comfort, on demand.')
+    const user = userEvent.setup()
+    render(<FoundationSurface projectId={projectId} />)
+
+    const row = (await screen.findByText('Seating comfort')).closest('tr') as HTMLElement
+    // Legacy plain string renders as a clamped read-mode summary.
+    const summary = within(row).getByText('Comfort, on demand.')
+    expect(summary).toHaveClass('grid-cell__clamp')
+
+    // Click swaps to a live Lexical contentEditable (NOT a textarea).
+    await user.click(summary)
+    const editable = within(row).getByLabelText('Description')
+    expect(editable).toHaveAttribute('contenteditable', 'true')
+    expect(editable).toHaveTextContent('Comfort, on demand.')
+
+    // Empty it and commit with Cmd/Ctrl+Enter — persisted via setDescription,
+    // and the cell collapses back to read mode (no editor lingering).
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+    fireEvent.keyDown(editable, { key: 'Enter', metaKey: true })
+
+    await waitFor(() =>
+      expect(useTier1Store.getState().props.find((p) => p.id === prop.id)?.description ?? '').toBe(''),
+    )
+    await waitFor(() => expect(within(row).queryByLabelText('Description')).not.toBeInTheDocument())
   })
 })
