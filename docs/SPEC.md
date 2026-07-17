@@ -40,10 +40,10 @@ The app is the tool that lets a designer perform, record, and audit this process
 | **Purpose** | 1st Tier: single rich-text statement of what the system is for. |
 | **Value Proposition** | 1st Tier: ranked entry (rank 1°, 2°, …) with name + description (e.g. "Seating-status comfort", "Mobility fluidity"). |
 | **Architecture Entry** | 2nd Tier: a row in an architecture table (example tables: Value / Stakeholders / Process): name + description, hierarchically nested (e.g. Users → One° of Circle → Superstar). |
-| **Canvas** | A design surface with its own set of dimensions and contexts. The project has one root canvas; every context can own one child canvas. |
+| **Canvas** | A design surface with its own set of dimensions and contexts — a **first-class entity** (a `canvases` row, migration 0017). A project holds **many** root canvases (`parent_context_id` NULL), stacked in the Design lane; every context can own exactly one child canvas (`parent_context_id` = that context). `dimensions.canvas_id`/`contexts.canvas_id` are the membership FKs. |
 | **Dimension** | One of a canvas's n axes (name, color, sort order). The root canvas of the example has 3 (Value, Stake, Process); any count ≥ 2 is valid and dimensions can be added or removed per canvas. |
 | **Parameter** | An ordered point on a dimension (e.g. Stake: Buyers, Maintainer, Users). Parameters form a tree: a parameter may have sub-parameters (`parent_param_id`) that appear when the parent becomes a dimension of a child canvas (Users → Zero°/Inner°/Second°/Third°/Outer° Circle). |
-| **Context** | A design decision node (α, β, …). Lives in a tree (`parent_id`): root contexts sit on the root canvas; children of α (α1, α2…) sit on α's child canvas. Has symbol, optional name, justification. |
+| **Context** | A design decision node (α, β, …). Lives in a tree (`parent_id`): root contexts sit on a root canvas; children of α (α1, α2…) sit on α's child canvas. Has symbol, optional name, justification. |
 | **Binding** | The pair (context × dimension → parameter): exactly one per dimension per context. The set of a context's n bindings is its identity on the canvas. |
 | **Statement / Justification** | Prose attached to a context explaining the tuple. First-class, searchable. |
 | **Coverage tuple** | Any element of the cross-product of all n dimensions' parameter sets on a given canvas (∏ mᵢ tuples). Documented when at least one complete context binds it; otherwise unexplored. |
@@ -71,13 +71,18 @@ tier1_props     id · project_id · rank · name · description · sort
 tier2_tables    id · project_id · name · sort            (example: Value, Stakeholders, Process)
 tier2_entries   id · table_id → tier2_tables · parent_id → tier2_entries
                 · name · description · sort
-canvases        (implicit — root canvas = project, child canvas = context; no table needed)
-dimensions      id · project_id · context_id (null = root canvas) · name · color · sort
+canvases        id · project_id · workspace_id · parent_context_id → contexts
+                (null = a root canvas, many per project; set = that context's child
+                canvas, one per context) · name · sort            (migration 0017)
+dimensions      id · project_id · canvas_id → canvases · name · color · sort
                 · source_param_id → parameters (set for child canvases)
+                · context_id — transitional, superseded by canvas_id, dropped in 0018+
 parameters      id · dimension_id · parent_param_id → parameters · name · sort
                 · source_entry_id → tier2_entries (nullable)
-contexts        id · project_id · parent_id → contexts (null = root) · symbol · name
+contexts        id · project_id · canvas_id → canvases · symbol · name
                 · justification · sort
+                · parent_id → contexts — transitional, superseded by canvas_id,
+                  dropped in 0018+ (null = root)
 bindings        id · context_id · dimension_id · parameter_id
                 · UNIQUE(context_id, dimension_id)
                 · tuple_hash (ordered parameter ids) — indexed per canvas for duplicate
@@ -86,8 +91,8 @@ bindings        id · context_id · dimension_id · parameter_id
 
 Notes:
 
-- The schema is already n-ary: a canvas's dimension count is simply the number of `dimensions` rows scoped to it. No column encodes "3".
-- `dimensions.context_id` realizes the recursion: α's child canvas rows are `dimensions WHERE context_id = α`, seeded one-per-binding from α's bindings.
+- The schema is already n-ary: a canvas's dimension count is simply the number of `dimensions` rows scoped to it (by `canvas_id`). No column encodes "3".
+- `canvas_id` realizes both membership and recursion: a root canvas's rows are `WHERE canvas_id = <root>`; α's child canvas rows are `WHERE canvas_id = <α's child canvas>`, seeded one-per-binding from α's bindings (`openChildCanvas`). The legacy `dimensions.context_id` / `contexts.parent_id` still carry the same information transitionally (the read path repointed to `canvas_id` in 090 phase 4a); they are dropped in cleanup migration 0018+.
 - Greek symbols auto-assigned from a cycle (α β γ δ ε λ μ θ π …) with manual override; children get `parent-symbol + index` (α1, α2).
 - Future sync: row deltas only, LWW per record, no positions on the wire — all satisfied by invariant 5 and the timestamp columns.
 
@@ -140,7 +145,7 @@ Tiers 1–2 keep the tabular presentation of the source document — editable ta
 
 - **Foundation**: purpose text block + ranked value-propositions table (columns: rank 1°, 2°… · name · description; drag to re-rank).
 - **Architecture**: nested-row tables — one per intended dimension (the example ships with Value / Stakeholders / Process; tables can be added/renamed), each row name + description, arbitrary nesting.
-- **Promote to Design**: from the Architecture tab, select entries → "use as dimension/parameters" seeds or extends the root canvas (each table maps to one dimension). Link is kept (invariant 7); a badge on parameters shows their tier-2 source.
+- **Promote to Design**: from the Architecture tab, select entries → "use as dimension/parameters" seeds or extends the current root canvas (each table maps to one dimension). Link is kept (invariant 7); a badge on parameters shows their tier-2 source.
 
 ### 4.7 Cross-cutting
 

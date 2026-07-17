@@ -1,6 +1,6 @@
 # 090: Multiple design canvases per project — canvas becomes a first-class entity
 
-- **Status**: OPEN — proposal / not started. Schema-bearing vertical slice. Surfaced during the 089 unified-canvas design cycle; **separable from** and **sequences before** the React-Flow canvas merge (land the model + a switcher in the current shell, then 089 renders N canvases as N clusters).
+- **Status**: SHIPPED (phases 1-4 merged to main; migration 0017 live-verified clean; switcher UI deploy in flight) — pending owner live-smoke. Schema-bearing vertical slice. Surfaced during the 089 unified-canvas design cycle; **separable from** and **sequences before** the React-Flow canvas merge (land the model + a switcher in the current shell, then 089 renders N canvases as N clusters). See `## What shipped (implementation notes)` below for the corrections discovered during build.
 - **Milestone**: M8-ish (sync/schema) for the data slice; the lane UX rides M7 (089). This slice can ship in the **current route UI** (a canvas switcher) with zero dependency on the infinite-canvas work.
 - **Related**: **089** (unified canvas — renders each canvas as a cluster; recursion drill-in already modelled as child-canvas clusters), **011** (recursion/drilldown — the implicit child-canvas model this formalizes), **012** (coverage — already per-canvas, unaffected), **088** (FK apply-order — a new parent FK to reason about), **075/077/072/079** (the deferred-FK / retry-drain / ensure-stub machinery a new synced parent touches).
 
@@ -189,25 +189,37 @@ Standing gate each phase: `npm run verify:fast` green; `npx tsc --noEmit`; `npx 
 
 ---
 
+## What shipped (implementation notes)
+
+Phases 1-4 merged to `main` and pushed (data-slice migration `0017` live-verified clean on prod; switcher-UI deploy in flight). Four corrections the original plan above did **not** foresee — captured here for the record:
+
+1. **Missing `GRANT` on `canvases`.** 0017 also needed `GRANT SELECT, INSERT, UPDATE, DELETE ON "canvases" TO app_user` (the 0008/0009 pattern). A new table is **not** covered by 0008's existing grant list, so without it the server's non-owning `app_user` role is `42501`-denied on every write and **cloud project creation breaks** (RLS policies only filter rows a role may already touch — they do not grant the table). Caught by the workspaceRls test, not the original plan. Now hand-appended in `0017_canvases.sql:91`.
+2. **`FORMAT_VERSION` 4→5 + `upgradeV4ToV5`.** Adding `canvasId` to the `dimensions`/`contexts` envelope row schemas made a legacy **v4** export unparseable (no `canvases` array; a null `canvas_id` would strand every row). Required a version bump (`projectEnvelope.ts:54`) plus an upgrade shim that **synthesizes the canvas layer at import time** — replicating 0017's backfill (one root canvas per project, one child canvas per distinct child context via the `dimensions.contextId ∪ contexts.parentId` union, then repointing every `canvasId`) — so a pre-090 file still imports losslessly.
+3. **Read-path repoint (phase 4a) — the load-bearing correctness change.** The original Phase 4 plan omitted that `canvasScope` / `contextCanvasScope` had to repoint from `context_id IS NULL` to the **explicit `canvas_id`**. Without it, two root canvases (both `context_id NULL`) would leak each other's dimensions/contexts — the entire point of the feature would silently fail. Split into its own phase (4a) because it is the change everything else rests on.
+4. **`canvasId` arg on dimension reorder/remove/restore (phase 4c step 0).** Those ops keyed on the implicit root scope; they gained a `canvasId` argument so reorder/remove/restore are **canvas-correct on a non-default root canvas** (not just the first one).
+
+Still deferred to **cleanup migration 0018+** (Open Question 5): dropping `dimensions.context_id` / `contexts.parent_id` and repointing the server dimension-floor query (`countLiveDimensions`, `src/server/writeApi/store.ts:442-449`) off `context_id` onto `canvas_id`. The read path is on `canvas_id`; these transitional columns are kept until that cleanup lands.
+
 ## Acceptance criteria
-- [ ] A project can hold **N root canvases**; each has independent dimensions/contexts/bindings.
-- [ ] `createProject` seeds one root canvas (Correction 1); migration 0017 backfills existing projects losslessly (one root canvas each — even empty ones; child canvases per distinct child context via the dims∪contexts union); no dangling FKs.
-- [ ] `canvases` syncs (workspace-scoped, `REPLICA IDENTITY FULL`) and its forward-FK cycle is handled via `DEFERRED_FK_COLUMN['canvases'] = ['parentContextId']` + `ENVELOPE_TABLE_NAMES` positioning (which drives `RETRY_APPLY_ORDER`), with a green 088-harness materialization test (no false orphan).
-- [ ] All ~13 registries updated; `projectIO.test.ts` schema cross-check green; export/import round-trips a multi-canvas project.
-- [ ] `migration-stack.test.ts` bumped 17→18 and snapshot regenerated.
-- [ ] Create / name / reorder / (confirm-gated, cascading) delete of root canvases.
-- [ ] SPEC §4.5-4.6 + glossary updated (canvas is a first-class entity; "one root canvas" invariant dropped; note `context_id`/`parent_id` are transitional).
-- [ ] 011 recursion + 012 coverage unaffected.
+- [x] A project can hold **N root canvases**; each has independent dimensions/contexts/bindings.
+- [x] `createProject` seeds one root canvas (Correction 1); migration 0017 backfills existing projects losslessly (one root canvas each — even empty ones; child canvases per distinct child context via the dims∪contexts union); no dangling FKs. **Live-verified clean on prod RDS.**
+- [x] `canvases` syncs (workspace-scoped, `REPLICA IDENTITY FULL`) and its forward-FK cycle is handled via `DEFERRED_FK_COLUMN['canvases'] = ['parentContextId']` + `ENVELOPE_TABLE_NAMES` positioning (which drives `RETRY_APPLY_ORDER`), with a green 088-harness materialization test (no false orphan). **Plus the GRANT the plan missed — see What shipped #1.**
+- [x] All ~13 registries updated; `projectIO.test.ts` schema cross-check green; export/import round-trips a multi-canvas project (`FORMAT_VERSION` 4→5 + `upgradeV4ToV5` — see What shipped #2).
+- [x] `migration-stack.test.ts` bumped 17→18 and snapshot regenerated.
+- [x] Create / name / reorder / (confirm-gated, cascading) delete of root canvases.
+- [x] SPEC §4.5-4.6 + glossary updated (canvas is a first-class entity; "one root canvas" invariant dropped; note `context_id`/`parent_id` are transitional).
+- [x] 011 recursion + 012 coverage unaffected.
+- [ ] **Owner live-smoke** (the only item left): signed-in UI smoke on the heavy account — switcher create/switch/delete-Undo, two independent canvases — + the debug-API DB checks (see HANDOFF).
 
 ---
 
 ## Open questions (owner decisions)
-1. **Naming**: root canvases user-named vs ordinal-only ("Canvas 1/2/3")? Child canvases show the context symbol as their name (recommended — `name` NULL ⇒ derive)?
-2. **Delete semantics**: soft-delete + cascade to dimensions/contexts/bindings (recommended), or block delete while non-empty?
-3. **Child-canvas uniqueness**: enforce 1-child-canvas-per-context as a **partial unique index** on `parent_context_id WHERE deleted_at IS NULL AND parent_context_id IS NOT NULL` (recommended — matches 011).
-4. **Cross-canvas references**: confirm canvases are fully independent (no shared dimensions across root canvases) — recommended, matches "independent explorations".
-5. **Dropping `dimensions.context_id` / `contexts.parent_id`**: deferred to a **cleanup migration 0018+** after the read path + server floor query (`store.ts:442-449`) are fully on `canvas_id` (Correction 2 / Transition strategy). Do **not** drop in 0017.
-6. **Does `createProject` seed the first canvas client-side, server-side, or both?** (It runs locally today, `mutations.ts:77-87`; the seed row must sync — recommend seeding in `createProject` so the same path covers local + cloud, enqueued like any other create.)
+1. **Naming** — ✅ RESOLVED (shipped): root canvases are **user-named with an ordinal fallback** — `name` NULL ⇒ `canvasLabel()` renders "Canvas 1/2/3" (`CanvasSwitcher.tsx:21-25`); child canvases keep `name` NULL and derive from the context symbol. 0017 backfills the first root canvas as `'Canvas 1'` and child canvases as NULL.
+2. **Delete semantics** — ✅ RESOLVED (shipped): **soft-delete + cascade** to dimensions/contexts/bindings (`archiveCanvasCascade`), confirm-gated via the no-modal status-line + inline Undo idiom; a `RootCanvasFloorError` blocks deleting the **last** live root canvas (`store/canvases.ts:178-226`).
+3. **Child-canvas uniqueness** — ✅ RESOLVED (shipped): enforced as the **partial unique index** `canvases_parent_context_idx ON parent_context_id WHERE deleted_at IS NULL AND parent_context_id IS NOT NULL` (`0017_canvases.sql:37`).
+4. **Cross-canvas references** — ✅ RESOLVED (shipped): canvases are **fully independent** — each dimension/context belongs to exactly one canvas via `canvas_id`; the phase-4a read-path repoint (What shipped #3) guarantees no leakage across root canvases.
+5. **Dropping `dimensions.context_id` / `contexts.parent_id`** — ⏳ STILL DEFERRED to a **cleanup migration 0018+** after the server floor query (`countLiveDimensions`, `store.ts:442-449`) is repointed off `context_id` onto `canvas_id`. The read path is already on `canvas_id`; these columns remain transitional. Not dropped in 0017.
+6. **Does `createProject` seed the first canvas client-side, server-side, or both?** — ✅ RESOLVED (shipped): seeded in `createProject` so the one path covers local + cloud, enqueued like any other create; the seed row syncs.
 
 ---
 
