@@ -6,6 +6,7 @@ import {
   lostEditMessage,
   syncStatusLabel,
   SYNC_ERROR_GRACE_MS,
+  WRITE_STALL_GRACE_MS,
 } from './syncStatus'
 import { emptyQueue, enqueue, type QueuedMutation } from './mutationQueue'
 import type { RowDelta } from './syncDelta'
@@ -26,6 +27,7 @@ function input(overrides: Partial<Parameters<typeof deriveSyncStatus>[0]> = {}) 
     enabled: true,
     online: true,
     errorSince: null,
+    writeStalledSince: null,
     now: 0,
     reconnecting: false,
     upToDate: true,
@@ -116,6 +118,66 @@ describe('deriveSyncStatus — error debounce grace window (issue 086)', () => {
   })
 })
 
+// Issue 087, test-first plan #1 — the write-side mirror of 086's read-error
+// debounce. A SUSTAINED write-outbox failure (expired token, server 5xx, write
+// API down) must stop being invisible: once the backlog has failed to reach
+// the server for the full grace window it surfaces a DISTINCT 'write-stalled'
+// status ("Changes not saving"), separate from the read 'error' ("Sync
+// error"). Like 086 the grace comparison is pure — `now`/`writeStalledSince`
+// are passed as data, never read from a clock here. Must NOT fire for the
+// ordinary offline case (offline takes precedence), a single transient retry
+// that clears before the grace, or an empty backlog.
+describe('deriveSyncStatus — write-stall surfacing (issue 087)', () => {
+  it('a write stall older than the grace, with a pending backlog and online -> write-stalled', () => {
+    const status = deriveSyncStatus(
+      input({ writeStalledSince: 0, now: WRITE_STALL_GRACE_MS, pendingCount: 2, upToDate: true }),
+    )
+    expect(status).toBe('write-stalled')
+  })
+
+  it('within the grace window a write stall is NOT yet surfaced (still calm syncing)', () => {
+    const status = deriveSyncStatus(
+      input({ writeStalledSince: 1000, now: 1000 + WRITE_STALL_GRACE_MS - 1, pendingCount: 2 }),
+    )
+    expect(status).not.toBe('write-stalled')
+    expect(status).toBe('syncing')
+  })
+
+  it('a write stall past the grace but with NO backlog left is not surfaced (a flush already drained it)', () => {
+    // pendingCount 0 means the outbox is empty — nothing is unsaved, so even a
+    // lingering timestamp must never claim "Changes not saving".
+    const status = deriveSyncStatus(
+      input({ writeStalledSince: 0, now: WRITE_STALL_GRACE_MS, pendingCount: 0, upToDate: true }),
+    )
+    expect(status).toBe('synced')
+  })
+
+  it('writeStalledSince === null is never write-stalled, no matter how large now is', () => {
+    expect(deriveSyncStatus(input({ writeStalledSince: null, now: 1e12, pendingCount: 5 }))).not.toBe(
+      'write-stalled',
+    )
+  })
+
+  it('offline still shows offline even when a write stall is also past its grace (offline takes precedence)', () => {
+    const status = deriveSyncStatus(
+      input({ online: false, writeStalledSince: 0, now: WRITE_STALL_GRACE_MS, pendingCount: 3 }),
+    )
+    expect(status).toBe('offline')
+  })
+
+  it('a sustained write stall outranks a within-grace read error blip', () => {
+    const status = deriveSyncStatus(
+      input({
+        writeStalledSince: 0,
+        now: WRITE_STALL_GRACE_MS,
+        errorSince: WRITE_STALL_GRACE_MS - 1,
+        pendingCount: 1,
+      }),
+    )
+    expect(status).toBe('write-stalled')
+  })
+})
+
 describe('syncStatusLabel — numerate voice (STYLE_GUIDE §9)', () => {
   it('synced', () => {
     expect(syncStatusLabel('synced', 0)).toBe('Synced')
@@ -132,6 +194,9 @@ describe('syncStatusLabel — numerate voice (STYLE_GUIDE §9)', () => {
   })
   it('error', () => {
     expect(syncStatusLabel('error', 0)).toBe('Sync error')
+  })
+  it('write-stalled is distinct from the read error — specific "Changes not saving" copy (issue 087)', () => {
+    expect(syncStatusLabel('write-stalled', 2)).toBe('Changes not saving')
   })
   it('disabled renders no text (the indicator does not mount at all)', () => {
     expect(syncStatusLabel('disabled', 0)).toBe('')

@@ -7,7 +7,14 @@
 import type { MutationQueue } from './mutationQueue'
 import type { RowDelta, TableName } from './syncDelta'
 
-export type SyncStatus = 'disabled' | 'offline' | 'reconnecting' | 'syncing' | 'error' | 'synced'
+export type SyncStatus =
+  | 'disabled'
+  | 'offline'
+  | 'reconnecting'
+  | 'syncing'
+  | 'error'
+  | 'write-stalled'
+  | 'synced'
 
 // Issue 086 — a genuine read error must stay unresolved this long before the
 // "Sync error" banner surfaces. The observed flicker (docs/issues/086: boot-
@@ -16,6 +23,14 @@ export type SyncStatus = 'disabled' | 'offline' | 'reconnecting' | 'syncing' | '
 // while still surfacing a sustained failure. Tuning knob, not a contract —
 // see the issue's "Open tension" note.
 export const SYNC_ERROR_GRACE_MS = 5000
+
+// Issue 087 — the WRITE-side mirror of SYNC_ERROR_GRACE_MS above. A genuine
+// write-outbox failure (expired token, server 5xx, write API down) must stay
+// unresolved this long before the "Changes not saving" status surfaces, so a
+// single transient flush blip that a backoff retry resolves within a second or
+// two never flashes it. Same tuning-knob philosophy as the read grace, kept a
+// DISTINCT constant so the two windows can diverge without entangling 086/087.
+export const WRITE_STALL_GRACE_MS = 5000
 
 export interface SyncStatusInput {
   // Whether the sync engine is running at all (isSyncEnabled(), issue 032).
@@ -31,6 +46,14 @@ export interface SyncStatusInput {
   // function stays pure and unit-testable. Cleared to `null` by the store on
   // the next successful onApplied/onControl. Replaces 036's `hasError`.
   readonly errorSince: number | null
+  // Issue 087 — the timestamp (ms) the current sustained WRITE-outbox failure
+  // began, or `null` when the outbox is healthy. Set by the store the first
+  // time a flush() fails to reach the server (network-error / auth-rejected,
+  // src/store/sync.ts) and cleared the moment a flush lands — the write twin of
+  // `errorSince` above. Kept as data (not a live clock read) so this function
+  // stays pure. Only surfaces past WRITE_STALL_GRACE_MS AND with a real backlog
+  // (pendingCount > 0): an empty outbox has nothing unsaved to warn about.
+  readonly writeStalledSince: number | null
   // Issue 086 — the current wall-clock time (ms), passed in by the caller so
   // the grace-window comparison below is a pure function of its inputs (the
   // store plumbs `Date.now()`; tests pass a fixed value / fake-timer clock).
@@ -55,6 +78,19 @@ export interface SyncStatusInput {
 export function deriveSyncStatus(input: SyncStatusInput): SyncStatus {
   if (!input.enabled) return 'disabled'
   if (!input.online) return 'offline'
+  // Issue 087 — a SUSTAINED write-outbox failure with edits still unsaved is
+  // the most urgent honest signal short of being offline: the user's changes
+  // are genuinely not reaching the server (worse than a read stall — that only
+  // delays inbound updates). Surfaces only once the failure has persisted the
+  // full grace window AND a real backlog remains; within the grace, or with an
+  // already-drained outbox, it falls through to calm activity below. Ranked
+  // above the read `error` so "Changes not saving" wins when both are true.
+  if (
+    input.writeStalledSince !== null &&
+    input.pendingCount > 0 &&
+    input.now - input.writeStalledSince >= WRITE_STALL_GRACE_MS
+  )
+    return 'write-stalled'
   // Issue 086 — only surface the banner once a genuine error has stayed
   // unresolved for the full grace window; within it, fall through to calm
   // activity below (never an instant flash).
@@ -83,6 +119,12 @@ export function syncStatusLabel(status: SyncStatus, pendingCount: number): strin
       return 'Reconnecting…'
     case 'error':
       return 'Sync error'
+    // Issue 087 — a DISTINCT, specific label from the read 'error' above: this
+    // one names the actual consequence (the user's edits aren't reaching the
+    // server), per STYLE_GUIDE §9 ("say what happened"). Quiet and numerate —
+    // the pending count already rides the adjacent chrome, so no count here.
+    case 'write-stalled':
+      return 'Changes not saving'
   }
 }
 

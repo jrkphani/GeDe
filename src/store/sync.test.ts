@@ -19,7 +19,7 @@ import type { TokenProvider } from '../sync/authToken'
 import type { ElectricMessage } from '../sync/electricProtocol'
 import type { QueuedMutation } from '../domain/mutationQueue'
 import type { TableName } from '../domain/syncDelta'
-import { SYNC_ERROR_GRACE_MS } from '../domain/syncStatus'
+import { SYNC_ERROR_GRACE_MS, WRITE_STALL_GRACE_MS } from '../domain/syncStatus'
 
 // Issue 048 — signs the store into "authenticated" without ever touching the
 // real amazon-cognito-identity-js client: getAuthHeaders() (src/auth/
@@ -1632,5 +1632,98 @@ describe('sync store — write-queue flush (issue 048)', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(useSyncStore.getState().pendingCount).toBe(0)
+  })
+})
+
+// Issue 087 — the write-side mirror of 086: a SUSTAINED write-outbox failure
+// (expired token, server 5xx, write API down) must stop retrying silently and
+// surface in the footer. A failed flush sets `writeStalledSince` (the write
+// twin of 086's read `errorSince`); a successful flush clears it the moment
+// the round trip lands. deriveSyncStatus then debounces it into the distinct
+// 'write-stalled' status past WRITE_STALL_GRACE_MS. Signed-out/sync-off/offline
+// paths are unaffected (offline takes precedence in the pure derivation).
+describe('sync store — write-stall surfacing (issue 087)', () => {
+  it('consecutive network-error flushes set writeStalledSince, and the clock does not reset on repeats', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const fetchMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'))
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(mutation())
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    const firstStalledSince = useSyncStore.getState().writeStalledSince
+    expect(firstStalledSince).not.toBeNull()
+    // The write never reached the server — it stays queued, not lost.
+    expect(useSyncStore.getState().pendingCount).toBe(1)
+    // Within the grace window the footer stays calm, not yet surfacing.
+    expect(useSyncStore.getState().status).not.toBe('write-stalled')
+
+    // A second failing flush must NOT restart the clock (mirror 086: it runs
+    // from when the stall FIRST began).
+    await useSyncStore.getState().flush()
+    expect(useSyncStore.getState().writeStalledSince).toBe(firstStalledSince)
+  })
+
+  it('a successful flush clears writeStalledSince immediately', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const m = mutation()
+    const fetchMock = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValue({
+        ok: true,
+        status: 200,
+        json: () => Promise.resolve({ outcomes: [{ mutationId: m.id, status: 'applied' }] }),
+      })
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(m)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    expect(useSyncStore.getState().writeStalledSince).not.toBeNull()
+
+    // A flush that reaches the server and drains the queue clears the stall.
+    await useSyncStore.getState().flush()
+    expect(useSyncStore.getState().writeStalledSince).toBeNull()
+    expect(useSyncStore.getState().pendingCount).toBe(0)
+  })
+
+  it('an expired-token (auth-rejected) flush also stalls, and surfaces "write-stalled" once the grace elapses', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: false,
+      status: 401,
+      json: () => Promise.resolve({ rejection: { message: 'Your session expired — sign in again to save.' } }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    // The indicator only shows a status once the engine is running (enabled) —
+    // start it with a fake stream, exactly as the 086 debounce tests do.
+    const { db } = await openDatabase('memory://')
+    const { factory } = fakeStreamFactory()
+    useSyncStore.getState().start(db, { streamFactory: factory })
+    useSyncStore.getState().setWorkspaceId('ws-1')
+
+    vi.useFakeTimers()
+    useSyncStore.getState().enqueueLocalMutation(mutation())
+    await vi.advanceTimersByTimeAsync(0)
+
+    expect(useSyncStore.getState().writeStalledSince).not.toBeNull()
+    expect(useSyncStore.getState().status).not.toBe('write-stalled')
+    expect(useSyncStore.getState().pendingCount).toBe(1)
+
+    // The grace elapses with the outbox still failing -> the footer surfaces it.
+    await vi.advanceTimersByTimeAsync(WRITE_STALL_GRACE_MS)
+    expect(useSyncStore.getState().status).toBe('write-stalled')
+    vi.useRealTimers()
+  })
+
+  it('resetSyncStore() resets writeStalledSince back to null', () => {
+    useSyncStore.setState({ writeStalledSince: 12345 })
+    resetSyncStore()
+    expect(useSyncStore.getState().writeStalledSince).toBeNull()
   })
 })

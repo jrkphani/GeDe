@@ -19,6 +19,7 @@ import {
   detectLostEdits,
   lostEditMessage,
   SYNC_ERROR_GRACE_MS,
+  WRITE_STALL_GRACE_MS,
   type SyncStatus,
 } from '../domain/syncStatus'
 import type { TableName } from '../domain/syncDelta'
@@ -72,6 +73,20 @@ function clearErrorGraceTimer(): void {
   errorGraceTimer = null
 }
 
+// Issue 087 — the write-side twin of errorGraceTimer above: the debounce timer
+// for a still-unresolved write-outbox failure. A failing flush schedules
+// exactly ONE recompute() WRITE_STALL_GRACE_MS after the stall FIRST begins, so
+// the "Changes not saving" footer surfaces once the grace elapses if no flush
+// has landed to clear it; any successful flush (or a stop/restart) cancels it.
+// Never reset while the stall persists — the clock runs from when it began, not
+// from each repeated failure (mirrors errorGraceTimer's own rule).
+let writeStallGraceTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearWriteStallGraceTimer(): void {
+  if (writeStallGraceTimer !== null) clearTimeout(writeStallGraceTimer)
+  writeStallGraceTimer = null
+}
+
 function resetBackoff(): void {
   backoffMs = INITIAL_BACKOFF_MS
 }
@@ -119,6 +134,14 @@ interface SyncState {
   // genuine error only surfaces the banner once it has stayed set for
   // SYNC_ERROR_GRACE_MS (the debounce that kills the observed flicker).
   errorSince: number | null
+  // Issue 087 — the timestamp (ms) the current sustained WRITE-outbox failure
+  // began, or `null` when the outbox is healthy. The write twin of `errorSince`
+  // above: set the first time a flush() fails to reach the server (a
+  // network-error or auth-rejected outcome) and cleared the moment a flush
+  // lands. deriveSyncStatus debounces it into the 'write-stalled' status (only
+  // past WRITE_STALL_GRACE_MS with a real backlog) so a genuinely stuck outbox
+  // stops retrying silently and surfaces in the footer.
+  writeStalledSince: number | null
   reconnecting: boolean
   upToDateTables: ReadonlySet<TableName>
   status: SyncStatus
@@ -226,12 +249,32 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       // itself). A scheduled recompute() after the grace re-evaluates this
       // once the window has elapsed.
       errorSince: s.errorSince,
+      // Issue 087 — plumb the write-stall timestamp alongside 086's read one;
+      // the pure deriveSyncStatus does the grace-window + backlog comparison.
+      writeStalledSince: s.writeStalledSince,
       now: Date.now(),
       reconnecting,
       upToDate,
       pendingCount: s.pendingCount,
     })
     set({ reconnecting, status })
+  }
+
+  // Issue 087 — the write-outbox analogue of onError's read-error debounce
+  // (start() below): a failing flush() marks the stall from when it FIRST
+  // began (never resets on a repeat), recomputes (still calm — within the grace
+  // deriveSyncStatus reports 'syncing', not 'write-stalled'), and schedules ONE
+  // recompute() after the grace so "Changes not saving" surfaces if nothing has
+  // cleared it. A successful flush clears writeStalledSince and cancels this.
+  function markWriteStalled(): void {
+    if (get().writeStalledSince !== null) return
+    set({ writeStalledSince: Date.now() })
+    recompute()
+    clearWriteStallGraceTimer()
+    writeStallGraceTimer = setTimeout(() => {
+      writeStallGraceTimer = null
+      recompute()
+    }, WRITE_STALL_GRACE_MS)
   }
 
   return {
@@ -241,6 +284,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
     pendingCount: 0,
     online: true,
     errorSince: null,
+    writeStalledSince: null,
     reconnecting: false,
     upToDateTables: new Set<TableName>(),
     status: 'disabled',
@@ -290,12 +334,14 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       // unchanged from 051, still defensive rather than deleted.
       if (shouldSkipReadPath(Boolean(options.streamFactory))) return
       get().handle?.stop()
-      // Issue 086 — a (re)start is a clean slate for the read-error debounce.
+      // Issue 086/087 — a (re)start is a clean slate for both debounces.
       clearErrorGraceTimer()
+      clearWriteStallGraceTimer()
       set({
         enabled: true,
         online: initialOnline(),
         errorSince: null,
+        writeStalledSince: null,
         reconnecting: false,
         upToDateTables: new Set<TableName>(),
       })
@@ -417,6 +463,7 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       offlineHandler = null
       clearFlushTimer()
       clearErrorGraceTimer()
+      clearWriteStallGraceTimer()
       resetBackoff()
       set({ enabled: false, handle: null })
       recompute()
@@ -455,12 +502,20 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       if (result.kind === 'skipped') return
 
       if (result.kind === 'network-error') {
+        // Issue 087 — a genuine write-outbox failure (server 5xx / write API
+        // down / offline). Mark the stall (debounced) so a SUSTAINED failure
+        // surfaces "Changes not saving" instead of only ever retrying quietly.
+        markWriteStalled()
         scheduleFlushRetry(() => get().flush())
         return
       }
 
       if (result.kind === 'auth-rejected') {
         useStatusStore.getState().announce(result.rejection.message)
+        // Issue 087 — an expired/invalid token is the other genuine sustained
+        // failure: the quiet announce above is a one-shot, so also mark the
+        // stall so the footer reflects it if a token refresh never resolves it.
+        markWriteStalled()
         scheduleFlushRetry(() => get().flush())
         return
       }
@@ -468,6 +523,11 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       // result.kind === 'applied' — the round trip itself succeeded, so
       // reset backoff even if some individual mutations were rejected.
       resetBackoff()
+      // Issue 087 — a flush that reached the server clears the write stall the
+      // moment it lands (mirrors 086 clearing errorSince on a successful apply);
+      // cancel a debounce that hasn't fired yet.
+      clearWriteStallGraceTimer()
+      if (get().writeStalledSince !== null) set({ writeStalledSince: null })
       let nextQueue = get().queue
       for (const id of result.acknowledgedIds) nextQueue = acknowledge(nextQueue, id)
       nextQueue = prune(nextQueue)
@@ -562,6 +622,7 @@ export function resetSyncStore(): void {
   offlineHandler = null
   clearFlushTimer()
   clearErrorGraceTimer()
+  clearWriteStallGraceTimer()
   resetBackoff()
   useSyncStore.setState({
     enabled: false,
@@ -570,6 +631,7 @@ export function resetSyncStore(): void {
     pendingCount: 0,
     online: true,
     errorSince: null,
+    writeStalledSince: null,
     reconnecting: false,
     upToDateTables: new Set<TableName>(),
     status: 'disabled',
