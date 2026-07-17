@@ -11,7 +11,14 @@
 // hypothetical.
 import DOMPurify from 'dompurify'
 import { ListItemNode, ListNode } from '@lexical/list'
-import { createEditor, type Klass, type LexicalNode } from 'lexical'
+import {
+  $createParagraphNode,
+  $createTextNode,
+  $getRoot,
+  createEditor,
+  type Klass,
+  type LexicalNode,
+} from 'lexical'
 
 // The XSS whitelist-by-construction (081's rich-text-library decision):
 // ParagraphNode/TextNode are Lexical built-ins (always registered, no entry
@@ -64,6 +71,65 @@ export function safeRichTextJson(json: string | null): string | null {
     )
     return null
   }
+}
+
+// Issue 089 D1 Phase 2 — the Lexical-JSON <-> plain-text bridge. Direction D1
+// turns grid cells that used to hold plain strings into rich text (Lexical
+// JSON). The two live consumers of that prose — the palette's keyword corpus
+// (coreCommands.ts) and the documented-status dot (completeness.ts) — must
+// read the AUTHORED TEXT, never the JSON envelope. These two helpers are that
+// bridge, and P4 (the data conversion) leans on the round-trip closure below.
+
+// Reads the plain prose out of a field that may be EITHER shape, correctly and
+// without ever throwing:
+//   - valid Lexical JSON (a converted cell)  → the editor's own text content,
+//     via the same `editorState.read(() => $getRoot().getTextContent())` API
+//     the real editor uses (rich-text-editor.tsx).
+//   - a legacy plain string (not yet converted) → returned verbatim, because
+//     safeRichTextJson rejects it as non-Lexical (that's exactly the "not a
+//     Lexical payload" signal, not an error).
+//   - null / empty  → ''.
+// So it is correct on BOTH the pre-conversion and post-conversion corpus,
+// which is why the consumers can adopt it now, before any data moves.
+export function richTextToPlainText(value: string | null): string {
+  if (value === null) return ''
+  // A serialized Lexical EditorState is always a JSON object literal
+  // (`{"root":...}`). A legacy plain string is prose that (almost) never
+  // starts with `{`, so this fast path returns it verbatim WITHOUT routing it
+  // through safeRichTextJson — whose fail-closed `console.error` is meant for a
+  // tampered sync payload at the security boundary (081), NOT for the expected
+  // "this cell hasn't been converted to rich text yet" case. Pre-P4 that is
+  // EVERY cell, so skipping the log here keeps the console clean. Output is
+  // identical either way: a non-`{` string is exactly what safeRichTextJson
+  // would reject to null, and every valid EditorState still goes through it.
+  if (!value.trimStart().startsWith('{')) return value
+  const safe = safeRichTextJson(value)
+  if (safe === null) return value
+  return probeEditor()
+    .parseEditorState(safe)
+    .read(() => $getRoot().getTextContent())
+}
+
+// Wraps a plain string as a single-paragraph Lexical doc and returns its
+// serialized JSON. Uses ONLY the built-in ParagraphNode/TextNode (registered
+// via RICH_TEXT_NODES' probeEditor) so its output is guaranteed to pass
+// safeRichTextJson — the P4-critical closure: P4 converts legacy strings in a
+// loop guarded by safeRichTextJson, so output that failed to validate would be
+// re-converted forever. An empty string yields a valid empty-paragraph doc
+// (no text node), which round-trips back to '' through richTextToPlainText.
+export function plainTextToRichJson(text: string): string {
+  const editor = probeEditor()
+  editor.update(
+    () => {
+      const root = $getRoot()
+      root.clear()
+      const paragraph = $createParagraphNode()
+      if (text !== '') paragraph.append($createTextNode(text))
+      root.append(paragraph)
+    },
+    { discrete: true },
+  )
+  return JSON.stringify(editor.getEditorState().toJSON())
 }
 
 // Defense-in-depth (081 security item 3), required even though it is not on

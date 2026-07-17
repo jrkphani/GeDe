@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { documentedStatus, isComplete } from './completeness'
+import { plainTextToRichJson } from './richText'
 
 describe('isComplete', () => {
   it('is false when no dimensions are bound', () => {
@@ -38,5 +39,22 @@ describe('documentedStatus', () => {
 
   it('is documented when complete and justified', () => {
     expect(documentedStatus(true, 'Reflects the primary beneficiaries')).toBe('documented')
+  })
+
+  // Issue 089 D1 Phase 2 — once justification can hold Lexical JSON, an EMPTY
+  // rich doc is ALWAYS a non-empty string (`{"root":...}`), so a naive
+  // `.trim() !== ''` would wrongly read it as documented (a status-dot
+  // regression, STYLE_GUIDE §9). documentedStatus must read the PROSE, not the
+  // JSON envelope.
+  it('is complete (not documented) when the justification is an EMPTY rich doc', () => {
+    const emptyRichDoc = plainTextToRichJson('')
+    expect(emptyRichDoc.trim()).not.toBe('') // the trap: the envelope is non-empty
+    expect(documentedStatus(true, emptyRichDoc)).toBe('complete')
+  })
+
+  it('is documented when the justification is a NON-empty rich doc', () => {
+    expect(documentedStatus(true, plainTextToRichJson('Reflects the primary beneficiaries'))).toBe(
+      'documented',
+    )
   })
 })

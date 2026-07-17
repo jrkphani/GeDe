@@ -7,6 +7,8 @@ export function isComplete(
   return dimensionIds.length > 0 && dimensionIds.every((id) => boundDimensionIds.has(id))
 }
 
+import { richTextToPlainText } from './richText'
+
 export type DocumentedStatus = 'draft' | 'complete' | 'documented'
 
 // STYLE_GUIDE §9/§10 dot signifier (issue 005): draft = hollow, complete-
@@ -17,5 +19,10 @@ export function documentedStatus(
   justification: string | null | undefined,
 ): DocumentedStatus {
   if (!complete) return 'draft'
-  return justification && justification.trim() !== '' ? 'documented' : 'complete'
+  // Read the authored PROSE, not the raw field (089 D1 P2): once justification
+  // can hold Lexical JSON, an EMPTY rich doc is still a non-empty string
+  // (`{"root":...}`), so a naive `.trim() !== ''` would wrongly light the
+  // "documented" dot for an empty doc (STYLE_GUIDE §9 regression).
+  // richTextToPlainText is correct on both legacy strings and JSON.
+  return richTextToPlainText(justification ?? null).trim() !== '' ? 'documented' : 'complete'
 }

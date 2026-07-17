@@ -1,4 +1,5 @@
 import type { CommandItem } from '../domain/paletteRanking'
+import { richTextToPlainText } from '../domain/richText'
 import type { CommandProvider } from '../store/commandRegistry'
 import { useContextsStore } from '../store/contexts'
 import { currentRoute, navigate } from './router'
@@ -83,7 +84,11 @@ const contextSource: CommandProvider = () => {
       kind: 'context',
       title: c.name?.trim() ? c.name.trim() : c.symbol,
       symbol: c.symbol,
-      keywords: [c.symbol, c.justification ?? ''],
+      // Index the authored PROSE, not the Lexical-JSON envelope (089 D1 P2):
+      // once justification can be rich text, stuffing the raw JSON here would
+      // pollute the corpus with structural tokens and drop real word matches.
+      // richTextToPlainText is correct on both legacy strings and JSON.
+      keywords: [c.symbol, richTextToPlainText(c.justification)],
       run: () => {
         navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })
         useContextsStore.getState().select(c.id)

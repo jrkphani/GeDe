@@ -8,7 +8,13 @@
 import { describe, expect, it } from 'vitest'
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
 import { $createListItemNode, $createListNode, ListItemNode, ListNode } from '@lexical/list'
-import { RICH_TEXT_NODES, safeRichTextJson, sanitizeRichTextHtml } from './richText'
+import {
+  plainTextToRichJson,
+  richTextToPlainText,
+  RICH_TEXT_NODES,
+  safeRichTextJson,
+  sanitizeRichTextHtml,
+} from './richText'
 
 // A real, valid serialized EditorState built through the SAME registered
 // node set the app editor uses (RICH_TEXT_NODES) — a paragraph with a bold
@@ -105,6 +111,54 @@ describe('safeRichTextJson — parse guard (test-first plan item 7)', () => {
 
   it('RICH_TEXT_NODES is exactly ListNode + ListItemNode — no LinkNode/HeadingNode/CodeNode/DecoratorNode', () => {
     expect(RICH_TEXT_NODES).toEqual([ListNode, ListItemNode])
+  })
+})
+
+// Issue 089 D1 Phase 2 — the Lexical-JSON <-> plain-text helpers that let the
+// two real prose consumers (palette keyword corpus, documented-status) keep
+// working once a cell's value becomes Lexical JSON instead of a plain string,
+// BEFORE any data is converted (P4 depends on this closure).
+describe('richTextToPlainText — reads prose out of either shape (089 D1 P2)', () => {
+  it('extracts the text content of a real Lexical JSON payload (no JSON syntax)', () => {
+    const json = validEditorStateJson()
+    const text = richTextToPlainText(json)
+    // The prose the editor state carries, in document order — not JSON keys.
+    expect(text).toContain('Comfort, on demand.')
+    expect(text).toContain('First point')
+    expect(text).not.toContain('root')
+    expect(text).not.toContain('paragraph')
+    expect(text).not.toContain('"type"')
+  })
+
+  it('returns a legacy plain string verbatim (not valid Lexical JSON → passthrough)', () => {
+    expect(richTextToPlainText('Reflects the primary beneficiaries')).toBe(
+      'Reflects the primary beneficiaries',
+    )
+  })
+
+  it('null and empty string both normalize to an empty string, never throwing', () => {
+    expect(richTextToPlainText(null)).toBe('')
+    expect(richTextToPlainText('')).toBe('')
+    expect(() => richTextToPlainText('not json{')).not.toThrow()
+    // A non-Lexical string is treated as legacy plain text (returned verbatim),
+    // which is the correct, non-throwing behavior on the pre-conversion corpus.
+    expect(richTextToPlainText('not json{')).toBe('not json{')
+  })
+})
+
+describe('plainTextToRichJson — the P4-critical round-trip closure (089 D1 P2)', () => {
+  it("output validates via safeRichTextJson AND round-trips back through richTextToPlainText", () => {
+    const json = plainTextToRichJson('hi')
+    // P4 will call plainTextToRichJson in a loop guarded by safeRichTextJson;
+    // if the output didn't validate, that loop would re-convert forever.
+    expect(safeRichTextJson(json)).toBe(json)
+    expect(richTextToPlainText(json)).toBe('hi')
+  })
+
+  it('an empty string becomes a valid (empty-paragraph) doc that round-trips to ""', () => {
+    const json = plainTextToRichJson('')
+    expect(safeRichTextJson(json)).toBe(json)
+    expect(richTextToPlainText(json)).toBe('')
   })
 })
 
