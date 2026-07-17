@@ -198,6 +198,10 @@ interface SyncState {
   // (test-first plan #5). Safe to call repeatedly/concurrently: an
   // in-flight flush is skipped rather than doubled.
   flush: () => Promise<void>
+  // Issue 089 D2 — the LOCAL twin of onApplied's `*AppliedAt` bumps, for a
+  // cross-store write that has no server round-trip to echo it back. See the
+  // implementation's doc comment.
+  notifyLocalApply: (tables: readonly TableName[]) => void
 }
 
 export const useSyncStore = create<SyncState>()((set, get) => {
@@ -486,6 +490,32 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       // More work may remain (the queue grew mid-flush, or this batch only
       // partially drained) — keep draining until a flush finds nothing left.
       if (pending(get().queue).length > 0) void get().flush()
+    },
+
+    // Issue 089 D2 — the LOCAL twin of onApplied's `*AppliedAt` bumps. A
+    // mutation in one store that writes rows a DIFFERENT co-mounted store owns
+    // (tier2.promote / rename-propagate / delete-resolution create or edit the
+    // root-canvas dimensions + parameters the Design lane owns) has no server
+    // round-trip to bump the matching signal — so the 075B refresh
+    // subscriptions in dimensions.ts / parameters.ts never wake, and in the D2
+    // co-mount model the already-mounted, projectId-keyed sibling lane stays
+    // stale until a reload. Bumping the SAME signals here wakes those existing
+    // subscriptions to re-read for their CURRENT canvas / tracked dimensions
+    // (canvas-scoped per 090) — no new cross-store coupling, no schema change.
+    // Does NOT recompute() (sync status is unaffected by a local re-read).
+    notifyLocalApply(tables) {
+      const at = Date.now()
+      const patch: Partial<SyncState> = {}
+      for (const table of tables) {
+        if (table === 'dimensions') patch.dimensionsAppliedAt = at
+        else if (table === 'parameters') patch.parametersAppliedAt = at
+        else if (table === 'contexts') patch.contextsAppliedAt = at
+        else if (table === 'bindings') patch.bindingsAppliedAt = at
+        else if (table === 'tier1_purpose' || table === 'tier1_props') patch.tier1AppliedAt = at
+        else if (table === 'tier2_tables' || table === 'tier2_entries') patch.tier2AppliedAt = at
+        else if (table === 'canvases') patch.canvasesAppliedAt = at
+      }
+      set(patch)
     },
   }
 })

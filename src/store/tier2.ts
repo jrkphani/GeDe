@@ -94,6 +94,19 @@ function enqueueEntryRemoval(
   }
 }
 
+// Issue 089 D2 — wake the co-mounted Design lane after a cross-tier write.
+// promote / rename-propagate / delete-resolution mutate the root-canvas
+// dimensions & parameters the Design lane owns; in the D2 co-mount model that
+// lane is already mounted and its projectId-keyed load effect does NOT re-fire
+// on this sibling lane's local write (docs/issues/089 D2). Bump the shared
+// local-apply signal so useDimensionsStore / useParametersStore's own 075B
+// subscriptions re-read for the CURRENT canvas — without a reload or a server
+// echo (works offline / in-test). Canvas-scoping (090) is preserved by those
+// subscriptions themselves: they re-list for their store's CURRENT canvasId.
+function refreshDesignLane(): void {
+  useSyncStore.getState().notifyLocalApply(['dimensions', 'parameters'])
+}
+
 interface Tier2State {
   projectId: string | null
   tables: Tier2TableRow[]
@@ -331,6 +344,9 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       }
       await reloadEntries(tableId)
       await refreshLinks(projectId)
+      // Invariant 7 renamed the linked parameters too — refresh the Design lane
+      // so its register reflects the new name live (089 D2).
+      if (linked.length > 0) refreshDesignLane()
       useCommandLogStore.getState().push({
         label: `rename "${name}"`,
         async undo() {
@@ -429,6 +445,9 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       enqueueEntryRemoval(entries, removedIds, after)
       await reloadEntries(tableId)
       await refreshLinks(projectId)
+      // The linked parameters were unlinked from their source entry — refresh
+      // the Design lane so its 014 link glyphs clear live (089 D2).
+      refreshDesignLane()
       useCommandLogStore.getState().push({
         label: 'unlink parameter, delete entry',
         async undo() {
@@ -472,6 +491,9 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       enqueueEntryRemoval(entries, removedIds, after)
       await reloadEntries(tableId)
       await refreshLinks(projectId)
+      // The linked parameters were soft-deleted — refresh the Design lane so
+      // they drop out of its register live (089 D2).
+      refreshDesignLane()
       useCommandLogStore.getState().push({
         label: 'delete parameter and entry',
         async undo() {
@@ -502,6 +524,9 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       for (const p of outcome.createdParameters) enqueueIfSyncing('parameters', p.id, 'upsert', p)
       await refreshLinks(input.projectId)
       if (createdParamIds.length === 0 && createdDim === null) return outcome // nothing created
+      // A dimension and/or parameters just landed on the root canvas the Design
+      // lane owns — refresh it live (089 D2).
+      refreshDesignLane()
 
       const afterDimIds = (await listDimensions(db(), input.projectId)).map((d) => d.id)
       const afterParamIds = (await listParameters(db(), outcome.dimensionId)).map((p) => p.id)

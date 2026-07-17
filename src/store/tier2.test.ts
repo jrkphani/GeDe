@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { openDatabase } from '../db/client'
 import {
   addTier2Entry,
@@ -10,6 +10,7 @@ import {
 } from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
+import { resetDimensionsStore, useDimensionsStore } from './dimensions'
 import { resetSyncStore, useSyncStore } from './sync'
 import { useStatusStore } from './status'
 import { resetTier2Store, useTier2Store } from './tier2'
@@ -28,6 +29,7 @@ beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetTier2Store()
+  resetDimensionsStore()
   resetSyncStore()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
@@ -141,6 +143,31 @@ describe('tier2 store — promote (one undo step, invariant 7)', () => {
 
     await useCommandLogStore.getState().redo()
     expect(await listParameters(db, outcome.dimensionId)).toHaveLength(2)
+  })
+
+  // Issue 089 D2 — in the co-mount model the Design lane is already mounted and
+  // its projectId-keyed load effect never re-fires on this sibling Architecture
+  // lane's promote. So promote must refresh useDimensionsStore itself (via the
+  // local-apply signal) — the promoted dimension appears in the Design store
+  // for its CURRENT canvas (090), with no remount and no reload.
+  it('promote refreshes useDimensionsStore for the current canvas (no remount)', async () => {
+    // The Design lane loaded its (empty) root canvas at co-mount time.
+    await useDimensionsStore.getState().load(projectId)
+    expect(useDimensionsStore.getState().dimensions).toHaveLength(0)
+
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const buyers = nn(await useTier2Store.getState().addEntry(table.id, null, 'Buyers'))
+    await useTier2Store
+      .getState()
+      .promote({ projectId, entryIds: [buyers.id], target: { kind: 'new', name: 'Stake' } })
+
+    // The 075B subscription re-reads asynchronously off the bumped signal.
+    await vi.waitFor(() => {
+      expect(useDimensionsStore.getState().dimensions.map((d) => d.name)).toContain('Stake')
+    })
+    // Scoped to the canvas the Design store currently has loaded (090 root),
+    // not a hardcoded root — the dimension landed on that same canvas.
+    expect(useDimensionsStore.getState().canvasId).not.toBeNull()
   })
 
   it('re-promote extends without duplicating already-linked entries', async () => {

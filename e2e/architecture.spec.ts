@@ -98,10 +98,12 @@ test('architecture: build tables, promote to dimensions, register offers params,
   await expect(tablePanel(page, 'Stakeholders').getByRole('cell', { name: 'People', exact: true })).toBeVisible()
   await expect(page.locator('.status-bar')).toContainText(/parameter updated/)
 
-  // Back on Design: the register's Stake combobox now offers "People".
+  // Back on Design: the register's Stake combobox now offers "People" — live,
+  // with NO reload. In the 089 D2 co-mount model the Design lane is already
+  // mounted, so the Architecture-lane rename's invariant-7 parameter update
+  // refreshes it through the local-apply signal (tier2.renameEntry →
+  // useSyncStore.notifyLocalApply), not a remount.
   await page.getByRole('link', { name: 'Design' }).click()
-  await page.reload()
-  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const rowAfter = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
   await rowAfter.locator('td').nth(3).getByRole('button').click()
   await expect(page.getByPlaceholder('Type to filter…')).toBeVisible()
