@@ -168,12 +168,18 @@ test('existing scenario: enter formatted prose, reload persists, export/import r
   // generous wait (mirrors e2e/canvas-spline.spec.ts's own
   // waitForTimeout for a similar no-better-signal case) is enough for it to
   // land before we reload.
-  await page.waitForTimeout(500)
+  // The commit-on-blur write to local PGlite is fire-and-forget with no DOM
+  // signal to await. If we reload before it lands the write is LOST (not merely
+  // late) — a re-reload can never recover it — so a too-short fixed wait flaked
+  // in CI under load. Give the local write ample, CI-safe headroom before
+  // reloading. (A magic wait, but there is genuinely no completion signal for
+  // this field; the local IndexedDB write is fast, so generous slack is safe.)
+  await page.waitForTimeout(3_000)
 
   await page.reload()
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const reloaded = page.getByRole('textbox', { name: 'Existing scenario' })
-  await expect(reloaded.locator('strong', { hasText: 'booking' })).toBeVisible()
+  await expect(reloaded.locator('strong', { hasText: 'booking' })).toBeVisible({ timeout: 15_000 })
   await expect(reloaded.locator('em', { hasText: 'entirely' })).toBeVisible()
   await expect(
     reloaded.locator('.rich-text-editor__text--underline', { hasText: 'manual' }),
