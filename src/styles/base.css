@@ -420,7 +420,24 @@ body {
   border-bottom-color: var(--ink-muted);
 }
 
-/* Popover (Radix) — the app's single shadow token, zero radius. */
+/* Popover (Radix) — the app's single shadow token, zero radius.
+ *
+ * Stacking order (issue 089 D2 regression fix): every app popover/menu is a
+ * Radix portal to <body> (ui/popover.tsx), a sibling of the app root whose
+ * positioned descendants (notably the D2 sticky `.workspace__lane-header`,
+ * z-index:5) compete in the SAME body-level stacking context. Without an
+ * explicit z-index the portal defaulted to `auto` (0) and a lane header could
+ * paint OVER an open popover — making the app-bar Project menu's "Export
+ * project…" unclickable on any route where a lane header underlaps it. The
+ * app's layers, low→high:
+ *     1   frozen grid col / coverage cells (in-surface chrome)
+ *     5   .workspace__lane-header (D2 sticky per-lane header)
+ *    50   .popover / .menu  ← app-bar & in-surface Radix overlays (this rule)
+ *   100/101 .command-palette overlay/panel (always the top layer)
+ * 50 keeps every popover above the lane headers (and the FormatStrip band,
+ * which carries no z-index) yet below the command palette. `.menu` and the
+ * other overlay variants ride on this base class (cn('popover', …)), so they
+ * inherit the layer — no per-variant z-index needed. */
 .popover {
   background: var(--panel);
   border: 1px solid var(--hairline);
@@ -428,6 +445,7 @@ body {
   box-shadow: var(--shadow-popover);
   padding: var(--space-2);
   min-width: 280px;
+  z-index: 50;
 }
 
 /* Dimension manager — issue 002. Popover rows are denser than document tables. */

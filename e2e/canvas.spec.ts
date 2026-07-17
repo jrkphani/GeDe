@@ -100,23 +100,40 @@ test('binding a context renders exactly one non-draft node with its symbol; the 
   await expect(page.locator('.canvas-node[data-context-id] text').first()).toHaveText('α')
 })
 
-test('the canvas label tier switches as the container crosses the 640px/400px breakpoints', async ({ page }) => {
+test('the canvas label tier switches as the container crosses the 400px breakpoint (live)', async ({ page }) => {
   await setUpCanvas(page)
   const shell = page.locator('.canvas-shell')
 
-  // canvas-shell is ~40% of the side-by-side row (design-surface-row), minus
-  // the persistent dimension rail's own fixed ~260px column (issue 082 Phase
-  // 1 — the rail now always occupies a flex-basis in this row alongside the
-  // canvas and register, so the shell's measured width at a given viewport
-  // is smaller than it was pre-082). These viewport sizes are chosen so the
-  // *shell's own measured width* (not the viewport) lands solidly within
-  // each STYLE_GUIDE §7 tier.
-  await page.setViewportSize({ width: 2200, height: 900 })
-  await expect(shell).toHaveAttribute('data-label-tier', 'full')
+  // Issue 089 D2 — the Design surface is now a co-mounted lane (a fixed ~940px
+  // column, `.workspace__lane--design`), not the full-viewport surface it was
+  // pre-D2. Inside that column the canvas is a ~34% side panel of the
+  // `.design-surface-row`, so its measured `.canvas-shell` width is governed by
+  // the LANE'S own container query (STYLE_GUIDE §7 tiers keyed on the shell's
+  // own width via ResizeObserver), NOT the viewport. Consequences (verified by
+  // measuring the rendered shell width at each viewport below):
+  //   • The 'full' tier (shell ≥640px) is no longer reachable in-lane — the
+  //     shell tops out ~592px even when the whole workspace stacks — so it is
+  //     covered only by the pure unit test (canvasResponsive.test.ts). Widening
+  //     the VIEWPORT no longer promotes the shell to 'full'; the lane caps it.
+  //   • The reachable live tiers are 'truncated' (shell in [400,640)) and
+  //     'legend' (<400). This spec proves the real-browser ResizeObserver →
+  //     width → tier wiring by crossing the 400px breakpoint (which jsdom's
+  //     no-op ResizeObserver can't exercise).
 
-  await page.setViewportSize({ width: 1700, height: 900 })
+  // Wide viewport: the lane stays fixed-width, the canvas is a narrow side
+  // panel (~295px) — 'legend'. Proves viewport width alone no longer drives the
+  // tier (the lane governs).
+  await page.setViewportSize({ width: 2200, height: 900 })
+  await expect(shell).toHaveAttribute('data-label-tier', 'legend')
+
+  // Mid viewport: the workspace stacks and the design-surface-row stacks the
+  // canvas full-width under the editing zone (~512px shell) — 'truncated'.
+  await page.setViewportSize({ width: 560, height: 900 })
   await expect(shell).toHaveAttribute('data-label-tier', 'truncated')
 
+  // Narrow viewport: the shell drops below the 400px breakpoint (~332px) —
+  // 'legend'. The live truncated→legend switch across 400px is the real-browser
+  // proof this test exists for.
   await page.setViewportSize({ width: 380, height: 900 })
   await expect(shell).toHaveAttribute('data-label-tier', 'legend')
 })

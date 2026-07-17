@@ -55,13 +55,16 @@ async function setUpCanvas(page: Page) {
 test('every parameter dot on the canvas carries a visible label with its name', async ({ page }) => {
   await setUpCanvas(page)
 
-  // Ensure the canvas measures wide enough for the 'full' label tier
-  // (STYLE_GUIDE §7: shell width ≥640px). Issue 082 Phase 1's persistent
-  // dimension rail now takes a fixed ~260px column in this row too, so a
-  // wider viewport than pre-082 is needed to clear the shell's own 640px
-  // threshold.
-  await page.setViewportSize({ width: 2200, height: 900 })
-  await expect(page.locator('.canvas-shell')).toHaveAttribute('data-label-tier', 'full')
+  // Issue 089 D2 — the Design surface is a co-mounted, fixed-width lane now, so
+  // the canvas `.canvas-shell` can no longer reach the 'full' tier (≥640px); it
+  // tops out ~592px (see canvas.spec.ts for the measured explanation). Param
+  // labels are hidden ONLY in the 'legend' tier (Canvas.tsx renders them for
+  // both 'full' and 'truncated'), so a 'truncated'-tier viewport still proves
+  // "every dot carries a visible label". The four names here are all ≤ 8 chars
+  // (PARAM_LABEL_TRUNCATE_LENGTH), so they render in FULL even at 'truncated' —
+  // the label-text assertions below are unaffected by truncation.
+  await page.setViewportSize({ width: 560, height: 900 })
+  await expect(page.locator('.canvas-shell')).toHaveAttribute('data-label-tier', 'truncated')
 
   await expect(page.locator('.canvas-dot')).toHaveCount(4)
   await expect(page.locator('.canvas-param-label')).toHaveCount(4)
@@ -75,8 +78,12 @@ test('parameter labels degrade with the canvas width, per the label-tier machine
   await setUpCanvas(page)
   const shell = page.locator('.canvas-shell')
 
-  await page.setViewportSize({ width: 2200, height: 900 })
-  await expect(shell).toHaveAttribute('data-label-tier', 'full')
+  // Issue 089 D2 — 'full' is lane-unreachable; 'truncated' is the widest
+  // reachable tier that still shows labels (see the note above / canvas.spec.ts).
+  // The degrade this test asserts — labels present at width, gone in 'legend' —
+  // is proven across the reachable truncated → legend switch.
+  await page.setViewportSize({ width: 560, height: 900 })
+  await expect(shell).toHaveAttribute('data-label-tier', 'truncated')
   await expect(page.locator('.canvas-param-label', { hasText: 'Comfort' })).toBeVisible()
 
   await page.setViewportSize({ width: 380, height: 900 })

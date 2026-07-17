@@ -100,6 +100,34 @@ test('compose α on the canvas — bind three dots, justify in the register — 
   await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'documented')
 })
 
+// Issue 089 D2 regression guard — the global rich-text FormatStrip is
+// focus-revealed (AppShell mounts it only while a rich editor is active). A
+// justification cell mounts its Lexical editor with autoFocus, so that first,
+// automatic focus MUST reveal + bind the strip with NO manual blur/re-focus.
+// D1's store register-reconciliation guaranteed this; D2's co-mounted lanes
+// regressed it (the always-mounted Foundation editor + the lane focus wiring
+// left the just-mounted grid editor unbound on its own autoFocus). Owner
+// confirmed the break live; this is the red-first reproduction.
+test('089 D2: autoFocus into a justification cell reveals + binds the FormatStrip (no manual re-focus)', async ({
+  page,
+}) => {
+  await setUpCanvas(page)
+
+  await page.getByRole('button', { name: 'New context' }).click()
+  const row = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
+  const justificationCell = row.locator('td').nth(5)
+
+  // Focus-revealed: with nothing focused, the strip is not in the DOM at all.
+  await expect(page.locator('.format-strip')).toHaveCount(0)
+
+  // Click swaps the read-mode cell for the live editor, which autoFocuses.
+  await justificationCell.click()
+  await expect(justificationCell.locator('.rich-text-editor__content')).toBeVisible()
+
+  // The autoFocus alone must bind the strip — no second click / Tab / re-focus.
+  await expect(page.locator('.format-strip')).toHaveCount(1)
+})
+
 test('the `c` key enters compose mode and Escape keeps the draft with a discard offer', async ({
   page,
 }) => {

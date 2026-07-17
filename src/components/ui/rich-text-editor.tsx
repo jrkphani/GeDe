@@ -215,7 +215,25 @@ function EditorChrome({
   // default → the always-mounted existing_scenario editor is unchanged.
   useEffect(() => {
     if (readOnly || !autoFocus) return
-    editor.getRootElement()?.focus()
+    const root = editor.getRootElement()
+    root?.focus()
+    // Assert the FormatStrip binding here, rather than relying SOLELY on the
+    // focusin this focus() fires (089 D2). React StrictMode's dev double-invoke
+    // (and any Offscreen-style passive-effect reconnect) runs this mount effect
+    // a SECOND time — but the register effect's intervening cleanup has already
+    // cleared focusedId, and the 2nd focus() is a no-op on the still-focused
+    // root, so it fires NO focusin and handleFocus never re-runs setFocused.
+    // The register effect's re-run then sees focusedId === null and its
+    // `focusedId === id` reconcile misses, leaving a grid rich cell's editor
+    // UNBOUND on its first autoFocus (the FormatStrip stays hidden until a
+    // manual re-focus). Setting focusedId directly makes the binding
+    // order-independent: whichever of the autoFocus / register effects runs
+    // last, register's reconcile (or this call) lands the active binding. This
+    // is scoped to the autoFocus path — the always-mounted existing_scenario
+    // editor (autoFocus undefined) early-returns above and is untouched.
+    if (root && document.activeElement === root) {
+      useFocusedEditorStore.getState().setFocused(editorId)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

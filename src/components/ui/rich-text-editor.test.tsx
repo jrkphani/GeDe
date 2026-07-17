@@ -16,6 +16,7 @@
 // Range/Selection APIs jsdom DOES implement — both are the actual code paths
 // a user exercises, just without simulating the keystrokes that build the
 // initial text.
+import { StrictMode } from 'react'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { render, screen, fireEvent, waitFor } from '@testing-library/react'
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
@@ -166,6 +167,36 @@ describe('RichTextEditor — autoFocus binds the global FormatStrip (blocker 1)'
       />,
     )
     // The strip reads activeEditor; without a manual re-focus it must be bound.
+    await waitFor(() => {
+      expect(useFocusedEditorStore.getState().activeEditor).not.toBeNull()
+    })
+  })
+})
+
+// Regression guard (089 D2): a grid rich cell mounts its editor with autoFocus.
+// Under React StrictMode's dev double-invoke (the same shape as any Offscreen
+// passive-effect reconnect), the mount effects run twice: pass-1 binds, the
+// cleanup's `unregister` clears focusedId, then pass-2's focus() is a no-op on
+// the already-focused root (fires NO focusin, so handleFocus never re-runs
+// setFocused) and register's `focusedId === id` reconcile misses. Result before
+// the fix: the FormatStrip stays UNBOUND on the first autoFocus, no manual
+// re-focus. The autoFocus effect now asserts the binding directly, so it
+// survives the double-invoke. (The full-stack repro lives in canvas-compose.spec.)
+describe('RichTextEditor — autoFocus binds under StrictMode double-invoke (089 D2)', () => {
+  beforeEach(() => resetFocusedEditor())
+
+  it('an autoFocus editor stays strip-bound through the mount double-invoke', async () => {
+    render(
+      <StrictMode>
+        <RichTextEditor
+          value={null}
+          onCommit={vi.fn()}
+          ariaLabel="Justification"
+          placeholder="Add justification…"
+          autoFocus
+        />
+      </StrictMode>,
+    )
     await waitFor(() => {
       expect(useFocusedEditorStore.getState().activeEditor).not.toBeNull()
     })
