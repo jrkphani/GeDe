@@ -13,6 +13,7 @@ import { useCanvasesStore } from '../store/canvases'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
+import { healRichTextOnLoad } from '../store/richTextConvert'
 import { useStatusStore } from '../store/status'
 import { useTier2Store } from '../store/tier2'
 import { useWorkspaceRole } from '../store/workspace'
@@ -137,6 +138,15 @@ export function DesignSurface({
       }
       await useDimensionsStore.getState().load(projectId, canvasSelector)
       await useContextsStore.getState().load(projectId, canvasSelector)
+      // Issue 089 D1 Phase 4 — proactively normalize legacy plain-string prose
+      // cells (contexts.justification) to Lexical JSON, AFTER contexts have
+      // loaded. Repeatable + idempotent (safeRichTextJson skip-guard), bypasses
+      // the command log, and re-heals any cell an un-upgraded peer clobbered
+      // back to plain text (LWW is value-blind). Fire-and-forget: it does not
+      // gate render — the rich cell already renders legacy strings correctly,
+      // and it does not touch this store's in-memory state, so it can never
+      // re-trigger the load subscription (no loop).
+      void healRichTextOnLoad(projectId)
       void useContextsStore.getState().loadBreadcrumbs(contextPath)
     }
     // Only load once the canvas selector is settled (see canLoad above) — this

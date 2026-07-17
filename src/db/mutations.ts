@@ -935,6 +935,18 @@ export async function listContexts(
     .orderBy(asc(contexts.sort))
 }
 
+// Issue 089 D1 Phase 4 — every LIVE context in the project, across ALL canvases
+// (root + child). Unlike listContexts (scoped to a single canvas), the rich-text
+// heal-on-load normalizes the whole project's justification prose in one pass, so
+// it must see contexts on child canvases too. Live rows only: a tombstoned
+// context's prose never renders, so it never needs converting.
+export async function listContextsForHeal(db: Database, projectId: string): Promise<ContextRow[]> {
+  return db
+    .select()
+    .from(contexts)
+    .where(and(eq(contexts.projectId, projectId), isNull(contexts.deletedAt)))
+}
+
 // Root contexts cycle the Greek alphabet; a child context (parent set) is named
 // parent-symbol + index (α1, α2 — SPEC §3, issue 011), both scoped to the
 // canvas's live siblings so a deleted gap never collides on reassignment.
