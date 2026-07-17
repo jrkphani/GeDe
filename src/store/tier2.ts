@@ -354,12 +354,16 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
           for (const p of prevParamNames) await renameParameter(db(), p.id, p.name)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
+          // Invariant 7 renamed the linked parameters — refresh the Design lane
+          // so its register reflects the reverted name live (089 D2 / 092).
+          if (prevParamNames.length > 0) refreshDesignLane()
         },
         async redo() {
           await dbRenameEntry(db(), id, name)
           for (const p of prevParamNames) await renameParameter(db(), p.id, name)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
+          if (prevParamNames.length > 0) refreshDesignLane()
         },
       })
       return linked.length
@@ -455,12 +459,16 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
           await relinkParameters(db(), priorLinks)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
+          // The parameters were re-linked to their source entry — refresh the
+          // Design lane so its 014 link glyphs reappear live (089 D2 / 092).
+          refreshDesignLane()
         },
         async redo() {
           await unlinkParametersFromEntries(db(), paramIds)
           await removeTier2EntrySubtree(db(), tableId, id)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
+          refreshDesignLane()
         },
       })
     },
@@ -501,12 +509,16 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
           await restoreParametersWithBindings(db(), del.removedParameters, del.deletedBindings)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
+          // The parameters were restored — refresh the Design lane so they
+          // reappear in its register live (089 D2 / 092).
+          refreshDesignLane()
         },
         async redo() {
           await deleteParametersUnbinding(db(), paramIds)
           await removeTier2EntrySubtree(db(), tableId, id)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
+          refreshDesignLane()
         },
       })
     },
@@ -537,11 +549,16 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
           for (const pid of createdParamIds) await removeParameter(db(), target, pid)
           if (createdDim) await undoAddDimension(db(), input.projectId, createdDim.id)
           await refreshLinks(input.projectId)
+          // The promoted dimension/parameters were removed from the root canvas
+          // — refresh the Design lane so they drop out of its register live
+          // (089 D2 / 092).
+          refreshDesignLane()
         },
         async redo() {
           if (createdDim) await restoreDimension(db(), input.projectId, createdDim.id, afterDimIds)
           for (const pid of createdParamIds) await restoreParameter(db(), target, pid, afterParamIds)
           await refreshLinks(input.projectId)
+          refreshDesignLane()
         },
       })
       return outcome

@@ -11,6 +11,7 @@ import {
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetDimensionsStore, useDimensionsStore } from './dimensions'
+import { resetParametersStore, useParametersStore } from './parameters'
 import { resetSyncStore, useSyncStore } from './sync'
 import { useStatusStore } from './status'
 import { resetTier2Store, useTier2Store } from './tier2'
@@ -30,6 +31,7 @@ beforeEach(async () => {
   setDatabase(db)
   resetTier2Store()
   resetDimensionsStore()
+  resetParametersStore()
   resetSyncStore()
   useCommandLogStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
@@ -369,5 +371,70 @@ describe('tier2 store — refresh on inbound delta (issue 075 Part B)', () => {
     }
 
     expect(useTier2Store.getState().entriesByTable[table.id]?.map((e) => e.id)).toContain(streamedIn.id)
+  })
+})
+
+// Issue 092 — 089 D2 fixed the FORWARD cross-tier paths (promote /
+// rename-propagate / resolve) to wake the co-mounted Design lane via
+// notifyLocalApply, but the undo/redo command-log closures of those same ops
+// were left untouched: undoing/redoing a cross-tier write writes to PGlite but
+// never bumps the *AppliedAt signals, so the already-mounted Design lane stays
+// stale until a reload. These mirror the forward-path assertion style (the
+// 089 D2 "promote refreshes useDimensionsStore" test above), asserting the
+// register re-reads for its CURRENT canvas/dimension with no remount.
+describe('tier2 store — undo/redo of a cross-tier op refreshes the co-mounted sibling lane (issue 092)', () => {
+  it('undo AND redo of a promote refresh useDimensionsStore for the current canvas (no remount)', async () => {
+    // The Design lane loaded its (empty) root canvas at co-mount time.
+    await useDimensionsStore.getState().load(projectId)
+    expect(useDimensionsStore.getState().dimensions).toHaveLength(0)
+
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const buyers = nn(await useTier2Store.getState().addEntry(table.id, null, 'Buyers'))
+    await useTier2Store
+      .getState()
+      .promote({ projectId, entryIds: [buyers.id], target: { kind: 'new', name: 'Stake' } })
+
+    // Forward path (089 D2) already refreshes.
+    await vi.waitFor(() => {
+      expect(useDimensionsStore.getState().dimensions.map((d) => d.name)).toContain('Stake')
+    })
+
+    // Undo of the promote must ALSO wake the co-mounted Design lane (092): the
+    // dimension drops out of the register live, without a reload.
+    await useCommandLogStore.getState().undo()
+    await vi.waitFor(() => {
+      expect(useDimensionsStore.getState().dimensions.map((d) => d.name)).not.toContain('Stake')
+    })
+
+    // Redo restores it live too.
+    await useCommandLogStore.getState().redo()
+    await vi.waitFor(() => {
+      expect(useDimensionsStore.getState().dimensions.map((d) => d.name)).toContain('Stake')
+    })
+  })
+
+  it('undo of a resolveDeleteParams refreshes useParametersStore for the current dimension (no remount)', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const users = nn(await useTier2Store.getState().addEntry(table.id, null, 'Users'))
+    const { dimensionId } = await useTier2Store
+      .getState()
+      .promote({ projectId, entryIds: [users.id], target: { kind: 'new', name: 'Stake' } })
+
+    // The Design lane's ContextRegister loaded this dimension's parameters.
+    await useParametersStore.getState().load(dimensionId)
+    expect(useParametersStore.getState().byDimension[dimensionId]).toHaveLength(1)
+
+    // Forward path (089 D2) already refreshes the parameter out of the register.
+    await useTier2Store.getState().resolveDeleteParams(table.id, users.id)
+    await vi.waitFor(() => {
+      expect(useParametersStore.getState().byDimension[dimensionId] ?? []).toHaveLength(0)
+    })
+
+    // Undo restores the parameter — the co-mounted Design lane's register must
+    // reflect it live (092), no remount.
+    await useCommandLogStore.getState().undo()
+    await vi.waitFor(() => {
+      expect(useParametersStore.getState().byDimension[dimensionId] ?? []).toHaveLength(1)
+    })
   })
 })
