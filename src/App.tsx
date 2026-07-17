@@ -1,9 +1,7 @@
 import { useEffect } from 'react'
-import { ArchitectureSurface } from './components/ArchitectureSurface'
-import { DesignSurface } from './components/DesignSurface'
-import { FoundationSurface } from './components/FoundationSurface'
 import { HeroLanding } from './components/HeroLanding'
 import { ProjectsList } from './components/ProjectsList'
+import { WorkspaceSurface } from './components/WorkspaceSurface'
 import { Button } from './components/ui/button'
 import { AppShell } from './shell/AppShell'
 import { navigate, useRoute } from './shell/router'
@@ -42,21 +40,15 @@ function Surface({ route }: { route: AppRoute }) {
   switch (route.kind) {
     case 'projects':
       return <ProjectsList onOpen={(id) => navigate({ kind: 'project', projectId: id })} />
+    // Issue 089 D2 Phase 1 — project / tier / design all mount the unified
+    // workspace (three tier lanes on one page). The route grammar is unchanged
+    // (SITEMAP §1): the URL identity, the `/p/:id`→lastTierRoute redirect
+    // (App effect below), and Design's contextPath/view/canvasId all persist —
+    // WorkspaceSurface only changes WHAT the route mounts, not how it parses.
     case 'project':
-      return null // redirect handled in App effect
     case 'tier':
-      if (route.tier === 'foundation') return <FoundationSurface projectId={route.projectId} />
-      return <ArchitectureSurface projectId={route.projectId} />
     case 'design':
-      return (
-        <DesignSurface
-          key={route.projectId}
-          projectId={route.projectId}
-          contextPath={route.contextPath}
-          view={route.view}
-          canvasId={route.canvasId}
-        />
-      )
+      return <WorkspaceSurface route={route} />
     // Issue 064: /welcome and /login both render the same hero/landing
     // surface — product brief + the 3-mode auth card in one polished page.
     // It is the canonical signed-out destination and the sign-out redirect

@@ -254,6 +254,60 @@ body {
   overflow: auto;
 }
 
+/* ── Issue 089 D2 Phase 1 · the unified workspace ───────────────────────────
+   The three tier surfaces (Foundation · Architecture · Design) render as
+   side-by-side vertical lanes on ONE page, hosted by the single existing
+   `.surface` scroll region (Fork 6: one shared page scroll, not lane-local
+   scrolls). Lanes are non-stretching columns — `align-items: flex-start` keeps
+   a short lane from stretching to a tall neighbour's height; each lane grows
+   downward with its own content. Lanes keep a bounded reading width (the same
+   max-widths the standalone routes used), so when they don't fit the viewport
+   the shared `.surface` scrolls horizontally rather than squeezing them.
+   Scroll-to-lane (P2), active-lane handler scoping (P3), and per-lane sticky
+   context headers + narrow reflow (P4) are later phases. */
+.workspace {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-5);
+  /* Never shrink below the lanes' combined intrinsic width — overflow into the
+     shared `.surface` horizontal scroll instead of compressing the columns. */
+  min-width: min-content;
+}
+
+.workspace__lane {
+  flex: 0 0 auto;
+  align-self: start;
+  min-width: 0;
+}
+
+.workspace__lane--foundation {
+  /* Matches `.foundation`'s standalone reading width (was max-width: 760px). */
+  width: 760px;
+}
+
+.workspace__lane--architecture {
+  /* Matches `.architecture`'s standalone reading width (was max-width: 860px). */
+  width: 860px;
+}
+
+.workspace__lane--design {
+  /* Wide enough for the Design row's rail + register + canvas to lay out
+     horizontally (their combined min-widths) before the surface's own
+     container query would stack them. */
+  width: 940px;
+}
+
+/* De-center Foundation and Architecture inside a lane: on their standalone
+   routes they center the page with max-width + margin:auto; in a lane the lane
+   owns the width, so the surface fills its column. Only the OUTER centering is
+   neutralized — each surface's internal flex column, gaps, and panels are
+   untouched. (Design's `.design-main` is already full-width, no override.) */
+.workspace__lane > .foundation,
+.workspace__lane > .architecture {
+  max-width: none;
+  margin: 0;
+}
+
 .status-bar {
   height: 28px;
   flex: none;
