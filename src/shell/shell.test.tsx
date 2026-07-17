@@ -17,12 +17,27 @@ function pushFakeCommand(label: string) {
   return { undo, redo }
 }
 
-function TestShell({ filler }: { filler?: boolean }) {
+function TestShell({ filler, lanes }: { filler?: boolean; lanes?: boolean }) {
   const route = useRoute()
   return (
     <ContextBarProvider>
-      <AppShell route={route}>{filler === true ? <Filler /> : <div />}</AppShell>
+      <AppShell route={route}>
+        {lanes === true ? <Lanes /> : filler === true ? <Filler /> : <div />}
+      </AppShell>
     </ContextBarProvider>
+  )
+}
+
+// The three lane sections WorkspaceSurface renders in the real app (issue 089
+// D2). AppShell doesn't own them, but ⌘1/2/3's scroll-to-lane queries them, so
+// the ⌘ test mounts sentinel lanes to observe which one gets scrolled.
+function Lanes() {
+  return (
+    <>
+      <section className="workspace__lane workspace__lane--foundation" />
+      <section className="workspace__lane workspace__lane--architecture" />
+      <section className="workspace__lane workspace__lane--design" />
+    </>
   )
 }
 
@@ -61,15 +76,27 @@ describe('tier tabs', () => {
     expect(screen.getByRole('link', { name: 'Design' }).className).toContain('tab--active')
   })
 
-  it('⌘1/⌘2/⌘3 switch tiers', async () => {
+  it('⌘1/⌘2/⌘3 switch tiers AND scroll the target lane into view (089 D2 P2)', async () => {
+    const scrollSpy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {})
     const user = userEvent.setup()
-    render(<TestShell />)
+    const { container } = render(<TestShell lanes />)
+    const laneEl = (lane: string) => container.querySelector(`.workspace__lane--${lane}`)
+
+    // Still navigates the URL (retained routes / tab--active), and now also
+    // brings the matching lane into view via scrollIntoView.
     await user.keyboard('{Meta>}3{/Meta}')
     expect(window.location.pathname).toBe('/p/proj-1/design')
+    expect(scrollSpy.mock.instances.at(-1)).toBe(laneEl('design'))
+
     await user.keyboard('{Meta>}2{/Meta}')
     expect(window.location.pathname).toBe('/p/proj-1/architecture')
+    expect(scrollSpy.mock.instances.at(-1)).toBe(laneEl('architecture'))
+
     await user.keyboard('{Meta>}1{/Meta}')
     expect(window.location.pathname).toBe('/p/proj-1/foundation')
+    expect(scrollSpy.mock.instances.at(-1)).toBe(laneEl('foundation'))
+
+    scrollSpy.mockRestore()
   })
 })
 

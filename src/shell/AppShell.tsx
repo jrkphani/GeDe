@@ -15,6 +15,7 @@ import { PendingInvitations } from '../components/PendingInvitations'
 import { WorkspaceMembers } from '../components/WorkspaceMembers'
 import { downloadTextFile, exportFilename } from '../lib/download'
 import { coreCommandSources } from './coreCommands'
+import { scrollToLane } from './laneTarget'
 import { PresenceRoster } from './PresenceRoster'
 import { navigate } from './router'
 import { serializeRoute, type AppRoute, type Tier } from './routes'
@@ -309,7 +310,14 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
         | undefined
       if (!tab) return
       e.preventDefault()
+      // 089 D2 P2 — ⌘1/2/3 is the explicit "go to lane" key (fork 9): it still
+      // navigates (preserving back/forward + tab--active) and now also scrolls
+      // the target lane into view immediately on the keypress. `tab` is a
+      // `Tier | 'design'`, which is exactly the `Lane` union. App's route effect
+      // also scrolls on the resulting route change (the sole path for deep-links
+      // / tab-clicks / back-forward); same lane, idempotent scrollIntoView.
       navigate(routeForTab(projectId, tab))
+      scrollToLane(tab)
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)

@@ -4,6 +4,7 @@ import { ProjectsList } from './components/ProjectsList'
 import { WorkspaceSurface } from './components/WorkspaceSurface'
 import { Button } from './components/ui/button'
 import { AppShell } from './shell/AppShell'
+import { laneForRoute, scrollToLane } from './shell/laneTarget'
 import { navigate, useRoute } from './shell/router'
 import { type AppRoute, type Tier } from './shell/routes'
 import { ContextBarProvider } from './shell/slots'
@@ -96,6 +97,20 @@ export default function App() {
     if (route.kind === 'project') navigate(lastTierRoute(route.projectId), { replace: true })
     else rememberTier(route)
   }, [route])
+
+  // Issue 089 D2 P2 — the retained tier/design routes are scroll-to-lane
+  // deep-links: whenever the active route resolves to a lane, bring that
+  // `.workspace__lane--*` section into view. Runs after WorkspaceSurface commits
+  // (useEffect fires post-DOM), so the lane element exists; scrollToLane also
+  // guards the not-yet-mounted case. Gated + keyed on `status` so a COLD deep
+  // link (`/p/:id/design` loaded while the DB is still hydrating, when no lanes
+  // are mounted yet) still scrolls once `status` flips to 'ready' and the lanes
+  // paint. Covers every route change — tab clicks, ⌘1/2/3, back/forward, and the
+  // `project`→tier redirect above (which lands here as a concrete tier route).
+  useEffect(() => {
+    if (status !== 'ready') return
+    scrollToLane(laneForRoute(route))
+  }, [route, status])
 
   return (
     <div className="shell-root" data-db-ready={status === 'ready'}>
