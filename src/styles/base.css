@@ -1771,19 +1771,19 @@ body {
   flex-direction: column;
 }
 
-/* Toolbar: a hairline rule separates it from the editable region below
-   (STYLE_GUIDE §7's "hairline top border" pattern). Only mounted when not
-   read-only. */
-.rich-text-editor__toolbar {
+/* Issue 089 D1 P1 — the rich-text FormatStrip. The per-editor Toolbar was
+   detached into ONE strip that lives in the shell context bar (a context-bar
+   group, like .context-bar__controls) and binds to whichever rich editor is
+   focused. It reuses the command-button chrome the in-editor toolbar carried,
+   but drops that toolbar's own hairline divider — inside the 32px band the
+   bar's own border-bottom already separates it from the surface. */
+.format-strip {
   display: flex;
   align-items: center;
   gap: var(--space-1);
-  padding-bottom: var(--space-2);
-  margin-bottom: var(--space-2);
-  border-bottom: 1px solid var(--hairline);
 }
 
-.rich-text-editor__toolbar .command-button {
+.format-strip .command-button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -1791,13 +1791,20 @@ body {
 }
 
 /* aria-pressed reflects the active mark/block state at the cursor
-   (STYLE_GUIDE §5/§10) — the accent wash + border is the one place this
-   editor borrows the chrome accent, matching selection-state conventions
-   elsewhere (§2.2) rather than inventing a new toolbar-active color. */
-.rich-text-editor__toolbar .command-button[aria-pressed='true'] {
+   (STYLE_GUIDE §5/§10) — the accent wash + border is the one place this strip
+   borrows the chrome accent, matching selection-state conventions elsewhere
+   (§2.2) rather than inventing a new toolbar-active color. */
+.format-strip .command-button[aria-pressed='true'] {
   background: var(--accent-wash);
   border-color: var(--accent);
   color: var(--accent-strong);
+}
+
+/* Disabled (no rich editor focused): muted, not broken — full-opacity chrome
+   would read as clickable. In-app the band is focus-revealed so this state is
+   rarely seen, but the strip renders it defensively (and in isolation tests). */
+.format-strip[aria-disabled='true'] .command-button {
+  opacity: 0.55;
 }
 
 .rich-text-editor__scroller {

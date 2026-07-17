@@ -1,0 +1,80 @@
+// Issue 089 D1 P1 — the focused-editor registry that binds the global
+// rich-text FormatStrip to whichever rich editor is focused. Mirrors the
+// status.ts / commandRegistry.ts slice precedent: register/unregister editors,
+// track the focused id, expose the active LexicalEditor. Last-focused wins;
+// blur clears; unregistering the active id clears the active editor too.
+import { beforeEach, describe, expect, it } from 'vitest'
+import { createEditor, type LexicalEditor } from 'lexical'
+import { RICH_TEXT_NODES } from '../domain/richText'
+import { resetFocusedEditor, useFocusedEditorStore } from './focusedEditor'
+
+function makeEditor(): LexicalEditor {
+  return createEditor({
+    namespace: 'test',
+    nodes: RICH_TEXT_NODES,
+    onError: (error) => {
+      throw error
+    },
+  })
+}
+
+beforeEach(() => resetFocusedEditor())
+
+describe('focusedEditor store', () => {
+  it('registering an editor does not by itself make it active', () => {
+    const a = makeEditor()
+    useFocusedEditorStore.getState().register('a', a)
+    expect(useFocusedEditorStore.getState().activeEditor).toBeNull()
+  })
+
+  it('setFocused after register exposes that editor as active', () => {
+    const a = makeEditor()
+    useFocusedEditorStore.getState().register('a', a)
+    useFocusedEditorStore.getState().setFocused('a')
+    expect(useFocusedEditorStore.getState().activeEditor).toBe(a)
+  })
+
+  it('focusing A then B makes B active (last-focused wins)', () => {
+    const a = makeEditor()
+    const b = makeEditor()
+    const store = useFocusedEditorStore.getState()
+    store.register('a', a)
+    store.register('b', b)
+    store.setFocused('a')
+    store.setFocused('b')
+    expect(useFocusedEditorStore.getState().activeEditor).toBe(b)
+  })
+
+  it('blur (setFocused(null)) clears the active editor', () => {
+    const a = makeEditor()
+    useFocusedEditorStore.getState().register('a', a)
+    useFocusedEditorStore.getState().setFocused('a')
+    useFocusedEditorStore.getState().setFocused(null)
+    expect(useFocusedEditorStore.getState().activeEditor).toBeNull()
+  })
+
+  it('unregistering the active id clears the active editor', () => {
+    const a = makeEditor()
+    useFocusedEditorStore.getState().register('a', a)
+    useFocusedEditorStore.getState().setFocused('a')
+    useFocusedEditorStore.getState().unregister('a')
+    expect(useFocusedEditorStore.getState().activeEditor).toBeNull()
+    expect(useFocusedEditorStore.getState().focusedId).toBeNull()
+  })
+
+  it('unregistering a non-active id leaves the active editor untouched', () => {
+    const a = makeEditor()
+    const b = makeEditor()
+    const store = useFocusedEditorStore.getState()
+    store.register('a', a)
+    store.register('b', b)
+    store.setFocused('a')
+    store.unregister('b')
+    expect(useFocusedEditorStore.getState().activeEditor).toBe(a)
+  })
+
+  it('focusing an id that was never registered yields a null active editor', () => {
+    useFocusedEditorStore.getState().setFocused('ghost')
+    expect(useFocusedEditorStore.getState().activeEditor).toBeNull()
+  })
+})

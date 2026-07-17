@@ -1,35 +1,14 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react'
-import {
-  Bold as BoldIcon,
-  Indent as IndentIcon,
-  Italic as ItalicIcon,
-  List as BulletListIcon,
-  ListOrdered as NumberedListIcon,
-  Outdent as OutdentIcon,
-  Underline as UnderlineIcon,
-} from 'lucide-react'
+import { useEffect, useId, useRef, useState } from 'react'
 import {
   $createParagraphNode,
   $getRoot,
-  $getSelection,
-  $isRangeSelection,
   COMMAND_PRIORITY_NORMAL,
   FORMAT_TEXT_COMMAND,
-  INDENT_CONTENT_COMMAND,
   KEY_DOWN_COMMAND,
-  OUTDENT_CONTENT_COMMAND,
   type EditorState,
   type LexicalEditor,
   type TextFormatType,
 } from 'lexical'
-import {
-  $isListNode,
-  INSERT_ORDERED_LIST_COMMAND,
-  INSERT_UNORDERED_LIST_COMMAND,
-  ListItemNode,
-  REMOVE_LIST_COMMAND,
-} from '@lexical/list'
-import { $getNearestNodeOfType } from '@lexical/utils'
 import { LexicalComposer } from '@lexical/react/LexicalComposer'
 import { useLexicalComposerContext } from '@lexical/react/LexicalComposerContext'
 import { RichTextPlugin } from '@lexical/react/LexicalRichTextPlugin'
@@ -39,7 +18,7 @@ import { ListPlugin } from '@lexical/react/LexicalListPlugin'
 import { LexicalErrorBoundary } from '@lexical/react/LexicalErrorBoundary'
 import { cn } from '@/lib/utils'
 import { RICH_TEXT_NODES, safeRichTextJson } from '../../domain/richText'
-import { Button } from './button'
+import { useFocusedEditorStore } from '../../store/focusedEditor'
 
 /*
  * Rich-text editor primitive (issue 081) — Lexical, storing the editor's own
@@ -151,157 +130,6 @@ function SyncExternalValuePlugin({
   return null
 }
 
-interface ToolbarButtonSpec {
-  key: string
-  label: string
-  Icon: typeof BoldIcon
-  pressed: boolean
-  onClick: () => void
-}
-
-function useToolbarState(editor: LexicalEditor) {
-  const [isBold, setIsBold] = useState(false)
-  const [isItalic, setIsItalic] = useState(false)
-  const [isUnderline, setIsUnderline] = useState(false)
-  const [isBulletList, setIsBulletList] = useState(false)
-  const [isNumberedList, setIsNumberedList] = useState(false)
-
-  useEffect(() => {
-    return editor.registerUpdateListener(({ editorState }) => {
-      editorState.read(() => {
-        const selection = $getSelection()
-        if (!$isRangeSelection(selection)) {
-          setIsBold(false)
-          setIsItalic(false)
-          setIsUnderline(false)
-          setIsBulletList(false)
-          setIsNumberedList(false)
-          return
-        }
-        setIsBold(selection.hasFormat('bold'))
-        setIsItalic(selection.hasFormat('italic'))
-        setIsUnderline(selection.hasFormat('underline'))
-        const listItem = $getNearestNodeOfType(selection.anchor.getNode(), ListItemNode)
-        const list = listItem ? listItem.getParent() : null
-        const listType = $isListNode(list) ? list.getListType() : null
-        setIsBulletList(listType === 'bullet')
-        setIsNumberedList(listType === 'number')
-      })
-    })
-  }, [editor])
-
-  return { isBold, isItalic, isUnderline, isBulletList, isNumberedList }
-}
-
-// WAI-ARIA toolbar pattern: roving tabindex — one button is tabbable at a
-// time; ArrowLeft/ArrowRight move focus between buttons (STYLE_GUIDE §10,
-// full keyboard operability is a per-issue acceptance criterion).
-function Toolbar({ editor }: { editor: LexicalEditor }) {
-  const { isBold, isItalic, isUnderline, isBulletList, isNumberedList } = useToolbarState(editor)
-  const [activeIndex, setActiveIndex] = useState(0)
-  const buttonRefs = useRef<(HTMLButtonElement | null)[]>([])
-
-  const buttons: ToolbarButtonSpec[] = [
-    {
-      key: 'bold',
-      label: 'Bold',
-      Icon: BoldIcon,
-      pressed: isBold,
-      onClick: () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'bold'),
-    },
-    {
-      key: 'italic',
-      label: 'Italic',
-      Icon: ItalicIcon,
-      pressed: isItalic,
-      onClick: () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'italic'),
-    },
-    {
-      key: 'underline',
-      label: 'Underline',
-      Icon: UnderlineIcon,
-      pressed: isUnderline,
-      onClick: () => editor.dispatchCommand(FORMAT_TEXT_COMMAND, 'underline'),
-    },
-    {
-      key: 'bulleted-list',
-      label: 'Bulleted list',
-      Icon: BulletListIcon,
-      pressed: isBulletList,
-      onClick: () =>
-        editor.dispatchCommand(
-          isBulletList ? REMOVE_LIST_COMMAND : INSERT_UNORDERED_LIST_COMMAND,
-          undefined,
-        ),
-    },
-    {
-      key: 'numbered-list',
-      label: 'Numbered list',
-      Icon: NumberedListIcon,
-      pressed: isNumberedList,
-      onClick: () =>
-        editor.dispatchCommand(
-          isNumberedList ? REMOVE_LIST_COMMAND : INSERT_ORDERED_LIST_COMMAND,
-          undefined,
-        ),
-    },
-    {
-      key: 'indent',
-      label: 'Indent',
-      Icon: IndentIcon,
-      pressed: false,
-      onClick: () => editor.dispatchCommand(INDENT_CONTENT_COMMAND, undefined),
-    },
-    {
-      key: 'outdent',
-      label: 'Outdent',
-      Icon: OutdentIcon,
-      pressed: false,
-      onClick: () => editor.dispatchCommand(OUTDENT_CONTENT_COMMAND, undefined),
-    },
-  ]
-
-  function handleToolbarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
-    if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
-    event.preventDefault()
-    const delta = event.key === 'ArrowRight' ? 1 : -1
-    const next = (activeIndex + delta + buttons.length) % buttons.length
-    setActiveIndex(next)
-    buttonRefs.current[next]?.focus()
-  }
-
-  return (
-    <div
-      className="rich-text-editor__toolbar"
-      role="toolbar"
-      aria-label="Existing scenario formatting"
-      onKeyDown={handleToolbarKeyDown}
-    >
-      {buttons.map((button, index) => (
-        <Button
-          key={button.key}
-          ref={(el) => {
-            buttonRefs.current[index] = el
-          }}
-          variant="command"
-          aria-label={button.label}
-          aria-pressed={button.pressed}
-          tabIndex={index === activeIndex ? 0 : -1}
-          // Preserves the editor's text selection — a mousedown on a
-          // <button> steals focus (and with it, Lexical's selection anchor)
-          // before the click handler ever runs; without this, "select text
-          // then click Bold" would format nothing.
-          onMouseDown={(event) => event.preventDefault()}
-          onFocus={() => setActiveIndex(index)}
-          onClick={button.onClick}
-        >
-          <button.Icon size={16} strokeWidth={1.5} aria-hidden="true" />
-        </Button>
-      ))}
-    </div>
-  )
-}
-
 function EditorChrome({
   value,
   onCommit,
@@ -316,6 +144,9 @@ function EditorChrome({
   readOnly: boolean
 }) {
   const [editor] = useLexicalComposerContext()
+  // Stable per-instance key for the focused-editor registry (089 D1 P1): the
+  // global FormatStrip binds to whichever id is focused.
+  const editorId = useId()
   // Shared between the external-sync plugin and the blur-commit handler
   // below so neither re-processes the other's own write (see
   // SyncExternalValuePlugin's doc comment).
@@ -332,8 +163,29 @@ function EditorChrome({
     editor.setEditable(!readOnly)
   }, [editor, readOnly])
 
+  // Register this editable instance in the focused-editor registry (089 D1 P1)
+  // so the shell's global FormatStrip can bind to it when focused. Read-only
+  // instances never register (viewers get no formatting strip, matching 035).
+  // getState() is used throughout this component so EditorChrome never
+  // re-renders on strip focus changes — it only writes to the store.
+  useEffect(() => {
+    if (readOnly) return
+    useFocusedEditorStore.getState().register(editorId, editor)
+    return () => useFocusedEditorStore.getState().unregister(editorId)
+  }, [editorId, editor, readOnly])
+
+  // focusin/focusout on the scroller drive BOTH the strip binding and the
+  // existing commit-on-blur. The strip's buttons preventDefault their own
+  // mousedown, so clicking one never blurs the editor here — selection and the
+  // active binding both survive, and no spurious commit fires (081 contract).
+  function handleFocus() {
+    if (readOnly) return
+    useFocusedEditorStore.getState().setFocused(editorId)
+  }
+
   function handleBlur() {
     if (readOnly) return
+    useFocusedEditorStore.getState().setFocused(null)
     const next = serializeForCommit(editor.getEditorState())
     if (next === lastSyncedRef.current) return
     lastSyncedRef.current = next
@@ -342,8 +194,7 @@ function EditorChrome({
 
   return (
     <div className="rich-text-editor" data-readonly={readOnly || undefined}>
-      {!readOnly && <Toolbar editor={editor} />}
-      <div className="rich-text-editor__scroller" onBlur={handleBlur}>
+      <div className="rich-text-editor__scroller" onFocus={handleFocus} onBlur={handleBlur}>
         <RichTextPlugin
           contentEditable={
             <ContentEditable className="rich-text-editor__content" aria-label={ariaLabel} />
@@ -372,6 +223,10 @@ export interface RichTextEditorProps {
   placeholder: string
   /** Issue 035 — a viewer sees rendered formatting, no toolbar, no edit affordance. */
   readOnly?: boolean
+  /** Lexical namespace (089 D1 P1) — parameterized so multiple rich editors can
+   *  coexist behind the single global FormatStrip (P3/P5). Defaults to the
+   *  original existing_scenario value, so that field is unchanged. */
+  namespace?: string
   className?: string
 }
 
@@ -381,6 +236,7 @@ export function RichTextEditor({
   ariaLabel,
   placeholder,
   readOnly = false,
+  namespace = 'gede-existing-scenario',
   className,
 }: RichTextEditorProps) {
   // Read once on mount (Lexical's own contract for initialConfig.editorState
@@ -398,7 +254,7 @@ export function RichTextEditor({
     <div className={cn('rich-text-editor-root', className)}>
       <LexicalComposer
         initialConfig={{
-          namespace: 'gede-existing-scenario',
+          namespace,
           nodes: RICH_TEXT_NODES,
           editable: !readOnly,
           // exactOptionalPropertyTypes: omit the key entirely when there's no

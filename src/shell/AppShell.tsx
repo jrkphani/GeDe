@@ -5,7 +5,9 @@ import { useCommandRegistryStore } from '../store/commandRegistry'
 import { useSemanticSearchStore } from '../store/semanticSearch'
 import { useProjectsStore } from '../store/projects'
 import { useStatusStore } from '../store/status'
+import { useFocusedEditorStore } from '../store/focusedEditor'
 import { Button } from '../components/ui/button'
+import { FormatStrip } from '../components/FormatStrip'
 import { Input } from '../components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover'
 import { CommandPalette } from '../components/CommandPalette'
@@ -16,7 +18,7 @@ import { coreCommandSources } from './coreCommands'
 import { PresenceRoster } from './PresenceRoster'
 import { navigate } from './router'
 import { serializeRoute, type AppRoute, type Tier } from './routes'
-import { ContextBarSlot } from './slots'
+import { ContextBar, ContextBarSlot } from './slots'
 import { StatusBar } from './StatusBar'
 import { toggleTheme } from './theme'
 
@@ -224,6 +226,13 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
   const active = activeTab(route)
   const past = useCommandLogStore((s) => s.past)
   const future = useCommandLogStore((s) => s.future)
+  // 089 D1 P1 — the persistent rich-text FormatStrip is FOCUS-REVEALED: it fills
+  // the context bar only while a rich editor is focused. This deliberately keeps
+  // the existing collapse contract (slots.tsx: the band `hidden`s when its portal
+  // count is 0) intact — an always-mounted strip would leave an empty chrome band
+  // on every route. Selecting the boolean (not the editor) so the shell re-renders
+  // only when focus enters/leaves a rich editor, not on every editor mutation.
+  const formatStripActive = useFocusedEditorStore((s) => s.activeEditor !== null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   // Captured at ⌘K press so a dismissal (Esc) can restore focus to exactly the
   // element the user left (SITEMAP §3); a navigation moves focus to the surface.
@@ -393,6 +402,11 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
         </div>
       </header>
       <ContextBarSlot />
+      {formatStripActive && (
+        <ContextBar>
+          <FormatStrip />
+        </ContextBar>
+      )}
       <div className="surface" ref={surfaceRef} tabIndex={-1}>
         {children}
       </div>
