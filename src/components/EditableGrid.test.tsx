@@ -1,8 +1,10 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
 import { describe, expect, it, vi } from 'vitest'
-import { render, screen, within } from '@testing-library/react'
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
+import { RICH_TEXT_NODES } from '../domain/richText'
 import { EditableGrid, PHANTOM_ROW_ID, nextEditableCell, type GridColumn, type GridNav } from './EditableGrid'
 
 // Generic domain, deliberately unrelated to contexts/dimensions — proves
@@ -465,6 +467,161 @@ describe('nextEditableCell — pure boundary logic (issue 022)', () => {
 
   it('returns null at the far boundary rather than stranding', () => {
     expect(nextEditableCell(nav, PHANTOM_ROW_ID, 'a', 'right')).toBeNull()
+  })
+})
+
+// Selects the full text content of `container` via the real DOM
+// Selection/Range APIs (jsdom implements these; only realistic keyboard input
+// is what Lexical can't process here — see rich-text-editor.test.tsx's header).
+function selectAllTextIn(container: Element) {
+  const range = document.createRange()
+  range.selectNodeContents(container)
+  const selection = window.getSelection()
+  selection?.removeAllRanges()
+  selection?.addRange(range)
+  document.dispatchEvent(new Event('selectionchange'))
+}
+
+describe('EditableGrid — richtext cell (089 D1 Phase 3)', () => {
+  interface Note {
+    id: string
+    body: string
+  }
+
+  // Lexical JSON for a "converted" cell, built via the same node set the editor
+  // uses. A raw plain string stands in for a legacy, not-yet-converted cell.
+  function richJson(text: string): string {
+    const editor = createEditor({
+      namespace: 'test',
+      nodes: RICH_TEXT_NODES,
+      onError: (e) => {
+        throw e
+      },
+    })
+    editor.update(
+      () => {
+        const p = $createParagraphNode()
+        p.append($createTextNode(text))
+        $getRoot().append(p)
+      },
+      { discrete: true },
+    )
+    return JSON.stringify(editor.getEditorState().toJSON())
+  }
+
+  function makeCols(onCommit: (row: Note, v: string) => void = vi.fn()): GridColumn<Note>[] {
+    return [
+      {
+        id: 'body',
+        header: 'Body',
+        cell: {
+          kind: 'richtext',
+          getValue: (n) => n.body,
+          onCommit: (n, v) => {
+            onCommit(n, v)
+          },
+        },
+      },
+    ]
+  }
+
+  it('Cmd+Enter commits the value AND advances edit-focus DOWN to the next row', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    const noteRows: Note[] = [
+      { id: 'r1', body: richJson('One') },
+      { id: 'r2', body: richJson('Two') },
+    ]
+    render(<EditableGrid rows={noteRows} columns={makeCols(onCommit)} getRowId={(r) => r.id} />)
+
+    // Idle → click swaps the read-mode display for a LIVE contentEditable.
+    await user.click(screen.getByText('One'))
+    const editable = await screen.findByLabelText('Body')
+    expect(editable).toHaveAttribute('contenteditable', 'true')
+
+    // A real edit jsdom can drive (select-all + Backspace empties the doc).
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+
+    // Cmd+Enter commits, then advances DOWN into row 2's editor.
+    fireEvent.keyDown(editable, { key: 'Enter', metaKey: true })
+    await waitFor(() => expect(onCommit).toHaveBeenCalledWith(noteRows[0], ''))
+    await waitFor(() => {
+      const next = screen.getByLabelText('Body')
+      expect(next).toHaveAttribute('contenteditable', 'true')
+      expect(next).toHaveFocus()
+    })
+  })
+
+  it('Esc reverts the in-progress edit and lands focus on the read-mode display (not lost)', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    const noteRows: Note[] = [{ id: 'r1', body: richJson('One') }]
+    render(<EditableGrid rows={noteRows} columns={makeCols(onCommit)} getRowId={(r) => r.id} />)
+
+    await user.click(screen.getByText('One'))
+    const editable = await screen.findByLabelText('Body')
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+
+    fireEvent.keyDown(editable, { key: 'Escape' })
+
+    // Reverted: nothing committed, original prose back in the read-mode display.
+    expect(onCommit).not.toHaveBeenCalled()
+    const display = await screen.findByText('One')
+    expect(display.closest('.grid-cell')).toHaveFocus()
+  })
+
+  it('Tab from the read-mode display traverses to the next cell, NOT into the editor', async () => {
+    const user = userEvent.setup()
+    const noteRows: Note[] = [
+      { id: 'r1', body: richJson('One') },
+      { id: 'r2', body: richJson('Two') },
+    ]
+    render(<EditableGrid rows={noteRows} columns={makeCols()} getRowId={(r) => r.id} />)
+
+    await user.tab()
+    expect(screen.getByText('One').closest('.grid-cell')).toHaveFocus()
+    // No live editor opened by focusing the display.
+    expect(document.querySelector('[contenteditable="true"]')).toBeNull()
+
+    await user.tab()
+    // Tab moved to the NEXT cell's display, not into row 1's editor.
+    expect(screen.getByText('Two').closest('.grid-cell')).toHaveFocus()
+    expect(document.querySelector('[contenteditable="true"]')).toBeNull()
+  })
+
+  it('renders a legacy plain-string value visibly and does NOT persist it on view', () => {
+    const onCommit = vi.fn()
+    const noteRows: Note[] = [{ id: 'r1', body: 'Legacy plain justification' }]
+    render(<EditableGrid rows={noteRows} columns={makeCols(onCommit)} getRowId={(r) => r.id} />)
+    // Rendered (not blank) even though it is not Lexical JSON…
+    expect(screen.getByText('Legacy plain justification')).toBeInTheDocument()
+    // …and never re-persisted merely by rendering it (the editor never mounts).
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+
+  it('the phantom row on a richtext column stays a plain input and still creates', async () => {
+    const onCreate = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <EditableGrid
+        rows={[]}
+        columns={makeCols()}
+        getRowId={(r) => r.id}
+        phantom={{ columnId: 'body', placeholder: 'New note', onCreate }}
+      />,
+    )
+    const phantom = screen.getByPlaceholderText('New note')
+    // Typing prose into the phantom uses a plain input, never a rich editor.
+    expect(phantom.tagName).toBe('INPUT')
+    await user.type(phantom, 'Fresh')
+    await user.keyboard('{Enter}')
+    expect(onCreate).toHaveBeenCalledWith('Fresh')
   })
 })
 

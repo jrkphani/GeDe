@@ -136,12 +136,18 @@ function EditorChrome({
   ariaLabel,
   placeholder,
   readOnly,
+  onCommitAndAdvance,
+  onEscape,
+  autoFocus,
 }: {
   value: string | null
   onCommit: (next: string | null) => void
   ariaLabel: string
   placeholder: string
   readOnly: boolean
+  onCommitAndAdvance?: ((dir: 'down') => void) | undefined
+  onEscape?: (() => void) | undefined
+  autoFocus?: boolean | undefined
 }) {
   const [editor] = useLexicalComposerContext()
   // Stable per-instance key for the focused-editor registry (089 D1 P1): the
@@ -151,6 +157,67 @@ function EditorChrome({
   // below so neither re-processes the other's own write (see
   // SyncExternalValuePlugin's doc comment).
   const lastSyncedRef = useRef<string | null>(value)
+  // Issue 089 D1 P3 — the grid-cell seam. When Esc reverts an in-progress edit
+  // the editor unmounts (the cell collapses to its read-mode display); this
+  // flag makes the ensuing blur a no-op so an abandoned edit is never committed
+  // (mirrors MultilineCell's `cancelling` ref, EditableGrid.tsx).
+  const cancellingRef = useRef(false)
+
+  // Issue 089 D1 P3 — Numbers-grammar reconciliation for a live contentEditable.
+  // A rich editor swallows plain Enter (paragraph) and Tab (indent), so the
+  // grid's "Enter commits+down / Tab traverses" can't be reused inside it:
+  //   • Cmd/Ctrl+Enter = commit + move DOWN (the grid host advances).
+  //   • plain Enter    = newline (Lexical default — we return false, untouched).
+  //   • Esc            = revert + hand back to the cell (which refocuses its
+  //                      read-mode display; Tab/arrows resume from there).
+  //   • Tab            = never intercepted here — traversal happens only from
+  //                      the non-editing display element, sidestepping indent.
+  // Registered on KEY_DOWN_COMMAND like ShortcutsPlugin, so returning true
+  // short-circuits Lexical's own KEY_ENTER_COMMAND (LexicalEvents onKeyDown).
+  useEffect(() => {
+    if (readOnly) return
+    if (!onCommitAndAdvance && !onEscape) return
+    return editor.registerCommand(
+      KEY_DOWN_COMMAND,
+      (event: KeyboardEvent) => {
+        const modifier = event.metaKey || event.ctrlKey
+        if (event.key === 'Enter' && modifier && onCommitAndAdvance) {
+          event.preventDefault()
+          // Commit the current content first (same path as handleBlur), then
+          // ask the host to advance — the ensuing unmount-blur is idempotent.
+          const next = serializeForCommit(editor.getEditorState())
+          if (next !== lastSyncedRef.current) {
+            lastSyncedRef.current = next
+            onCommit(next)
+          }
+          onCommitAndAdvance('down')
+          return true
+        }
+        if (event.key === 'Escape' && onEscape) {
+          event.preventDefault()
+          cancellingRef.current = true
+          onEscape()
+          return true
+        }
+        return false
+      },
+      COMMAND_PRIORITY_NORMAL,
+    )
+  }, [editor, readOnly, onCommitAndAdvance, onEscape, onCommit])
+
+  // Land focus when the cell swaps its read-mode display for this editor
+  // (click / Enter / commit-and-advance). Focus the root element directly (DOM
+  // focus): it fires focusin → handleFocus → the FormatStrip binds, and the
+  // browser places the caret in the contentEditable. Deliberately NOT
+  // editor.focus() — that forces a Lexical selection-scroll (getBoundingClientRect)
+  // that jsdom can't service; the caret from native focus is enough, and the
+  // strip/shortcuts operate on whatever range the user then makes. Off by
+  // default → the always-mounted existing_scenario editor is unchanged.
+  useEffect(() => {
+    if (readOnly || !autoFocus) return
+    editor.getRootElement()?.focus()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // `initialConfig.editable` is read ONCE on mount (LexicalComposer's own
   // contract) — it does not react to a `readOnly` prop that flips after
@@ -186,6 +253,11 @@ function EditorChrome({
   function handleBlur() {
     if (readOnly) return
     useFocusedEditorStore.getState().setFocused(null)
+    // Esc-revert (089 D1 P3): the edit was abandoned, never commit it.
+    if (cancellingRef.current) {
+      cancellingRef.current = false
+      return
+    }
     const next = serializeForCommit(editor.getEditorState())
     if (next === lastSyncedRef.current) return
     lastSyncedRef.current = next
@@ -227,6 +299,17 @@ export interface RichTextEditorProps {
    *  coexist behind the single global FormatStrip (P3/P5). Defaults to the
    *  original existing_scenario value, so that field is unchanged. */
   namespace?: string
+  /** Grid-cell seam (089 D1 P3): Cmd/Ctrl+Enter commits the current value and
+   *  asks the host to move DOWN. Plain Enter stays a newline. Undefined by
+   *  default → the always-mounted existing_scenario editor is unchanged. */
+  onCommitAndAdvance?: (dir: 'down') => void
+  /** Grid-cell seam (089 D1 P3): Esc reverts the in-progress edit (never
+   *  commits) and hands control back to the host, which returns focus to its
+   *  read-mode display element. Undefined by default. */
+  onEscape?: () => void
+  /** Focus the editable on mount — a grid cell swaps its read-mode display for
+   *  this editor on click / Enter / advance and needs the caret to land. */
+  autoFocus?: boolean
   className?: string
 }
 
@@ -237,6 +320,9 @@ export function RichTextEditor({
   placeholder,
   readOnly = false,
   namespace = 'gede-existing-scenario',
+  onCommitAndAdvance,
+  onEscape,
+  autoFocus,
   className,
 }: RichTextEditorProps) {
   // Read once on mount (Lexical's own contract for initialConfig.editorState
@@ -283,6 +369,9 @@ export function RichTextEditor({
           ariaLabel={ariaLabel}
           placeholder={placeholder}
           readOnly={readOnly}
+          onCommitAndAdvance={onCommitAndAdvance}
+          onEscape={onEscape}
+          autoFocus={autoFocus}
         />
       </LexicalComposer>
     </div>

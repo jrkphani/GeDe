@@ -181,7 +181,12 @@ export function ContextRegister({
       id: 'justification',
       header: 'Justification',
       cell: {
-        kind: 'multiline',
+        // Issue 089 D1 Phase 3 — the proof column: justification is now a rich
+        // cell (Lexical). Same value contract (a stored string in/out), but the
+        // string is Lexical JSON once edited here; legacy plain strings (and the
+        // phantom-row's plain-input create below) still render. The global
+        // FormatStrip (089 D1 P1) binds to this cell's editor when focused.
+        kind: 'richtext',
         getValue: (ctx) => ctx.justification ?? '',
         onCommit: async (ctx, value) => {
           await setJustification(ctx.id, value)

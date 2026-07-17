@@ -86,13 +86,15 @@ test('compose α on the canvas — bind three dots, justify in the register — 
   await expect(row.locator('td').nth(3)).toContainText('Users')
   await expect(row.locator('td').nth(4)).toContainText('Engagement')
 
-  // Justify directly in the register's justification cell (Decision 4 —
-  // expand-on-focus is the roomier editor the Composer used to provide).
+  // Justify directly in the register's justification cell. Issue 089 D1 P3:
+  // the cell is now a rich editor — clicking swaps its read-mode summary for a
+  // live Lexical contentEditable; plain Enter is a newline, so commit is
+  // Cmd/Ctrl+Enter (commit + move down).
   const justificationCell = row.locator('td').nth(5)
   await justificationCell.click()
-  const textarea = row.locator('.grid-cell__input--multiline')
-  await textarea.fill('First real context')
-  await textarea.press('Enter')
+  const editor = justificationCell.locator('.rich-text-editor__content')
+  await editor.fill('First real context')
+  await editor.press('ControlOrMeta+Enter')
 
   await expect(justificationCell).toContainText('First real context')
   await expect(row.locator('.status-dot')).toHaveAttribute('data-status', 'documented')

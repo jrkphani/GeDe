@@ -6,7 +6,9 @@ import {
   type ColumnDef,
 } from '@tanstack/react-table'
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { plainTextToRichJson, richTextToPlainText, safeRichTextJson } from '../domain/richText'
 import { Combobox, type ComboboxOption } from './ui/combobox'
+import { RichTextEditor } from './ui/rich-text-editor'
 import { Swatch } from './ui/swatch'
 
 // ADR-0004: TanStack Table computes rows/columns; EditableGrid owns every
@@ -54,12 +56,23 @@ export interface MultilineCellKind<TRow> {
   onCommit: (row: TRow, value: string) => Promise<boolean> | void
 }
 
+// Issue 089 D1 Phase 3 — a rich-text cell (Lexical). Same value contract as
+// multiline (a stored string in, a stored string out) but the string is
+// Lexical JSON once written, OR a legacy plain string on a not-yet-converted
+// row (pre-P4 that's every row) — RichTextCell renders both, see seedRichValue.
+export interface RichTextCellKind<TRow> {
+  kind: 'richtext'
+  getValue: (row: TRow) => string
+  onCommit: (row: TRow, value: string) => Promise<boolean> | void
+}
+
 export type GridCellKind<TRow> =
   | TextCellKind<TRow>
   | MonoCellKind<TRow>
   | ComboboxCellKind<TRow>
   | StaticCellKind<TRow>
   | MultilineCellKind<TRow>
+  | RichTextCellKind<TRow>
 
 export interface GridColumn<TRow> {
   id: string
@@ -492,6 +505,136 @@ function MultilineCell<TRow>({
   )
 }
 
+// A richtext cell stores EITHER Lexical JSON (a converted cell) or a legacy
+// plain string (not yet converted — pre-P4 that's every cell). The read-mode
+// display always projects to plain text (richTextToPlainText, correct on both
+// shapes). The live editor needs a value Lexical can hydrate: valid JSON passes
+// through; a legacy plain string is wrapped as a single paragraph so it shows
+// (only re-persisted if the user actually edits and commits — the editor is
+// unmounted while the cell is merely viewed); an empty cell seeds null (an
+// empty editor) so a focus+blur with no edit can't spuriously commit an
+// empty-paragraph doc over a null.
+function seedRichValue(stored: string): string | null {
+  if (stored === '') return null
+  if (stored.trimStart().startsWith('{')) {
+    const safe = safeRichTextJson(stored)
+    if (safe !== null) return safe
+  }
+  return plainTextToRichJson(stored)
+}
+
+// Issue 089 D1 Phase 3 — the rich-text justification cell. Modeled on
+// MultilineCell (click-to-swap: a clamped read-mode display becomes a live
+// editor on click/Enter), but the editor is RichTextEditor — an always-live
+// Lexical contentEditable. The Numbers-grammar conflict (Enter=paragraph,
+// Tab=indent) is resolved by keeping Tab/arrow traversal on the read-mode
+// display and moving commit to Cmd/Ctrl+Enter inside the editor (the seam in
+// rich-text-editor.tsx). The global FormatStrip (089 D1 P1) binds to this
+// editor when it is focused, via the focused-editor registry.
+function RichTextCell<TRow>({
+  row,
+  rowId,
+  columnId,
+  cellDef,
+  nav,
+  name,
+}: {
+  row: TRow
+  rowId: string
+  columnId: string
+  cellDef: RichTextCellKind<TRow>
+  nav: NavContext
+  name: string
+}) {
+  const stored = cellDef.getValue(row)
+  const editing = !nav.readOnly && nav.editing?.rowId === rowId && nav.editing.columnId === columnId
+  const displayRef = useRef<HTMLDivElement | null>(null)
+  const refocusDisplay = useRef(false)
+  // The plain projection is both the read-mode text and the em-dash/empty test;
+  // it never throws on a legacy string or malformed JSON (richText.ts).
+  const plain = richTextToPlainText(stored)
+
+  // After Esc collapses the editor back to read mode, land focus on the display
+  // element (never stranded on <body>) so the Tab/arrow grammar resumes.
+  useEffect(() => {
+    if (!editing && refocusDisplay.current) {
+      refocusDisplay.current = false
+      displayRef.current?.focus()
+    }
+  }, [editing])
+
+  // Issue 035 — same read-only short-circuit as MultilineCell: a static,
+  // clamped display, no click-to-edit and no live editor.
+  if (nav.readOnly) {
+    return (
+      <div
+        className="grid-cell grid-cell--multiline"
+        aria-label={plain ? undefined : `${name}, empty`}
+        title={plain || undefined}
+      >
+        {plain ? (
+          <span className="grid-cell__clamp">{plain}</span>
+        ) : (
+          <span className="grid-cell__placeholder" aria-hidden="true">
+            —
+          </span>
+        )}
+      </div>
+    )
+  }
+
+  if (editing) {
+    return (
+      <div className="grid-cell grid-cell--richtext" ref={registerRef(nav, rowId, columnId)}>
+        <RichTextEditor
+          value={seedRichValue(stored)}
+          namespace={`gede-justification-${rowId}`}
+          ariaLabel={name}
+          placeholder="Add justification…"
+          autoFocus
+          onCommit={(next) => {
+            void cellDef.onCommit(row, next ?? '')
+          }}
+          onCommitAndAdvance={() =>
+            nav.advance(nextEditableCell(nav, rowId, columnId, 'down'), rowId, columnId)
+          }
+          onEscape={() => {
+            refocusDisplay.current = true
+            nav.setEditing(null)
+          }}
+        />
+      </div>
+    )
+  }
+
+  return (
+    <div
+      ref={(el) => {
+        displayRef.current = el
+        registerRef(nav, rowId, columnId)(el)
+      }}
+      className="grid-cell grid-cell--multiline"
+      aria-label={plain ? undefined : `${name}, empty`}
+      tabIndex={0}
+      title={plain || undefined}
+      onClick={() => nav.setEditing({ rowId, columnId })}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault()
+          nav.setEditing({ rowId, columnId })
+        }
+        handleGridArrowKeys(e, nav, rowId, columnId)
+      }}
+    >
+      {plain ? (
+        <span className="grid-cell__clamp">{plain}</span>
+      ) : (
+        <span className="grid-cell__placeholder" aria-hidden="true">—</span>
+      )}
+    </div>
+  )
+}
+
 function ComboboxCell<TRow>({
   row,
   rowId,
@@ -654,6 +797,9 @@ function renderGridCell<TRow>(info: CellContext<TRow, unknown>) {
   }
   if (col.cell.kind === 'multiline') {
     return <MultilineCell row={row} rowId={rowId} columnId={col.id} cellDef={col.cell} nav={meta.nav} name={name} />
+  }
+  if (col.cell.kind === 'richtext') {
+    return <RichTextCell row={row} rowId={rowId} columnId={col.id} cellDef={col.cell} nav={meta.nav} name={name} />
   }
   return (
     <TextOrMonoCell

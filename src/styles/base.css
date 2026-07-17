@@ -1165,6 +1165,24 @@ body {
   min-height: 72px;
 }
 
+/* Issue 089 D1 Phase 3 — the rich justification cell in edit mode. The
+   read-mode summary reuses .grid-cell--multiline's single-line clamp above;
+   clicking swaps it for the live Lexical editor, which must be given real
+   width/height (an empty contentEditable otherwise collapses to the caret's
+   ~0px box and reads as invisible). Mirrors the roomy min-width/min-height
+   floor the old multiline textarea carried (Decision 4). */
+.grid-cell--richtext {
+  align-items: stretch;
+  padding-top: var(--space-2);
+  padding-bottom: var(--space-2);
+}
+
+.grid-cell--richtext .rich-text-editor-root {
+  flex: 1;
+  min-width: 320px;
+  min-height: 72px;
+}
+
 /* Duplicate-tuple badge (issue 005, invariant 2): quiet, non-blocking, mono —
    navigation to the sibling, never dismissal (no ✕). Explicit width for the
    same reason as .grid-col--status above; `nowrap` still lets a long sibling
