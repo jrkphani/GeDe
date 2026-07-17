@@ -369,19 +369,25 @@ describe("DesignSurface — `d` focus shortcut (issue 082 Phase 1)", () => {
 describe('DesignSurface — tablet stack (issue 082 Phase 1, Decision 4)', () => {
   const css = fs.readFileSync(path.resolve(__dirname, '../styles/base.css'), 'utf-8')
 
-  it('below 640px the editing zone stacks (rail -> register), the row stacks the zone above the canvas, all at full width', () => {
+  it('the row is one column with the ring on top (order:-1) and the editing zone below; below 640px the editing zone itself stacks rail -> register at full width', () => {
+    // Owner layout (2026-07-18): the design-surface-row is a column at EVERY
+    // width (the ring paints on top via `.canvas-shell { order: -1 }`, the
+    // editing zone below) — so `flex-direction: column` lives in the base rule
+    // now, not the @container block. (`[^}]*` spans the leading comment inside
+    // each rule; a negated class matches newlines.)
+    expect(css).toMatch(/\.design-surface-row\s*\{[^}]*flex-direction:\s*column;/)
+    expect(css).toMatch(/\.design-surface-row > \.canvas-shell\s*\{[^}]*order:\s*-1;/)
+    // Issue 085 Phase C — below 640px the editing zone itself also stacks
+    // internally (rail -> register), and the rail (a child of the editing zone,
+    // not the row) goes full width within that stack.
     const match = /@container \(max-width: 640px\) \{([^]*?)\n\}\n/.exec(css)
     expect(match).not.toBeNull()
     const body = (match as RegExpMatchArray)[1] as string
-    expect(body).toMatch(/\.design-surface-row\s*\{\s*\n\s*flex-direction:\s*column;/)
-    // Issue 085 Phase C — the editing zone itself also stacks internally
-    // (rail -> register) once narrow, and the rail (now a child of the
-    // editing zone, not the row) goes full width within that stack.
     expect(body).toMatch(/\.design-surface-row > \.editing-zone\s*\{\s*\n\s*flex-direction:\s*column;/)
     expect(body).toMatch(/\.editing-zone > \.dim-rail\s*\{\s*\n\s*flex:\s*none;\s*\n\s*width:\s*100%;/)
   })
 
-  it('the editing zone is a direct child of .design-surface-row (rail/register stack together, above the canvas)', async () => {
+  it('the editing zone is a direct child of .design-surface-row (rail/register stay grouped in DOM/tab order; the ring is lifted above only via CSS order)', async () => {
     renderDesignSurface({ projectId, contextPath: [], view: 'canvas' })
     await waitFor(() => expect(document.querySelector('.canvas-shell')).toBeInTheDocument())
     const row = document.querySelector('.design-surface-row') as HTMLElement

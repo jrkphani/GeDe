@@ -104,36 +104,31 @@ test('the canvas label tier switches as the container crosses the 400px breakpoi
   await setUpCanvas(page)
   const shell = page.locator('.canvas-shell')
 
-  // Issue 089 D2 — the Design surface is now a co-mounted lane (a fixed ~940px
-  // column, `.workspace__lane--design`), not the full-viewport surface it was
-  // pre-D2. Inside that column the canvas is a ~34% side panel of the
-  // `.design-surface-row`, so its measured `.canvas-shell` width is governed by
-  // the LANE'S own container query (STYLE_GUIDE §7 tiers keyed on the shell's
-  // own width via ResizeObserver), NOT the viewport. Consequences (verified by
-  // measuring the rendered shell width at each viewport below):
-  //   • The 'full' tier (shell ≥640px) is no longer reachable in-lane — the
-  //     shell tops out ~592px even when the whole workspace stacks — so it is
-  //     covered only by the pure unit test (canvasResponsive.test.ts). Widening
-  //     the VIEWPORT no longer promotes the shell to 'full'; the lane caps it.
-  //   • The reachable live tiers are 'truncated' (shell in [400,640)) and
-  //     'legend' (<400). This spec proves the real-browser ResizeObserver →
-  //     width → tier wiring by crossing the 400px breakpoint (which jsdom's
-  //     no-op ResizeObserver can't exercise).
+  // Issue 089 D2 + owner layout (2026-07-18) — the Design surface is a
+  // co-mounted lane, and the canvas is now the ring ON TOP: a centered square
+  // sized `min(480px, 60vh, 100%)`. Its measured `.canvas-shell` width (which
+  // drives the STYLE_GUIDE §7 label tier via ResizeObserver) is the 480px/60vh
+  // cap on wide lanes, and the LANE width itself once the lane is narrower than
+  // the cap. Consequences (verified by measuring the rendered shell width):
+  //   • 'full' (≥640px) stays lane-unreachable (the 480px cap) — covered only
+  //     by the pure unit test (canvasResponsive.test.ts).
+  //   • The reachable live tiers are 'truncated' (shell in [400,640)) — the
+  //     capped ring on any roomy viewport — and 'legend' (<400) once a narrow
+  //     lane shrinks the ring below 400px. This spec proves the real-browser
+  //     ResizeObserver → width → tier wiring by crossing the 400px breakpoint.
 
-  // Wide viewport: the lane stays fixed-width, the canvas is a narrow side
-  // panel (~295px) — 'legend'. Proves viewport width alone no longer drives the
-  // tier (the lane governs).
+  // Wide viewport: the ring hits its 480px cap — 'truncated' (larger than the
+  // pre-owner-layout narrow side panel, which sat in 'legend').
   await page.setViewportSize({ width: 2200, height: 900 })
-  await expect(shell).toHaveAttribute('data-label-tier', 'legend')
+  await expect(shell).toHaveAttribute('data-label-tier', 'truncated')
 
-  // Mid viewport: the workspace stacks and the design-surface-row stacks the
-  // canvas full-width under the editing zone (~512px shell) — 'truncated'.
+  // Mid viewport: the workspace stacks; the ring is still at/near its cap — 'truncated'.
   await page.setViewportSize({ width: 560, height: 900 })
   await expect(shell).toHaveAttribute('data-label-tier', 'truncated')
 
-  // Narrow viewport: the shell drops below the 400px breakpoint (~332px) —
-  // 'legend'. The live truncated→legend switch across 400px is the real-browser
-  // proof this test exists for.
+  // Narrow viewport: the lane (hence the `100%`-capped ring) drops below the
+  // 400px breakpoint — 'legend'. The live truncated→legend switch across 400px
+  // is the real-browser proof this test exists for.
   await page.setViewportSize({ width: 380, height: 900 })
   await expect(shell).toHaveAttribute('data-label-tier', 'legend')
 })

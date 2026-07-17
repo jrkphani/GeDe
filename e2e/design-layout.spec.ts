@@ -58,52 +58,48 @@ async function setUpTwoDimensionCanvas(page: Page) {
   await addParameterTo('Stake', 'Users')
 }
 
-// Issue 085 Phase C — the canvas moves OUT from between the rail and the
-// register to a side visual panel; the rail + register now share one
-// bordered editing zone. Rewritten from the pre-085 "register beside the
-// canvas" geometry (the canvas used to be the middle column) to the new
-// "canvas beside the editing zone" geometry.
-test('at >=640px the canvas sits beside the editing zone (not between rail and register); below 640px they stack', async ({
+// Owner layout (2026-07-18) — the ring (canvas) now sits ON TOP, full lane
+// width, larger; the editing zone (rail + register) reads directly BELOW it.
+// This replaces the 085-era "canvas beside the editing zone" geometry: the
+// circle and the register no longer compete for horizontal width. The canvas
+// stays the LAST DOM child (tab order rail -> register, never interrupted) and
+// is only lifted visually via CSS `order: -1`.
+test('the canvas sits above the full-width editing zone (larger ring), with the register directly below it; the editing zone stacks rail -> register at narrow widths', async ({
   page,
 }) => {
   await setUpTwoDimensionCanvas(page)
 
-  // Wide: editing zone (rail + register) and the canvas are side by side,
-  // canvas last — never sandwiched between the two editing surfaces.
+  // Wide: canvas on top, editing zone below — same left edge and full lane
+  // width (a single stacked column), not the old side-by-side split.
   await page.setViewportSize({ width: 1400, height: 900 })
   const zoneBox = await requireBox(page.locator('.editing-zone'))
   const canvasBox = await requireBox(page.locator('.canvas-shell'))
   const registerBox = await requireBox(page.locator('.context-register-shell'))
-  expect(canvasBox.x).toBeGreaterThanOrEqual(zoneBox.x + zoneBox.width - 1)
-  // Canvas sits to the right of the register (never between rail and register).
-  // Issue 089 D2 — the Design surface is a co-mounted, fixed-width lane (~940px)
-  // now, not the full-viewport surface it was pre-D2. In that tighter column the
-  // register's `min(320px, 100%)` floor slightly overflows the editing zone (its
-  // measured right edge extends a handful of px past the zone / into the row
-  // gap), so the canvas's left edge begins just before the register's absolute
-  // right edge — while still clearly to the right of the bulk of the register.
-  // Assert the intent ("canvas is beside/after the register, not before it")
-  // against the register's near-right edge (90% of its width), not its exact
-  // overflowed right edge.
-  expect(canvasBox.x).toBeGreaterThanOrEqual(registerBox.x + registerBox.width * 0.9)
-  // The register keeps a real (not collapsed) min-width inside the zone
-  // (design brief: "sensible min-width") — comfortably above the 320px CSS
-  // floor with viewport slack.
+  // The editing zone begins at/after the canvas ends — canvas is above it.
+  expect(zoneBox.y).toBeGreaterThanOrEqual(canvasBox.y + canvasBox.height - 1)
+  // The ring is a centered square: horizontally centered over the full-width
+  // zone, narrower than it (the ring, not the whole band), and larger than the
+  // old ~320px side column (owner: "the graph can be larger").
+  const canvasCenter = canvasBox.x + canvasBox.width / 2
+  const zoneCenter = zoneBox.x + zoneBox.width / 2
+  expect(Math.abs(canvasCenter - zoneCenter)).toBeLessThanOrEqual(3)
+  expect(canvasBox.width).toBeLessThanOrEqual(zoneBox.width)
+  expect(canvasBox.width).toBeGreaterThanOrEqual(440)
+  expect(Math.abs(canvasBox.width - canvasBox.height)).toBeLessThanOrEqual(4) // square
+  // The full-width editing zone keeps the register at a real, non-collapsed
+  // width beside the rail (design brief: "sensible min-width").
   expect(registerBox.width).toBeGreaterThanOrEqual(300)
-  // The editing zone and the canvas read as balanced (align-items: stretch,
-  // issue 027), and the canvas keeps its min-height floor even as a
-  // narrower side column (design brief: "legible without being the hero").
-  expect(zoneBox.height).toBeGreaterThanOrEqual(canvasBox.height * 0.9)
-  expect(canvasBox.height).toBeGreaterThanOrEqual(300)
 
-  // Narrow: stacked — the editing zone stacks first (rail -> register), the
-  // canvas moves below the whole zone, not beside it.
+  // Narrow: still canvas-on-top; the editing zone's own rail -> register pair
+  // stacks to a column so nothing is squeezed.
   await page.setViewportSize({ width: 500, height: 900 })
   const zoneBoxNarrow = await requireBox(page.locator('.editing-zone'))
   const canvasBoxNarrow = await requireBox(page.locator('.canvas-shell'))
   const railBoxNarrow = await requireBox(page.locator('.dim-rail'))
   const registerBoxNarrow = await requireBox(page.locator('.context-register-shell'))
-  expect(canvasBoxNarrow.y).toBeGreaterThanOrEqual(zoneBoxNarrow.y + zoneBoxNarrow.height - 1)
+  // Canvas remains above the editing zone (not below it, as pre-owner-layout).
+  expect(zoneBoxNarrow.y).toBeGreaterThanOrEqual(canvasBoxNarrow.y + canvasBoxNarrow.height - 1)
+  // Within the zone, rail is above the register.
   expect(registerBoxNarrow.y).toBeGreaterThanOrEqual(railBoxNarrow.y + railBoxNarrow.height - 1)
 })
 
@@ -168,10 +164,11 @@ test('dimensions, parameters, and contexts can all be defined by keyboard alone 
   await expect(page.locator('.context-register-shell').getByText('α', { exact: true })).toBeVisible()
 
   // The canvas never received focus or a click during this flow, and it
-  // sits beside the editing zone, never between the rail and the register.
+  // sits ABOVE the editing zone (owner layout 2026-07-18) — never between the
+  // rail and the register in the DOM/tab order.
   const zoneBox = await requireBox(page.locator('.editing-zone'))
   const canvasBox = await requireBox(page.locator('.canvas-shell'))
-  expect(canvasBox.x).toBeGreaterThanOrEqual(zoneBox.x + zoneBox.width - 1)
+  expect(zoneBox.y).toBeGreaterThanOrEqual(canvasBox.y + canvasBox.height - 1)
 
   // The ring renders — proportional arcs (Phase A): one arc + one dot per
   // dimension/parameter defined above.

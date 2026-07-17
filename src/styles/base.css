@@ -1574,8 +1574,15 @@ body {
    height instead of either shrinking to its own (often short) content. */
 .design-surface-row {
   display: flex;
+  /* Owner layout (2026-07-18): stack the ring ON TOP and the editing zone
+     (rail + register) BELOW, instead of the old side-by-side split where the
+     circle and the register fought for horizontal width. The ring is a
+     centered square up top (sized larger, below) and the table reads directly
+     beneath it — one column, top-to-bottom. `align-items: center` centers the
+     ring; the editing zone opts back into full width via `align-self`. */
+  flex-direction: column;
   gap: var(--space-5);
-  align-items: stretch;
+  align-items: center;
 }
 
 /* Issue 085 Phase C — the single bordered editing-zone surface: rail +
@@ -1583,7 +1590,13 @@ body {
    `.panel`'s own tokens) instead of two separately-bordered panels, so the
    pair reads as one editing place, not two panes either side of the canvas. */
 .design-surface-row > .editing-zone {
-  flex: 1 1 66%;
+  /* Column layout (owner 2026-07-18): natural height, full lane width; it sits
+     BELOW the ring. `order: 2` pairs with the canvas's `order: -1` so the ring
+     paints on top while the editing zone stays FIRST in the DOM/tab order the
+     085 comment protects (rail -> register, never interrupted by the canvas). */
+  order: 2;
+  align-self: stretch;
+  flex: 0 0 auto;
   min-width: 0;
   display: flex;
   gap: var(--space-5);
@@ -1608,15 +1621,24 @@ body {
   overflow-y: auto;
 }
 
-/* Issue 085 Phase C — the canvas is a side visual panel (Decision 2:
-   "primarily a visual representation… not an editing surface"), the LAST
-   child of the row so it never sits between the rail and the register in
-   tab order either. A min-height floor keeps the ring legible without
-   letting it dominate the row (design brief: "without being the hero"). */
+/* Issue 085 Phase C + owner layout (2026-07-18) — the canvas is still a
+   visual-only panel (Decision 2: "a visual representation… not an editing
+   surface") and stays the LAST DOM child so it never sits between the rail and
+   the register in tab order. It now renders ON TOP via `order: -1` (visual
+   only; DOM/focus order unchanged), as a centered square LARGER than the old
+   side-by-side 34% column, with the register reading directly beneath it.
+   Crucially the shell is sized to the RING (not the full band): Canvas measures
+   THIS element's width to keep the invisible 44px dot hit-target proportional
+   (Canvas.tsx dotHitRadiusUnits) — a full-band-wide shell would under-size the
+   hit circles and let the SVG background swallow compose-dot clicks. */
 .design-surface-row > .canvas-shell {
-  flex: 1 1 34%;
-  min-width: 260px;
-  min-height: 320px;
+  order: -1;
+  /* The ring is a square capped at 480px, but never taller than 60vh (short
+     viewports) and never wider than the lane (`100%` — narrow lanes shrink it
+     so it never overflows and its label tier still degrades with width). The
+     base `.canvas-svg` rule (width:100% + aspect-ratio:1/1) makes the svg a
+     square of this width; no per-svg override needed. */
+  width: min(480px, 60vh, 100%);
 }
 
 .editing-zone > .context-register-shell {
@@ -1649,13 +1671,11 @@ body {
 }
 
 @container (max-width: 640px) {
-  /* Issue 085 Phase C, tablet (Decision 1 tablet clause) — the editing zone
-     stacks first (DOM order: rail -> register), the canvas moves below the
-     whole zone as a collapsible visual, matching the design brief. */
-  .design-surface-row {
-    flex-direction: column;
-  }
-
+  /* Owner layout (2026-07-18) — the row is already a column at every width now
+     (ring on top via `order: -1`, editing zone below; the ring's own
+     `height: min(480px, 60vh)` already shrinks it on short/narrow viewports).
+     At narrow widths the editing zone's own rail | register pair also stacks to
+     a column so nothing is squeezed. */
   .design-surface-row > .editing-zone {
     flex-direction: column;
   }
