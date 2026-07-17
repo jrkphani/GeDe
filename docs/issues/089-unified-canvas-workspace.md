@@ -1,6 +1,6 @@
 # 089: Unified canvas workspace — three tiers as one zoomable canvas + a global rich-text toolbar
 
-- **Status**: **D1 SHIPPED** (2026-07-17) — the global rich-text toolbar is merged to `main` and deploying (frontend-only + a value-gated heal-on-load; **no schema migration**). **D2** (single scrollable lane page), **D3** (pan/zoom canvas), and **rich identifier columns** remain **OPEN**. See `## D1 — SHIPPED (implementation notes)` below. The rest of this doc is the design cycle that must precede any canvas implementation (mirrors how 085 got a full spec before a line changed).
+- **Status**: **D1 SHIPPED** (2026-07-17) — the global rich-text toolbar is merged to `main` and deploying (frontend-only + a value-gated heal-on-load; **no schema migration**). **D2 SHIPPED** (2026-07-17) — the three tiers now render as side-by-side vertical lanes on one page (frontend + store changes; **no schema migration**), merged to `main` and deploying. **D3** (pan/zoom canvas) and **rich identifier columns** remain **OPEN**. See `## D1 — SHIPPED (implementation notes)` and `## D2 — SHIPPED (implementation notes)` below. The rest of this doc is the design cycle that must precede any *zoom* canvas implementation (mirrors how 085 got a full spec before a line changed).
 - **Milestone**: post-M6 (call it **M7 — workspace unification**). No sync/infra blocker for the toolbar half (D1 — now shipped); the zoom-canvas half is the largest client-side surgery the app has attempted and should be gated behind a spike (see Recommended sequencing). This supersedes nothing yet — it *proposes* to partially supersede the tier-tab routing model (SITEMAP §1) and re-open a tension 085 explicitly closed (canvas-as-visual). Both are named honestly below.
 
 ## D1 — SHIPPED (implementation notes)
@@ -111,6 +111,34 @@ D2 changes only **WHAT the route mounts**: one `WorkspaceSurface` rendering all 
 - **§2 shell anatomy** — nuance "page never scrolls"; context content → per-lane sticky headers; shell bar hosts only `FormatStrip`.
 - **§4 keyboard** — ⌘1/2/3 = navigate + scroll; `c` / `v` / `d` active-lane-scoped.
 - **§5 responsive** — 3-col → stacked breakpoint.
+
+## D2 — SHIPPED (implementation notes)
+
+**Shipped 2026-07-17** — the three tier routes now render as **side-by-side vertical lanes on one page**, merged to `main` and deploying. Commits: `feat(089-D2)` phases 1-5 (latest `6916024`). **Frontend + store changes — NO schema migration** (positions stay derived from the existing ordinal `sort`; migration count untouched). **`verify:fast` 1446 unit + full e2e 53/0.**
+
+### What landed
+
+- **One page, three lanes.** `src/components/WorkspaceSurface.tsx` renders all three tiers (Foundation / Architecture / Design) as non-stretching flex columns inside the shared `.surface` scroll region, replacing `App.tsx`'s single-surface switch. The three surfaces now co-mount in the DOM (previously only one was ever mounted).
+- **Route grammar RETAINED** (the correction vs the exploratory D2 framing held). `/foundation|architecture|design[/:ctx…]?view=&canvas=` still parse / serialize and still drive `tab--active`. D2 changed only **WHAT the route mounts** and **ADDED a scroll-to-lane effect** (`src/shell/laneTarget.ts`, pure `laneForRoute`). Tabs + ⌘1/2/3 still `navigate()` (preserving back/forward + `tab--active`) and now *also* scroll to the lane. This kept 011/012/090 and most of the e2e suite intact.
+- **`activeLane` slice** (`src/store/activeLane.ts`, mirroring `focusedEditor.ts`) re-scopes Design's capture-phase global verbs (`c` / `v` / `d`) to the active lane. It is set on each lane's `focusin` / `pointerdown` and by ⌘1/2/3; `Esc` and the Tab seam self-scope. **Behavior flag:** with no lane active, `c` / `v` / `d` are no-ops until a lane is clicked / ⌘'d — so a `c` from the Foundation lane does not create a Design draft.
+- **Cross-lane reactive refresh** (`notifyLocalApply` in `src/store/sync.ts`, wired into `tier2.ts` promote / rename-propagate / resolve). A cross-tier write in one lane now refreshes the co-mounted Design lane — which no longer remounts — by bumping the same `*AppliedAt` signals the 075B subscriptions already watch. Offline-safe and respects 090 canvas-scoping.
+- **Per-lane sticky context headers.** Each surface's context bar moved into an in-lane sticky header (Architecture's quick-jump; Design's breadcrumbs + the 090 `CanvasSwitcher` + view-toggle + coverage stats) — the single shell `.context-bar` slot can't host three tiers at once. The shell context bar now hosts **only** the focus-revealed D1 `FormatStrip`. **Narrow-screen reflow** at ≤1024px stacks the 3 columns (⌘1/2/3 scroll-to-lane becomes load-bearing there).
+
+### Two real regressions caught by the full-e2e gate + fixed (not papered over)
+
+1. **Export unclickable.** The sticky lane-header (`z-index: 5`) painted over the body-portaled Radix `.popover`, so Export couldn't be clicked → `.popover` z-index raised to 50 (above the header, below the command palette at 100).
+2. **FormatStrip didn't bind on a justification cell's autoFocus.** React StrictMode's dev double-invoke unbound the editor → fixed in the autoFocus effect (order-independent, scoped) so the strip binds regardless of effect order.
+
+### Fork resolutions (shipped answers)
+
+- **Fork 6** (one plane vs three scrolls) — **RESOLVED: one shared page scroll** (the existing `.surface`); lanes are non-stretching flex columns, no lane-local scroll.
+- **Fork 8** (routes as deep-links) — **RESOLVED: all 3 routes retained** as scroll-to-lane deep-links; the grammar was not collapsed.
+- **Fork 9** (cross-lane keyboard) — **RESOLVED: independent per-lane Tab scopes** + ⌘1/2/3 as the explicit "go to lane" key; no continuous cross-lane Tab chain.
+- **Context bar** — **RESOLVED: per-lane sticky headers**; shell bar hosts only `FormatStrip`.
+
+### Known follow-up (not blocking)
+
+- **Undo/redo of cross-tier ops has the same co-mount staleness** the reactive refresh fixed on the forward paths (promote / rename-propagate / resolve). The forward writes now refresh the co-mounted Design lane; the undo/redo paths of those same ops do not yet. Worth a later pass — it does not block D2 shipping.
 
 ## Vision (owner)
 
@@ -316,12 +344,14 @@ Today `Toolbar` is constructed with a specific `editor` and reads its state via 
 2. ~~**Toolbar form:** persistent context-bar strip, selection popover, or both?~~ **RESOLVED — persistent context-bar strip** (`FormatStrip`), realized as focus-reveal (appears on rich-editor focus). Popover still reconsiderable if D3 ships.
 3. ~~**Rich-text back-compat:** display-only fallback or a one-time convert migration?~~ **RESOLVED — convert, realized as a *repeatable* value-gated heal-on-load** (`richTextConvert.ts`), not the display-only fallback the doc originally recommended. It must repeat because LWW is value-blind (an un-upgraded peer re-clobbers the converted value with plain text).
 4. ~~**Which fields become rich?**~~ **RESOLVED — prose now, identifiers deferred.** All four prose columns (Purpose, both descriptions, justification) are rich; `*.name` / `contexts.symbol` identifiers are deferred pending an owner call (see "Identifier columns — deferred" above).
-5. **Zoom/pan tech:** CSS transform + `@use-gesture` (recommended), `react-zoom-pan-pinch`, or a scene-graph lib (tldraw/react-flow, not recommended for tables)?
-6. **Do lanes share one scroll/plane or stay independent?** i.e. is D2's page one scroll region or three lane-local scrolls under a shared header?
-7. **Is the Design ring still canvas-as-visual (085) inside its lane, or does the whole page-canvas replace that role?** (The 085 tension — needs an explicit call.)
-8. **Keep the three routes as deep-links into canvas regions?** (Recommend yes — preserve `/foundation` etc. as "pan/zoom to this lane" so links and `⌘1/2/3` still work.)
-9. **Cross-lane keyboard:** independent tab scopes + "next lane" keys (recommended), or one continuous Tab chain across the plane?
-10. **Lanes hand-placeable or auto-laid-out?** Free placement collides with `STYLE_GUIDE.md:16` principle 4 ("position is derived"). Recommend **auto-laid-out lanes, meaning-free viewport pan/zoom only** — arrangement never carries meaning.
+5. **Zoom/pan tech:** CSS transform + `@use-gesture` (recommended), `react-zoom-pan-pinch`, or a scene-graph lib (tldraw/react-flow, not recommended for tables)? **STILL OPEN — a D3 gate.** This is the same substrate question the owner Decision and the appended §5 library research contradict on (React Flow vs CSS-transform plane); it is unresolved and **spike-first** (see the UNRESOLVED note under "## Decision").
+6. ~~**Do lanes share one scroll/plane or stay independent?**~~ **RESOLVED (D2 shipped 2026-07-17) — one shared page scroll** (the existing `.surface`); lanes are non-stretching flex columns, no lane-local scroll.
+7. **Is the Design ring still canvas-as-visual (085) inside its lane, or does the whole page-canvas replace that role?** (The 085 tension — needs an explicit call.) **STILL OPEN — a D3 gate.** D2 left the Design lane's `[editing-zone | canvas]` layout untouched, so the 085 tension only re-opens with the zoom canvas.
+8. ~~**Keep the three routes as deep-links into canvas regions?**~~ **RESOLVED (D2 shipped 2026-07-17) — yes.** All three routes retained as scroll-to-lane deep-links (`laneForRoute`); the grammar was not collapsed, so links and ⌘1/2/3 still work (now navigate + scroll).
+9. ~~**Cross-lane keyboard:**~~ **RESOLVED (D2 shipped 2026-07-17) — independent per-lane Tab scopes** + ⌘1/2/3 as the explicit "go to lane" key; no continuous cross-lane Tab chain.
+10. **Lanes hand-placeable or auto-laid-out?** Free placement collides with `STYLE_GUIDE.md:16` principle 4 ("position is derived"). Recommend **auto-laid-out lanes, meaning-free viewport pan/zoom only** — arrangement never carries meaning. **STILL OPEN — a D3 gate** (D2's lanes are auto-laid-out flex columns; the hand-placeable-vs-derived question only bites once the zoom plane exists).
+
+> **Forks 5 / 7 / 10 remain OPEN and gate D3** (the pan/zoom canvas). The **React-Flow-vs-CSS-transform substrate contradiction** between the owner Decision and the appended §5 library research is **still unresolved** — per Recommended sequencing it must be settled by a **time-boxed spike before any D3 build**. D2 (shipped) depends on none of these; it added no viewport transform.
 
 ## Recommended sequencing
 
