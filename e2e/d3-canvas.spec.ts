@@ -159,6 +159,9 @@ test('the Architecture promote popover anchors at its trigger at viewport scale 
   await page.setViewportSize({ width: 1920, height: 1400 })
   await openThreeLaneCanvas(page)
 
+  // P3.2 — the Architecture lane is now the header node (add-table phantom) plus
+  // one node per table. `.wc-node--architecture` is the header; a created table
+  // is a `.wc-node--arch-table`.
   const arch = page.locator('.wc-node--architecture')
   await expect(arch).toBeVisible()
 
@@ -168,21 +171,23 @@ test('the Architecture promote popover anchors at its trigger at viewport scale 
   const scale = await viewportScale(page)
   expect(scale).not.toBe(1)
 
-  // Build one promotable entry entirely inside the Architecture lane node.
+  // Add a table via the header's add-table phantom; it mounts its own node.
   const tablePhantom = arch.getByPlaceholder('Name a table')
   await tablePhantom.click()
   await page.keyboard.type('Stakeholders')
   await page.keyboard.press('Enter')
-  await expect(arch.locator('.t2-table__name', { hasText: 'Stakeholders' })).toBeVisible()
+  const table = page.locator('.wc-node--arch-table')
+  await expect(table.locator('.t2-table__name', { hasText: 'Stakeholders' })).toBeVisible()
 
-  const entryPhantom = arch.getByPlaceholder('Name an entry')
+  // Build one promotable entry entirely inside the table node.
+  const entryPhantom = table.getByPlaceholder('Name an entry')
   await entryPhantom.click()
   await page.keyboard.type('Buyers')
   await page.keyboard.press('Enter')
-  await expect(arch.getByRole('cell', { name: 'Buyers', exact: true })).toBeVisible()
+  await expect(table.getByRole('cell', { name: 'Buyers', exact: true })).toBeVisible()
 
-  await arch.getByRole('button', { name: 'Select Buyers' }).click()
-  const trigger = arch.getByRole('button', { name: 'Use as dimension…' })
+  await table.getByRole('button', { name: 'Select Buyers' }).click()
+  const trigger = table.getByRole('button', { name: 'Use as dimension…' })
   await trigger.click()
 
   // The Radix promote popover is body-portalled (unscaled) and must anchor at
@@ -314,4 +319,84 @@ test('focusing a cell in an off-screen lane pans it into view', async ({ page })
       return cx > p.x && cx < p.x + p.width && cy > p.y && cy < p.y + p.height
     })
     .toBe(true)
+})
+
+// ── 089-D3 P3.2 / P3.3 — the Architecture lane decomposed into per-table nodes ─
+// P3.2 emits one React Flow node per `tier2` table (plus a small header node with
+// the add-table phantom); each table node hosts the REAL TablePanel/EditableGrid,
+// positioned by computeLaneLayout using MEASURED heights. P3.3 makes Tab cross
+// node boundaries by `sort` order (via the EditableGrid.onExitBoundary seam), not
+// DOM/array order — the table nodes are deliberately emitted in reverse-sort DOM
+// order so this genuinely proves sort-following (native Tab would go the other
+// way / fall out of the canvas).
+
+// Add a table through the Architecture header's add-table phantom. Returns once
+// the new table's own node has mounted.
+async function addArchTable(page: Page, name: string): Promise<void> {
+  const header = page.locator('.wc-node--architecture')
+  await header.getByPlaceholder('Name a table').click()
+  await page.keyboard.type(name)
+  await page.keyboard.press('Enter')
+  await expect(
+    page.locator('.wc-node--arch-table').filter({ hasText: name }),
+  ).toBeVisible()
+}
+
+test('the Architecture lane mounts N per-table nodes with in-node grammar at zoom ≠ 1', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page)
+
+  // Two tables → two per-table nodes (the whole-surface architecture node is gone).
+  await addArchTable(page, 'Alpha')
+  await addArchTable(page, 'Beta')
+  await expect(page.locator('.wc-node--arch-table')).toHaveCount(2)
+
+  // The app fit-views on load, so this runs at a non-unity viewport scale.
+  await expect.poll(() => viewportScale(page)).not.toBe(1)
+
+  // In-node grammar works inside a per-table node at zoom ≠ 1: the phantom row
+  // creates an entry that renders as a real cell in that node.
+  const alpha = page.locator('.wc-node--arch-table').filter({ hasText: 'Alpha' })
+  await alpha.getByPlaceholder('Name an entry').click()
+  await page.keyboard.type('Buyers')
+  await page.keyboard.press('Enter')
+  await expect(alpha.getByRole('cell', { name: 'Buyers', exact: true })).toBeVisible()
+})
+
+test('cross-node Tab follows sort order between table nodes (forward + backward)', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+
+  // Alpha (sort 0) then Beta (sort 1). Give Beta a real first cell so forward Tab
+  // lands on a data cell, not just Beta's phantom.
+  await addArchTable(page, 'Alpha')
+  await addArchTable(page, 'Beta')
+  const alpha = page.locator('.wc-node--arch-table').filter({ hasText: 'Alpha' })
+  const beta = page.locator('.wc-node--arch-table').filter({ hasText: 'Beta' })
+
+  await beta.getByPlaceholder('Name an entry').click()
+  await page.keyboard.type('B-entry')
+  await page.keyboard.press('Enter')
+  await expect(beta.getByRole('cell', { name: 'B-entry', exact: true })).toBeVisible()
+
+  // FORWARD: from Alpha's empty phantom (the grid's forward boundary), Tab hands
+  // off to the NEXT-by-sort node (Beta) and lands on its first editable cell —
+  // even though Beta is DOM-BEFORE Alpha (reverse-sort DOM order), so native Tab
+  // could never reach it this way.
+  await alpha.getByPlaceholder('Name an entry').click()
+  await page.keyboard.press('Tab')
+  const betaFirstCell = beta.locator('tbody tr[data-row-id] .grid-cell[tabindex]').first()
+  await expect(betaFirstCell).toBeFocused()
+  await expect(betaFirstCell).toHaveText('B-entry')
+
+  // BACKWARD: from Beta's first editable cell (its backward boundary), Shift+Tab
+  // hands off to the PREV-by-sort node (Alpha) and lands on its last editable
+  // position — the phantom "Name an entry" row.
+  await beta.getByRole('cell', { name: 'B-entry', exact: true }).click()
+  await page.keyboard.press('Shift+Tab')
+  await expect(alpha.getByPlaceholder('Name an entry')).toBeFocused()
 })

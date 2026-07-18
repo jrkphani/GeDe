@@ -110,14 +110,22 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
   )
 }
 
-function TablePanel({
+// 089-D3 P3.2 — exported so the decomposed D3 canvas (WorkspaceCanvas, behind
+// the dev-only `?d3rf` flag) can mount ONE real table per React Flow node while
+// the normal (flag-off) ArchitectureSurface keeps rendering N of these stacked
+// as paper panels. Identical rendering either way — the only additive seam is
+// the optional `onExitBoundary`, forwarded to EditableGrid for D3's cross-node
+// Tab (undefined here → byte-identical behavior for the normal surface).
+export function TablePanel({
   projectId,
   table,
   readOnly,
+  onExitBoundary,
 }: {
   projectId: string
   table: Tier2TableRow
   readOnly: boolean
+  onExitBoundary?: (dir: 'forward' | 'backward') => void
 }) {
   const entries = useTier2Store((s) => s.entriesByTable[table.id] ?? NO_ENTRIES)
   const linkByEntryId = useTier2Store((s) => s.linkByEntryId)
@@ -405,6 +413,10 @@ function TablePanel({
           placeholder: 'Name an entry',
           onCreate: (name) => void addEntry(table.id, null, name),
         }}
+        // Conditional spread (not `onExitBoundary={onExitBoundary}`) so the prop
+        // is ABSENT — not `undefined` — for the normal surface, honoring
+        // exactOptionalPropertyTypes and keeping EditableGrid byte-identical.
+        {...(onExitBoundary ? { onExitBoundary } : {})}
       />
       {selected.size > 0 && (
         <div className="t2-selection-bar">
