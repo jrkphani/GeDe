@@ -634,6 +634,33 @@ export function enqueueIfSyncing(
   })
 }
 
+// Issue 073 Subtlety B / 094 — the sibling-sort cascade: enqueue an 'update' for
+// every row PRESENT in `before` whose position (its index in `after`, which is
+// always in densified sort order, so the index IS the row's persisted `sort`)
+// differs from its `sort` in `before`. This is the ONE cascade that BOTH the
+// forward reorder/remove paths AND their undo/redo reversals (094) call, so the
+// two can never drift apart.
+//
+// A row ABSENT from `before` is deliberately SKIPPED, not treated as "moved":
+// the only such row is the principal being revived by an undo (undo-of-remove /
+// redo-of-add restores a row `before` — the post-mutation snapshot — doesn't
+// carry). That row's own revive is enqueued EXPLICITLY by the closure (as a
+// 'revive' — 094; it un-tombstones the resurrected row server-side), so counting
+// it here too would double-enqueue it. This helper is
+// strictly the moved-SIBLINGS delta. NEVER persists `{x,y}` — a reorder is a
+// pure `sort` edit (the 089-D3 derived-positioning invariant).
+export function enqueueSortDeltas<
+  T extends { readonly updatedAt: string; readonly id: string; readonly sort: number } & Readonly<
+    Record<string, unknown>
+  >,
+>(table: TableName, before: readonly T[], after: readonly T[]): void {
+  const beforeSort = new Map(before.map((r) => [r.id, r.sort]))
+  after.forEach((row, index) => {
+    const prev = beforeSort.get(row.id)
+    if (prev !== undefined && prev !== index) enqueueIfSyncing(table, row.id, 'update', row)
+  })
+}
+
 export function resetSyncStore(): void {
   useSyncStore.getState().handle?.stop()
   if (typeof window !== 'undefined') {

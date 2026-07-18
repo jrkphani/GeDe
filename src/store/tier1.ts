@@ -23,6 +23,23 @@ import { useStatusStore } from './status'
 // listener per project-open.
 let syncUnsubscribe: (() => void) | null = null
 
+// Issue 073 Subtlety B / 094 — the sibling re-rank cascade: tier1 props carry
+// BOTH `sort` and a 1-based `rank` (rank === index + 1). Enqueue an 'update' for
+// every prop PRESENT in `before` whose position actually moved. The ONE cascade
+// the forward reorder/remove paths AND their undo/redo reversals (094) both
+// call, so the two can never drift. A row ABSENT from `before` is SKIPPED, not
+// treated as moved — the only such row is the principal a undo revives, whose
+// revive the closure enqueues explicitly (mirrors enqueueSortDeltas's contract).
+function enqueuePropDeltas(before: readonly Tier1PropRow[], after: readonly Tier1PropRow[]): void {
+  const beforeById = new Map(before.map((p) => [p.id, p]))
+  after.forEach((row, index) => {
+    const prev = beforeById.get(row.id)
+    if (prev && (prev.sort !== index || prev.rank !== index + 1)) {
+      enqueueIfSyncing('tier1_props', row.id, 'update', row)
+    }
+  })
+}
+
 // 1st Tier Foundation state for the currently open project (issue 013): one
 // purpose body + a table of ranked value propositions. Every mutating action
 // pushes its inverse onto the shared command log (issue 006) — one gesture,
@@ -119,10 +136,14 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
       async undo() {
         const r = await dbSetPurpose(db, projectId, previous)
         set({ purpose: r?.body ?? previous })
+        // Issue 094 — by undo time the row always exists (the forward edit
+        // created/updated it), so reviving the prior body is an 'update'.
+        if (r) enqueueIfSyncing('tier1_purpose', r.id, 'update', r)
       },
       async redo() {
         const r = await dbSetPurpose(db, projectId, body)
         set({ purpose: r?.body ?? body })
+        if (r) enqueueIfSyncing('tier1_purpose', r.id, 'update', r)
       },
     })
   },
@@ -150,10 +171,14 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
       async undo() {
         const r = await dbSetExistingScenario(db, projectId, previous)
         set({ existingScenario: r?.existingScenario ?? previous })
+        // Issue 094 — the shared tier1_purpose row already exists by undo time
+        // (see setPurpose's undo) → 'update'.
+        if (r) enqueueIfSyncing('tier1_purpose', r.id, 'update', r)
       },
       async redo() {
         const r = await dbSetExistingScenario(db, projectId, existingScenario)
         set({ existingScenario: r?.existingScenario ?? existingScenario })
+        if (r) enqueueIfSyncing('tier1_purpose', r.id, 'update', r)
       },
     })
   },
@@ -185,12 +210,24 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: `add value proposition "${name}"`,
       async undo() {
-        await dbRemove(db, projectId, row.id)
-        set({ props: await dbList(db, projectId) })
+        const before = get().props
+        const after = await dbRemove(db, projectId, row.id)
+        set({ props: after })
+        // Issue 094 — reversal of the forward add's 'upsert': soft-delete the
+        // row (→ 'delete') + close the sibling rank/sort gap (→ 'update' each).
+        enqueueIfSyncing('tier1_props', row.id, 'delete', row)
+        enqueuePropDeltas(before, after)
       },
       async redo() {
-        await dbRestore(db, projectId, row.id, orderedIdsAfterAdd)
-        set({ props: await dbList(db, projectId) })
+        const before = get().props
+        const after = await dbRestore(db, projectId, row.id, orderedIdsAfterAdd)
+        set({ props: after })
+        // Issue 094 — redo re-inserts the row the undo tombstoned → 'revive'
+        // (un-tombstones server-side; a plain 'update' can't clear deleted_at,
+        // and an 'upsert' would `ON CONFLICT (id) DO NOTHING` — the 066-class no-op).
+        const restored = after.find((p) => p.id === row.id)
+        if (restored) enqueueIfSyncing('tier1_props', restored.id, 'revive', restored)
+        enqueuePropDeltas(before, after)
       },
     })
     return row
@@ -208,12 +245,15 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: `rename value proposition to "${name}"`,
       async undo() {
-        await dbRename(db, id, previous)
+        const reverted = await dbRename(db, id, previous)
         set({ props: await dbList(db, projectId) })
+        // Issue 094 — an edit of an already-synced row → 'update'.
+        enqueueIfSyncing('tier1_props', reverted.id, 'update', reverted)
       },
       async redo() {
-        await dbRename(db, id, name)
+        const reapplied = await dbRename(db, id, name)
         set({ props: await dbList(db, projectId) })
+        enqueueIfSyncing('tier1_props', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -230,12 +270,15 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: 'edit value-proposition description',
       async undo() {
-        await dbSetDescription(db, id, previous)
+        const reverted = await dbSetDescription(db, id, previous)
         set({ props: await dbList(db, projectId) })
+        // Issue 094 — an edit of an already-synced row → 'update'.
+        enqueueIfSyncing('tier1_props', reverted.id, 'update', reverted)
       },
       async redo() {
-        await dbSetDescription(db, id, description)
+        const reapplied = await dbSetDescription(db, id, description)
         set({ props: await dbList(db, projectId) })
+        enqueueIfSyncing('tier1_props', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -255,25 +298,21 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     // new sort order, so each row's index IS its new sort/rank — enqueue an
     // 'update' for every row whose previous sort/rank disagrees with it,
     // else sibling drift never reaches the server.
-    const beforeById = new Map(before.map((p) => [p.id, p]))
-    after.forEach((row, index) => {
-      const prev = beforeById.get(row.id)
-      // -1 sentinels for "no prior row" — sort/rank are always >= 0, so a
-      // missing `prev` always counts as changed without an explicit `!prev` /
-      // optional-chain-on-a-narrowed-value lint conflict.
-      const prevSort = prev?.sort ?? -1
-      const prevRank = prev?.rank ?? -1
-      if (prevSort !== index || prevRank !== index + 1) {
-        enqueueIfSyncing('tier1_props', row.id, 'update', row)
-      }
-    })
+    enqueuePropDeltas(before, after)
     useCommandLogStore.getState().push({
       label: 're-rank value proposition',
       async undo() {
-        set({ props: await dbReorder(db, projectId, id, fromIndex) })
+        const beforeUndo = get().props
+        const afterUndo = await dbReorder(db, projectId, id, fromIndex)
+        set({ props: afterUndo })
+        // Issue 094 — re-rank back; enqueue an 'update' per moved prop.
+        enqueuePropDeltas(beforeUndo, afterUndo)
       },
       async redo() {
-        set({ props: await dbReorder(db, projectId, id, toIndex) })
+        const beforeRedo = get().props
+        const afterRedo = await dbReorder(db, projectId, id, toIndex)
+        set({ props: afterRedo })
+        enqueuePropDeltas(beforeRedo, afterRedo)
       },
     })
   },
@@ -294,26 +333,28 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     // (same rewriteTier1PropRanks cascade as reorderProp — Subtlety B), so
     // enqueue an 'update' for every one of those, not just the delete.
     if (removedRow) enqueueIfSyncing('tier1_props', id, 'delete', removedRow)
-    const beforeById = new Map(before.map((p) => [p.id, p]))
-    after.forEach((row, index) => {
-      const prev = beforeById.get(row.id)
-      // -1 sentinels for "no prior row" — sort/rank are always >= 0, so a
-      // missing `prev` always counts as changed without an explicit `!prev` /
-      // optional-chain-on-a-narrowed-value lint conflict.
-      const prevSort = prev?.sort ?? -1
-      const prevRank = prev?.rank ?? -1
-      if (prevSort !== index || prevRank !== index + 1) {
-        enqueueIfSyncing('tier1_props', row.id, 'update', row)
-      }
-    })
+    enqueuePropDeltas(before, after)
     useCommandLogStore.getState().push({
       label: `remove value proposition "${removedName}"`,
       async undo() {
-        await dbRestore(db, projectId, id, orderedIds)
-        set({ props: await dbList(db, projectId) })
+        const beforeUndo = get().props
+        const restored = await dbRestore(db, projectId, id, orderedIds)
+        set({ props: restored })
+        // Issue 094 — reversal of the forward remove: revive the row (→ 'revive',
+        // un-tombstones the soft-deleted row) + re-open the sibling rank/sort gap
+        // (→ 'update' each moved sibling — those stayed live). A plain 'update'
+        // on the removed row can't clear deleted_at server-side — the 094 bug.
+        const revived = restored.find((p) => p.id === id)
+        if (revived) enqueueIfSyncing('tier1_props', revived.id, 'revive', revived)
+        enqueuePropDeltas(beforeUndo, restored)
       },
       async redo() {
-        set({ props: await dbRemove(db, projectId, id) })
+        const beforeRedo = get().props
+        const afterRedo = await dbRemove(db, projectId, id)
+        set({ props: afterRedo })
+        // Issue 094 — re-do the forward remove's enqueues.
+        if (removedRow) enqueueIfSyncing('tier1_props', id, 'delete', removedRow)
+        enqueuePropDeltas(beforeRedo, afterRedo)
       },
     })
   },

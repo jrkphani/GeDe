@@ -10,7 +10,7 @@ import {
 } from '../db/mutations'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
-import { enqueueIfSyncing, useSyncStore } from './sync'
+import { enqueueIfSyncing, enqueueSortDeltas, useSyncStore } from './sync'
 
 // Issue 075 Part B — the `useSyncStore.parametersAppliedAt` subscription
 // below (mirrors src/store/projects.ts's own module-level syncUnsubscribe
@@ -90,13 +90,25 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
       label: `add parameter "${row.name}"`,
       async undo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
-        await dbRemove(db, dimensionId, row.id)
-        set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+        const before = get().byDimension[dimensionId] ?? []
+        const after = await dbRemove(db, dimensionId, row.id)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: after } })
+        // Issue 094 — reversal of the forward add's 'upsert': soft-delete the
+        // row (→ 'delete') + close the sibling-sort gap (→ 'update' each moved).
+        enqueueIfSyncing('parameters', row.id, 'delete', row)
+        enqueueSortDeltas('parameters', before, after)
       },
       async redo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
-        await dbRestore(db, dimensionId, row.id, orderedIdsAfterAdd)
-        set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+        const before = get().byDimension[dimensionId] ?? []
+        const after = await dbRestore(db, dimensionId, row.id, orderedIdsAfterAdd)
+        set({ byDimension: { ...get().byDimension, [dimensionId]: after } })
+        // Issue 094 — redo re-inserts the row the undo tombstoned → 'revive'
+        // (un-tombstones server-side; a plain 'update' can't clear deleted_at,
+        // and an 'upsert' would `ON CONFLICT (id) DO NOTHING` — the 066-class no-op).
+        const restored = after.find((p) => p.id === row.id)
+        if (restored) enqueueIfSyncing('parameters', restored.id, 'revive', restored)
+        enqueueSortDeltas('parameters', before, after)
       },
     })
     return row
@@ -113,13 +125,16 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
       label: `rename parameter to "${name}"`,
       async undo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
-        await dbRename(db, id, previousName)
+        const reverted = await dbRename(db, id, previousName)
         set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+        // Issue 094 — an edit of an already-synced row → 'update'.
+        enqueueIfSyncing('parameters', reverted.id, 'update', reverted)
       },
       async redo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
-        await dbRename(db, id, name)
+        const reapplied = await dbRename(db, id, name)
         set({ byDimension: { ...get().byDimension, [dimensionId]: await dbList(db, dimensionId) } })
+        enqueueIfSyncing('parameters', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -136,22 +151,23 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
     // one dragged (db/mutations.ts's rewriteParameterSort). `rows` is already
     // in the new sort order, so each row's index IS its new sort — enqueue an
     // 'update' for every row whose previous sort disagrees with it.
-    const beforeById = new Map(before.map((p) => [p.id, p]))
-    rows.forEach((row, index) => {
-      const prevSort = beforeById.get(row.id)?.sort ?? -1
-      if (prevSort !== index) enqueueIfSyncing('parameters', row.id, 'update', row)
-    })
+    enqueueSortDeltas('parameters', before, rows)
     useCommandLogStore.getState().push({
       label: 'reorder parameter',
       async undo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const beforeUndo = get().byDimension[dimensionId] ?? []
         const reverted = await dbReorder(db, dimensionId, id, fromIndex)
         set({ byDimension: { ...get().byDimension, [dimensionId]: reverted } })
+        // Issue 094 — re-sort back; enqueue an 'update' per moved row.
+        enqueueSortDeltas('parameters', beforeUndo, reverted)
       },
       async redo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const beforeRedo = get().byDimension[dimensionId] ?? []
         const reapplied = await dbReorder(db, dimensionId, id, toIndex)
         set({ byDimension: { ...get().byDimension, [dimensionId]: reapplied } })
+        enqueueSortDeltas('parameters', beforeRedo, reapplied)
       },
     })
   },
@@ -169,22 +185,30 @@ export const useParametersStore = create<ParametersState>()((set, get) => ({
     // ALSO rewrites `sort` on every surviving sibling (Subtlety B, same
     // rewriteParameterSort cascade as reorder) — enqueue an 'update' for each.
     if (removedRow) enqueueIfSyncing('parameters', id, 'delete', removedRow)
-    const beforeById = new Map(before.map((p) => [p.id, p]))
-    rows.forEach((row, index) => {
-      const prevSort = beforeById.get(row.id)?.sort ?? -1
-      if (prevSort !== index) enqueueIfSyncing('parameters', row.id, 'update', row)
-    })
+    enqueueSortDeltas('parameters', before, rows)
     useCommandLogStore.getState().push({
       label: `remove parameter "${removedName}"`,
       async undo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const beforeUndo = get().byDimension[dimensionId] ?? []
         const restored = await dbRestore(db, dimensionId, id, orderedIds)
         set({ byDimension: { ...get().byDimension, [dimensionId]: restored } })
+        // Issue 094 — reversal of the forward remove: revive the row (→ 'revive',
+        // un-tombstones the soft-deleted row) + re-open the sibling-sort gap
+        // (→ 'update' each moved sibling — those stayed live). A plain 'update'
+        // on the removed row can't clear deleted_at server-side — the 094 bug.
+        const revived = restored.find((p) => p.id === id)
+        if (revived) enqueueIfSyncing('parameters', revived.id, 'revive', revived)
+        enqueueSortDeltas('parameters', beforeUndo, restored)
       },
       async redo() {
         set({ generation: { ...get().generation, [dimensionId]: (get().generation[dimensionId] ?? 0) + 1 } })
+        const beforeRedo = get().byDimension[dimensionId] ?? []
         const removed = await dbRemove(db, dimensionId, id)
         set({ byDimension: { ...get().byDimension, [dimensionId]: removed } })
+        // Issue 094 — re-do the forward remove's enqueues.
+        if (removedRow) enqueueIfSyncing('parameters', id, 'delete', removedRow)
+        enqueueSortDeltas('parameters', beforeRedo, removed)
       },
     })
   },

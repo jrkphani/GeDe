@@ -68,11 +68,12 @@ describe('canvases store — create / undo (issue 090 Phase 4b)', () => {
       .queue.entries.filter((e) => e.table === 'canvases' && e.op === 'delete')
     expect(deletes.map((e) => e.rowId)).toContain(row.id)
 
-    // redo restores + enqueues update (restore of an already-synced row)
+    // redo re-inserts the row the undo tombstoned → 'revive' (094: un-tombstones
+    // server-side; a plain 'update' can't clear deleted_at)
     await useCommandLogStore.getState().redo()
     expect(useCanvasesStore.getState().canvases.map((c) => c.name)).toEqual(['Canvas 1', 'Explorations'])
     expect(useSyncStore.getState().queue.entries).toContainEqual(
-      expect.objectContaining({ table: 'canvases', rowId: row.id, op: 'update' }),
+      expect.objectContaining({ table: 'canvases', rowId: row.id, op: 'revive' }),
     )
   })
 })
@@ -144,12 +145,13 @@ describe('canvases store — archive cascade + no-modal Undo (090)', () => {
     expect(del).toContainEqual(expect.objectContaining({ table: 'contexts', rowId: ctx.id }))
     expect(del.filter((e) => e.table === 'bindings')).toHaveLength(1)
 
-    // Run the announced Undo — restores the whole cascade and re-enqueues updates.
+    // Run the announced Undo — restores the whole cascade and re-enqueues
+    // revives (094: every cascade row was tombstoned; 'revive' un-tombstones).
     await must(useStatusStore.getState().action).run()
     expect((await listCanvases(db, projectId)).map((c) => c.id).sort()).toEqual([c1, c2].sort())
     expect(await listDimensions(db, projectId, c2)).toHaveLength(1)
 
-    const upd = useSyncStore.getState().queue.entries.filter((e) => e.op === 'update')
+    const upd = useSyncStore.getState().queue.entries.filter((e) => e.op === 'revive')
     expect(upd).toContainEqual(expect.objectContaining({ table: 'canvases', rowId: c2 }))
     expect(upd).toContainEqual(expect.objectContaining({ table: 'dimensions', rowId: dim.id }))
     expect(upd).toContainEqual(expect.objectContaining({ table: 'contexts', rowId: ctx.id }))

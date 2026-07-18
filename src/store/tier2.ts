@@ -36,7 +36,7 @@ import {
 import { subtreeIds } from '../domain/entryTree'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
-import { enqueueIfSyncing, useSyncStore } from './sync'
+import { enqueueIfSyncing, enqueueSortDeltas, useSyncStore } from './sync'
 import { useStatusStore } from './status'
 
 // Issue 075 Part B — the `useSyncStore.tier2AppliedAt` subscription below
@@ -92,6 +92,29 @@ function enqueueEntryRemoval(
   for (const row of after) {
     const prev = beforeById.get(row.id)
     if (prev && prev.sort !== row.sort) enqueueIfSyncing('tier2_entries', row.id, 'update', row)
+  }
+}
+
+// Issue 094 — the exact reversal of enqueueEntryRemoval: a restore un-tombstones
+// every entry in `restoredIds` (→ 'revive' — those rows were tombstoned, and a
+// plain 'update' can't clear deleted_at server-side) AND re-closes its siblings'
+// sort gap (→ 'update' for every surviving sibling whose sort actually moved —
+// those stayed live). `before` is the pre-restore set, so the restored ids are
+// absent from it — they enqueue via the `restored` branch as 'revive'.
+function enqueueEntryRestore(
+  before: readonly Tier2EntryRow[],
+  restoredIds: readonly string[],
+  after: readonly Tier2EntryRow[],
+): void {
+  const beforeById = new Map(before.map((e) => [e.id, e]))
+  const restored = new Set(restoredIds)
+  for (const row of after) {
+    const prev = beforeById.get(row.id)
+    if (restored.has(row.id)) {
+      enqueueIfSyncing('tier2_entries', row.id, 'revive', row)
+    } else if (prev && prev.sort !== row.sort) {
+      enqueueIfSyncing('tier2_entries', row.id, 'update', row)
+    }
   }
 }
 
@@ -267,10 +290,24 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: `add table "${name}"`,
         async undo() {
-          set({ tables: await dbRemoveTable(db(), projectId, row.id) })
+          const before = get().tables
+          const after = await dbRemoveTable(db(), projectId, row.id)
+          set({ tables: after })
+          // Issue 094 — reversal of the forward add's 'upsert': soft-delete the
+          // table (→ 'delete') + close the sibling-sort gap (→ 'update' each).
+          enqueueIfSyncing('tier2_tables', row.id, 'delete', row)
+          enqueueSortDeltas('tier2_tables', before, after)
         },
         async redo() {
-          set({ tables: await dbRestoreTable(db(), projectId, row.id, orderedIds) })
+          const before = get().tables
+          const after = await dbRestoreTable(db(), projectId, row.id, orderedIds)
+          set({ tables: after })
+          // Issue 094 — redo re-inserts the table the undo tombstoned → 'revive'
+          // (un-tombstones server-side; a plain 'update' can't clear deleted_at,
+          // and an 'upsert' would `ON CONFLICT (id) DO NOTHING` — the 066-class no-op).
+          const restored = after.find((t) => t.id === row.id)
+          if (restored) enqueueIfSyncing('tier2_tables', restored.id, 'revive', restored)
+          enqueueSortDeltas('tier2_tables', before, after)
         },
       })
       return row
@@ -287,12 +324,15 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: `rename table to "${name}"`,
         async undo() {
-          await dbRenameTable(db(), id, previous)
+          const reverted = await dbRenameTable(db(), id, previous)
           await reloadTables(projectId)
+          // Issue 094 — an edit of an already-synced row → 'update'.
+          enqueueIfSyncing('tier2_tables', reverted.id, 'update', reverted)
         },
         async redo() {
-          await dbRenameTable(db(), id, name)
+          const reapplied = await dbRenameTable(db(), id, name)
           await reloadTables(projectId)
+          enqueueIfSyncing('tier2_tables', reapplied.id, 'update', reapplied)
         },
       })
     },
@@ -314,18 +354,21 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       // drift never reaches the server. NOTHING but `sort` is persisted: the
       // node's `{x,y}` is a pure derived projection of `(tier, sort)`, never
       // written to the outbox (the load-bearing derived-positioning invariant).
-      const beforeById = new Map(before.map((t) => [t.id, t]))
-      after.forEach((row, index) => {
-        const prevSort = beforeById.get(row.id)?.sort ?? -1
-        if (prevSort !== index) enqueueIfSyncing('tier2_tables', row.id, 'update', row)
-      })
+      enqueueSortDeltas('tier2_tables', before, after)
       useCommandLogStore.getState().push({
         label: 'reorder table',
         async undo() {
-          set({ tables: await dbReorderTable(db(), projectId, id, fromIndex) })
+          const beforeUndo = get().tables
+          const afterUndo = await dbReorderTable(db(), projectId, id, fromIndex)
+          set({ tables: afterUndo })
+          // Issue 094 — re-sort back; enqueue an 'update' per moved row.
+          enqueueSortDeltas('tier2_tables', beforeUndo, afterUndo)
         },
         async redo() {
-          set({ tables: await dbReorderTable(db(), projectId, id, toIndex) })
+          const beforeRedo = get().tables
+          const afterRedo = await dbReorderTable(db(), projectId, id, toIndex)
+          set({ tables: afterRedo })
+          enqueueSortDeltas('tier2_tables', beforeRedo, afterRedo)
         },
       })
     },
@@ -351,12 +394,22 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: `add "${name}"`,
         async undo() {
-          await removeTier2EntrySubtree(db(), tableId, row.id)
-          await reloadEntries(tableId)
+          const before = get().entriesByTable[tableId] ?? []
+          const { entries: after, removedIds } = await removeTier2EntrySubtree(db(), tableId, row.id)
+          set({ entriesByTable: { ...get().entriesByTable, [tableId]: after } })
+          // Issue 094 — reversal of the forward add's 'upsert': tombstone the
+          // entry (→ 'delete') + close the sibling-sort gap (→ 'update').
+          enqueueEntryRemoval(before, removedIds, after)
         },
         async redo() {
-          await restoreTier2EntrySubtree(db(), tableId, [row.id])
-          await reloadEntries(tableId)
+          const before = get().entriesByTable[tableId] ?? []
+          const after = await restoreTier2EntrySubtree(db(), tableId, [row.id])
+          set({ entriesByTable: { ...get().entriesByTable, [tableId]: after } })
+          // Issue 094 — reversal of the forward add's 'upsert'/undo's 'delete':
+          // the undo tombstoned this entry, so redo resurrects it → 'revive'
+          // (enqueueEntryRestore emits 'revive' for restored ids; a plain
+          // 'update' can't clear deleted_at server-side).
+          enqueueEntryRestore(before, [row.id], after)
         },
       })
       return row
@@ -385,8 +438,14 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: `rename "${name}"`,
         async undo() {
-          await dbRenameEntry(db(), id, previous)
-          for (const p of prevParamNames) await renameParameter(db(), p.id, p.name)
+          const revertedEntry = await dbRenameEntry(db(), id, previous)
+          enqueueIfSyncing('tier2_entries', revertedEntry.id, 'update', revertedEntry)
+          // Issue 094 — invariant 7's rename propagation is edited back on every
+          // linked parameter too → 'update' each (mirrors the forward path).
+          for (const p of prevParamNames) {
+            const revertedParam = await renameParameter(db(), p.id, p.name)
+            enqueueIfSyncing('parameters', revertedParam.id, 'update', revertedParam)
+          }
           await reloadEntries(tableId)
           await refreshLinks(projectId)
           // Invariant 7 renamed the linked parameters — refresh the Design lane
@@ -394,8 +453,12 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
           if (prevParamNames.length > 0) refreshDesignLane()
         },
         async redo() {
-          await dbRenameEntry(db(), id, name)
-          for (const p of prevParamNames) await renameParameter(db(), p.id, name)
+          const renamedEntry = await dbRenameEntry(db(), id, name)
+          enqueueIfSyncing('tier2_entries', renamedEntry.id, 'update', renamedEntry)
+          for (const p of prevParamNames) {
+            const renamedParam = await renameParameter(db(), p.id, name)
+            enqueueIfSyncing('parameters', renamedParam.id, 'update', renamedParam)
+          }
           await reloadEntries(tableId)
           await refreshLinks(projectId)
           if (prevParamNames.length > 0) refreshDesignLane()
@@ -415,12 +478,15 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: 'edit description',
         async undo() {
-          await dbSetEntryDescription(db(), id, previous)
+          const reverted = await dbSetEntryDescription(db(), id, previous)
           await reloadEntries(tableId)
+          // Issue 094 — an edit of an already-synced row → 'update'.
+          enqueueIfSyncing('tier2_entries', reverted.id, 'update', reverted)
         },
         async redo() {
-          await dbSetEntryDescription(db(), id, description)
+          const reapplied = await dbSetEntryDescription(db(), id, description)
           await reloadEntries(tableId)
+          enqueueIfSyncing('tier2_entries', reapplied.id, 'update', reapplied)
         },
       })
     },
@@ -449,12 +515,19 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: 'delete entry',
         async undo() {
-          await restoreTier2EntrySubtree(db(), tableId, removedIds)
-          await reloadEntries(tableId)
+          const before = get().entriesByTable[tableId] ?? []
+          const afterUndo = await restoreTier2EntrySubtree(db(), tableId, removedIds)
+          set({ entriesByTable: { ...get().entriesByTable, [tableId]: afterUndo } })
+          // Issue 094 — reversal of the forward removal: revive the subtree
+          // (→ 'revive' each — enqueueEntryRestore emits 'revive' for restored
+          // ids) + re-open the sibling-sort gap (→ 'update' each moved sibling).
+          enqueueEntryRestore(before, removedIds, afterUndo)
         },
         async redo() {
-          await removeTier2EntrySubtree(db(), tableId, id)
-          await reloadEntries(tableId)
+          const before = get().entriesByTable[tableId] ?? []
+          const { entries: afterRedo, removedIds: redoRemovedIds } = await removeTier2EntrySubtree(db(), tableId, id)
+          set({ entriesByTable: { ...get().entriesByTable, [tableId]: afterRedo } })
+          enqueueEntryRemoval(before, redoRemovedIds, afterRedo)
         },
       })
       return { kind: 'removed' }
@@ -490,20 +563,37 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: 'unlink parameter, delete entry',
         async undo() {
-          await restoreTier2EntrySubtree(db(), tableId, removedIds)
+          const before = get().entriesByTable[tableId] ?? []
+          const afterUndo = await restoreTier2EntrySubtree(db(), tableId, removedIds)
           await relinkParameters(db(), priorLinks)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
           // The parameters were re-linked to their source entry — refresh the
           // Design lane so its 014 link glyphs reappear live (089 D2 / 092).
           refreshDesignLane()
+          // Issue 094 — reversal: revive the entry subtree (→ 'revive' each —
+          // enqueueEntryRestore emits 'revive' for restored ids) + re-link the
+          // parameters to their source entry (→ 'update'; the params stayed live
+          // through resolveKeep — only unlinked — so this is a field edit, and
+          // linkedParams carries the original sourceEntryId relinkParameters restored).
+          enqueueEntryRestore(before, removedIds, afterUndo)
+          const relinkedAt = new Date().toISOString()
+          for (const p of linkedParams) enqueueIfSyncing('parameters', p.id, 'update', { ...p, updatedAt: relinkedAt })
         },
         async redo() {
+          const before = get().entriesByTable[tableId] ?? []
           await unlinkParametersFromEntries(db(), paramIds)
-          await removeTier2EntrySubtree(db(), tableId, id)
+          const { entries: afterRedo, removedIds: redoRemovedIds } = await removeTier2EntrySubtree(db(), tableId, id)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
           refreshDesignLane()
+          // Issue 094 — re-do: unlink the parameters (→ 'update', sourceEntryId
+          // nulled) + remove the entry subtree (delete + sibling updates).
+          const unlinkedAt = new Date().toISOString()
+          for (const p of linkedParams) {
+            enqueueIfSyncing('parameters', p.id, 'update', { ...p, sourceEntryId: null, updatedAt: unlinkedAt })
+          }
+          enqueueEntryRemoval(before, redoRemovedIds, afterRedo)
         },
       })
     },
@@ -540,20 +630,43 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       useCommandLogStore.getState().push({
         label: 'delete parameter and entry',
         async undo() {
-          await restoreTier2EntrySubtree(db(), tableId, removedIds)
+          const before = get().entriesByTable[tableId] ?? []
+          const afterUndo = await restoreTier2EntrySubtree(db(), tableId, removedIds)
           await restoreParametersWithBindings(db(), del.removedParameters, del.deletedBindings)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
           // The parameters were restored — refresh the Design lane so they
           // reappear in its register live (089 D2 / 092).
           refreshDesignLane()
+          // Issue 094 — reversal: revive the entry subtree (via enqueueEntryRestore,
+          // which now emits 'revive' for the restored ids) + revive every
+          // soft-deleted parameter (→ 'revive', deleted_at cleared) + revive every
+          // hard-deleted-then-reinserted binding (→ 'revive'). All these rows were
+          // tombstoned server-side, and a plain 'update' can't clear deleted_at.
+          enqueueEntryRestore(before, removedIds, afterUndo)
+          const revivedAt = new Date().toISOString()
+          for (const p of linkedParams) {
+            enqueueIfSyncing('parameters', p.id, 'revive', { ...p, deletedAt: null, updatedAt: revivedAt })
+          }
+          for (const b of del.deletedBindings) {
+            enqueueIfSyncing('bindings', b.id, 'revive', { ...b, updatedAt: revivedAt })
+          }
         },
         async redo() {
+          const before = get().entriesByTable[tableId] ?? []
           await deleteParametersUnbinding(db(), paramIds)
-          await removeTier2EntrySubtree(db(), tableId, id)
+          const { entries: afterRedo, removedIds: redoRemovedIds } = await removeTier2EntrySubtree(db(), tableId, id)
           await reloadEntries(tableId)
           await refreshLinks(projectId)
           refreshDesignLane()
+          // Issue 094 — re-do: soft-delete the parameters (→ 'delete') +
+          // hard-delete their bindings (→ 'delete') + remove the entry subtree.
+          const deletedAt = new Date().toISOString()
+          for (const p of linkedParams) {
+            enqueueIfSyncing('parameters', p.id, 'delete', { ...p, deletedAt, updatedAt: deletedAt })
+          }
+          for (const b of del.deletedBindings) enqueueIfSyncing('bindings', b.id, 'delete', b)
+          enqueueEntryRemoval(before, redoRemovedIds, afterRedo)
         },
       })
     },
@@ -588,12 +701,22 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
           // — refresh the Design lane so they drop out of its register live
           // (089 D2 / 092).
           refreshDesignLane()
+          // Issue 094 — reversal of promote's upserts: tombstone every created
+          // row → 'delete'. Promote appended them at the tail (sort = prior
+          // length), so removing them moves no sibling — no sort deltas needed.
+          for (const p of outcome.createdParameters) enqueueIfSyncing('parameters', p.id, 'delete', p)
+          if (createdDim) enqueueIfSyncing('dimensions', createdDim.id, 'delete', createdDim)
         },
         async redo() {
           if (createdDim) await restoreDimension(db(), input.projectId, createdDim.id, afterDimIds)
           for (const pid of createdParamIds) await restoreParameter(db(), target, pid, afterParamIds)
           await refreshLinks(input.projectId)
           refreshDesignLane()
+          // Issue 094 — redo re-inserts the rows the undo tombstoned → 'revive'
+          // (un-tombstones server-side; a plain 'update' can't clear deleted_at,
+          // and an 'upsert' would `ON CONFLICT (id) DO NOTHING` — the 066-class no-op).
+          if (createdDim) enqueueIfSyncing('dimensions', createdDim.id, 'revive', createdDim)
+          for (const p of outcome.createdParameters) enqueueIfSyncing('parameters', p.id, 'revive', p)
         },
       })
       return outcome

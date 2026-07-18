@@ -157,7 +157,7 @@ describe('contexts store — child canvas sync enqueue (issue 073 pt2)', () => {
     expect(bindingDeletes).toHaveLength(1)
   })
 
-  it('revertStale enqueues an update for the reverted dimensions row + an update for each restored binding', async () => {
+  it('revertStale enqueues an update for the reverted dimensions row + a revive for each restored binding', async () => {
     await useContextsStore.getState().openChildCanvas(alphaId)
     const alphaCanvasId = must(await resolveReadCanvasId(db, projectId, alphaId), 'alpha child canvas')
     await useDimensionsStore.getState().load(projectId, alphaCanvasId, true)
@@ -179,11 +179,19 @@ describe('contexts store — child canvas sync enqueue (issue 073 pt2)', () => {
     await useContextsStore.getState().revertStale(event)
 
     const queued = useSyncStore.getState().queue.entries
+    // The child dimension's sourceParamId/name revert is a field edit of a row
+    // that stayed live → 'update'.
     expect(queued).toContainEqual(
       expect.objectContaining({ table: 'dimensions', rowId: usersDim.id, op: 'update' }),
     )
-    const bindingUpdates = queued.filter((e) => e.table === 'bindings' && e.op === 'update')
-    expect(bindingUpdates).toHaveLength(1)
-    expect(bindingUpdates[0]?.rowId).toBe(event.retiredBindings[0]?.id)
+    // Issue 094 — the retired sub-bindings were tombstoned server-side by
+    // openChildCanvas's wire 'delete'; revertStale's re-insert must resurrect
+    // them → 'revive' (a plain 'update' can't clear deleted_at, and checkTenancy
+    // rejects a tombstoned target as unknown_entity).
+    const bindingRevives = queued.filter((e) => e.table === 'bindings' && e.op === 'revive')
+    expect(bindingRevives).toHaveLength(1)
+    expect(bindingRevives[0]?.rowId).toBe(event.retiredBindings[0]?.id)
+    // And never a plain 'update' for a binding on this revert (the pre-094 bug).
+    expect(queued.some((e) => e.table === 'bindings' && e.op === 'update')).toBe(false)
   })
 })

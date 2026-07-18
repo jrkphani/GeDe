@@ -15,7 +15,7 @@ import {
 import { useCommandLogStore } from './commandLog'
 import { requireDatabase } from './database'
 import { useStatusStore } from './status'
-import { enqueueIfSyncing, useSyncStore } from './sync'
+import { enqueueIfSyncing, enqueueSortDeltas, useSyncStore } from './sync'
 
 // Issue 090 Phase 4b — the root-canvas switcher's store, the sibling of
 // contexts.ts/projects.ts. A project holds N root canvases in a Design lane
@@ -113,9 +113,10 @@ export const useCanvasesStore = create<CanvasesState>()((set, get) => ({
         set({ generation: get().generation + 1 })
         const restored = await dbRestoreCanvas(db, row.id)
         set({ canvases: await dbListCanvases(db, projectId), selectedCanvasId: restored.id })
-        // Restore of an already-synced row clears deleted_at → 'update', never
-        // 'upsert' (the 066-class no-op the op-selection rule warns about).
-        enqueueIfSyncing('canvases', restored.id, 'update', restored)
+        // Issue 094 — redo re-inserts a row the undo tombstoned. A plain
+        // 'update' can't clear deleted_at server-side, so this resurrection is a
+        // 'revive' (un-tombstones, or inserts live if absent), never 'update'.
+        enqueueIfSyncing('canvases', restored.id, 'revive', restored)
       },
     })
     return row
@@ -134,13 +135,16 @@ export const useCanvasesStore = create<CanvasesState>()((set, get) => ({
       label: `rename canvas to "${name}"`,
       async undo() {
         set({ generation: get().generation + 1 })
-        await dbRenameCanvas(db, id, previousName)
+        const reverted = await dbRenameCanvas(db, id, previousName)
         set({ canvases: await dbListCanvases(db, projectId) })
+        // Issue 094 — an edit of an already-synced row → 'update'.
+        enqueueIfSyncing('canvases', reverted.id, 'update', reverted)
       },
       async redo() {
         set({ generation: get().generation + 1 })
-        await dbRenameCanvas(db, id, name)
+        const reapplied = await dbRenameCanvas(db, id, name)
         set({ canvases: await dbListCanvases(db, projectId) })
+        enqueueIfSyncing('canvases', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -157,20 +161,23 @@ export const useCanvasesStore = create<CanvasesState>()((set, get) => ({
     // reorderCanvas rewrites `sort` on every sibling that actually moved (same
     // rewriteSort cascade as reorderDimension) — enqueue an 'update' for each
     // row whose previous sort disagrees with its new index (issue 073).
-    const beforeById = new Map(before.map((c) => [c.id, c]))
-    after.forEach((row, index) => {
-      const prevSort = beforeById.get(row.id)?.sort ?? -1
-      if (prevSort !== index) enqueueIfSyncing('canvases', row.id, 'update', row)
-    })
+    enqueueSortDeltas('canvases', before, after)
     useCommandLogStore.getState().push({
       label: 'reorder canvas',
       async undo() {
         set({ generation: get().generation + 1 })
-        set({ canvases: await dbReorderCanvas(db, projectId, id, fromIndex) })
+        const beforeUndo = get().canvases
+        const afterUndo = await dbReorderCanvas(db, projectId, id, fromIndex)
+        set({ canvases: afterUndo })
+        // Issue 094 — re-sort back; enqueue an 'update' per moved row.
+        enqueueSortDeltas('canvases', beforeUndo, afterUndo)
       },
       async redo() {
         set({ generation: get().generation + 1 })
-        set({ canvases: await dbReorderCanvas(db, projectId, id, toIndex) })
+        const beforeRedo = get().canvases
+        const afterRedo = await dbReorderCanvas(db, projectId, id, toIndex)
+        set({ canvases: afterRedo })
+        enqueueSortDeltas('canvases', beforeRedo, afterRedo)
       },
     })
   },
@@ -206,8 +213,10 @@ export const useCanvasesStore = create<CanvasesState>()((set, get) => ({
         const restored = await restoreCanvasCascade(db, captured)
         const rows = await dbListCanvases(db, projectId)
         set({ canvases: rows, selectedCanvasId: restored.canvas.id })
-        // Restore revives already-synced rows → 'update' per row.
-        enqueueCascade(restored, 'update')
+        // Issue 094 — undo of the cascade delete un-tombstones the canvas AND
+        // every row on it → 'revive' per row (a plain 'update' can't clear
+        // deleted_at server-side).
+        enqueueCascade(restored, 'revive')
       },
       async redo() {
         set({ generation: get().generation + 1 })
@@ -228,8 +237,9 @@ export const useCanvasesStore = create<CanvasesState>()((set, get) => ({
 
 // Enqueue the same sync op for every row a cascade touched — the canvas itself
 // plus its dimensions, contexts, and bindings (verbatim rows from the cascade
-// result). 'delete' on archive, 'update' on restore (issue 073).
-function enqueueCascade(result: CanvasCascadeResult, op: 'delete' | 'update'): void {
+// result). 'delete' on archive; 'revive' on restore (094 — un-tombstones every
+// row, since a plain 'update' can't clear deleted_at server-side).
+function enqueueCascade(result: CanvasCascadeResult, op: 'delete' | 'revive'): void {
   enqueueIfSyncing('canvases', result.canvas.id, op, result.canvas)
   for (const d of result.dimensions) enqueueIfSyncing('dimensions', d.id, op, d)
   for (const c of result.contexts) enqueueIfSyncing('contexts', c.id, op, c)

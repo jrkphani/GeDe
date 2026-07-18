@@ -16,7 +16,7 @@ import {
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { useContextsStore } from './contexts'
-import { enqueueIfSyncing, useSyncStore } from './sync'
+import { enqueueIfSyncing, enqueueSortDeltas, useSyncStore } from './sync'
 
 // Root-canvas dimensions for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
@@ -133,12 +133,33 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
         // Bypasses the n=2 floor deliberately — see undoAddDimension's doc.
         // Scoped to this canvas (090 Phase 4c) so the sibling-sort rewrite
         // touches only this canvas's rows.
-        await undoAddDimension(db, projectId, row.id, canvasId ?? undefined)
-        set({ dimensions: await dbList(db, projectId, canvasId) })
+        const before = get().dimensions
+        const { dimensions: after, deletedBindings } = await undoAddDimension(
+          db,
+          projectId,
+          row.id,
+          canvasId ?? undefined,
+        )
+        set({ dimensions: after })
+        // Issue 094 — the reversal of the forward add's 'upsert': the row is
+        // soft-deleted (→ 'delete') and its siblings' sort may close the gap
+        // (→ 'update' each moved row). A tail-appended add leaves siblings put,
+        // so enqueueSortDeltas usually emits nothing — but mirror it precisely.
+        enqueueIfSyncing('dimensions', row.id, 'delete', row)
+        enqueueSortDeltas('dimensions', before, after)
+        for (const b of deletedBindings) enqueueIfSyncing('bindings', b.id, 'delete', b)
       },
       async redo() {
-        await dbRestore(db, projectId, row.id, orderedIdsAfterAdd, [], canvasId ?? undefined)
-        set({ dimensions: await dbList(db, projectId, canvasId) })
+        const before = get().dimensions
+        const after = await dbRestore(db, projectId, row.id, orderedIdsAfterAdd, [], canvasId ?? undefined)
+        set({ dimensions: after })
+        // Issue 094 — redo re-inserts the row the undo tombstoned → 'revive'
+        // (un-tombstones server-side; a plain 'update' can't clear deleted_at,
+        // and an 'upsert' would `ON CONFLICT (id) DO NOTHING` — the 066-class
+        // no-op). Mirrors canvases.ts's create-redo.
+        const restored = after.find((d) => d.id === row.id)
+        if (restored) enqueueIfSyncing('dimensions', restored.id, 'revive', restored)
+        enqueueSortDeltas('dimensions', before, after)
       },
     })
     return row
@@ -155,12 +176,16 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: `rename dimension to "${name}"`,
       async undo() {
-        await dbRename(db, id, previousName)
+        const reverted = await dbRename(db, id, previousName)
         set({ dimensions: await dbList(db, projectId, canvasId) })
+        // Issue 094 — an edit of an already-synced row → 'update' (mirrors the
+        // forward rename's own enqueue).
+        enqueueIfSyncing('dimensions', reverted.id, 'update', reverted)
       },
       async redo() {
-        await dbRename(db, id, name)
+        const reapplied = await dbRename(db, id, name)
         set({ dimensions: await dbList(db, projectId, canvasId) })
+        enqueueIfSyncing('dimensions', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -176,12 +201,15 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: 'recolor dimension',
       async undo() {
-        await dbSetColor(db, id, previousColor)
+        const reverted = await dbSetColor(db, id, previousColor)
         set({ dimensions: await dbList(db, projectId, canvasId) })
+        // Issue 094 — an edit of an already-synced row → 'update'.
+        enqueueIfSyncing('dimensions', reverted.id, 'update', reverted)
       },
       async redo() {
-        await dbSetColor(db, id, color)
+        const reapplied = await dbSetColor(db, id, color)
         set({ dimensions: await dbList(db, projectId, canvasId) })
+        enqueueIfSyncing('dimensions', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -200,18 +228,22 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
     // sort order, so each row's index IS its new sort — enqueue an 'update'
     // for every row whose previous sort disagrees with it, else sibling drift
     // never reaches the server.
-    const beforeById = new Map(before.map((d) => [d.id, d]))
-    after.forEach((row, index) => {
-      const prevSort = beforeById.get(row.id)?.sort ?? -1
-      if (prevSort !== index) enqueueIfSyncing('dimensions', row.id, 'update', row)
-    })
+    enqueueSortDeltas('dimensions', before, after)
     useCommandLogStore.getState().push({
       label: 'reorder dimension',
       async undo() {
-        set({ dimensions: await dbReorder(db, projectId, id, fromIndex, canvasId ?? undefined) })
+        const beforeUndo = get().dimensions
+        const afterUndo = await dbReorder(db, projectId, id, fromIndex, canvasId ?? undefined)
+        set({ dimensions: afterUndo })
+        // Issue 094 — the reversal re-sorts the lane back; enqueue an 'update'
+        // for every row whose sort actually moved (same cascade as forward).
+        enqueueSortDeltas('dimensions', beforeUndo, afterUndo)
       },
       async redo() {
-        set({ dimensions: await dbReorder(db, projectId, id, toIndex, canvasId ?? undefined) })
+        const beforeRedo = get().dimensions
+        const afterRedo = await dbReorder(db, projectId, id, toIndex, canvasId ?? undefined)
+        set({ dimensions: afterRedo })
+        enqueueSortDeltas('dimensions', beforeRedo, afterRedo)
       },
     })
   },
@@ -233,24 +265,40 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
       // binding that pointed at this dimension — enqueue all three, not just
       // the delete the user directly triggered.
       if (removedRow) enqueueIfSyncing('dimensions', id, 'delete', removedRow)
-      const beforeById = new Map(before.map((d) => [d.id, d]))
-      after.forEach((row, index) => {
-        const prevSort = beforeById.get(row.id)?.sort ?? -1
-        if (prevSort !== index) enqueueIfSyncing('dimensions', row.id, 'update', row)
-      })
+      enqueueSortDeltas('dimensions', before, after)
       for (const b of deletedBindings) enqueueIfSyncing('bindings', b.id, 'delete', b)
       await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
       useCommandLogStore.getState().push({
         label: `remove dimension "${removedName}"`,
         async undo() {
+          const beforeUndo = get().dimensions
           const restored = await dbRestore(db, projectId, id, orderedIds, deletedBindings, canvasId ?? undefined)
           set({ dimensions: restored })
           await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
+          // Issue 094 — the exact reversal of the forward remove's three
+          // enqueues: revive the dimension (→ 'revive', un-tombstones the
+          // soft-deleted row), re-open the sibling-sort gap (→ 'update' each
+          // moved row — those stayed live), and revive every cascade-tombstoned
+          // binding (→ 'revive'; restoreDimension rewrote parameterId from the
+          // captured row, so `b.parameterId` is the live value). A plain
+          // 'update' can't clear deleted_at server-side — the 094 bug.
+          const revived = restored.find((d) => d.id === id)
+          if (revived) enqueueIfSyncing('dimensions', revived.id, 'revive', revived)
+          enqueueSortDeltas('dimensions', beforeUndo, restored)
+          const revivedAt = new Date().toISOString()
+          for (const b of deletedBindings) {
+            enqueueIfSyncing('bindings', b.id, 'revive', { ...b, deletedAt: null, updatedAt: revivedAt })
+          }
         },
         async redo() {
+          const beforeRedo = get().dimensions
           const result = await dbRemove(db, projectId, id, canvasId ?? undefined)
           set({ dimensions: result.dimensions })
           await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(result.deletedBindings))
+          // Issue 094 — re-do the forward remove's three enqueues verbatim.
+          if (removedRow) enqueueIfSyncing('dimensions', id, 'delete', removedRow)
+          enqueueSortDeltas('dimensions', beforeRedo, result.dimensions)
+          for (const b of result.deletedBindings) enqueueIfSyncing('bindings', b.id, 'delete', b)
         },
       })
       return { ok: true }

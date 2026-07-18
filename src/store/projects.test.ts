@@ -199,7 +199,7 @@ describe('projects store — sync enqueue (issue 073 pt2)', () => {
     expect(queued[0]).toMatchObject({ table: 'projects', rowId: id, op: 'delete', status: 'pending' })
   })
 
-  it('restoreArchivedProject enqueues a projects update carrying deletedAt: null', async () => {
+  it('restoreArchivedProject enqueues a projects revive carrying deletedAt: null', async () => {
     await useProjectsStore.getState().createProject('Tavalo')
     const id = useProjectsStore.getState().projects[0]?.id as string
     await useProjectsStore.getState().archiveProject(id)
@@ -210,7 +210,9 @@ describe('projects store — sync enqueue (issue 073 pt2)', () => {
 
     const queued = useSyncStore.getState().queue.entries
     expect(queued).toHaveLength(1)
-    expect(queued[0]).toMatchObject({ table: 'projects', rowId: id, op: 'update', status: 'pending' })
+    // Issue 094 — un-tombstoning a soft-deleted row is a 'revive', not 'update'
+    // (a plain 'update' can't clear deleted_at server-side; the 070 cloud bug).
+    expect(queued[0]).toMatchObject({ table: 'projects', rowId: id, op: 'revive', status: 'pending' })
     expect((queued[0]?.row as { deletedAt: string | null }).deletedAt).toBeNull()
   })
 })

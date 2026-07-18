@@ -200,12 +200,19 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
       useCommandLogStore.getState().push({
         label: `create project "${row.name}"`,
         async undo() {
-          await dbArchive(db, row.id)
+          const archived = await dbArchive(db, row.id)
           set({ projects: await dbList(db) })
+          // Issue 094 — reversal of create's insert is a tombstone → 'delete'.
+          // Gated on a sync workspace (enqueueIfSyncing), matching the forward
+          // enqueueLocalMutation above.
+          enqueueIfSyncing('projects', archived.id, 'delete', archived)
         },
         async redo() {
-          await dbRestore(db, row.id)
+          const restored = await dbRestore(db, row.id)
           set({ projects: await dbList(db) })
+          // Issue 094 — redo re-inserts the row the undo tombstoned → 'revive'
+          // (un-tombstones server-side; a plain 'update' can't clear deleted_at).
+          enqueueIfSyncing('projects', restored.id, 'revive', restored)
         },
       })
     })()
@@ -230,12 +237,15 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: `rename project to "${name}"`,
       async undo() {
-        await dbRename(db, id, previousName)
+        const reverted = await dbRename(db, id, previousName)
         set({ projects: await dbList(db) })
+        // Issue 094 — an edit of an already-synced row → 'update'.
+        enqueueIfSyncing('projects', reverted.id, 'update', reverted)
       },
       async redo() {
-        await dbRename(db, id, name)
+        const reapplied = await dbRename(db, id, name)
         set({ projects: await dbList(db) })
+        enqueueIfSyncing('projects', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -250,12 +260,16 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     useCommandLogStore.getState().push({
       label: `archive "${row.name}"`,
       async undo() {
-        await dbRestore(db, id)
+        const restored = await dbRestore(db, id)
         set({ projects: await dbList(db) })
+        // Issue 094 — reversal of archive's 'delete' resurrects the tombstoned
+        // row → 'revive' (a plain 'update' can't clear deleted_at server-side).
+        enqueueIfSyncing('projects', restored.id, 'revive', restored)
       },
       async redo() {
-        await dbArchive(db, id)
+        const archived = await dbArchive(db, id)
         set({ projects: get().projects.filter((p) => p.id !== id) })
+        enqueueIfSyncing('projects', archived.id, 'delete', archived)
       },
     })
   },
@@ -275,18 +289,24 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     if (!db) return
     const row = await dbRestore(db, id)
     set({ projects: await dbList(db), archivedProjects: await dbListArchived(db) })
-    // Issue 073 — restoreProject clears deleted_at on an already-synced row:
-    // 'update' (row.deletedAt is already null here, dbRestore's own set()).
-    enqueueIfSyncing('projects', row.id, 'update', row)
+    // Issue 094 (was 073) — restoreArchivedProject un-tombstones a soft-deleted
+    // row → 'revive'. This is the 070 cloud-restore bug: a plain 'update' can't
+    // clear deleted_at server-side, so the restore never reached the server and
+    // the streamed tombstone clobbered the local un-archive on reload.
+    enqueueIfSyncing('projects', row.id, 'revive', row)
     useCommandLogStore.getState().push({
       label: `restore "${row.name}"`,
       async undo() {
-        await dbArchive(db, id)
+        const archived = await dbArchive(db, id)
         set({ projects: await dbList(db), archivedProjects: await dbListArchived(db) })
+        // Issue 094 — reversal of restore's 'update' is a tombstone → 'delete'.
+        enqueueIfSyncing('projects', archived.id, 'delete', archived)
       },
       async redo() {
-        await dbRestore(db, id)
+        const restored = await dbRestore(db, id)
         set({ projects: await dbList(db), archivedProjects: await dbListArchived(db) })
+        // Issue 094 — redo re-restores the tombstoned row → 'revive'.
+        enqueueIfSyncing('projects', restored.id, 'revive', restored)
       },
     })
   },

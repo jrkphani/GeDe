@@ -204,7 +204,7 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     // A stale rebind hard-deletes the child's retired sub-bindings locally
     // (db.delete, not a tombstone — db/mutations.ts's own openChildCanvas) —
     // enqueue 'delete' so the server marks the same rows gone; revertStale's
-    // own 'update' (below) is the one path that ever revives them.
+    // own 'revive' (below) is the one path that ever un-tombstones them.
     for (const event of stale) {
       for (const b of event.retiredBindings) {
         enqueueIfSyncing('bindings', b.id, 'delete', b)
@@ -222,11 +222,15 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const contexts = await rawListContexts(db, projectId, canvasId)
     const bindingsByContext = await fetchBindingsMap(db, contexts.map((c) => c.id))
     set({ contexts, bindingsByContext })
-    // Issue 073 pt1 — re-syncs the sub-bindings this banner's Undo re-inserts
-    // (event.retiredBindings — previously-existing rows, so 'update', not
-    // 'upsert').
+    // Issue 073 pt1 / 094 — re-syncs the sub-bindings this banner's Undo
+    // re-inserts (event.retiredBindings). openChildCanvas tombstoned these rows
+    // server-side via a wire 'delete' (they pointed at the retired
+    // sub-parameter), so resurrecting them is a 'revive', NOT an 'update': a
+    // plain 'update' can't clear deleted_at server-side and checkTenancy rejects
+    // a tombstoned target as unknown_entity — the 094 bug (the re-insert would
+    // be silently dropped).
     for (const b of event.retiredBindings) {
-      enqueueIfSyncing('bindings', b.id, 'update', b)
+      enqueueIfSyncing('bindings', b.id, 'revive', b)
     }
     // Issue 073 pt2 — the OTHER half of the pair pt1 flagged as unwired:
     // revertStaleRebind ALSO reverts the child dimension's own
@@ -308,16 +312,22 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
       label: `create context ${row.symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
-        await dbArchive(db, row.id)
+        const archived = await dbArchive(db, row.id)
         set({ contexts: await rawListContexts(db, projectId, canvasId) })
+        // Issue 094 — reversal of the forward create's 'upsert' is a tombstone
+        // → 'delete'.
+        enqueueIfSyncing('contexts', archived.id, 'delete', archived)
       },
       async redo() {
         set({ generation: get().generation + 1 })
-        await dbRestore(db, row.id)
+        const restored = await dbRestore(db, row.id)
         set({
           contexts: await rawListContexts(db, projectId, canvasId),
           bindingsByContext: { ...get().bindingsByContext, [row.id]: get().bindingsByContext[row.id] ?? {} },
         })
+        // Issue 094 — redo re-inserts the row the undo tombstoned → 'revive'
+        // (un-tombstones server-side; a plain 'update' can't clear deleted_at).
+        enqueueIfSyncing('contexts', restored.id, 'revive', restored)
       },
     })
     return row
@@ -336,13 +346,17 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
       label: `discard draft ${symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
-        await dbRestore(db, id)
+        const restored = await dbRestore(db, id)
         set({ contexts: await rawListContexts(db, projectId, canvasId) })
+        // Issue 094 — reversal of discard's forward 'delete' resurrects the
+        // tombstoned row → 'revive' (a plain 'update' can't clear deleted_at).
+        enqueueIfSyncing('contexts', restored.id, 'revive', restored)
       },
       async redo() {
         set({ generation: get().generation + 1 })
-        await dbArchive(db, id)
+        const archived = await dbArchive(db, id)
         set({ contexts: await rawListContexts(db, projectId, canvasId), selectedContextId: null })
+        enqueueIfSyncing('contexts', archived.id, 'delete', archived)
       },
     })
   },
@@ -361,13 +375,16 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
         label: `rename ${previousSymbol} to ${symbol}`,
         async undo() {
           set({ generation: get().generation + 1 })
-          await dbSetSymbol(db, projectId, id, previousSymbol)
+          const reverted = await dbSetSymbol(db, projectId, id, previousSymbol)
           set({ contexts: await rawListContexts(db, projectId, canvasId) })
+          // Issue 094 — an edit of an already-synced row → 'update'.
+          enqueueIfSyncing('contexts', reverted.id, 'update', reverted)
         },
         async redo() {
           set({ generation: get().generation + 1 })
-          await dbSetSymbol(db, projectId, id, symbol)
+          const reapplied = await dbSetSymbol(db, projectId, id, symbol)
           set({ contexts: await rawListContexts(db, projectId, canvasId) })
+          enqueueIfSyncing('contexts', reapplied.id, 'update', reapplied)
         },
       })
       return { ok: true }
@@ -391,13 +408,16 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
       label: `edit justification for ${symbol}`,
       async undo() {
         set({ generation: get().generation + 1 })
-        await dbSetJustification(db, id, previousText)
+        const reverted = await dbSetJustification(db, id, previousText)
         set({ contexts: await rawListContexts(db, projectId, canvasId) })
+        // Issue 094 — an edit of an already-synced row → 'update'.
+        enqueueIfSyncing('contexts', reverted.id, 'update', reverted)
       },
       async redo() {
         set({ generation: get().generation + 1 })
-        await dbSetJustification(db, id, text)
+        const reapplied = await dbSetJustification(db, id, text)
         set({ contexts: await rawListContexts(db, projectId, canvasId) })
+        enqueueIfSyncing('contexts', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -428,6 +448,13 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
       label: 'bind parameter',
       async undo() {
         set({ generation: get().generation + 1 })
+        // Issue 094 — when the forward bind created a brand-new binding (no
+        // prior parameter), its reversal tombstones that row; dbUnbind returns
+        // the live set (which excludes it), so read the row back FIRST for the
+        // 'delete' payload (mirrors the forward unbind's own read-back).
+        const removedTarget = previousParameterId
+          ? null
+          : (await dbListBindings(db, contextId)).find((r) => r.dimensionId === dimensionId)
         const restored = previousParameterId
           ? await dbBind(db, contextId, dimensionId, previousParameterId)
           : await dbUnbind(db, contextId, dimensionId)
@@ -437,6 +464,14 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
             [contextId]: Object.fromEntries(restored.map((r) => [r.dimensionId, r.parameterId])),
           },
         })
+        if (previousParameterId) {
+          // Re-bound the prior parameter on the SAME natural-key row (already
+          // server-seen) → 'update'.
+          const bindingRow = restored.find((r) => r.dimensionId === dimensionId)
+          if (bindingRow) enqueueIfSyncing('bindings', bindingRow.id, 'update', bindingRow)
+        } else if (removedTarget) {
+          enqueueIfSyncing('bindings', removedTarget.id, 'delete', removedTarget)
+        }
       },
       async redo() {
         set({ generation: get().generation + 1 })
@@ -447,6 +482,17 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
             [contextId]: Object.fromEntries(reapplied.map((r) => [r.dimensionId, r.parameterId])),
           },
         })
+        // Issue 094 — redo re-binds `parameterId` on the SAME natural-key row.
+        // When the forward bind created a BRAND-NEW binding (previousParameterId
+        // === null), the undo tombstoned that row, so redo must RESURRECT it →
+        // 'revive' (a plain 'update' can't clear deleted_at server-side, and an
+        // 'upsert' would `ON CONFLICT (id) DO NOTHING` — the 066-class no-op).
+        // When the forward bind was a REBIND (previousParameterId !== null), the
+        // row stayed live throughout, so redo is a plain field edit → 'update'.
+        const bindingRow = reapplied.find((r) => r.dimensionId === dimensionId)
+        if (bindingRow) {
+          enqueueIfSyncing('bindings', bindingRow.id, previousParameterId === null ? 'revive' : 'update', bindingRow)
+        }
       },
     })
   },
@@ -479,9 +525,18 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
             [contextId]: Object.fromEntries(restored.map((r) => [r.dimensionId, r.parameterId])),
           },
         })
+        // Issue 094 — reversal of unbind's 'delete' resurrects the SAME
+        // natural-key row (tombstoned by the forward unbind) → 'revive' (a plain
+        // 'update' can't clear deleted_at server-side).
+        const bindingRow = restored.find((r) => r.dimensionId === dimensionId)
+        if (bindingRow) enqueueIfSyncing('bindings', bindingRow.id, 'revive', bindingRow)
       },
       async redo() {
         set({ generation: get().generation + 1 })
+        // Issue 094 — dbUnbind tombstones then returns the live set (excluding
+        // the row), so read it back FIRST for the 'delete' payload (mirrors the
+        // forward unbind).
+        const target = (await dbListBindings(db, contextId)).find((r) => r.dimensionId === dimensionId)
         const reapplied = await dbUnbind(db, contextId, dimensionId)
         set({
           bindingsByContext: {
@@ -489,6 +544,7 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
             [contextId]: Object.fromEntries(reapplied.map((r) => [r.dimensionId, r.parameterId])),
           },
         })
+        if (target) enqueueIfSyncing('bindings', target.id, 'delete', target)
       },
     })
   },

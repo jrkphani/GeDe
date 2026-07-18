@@ -72,6 +72,7 @@ const TABLE_TO_MUTATION_TABLE: Readonly<Record<TableName, MutationTable>> = {
 function toMutationOp(op: QueuedMutation['op']): MutationEnvelope['op'] {
   if (op === 'delete') return 'delete'
   if (op === 'update') return 'update'
+  if (op === 'revive') return 'revive'
   return 'insert'
 }
 

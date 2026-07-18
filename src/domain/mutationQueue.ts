@@ -24,7 +24,12 @@ import type { RowDelta, TableName } from './syncDelta'
 // (still maps to 'insert') for every pre-066 producer (invite/changeRole/
 // removeMember/acceptInvitation) — see that module's own KNOWN LIMITATION
 // note for the pre-existing producers this doesn't retroactively fix.
-export type MutationOp = 'upsert' | 'update' | 'delete'
+// 094 adds 'revive': a reversal that RESURRECTS a soft-deleted row (undo of a
+// remove/delete/archive, redo of an add, restoreArchivedProject). A plain
+// 'update' can't clear deleted_at server-side, so those reversals were silently
+// broken until the server gained its own 'revive' op (Phase 1, f77d69a);
+// toMutationOp in writeTransport maps this straight through to the wire 'revive'.
+export type MutationOp = 'upsert' | 'update' | 'delete' | 'revive'
 
 export interface QueuedMutation {
   // UUIDv7 — the 043 replay protocol's idempotency key. Re-enqueuing the same
