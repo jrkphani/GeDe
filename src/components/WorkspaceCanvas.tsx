@@ -8,7 +8,6 @@ import {
   useReactFlow,
   type Node,
   type NodeProps,
-  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { computeLaneLayout, LANE_ORDER, type LaneLayoutConfig, type LaneTier } from '../domain/laneLayout'
@@ -17,6 +16,17 @@ import type { AppRoute, DesignView } from '../shell/routes'
 import { ArchitectureSurface } from './ArchitectureSurface'
 import { DesignSurface } from './DesignSurface'
 import { FoundationSurface } from './FoundationSurface'
+// The ⌘1/2/3 pan-to-lane interceptor + its module-level `activeCanvasInstance`
+// handle live in this tiny, `@xyflow/react`-free module so App.tsx can import
+// THEM eagerly (register the listener before AppShell) while `React.lazy`-loading
+// this heavy canvas — keeping React Flow's JS AND its stylesheet out of prod.
+import {
+  clearActiveCanvasInstance,
+  LANE_NODE_ID,
+  prefersReducedMotion,
+  setActiveCanvasInstance,
+  type CanvasNavInstance,
+} from './d3CanvasNav'
 
 // 089-D3 P2 — three lanes on one canvas. P1 mounted ONE real node (DesignSurface)
 // on the React Flow viewport shell (`@xyflow/react`, the substrate the owner
@@ -69,78 +79,17 @@ const LANE_LABEL: Record<LaneTier, string> = {
 // function of its tier index (LANE_ORDER).
 const LANE_CONFIG: LaneLayoutConfig = { laneWidth: 960, laneGap: 48, nodeGap: 24 }
 
-const LANE_NODE_ID: Record<LaneTier, string> = {
-  foundation: 'workspace-canvas-foundation-lane',
-  architecture: 'workspace-canvas-architecture-lane',
-  design: 'workspace-canvas-design-lane',
-}
+// ⌘1/2/3 lane ids + the pan-to-lane interceptor now live in `./d3CanvasNav`
+// (imported above) — the eager, React-Flow-free module. `LANE_NODE_ID` is reused
+// here to id each lane node; the interceptor's `LANE_FIT_PADDING` /
+// `LANE_JUMP_DURATION` / `DIGIT_TO_TIER` moved with it.
 
-// 089-D3 P4 (nav layer) — ⌘1/2/3 maps to a lane, exactly as AppShell's global
-// route-navigate does (Digit1→foundation, Digit2→architecture, Digit3→design).
-// On the canvas these must PAN, not navigate — see WorkspaceCanvasInner.
-const DIGIT_TO_TIER: Record<string, LaneTier | undefined> = {
-  Digit1: 'foundation',
-  Digit2: 'architecture',
-  Digit3: 'design',
-}
-
-// Frame a single lane node with a little breathing room when jumping to it.
-const LANE_FIT_PADDING = 0.16
-// Animation durations (ms). Reduced-motion snaps both to 0 (STYLE_GUIDE §8 —
-// "the app never animates what it can simply do").
-const LANE_JUMP_DURATION = 450
 const FOCUS_PAN_DURATION = 320
 // Focus-driven pan is pan-if-outside-margin, NOT center-on-every-focus: only
 // pan when the focused element is within this many px of (or past) a pane edge,
 // so the viewport never fights a typist whose caret is already comfortably in
 // view (D3 spike finding — "center on every focus is too jerky").
 const FOCUS_PAN_MARGIN = 88
-
-// matchMedia is in the DOM lib types but absent under jsdom — read it through
-// Partial<Window> so the presence check is a real runtime guard (mirrors
-// shell/laneTarget.ts). Under reduced-motion every pan snaps (duration 0).
-function prefersReducedMotion(): boolean {
-  const matchMedia = (window as Partial<Window>).matchMedia
-  return matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
-}
-
-// ── ⌘1/2/3 pan-to-lane interceptor (module-level, capture phase) ────────────
-// WHY module-level and not a component effect: AppShell owns a GLOBAL
-// window-capture ⌘1/2/3 handler that calls navigate(), which rebuilds the URL
-// via serializeRoute and DROPS the `?d3rf` param — exiting the canvas. To keep
-// `?d3rf`, the canvas must intercept ⌘1/2/3 FIRST and stop the event before
-// AppShell's listener runs. DOM invokes same-target capture listeners in
-// REGISTRATION order, so "first" means "added before AppShell's". AppShell
-// mounts (and registers) before the canvas does — the canvas is gated behind the
-// DB-ready surface, AppShell is always mounted — so a canvas *effect* listener
-// is hopelessly second. Registering at MODULE-EVAL time (this file is imported
-// by App.tsx before any component mounts) guarantees this listener is added
-// before AppShell's mount-effect listener, so it wins. `stopImmediatePropagation`
-// (not just `stopPropagation`) is required because both listeners sit on the
-// SAME target (window). The listener is inert (early return) unless a canvas is
-// mounted and has published its instance below, so the normal flag-off app —
-// and production, where the canvas never mounts — is byte-for-byte unaffected.
-let activeCanvasInstance: ReactFlowInstance<LaneNode> | null = null
-
-function onCanvasNavKeydown(e: KeyboardEvent): void {
-  const instance = activeCanvasInstance
-  if (!instance) return
-  if (!(e.metaKey || e.ctrlKey)) return
-  const tier = DIGIT_TO_TIER[e.code]
-  if (!tier) return
-  // Win over AppShell's global navigate() — keep the canvas (and `?d3rf`).
-  e.preventDefault()
-  e.stopImmediatePropagation()
-  const duration = prefersReducedMotion() ? 0 : LANE_JUMP_DURATION
-  void instance.fitView({ nodes: [{ id: LANE_NODE_ID[tier] }], padding: LANE_FIT_PADDING, duration })
-  // Mirror AppShell / D2: the keyboard lane-jump also makes the lane ACTIVE, so
-  // Design's `c`/`v`/`d` verbs scope to it without needing focus to land.
-  useActiveLaneStore.getState().setActiveLane(tier)
-}
-
-if (typeof window !== 'undefined') {
-  window.addEventListener('keydown', onCanvasNavKeydown, true)
-}
 
 // A `type` (not `interface`) on purpose: React Flow's `Node<Data>` constrains
 // Data to `Record<string, unknown>`, which an object-literal type alias
@@ -297,16 +246,18 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   const wrapperRef = useRef<HTMLDivElement>(null)
 
   // ⌘1/2/3 → pan/zoom to the Foundation / Architecture / Design lane node.
-  // The actual key listener is the MODULE-LEVEL interceptor (see below); this
-  // effect just registers this canvas's live React Flow instance as the active
-  // pan target for as long as the canvas is mounted. On unmount it clears it, so
-  // the interceptor falls dormant and AppShell's global ⌘1/2/3 route-navigate
-  // resumes for the normal (flag-off) app.
+  // The actual key listener is the MODULE-LEVEL interceptor in `./d3CanvasNav`
+  // (registered eagerly by App.tsx, before AppShell); this effect just publishes
+  // this canvas's live React Flow instance as the active pan target for as long
+  // as the canvas is mounted. On unmount it clears it, so the interceptor falls
+  // dormant and AppShell's global ⌘1/2/3 route-navigate resumes for the normal
+  // (flag-off) app. The nav module stays `@xyflow/react`-free, so we hand it a
+  // tiny adapter (built here, inside the effect) that forwards to `fitView`; the
+  // adapter's identity is what the clear is guarded on.
   useEffect(() => {
-    activeCanvasInstance = reactFlow
-    return () => {
-      if (activeCanvasInstance === reactFlow) activeCanvasInstance = null
-    }
+    const nav: CanvasNavInstance = { fitView: (options) => reactFlow.fitView(options) }
+    setActiveCanvasInstance(nav)
+    return () => clearActiveCanvasInstance(nav)
   }, [reactFlow])
 
   // Focus-driven pan (D3 spike gate-d): native `scrollIntoView` is a no-op on a

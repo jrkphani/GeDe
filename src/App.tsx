@@ -1,8 +1,13 @@
-import { useEffect } from 'react'
+import { lazy, Suspense, useEffect } from 'react'
 import { HeroLanding } from './components/HeroLanding'
 import { ProjectsList } from './components/ProjectsList'
-import { WorkspaceCanvas } from './components/WorkspaceCanvas'
 import { WorkspaceSurface } from './components/WorkspaceSurface'
+// Eager, side-effect-only import: registers the ⌘1/2/3 pan-to-lane capture
+// listener at module-eval time (BEFORE AppShell's mount-effect listener, so the
+// canvas interceptor wins the capture race). This module is `@xyflow/react`-free,
+// so importing it eagerly costs the prod bundle nothing — no React Flow JS, no
+// CSS. See src/components/d3CanvasNav.ts.
+import './components/d3CanvasNav'
 import { Button } from './components/ui/button'
 import { AppShell } from './shell/AppShell'
 import { laneForRoute, scrollToLane } from './shell/laneTarget'
@@ -13,6 +18,17 @@ import { useAuthStore } from './store/auth'
 import { useProjectsStore } from './store/projects'
 
 const LAST_TIER_PREFIX = 'gede-last-tier:'
+
+// 089-D3 — the React Flow canvas is the ONLY thing that pulls in `@xyflow/react`
+// (JS + its ~18.6 KB stylesheet). `React.lazy` puts it in its own async chunk so
+// a static `import` never drags React Flow into the main bundle; combined with
+// the `import.meta.env.DEV` gate in d3CanvasEnabled(), a production build folds
+// the mount site away and never imports this chunk — so neither the JS nor the
+// CSS ships to prod users. The lightweight ⌘1/2/3 interceptor is imported
+// eagerly above instead (d3CanvasNav), preserving the register-first ordering.
+const WorkspaceCanvas = lazy(() =>
+  import('./components/WorkspaceCanvas').then((m) => ({ default: m.WorkspaceCanvas })),
+)
 
 // 089-D3 P1 — a DEV-ONLY, OFF-by-default flag that mounts the React Flow canvas
 // (WorkspaceCanvas) in place of the normal WorkspaceSurface for the workspace
@@ -64,8 +80,15 @@ function Surface({ route }: { route: AppRoute }) {
     case 'design':
       // 089-D3 P1 — dev-only `?d3rf` flag swaps in the React Flow canvas; OFF by
       // default and dead in prod builds (see d3CanvasEnabled), so normal app
-      // behavior is unchanged.
-      return d3CanvasEnabled() ? <WorkspaceCanvas route={route} /> : <WorkspaceSurface route={route} />
+      // behavior is unchanged. The canvas is `React.lazy` (its own async chunk),
+      // so it's wrapped in <Suspense> while the chunk loads.
+      return d3CanvasEnabled() ? (
+        <Suspense fallback={null}>
+          <WorkspaceCanvas route={route} />
+        </Suspense>
+      ) : (
+        <WorkspaceSurface route={route} />
+      )
     // Issue 064: /welcome and /login both render the same hero/landing
     // surface — product brief + the 3-mode auth card in one polished page.
     // It is the canonical signed-out destination and the sign-out redirect
