@@ -60,6 +60,20 @@ export interface QueuedMutation {
    * target the currently-open/own workspace and keep relying on the global.
    */
   readonly workspaceId?: string
+  /**
+   * Issue 091 — provenance tag for a BACKGROUND write the app enqueues on the
+   * user's behalf rather than in direct response to an edit. Today the only
+   * such producer is the D1 rich-text heal-on-load (src/store/richTextConvert.ts),
+   * which enqueues repeatable 'update' mutations for prose columns on every
+   * project open. A heal write self-corrects on the next load, so an
+   * `unknown_entity` rejection for one (a locally-created row whose INSERT
+   * hasn't flushed server-side yet) is cosmetic: flush() (src/store/sync.ts)
+   * still DROPS the rejected entry but SKIPS the status-bar note for it.
+   * Omitted (undefined) for every user-initiated write — those still surface a
+   * rejection note, because a user editing a genuinely-missing row is a real
+   * signal we keep.
+   */
+  readonly origin?: 'heal'
 }
 
 export interface MutationQueue {

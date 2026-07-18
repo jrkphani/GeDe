@@ -529,6 +529,16 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       clearWriteStallGraceTimer()
       if (get().writeStalledSince !== null) set({ writeStalledSince: null })
       let nextQueue = get().queue
+      // Issue 091 — snapshot which rejected mutations came from a BACKGROUND
+      // heal write (richTextConvert.ts tags them `origin: 'heal'`) BEFORE the
+      // reject loop below drops them from the queue. A heal write is repeatable
+      // and self-corrects on the next load, so its `unknown_entity` rejection (a
+      // locally-created row whose INSERT hasn't flushed server-side yet) is
+      // cosmetic — the entry is still dropped exactly as before, but its note is
+      // suppressed. User-initiated writes carry no tag and keep surfacing.
+      const healOriginIds = new Set(
+        nextQueue.entries.filter((e) => e.origin === 'heal').map((e) => e.id),
+      )
       for (const id of result.acknowledgedIds) nextQueue = acknowledge(nextQueue, id)
       nextQueue = prune(nextQueue)
       // Rejection reconciliation (test-first plan #4): drop the rejected
@@ -542,8 +552,13 @@ export const useSyncStore = create<SyncState>()((set, get) => {
       }
       set({ queue: nextQueue, pendingCount: pendingCount(nextQueue) })
       recompute()
-      if (result.rejections.length > 0) {
-        const last = result.rejections[result.rejections.length - 1]
+      // Issue 091 — announce only the last rejection that did NOT originate from
+      // a background heal write. Heal-originated rejections are dropped above
+      // (rejectMutation) just like any other, but their cosmetic note is
+      // suppressed here.
+      const surfacedRejections = result.rejections.filter((r) => !healOriginIds.has(r.mutationId))
+      if (surfacedRejections.length > 0) {
+        const last = surfacedRejections[surfacedRejections.length - 1]
         if (last) useStatusStore.getState().announce(last.message)
       }
 
@@ -597,6 +612,10 @@ export function enqueueIfSyncing(
   rowId: string,
   op: MutationOp,
   row: { readonly updatedAt: string } & Readonly<Record<string, unknown>>,
+  // Issue 091 — an optional provenance tag threaded onto the queued mutation.
+  // Only the D1 heal-on-load passes 'heal'; every other call site omits it and
+  // gets an untagged (user-initiated) mutation, unchanged from before.
+  origin?: QueuedMutation['origin'],
 ): void {
   const workspaceId = useSyncStore.getState().workspaceId
   if (!workspaceId) return
@@ -609,6 +628,9 @@ export function enqueueIfSyncing(
     optimisticUpdatedAt: row.updatedAt,
     enqueuedAt: new Date().toISOString(),
     status: 'pending',
+    // exactOptionalPropertyTypes: only set the key when there's a real tag
+    // (never `origin: undefined`).
+    ...(origin ? { origin } : {}),
   })
 }
 

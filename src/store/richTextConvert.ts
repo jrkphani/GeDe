@@ -100,7 +100,15 @@ function makeHealer<Row extends { readonly updatedAt: string }>(
       // would map to 'insert' and silently no-op (the 066-class bug). Bypasses
       // the command log entirely: a bulk normalization must never pollute
       // undo/redo.
-      enqueueIfSyncing(col.table, col.getId(updated), 'update', updated)
+      //
+      // Issue 091 — tag this as a heal-originated (`origin: 'heal'`) BACKGROUND
+      // write. If the row's own INSERT hasn't flushed server-side yet, the
+      // server rejects this update `unknown_entity`; because the heal is
+      // repeatable and self-corrects next load, flush() (sync.ts) drops the
+      // rejected entry but suppresses the cosmetic status note for it. A
+      // user-initiated edit of a genuinely-missing row stays untagged and still
+      // surfaces the note.
+      enqueueIfSyncing(col.table, col.getId(updated), 'update', updated, 'heal')
     }
   }
 }

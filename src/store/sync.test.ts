@@ -12,7 +12,7 @@ import { canvases, dimensions, parameters, projects } from '../db/schema'
 import { useCommandLogStore } from './commandLog'
 import { useStatusStore } from './status'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
-import { resetSyncStore, useSyncStore } from './sync'
+import { enqueueIfSyncing, resetSyncStore, useSyncStore } from './sync'
 import { SYNCED_TABLES } from '../sync/config'
 import type { ShapeStreamFactory, ShapeStreamLike } from '../sync/syncEngine'
 import type { TokenProvider } from '../sync/authToken'
@@ -1632,6 +1632,108 @@ describe('sync store — write-queue flush (issue 048)', () => {
 
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(useSyncStore.getState().pendingCount).toBe(0)
+  })
+})
+
+// Issue 091 — the D1 heal-on-load (src/store/richTextConvert.ts) enqueues
+// BACKGROUND 'update' mutations for prose columns on every project open. If a
+// locally-created row's INSERT hasn't flushed server-side yet, that background
+// update is rejected `unknown_entity` (src/server/writeApi/tenancy.ts) and used
+// to surface the scary status note "The item you tried to change no longer
+// exists." even though the heal is repeatable and self-corrects on the next
+// load. The mitigation: heal-originated writes are tagged `origin: 'heal'`
+// (via enqueueIfSyncing) so flush() can DROP the rejected entry exactly as
+// before (no infinite retry) but SKIP the cosmetic note. USER-initiated writes
+// carry no tag and STILL surface it — a user editing a genuinely-missing row is
+// a real signal we keep. Server write authority is unchanged (it still rejects).
+describe('sync store — heal-originated write rejections stay silent (issue 091)', () => {
+  const NOTE = 'The item you tried to change no longer exists.'
+
+  it('a heal-originated write rejected unknown_entity is dropped WITHOUT surfacing the note', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const m = mutation({ op: 'update', origin: 'heal' })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          outcomes: [{ mutationId: m.id, status: 'rejected', reason: 'unknown_entity', message: NOTE }],
+        }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(m)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // Still dropped/acked like any rejection — no backlog, no infinite retry.
+    expect(useSyncStore.getState().pendingCount).toBe(0)
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+    // ...but the cosmetic note is suppressed for a background heal write.
+    expect(useStatusStore.getState().message).toBeNull()
+  })
+
+  it('a USER-originated write rejected unknown_entity STILL surfaces the note (real signal kept)', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const m = mutation({ op: 'update' }) // no origin tag == user-initiated
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          outcomes: [{ mutationId: m.id, status: 'rejected', reason: 'unknown_entity', message: NOTE }],
+        }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(m)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().pendingCount).toBe(0)
+    expect(useStatusStore.getState().message).toBe(NOTE)
+  })
+
+  it('a mixed batch suppresses the heal rejection but still surfaces a co-rejected USER write', async () => {
+    vi.stubEnv('VITE_SYNC_ENABLED', 'true')
+    signIn()
+    const userMessage = "Someone else's more recent change already landed — yours was not applied."
+    const healM = mutation({ id: uuidv7(), rowId: 'ctx-heal', op: 'update', origin: 'heal' })
+    const userM = mutation({ id: uuidv7(), rowId: 'ctx-user', op: 'update' })
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: () =>
+        Promise.resolve({
+          // User rejection FIRST, heal rejection LAST: without the fix the code
+          // announces the last rejection (the heal NOTE); with the fix the heal
+          // one is filtered and the surviving user signal surfaces instead.
+          outcomes: [
+            { mutationId: userM.id, status: 'rejected', reason: 'stale_conflict', message: userMessage },
+            { mutationId: healM.id, status: 'rejected', reason: 'unknown_entity', message: NOTE },
+          ],
+        }),
+    })
+    vi.stubGlobal('fetch', fetchMock)
+
+    useSyncStore.getState().setWorkspaceId('ws-1')
+    useSyncStore.getState().enqueueLocalMutation(healM)
+    useSyncStore.getState().enqueueLocalMutation(userM)
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    expect(useSyncStore.getState().pendingCount).toBe(0)
+    expect(useStatusStore.getState().message).toBe(userMessage)
+  })
+
+  it('enqueueIfSyncing tags a heal write with origin: "heal" (and omits the tag otherwise)', () => {
+    useSyncStore.setState({ workspaceId: 'ws-1' })
+    enqueueIfSyncing('contexts', 'ctx-1', 'update', { id: 'ctx-1', updatedAt: '2026-01-01T00:00:01.000Z' }, 'heal')
+    enqueueIfSyncing('contexts', 'ctx-2', 'update', { id: 'ctx-2', updatedAt: '2026-01-01T00:00:01.000Z' })
+    const entries = useSyncStore.getState().queue.entries
+    expect(entries.find((e) => e.rowId === 'ctx-1')?.origin).toBe('heal')
+    expect(entries.find((e) => e.rowId === 'ctx-2')?.origin).toBeUndefined()
   })
 })
 
