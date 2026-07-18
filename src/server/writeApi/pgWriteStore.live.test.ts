@@ -195,6 +195,63 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
     expect(result.rows[0]?.workspace_id).toBe(workspaceId)
   })
 
+  // Issue 095 — tier1_purpose is a project SINGLETON (unique index
+  // tier1_purpose_project_idx on project_id). A client whose local mirror lacks
+  // the row enqueues an 'upsert' (→ 'insert' op) with a FRESH id; against a
+  // project that already has a server-side purpose row this used to 23505 on the
+  // secondary unique index (a plain `ON CONFLICT (id) DO NOTHING` can't see the
+  // project_id collision) → uncaught → ALB 500 → the purpose edit silently lost.
+  // Only REAL Postgres enforces the unique index, so this is the authoritative
+  // proof the fix reconciles onto the existing row instead of erroring. (The
+  // fake-client contract test can only assert the SQL string, not that Postgres
+  // accepts it — exactly the 053/054 lesson.)
+  it('insert(upsert): a tier1_purpose write with a NEW id but an existing project_id updates the existing row, no 23505 (095)', async () => {
+    const store = new PgWriteStore({ pool })
+    const projectId = uuidv7()
+    const existingRowId = uuidv7()
+
+    // Seed a project + its ONE tier1_purpose row (id = existingRowId) — the
+    // server-side state a cold-mirror client is unaware of.
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      projectId,
+      workspaceId,
+      'P095',
+    ])
+    await pool.query('INSERT INTO tier1_purpose (id, project_id, workspace_id, body) VALUES ($1, $2, $3, $4)', [
+      existingRowId,
+      projectId,
+      workspaceId,
+      'old body',
+    ])
+
+    // The cold-mirror client edits the purpose: FRESH id, SAME project_id, new body.
+    const freshId = uuidv7()
+    const clientUpdatedAt = new Date(Date.now() + 1000).toISOString()
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'tier1Purpose',
+        op: 'insert', // 'upsert' maps to 'insert' — see src/sync/writeTransport.ts
+        entityId: freshId,
+        payload: { id: freshId, projectId, body: 'new body', workspaceId },
+        clientUpdatedAt,
+      },
+      'live-test-user-sub',
+    )
+    expect(applied).toBe(true)
+
+    // Exactly ONE purpose row for the project — reconciled onto the EXISTING row
+    // (its id kept), body updated (DO UPDATE persisted the edit, not DO NOTHING).
+    const rows = await pool.query<{ id: string; body: string }>(
+      'SELECT id, body FROM tier1_purpose WHERE project_id = $1',
+      [projectId],
+    )
+    expect(rows.rows).toHaveLength(1)
+    expect(rows.rows[0]?.id).toBe(existingRowId)
+    expect(rows.rows[0]?.body).toBe('new body')
+  })
+
   // Issue 078 step 2 (migration 0015) — parameters/bindings/tier2_entries
   // gained their own denormalized workspace_id column, mirroring the
   // `projects` round-trip above. Real Postgres is the only thing that can

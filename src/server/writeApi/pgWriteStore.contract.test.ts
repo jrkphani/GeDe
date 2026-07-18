@@ -546,6 +546,57 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     expect(paramsByPlaceholder.get(existingScenarioAssignment[1])).toBe(lexicalJson)
   })
 
+  // Issue 095 — tier1_purpose is a project SINGLETON (unique index
+  // tier1_purpose_project_idx on project_id, src/db/schema.ts:126). A signed-in
+  // client whose LOCAL mirror lacks the row mints a fresh `id` and enqueues an
+  // 'upsert' (→ 'insert' op). A plain `ON CONFLICT (id) DO NOTHING` cannot see
+  // the project_id collision, so a project that already has a server-side row
+  // 23505s (confirmed live via CloudWatch) → uncaught → ALB 500 → the purpose
+  // edit silently never persists. The insert must upsert on the NATURAL key so a
+  // differing id reconciles onto the existing row (persisting the edit,
+  // LWW-by-arrival like the update branch). This is the SQL-shape guard that
+  // runs in verify:fast; pgWriteStore.live.test.ts carries the real-23505 proof
+  // against Postgres (a fake client never enforces a unique constraint — the
+  // same reason bugs 053/054 needed the live test).
+  it('insert: a tier1Purpose mutation upserts on the project_id natural key, not ON CONFLICT (id) (095)', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    const projectId = uuidv7()
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'insert',
+      entityId,
+      payload: { id: entityId, projectId, body: '{"root":{"children":[]}}' },
+    })
+
+    await store.applyIfNew(mutation, 'user-42')
+
+    const insertCall = calls.find((c) => c.text.includes('INSERT INTO tier1_purpose'))
+    if (!insertCall) throw new Error('no INSERT INTO tier1_purpose call was captured')
+    // Upsert on the natural key, and actually persist the edit (body from EXCLUDED).
+    expect(insertCall.text).toContain('ON CONFLICT (project_id) DO UPDATE')
+    expect(insertCall.text).toContain('body = EXCLUDED.body')
+    expect(insertCall.text).not.toContain('ON CONFLICT (id) DO NOTHING')
+  })
+
+  // Issue 095 (regression guard) — a table WITHOUT a natural-key entry in the map
+  // (e.g. projects, keyed only by its id PK) must keep the original idempotency
+  // guard `ON CONFLICT (id) DO NOTHING`, unchanged.
+  it('insert: a table with no secondary unique key still uses ON CONFLICT (id) DO NOTHING (095 scope guard)', async () => {
+    const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+    const entityId = uuidv7()
+    await store.applyIfNew(
+      envelope({ table: 'projects', op: 'insert', entityId, payload: { id: entityId, name: 'P' } }),
+      'user-42',
+    )
+    const insertCall = calls.find((c) => c.text.includes('INSERT INTO projects'))
+    if (!insertCall) throw new Error('no INSERT INTO projects call was captured')
+    expect(insertCall.text).toContain('ON CONFLICT (id) DO NOTHING')
+    expect(insertCall.text).not.toContain('DO UPDATE')
+  })
+
   // Issue 066 — revokeInvitation/declineInvitation enqueue a `delete` op.
   // The `delete` branch of applyIfNew (a bare
   // `UPDATE <table> SET deleted_at = $2, updated_at = $2 WHERE id = $1`) had

@@ -307,6 +307,24 @@ const SQL_TABLE_NAMES: Readonly<Record<MutationTable, string>> = {
   workspaceMembers: 'workspace_members',
 }
 
+// Issue 095 — tables whose meaningful NATURAL key is a non-`id` UNIQUE index, so
+// the insert path must reconcile on that key, not the `id` PK. A signed-in client
+// whose local mirror lacks the row mints a FRESH `id` and enqueues an 'upsert'
+// (→ 'insert'): a plain `ON CONFLICT (id) DO NOTHING` can't see the natural-key
+// collision, so Postgres 23505s on the secondary unique index → 500 → silent
+// data-loss. Listed tables upsert on the natural key instead (`DO UPDATE`,
+// persisting the edit LWW-by-arrival like the update branch). ONLY tier1_purpose
+// is covered here (a project singleton, `tier1_purpose_project_idx`) — the bug
+// reproduced live for it. The other secondary-unique tables (`bindings` on
+// (context_id, dimension_id); `workspace_members` on (workspace_id, user_sub);
+// `canvases` on (parent/context)) share the theoretical exposure but were NOT
+// reproduced and want DIFFERENT conflict semantics (e.g. a binding is an
+// idempotent link → `DO NOTHING`, not `DO UPDATE`), so they are deliberately left
+// for a scoped follow-up rather than a blanket change — see docs/issues/095.
+const NATURAL_KEY_CONFLICT: Partial<Record<MutationTable, string>> = {
+  tier1Purpose: 'project_id',
+}
+
 export interface PgWriteStoreConfig {
   readonly pool: Pool
 }
@@ -536,10 +554,24 @@ export class PgWriteStore implements WriteStore {
       const values = entries.map(([, value]) => value)
       if (mutation.op === 'insert') {
         const placeholders = values.map((_, i) => `$${i + 4}`).join(', ')
-        await client.query(
-          `INSERT INTO ${table} (id, updated_at, workspace_id, ${columns.join(', ')}) VALUES ($1, $2, $3, ${placeholders}) ON CONFLICT (id) DO NOTHING`,
-          [mutation.entityId, mutation.clientUpdatedAt, mutation.workspaceId, ...values],
-        )
+        const insertHead = `INSERT INTO ${table} (id, updated_at, workspace_id, ${columns.join(', ')}) VALUES ($1, $2, $3, ${placeholders})`
+        const insertParams = [mutation.entityId, mutation.clientUpdatedAt, mutation.workspaceId, ...values]
+        const naturalKey = NATURAL_KEY_CONFLICT[mutation.table]
+        if (naturalKey !== undefined) {
+          // Issue 095 — a project-singleton table: upsert on the NATURAL key so a
+          // cold-mirror client's fresh `id` reconciles onto the existing row and
+          // the edit persists (LWW-by-arrival, the same unconditional semantics as
+          // the update branch below), instead of 23505-ing on the secondary
+          // unique index under a plain `ON CONFLICT (id) DO NOTHING`. Every
+          // supplied column is re-set from EXCLUDED (server-stamped updated_at /
+          // workspace_id included) so the incoming edit wins.
+          const setClause = ['updated_at = EXCLUDED.updated_at', 'workspace_id = EXCLUDED.workspace_id']
+            .concat(columns.map((c) => `${c} = EXCLUDED.${c}`))
+            .join(', ')
+          await client.query(`${insertHead} ON CONFLICT (${naturalKey}) DO UPDATE SET ${setClause}`, insertParams)
+          return true
+        }
+        await client.query(`${insertHead} ON CONFLICT (id) DO NOTHING`, insertParams)
         return true
       }
 
