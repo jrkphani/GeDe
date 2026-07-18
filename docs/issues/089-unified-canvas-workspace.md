@@ -140,6 +140,33 @@ D2 changes only **WHAT the route mounts**: one `WorkspaceSurface` rendering all 
 
 - **Undo/redo of cross-tier ops has the same co-mount staleness** the reactive refresh fixed on the forward paths (promote / rename-propagate / resolve). The forward writes now refresh the co-mounted Design lane; the undo/redo paths of those same ops do not yet. Worth a later pass — it does not block D2 shipping.
 
+## D3 — spike PASSED, GO (2026-07-18)
+
+The mandated time-boxed spike ran on the owner-chosen substrate **React Flow (`@xyflow/react` 12.11.2)** in a throwaway isolated worktree (not merged). It mounted the **real `EditableGrid` and the real `ui/popover` Radix primitives** as React Flow custom nodes, laid into three tier lane-columns, and exercised all four gates at viewport scale ≠ 1 (1.25) via a headless-Chromium driver. Zero console/page errors. **Verdict: GO.**
+
+### Four gates — all PASS
+- **(a) EditableGrid grammar at zoom ≠ 1 — PASS.** The **real** grid's full contract survives inside a node: click-to-edit, Enter-down, Tab-right, Esc-revert, phantom-row Tab-creates-and-continues, AND the Lexical **richtext** cell (Cmd+Enter commits-and-advances). **Required annotation:** wrap the interactive grid body in **`nodrag nopan nowheel`** — `nodrag` (else pointer-down starts a node-drag instead of editing; a header `dragHandle` is the alternative) and `nowheel` (else wheel zooms the canvas instead of scrolling the cell) are both load-bearing. `EditableGrid`'s inputs already `stopPropagation` keydowns, and React Flow ignores shortcuts when the target is an input/textarea/contenteditable — so no accidental node delete/nudge while typing.
+- **(b) Constrained-drag reorder — PASS.** React Flow's built-in node-drag tracks the cursor correctly under zoom **with no scale math** (the dnd-kit `1/zoom` gotcha in §2 simply doesn't arise). Dragging a node down its lane (with a sideways component) reordered by `sort` with **x invariant** and **no `{x,y}` persisted**. It cleanly replaces dnd-kit for on-canvas reorder. Prod notes: pin x in `onNodeDrag` (use live `node.position.y`), recompute `sort` + re-derive ALL positions in `onNodeDragStop`, set `autoPanOnNodeDrag={false}`.
+- **(c) Radix popovers under transform — PASS, no fix needed.** The promote popover (built from the **real `ui/popover`**) opened from a node at 1.25× anchored pixel-exactly (`dy = sideOffset`, `dx = 0`) via the default body portal — because this repo's **`@floating-ui/dom` is 1.8.0 (≥ 1.4.3)**, the §3 precondition is already met. Body-portalled content renders unscaled (correct for menus).
+- **(d) Focus-driven pan — PASS (and necessary).** `onFocusCapture` → `screenToFlowPosition` → `setCenter` pans the viewport to a focused cell. Native `scrollIntoView` does nothing on a transformed plane (no scroll container), so this hook is required, not optional.
+
+### Key findings
+- **dagre is overkill for straight vertical lanes** (~10 lines of hand math suffice); it only earns its place once the **011/012 recursion/coverage clusters + edges** need real graph layout. **Defer dagre** to that work.
+- **Bundle:** React Flow ≈ **~88 kB gz** all-in (core + `@xyflow/system` + css) — a fair price for viewport + minimap + controls + grid + drag-under-zoom. dagre (~30–35 kB, lodash-dominated) is avoidable for now.
+- **§5's objection (React Flow is position-authoritative) is manageable:** treat `{x,y}` as a pure render-time projection of `(tier, sort)`, recompute on every change, never persist — node-drag carries exactly one meaning (reorder), honoring STYLE_GUIDE principle 4.
+
+### Proposed phased build plan (≤5 files/phase, red-first; production wraps the REAL surfaces, not the spike's nodes)
+- **P0 — derived-layout core (no React Flow).** `src/domain/laneLayout.ts` pure `fn(items{tier,sort,height})→positions` + `reorderWithinLane` + tests. Red: reorder asserts `sort` swap with x invariant. Retires the "position stays derived" risk in isolation.
+- **P1 — viewport shell + one real node.** `WorkspaceCanvas.tsx` (ReactFlow provider, `autoPanOnNodeDrag={false}`, min/maxZoom) + a `DesignNodeAdapter` mounting the **real** `DesignSurface`/`ContextRegister` with `nodrag nopan nowheel` + header `dragHandle`. Behind a dev flag / the `?canvas=` grammar — do NOT collapse routes yet. Red: register click-to-edit + Enter/Tab/Esc at zoom ≠ 1.
+- **P2 — all three lanes + Architecture/Foundation adapters** (real surfaces; real promote/resolution popovers; the D2 `activeLane` slice drives `c`/`v`/`d` per focused lane). Red: promote popover anchors at zoom ≠ 1; `c` from Foundation doesn't create a Design draft.
+- **P3 — constrained drag → real `sort` mutations** (the same tier-reorder mutations dnd-kit calls today), then re-derive layout. Red: drag reorders + persists `sort`; no `{x,y}` written to store/outbox.
+- **P4 — focus-pan (pan-if-outside-margin, reduced-motion snap) + ⌘1/2/3 pan-to-lane + lane-summary LOD** (mount the real grid only near 1:1). Red: Tab through a tall table keeps the active cell on-screen without native scroll; overview stays cheap with all three lanes mounted.
+
+### Top 3 risks still to retire (in the build, not the spike)
+1. **Perf with all three REAL surfaces mounted + transformed** (Design's Canvas + compose machine + N Architecture grids at real data volume) — LOD / `content-visibility` / lane-virtualization is unproven at scale (P4).
+2. **Focus-pan ergonomics** — "center on every focus" is too jerky for bulk keyboard entry; the pan-if-outside-margin heuristic needs real-user tuning so the viewport never fights the typist (north star).
+3. **Recursion/coverage clusters (011/012)** as edge-connected satellites — where real graph layout (dagre/elk) + lazy-mount/LOD finally get exercised; out of the spike's scope.
+
 ## Vision (owner)
 
 Merge GeDe's three separate routes — **Foundation** (Tier 1), **Architecture** (Tier 2), **Design** (Tier 3) — into **one open, zoomable canvas page**. Each tier is its own vertical **lane**; lanes sit side by side on an infinite grid canvas and **grow downward** as more tables/rows are added. The whole page **pans and zooms** — zoom into the section you want to focus on, zoom out for the overview — like Figma / Miro / tldraw, but with *structured table content* inside the lanes rather than free-floating shapes.
