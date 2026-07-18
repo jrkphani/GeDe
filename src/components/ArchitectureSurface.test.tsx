@@ -367,6 +367,100 @@ describe('ArchitectureSurface — Remove moved to the selection bar (issue 084, 
   })
 })
 
+// Issue 084 Direction 3, Phase 1 — the structural mount + visual hierarchy.
+// One outer EditableChainProvider threads the stacked tables; the add-table
+// affordance relocates from a top standalone row to a single TRAILING phantom
+// that is the chain's terminal node (`t2phantom`). Cross-table Tab is P2 — this
+// phase only mounts the seam and lands the indentation/weight hierarchy.
+describe('ArchitectureSurface — D3 P1 trailing add-table (issue 084 Direction 3)', () => {
+  it('renders the add-table as a single TRAILING phantom after all table panels', async () => {
+    await addTier2Table(db, projectId, 'Stakeholders')
+    const { container } = render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Stakeholders', { selector: '.t2-table__name' })
+
+    // One add grammar: exactly one typed create input for tables.
+    expect(screen.getAllByPlaceholderText('Name a table')).toHaveLength(1)
+    // The old top standalone add-table (above the panels) is gone: the add-row
+    // now trails the last table panel in document order.
+    const addRow = container.querySelector('.t2-add-table') as HTMLElement
+    const lastTable = [...container.querySelectorAll('.t2-table')].pop() as HTMLElement
+    expect(addRow).not.toBeNull()
+    expect(lastTable.compareDocumentPosition(addRow) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  })
+
+  it('still creates a table from the trailing phantom (type + Enter clears + refocuses)', async () => {
+    const user = userEvent.setup()
+    render(<ArchitectureSurface projectId={projectId} />)
+    const addField = await screen.findByPlaceholderText('Name a table')
+    await user.type(addField, 'Process')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getAllByText('Process').length).toBeGreaterThan(0))
+    expect(addField).toHaveValue('')
+    expect(addField).toHaveFocus()
+  })
+
+  it('preserves per-entry --depth and carries the table→entry inset class on the section', async () => {
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars')
+    const { container } = render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    const root = container.querySelector('[data-depth="0"]') as HTMLElement
+    const child = container.querySelector('[data-depth="1"]') as HTMLElement
+    // Per-entry depth preserved: a child's --depth exceeds its parent's.
+    expect(Number(child.style.getPropertyValue('--depth'))).toBeGreaterThan(
+      Number(root.style.getPropertyValue('--depth')),
+    )
+    // The table section now carries the new table→entry inset class.
+    expect(container.querySelector('.t2-table.t2-table--indent')).not.toBeNull()
+  })
+})
+
+// The outer chain seam + terminal add-table node are asserted at the source
+// layer (jsdom mounts the provider but P1 wires no cross-table registrations —
+// that is P2 — so behavior alone can't yet prove the mount).
+describe('ArchitectureSurface source — D3 outer EditableChainProvider (issue 084 Direction 3 P1)', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/components/ArchitectureSurface.tsx'), 'utf8')
+
+  it('wraps the stacked tables in an EditableChainProvider ordered by chainOrder(tables)', () => {
+    expect(source).toMatch(/EditableChainProvider/)
+    expect(source).toMatch(/order=\{chainOrder\(tables\)\}/)
+  })
+
+  it('gives the trailing add-table phantom the terminal chain id CHAIN_PHANTOM_ID', () => {
+    expect(source).toMatch(/chainId=\{CHAIN_PHANTOM_ID\}/)
+  })
+})
+
+// Owner UX requirement (issue 084 Direction 3): a table→entry indent level plus
+// a parent-heavier font-weight step, both token-driven (jsdom doesn't cascade
+// base.css, so assert the CSS/token layer directly).
+describe('.t2-table CSS — table→entry inset + weight hierarchy (issue 084 Direction 3 P1)', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
+  const tokens = readFileSync(resolve(process.cwd(), 'src/styles/tokens.css'), 'utf8')
+
+  it('insets a table\'s entries under its header via a --space token, no raw px', () => {
+    const match = /\.t2-table--indent[^{]*\{([^}]*)\}/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1] as string
+    expect(body).toMatch(/var\(--space-\d\)/)
+    expect(body).not.toMatch(/\d+px/)
+  })
+
+  it('makes the parent (table name) heavier than child entries via font-weight tokens', () => {
+    // Parent record: the table name resolves to the strong weight token.
+    const nameMatch = /\.t2-table__name\s*\{([^}]*)\}/.exec(css)
+    expect((nameMatch as RegExpMatchArray)[1]).toMatch(/font-weight:\s*var\(--font-weight-strong\)/)
+    // Child records: entry name cells resolve to the lighter (normal) token.
+    expect(css).toMatch(/font-weight:\s*var\(--font-weight-normal\)/)
+    // Tokens: the parent weight is numerically heavier than the child weight.
+    const strong = Number(/--font-weight-strong:\s*(\d+)/.exec(tokens)?.[1])
+    const normal = Number(/--font-weight-normal:\s*(\d+)/.exec(tokens)?.[1])
+    expect(strong).toBeGreaterThan(normal)
+  })
+})
+
 // Issue 084 finding 6 (STYLE_GUIDE §11) — the nested-row indent must be
 // token-driven at the CSS layer, not a raw pixel literal or an inline calc in
 // JSX. base.css computes it from the per-row --depth custom property times the

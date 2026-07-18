@@ -7,9 +7,10 @@ import { useStatusStore } from '../store/status'
 import { useTier2Store, type EntryLink } from '../store/tier2'
 import { useWorkspaceRole } from '../store/workspace'
 import { EditableGrid, type GridColumn } from './EditableGrid'
+import { CHAIN_PHANTOM_ID, chainOrder } from './gridBoundaryFocus'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { InlineEdit, PhantomInput } from './ui/inline-editor'
+import { EditableChainProvider, InlineEdit, PhantomInput } from './ui/inline-editor'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './ui/popover'
 
 // Stable empty fallback — a fresh [] in the selector loops the subscription.
@@ -75,36 +76,47 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
       <main className="architecture">
         <h2 className="tier2-header">2nd Tier · Architecture</h2>
 
-        {/* D1 (issue 084) — the single create path: a stable, always-visible typed
-            add-row fixed directly under the header. It never relocates as tables
-            accumulate and is the only "add table" affordance (the old
-            context-bar focus-only button is gone, finding 2). A viewer never sees
-            this write-only affordance (issue 035). */}
-        {readOnly ? null : (
-          <div className="t2-add-table">
-            <span className="t2-add-table__glyph" aria-hidden>
-              +
-            </span>
-            <PhantomInput
-              placeholder="Name a table"
-              ariaLabel="Add architecture table"
-              inputClassName="t2-add-table__input"
-              onSubmit={(name) => void addTable(name)}
-            />
-          </div>
-        )}
-
         {/* Empty-state guidance (issue 084 finding 1): one orienting line so a
-            first-run project is never a bare input with nothing actionable. */}
+            first-run project is never a bare input with nothing actionable. The
+            add-row it points to now trails the (empty) stack, below. */}
         {tables.length === 0 && !readOnly ? (
           <p className="t2-empty">
-            No tables yet. Name your first dimension above — e.g. “Stakeholders”, “Value”.
+            No tables yet. Name your first dimension below — e.g. “Stakeholders”, “Value”.
           </p>
         ) : null}
 
-        {tables.map((table) => (
-          <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
-        ))}
+        {/* Issue 084 Direction 3 P1 — one outer chain threads the stacked tables
+            plus the trailing add-table phantom. `order` is recomputed each render
+            from live tables (mirrors DimensionManager) so P2 can register each
+            table's cross-table boundaries without extra wiring; with no per-table
+            registrations yet this is a harmless context. */}
+        <EditableChainProvider order={chainOrder(tables)}>
+          {tables.map((table) => (
+            <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
+          ))}
+
+          {/* Direction 3 fork 2 — the single create path is now the chain's
+              TERMINAL node: one typed add-table phantom as the LAST row of the
+              surface (the top standalone add-row is gone; still one add grammar,
+              finding 2). Enter creates + self-refocuses; Tab-with-content creates
+              too (cross-table continuation into the new table is P2). A viewer
+              never sees this write-only affordance (issue 035). */}
+          {readOnly ? null : (
+            <div className="t2-add-table">
+              <span className="t2-add-table__glyph" aria-hidden>
+                +
+              </span>
+              <PhantomInput
+                placeholder="Name a table"
+                ariaLabel="Add architecture table"
+                inputClassName="t2-add-table__input"
+                chainId={CHAIN_PHANTOM_ID}
+                onSubmit={(name) => void addTable(name)}
+                onTabSubmit={(name) => void addTable(name)}
+              />
+            </div>
+          )}
+        </EditableChainProvider>
       </main>
     </>
   )
@@ -374,7 +386,11 @@ export function TablePanel({
   ]
 
   return (
-    <section className="panel t2-table" id={`t2-table-${table.id}`} data-selecting={selected.size > 0 || undefined}>
+    <section
+      className="panel t2-table t2-table--indent"
+      id={`t2-table-${table.id}`}
+      data-selecting={selected.size > 0 || undefined}
+    >
       <InlineEdit
         value={table.name}
         onCommit={(next) => void renameTable(table.id, next)}

@@ -46,6 +46,13 @@
   --leading-label: 16px;
   --leading-colhead: 16px;
 
+  /* Weight scale — §3 (named by emphasis role; components never hard-code a
+     numeric weight). `strong` = headers / parent records, `medium` = quiet
+     emphasis, `normal` = body / child records. */
+  --font-weight-strong: 600;
+  --font-weight-medium: 500;
+  --font-weight-normal: 400;
+
   /* Space & shape — §4 */
   --space-1: 4px;
   --space-2: 8px;
