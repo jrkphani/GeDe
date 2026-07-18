@@ -1,0 +1,56 @@
+name: dev-canvas-e2e
+
+# NON-DEPLOY-GATING visibility run for the `?d3rf` dev-flag e2e suite
+# (e2e/d3-canvas.spec.ts, every test tagged `@dev-flag`). Issue 096.
+#
+# WHY THIS EXISTS: the `?d3rf` D3 canvas is dev-only and dead in a production
+# build, but its e2e used to run inside `verify` (`npm run e2e`), and deploy.yml
+# gates prod deploy on `verify` succeeding (via `workflow_run`). So one flaky
+# dev-canvas test silently froze EVERY prod deploy for ~8 commits. The fix:
+#   • the deploy-gating `verify` now runs `playwright test --grep-invert @dev-flag`
+#     (i.e. `npm run e2e`) — the dev-canvas suite is EXCLUDED from the gate;
+#   • this workflow runs ONLY the dev-canvas suite (`npm run e2e:dev-flag`), for
+#     visibility. It reports red when the dev-canvas suite breaks, but deploy.yml
+#     watches only `verify`, so THIS workflow can NEVER gate/block a prod deploy.
+#
+# Deliberately does NOT touch deploy.yml's gating logic — it only ADDS a separate,
+# non-gating signal, which strictly reduces deploy-freeze risk.
+#
+# IF `?d3rf` graduates to a real, user-facing feature: remove the `@dev-flag`
+# tags in e2e/d3-canvas.spec.ts (and the `--grep-invert @dev-flag` from
+# `npm run e2e`) so these tests move back INTO the deploy-gating `verify`, and
+# retire this workflow.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# onnxruntime-node (via @huggingface/transformers, issue 042) postinstall
+# downloads large CUDA/GPU EP binaries from nuget.org during `npm ci`; that
+# host is intermittently unreachable from CI runners (ETIMEDOUT). The app uses
+# onnxruntime-web (WASM), never the native Node backend, so skip the
+# non-bundled binary download. See onnxruntime-node/script/install.js.
+env:
+  ONNXRUNTIME_NODE_INSTALL: skip
+
+jobs:
+  dev-canvas-e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm run e2e:dev-flag
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: dev-canvas-playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

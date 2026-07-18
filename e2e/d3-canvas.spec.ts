@@ -1,5 +1,17 @@
 import { expect, test, type Page } from '@playwright/test'
 
+// ── DEPLOY-GATE CONTRACT (issue 096) ────────────────────────────────────────
+// EVERY test in this file is tagged `@dev-flag` and MUST stay so. These specs
+// exercise the `?d3rf` dev-only canvas, which is OFF by default and dead in a
+// production build — so they must NEVER gate a prod deploy. The deploy-gating
+// run excludes them (`npm run e2e` = `playwright test --grep-invert @dev-flag`);
+// a separate, NON-gating job runs only them for visibility (`npm run
+// e2e:dev-flag` via .github/workflows/dev-canvas-e2e.yml). A flaky test here can
+// no longer freeze the pipeline (the exact 096 failure: ~8 blocked deploys).
+// IF `?d3rf` ever graduates to a real, user-facing feature, move these tests
+// back into the deploy-gating `verify` by removing the `@dev-flag` tag (and drop
+// this file from grep-invert), so real regressions block deploy again.
+
 // 089-D3 P1 — the gate-(a) regression guard in the REAL app: the EditableGrid
 // Numbers-grammar must survive inside a React Flow custom node at viewport scale
 // ≠ 1. This mounts the dev-only canvas (`?d3rf`, App.tsx), which renders the REAL
@@ -26,7 +38,29 @@ async function viewportTransform(page: Page): Promise<string> {
   return (await page.locator('.react-flow__viewport').getAttribute('style')) ?? ''
 }
 
-test('EditableGrid keyboard grammar survives inside a React Flow node at zoom ≠ 1', async ({
+// Block until the React Flow viewport transform is identical across two
+// consecutive polls — i.e. all pending viewport moves have settled. WorkspaceCanvas
+// fires a ONE-TIME initial `fitView` once every node is measured/initialized
+// (guarded by `useNodesInitialized`), dispatched from a rAF whose timing is
+// nondeterministic relative to a test's keystrokes. If a test drives a pan (⌘1/2/3
+// or focus-pan) BEFORE that fit lands, the late fit re-frames all lanes and undoes
+// the pan (issue 096's residual focus-pan flake). Waiting for a stable transform
+// first guarantees the initial fit is done — after which the viewport never moves
+// on its own — so subsequent pans are deterministic (reduced-motion makes them
+// snap, so each settles within a poll tick).
+async function waitForStableViewport(page: Page): Promise<void> {
+  let prev = ''
+  await expect
+    .poll(async () => {
+      const cur = await viewportTransform(page)
+      const stable = cur !== '' && cur === prev
+      prev = cur
+      return stable
+    })
+    .toBe(true)
+}
+
+test('EditableGrid keyboard grammar survives inside a React Flow node at zoom ≠ 1', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   // Project → open it → jump to the Design route WITH the dev flag. The flag
@@ -134,7 +168,7 @@ async function openThreeLaneCanvas(page: Page): Promise<string> {
   return projectId as string
 }
 
-test('all three tier lanes mount as React Flow nodes, in tier column order', async ({ page }) => {
+test('all three tier lanes mount as React Flow nodes, in tier column order', { tag: '@dev-flag' }, async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1100 })
   await openThreeLaneCanvas(page)
 
@@ -153,15 +187,24 @@ test('all three tier lanes mount as React Flow nodes, in tier column order', asy
   expect(a.x).toBeLessThan(d.x)
 })
 
-// QUARANTINED (issue 096) — a React-Flow viewport-transform test that is
-// CI-rendering-fragile (Radix popover anchor position at zoom ≠ 1 lands ~200px
-// off under headless CI, though it passes locally + on re-run). It — with the
-// focus-pan test below — silently blocked EVERY `main` deploy for ~8 commits
-// (verify → deploy is gated on verify success). The ?d3rf D3 canvas is dev-flag
-// only, so its e2e must never gate prod deploys. Re-enable once hardened per 096.
-test.fixme('the Architecture promote popover anchors at its trigger at viewport scale ≠ 1', async ({
+// HARDENED (issue 096) — was CI-rendering-fragile: the Radix popover anchor at
+// zoom ≠ 1 landed ~200px off under headless CI. Root cause: clicking the "Use as
+// dimension…" trigger focuses it, which fires the canvas's focus-driven pan
+// (onFocusCapture → setCenter). Under normal motion that pan ANIMATES for
+// FOCUS_PAN_DURATION ms, moving the trigger out from under Radix's already-taken
+// popover measurement → the popover anchors to the trigger's stale pre-pan rect.
+// Fix: emulate `prefers-reduced-motion: reduce`, which the app honors
+// (prefersReducedMotion in d3CanvasNav.ts) to snap every pan to `duration: 0`, so
+// the viewport is settled before the popover measures; and assert the (zoom-
+// invariant) anchor relationship via expect.poll so it converges as floating-ui
+// finishes positioning. Un-quarantined per 096 — see the deploy-gate note in the
+// issue: the ?d3rf D3 canvas is dev-flag-only and must never gate prod deploys.
+test('the Architecture promote popover anchors at its trigger at viewport scale ≠ 1', { tag: '@dev-flag' }, async ({
   page,
 }) => {
+  // Reduced motion → the focus-pan setCenter + lane fitView snap to duration 0,
+  // removing the animation window this test used to race against.
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1920, height: 1400 })
   await openThreeLaneCanvas(page)
 
@@ -176,6 +219,11 @@ test.fixme('the Architecture promote popover anchors at its trigger at viewport 
   await expect.poll(() => viewportScale(page)).not.toBe(1)
   const scale = await viewportScale(page)
   expect(scale).not.toBe(1)
+
+  // Let the initial fit-view settle before interacting: adding a table mounts a
+  // new node → re-measure, and clicking the trigger fires a focus-pan; a late fit
+  // racing either would move the trigger under the popover's measurement.
+  await waitForStableViewport(page)
 
   // Add a table via the header's add-table phantom; it mounts its own node.
   const tablePhantom = arch.getByPlaceholder('Name a table')
@@ -201,18 +249,33 @@ test.fixme('the Architecture promote popover anchors at its trigger at viewport 
   // lives inside a scaled node (align="start", sideOffset=4).
   const popover = page.locator('.t2-promote')
   await expect(popover).toBeVisible()
-  const tBox = await trigger.boundingBox()
-  const pBox = await popover.boundingBox()
-  if (!tBox || !pBox) throw new Error('trigger and popover must have bounding boxes')
-  // Left edges aligned (align="start").
-  expect(Math.abs(pBox.x - tBox.x)).toBeLessThan(40)
+
+  // Poll the anchor geometry rather than snapshotting it once: floating-ui
+  // positions the portalled popover after mount, and with reduced motion the
+  // viewport is guaranteed steady, so these converge immediately (and can't be
+  // caught mid-animation). Left edges aligned (align="start").
+  await expect
+    .poll(async () => {
+      const tBox = await trigger.boundingBox()
+      const pBox = await popover.boundingBox()
+      if (!tBox || !pBox) return Number.POSITIVE_INFINITY
+      return Math.abs(pBox.x - tBox.x)
+    })
+    .toBeLessThan(40)
   // Adjacent vertically — just below the trigger, or flipped just above it.
-  const gapBelow = Math.abs(pBox.y - (tBox.y + tBox.height))
-  const gapAbove = Math.abs(pBox.y + pBox.height - tBox.y)
-  expect(Math.min(gapBelow, gapAbove)).toBeLessThan(40)
+  await expect
+    .poll(async () => {
+      const tBox = await trigger.boundingBox()
+      const pBox = await popover.boundingBox()
+      if (!tBox || !pBox) return Number.POSITIVE_INFINITY
+      const gapBelow = Math.abs(pBox.y - (tBox.y + tBox.height))
+      const gapAbove = Math.abs(pBox.y + pBox.height - tBox.y)
+      return Math.min(gapBelow, gapAbove)
+    })
+    .toBeLessThan(40)
 })
 
-test('activeLane gates the Design `c` verb per focused lane node', async ({ page }) => {
+test('activeLane gates the Design `c` verb per focused lane node', { tag: '@dev-flag' }, async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1100 })
   await openThreeLaneCanvas(page)
 
@@ -251,7 +314,7 @@ test('activeLane gates the Design `c` verb per focused lane node', async ({ page
 // canvas intercepts the keypress on the CAPTURE phase and stops it reaching
 // AppShell's global handler, so `?d3rf` survives.
 
-test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf canvas', async ({
+test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf canvas', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1400, height: 1000 })
@@ -289,23 +352,35 @@ test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf
     .toBeLessThan(120)
 })
 
-// QUARANTINED (issue 096) — the focus-driven pan uses React Flow's animated
-// setCenter; under headless CI the pan doesn't land the node inside the pane
-// within the poll window (deterministic 2/2 in CI; flaky locally). Dev-flag-only
-// canvas — see the note on the popover test above. Re-enable once hardened.
-test.fixme('focusing a cell in an off-screen lane pans it into view', async ({ page }) => {
+// STILL QUARANTINED (issue 096) — could NOT be made deterministic; keep it out of
+// the deploy gate. The focus-driven pan (WorkspaceCanvas onFocusCapture → React
+// Flow setCenter) is only reliable on a "warm" viewport (immediately after another
+// move) and races a ONE-TIME post-measurement fitView. Investigation (2026-07-18):
+//   • Emulating `prefers-reduced-motion: reduce` snaps the pan to duration 0 and
+//     lifts the pass rate to ~11/12 — but setCenter(duration 0) is a no-op when the
+//     zoom is idle, so ANY settle/stabilise wait inserted before the focus drops it
+//     back to 0/N (the pan silently never fires).
+//   • WorkspaceCanvas fires a one-time fitView after `useNodesInitialized` (from a
+//     rAF); its result transform is byte-identical to the initial fit, so it cannot
+//     be waited out by watching the viewport transform, and when it lands just after
+//     the focus-pan it clobbers the node back off-screen (the residual ~1/12 flake).
+//   • blur+refocus per poll tick makes it worse (the blur undoes the prior pan and
+//     the post-focus box read is a frame too early), and the animated (non-reduced)
+//     setCenter after a settle also no-ops.
+// Net: ~92% is not good enough — a single flake re-freezes the deploy pipeline (the
+// exact 096 failure), so this stays `test.fixme`. Best real fix is app-side: have
+// onFocusCapture await the measurement fit (or expose a settled signal) so the pan
+// isn't racing it; or cover the invariant with a unit test of onFocusCapture instead
+// of an e2e. Dev-flag-only canvas — see the deploy-gate note on the popover test.
+test.fixme('focusing a cell in an off-screen lane pans it into view', { tag: '@dev-flag' }, async ({ page }) => {
+  await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1100, height: 850 })
   await openThreeLaneCanvas(page)
   await expect(page.locator('.wc-node--design .design-main')).toBeVisible({ timeout: 15_000 })
 
-  // Zoom into the Foundation lane (leftmost) so the Design lane (rightmost) is
-  // pushed off the visible pane — the precondition the focus-pan must fix.
   await page.keyboard.press('Meta+Digit1')
 
   const designDim = page.locator('.wc-node--design').getByPlaceholder('Type to add a dimension')
-
-  // The Design phantom input is in the DOM but currently off the right of the
-  // pane — its center-x sits beyond the pane's right edge.
   await expect
     .poll(async () => {
       const el = await designDim.boundingBox()
@@ -315,8 +390,6 @@ test.fixme('focusing a cell in an off-screen lane pans it into view', async ({ p
     })
     .toBeGreaterThan(0)
 
-  // Focus it (not a pointer action — works on an off-screen element). The
-  // focus-driven pan brings it inside the pane because it was outside the margin.
   await designDim.focus()
 
   await expect
@@ -352,7 +425,7 @@ async function addArchTable(page: Page, name: string): Promise<void> {
   ).toBeVisible()
 }
 
-test('the Architecture lane mounts N per-table nodes with in-node grammar at zoom ≠ 1', async ({
+test('the Architecture lane mounts N per-table nodes with in-node grammar at zoom ≠ 1', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1100 })
@@ -375,7 +448,7 @@ test('the Architecture lane mounts N per-table nodes with in-node grammar at zoo
   await expect(alpha.getByRole('cell', { name: 'Buyers', exact: true })).toBeVisible()
 })
 
-test('cross-node Tab follows sort order between table nodes (forward + backward)', async ({
+test('cross-node Tab follows sort order between table nodes (forward + backward)', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
@@ -464,7 +537,7 @@ async function archTablesByY(
   return { names: items.map((i) => i.name), xs: items.map((i) => i.x) }
 }
 
-test('dragging a table node down its lane reorders + persists sort, and the lane stays a clean vertical column', async ({
+test('dragging a table node down its lane reorders + persists sort, and the lane stays a clean vertical column', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
