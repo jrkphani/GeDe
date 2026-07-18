@@ -639,6 +639,121 @@ describe('EditableGrid — richtext cell (089 D1 Phase 3)', () => {
   })
 })
 
+describe('onExitBoundary (089-D3 P3.0 — cross-node Tab handoff seam)', () => {
+  it('fires forward when Tab leaves the forward boundary (empty phantom, forward Tab)', () => {
+    const onExitBoundary = vi.fn()
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate: vi.fn() }}
+        onExitBoundary={onExitBoundary}
+      />,
+    )
+    const phantom = screen.getByPlaceholderText('New task')
+    phantom.focus()
+    fireEvent.keyDown(phantom, { key: 'Tab' })
+    expect(onExitBoundary).toHaveBeenCalledExactlyOnceWith('forward')
+  })
+
+  it('does NOT fire forward when the phantom has content (Tab creates-and-continues, not an exit)', async () => {
+    const onExitBoundary = vi.fn()
+    const onCreate = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate }}
+        onExitBoundary={onExitBoundary}
+      />,
+    )
+    const phantom = screen.getByPlaceholderText('New task')
+    await user.type(phantom, 'Gamma')
+    fireEvent.keyDown(phantom, { key: 'Tab' })
+    expect(onCreate).toHaveBeenCalledWith('Gamma')
+    expect(onExitBoundary).not.toHaveBeenCalled()
+  })
+
+  it('fires backward on Shift+Tab from a DISPLAY cell at the first editable cell', async () => {
+    const onExitBoundary = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} onExitBoundary={onExitBoundary} />,
+    )
+    await user.tab()
+    expect(screen.getByText('Alpha')).toHaveFocus()
+    fireEvent.keyDown(screen.getByText('Alpha'), { key: 'Tab', shiftKey: true })
+    expect(onExitBoundary).toHaveBeenCalledExactlyOnceWith('backward')
+  })
+
+  it('does NOT fire backward on Shift+Tab from a NON-boundary cell (there is a previous editable cell)', async () => {
+    const onExitBoundary = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} onExitBoundary={onExitBoundary} />,
+    )
+    await user.tab()
+    await user.tab()
+    expect(screen.getByText('P1')).toHaveFocus()
+    fireEvent.keyDown(screen.getByText('P1'), { key: 'Tab', shiftKey: true })
+    expect(onExitBoundary).not.toHaveBeenCalled()
+  })
+
+  it('fires backward from an ACTIVELY-EDITING first cell AFTER committing the in-flight edit (no lost edit)', async () => {
+    const order: string[] = []
+    const onExitBoundary = vi.fn(() => order.push('exit'))
+    const onTitleCommit = vi.fn(() => order.push('commit'))
+    const user = userEvent.setup()
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns(onTitleCommit)}
+        getRowId={(r) => r.id}
+        onExitBoundary={onExitBoundary}
+      />,
+    )
+    await user.click(screen.getByText('Alpha'))
+    const input = screen.getByDisplayValue('Alpha')
+    await user.clear(input)
+    await user.type(input, 'Xed')
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey: true })
+    await waitFor(() => expect(onExitBoundary).toHaveBeenCalledWith('backward'))
+    // The in-flight edit was committed, not lost…
+    expect(onTitleCommit).toHaveBeenCalledWith(rows[0], 'Xed')
+    // …and committed BEFORE the boundary signal (commit-then-signal).
+    expect(order).toEqual(['commit', 'exit'])
+  })
+
+  it('without onExitBoundary, empty-phantom forward Tab falls through to native (unchanged, no throw)', () => {
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate: vi.fn() }}
+      />,
+    )
+    const phantom = screen.getByPlaceholderText('New task')
+    phantom.focus()
+    fireEvent.keyDown(phantom, { key: 'Tab' })
+    expect(phantom).toBeInTheDocument()
+  })
+
+  it('without onExitBoundary, Shift+Tab from an editing first cell keeps the current stay-put behavior', async () => {
+    const onTitleCommit = vi.fn()
+    const user = userEvent.setup()
+    render(<EditableGrid rows={rows} columns={makeColumns(onTitleCommit)} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('Alpha'))
+    const input = screen.getByDisplayValue('Alpha')
+    fireEvent.keyDown(input, { key: 'Tab', shiftKey: true })
+    // Current behavior: commit-and-advance(null) → focus lands back on the origin display cell, never <body>.
+    await waitFor(() => expect(screen.getByText('Alpha')).toHaveFocus())
+  })
+})
+
 describe('readOnly (issue 035 — viewer role affordance)', () => {
   it('renders no phantom row, regardless of what the caller passes as `phantom`', () => {
     render(

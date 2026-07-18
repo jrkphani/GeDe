@@ -126,6 +126,21 @@ export interface EditableGridProps<TRow> {
   // scope cut rather than an oversight. Optional and additive: omitting it is
   // exactly the pre-038 behavior.
   onEditingChange?: (cell: EditingCell | null) => void
+  // Issue 089-D3 P3.0 — the cross-node Tab handoff seam. Fires at EXACTLY the two
+  // points where the grid otherwise yields control to native Tab / has no next
+  // cell, so a caller (D3's per-item-node canvas, a later phase) can relocate
+  // focus to the correct next-by-`sort` node AFTER the grid has committed:
+  //   • 'forward'  — forward Tab off the forward boundary (empty phantom row,
+  //                  the native-Tab-fallthrough path).
+  //   • 'backward' — Shift+Tab where `nextEditableCell(…, 'left')` returns null
+  //                  (row 0 / first editable cell), fired from BOTH a display
+  //                  cell and an actively-editing cell — in the editing case the
+  //                  in-flight edit is COMMITTED first, THEN this fires, and the
+  //                  usual commit-on-blur `advance(null)` origin-refocus is
+  //                  suppressed so it can't race the caller's focus move.
+  // Optional and additive: when omitted, behavior is byte-identical to today —
+  // native Tab proceeds, no throw, no focus change beyond current behavior.
+  onExitBoundary?: (dir: 'forward' | 'backward') => void
 }
 
 export const PHANTOM_ROW_ID = '__phantom__'
@@ -160,6 +175,9 @@ interface NavContext extends GridNav {
   // continues across a brand-new record (Numbers/Excel grammar) instead of
   // dead-ending on the phantom's single column.
   createFromPhantom: (columnId: string, value: string) => void
+  // Issue 089-D3 P3.0 — the cross-node Tab handoff seam (see EditableGridProps).
+  // Undefined for every existing caller → the grammar is unchanged.
+  onExitBoundary?: ((dir: 'forward' | 'backward') => void) | undefined
 }
 
 // TanStack's `meta` is read at render time inside the (stable) cell renderer
@@ -258,6 +276,25 @@ function handleGridArrowKeys(e: React.KeyboardEvent, nav: NavContext, rowId: str
   }
 }
 
+// Issue 089-D3 P3.0 — from a DISPLAY cell (not editing), a Shift+Tab at the
+// backward boundary (no previous editable cell) hands off to the caller instead
+// of native Tab. Returns true when it consumed the event. A no-op — returns
+// false, leaving native traversal intact — whenever there is no boundary
+// consumer, the key isn't Shift+Tab, or a previous editable cell exists. This is
+// the guard that keeps every existing (no-`onExitBoundary`) grid byte-identical.
+function handleDisplayCellExitBoundary(
+  e: React.KeyboardEvent,
+  nav: NavContext,
+  rowId: string,
+  columnId: string,
+): boolean {
+  if (!nav.onExitBoundary || e.key !== 'Tab' || !e.shiftKey) return false
+  if (nextEditableCell(nav, rowId, columnId, 'left') !== null) return false
+  e.preventDefault()
+  nav.onExitBoundary('backward')
+  return true
+}
+
 function registerRef(nav: NavContext, rowId: string, columnId: string) {
   return (el: HTMLElement | null) => {
     const map = nav.refs.current
@@ -290,9 +327,17 @@ function TextOrMonoCell<TRow>({
   const editing = !nav.readOnly && nav.editing?.rowId === rowId && nav.editing.columnId === columnId
   const [draft, setDraft] = useState(value)
   const cancelling = useRef(false)
+  // Issue 089-D3 P3.0 — set while a Shift+Tab boundary handoff is in flight so
+  // the resulting blur skips its commit-on-blur `advance(null)` (which would
+  // refocus this origin cell and race the caller's focus move). Reset whenever
+  // the cell leaves edit mode, so a stale flag can never suppress a later blur.
+  const exiting = useRef(false)
 
   useEffect(() => {
-    if (!editing) setDraft(value)
+    if (!editing) {
+      setDraft(value)
+      exiting.current = false
+    }
   }, [editing, value])
 
   async function commitAndAdvance(next: string, target: EditingCell | null) {
@@ -301,6 +346,18 @@ function TextOrMonoCell<TRow>({
       if (ok === false) setDraft(value) // rejected: revert to the last-known-good value
     }
     nav.advance(target, rowId, columnId)
+  }
+
+  // Issue 089-D3 P3.0 — commit-then-signal: commit the in-flight edit, THEN fire
+  // the boundary callback, THEN close the editor WITHOUT `advance` (no stay-put
+  // refocus), so the caller relocates focus cleanly with nothing to race.
+  async function commitAndExit(next: string, dir: 'forward' | 'backward') {
+    if (next !== value) {
+      const ok = await cellDef.onCommit(row, next)
+      if (ok === false) setDraft(value)
+    }
+    nav.onExitBoundary?.(dir)
+    nav.setEditing(null)
   }
 
   // Issue 035 — a read-only cell never becomes a click/keyboard target at all
@@ -336,7 +393,15 @@ function TextOrMonoCell<TRow>({
             void commitAndAdvance(draft.trim(), nextEditableCell(nav, rowId, columnId, 'down'))
           } else if (e.key === 'Tab') {
             e.preventDefault()
-            void commitAndAdvance(draft.trim(), nextEditableCell(nav, rowId, columnId, e.shiftKey ? 'left' : 'right'))
+            const target = nextEditableCell(nav, rowId, columnId, e.shiftKey ? 'left' : 'right')
+            // Backward boundary with a consumer: commit, then hand off focus
+            // (see commitAndExit) instead of `advance(null)`'s origin-refocus.
+            if (e.shiftKey && target === null && nav.onExitBoundary) {
+              exiting.current = true
+              void commitAndExit(draft.trim(), 'backward')
+            } else {
+              void commitAndAdvance(draft.trim(), target)
+            }
           } else if (e.key === 'Escape') {
             e.preventDefault()
             cancelling.current = true
@@ -350,6 +415,9 @@ function TextOrMonoCell<TRow>({
             nav.setEditing(null)
             return
           }
+          // Boundary handoff in flight (089-D3 P3.0): commitAndExit owns the
+          // commit + close; don't commit-on-blur/advance and bounce focus back.
+          if (exiting.current) return
           void commitAndAdvance(draft.trim(), null)
         }}
       />
@@ -367,6 +435,7 @@ function TextOrMonoCell<TRow>({
       tabIndex={0}
       onClick={() => nav.setEditing({ rowId, columnId })}
       onKeyDown={(e) => {
+        if (handleDisplayCellExitBoundary(e, nav, rowId, columnId)) return
         if (e.key === 'Enter') {
           e.preventDefault()
           nav.setEditing({ rowId, columnId })
@@ -401,10 +470,15 @@ function MultilineCell<TRow>({
   const editing = !nav.readOnly && nav.editing?.rowId === rowId && nav.editing.columnId === columnId
   const [draft, setDraft] = useState(value)
   const cancelling = useRef(false)
+  // Issue 089-D3 P3.0 — see TextOrMonoCell's `exiting` for the rationale.
+  const exiting = useRef(false)
   const textareaRef = useRef<HTMLTextAreaElement | null>(null)
 
   useEffect(() => {
-    if (!editing) setDraft(value)
+    if (!editing) {
+      setDraft(value)
+      exiting.current = false
+    }
   }, [editing, value])
 
   useEffect(() => {
@@ -421,6 +495,16 @@ function MultilineCell<TRow>({
       if (ok === false) setDraft(value)
     }
     nav.advance(target, rowId, columnId)
+  }
+
+  // Issue 089-D3 P3.0 — commit-then-signal, see TextOrMonoCell.commitAndExit.
+  async function commitAndExit(next: string, dir: 'forward' | 'backward') {
+    if (next !== value) {
+      const ok = await cellDef.onCommit(row, next)
+      if (ok === false) setDraft(value)
+    }
+    nav.onExitBoundary?.(dir)
+    nav.setEditing(null)
   }
 
   // Issue 035 — same read-only short-circuit as TextOrMonoCell.
@@ -464,7 +548,13 @@ function MultilineCell<TRow>({
             void commitAndAdvance(draft.trim(), nextEditableCell(nav, rowId, columnId, 'down'))
           } else if (e.key === 'Tab') {
             e.preventDefault()
-            void commitAndAdvance(draft.trim(), nextEditableCell(nav, rowId, columnId, e.shiftKey ? 'left' : 'right'))
+            const target = nextEditableCell(nav, rowId, columnId, e.shiftKey ? 'left' : 'right')
+            if (e.shiftKey && target === null && nav.onExitBoundary) {
+              exiting.current = true
+              void commitAndExit(draft.trim(), 'backward')
+            } else {
+              void commitAndAdvance(draft.trim(), target)
+            }
           } else if (e.key === 'Escape') {
             e.preventDefault()
             cancelling.current = true
@@ -478,6 +568,7 @@ function MultilineCell<TRow>({
             nav.setEditing(null)
             return
           }
+          if (exiting.current) return
           void commitAndAdvance(draft.trim(), null)
         }}
       />
@@ -493,6 +584,7 @@ function MultilineCell<TRow>({
       title={value || undefined}
       onClick={() => nav.setEditing({ rowId, columnId })}
       onKeyDown={(e) => {
+        if (handleDisplayCellExitBoundary(e, nav, rowId, columnId)) return
         if (e.key === 'Enter') {
           e.preventDefault()
           nav.setEditing({ rowId, columnId })
@@ -623,6 +715,7 @@ function RichTextCell<TRow>({
       title={plain || undefined}
       onClick={() => nav.setEditing({ rowId, columnId })}
       onKeyDown={(e) => {
+        if (handleDisplayCellExitBoundary(e, nav, rowId, columnId)) return
         if (e.key === 'Enter') {
           e.preventDefault()
           nav.setEditing({ rowId, columnId })
@@ -706,7 +799,15 @@ function ComboboxCell<TRow>({
               // Tab commits nothing here (selection commits on pick) and moves
               // to the next editable cell, landing on it in edit mode.
               e.preventDefault()
-              nav.advance(nextEditableCell(nav, rowId, columnId, e.shiftKey ? 'left' : 'right'), rowId, columnId)
+              const target = nextEditableCell(nav, rowId, columnId, e.shiftKey ? 'left' : 'right')
+              // Backward boundary with a consumer (089-D3 P3.0): hand off focus
+              // instead of `advance(null)`'s stay-put refocus. No in-flight edit
+              // to commit here — a combobox commits on pick, not on Tab.
+              if (e.shiftKey && target === null && nav.onExitBoundary) {
+                nav.onExitBoundary('backward')
+              } else {
+                nav.advance(target, rowId, columnId)
+              }
             }
             handleGridArrowKeys(e, nav, rowId, columnId)
           }}
@@ -765,9 +866,15 @@ function PhantomCell({
             e.preventDefault()
             nav.createFromPhantom(columnId, draft.trim())
             setDraft('')
+          } else if (nav.onExitBoundary) {
+            // Empty phantom + forward Tab, with a boundary consumer (089-D3
+            // P3.0): this is the grid's forward boundary — hand off focus so the
+            // caller can move to the correct next-by-sort node.
+            e.preventDefault()
+            nav.onExitBoundary('forward')
           }
-          // Empty phantom + forward Tab: let native Tab move focus out of the
-          // grid rather than trapping the user on an empty phantom cell.
+          // Empty phantom + forward Tab, no consumer: let native Tab move focus
+          // out of the grid rather than trapping the user on an empty phantom.
         }
         if (e.key === 'Escape') setDraft('')
         handleGridArrowKeys(e, nav, PHANTOM_ROW_ID, columnId)
@@ -829,6 +936,7 @@ export function EditableGrid<TRow>({
   isRowSelected,
   readOnly = false,
   onEditingChange,
+  onExitBoundary,
 }: EditableGridProps<TRow>) {
   // Issue 035 — a read-only grid never shows the phantom row, regardless of
   // what the caller passed; callers don't need their own conditional.
@@ -882,6 +990,7 @@ export function EditableGrid<TRow>({
       pendingPhantomEdit.current = columnId
       activePhantom?.onCreate(value)
     },
+    onExitBoundary,
   }
   const columnSignature = columns.map((c) => `${c.id}:${c.header}:${c.headClassName ?? ''}`).join('|')
 
