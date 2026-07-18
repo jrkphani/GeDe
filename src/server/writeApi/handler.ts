@@ -22,7 +22,7 @@ import {
 } from '../../domain/writeInvariants'
 import { verifyBearerToken, type JwtVerifierConfig } from './jwt'
 import { checkTenancy } from './tenancy'
-import { resolveForeignKeys, type WriteStore } from './store'
+import { resolveForeignKeys, resolveForeignKeyTenancy, type WriteStore } from './store'
 import { rejection, type WriteRejection } from './rejection'
 
 export interface WriteApiRequest {
@@ -116,6 +116,49 @@ export async function handleWriteRequest(request: WriteApiRequest, deps: WriteAp
             : 'The item you tried to change no longer exists.',
       })
       continue
+    }
+
+    // Issue 098 (SECURITY) — checkTenancy above only authorized the DECLARED
+    // workspace; it never asks WHOSE workspace the row's FK targets belong to.
+    // For insert/update, verify every present FK target is same-tenant, so a
+    // caller authorized for their own workspace cannot create/re-point a row
+    // whose projectId (etc.) references a VICTIM's entity in another workspace
+    // (the FK exists, so resolveForeignKeys/checkInvariants would let it pass).
+    // Runs BEFORE checkInvariants so an EXISTING cross-tenant FK yields
+    // cross_tenant, while a genuinely MISSING FK still yields
+    // referential_integrity from checkInvariants (resolveForeignKeyTenancy
+    // skips null resolutions). Does NOT touch tier1_purpose's natural-key
+    // upsert (issue 091/095) — this is the insert/update FK-tenancy gate only.
+    if (mutation.op === 'insert' || mutation.op === 'update') {
+      const crossTenantFks = await resolveForeignKeyTenancy(
+        mutation.table,
+        mutation.payload,
+        mutation.workspaceId,
+        deps.store,
+      )
+      if (crossTenantFks.length > 0) {
+        // Diagnostic (mirrors the 091 tenancy-rejection log shape): structured,
+        // identifiers only — table/op/entityId/mutationId/declaredWorkspaceId
+        // and the offending FK columns. No prose/PII, and never the FK VALUES
+        // (a victim's entity ids) — only which columns were cross-tenant.
+        console.warn(
+          `[writeApi][098] cross-tenant FK ${JSON.stringify({
+            table: mutation.table,
+            op: mutation.op,
+            entityId: mutation.entityId,
+            mutationId: mutation.id,
+            declaredWorkspaceId: mutation.workspaceId,
+            columns: crossTenantFks,
+          })}`,
+        )
+        outcomes.push({
+          mutationId: mutation.id,
+          status: 'rejected',
+          reason: 'cross_tenant',
+          message: 'That change is outside your workspace and was not saved.',
+        })
+        continue
+      }
     }
 
     const invariantViolation = await checkInvariants(mutation, deps.store)

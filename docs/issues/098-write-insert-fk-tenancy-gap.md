@@ -1,6 +1,6 @@
 # 098: (SECURITY) write-path `insert` never verifies FK-referenced rows belong to the caller's workspace
 
-- **Status**: OPEN — found 2026-07-18 by the adversarial security review of 097 (empirically reproduced against a real Postgres). Not started. **Pre-existing gap (predates 095).**
+- **Status**: ✅ FIX LANDED + **ADVERSARIAL REVIEW PASSED** (real-Postgres verified) — 2026-07-18. Approach (A): a new `resolveForeignKeyTenancy` (`store.ts`) resolves every present FK target's workspace and rejects `cross_tenant` when it differs from the mutation's declared (already-authorized) workspace; wired into `handler.ts` for insert+update, before `checkInvariants`, with a `[writeApi][098]` diagnostic (identifiers only, never the FK values). **The adversarial review found + closed one further gap of the same class** (mirroring how 097's review found 098): `projects.adoptedIntoProjectId` (a real self-ref FK, `schema.ts:95`) was absent from `FK_SCHEMA.projects` (`{}`), so it was checked by NEITHER existence NOR tenancy — a crafted `/write` insert could plant a cross-tenant `adoptedIntoProjectId` (+ a minor existence oracle). Closed by adding `projects: { adoptedIntoProjectId: 'projects' }` to `FK_SCHEMA` (consistent with the other self-ref FKs). Red-first; `verify:fast` 1513 green; real-Postgres live suite 7/7. **Pre-existing gap (predates 095).** Pending deploy.
 - **Milestone**: M9 (tenancy) / write-path security.
 - **Severity**: **Medium-High** — authenticated cross-tenant write: a caller can create rows that reference ANOTHER workspace's parent entities (starting with `project_id`). Requires a valid JWT + a known victim parent id + a crafted `/write`. The API is the sole authz boundary in prod (RLS is a no-op).
 - **Related**: **097** (the natural-key upsert guard whose silent-no-op makes this gap's impact worse for `tier1_purpose`), **095**, **043/057/080** (the authz model), **034** (RLS backstop, no-op in prod).
@@ -28,6 +28,10 @@ The insert path must verify every FK target's tenancy, not just its existence. O
 2. Implement per-FK tenancy resolution; assert legit same-workspace + 057-shared-member inserts still pass.
 3. Add an observability log (mirror `handler.ts:99` `[writeApi][091]`) so a rejected/absorbed cross-tenant write is visible in CloudWatch.
 4. `verify:fast` + the live suite.
+
+## Operational follow-up (from the review, not code)
+- **One-time backfill audit**: the fix necessarily trusts each row's already-persisted denormalized `workspace_id`. Any row planted by the *pre-098* bug before this ships would still resolve as "same-tenant" to a chained FK check. Worth running a one-time audit once deployed — join each `projectId`-FK-bearing table back through `projects.workspace_id` and flag divergence. (Low expected yield — the bug required a crafted `/write` bypassing the client — but cheap insurance.)
+- The `workspaces`-target FK branch (`invitations`/`workspaceMembers`) is effectively vestigial: `applyIfNew` already server-stamps `workspace_id = mutation.workspaceId` (SERVER_STAMPED), so those two never trust the payload column. Harmless, kept for uniformity/defense-in-depth.
 
 ## Notes / also-found
 - **Observability gap**: when 097's guard no-ops (0 rows) the mutation is still ledgered `applied` (`true`) with no signal — worth a server log when the natural-key `DO UPDATE`'s `RETURNING` is empty, so a silently-absorbed write is at least visible in CloudWatch.

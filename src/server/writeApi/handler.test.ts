@@ -467,6 +467,201 @@ describe('handleWriteRequest — shared-workspace membership (issue 057)', () =>
   })
 })
 
+// Issue 098 (SECURITY) — the write-path `insert`/`update` never verified that
+// an FK-referenced row belongs to the caller's workspace, only that it EXISTS
+// (resolveForeignKeys) and that the DECLARED workspace is authorized
+// (checkTenancy). So a caller authorized for their own workspace A could
+// `insert` a row (e.g. tier1Purpose, dimensions) whose projectId points at a
+// VICTIM's project in workspace V, stamping workspace_id = A. These tests seed
+// a real victim project (so the FK EXISTS — proving the rejection is TENANCY,
+// not the pre-existing existence check) and assert the cross-tenant FK is
+// rejected `cross_tenant`, while legit same-workspace / 057-shared inserts and
+// genuinely-missing FKs are unaffected.
+describe('handleWriteRequest — cross-tenant FK on insert/update (issue 098 SECURITY)', () => {
+  const WS_V = workspaceIdForSub('victim')
+
+  function seedVictimProject(store: InMemoryWriteStore): string {
+    const victimProjectId = uuidv7()
+    store.seedWorkspace(WS_V)
+    store.seed({
+      id: victimProjectId,
+      workspaceId: WS_V,
+      table: 'projects',
+      data: { name: 'Victim project' },
+      updatedAt: new Date(0).toISOString(),
+      deletedAt: null,
+    })
+    return victimProjectId
+  }
+
+  it('rejects a tier1Purpose insert whose projectId points at another workspace\'s (existing) project', async () => {
+    const store = new InMemoryWriteStore()
+    const victimProjectId = seedVictimProject(store)
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'insert',
+      payload: { projectId: victimProjectId, body: 'squatted' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    }
+  })
+
+  it('rejects a dimensions insert whose projectId points at another workspace\'s (existing) project', async () => {
+    const store = new InMemoryWriteStore()
+    const victimProjectId = seedVictimProject(store)
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'dimensions',
+      op: 'insert',
+      payload: { projectId: victimProjectId, name: 'Cross-tenant dim' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    }
+  })
+
+  it('rejects an update that RE-POINTS an FK at another workspace\'s (existing) project', async () => {
+    const store = new InMemoryWriteStore()
+    const victimProjectId = seedVictimProject(store)
+    // A purpose row the caller legitimately owns in WS1...
+    const ownProjectId = uuidv7()
+    store.seed({ id: ownProjectId, workspaceId: WS1, table: 'projects', data: { name: 'Mine' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    const purposeId = uuidv7()
+    store.seed({ id: purposeId, workspaceId: WS1, table: 'tier1Purpose', data: { projectId: ownProjectId, body: 'ok' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    const token = await tokenFor('user-1', WS1)
+    // ...that the caller now tries to re-point at the victim's project.
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'update',
+      entityId: purposeId,
+      payload: { projectId: victimProjectId },
+      clientUpdatedAt: new Date().toISOString(),
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    }
+  })
+
+  it('applies a legit same-workspace insert (FK target in the caller\'s own workspace)', async () => {
+    const store = new InMemoryWriteStore()
+    const ownProjectId = uuidv7()
+    store.seedWorkspace(WS1)
+    store.seed({ id: ownProjectId, workspaceId: WS1, table: 'projects', data: { name: 'Mine' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'insert',
+      payload: { projectId: ownProjectId, body: 'legit' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+  })
+
+  it('applies a 057-shared-member insert (FK target in the DECLARED, member-authorized workspace)', async () => {
+    // A member of workspace V inserting into V, referencing V's own project,
+    // declaring V — proves the tenancy check is against the DECLARED (and
+    // membership-authorized) workspace, not the caller's personal claims.workspaceId.
+    const store = new InMemoryWriteStore()
+    const victimProjectId = seedVictimProject(store)
+    store.seedMembership(WS_V, 'user-b')
+    const token = await tokenFor('user-b', workspaceIdForSub('user-b'))
+    const mutation = envelope({
+      workspaceId: WS_V,
+      table: 'tier1Purpose',
+      op: 'insert',
+      payload: { projectId: victimProjectId, body: 'member edit' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+  })
+
+  it('still rejects a genuinely NONEXISTENT FK as referential_integrity, NOT cross_tenant', async () => {
+    const store = new InMemoryWriteStore()
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'insert',
+      payload: { projectId: uuidv7(), body: 'points at nothing' },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'referential_integrity' })
+    }
+  })
+
+  // Issue 098 follow-up (adversarial review) — `projects.adoptedIntoProjectId`
+  // (schema.ts:95, issue 037's local→cloud on-ramp) is a real self-referential
+  // FK, but FK_SCHEMA.projects was `{}`, so a crafted `projects` insert could
+  // plant `adoptedIntoProjectId = <victim project in another workspace>` with
+  // NEITHER an existence NOR a tenancy check. Adding the FK_SCHEMA entry makes
+  // it both. The legit client never sends this column via /write, so the null/
+  // undefined-skip means these checks only ever fire on a crafted payload.
+  it('rejects a projects insert whose adoptedIntoProjectId points at another workspace\'s (existing) project', async () => {
+    const store = new InMemoryWriteStore()
+    const victimProjectId = seedVictimProject(store)
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'projects',
+      op: 'insert',
+      payload: { name: 'On-ramp squat', adoptedIntoProjectId: victimProjectId },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    }
+  })
+
+  it('rejects a projects insert whose adoptedIntoProjectId points at a NONEXISTENT project as referential_integrity', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS1)
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'projects',
+      op: 'insert',
+      payload: { name: 'Dangling on-ramp', adoptedIntoProjectId: uuidv7() },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'referential_integrity' })
+    }
+  })
+
+  it('applies a projects insert whose adoptedIntoProjectId points at a same-workspace project', async () => {
+    const store = new InMemoryWriteStore()
+    store.seedWorkspace(WS1)
+    const ownProjectId = uuidv7()
+    store.seed({ id: ownProjectId, workspaceId: WS1, table: 'projects', data: { name: 'Adopt target' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'projects',
+      op: 'insert',
+      payload: { name: 'On-ramp legit', adoptedIntoProjectId: ownProjectId },
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+  })
+})
+
 describe('handleWriteRequest — offline replay/idempotency (test-first plan item 4)', () => {
   it('applies a fresh mutation once, and a replay of the same mutation id is a no-op, not a duplicate', async () => {
     const store = new InMemoryWriteStore()

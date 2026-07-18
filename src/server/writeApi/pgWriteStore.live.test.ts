@@ -31,7 +31,7 @@ import path from 'node:path'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { Pool } from 'pg'
 import { uuidv7 } from 'uuidv7'
-import { PgWriteStore } from './store'
+import { PgWriteStore, resolveForeignKeyTenancy } from './store'
 
 const DATABASE_URL = process.env.DATABASE_URL
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..')
@@ -307,6 +307,61 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
     expect(after.rows[0]?.id).toBe(rowId)
     expect(after.rows[0]?.body).toBe('victim body') // NOT "HACKED"
     expect(after.rows[0]?.workspace_id).toBe(victimWorkspaceId) // NOT re-tenanted
+  })
+
+  // Issue 098 (SECURITY) — the write-path FK-TENANCY pre-check. Against real FK
+  // data, `resolveForeignKeyTenancy` must resolve a FK target's OWNING workspace
+  // (via PgWriteStore.resolveWorkspaceForEntity's real SQL) and flag it when it
+  // differs from the caller's declared workspace — the check the fake-client
+  // contract test cannot exercise (it never resolves a real row's workspace_id).
+  it('resolveForeignKeyTenancy flags a projectId owned by another workspace, and passes a same-workspace one (098)', async () => {
+    const store = new PgWriteStore({ pool })
+    const attackerWorkspaceId = workspaceId // the beforeAll fixture workspace
+    const victimWorkspaceId = uuidv7()
+    const victimProjectId = uuidv7()
+    const ownProjectId = uuidv7()
+
+    // Victim workspace + a project it owns.
+    await pool.query('INSERT INTO workspaces (id, name) VALUES ($1, $2)', [victimWorkspaceId, 'Victim WS 098'])
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      victimProjectId,
+      victimWorkspaceId,
+      'Victim Project 098',
+    ])
+    // A project the attacker legitimately owns in their own workspace.
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      ownProjectId,
+      attackerWorkspaceId,
+      'Own Project 098',
+    ])
+
+    // Attacker declares their own workspace but references the VICTIM's project.
+    const crossTenant = await resolveForeignKeyTenancy(
+      'tier1Purpose',
+      { projectId: victimProjectId },
+      attackerWorkspaceId,
+      store,
+    )
+    expect(crossTenant).toContain('projectId')
+
+    // Same declared workspace, own project → clean.
+    const clean = await resolveForeignKeyTenancy(
+      'tier1Purpose',
+      { projectId: ownProjectId },
+      attackerWorkspaceId,
+      store,
+    )
+    expect(clean).toEqual([])
+
+    // A genuinely-missing FK target resolves to null → NOT flagged cross-tenant
+    // (it must fall through to the existing referential_integrity check).
+    const missing = await resolveForeignKeyTenancy(
+      'tier1Purpose',
+      { projectId: uuidv7() },
+      attackerWorkspaceId,
+      store,
+    )
+    expect(missing).toEqual([])
   })
 
   // Issue 078 step 2 (migration 0015) — parameters/bindings/tier2_entries

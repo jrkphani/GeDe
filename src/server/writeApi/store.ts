@@ -44,7 +44,15 @@ export type FkReferenceTable = MutationTable | 'workspaces'
  * Each entry: payload column name -> the table it must resolve against.
  */
 export const FK_SCHEMA: Readonly<Record<MutationTable, Readonly<Record<string, FkReferenceTable>>>> = {
-  projects: {},
+  // Issue 037 — `adoptedIntoProjectId` is a real self-referential FK
+  // (schema.ts: `references((): AnyPgColumn => projects.id)`, the local→cloud
+  // on-ramp). Declared here so it is BOTH existence-checked (resolveForeignKeys)
+  // AND tenancy-checked (resolveForeignKeyTenancy, issue 098) — mirroring the
+  // other self-referential FKs below (tier2Entries.parentId, parameters.
+  // parentParamId, contexts.parentId). The legit client never sends this column
+  // via /write, so the nullable-FK skip means the check only fires on a crafted
+  // payload attempting a cross-tenant plant.
+  projects: { adoptedIntoProjectId: 'projects' },
   // Issue 090 — `parentContextId` is the nullable half of the canvases↔contexts
   // FK cycle (a child canvas points at its parent context); `projectId` is the
   // NOT-NULL project owner. `dimensions`/`contexts` gain `canvasId` (their
@@ -143,6 +151,63 @@ export async function resolveForeignKeys(
     if (!exists) unresolved.push(value)
   }
   return unresolved
+}
+
+/**
+ * Issue 098 (SECURITY) — the FK-TENANCY pre-check that `resolveForeignKeys`
+ * above deliberately does NOT do: that verifies a FK target EXISTS; this
+ * verifies it BELONGS to the caller. For each FK edge FK_SCHEMA declares for
+ * `table`, resolve the workspace the target row actually belongs to and return
+ * the column names whose target belongs to a workspace OTHER than the
+ * mutation's DECLARED (and already-authorized, by checkTenancy) one. An empty
+ * list means every present FK is same-tenant.
+ *
+ * Without this, a caller authorized only for workspace A can `insert`/`update`
+ * a row (e.g. tier1Purpose, dimensions, canvases, ...) whose `projectId` (or
+ * any FK) points at a VICTIM's entity in workspace V — the FK is satisfied (the
+ * project exists) and checkTenancy only authorized the declared workspace A, so
+ * the row lands stamped workspace_id = A over the victim's parent. The API is
+ * the sole authz boundary in prod (RLS is a no-op, ADR-0010).
+ *
+ * Co-located with FK_SCHEMA/resolveForeignKeys ON PURPOSE (not in tenancy.ts):
+ * store.ts already imports `WorkspaceScopeResolver` FROM tenancy.ts, so putting
+ * this there would create a circular import.
+ *
+ * Semantics per FK edge:
+ *  - null/undefined value → skip (a nullable FK legally absent).
+ *  - non-string value → skip (resolveForeignKeys already flags it as an
+ *    invalid-reference type; not this function's concern).
+ *  - target table is `workspaces` → the row's tenancy IS its own id, so flag
+ *    iff `value !== declaredWorkspaceId`.
+ *  - otherwise → resolve the target's workspace; flag iff it resolves to a
+ *    workspace that is neither null NOR the declared one. A `null` resolution
+ *    (missing / soft-deleted target) is SKIPPED, never flagged — it must fall
+ *    through to resolveForeignKeys's existing `referential_integrity`
+ *    rejection, so a genuinely missing FK never masquerades as cross_tenant.
+ */
+export async function resolveForeignKeyTenancy(
+  table: MutationTable,
+  payload: Readonly<Record<string, unknown>>,
+  declaredWorkspaceId: string,
+  resolver: Pick<WorkspaceScopeResolver, 'resolveWorkspaceForEntity'>,
+): Promise<string[]> {
+  const edges = FK_SCHEMA[table]
+  const crossTenant: string[] = []
+  for (const [column, refTable] of Object.entries(edges)) {
+    const value = payload[column]
+    if (value === null || value === undefined) continue // nullable FK legally absent
+    if (typeof value !== 'string') continue // resolveForeignKeys owns the invalid-reference-type case
+    if (refTable === 'workspaces') {
+      // A `workspaces` FK target carries no workspace_id of its own — its
+      // tenancy is its own id (issue 056). Anything but the declared workspace
+      // is cross-tenant.
+      if (value !== declaredWorkspaceId) crossTenant.push(column)
+      continue
+    }
+    const targetWorkspace = await resolver.resolveWorkspaceForEntity(refTable, value)
+    if (targetWorkspace !== null && targetWorkspace !== declaredWorkspaceId) crossTenant.push(column)
+  }
+  return crossTenant
 }
 
 // ── In-memory test double ───────────────────────────────────────────────────
