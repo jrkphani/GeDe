@@ -128,6 +128,64 @@ describe('tier2 store — a failed add announces via useStatusStore, never a sil
   })
 })
 
+// 089-D3 P3.4 — dragging a table node up/down its Architecture lane reorders
+// the tables and PERSISTS the new `sort`, honoring derived positioning: the
+// store rewrites ONLY `sort`, never a `{x,y}`. Mirrors useDimensionsStore's
+// reorder (dense sort rewrite, undoable, per-changed-row enqueue).
+describe('tier2 store — reorderTable (089-D3 P3.4, sort-only persist)', () => {
+  it('reorderTable persists a dense sort rewrite and is one undo step', async () => {
+    await useTier2Store.getState().addTable('Alpha')
+    await useTier2Store.getState().addTable('Beta')
+    await useTier2Store.getState().addTable('Gamma')
+    const ids = tables().map((t) => t.id)
+    const gamma = ids[2] as string
+
+    // Drag Gamma (sort 2) to the top (index 0).
+    await useTier2Store.getState().reorderTable(gamma, 0)
+    expect(tables().map((t) => t.name)).toEqual(['Gamma', 'Alpha', 'Beta'])
+    expect(tables().map((t) => t.sort)).toEqual([0, 1, 2]) // dense
+
+    await useCommandLogStore.getState().undo()
+    expect(tables().map((t) => t.id)).toEqual(ids) // exact original order
+    await useCommandLogStore.getState().redo()
+    expect(tables().map((t) => t.name)).toEqual(['Gamma', 'Alpha', 'Beta'])
+  })
+
+  it('reorderTable enqueues a tier2_tables update for every row whose sort changed — and NEVER a {x,y} position field (derived-positioning invariant)', async () => {
+    await useTier2Store.getState().addTable('Alpha')
+    await useTier2Store.getState().addTable('Beta')
+    await useTier2Store.getState().addTable('Gamma')
+    const gamma = tables()[2]?.id as string
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useTier2Store.getState().reorderTable(gamma, 0)
+
+    const queued = useSyncStore.getState().queue.entries
+    // Gamma 2→0, Alpha/Beta each shift +1 → every row's sort moved.
+    expect(queued.filter((e) => e.table === 'tier2_tables' && e.op === 'update')).toHaveLength(3)
+    // The load-bearing correctness property: the outbox carries the table row's
+    // own columns (incl. the rewritten `sort`) but NEVER a persisted position —
+    // no `x`, `y`, or `position` field ever reaches the store/outbox.
+    for (const e of queued) {
+      const keys = Object.keys(e.row)
+      expect(keys).not.toContain('x')
+      expect(keys).not.toContain('y')
+      expect(keys).not.toContain('position')
+    }
+  })
+
+  it('reorderTable enqueues nothing when a table is dropped in its own slot (no sort changed)', async () => {
+    await useTier2Store.getState().addTable('Alpha')
+    await useTier2Store.getState().addTable('Beta')
+    const ids = tables().map((t) => t.id)
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    await useTier2Store.getState().reorderTable(ids[0] as string, 0)
+
+    expect(useSyncStore.getState().queue.entries).toHaveLength(0)
+  })
+})
+
 describe('tier2 store — promote (one undo step, invariant 7)', () => {
   it('promote creates a dimension + parameters and undoes/redoes as a single step', async () => {
     const table = nn(await useTier2Store.getState().addTable('Stakeholders'))

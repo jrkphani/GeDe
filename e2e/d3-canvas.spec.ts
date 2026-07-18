@@ -400,3 +400,118 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   await page.keyboard.press('Shift+Tab')
   await expect(alpha.getByPlaceholder('Name an entry')).toBeFocused()
 })
+
+// ── 089-D3 P3.4 — constrained drag reorders `sort` (persisted, derived pos) ───
+// Dragging a table node's header up/down its lane reorders the tables and
+// PERSISTS the new `sort` (via the tier2 table-reorder mutation). Position stays
+// DERIVED — never a persisted `{x,y}` — so the lane must stay a clean vertical
+// column and the new order must survive a reload (a real `sort` write, not just
+// in-memory node coords). The table nodes are emitted in reverse-sort DOM order,
+// so this is a genuine reorder of `sort`, not of DOM/array order.
+
+// Table names top-to-bottom by each arch-table node's on-screen y, plus their
+// rounded left-x — the visual `sort` stack and the lane's column invariant.
+// The `|`-joined React Flow transforms of the arch-table nodes — a signature of
+// the current derived stack, used to wait until fit-view/measurement has settled
+// before dragging (a drag against a still-animating viewport races and flakes).
+async function archNodeTransforms(page: Page): Promise<string> {
+  return page.locator('.wc-node--arch-table').evaluateAll((els) =>
+    els
+      .map((el) => {
+        const node = el.closest('.react-flow__node')
+        return node ? (node as HTMLElement).style.transform : ''
+      })
+      .join('|'),
+  )
+}
+
+// Block until the arch-table stack transforms are identical across two
+// consecutive polls — i.e. the viewport has stopped moving.
+async function waitForStableArchStack(page: Page): Promise<void> {
+  let prev = ''
+  await expect
+    .poll(async () => {
+      const cur = await archNodeTransforms(page)
+      const stable = cur !== '' && cur === prev
+      prev = cur
+      return stable
+    })
+    .toBe(true)
+}
+
+async function archTablesByY(
+  page: Page,
+): Promise<{ names: string[]; xs: number[] }> {
+  const items = await page.locator('.wc-node--arch-table').evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect()
+      const handle = el.querySelector('.wc-node__handle')
+      const name = handle ? handle.textContent.trim() : ''
+      return { name, y: r.top, x: Math.round(r.left) }
+    }),
+  )
+  items.sort((a, b) => a.y - b.y)
+  return { names: items.map((i) => i.name), xs: items.map((i) => i.x) }
+}
+
+test('dragging a table node down its lane reorders + persists sort, and the lane stays a clean vertical column', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  const projectId = await openThreeLaneCanvas(page)
+
+  // Three tables → derived stack Alpha (sort 0), Beta (1), Gamma (2).
+  await addArchTable(page, 'Alpha')
+  await addArchTable(page, 'Beta')
+  await addArchTable(page, 'Gamma')
+  await expect(page.locator('.wc-node--arch-table')).toHaveCount(3)
+
+  // Frame all three table nodes into the pane so the drag origin + drop target
+  // are both on-screen, then wait for the fit-view pan to settle before dragging.
+  await page.locator('.react-flow__controls-fitview').click()
+  await waitForStableArchStack(page)
+
+  const before = await archTablesByY(page)
+  expect(before.names).toEqual(['Alpha', 'Beta', 'Gamma'])
+  // Clean vertical column: every table node shares one left-x.
+  expect(new Set(before.xs).size).toBe(1)
+
+  // Drag Alpha's HEADER (the only drag origin — `dragHandle`) down past Gamma.
+  const alphaHandle = page
+    .locator('.wc-node--arch-table')
+    .filter({ hasText: 'Alpha' })
+    .locator('.wc-node__handle')
+  const gammaNode = page.locator('.wc-node--arch-table').filter({ hasText: 'Gamma' })
+  const start = await alphaHandle.boundingBox()
+  const gammaBox = await gammaNode.boundingBox()
+  if (!start || !gammaBox) throw new Error('drag handle + gamma node must have boxes')
+  const startX = start.x + start.width / 2
+  const startY = start.y + start.height / 2
+  const dropY = gammaBox.y + gammaBox.height + 24 // below Gamma's center → last
+
+  // React Flow's node-drag needs a real pointer sequence with an initial nudge.
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move(startX, startY + 12, { steps: 4 })
+  await page.mouse.move(startX, dropY, { steps: 12 })
+  await page.mouse.up()
+
+  // Reordered: Alpha is now last. The dropped node snapped to its DERIVED slot
+  // (never kept its dragged coords), and the column is still a single x.
+  await expect
+    .poll(async () => (await archTablesByY(page)).names)
+    .toEqual(['Beta', 'Gamma', 'Alpha'])
+  const afterDrop = await archTablesByY(page)
+  expect(new Set(afterDrop.xs).size).toBe(1) // x invariant — lane stays vertical
+
+  // PERSISTED — a reload re-reads `sort` from PGlite; the new order survives.
+  // If a `{x,y}` had been persisted instead of `sort`, the reload's derived
+  // layout would fall back to creation-order — this proves `sort` was written.
+  await page.goto(`/p/${projectId}/design?d3rf=1`)
+  await expect(page.locator('.wc-node--arch-table')).toHaveCount(3)
+  await expect
+    .poll(async () => (await archTablesByY(page)).names)
+    .toEqual(['Beta', 'Gamma', 'Alpha'])
+  const afterReload = await archTablesByY(page)
+  expect(new Set(afterReload.xs).size).toBe(1)
+})

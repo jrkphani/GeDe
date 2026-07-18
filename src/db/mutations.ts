@@ -1594,6 +1594,30 @@ export async function restoreTier2Table(
   return listTier2Tables(db, projectId)
 }
 
+// Issue 089 D3 P3.4 — move a table to `toIndex` within its project's
+// Architecture lane and re-densify `sort` to 0..n-1 (mirrors reorderDimension /
+// reorderCanvas). A table node dragged up/down its lane carries exactly one
+// meaning — reorder — so ONLY `sort` is ever rewritten; the node's `{x,y}` is a
+// pure derived projection of `(tier, sort)` and is never persisted (SPEC
+// invariant 5 / STYLE_GUIDE §1 principle 4). Returns the full re-sorted list so
+// the store can diff which rows actually moved. An unknown id is a no-op; a
+// `toIndex` past the lane bounds is clamped.
+export async function reorderTier2Table(
+  db: Database,
+  projectId: string,
+  id: string,
+  toIndex: number,
+): Promise<Tier2TableRow[]> {
+  const rows = await listTier2Tables(db, projectId)
+  const from = rows.findIndex((t) => t.id === id)
+  if (from === -1) return rows
+  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
+  const moved = firstOrThrow(rows.splice(from, 1))
+  rows.splice(target, 0, moved)
+  await rewriteTier2TableSort(db, rows)
+  return listTier2Tables(db, projectId)
+}
+
 // ── Entries ──────────────────────────────────────────────────────────────────
 
 function tier2EntryScope(tableId: string) {

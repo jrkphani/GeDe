@@ -17,6 +17,7 @@ import {
   removeTier2EntrySubtree,
   renameTier2Entry,
   renameTier2Table,
+  reorderTier2Table,
   unlinkParametersFromEntries,
 } from './mutations'
 
@@ -45,6 +46,41 @@ describe('tier2 tables', () => {
     await renameTier2Table(db, stake.id, 'Stake')
     tables = await listTier2Tables(db, projectId)
     expect(tables.map((t) => t.name)).toEqual(['Value', 'Stake', 'Process'])
+  })
+
+  // 089-D3 P3.4 — a table node dragged up/down its lane persists a NEW `sort`
+  // via this mutation (mirrors reorderDimension / reorderCanvas). Only `sort`
+  // is ever rewritten, and it is kept DENSE (0..n-1) — position stays derived,
+  // never persisted.
+  it('reorderTier2Table moves a table and rewrites sort densely (0..n-1)', async () => {
+    const { db, projectId } = await freshProject()
+    const alpha = await addTier2Table(db, projectId, 'Alpha')
+    await addTier2Table(db, projectId, 'Beta')
+    await addTier2Table(db, projectId, 'Gamma')
+
+    // Drag Alpha (sort 0) down to the bottom (index 2).
+    const after = await reorderTier2Table(db, projectId, alpha.id, 2)
+    expect(after.map((t) => t.name)).toEqual(['Beta', 'Gamma', 'Alpha'])
+    expect(after.map((t) => t.sort)).toEqual([0, 1, 2]) // dense, no gaps
+
+    // Drag it back to the top (index 0) — inverse restores the original order.
+    const back = await reorderTier2Table(db, projectId, alpha.id, 0)
+    expect(back.map((t) => t.name)).toEqual(['Alpha', 'Beta', 'Gamma'])
+    expect(back.map((t) => t.sort)).toEqual([0, 1, 2])
+  })
+
+  it('reorderTier2Table is a no-op copy for an unknown id and clamps an out-of-range index', async () => {
+    const { db, projectId } = await freshProject()
+    const alpha = await addTier2Table(db, projectId, 'Alpha')
+    await addTier2Table(db, projectId, 'Beta')
+
+    const unknown = await reorderTier2Table(db, projectId, 'nope', 1)
+    expect(unknown.map((t) => t.name)).toEqual(['Alpha', 'Beta'])
+
+    // toIndex past the end clamps to the last slot.
+    const clamped = await reorderTier2Table(db, projectId, alpha.id, 99)
+    expect(clamped.map((t) => t.name)).toEqual(['Beta', 'Alpha'])
+    expect(clamped.map((t) => t.sort)).toEqual([0, 1])
   })
 })
 

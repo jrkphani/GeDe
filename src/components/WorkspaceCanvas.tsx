@@ -9,9 +9,15 @@ import {
   useReactFlow,
   type Node,
   type NodeProps,
+  type OnNodeDrag,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { computeLaneLayout, type LaneItem, type LaneLayoutConfig } from '../domain/laneLayout'
+import {
+  computeLaneLayout,
+  LANE_ORDER,
+  type LaneItem,
+  type LaneLayoutConfig,
+} from '../domain/laneLayout'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
 import { useTier2Store } from '../store/tier2'
@@ -83,6 +89,13 @@ const LANE_LABEL: Record<'foundation' | 'design', string> = {
 // surfaces lay out identically inside their nodes; each column's x is a pure
 // function of its tier index (LANE_ORDER).
 const LANE_CONFIG: LaneLayoutConfig = { laneWidth: 960, laneGap: 48, nodeGap: 24 }
+
+// The derived x of the Architecture lane column (a pure fn of its tier index —
+// identical to laneLayout's own `laneX`). A table-node drag is pinned to this x
+// so the lane stays a clean vertical column: only the drag's y (its `sort`
+// slot) ever carries meaning, never its x (P3.4 constrained-drag reorder).
+const ARCH_COLUMN_X =
+  LANE_ORDER.indexOf('architecture') * (LANE_CONFIG.laneWidth + LANE_CONFIG.laneGap)
 
 const FOCUS_PAN_DURATION = 320
 // Focus-driven pan is pan-if-outside-margin, NOT center-on-every-focus: only
@@ -540,11 +553,60 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     [reactFlow],
   )
 
+  // P3.4 — constrained table-node drag. During the drag, pin the dragged table's
+  // x to the Architecture column (honoring its LIVE dragged y) so the lane never
+  // drifts sideways — the drag reads as a pure vertical reorder gesture. Only
+  // `archTable` nodes reorder; other node kinds drag freely and snap back on stop.
+  const onNodeDrag = useCallback<OnNodeDrag<CanvasNode>>(
+    (_event, node) => {
+      if (node.type !== 'archTable') return
+      setNodes((prev) =>
+        prev.map((n) =>
+          n.id === node.id && n.position.x !== ARCH_COLUMN_X
+            ? { ...n, position: { x: ARCH_COLUMN_X, y: node.position.y } }
+            : n,
+        ),
+      )
+    },
+    [setNodes],
+  )
+
+  // P3.4 — on drop: for a table node, compute its new lane index from its drop
+  // center-y ranked against its siblings' slot centers, then PERSIST the reorder
+  // via the tier2 store (which rewrites ONLY `sort`, never a `{x,y}`). Always
+  // re-derive EVERY node's position afterward so the dropped node snaps to its
+  // derived slot — no node ever keeps its dragged coords (derived-positioning
+  // invariant). Foundation/Design/header drags are pure no-ops: they just snap
+  // back.
+  const onNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(
+    (_event, node) => {
+      if (node.type === 'archTable') {
+        const archNodes = reactFlow.getNodes().filter((n) => n.type === 'archTable')
+        // Rank every table node by its center-y (the dragged node using its live
+        // dropped y, siblings their derived y); the dragged node's rank is the
+        // index it now occupies — exactly what reorderTier2Table densifies to.
+        const ranked = archNodes
+          .map((n) => {
+            const y = n.id === node.id ? node.position.y : n.position.y
+            const height = n.measured?.height ?? n.data.estimate
+            return { id: n.id, center: y + height / 2 }
+          })
+          .sort((a, b) => a.center - b.center)
+        const targetIndex = ranked.findIndex((r) => r.id === node.id)
+        if (targetIndex !== -1) void useTier2Store.getState().reorderTable(node.id, targetIndex)
+      }
+      setNodes((prev) => withDerivedPositions(prev))
+    },
+    [reactFlow, setNodes],
+  )
+
   return (
     <div className="workspace-canvas" ref={wrapperRef} onFocusCapture={onFocusCapture}>
       <ReactFlow
         nodes={nodes}
         onNodesChange={onNodesChange}
+        onNodeDrag={onNodeDrag}
+        onNodeDragStop={onNodeDragStop}
         nodeTypes={NODE_TYPES}
         // Frame everything into the pane on first paint; the post-measurement
         // effect above refits once measured heights settle (fit-vs-measure race).

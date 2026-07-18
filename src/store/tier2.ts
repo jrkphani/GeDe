@@ -18,6 +18,7 @@ import {
   renameParameter,
   renameTier2Entry as dbRenameEntry,
   renameTier2Table as dbRenameTable,
+  reorderTier2Table as dbReorderTable,
   restoreDimension,
   restoreParameter,
   restoreParametersWithBindings,
@@ -124,6 +125,7 @@ interface Tier2State {
   load: (projectId: string) => Promise<void>
   addTable: (name: string) => Promise<Tier2TableRow | null>
   renameTable: (id: string, name: string) => Promise<void>
+  reorderTable: (id: string, toIndex: number) => Promise<void>
   addEntry: (tableId: string, parentId: string | null, name: string) => Promise<Tier2EntryRow | null>
   renameEntry: (tableId: string, id: string, name: string) => Promise<number>
   setEntryDescription: (tableId: string, id: string, description: string) => Promise<void>
@@ -291,6 +293,39 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
         async redo() {
           await dbRenameTable(db(), id, name)
           await reloadTables(projectId)
+        },
+      })
+    },
+
+    async reorderTable(id, toIndex) {
+      const { projectId } = get()
+      if (projectId === null) return
+      const before = get().tables
+      const fromIndex = before.findIndex((t) => t.id === id)
+      if (fromIndex === -1) return
+      bump()
+      const after = await dbReorderTable(db(), projectId, id, toIndex)
+      set({ tables: after })
+      // Issue 089 D3 P3.4 — reorderTier2Table's rewriteTier2TableSort rewrites
+      // `sort` on EVERY sibling whose ordinal actually moved, not just the one
+      // dragged (mirrors useDimensionsStore.reorder / Subtlety B). `after` is
+      // already in new sort order, so each row's index IS its new sort — enqueue
+      // an 'update' for every row whose previous sort disagrees, else sibling
+      // drift never reaches the server. NOTHING but `sort` is persisted: the
+      // node's `{x,y}` is a pure derived projection of `(tier, sort)`, never
+      // written to the outbox (the load-bearing derived-positioning invariant).
+      const beforeById = new Map(before.map((t) => [t.id, t]))
+      after.forEach((row, index) => {
+        const prevSort = beforeById.get(row.id)?.sort ?? -1
+        if (prevSort !== index) enqueueIfSyncing('tier2_tables', row.id, 'update', row)
+      })
+      useCommandLogStore.getState().push({
+        label: 'reorder table',
+        async undo() {
+          set({ tables: await dbReorderTable(db(), projectId, id, fromIndex) })
+        },
+        async redo() {
+          set({ tables: await dbReorderTable(db(), projectId, id, toIndex) })
         },
       })
     },
