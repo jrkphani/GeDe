@@ -1,6 +1,6 @@
 # 091: "The item you tried to change no longer exists" surfaces during normal editing
 
-- **Status**: OPEN — observed live, not yet root-caused. Intermittent. Likely cosmetic (self-heals to `Synced`), but it flashes a scary error to the user.
+- **Status**: PARTIAL — the **heal-origin suppression shipped** (`4641a75`, 2026-07-18): D1 heal-on-load background writes are tagged `origin:'heal'` (`richTextConvert.ts`) and their `unknown_entity` rejection no longer surfaces the note (`sync.ts flush()` filters them); user-initiated rejections still surface (no masking). This closes **hypothesis 2** (the prime suspect). **Still OPEN + owner-gated: general root-cause** — hyp. 1 (stale-delete echo) and hyp. 3 (edit-before-insert race) need production CloudWatch on `…WriteApiFunction…` to disambiguate (the note could still fire for a USER edit). Intermittent, cosmetic (self-heals to `Synced`).
 - **Milestone**: sync/write-path hardening (the write-side companion to 086/087).
 - **Related**: **089-D1** (the heal-on-load enqueues `'update'` mutations for prose columns — a prime suspect), **086** (over-sensitive read-error banner / debounced notes), **087** (surface silent write failures), **088** (write-path/sync at scale).
 

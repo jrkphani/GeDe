@@ -142,6 +142,8 @@ D2 changes only **WHAT the route mounts**: one `WorkspaceSurface` rendering all 
 
 ## D3 — spike PASSED, GO (2026-07-18)
 
+**Build progress (behind the dev-only `?d3rf` flag; production unaffected):** **P0 SHIPPED** (`d1b5a3a`, pure `src/domain/laneLayout.ts`), **P1 SHIPPED** (`d1c3a86`, React Flow viewport + one real Design node), **P2 SHIPPED** (`63b64f4`, all three tier lanes as nodes; gate-c promote-popover-at-zoom + activeLane gating proven). **Next: P3** (constrained node-drag → the existing `sort` reorder mutations) then **P4** (focus-pan + ⌘1/2/3 pan-to-lane + lane LOD). Each phase is owner-checkpointed. `@xyflow/react` 12.11.2 added; dagre deferred.
+
 The mandated time-boxed spike ran on the owner-chosen substrate **React Flow (`@xyflow/react` 12.11.2)** in a throwaway isolated worktree (not merged). It mounted the **real `EditableGrid` and the real `ui/popover` Radix primitives** as React Flow custom nodes, laid into three tier lane-columns, and exercised all four gates at viewport scale ≠ 1 (1.25) via a headless-Chromium driver. Zero console/page errors. **Verdict: GO.**
 
 ### Four gates — all PASS

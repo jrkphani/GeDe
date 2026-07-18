@@ -1,6 +1,6 @@
 # 084: 2nd Tier — Architecture UX — stable, consistent, keyboard-fast table + entry authoring
 
-- **Status**: OPEN — audited, not started.
+- **Status**: PARTIAL — the two **non-forking hygiene items shipped** (`8ac3c72`, 2026-07-18): **finding 6** (nested indent is now token-driven — a `--depth` custom property × the `--space-5` token in `base.css`, no inline calc / raw px in JSX) and **finding 7** (already resolved by the Direction-1 slice — the `querySelector` focus reach is gone; added a regression guard). **The four genuine design forks remain OPEN + owner-gated** (empty-state guidance, one add-grammar, keyboard bridge across the table boundary, listbox selection semantics — see "Open questions" below). Do **not** archive 084.
 - **Milestone**: M6 (UI polish, same track as 013/021/024/027/081/082) — no sync/infra blocker. Architecture-route surgery only; no schema, no synced-column ripple.
 - **Blocked by**: **Sequence after 083** (the tier editing lockout / role-gate bug) — 083 restores the add affordance's *presence*; 084 improves the *shape* of that affordance. Landing 084 first would polish a control that a locked-out user can't see. Can and should **share 082's unified grid grammar** (its `EditableChainProvider` / `EditableGrid` keyboard contract) rather than inventing a parallel one — Direction 3 below depends on that.
 
