@@ -25,6 +25,7 @@ import { useWorkspaceRole } from '../store/workspace'
 import type { Tier2TableRow } from '../db/mutations'
 import type { AppRoute, DesignView } from '../shell/routes'
 import { DesignSurface } from './DesignSurface'
+import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
 import { FoundationSurface } from './FoundationSurface'
 import { TablePanel } from './ArchitectureSurface'
 import { PhantomInput } from './ui/inline-editor'
@@ -153,26 +154,10 @@ type CanvasNode = LaneNode | ArchHeaderNode | ArchTableNode
 // [data-id="<tableId>"]`; within it we land focus on the FIRST editable grid
 // cell (forward entry) or the LAST editable position — the phantom "add entry"
 // row (backward entry). Focusing an off-screen target trips the wrapper's
-// `onFocusCapture` pan, bringing it on-screen (spike gate-d). ────────────────
-
-function firstEditableCell(node: HTMLElement): HTMLElement | null {
-  const cell = node.querySelector<HTMLElement>(
-    '.editable-grid tbody tr[data-row-id] .grid-cell[tabindex]',
-  )
-  if (cell) return cell
-  // Empty table: the only editable position is the phantom row's input.
-  return node.querySelector<HTMLElement>('.grid-row--phantom input')
-}
-
-function lastEditablePosition(node: HTMLElement): HTMLElement | null {
-  // The phantom "Name an entry" input is visually + tab-order last.
-  const phantom = node.querySelector<HTMLElement>('.grid-row--phantom input')
-  if (phantom) return phantom
-  const cells = node.querySelectorAll<HTMLElement>(
-    '.editable-grid tbody tr[data-row-id] .grid-cell[tabindex]',
-  )
-  return cells[cells.length - 1] ?? null
-}
+// `onFocusCapture` pan, bringing it on-screen (spike gate-d). `firstEditableCell`
+// / `lastEditablePosition` now live in the shared `gridBoundaryFocus` seam module
+// (084-D3 P0) so this consumer and the 084 Architecture chain adapter share one
+// set of edge semantics. ─────────────────────────────────────────────────────
 
 function nodeElement(tableId: string): HTMLElement | null {
   return document.querySelector<HTMLElement>(`.react-flow__node[data-id="${tableId}"]`)
