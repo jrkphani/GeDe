@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import { HeroLanding } from './components/HeroLanding'
 import { ProjectsList } from './components/ProjectsList'
+import { WorkspaceCanvas } from './components/WorkspaceCanvas'
 import { WorkspaceSurface } from './components/WorkspaceSurface'
 import { Button } from './components/ui/button'
 import { AppShell } from './shell/AppShell'
@@ -12,6 +13,18 @@ import { useAuthStore } from './store/auth'
 import { useProjectsStore } from './store/projects'
 
 const LAST_TIER_PREFIX = 'gede-last-tier:'
+
+// 089-D3 P1 — a DEV-ONLY, OFF-by-default flag that mounts the React Flow canvas
+// (WorkspaceCanvas) in place of the normal WorkspaceSurface for the workspace
+// routes. `import.meta.env.DEV` is statically `false` in a production build, so
+// the whole expression folds to `false` there — the canvas is dead code in prod
+// and WorkspaceSurface always renders. In dev it is still opt-in per navigation
+// via `?d3rf` in the URL; without the param the normal surface renders. This is
+// the D3 spike's gate-(a) harness, NOT a shipped route change — routes.ts is
+// untouched and the flag never persists to any store.
+function d3CanvasEnabled(): boolean {
+  return import.meta.env.DEV && new URLSearchParams(window.location.search).has('d3rf')
+}
 
 function rememberTier(route: AppRoute) {
   if (route.kind === 'tier') localStorage.setItem(LAST_TIER_PREFIX + route.projectId, route.tier)
@@ -49,7 +62,10 @@ function Surface({ route }: { route: AppRoute }) {
     case 'project':
     case 'tier':
     case 'design':
-      return <WorkspaceSurface route={route} />
+      // 089-D3 P1 — dev-only `?d3rf` flag swaps in the React Flow canvas; OFF by
+      // default and dead in prod builds (see d3CanvasEnabled), so normal app
+      // behavior is unchanged.
+      return d3CanvasEnabled() ? <WorkspaceCanvas route={route} /> : <WorkspaceSurface route={route} />
     // Issue 064: /welcome and /login both render the same hero/landing
     // surface — product brief + the 3-mode auth card in one polished page.
     // It is the canonical signed-out destination and the sign-out redirect

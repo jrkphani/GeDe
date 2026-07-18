@@ -352,6 +352,41 @@ body {
   }
 }
 
+/* ── Issue 089 D3 Phase 1 · React Flow canvas shell + one real node ──────────
+   DEV-ONLY (mounted behind the `?d3rf` flag, App.tsx). The React Flow viewport
+   fills the shared `.surface` scroll region; a single custom node hosts the real
+   DesignSurface. Minimal node chrome only — a header drag-handle bar (the sole
+   drag origin) over the interactive body. Colors are tokens (STYLE_GUIDE §11);
+   the header + border reuse the same panel/hairline idiom as the D2 lanes. */
+.workspace-canvas {
+  width: 100%;
+  height: 100%;
+}
+
+.wc-node {
+  width: 960px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.wc-node__handle {
+  display: flex;
+  align-items: center;
+  height: 28px;
+  padding: 0 var(--space-4);
+  background: var(--grid-minor);
+  color: var(--ink-muted);
+  border-bottom: 1px solid var(--hairline);
+  font-size: var(--text-label);
+  cursor: grab;
+  user-select: none;
+}
+
+.wc-node__body {
+  padding: var(--space-4);
+}
+
 .status-bar {
   height: 28px;
   flex: none;
