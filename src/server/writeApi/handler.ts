@@ -89,6 +89,23 @@ export async function handleWriteRequest(request: WriteApiRequest, deps: WriteAp
 
     const tenancy = await checkTenancy(mutation, auth.claims, deps.store)
     if (!tenancy.ok) {
+      // Issue 091 — diagnostic log so a tenancy rejection is visible in
+      // CloudWatch (the handler otherwise only returns the outcome to the
+      // client, so `unknown_entity` never appeared in the logs). Structured,
+      // identifiers only (no prose/PII): table/op/entityId/reason disambiguate
+      // hyp. 1 (stale-delete echo — the row was tombstoned) from hyp. 3 (a
+      // not-yet-synced row) once cross-referenced against the row's DB state at
+      // the repro time. Remove once 091 is root-caused.
+      console.warn(
+        `[writeApi][091] tenancy rejection ${JSON.stringify({
+          reason: tenancy.reason,
+          table: mutation.table,
+          op: mutation.op,
+          entityId: mutation.entityId,
+          mutationId: mutation.id,
+          declaredWorkspaceId: mutation.workspaceId,
+        })}`,
+      )
       outcomes.push({
         mutationId: mutation.id,
         status: 'rejected',
