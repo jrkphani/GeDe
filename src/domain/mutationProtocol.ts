@@ -51,7 +51,18 @@ export type MutationTable =
   | 'invitations'
   | 'workspaceMembers'
 
-export type MutationOp = 'insert' | 'update' | 'delete'
+// Issue 094 (revival gap) — `revive` is the dedicated un-tombstone op. A real-
+// Postgres probe proved NO existing op can make a soft-deleted row live again:
+// `update` drops `deleted_at` (SERVER_STAMPED) so it can't clear the tombstone,
+// and its target resolves to null (getRow filters `deleted_at IS NULL`) →
+// `unknown_entity`; `upsert`/`insert` is `ON CONFLICT (id) DO NOTHING` → a no-op
+// against the existing tombstoned id. `revive` = "make this row live with these
+// fields, idempotently": it un-tombstones + applies fields when the row exists
+// (same-tenant), and inserts it live when the row is absent. Cross-tenant safe
+// (the write path resolves the tombstoned row's workspace and rejects a
+// mismatch; the store SQL no-ops a cross-tenant collision). See handler.ts /
+// tenancy.ts / store.ts for the three gates this op threads through.
+export type MutationOp = 'insert' | 'update' | 'delete' | 'revive'
 
 /**
  * One queued client edit, replayed to the write-path API. `id` is the

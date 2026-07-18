@@ -131,7 +131,11 @@ export async function handleWriteRequest(request: WriteApiRequest, deps: WriteAp
     // referential_integrity from checkInvariants (resolveForeignKeyTenancy
     // skips null resolutions). Does NOT touch tier1_purpose's natural-key
     // upsert (issue 091/095) — this is the insert/update FK-tenancy gate only.
-    if (mutation.op === 'insert' || mutation.op === 'update') {
+    // Issue 094 — `revive` writes FK columns exactly like insert/update (its
+    // payload can carry a projectId/canvasId/etc.), so it MUST run this gate too:
+    // otherwise a revive could plant a cross-tenant FK the same way an insert
+    // could. Mirrors the insert/update handling.
+    if (mutation.op === 'insert' || mutation.op === 'update' || mutation.op === 'revive') {
       const crossTenantFks = await resolveForeignKeyTenancy(
         mutation.table,
         mutation.payload,
@@ -174,7 +178,15 @@ export async function handleWriteRequest(request: WriteApiRequest, deps: WriteAp
       continue
     }
 
-    if (mutation.op !== 'insert') {
+    // Issue 094 — the LWW stale gate runs ONLY for `update`/`delete`. `insert`
+    // skipped it from the start (a fresh row has no prior state to lose to), and
+    // `revive` skips it for the same reason a fresh insert does AND because a
+    // revive is an INTENTIONAL resurrection: the row it targets is tombstoned,
+    // so its stored updated_at is the DELETE's timestamp — running LWW would let
+    // that delete "win" and reject the revive as stale, which is exactly the
+    // un-revivable behavior this op exists to fix. Also, getRow filters
+    // `deleted_at IS NULL`, so a tombstoned target resolves to null here anyway.
+    if (mutation.op === 'update' || mutation.op === 'delete') {
       const currentRow = await deps.store.getRow(mutation.table, mutation.entityId)
       const decision = resolveLastWriteWins(currentRow?.updatedAt ?? null, mutation)
       if (decision === 'stale') {
@@ -217,17 +229,26 @@ async function checkInvariants(mutation: MutationEnvelope, store: WriteStore): P
     }
   }
 
-  if (mutation.table === 'bindings' && (mutation.op === 'insert' || mutation.op === 'update')) {
+  // Issue 094 — `revive` can re-add a binding for a (context, dimension) pair,
+  // so it must be uniqueness-checked exactly like insert/update (mirror the
+  // insert handling). It excludes its OWN entityId from the count (like update),
+  // so re-reviving a binding into the slot it already occupies never self-
+  // conflicts — only a DIFFERENT live binding on the pair rejects it.
+  if (mutation.table === 'bindings' && (mutation.op === 'insert' || mutation.op === 'update' || mutation.op === 'revive')) {
     const contextId = mutation.payload.contextId as string | undefined
     const dimensionId = mutation.payload.dimensionId as string | undefined
     if (contextId && dimensionId) {
-      const excludeId = mutation.op === 'update' ? mutation.entityId : undefined
+      const excludeId = mutation.op === 'insert' ? undefined : mutation.entityId
       const count = await store.countLiveBindingsForPair(contextId, dimensionId, excludeId)
       if (violatesBindingUniqueness(count)) return bindingUniquenessViolation()
     }
   }
 
-  if (mutation.op === 'insert' || mutation.op === 'update') {
+  // Issue 094 — `revive` writes FK columns like insert/update (its payload
+  // carries projectId/dimensionId/etc.), so the referential-integrity pre-check
+  // must run for it too — a revive must not resurrect/insert a row pointing at a
+  // non-existent parent. Mirrors the insert/update handling.
+  if (mutation.op === 'insert' || mutation.op === 'update' || mutation.op === 'revive') {
     const unresolved = await resolveForeignKeys(mutation.table, mutation.payload, store)
     if (violatesReferentialIntegrity(unresolved)) return referentialIntegrityViolation(unresolved)
   }

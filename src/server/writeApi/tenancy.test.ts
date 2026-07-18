@@ -25,9 +25,16 @@ function envelope(overrides: Partial<MutationEnvelope> = {}): MutationEnvelope {
 function fixedResolver(
   workspaceByEntity: Record<string, string | null>,
   members: ReadonlySet<string> = new Set(),
+  // Issue 094 — the revive tenancy branch resolves the target INCLUDING
+  // tombstoned rows. Defaults to `workspaceByEntity` (so a live-and-deleted row
+  // map is one and the same for the common case); pass this to model a row that
+  // is present-but-tombstoned (resolves here) yet filtered out of the live map.
+  workspaceByEntityIncludingDeleted: Record<string, string | null> = workspaceByEntity,
 ): WorkspaceScopeResolver {
   return {
     resolveWorkspaceForEntity: (_table, entityId) => Promise.resolve(workspaceByEntity[entityId] ?? null),
+    resolveWorkspaceForEntityIncludingDeleted: (_table, entityId) =>
+      Promise.resolve(workspaceByEntityIncludingDeleted[entityId] ?? null),
     // Issue 091 — the fixed resolver has no natural-key notion; returning null
     // keeps every existing case's behavior (a by-id miss stays unknown_entity).
     resolveWorkspaceForNaturalKey: () => Promise.resolve(null),
@@ -112,6 +119,40 @@ describe('checkTenancy — issue 057: membership-gated access to a non-own works
   it('rejects a delete into a non-own workspace with no membership, even for an unknown entity (membership is checked before entity resolution)', async () => {
     const mutation = envelope({ op: 'delete', workspaceId: 'ws-other', entityId: 'ghost' })
     const result = await checkTenancy(mutation, CLAIMS, fixedResolver({}))
+    expect(result).toEqual({ ok: false, reason: 'cross_tenant' })
+  })
+})
+
+// Issue 094 (revival gap) — the `revive` op's tenancy branch. It resolves the
+// target INCLUDING tombstoned rows (unlike update/delete, which 404 a tombstone
+// as unknown_entity). Three shapes, all SECURITY-relevant since reviving
+// resolves DELETED rows a victim owns.
+describe('checkTenancy — issue 094: revive resolves tombstoned rows', () => {
+  it('accepts a revive whose present-but-TOMBSTONED target belongs to the declared (own) workspace', async () => {
+    const mutation = envelope({ op: 'revive', workspaceId: 'ws-1', entityId: 'row-1' })
+    // row-1 is tombstoned: absent from the LIVE map, present in the include-deleted map.
+    const resolver = fixedResolver({}, new Set(), { 'row-1': 'ws-1' })
+    const result = await checkTenancy(mutation, CLAIMS, resolver)
+    expect(result).toEqual({ ok: true })
+  })
+
+  it('rejects a revive of a tombstoned row that belongs to ANOTHER workspace as cross_tenant (never unknown_entity — the row IS resolvable)', async () => {
+    const mutation = envelope({ op: 'revive', workspaceId: 'ws-1', entityId: 'row-1' })
+    const resolver = fixedResolver({}, new Set(), { 'row-1': 'ws-other' })
+    const result = await checkTenancy(mutation, CLAIMS, resolver)
+    expect(result).toEqual({ ok: false, reason: 'cross_tenant' })
+  })
+
+  it('accepts a revive of a truly ABSENT row (insert semantics — the FK-tenancy gate in handler.ts guards the payload)', async () => {
+    const mutation = envelope({ op: 'revive', workspaceId: 'ws-1', entityId: 'never-existed' })
+    const result = await checkTenancy(mutation, CLAIMS, fixedResolver({}))
+    expect(result).toEqual({ ok: true })
+  })
+
+  it('rejects a revive declaring a non-own workspace with no membership (the workspace-authorization gate runs first, as for every op)', async () => {
+    const mutation = envelope({ op: 'revive', workspaceId: 'ws-other', entityId: 'row-1' })
+    const resolver = fixedResolver({}, new Set(), { 'row-1': 'ws-other' })
+    const result = await checkTenancy(mutation, CLAIMS, resolver)
     expect(result).toEqual({ ok: false, reason: 'cross_tenant' })
   })
 })

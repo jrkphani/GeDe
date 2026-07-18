@@ -293,6 +293,14 @@ export class InMemoryWriteStore implements WriteStore {
     return Promise.resolve(row.workspaceId)
   }
 
+  // Issue 094 (revival gap) — the twin that does NOT filter `deletedAt`: returns
+  // the row's workspaceId even when tombstoned, null only when truly absent.
+  // `checkTenancy`'s revive branch uses this to range-check a tombstoned target.
+  resolveWorkspaceForEntityIncludingDeleted(table: MutationTable, entityId: string): Promise<string | null> {
+    const row = this.rows.get(this.key(table, entityId))
+    return Promise.resolve(row ? row.workspaceId : null)
+  }
+
   // Issue 091 — the natural-key fallback (see WorkspaceScopeResolver's doc
   // comment). Scans for a LIVE row of the mutation's table whose natural-key
   // column value matches the payload's; returns its workspaceId, or null for a
@@ -385,6 +393,47 @@ export class InMemoryWriteStore implements WriteStore {
       }
     }
 
+    // Issue 094 follow-up (adversarial review) — a NATURAL-KEY table's REVIVE
+    // reconciles onto the existing singleton row by its natural key (project_id),
+    // LIVE OR TOMBSTONED, keeping that row's own id and clearing any tombstone —
+    // mirroring PgWriteStore's natural-key revive branch and the 091 update
+    // handling above. Without this, a diverged-id revive would mint a SECOND row
+    // under the client's fresh id here (in-memory) while live Postgres 23505s on
+    // the natural-key index — exactly the in-memory-hides-live-divergence trap
+    // that 094 exists to close. Unlike the 091 update block, this deliberately
+    // does NOT skip tombstoned rows — un-tombstoning one is the whole point.
+    if (mutation.op === 'revive') {
+      const naturalRevive = naturalKeyOf(mutation)
+      if (naturalRevive !== null) {
+        for (const [rowKey, row] of this.rows.entries()) {
+          if (row.table !== mutation.table) continue
+          if (row.data[naturalRevive.jsKey] !== naturalRevive.value) continue
+          if (row.workspaceId === mutation.workspaceId) {
+            this.rows.set(rowKey, {
+              ...row,
+              data: { ...row.data, ...mutation.payload },
+              updatedAt: mutation.clientUpdatedAt,
+              deletedAt: null,
+            })
+          }
+          // Matched a natural-key row (same- or cross-tenant) — addressed by
+          // natural key, never the diverged id; a cross-tenant match is a silent
+          // no-op (never un-tombstoned/overwritten), mirroring Pg's workspace
+          // guard. Done either way (no second row minted under the fresh id).
+          return Promise.resolve(true)
+        }
+        // No natural-key row (live or tombstoned) matched — a genuinely fresh
+        // singleton; fall through to the id-keyed insert-live merge below.
+      }
+    }
+
+    // The non-delete merge path: `insert`, `update` (non-natural-key), AND
+    // Issue 094's `revive` (non-natural-key, or a fresh-singleton fall-through).
+    // It unconditionally sets `deletedAt: null`, so reviving a tombstoned row
+    // here naturally un-tombstones it and merges the payload; reviving an absent
+    // row inserts it live — the two revive semantics fall out of the same merge
+    // for free (the PgWriteStore needs a dedicated branch because SQL can't
+    // un-tombstone that cheaply — see its revive SQL).
     const existing = this.rows.get(this.key(mutation.table, mutation.entityId))
     const merged: StoredRow = {
       id: mutation.entityId,
@@ -545,6 +594,25 @@ export class PgWriteStore implements WriteStore {
 
   resolveWorkspaceForEntity(table: MutationTable, entityId: string): Promise<string | null> {
     return this.getRow(table, entityId).then((row) => row?.workspaceId ?? null)
+  }
+
+  // Issue 094 (revival gap) — resolves the row's workspace_id WITHOUT the
+  // `deleted_at IS NULL` filter `getRow` applies, so a tombstoned row (exactly
+  // what a revive targets) still resolves; null only when the id is truly absent.
+  // Its own connection/query (not via getRow, which filters tombstones out) —
+  // runs BEFORE tenancy is decided, like resolveWorkspaceForNaturalKey/isMember,
+  // so no tenant-context GUC is set here.
+  async resolveWorkspaceForEntityIncludingDeleted(table: MutationTable, entityId: string): Promise<string | null> {
+    const client = await this.config.pool.connect()
+    try {
+      const result = await client.query<{ workspace_id: string }>(
+        `SELECT workspace_id FROM ${SQL_TABLE_NAMES[table]} WHERE id = $1`,
+        [entityId],
+      )
+      return result.rows[0]?.workspace_id ?? null
+    } finally {
+      client.release()
+    }
   }
 
   // Issue 091 — the natural-key fallback (see WorkspaceScopeResolver's doc
@@ -716,6 +784,112 @@ export class PgWriteStore implements WriteStore {
         .filter(([col]) => !SERVER_STAMPED.has(col))
       const columns = entries.map(([col]) => col)
       const values = entries.map(([, value]) => value)
+
+      // Issue 094 (revival gap) — un-tombstone a soft-deleted row, or insert it
+      // live if absent; idempotent; cross-tenant safe. Implemented as two
+      // statements, NOT the `ON CONFLICT (id) DO UPDATE SET deleted_at = NULL …`
+      // an upsert would suggest: a real-Postgres probe proved that ON CONFLICT
+      // form FAILS with a NOT NULL violation on the target table's other
+      // required columns (project_id, canvas_id, …) whenever the revive payload
+      // omits them — because Postgres evaluates NOT NULL on the tentative INSERT
+      // tuple BEFORE the conflict arbiter fires, so the DO UPDATE never runs and
+      // the row stays tombstoned. (This is exactly the InMemory-passes/live-fails
+      // class 094 exists to close.) Instead:
+      //   1. UPDATE the row live (clear deleted_at + apply fields) ONLY when it
+      //      exists AND already belongs to the declared (already-authorized)
+      //      workspace — the `AND workspace_id = $3` guard mirrors 097/095/091's
+      //      no-clobber defense-in-depth: a cross-tenant tombstoned row is a
+      //      0-row no-op, never resurrected or re-tenanted.
+      //   2. INSERT live ONLY when NO row exists at all. The `WHERE NOT EXISTS`
+      //      guard means the tentative INSERT tuple is never formed when the row
+      //      already exists, so a partial-payload revive against an existing row
+      //      never trips the NOT NULL check that broke the ON CONFLICT form. A
+      //      cross-tenant collision therefore no-ops in BOTH statements (step 1's
+      //      workspace guard + step 2's existence guard) → the victim row is
+      //      untouched. An absent revive is semantically an insert, so its
+      //      payload must carry the NOT NULL columns exactly as a plain insert
+      //      would (the client's restore/redo path sends the full row).
+      // A NATURAL_KEY_CONFLICT table (tier1_purpose) splits off FIRST and
+      // addresses both statements by its natural key (project_id), not the
+      // client-minted id — otherwise a diverged-id revive 23505s on the natural-
+      // key unique index (the 091/095 diverged-id class). See the inner comments.
+      if (mutation.op === 'revive') {
+        // Issue 094 follow-up (adversarial review) — a NATURAL-KEY table's revive
+        // must reconcile by its natural key, EXACTLY like the 091 update / 095
+        // insert paths, not by the client-minted `entityId`. For `tier1_purpose`
+        // (a project singleton, unique on `project_id`), a cold-mirror client
+        // mints a FRESH/diverged id; a revive whose payload `projectId` matches an
+        // already-live singleton would, under the id-keyed form below, (a) MISS
+        // the existing row in the UPDATE and (b) then 23505 on
+        // `tier1_purpose_project_idx` in the INSERT (the PK `NOT EXISTS` guard
+        // only guards the id, not the natural-key unique index) → an UNHANDLED
+        // duplicate-key error out of applyIfNew → albAdapter 500, with earlier
+        // batch mutations already committed (each applyIfNew is its own tx). This
+        // is the 091/095 diverged-id class, and it must be PREVENTED (address by
+        // natural key), never caught. `naturalKeyOf` is the same helper 091/095
+        // share, so all three paths agree on which column/value addresses the row.
+        const naturalRevive = naturalKeyOf(mutation)
+        if (naturalRevive !== null) {
+          // Step 1 — un-tombstone + apply fields on the EXISTING singleton,
+          // addressed by natural key (project_id), keeping the server row's own
+          // id (id is SERVER_STAMPED, never in the SET). Matches a live OR
+          // tombstoned row (revive un-tombstones, so — unlike the 091 update —
+          // it deliberately does not filter `deleted_at`). The trailing
+          // `AND workspace_id = $2` guard is the 097/095/091 no-clobber defense:
+          // a cross-tenant singleton is a 0-row no-op, never resurrected/re-
+          // tenanted. Param layout mirrors the 091 update branch (no unused $1 —
+          // the diverged entityId is dropped here): $1 updated_at, $2 workspace_id
+          // (SET + guard), $3.. columns, trailing the natural-key value.
+          const nkSetClause = columns.map((c, i) => `${c} = $${i + 3}`).join(', ')
+          await client.query(
+            `UPDATE ${table} SET deleted_at = NULL, workspace_id = $2, ${nkSetClause}, updated_at = $1 WHERE ${naturalRevive.sqlColumn} = $${values.length + 3} AND workspace_id = $2`,
+            [mutation.clientUpdatedAt, mutation.workspaceId, ...values, naturalRevive.value],
+          )
+          // Step 2 — insert live ONLY if NO row for that NATURAL KEY exists (not
+          // the id): guards the actual unique index the 23505 fires on. The
+          // trailing `ON CONFLICT (${naturalRevive.sqlColumn}) DO NOTHING` is the
+          // concurrency backstop — if a concurrent tx committed the singleton
+          // between this snapshot's `NOT EXISTS` and the insert, the loser
+          // no-ops on the natural-key arbiter instead of 23505'ing. (Naming the
+          // natural-key arbiter, not `id`, is what actually catches THIS table's
+          // duplicate-key race; a same-id race for a UUIDv7 singleton is not a
+          // real scenario.)
+          const columnListNk = columns.length > 0 ? `, ${columns.join(', ')}` : ''
+          const selectValsNk = values.map((_, i) => `$${i + 4}`).join(', ')
+          const selectValsListNk = selectValsNk.length > 0 ? `, ${selectValsNk}` : ''
+          await client.query(
+            `INSERT INTO ${table} (id, updated_at, workspace_id${columnListNk}) SELECT $1, $2, $3${selectValsListNk} WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE ${naturalRevive.sqlColumn} = $${values.length + 4}) ON CONFLICT (${naturalRevive.sqlColumn}) DO NOTHING`,
+            [mutation.entityId, mutation.clientUpdatedAt, mutation.workspaceId, ...values, naturalRevive.value],
+          )
+          return true
+        }
+
+        // Non-natural-key table — address by the row's own id (the common
+        // revive: dimensions, projects, invitations, ...). See this branch's
+        // header comment (above the `if`) for why it is UPDATE-first +
+        // NOT-EXISTS-guarded INSERT rather than `ON CONFLICT (id) DO UPDATE`
+        // (the NOT NULL-before-arbiter landmine). The `ON CONFLICT (id) DO
+        // NOTHING` backstop makes two concurrent reviving of the same fresh
+        // absent id race to a no-op instead of a 23505.
+        const setClause = ['deleted_at = NULL', 'updated_at = $2', 'workspace_id = $3']
+          .concat(columns.map((c, i) => `${c} = $${i + 4}`))
+          .join(', ')
+        await client.query(`UPDATE ${table} SET ${setClause} WHERE id = $1 AND workspace_id = $3`, [
+          mutation.entityId,
+          mutation.clientUpdatedAt,
+          mutation.workspaceId,
+          ...values,
+        ])
+        const columnList = columns.length > 0 ? `, ${columns.join(', ')}` : ''
+        const selectVals = values.map((_, i) => `$${i + 4}`).join(', ')
+        const selectValsList = selectVals.length > 0 ? `, ${selectVals}` : ''
+        await client.query(
+          `INSERT INTO ${table} (id, updated_at, workspace_id${columnList}) SELECT $1, $2, $3${selectValsList} WHERE NOT EXISTS (SELECT 1 FROM ${table} WHERE id = $1) ON CONFLICT (id) DO NOTHING`,
+          [mutation.entityId, mutation.clientUpdatedAt, mutation.workspaceId, ...values],
+        )
+        return true
+      }
+
       if (mutation.op === 'insert') {
         const placeholders = values.map((_, i) => `$${i + 4}`).join(', ')
         const insertHead = `INSERT INTO ${table} (id, updated_at, workspace_id, ${columns.join(', ')}) VALUES ($1, $2, $3, ${placeholders})`

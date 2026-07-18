@@ -798,6 +798,148 @@ describe('handleWriteRequest — tier1_purpose diverged-id update (issue 091)', 
   })
 })
 
+// Issue 094 (revival gap) — a real-Postgres probe proved NO existing write op
+// can un-tombstone a soft-deleted row: `update` drops `deleted_at` and its
+// target resolves to null (unknown_entity); `insert`/upsert is
+// `ON CONFLICT (id) DO NOTHING` (no-op vs the tombstoned id). The dedicated
+// `revive` op closes this: it un-tombstones + applies fields when the row exists
+// (same-tenant), inserts it live when absent, and is cross-tenant safe. These
+// in-memory tests are red-first — `revive` did not exist as a MutationOp before
+// this change, so they proved the gap (and now prove the fix).
+describe('handleWriteRequest — revive un-tombstones a soft-deleted row (issue 094)', () => {
+  it('revives a tombstoned row (insert → delete → revive) so getRow returns it LIVE with the revived field values', async () => {
+    const store = new InMemoryWriteStore()
+    const token = await tokenFor('user-1', WS1)
+    const entityId = uuidv7()
+    const insert = envelope({ entityId, op: 'insert', payload: { name: 'Original' }, clientUpdatedAt: '2026-01-01T00:00:00.000Z' })
+    const del = envelope({ entityId, op: 'delete', payload: {}, clientUpdatedAt: '2026-01-02T00:00:00.000Z' })
+    const revive = envelope({ entityId, op: 'revive', payload: { name: 'Revived' }, clientUpdatedAt: '2026-01-03T00:00:00.000Z' })
+
+    const setup = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [insert, del] }, deps(store))
+    expect(setup.status).toBe(200)
+    if (setup.status === 200) expect(setup.outcomes.map((o) => o.status)).toEqual(['applied', 'applied'])
+    // Tombstoned: getRow filters `deleted_at IS NULL`, so it reads as gone.
+    expect(await store.getRow('projects', entityId)).toBeNull()
+
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [revive] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+
+    const row = await store.getRow('projects', entityId)
+    expect(row).not.toBeNull()
+    expect(row?.deletedAt).toBeNull() // un-tombstoned
+    expect(row?.data.name).toBe('Revived') // fields applied
+  })
+
+  it('revives a row that was NEVER inserted (insert semantics): the row is live afterward', async () => {
+    const store = new InMemoryWriteStore()
+    const token = await tokenFor('user-1', WS1)
+    const entityId = uuidv7()
+    const revive = envelope({ entityId, op: 'revive', payload: { name: 'Fresh via revive' } })
+
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [revive] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+
+    const row = await store.getRow('projects', entityId)
+    expect(row?.data.name).toBe('Fresh via revive')
+    expect(row?.deletedAt).toBeNull()
+  })
+
+  it('rejects a cross-tenant revive of another workspace\'s tombstoned row as cross_tenant, leaving the victim untouched', async () => {
+    const store = new InMemoryWriteStore()
+    const WS_V = workspaceIdForSub('victim')
+    const rowId = uuidv7()
+    // The victim owns a TOMBSTONED projects row (deletedAt set).
+    store.seedWorkspace(WS_V)
+    store.seed({
+      id: rowId,
+      workspaceId: WS_V,
+      table: 'projects',
+      data: { name: 'Victim (deleted)' },
+      updatedAt: '2026-01-02T00:00:00.000Z',
+      deletedAt: '2026-01-02T00:00:00.000Z',
+    })
+    const applySpy = vi.spyOn(store, 'applyIfNew')
+    const token = await tokenFor('user-1', WS1)
+    // Attacker in WS1 tries to revive the victim's row id, declaring WS1.
+    const revive = envelope({
+      workspaceId: WS1,
+      entityId: rowId,
+      op: 'revive',
+      payload: { name: 'Stolen' },
+      clientUpdatedAt: '2026-01-03T00:00:00.000Z',
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [revive] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    // Rejected BEFORE any write: applyIfNew never ran, and the row still resolves
+    // (including tombstoned) to the VICTIM's workspace — never re-tenanted.
+    expect(applySpy).not.toHaveBeenCalled()
+    expect(await store.resolveWorkspaceForEntityIncludingDeleted('projects', rowId)).toBe(WS_V)
+  })
+
+  it('reconciles a diverged-id tier1_purpose revive onto the existing singleton by natural key (in-memory parity with live 23505 fix)', async () => {
+    // Adversarial-review parity test: without natural-key-aware revive, InMemory
+    // would mint a SECOND tier1_purpose row under the client's fresh id while
+    // live Postgres 23505s on tier1_purpose_project_idx — the in-memory-hides-
+    // live-divergence trap. This proves InMemory reconciles onto the existing
+    // row by project_id (id kept), matching the live natural-key revive.
+    const store = new InMemoryWriteStore()
+    const projectId = uuidv7()
+    const serverPurposeId = uuidv7() // the row's real server id (X)
+    store.seed({ id: projectId, workspaceId: WS1, table: 'projects', data: { name: 'P094nk' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    store.seed({
+      id: serverPurposeId,
+      workspaceId: WS1,
+      table: 'tier1Purpose',
+      data: { projectId, body: 'old' },
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-1', WS1)
+    const divergedId = uuidv7() // fresh, diverged from the server row's id
+    const revive = envelope({
+      table: 'tier1Purpose',
+      op: 'revive',
+      entityId: divergedId,
+      payload: { projectId, body: 'revived' },
+      clientUpdatedAt: '2026-06-01T00:00:00.000Z',
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [revive] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    // The EXISTING server row (id X) is reconciled — body 'revived', still live.
+    const row = await store.getRow('tier1Purpose', serverPurposeId)
+    expect(row?.data.body).toBe('revived')
+    expect(row?.deletedAt).toBeNull()
+    // No stray row minted under the client's diverged id.
+    expect(await store.getRow('tier1Purpose', divergedId)).toBeNull()
+  })
+
+  it('runs the FK-tenancy (098) check on revive: rejects a revive whose projectId points at another workspace\'s project', async () => {
+    const store = new InMemoryWriteStore()
+    const WS_V = workspaceIdForSub('victim')
+    const victimProjectId = uuidv7()
+    store.seedWorkspace(WS_V)
+    store.seed({
+      id: victimProjectId,
+      workspaceId: WS_V,
+      table: 'projects',
+      data: { name: 'Victim project' },
+      updatedAt: new Date(0).toISOString(),
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-1', WS1)
+    // Attacker revives a NEW dimension (absent id → allowed by the revive tenancy
+    // branch as a fresh insert) whose projectId FK targets the victim's project.
+    const revive = envelope({ table: 'dimensions', op: 'revive', payload: { projectId: victimProjectId, name: 'Cross-tenant dim' } })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [revive] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+  })
+})
+
 describe('handleWriteRequest — offline replay/idempotency (test-first plan item 4)', () => {
   it('applies a fresh mutation once, and a replay of the same mutation id is a no-op, not a duplicate', async () => {
     const store = new InMemoryWriteStore()

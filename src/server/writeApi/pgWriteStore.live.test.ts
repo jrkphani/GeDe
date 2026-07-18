@@ -587,4 +587,237 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
     expect(bindingRow.rows[0]?.workspace_id).toBe(workspaceId)
     expect(entryRow.rows[0]?.workspace_id).toBe(workspaceId)
   })
+
+  // Issue 094 (revival gap) — the AUTHORITATIVE un-tombstone proof. A real-
+  // Postgres probe (docs/issues/094 "## The revival gap") showed `update` CANNOT
+  // clear a tombstone (deleted_at is SERVER_STAMPED, dropped from the SET) and a
+  // revive-update is rejected before it applies (getRow filters deleted_at). The
+  // `revive` op's dedicated SQL must un-tombstone the EXISTING row (deleted_at →
+  // NULL) and apply the payload fields. Crucially this exercises a table with
+  // NOT NULL columns absent from the revive payload (dimensions: project_id/
+  // canvas_id/color/sort) — the exact shape that makes the naive
+  // `INSERT … ON CONFLICT (id) DO UPDATE` form FAIL with a NOT NULL violation
+  // (Postgres checks NOT NULL on the tentative insert tuple BEFORE the conflict
+  // arbiter), which is why the implementation is UPDATE-first + NOT-EXISTS-
+  // guarded INSERT. Only REAL Postgres enforces NOT NULL + the tombstone
+  // filter, so this is the proof the fake-client contract test cannot give.
+  it('revive: un-tombstones an EXISTING soft-deleted dimension (deleted_at → NULL) and applies the fields — the thing update CANNOT do (094)', async () => {
+    const store = new PgWriteStore({ pool })
+    const projectId = uuidv7()
+    const canvasId = uuidv7()
+    const dimensionId = uuidv7()
+
+    // Seed a project + canvas + a live dimension.
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [projectId, workspaceId, 'P094'])
+    await pool.query('INSERT INTO canvases (id, project_id, workspace_id, sort) VALUES ($1, $2, $3, 0)', [
+      canvasId,
+      projectId,
+      workspaceId,
+    ])
+    await pool.query(
+      'INSERT INTO dimensions (id, project_id, workspace_id, canvas_id, name, color, sort) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [dimensionId, projectId, workspaceId, canvasId, 'Before delete', '#000', 0],
+    )
+
+    // Delete it (op delete → tombstone) via the write store, exactly as a client would.
+    const deleteApplied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'dimensions',
+        op: 'delete',
+        entityId: dimensionId,
+        payload: {},
+        clientUpdatedAt: new Date(Date.now() + 1000).toISOString(),
+      },
+      'live-test-user-sub',
+    )
+    expect(deleteApplied).toBe(true)
+    const afterDelete = await pool.query<{ deleted_at: Date | null }>(
+      'SELECT deleted_at FROM dimensions WHERE id = $1',
+      [dimensionId],
+    )
+    expect(afterDelete.rows[0]?.deleted_at).not.toBeNull() // tombstoned
+
+    // Revive it — un-tombstone + apply a new name. Payload deliberately OMITS the
+    // other NOT NULL columns (project_id/canvas_id/color/sort): the naive ON
+    // CONFLICT form would NOT NULL-violate here; the UPDATE-first path must not.
+    const reviveApplied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'dimensions',
+        op: 'revive',
+        entityId: dimensionId,
+        payload: { name: 'After revive' },
+        clientUpdatedAt: new Date(Date.now() + 2000).toISOString(),
+      },
+      'live-test-user-sub',
+    )
+    expect(reviveApplied).toBe(true)
+
+    // The row is LIVE again (deleted_at cleared), the field applied, exactly one row.
+    const afterRevive = await pool.query<{ id: string; name: string; deleted_at: Date | null; canvas_id: string }>(
+      'SELECT id, name, deleted_at, canvas_id FROM dimensions WHERE id = $1',
+      [dimensionId],
+    )
+    expect(afterRevive.rows).toHaveLength(1)
+    expect(afterRevive.rows[0]?.deleted_at).toBeNull() // un-tombstoned — the crux
+    expect(afterRevive.rows[0]?.name).toBe('After revive') // fields applied
+    expect(afterRevive.rows[0]?.canvas_id).toBe(canvasId) // NOT NULL cols preserved, never clobbered
+  })
+
+  // Issue 094 follow-up (SECURITY) — a cross-tenant revive must NOT resurrect (or
+  // re-tenant) a victim's tombstoned row. Mirrors the 095/091 cross-tenant store-
+  // layer tests: the UPDATE's `AND workspace_id = <declared>` guard no-ops (wrong
+  // workspace) AND the insert's `WHERE NOT EXISTS` guard no-ops (the id exists),
+  // so the victim row is untouched. Also proves the partial-payload cross-tenant
+  // case does NOT NOT-NULL-error (the NOT EXISTS guard never forms the tuple).
+  it('revive: a cross-tenant revive (declared workspace ≠ the tombstoned row’s) leaves the victim row tombstoned + untouched (094 security)', async () => {
+    const store = new PgWriteStore({ pool })
+    const victimWorkspaceId = uuidv7()
+    const attackerWorkspaceId = workspaceId // the beforeAll fixture workspace
+    const projectId = uuidv7()
+    const canvasId = uuidv7()
+    const dimensionId = uuidv7() // the victim row's real id
+
+    // Seed a VICTIM workspace + project + canvas + a TOMBSTONED dimension it owns.
+    await pool.query('INSERT INTO workspaces (id, name) VALUES ($1, $2)', [victimWorkspaceId, 'Victim WS 094'])
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      projectId,
+      victimWorkspaceId,
+      'Victim Project 094',
+    ])
+    await pool.query('INSERT INTO canvases (id, project_id, workspace_id, sort) VALUES ($1, $2, $3, 0)', [
+      canvasId,
+      projectId,
+      victimWorkspaceId,
+    ])
+    await pool.query(
+      'INSERT INTO dimensions (id, project_id, workspace_id, canvas_id, name, color, sort, deleted_at) VALUES ($1, $2, $3, $4, $5, $6, $7, now())',
+      [dimensionId, projectId, victimWorkspaceId, canvasId, 'victim dim', '#000', 0],
+    )
+
+    // Attacker (a DIFFERENT workspace) tries to revive the SAME id declaring their
+    // own workspace, with a partial payload. (applyIfNew's tenant GUC is the
+    // attacker workspace; prod RLS is a no-op — only the two guards stand between
+    // this and a cross-tenant resurrection/clobber. checkTenancy is bypassed at
+    // this store-layer call, exactly like the 095/091 security tests.)
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId: attackerWorkspaceId,
+        table: 'dimensions',
+        op: 'revive',
+        entityId: dimensionId,
+        payload: { name: 'HACKED' },
+        clientUpdatedAt: new Date(Date.now() + 5000).toISOString(),
+      },
+      'attacker-sub',
+    )
+    expect(applied).toBe(true) // ledgered; both guarded statements just no-op
+
+    // The victim's row is UNTOUCHED — still tombstoned, same name, same workspace.
+    const after = await pool.query<{ name: string; workspace_id: string; deleted_at: Date | null }>(
+      'SELECT name, workspace_id, deleted_at FROM dimensions WHERE id = $1',
+      [dimensionId],
+    )
+    expect(after.rows).toHaveLength(1)
+    expect(after.rows[0]?.deleted_at).not.toBeNull() // STILL tombstoned — not resurrected
+    expect(after.rows[0]?.name).toBe('victim dim') // NOT "HACKED"
+    expect(after.rows[0]?.workspace_id).toBe(victimWorkspaceId) // NOT re-tenanted
+  })
+
+  // Issue 094 follow-up (adversarial review) — the diverged-id revive of a
+  // NATURAL-KEY singleton. tier1_purpose is unique on project_id; a cold-mirror
+  // client mints a FRESH id for it. A revive whose entityId is fresh/diverged but
+  // whose payload projectId matches an ALREADY-LIVE tier1_purpose row must
+  // RECONCILE onto that row by natural key — NOT throw 23505 on
+  // tier1_purpose_project_idx (which the id-keyed revive form would, since its
+  // `NOT EXISTS (id)` guard doesn't see the natural-key collision). This is the
+  // exact 091/095 class, and only REAL Postgres enforces the unique index, so
+  // this is the authoritative proof. Watch it THROW first (red), then green.
+  it('revive: a diverged-id tier1_purpose revive whose projectId matches a LIVE row reconciles by natural key, no 23505 (094 review)', async () => {
+    const store = new PgWriteStore({ pool })
+    const projectId = uuidv7()
+    const existingRowId = uuidv7() // the row's real server id (X)
+
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [projectId, workspaceId, 'P094nk'])
+    await pool.query('INSERT INTO tier1_purpose (id, project_id, workspace_id, body) VALUES ($1, $2, $3, $4)', [
+      existingRowId,
+      projectId,
+      workspaceId,
+      'old body',
+    ])
+
+    // The cold-mirror client revives the purpose via a FRESH, diverged id (Y),
+    // same project_id, new body. Under an id-keyed revive this 23505s on the
+    // project_id unique index; the natural-key revive reconciles onto row X.
+    const freshId = uuidv7()
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'tier1Purpose',
+        op: 'revive',
+        entityId: freshId,
+        payload: { id: freshId, projectId, body: 'revived body', workspaceId },
+        clientUpdatedAt: new Date(Date.now() + 1000).toISOString(),
+      },
+      'live-test-user-sub',
+    )
+    expect(applied).toBe(true) // did NOT throw 23505
+
+    // Exactly ONE purpose row for the project — the EXISTING row (id X kept),
+    // body reconciled, live. No stray row minted under the diverged id Y.
+    const rows = await pool.query<{ id: string; body: string; deleted_at: Date | null }>(
+      'SELECT id, body, deleted_at FROM tier1_purpose WHERE project_id = $1',
+      [projectId],
+    )
+    expect(rows.rows).toHaveLength(1)
+    expect(rows.rows[0]?.id).toBe(existingRowId)
+    expect(rows.rows[0]?.body).toBe('revived body')
+    expect(rows.rows[0]?.deleted_at).toBeNull()
+    const stray = await pool.query('SELECT 1 FROM tier1_purpose WHERE id = $1', [freshId])
+    expect(stray.rows).toHaveLength(0)
+  })
+
+  // Issue 094 follow-up — the same natural-key path un-tombstones a DELETED
+  // singleton addressed by a diverged id: the existing (tombstoned) row is
+  // revived in place (id kept, deleted_at cleared), no duplicate minted.
+  it('revive: a diverged-id tier1_purpose revive un-tombstones the existing DELETED singleton by natural key (094 review)', async () => {
+    const store = new PgWriteStore({ pool })
+    const projectId = uuidv7()
+    const existingRowId = uuidv7() // the row's real server id (X), tombstoned
+
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [projectId, workspaceId, 'P094nk2'])
+    await pool.query(
+      'INSERT INTO tier1_purpose (id, project_id, workspace_id, body, deleted_at) VALUES ($1, $2, $3, $4, now())',
+      [existingRowId, projectId, workspaceId, 'old body'],
+    )
+
+    const freshId = uuidv7()
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'tier1Purpose',
+        op: 'revive',
+        entityId: freshId,
+        payload: { id: freshId, projectId, body: 'undeleted body', workspaceId },
+        clientUpdatedAt: new Date(Date.now() + 2000).toISOString(),
+      },
+      'live-test-user-sub',
+    )
+    expect(applied).toBe(true)
+
+    const rows = await pool.query<{ id: string; body: string; deleted_at: Date | null }>(
+      'SELECT id, body, deleted_at FROM tier1_purpose WHERE project_id = $1',
+      [projectId],
+    )
+    expect(rows.rows).toHaveLength(1)
+    expect(rows.rows[0]?.id).toBe(existingRowId) // existing row, id kept
+    expect(rows.rows[0]?.body).toBe('undeleted body')
+    expect(rows.rows[0]?.deleted_at).toBeNull() // un-tombstoned
+  })
 })
