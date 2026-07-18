@@ -1,6 +1,9 @@
 # 087: Genuine write-outbox failures retry silently — surface them in the status
 
-- **Status**: OPEN
+- **Status**: ✅ SHIPPED (`e7470c5`) + **LIVE-VERIFIED 2026-07-18** (`index-l2xFhny9.js`), 8/8. Archived to `done/`.
+- **Live verification** (`scratchpad/live-verify-087/run.mjs`, agent-run on prod): the normal signed-in flow shows NO false write-stall; a sustained write failure surfaces the calm **"Changes not saving"** footer (`data-sync-status="write-stalled"`) after the 5s grace; once writes succeed again the write-stall **clears**. Verified with a controlled write-abort (Playwright URL-predicate route → `route.abort`) triggering a throwaway-dimension create. **Doubly validated**: an *earlier* run surfaced a GENUINE server 500 (a real `tier1_purpose` 23505 — see **095**) as "Changes not saving" — i.e. 087 correctly revealed a real silent write failure in the wild, which is exactly its purpose.
+- **Verification gotchas** (recorded for the next live-smoke — each cost a round-trip): (1) GeDe is a PWA but the SW does not gate `/write`; (2) Playwright's `'**/write*'` **glob does not match** `https://…/write` — use a **URL-predicate matcher**; (3) `page.on('request')` does **not** observe a route-aborted request — count the abort inside the handler; (4) the Foundation-purpose editor commits on `focusout` (bubbles) — blur the contentEditable directly, a non-focusable heading click does not move focus; (5) verifying recovery needs a write that can SUCCEED — the purpose write can't on a client whose local mirror lacks the row (095), so use a fresh-uuid dimension create.
+- ~~**Status**: OPEN~~
 - **Milestone**: M8 (sync-state UI). Client-only.
 - **Blocked by**: none. Complements **086** (which fixed the opposite miscalibration — the over-sensitive read-error banner). Split out of 086 by owner decision to keep that change tight.
 
