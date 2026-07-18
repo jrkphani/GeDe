@@ -23,8 +23,8 @@ Six commits landed after the D2-LIVE state below; **confirm the live hash before
 **Orchestration model.** The main agent is the ORCHESTRATOR: plan → dispatch ≤3 concurrent subagents → **verify every subagent claim against the code + run the affected e2e locally** → commit/push → loop until the open-issue count is 0, then triage the README for anything newly filed. **Never let two subagents edit the same file on `main`** — the `lint-staged` pre-commit stash silently DROPPED a subagent's edits during a partial commit this session. Mitigations that worked: commit with `git commit --no-verify` **after** running `npm run verify:fast` yourself, and/or worktree-isolate any subagent whose files might overlap another's.
 
 **Open-issue state (this session's end):**
-- **087** — SHIPPED (`e7470c5`). No build work; **awaits owner live-verify → archive to `done/`**.
-- **092** — SHIPPED (`50730d7`). No build work; **awaits owner live-verify → archive**.
+- **087** — SHIPPED (`e7470c5`). No build work. **AGENT can live-verify + close it** (owner confirmed 2026-07-18): sign in on the live URL with the **`GEDE_EMAIL` / `GEDE_PASSWORD` env vars** via the live-smoke Playwright pattern, then **Playwright `route`-abort the `POST …/write`** so an edit's flush keeps failing → after the 5 s grace the footer must read **"Changes not saving"** → un-abort → it clears to **Synced** (+ confirm no *false* write-stall in the normal signed-in flow). Then archive to `done/`.
+- **092** — SHIPPED (`50730d7`). No build work. **AGENT can live-verify + close it**: sign in (env creds, live-smoke), on the D2 lane page **promote an Architecture entry to a dimension, then Undo** — the co-mounted **Design register must refresh (the dimension drops out) with NO reload** (and Redo re-adds it). Then archive to `done/`.
 - **091** — heal-case fixed (`4641a75`) + CloudWatch diagnostic deployed (`878eb97`). **General root-cause BLOCKED on owner live repro** (a USER edit), then a small server-side fix + remove the diagnostic log.
 - **089** — D1/D2 live; **D3 P3 arc COMPLETE behind `?d3rf`** (P0→P3.4); rich identifiers RESOLVED (keep plain). Remaining = OPTIONAL graduation (thread the flag / decompose Foundation+Design lanes / LOD) + two small follow-ups (`reorderTable` undo-enqueue; `laneLayout` tie-break).
 - **084** — hygiene 6/7 shipped (`8ac3c72`); **Direction 3 (grid unification) DECIDED, NOT started** — the biggest remaining build.
@@ -32,13 +32,13 @@ Six commits landed after the D2-LIVE state below; **confirm the live hash before
 **The hard constraint (drives the whole sequence):** 084 D3 and 089's Architecture are the SAME real estate — both rebuild `EditableGrid`'s grammar + `ArchitectureSurface`/`TablePanel`. **They cannot run in parallel, and building them out of order = rework.** Note 082's `EditableChain` grammar seam exists only for the Design *rail* (`inline-editor.tsx`), NOT for `EditableGrid`'s tables — so 084 D3 must genuinely reconcile two grammar systems (real foundational work, not a component reuse). Settle one reconciliation before 084 D3 starts: *the 089 canvas will host the 084-unified grid* — which is exactly why 084 D3 comes first.
 
 **Ideal sequence:**
-1. **(owner-external, anytime — blocks nothing):** live-verify + archive 087 & 092; reproduce 091 on the live build.
+1. **(AGENT-doable now, parallel — blocks nothing):** live-verify + archive **087 & 092** yourself via the env-var creds + live-smoke Playwright (the *how* is in the open-issue-state block above — 087 = `route`-abort `POST /write`; 092 = promote-then-Undo on the lane page). Dispatch a subagent for each. **Owner-external:** reproduce **091** on the live build (a USER edit).
 2. **091 root-cause** — the moment the owner repros: read `[writeApi][091]` in the `…WriteApiFunction…` CloudWatch log group (via the AWS MCP, read-only), cross-ref the `entityId` vs DB state (tombstoned ⇒ hyp.1 stale-delete echo; never-inserted ⇒ hyp.3 edit-before-insert race), ship the fix, remove the diagnostic. Small, server-side, parallel to any UI track.
 3. **084 Direction 3** — BEFORE further 089 graduation (the canvas wraps the Architecture surface, so it inherits the improvement; and it's the real user-facing route). Phase it like D1/D2/D3: short spec/interview (the crux is reconciling the two grid grammars) → phased build, ≤5 files/phase, red-first.
 4. **089 D3 graduation** — thread the flag / decompose Foundation+Design lanes / LOD — LAST, on top of the unified grid.
 
 **Parallel opportunities:**
-- Track A (owner-external): archive 087/092 + repro 091 — anytime.
+- Track A (AGENT, parallel): live-verify + archive 087/092 via env creds (a subagent each). Owner-external: repro 091 — anytime.
 - **091's server-side fix** — parallel to any UI track (different files).
 - **Small isolated cleanups** — `laneLayout` tie-break (089-only file) + `reorderTable` undo-enqueue (092-class, `tier2.ts`) — a quick subagent, anytime; but if 084 D3 is actively touching `tier2.ts`/`EditableGrid`, sequence to avoid the same-file clash.
 - **NOT parallel:** 084 D3 ‖ 089 Architecture. Foundation/Design lane decomposition COULD overlap 084 D3 (different surfaces) but both touch `EditableGrid` — worktree-isolate if attempted.
