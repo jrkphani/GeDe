@@ -117,6 +117,21 @@ describe('computeLaneLayout — determinism & edge cases', () => {
     expect(yOf(posA, 'y')).toBe(yOf(posB, 'y'))
   })
 
+  it('breaks a duplicate-sort tie deterministically by id, independent of input order', () => {
+    // Two nodes sharing a `sort` in one lane. The DB keeps sort dense so this
+    // "can't" happen, but computeLaneLayout documents itself as a pure projection
+    // "independent of input array order" — a duplicate sort must therefore resolve
+    // by a stable key (id ascending), not by which array slot the caller passed.
+    const a = [item('zzz', 'foundation', 0, 40), item('aaa', 'foundation', 0, 40)]
+    const b = [item('aaa', 'foundation', 0, 40), item('zzz', 'foundation', 0, 40)]
+    const yIn = (arr: LaneItem[], id: string) => byId(computeLaneLayout(arr, CONFIG), id).y
+    // identical result regardless of input array order
+    expect(yIn(a, 'aaa')).toBe(yIn(b, 'aaa'))
+    expect(yIn(a, 'zzz')).toBe(yIn(b, 'zzz'))
+    // id ascending: 'aaa' stacks above 'zzz'
+    expect(yIn(a, 'aaa')).toBeLessThan(yIn(a, 'zzz'))
+  })
+
   it('empty input yields an empty layout', () => {
     expect(computeLaneLayout([], CONFIG)).toEqual([])
   })

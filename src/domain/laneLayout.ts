@@ -62,9 +62,15 @@ function laneX(tier: LaneTier, config: LaneLayoutConfig): number {
   return columnIndex(tier) * (config.laneWidth + config.laneGap)
 }
 
-// Items in one lane, ascending by `sort`, without mutating the input array.
+// Items in one lane, ascending by `sort`, without mutating the input array. A
+// duplicate `sort` (DB keeps sort dense, so a defense-in-depth case) is broken
+// by `id` ascending so the projection stays deterministic and independent of
+// input array order — never leaning on the engine's stable-sort of the caller's
+// array slots.
 function laneItemsSorted(items: readonly LaneItem[], tier: LaneTier): LaneItem[] {
-  return items.filter((i) => i.tier === tier).sort((a, b) => a.sort - b.sort)
+  return items
+    .filter((i) => i.tier === tier)
+    .sort((a, b) => a.sort - b.sort || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
 }
 
 // Derive a position for every item. x = pure fn(tier); within a lane, items are
