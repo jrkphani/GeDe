@@ -2419,6 +2419,11 @@ body {
   align-items: center;
   gap: var(--space-1);
   min-height: 40px;
+  /* Issue 084 finding 6 (STYLE_GUIDE §4/§6/§11): nested-row indent is
+     token-driven — the per-row --depth custom property (set from the tree
+     depth in JSX) times the --space-5 (24px) step = 24px per level, one grid
+     cell. No raw pixel literal, no inline calc in the component. */
+  padding-left: calc(var(--depth, 0) * var(--space-5));
 }
 
 .t2-chevron,

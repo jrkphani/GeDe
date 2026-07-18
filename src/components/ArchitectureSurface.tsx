@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Tier2EntryRow, Tier2TableRow } from '../db/mutations'
 import { buildEntryTree, flattenEntryTree } from '../domain/entryTree'
 import { canWrite } from '../domain/workspaceRole'
@@ -227,7 +227,10 @@ function TablePanel({
             <div
               className="t2-tree"
               data-depth={meta.depth}
-              style={{ paddingLeft: `calc(var(--space-5) * ${meta.depth})` }}
+              // Finding 6 (STYLE_GUIDE §11): feed the depth to a --depth custom
+              // property; base.css multiplies it by the --space-5 token. No raw
+              // pixel literal and no inline calc lives in the component.
+              style={{ '--depth': meta.depth } as CSSProperties}
             >
               {meta.hasChildren ? (
                 <Button

@@ -73,9 +73,13 @@ describe('ArchitectureSurface', () => {
 
     const rootTree = container.querySelector('[data-depth="0"]') as HTMLElement
     const childTree = container.querySelector('[data-depth="1"]') as HTMLElement
-    // No raw pixel literal — indentation derives from the --space-5 (24px) token.
-    expect(rootTree.style.paddingLeft).toBe('calc(var(--space-5) * 0)')
-    expect(childTree.style.paddingLeft).toBe('calc(var(--space-5) * 1)')
+    // No raw pixel literal AND no inline calc in JSX: depth only feeds a --depth
+    // custom property; base.css multiplies it by the --space-5 (24px) token
+    // (asserted at the CSS layer below — jsdom doesn't cascade the stylesheet).
+    expect(rootTree.style.paddingLeft).toBe('')
+    expect(childTree.style.paddingLeft).toBe('')
+    expect(rootTree.style.getPropertyValue('--depth')).toBe('0')
+    expect(childTree.style.getPropertyValue('--depth')).toBe('1')
   })
 
   it('promote selection spans nesting levels and previews the parameter count', async () => {
@@ -360,6 +364,36 @@ describe('ArchitectureSurface — Remove moved to the selection bar (issue 084, 
     // The linked-parameter resolution surfaces instead of a silent delete.
     expect(await screen.findByText(/Keep parameter as unlinked copy/)).toBeInTheDocument()
     expect(screen.getByText(/It is linked to/)).toBeInTheDocument()
+  })
+})
+
+// Issue 084 finding 6 (STYLE_GUIDE §11) — the nested-row indent must be
+// token-driven at the CSS layer, not a raw pixel literal or an inline calc in
+// JSX. base.css computes it from the per-row --depth custom property times the
+// --space-5 (24px) step, so the visual indent (24px/level) is unchanged.
+describe('.t2-tree CSS — token-driven nested indent (issue 084 finding 6)', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
+
+  it('computes padding-left from --depth × the --space-5 token, no raw px', () => {
+    const match = /\.t2-tree\s*\{([^}]*)\}/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1] as string
+    expect(body).toMatch(/padding-left:\s*calc\(var\(--depth[^)]*\)\s*\*\s*var\(--space-5\)\)/)
+    // Guard against a raw pixel literal creeping back into the indent.
+    expect(body).not.toMatch(/padding-left:\s*[^;]*\d+px/)
+  })
+})
+
+// Issue 084 finding 7 (STYLE_GUIDE §10) — focus is React-managed, never a
+// DOM reach. The old context-bar "Add table" button used
+// `addTableRef.current?.querySelector('input')?.focus()`; that whole affordance
+// was removed (the add-table PhantomInput is the single create path and is
+// role-gated, asserted by the viewer test above). This guards the regression.
+describe('ArchitectureSurface source — no querySelector focus reach (issue 084 finding 7)', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/components/ArchitectureSurface.tsx'), 'utf8')
+
+  it('never reaches into the DOM with querySelector to move focus', () => {
+    expect(source).not.toMatch(/querySelector/)
   })
 })
 
