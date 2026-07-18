@@ -106,6 +106,7 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [091](091-editing-item-no-longer-exists-note.md) PARTIAL (heal-case fixed `4641a75`; **CloudWatch diagnostic deployed `878eb97`, awaiting owner live repro**) | "The item you tried to change no longer exists." flashes during editing — write-API `unknown_entity` rejection; general root-cause needs a live repro | M8 | — |
 | [092](092-undo-redo-cross-lane-staleness.md) ✅ SHIPPED (`50730d7`; agent-live-verifiable → archive) | undo/redo of cross-tier ops didn't refresh the co-mounted Design lane (089-D2 follow-up) | 089-D2 | — |
 | [093](093-d3-context-register-extend-right.md) OPEN (design writeup; owner forks pending) | D3 canvas — let the context register extend RIGHT instead of clipping, and re-home the "New context" affordance | M6 | 089-D3 |
+| [094](094-undo-redo-mutations-not-persisted-to-sync-outbox.md) OPEN (found 2026-07-18; owner scope decision pending) | undo/redo of a mutation is never enqueued to the sync outbox — cloud-mode reversal silently lost on reload (persistence half of 092's closures) | M8 | — |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
