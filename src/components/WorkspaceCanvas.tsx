@@ -1,11 +1,14 @@
-import { useMemo } from 'react'
+import { useCallback, useEffect, useMemo, useRef, type FocusEvent } from 'react'
 import {
   Background,
   Controls,
   ReactFlow,
+  ReactFlowProvider,
   useNodesState,
+  useReactFlow,
   type Node,
   type NodeProps,
+  type ReactFlowInstance,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 import { computeLaneLayout, LANE_ORDER, type LaneLayoutConfig, type LaneTier } from '../domain/laneLayout'
@@ -72,6 +75,73 @@ const LANE_NODE_ID: Record<LaneTier, string> = {
   design: 'workspace-canvas-design-lane',
 }
 
+// 089-D3 P4 (nav layer) — ⌘1/2/3 maps to a lane, exactly as AppShell's global
+// route-navigate does (Digit1→foundation, Digit2→architecture, Digit3→design).
+// On the canvas these must PAN, not navigate — see WorkspaceCanvasInner.
+const DIGIT_TO_TIER: Record<string, LaneTier | undefined> = {
+  Digit1: 'foundation',
+  Digit2: 'architecture',
+  Digit3: 'design',
+}
+
+// Frame a single lane node with a little breathing room when jumping to it.
+const LANE_FIT_PADDING = 0.16
+// Animation durations (ms). Reduced-motion snaps both to 0 (STYLE_GUIDE §8 —
+// "the app never animates what it can simply do").
+const LANE_JUMP_DURATION = 450
+const FOCUS_PAN_DURATION = 320
+// Focus-driven pan is pan-if-outside-margin, NOT center-on-every-focus: only
+// pan when the focused element is within this many px of (or past) a pane edge,
+// so the viewport never fights a typist whose caret is already comfortably in
+// view (D3 spike finding — "center on every focus is too jerky").
+const FOCUS_PAN_MARGIN = 88
+
+// matchMedia is in the DOM lib types but absent under jsdom — read it through
+// Partial<Window> so the presence check is a real runtime guard (mirrors
+// shell/laneTarget.ts). Under reduced-motion every pan snaps (duration 0).
+function prefersReducedMotion(): boolean {
+  const matchMedia = (window as Partial<Window>).matchMedia
+  return matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false
+}
+
+// ── ⌘1/2/3 pan-to-lane interceptor (module-level, capture phase) ────────────
+// WHY module-level and not a component effect: AppShell owns a GLOBAL
+// window-capture ⌘1/2/3 handler that calls navigate(), which rebuilds the URL
+// via serializeRoute and DROPS the `?d3rf` param — exiting the canvas. To keep
+// `?d3rf`, the canvas must intercept ⌘1/2/3 FIRST and stop the event before
+// AppShell's listener runs. DOM invokes same-target capture listeners in
+// REGISTRATION order, so "first" means "added before AppShell's". AppShell
+// mounts (and registers) before the canvas does — the canvas is gated behind the
+// DB-ready surface, AppShell is always mounted — so a canvas *effect* listener
+// is hopelessly second. Registering at MODULE-EVAL time (this file is imported
+// by App.tsx before any component mounts) guarantees this listener is added
+// before AppShell's mount-effect listener, so it wins. `stopImmediatePropagation`
+// (not just `stopPropagation`) is required because both listeners sit on the
+// SAME target (window). The listener is inert (early return) unless a canvas is
+// mounted and has published its instance below, so the normal flag-off app —
+// and production, where the canvas never mounts — is byte-for-byte unaffected.
+let activeCanvasInstance: ReactFlowInstance<LaneNode> | null = null
+
+function onCanvasNavKeydown(e: KeyboardEvent): void {
+  const instance = activeCanvasInstance
+  if (!instance) return
+  if (!(e.metaKey || e.ctrlKey)) return
+  const tier = DIGIT_TO_TIER[e.code]
+  if (!tier) return
+  // Win over AppShell's global navigate() — keep the canvas (and `?d3rf`).
+  e.preventDefault()
+  e.stopImmediatePropagation()
+  const duration = prefersReducedMotion() ? 0 : LANE_JUMP_DURATION
+  void instance.fitView({ nodes: [{ id: LANE_NODE_ID[tier] }], padding: LANE_FIT_PADDING, duration })
+  // Mirror AppShell / D2: the keyboard lane-jump also makes the lane ACTIVE, so
+  // Design's `c`/`v`/`d` verbs scope to it without needing focus to land.
+  useActiveLaneStore.getState().setActiveLane(tier)
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('keydown', onCanvasNavKeydown, true)
+}
+
 // A `type` (not `interface`) on purpose: React Flow's `Node<Data>` constrains
 // Data to `Record<string, unknown>`, which an object-literal type alias
 // satisfies but an interface does not (interfaces lack an implicit index
@@ -127,7 +197,21 @@ function LaneNode({ data }: NodeProps<LaneNode>) {
 // a fresh object each render. One generic type keyed by `tier` in `data`.
 const NODE_TYPES = { lane: LaneNode }
 
+// The exported shell wraps the canvas in a ReactFlowProvider so both the
+// imperative viewport handle (`useReactFlow`, for ⌘1/2/3 pan-to-lane) and the
+// focus-pan handler live inside the RF context — cleaner than threading an
+// `onInit` instance ref, and it lets the focus handler sit on the wrapping
+// element (outside <ReactFlow> itself) while still calling `screenToFlowPosition`
+// / `setCenter`.
 export function WorkspaceCanvas({ route }: { route: WorkspaceRoute }) {
+  return (
+    <ReactFlowProvider>
+      <WorkspaceCanvasInner route={route} />
+    </ReactFlowProvider>
+  )
+}
+
+function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   const projectId = route.projectId
   // Same derivation as WorkspaceSurface: only a `design` route carries
   // contextPath / view / canvasId; other workspace routes open the root canvas.
@@ -173,10 +257,94 @@ export function WorkspaceCanvas({ route }: { route: WorkspaceRoute }) {
     // Recompute only when the route-derived inputs change.
   }, [projectId, design.contextPath, design.view, design.canvasId])
 
-  const [nodes, , onNodesChange] = useNodesState<LaneNode>(initialNodes)
+  const [nodes, setNodes, onNodesChange] = useNodesState<LaneNode>(initialNodes)
+
+  // Code-review HIGH fix: `useNodesState(initialNodes)` wraps `useState`, so it
+  // seeds from `initialNodes` ONLY on the first render — every later value is
+  // discarded. Without this re-sync the mounted nodes' `data` (projectId /
+  // contextPath / view / canvasId) freezes at mount, so while `?d3rf` persists a
+  // Design drill-down, a project switch, or a canvas switch would silently stop
+  // updating the co-mounted surfaces (the canvas keeps showing the mount-time
+  // context). Re-patch each node's `data` from the freshly-recomputed
+  // `initialNodes` whenever the route-derived inputs change; positions are left
+  // as-is (derived + stable) so the viewport is never jarred.
+  useEffect(() => {
+    setNodes((prev) => {
+      const next = prev.map((n) => {
+        const fresh = initialNodes.find((i) => i.id === n.id)
+        if (!fresh) return n
+        const d = n.data
+        const f = fresh.data
+        const same =
+          d.projectId === f.projectId &&
+          d.contextPath === f.contextPath &&
+          d.view === f.view &&
+          d.canvasId === f.canvasId
+        return same ? n : { ...n, data: f }
+      })
+      // Return the SAME array reference when nothing changed so this never
+      // churns node identity on mount (where prev.data === initialNodes.data) —
+      // a redundant re-render would disrupt fitView / focus-pan.
+      return next.some((n, i) => n !== prev[i]) ? next : prev
+    })
+  }, [initialNodes, setNodes])
+
+  // Imperative viewport handle (stable across renders). Available because this
+  // component is rendered inside the <ReactFlowProvider> above.
+  const reactFlow = useReactFlow<LaneNode>()
+  // The pane wrapper — its rect is the on-screen viewport bounds the focus-pan
+  // margin test is measured against.
+  const wrapperRef = useRef<HTMLDivElement>(null)
+
+  // ⌘1/2/3 → pan/zoom to the Foundation / Architecture / Design lane node.
+  // The actual key listener is the MODULE-LEVEL interceptor (see below); this
+  // effect just registers this canvas's live React Flow instance as the active
+  // pan target for as long as the canvas is mounted. On unmount it clears it, so
+  // the interceptor falls dormant and AppShell's global ⌘1/2/3 route-navigate
+  // resumes for the normal (flag-off) app.
+  useEffect(() => {
+    activeCanvasInstance = reactFlow
+    return () => {
+      if (activeCanvasInstance === reactFlow) activeCanvasInstance = null
+    }
+  }, [reactFlow])
+
+  // Focus-driven pan (D3 spike gate-d): native `scrollIntoView` is a no-op on a
+  // transformed plane, so focusing a cell/editor inside a node needs an explicit
+  // pan. Heuristic is pan-if-outside-margin, never center-on-every-focus: if the
+  // focused element sits comfortably inside the pane (>= FOCUS_PAN_MARGIN from
+  // every edge) we leave the viewport alone so bulk keyboard entry is never
+  // yanked around; only when it is near/past an edge do we `setCenter` on it —
+  // keeping the CURRENT zoom (pan, don't re-zoom). Reduced-motion snaps.
+  const onFocusCapture = useCallback(
+    (e: FocusEvent<HTMLDivElement>) => {
+      const target = e.target as HTMLElement | null
+      const pane = wrapperRef.current
+      if (!target || !pane || typeof target.getBoundingClientRect !== 'function') return
+      const r = target.getBoundingClientRect()
+      // A zero-box target (e.g. the focus-forwarding wrapper itself) can't be
+      // meaningfully off-screen — skip.
+      if (r.width === 0 && r.height === 0) return
+      const p = pane.getBoundingClientRect()
+      const outside =
+        r.top < p.top + FOCUS_PAN_MARGIN ||
+        r.bottom > p.bottom - FOCUS_PAN_MARGIN ||
+        r.left < p.left + FOCUS_PAN_MARGIN ||
+        r.right > p.right - FOCUS_PAN_MARGIN
+      if (!outside) return
+      const center = reactFlow.screenToFlowPosition({
+        x: r.left + r.width / 2,
+        y: r.top + r.height / 2,
+      })
+      const { zoom } = reactFlow.getViewport()
+      const duration = prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION
+      void reactFlow.setCenter(center.x, center.y, { zoom, duration })
+    },
+    [reactFlow],
+  )
 
   return (
-    <div className="workspace-canvas">
+    <div className="workspace-canvas" ref={wrapperRef} onFocusCapture={onFocusCapture}>
       <ReactFlow
         nodes={nodes}
         onNodesChange={onNodesChange}

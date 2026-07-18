@@ -20,6 +20,12 @@ async function viewportScale(page: Page): Promise<number> {
   return Number.parseFloat(match[1] as string)
 }
 
+// The React Flow viewport's full inline transform (`translate(x, y) scale(z)`),
+// so a test can assert the viewport genuinely moved/zoomed after a pan.
+async function viewportTransform(page: Page): Promise<string> {
+  return (await page.locator('.react-flow__viewport').getAttribute('style')) ?? ''
+}
+
 test('EditableGrid keyboard grammar survives inside a React Flow node at zoom ≠ 1', async ({
   page,
 }) => {
@@ -225,4 +231,87 @@ test('activeLane gates the Design `c` verb per focused lane node', async ({ page
   await design.locator('.coverage-stat').click()
   await page.keyboard.press('c')
   await expect(page.locator('.canvas-node--draft')).toHaveCount(1)
+})
+
+// ── 089-D3 (P4 nav layer) — ⌘1/2/3 pan-to-lane + focus-driven pan ───────────
+// The spike-proven navigation, now in the real canvas: ⌘1/2/3 pans the viewport
+// to a lane node instead of AppShell's route-navigate (which would rebuild the
+// URL via serializeRoute and DROP the `?d3rf` param, exiting the canvas). The
+// canvas intercepts the keypress on the CAPTURE phase and stops it reaching
+// AppShell's global handler, so `?d3rf` survives.
+
+test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf canvas', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1400, height: 1000 })
+  await openThreeLaneCanvas(page)
+  // Wait until every lane surface has mounted and the initial fit-view settled.
+  await expect(page.locator('.wc-node--design .design-main')).toBeVisible({ timeout: 15_000 })
+
+  const before = await viewportTransform(page)
+
+  // Capture-phase interception must win over AppShell's window-capture ⌘1/2/3
+  // handler: it PANS, it does not navigate().
+  await page.keyboard.press('Meta+Digit2')
+
+  // The viewport genuinely moved/zoomed toward the lane (RF animates the pan).
+  await expect.poll(() => viewportTransform(page)).not.toBe(before)
+
+  // Critically, we did NOT navigate away: AppShell's navigate() would have
+  // rebuilt the URL (dropping ?d3rf, leaving the Design route) — instead the URL
+  // is untouched, still the Design route, still carrying the dev flag.
+  expect(page.url()).toContain('d3rf')
+  expect(page.url()).toContain('/design')
+  // The canvas is still mounted (a navigate() would have swapped in the normal
+  // WorkspaceSurface, unmounting React Flow entirely).
+  await expect(page.locator('.react-flow')).toBeVisible()
+
+  // The pan centered the Architecture lane: its on-screen center-x settles near
+  // the pane's center-x (fitView framed the single lane node).
+  await expect
+    .poll(async () => {
+      const a = await page.locator('.wc-node--architecture').boundingBox()
+      const p = await page.locator('.react-flow').boundingBox()
+      if (!a || !p) return Number.POSITIVE_INFINITY
+      return Math.abs(a.x + a.width / 2 - (p.x + p.width / 2))
+    })
+    .toBeLessThan(120)
+})
+
+test('focusing a cell in an off-screen lane pans it into view', async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 850 })
+  await openThreeLaneCanvas(page)
+  await expect(page.locator('.wc-node--design .design-main')).toBeVisible({ timeout: 15_000 })
+
+  // Zoom into the Foundation lane (leftmost) so the Design lane (rightmost) is
+  // pushed off the visible pane — the precondition the focus-pan must fix.
+  await page.keyboard.press('Meta+Digit1')
+
+  const designDim = page.locator('.wc-node--design').getByPlaceholder('Type to add a dimension')
+
+  // The Design phantom input is in the DOM but currently off the right of the
+  // pane — its center-x sits beyond the pane's right edge.
+  await expect
+    .poll(async () => {
+      const el = await designDim.boundingBox()
+      const p = await page.locator('.react-flow').boundingBox()
+      if (!el || !p) return -1
+      return el.x + el.width / 2 - (p.x + p.width)
+    })
+    .toBeGreaterThan(0)
+
+  // Focus it (not a pointer action — works on an off-screen element). The
+  // focus-driven pan brings it inside the pane because it was outside the margin.
+  await designDim.focus()
+
+  await expect
+    .poll(async () => {
+      const el = await designDim.boundingBox()
+      const p = await page.locator('.react-flow').boundingBox()
+      if (!el || !p) return false
+      const cx = el.x + el.width / 2
+      const cy = el.y + el.height / 2
+      return cx > p.x && cx < p.x + p.width && cy > p.y && cy < p.y + p.height
+    })
+    .toBe(true)
 })
