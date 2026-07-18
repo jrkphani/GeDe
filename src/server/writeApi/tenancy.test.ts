@@ -28,6 +28,9 @@ function fixedResolver(
 ): WorkspaceScopeResolver {
   return {
     resolveWorkspaceForEntity: (_table, entityId) => Promise.resolve(workspaceByEntity[entityId] ?? null),
+    // Issue 091 — the fixed resolver has no natural-key notion; returning null
+    // keeps every existing case's behavior (a by-id miss stays unknown_entity).
+    resolveWorkspaceForNaturalKey: () => Promise.resolve(null),
     isMember: (workspaceId, sub) => Promise.resolve(members.has(`${workspaceId}:${sub}`)),
   }
 }

@@ -89,13 +89,15 @@ export async function handleWriteRequest(request: WriteApiRequest, deps: WriteAp
 
     const tenancy = await checkTenancy(mutation, auth.claims, deps.store)
     if (!tenancy.ok) {
-      // Issue 091 — diagnostic log so a tenancy rejection is visible in
-      // CloudWatch (the handler otherwise only returns the outcome to the
-      // client, so `unknown_entity` never appeared in the logs). Structured,
-      // identifiers only (no prose/PII): table/op/entityId/reason disambiguate
-      // hyp. 1 (stale-delete echo — the row was tombstoned) from hyp. 3 (a
-      // not-yet-synced row) once cross-referenced against the row's DB state at
-      // the repro time. Remove once 091 is root-caused.
+      // Issue 091 — PERMANENT tenancy-rejection observability (kept, not a
+      // temporary diagnostic): the handler otherwise only returns the outcome
+      // to the client, so a `cross_tenant`/`unknown_entity` rejection would
+      // never appear in CloudWatch. Structured, identifiers only (no prose/PII):
+      // table/op/entityId/reason/declaredWorkspaceId. This log is what captured
+      // the live 091 repro (a diverged-id tier1_purpose update rejected
+      // unknown_entity); with 091 now fixed via natural-key resolution it stays
+      // as ongoing tenancy-rejection observability (sibling to the [098] log
+      // below), not a diagnostic to be removed.
       console.warn(
         `[writeApi][091] tenancy rejection ${JSON.stringify({
           reason: tenancy.reason,

@@ -22,6 +22,25 @@ export interface WorkspaceScopeResolver {
    */
   resolveWorkspaceForEntity(table: MutationTable, entityId: string): Promise<string | null>
   /**
+   * Issue 091 — the NATURAL-KEY fallback resolver for the update/delete path.
+   * `tier1_purpose` is a project singleton (unique on `project_id`); a
+   * cold-mirror client mints a FRESH `id` for it, so after 095's insert-path
+   * reconciliation the client's minted id still diverges from the server row's
+   * id. The NEXT edit enqueues an `update` for that minted id, which
+   * `resolveWorkspaceForEntity` (keyed on the row's `id`) cannot resolve →
+   * `unknown_entity` → the "item no longer exists" note + a dropped edit.
+   *
+   * For a table in store.ts's `NATURAL_KEY_CONFLICT` whose payload carries the
+   * natural-key value (for `tier1Purpose` that's `payload.projectId`), this
+   * resolves the LIVE row by that natural key and returns its `workspace_id`;
+   * for any other table, or when the payload lacks the natural key, it returns
+   * `null`. `checkTenancy` calls it ONLY as a fallback when the by-id
+   * resolution already returned `null`, so the common path is untouched — and
+   * crucially it STILL yields `cross_tenant` (never a silent pass) when the
+   * natural-key row belongs to a workspace other than the declared one.
+   */
+  resolveWorkspaceForNaturalKey(mutation: MutationEnvelope): Promise<string | null>
+  /**
    * Issue 057 — the membership-gated relaxation of the single-workspace-per-
    * sub invariant: true iff `sub` has a real, live (non-soft-deleted)
    * `workspace_members` row for `workspaceId`. `checkTenancy` below calls
@@ -83,7 +102,20 @@ export async function checkTenancy(
     return { ok: true }
   }
 
-  const actualWorkspace = await resolver.resolveWorkspaceForEntity(mutation.table, mutation.entityId)
+  let actualWorkspace = await resolver.resolveWorkspaceForEntity(mutation.table, mutation.entityId)
+  // Issue 091 — when the by-id resolution fails (`null`), fall back to
+  // resolving the row by its NATURAL key. `tier1_purpose` is a project
+  // singleton whose client-minted id diverges from the server row's id after
+  // 095's insert-path reconciliation; the NEXT edit's `update` targets that
+  // minted id, which has no server row → `null` here. The `??=` (evaluated
+  // ONLY on a by-id miss) resolves the LIVE row by its natural key (project_id
+  // from the payload) instead — `null` for every non-natural-key table or when
+  // the payload lacks the key, so this is purely additive: it rescues the
+  // diverged-id update rather than dropping it as unknown_entity, and — because
+  // the resolved workspace is still range-checked below — a caller declaring
+  // workspace A whose natural-key row belongs to victim V is STILL rejected
+  // `cross_tenant`, never papered over.
+  actualWorkspace ??= await resolver.resolveWorkspaceForNaturalKey(mutation)
   if (actualWorkspace === null) {
     return { ok: false, reason: 'unknown_entity' }
   }

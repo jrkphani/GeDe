@@ -662,6 +662,142 @@ describe('handleWriteRequest — cross-tenant FK on insert/update (issue 098 SEC
   })
 })
 
+// Issue 091 — "The item you tried to change no longer exists." during ordinary
+// editing. `tier1_purpose` is a project SINGLETON (unique on project_id); a
+// cold-mirror client mints a FRESH id for it. 095 fixed the FIRST edit (an
+// upsert reconciles onto the server row by project_id) — but the server row
+// keeps its OWN id, so the client's minted id still diverges. The NEXT edit
+// enqueues an `update` for that minted id → the server has no row with that id
+// → checkTenancy's by-id resolution returns null → unknown_entity → the note,
+// and the edit is silently dropped. The fix resolves the update by the NATURAL
+// key (project_id from the payload) when the by-id resolution fails, so a
+// diverged-id update reconciles onto the real row — while STILL rejecting a
+// genuine cross-tenant attempt (the natural-key row's workspace is range-checked
+// exactly like the by-id one).
+describe('handleWriteRequest — tier1_purpose diverged-id update (issue 091)', () => {
+  it('applies a diverged-id tier1_purpose update by resolving the row via its project_id natural key (core repro)', async () => {
+    const store = new InMemoryWriteStore()
+    const projectId = uuidv7()
+    const serverPurposeId = uuidv7() // the row's real server id (X)
+    store.seed({ id: projectId, workspaceId: WS1, table: 'projects', data: { name: 'P091' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    store.seed({
+      id: serverPurposeId,
+      workspaceId: WS1,
+      table: 'tier1Purpose',
+      data: { projectId, body: 'old' },
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-1', WS1)
+    // The cold-mirror client's minted id (Y) — diverged from the server row's id (X).
+    const divergedId = uuidv7()
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'update',
+      entityId: divergedId,
+      payload: { projectId, body: 'new' },
+      clientUpdatedAt: '2026-06-01T00:00:00.000Z',
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      // Was `rejected`/`unknown_entity` before the fix — this is the red-first repro.
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+    // The existing server row (id X) is updated in place — body 'new', id kept.
+    const row = await store.getRow('tier1Purpose', serverPurposeId)
+    expect(row?.data.body).toBe('new')
+    // No stray row minted under the client's diverged id.
+    expect(await store.getRow('tier1Purpose', divergedId)).toBeNull()
+  })
+
+  it('rejects a diverged-id tier1_purpose update as cross_tenant when the project\'s purpose row belongs to another workspace', async () => {
+    const store = new InMemoryWriteStore()
+    const WS_V = workspaceIdForSub('victim')
+    const projectId = uuidv7()
+    const victimPurposeId = uuidv7()
+    store.seedWorkspace(WS_V)
+    store.seed({ id: projectId, workspaceId: WS_V, table: 'projects', data: { name: 'Victim P' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    store.seed({
+      id: victimPurposeId,
+      workspaceId: WS_V,
+      table: 'tier1Purpose',
+      data: { projectId, body: 'victim' },
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      deletedAt: null,
+    })
+    // Attacker acts in their OWN workspace (WS1) but references the victim's project_id.
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      workspaceId: WS1,
+      table: 'tier1Purpose',
+      op: 'update',
+      entityId: uuidv7(), // diverged id (no such row anywhere)
+      payload: { projectId, body: 'HACKED' },
+      clientUpdatedAt: '2026-06-01T00:00:00.000Z',
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'cross_tenant' })
+    }
+    // The victim's row is untouched — the natural-key resolution HARDENS tenancy,
+    // it does not paper over it.
+    const row = await store.getRow('tier1Purpose', victimPurposeId)
+    expect(row?.data.body).toBe('victim')
+  })
+
+  it('still rejects a tier1_purpose update as unknown_entity when the project has no purpose row at all', async () => {
+    const store = new InMemoryWriteStore()
+    const projectId = uuidv7()
+    // Project exists, but NO tier1_purpose row for it — nothing resolves by id or natural key.
+    store.seed({ id: projectId, workspaceId: WS1, table: 'projects', data: { name: 'Empty P' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'update',
+      entityId: uuidv7(),
+      payload: { projectId, body: 'new' },
+      clientUpdatedAt: '2026-06-01T00:00:00.000Z',
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'unknown_entity' })
+    }
+  })
+
+  it('control: a NON-diverged tier1_purpose update (entityId matches the server row) still applies via the common by-id path', async () => {
+    const store = new InMemoryWriteStore()
+    const projectId = uuidv7()
+    const serverPurposeId = uuidv7()
+    store.seed({ id: projectId, workspaceId: WS1, table: 'projects', data: { name: 'P' }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    store.seed({
+      id: serverPurposeId,
+      workspaceId: WS1,
+      table: 'tier1Purpose',
+      data: { projectId, body: 'old' },
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      deletedAt: null,
+    })
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({
+      table: 'tier1Purpose',
+      op: 'update',
+      entityId: serverPurposeId, // matches the server row — the common path
+      payload: { projectId, body: 'new' },
+      clientUpdatedAt: '2026-06-01T00:00:00.000Z',
+    })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+    const row = await store.getRow('tier1Purpose', serverPurposeId)
+    expect(row?.data.body).toBe('new')
+  })
+})
+
 describe('handleWriteRequest — offline replay/idempotency (test-first plan item 4)', () => {
   it('applies a fresh mutation once, and a replay of the same mutation id is a no-op, not a duplicate', async () => {
     const store = new InMemoryWriteStore()

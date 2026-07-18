@@ -309,6 +309,124 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
     expect(after.rows[0]?.workspace_id).toBe(victimWorkspaceId) // NOT re-tenanted
   })
 
+  // Issue 091 — the `update`-path twin of 095. tier1_purpose is a project
+  // SINGLETON, but a cold-mirror client mints a FRESH id for it; after 095's
+  // insert-path reconciliation the server row keeps its OWN id, so the client's
+  // minted id diverges. The NEXT edit enqueues an `update` for the minted id —
+  // addressing the row by `id` would UPDATE zero rows (the id isn't on the
+  // server) → the edit silently vanishes. The fix addresses the row by its
+  // project_id natural key instead. Only REAL Postgres proves the UPDATE hits
+  // the existing row (id kept) rather than no-op'ing / minting a second row.
+  it('update: a tier1_purpose update with a FRESH id but an existing project_id updates the existing row by natural key (091)', async () => {
+    const store = new PgWriteStore({ pool })
+    const projectId = uuidv7()
+    const existingRowId = uuidv7() // the row's real server id (X)
+
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      projectId,
+      workspaceId,
+      'P091',
+    ])
+    await pool.query('INSERT INTO tier1_purpose (id, project_id, workspace_id, body) VALUES ($1, $2, $3, $4)', [
+      existingRowId,
+      projectId,
+      workspaceId,
+      'old',
+    ])
+
+    // The cold-mirror client edits the purpose via an `update` carrying a FRESH,
+    // diverged id (Y) — same project_id, new body.
+    const freshId = uuidv7()
+    const clientUpdatedAt = new Date(Date.now() + 1000).toISOString()
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId,
+        table: 'tier1Purpose',
+        op: 'update',
+        entityId: freshId,
+        payload: { id: freshId, projectId, body: 'new', workspaceId },
+        clientUpdatedAt,
+      },
+      'live-test-user-sub',
+    )
+    expect(applied).toBe(true)
+
+    // Exactly ONE purpose row for the project — the EXISTING row (id X kept),
+    // body updated by natural key. Not a no-op, no second row minted under Y.
+    const rows = await pool.query<{ id: string; body: string }>(
+      'SELECT id, body FROM tier1_purpose WHERE project_id = $1',
+      [projectId],
+    )
+    expect(rows.rows).toHaveLength(1)
+    expect(rows.rows[0]?.id).toBe(existingRowId)
+    expect(rows.rows[0]?.body).toBe('new')
+    // The client's diverged id never became a row.
+    const stray = await pool.query('SELECT 1 FROM tier1_purpose WHERE id = $1', [freshId])
+    expect(stray.rows).toHaveLength(0)
+  })
+
+  // Issue 091 follow-up (SECURITY) — the natural-key UPDATE addresses the row by
+  // project_id (not the client-minted id), so without a guard a caller could
+  // overwrite (and re-tenant) ANOTHER workspace's tier1_purpose by declaring
+  // their own workspace + a victim's project_id — exactly the exposure the 095
+  // upsert guard closes for the insert path. The `AND workspace_id = <declared>`
+  // predicate on the UPDATE must make that a silent no-op (0 rows). Only real
+  // Postgres executes UPDATE … WHERE, so this is the authoritative proof (the
+  // fake-client contract test can only assert the SQL string). Mirrors this
+  // file's 095 "cross-tenant upsert does NOT overwrite" test, at the store layer
+  // (bypassing checkTenancy) to exercise the guard directly.
+  it('update: a cross-tenant natural-key update (declared workspace ≠ the row’s) does NOT overwrite it (091 security)', async () => {
+    const store = new PgWriteStore({ pool })
+    const victimWorkspaceId = uuidv7()
+    const attackerWorkspaceId = workspaceId // the beforeAll fixture workspace
+    const projectId = uuidv7()
+    const rowId = uuidv7() // the victim row's real server id (X)
+
+    // Seed a VICTIM workspace + project + tier1_purpose row it owns.
+    await pool.query('INSERT INTO workspaces (id, name) VALUES ($1, $2)', [victimWorkspaceId, 'Victim WS 091'])
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      projectId,
+      victimWorkspaceId,
+      'Victim Project 091',
+    ])
+    await pool.query('INSERT INTO tier1_purpose (id, project_id, workspace_id, body) VALUES ($1, $2, $3, $4)', [
+      rowId,
+      projectId,
+      victimWorkspaceId,
+      'victim body',
+    ])
+
+    // Attacker (a DIFFERENT workspace) sends an UPDATE with a FRESH diverged id,
+    // the SAME project_id, declaring THEIR OWN workspace. (applyIfNew's tenant
+    // GUC is set to the attacker workspace; prod RLS is a no-op, so only the
+    // `AND workspace_id = $2` guard stands between this and a cross-tenant
+    // clobber — checkTenancy is bypassed entirely at this store-layer call.)
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId: attackerWorkspaceId,
+        table: 'tier1Purpose',
+        op: 'update',
+        entityId: uuidv7(), // diverged id — no such row anywhere
+        payload: { projectId, body: 'HACKED', workspaceId: attackerWorkspaceId },
+        clientUpdatedAt: new Date(Date.now() + 5000).toISOString(),
+      },
+      'attacker-sub',
+    )
+    expect(applied).toBe(true) // the mutation is "applied" (ledgered); the UPDATE just no-ops (0 rows)
+
+    // The victim's row is UNTOUCHED — same id, body, workspace.
+    const after = await pool.query<{ id: string; body: string; workspace_id: string }>(
+      'SELECT id, body, workspace_id FROM tier1_purpose WHERE project_id = $1',
+      [projectId],
+    )
+    expect(after.rows).toHaveLength(1)
+    expect(after.rows[0]?.id).toBe(rowId)
+    expect(after.rows[0]?.body).toBe('victim body') // NOT "HACKED"
+    expect(after.rows[0]?.workspace_id).toBe(victimWorkspaceId) // NOT re-tenanted
+  })
+
   // Issue 098 (SECURITY) — the write-path FK-TENANCY pre-check. Against real FK
   // data, `resolveForeignKeyTenancy` must resolve a FK target's OWNING workspace
   // (via PgWriteStore.resolveWorkspaceForEntity's real SQL) and flag it when it

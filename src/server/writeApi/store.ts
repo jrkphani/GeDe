@@ -293,6 +293,20 @@ export class InMemoryWriteStore implements WriteStore {
     return Promise.resolve(row.workspaceId)
   }
 
+  // Issue 091 — the natural-key fallback (see WorkspaceScopeResolver's doc
+  // comment). Scans for a LIVE row of the mutation's table whose natural-key
+  // column value matches the payload's; returns its workspaceId, or null for a
+  // non-natural-key table / missing key / no such row.
+  resolveWorkspaceForNaturalKey(mutation: MutationEnvelope): Promise<string | null> {
+    const natural = naturalKeyOf(mutation)
+    if (natural === null) return Promise.resolve(null)
+    for (const row of this.rows.values()) {
+      if (row.table !== mutation.table || row.deletedAt !== null) continue
+      if (row.data[natural.jsKey] === natural.value) return Promise.resolve(row.workspaceId)
+    }
+    return Promise.resolve(null)
+  }
+
   countLiveDimensions(projectId: string, contextId: string | null): Promise<number> {
     let count = 0
     for (const row of this.rows.values()) {
@@ -338,6 +352,37 @@ export class InMemoryWriteStore implements WriteStore {
         })
       }
       return Promise.resolve(true)
+    }
+
+    // Issue 091 — a NATURAL-KEY table's UPDATE addresses the LIVE row by its
+    // natural key (project_id from the payload), not the client-minted
+    // `entityId`, which may have diverged from the server row's id after 095's
+    // insert-path reconciliation. This updates the existing row IN PLACE
+    // (keeping its own id), mirroring PgWriteStore's natural-key UPDATE branch
+    // below. The `row.workspaceId === mutation.workspaceId` guard is
+    // defense-in-depth (mirrors 097/095 and Pg's `AND workspace_id = $3`): a
+    // cross-tenant natural-key row is a silent no-op, never overwritten. Only
+    // `update` takes this path; `insert` keeps the plain entityId-keyed upsert.
+    if (mutation.op === 'update') {
+      const natural = naturalKeyOf(mutation)
+      if (natural !== null) {
+        for (const [rowKey, row] of this.rows.entries()) {
+          if (row.table !== mutation.table || row.deletedAt !== null) continue
+          if (row.data[natural.jsKey] !== natural.value) continue
+          if (row.workspaceId === mutation.workspaceId) {
+            this.rows.set(rowKey, {
+              ...row,
+              data: { ...row.data, ...mutation.payload },
+              updatedAt: mutation.clientUpdatedAt,
+            })
+          }
+          // Matched a natural-key row (same- or cross-tenant) — addressed by
+          // natural key, never by the diverged id. Done either way.
+          return Promise.resolve(true)
+        }
+        // No live natural-key row matched — fall through to the id-keyed path
+        // (defensive; in practice tenancy resolves to the id row when it does).
+      }
     }
 
     const existing = this.rows.get(this.key(mutation.table, mutation.entityId))
@@ -388,6 +433,28 @@ const SQL_TABLE_NAMES: Readonly<Record<MutationTable, string>> = {
 // for a scoped follow-up rather than a blanket change — see docs/issues/095.
 const NATURAL_KEY_CONFLICT: Partial<Record<MutationTable, string>> = {
   tier1Purpose: 'project_id',
+}
+
+/** snake_case SQL column → Drizzle camelCase JS payload key (`project_id` → `projectId`) — the inverse of `applyIfNew`'s `toSqlColumn`. */
+const toJsKey = (sqlColumn: string): string => sqlColumn.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase())
+
+/**
+ * Issue 091 — for a NATURAL-KEY table (`NATURAL_KEY_CONFLICT`) whose mutation
+ * payload carries the natural-key value, returns `{ sqlColumn, jsKey, value }`;
+ * otherwise `null` (non-natural-key table, or the payload omits the key). The
+ * single place the sql-column ↔ js-key ↔ payload-value derivation lives, shared
+ * by `resolveWorkspaceForNaturalKey` (both stores) and PgWriteStore's update
+ * branch, so they can never disagree about which column/value addresses the row.
+ */
+function naturalKeyOf(
+  mutation: Pick<MutationEnvelope, 'table' | 'payload'>,
+): { sqlColumn: string; jsKey: string; value: string } | null {
+  const sqlColumn = NATURAL_KEY_CONFLICT[mutation.table]
+  if (sqlColumn === undefined) return null
+  const jsKey = toJsKey(sqlColumn)
+  const value = mutation.payload[jsKey]
+  if (typeof value !== 'string') return null
+  return { sqlColumn, jsKey, value }
 }
 
 export interface PgWriteStoreConfig {
@@ -478,6 +545,28 @@ export class PgWriteStore implements WriteStore {
 
   resolveWorkspaceForEntity(table: MutationTable, entityId: string): Promise<string | null> {
     return this.getRow(table, entityId).then((row) => row?.workspaceId ?? null)
+  }
+
+  // Issue 091 — the natural-key fallback (see WorkspaceScopeResolver's doc
+  // comment). Resolves the LIVE row by its natural-key column (project_id from
+  // the payload) rather than the client-minted id, returning its workspace_id;
+  // null for a non-natural-key table, a missing key, or no such row. `sqlColumn`
+  // comes from the fixed `NATURAL_KEY_CONFLICT` map (never client input), so
+  // interpolating it into the query is not an injection vector — the value is
+  // still bound as $1.
+  async resolveWorkspaceForNaturalKey(mutation: MutationEnvelope): Promise<string | null> {
+    const natural = naturalKeyOf(mutation)
+    if (natural === null) return null
+    const client = await this.config.pool.connect()
+    try {
+      const result = await client.query<{ workspace_id: string }>(
+        `SELECT workspace_id FROM ${SQL_TABLE_NAMES[mutation.table]} WHERE ${natural.sqlColumn} = $1 AND deleted_at IS NULL`,
+        [natural.value],
+      )
+      return result.rows[0]?.workspace_id ?? null
+    } finally {
+      client.release()
+    }
   }
 
   // Issue 057 — the real membership check backing `checkTenancy`'s
@@ -581,6 +670,16 @@ export class PgWriteStore implements WriteStore {
       // `clientUpdatedAt` (the LWW candidate timestamp), not the server's
       // receipt wall-clock — see the InMemoryWriteStore doc comment for why.
       if (mutation.op === 'delete') {
+        // Issue 091 KNOWN FAST-FOLLOW (comment only — behavior deliberately
+        // unchanged): the natural-key resolution the update branch below gained
+        // is NOT mirrored here. A diverged-id delete for a NATURAL_KEY_CONFLICT
+        // table (tier1_purpose) would address a non-existent id and phantom
+        // no-op (0 rows). This is currently UNREACHABLE — tier1_purpose is a
+        // project singleton that is never enqueued as a 'delete' (it is only
+        // ever upserted/updated). If a tier1_purpose (or any natural-key table)
+        // delete is ever enabled, mirror the `WHERE <naturalKeyCol> = … AND
+        // workspace_id = <declared>` addressing here, or add a loud guard —
+        // otherwise the tombstone would silently miss the real row.
         await client.query(`UPDATE ${table} SET deleted_at = $2, updated_at = $2 WHERE id = $1`, [
           mutation.entityId,
           mutation.clientUpdatedAt,
@@ -657,6 +756,33 @@ export class PgWriteStore implements WriteStore {
 
       // update
       const setClause = columns.map((c, i) => `${c} = $${i + 4}`).join(', ')
+      // Issue 091 — for a NATURAL-KEY table (tier1_purpose) whose payload
+      // carries the natural-key value, address the row by that natural key
+      // (project_id), not the client-minted `id`, which may have diverged from
+      // the server row's id after 095's insert-path reconciliation. Addressing
+      // by `id` would UPDATE zero rows (the id isn't on the server) → the edit
+      // is silently lost; addressing by project_id hits the real row. The
+      // trailing `AND workspace_id = <declared>` guard is defense-in-depth
+      // (mirrors 097's guard): even if tenancy were bypassed, a cross-tenant
+      // row can never be overwritten (0 rows). `id` (the PK) is never in the
+      // SET clause (SERVER_STAMPED drops it), so the server row keeps its own id.
+      const natural = naturalKeyOf(mutation)
+      if (natural !== null) {
+        // Own parameter numbering (no unused `$1`): Postgres cannot infer the
+        // type of a bind parameter that never appears in the SQL text, so the
+        // client-minted `entityId` is dropped entirely here (the row is
+        // addressed by its natural key, not its id). $1 updated_at, $2
+        // workspace_id (SET + guard), $3.. the payload columns, and the trailing
+        // param the natural-key value.
+        const nkSetClause = columns.map((c, i) => `${c} = $${i + 3}`).join(', ')
+        await client.query(
+          `UPDATE ${table} SET workspace_id = $2, ${nkSetClause}, updated_at = $1 WHERE ${natural.sqlColumn} = $${values.length + 3} AND workspace_id = $2`,
+          [mutation.clientUpdatedAt, mutation.workspaceId, ...values, natural.value],
+        )
+        return true
+      }
+      // Non-natural-key table (or the payload lacks the natural key) — address
+      // by the row's `id` exactly as before.
       await client.query(`UPDATE ${table} SET workspace_id = $3, ${setClause}, updated_at = $2 WHERE id = $1`, [
         mutation.entityId,
         mutation.clientUpdatedAt,
