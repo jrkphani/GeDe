@@ -2,6 +2,14 @@
 
 For the next agent. Read this → `docs/issues/README.md` → the relevant issue. Everything else is reference.
 
+## Orchestrator session 2026-07-18 (live build `index-l2xFhny9.js`)
+
+- **092 SHIPPED + LIVE-VERIFIED → archived to `done/`.** Playwright smoke (`scratchpad/live-verify-092/run.mjs`) on prod, 11/11: promote → Design register shows the dimension; **Undo drops it with NO reload** (window sentinel + URL survived → in-place refresh, not remount); Redo re-adds. Ended redone (server==local consistent).
+- **laneLayout tie-break SHIPPED** (`b734c95`) — `computeLaneLayout` now breaks duplicate-`sort` ties by `id` (was input-array-order-dependent, breaking its "order-independent" contract). Red-first; the safe half of the HANDOFF cleanup.
+- **094 FILED** (`1f0d167`, new issue) — **undo/redo of any mutation is never enqueued to the sync outbox**: confirmed systemic (NO command-log undo/redo closure in any of the 8 stores calls `enqueueIfSyncing`; forward paths do). Cloud-mode reversal (dimension reorder/remove, promote) silently lost on reload; masked local-only. **Owner decided: STICK TO THE PLAN** — queue 094 AFTER 084 D3. This subsumed the HANDOFF "reorderTable undo-enqueue" cleanup (half-fixing it would break consistency with the mirrored `reorderDimension`).
+- **087 live-verify IN PROGRESS.** v1 smoke false-failed (edited an EMPTY Lexical purpose via DOM-Range manipulation that never registered → no write enqueued → correctly no stall). v2 (`scratchpad/live-verify-087/run.mjs`) rewritten: real keyboard typing + asserts the edit registered AND that a `POST /write` actually fired before expecting the stall. Awaiting owner re-run. **087 CODE is unchanged/sound** — the trigger conditions (`writeStalledSince≠null` + `pendingCount>0` + grace) are unit-covered; this is purely a live-smoke fix.
+- **084 D3 exploration DONE** — grammar reconciliation (EditableGrid 2D-matrix vs 082 EditableChain 1D-chain) mapped; blast radius + 6 owner forks ready for step 3.
+
 ## Latest — continued session 2026-07-18 (pushed to `main`, CI-deploying)
 
 Six commits landed after the D2-LIVE state below; **confirm the live hash before assuming any are deployed**.

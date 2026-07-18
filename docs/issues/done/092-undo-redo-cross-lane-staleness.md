@@ -1,6 +1,8 @@
 # 092: undo/redo of cross-tier ops doesn't refresh the co-mounted sibling lane (089-D2 follow-up)
 
-- **Status**: OPEN — known follow-up left by 089-D2. Low severity (undo-across-lanes is an uncommon path). Not started.
+- **Status**: ✅ SHIPPED (`50730d7`) + **LIVE-VERIFIED 2026-07-18** (`index-l2xFhny9.js`). Archived to `done/`.
+- **Live verification**: standalone Playwright smoke (`scratchpad/live-verify-092/run.mjs`) on the production build, 11/11 checks green: promote an Architecture entry → the co-mounted Design register shows the new dimension; **Undo drops it from the register with NO page reload** (a `window` sentinel + the URL both survived, proving an in-place reactive refresh, not a remount); **Redo re-adds it**. Ended in the redone/persisted state (server==local consistent). Note the orthogonal *persistence* gap in these same closures is tracked separately as **094**.
+- ~~**Status**: OPEN — known follow-up left by 089-D2. Low severity (undo-across-lanes is an uncommon path). Not started.~~
 - **Milestone**: 089-D2 polish.
 - **Related**: **089-D2** (the lane page — this is a residual of its cross-lane refresh fix), **006** (command-log undo/redo), **075B** (the `*AppliedAt` refresh subscriptions this reuses).
 
