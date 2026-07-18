@@ -319,6 +319,7 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
   it('insert: parameters/bindings/tier2_entries persist with a real workspace_id, server-stamped from mutation.workspaceId', async () => {
     const store = new PgWriteStore({ pool })
     const projectId = uuidv7()
+    const canvasId = uuidv7()
     const dimensionId = uuidv7()
     const contextId = uuidv7()
     const tableId = uuidv7()
@@ -335,13 +336,18 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
       workspaceId,
       'Live 078 Project',
     ])
+    await pool.query('INSERT INTO canvases (id, project_id, workspace_id, sort) VALUES ($1, $2, $3, 0)', [
+      canvasId,
+      projectId,
+      workspaceId,
+    ])
     await pool.query(
-      'INSERT INTO dimensions (id, project_id, workspace_id, name, color, sort) VALUES ($1, $2, $3, $4, $5, $6)',
-      [dimensionId, projectId, workspaceId, 'Dim', '#000', 0],
+      'INSERT INTO dimensions (id, project_id, workspace_id, canvas_id, name, color, sort) VALUES ($1, $2, $3, $4, $5, $6, $7)',
+      [dimensionId, projectId, workspaceId, canvasId, 'Dim', '#000', 0],
     )
     await pool.query(
-      "INSERT INTO contexts (id, project_id, workspace_id, symbol, sort) VALUES ($1, $2, $3, 'α', 0)",
-      [contextId, projectId, workspaceId],
+      "INSERT INTO contexts (id, project_id, workspace_id, canvas_id, symbol, sort) VALUES ($1, $2, $3, $4, 'α', 0)",
+      [contextId, projectId, workspaceId, canvasId],
     )
     await pool.query('INSERT INTO tier2_tables (id, project_id, workspace_id, name, sort) VALUES ($1, $2, $3, $4, 0)', [
       tableId,
