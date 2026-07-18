@@ -1,3 +1,26 @@
+# HANDOFF — 2026-07-19 MORNING (night shift: 098·091 SECURITY cluster shipped+live-verified · 096 deploy-gate guard landed · 094 parked on a design fork)
+
+## ☀️ MORNING — NIGHT-SHIFT RESULTS (read this first, then the AskUserQuestion I left you)
+
+**Live build: `index-yIDo1fKM.js`** (client bundle UNCHANGED this shift — all fixes were server-side write-Lambda + CI/test/docs; the write Lambda WAS redeployed & live-verified). Deploy pipeline GREEN.
+
+**Shipped + verified this shift (all on `main`, all deployed):**
+- **Quick-win** (`5a9f8ee`) — fixed the broken `pgWriteStore.live.test.ts` canvas_id fixture (090/0017); the real-Postgres suite is green end-to-end again (used it heavily below).
+- **098 SECURITY** (`b0011f6`) — write-path `insert`/`update` now rejects cross-tenant FK targets (`resolveForeignKeyTenancy`): a caller could no longer plant a row referencing a victim's `project_id`. **Adversarial review PASSED and found + closed one further same-class gap** (`projects.adoptedIntoProjectId` was absent from `FK_SCHEMA` → checked by neither existence nor tenancy). Red-first, real-PG 7/7. **Archived → done/.**
+- **091** (`f978616`) — `tier1_purpose` diverged-id `update` no longer `unknown_entity`s ("item no longer exists" + lost 2nd edit): natural-key (`project_id`) resolution fallback in `checkTenancy` + `applyIfNew` update, mirroring 095's insert fix, with an `AND workspace_id` defense-in-depth guard. Adversarial review PASSED (double-gated by 098). Real-PG 9/9 incl. a cross-tenant regression test. **LIVE-VERIFIED** (both purpose edits persist across reload, no note, CloudWatch WriteApiFunction clean — 4 invocations, zero `[091]`/`[098]`/`unknown_entity`/`cross_tenant`/`5xx`). **Archived → done/.**
+- **096** (`614d3a5`) — the promote-popover d3-canvas e2e HARDENED + re-enabled (reduced-motion + poll geometry, 33/33 deterministic); the focus-pan test honestly KEPT quarantined (`test.fixme`, app-side root cause noted). **Structural deploy-gate guard: all `?d3rf` d3-canvas tests tagged `@dev-flag`, EXCLUDED from the deploy-gating `verify` (`e2e` = `--grep-invert @dev-flag`), and run in a new non-gating `dev-canvas-e2e.yml`** — a dev-flag flake can never silently freeze prod deploy again (the ~8-commit-freeze root cause). deploy.yml gating logic untouched. *(CI for 614d3a5 was in flight at shift end — confirm verify went green + the dev-canvas-e2e workflow ran.)*
+
+**⏸️ 094 PARKED on an OWNER DESIGN FORK (the one genuine discovery of the night).** The client-side undo/redo enqueue work is BUILT and green in-memory across all 7 stores — **preserved in `git stash` (`wip-094-undo-redo-enqueue`) + a patch backup in scratchpad** — BUT a real-Postgres probe proved the systematic fix is incomplete: **the write protocol has NO way to revive a soft-deleted row** (update SQL drops `deleted_at` via SERVER_STAMPED; `getRow` filters deleted → `checkTenancy` rejects a revive-update as `unknown_entity`; upsert is `DO NOTHING`). So the *revive* reversals (redo-of-add, undo-of-remove, restore) would enqueue mutations the live server rejects — an InMemory↔Postgres divergence (the 053/054/095 trap). **This also means the forward `restoreArchivedProject` (070) path is likely broken in cloud mode — a latent bug worth its own live check.** The full finding + 3 design options are in `docs/issues/094-*.md` → "## The revival gap". **Needs your decision (see the AskUserQuestion) before it can ship correctly. Owner previously rejected a half-fix.**
+
+**OPEN issues now = 084, 089/093, 094(blocked-on-fork). The 091+094+096+098 night-shift target: 098✅ 091✅ 096✅ 094⏸(parked-on-fork).**
+
+**Owner forks queued for you (in the AskUserQuestion + the issue docs):**
+- **094 revival-protocol** (blocks a data-loss fix): (1) dedicated `revive` op [recommended — only unambiguous model, also fixes 070], (2) let `update` carry+apply `deleted_at`, (3) revive-on-conflict upsert.
+- **084 Direction 3 grid unification** — the biggest remaining build; DIRECTION decided, 6 build sub-forks queued (canonical grammar, commit-on-blur, richtext, selection a11y, keyboard-bridge scope, add-table placement — see `084-*.md` + mem `S636`/`5620`). A short spec/interview when that track starts. **Do NOT run parallel with 089 Architecture.**
+- **089 D3 graduation + 093** (LAST) — 093 has 5 owner forks (`093-*.md`).
+
+---
+
 # HANDOFF — 2026-07-18 EVENING (087·092·095·097 shipped+live-verified · deploy pipeline rescued · 091 root-caused · 094·096·098 filed)
 
 For the next agent. Read this → `docs/issues/README.md` → the relevant issue. Everything else is reference.
