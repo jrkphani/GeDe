@@ -252,6 +252,63 @@ describe.skipIf(!LIVE_DB_READY)('PgWriteStore.applyIfNew — live Postgres integ
     expect(rows.rows[0]?.body).toBe('new body')
   })
 
+  // Issue 095 follow-up (SECURITY) — the natural-key upsert reconciles onto an
+  // EXISTING row by project_id, so without a guard a caller could overwrite (and
+  // re-tenant) ANOTHER workspace's tier1_purpose by declaring their own workspace
+  // + a victim's project_id (the insert tenancy branch only authorizes the
+  // DECLARED workspace, and prod RLS is a no-op). The
+  // `WHERE tier1_purpose.workspace_id = EXCLUDED.workspace_id` guard must make
+  // that a silent no-op. Only real Postgres executes ON CONFLICT … WHERE.
+  it('insert(upsert): a cross-tenant upsert (declared workspace ≠ the row’s) does NOT overwrite it (095 security)', async () => {
+    const store = new PgWriteStore({ pool })
+    const victimWorkspaceId = uuidv7()
+    const attackerWorkspaceId = workspaceId // the beforeAll fixture workspace
+    const projectId = uuidv7()
+    const rowId = uuidv7()
+
+    // Seed a VICTIM workspace + project + tier1_purpose row it owns.
+    await pool.query('INSERT INTO workspaces (id, name) VALUES ($1, $2)', [victimWorkspaceId, 'Victim WS'])
+    await pool.query('INSERT INTO projects (id, workspace_id, name) VALUES ($1, $2, $3)', [
+      projectId,
+      victimWorkspaceId,
+      'Victim Project',
+    ])
+    await pool.query('INSERT INTO tier1_purpose (id, project_id, workspace_id, body) VALUES ($1, $2, $3, $4)', [
+      rowId,
+      projectId,
+      victimWorkspaceId,
+      'victim body',
+    ])
+
+    // Attacker (a DIFFERENT workspace) upserts the SAME project_id declaring their
+    // own workspace. (applyIfNew's tenant GUC is set to the attacker workspace;
+    // prod RLS is a no-op, so only the WHERE guard stands between this and a
+    // cross-tenant clobber.)
+    const applied = await store.applyIfNew(
+      {
+        id: uuidv7(),
+        workspaceId: attackerWorkspaceId,
+        table: 'tier1Purpose',
+        op: 'insert',
+        entityId: uuidv7(),
+        payload: { id: uuidv7(), projectId, body: 'HACKED', workspaceId: attackerWorkspaceId },
+        clientUpdatedAt: new Date(Date.now() + 5000).toISOString(),
+      },
+      'attacker-sub',
+    )
+    expect(applied).toBe(true) // the mutation is "applied" (ledgered); the DO UPDATE just no-ops
+
+    // The victim's row is UNTOUCHED — same body, same workspace, same id.
+    const after = await pool.query<{ id: string; body: string; workspace_id: string }>(
+      'SELECT id, body, workspace_id FROM tier1_purpose WHERE project_id = $1',
+      [projectId],
+    )
+    expect(after.rows).toHaveLength(1)
+    expect(after.rows[0]?.id).toBe(rowId)
+    expect(after.rows[0]?.body).toBe('victim body') // NOT "HACKED"
+    expect(after.rows[0]?.workspace_id).toBe(victimWorkspaceId) // NOT re-tenanted
+  })
+
   // Issue 078 step 2 (migration 0015) — parameters/bindings/tier2_entries
   // gained their own denormalized workspace_id column, mirroring the
   // `projects` round-trip above. Real Postgres is the only thing that can

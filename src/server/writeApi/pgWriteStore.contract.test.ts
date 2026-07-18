@@ -578,6 +578,10 @@ describe('PgWriteStore.applyIfNew — SQL column mapping (regression: bugs 053/0
     expect(insertCall.text).toContain('ON CONFLICT (project_id) DO UPDATE')
     expect(insertCall.text).toContain('body = EXCLUDED.body')
     expect(insertCall.text).not.toContain('ON CONFLICT (id) DO NOTHING')
+    // SECURITY (095 follow-up): the natural-key DO UPDATE reconciles onto an
+    // EXISTING row, so it MUST be guarded against overwriting another tenant's
+    // singleton — the predicate makes a cross-tenant collision a silent no-op.
+    expect(insertCall.text).toContain('WHERE tier1_purpose.workspace_id = EXCLUDED.workspace_id')
   })
 
   // Issue 095 (regression guard) — a table WITHOUT a natural-key entry in the map

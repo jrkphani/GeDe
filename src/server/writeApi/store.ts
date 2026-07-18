@@ -563,12 +563,27 @@ export class PgWriteStore implements WriteStore {
           // the edit persists (LWW-by-arrival, the same unconditional semantics as
           // the update branch below), instead of 23505-ing on the secondary
           // unique index under a plain `ON CONFLICT (id) DO NOTHING`. Every
-          // supplied column is re-set from EXCLUDED (server-stamped updated_at /
-          // workspace_id included) so the incoming edit wins.
+          // supplied column is re-set from EXCLUDED so the incoming edit wins.
+          //
+          // SECURITY (095 follow-up): because this DO UPDATE reconciles onto an
+          // EXISTING row by the natural key (not the id), it could otherwise let a
+          // caller overwrite ANOTHER tenant's row — the `insert` tenancy branch
+          // (checkTenancy) only authorizes the DECLARED workspace, never the
+          // target row's, and RLS is a no-op in prod. The
+          // `WHERE <table>.workspace_id = EXCLUDED.workspace_id` guard makes a
+          // cross-tenant collision a silent no-op (0 rows, no error): the update
+          // only applies when the existing row already belongs to the declared
+          // (already-authorized) workspace, so workspace_id can never be flipped
+          // and no other tenant's singleton can be clobbered. Same-tenant edits
+          // are unaffected (the predicate holds). The plain `ON CONFLICT (id)`
+          // path below never had this exposure (a colliding id was DO NOTHING).
           const setClause = ['updated_at = EXCLUDED.updated_at', 'workspace_id = EXCLUDED.workspace_id']
             .concat(columns.map((c) => `${c} = EXCLUDED.${c}`))
             .join(', ')
-          await client.query(`${insertHead} ON CONFLICT (${naturalKey}) DO UPDATE SET ${setClause}`, insertParams)
+          await client.query(
+            `${insertHead} ON CONFLICT (${naturalKey}) DO UPDATE SET ${setClause} WHERE ${table}.workspace_id = EXCLUDED.workspace_id`,
+            insertParams,
+          )
           return true
         }
         await client.query(`${insertHead} ON CONFLICT (id) DO NOTHING`, insertParams)

@@ -108,6 +108,8 @@ One markdown file per issue: `NNN-short-slug.md`. Each issue is a **vertical sli
 | [093](093-d3-context-register-extend-right.md) OPEN (design writeup; owner forks pending) | D3 canvas — let the context register extend RIGHT instead of clipping, and re-home the "New context" affordance | M6 | 089-D3 |
 | [094](094-undo-redo-mutations-not-persisted-to-sync-outbox.md) OPEN (found 2026-07-18; queued after 084 D3 per owner) | undo/redo of a mutation is never enqueued to the sync outbox — cloud-mode reversal silently lost on reload (persistence half of 092's closures) | M8 | — |
 | [095](done/095-tier1-purpose-upsert-23505-on-secondary-unique.md) ✅ SHIPPED & archived (**deployed + live-verified 2026-07-18**, no 23505 in prod) | `tier1_purpose` upsert 500s (23505) — server `INSERT ON CONFLICT (id)` ignored the `project_id` unique index. Fixed (upsert on natural key). **Residual id-divergence → 091** (same root cause, `update` path) | M8/M11 | — |
+| [096](096-d3-canvas-e2e-flakes-blocked-deploys.md) PARTIAL (pipeline unblocked 2026-07-18; harden + re-enable owed) | flaky `?d3rf` `d3-canvas.spec.ts` viewport tests silently blocked EVERY prod deploy for ~8 commits; quarantined (`test.fixme`) to unblock | CI/deploy | — |
+| [097](097-tier1-purpose-upsert-cross-tenant-overwrite.md) ✅ FIX LANDED (SECURITY; pending review + deploy) | (SECURITY) 095's natural-key `tier1_purpose` upsert could overwrite/re-tenant another workspace's row; guarded with `DO UPDATE … WHERE workspace_id = EXCLUDED.workspace_id` | M9 | — |
 
 Issue numbers are identity, not order — pick by the dependency graph (016 comes right after 001). Parallelizable tracks after 004: canvas (008→010), tiers (013→014), palette (017), and 005/006 can proceed independently.
 
