@@ -1811,6 +1811,79 @@ body {
   white-space: nowrap;
 }
 
+/* ── 089-D3 P3 — recursion satellites + edges (issue 011 on the canvas) ─────
+   A drill-in opens a context's child canvas as a SUMMARY satellite node to the
+   right of the Design core, connected by the app's first React Flow edge. The
+   satellite is deliberately NOT `.wc-node` (the count-4 lane-node invariant must
+   hold); it is a compact summary card, not a live core. Promoting a stub to a
+   live child core is the tracked 089 follow-up. */
+.wc-satellite {
+  width: 260px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-1, 0 1px 2px rgb(0 0 0 / 6%));
+}
+.wc-satellite__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 var(--space-3);
+  background: var(--grid-minor);
+  border-bottom: 1px solid var(--hairline);
+}
+.wc-satellite__symbol {
+  font-size: var(--text-label);
+  color: var(--ink);
+}
+.wc-satellite__collapse {
+  border: 0;
+  background: transparent;
+  color: var(--ink-muted);
+  cursor: pointer;
+  font-size: var(--text-body);
+  line-height: 1;
+  padding: 0 var(--space-1);
+}
+.wc-satellite__collapse:hover {
+  color: var(--ink);
+}
+.wc-satellite__body {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-3);
+}
+.wc-satellite__count {
+  font-size: var(--text-label);
+  color: var(--ink-muted);
+}
+.wc-satellite__enter {
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+  color: var(--ink);
+  border-radius: var(--radius-sm, 4px);
+  cursor: pointer;
+  font-size: var(--text-label);
+  padding: var(--space-1) var(--space-2);
+}
+.wc-satellite__enter:hover {
+  background: var(--grid-minor);
+}
+/* A pure edge anchor — the parent/child handles are never user-connectable
+   (nodesConnectable stays false), so hide the default React Flow dot. */
+.wc-edge-anchor {
+  opacity: 0;
+  pointer-events: none;
+}
+/* The parent→child recursion edge itself. */
+.react-flow__edge.wc-edge .react-flow__edge-path {
+  stroke: var(--hairline-strong, var(--ink-muted));
+  stroke-width: 1.5;
+}
+
 /* ── Recursion / drill-down (issue 011) ──────────────────────────────────── */
 
 /* The app's ONE choreographed transition (STYLE_GUIDE §8 drill-down exception,

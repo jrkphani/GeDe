@@ -897,3 +897,128 @@ test('the D3 register extends right, drops the New-context button, and LOD-colla
   await expect(register.getByRole('columnheader', { name: 'Tuple', exact: true })).toBeVisible()
   await expect(register.getByRole('columnheader', { name: 'Dim1', exact: true })).toHaveCount(0)
 })
+
+// ── 089-D3 P3 — recursion as edge-connected satellites (issue 011) ──────────
+// Drilling into a context OPENS its child canvas as a SUMMARY satellite node to
+// the right of the Design core + a parent→child edge (the app's FIRST React Flow
+// edges), pans to it, and collapse unmounts it — the parent core stays put. The
+// child satellite is a summary STUB, not a second live {register+ring} core (the
+// contexts store is a singleton); deep entry still navigates (Enter ▸). Promoting
+// the stub to a live child core is the tracked 089 follow-up.
+
+test('drill-in spawns an edge-connected child satellite; pan-to-child; collapse unmounts; parent unchanged', { tag: '@dev-flag' }, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page)
+
+  const register = page.locator('.wc-node--design-register .context-register-shell')
+  await expect(register).toBeVisible({ timeout: 15_000 })
+
+  // One real context α via the register phantom.
+  const phantom = register.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
+  await phantom.click()
+  await page.keyboard.type('first justification')
+  await page.keyboard.press('Enter')
+  await expect(register.getByText('α', { exact: true })).toBeVisible()
+
+  // Nothing spatial before drilling: no satellites, no edges.
+  await expect(page.locator('.wc-satellite')).toHaveCount(0)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
+
+  // Settle the initial fit, capture the framing, then drill: "Open ▸" on α.
+  await waitForStableViewport(page)
+  const beforeOpen = await viewportTransform(page)
+  await register.locator('.children-drill').first().click()
+
+  // A child satellite node + the parent→child edge appear; the satellite reads α.
+  const satellite = page.locator('.wc-satellite')
+  await expect(satellite).toHaveCount(1)
+  await expect(satellite).toContainText('α')
+  await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+
+  // Parent core UNCHANGED — still four lane nodes (satellites are NOT `.wc-node`),
+  // the Design register still mounted.
+  await expect(page.locator('.wc-node')).toHaveCount(4)
+  await expect(page.locator('.wc-node--design-register')).toBeVisible()
+
+  // Pan-to-child: the viewport moved to frame the satellite.
+  await expect.poll(async () => (await viewportTransform(page)) !== beforeOpen).toBe(true)
+
+  // Collapse × unmounts the satellite + its edge; the parent core stays put.
+  await waitForStableViewport(page)
+  await satellite.locator('.wc-satellite__collapse').click()
+  await expect(page.locator('.wc-satellite')).toHaveCount(0)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
+  await expect(page.locator('.wc-node')).toHaveCount(4)
+  await expect(page.locator('.wc-node--design-register')).toBeVisible()
+})
+
+test('a satellite Enter ▸ deep-links into the child canvas (contextPath resolves) and resets satellites', { tag: '@dev-flag' }, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  const projectId = await openThreeLaneCanvas(page)
+
+  const register = page.locator('.wc-node--design-register .context-register-shell')
+  await expect(register).toBeVisible({ timeout: 15_000 })
+  const phantom = register.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
+  await phantom.click()
+  await page.keyboard.type('first justification')
+  await page.keyboard.press('Enter')
+  await expect(register.getByText('α', { exact: true })).toBeVisible()
+
+  await waitForStableViewport(page)
+  await register.locator('.children-drill').first().click()
+  const satellite = page.locator('.wc-satellite')
+  await expect(satellite).toHaveCount(1)
+
+  // Enter ▸ navigates into the child canvas: the URL grows a contextPath segment
+  // (routes.ts grammar, PRESERVED), the canvas persists (canvasMode, P0), and — the
+  // child being a different canvas — the satellite set resets (the stable-id
+  // per-canvas-nav reset). Deep-link resolution: the core still mounts.
+  await satellite.locator('.wc-satellite__enter').click()
+  await expect(page).toHaveURL(new RegExp(`/p/${projectId}/design/[^/?#]+`))
+  await expect(page.locator('.wc-node--design-register')).toBeVisible()
+  await expect(page.locator('.wc-satellite')).toHaveCount(0)
+})
+
+test('a satellite clears a 093-widened register — no overlap (review HIGH guard)', { tag: '@dev-flag' }, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+  const register = page.locator('.wc-node--design-register')
+  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+
+  // Widen the register well past the nominal 960px lane width (093 made it
+  // width:max-content, uncapped). Six dimensions push it past 960 + coreGap.
+  const dimPhantom = register.getByPlaceholder('Type to add a dimension')
+  for (const name of ['Dim1', 'Dim2', 'Dim3', 'Dim4', 'Dim5', 'Dim6']) {
+    await dimPhantom.click()
+    await page.keyboard.type(name)
+    await page.keyboard.press('Enter')
+  }
+  await expect(register.locator('.dim-row')).toHaveCount(6)
+  expect(await register.evaluate((el) => (el as HTMLElement).offsetWidth)).toBeGreaterThan(1080)
+
+  // One context, then drill to spawn its satellite.
+  const shell = register.locator('.context-register-shell')
+  const phantom = shell.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
+  await phantom.click()
+  await page.keyboard.type('first justification')
+  await page.keyboard.press('Enter')
+  await expect(shell.getByText('α', { exact: true })).toBeVisible()
+
+  await waitForStableViewport(page)
+  await shell.locator('.children-drill').first().click()
+  const satellite = page.locator('.wc-satellite')
+  await expect(satellite).toHaveCount(1)
+  await waitForStableViewport(page)
+
+  // NO OVERLAP: the satellite's left edge is at/after the register node's right
+  // edge (screen coords — both share the viewport transform, so the relative
+  // check is scale-invariant). The pre-fix bug used a nominal-960 offset, landing
+  // the satellite on top of the wide register's CHILDREN/DUPLICATE columns.
+  const regBox = await register.boundingBox()
+  const satBox = await satellite.boundingBox()
+  expect(regBox).not.toBeNull()
+  expect(satBox).not.toBeNull()
+  if (regBox && satBox) {
+    expect(satBox.x).toBeGreaterThanOrEqual(regBox.x + regBox.width - 1)
+  }
+})

@@ -2,11 +2,15 @@ import { useCallback, useEffect, useMemo, useRef, type FocusEvent } from 'react'
 import {
   Background,
   Controls,
+  Handle,
+  MarkerType,
+  Position,
   ReactFlow,
   ReactFlowProvider,
   useNodesInitialized,
   useNodesState,
   useReactFlow,
+  type Edge,
   type Node,
   type NodeProps,
   type OnNodeDrag,
@@ -18,6 +22,18 @@ import {
   type LaneItem,
   type LaneLayoutConfig,
 } from '../domain/laneLayout'
+import {
+  computeSatelliteLayout,
+  type ClusterLayoutConfig,
+  type SatelliteItem,
+} from '../domain/clusterLayout'
+import { navigate } from '../shell/router'
+import {
+  resetCanvasSatellites,
+  satelliteNodeId,
+  useCanvasSatellitesStore,
+} from '../store/canvasSatellites'
+import { useContextsStore } from '../store/contexts'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
 import { formatDegree } from '../domain/degree'
@@ -30,6 +46,7 @@ import { DesignRegisterBody, DesignRingBody } from './DesignCoreAdapter'
 import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
 import { FoundationHeaderPanel, FoundationPropPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
+import { Button } from './ui/button'
 import { PhantomInput } from './ui/inline-editor'
 // The ⌘1/2/3 pan-to-lane interceptor + its module-level `activeCanvasInstance`
 // handle live in this tiny, `@xyflow/react`-free module so App.tsx can import
@@ -108,6 +125,25 @@ const laneColumnX = (tier: 'foundation' | 'architecture') =>
 const FOUNDATION_COLUMN_X = laneColumnX('foundation')
 const ARCH_COLUMN_X = laneColumnX('architecture')
 
+// 089-D3 P3 — the recursion cluster geometry (issue 011). A drill-in opens a
+// context's child canvas as a SUMMARY satellite node to the RIGHT of the Design
+// column, connected by a parent→child edge. Satellites stack in one column, one
+// laneWidth + coreGap to the right of the Design core, so they clear even a
+// 093-widened register; SATELLITE_ESTIMATE seeds the fixed summary-card height.
+// The Design column's x = its LANE_ORDER index × the column stride.
+const DESIGN_COLUMN_X = LANE_ORDER.indexOf('design') * (LANE_CONFIG.laneWidth + LANE_CONFIG.laneGap)
+const SATELLITE_ESTIMATE = 168
+// Base cluster geometry; `coreWidth` is overridden per-derive with the register's
+// MEASURED width (see withDerivedPositions) so satellites clear a 093-widened
+// (max-content, uncapped) register instead of overlapping it.
+const CLUSTER_CONFIG: ClusterLayoutConfig = {
+  originX: DESIGN_COLUMN_X,
+  coreWidth: LANE_CONFIG.laneWidth,
+  coreGap: 120,
+  satelliteHeight: SATELLITE_ESTIMATE,
+  vGap: LANE_CONFIG.nodeGap,
+}
+
 const FOCUS_PAN_DURATION = 320
 // Focus-driven pan is pan-if-outside-margin, NOT center-on-every-focus: only
 // pan when the focused element is within this many px of (or past) a pane edge,
@@ -185,6 +221,24 @@ type ArchTableData = {
 }
 type ArchTableNode = Node<ArchTableData, 'archTable'>
 
+// 089-D3 P3 — a recursion SATELLITE node: the SUMMARY of a context's child canvas
+// (issue 011), opened to the right of the Design core + connected by an edge. NOT
+// a live {register+ring} core (the contexts store is a singleton — promoting a
+// stub to a live core is the tracked 089 follow-up); it shows the parent symbol +
+// child-context count, reads them itself from the contexts store, and offers
+// Enter ▸ (navigate deep — the existing drill) and Collapse ×. It has no lane
+// `tier` — its position comes from `computeSatelliteLayout`, not the lane stack.
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+type SatelliteNodeData = {
+  kind: 'satellite'
+  parentContextId: string
+  // Navigate into the child canvas (re-scopes the core — the existing deep drill).
+  onEnter: (parentContextId: string) => void
+  // Unmount this satellite (collapse the child cluster).
+  onCollapse: (parentContextId: string) => void
+}
+type SatelliteNode = Node<SatelliteNodeData, 'satellite'>
+
 type CanvasNode =
   | DesignRegisterNode
   | DesignRingNode
@@ -192,6 +246,7 @@ type CanvasNode =
   | FoundationItemNode
   | ArchHeaderNode
   | ArchTableNode
+  | SatelliteNode
 
 // ── Cross-node focus helpers (P3.3). A table node's DOM is `.react-flow__node
 // [data-id="<tableId>"]`; within it we land focus on the FIRST editable grid
@@ -211,13 +266,37 @@ function nodeElement(nodeId: string): HTMLElement | null {
 // computeLaneLayout. Returns the SAME array reference when nothing moved so it
 // can be called from a measurement effect without churning. ──────────────────
 function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
-  const items: LaneItem[] = nodes.map((n) => ({
-    id: n.id,
-    tier: n.data.tier,
-    sort: n.data.sort,
-    height: n.measured?.height ?? n.data.estimate,
-  }))
-  const posById = new Map(computeLaneLayout(items, LANE_CONFIG).map((p) => [p.id, p]))
+  // Lane nodes stack in tier columns (computeLaneLayout); satellite nodes hang in
+  // a rightward column off the Design core (computeSatelliteLayout, P3). Both are
+  // pure derived projections — no {x,y} is ever persisted.
+  const laneItems: LaneItem[] = []
+  const satelliteItems: SatelliteItem[] = []
+  for (const n of nodes) {
+    if (n.type === 'satellite') {
+      satelliteItems.push({ id: n.id })
+    } else {
+      laneItems.push({
+        id: n.id,
+        tier: n.data.tier,
+        sort: n.data.sort,
+        height: n.measured?.height ?? n.data.estimate,
+      })
+    }
+  }
+  const posById = new Map<string, { x: number; y: number }>()
+  for (const p of computeLaneLayout(laneItems, LANE_CONFIG)) posById.set(p.id, { x: p.x, y: p.y })
+  // Satellites hang off the Design REGISTER's real right edge. 093 made the
+  // register `width: max-content` (uncapped), so a nominal 960px would let a wide
+  // register overlap the satellite + skew the edge (its source handle anchors to
+  // the real box). Clear it with the register's MEASURED width (≥ the nominal).
+  const registerWidth = nodes.find((n) => n.id === LANE_NODE_ID.design)?.measured?.width
+  const clusterConfig: ClusterLayoutConfig = {
+    ...CLUSTER_CONFIG,
+    coreWidth: Math.max(CLUSTER_CONFIG.coreWidth, registerWidth ?? 0),
+  }
+  for (const p of computeSatelliteLayout(satelliteItems, LANE_NODE_ID.design, clusterConfig).positions) {
+    posById.set(p.id, { x: p.x, y: p.y })
+  }
   const next = nodes.map((n) => {
     const p = posById.get(n.id)
     if (!p || (n.position.x === p.x && n.position.y === p.y)) return n
@@ -238,6 +317,15 @@ function DesignRegisterNode({ data }: NodeProps<DesignRegisterNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
   return (
     <div className="wc-node wc-node--design-register">
+      {/* P3 — the parent end of a recursion edge to any open child satellite.
+          Hidden + non-connectable (nodesConnectable stays false): a pure edge
+          anchor, not a user-draggable connection point. */}
+      <Handle
+        type="source"
+        position={Position.Right}
+        isConnectable={false}
+        className="wc-edge-anchor"
+      />
       <div className="wc-node__handle" aria-hidden="true">
         Design
       </div>
@@ -405,6 +493,45 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
   )
 }
 
+// 089-D3 P3 — a recursion SATELLITE node: the summary card for a context's child
+// canvas (issue 011), opened to the right of the Design core + edge-connected to
+// it. It reads the parent context's symbol + child-context count straight from
+// the contexts store (a separate React tree from the register that opened it), so
+// the count stays live as the parent canvas mutates. `Enter ▸` navigates deep
+// (the existing drill, which re-scopes the single core); `Collapse ×` unmounts
+// it. NOT the base `.wc-node` class — the count-4 lane-node invariant must hold.
+function SatelliteNode({ data }: NodeProps<SatelliteNode>) {
+  const { parentContextId, onEnter, onCollapse } = data
+  const contexts = useContextsStore((s) => s.contexts)
+  const childCount = useContextsStore((s) => s.childCountByContext[parentContextId] ?? 0)
+  const symbol = contexts.find((c) => c.id === parentContextId)?.symbol ?? '—'
+  return (
+    <div className="wc-satellite nodrag nopan" data-testid="wc-satellite">
+      {/* The child end of the parent→child recursion edge. */}
+      <Handle type="target" position={Position.Left} isConnectable={false} className="wc-edge-anchor" />
+      <div className="wc-satellite__head">
+        <span className="wc-satellite__symbol">{symbol} ▸</span>
+        <Button
+          variant="bare"
+          className="wc-satellite__collapse"
+          onClick={() => onCollapse(parentContextId)}
+          aria-label={`Collapse child canvas of ${symbol}`}
+        >
+          ×
+        </Button>
+      </div>
+      <div className="wc-satellite__body">
+        <span className="wc-satellite__count">
+          {childCount === 0 ? 'Empty child canvas' : `${childCount} context${childCount === 1 ? '' : 's'}`}
+        </span>
+        <Button variant="bare" className="wc-satellite__enter" onClick={() => onEnter(parentContextId)}>
+          Enter ▸
+        </Button>
+      </div>
+    </div>
+  )
+}
+
 // Stable across renders — React Flow warns (and remounts nodes) if nodeTypes is
 // a fresh object each render.
 const NODE_TYPES = {
@@ -414,6 +541,7 @@ const NODE_TYPES = {
   foundationItem: FoundationItemNode,
   archHeader: ArchHeaderNode,
   archTable: ArchTableNode,
+  satellite: SatelliteNode,
 }
 
 // The exported shell wraps the canvas in a ReactFlowProvider so both the
@@ -534,6 +662,46 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     })
   }, [])
 
+  // 089-D3 P3 — the open recursion satellites (issue 011). Opening a satellite is
+  // pure canvas state (NO DB write): the register/ring drill affordances call
+  // openSatellite; this canvas renders one summary node + a parent→child edge per
+  // open child, and pans to the newly-focused one. The child canvas is only
+  // materialized (openChildCanvas) when the user actually Enters it (lazy).
+  const openSatellites = useCanvasSatellitesStore((s) => s.open)
+  const satelliteFocus = useCanvasSatellitesStore((s) => s.focus)
+
+  // The current context path in a ref so the (stable) satellite-Enter callback
+  // navigates into [...currentPath, parentContextId] without re-subscribing.
+  const contextPathRef = useRef(design.contextPath)
+  contextPathRef.current = design.contextPath
+
+  // Enter ▸ on a satellite: the existing deep drill — navigate into the child
+  // canvas (re-scopes the single core; the canvas-nav reset clears satellites).
+  const onSatelliteEnter = useCallback(
+    (parentContextId: string) => {
+      navigate({
+        kind: 'design',
+        projectId,
+        contextPath: [...contextPathRef.current, parentContextId],
+        view: 'canvas',
+      })
+    },
+    [projectId],
+  )
+  const onSatelliteCollapse = useCallback((parentContextId: string) => {
+    useCanvasSatellitesStore.getState().collapse(parentContextId)
+  }, [])
+
+  // Satellites are per-canvas: reset the open set whenever the active canvas
+  // changes (deep-link / ⌘ / breadcrumb). The satellite nodes have stable ids and
+  // never unmount, so this reset must be explicit (P2's hoveredMark lesson — a
+  // stable id means there is no unmount to hang the reset on). Opening a satellite
+  // does NOT change this identity (no navigate), so the set survives on-canvas.
+  const canvasIdentity = `${projectId}::${design.contextPath.join('/')}::${design.canvasId ?? ''}`
+  useEffect(() => {
+    resetCanvasSatellites()
+  }, [canvasIdentity])
+
   // The desired node set for the current tables + props + route + role. The
   // Foundation column is a header node (sort -1) + one `foundationItem` node per
   // value-prop (sort = prop.sort); the Architecture column is the header node
@@ -642,6 +810,22 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         },
       })
     }
+    // P3 — one satellite summary node per open child canvas, in open order (the
+    // clusterLayout stack order). Position is derived; not draggable (no reorder).
+    for (const parentContextId of openSatellites) {
+      list.push({
+        id: satelliteNodeId(parentContextId),
+        type: 'satellite',
+        position: { x: 0, y: 0 },
+        draggable: false,
+        data: {
+          kind: 'satellite',
+          parentContextId,
+          onEnter: onSatelliteEnter,
+          onCollapse: onSatelliteCollapse,
+        },
+      })
+    }
     return list
   }, [
     tables,
@@ -655,9 +839,42 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     onTableExitBoundary,
     onPropCreated,
     onPropExitBoundary,
+    openSatellites,
+    onSatelliteEnter,
+    onSatelliteCollapse,
   ])
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(desiredNodes)
+
+  // P3 — the recursion edges (the app's FIRST React Flow edges): one parent→child
+  // edge per open satellite. Derived from the RECONCILED satellite NODES (not the
+  // store's open set) so an edge never targets a node React Flow doesn't yet have
+  // in `nodes` — the reconcile effect adds a satellite node one commit after the
+  // store opens it, so sourcing edges off `nodes` keeps them in lockstep. Fully
+  // derived + never user-edited (nodesConnectable stays false), so there is no
+  // useEdgesState; a stable join-key memo keeps the edges array identity constant
+  // across measure-only node updates, and computeSatelliteLayout's stable edge ids
+  // keep RF's edge reconcile from churning (the loop-avoidance discipline).
+  const satelliteNodeIds = nodes.flatMap((n) => (n.type === 'satellite' ? [n.id] : []))
+  const satelliteEdgeKey = satelliteNodeIds.join('|')
+  const edges = useMemo<Edge[]>(
+    () =>
+      computeSatelliteLayout(
+        satelliteNodeIds.map((id) => ({ id })),
+        LANE_NODE_ID.design,
+        CLUSTER_CONFIG,
+      ).edges.map((e) => ({
+        id: e.id,
+        source: e.source,
+        target: e.target,
+        className: 'wc-edge',
+        markerEnd: { type: MarkerType.ArrowClosed },
+      })),
+    // satelliteNodeIds is derived from satelliteEdgeKey; keying on the string keeps
+    // the edges array stable across measure-only `nodes` updates (join-key memo).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [satelliteEdgeKey],
+  )
 
   // Reconcile the mounted nodes with the desired set whenever tables/route/role
   // change: refresh each node's `data` (so a project switch, a design drill-down,
@@ -680,8 +897,13 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // on a measurement signature so it fires exactly when heights settle — and
   // `withDerivedPositions` returns the same array when nothing moved, so this
   // never loops.
+  // Track WIDTH as well as height: a satellite's x is derived from the register's
+  // measured width (093 uncapped it), and adding a dimension widens the register
+  // WITHOUT necessarily changing its height — a height-only signature would leave
+  // the satellite overlapping. Width feeds only the satellite clearance, never the
+  // lane x-stride, so the derived-positions invariant holds.
   const measuredSignature = nodes
-    .map((n) => `${n.id}:${Math.round(n.measured?.height ?? 0)}`)
+    .map((n) => `${n.id}:${Math.round(n.measured?.height ?? 0)}x${Math.round(n.measured?.width ?? 0)}`)
     .join('|')
   useEffect(() => {
     setNodes((prev) => withDerivedPositions(prev))
@@ -700,6 +922,24 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     const raf = requestAnimationFrame(() => void reactFlow.fitView({ padding: 0.12, duration: 0 }))
     return () => cancelAnimationFrame(raf)
   }, [nodesInitialized, reactFlow])
+
+  // P3 — pan/zoom to a freshly-opened (or re-focused) satellite. `focus` is a
+  // one-shot set by openSatellite; we wait for the node to mount + measure (this
+  // effect re-runs as `nodes` updates), fit it into view, then consumeFocus so a
+  // later reconcile never yanks the viewport back. Reduced-motion snaps.
+  useEffect(() => {
+    if (!satelliteFocus) return
+    const node = reactFlow.getNode(satelliteFocus)
+    if (node?.measured?.height == null) return
+    void reactFlow.fitView({
+      nodes: [{ id: satelliteFocus }],
+      padding: 0.3,
+      maxZoom: 1,
+      duration: prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION,
+    })
+    useCanvasSatellitesStore.getState().consumeFocus()
+    // `nodes` is a re-run trigger only (the node must exist + be measured first).
+  }, [satelliteFocus, nodes, reactFlow])
 
   // The pane wrapper — its rect is the on-screen viewport bounds the focus-pan
   // margin test is measured against.
@@ -790,7 +1030,10 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         const ranked = siblings
           .map((n) => {
             const y = n.id === node.id ? node.position.y : n.position.y
-            const height = n.measured?.height ?? n.data.estimate
+            // siblings are all `reorderType` (archTable/foundationItem), which
+            // carry `estimate`; the `in` guard narrows the CanvasNode union (a
+            // satellite, which has no estimate, can never be a reorder sibling).
+            const height = n.measured?.height ?? ('estimate' in n.data ? n.data.estimate : SATELLITE_ESTIMATE)
             return { id: n.id, center: y + height / 2 }
           })
           .sort((a, b) => a.center - b.center)
@@ -812,6 +1055,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     <div className="workspace-canvas" ref={wrapperRef} onFocusCapture={onFocusCapture}>
       <ReactFlow
         nodes={nodes}
+        edges={edges}
         onNodesChange={onNodesChange}
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}

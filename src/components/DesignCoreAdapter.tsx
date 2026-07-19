@@ -10,6 +10,7 @@ import { navigate } from '../shell/router'
 import { canWrite } from '../domain/workspaceRole'
 import { useActiveLaneStore } from '../store/activeLane'
 import { useCanvasComposeStore } from '../store/canvasCompose'
+import { useCanvasSatellitesStore } from '../store/canvasSatellites'
 import { useCanvasesStore } from '../store/canvases'
 import { useContextsStore } from '../store/contexts'
 import { useDimensionsStore } from '../store/dimensions'
@@ -174,7 +175,12 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
   )
 
   function handleDrillIn(id: string) {
-    navigate({ kind: 'design', projectId, contextPath: [...contextPath, id], view: 'canvas' })
+    // P3 (issue 011) — on the canvas, drilling OPENS the child canvas as an
+    // edge-connected SUMMARY satellite beside the core (the parent stays visible),
+    // instead of navigating away. Deep entry into the child still happens via the
+    // satellite's "Enter ▸" (the same navigate). Promoting the summary satellite to
+    // a live child {register+ring} core is the tracked 089 follow-up.
+    useCanvasSatellitesStore.getState().openSatellite(id)
   }
 
   // `c` = New context (Design canvas view only), capture phase + text-field guard.
@@ -464,7 +470,12 @@ export function DesignRingBody({ projectId, contextPath, view, canvasId }: Desig
   }, [canvasSelector])
 
   function handleDrillIn(id: string) {
-    navigate({ kind: 'design', projectId, contextPath: [...contextPath, id], view: 'canvas' })
+    // P3 (issue 011) — on the canvas, drilling OPENS the child canvas as an
+    // edge-connected SUMMARY satellite beside the core (the parent stays visible),
+    // instead of navigating away. Deep entry into the child still happens via the
+    // satellite's "Enter ▸" (the same navigate). Promoting the summary satellite to
+    // a live child {register+ring} core is the tracked 089 follow-up.
+    useCanvasSatellitesStore.getState().openSatellite(id)
   }
 
   function handleSelect(id: string | null) {
