@@ -2416,6 +2416,21 @@ body {
   width: 96px;
 }
 
+/* Child-record NAME indent (issue 084 Direction 3, owner req "indent child
+   records to clearly show they are child entries"): the leading tree/chevron
+   column alone only stepped the chevron right — the NAME is a separate column,
+   so a child's name text column-aligned with its parent's. Step the name cell
+   right per depth level off the SAME per-row --depth model the tree uses (fed to
+   the <tr> via EditableGrid's rowStyle), × the --space-5 (24px) step. Applies to
+   both the read-mode display and the edit input inside the cell (padding on the
+   <td>, not the inner .grid-cell, so editing doesn't shift). Depth 0 → 0 inset →
+   flat/top-level rows and every non-tree grid are unchanged. No raw px. The
+   `.editable-grid td` qualifier is required to out-specify the base
+   `.editable-grid td { padding: 0 }` reset (which zeroes the inline padding). */
+.editable-grid td.t2-col--name {
+  padding-inline-start: calc(var(--depth, 0) * var(--space-5));
+}
+
 /* Trailing row-command gutter (issue 084): row verbs are never a data column.
    The per-row "Add child" affordance lives here, quiet at rest and revealed
    only on row hover / focus-within — mirrors the removed meta-cell row-action

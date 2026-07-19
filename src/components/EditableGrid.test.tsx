@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { useState } from 'react'
+import { useState, type CSSProperties } from 'react'
 import { describe, expect, it, vi } from 'vitest'
 import { fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -836,5 +836,33 @@ describe('inlineRow (issue 084 D3 P3 — per-parent inline row seam)', () => {
       />,
     )
     expect(screen.queryByPlaceholderText('inline child')).toBeNull()
+  })
+})
+
+// Issue 084 Direction 3 refinement — the additive `rowStyle` seam: a caller may
+// feed a per-row inline style (Architecture uses it to carry each entry's --depth
+// so the NAME cell steps right per level). Default-off: absent → no style attr →
+// every existing caller (Foundation, ContextRegister, the ?d3rf canvas at depth
+// 0) stays byte-identical.
+describe('rowStyle (issue 084 D3 — per-row style seam)', () => {
+  it('applies a caller-supplied inline style (e.g. --depth) to the data row', () => {
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(t) => t.id}
+        rowStyle={(t) => ({ '--depth': t.id === '2' ? 1 : 0 }) as CSSProperties}
+      />,
+    )
+    const beta = screen.getByText('Beta').closest('tr') as HTMLTableRowElement
+    const alpha = screen.getByText('Alpha').closest('tr') as HTMLTableRowElement
+    expect(beta.style.getPropertyValue('--depth')).toBe('1')
+    expect(alpha.style.getPropertyValue('--depth')).toBe('0')
+  })
+
+  it('sets no style attribute when rowStyle is absent (byte-identical default-off)', () => {
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(t) => t.id} />)
+    const alpha = screen.getByText('Alpha').closest('tr') as HTMLTableRowElement
+    expect(alpha.getAttribute('style')).toBeNull()
   })
 })

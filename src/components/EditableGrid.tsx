@@ -5,7 +5,7 @@ import {
   type CellContext,
   type ColumnDef,
 } from '@tanstack/react-table'
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { plainTextToRichJson, richTextToPlainText, safeRichTextJson } from '../domain/richText'
 import { Combobox, type ComboboxOption } from './ui/combobox'
 import { RichTextEditor } from './ui/rich-text-editor'
@@ -102,6 +102,11 @@ export interface InlineRowConfig {
   afterRowId: string
   cell: (columnId: string) => React.ReactNode
   className?: string
+  // Issue 084 Direction 3 refinement — an optional inline style on the transient
+  // <tr> (Architecture feeds the armed child's --depth here so the phantom's name
+  // cell inherits the same per-level indent as a real child row). Additive and
+  // default-off; absent → no style attr → byte-identical.
+  style?: CSSProperties
 }
 
 export interface EditableGridProps<TRow> {
@@ -110,6 +115,13 @@ export interface EditableGridProps<TRow> {
   getRowId: (row: TRow) => string
   phantom?: PhantomConfig
   rowClassName?: (row: TRow) => string | undefined
+  // Issue 084 Direction 3 refinement — an optional per-row inline style on the
+  // data <tr> (Architecture feeds each entry's --depth here so the NAME cell,
+  // a separate column from the leading tree/chevron cell, steps right per depth
+  // level). Additive and default-off: absent → no style attr → every existing
+  // caller (Foundation, ContextRegister, the ?d3rf canvas at depth 0) is
+  // byte-identical.
+  rowStyle?: (row: TRow) => CSSProperties | undefined
   // Issue 021 — a11y: callers supply a short row identity (e.g. the context
   // symbol) so every cell/editor gets an accessible name of the shape
   // "{column header} for {row label}" (e.g. "Justification for α"). When
@@ -946,6 +958,7 @@ export function EditableGrid<TRow>({
   getRowId,
   phantom,
   rowClassName,
+  rowStyle,
   getRowLabel,
   onRowClick,
   isRowSelected,
@@ -1093,6 +1106,10 @@ export function EditableGrid<TRow>({
               <tr
                 key={row.id}
                 className={classes || undefined}
+                // Issue 084 D3 — an optional per-row inline style (e.g. --depth
+                // for the name-cell indent). Absent → undefined → no style attr,
+                // byte-identical for callers that don't pass `rowStyle`.
+                style={rowStyle?.(row.original)}
                 data-row-id={getRowId(row.original)}
                 aria-selected={isRowSelected?.(row.original) ?? undefined}
                 onClick={onRowClick ? () => onRowClick(row.original) : undefined}
@@ -1113,7 +1130,7 @@ export function EditableGrid<TRow>({
               return (
                 <Fragment key={row.id}>
                   {dataRow}
-                  <tr className={inlineHere.className}>
+                  <tr className={inlineHere.className} style={inlineHere.style}>
                     {columns.map((col) => (
                       <td key={col.id} className={col.cellClassName}>
                         {inlineHere.cell(col.id)}

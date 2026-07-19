@@ -426,6 +426,11 @@ export function TablePanel({
     {
       id: 'name',
       header: 'Name',
+      // Owner req ("indent child records"): the name cell is a targetable column
+      // so its per-depth left inset (base.css .t2-col--name, keyed on the row's
+      // --depth) makes a child's name step visibly right of its parent's — the
+      // leading tree column alone only indents the chevron.
+      cellClassName: 't2-col--name',
       cell: {
         kind: 'text',
         getValue: (entry) => entry.name,
@@ -554,6 +559,15 @@ export function TablePanel({
         columns={columns}
         getRowId={(entry) => entry.id}
         readOnly={readOnly}
+        // Owner req ("indent child records"): carry each entry's tree depth to
+        // the <tr> as the --depth custom property so the NAME cell (a column
+        // separate from the leading tree/chevron cell) steps right per level —
+        // reusing the SAME depth model .t2-tree already uses, no parallel system.
+        // Depth 0 → 0 inset → flat/top-level rows and every non-tree grid
+        // unchanged. No raw px (base.css multiplies by the --space-5 token).
+        rowStyle={(entry) =>
+          ({ '--depth': metaById.get(entry.id)?.depth ?? 0 }) as CSSProperties
+        }
         phantom={{
           columnId: 'name',
           placeholder: 'Name an entry',
@@ -573,6 +587,13 @@ export function TablePanel({
               inlineRow: {
                 afterRowId: addingChildTo,
                 className: 'grid-row--phantom t2-add-child-row',
+                // Match the armed child's depth (parent.depth + 1) on the row so
+                // the phantom's NAME input inherits the same per-level indent as a
+                // real child, sitting clearly under its parent. Same --depth model
+                // as data rows (rowStyle above); no raw px.
+                style: {
+                  '--depth': (metaById.get(addingChildTo)?.depth ?? 0) + 1,
+                } as CSSProperties,
                 cell: (columnId: string) => renderAddChildCell(columnId),
               },
             }

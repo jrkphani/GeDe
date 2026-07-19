@@ -82,6 +82,33 @@ describe('ArchitectureSurface', () => {
     expect(childTree.style.getPropertyValue('--depth')).toBe('1')
   })
 
+  // Owner req ("indent child records to clearly show they are child entries"):
+  // the leading tree/chevron column alone only steps the chevron right — the NAME
+  // is a SEPARATE fixed-width column, so a child's name text column-aligns with
+  // its parent's. The row must carry its --depth to the NAME cell too, so the
+  // name steps right per level and the hierarchy reads at a glance.
+  it('indents a child entry NAME cell per depth level, not only the leading tree column (owner req)', async () => {
+    const table = await addTier2Table(db, projectId, 'Buyers')
+    const superstars = await addTier2Entry(db, table.id, null, 'Superstars')
+    const whales = await addTier2Entry(db, table.id, superstars.id, 'Whales')
+    await addTier2Entry(db, table.id, whales.id, 'Krakens')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Krakens')
+
+    // The entry <tr> carries its depth as the --depth custom property (fed via
+    // EditableGrid's rowStyle seam), so the NAME cell — a separate column from
+    // the tree/chevron column — insets per level off the same depth model.
+    const rowDepth = (name: string) =>
+      (screen.getByText(name).closest('tr') as HTMLElement).style.getPropertyValue('--depth')
+    expect(rowDepth('Superstars')).toBe('0')
+    expect(rowDepth('Whales')).toBe('1')
+    expect(rowDepth('Krakens')).toBe('2')
+
+    // The name cell is a targetable column so the depth-keyed inset lands on it.
+    const nameCell = screen.getByText('Whales').closest('td') as HTMLElement
+    expect(nameCell.className).toContain('t2-col--name')
+  })
+
   it('promote selection spans nesting levels and previews the parameter count', async () => {
     const user = userEvent.setup()
     const table = await addTier2Table(db, projectId, 'Stakeholders')
@@ -660,6 +687,25 @@ describe('.t2-tree CSS — token-driven nested indent (issue 084 finding 6)', ()
     expect(body).toMatch(/padding-left:\s*calc\(var\(--depth[^)]*\)\s*\*\s*var\(--space-5\)\)/)
     // Guard against a raw pixel literal creeping back into the indent.
     expect(body).not.toMatch(/padding-left:\s*[^;]*\d+px/)
+  })
+})
+
+// Owner req refinement (issue 084 Direction 3) — the child NAME cell must also
+// step right per depth level (the tree column alone only indents the chevron).
+// The inset is token-driven off the SAME per-row --depth model the tree uses
+// (× the --space-5 step), so depth 0 → 0 inset → flat tables/other grids
+// unchanged. Asserted at the CSS layer (jsdom doesn't cascade base.css).
+describe('.t2-col--name CSS — depth-keyed NAME indent (issue 084 Direction 3)', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
+
+  it('insets the name cell by --depth × the --space-5 token, no raw px', () => {
+    const match = /\.t2-col--name\s*\{([^}]*)\}/.exec(css)
+    expect(match).not.toBeNull()
+    const body = (match as RegExpMatchArray)[1] as string
+    expect(body).toMatch(
+      /padding-inline-start:\s*calc\(var\(--depth[^)]*\)\s*\*\s*var\(--space-5\)\)/,
+    )
+    expect(body).not.toMatch(/\d+px/)
   })
 })
 
