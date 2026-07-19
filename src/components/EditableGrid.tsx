@@ -492,10 +492,6 @@ function TextOrMonoCell<TRow>({
     <div
       ref={registerRef(nav, rowId, columnId)}
       className={`grid-cell${mono ? ' grid-cell--mono' : ''}`}
-      // A non-empty cell's name is its own text (the column is announced via the
-      // scoped <th>); an empty cell has only the aria-hidden em-dash, so it
-      // needs an explicit name that states the column and its empty state (021).
-      aria-label={value ? undefined : `${name}, empty`}
       tabIndex={0}
       onClick={() => nav.setEditing({ rowId, columnId })}
       onKeyDown={(e) => {
@@ -507,7 +503,18 @@ function TextOrMonoCell<TRow>({
         handleGridArrowKeys(e, nav, rowId, columnId)
       }}
     >
-      {value || <span className="grid-cell__placeholder" aria-hidden="true">—</span>}
+      {value || (
+        <>
+          <span className="grid-cell__placeholder" aria-hidden="true">—</span>
+          {/* A non-empty cell's name is its own text (the column is announced via
+              the scoped <th>); an empty cell has only the aria-hidden em-dash, so
+              it needs an explicit name stating the column + empty state (021).
+              084-D3 P6 a11y: carry that name in visually-hidden text rather than an
+              aria-label on this bare div (a role-less div may not — axe
+              `aria-prohibited-attr`); the accessible name is identical. */}
+          <span className="visually-hidden">{`${name}, empty`}</span>
+        </>
+      )}
       {adornment?.(row)}
     </div>
   )
@@ -651,7 +658,6 @@ function MultilineCell<TRow>({
     <div
       ref={registerRef(nav, rowId, columnId)}
       className="grid-cell grid-cell--multiline"
-      aria-label={value ? undefined : `${name}, empty`}
       tabIndex={0}
       title={value || undefined}
       onClick={() => nav.setEditing({ rowId, columnId })}
@@ -667,7 +673,12 @@ function MultilineCell<TRow>({
       {value ? (
         <span className="grid-cell__clamp">{value}</span>
       ) : (
-        <span className="grid-cell__placeholder" aria-hidden="true">—</span>
+        <>
+          <span className="grid-cell__placeholder" aria-hidden="true">—</span>
+          {/* 084-D3 P6 a11y: name the empty cell via visually-hidden text, not an
+              aria-label on this bare div (axe `aria-prohibited-attr`). */}
+          <span className="visually-hidden">{`${name}, empty`}</span>
+        </>
       )}
     </div>
   )
@@ -791,7 +802,6 @@ function RichTextCell<TRow>({
         registerRef(nav, rowId, columnId)(el)
       }}
       className="grid-cell grid-cell--multiline"
-      aria-label={plain ? undefined : `${name}, empty`}
       tabIndex={0}
       title={plain || undefined}
       onClick={() => nav.setEditing({ rowId, columnId })}
@@ -807,7 +817,12 @@ function RichTextCell<TRow>({
       {plain ? (
         <span className="grid-cell__clamp">{plain}</span>
       ) : (
-        <span className="grid-cell__placeholder" aria-hidden="true">—</span>
+        <>
+          <span className="grid-cell__placeholder" aria-hidden="true">—</span>
+          {/* 084-D3 P6 a11y: name the empty cell via visually-hidden text, not an
+              aria-label on this bare div (axe `aria-prohibited-attr`). */}
+          <span className="visually-hidden">{`${name}, empty`}</span>
+        </>
       )}
     </div>
   )

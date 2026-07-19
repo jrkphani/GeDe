@@ -336,9 +336,16 @@ describe('accessible names & grid semantics (issue 021)', () => {
     render(
       <EditableGrid rows={emptyRows} columns={makeColumns()} getRowId={(r) => r.id} getRowLabel={() => 'row X'} />,
     )
-    const cell = screen.getByLabelText('Title for row X, empty')
+    // 084-D3 P6: the empty-state name is carried in visually-hidden text (not an
+    // aria-label on the bare div — axe `aria-prohibited-attr`), so the cell's
+    // accessible name is still exactly "Title for row X, empty".
+    const cell = screen.getByText('Title for row X, empty').closest('.grid-cell') as HTMLElement
     expect(cell).toBeInTheDocument()
     expect(cell.querySelector('.grid-cell__placeholder')).toHaveAttribute('aria-hidden', 'true')
+    // The name must NOT be an aria-label on this role-less div (axe
+    // `aria-prohibited-attr`, 084-D3 P6) — it comes from visually-hidden text.
+    expect(cell).not.toHaveAttribute('aria-label')
+    expect(cell.querySelector('.visually-hidden')).toHaveTextContent('Title for row X, empty')
   })
 
   it('every header is a scoped column header (native table semantics)', () => {
@@ -611,8 +618,10 @@ describe('EditableGrid — richtext cell (089 D1 Phase 3)', () => {
     const noteRows: Note[] = [{ id: 'r1', body: '' }]
     render(<EditableGrid rows={noteRows} columns={makeCols()} getRowId={(r) => r.id} />)
 
-    // Open the editor on the empty cell — the ghost renders inside it.
-    await user.click(screen.getByLabelText('Body, empty'))
+    // Open the editor on the empty cell — the ghost renders inside it. The
+    // empty-state name is now visually-hidden text (084-D3 P6 a11y), so target
+    // the cell by that accessible text rather than an aria-label.
+    await user.click(screen.getByText('Body, empty').closest('.grid-cell') as HTMLElement)
     expect(await screen.findByText('Add note…')).toBeInTheDocument()
     // Blocker 3 (089 D1): the hardcoded justification ghost must be gone for
     // non-justification (e.g. description) rich columns.

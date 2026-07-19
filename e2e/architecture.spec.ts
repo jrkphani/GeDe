@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
 // Issue 014, test-first plan item 5: build the example's Architecture tables,
@@ -148,4 +149,252 @@ test('architecture: selection bar stays in view (sticky) on a tall table without
   // means this is reachable without any scroll — assert it's actually within
   // the viewport, not merely present in the DOM off-screen.
   await expect(promoteTrigger).toBeInViewport()
+})
+
+// ───────────────────────────────────────────────────────────────────────────
+// Issue 084 Direction 3 — P6: e2e + a11y sweep. The stacked-per-table grid
+// threaded by one outer chain (P1/P2) must be fully keyboard-operable end to
+// end, its promote multi-select must expose real listbox/option semantics
+// (P4), the quiet shortcut hints must reveal on focus and hide at rest (P5),
+// and the whole structure must stay responsive at volume (risk 3).
+// ───────────────────────────────────────────────────────────────────────────
+
+/** Fresh empty project on the Architecture route (typed create, no seed). */
+async function openArchitecture(page: Page, projectName: string) {
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill(projectName)
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: `Open ${projectName}` }).click()
+  await page.getByRole('link', { name: 'Architecture' }).click()
+  await expect(page.getByText('2nd Tier · Architecture')).toBeVisible()
+}
+
+/**
+ * A valid FORMAT_VERSION 5 `.gede.json` envelope with `nTables` Architecture
+ * tables, each holding `nEntries` top-level entries. Ids are opaque strings —
+ * the importer remaps every id/FK via uuidv7 and stamps the target workspace —
+ * so they only need to be internally consistent (FK checks pass). All ten
+ * envelope arrays must be present; the unused layers are empty. (Schema:
+ * src/domain/projectEnvelope.ts.)
+ */
+function makeVolumeFixture(nTables: number, nEntries: number) {
+  const now = new Date().toISOString()
+  const tier2_tables: unknown[] = []
+  const tier2_entries: unknown[] = []
+  for (let t = 0; t < nTables; t++) {
+    const tableId = `tbl-${t}`
+    tier2_tables.push({
+      id: tableId,
+      projectId: 'proj-0',
+      workspaceId: null,
+      name: `Table ${t + 1}`,
+      sort: t,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    })
+    for (let e = 0; e < nEntries; e++) {
+      tier2_entries.push({
+        id: `${tableId}-e${e}`,
+        tableId,
+        workspaceId: null,
+        parentId: null,
+        name: `T${t + 1} Entry ${e + 1}`,
+        description: null,
+        sort: e,
+        createdAt: now,
+        updatedAt: now,
+        deletedAt: null,
+      })
+    }
+  }
+  return {
+    formatVersion: 5,
+    tables: {
+      projects: [
+        {
+          id: 'proj-0',
+          workspaceId: null,
+          name: 'Volume',
+          description: null,
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+        },
+      ],
+      canvases: [],
+      tier1_purpose: [],
+      tier1_props: [],
+      tier2_tables,
+      tier2_entries,
+      dimensions: [],
+      parameters: [],
+      contexts: [],
+      bindings: [],
+    },
+  }
+}
+
+test('architecture P6: builds tables and threads focus across them entirely from the keyboard', async ({
+  page,
+}) => {
+  await openArchitecture(page, 'Keys')
+
+  // Enter the grammar with no mouse: focus the trailing add-table phantom and
+  // create two tables with Enter (commit + self-refocus).
+  const addTable = page.getByPlaceholder('Name a table')
+  await addTable.focus()
+  await expect(addTable).toBeFocused()
+  await page.keyboard.type('Alpha')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.t2-table__name', { hasText: 'Alpha' })).toBeVisible()
+  await page.keyboard.type('Beta')
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.t2-table__name', { hasText: 'Beta' })).toBeVisible()
+
+  const alpha = tablePanel(page, 'Alpha')
+  const beta = tablePanel(page, 'Beta')
+
+  // Fill one entry in Alpha from its add-entry phantom, which then clears +
+  // refocuses (Numbers grammar) — leaving the empty phantom at Alpha's boundary.
+  await alpha.getByPlaceholder('Name an entry').focus()
+  await page.keyboard.type('a1')
+  await page.keyboard.press('Enter')
+  await expect(alpha.getByRole('cell', { name: 'a1', exact: true })).toBeVisible()
+
+  // Tab off Alpha's (now empty) add-entry phantom → forward exit boundary →
+  // Beta's first editable position (Beta is empty, so its add-entry phantom).
+  await expect(alpha.getByPlaceholder('Name an entry')).toBeFocused()
+  await page.keyboard.press('Tab')
+  await expect(beta.getByPlaceholder('Name an entry')).toBeFocused()
+
+  // Tab off the LAST table's phantom → the trailing add-table phantom.
+  await page.keyboard.press('Tab')
+  await expect(addTable).toBeFocused()
+
+  // Type a name + Tab in the add-table phantom → creates the table AND lands
+  // focus inside the freshly-created (empty) table's first entry phantom.
+  await page.keyboard.type('Gamma')
+  await page.keyboard.press('Tab')
+  const gamma = tablePanel(page, 'Gamma')
+  await expect(page.locator('.t2-table__name', { hasText: 'Gamma' })).toBeVisible()
+  await expect(gamma.getByPlaceholder('Name an entry')).toBeFocused()
+  // (The reverse Shift+Tab chain — first-data-cell → previous table's phantom —
+  // is covered on the canvas by d3-canvas.spec.ts; the forward add-table →
+  // fill → next-table → add-table → new-table sequence above is the P2/P6
+  // headline for the normal surface.)
+})
+
+test('architecture P6: the promote multi-select is a labeled listbox of options with real aria-selected, and axe-clean', async ({
+  page,
+}) => {
+  await openArchitecture(page, 'Roles')
+  await addTable(page, 'Roles')
+  await addEntry(page, 'Roles', 'Admin')
+  await addEntry(page, 'Roles', 'Editor')
+
+  const panel = tablePanel(page, 'Roles')
+
+  // The multi-select semantics: a labeled listbox owning per-entry options.
+  const listbox = panel.getByRole('listbox', { name: 'Select Roles entries to promote' })
+  await expect(listbox).toBeAttached()
+  await expect(listbox).toHaveAttribute('aria-multiselectable', 'true')
+
+  const adminOption = panel.getByRole('option', { name: 'Select Admin' })
+  const editorOption = panel.getByRole('option', { name: 'Select Editor' })
+  // aria-selected is a real boolean, present on both — false at rest.
+  await expect(adminOption).toHaveAttribute('aria-selected', 'false')
+  await expect(editorOption).toHaveAttribute('aria-selected', 'false')
+
+  // Selecting flips only that option's aria-selected to true.
+  await adminOption.click()
+  await expect(adminOption).toHaveAttribute('aria-selected', 'true')
+  await expect(editorOption).toHaveAttribute('aria-selected', 'false')
+  await expect(panel.getByText('1 selected')).toBeVisible()
+
+  // No serious/critical a11y violations on the composed Architecture surface
+  // (with a live selection + the promote affordance shown).
+  const results = await new AxeBuilder({ page })
+    .include('main')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze()
+  const blocking = results.violations.filter(
+    (v) => v.impact === 'serious' || v.impact === 'critical',
+  )
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+test('architecture P6: the quiet keyboard hints reveal on focus and are hidden at rest', async ({
+  page,
+}) => {
+  await openArchitecture(page, 'Hints')
+  await addTable(page, 'Roles')
+  await addEntry(page, 'Roles', 'Admin')
+
+  const panel = tablePanel(page, 'Roles')
+
+  // Add-table phantom: its ⏎ hint is hidden at rest (visibility:hidden), shown
+  // only on focus-within (the .row-action reveal pattern) — the chips are
+  // aria-hidden either way, so this is CSS visibility, asserted via computed style.
+  const addTableHint = page.locator('.t2-add-table .key-hint')
+  await expect
+    .poll(() => addTableHint.evaluate((el) => getComputedStyle(el).visibility))
+    .toBe('hidden')
+  await page.getByPlaceholder('Name a table').focus()
+  await expect(page.locator('.t2-add-table .key-hint__cap', { hasText: '⏎' })).toBeVisible()
+
+  // Editing a text cell shows the Tab →/Esc chips inline at the cell's end.
+  await panel.getByRole('cell', { name: 'Admin', exact: true }).click()
+  await expect(page.locator('input:focus')).toBeVisible()
+  const editHints = page.locator('.grid-cell__editing .key-hint__cap')
+  await expect(editHints.filter({ hasText: 'Tab' })).toBeVisible()
+  await expect(editHints.filter({ hasText: '→' })).toBeVisible()
+  await expect(editHints.filter({ hasText: 'Esc' })).toBeVisible()
+
+  // Escape commits/cancels back to the display cell → the editing chips are gone.
+  await page.keyboard.press('Escape')
+  await expect(page.locator('.grid-cell__editing')).toHaveCount(0)
+})
+
+test('architecture P6: renders and stays operable at volume (~20 tables × ~50 entries)', async ({
+  page,
+}) => {
+  test.setTimeout(120_000)
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+
+  // Bulk-seed via the supported import path — 1000 entries via the UI would be
+  // prohibitively slow. The fixture is a valid v5 envelope (import remaps ids).
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'Volume.gede.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(JSON.stringify(makeVolumeFixture(20, 50))),
+  })
+  await page.getByRole('button', { name: 'Open Volume' }).click()
+  await page.getByRole('link', { name: 'Architecture' }).click()
+  await expect(page.getByText('2nd Tier · Architecture')).toBeVisible()
+
+  // All 20 tables mount (one stacked EditableGrid each — D3 adds no per-row
+  // mount over today's N TablePanels, only one O(tables) chain provider).
+  await expect(page.locator('.t2-table')).toHaveCount(20, { timeout: 30_000 })
+  const last = tablePanel(page, 'Table 20')
+  await expect(last.getByRole('cell', { name: 'T20 Entry 50', exact: true })).toBeVisible()
+
+  // Opening a cell deep in the last table is responsive (editor mounts fast) —
+  // the perf-at-volume risk (risk 3) retired against the real surface.
+  const cell = last.getByRole('cell', { name: 'T20 Entry 50', exact: true })
+  const t0 = Date.now()
+  await cell.click()
+  await expect(page.locator('input:focus')).toBeVisible()
+  const openMs = Date.now() - t0
+  expect(openMs, `cell-open at volume took ${openMs}ms`).toBeLessThan(3_000)
+  await page.keyboard.press('Escape')
+
+  // Cross-table keyboard focus still threads at volume: Tab off table 20's
+  // add-entry phantom lands on the trailing add-table phantom (last boundary).
+  await last.getByPlaceholder('Name an entry').focus()
+  await page.keyboard.press('Tab')
+  await expect(page.getByPlaceholder('Name a table')).toBeFocused()
 })
