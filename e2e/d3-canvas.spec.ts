@@ -599,6 +599,160 @@ test('dragging a table node down its lane reorders + persists sort, and the lane
   expect(new Set(afterReload.xs).size).toBe(1)
 })
 
+// ── 089-D3 graduation P1 — DECOMPOSE the Foundation lane into per-item nodes ──
+// Where P2 mounted Foundation as ONE whole-surface `lane` node, the Foundation
+// column now emits a header node (`.wc-node--foundation`: heading + Purpose +
+// Existing-Scenario rich editors + the add-prop phantom) plus one node PER
+// `tier1_props` value-prop (`.wc-node--foundation-item`, id = prop id), each
+// hosting the real name/description EditableGrid. This mirrors the Architecture
+// decomposition exactly — the one difference is Foundation reorders by RANK
+// (`reorderProp`), not `sort`. Positions stay DERIVED (never a persisted x/y).
+
+async function addFoundationProp(page: Page, name: string): Promise<void> {
+  const header = page.locator('.wc-node--foundation')
+  await header.getByPlaceholder('Name a value proposition').click()
+  await page.keyboard.type(name)
+  await page.keyboard.press('Enter')
+  await expect(
+    page.locator('.wc-node--foundation-item').filter({ hasText: name }),
+  ).toBeVisible()
+}
+
+// Value-prop names top-to-bottom by each foundation-item node's on-screen y,
+// plus their rounded left-x — the visual `rank` stack and the column invariant.
+// The name is read from the item's first editable grid cell (the name column).
+async function foundationPropsByY(
+  page: Page,
+): Promise<{ names: string[]; xs: number[] }> {
+  const items = await page.locator('.wc-node--foundation-item').evaluateAll((els) =>
+    els.map((el) => {
+      const r = el.getBoundingClientRect()
+      const cell = el.querySelector('tbody tr[data-row-id] .grid-cell[tabindex]')
+      const name = cell ? cell.textContent.trim() : ''
+      return { name, y: r.top, x: Math.round(r.left) }
+    }),
+  )
+  items.sort((a, b) => a.y - b.y)
+  return { names: items.map((i) => i.name), xs: items.map((i) => i.x) }
+}
+
+async function foundationItemTransforms(page: Page): Promise<string> {
+  return page.locator('.wc-node--foundation-item').evaluateAll((els) =>
+    els
+      .map((el) => {
+        const node = el.closest('.react-flow__node')
+        return node ? (node as HTMLElement).style.transform : ''
+      })
+      .join('|'),
+  )
+}
+
+async function waitForStableFoundationStack(page: Page): Promise<void> {
+  let prev = ''
+  await expect
+    .poll(async () => {
+      const cur = await foundationItemTransforms(page)
+      const stable = cur !== '' && cur === prev
+      prev = cur
+      return stable
+    })
+    .toBe(true)
+}
+
+test('the Foundation lane decomposes into a header + per-prop nodes, editable at zoom ≠ 1', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+
+  // The header node keeps the `1st Tier` heading + the Purpose rich editor.
+  await expect(page.locator('.wc-node--foundation')).toBeVisible()
+  await expect(page.getByRole('heading', { name: /1st Tier/ })).toBeVisible()
+
+  // Two value props → two per-prop nodes (the whole-surface Foundation node is gone).
+  await addFoundationProp(page, 'Comfort')
+  await addFoundationProp(page, 'Mobility')
+  await expect(page.locator('.wc-node--foundation-item')).toHaveCount(2)
+
+  // The app fit-views on load, so this runs at a non-unity viewport scale.
+  await expect.poll(() => viewportScale(page)).not.toBe(1)
+
+  // Let the create-focus (onPropCreated rAF) + its focus-pan settle before the
+  // next interaction, so a delayed programmatic focus can't steal our typing.
+  await waitForStableViewport(page)
+
+  // Purpose is editable in the header node at zoom ≠ 1 (the proven foundation.spec
+  // interaction: the role=textbox rich editor, click + type, commit-agnostic).
+  const purpose = page
+    .locator('.wc-node--foundation')
+    .getByRole('textbox', { name: 'System purpose' })
+  await purpose.click()
+  await page.keyboard.type('Move people comfortably')
+  await expect(purpose).toContainText('Move people comfortably')
+
+  // In-node grid grammar works at zoom ≠ 1: clicking a prop's name cell opens an
+  // editable input inside that per-prop node.
+  const comfort = page.locator('.wc-node--foundation-item').filter({ hasText: 'Comfort' })
+  const nameCell = comfort.locator('tbody tr[data-row-id] .grid-cell[tabindex]').first()
+  await nameCell.click()
+  await expect(comfort.locator('input, textarea, [contenteditable="true"]').first()).toBeVisible()
+})
+
+test('dragging a value-prop node down its lane reorders + persists rank, and the lane stays a clean vertical column', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  const projectId = await openThreeLaneCanvas(page)
+
+  // Three props → derived rank stack Comfort (1°), Mobility (2°), Speed (3°).
+  await addFoundationProp(page, 'Comfort')
+  await addFoundationProp(page, 'Mobility')
+  await addFoundationProp(page, 'Speed')
+  await expect(page.locator('.wc-node--foundation-item')).toHaveCount(3)
+
+  await page.locator('.react-flow__controls-fitview').click()
+  await waitForStableFoundationStack(page)
+
+  const before = await foundationPropsByY(page)
+  expect(before.names).toEqual(['Comfort', 'Mobility', 'Speed'])
+  expect(new Set(before.xs).size).toBe(1) // clean vertical column
+
+  // Drag Comfort's HEADER (its only drag origin) down past Speed → it becomes last.
+  const comfortHandle = page
+    .locator('.wc-node--foundation-item')
+    .filter({ hasText: 'Comfort' })
+    .locator('.wc-node__handle')
+  const speedNode = page.locator('.wc-node--foundation-item').filter({ hasText: 'Speed' })
+  const start = await comfortHandle.boundingBox()
+  const speedBox = await speedNode.boundingBox()
+  if (!start || !speedBox) throw new Error('drag handle + speed node must have boxes')
+  const startX = start.x + start.width / 2
+  const startY = start.y + start.height / 2
+  const dropY = speedBox.y + speedBox.height + 24
+
+  await page.mouse.move(startX, startY)
+  await page.mouse.down()
+  await page.mouse.move(startX, startY + 12, { steps: 4 })
+  await page.mouse.move(startX, dropY, { steps: 12 })
+  await page.mouse.up()
+
+  await expect
+    .poll(async () => (await foundationPropsByY(page)).names)
+    .toEqual(['Mobility', 'Speed', 'Comfort'])
+  const afterDrop = await foundationPropsByY(page)
+  expect(new Set(afterDrop.xs).size).toBe(1) // x invariant — lane stays vertical
+
+  // PERSISTED — a reload re-reads `rank` from PGlite; the new order survives (a
+  // real rank write via reorderProp, not in-memory node coords).
+  await page.goto(`/p/${projectId}/design?d3rf=1`)
+  await expect(page.locator('.wc-node--foundation-item')).toHaveCount(3)
+  await expect
+    .poll(async () => (await foundationPropsByY(page)).names)
+    .toEqual(['Mobility', 'Speed', 'Comfort'])
+  const afterReload = await foundationPropsByY(page)
+  expect(new Set(afterReload.xs).size).toBe(1)
+})
+
 // 089-D3 graduation P0 — the `?d3rf` opt-in now persists in the canvasMode store
 // (seeded once from the initial URL), so an in-app navigate() that rebuilds the
 // URL and DROPS the flag no longer exits the canvas. Every test above has to

@@ -20,13 +20,15 @@ import {
 } from '../domain/laneLayout'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
+import { formatDegree } from '../domain/degree'
+import { useTier1Store } from '../store/tier1'
 import { useTier2Store } from '../store/tier2'
 import { useWorkspaceRole } from '../store/workspace'
-import type { Tier2TableRow } from '../db/mutations'
+import type { Tier1PropRow, Tier2TableRow } from '../db/mutations'
 import type { AppRoute, DesignView } from '../shell/routes'
 import { DesignSurface } from './DesignSurface'
 import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
-import { FoundationSurface } from './FoundationSurface'
+import { FoundationHeaderPanel, FoundationPropPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
 import { PhantomInput } from './ui/inline-editor'
 // The ⌘1/2/3 pan-to-lane interceptor + its module-level `activeCanvasInstance`
@@ -41,13 +43,17 @@ import {
   type CanvasNavInstance,
 } from './d3CanvasNav'
 
-// 089-D3 P3.2 — DECOMPOSE the Architecture lane into per-table nodes. Where P2
-// mounted each tier as ONE whole-surface node, the Architecture column now emits
+// 089-D3 P3.2 / P1 — DECOMPOSE the tier lanes into per-item nodes. Where earlier
+// P2 mounted each tier as ONE whole-surface node, the Architecture column emits
 // one React Flow node PER `tier2` table (id = table id), each hosting the REAL
 // `TablePanel` (its EditableGrid + tree/promote/resolution), plus a small header
-// node (heading + the add-table phantom + empty-state) at the top of the column.
-// Foundation and Design stay whole-surface nodes for now. Every node's position
-// is DERIVED by P0's `computeLaneLayout` (STYLE_GUIDE §1 principle 4 / SPEC
+// node (heading + the add-table phantom + empty-state) at the top of the column;
+// the Foundation column (graduation P1) is decomposed the same way — a header
+// node (heading + Purpose/Existing-Scenario + add-prop phantom) + one node per
+// `tier1_props` value-prop (its name/description grid) — the one difference being
+// Foundation reorders by RANK (`reorderProp`), not `sort`. Design stays a whole-
+// surface node until P2. Every node's position is DERIVED by P0's
+// `computeLaneLayout` (STYLE_GUIDE §1 principle 4 / SPEC
 // invariant 5 — a pure projection of `(tier, sort)`, never persisted): x is
 // tier-indexed (LANE_ORDER), and within the Architecture column the header (sort
 // -1) then the tables (sort 0..n-1) stack downward using each node's MEASURED
@@ -75,28 +81,25 @@ type WorkspaceRoute = Extract<AppRoute, { kind: 'project' | 'tier' | 'design' }>
 // React Flow measures each node (`node.measured.height`) and the stack is
 // re-derived. Kept honest so the pre-measurement paint is roughly right (Design
 // is the tallest tier; a table is a short panel; the header is tiny).
-const FOUNDATION_ESTIMATE = 700
+const FOUNDATION_HEADER_ESTIMATE = 620
+const FOUNDATION_ITEM_ESTIMATE = 120
 const DESIGN_ESTIMATE = 1200
 const ARCH_HEADER_ESTIMATE = 160
 const ARCH_TABLE_ESTIMATE = 340
-
-// Human label on the Foundation / Design header drag-handle bars.
-const LANE_LABEL: Record<'foundation' | 'design', string> = {
-  foundation: 'Foundation',
-  design: 'Design',
-}
 
 // Lane geometry. `laneWidth` matches the `.wc-node` reading width so the real
 // surfaces lay out identically inside their nodes; each column's x is a pure
 // function of its tier index (LANE_ORDER).
 const LANE_CONFIG: LaneLayoutConfig = { laneWidth: 960, laneGap: 48, nodeGap: 24 }
 
-// The derived x of the Architecture lane column (a pure fn of its tier index —
-// identical to laneLayout's own `laneX`). A table-node drag is pinned to this x
-// so the lane stays a clean vertical column: only the drag's y (its `sort`
-// slot) ever carries meaning, never its x (P3.4 constrained-drag reorder).
-const ARCH_COLUMN_X =
-  LANE_ORDER.indexOf('architecture') * (LANE_CONFIG.laneWidth + LANE_CONFIG.laneGap)
+// The derived x of a lane column (a pure fn of its tier index — identical to
+// laneLayout's own `laneX`). A per-item-node drag is pinned to its lane's x so
+// the lane stays a clean vertical column: only the drag's y (its rank/sort slot)
+// ever carries meaning, never its x (constrained-drag reorder).
+const laneColumnX = (tier: 'foundation' | 'architecture') =>
+  LANE_ORDER.indexOf(tier) * (LANE_CONFIG.laneWidth + LANE_CONFIG.laneGap)
+const FOUNDATION_COLUMN_X = laneColumnX('foundation')
+const ARCH_COLUMN_X = laneColumnX('architecture')
 
 const FOCUS_PAN_DURATION = 320
 // Focus-driven pan is pan-if-outside-margin, NOT center-on-every-focus: only
@@ -113,7 +116,9 @@ const FOCUS_PAN_MARGIN = 88
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
 type LaneNodeData = {
-  tier: 'foundation' | 'design'
+  // P1 decomposed Foundation into per-item nodes, so the whole-surface `lane`
+  // node now only ever hosts Design (P2 decomposes it too).
+  tier: 'design'
   sort: number
   estimate: number
   projectId: string
@@ -122,6 +127,30 @@ type LaneNodeData = {
   canvasId: string | undefined
 }
 type LaneNode = Node<LaneNodeData, 'lane'>
+
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+type FoundationHeaderData = {
+  tier: 'foundation'
+  sort: number
+  estimate: number
+  readOnly: boolean
+  // Continue focus into a freshly-created value-prop's node once it mounts.
+  onPropCreated: (propId: string) => void
+}
+type FoundationHeaderNode = Node<FoundationHeaderData, 'foundationHeader'>
+
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+type FoundationItemData = {
+  tier: 'foundation'
+  sort: number
+  estimate: number
+  prop: Tier1PropRow
+  readOnly: boolean
+  // Cross-node Tab: the grid hit a forward/backward boundary — relocate focus to
+  // the next/prev-by-`sort` value-prop node (mirrors ArchTable's onExitBoundary).
+  onExitBoundary: (propId: string, dir: 'forward' | 'backward') => void
+}
+type FoundationItemNode = Node<FoundationItemData, 'foundationItem'>
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
 type ArchHeaderData = {
@@ -148,7 +177,12 @@ type ArchTableData = {
 }
 type ArchTableNode = Node<ArchTableData, 'archTable'>
 
-type CanvasNode = LaneNode | ArchHeaderNode | ArchTableNode
+type CanvasNode =
+  | LaneNode
+  | FoundationHeaderNode
+  | FoundationItemNode
+  | ArchHeaderNode
+  | ArchTableNode
 
 // ── Cross-node focus helpers (P3.3). A table node's DOM is `.react-flow__node
 // [data-id="<tableId>"]`; within it we land focus on the FIRST editable grid
@@ -159,8 +193,8 @@ type CanvasNode = LaneNode | ArchHeaderNode | ArchTableNode
 // (084-D3 P0) so this consumer and the 084 Architecture chain adapter share one
 // set of edge semantics. ─────────────────────────────────────────────────────
 
-function nodeElement(tableId: string): HTMLElement | null {
-  return document.querySelector<HTMLElement>(`.react-flow__node[data-id="${tableId}"]`)
+function nodeElement(nodeId: string): HTMLElement | null {
+  return document.querySelector<HTMLElement>(`.react-flow__node[data-id="${nodeId}"]`)
 }
 
 // ── The derived-position projection. Reads each node's MEASURED height (or its
@@ -187,31 +221,76 @@ function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
 
 // ── Node components ──────────────────────────────────────────────────────────
 
-// Foundation / Design lane node: a header drag-handle bar over the REAL whole
-// tier surface. Body is `nodrag nopan nowheel` and records its lane active on
-// focus/pointer (D2 `activeLane` gating).
+// Design lane node: a header drag-handle bar over the REAL whole Design surface
+// (P2 decomposes this into a {ring + register} core). Body is `nodrag nopan
+// nowheel` and records its lane active on focus/pointer (D2 `activeLane` gating).
 function LaneNode({ data }: NodeProps<LaneNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
-  const { tier } = data
   return (
-    <div className={`wc-node wc-node--${tier}`}>
+    <div className="wc-node wc-node--design">
       <div className="wc-node__handle" aria-hidden="true">
-        {LANE_LABEL[tier]}
+        Design
       </div>
       <div
         className="nodrag nopan nowheel wc-node__body"
-        onFocusCapture={() => setActiveLane(tier)}
-        onPointerDown={() => setActiveLane(tier)}
+        onFocusCapture={() => setActiveLane('design')}
+        onPointerDown={() => setActiveLane('design')}
       >
-        {tier === 'foundation' && <FoundationSurface projectId={data.projectId} />}
-        {tier === 'design' && (
-          <DesignSurface
-            projectId={data.projectId}
-            contextPath={data.contextPath}
-            view={data.view}
-            canvasId={data.canvasId}
-          />
-        )}
+        <DesignSurface
+          projectId={data.projectId}
+          contextPath={data.contextPath}
+          view={data.view}
+          canvasId={data.canvasId}
+        />
+      </div>
+    </div>
+  )
+}
+
+// Foundation column header node: the heading + the Purpose / Existing-Scenario
+// rich editors + the single add-prop phantom. Carries the Foundation lane's
+// stable node id (LANE_NODE_ID.foundation) so ⌘1 frames the column top. Adding a
+// value-prop continues focus into the new node (rAF×2, via onPropCreated).
+function FoundationHeaderNode({ data }: NodeProps<FoundationHeaderNode>) {
+  const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
+  return (
+    <div className="wc-node wc-node--foundation wc-node--foundation-header">
+      <div className="wc-node__handle" aria-hidden="true">
+        Foundation
+      </div>
+      <div
+        className="nodrag nopan nowheel wc-node__body"
+        onFocusCapture={() => setActiveLane('foundation')}
+        onPointerDown={() => setActiveLane('foundation')}
+      >
+        <FoundationHeaderPanel readOnly={data.readOnly} onPropCreated={data.onPropCreated} />
+      </div>
+    </div>
+  )
+}
+
+// Per-value-prop Foundation node: a header drag-handle bar (the degree + name)
+// over the real name/description grid. `data-prop-id` makes the node addressable
+// for the cross-node focus helpers; `onExitBoundary` wires the grid's Tab-off-a-
+// -boundary seam to the canvas's next/prev-by-`sort` traversal.
+function FoundationItemNode({ data }: NodeProps<FoundationItemNode>) {
+  const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
+  return (
+    <div className="wc-node wc-node--foundation-item" data-prop-id={data.prop.id}>
+      <div className="wc-node__handle" aria-hidden="true">
+        <span className="wc-node__degree font-mono">{formatDegree(data.prop.rank)}</span>{' '}
+        {data.prop.name}
+      </div>
+      <div
+        className="nodrag nopan nowheel wc-node__body"
+        onFocusCapture={() => setActiveLane('foundation')}
+        onPointerDown={() => setActiveLane('foundation')}
+      >
+        <FoundationPropPanel
+          prop={data.prop}
+          readOnly={data.readOnly}
+          onExitBoundary={(dir) => data.onExitBoundary(data.prop.id, dir)}
+        />
       </div>
     </div>
   )
@@ -292,7 +371,13 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
 
 // Stable across renders — React Flow warns (and remounts nodes) if nodeTypes is
 // a fresh object each render.
-const NODE_TYPES = { lane: LaneNode, archHeader: ArchHeaderNode, archTable: ArchTableNode }
+const NODE_TYPES = {
+  lane: LaneNode,
+  foundationHeader: FoundationHeaderNode,
+  foundationItem: FoundationItemNode,
+  archHeader: ArchHeaderNode,
+  archTable: ArchTableNode,
+}
 
 // The exported shell wraps the canvas in a ReactFlowProvider so both the
 // imperative viewport handle (`useReactFlow`, for ⌘1/2/3 pan-to-lane + focus-pan)
@@ -331,15 +416,25 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     void useTier2Store.getState().load(projectId)
   }, [projectId])
 
+  // P1 — the decomposed Foundation column is data-driven off the tier1 store the
+  // same way: the flag-off app's `FoundationSurface` calls `load` itself, but it
+  // never mounts here, so the canvas owns the load + drives one node per prop.
+  const props = useTier1Store((s) => s.props)
+  useEffect(() => {
+    void useTier1Store.getState().load(projectId)
+  }, [projectId])
+
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
 
   const reactFlow = useReactFlow<CanvasNode>()
 
-  // Latest tables in a ref so the (stable) boundary callback reads current sort
-  // order without re-subscribing. `tables` is DB-ordered by `sort` ascending.
+  // Latest tables/props in refs so the (stable) boundary callbacks read current
+  // sort order without re-subscribing. Both are DB-ordered by `sort` ascending.
   const tablesRef = useRef(tables)
   tablesRef.current = tables
+  const propsRef = useRef(props)
+  propsRef.current = props
 
   // P3.2 — continue focus into a just-created table's node. The store update →
   // node build → React Flow mount → measure chain needs two frames to settle
@@ -374,9 +469,39 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     })
   }, [])
 
-  // The desired node set for the current tables + route + role. Foundation and
-  // Design stay whole-surface `lane` nodes; the Architecture column is the header
-  // node (sort -1) + one `archTable` node per table (sort = table.sort). Node
+  // P1 — continue focus into a just-created value-prop's node (same rAF×2 mount
+  // race as onTableCreated: store update → node build → RF mount → measure).
+  const onPropCreated = useCallback((propId: string) => {
+    requestAnimationFrame(() =>
+      requestAnimationFrame(() => {
+        const node = nodeElement(propId)
+        if (node) firstEditableCell(node)?.focus()
+      }),
+    )
+  }, [])
+
+  // P1 — cross-node Tab for Foundation, mirroring onTableExitBoundary: move focus
+  // to the next-by-`sort` (forward) or prev-by-`sort` (backward) prop node.
+  // Traversal follows the store's `sort` order, NOT DOM/array order.
+  const onPropExitBoundary = useCallback((propId: string, dir: 'forward' | 'backward') => {
+    const list = propsRef.current
+    const idx = list.findIndex((p) => p.id === propId)
+    if (idx === -1) return
+    const target = dir === 'forward' ? list[idx + 1] : list[idx - 1]
+    if (!target) return
+    requestAnimationFrame(() => {
+      const node = nodeElement(target.id)
+      if (!node) return
+      const cell = dir === 'forward' ? firstEditableCell(node) : lastEditablePosition(node)
+      cell?.focus()
+    })
+  }, [])
+
+  // The desired node set for the current tables + props + route + role. The
+  // Foundation column is a header node (sort -1) + one `foundationItem` node per
+  // value-prop (sort = prop.sort); the Architecture column is the header node
+  // (sort -1) + one `archTable` node per table (sort = table.sort); Design stays
+  // a whole-surface `lane` node (P2 decomposes it). Node
   // (DOM) order is intentionally DECOUPLED from visual `sort` order — the table
   // nodes are emitted in DESCENDING sort so DOM/array order ≠ visual/stack order.
   // This is legitimate (React Flow renders by array order, positions by `sort`)
@@ -387,17 +512,15 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     const list: CanvasNode[] = [
       {
         id: LANE_NODE_ID.foundation,
-        type: 'lane',
+        type: 'foundationHeader',
         position: { x: 0, y: 0 },
         dragHandle: '.wc-node__handle',
         data: {
           tier: 'foundation',
-          sort: 0,
-          estimate: FOUNDATION_ESTIMATE,
-          projectId,
-          contextPath: [],
-          view: 'canvas',
-          canvasId: undefined,
+          sort: -1,
+          estimate: FOUNDATION_HEADER_ESTIMATE,
+          readOnly,
+          onPropCreated,
         },
       },
       {
@@ -429,6 +552,24 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         },
       },
     ]
+    // Emitted in DESCENDING sort (like the arch tables) so DOM/array order ≠
+    // visual/stack order — hardening the cross-node-Tab-follows-`sort` invariant.
+    for (const prop of [...props].reverse()) {
+      list.push({
+        id: prop.id,
+        type: 'foundationItem',
+        position: { x: 0, y: 0 },
+        dragHandle: '.wc-node__handle',
+        data: {
+          tier: 'foundation',
+          sort: prop.sort,
+          estimate: FOUNDATION_ITEM_ESTIMATE,
+          prop,
+          readOnly,
+          onExitBoundary: onPropExitBoundary,
+        },
+      })
+    }
     for (const table of [...tables].reverse()) {
       list.push({
         id: table.id,
@@ -449,6 +590,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     return list
   }, [
     tables,
+    props,
     projectId,
     design.contextPath,
     design.view,
@@ -456,6 +598,8 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     readOnly,
     onTableCreated,
     onTableExitBoundary,
+    onPropCreated,
+    onPropExitBoundary,
   ])
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(desiredNodes)
@@ -553,11 +697,17 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // `archTable` nodes reorder; other node kinds drag freely and snap back on stop.
   const onNodeDrag = useCallback<OnNodeDrag<CanvasNode>>(
     (_event, node) => {
-      if (node.type !== 'archTable') return
+      const columnX =
+        node.type === 'archTable'
+          ? ARCH_COLUMN_X
+          : node.type === 'foundationItem'
+            ? FOUNDATION_COLUMN_X
+            : null
+      if (columnX === null) return
       setNodes((prev) =>
         prev.map((n) =>
-          n.id === node.id && n.position.x !== ARCH_COLUMN_X
-            ? { ...n, position: { x: ARCH_COLUMN_X, y: node.position.y } }
+          n.id === node.id && n.position.x !== columnX
+            ? { ...n, position: { x: columnX, y: node.position.y } }
             : n,
         ),
       )
@@ -574,12 +724,15 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // back.
   const onNodeDragStop = useCallback<OnNodeDrag<CanvasNode>>(
     (_event, node) => {
-      if (node.type === 'archTable') {
-        const archNodes = reactFlow.getNodes().filter((n) => n.type === 'archTable')
-        // Rank every table node by its center-y (the dragged node using its live
-        // dropped y, siblings their derived y); the dragged node's rank is the
-        // index it now occupies — exactly what reorderTier2Table densifies to.
-        const ranked = archNodes
+      // Rank the dragged node's SIBLINGS (same node type) by center-y — the
+      // dragged node using its live dropped y, siblings their derived y — and the
+      // dragged node's rank is the index it now occupies. Persist via the store's
+      // reorder (which rewrites ONLY `sort`/`rank`, never a `{x,y}`).
+      const reorderType =
+        node.type === 'archTable' || node.type === 'foundationItem' ? node.type : null
+      if (reorderType !== null) {
+        const siblings = reactFlow.getNodes().filter((n) => n.type === reorderType)
+        const ranked = siblings
           .map((n) => {
             const y = n.id === node.id ? node.position.y : n.position.y
             const height = n.measured?.height ?? n.data.estimate
@@ -587,7 +740,13 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           })
           .sort((a, b) => a.center - b.center)
         const targetIndex = ranked.findIndex((r) => r.id === node.id)
-        if (targetIndex !== -1) void useTier2Store.getState().reorderTable(node.id, targetIndex)
+        if (targetIndex !== -1) {
+          if (reorderType === 'archTable') {
+            void useTier2Store.getState().reorderTable(node.id, targetIndex)
+          } else {
+            void useTier1Store.getState().reorderProp(node.id, targetIndex)
+          }
+        }
       }
       setNodes((prev) => withDerivedPositions(prev))
     },
