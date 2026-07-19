@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronRight } from 'lucide-react'
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Tier2EntryRow, Tier2TableRow } from '../db/mutations'
 import { buildEntryTree, flattenEntryTree } from '../domain/entryTree'
 import { canWrite } from '../domain/workspaceRole'
@@ -7,10 +7,17 @@ import { useStatusStore } from '../store/status'
 import { useTier2Store, type EntryLink } from '../store/tier2'
 import { useWorkspaceRole } from '../store/workspace'
 import { EditableGrid, type GridColumn } from './EditableGrid'
-import { CHAIN_PHANTOM_ID, chainOrder } from './gridBoundaryFocus'
+import {
+  CHAIN_PHANTOM_ID,
+  chainOrder,
+  firstEditableCell,
+  lastEditablePosition,
+  tableInId,
+  tableOutId,
+} from './gridBoundaryFocus'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { EditableChainProvider, InlineEdit, PhantomInput } from './ui/inline-editor'
+import { EditableChainProvider, InlineEdit, PhantomInput, useEditableChain } from './ui/inline-editor'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './ui/popover'
 
 // Stable empty fallback — a fresh [] in the selector loops the subscription.
@@ -85,40 +92,135 @@ export function ArchitectureSurface({ projectId }: { projectId: string }) {
           </p>
         ) : null}
 
-        {/* Issue 084 Direction 3 P1 — one outer chain threads the stacked tables
-            plus the trailing add-table phantom. `order` is recomputed each render
-            from live tables (mirrors DimensionManager) so P2 can register each
-            table's cross-table boundaries without extra wiring; with no per-table
-            registrations yet this is a harmless context. */}
+        {/* Issue 084 Direction 3 P1/P2 — one outer chain threads the stacked
+            tables plus the trailing add-table phantom. `order` is recomputed each
+            render from live tables (mirrors DimensionManager). P2 registers each
+            table's cross-table boundaries (`ChainedTablePanel`) and wires the
+            grid's frozen `onExitBoundary` seam so Tab flows table→table→add-table
+            and the add-table phantom continues into a freshly-created table. */}
         <EditableChainProvider order={chainOrder(tables)}>
           {tables.map((table) => (
-            <TablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
+            <ChainedTablePanel key={table.id} projectId={projectId} table={table} readOnly={readOnly} />
           ))}
 
-          {/* Direction 3 fork 2 — the single create path is now the chain's
-              TERMINAL node: one typed add-table phantom as the LAST row of the
-              surface (the top standalone add-row is gone; still one add grammar,
-              finding 2). Enter creates + self-refocuses; Tab-with-content creates
-              too (cross-table continuation into the new table is P2). A viewer
-              never sees this write-only affordance (issue 035). */}
-          {readOnly ? null : (
-            <div className="t2-add-table">
-              <span className="t2-add-table__glyph" aria-hidden>
-                +
-              </span>
-              <PhantomInput
-                placeholder="Name a table"
-                ariaLabel="Add architecture table"
-                inputClassName="t2-add-table__input"
-                chainId={CHAIN_PHANTOM_ID}
-                onSubmit={(name) => void addTable(name)}
-                onTabSubmit={(name) => void addTable(name)}
-              />
-            </div>
-          )}
+          {/* Direction 3 fork 2 — the single create path is the chain's TERMINAL
+              node: one typed add-table phantom as the LAST row of the surface (the
+              top standalone add-row is gone; still one add grammar, finding 2).
+              Enter creates + self-refocuses; Tab-with-content creates AND continues
+              focus into the new table (P2). A viewer never sees this write-only
+              affordance (issue 035). */}
+          {readOnly ? null : <AddTablePhantom addTable={addTable} />}
         </EditableChainProvider>
       </main>
     </>
+  )
+}
+
+// 084-D3 P2 — the cross-table chain adapter. Rendered per table INSIDE the outer
+// EditableChainProvider so it can speak the chain; `TablePanel` itself stays
+// chain-agnostic (WorkspaceCanvas reuses it under NO provider, driving the same
+// `onExitBoundary` seam onto its own canvas traversal). This wrapper does two
+// things: (1) registers this table's two boundary edges into the chain —
+//   • `:in`  → its first editable cell (a forward advance from the PREVIOUS
+//     table's `:out`, or the add-table continuation, lands here);
+//   • `:out` → its add-entry phantom (a backward advance from the NEXT table's
+//     `:in` lands here);
+// and (2) wires the grid's FROZEN `onExitBoundary(dir)` to a cross-table advance.
+// The DOM edges resolve lazily through the shared `gridBoundaryFocus` helpers,
+// scoped to this table's `#t2-table-<id>` section (looked up by getElementById —
+// never a DOM-reach focus query, finding 7), so a re-rendered/reordered grid is
+// always current. Skipped entirely when read-only (no phantom, no editable
+// cells → nothing to thread; issue 035).
+function ChainedTablePanel({
+  projectId,
+  table,
+  readOnly,
+}: {
+  projectId: string
+  table: Tier2TableRow
+  readOnly: boolean
+}) {
+  const chain = useEditableChain()
+
+  useEffect(() => {
+    if (!chain || readOnly) return
+    const sectionEl = () => document.getElementById(`t2-table-${table.id}`)
+    const focusFirst = () => {
+      const s = sectionEl()
+      if (s) firstEditableCell(s)?.focus()
+    }
+    const focusLast = () => {
+      const s = sectionEl()
+      if (s) lastEditablePosition(s)?.focus()
+    }
+    const unregisterIn = chain.register(tableInId(table.id), {
+      focus: focusFirst,
+      startEditing: focusFirst,
+    })
+    const unregisterOut = chain.register(tableOutId(table.id), { focus: focusLast })
+    return () => {
+      unregisterIn()
+      unregisterOut()
+    }
+  }, [chain, table.id, readOnly])
+
+  // Frozen seam (089-D3): forward off this table's add-entry phantom advances
+  // right off its `:out` (→ next table's `:in`, or `t2phantom` for the last);
+  // backward off its first cell advances left off its `:in` (→ previous table's
+  // `:out`, or a no-op at the very first table). The chain's own advance is a
+  // no-op past either end, so focus is never stranded.
+  const onExitBoundary = useCallback(
+    (dir: 'forward' | 'backward') => {
+      if (!chain) return
+      if (dir === 'forward') chain.advance(tableOutId(table.id), 'right')
+      else chain.advance(tableInId(table.id), 'left')
+    },
+    [chain, table.id],
+  )
+
+  return (
+    <TablePanel
+      projectId={projectId}
+      table={table}
+      readOnly={readOnly}
+      onExitBoundary={onExitBoundary}
+    />
+  )
+}
+
+// 084-D3 P2 — the chain's TERMINAL create node, inside the provider so it can
+// continue focus into a freshly-created table. Enter still creates + self-
+// refocuses (via `onSubmit`); Tab-with-content creates AND lands focus in the new
+// (empty) table's first editable position — its own add-entry phantom — via
+// `focusWhenReady`'s pending mechanism: the new table's `ChainedTablePanel`
+// registers its `:in` on mount, and `register()` activates the pending target the
+// moment it appears (mirrors DimensionManager's dim→param-phantom continuation
+// across an async create — the create promise resolves after the store reload, so
+// the target row may not exist yet when Tab fires).
+function AddTablePhantom({
+  addTable,
+}: {
+  addTable: (name: string) => Promise<Tier2TableRow | null>
+}) {
+  const chain = useEditableChain()
+  return (
+    <div className="t2-add-table">
+      <span className="t2-add-table__glyph" aria-hidden>
+        +
+      </span>
+      <PhantomInput
+        placeholder="Name a table"
+        ariaLabel="Add architecture table"
+        inputClassName="t2-add-table__input"
+        chainId={CHAIN_PHANTOM_ID}
+        onSubmit={(name) => void addTable(name)}
+        onTabSubmit={(name) =>
+          void addTable(name).then((row) => {
+            if (row && chain) chain.focusWhenReady(tableInId(row.id))
+          })
+        }
+      />
+    </div>
   )
 }
 

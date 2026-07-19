@@ -433,6 +433,107 @@ describe('ArchitectureSurface source — D3 outer EditableChainProvider (issue 0
   })
 })
 
+// Issue 084 Direction 3, Phase 2 — cross-table Tab via the shared seam (the
+// CORE-RISK phase). The outer EditableChainProvider now threads real per-table
+// boundary registrations: each table contributes an `:in` (first editable cell)
+// and `:out` (its add-entry phantom); the grid's frozen `onExitBoundary(dir)`
+// seam advances across tables through the chain, and the add-table phantom is
+// the terminal node that continues focus into a freshly-created table.
+describe('ArchitectureSurface — D3 P2 cross-table Tab (issue 084 Direction 3)', () => {
+  async function twoTables() {
+    const a = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, a.id, null, 'Buyers')
+    const b = await addTier2Table(db, projectId, 'Value')
+    await addTier2Entry(db, b.id, null, 'Comfort')
+    return { a, b }
+  }
+
+  it('Tab from a table’s add-entry phantom lands focus in the next table’s first cell', async () => {
+    const user = userEvent.setup()
+    const { b } = await twoTables()
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+    await screen.findByText('Comfort')
+
+    // A's add-entry phantom is the first "Name an entry" input in document order.
+    const phantomA = screen.getAllByPlaceholderText('Name an entry')[0] as HTMLInputElement
+    phantomA.focus()
+    expect(phantomA).toHaveFocus()
+
+    await user.tab()
+
+    // Focus crossed into table B's first editable cell (its entry Name cell).
+    const bSection = document.getElementById(`t2-table-${b.id}`) as HTMLElement
+    const bFirstCell = within(bSection).getByText('Comfort').closest('.grid-cell') as HTMLElement
+    expect(bFirstCell).toHaveFocus()
+  })
+
+  it('Shift+Tab from a table’s first cell lands focus on the previous table’s add-entry phantom', async () => {
+    const user = userEvent.setup()
+    const { b } = await twoTables()
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+    await screen.findByText('Comfort')
+
+    const bSection = document.getElementById(`t2-table-${b.id}`) as HTMLElement
+    const bFirstCell = within(bSection).getByText('Comfort').closest('.grid-cell') as HTMLElement
+    bFirstCell.focus()
+    expect(bFirstCell).toHaveFocus()
+
+    await user.tab({ shift: true })
+
+    // Backward off B's `:in` lands on A's `:out` — A's add-entry phantom (the
+    // first "Name an entry" input in document order).
+    const phantomA = screen.getAllByPlaceholderText('Name an entry')[0] as HTMLInputElement
+    expect(phantomA).toHaveFocus()
+  })
+
+  it('Tab from the LAST table’s add-entry phantom lands focus on the terminal add-table phantom', async () => {
+    const user = userEvent.setup()
+    await twoTables()
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+    await screen.findByText('Comfort')
+
+    // B is the last table; its add-entry phantom is the last "Name an entry".
+    const phantoms = screen.getAllByPlaceholderText('Name an entry')
+    const phantomB = phantoms[phantoms.length - 1] as HTMLInputElement
+    phantomB.focus()
+    expect(phantomB).toHaveFocus()
+
+    await user.tab()
+
+    // Forward off the last table's `:out` lands on the terminal `t2phantom`.
+    expect(screen.getByPlaceholderText('Name a table')).toHaveFocus()
+  })
+
+  it('typing a table name in the add-table phantom + Tab creates the table AND continues focus into its first cell', async () => {
+    const user = userEvent.setup()
+    await twoTables()
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+    await screen.findByText('Comfort')
+
+    const addField = screen.getByPlaceholderText('Name a table')
+    addField.focus()
+    await user.type(addField, 'Process')
+    await user.tab()
+
+    // The table was created…
+    await waitFor(() => {
+      expect(useTier2Store.getState().tables.some((t) => t.name === 'Process')).toBe(true)
+    })
+    // …and focus continued into the new (empty) table's first editable position —
+    // its own add-entry phantom — via focusWhenReady's pending mechanism.
+    await waitFor(() => {
+      const created = useTier2Store.getState().tables.find((t) => t.name === 'Process')
+      const section = document.getElementById(`t2-table-${created?.id}`) as HTMLElement
+      const firstPos = section.querySelector('.grid-row--phantom input') as HTMLElement
+      expect(firstPos).toHaveFocus()
+    })
+  })
+})
+
 // Owner UX requirement (issue 084 Direction 3): a table→entry indent level plus
 // a parent-heavier font-weight step, both token-driven (jsdom doesn't cascade
 // base.css, so assert the CSS/token layer directly).
