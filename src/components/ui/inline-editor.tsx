@@ -305,6 +305,16 @@ export interface PhantomInputProps {
    *  the caller is responsible for creating the row and calling
    *  `chain.focusWhenReady(...)` on its successor once known. */
   onTabSubmit?: (value: string) => void
+  // Issue 084 D3 P3 — an EPHEMERAL phantom that appears in response to a user
+  // action (Architecture's inline typed add-child row) and must accept typing at
+  // once, then dismiss itself when abandoned. Both additive and default-off, so
+  // every existing (persistent) phantom is byte-identical:
+  //   • `autoFocus` — focus the input on mount.
+  //   • `onCancel`  — called when the phantom is dismissed WITHOUT submitting
+  //     (Escape, or blurring away). Omitted → Escape only clears the draft and
+  //     blur does nothing, exactly as before.
+  autoFocus?: boolean
+  onCancel?: () => void
 }
 
 export function PhantomInput({
@@ -315,6 +325,8 @@ export function PhantomInput({
   stopPropagation = false,
   chainId,
   onTabSubmit,
+  autoFocus = false,
+  onCancel,
 }: PhantomInputProps) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -334,8 +346,10 @@ export function PhantomInput({
       className={cn('inplace-input', inputClassName)}
       placeholder={placeholder}
       aria-label={ariaLabel}
+      autoFocus={autoFocus}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
+      onBlur={onCancel ? () => onCancel() : undefined}
       onKeyDown={(e) => {
         if (stopPropagation) e.stopPropagation()
         if (e.key === 'Enter' && draft.trim() && !submittingRef.current) {
@@ -348,6 +362,7 @@ export function PhantomInput({
           })
         } else if (e.key === 'Escape') {
           setDraft('')
+          onCancel?.()
         } else if (e.key === 'Tab' && chain && chainId) {
           if (e.shiftKey) {
             // Go back to the previous chain field — mirrors EditableGrid's

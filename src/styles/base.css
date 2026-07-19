@@ -2646,11 +2646,6 @@ body {
   line-height: var(--leading-body);
 }
 
-/* Typed add-child phantom (issue 084 finding 4). */
-.t2-add-child {
-  min-width: 220px;
-}
-
 /* Panel-level anchor for the rehomed delete-resolution popover (issue 084) —
    zero-size, no layout footprint; present only while a resolution is open. */
 .t2-resolution-anchor {

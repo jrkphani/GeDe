@@ -311,6 +311,90 @@ describe('ArchitectureSurface — typed add-child in the trailing gutter (issue 
   })
 })
 
+// Issue 084 Direction 3, Phase 3 — the add-child popover becomes an INLINE
+// typed child phantom ROW directly under the parent (at depth+1), matching the
+// trailing add-table/add-entry phantom grammar (finding 4: lower interaction
+// cost, one type-first grammar). Type + Enter creates the child (named on
+// create, no 'New entry' literal); Esc cancels the phantom.
+describe('ArchitectureSurface — D3 P3 inline typed add-child (issue 084 Direction 3)', () => {
+  it('reveals an inline phantom ROW under the parent (not a popover) at depth = parent.depth + 1', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    const { container } = render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(await screen.findByLabelText('Add child to Buyers'))
+    const childField = await screen.findByPlaceholderText('Name a child of Buyers')
+
+    // Inline grid ROW, not a floating popover: no dialog, and the input lives
+    // inside the table's own EditableGrid (not a portaled popover surface).
+    expect(screen.queryByRole('dialog')).toBeNull()
+    const phantomRow = childField.closest('tr') as HTMLElement
+    expect(phantomRow).not.toBeNull()
+    expect(childField.closest('table.editable-grid')).toBe(
+      container.querySelector('table.editable-grid'),
+    )
+    // Indented one level below the parent (Buyers is depth 0 → child phantom 1).
+    const treeCell = phantomRow.querySelector('[data-depth]') as HTMLElement
+    expect(treeCell.style.getPropertyValue('--depth')).toBe('1')
+  })
+
+  it('type + Enter creates a child with THAT name under the parent (no "New entry" literal)', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(await screen.findByLabelText('Add child to Buyers'))
+    const childField = await screen.findByPlaceholderText('Name a child of Buyers')
+    await user.type(childField, 'Superstars')
+    await user.keyboard('{Enter}')
+
+    // Created under Buyers with the typed name — addEntry(tableId, parentId, name).
+    await waitFor(() => {
+      const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+      const child = entries.find((e) => e.name === 'Superstars')
+      expect(child?.parentId).toBe(buyers.id)
+    })
+    // Rendered indented under the parent, and no literal placeholder ever created.
+    const superRow = (await screen.findByText('Superstars')).closest('tr') as HTMLElement
+    const superTree = superRow.querySelector('[data-depth]') as HTMLElement
+    expect(superTree.getAttribute('data-depth')).toBe('1')
+    expect(screen.queryByText('New entry')).not.toBeInTheDocument()
+  })
+
+  it('Esc cancels the inline phantom without creating', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(await screen.findByLabelText('Add child to Buyers'))
+    const childField = await screen.findByPlaceholderText('Name a child of Buyers')
+    await user.type(childField, 'Discarded')
+    await user.keyboard('{Escape}')
+
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText('Name a child of Buyers')).not.toBeInTheDocument(),
+    )
+    const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+    expect(entries.some((e) => e.name === 'Discarded')).toBe(false)
+  })
+})
+
+describe('ArchitectureSurface source — inline add-child, no popover literal (issue 084 D3 P3)', () => {
+  const source = readFileSync(resolve(process.cwd(), 'src/components/ArchitectureSurface.tsx'), 'utf8')
+
+  it('drives add-child through the grid inlineRow seam, never a literal name', () => {
+    expect(source).toMatch(/inlineRow/)
+    // No hardcoded child name anywhere (finding 4 — type-first, never a literal).
+    expect(source).not.toMatch(/New entry/)
+  })
+})
+
 describe('ArchitectureSurface — Remove moved to the selection bar (issue 084, tests c/d/e)', () => {
   it('has NO per-row "Remove" button in the row (test c)', async () => {
     const table = await addTier2Table(db, projectId, 'Stakeholders')

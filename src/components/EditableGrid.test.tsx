@@ -789,3 +789,52 @@ describe('readOnly (issue 035 — viewer role affordance)', () => {
     expect(screen.getByRole('textbox')).toBeInTheDocument()
   })
 })
+
+// Issue 084 Direction 3 P3 — the additive `inlineRow` seam: a caller-supplied
+// transient row injected immediately after a named data row (Architecture's
+// inline typed add-child phantom under its parent). Tier-agnostic (the grid owns
+// the <tr>/<td>, the caller owns each column's content) and default-off, so every
+// existing caller stays byte-identical.
+describe('inlineRow (issue 084 D3 P3 — per-parent inline row seam)', () => {
+  it('renders a caller-supplied transient row immediately after the named data row', () => {
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(t) => t.id}
+        inlineRow={{
+          afterRowId: '1',
+          className: 'inline-after',
+          cell: (columnId) => (columnId === 'title' ? <input placeholder="inline child" /> : null),
+        }}
+      />,
+    )
+    const injected = screen.getByPlaceholderText('inline child')
+    const injectedRow = injected.closest('tr') as HTMLTableRowElement
+    expect(injectedRow).toHaveClass('inline-after')
+    // Positioned right after row '1' (Alpha), before row '2' (Beta).
+    const bodyRows = [...(injectedRow.closest('tbody') as HTMLElement).querySelectorAll('tr')]
+    const alphaRow = screen.getByText('Alpha').closest('tr') as HTMLTableRowElement
+    const betaRow = screen.getByText('Beta').closest('tr') as HTMLTableRowElement
+    expect(bodyRows.indexOf(alphaRow)).toBeLessThan(bodyRows.indexOf(injectedRow))
+    expect(bodyRows.indexOf(injectedRow)).toBeLessThan(bodyRows.indexOf(betaRow))
+  })
+
+  it('renders no transient row when inlineRow is absent (byte-identical default-off)', () => {
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(t) => t.id} />)
+    expect(screen.queryByPlaceholderText('inline child')).toBeNull()
+  })
+
+  it('never renders the inline row when readOnly (gated like the phantom)', () => {
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(t) => t.id}
+        readOnly
+        inlineRow={{ afterRowId: '1', cell: () => <input placeholder="inline child" /> }}
+      />,
+    )
+    expect(screen.queryByPlaceholderText('inline child')).toBeNull()
+  })
+})

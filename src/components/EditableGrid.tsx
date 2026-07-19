@@ -5,7 +5,7 @@ import {
   type CellContext,
   type ColumnDef,
 } from '@tanstack/react-table'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { plainTextToRichJson, richTextToPlainText, safeRichTextJson } from '../domain/richText'
 import { Combobox, type ComboboxOption } from './ui/combobox'
 import { RichTextEditor } from './ui/rich-text-editor'
@@ -92,6 +92,18 @@ export interface PhantomConfig {
   onCreate: (value: string) => void
 }
 
+// Issue 084 Direction 3 P3 — a transient row injected immediately AFTER the data
+// row with `afterRowId` (Architecture's inline typed add-child phantom under its
+// parent entry). Tier-agnostic: the grid owns the <tr>/<td>/column structure, the
+// caller owns each column's content via `cell(columnId)` (e.g. a depth-indented
+// tree spacer + a create input). Additive and default-off — absent → the grid is
+// byte-identical to before, and it is gated by `readOnly` like the phantom row.
+export interface InlineRowConfig {
+  afterRowId: string
+  cell: (columnId: string) => React.ReactNode
+  className?: string
+}
+
 export interface EditableGridProps<TRow> {
   rows: TRow[]
   columns: GridColumn<TRow>[]
@@ -141,6 +153,9 @@ export interface EditableGridProps<TRow> {
   // Optional and additive: when omitted, behavior is byte-identical to today —
   // native Tab proceeds, no throw, no focus change beyond current behavior.
   onExitBoundary?: (dir: 'forward' | 'backward') => void
+  // Issue 084 D3 P3 — an optional transient row rendered after a named data row
+  // (see InlineRowConfig). Additive and default-off; gated by `readOnly`.
+  inlineRow?: InlineRowConfig
 }
 
 export const PHANTOM_ROW_ID = '__phantom__'
@@ -937,10 +952,14 @@ export function EditableGrid<TRow>({
   readOnly = false,
   onEditingChange,
   onExitBoundary,
+  inlineRow,
 }: EditableGridProps<TRow>) {
   // Issue 035 — a read-only grid never shows the phantom row, regardless of
   // what the caller passed; callers don't need their own conditional.
   const activePhantom = readOnly ? undefined : phantom
+  // Issue 084 D3 P3 — same gating for the inline (add-child) row: a viewer never
+  // sees it, and an absent config leaves the grid byte-identical.
+  const activeInlineRow = readOnly ? undefined : inlineRow
   const [editing, setEditing] = useState<EditingCell | null>(null)
 
   // Issue 038 — the presence seam: report every open/close of the shared
@@ -1070,7 +1089,7 @@ export function EditableGrid<TRow>({
             const classes = [rowClassName?.(row.original), rowIndex % 2 === 1 ? 'grid-row--zebra' : undefined]
               .filter((c): c is string => Boolean(c))
               .join(' ')
-            return (
+            const dataRow = (
               <tr
                 key={row.id}
                 className={classes || undefined}
@@ -1085,6 +1104,26 @@ export function EditableGrid<TRow>({
                 ))}
               </tr>
             )
+            // Issue 084 D3 P3 — a caller-supplied transient row (the inline
+            // add-child phantom) trails its parent data row. Absent → this whole
+            // branch is skipped and the grid renders exactly `dataRow` as before.
+            const inlineHere =
+              activeInlineRow?.afterRowId === getRowId(row.original) ? activeInlineRow : null
+            if (inlineHere) {
+              return (
+                <Fragment key={row.id}>
+                  {dataRow}
+                  <tr className={inlineHere.className}>
+                    {columns.map((col) => (
+                      <td key={col.id} className={col.cellClassName}>
+                        {inlineHere.cell(col.id)}
+                      </td>
+                    ))}
+                  </tr>
+                </Fragment>
+              )
+            }
+            return dataRow
           })}
           {activePhantom && (
             <tr className="grid-row--phantom">

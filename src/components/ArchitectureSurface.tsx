@@ -334,6 +334,45 @@ export function TablePanel({
     setSelected(new Set())
   }
 
+  // Issue 084 D3 P3 — the inline add-child phantom's per-column content. The
+  // grid owns the <tr>/<td>; this fills the tree cell with a depth-indented
+  // spacer (parent.depth+1, token-driven via the same `--depth` model as data
+  // rows — no raw px) and the Name cell with a typed create input. Every other
+  // column is blank. Only ever called while `addingChildTo` is set.
+  function renderAddChildCell(columnId: string): React.ReactNode {
+    if (!addingChildTo) return null
+    const parent = entries.find((e) => e.id === addingChildTo)
+    if (!parent) return null
+    const childDepth = (metaById.get(addingChildTo)?.depth ?? 0) + 1
+    if (columnId === 'tree') {
+      return (
+        <div className="t2-tree" data-depth={childDepth} style={{ '--depth': childDepth } as CSSProperties}>
+          <span className="t2-chevron-spacer" />
+        </div>
+      )
+    }
+    if (columnId === 'name') {
+      // Reuse the shared PhantomInput primitive (the layer-boundary rule's
+      // sanctioned create control) in its EPHEMERAL mode: autofocus on arm,
+      // Enter creates the named child and CONTINUES (clears + self-refocuses for
+      // the next sibling), Esc/blur dismiss. Named-on-create → no placeholder
+      // row, no rename step (finding 4). `stopPropagation` keeps the grid's own
+      // key grammar from also seeing these keystrokes.
+      return (
+        <PhantomInput
+          placeholder={`Name a child of ${parent.name}`}
+          ariaLabel={`Name a child of ${parent.name}`}
+          inputClassName="grid-cell__input t2-add-child__input"
+          autoFocus
+          stopPropagation
+          onSubmit={(name) => void addEntry(table.id, addingChildTo, name)}
+          onCancel={() => setAddingChildTo(null)}
+        />
+      )
+    }
+    return null
+  }
+
   const columns: GridColumn<Tier2EntryRow>[] = [
     {
       id: 'tree',
@@ -451,37 +490,26 @@ export function TablePanel({
         kind: 'static',
         render: (entry) =>
           readOnly ? null : (
-            // Typed add-child (issue 084 finding 4): un-collapses the parent then
-            // opens a phantom — type → Enter — instead of inserting a literal
-            // 'New entry' row the user then has to find and rename. Same
-            // type-first grammar as every other add on this surface.
-            <Popover
-              open={addingChildTo === entry.id}
-              onOpenChange={(open) => setAddingChildTo(open ? entry.id : null)}
+            // Typed add-child (issue 084 finding 4 / D3 P3): un-collapses the
+            // parent then reveals an INLINE typed phantom child ROW directly under
+            // it (at depth+1, via the grid's `inlineRow` seam below) — type →
+            // Enter — instead of a floating popover or a literal placeholder row
+            // the user must hunt down and rename. Same type-first grammar as every
+            // other add on this surface, at a lower interaction cost.
+            <Button
+              className="t2-add-child-trigger"
+              aria-label={`Add child to ${entry.name}`}
+              onClick={() => {
+                setCollapsed((prev) => {
+                  const next = new Set(prev)
+                  next.delete(entry.id)
+                  return next
+                })
+                setAddingChildTo(entry.id)
+              }}
             >
-              <PopoverTrigger asChild>
-                <Button
-                  className="t2-add-child-trigger"
-                  aria-label={`Add child to ${entry.name}`}
-                  onClick={() =>
-                    setCollapsed((prev) => {
-                      const next = new Set(prev)
-                      next.delete(entry.id)
-                      return next
-                    })
-                  }
-                >
-                  <span aria-hidden>＋ </span>Add child
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent align="end" sideOffset={4} className="t2-add-child">
-                <PhantomInput
-                  placeholder={`Name a child of ${entry.name}`}
-                  ariaLabel={`Name a child of ${entry.name}`}
-                  onSubmit={(name) => void addEntry(table.id, entry.id, name)}
-                />
-              </PopoverContent>
-            </Popover>
+              <span aria-hidden>＋ </span>Add child
+            </Button>
           ),
       },
     },
@@ -535,6 +563,20 @@ export function TablePanel({
         // is ABSENT — not `undefined` — for the normal surface, honoring
         // exactOptionalPropertyTypes and keeping EditableGrid byte-identical.
         {...(onExitBoundary ? { onExitBoundary } : {})}
+        // Issue 084 D3 P3 — the inline typed add-child phantom: a transient row
+        // rendered directly under the armed parent (at parent.depth+1), reusing
+        // the grid's tier-agnostic `inlineRow` seam. Absent (nothing armed) →
+        // byte-identical to the normal grid; spread conditionally so the prop is
+        // ABSENT, not `undefined` (exactOptionalPropertyTypes).
+        {...(addingChildTo
+          ? {
+              inlineRow: {
+                afterRowId: addingChildTo,
+                className: 'grid-row--phantom t2-add-child-row',
+                cell: (columnId: string) => renderAddChildCell(columnId),
+              },
+            }
+          : {})}
       />
       {selected.size > 0 && (
         <div className="t2-selection-bar">
