@@ -1,6 +1,6 @@
-# HANDOFF — 2026-07-19 (session 4)
+# HANDOFF — 2026-07-19 (session 5)
 
-**089 D3-canvas graduation: P0·P1·P2·093 SHIPPED — the two hardest structural phases are done. NEXT = P3 (recursion satellites).**
+**089 D3-canvas graduation: P0·P1·P2·093·P3 SHIPPED — first React Flow edges + recursion satellites are in. NEXT = P4 (coverage twin).**
 
 Open issues: **089** (graduation build, P3→P7 remain) + nothing else blocking. Launch prompt for the next agent: `docs/NEXT-ORCHESTRATOR.md`. Authoritative phased spec: `docs/issues/089-unified-canvas-workspace.md → ## D3 GRADUATION — APPROVED BUILD PLAN` (P0/P1/P2/093 bullets are marked SHIPPED with lessons).
 
@@ -18,10 +18,10 @@ Shipped this session (all on `main`, verify-green):
 
 The flag-off surfaces (`FoundationSurface`, `DesignSurface`) are **UNTOUCHED** — the canvas adapters are a parallel, mutually-exclusive render path, so the flag-off route + its whole test suite are zero-risk.
 
-## NEXT — P3 → P7 (each ≤5 files, red-first; funnel through `WorkspaceCanvas.tsx` so they are SEQUENTIAL)
+## NEXT — P4 → P7 (each ≤5 files, red-first; funnel through `WorkspaceCanvas.tsx` so they are SEQUENTIAL)
 
-- **P3 — recursion (011) as edge-connected child-canvas satellites.** Drill-in spawns a child `{register+ring}` cluster beside the parent + a parent→child edge; pan-to-child; collapse unmounts. NEW `src/domain/clusterLayout.ts` (**dagre/elk earns its place here**). **This introduces the FIRST React Flow edges — there is ZERO edge infra today** (`WorkspaceCanvas` sets `nodesConnectable={false}`, no `useEdgesState`).
-- **P4 — coverage (012) as an edge-connected analytical twin.** `v` opens/collapses a twin node (was a route swap); gap-click pans back + composes pre-filled.
+- **P3 — ✅ SHIPPED (`da87e86`).** Recursion (011) as edge-connected satellites: the app's FIRST React Flow edges + NEW `clusterLayout.ts` (pure; dagre deferred) + NEW `canvasSatellites.ts` store. Drill "Open ▸" opens a SUMMARY-STUB satellite (owner-approved scope — the singleton `contexts` store blocks two live cores) + parent→child edge; pan-to-child; collapse unmounts; Enter ▸ deep-links. **Deferred follow-up tracked in the 089 issue: promote the stub → a live child core (per-canvas store factory).** Review caught + fixed a HIGH (satellites must clear the register's MEASURED width — 093 uncapped it).
+- **P4 — coverage (012) as an edge-connected analytical twin. ← START HERE.** `v` opens/collapses a twin node (was a route swap); gap-click pans back + composes pre-filled. **Reuse P3's edge + satellite infra** (`clusterLayout.ts` gains a twin placement; `canvasSatellites` pattern or a sibling slice for the twin's open/collapse). Banked map: `CoverageMatrix.tsx` is already store-free + prop-driven; the two `navigate()` sites to convert are the `v` handler in `DesignRegisterBody` + `handleComposeTuple` in `DesignRingBody`.
 - **P5 — LOD + lazy-mount satellites + perf at volume.** Lane-summary LOD, `content-visibility`, reuse 084's `.gede.json` 20×50 volume seed. **093's deferred bits land here:** the register pixel width-cap + the >8-column collapse trigger + focus-expand.
 - **P6 — deploy-gate transition (careful).** FIRST de-flake the 096 `test.fixme` specs + prove green across N runs while STILL `@dev-flag`; THEN drop the tags + `--grep-invert @dev-flag` (`package.json:14`) + retire `dev-canvas-e2e.yml`. Invert the RF zero-size bundle guard into a budget ceiling (RF now ships ~88 KB).
 - **P7 — THE DEFAULT-FLIP (last, the reversing step) + SITEMAP/085 lockstep in the SAME PR.** `d3CanvasEnabled()` becomes a capability check (default ON desktop/tablet), canvas is primary, `WorkspaceSurface` is the < 1024px fallback. ~50+ non-`@dev-flag` specs assume the `WorkspaceSurface` DOM — run the full suite against the canvas in a branch first (D2 P5 Rule-12 sweep is the template). **Adversarially review this + the SITEMAP §1/§2/§3/§4 + 085 supersession edits.**
@@ -34,6 +34,7 @@ The flag-off surfaces (`FoundationSurface`, `DesignSurface`) are **UNTOUCHED** �
 - **Stable-id nodes never unmount** → re-home every per-navigation reset the original did on unmount to an effect keyed on `canvasSelector`/`contextId` (the P2 `hoveredMark` lesson).
 - **Zoom inside a node body:** RF `useStore((s) => s.transform[2] < THRESHOLD)` — a BOOLEAN selector re-renders only on threshold crossing (perf-safe), no `onMove` wiring.
 - **Test focus-race:** after a create, an `onXCreated` rAF×2 focus can steal focus from the next interaction — `await waitForStableViewport(page)` before the next e2e step.
+- **Beside-the-core geometry keys off the register's MEASURED width (P3).** 093 made the register `width:max-content` (uncapped), so anything placed to its right (satellites; the P4 coverage twin) must clear its *measured* width, NOT the nominal 960px — feed `node.measured.width` into the placement + track width in the re-derive signature. Width feeds satellite/twin clearance only, never the lane x-stride (that stays tier-indexed). Derive edges from the RECONCILED `nodes`, not the store, so an edge never targets a node RF doesn't have yet.
 
 ## Banked investigation maps (P3/P4 — saves re-investigation)
 
