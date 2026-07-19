@@ -240,7 +240,7 @@ test('the Architecture promote popover anchors at its trigger at viewport scale 
   await page.keyboard.press('Enter')
   await expect(table.getByRole('cell', { name: 'Buyers', exact: true })).toBeVisible()
 
-  await table.getByRole('button', { name: 'Select Buyers' }).click()
+  await table.getByRole('option', { name: 'Select Buyers' }).click()
   const trigger = table.getByRole('button', { name: 'Use as dimension…' })
   await trigger.click()
 
