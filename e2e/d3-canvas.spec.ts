@@ -81,7 +81,7 @@ test('EditableGrid keyboard grammar survives inside a React Flow node at zoom �
   // P2 co-mounts three lane nodes, so `.wc-node` is no longer unique — scope to
   // the Design lane's modifier class.
   await expect(page.locator('.react-flow')).toBeVisible()
-  await expect(page.locator('.wc-node--design')).toBeVisible()
+  await expect(page.locator('.wc-node--design-register')).toBeVisible()
   const register = page.locator('.context-register-shell')
   await expect(register).toBeVisible({ timeout: 15_000 })
 
@@ -164,7 +164,7 @@ async function openThreeLaneCanvas(page: Page): Promise<string> {
   await page.goto(`/p/${projectId}/design?d3rf=1`)
 
   await expect(page.locator('.react-flow')).toBeVisible()
-  await expect(page.locator('.wc-node')).toHaveCount(3)
+  await expect(page.locator('.wc-node')).toHaveCount(4)
   return projectId as string
 }
 
@@ -176,12 +176,12 @@ test('all three tier lanes mount as React Flow nodes, in tier column order', { t
   // headings, and the Design surface's own main region.
   await expect(page.getByRole('heading', { name: /1st Tier/ })).toBeVisible()
   await expect(page.getByRole('heading', { name: /2nd Tier/ })).toBeVisible()
-  await expect(page.locator('.wc-node--design .design-main')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.wc-node--design-register .context-register-shell')).toBeVisible({ timeout: 15_000 })
 
   // Derived layout (LANE_ORDER): foundation left of architecture left of design.
   const f = await page.locator('.wc-node--foundation').boundingBox()
   const a = await page.locator('.wc-node--architecture').boundingBox()
-  const d = await page.locator('.wc-node--design').boundingBox()
+  const d = await page.locator('.wc-node--design-register').boundingBox()
   if (!f || !a || !d) throw new Error('all three lane nodes must have a bounding box')
   expect(f.x).toBeLessThan(a.x)
   expect(a.x).toBeLessThan(d.x)
@@ -279,8 +279,8 @@ test('activeLane gates the Design `c` verb per focused lane node', { tag: '@dev-
   await page.setViewportSize({ width: 1600, height: 1100 })
   await openThreeLaneCanvas(page)
 
-  const design = page.locator('.wc-node--design')
-  await expect(design.locator('.design-main')).toBeVisible({ timeout: 15_000 })
+  const design = page.locator('.wc-node--design-register')
+  await expect(design.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
 
   // Give Design two dimensions so a compose draft renders as a canvas draft node.
   const dimPhantom = design.getByPlaceholder('Type to add a dimension')
@@ -320,7 +320,7 @@ test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf
   await page.setViewportSize({ width: 1400, height: 1000 })
   await openThreeLaneCanvas(page)
   // Wait until every lane surface has mounted and the initial fit-view settled.
-  await expect(page.locator('.wc-node--design .design-main')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.wc-node--design-register .context-register-shell')).toBeVisible({ timeout: 15_000 })
 
   const before = await viewportTransform(page)
 
@@ -376,11 +376,11 @@ test.fixme('focusing a cell in an off-screen lane pans it into view', { tag: '@d
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1100, height: 850 })
   await openThreeLaneCanvas(page)
-  await expect(page.locator('.wc-node--design .design-main')).toBeVisible({ timeout: 15_000 })
+  await expect(page.locator('.wc-node--design-register .context-register-shell')).toBeVisible({ timeout: 15_000 })
 
   await page.keyboard.press('Meta+Digit1')
 
-  const designDim = page.locator('.wc-node--design').getByPlaceholder('Type to add a dimension')
+  const designDim = page.locator('.wc-node--design-register').getByPlaceholder('Type to add a dimension')
   await expect
     .poll(async () => {
       const el = await designDim.boundingBox()
@@ -784,5 +784,60 @@ test('the ?d3rf canvas survives an in-app navigate that drops the flag (P0 — c
   await expect(page).toHaveURL(/\/p\/[^/]+\/design$/)
   expect(new URL(page.url()).searchParams.has('d3rf')).toBe(false)
   await expect(page.locator('.react-flow')).toBeVisible()
-  await expect(page.locator('.wc-node--design')).toBeVisible()
+  await expect(page.locator('.wc-node--design-register')).toBeVisible()
+})
+
+// ── 089-D3 graduation P2 — DECOMPOSE the Design lane into a {register + ring} core
+// The Design lane is now TWO React Flow nodes — a register body (rail +
+// ContextRegister + header, the authoring surface) stacked OVER a ring body
+// (Canvas, the derived glance). They are separate React trees, so the compose
+// draft they share lives in the `canvasCompose` store: `c` in the register ENTERS
+// compose, and the draft dot renders in the SEPARATE ring node. Selection is
+// shared via the contexts store. 085 holds: no on-ring authoring.
+test('the Design lane is a register node stacked over a ring node, with cross-node compose at zoom ≠ 1', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+
+  const register = page.locator('.wc-node--design-register')
+  const ring = page.locator('.wc-node--design-ring')
+  await expect(register).toBeVisible()
+  await expect(ring).toBeVisible()
+
+  // The register hosts the ContextRegister grid; the ring hosts the Canvas svg.
+  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+  await expect(ring.locator('.canvas-svg')).toBeVisible({ timeout: 15_000 })
+
+  // Register stacked OVER ring (owner "register over ring" layout).
+  const rBox = await register.boundingBox()
+  const gBox = await ring.boundingBox()
+  if (!rBox || !gBox) throw new Error('both design nodes must have a bounding box')
+  expect(rBox.y).toBeLessThan(gBox.y)
+
+  // Give Design two dimensions via the rail (in the register node) so a compose
+  // draft can render on the canvas.
+  const dimPhantom = register.getByPlaceholder('Type to add a dimension')
+  await dimPhantom.click()
+  await page.keyboard.type('Value')
+  await page.keyboard.press('Enter')
+  await dimPhantom.click()
+  await page.keyboard.type('Stake')
+  await page.keyboard.press('Enter')
+  await expect(register.locator('.dim-row')).toHaveCount(2)
+
+  // The app fit-views on load, so the cross-node interaction below runs at a
+  // non-unity viewport scale.
+  await expect.poll(() => viewportScale(page)).not.toBe(1)
+
+  // `c` in the register (Design lane active) ENTERS compose → the draft dot
+  // renders in the SEPARATE ring node — proving the two nodes share the compose
+  // draft via the canvasCompose store (a plain useState couldn't cross the trees).
+  await register.locator('.coverage-stat').click()
+  await page.keyboard.press('c')
+  await expect(ring.locator('.canvas-node--draft')).toHaveCount(1)
+
+  // The draft is selected (enterCompose selects it); selection is shared via the
+  // contexts store, so the register reflects it as a selected row.
+  await expect(register.locator('.grid-row--selected')).toHaveCount(1)
 })

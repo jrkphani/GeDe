@@ -1736,6 +1736,46 @@ body {
   margin-bottom: var(--space-4);
 }
 
+/* ── 089-D3 graduation P2 — the DECOMPOSED Design core ────────────────────────
+   On the `?d3rf` canvas the Design lane is TWO separate React Flow nodes — a
+   register body stacked over a ring body — instead of one `.design-surface-row`
+   with two flex children. The `.design-surface-row > .editing-zone` and
+   `> .canvas-shell` rules above no longer match, so re-home the two declarations
+   they carried. The inner `.editing-zone > .dim-rail` / `> .context-register-shell`
+   rules still apply (the editing-zone wrapper is preserved), as does the generic
+   `[data-suppress-canvas-empty]` attribute selector. */
+.design-core-register .editing-zone {
+  /* The 085 single-chrome surface (was `.design-surface-row > .editing-zone`),
+     minus the `order` hack the two-flex-children layout needed. */
+  display: flex;
+  gap: var(--space-5);
+  align-items: stretch;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  padding: var(--space-3);
+}
+
+/* The ring body centers its square canvas within the design column. The shell is
+   sized to the RING (not the node) so Canvas's invisible dot hit-targets stay
+   proportional — a full-node-wide shell would under-size them (see the
+   `.canvas-shell` width rationale on the old `.design-surface-row > .canvas-shell`). */
+.design-core-ring {
+  display: flex;
+  justify-content: center;
+}
+.design-core-ring > .canvas-shell {
+  width: min(480px, 60vh, 100%);
+}
+
+/* Narrow the editing zone's rail | register pair to a column when the register
+   node itself is narrow (mirrors the old <640px container rule). */
+@container (max-width: 640px) {
+  .design-core-register .editing-zone {
+    flex-direction: column;
+  }
+}
+
 /* ── Recursion / drill-down (issue 011) ──────────────────────────────────── */
 
 /* The app's ONE choreographed transition (STYLE_GUIDE §8 drill-down exception,

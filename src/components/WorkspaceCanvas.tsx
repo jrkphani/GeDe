@@ -26,7 +26,7 @@ import { useTier2Store } from '../store/tier2'
 import { useWorkspaceRole } from '../store/workspace'
 import type { Tier1PropRow, Tier2TableRow } from '../db/mutations'
 import type { AppRoute, DesignView } from '../shell/routes'
-import { DesignSurface } from './DesignSurface'
+import { DesignRegisterBody, DesignRingBody } from './DesignCoreAdapter'
 import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
 import { FoundationHeaderPanel, FoundationPropPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
@@ -51,9 +51,10 @@ import {
 // the Foundation column (graduation P1) is decomposed the same way — a header
 // node (heading + Purpose/Existing-Scenario + add-prop phantom) + one node per
 // `tier1_props` value-prop (its name/description grid) — the one difference being
-// Foundation reorders by RANK (`reorderProp`), not `sort`. Design stays a whole-
-// surface node until P2. Every node's position is DERIVED by P0's
-// `computeLaneLayout` (STYLE_GUIDE §1 principle 4 / SPEC
+// Foundation reorders by RANK (`reorderProp`), not `sort`. The Design lane (P2) is
+// a register node (rail + ContextRegister + header) stacked over a ring node
+// (Canvas), sharing the compose draft via the `canvasCompose` store. Every node's
+// position is DERIVED by P0's `computeLaneLayout` (STYLE_GUIDE §1 principle 4 / SPEC
 // invariant 5 — a pure projection of `(tier, sort)`, never persisted): x is
 // tier-indexed (LANE_ORDER), and within the Architecture column the header (sort
 // -1) then the tables (sort 0..n-1) stack downward using each node's MEASURED
@@ -83,7 +84,13 @@ type WorkspaceRoute = Extract<AppRoute, { kind: 'project' | 'tier' | 'design' }>
 // is the tallest tier; a table is a short panel; the header is tiny).
 const FOUNDATION_HEADER_ESTIMATE = 620
 const FOUNDATION_ITEM_ESTIMATE = 120
-const DESIGN_ESTIMATE = 1200
+// The Design lane is decomposed (P2) into a register node (rail + ContextRegister
+// + header) stacked over a ring node (Canvas). Two estimates for the first frame.
+const DESIGN_REGISTER_ESTIMATE = 720
+const DESIGN_RING_ESTIMATE = 560
+// Stable node id for the ring (the register keeps LANE_NODE_ID.design so ⌘3 still
+// frames the Design column top).
+const DESIGN_RING_NODE_ID = 'workspace-canvas-design-ring'
 const ARCH_HEADER_ESTIMATE = 160
 const ARCH_TABLE_ESTIMATE = 340
 
@@ -115,9 +122,9 @@ const FOCUS_PAN_MARGIN = 88
 // definitions is waived for that reason. ────────────────────────────────────
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
-type LaneNodeData = {
-  // P1 decomposed Foundation into per-item nodes, so the whole-surface `lane`
-  // node now only ever hosts Design (P2 decomposes it too).
+type DesignBodyNodeData = {
+  // P2 decomposed Design into a register node stacked over a ring node. Both
+  // carry the same route-derived data; the node TYPE picks which body renders.
   tier: 'design'
   sort: number
   estimate: number
@@ -126,7 +133,8 @@ type LaneNodeData = {
   view: DesignView
   canvasId: string | undefined
 }
-type LaneNode = Node<LaneNodeData, 'lane'>
+type DesignRegisterNode = Node<DesignBodyNodeData, 'designRegister'>
+type DesignRingNode = Node<DesignBodyNodeData, 'designRing'>
 
 // eslint-disable-next-line @typescript-eslint/consistent-type-definitions
 type FoundationHeaderData = {
@@ -178,7 +186,8 @@ type ArchTableData = {
 type ArchTableNode = Node<ArchTableData, 'archTable'>
 
 type CanvasNode =
-  | LaneNode
+  | DesignRegisterNode
+  | DesignRingNode
   | FoundationHeaderNode
   | FoundationItemNode
   | ArchHeaderNode
@@ -221,13 +230,14 @@ function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
 
 // ── Node components ──────────────────────────────────────────────────────────
 
-// Design lane node: a header drag-handle bar over the REAL whole Design surface
-// (P2 decomposes this into a {ring + register} core). Body is `nodrag nopan
+// Design REGISTER node (P2): the top of the {register + ring} core — the rail +
+// ContextRegister + lane header (the authoring surface). Carries the Design
+// lane's stable node id so ⌘3 frames the column top. Body is `nodrag nopan
 // nowheel` and records its lane active on focus/pointer (D2 `activeLane` gating).
-function LaneNode({ data }: NodeProps<LaneNode>) {
+function DesignRegisterNode({ data }: NodeProps<DesignRegisterNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
   return (
-    <div className="wc-node wc-node--design">
+    <div className="wc-node wc-node--design-register">
       <div className="wc-node__handle" aria-hidden="true">
         Design
       </div>
@@ -236,7 +246,33 @@ function LaneNode({ data }: NodeProps<LaneNode>) {
         onFocusCapture={() => setActiveLane('design')}
         onPointerDown={() => setActiveLane('design')}
       >
-        <DesignSurface
+        <DesignRegisterBody
+          projectId={data.projectId}
+          contextPath={data.contextPath}
+          view={data.view}
+          canvasId={data.canvasId}
+        />
+      </div>
+    </div>
+  )
+}
+
+// Design RING node (P2): the derived visual glance (Canvas / CoverageMatrix),
+// stacked BELOW the register. 085's rule holds — no on-ring authoring; the ring
+// shares the compose draft with the register via the `canvasCompose` store.
+function DesignRingNode({ data }: NodeProps<DesignRingNode>) {
+  const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
+  return (
+    <div className="wc-node wc-node--design-ring">
+      <div className="wc-node__handle" aria-hidden="true">
+        Design · canvas
+      </div>
+      <div
+        className="nodrag nopan nowheel wc-node__body"
+        onFocusCapture={() => setActiveLane('design')}
+        onPointerDown={() => setActiveLane('design')}
+      >
+        <DesignRingBody
           projectId={data.projectId}
           contextPath={data.contextPath}
           view={data.view}
@@ -372,7 +408,8 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
 // Stable across renders — React Flow warns (and remounts nodes) if nodeTypes is
 // a fresh object each render.
 const NODE_TYPES = {
-  lane: LaneNode,
+  designRegister: DesignRegisterNode,
+  designRing: DesignRingNode,
   foundationHeader: FoundationHeaderNode,
   foundationItem: FoundationItemNode,
   archHeader: ArchHeaderNode,
@@ -537,14 +574,32 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         },
       },
       {
+        // Register node keeps LANE_NODE_ID.design (sort 0, top) so ⌘3 frames it.
         id: LANE_NODE_ID.design,
-        type: 'lane',
+        type: 'designRegister',
         position: { x: 0, y: 0 },
         dragHandle: '.wc-node__handle',
         data: {
           tier: 'design',
           sort: 0,
-          estimate: DESIGN_ESTIMATE,
+          estimate: DESIGN_REGISTER_ESTIMATE,
+          projectId,
+          contextPath: design.contextPath,
+          view: design.view,
+          canvasId: design.canvasId,
+        },
+      },
+      {
+        // Ring node (sort 1, below) — stacked under the register per the owner's
+        // "register OVER ring" layout; computeLaneLayout stacks them by `sort`.
+        id: DESIGN_RING_NODE_ID,
+        type: 'designRing',
+        position: { x: 0, y: 0 },
+        dragHandle: '.wc-node__handle',
+        data: {
+          tier: 'design',
+          sort: 1,
+          estimate: DESIGN_RING_ESTIMATE,
           projectId,
           contextPath: design.contextPath,
           view: design.view,
