@@ -1022,3 +1022,107 @@ test('a satellite clears a 093-widened register — no overlap (review HIGH guar
     expect(satBox.x).toBeGreaterThanOrEqual(regBox.x + regBox.width - 1)
   }
 })
+
+// ── 089-D3 P4 — coverage (012) as an edge-connected analytical twin ──────────
+// The `v` key (and the header Coverage toggle) now OPEN a coverage TWIN node
+// below the Design core + a ring→twin edge, instead of the old route swap that
+// REPLACED the ring. The twin is FULLY LIVE (CoverageMatrix reads the same
+// current-canvas stores the ring reads). A gap-cell click composes pre-filled +
+// pans back along the edge to the ring. routes.ts `?view=` grammar is preserved.
+
+// Open the ?d3rf canvas + seed 3 dimensions × 2 parameters (tuple space = 8),
+// mirroring the flag-off coverage.spec so the same gap-cell selectors apply.
+async function openCanvasWithCoverageData(page: Page): Promise<void> {
+  await openThreeLaneCanvas(page)
+  const register = page.locator('.wc-node--design-register')
+  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+  async function addDim(name: string) {
+    const p = register.getByPlaceholder('Type to add a dimension')
+    await p.fill(name)
+    await p.press('Enter')
+    await expect(register.locator('.dim-row__name', { hasText: name })).toBeVisible()
+  }
+  await addDim('Value')
+  await addDim('Stake')
+  await addDim('Process')
+  // Each dimension has exactly one "Type to add a parameter" phantom, in dim order
+  // (Value=0, Stake=1, Process=2) — target by index (a nested .filter({has}) is not
+  // reliably actionable at canvas scale) and force-click past the transformed pane.
+  async function addParam(dimIndex: number, param: string) {
+    const p = register.getByPlaceholder('Type to add a parameter').nth(dimIndex)
+    await p.click({ force: true })
+    await p.pressSequentially(param)
+    await page.keyboard.press('Enter')
+    await expect(register.getByText(param, { exact: true })).toBeVisible()
+  }
+  await addParam(0, 'Comfort')
+  await addParam(0, 'Cost')
+  await addParam(1, 'Users')
+  await addParam(1, 'Admins')
+  await addParam(2, 'Engagement')
+  await addParam(2, 'Onboarding')
+}
+
+test('the `v` key opens an edge-connected coverage twin (not a route swap); v again collapses it', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openCanvasWithCoverageData(page)
+
+  // Nothing spatial before: four lane nodes, no twin, no edge.
+  await expect(page.locator('.wc-node--coverage-twin')).toHaveCount(0)
+  await expect(page.locator('.wc-node')).toHaveCount(4)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
+
+  // Focus the ring surface (not a text field) so `v` fires; settle the viewport.
+  await page.locator('.wc-node--design-ring .canvas-svg').click()
+  await waitForStableViewport(page)
+  const urlBefore = page.url()
+  const beforeOpen = await viewportTransform(page)
+
+  // `v` opens the twin + the ring→twin edge — NOT a route swap: URL unchanged, the
+  // ring still shows the Canvas (not replaced), the twin is a 5th `.wc-node`.
+  await page.keyboard.press('v')
+  const twin = page.locator('.wc-node--coverage-twin')
+  await expect(twin).toHaveCount(1)
+  await expect(twin.locator('.coverage-matrix')).toBeVisible()
+  await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+  await expect(page.locator('.wc-node')).toHaveCount(5)
+  await expect(page.locator('.wc-node--design-ring .canvas-svg')).toBeVisible()
+  expect(page.url()).toBe(urlBefore)
+
+  // Pan-to-twin: the viewport moved to frame it.
+  await expect.poll(async () => (await viewportTransform(page)) !== beforeOpen).toBe(true)
+
+  // `v` again collapses the twin + its edge; back to four lane nodes.
+  await page.locator('.wc-node--design-ring .canvas-svg').click()
+  await waitForStableViewport(page)
+  await page.keyboard.press('v')
+  await expect(page.locator('.wc-node--coverage-twin')).toHaveCount(0)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
+  await expect(page.locator('.wc-node')).toHaveCount(4)
+})
+
+test('a coverage-twin gap cell composes pre-filled and pans back to the ring; the stat is live', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openCanvasWithCoverageData(page)
+
+  await page.locator('.wc-node--design-ring .canvas-svg').click()
+  await waitForStableViewport(page)
+  await page.keyboard.press('v')
+
+  const twin = page.locator('.wc-node--coverage-twin')
+  await expect(twin.locator('.coverage-matrix')).toBeVisible()
+  // Live stat derived from the 3×2 tuple space (8), 0 documented yet — a stub
+  // would not know the real total.
+  await expect(twin.locator('.coverage-stat--lead')).toHaveText('0 / 8 documented')
+
+  // A hollow gap cell → compose pre-filled with that tuple, then pan back to the
+  // ring (the draft's compose dot group is now in the ring, which was NOT replaced).
+  const gap = twin.getByRole('gridcell', { name: 'Unexplored — Comfort · Users · Engagement' })
+  await expect(gap).toHaveAttribute('data-documented', 'false')
+  await gap.click()
+  await expect(page.locator('.wc-node--design-ring .canvas-dot-group--compose').first()).toBeVisible()
+})

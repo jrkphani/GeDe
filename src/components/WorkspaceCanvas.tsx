@@ -33,6 +33,7 @@ import {
   satelliteNodeId,
   useCanvasSatellitesStore,
 } from '../store/canvasSatellites'
+import { useCanvasCoverageStore } from '../store/canvasCoverage'
 import { useContextsStore } from '../store/contexts'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
@@ -42,7 +43,7 @@ import { useTier2Store } from '../store/tier2'
 import { useWorkspaceRole } from '../store/workspace'
 import type { Tier1PropRow, Tier2TableRow } from '../db/mutations'
 import type { AppRoute, DesignView } from '../shell/routes'
-import { DesignRegisterBody, DesignRingBody } from './DesignCoreAdapter'
+import { DesignCoverageTwinBody, DesignRegisterBody, DesignRingBody } from './DesignCoreAdapter'
 import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
 import { FoundationHeaderPanel, FoundationPropPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
@@ -108,6 +109,10 @@ const DESIGN_RING_ESTIMATE = 560
 // Stable node id for the ring (the register keeps LANE_NODE_ID.design so ⌘3 still
 // frames the Design column top).
 const DESIGN_RING_NODE_ID = 'workspace-canvas-design-ring'
+// P4 (issue 012) — the coverage TWIN node, stacked in the Design lane BELOW the
+// ring (sort 2) and edge-connected to it. One per canvas (a singleton).
+const COVERAGE_TWIN_NODE_ID = 'workspace-canvas-coverage-twin'
+const COVERAGE_TWIN_ESTIMATE = 520
 const ARCH_HEADER_ESTIMATE = 160
 const ARCH_TABLE_ESTIMATE = 340
 
@@ -239,6 +244,22 @@ type SatelliteNodeData = {
 }
 type SatelliteNode = Node<SatelliteNodeData, 'satellite'>
 
+// P4 (issue 012) — the coverage TWIN node: a design-lane node (tier 'design',
+// sort 2) so computeLaneLayout stacks it below the ring, edge-connected to it. It
+// renders the read-only CoverageMatrix from the current-canvas stores (a FULLY
+// LIVE node, not a P3-style stub — no second canvas scope).
+// eslint-disable-next-line @typescript-eslint/consistent-type-definitions
+type CoverageTwinNodeData = {
+  tier: 'design'
+  sort: number
+  estimate: number
+  projectId: string
+  // Pan back along the edge to the ring after a gap-cell compose (so the new
+  // draft dot is in view).
+  onGapComposed: () => void
+}
+type CoverageTwinNode = Node<CoverageTwinNodeData, 'coverageTwin'>
+
 type CanvasNode =
   | DesignRegisterNode
   | DesignRingNode
@@ -247,6 +268,7 @@ type CanvasNode =
   | ArchHeaderNode
   | ArchTableNode
   | SatelliteNode
+  | CoverageTwinNode
 
 // ── Cross-node focus helpers (P3.3). A table node's DOM is `.react-flow__node
 // [data-id="<tableId>"]`; within it we land focus on the FIRST editable grid
@@ -285,15 +307,19 @@ function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
   }
   const posById = new Map<string, { x: number; y: number }>()
   for (const p of computeLaneLayout(laneItems, LANE_CONFIG)) posById.set(p.id, { x: p.x, y: p.y })
-  // Satellites hang off the Design REGISTER's real right edge. 093 made the
-  // register `width: max-content` (uncapped), so a nominal 960px would let a wide
-  // register overlap the satellite + skew the edge (its source handle anchors to
-  // the real box). Clear it with the register's MEASURED width (≥ the nominal).
-  const registerWidth = nodes.find((n) => n.id === LANE_NODE_ID.design)?.measured?.width
-  const clusterConfig: ClusterLayoutConfig = {
-    ...CLUSTER_CONFIG,
-    coreWidth: Math.max(CLUSTER_CONFIG.coreWidth, registerWidth ?? 0),
+  // Satellites hang off the Design core's real right edge. 093 made the register
+  // `width: max-content` (uncapped) and P4 added a coverage twin that can be even
+  // wider (up to 1200px) — all three (register, ring, twin) share the Design
+  // column, so satellites must clear the WIDEST measured design-column node, not
+  // just the register (else a wide twin + a deep satellite stack overlap — review
+  // MEDIUM). Width feeds the satellite clearance only, never the lane x-stride.
+  let coreWidth = CLUSTER_CONFIG.coreWidth
+  for (const n of nodes) {
+    if (n.type !== 'satellite' && n.data.tier === 'design' && n.measured?.width) {
+      coreWidth = Math.max(coreWidth, n.measured.width)
+    }
   }
+  const clusterConfig: ClusterLayoutConfig = { ...CLUSTER_CONFIG, coreWidth }
   for (const p of computeSatelliteLayout(satelliteItems, LANE_NODE_ID.design, clusterConfig).positions) {
     posById.set(p.id, { x: p.x, y: p.y })
   }
@@ -352,6 +378,14 @@ function DesignRingNode({ data }: NodeProps<DesignRingNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
   return (
     <div className="wc-node wc-node--design-ring">
+      {/* P4 — the parent end of the edge down to the coverage twin (hidden,
+          non-connectable: a pure edge anchor). */}
+      <Handle
+        type="source"
+        position={Position.Bottom}
+        isConnectable={false}
+        className="wc-edge-anchor"
+      />
       <div className="wc-node__handle" aria-hidden="true">
         Design · canvas
       </div>
@@ -532,6 +566,32 @@ function SatelliteNode({ data }: NodeProps<SatelliteNode>) {
   )
 }
 
+// P4 (issue 012) — the coverage TWIN node: the analytical twin of the ring,
+// stacked below the Design core + edge-connected to it. Its body (DesignCoverageTwinBody)
+// renders the read-only CoverageMatrix from the current-canvas stores; a gap-cell
+// click composes pre-filled then pans back to the ring. Body is `nodrag nopan
+// nowheel` (the matrix scrolls/clicks internally) and records the Design lane
+// active on focus/pointer (D2 activeLane gating), like the other design bodies.
+function CoverageTwinNode({ data }: NodeProps<CoverageTwinNode>) {
+  const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
+  return (
+    <div className="wc-node wc-node--coverage-twin" data-testid="wc-coverage-twin">
+      {/* The child end of the ring→twin edge. */}
+      <Handle type="target" position={Position.Top} isConnectable={false} className="wc-edge-anchor" />
+      <div className="wc-node__handle" aria-hidden="true">
+        Design · coverage
+      </div>
+      <div
+        className="nodrag nopan nowheel wc-node__body"
+        onFocusCapture={() => setActiveLane('design')}
+        onPointerDown={() => setActiveLane('design')}
+      >
+        <DesignCoverageTwinBody projectId={data.projectId} onGapComposed={data.onGapComposed} />
+      </div>
+    </div>
+  )
+}
+
 // Stable across renders — React Flow warns (and remounts nodes) if nodeTypes is
 // a fresh object each render.
 const NODE_TYPES = {
@@ -542,6 +602,7 @@ const NODE_TYPES = {
   archHeader: ArchHeaderNode,
   archTable: ArchTableNode,
   satellite: SatelliteNode,
+  coverageTwin: CoverageTwinNode,
 }
 
 // The exported shell wraps the canvas in a ReactFlowProvider so both the
@@ -702,6 +763,30 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     resetCanvasSatellites()
   }, [canvasIdentity])
 
+  // P4 (issue 012) — the coverage twin's open state + its one-shot pan target.
+  const coverageOpen = useCanvasCoverageStore((s) => s.open)
+  const coverageFocus = useCanvasCoverageStore((s) => s.focus)
+
+  // Seed the twin from the route's `view` on canvas-nav: a `?view=coverage`
+  // deep-link opens the twin (grammar preserved), a normal canvas-nav closes it
+  // (doubles as the per-canvas reset — the twin node has a stable id and never
+  // unmounts). `v`/the header toggle change the store WITHOUT touching the route,
+  // so neither dep here fires and the toggle persists on-canvas.
+  useEffect(() => {
+    useCanvasCoverageStore.getState().setOpen(design.view === 'coverage')
+  }, [canvasIdentity, design.view])
+
+  // Pan back along the edge to the ring after a coverage gap-cell compose, so the
+  // freshly-composed draft dot is in view (the twin + ring coexist).
+  const onGapComposed = useCallback(() => {
+    void reactFlow.fitView({
+      nodes: [{ id: DESIGN_RING_NODE_ID }],
+      padding: 0.3,
+      maxZoom: 1,
+      duration: prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION,
+    })
+  }, [reactFlow])
+
   // The desired node set for the current tables + props + route + role. The
   // Foundation column is a header node (sort -1) + one `foundationItem` node per
   // value-prop (sort = prop.sort); the Architecture column is the header node
@@ -753,7 +838,10 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           estimate: DESIGN_REGISTER_ESTIMATE,
           projectId,
           contextPath: design.contextPath,
-          view: design.view,
+          // P4 — the core bodies always render as 'canvas'; coverage is the twin
+          // node now, seeded from route.view (a `?view=coverage` deep-link opens
+          // the twin, not the old ring swap). routes.ts grammar preserved.
+          view: 'canvas',
           canvasId: design.canvasId,
         },
       },
@@ -770,7 +858,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           estimate: DESIGN_RING_ESTIMATE,
           projectId,
           contextPath: design.contextPath,
-          view: design.view,
+          view: 'canvas',
           canvasId: design.canvasId,
         },
       },
@@ -826,13 +914,29 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         },
       })
     }
+    // P4 — the coverage twin, when open: a design-lane node (sort 2) so
+    // computeLaneLayout stacks it below the ring; edge-connected to the ring.
+    if (coverageOpen) {
+      list.push({
+        id: COVERAGE_TWIN_NODE_ID,
+        type: 'coverageTwin',
+        position: { x: 0, y: 0 },
+        draggable: false,
+        data: {
+          tier: 'design',
+          sort: 2,
+          estimate: COVERAGE_TWIN_ESTIMATE,
+          projectId,
+          onGapComposed,
+        },
+      })
+    }
     return list
   }, [
     tables,
     props,
     projectId,
     design.contextPath,
-    design.view,
     design.canvasId,
     readOnly,
     onTableCreated,
@@ -842,6 +946,8 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     openSatellites,
     onSatelliteEnter,
     onSatelliteCollapse,
+    coverageOpen,
+    onGapComposed,
   ])
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(desiredNodes)
@@ -856,25 +962,40 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // across measure-only node updates, and computeSatelliteLayout's stable edge ids
   // keep RF's edge reconcile from churning (the loop-avoidance discipline).
   const satelliteNodeIds = nodes.flatMap((n) => (n.type === 'satellite' ? [n.id] : []))
-  const satelliteEdgeKey = satelliteNodeIds.join('|')
-  const edges = useMemo<Edge[]>(
-    () =>
-      computeSatelliteLayout(
-        satelliteNodeIds.map((id) => ({ id })),
-        LANE_NODE_ID.design,
-        CLUSTER_CONFIG,
-      ).edges.map((e) => ({
-        id: e.id,
-        source: e.source,
-        target: e.target,
-        className: 'wc-edge',
-        markerEnd: { type: MarkerType.ArrowClosed },
-      })),
-    // satelliteNodeIds is derived from satelliteEdgeKey; keying on the string keeps
-    // the edges array stable across measure-only `nodes` updates (join-key memo).
+  const hasCoverageTwin = nodes.some((n) => n.type === 'coverageTwin')
+  // Key on the satellite set + the twin presence so the edges array identity only
+  // changes when the edge SET changes, not on measure-only `nodes` updates.
+  const edgeKey = `${satelliteNodeIds.join('|')}#${hasCoverageTwin ? '1' : '0'}`
+  const edges = useMemo<Edge[]>(() => {
+    const satelliteEdges = computeSatelliteLayout(
+      satelliteNodeIds.map((id) => ({ id })),
+      LANE_NODE_ID.design,
+      CLUSTER_CONFIG,
+    ).edges.map((e) => ({
+      id: e.id,
+      source: e.source,
+      target: e.target,
+      className: 'wc-edge',
+      markerEnd: { type: MarkerType.ArrowClosed },
+    }))
+    // P4 — the ring→twin edge (only when the twin is mounted, so it never targets
+    // a node RF doesn't have).
+    const twinEdges: Edge[] = hasCoverageTwin
+      ? [
+          {
+            id: `edge:${DESIGN_RING_NODE_ID}:${COVERAGE_TWIN_NODE_ID}`,
+            source: DESIGN_RING_NODE_ID,
+            target: COVERAGE_TWIN_NODE_ID,
+            className: 'wc-edge',
+            markerEnd: { type: MarkerType.ArrowClosed },
+          },
+        ]
+      : []
+    return [...satelliteEdges, ...twinEdges]
+    // satelliteNodeIds/hasCoverageTwin are derived from edgeKey; keying on the
+    // string keeps the edges array stable across measure-only `nodes` updates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [satelliteEdgeKey],
-  )
+  }, [edgeKey])
 
   // Reconcile the mounted nodes with the desired set whenever tables/route/role
   // change: refresh each node's `data` (so a project switch, a design drill-down,
@@ -940,6 +1061,21 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     useCanvasSatellitesStore.getState().consumeFocus()
     // `nodes` is a re-run trigger only (the node must exist + be measured first).
   }, [satelliteFocus, nodes, reactFlow])
+
+  // P4 — pan/zoom to the coverage twin when it opens (same one-shot pattern as the
+  // satellite pan: wait for mount + measure, fit, then consumeFocus).
+  useEffect(() => {
+    if (!coverageFocus) return
+    const node = reactFlow.getNode(COVERAGE_TWIN_NODE_ID)
+    if (node?.measured?.height == null) return
+    void reactFlow.fitView({
+      nodes: [{ id: COVERAGE_TWIN_NODE_ID }],
+      padding: 0.3,
+      maxZoom: 1,
+      duration: prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION,
+    })
+    useCanvasCoverageStore.getState().consumeFocus()
+  }, [coverageFocus, nodes, reactFlow])
 
   // The pane wrapper — its rect is the on-screen viewport bounds the focus-pan
   // margin test is measured against.

@@ -1878,10 +1878,21 @@ body {
   opacity: 0;
   pointer-events: none;
 }
-/* The parent→child recursion edge itself. */
+/* The parent→child recursion edge itself (also the ring→coverage-twin edge, P4). */
 .react-flow__edge.wc-edge .react-flow__edge-path {
   stroke: var(--hairline-strong, var(--ink-muted));
   stroke-width: 1.5;
+}
+
+/* 089-D3 P4 — the coverage TWIN node (issue 012): the analytical twin stacked
+   below the Design core, edge-connected to the ring. It is a real `.wc-node`
+   (its own design-lane node at sort 2), sized to the CoverageMatrix it hosts. */
+.wc-node--coverage-twin {
+  width: max-content;
+  max-width: 1200px;
+}
+.wc-node--coverage-twin .wc-node__body {
+  padding: 0;
 }
 
 /* ── Recursion / drill-down (issue 011) ──────────────────────────────────── */
