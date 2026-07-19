@@ -216,12 +216,10 @@ The build sequences **all safe, non-reversing work first** (thread the flag so i
 
 ### Phases (≤5 files/phase, red-first)
 
-**P0 — thread `?d3rf` into a canvas-mode store so it survives `navigate()`.** *(known follow-up; do first — every later phase navigates)*
-- NEW `src/store/canvasMode.ts` — a tiny slice (mirrors `store/activeLane.ts` / `store/focusedEditor.ts`) holding `canvasEnabled`, seeded ONCE from the initial `?d3rf` on load.
-- `src/App.tsx` — `d3CanvasEnabled()` reads the store instead of re-reading `window.location.search` every render; a seed effect sets it from `?d3rf` on first mount (still `import.meta.env.DEV`-gated).
-- `e2e/d3-canvas.spec.ts` (`@dev-flag`) — new spec.
-- **Why:** today an in-app `navigate()` (breadcrumb drill `DesignSurface.tsx:493`, the `v` toggle `:567/:584`, a tab click) rebuilds the URL via `serializeRoute` and **drops `?d3rf`** (`d3CanvasNav.ts:52-66` — the ⌘1/2/3 interceptor keeps it only for lane jumps). The satellites (P3/P4) navigate, so this must land first.
-- **Gate:** `@dev-flag` e2e — enter with `?d3rf`, drill-in / switch tab (a real `navigate()`), assert `.react-flow` is STILL mounted; `verify:fast` green.
+**P0 — ✅ SHIPPED (`74ae9a2`, 2026-07-19) — thread `?d3rf` into a canvas-mode store so it survives `navigate()`.**
+- NEW `src/store/canvasMode.ts` (+ `.test.ts`, 5/5) — a tiny slice (mirrors `store/activeLane.ts`) holding `canvasEnabled`, seeded ONCE from the initial URL at store-create time (no mount-effect / flicker). `src/App.tsx` — `Surface` reads the store (`useCanvasModeStore`) instead of `window.location.search`; still `import.meta.env.DEV`-gated so it folds to `false` in prod (verified: xyflow stays OUT of the main bundle, only in the never-fetched lazy `WorkspaceCanvas` chunk). `e2e/d3-canvas.spec.ts` (`@dev-flag`) — a new persistence test: enter on `/architecture?d3rf=1`, click the Design tab (a real `navigate()` that drops `?d3rf`), assert `.react-flow` STILL mounted.
+- **⚠ Discovered + fixed a latent loop this exposed** (`WorkspaceCanvas.tsx`): on a non-`design` route `design.contextPath` was a fresh `[]` literal every render → the `desiredNodes` useMemo recomputed every render → its reconcile effect `setNodes`-looped ("Maximum update depth") → the canvas white-screened on ANY tier route. Masked pre-P0 because the flag dropped on navigate so the canvas never STAYED on a tier route. Fixed with a stable module-level `NO_CONTEXT_PATH`; the new e2e (which loads the architecture route) is the guard. **Lesson for P1/P7: the canvas had never actually rendered on a tier route until P0 — watch for more tier-route-only latent bugs as the lanes decompose.**
+- Verified: canvasMode 5/5; `d3-canvas.spec.ts` 9/9; `verify:fast` 1610; prod build keeps xyflow out of the main bundle.
 
 **P1 — decompose the Foundation lane into per-item nodes** (like Architecture already is at `WorkspaceCanvas.tsx:44-60,220-291`).
 - `src/components/WorkspaceCanvas.tsx` — replace the whole-surface Foundation `lane` node (`:193-218,378-393`) with a Foundation header node (Purpose + existing-scenario rich editor) + one node per value-prop (`tier1_props`), reusing `FoundationSurface` pieces via an adapter.
