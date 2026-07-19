@@ -31,7 +31,7 @@ async function addEntry(page: Page, tableName: string, entryName: string) {
 async function promoteTable(page: Page, tableName: string, entryNames: string[], dimensionName: string) {
   const panel = tablePanel(page, tableName)
   for (const name of entryNames) {
-    await panel.getByRole('button', { name: `Select ${name}` }).click()
+    await panel.getByRole('option', { name: `Select ${name}` }).click()
   }
   await expect(panel.getByText(`${entryNames.length} selected`)).toBeVisible()
   await panel.getByRole('button', { name: 'Use as dimension…' }).click()
@@ -84,9 +84,12 @@ test('architecture: build tables, promote to dimensions, register offers params,
   const stakeCell = row.locator('td').nth(3)
   await stakeCell.getByRole('button').click()
   await expect(page.getByPlaceholder('Type to filter…')).toBeVisible()
-  await expect(page.getByRole('option', { name: 'Buyers' })).toBeVisible()
-  await expect(page.getByRole('option', { name: 'Maintainer' })).toBeVisible()
-  await expect(page.getByRole('option', { name: 'Users' })).toBeVisible()
+  // `exact` targets the cmdk combobox items precisely: the co-mounted
+  // Architecture lane (084-D3 P4) now exposes `role="option"` select controls
+  // named "Select Buyers"/… which a substring match would also catch.
+  await expect(page.getByRole('option', { name: 'Buyers', exact: true })).toBeVisible()
+  await expect(page.getByRole('option', { name: 'Maintainer', exact: true })).toBeVisible()
+  await expect(page.getByRole('option', { name: 'Users', exact: true })).toBeVisible()
   await page.keyboard.press('Escape')
 
   // Rename "Users" in the Architecture tab → propagates to its parameter.
@@ -107,8 +110,10 @@ test('architecture: build tables, promote to dimensions, register offers params,
   const rowAfter = page.locator('.editable-grid tbody tr', { has: page.getByText('α', { exact: true }) })
   await rowAfter.locator('td').nth(3).getByRole('button').click()
   await expect(page.getByPlaceholder('Type to filter…')).toBeVisible()
-  await expect(page.getByRole('option', { name: 'People' })).toBeVisible()
-  await expect(page.getByRole('option', { name: 'Users' })).toBeHidden()
+  // `exact` again isolates the cmdk items from the co-mounted Architecture
+  // lane's "Select …" options (084-D3 P4).
+  await expect(page.getByRole('option', { name: 'People', exact: true })).toBeVisible()
+  await expect(page.getByRole('option', { name: 'Users', exact: true })).toBeHidden()
 })
 
 // Issue 025, test-first plan item 3: the selection bar/promote trigger must
@@ -135,7 +140,7 @@ test('architecture: selection bar stays in view (sticky) on a tall table without
   const panel = tablePanel(page, 'Stakeholders')
   // Select the first entry — at the very top of a table dozens of rows tall
   // — without scrolling the page at all.
-  await panel.getByRole('button', { name: 'Select Entry 1', exact: true }).click()
+  await panel.getByRole('option', { name: 'Select Entry 1', exact: true }).click()
 
   const promoteTrigger = page.getByRole('button', { name: 'Use as dimension…' })
   await expect(promoteTrigger).toBeVisible()

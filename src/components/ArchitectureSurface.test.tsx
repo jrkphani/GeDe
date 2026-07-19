@@ -118,8 +118,8 @@ describe('ArchitectureSurface', () => {
     await screen.findByText('Superstars')
 
     // Select a top-level row and a nested row (selection spans levels).
-    await user.click(await screen.findByRole('button', { name: 'Select Buyers' }))
-    await user.click(await screen.findByRole('button', { name: 'Select Superstars' }))
+    await user.click(await screen.findByRole('option', { name: 'Select Buyers' }))
+    await user.click(await screen.findByRole('option', { name: 'Select Superstars' }))
 
     // The selection bar appears with a promote action.
     const bar = await screen.findByText(/2 selected/)
@@ -189,7 +189,7 @@ describe('ArchitectureSurface — selection bar placement (issue 025)', () => {
 
     const { container } = render(<ArchitectureSurface projectId={projectId} />)
     // Select near the top of the table, not the bottom.
-    await user.click(await screen.findByRole('button', { name: 'Select Entry 1' }))
+    await user.click(await screen.findByRole('option', { name: 'Select Entry 1' }))
 
     const bar = container.querySelector('.t2-selection-bar') as HTMLElement
     expect(bar).toBeInTheDocument()
@@ -206,7 +206,7 @@ describe('ArchitectureSurface — selection bar placement (issue 025)', () => {
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     await addTier2Entry(db, table.id, null, 'Buyers')
     render(<ArchitectureSurface projectId={projectId} />)
-    await user.click(await screen.findByRole('button', { name: 'Select Buyers' }))
+    await user.click(await screen.findByRole('option', { name: 'Select Buyers' }))
     await user.click(await screen.findByRole('button', { name: /Use as dimension/ }))
     expect(await screen.findByLabelText('New dimension name')).toBeInTheDocument()
   })
@@ -222,7 +222,7 @@ describe('ArchitectureSurface — viewer read-only affordance (issue 035)', () =
     render(<ArchitectureSurface projectId={projectId} />)
     await screen.findByText('Buyers')
 
-    expect(screen.queryByRole('button', { name: 'Select Buyers' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('option', { name: 'Select Buyers' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Add child to Buyers' })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Remove Buyers' })).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Name an entry')).not.toBeInTheDocument()
@@ -238,7 +238,7 @@ describe('ArchitectureSurface — viewer read-only affordance (issue 035)', () =
     render(<ArchitectureSurface projectId={projectId} />)
     await screen.findByText('Buyers')
 
-    expect(await screen.findByRole('button', { name: 'Select Buyers' })).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Select Buyers' })).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Name an entry')).toBeInTheDocument()
     expect(screen.getByPlaceholderText('Name a table')).toBeInTheDocument()
   })
@@ -475,6 +475,90 @@ describe('ArchitectureSurface — Remove moved to the selection bar (issue 084, 
     // The linked-parameter resolution surfaces instead of a silent delete.
     expect(await screen.findByText(/Keep parameter as unlinked copy/)).toBeInTheDocument()
     expect(screen.getByText(/It is linked to/)).toBeInTheDocument()
+  })
+})
+
+// Issue 084 Direction 3, Phase 4 — the promote multi-select is now a LABELED
+// LISTBOX (decision 4). The per-row select control moved from an `aria-pressed`
+// toggle button to a `role="option"` + `aria-selected` control inside a labeled
+// `role="listbox"` (`aria-multiselectable`). Screen readers announce
+// "selected"/"not selected" and multi-selectability; the existing shift-range
+// select + promote flow are unchanged.
+describe('ArchitectureSurface — D3 P4 listbox selection a11y (issue 084 Direction 3)', () => {
+  it('exposes a labeled, multi-selectable listbox for the selection region', async () => {
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    const listbox = screen.getByRole('listbox')
+    expect(listbox).toHaveAttribute('aria-multiselectable', 'true')
+    // Named so an AT user knows what the multi-select is for.
+    expect(listbox.getAttribute('aria-label')).toMatch(/Stakeholders/)
+  })
+
+  it('renders each selectable row as role=option with aria-selected — toggling flips it, not aria-pressed', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    const opt = screen.getByRole('option', { name: 'Select Buyers' })
+    // The old aria-pressed toggle semantics are gone (decision 4).
+    expect(opt).not.toHaveAttribute('aria-pressed')
+    expect(opt).toHaveAttribute('aria-selected', 'false')
+
+    await user.click(opt)
+    expect(opt).toHaveAttribute('aria-selected', 'true')
+
+    await user.click(opt)
+    expect(opt).toHaveAttribute('aria-selected', 'false')
+  })
+
+  it('preserves shift-range select across the listbox (select A, shift-click C → A,B,C selected)', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Alpha')
+    await addTier2Entry(db, table.id, null, 'Bravo')
+    await addTier2Entry(db, table.id, null, 'Charlie')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Charlie')
+
+    const alpha = screen.getByRole('option', { name: 'Select Alpha' })
+    const bravo = screen.getByRole('option', { name: 'Select Bravo' })
+    const charlie = screen.getByRole('option', { name: 'Select Charlie' })
+
+    // Anchor on Alpha, then shift-click Charlie — the range in between fills.
+    await user.click(alpha)
+    fireEvent.click(charlie, { shiftKey: true })
+
+    expect(alpha).toHaveAttribute('aria-selected', 'true')
+    expect(bravo).toHaveAttribute('aria-selected', 'true')
+    expect(charlie).toHaveAttribute('aria-selected', 'true')
+    // The promote flow still reads the full selected set.
+    expect(screen.getByText(/3 selected/)).toBeInTheDocument()
+  })
+})
+
+// Issue 084 Direction 3, Phase 4 — the selection-bar Remove aligns to the Design
+// route's QUIET rowAction verb weight (decision 8), matching ParameterList's
+// per-row Remove, instead of the always-on `command` chrome. The delete +
+// panel-anchored resolution flow are unchanged (still covered by tests c/d/e).
+describe('ArchitectureSurface — D3 P4 quiet Remove verb weight (issue 084 Direction 3)', () => {
+  it('renders the selection-bar Remove at the quiet rowAction weight, not command chrome', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    const { container } = render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(await screen.findByRole('option', { name: 'Select Buyers' }))
+    const bar = container.querySelector('.t2-selection-bar') as HTMLElement
+    const removeBtn = within(bar).getByText('Remove')
+    // Quiet row-action chrome (STYLE_GUIDE §2.2), never the always-on command chrome.
+    expect(removeBtn).toHaveClass('row-action')
+    expect(removeBtn).not.toHaveClass('command-button')
   })
 })
 

@@ -406,13 +406,21 @@ export function TablePanel({
                 <span className="t2-chevron-spacer" />
               )}
               {/* Issue 035 — selection only ever feeds the promote action, so
-                  a viewer (who can't promote) never sees the affordance. */}
+                  a viewer (who can't promote) never sees the affordance.
+                  084-D3 P4 (decision 4): the per-row control is a `role="option"`
+                  in the panel's labeled `role="listbox"` (below), so an AT user
+                  hears "selected"/"not selected" for the promote multi-select —
+                  stronger semantics than the old `aria-pressed` toggle. Owned by
+                  the listbox via `aria-owns` (the option lives in a grid cell, so
+                  it can't be a DOM child of the listbox). */}
               {readOnly ? null : (
                 <Button
                   variant="bare"
                   className="t2-select"
+                  id={`t2-opt-${entry.id}`}
+                  role="option"
                   aria-label={`Select ${entry.name}`}
-                  aria-pressed={isSelected}
+                  aria-selected={isSelected}
                   onClick={(e) => onSelectClick(entry.id, e)}
                 >
                   <span className="t2-checkbox" data-checked={isSelected || undefined} />
@@ -599,6 +607,22 @@ export function TablePanel({
             }
           : {})}
       />
+      {/* 084-D3 P4 (decision 4): the labeled listbox that OWNS the per-row
+          `role="option"` select controls. The options live in grid cells (they
+          can't be DOM children of the listbox — EditableGrid owns the table), so
+          the listbox claims them via `aria-owns`. Visually-hidden anchor: the
+          checkboxes render in the grid; this only carries the multi-select
+          semantics + accessible name. Present whenever there is something to
+          select (a viewer sees no options → no listbox). */}
+      {!readOnly && flatIds.length > 0 && (
+        <div
+          role="listbox"
+          aria-multiselectable="true"
+          aria-label={`Select ${table.name} entries to promote`}
+          aria-owns={flatIds.map((id) => `t2-opt-${id}`).join(' ')}
+          className="visually-hidden"
+        />
+      )}
       {selected.size > 0 && (
         <div className="t2-selection-bar">
           <span className="t2-selection-bar__count">{selected.size} selected</span>
@@ -610,9 +634,12 @@ export function TablePanel({
           />
           {/* Remove moved off the row into the selection bar (issue 084). It
               deletes every selected entry, routing any promoted one through the
-              resolution flow above — never a silent cascade. */}
+              resolution flow above — never a silent cascade. 084-D3 P4
+              (decision 8): the verb weight aligns to the Design route's QUIET
+              `rowAction` (matching ParameterList's per-row Remove) — no
+              `variant` prop → the primitive's default `rowAction`. The delete +
+              resolution behavior is unchanged; only the chrome quiets. */}
           <Button
-            variant="command"
             className="t2-selection-bar__remove"
             onClick={() => void removeSelected()}
           >

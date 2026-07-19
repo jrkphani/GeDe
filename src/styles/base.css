@@ -2542,11 +2542,18 @@ body {
   color: var(--ink-muted);
 }
 
-/* Destructive command in the selection bar (issue 084): removes every selected
+/* Destructive verb in the selection bar (issue 084): removes every selected
    entry, routing any promoted entry through the resolution flow — never a
-   silent cascade. Danger-tinted text on the shared always-visible command
-   chrome (it must read as clickable at rest, not a hover-revealed row verb). */
-.t2-selection-bar__remove {
+   silent cascade. 084-D3 P4 (decision 8, STYLE_GUIDE §2.2): danger-tinted text
+   on the QUIET `rowAction` chrome (matching the Design route's per-row Remove),
+   not the always-on command chrome. The bar's own progressive disclosure (it
+   only appears once ≥1 row is selected) carries the "read as clickable"
+   affordance, so the verb itself can stay quiet. The explicit hover/focus rule
+   keeps the danger tint (base `.row-action:hover` would otherwise flip it to
+   `--ink`). */
+.t2-selection-bar__remove,
+.t2-selection-bar__remove:hover,
+.t2-selection-bar__remove:focus-visible {
   color: var(--danger);
 }
 
