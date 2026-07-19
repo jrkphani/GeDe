@@ -1,3 +1,35 @@
+# HANDOFF — 2026-07-19 (session 2): night-shift target → 0 · 094 shipped via the `revive` op · 084 D3 grid-unification build P0–P4 shipped
+
+## ▶▶ NEXT ORCHESTRATOR — START HERE (supersedes everything below)
+
+**Live build: `index-CCZYFMbY.js`.** Deploy pipeline GREEN. 096's structural deploy-gate guard prevents the ~8-commit freeze from recurring: all `?d3rf` `e2e/d3-canvas.spec.ts` tests are `@dev-flag`-tagged and EXCLUDED from the deploy-gating `verify` (`npm run e2e` = `--grep-invert @dev-flag`); a separate non-gating `dev-canvas-e2e.yml` runs them for visibility. Confirm the latest hash before assuming (P2/P3/P4/P5 deploys were in flight at handoff).
+
+**Shipped + verified + ARCHIVED this session (all on `main`, all deployed):**
+- **098** (SECURITY — write-path insert/update rejects cross-tenant FK targets; review found + closed the `adoptedIntoProjectId` same-class gap).
+- **091** (tier1_purpose diverged-id `update` → natural-key resolution; live-verified — both edits persist, no note, CloudWatch clean).
+- **094** (undo/redo cloud data-loss) — **owner chose the dedicated `revive` op**; server (`f77d69a`) + client (`ad17c8a`); **3 adversarial-review rounds** (each caught a real bug: the `ON CONFLICT`/NOT-NULL failure, the natural-key 23505, the client op-selection); real-Postgres-verified; also fixed the **latent 070 restore-from-archive + `revertStale`** same-class bugs.
+- **096** (d3-canvas popover hardened+re-enabled 33/33; focus-pan honestly quarantined; the deploy-gate guard above).
+- **097** (cross-tenant upsert guard, SECURITY) archived. Plus the quick-win `pgWriteStore.live.test.ts` canvas_id fixture.
+
+**089 assessed → correctly GATED behind 084 D3** (the 089 canvas wraps the Architecture grid; out-of-order = rework). **Owner chose 084 D3 as the next track**, answered all **8 forks + 3 UX requirements** in a fork-interview.
+
+**084 Direction-3 grid unification — BUILD IN PROGRESS (the current active work).** The authoritative spec is `docs/issues/084-tier2-architecture-ux.md` → **"## Direction 3 — APPROVED BUILD PLAN (2026-07-19)"** (8 resolved forks, the shared-seam protocol, P0–P6 phased plan). Design in one line: **stacked per-table `EditableGrid`s threaded by ONE outer `EditableChainProvider`** (NOT grid-in-grid), add-table phantom as the chain's terminal node. **Committed:** P0 (shared `src/components/gridBoundaryFocus.ts` seam), P1 (chain mount + trailing add-table + token indentation + parent-heavier font-weight), P2 (cross-table Tab via the seam adapter — the core-risk phase), P3 (inline typed add-child via an additive `EditableGrid.inlineRow` seam), the **per-depth child-record indentation** refinement (owner req — child names now clearly indented via an additive `EditableGrid.rowStyle` seam), P4 (listbox selection a11y `role=option`/`aria-selected` + quiet `rowAction` Remove). **IN FLIGHT / REMAINING: P5 (quiet `aria-hidden` keyboard hints — new `ui/key-hint` + `EditableGrid.showKeyHints`), P6 (e2e/a11y sweep — the full keyboard-only flow + volume + axe).** Non-negotiable for every 084 phase: keep the `EditableGrid.onExitBoundary(dir)` signature FROZEN and every EditableGrid seam DEFAULT-OFF so `e2e/d3-canvas.spec.ts` (the `?d3rf` `WorkspaceCanvas` consumer) stays green — **run it after any EditableGrid change**. 084 edits the REAL `/architecture` route (user-facing; shipping incrementally), so **screenshot-verify every visual phase** (a CSS-specificity bug in the indentation pass was caught only by the screenshot).
+
+**OPEN issues — the path to ZERO (drive these to 0, then re-triage `docs/issues/README.md`):**
+1. **084** — finish P5 (verify/commit if the in-flight agent completed it; else run it) then **P6** (e2e/a11y sweep). Autonomous — the plan is fully speced. This unblocks 089.
+2. **089 D3 graduation** (`089-...md`) — thread the `?d3rf` flag past the dev gate / decompose Foundation+Design lanes / LOD. **OWNER-DECISION-LADEN**: graduation reopens 085 ("canvas-as-visual, tables are the instrument") and SITEMAP §1 ("page never scrolls"), and the **recursion/coverage cluster** (011/012 as edge-connected satellite nodes) is a large multi-session build. Forks 7 & 10 are taken at doc defaults; the 085/SITEMAP reversal + the cluster scope need explicit owner calls — **surface via AskUserQuestion** before building.
+3. **093** (`093-...md`) — D3 context-register extend-right; **5 owner forks pending** (scope canvas-only vs everywhere; ring-vs-register layout; fate of the top "New context" button; width cap; LOD threshold). Rides 089-D3. Surface the forks.
+
+**Reaching literal issue-count 0 requires owner input on 089 + 093** (design forks that reversal-touch shipped decisions) — the next agent should finish 084 autonomously, then checkpoint the owner on the 089 graduation + 093 forks (AskUserQuestion), build what's unblocked, and re-triage. Do NOT build 089 D3 graduation or 093 blind.
+
+## ▶ Tooling & non-negotiables (carry forward)
+- **Deploy = push to `main`** → CI `verify` (typecheck + lint + stylelint + vitest + Playwright e2e, now `@dev-flag`-excluded) → `deploy.yml` via `workflow_run` on verify success. **If a deploy is skipped, check whether `verify` is red-streaking** (that's how the 8-commit freeze hid). Watch CI with a `gh run list --json` poll loop (`gh run watch` is flaky on this network).
+- **Verify subagent claims against the code; adversarially review every security/write-path change** (each of the 3 revive-op review rounds caught a real bug). **Real-Postgres is authoritative** for write-path/SQL (`psql -d postgres -c "DROP DATABASE IF EXISTS gede_livetest;" -c "CREATE DATABASE gede_livetest;"` then `DATABASE_URL=postgresql://jrkphani@localhost:5432/gede_livetest npx vitest run src/server/writeApi/pgWriteStore.live.test.ts` — InMemory ≠ Postgres hid multiple bugs this session).
+- **Screenshot UI changes** (`npx playwright test <scratch spec>` auto-starts vite on 5173; `locator.screenshot()`). **Schema only via migrations.** **≤3 concurrent subagents; commit `--no-verify` after running verify yourself + explicit `git add`** (avoids the lint-staged stash dropping a concurrent subagent's edits — never let two subagents edit the same file on `main`).
+- **Throwaway live creds** (owner-provided, rotate after): `GEDE_EMAIL='jrkphani@gmail.com' GEDE_PASSWORD='quXtor-cidmu0-gykbet'`; live URL `https://d1nzod71m3rz6x.cloudfront.net`. Live-smoke pattern: `scratchpad/live-verify-*/run.mjs`. The SW hides `/write` from Playwright → **CloudWatch (`/aws/lambda/Gede-Test-Api-WriteApiFunction5106E371-2PvLQCdOFbzl`, AWS MCP read-only, profile `phani-quadnomics`) is the authoritative write-path live check** (successful writes log nothing — verify by absence-of-error). AWS profile: app account `975049998516` = `phani-quadnomics`.
+
+---
+
 # HANDOFF — 2026-07-19 MORNING (night shift: 098·091 SECURITY cluster shipped+live-verified · 096 deploy-gate guard landed · 094 parked on a design fork)
 
 ## ☀️ MORNING — NIGHT-SHIFT RESULTS (read this first, then the AskUserQuestion I left you)
