@@ -99,9 +99,16 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
   const paramsByDimension = useParametersStore((s) => s.byDimension)
   const composeContextId = useCanvasComposeStore((s) => s.composeContextId)
 
-  // Issue 093 — collapse the per-dimension columns to a tuple-summary when zoomed
-  // out (boolean selector → re-renders only on threshold crossing, not per frame).
-  const registerCollapsed = useStore((s) => s.transform[2] < LOD_ZOOM)
+  // Issue 093 + 089-P5 — collapse the per-dimension columns to a tuple-summary
+  // when zoomed out (boolean selector → re-renders only on threshold crossing),
+  // EXCEPT during guided compose, when the register hosts the binding comboboxes
+  // and must show the full columns (P5). The many-dimension case is handled by the
+  // P5 width-cap (max-width 1600px + inner-scroll, base.css) — a stable, edit-safe
+  // legibility bound — NOT by an >8-column collapse + DOM-focus-expand, which the
+  // adversarial review showed drops focus into the register's own PORTALLED
+  // combobox (a `.contains()` check can't see portal content) and blocks the very
+  // binding flow it needs. So the cap SUPERSEDES 093's deferred >8-col collapse.
+  const registerCollapsed = useStore((s) => s.transform[2] < LOD_ZOOM) && !composeContextId
 
   // P4 (issue 012) — whether the coverage twin is open (drives the header toggle's
   // active state; the `v` key + toggle buttons open/collapse it).

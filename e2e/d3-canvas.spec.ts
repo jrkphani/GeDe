@@ -880,14 +880,17 @@ test('the D3 register extends right, drops the New-context button, and LOD-colla
   await expect(register.getByRole('columnheader', { name: 'Tuple', exact: true })).toHaveCount(0)
 
   // EXTEND-RIGHT: the register node's own (unscaled) DOM width exceeds the old
-  // 960px cap — it grew to content instead of clipping. And the register scroll
-  // panel does NOT inner-scroll horizontally (overflow-x is visible on the canvas).
+  // 960px cap — it grew to content instead of clipping (6 dims stays under the
+  // 089-P5 1600px cap, so no inner scroll here). Past the cap the register
+  // inner-scrolls (P5 changed overflow-x from `visible` to `auto` so a wide
+  // register can't grow without bound or overlap the satellite/twin clearance).
   const nodeWidth = await register.evaluate((el) => (el as HTMLElement).offsetWidth)
   expect(nodeWidth).toBeGreaterThan(960)
+  expect(nodeWidth).toBeLessThanOrEqual(1600)
   const overflowX = await register
     .locator('.register-scroll')
     .evaluate((el) => getComputedStyle(el).overflowX)
-  expect(overflowX).toBe('visible')
+  expect(overflowX).toBe('auto')
 
   // Zoom OUT below the LOD threshold → the per-dimension columns COLLAPSE to one
   // tuple-summary column (overview legibility).
@@ -1125,4 +1128,197 @@ test('a coverage-twin gap cell composes pre-filled and pans back to the ring; th
   await expect(gap).toHaveAttribute('data-documented', 'false')
   await gap.click()
   await expect(page.locator('.wc-node--design-ring .canvas-dot-group--compose').first()).toBeVisible()
+})
+
+// ── 089-D3 P5 — LOD + perf at volume ────────────────────────────────────────
+// A volume project (12 value-props + 12 tables for the lane LOD, 20 dimensions ×
+// 50 contexts for the register) imported via the .gede.json file input. At
+// overview zoom (below LANE_LOD_ZOOM) the per-item lane nodes render `.wc-lane-summary`
+// cards, NOT full `.editable-grid`s; zooming back in near 1:1 remounts the real
+// grids. Guards no console errors across import + pan/zoom.
+
+// Build a minimal but valid FORMAT_VERSION 5 envelope (fixed timestamps, no
+// Date.now — deterministic). Root canvas only; all dimensions/contexts on it.
+function volumeEnvelopeJson(): string {
+  const TS = '2020-01-01T00:00:00.000Z'
+  const base = { workspaceId: null, createdAt: TS, updatedAt: TS, deletedAt: null }
+  const projects = [{ id: 'p1', name: 'VolumeProj', description: null, ...base }]
+  const canvases = [
+    { id: 'cv-root', projectId: 'p1', parentContextId: null, name: 'Canvas 1', sort: 0, ...base },
+  ]
+  const tier1_purpose = [{ id: 'tp1', projectId: 'p1', body: '', existingScenario: null, ...base }]
+  const tier1_props = Array.from({ length: 12 }, (_, i) => ({
+    id: `prop-${i}`, projectId: 'p1', rank: i, name: `Prop ${i}`, description: null, sort: i, ...base,
+  }))
+  const tier2_tables = Array.from({ length: 12 }, (_, i) => ({
+    id: `tbl-${i}`, projectId: 'p1', name: `Table ${i}`, sort: i, ...base,
+  }))
+  const dimensions = Array.from({ length: 20 }, (_, i) => ({
+    id: `dim-${i}`, projectId: 'p1', canvasId: 'cv-root', contextId: null, sourceParamId: null,
+    name: `Dim ${i}`, color: '#888888', sort: i, ...base,
+  }))
+  const parameters = dimensions.flatMap((d, i) =>
+    Array.from({ length: 2 }, (_, j) => ({
+      id: `param-${i}-${j}`, dimensionId: d.id, parentParamId: null, sourceEntryId: null,
+      name: `P${i}-${j}`, sort: j, ...base,
+    })),
+  )
+  const contexts = Array.from({ length: 50 }, (_, i) => ({
+    id: `ctx-${i}`, projectId: 'p1', canvasId: 'cv-root', parentId: null,
+    symbol: `x${i}`, name: null, justification: null, sort: i, ...base,
+  }))
+  return JSON.stringify({
+    formatVersion: 5,
+    tables: {
+      projects, canvases, tier1_purpose, tier1_props, tier2_tables,
+      tier2_entries: [], dimensions, parameters, contexts, bindings: [],
+    },
+  })
+}
+
+test('at volume, overview renders lane summary cards (not full grids); zooming in remounts the real grids', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  const consoleErrors: string[] = []
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') consoleErrors.push(msg.text())
+  })
+
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+
+  // Import the volume project via the hidden .gede.json file input.
+  await page.locator('input[type="file"]').setInputFiles({
+    name: 'VolumeProj.gede.json',
+    mimeType: 'application/json',
+    buffer: Buffer.from(volumeEnvelopeJson()),
+  })
+  await expect(page.getByRole('button', { name: 'Open VolumeProj' })).toBeVisible({ timeout: 15_000 })
+  await page.getByRole('button', { name: 'Open VolumeProj' }).click()
+  await expect(page).toHaveURL(/\/p\/[^/]+/)
+  const projectId = /\/p\/([^/?#]+)/.exec(page.url())?.[1]
+  await page.goto(`/p/${projectId}/design?d3rf=1`)
+  await expect(page.locator('.react-flow')).toBeVisible()
+  await expect(page.locator('.wc-node--design-register')).toBeVisible({ timeout: 15_000 })
+  await waitForStableViewport(page)
+
+  // OVERVIEW: zoom out below LANE_LOD_ZOOM (0.35) so the lane items summarize.
+  const zoomOut = page.locator('.react-flow__controls-zoomout')
+  await expect.poll(async () => {
+    if ((await viewportScale(page)) >= 0.35) {
+      await zoomOut.click()
+      return false
+    }
+    return true
+  }, { timeout: 20_000 }).toBe(true)
+
+  // Lane items are summary cards, NOT full grids.
+  await expect(page.locator('.wc-lane-summary').first()).toBeVisible()
+  expect(await page.locator('.wc-lane-summary').count()).toBeGreaterThan(0)
+  await expect(page.locator('.wc-node--foundation-item .editable-grid')).toHaveCount(0)
+  await expect(page.locator('.wc-node--arch-table .editable-grid')).toHaveCount(0)
+
+  // ZOOM IN near 1:1: the real grids remount, the summaries disappear.
+  const zoomIn = page.locator('.react-flow__controls-zoomin')
+  await expect.poll(async () => {
+    if ((await viewportScale(page)) < 0.5) {
+      await zoomIn.click()
+      return false
+    }
+    return true
+  }, { timeout: 20_000 }).toBe(true)
+
+  await expect(page.locator('.wc-lane-summary')).toHaveCount(0)
+  expect(await page.locator('.wc-node--foundation-item .editable-grid').count()).toBeGreaterThan(0)
+
+  // No console errors across import + pan/zoom (Gate: interactive, no render loop).
+  expect(consoleErrors).toEqual([])
+})
+
+// 089-P5 review-fix guards ───────────────────────────────────────────────────
+// (1) A lane node being edited must NOT LOD-collapse on zoom-out (an EditableGrid
+// cell commits on blur, so unmounting the grid mid-edit could drop keystrokes —
+// the review HIGH). The focus-within guard keeps an edited node expanded.
+test('a lane node being edited does NOT collapse on zoom-out (no lost edit)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+  await addFoundationProp(page, 'Comfort')
+  await waitForStableViewport(page)
+
+  const item = page.locator('.wc-node--foundation-item').filter({ hasText: 'Comfort' })
+  const nameCell = item.locator('tbody tr[data-row-id] .grid-cell[tabindex]').first()
+  await nameCell.click()
+  const input = item.locator('input, textarea, [contenteditable="true"]').first()
+  await expect(input).toBeVisible()
+  await input.fill('Comfort-EDIT')
+
+  // Zoom out well below LANE_LOD_ZOOM (0.35) via the mouse WHEEL over the pane
+  // background — the review's actual hazard (wheel/pinch/trackpad zoom does NOT
+  // blur the focused cell, unlike clicking the zoom-out button which would blur +
+  // commit first). Wheel over a background point (not a node — node bodies are
+  // `nowheel`), keeping the in-flight edit focused throughout.
+  await page.mouse.move(800, 120)
+  await expect
+    .poll(async () => {
+      if ((await viewportScale(page)) >= 0.3) {
+        await page.mouse.wheel(0, 300)
+        return false
+      }
+      return true
+    })
+    .toBe(true)
+
+  // The edited node stayed EXPANDED (focus-within guard) — no summary card, the
+  // real grid + the in-flight input are still mounted, so no keystroke is lost.
+  await expect(item.locator('.wc-lane-summary')).toHaveCount(0)
+  await expect(item.locator('input, textarea, [contenteditable="true"]').first()).toBeVisible()
+  await page.keyboard.press('Enter')
+  await expect(item).toContainText('Comfort-EDIT')
+  // (That unfocused per-item lane nodes DO summarize at this overview zoom is
+  // covered by the volume test above; here the point is the edited node did not.)
+})
+
+// (2) Guided compose must force the register's full per-dimension columns even when
+// zoomed out (the collapse would otherwise hide the binding comboboxes the flow
+// needs — the review HIGH). The width-cap supersedes the >8-col collapse.
+test('entering compose expands the register even when zoomed-out-collapsed', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+  const register = page.locator('.wc-node--design-register')
+  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+  const dimPhantom = register.getByPlaceholder('Type to add a dimension')
+  for (const name of ['Value', 'Stake']) {
+    await dimPhantom.click()
+    await page.keyboard.type(name)
+    await page.keyboard.press('Enter')
+  }
+  await expect(register.locator('.dim-row')).toHaveCount(2)
+
+  // Zoom out below the register LOD (0.6) → the per-dimension columns collapse to
+  // the single tuple-summary column.
+  const zoomOut = page.locator('.react-flow__controls-zoomout')
+  await expect
+    .poll(async () => {
+      if ((await viewportScale(page)) >= 0.55) {
+        await zoomOut.click()
+        return false
+      }
+      return true
+    })
+    .toBe(true)
+  await expect(register.getByRole('columnheader', { name: 'Tuple', exact: true })).toBeVisible()
+  await expect(register.getByRole('columnheader', { name: 'Value', exact: true })).toHaveCount(0)
+
+  // Enter compose (`c`) — the register must EXPAND to the full per-dimension
+  // columns despite still being zoomed out, so the guided binding is usable.
+  await page.locator('.wc-node--design-ring .canvas-svg').click()
+  await waitForStableViewport(page)
+  await page.keyboard.press('c')
+  await expect(register.getByRole('columnheader', { name: 'Value', exact: true })).toBeVisible()
+  await expect(register.getByRole('columnheader', { name: 'Tuple', exact: true })).toHaveCount(0)
 })

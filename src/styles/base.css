@@ -1784,13 +1784,20 @@ body {
    normal Design route keep their `.register-scroll` inner scroll untouched.
    Design is the RIGHTMOST lane and laneLayout's x is a pure fn of tier index
    (never node width), so a wider register grows into empty canvas — nothing
-   shifts. (A pixel width cap is deferred to P5's LOD pass; overview legibility is
-   handled here by the zoom-collapse below.) */
+   shifts. 089-P5 adds the deferred PIXEL WIDTH-CAP: the register grows to content
+   width UP TO 1600px, then scrolls internally (overflow-x auto) rather than
+   growing without bound — so a 20-dimension register can't dominate the canvas or
+   push the satellite clearance (P4 clears the register's MEASURED width, now ≤
+   1600px) arbitrarily far right. Overview legibility is still handled by the
+   zoom-collapse + the >8-column collapse below. */
 .wc-node--design-register {
   width: max-content;
+  max-width: 1600px;
 }
 .wc-node--design-register .register-scroll {
-  overflow-x: visible;
+  /* P5 — scroll far columns internally past the 1600px cap (was `visible`, which
+     let the register grow unbounded — 093's interim extend-right). */
+  overflow-x: auto;
 }
 .wc-node--design-register .editable-grid {
   width: max-content;
@@ -1799,6 +1806,26 @@ body {
   /* Size to the (now content-wide) table rather than a 60% flex basis. */
   flex: 0 1 auto;
   min-width: 0;
+}
+
+/* 089-P5 — the lane LOD summary card: replaces a per-item lane node's heavy real
+   grid (FoundationPropPanel / TablePanel) when zoomed out below LANE_LOD_ZOOM, so
+   overview stays legible + fewer grids mount at volume. A compact glance — the
+   item name + a muted type label. */
+.wc-lane-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  min-height: 56px;
+  justify-content: center;
+}
+.wc-lane-summary__name {
+  font-weight: 500;
+  color: var(--ink);
+}
+.wc-lane-summary__meta {
+  font-size: var(--text-label);
+  color: var(--ink-muted);
 }
 
 /* The collapsed (zoomed-out) tuple-summary column — a calm read-only glance that

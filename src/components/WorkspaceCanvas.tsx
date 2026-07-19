@@ -10,6 +10,7 @@ import {
   useNodesInitialized,
   useNodesState,
   useReactFlow,
+  useStore,
   type Edge,
   type Node,
   type NodeProps,
@@ -115,6 +116,18 @@ const COVERAGE_TWIN_NODE_ID = 'workspace-canvas-coverage-twin'
 const COVERAGE_TWIN_ESTIMATE = 520
 const ARCH_HEADER_ESTIMATE = 160
 const ARCH_TABLE_ESTIMATE = 340
+
+// 089-P5 — LOD threshold for the per-item lane nodes (Foundation props, Arch
+// tables): below this viewport zoom their heavy real grid is swapped for a
+// lightweight summary card (overview legibility + fewer mounted grids at volume).
+// A body-local BOOLEAN `useStore` selector (like 093's register `LOD_ZOOM`) →
+// re-renders a body only when the threshold is CROSSED, never per pan/zoom frame,
+// and never through the WorkspaceCanvas reconcile/measuredSignature hot path.
+// Deliberately LOWER than the register's 0.6: a small project fit-views at ~0.5,
+// where the grammar e2e specs interact with the real grid — so lane items must
+// stay expanded there and only summarize when zoomed out FURTHER (a volume
+// project fit-views far below this, so its overview shows summary cards).
+const LANE_LOD_ZOOM = 0.35
 
 // Lane geometry. `laneWidth` matches the `.wc-node` reading width so the real
 // surfaces lay out identically inside their nodes; each column's x is a pure
@@ -431,8 +444,44 @@ function FoundationHeaderNode({ data }: NodeProps<FoundationHeaderNode>) {
 // over the real name/description grid. `data-prop-id` makes the node addressable
 // for the cross-node focus helpers; `onExitBoundary` wires the grid's Tab-off-a-
 // -boundary seam to the canvas's next/prev-by-`sort` traversal.
+// P5 LOD for a per-item lane node — collapse to a summary card when zoomed out,
+// but NEVER while the node is being edited. An EditableGrid text/richtext cell
+// commits on BLUR, so collapsing (unmounting the grid) mid-edit could drop the
+// pending keystrokes (adversarial-review HIGH); a body-local focus-within flag
+// keeps an actively-edited node expanded until focus leaves it. The `collapsed`
+// boolean is a pure fn of RF zoom + focus — never node height — so it stays out
+// of the reconcile/measuredSignature hot path (093's boolean-selector discipline).
+function useLaneLod(): {
+  collapsed: boolean
+  onFocusCapture: () => void
+  onBlurCapture: (e: FocusEvent<HTMLElement>) => void
+} {
+  const zoomedOut = useStore((s) => s.transform[2] < LANE_LOD_ZOOM)
+  // Focus is tracked in a REF, not state: setting state on focus would re-render
+  // the node body mid-click and cancel EditableGrid's click-to-edit (an observed
+  // regression). The ref is read when the node re-renders — which the `useStore`
+  // zoom selector already does exactly on a threshold crossing — so an
+  // actively-edited node (focus ref true) that the user WHEEL-zooms out stays
+  // expanded (its grid never unmounts → no dropped keystrokes), while a normal
+  // cell click never triggers a spurious re-render. A blurred node re-collapses on
+  // the next zoom/pan re-render (a cosmetic lag, not a correctness issue).
+  const focusedRef = useRef(false)
+  return {
+    collapsed: zoomedOut && !focusedRef.current,
+    onFocusCapture: () => {
+      focusedRef.current = true
+    },
+    onBlurCapture: (e) => {
+      // Clear only when focus truly leaves the node body (not on an intra-node
+      // focus move). relatedTarget null (focus to nothing) also clears — correct.
+      if (!e.currentTarget.contains(e.relatedTarget)) focusedRef.current = false
+    },
+  }
+}
+
 function FoundationItemNode({ data }: NodeProps<FoundationItemNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
+  const lod = useLaneLod()
   return (
     <div className="wc-node wc-node--foundation-item" data-prop-id={data.prop.id}>
       <div className="wc-node__handle" aria-hidden="true">
@@ -441,14 +490,25 @@ function FoundationItemNode({ data }: NodeProps<FoundationItemNode>) {
       </div>
       <div
         className="nodrag nopan nowheel wc-node__body"
-        onFocusCapture={() => setActiveLane('foundation')}
+        onFocusCapture={() => {
+          setActiveLane('foundation')
+          lod.onFocusCapture()
+        }}
+        onBlurCapture={lod.onBlurCapture}
         onPointerDown={() => setActiveLane('foundation')}
       >
-        <FoundationPropPanel
-          prop={data.prop}
-          readOnly={data.readOnly}
-          onExitBoundary={(dir) => data.onExitBoundary(data.prop.id, dir)}
-        />
+        {lod.collapsed ? (
+          <div className="wc-lane-summary" data-testid="wc-lane-summary">
+            <span className="wc-lane-summary__name">{data.prop.name}</span>
+            <span className="wc-lane-summary__meta">value proposition</span>
+          </div>
+        ) : (
+          <FoundationPropPanel
+            prop={data.prop}
+            readOnly={data.readOnly}
+            onExitBoundary={(dir) => data.onExitBoundary(data.prop.id, dir)}
+          />
+        )}
       </div>
     </div>
   )
@@ -506,6 +566,7 @@ function ArchHeaderNode({ data }: NodeProps<ArchHeaderNode>) {
 // -boundary seam to the canvas's next/prev-by-`sort` traversal.
 function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
+  const lod = useLaneLod()
   return (
     <div className="wc-node wc-node--arch-table" data-table-id={data.table.id}>
       <div className="wc-node__handle" aria-hidden="true">
@@ -513,15 +574,26 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
       </div>
       <div
         className="nodrag nopan nowheel wc-node__body"
-        onFocusCapture={() => setActiveLane('architecture')}
+        onFocusCapture={() => {
+          setActiveLane('architecture')
+          lod.onFocusCapture()
+        }}
+        onBlurCapture={lod.onBlurCapture}
         onPointerDown={() => setActiveLane('architecture')}
       >
-        <TablePanel
-          projectId={data.projectId}
-          table={data.table}
-          readOnly={data.readOnly}
-          onExitBoundary={(dir) => data.onExitBoundary(data.table.id, dir)}
-        />
+        {lod.collapsed ? (
+          <div className="wc-lane-summary" data-testid="wc-lane-summary">
+            <span className="wc-lane-summary__name">{data.table.name}</span>
+            <span className="wc-lane-summary__meta">table</span>
+          </div>
+        ) : (
+          <TablePanel
+            projectId={data.projectId}
+            table={data.table}
+            readOnly={data.readOnly}
+            onExitBoundary={(dir) => data.onExitBoundary(data.table.id, dir)}
+          />
+        )}
       </div>
     </div>
   )
@@ -1204,6 +1276,12 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         maxZoom={2}
         nodesConnectable={false}
         autoPanOnNodeDrag={false}
+        // NOTE (089-P5): `onlyRenderVisibleElements` was evaluated + REMOVED — it
+        // unmounts off-screen nodes, which breaks specs (and UX) that zoom into a
+        // node and read its content without first ensuring it is in view, and the
+        // real volume bottleneck is the register's own cell count (handled by the
+        // 093 zoom-collapse + the P5 >8-column collapse), not the lane-node count.
+        // Overview load is reduced instead by the LOD summary cards below.
         proOptions={{ hideAttribution: true }}
       >
         <Background />
