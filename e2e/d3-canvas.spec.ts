@@ -1,16 +1,23 @@
 import { expect, test, type Page } from '@playwright/test'
 
-// ── DEPLOY-GATE CONTRACT (issue 096) ────────────────────────────────────────
-// EVERY test in this file is tagged `@dev-flag` and MUST stay so. These specs
-// exercise the `?d3rf` dev-only canvas, which is OFF by default and dead in a
-// production build — so they must NEVER gate a prod deploy. The deploy-gating
-// run excludes them (`npm run e2e` = `playwright test --grep-invert @dev-flag`);
-// a separate, NON-gating job runs only them for visibility (`npm run
-// e2e:dev-flag` via .github/workflows/dev-canvas-e2e.yml). A flaky test here can
-// no longer freeze the pipeline (the exact 096 failure: ~8 blocked deploys).
-// IF `?d3rf` ever graduates to a real, user-facing feature, move these tests
-// back into the deploy-gating `verify` by removing the `@dev-flag` tag (and drop
-// this file from grep-invert), so real regressions block deploy again.
+// ── DEPLOY-GATE CONTRACT (issue 096 → GRADUATED 089-P6) ──────────────────────
+// These specs now RUN IN the deploy gate: `npm run e2e` = plain `playwright
+// test` (no more `--grep-invert @dev-flag`), so `verify` executes them and a
+// real canvas regression blocks a prod deploy again. They earned this by proving
+// 22 consecutive green (21 local runs + CI) with zero flakes before the un-tag;
+// the sole quarantined `test.fixme` (focus-pan) was converted to a pure unit
+// test (src/components/workspaceFocusPan.test.ts), so nothing here is a known
+// flaker. The non-gating visibility job (.github/workflows/dev-canvas-e2e.yml)
+// is retired — redundant now that these gate directly.
+//
+// The `@dev-flag` tag is RETAINED on every test, but ONLY as a one-line ROLLBACK
+// LEVER: if a canvas spec ever flakes and threatens to freeze the pipeline (the
+// original 096 failure: ~8 blocked deploys), re-add `--grep-invert @dev-flag` to
+// `package.json`'s `e2e` script to instantly re-exclude this whole file and
+// unblock deploys — then fix the flake and drop the flag again. `npm run
+// e2e:dev-flag` still runs ONLY these specs (targeted canvas runs / rollback
+// verification). NOTE: React Flow is still kept OUT of the prod bundle by
+// d3CanvasNav.guard.test.ts — the canvas ships to prod at 089-P7 (the flip).
 
 // 089-D3 P1 — the gate-(a) regression guard in the REAL app: the EditableGrid
 // Numbers-grammar must survive inside a React Flow custom node at viewport scale
