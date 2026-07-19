@@ -8,6 +8,7 @@ import {
 import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import { plainTextToRichJson, richTextToPlainText, safeRichTextJson } from '../domain/richText'
 import { Combobox, type ComboboxOption } from './ui/combobox'
+import { KeyHint } from './ui/key-hint'
 import { RichTextEditor } from './ui/rich-text-editor'
 import { Swatch } from './ui/swatch'
 
@@ -168,6 +169,15 @@ export interface EditableGridProps<TRow> {
   // Issue 084 D3 P3 — an optional transient row rendered after a named data row
   // (see InlineRowConfig). Additive and default-off; gated by `readOnly`.
   inlineRow?: InlineRowConfig
+  // Issue 084 D3 P5 — quiet keyboard-shortcut hints. When true, the actively-
+  // editing cell shows a decorative (aria-hidden) `<kbd>`-chip affordance —
+  // `Tab →`/`Esc` on a text/mono/multiline cell, `⌘⏎`/`Esc` on a richtext cell —
+  // and the phantom row shows a focus-within-revealed `⏎` chip. The real
+  // shortcut is already announced by the labeled control, so the hints add zero
+  // screen-reader noise. Additive and default-off: absent/false → no chips
+  // render and the grid is byte-identical for every existing caller
+  // (WorkspaceCanvas/Foundation/ContextRegister and the ?d3rf canvas).
+  showKeyHints?: boolean
 }
 
 export const PHANTOM_ROW_ID = '__phantom__'
@@ -205,6 +215,24 @@ interface NavContext extends GridNav {
   // Issue 089-D3 P3.0 — the cross-node Tab handoff seam (see EditableGridProps).
   // Undefined for every existing caller → the grammar is unchanged.
   onExitBoundary?: ((dir: 'forward' | 'backward') => void) | undefined
+  // Issue 084 D3 P5 — render the quiet keyboard-shortcut hints (see
+  // EditableGridProps.showKeyHints). Absent/false → no chips, byte-identical.
+  showKeyHints?: boolean
+}
+
+// Issue 084 D3 P5 — the decorative keyboard-shortcut hints for an actively-
+// editing cell. Each KeyHint is aria-hidden, so this adds no screen-reader
+// noise. The commit/advance gesture differs by cell kind: a text/mono/multiline
+// cell commits and moves on `Tab`; a richtext cell commits on `Cmd/Ctrl+Enter`
+// (the Numbers-grammar seam). `Esc` cancels in both. Rendered only while the
+// cell is editing, so a resting/display cell never carries a chip.
+function CellKeyHints({ variant }: { variant: 'tab' | 'cmdEnter' }) {
+  return (
+    <span className="grid-cell__hints">
+      <KeyHint keys={variant === 'tab' ? ['Tab', '→'] : ['⌘', '⏎']} />
+      <KeyHint keys={['Esc']} />
+    </span>
+  )
 }
 
 // TanStack's `meta` is read at render time inside the (stable) cell renderer
@@ -404,7 +432,7 @@ function TextOrMonoCell<TRow>({
   }
 
   if (editing) {
-    return (
+    const editor = (
       <input
         ref={registerRef(nav, rowId, columnId)}
         className={`inplace-input grid-cell__input${mono ? ' grid-cell__input--mono' : ''}`}
@@ -448,6 +476,15 @@ function TextOrMonoCell<TRow>({
           void commitAndAdvance(draft.trim(), null)
         }}
       />
+    )
+    // Issue 084 D3 P5 — off → the bare editor (byte-identical); on → the editor
+    // plus the quiet, aria-hidden Tab →/Esc chips at the cell's inline end.
+    if (!nav.showKeyHints) return editor
+    return (
+      <span className="grid-cell__editing">
+        {editor}
+        <CellKeyHints variant="tab" />
+      </span>
     )
   }
 
@@ -554,7 +591,7 @@ function MultilineCell<TRow>({
   }
 
   if (editing) {
-    return (
+    const editor = (
       <textarea
         ref={(el) => {
           textareaRef.current = el
@@ -599,6 +636,14 @@ function MultilineCell<TRow>({
           void commitAndAdvance(draft.trim(), null)
         }}
       />
+    )
+    // Issue 084 D3 P5 — off → bare editor; on → editor + quiet Tab →/Esc chips.
+    if (!nav.showKeyHints) return editor
+    return (
+      <span className="grid-cell__editing">
+        {editor}
+        <CellKeyHints variant="tab" />
+      </span>
     )
   }
 
@@ -707,7 +752,7 @@ function RichTextCell<TRow>({
   }
 
   if (editing) {
-    return (
+    const editor = (
       <div className="grid-cell grid-cell--richtext" ref={registerRef(nav, rowId, columnId)}>
         <RichTextEditor
           value={seedRichValue(stored)}
@@ -727,6 +772,15 @@ function RichTextCell<TRow>({
           }}
         />
       </div>
+    )
+    // Issue 084 D3 P5 — off → bare editor; on → editor + quiet ⌘⏎/Esc chips
+    // (the richtext commit is Cmd/Ctrl+Enter, not Tab — the Numbers-grammar seam).
+    if (!nav.showKeyHints) return editor
+    return (
+      <span className="grid-cell__editing">
+        {editor}
+        <CellKeyHints variant="cmdEnter" />
+      </span>
     )
   }
 
@@ -865,7 +919,7 @@ function PhantomCell({
   const [draft, setDraft] = useState('')
   const ref = useRef<HTMLInputElement>(null)
 
-  return (
+  const input = (
     <input
       ref={(el) => {
         ref.current = el
@@ -907,6 +961,18 @@ function PhantomCell({
         handleGridArrowKeys(e, nav, PHANTOM_ROW_ID, columnId)
       }}
     />
+  )
+  // Issue 084 D3 P5 — off → the bare phantom input (byte-identical); on → the
+  // input plus a quiet, aria-hidden `⏎` chip revealed on focus-within (the
+  // established .row-action reveal pattern, base.css), absent at rest.
+  if (!nav.showKeyHints) return input
+  return (
+    <span className="grid-cell__phantom">
+      {input}
+      <span className="grid-cell__hints">
+        <KeyHint keys={['⏎']} />
+      </span>
+    </span>
   )
 }
 
@@ -966,6 +1032,7 @@ export function EditableGrid<TRow>({
   onEditingChange,
   onExitBoundary,
   inlineRow,
+  showKeyHints = false,
 }: EditableGridProps<TRow>) {
   // Issue 035 — a read-only grid never shows the phantom row, regardless of
   // what the caller passed; callers don't need their own conditional.
@@ -1023,6 +1090,9 @@ export function EditableGrid<TRow>({
       activePhantom?.onCreate(value)
     },
     onExitBoundary,
+    // Issue 084 D3 P5 — a viewer's read-only grid shows no editing/phantom hints
+    // (there's nothing to edit); otherwise pass the caller's opt-in through.
+    showKeyHints: showKeyHints && !readOnly,
   }
   const columnSignature = columns.map((c) => `${c.id}:${c.header}:${c.headClassName ?? ''}`).join('|')
 

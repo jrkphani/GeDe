@@ -17,6 +17,7 @@ import {
 } from './gridBoundaryFocus'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
+import { KeyHint } from './ui/key-hint'
 import { EditableChainProvider, InlineEdit, PhantomInput, useEditableChain } from './ui/inline-editor'
 import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from './ui/popover'
 
@@ -184,6 +185,9 @@ function ChainedTablePanel({
       table={table}
       readOnly={readOnly}
       onExitBoundary={onExitBoundary}
+      // Issue 084 D3 P5 — the normal Architecture surface teaches its grammar
+      // with the quiet shortcut hints; the ?d3rf WorkspaceCanvas opts out.
+      showKeyHints
     />
   )
 }
@@ -220,6 +224,10 @@ function AddTablePhantom({
           })
         }
       />
+      {/* Issue 084 D3 P5 — a quiet `⏎` hint that this write-only add-row commits
+          on Enter. Decorative (aria-hidden), revealed on focus-within (base.css),
+          absent at rest — mirrors the row-action reveal pattern. */}
+      <KeyHint keys={['⏎']} />
     </div>
   )
 }
@@ -235,11 +243,17 @@ export function TablePanel({
   table,
   readOnly,
   onExitBoundary,
+  showKeyHints = false,
 }: {
   projectId: string
   table: Tier2TableRow
   readOnly: boolean
   onExitBoundary?: (dir: 'forward' | 'backward') => void
+  // Issue 084 D3 P5 — opt into the quiet keyboard-shortcut hints on the grid's
+  // editing cells + add-entry phantom. The normal ArchitectureSurface passes
+  // true (via ChainedTablePanel); the ?d3rf WorkspaceCanvas leaves it OFF, so
+  // that decomposed canvas stays byte-identical.
+  showKeyHints?: boolean
 }) {
   const entries = useTier2Store((s) => s.entriesByTable[table.id] ?? NO_ENTRIES)
   const linkByEntryId = useTier2Store((s) => s.linkByEntryId)
@@ -567,6 +581,10 @@ export function TablePanel({
         columns={columns}
         getRowId={(entry) => entry.id}
         readOnly={readOnly}
+        // Issue 084 D3 P5 — quiet keyboard-shortcut hints on the editing cells
+        // (Tab →/Esc, ⌘⏎/Esc) + the add-entry phantom's focus-revealed ⏎. Off
+        // for the ?d3rf canvas (WorkspaceCanvas never passes it).
+        showKeyHints={showKeyHints}
         // Owner req ("indent child records"): carry each entry's tree depth to
         // the <tr> as the --depth custom property so the NAME cell (a column
         // separate from the leading tree/chevron cell) steps right per level —

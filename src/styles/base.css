@@ -2657,6 +2657,70 @@ body {
   color: var(--ink-muted);
 }
 
+/* Issue 084 Direction 3 P5 — quiet keyboard-shortcut hints. A decorative
+   (aria-hidden) <kbd>-cap chip that makes the keyboard-fast editing grammar
+   discoverable without a manual (STYLE_GUIDE §6: quiet until relevant, reveal on
+   focus, never always-on chrome). Token-only — no raw px (bar the one sanctioned
+   1px hairline), no ::after content key-caps. */
+.key-hint {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+
+.key-hint__cap {
+  display: inline-flex;
+  align-items: center;
+  padding: 0 var(--space-1);
+  font-family: var(--font-mono);
+  font-size: var(--text-colhead);
+  line-height: var(--leading-colhead);
+  color: var(--ink-muted);
+  background: var(--paper);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+/* The hint cluster sits unobtrusively at the cell's inline end, overlaid so it
+   never shifts the cell's own layout (and is never a data column).
+   pointer-events:none so it can't intercept a click into the control beneath. */
+.grid-cell__editing,
+.grid-cell__phantom {
+  position: relative;
+  display: block;
+}
+
+.grid-cell__hints {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  inset-inline-end: var(--space-3);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  pointer-events: none;
+}
+
+/* Phantom rows: quiet at rest, the `⏎` chip revealed only on focus-within —
+   mirrors the .row-action visibility:hidden → reveal pattern (§6). An editing
+   cell's hints are shown continuously while it is the active editor (rendered
+   only in the editing branch), so they need no focus gate. */
+.grid-cell__phantom .key-hint,
+.t2-add-table .key-hint {
+  visibility: hidden;
+}
+
+.grid-cell__phantom:focus-within .key-hint,
+.t2-add-table:focus-within .key-hint {
+  visibility: visible;
+}
+
+/* The add-table phantom is a flex row (glyph + input), so its hint rides along
+   as a trailing flex item rather than an overlay. */
+.t2-add-table .key-hint {
+  flex: none;
+}
+
 /* Empty-state guidance (issue 084 finding 1): one orienting line beneath the
    add-row when no table exists yet — a bare input alone left a first-run
    project with nothing actionable. */

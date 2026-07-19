@@ -866,3 +866,115 @@ describe('rowStyle (issue 084 D3 — per-row style seam)', () => {
     expect(alpha.getAttribute('style')).toBeNull()
   })
 })
+
+// Issue 084 Direction 3 P5 — quiet keyboard-shortcut hints. An additive,
+// default-off `showKeyHints` prop renders decorative (aria-hidden) `<kbd>` chips
+// on the ACTIVELY-EDITING cell and the (focus-within-revealed) phantom row. The
+// real shortcut is already announced by the labeled control, so the hints add
+// ZERO screen-reader noise. Default OFF ⇒ byte-identical for every existing
+// caller (WorkspaceCanvas/Foundation/ContextRegister and the ?d3rf canvas).
+describe('EditableGrid — quiet keyboard hints (084 D3 P5)', () => {
+  interface Note {
+    id: string
+    body: string
+  }
+
+  function capTexts(): (string | null)[] {
+    return [...document.querySelectorAll('kbd')].map((c) => c.textContent)
+  }
+
+  it('shows Tab →/Esc chips on an editing text cell, all aria-hidden', async () => {
+    const user = userEvent.setup()
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} showKeyHints />)
+    await user.click(screen.getByText('Alpha'))
+    const input = screen.getByDisplayValue('Alpha')
+    expect(input).toHaveFocus()
+    // The chips.
+    expect(capTexts()).toEqual(expect.arrayContaining(['Tab', '→', 'Esc']))
+    // Every chip is out of the accessibility tree (aria-hidden ancestor)…
+    for (const cap of document.querySelectorAll('kbd')) {
+      expect(cap.closest('[aria-hidden="true"]')).not.toBeNull()
+    }
+    // …and the editing control keeps its own accessible name (no SR noise added).
+    expect(input).toHaveAttribute('aria-label', 'Title')
+  })
+
+  it('shows ⌘⏎/Esc chips on an editing richtext cell', async () => {
+    const user = userEvent.setup()
+    const noteRows: Note[] = [{ id: 'r1', body: 'Hello' }]
+    const cols: GridColumn<Note>[] = [
+      {
+        id: 'body',
+        header: 'Body',
+        cell: { kind: 'richtext', placeholder: 'Add note…', getValue: (n) => n.body, onCommit: () => {} },
+      },
+    ]
+    render(<EditableGrid rows={noteRows} columns={cols} getRowId={(r) => r.id} showKeyHints />)
+    await user.click(screen.getByText('Hello'))
+    const editable = await screen.findByLabelText('Body')
+    expect(editable).toHaveAttribute('contenteditable', 'true')
+    expect(capTexts()).toEqual(expect.arrayContaining(['⌘', '⏎', 'Esc']))
+    for (const cap of document.querySelectorAll('kbd')) {
+      expect(cap.closest('[aria-hidden="true"]')).not.toBeNull()
+    }
+  })
+
+  it('shows NO chips on a resting (non-editing) grid', () => {
+    render(<EditableGrid rows={rows} columns={makeColumns()} getRowId={(r) => r.id} showKeyHints />)
+    expect(document.querySelectorAll('kbd')).toHaveLength(0)
+  })
+
+  it('renders NO chips at all when showKeyHints is absent — byte-identical default-off', async () => {
+    const user = userEvent.setup()
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate: vi.fn() }}
+      />,
+    )
+    // Even with a cell actively editing and a phantom present, no hints exist.
+    await user.click(screen.getByText('Alpha'))
+    expect(screen.getByDisplayValue('Alpha')).toHaveFocus()
+    expect(document.querySelectorAll('kbd')).toHaveLength(0)
+  })
+
+  it('shows an aria-hidden ⏎ chip on the phantom row (revealed on focus-within via CSS)', () => {
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        showKeyHints
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate: vi.fn() }}
+      />,
+    )
+    // Present in the DOM (the rest/reveal is CSS visibility — asserted in
+    // key-hint.test.tsx), and decorative (aria-hidden).
+    expect(capTexts()).toContain('⏎')
+    for (const cap of document.querySelectorAll('kbd')) {
+      expect(cap.closest('[aria-hidden="true"]')).not.toBeNull()
+    }
+    // The phantom input keeps its accessible name unchanged.
+    expect(screen.getByPlaceholderText('New task')).toHaveAttribute('aria-label', 'New task')
+  })
+
+  it('the phantom still creates a row with the hint present (chip does not intercept input)', async () => {
+    const onCreate = vi.fn()
+    const user = userEvent.setup()
+    render(
+      <EditableGrid
+        rows={rows}
+        columns={makeColumns()}
+        getRowId={(r) => r.id}
+        showKeyHints
+        phantom={{ columnId: 'title', placeholder: 'New task', onCreate }}
+      />,
+    )
+    const phantom = screen.getByPlaceholderText('New task')
+    await user.type(phantom, 'Gamma')
+    await user.keyboard('{Enter}')
+    expect(onCreate).toHaveBeenCalledWith('Gamma')
+  })
+})

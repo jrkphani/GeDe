@@ -142,6 +142,18 @@ describe('ArchitectureSurface', () => {
     expect(addField).toHaveFocus()
   })
 
+  it('shows a decorative (aria-hidden) ⏎ hint on the add-table phantom (issue 084 D3 P5)', async () => {
+    render(<ArchitectureSurface projectId={projectId} />)
+    const addField = await screen.findByPlaceholderText('Name a table')
+    // The chip lives beside the add-table input, present in the DOM (the
+    // rest/reveal is CSS visibility on :focus-within), and out of the a11y tree.
+    const addRow = addField.closest('.t2-add-table') as HTMLElement
+    const chip = within(addRow).getByText('⏎')
+    expect(chip.closest('[aria-hidden="true"]')).not.toBeNull()
+    // The add control keeps its own accessible name — the chip adds no SR text.
+    expect(addField).toHaveAttribute('aria-label', 'Add architecture table')
+  })
+
   it('renders the promoted source badge INLINE within the Name cell, not a separate meta column (issue 084 test a)', async () => {
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     const users = await addTier2Entry(db, table.id, null, 'Users')
