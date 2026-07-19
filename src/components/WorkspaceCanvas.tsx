@@ -305,6 +305,15 @@ export function WorkspaceCanvas({ route }: { route: WorkspaceRoute }) {
   )
 }
 
+// A STABLE empty contextPath for non-`design` routes. A fresh `[]` literal here
+// would give `design.contextPath` a new identity every render, so the
+// `desiredNodes` useMemo (which depends on it) would recompute every render and
+// its reconcile effect would `setNodes` in a loop → "Maximum update depth". This
+// only manifests once the canvas STAYS mounted on a non-design route — which the
+// 089-P0 flag-persistence (canvasMode) first made possible (pre-P0 an in-app
+// navigate to a tier route dropped `?d3rf` and unmounted the canvas, masking it).
+const NO_CONTEXT_PATH: string[] = []
+
 function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   const projectId = route.projectId
   // Same derivation as WorkspaceSurface: only a `design` route carries
@@ -312,7 +321,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   const design =
     route.kind === 'design'
       ? { contextPath: route.contextPath, view: route.view, canvasId: route.canvasId }
-      : { contextPath: [] as string[], view: 'canvas' as const, canvasId: undefined }
+      : { contextPath: NO_CONTEXT_PATH, view: 'canvas' as const, canvasId: undefined }
 
   // The decomposed Architecture column is data-driven off the tier2 store: in
   // the flag-off app `ArchitectureSurface` calls `load` itself, but here it never

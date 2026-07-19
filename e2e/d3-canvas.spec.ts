@@ -598,3 +598,37 @@ test('dragging a table node down its lane reorders + persists sort, and the lane
   const afterReload = await archTablesByY(page)
   expect(new Set(afterReload.xs).size).toBe(1)
 })
+
+// 089-D3 graduation P0 — the `?d3rf` opt-in now persists in the canvasMode store
+// (seeded once from the initial URL), so an in-app navigate() that rebuilds the
+// URL and DROPS the flag no longer exits the canvas. Every test above has to
+// `page.goto` the full `?d3rf` URL precisely because a tab click used to drop it
+// mid-flow; this guards that persistence directly. It is the prerequisite for
+// the satellite phases (recursion drill-in / coverage toggle), which all navigate.
+test('the ?d3rf canvas survives an in-app navigate that drops the flag (P0 — canvasMode store)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill('Tavalo')
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: 'Open Tavalo' }).click()
+  await expect(page).toHaveURL(/\/p\/[^/]+/)
+  const projectId = /\/p\/([^/?#]+)/.exec(page.url())?.[1]
+  expect(projectId).toBeTruthy()
+
+  // Enter the canvas on Architecture WITH the dev flag — a full load, so
+  // canvasMode seeds `canvasEnabled` from `?d3rf`.
+  await page.goto(`/p/${projectId}/architecture?d3rf=1`)
+  await expect(page.locator('.react-flow')).toBeVisible({ timeout: 15_000 })
+
+  // A REAL in-app navigate(): click the Design tab. serializeRoute rebuilds the
+  // URL and DROPS `?d3rf` — but the store persists `canvasEnabled`, so the canvas
+  // stays mounted (pre-P0 it unmounted to WorkspaceSurface).
+  await page.getByRole('link', { name: 'Design' }).click()
+  await expect(page).toHaveURL(/\/p\/[^/]+\/design$/)
+  expect(new URL(page.url()).searchParams.has('d3rf')).toBe(false)
+  await expect(page.locator('.react-flow')).toBeVisible()
+  await expect(page.locator('.wc-node--design')).toBeVisible()
+})

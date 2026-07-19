@@ -15,6 +15,7 @@ import { navigate, useRoute } from './shell/router'
 import { type AppRoute, type Tier } from './shell/routes'
 import { ContextBarProvider } from './shell/slots'
 import { useAuthStore } from './store/auth'
+import { useCanvasModeStore } from './store/canvasMode'
 import { useProjectsStore } from './store/projects'
 
 const LAST_TIER_PREFIX = 'gede-last-tier:'
@@ -22,25 +23,15 @@ const LAST_TIER_PREFIX = 'gede-last-tier:'
 // 089-D3 — the React Flow canvas is the ONLY thing that pulls in `@xyflow/react`
 // (JS + its ~18.6 KB stylesheet). `React.lazy` puts it in its own async chunk so
 // a static `import` never drags React Flow into the main bundle; combined with
-// the `import.meta.env.DEV` gate in d3CanvasEnabled(), a production build folds
-// the mount site away and never imports this chunk — so neither the JS nor the
-// CSS ships to prod users. The lightweight ⌘1/2/3 interceptor is imported
+// the `import.meta.env.DEV` gate on `canvasMode`'s `canvasEnabled` (store/
+// canvasMode.ts), a production build folds the mount site away and never
+// imports this chunk — so neither the JS nor the CSS ships to prod users. The
+// canvasEnabled read is a store lookup (not a URL read) so the canvas survives
+// an in-app navigate that drops `?d3rf`. The lightweight ⌘1/2/3 interceptor is imported
 // eagerly above instead (d3CanvasNav), preserving the register-first ordering.
 const WorkspaceCanvas = lazy(() =>
   import('./components/WorkspaceCanvas').then((m) => ({ default: m.WorkspaceCanvas })),
 )
-
-// 089-D3 P1 — a DEV-ONLY, OFF-by-default flag that mounts the React Flow canvas
-// (WorkspaceCanvas) in place of the normal WorkspaceSurface for the workspace
-// routes. `import.meta.env.DEV` is statically `false` in a production build, so
-// the whole expression folds to `false` there — the canvas is dead code in prod
-// and WorkspaceSurface always renders. In dev it is still opt-in per navigation
-// via `?d3rf` in the URL; without the param the normal surface renders. This is
-// the D3 spike's gate-(a) harness, NOT a shipped route change — routes.ts is
-// untouched and the flag never persists to any store.
-function d3CanvasEnabled(): boolean {
-  return import.meta.env.DEV && new URLSearchParams(window.location.search).has('d3rf')
-}
 
 function rememberTier(route: AppRoute) {
   if (route.kind === 'tier') localStorage.setItem(LAST_TIER_PREFIX + route.projectId, route.tier)
@@ -67,6 +58,13 @@ function AuthCallbackRedirect() {
 }
 
 function Surface({ route }: { route: AppRoute }) {
+  // 089-D3 graduation P0 — the dev-only canvas opt-in now lives in a store,
+  // seeded ONCE from the initial `?d3rf` (store/canvasMode.ts). Reading the
+  // store instead of `window.location.search` means an in-app navigate() that
+  // drops `?d3rf` (a tab click, a drill-in, the `v` toggle) no longer unmounts
+  // the canvas mid-flow — a prerequisite for the satellite phases, which all
+  // navigate. Still DEV-gated + folds to a constant `false` in prod builds.
+  const canvasEnabled = useCanvasModeStore((s) => s.canvasEnabled)
   switch (route.kind) {
     case 'projects':
       return <ProjectsList onOpen={(id) => navigate({ kind: 'project', projectId: id })} />
@@ -79,10 +77,10 @@ function Surface({ route }: { route: AppRoute }) {
     case 'tier':
     case 'design':
       // 089-D3 P1 — dev-only `?d3rf` flag swaps in the React Flow canvas; OFF by
-      // default and dead in prod builds (see d3CanvasEnabled), so normal app
-      // behavior is unchanged. The canvas is `React.lazy` (its own async chunk),
-      // so it's wrapped in <Suspense> while the chunk loads.
-      return d3CanvasEnabled() ? (
+      // default and dead in prod builds (canvasEnabled folds to `false`), so
+      // normal app behavior is unchanged. The canvas is `React.lazy` (its own
+      // async chunk), so it's wrapped in <Suspense> while the chunk loads.
+      return canvasEnabled ? (
         <Suspense fallback={null}>
           <WorkspaceCanvas route={route} />
         </Suspense>
