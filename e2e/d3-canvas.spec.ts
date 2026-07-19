@@ -352,57 +352,12 @@ test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf
     .toBeLessThan(120)
 })
 
-// STILL QUARANTINED (issue 096) — could NOT be made deterministic; keep it out of
-// the deploy gate. The focus-driven pan (WorkspaceCanvas onFocusCapture → React
-// Flow setCenter) is only reliable on a "warm" viewport (immediately after another
-// move) and races a ONE-TIME post-measurement fitView. Investigation (2026-07-18):
-//   • Emulating `prefers-reduced-motion: reduce` snaps the pan to duration 0 and
-//     lifts the pass rate to ~11/12 — but setCenter(duration 0) is a no-op when the
-//     zoom is idle, so ANY settle/stabilise wait inserted before the focus drops it
-//     back to 0/N (the pan silently never fires).
-//   • WorkspaceCanvas fires a one-time fitView after `useNodesInitialized` (from a
-//     rAF); its result transform is byte-identical to the initial fit, so it cannot
-//     be waited out by watching the viewport transform, and when it lands just after
-//     the focus-pan it clobbers the node back off-screen (the residual ~1/12 flake).
-//   • blur+refocus per poll tick makes it worse (the blur undoes the prior pan and
-//     the post-focus box read is a frame too early), and the animated (non-reduced)
-//     setCenter after a settle also no-ops.
-// Net: ~92% is not good enough — a single flake re-freezes the deploy pipeline (the
-// exact 096 failure), so this stays `test.fixme`. Best real fix is app-side: have
-// onFocusCapture await the measurement fit (or expose a settled signal) so the pan
-// isn't racing it; or cover the invariant with a unit test of onFocusCapture instead
-// of an e2e. Dev-flag-only canvas — see the deploy-gate note on the popover test.
-test.fixme('focusing a cell in an off-screen lane pans it into view', { tag: '@dev-flag' }, async ({ page }) => {
-  await page.emulateMedia({ reducedMotion: 'reduce' })
-  await page.setViewportSize({ width: 1100, height: 850 })
-  await openThreeLaneCanvas(page)
-  await expect(page.locator('.wc-node--design-register .context-register-shell')).toBeVisible({ timeout: 15_000 })
-
-  await page.keyboard.press('Meta+Digit1')
-
-  const designDim = page.locator('.wc-node--design-register').getByPlaceholder('Type to add a dimension')
-  await expect
-    .poll(async () => {
-      const el = await designDim.boundingBox()
-      const p = await page.locator('.react-flow').boundingBox()
-      if (!el || !p) return -1
-      return el.x + el.width / 2 - (p.x + p.width)
-    })
-    .toBeGreaterThan(0)
-
-  await designDim.focus()
-
-  await expect
-    .poll(async () => {
-      const el = await designDim.boundingBox()
-      const p = await page.locator('.react-flow').boundingBox()
-      if (!el || !p) return false
-      const cx = el.x + el.width / 2
-      const cy = el.y + el.height / 2
-      return cx > p.x && cx < p.x + p.width && cy > p.y && cy < p.y + p.height
-    })
-    .toBe(true)
-})
+// NOTE: the "focusing a cell in an off-screen lane pans it into view" invariant
+// used to live here as a quarantined `test.fixme` — it could not be made e2e-
+// deterministic (issue 096: the focus-pan setCenter races a one-time post-
+// measurement fitView and no-ops under reduced motion). The app-owned decision
+// (pan-if-outside-margin, and to what point) is now unit-tested directly in
+// src/components/workspaceFocusPan.test.ts — the race left to React Flow (089-P6).
 
 // ── 089-D3 P3.2 / P3.3 — the Architecture lane decomposed into per-table nodes ─
 // P3.2 emits one React Flow node per `tier2` table (plus a small header node with

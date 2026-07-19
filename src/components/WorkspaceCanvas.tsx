@@ -46,6 +46,7 @@ import type { Tier1PropRow, Tier2TableRow } from '../db/mutations'
 import type { AppRoute, DesignView } from '../shell/routes'
 import { DesignCoverageTwinBody, DesignRegisterBody, DesignRingBody } from './DesignCoreAdapter'
 import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
+import { focusPanTarget } from './workspaceFocusPan'
 import { FoundationHeaderPanel, FoundationPropPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
 import { Button } from './ui/button'
@@ -1174,19 +1175,12 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
       const target = e.target as HTMLElement | null
       const pane = wrapperRef.current
       if (!target || !pane || typeof target.getBoundingClientRect !== 'function') return
-      const r = target.getBoundingClientRect()
-      if (r.width === 0 && r.height === 0) return
-      const p = pane.getBoundingClientRect()
-      const outside =
-        r.top < p.top + FOCUS_PAN_MARGIN ||
-        r.bottom > p.bottom - FOCUS_PAN_MARGIN ||
-        r.left < p.left + FOCUS_PAN_MARGIN ||
-        r.right > p.right - FOCUS_PAN_MARGIN
-      if (!outside) return
-      const center = reactFlow.screenToFlowPosition({
-        x: r.left + r.width / 2,
-        y: r.top + r.height / 2,
-      })
+      // Pure pan-decision (unit-tested in workspaceFocusPan.test.ts) — returns
+      // the screen point to centre on, or null when the element is already in
+      // view. The flaky setCenter-vs-fitView race is React Flow's, not ours.
+      const point = focusPanTarget(target.getBoundingClientRect(), pane.getBoundingClientRect(), FOCUS_PAN_MARGIN)
+      if (!point) return
+      const center = reactFlow.screenToFlowPosition(point)
       const { zoom } = reactFlow.getViewport()
       const duration = prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION
       void reactFlow.setCenter(center.x, center.y, { zoom, duration })
