@@ -841,3 +841,59 @@ test('the Design lane is a register node stacked over a ring node, with cross-no
   // contexts store, so the register reflects it as a selected row.
   await expect(register.locator('.grid-row--selected')).toHaveCount(1)
 })
+
+// ── Issue 093 — the D3 register extends RIGHT + LOD tuple-summary collapse ─────
+// On the canvas the Design register grows to its content width (no clip behind
+// the frozen symbol column, no inner horizontal scrollbar) so far proof columns
+// are reached by panning; the stranded top "New context" button is gone (the
+// phantom row is the sole create); and below ~0.6 zoom the per-dimension columns
+// collapse to one tuple-summary column for overview legibility.
+test('the D3 register extends right, drops the New-context button, and LOD-collapses when zoomed out', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+
+  const register = page.locator('.wc-node--design-register')
+  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+
+  // The stranded top "New context" button is removed (the register body no longer
+  // renders `.canvas-toolbar`); the phantom row is the sole create affordance.
+  await expect(register.locator('.canvas-toolbar')).toHaveCount(0)
+
+  // Add six dimensions so the register is wider than the old fixed 960px node.
+  const dimPhantom = register.getByPlaceholder('Type to add a dimension')
+  for (const name of ['Dim1', 'Dim2', 'Dim3', 'Dim4', 'Dim5', 'Dim6']) {
+    await dimPhantom.click()
+    await page.keyboard.type(name)
+    await page.keyboard.press('Enter')
+  }
+  await expect(register.locator('.dim-row')).toHaveCount(6)
+
+  // Zoom IN past the LOD threshold (0.6) so the full per-dimension columns show.
+  const zoomIn = page.locator('.react-flow__controls-zoomin')
+  for (let i = 0; i < 8; i++) await zoomIn.click()
+
+  // EXPANDED: every per-dimension column header is present, no Tuple summary.
+  await expect(register.getByRole('columnheader', { name: 'Dim1', exact: true })).toBeVisible()
+  await expect(register.getByRole('columnheader', { name: 'Dim6', exact: true })).toBeVisible()
+  await expect(register.getByRole('columnheader', { name: 'Tuple', exact: true })).toHaveCount(0)
+
+  // EXTEND-RIGHT: the register node's own (unscaled) DOM width exceeds the old
+  // 960px cap — it grew to content instead of clipping. And the register scroll
+  // panel does NOT inner-scroll horizontally (overflow-x is visible on the canvas).
+  const nodeWidth = await register.evaluate((el) => (el as HTMLElement).offsetWidth)
+  expect(nodeWidth).toBeGreaterThan(960)
+  const overflowX = await register
+    .locator('.register-scroll')
+    .evaluate((el) => getComputedStyle(el).overflowX)
+  expect(overflowX).toBe('visible')
+
+  // Zoom OUT below the LOD threshold → the per-dimension columns COLLAPSE to one
+  // tuple-summary column (overview legibility).
+  const zoomOut = page.locator('.react-flow__controls-zoomout')
+  for (let i = 0; i < 12; i++) await zoomOut.click()
+
+  await expect(register.getByRole('columnheader', { name: 'Tuple', exact: true })).toBeVisible()
+  await expect(register.getByRole('columnheader', { name: 'Dim1', exact: true })).toHaveCount(0)
+})

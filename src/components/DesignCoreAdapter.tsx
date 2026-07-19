@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
+import { useStore } from '@xyflow/react'
 import type { CanvasEmphasis } from '../domain/canvasAdjacency'
 import { firstUnbound } from '../domain/composeMode'
 import { documentedStatus, isComplete } from '../domain/completeness'
@@ -45,6 +46,13 @@ export interface DesignBodyProps {
   canvasId?: string | undefined
 }
 
+// Issue 093 — below this viewport zoom the register's per-dimension columns
+// collapse into ONE tuple-summary column (an LOD glance for overview legibility);
+// zoom back in past it to edit the full columns. Selecting the DERIVED boolean
+// from React Flow's store (not the raw zoom) means the register only re-renders
+// when the threshold is CROSSED, not on every pan/zoom frame.
+const LOD_ZOOM = 0.6
+
 // Pure derivation shared by both bodies: which canvas is open + whether its
 // content has loaded. Mirrors DesignSurface.tsx:44-99,515-518 exactly. No side
 // effects — the register body owns every load; the ring body only reads.
@@ -90,9 +98,12 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
   const contexts = useContextsStore((s) => s.contexts)
   const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
   const breadcrumbs = useContextsStore((s) => s.breadcrumbs)
-  const selectedContextId = useContextsStore((s) => s.selectedContextId)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
   const composeContextId = useCanvasComposeStore((s) => s.composeContextId)
+
+  // Issue 093 — collapse the per-dimension columns to a tuple-summary when zoomed
+  // out (boolean selector → re-renders only on threshold crossing, not per frame).
+  const registerCollapsed = useStore((s) => s.transform[2] < LOD_ZOOM)
 
   const [staleEvents, setStaleEvents] = useState<StaleRebindEvent[]>([])
 
@@ -161,8 +172,6 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
       ).length,
     [contexts, dimensionIds, bindingsByContext],
   )
-
-  const composing = composeContextId !== null && composeContextId === selectedContextId
 
   function handleDrillIn(id: string) {
     navigate({ kind: 'design', projectId, contextPath: [...contextPath, id], view: 'canvas' })
@@ -373,16 +382,9 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
               Add a second dimension to start binding contexts.
             </p>
           ) : null}
-          {readOnly ? null : (
-            <div className="canvas-toolbar">
-              <Button
-                onClick={() => void useCanvasComposeStore.getState().enterCompose()}
-                disabled={composing}
-              >
-                New context
-              </Button>
-            </div>
-          )}
+          {/* Issue 093 — the top "New context" button is REMOVED; the register's
+              phantom row is now the sole create affordance (the `c` key still
+              enters guided compose mode). */}
           <div className="editing-zone" role="group" aria-label="Dimensions, parameters, and contexts">
             <section className="dim-rail" aria-label="Dimensions and parameters">
               <DimensionManagerPanel childCanvas={contextId !== null} />
@@ -393,6 +395,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
                 contextId={contextId}
                 onDrillIn={handleDrillIn}
                 readOnly={readOnly}
+                collapsed={registerCollapsed}
               />
             </section>
           </div>

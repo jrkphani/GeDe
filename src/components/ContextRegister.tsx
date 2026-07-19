@@ -1,6 +1,7 @@
 import { useEffect } from 'react'
 import type { ContextRow } from '../db/mutations'
 import { documentedStatus, isComplete } from '../domain/completeness'
+import { tupleReadout } from '../domain/contextDescription'
 import { findDuplicateContextIds } from '../domain/duplicates'
 import { presenceCueLabel } from '../domain/presence'
 import { useCommandLogStore } from '../store/commandLog'
@@ -69,6 +70,7 @@ export function ContextRegister({
   contextId = null,
   onDrillIn,
   readOnly = false,
+  collapsed = false,
 }: {
   projectId: string
   contextId?: string | null
@@ -76,6 +78,11 @@ export function ContextRegister({
   // Issue 035 — a viewer sees the same register, minus every write affordance
   // (phantom row, in-place edit of any cell); forwarded straight to EditableGrid.
   readOnly?: boolean
+  // Issue 093 — LOD glance: when true (the D3 register is zoomed out), the
+  // per-dimension columns collapse into ONE read-only tuple-summary column so
+  // the register stays legible in overview. Zoom back in (collapsed=false) to
+  // edit the full columns. Default off for the D2 / normal-route register.
+  collapsed?: boolean
 }) {
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const contexts = useContextsStore((s) => s.contexts)
@@ -120,6 +127,33 @@ export function ContextRegister({
   const duplicatesByContext = findDuplicateContextIds(dimensionIds, bindingsByContext)
   const symbolById = Object.fromEntries(contexts.map((c) => [c.id, c.symbol]))
 
+  // Issue 093 — the collapsed tuple-summary column reads each context's whole
+  // bound tuple as one string ("Comfort · Users · —"), reusing the same
+  // `tupleReadout` / `' · '` idiom as the coverage matrix and the ring's a11y.
+  const paramNameById: Record<string, string> = {}
+  for (const list of Object.values(paramsByDimension)) {
+    for (const p of list) paramNameById[p.id] = p.name
+  }
+  const tupleSummaryColumn: GridColumn<ContextRow> = {
+    id: '__tuple_summary__',
+    header: 'Tuple',
+    headClassName: 'grid-col--tuple-summary',
+    cellClassName: 'grid-col--tuple-summary',
+    cell: {
+      kind: 'static',
+      render: (ctx) => {
+        const readout = tupleReadout(dimensions, bindingsByContext[ctx.id] ?? {}, paramNameById).join(
+          ' · ',
+        )
+        return (
+          <span className="register-tuple-summary font-mono" title={readout}>
+            {readout}
+          </span>
+        )
+      },
+    },
+  }
+
   const columns: GridColumn<ContextRow>[] = [
     {
       id: 'symbol',
@@ -156,27 +190,31 @@ export function ContextRegister({
         },
       },
     },
-    ...dimensions.map(
-      (dim): GridColumn<ContextRow> => ({
-        id: dim.id,
-        header: dim.name,
-        cell: {
-          kind: 'combobox',
-          getValue: (ctx) => bindingsByContext[ctx.id]?.[dim.id] ?? null,
-          getOptions: () =>
-            (paramsByDimension[dim.id] ?? []).map((p) => ({
-              value: p.id,
-              label: p.name,
-              color: dim.color,
-            })),
-          onCommit: async (ctx, value) => {
-            if (value) await bind(ctx.id, dim.id, value)
-            else await unbind(ctx.id, dim.id)
-            return true
-          },
-        },
-      }),
-    ),
+    // Issue 093 — collapsed (zoomed out) → one tuple-summary column; else the
+    // full per-dimension combobox columns.
+    ...(collapsed
+      ? [tupleSummaryColumn]
+      : dimensions.map(
+          (dim): GridColumn<ContextRow> => ({
+            id: dim.id,
+            header: dim.name,
+            cell: {
+              kind: 'combobox',
+              getValue: (ctx) => bindingsByContext[ctx.id]?.[dim.id] ?? null,
+              getOptions: () =>
+                (paramsByDimension[dim.id] ?? []).map((p) => ({
+                  value: p.id,
+                  label: p.name,
+                  color: dim.color,
+                })),
+              onCommit: async (ctx, value) => {
+                if (value) await bind(ctx.id, dim.id, value)
+                else await unbind(ctx.id, dim.id)
+                return true
+              },
+            },
+          }),
+        )),
     {
       id: 'justification',
       header: 'Justification',

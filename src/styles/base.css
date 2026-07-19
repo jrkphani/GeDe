@@ -1776,6 +1776,41 @@ body {
   }
 }
 
+/* ── Issue 093 — the D3 register EXTENDS RIGHT (canvas-only) ───────────────────
+   On the `?d3rf` canvas the Design register no longer clips its proof columns
+   behind the frozen symbol column inside a fixed 960px node; the register node
+   grows to its CONTENT width and far columns are reached by PANNING, not an inner
+   scrollbar. Scoped to `.wc-node--design-register` so the D2 lane page + the
+   normal Design route keep their `.register-scroll` inner scroll untouched.
+   Design is the RIGHTMOST lane and laneLayout's x is a pure fn of tier index
+   (never node width), so a wider register grows into empty canvas — nothing
+   shifts. (A pixel width cap is deferred to P5's LOD pass; overview legibility is
+   handled here by the zoom-collapse below.) */
+.wc-node--design-register {
+  width: max-content;
+}
+.wc-node--design-register .register-scroll {
+  overflow-x: visible;
+}
+.wc-node--design-register .editable-grid {
+  width: max-content;
+}
+.wc-node--design-register .context-register-shell {
+  /* Size to the (now content-wide) table rather than a 60% flex basis. */
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+/* The collapsed (zoomed-out) tuple-summary column — a calm read-only glance that
+   replaces the per-dimension columns below LOD_ZOOM (093). */
+.grid-col--tuple-summary {
+  min-width: 220px;
+}
+.register-tuple-summary {
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
 /* ── Recursion / drill-down (issue 011) ──────────────────────────────────── */
 
 /* The app's ONE choreographed transition (STYLE_GUIDE §8 drill-down exception,
