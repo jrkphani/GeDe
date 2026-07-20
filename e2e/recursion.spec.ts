@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 011 — reproduce the Numbers drill-down (SPEC §6 M3 done-when): a complete
 // root context α opens as a child canvas whose dimensions are α's bound
@@ -8,6 +9,11 @@ import { expect, test, type Page } from '@playwright/test'
 // Two dimensions (Value/Stake, one parameter each) keep the setup fast while
 // still exercising the full recursion path.
 async function setUpBoundAlpha(page: Page) {
+  // 089-P7: this recursion model is breadcrumb-based drill-in (`.children-drill`
+  // → `.breadcrumb--current`) and composes via the `New context` button — the
+  // WorkspaceSurface DesignSurface flow. The canvas models recursion as
+  // edge-connected satellites (covered by d3-canvas.spec.ts). Pin to the fallback.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

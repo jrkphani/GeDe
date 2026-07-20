@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 const PROPS = [
   'Seating-status comfort',
@@ -32,6 +33,12 @@ async function dragHandleOnto(page: Page, fromName: string, toName: string) {
 test('foundation: enter five value propositions, re-rank by drag, persist across reload', async ({
   page,
 }) => {
+  // 089-P7: re-ranks value props via in-grid `Reorder …` drag handles on the
+  // stacked Foundation `.editable-grid` (rank shown as `1°…5°`) — the
+  // WorkspaceSurface tier surface. The canvas decomposes Foundation into per-prop
+  // RF nodes reordered by dragging the node handle (covered by d3-canvas.spec.ts).
+  // Pin to the fallback surface.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
 
@@ -100,6 +107,10 @@ test('existing scenario: enter formatted prose, reload persists, export/import r
   page,
   browser,
 }) => {
+  // Pin to WorkspaceSurface (like the sibling test above): this exercises the
+  // in-grid Foundation prose/RankCell + export-import round-trip on the fallback
+  // surface; the canvas Foundation grammar is covered in d3-canvas.spec.ts.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
 

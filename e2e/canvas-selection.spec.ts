@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 009 — canvas selection, spokes, register sync. Issue 085 Phase B
 // retires the Composer strip: selecting on the canvas highlights + scrolls
@@ -6,6 +7,10 @@ import { expect, test, type Page } from '@playwright/test'
 // register's own justification cell is the (only) editing surface now.
 // Mirrors canvas.spec.ts's setup (3 dimensions, one parameter each).
 async function setUpCanvas(page: Page) {
+  // 089-P7: selection/spoke assertions on the DesignSurface ring + native-scroll
+  // register (WorkspaceSurface fallback). Canvas selection is covered by
+  // d3-canvas.spec.ts. Pin to the fallback surface.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 015 — export a fully-composed project, wipe to a clean browser profile,
 // import the file, and prove the register / canvas / coverage are identical.
@@ -9,6 +10,10 @@ import { expect, test, type Page } from '@playwright/test'
 // Seed 3 dimensions (Value/Stake/Process, one param each) and compose a
 // complete + justified context α — mirrors canvas-compose.spec.ts.
 async function seedAndCompose(page: Page) {
+  // 089-P7: composes via the `New context` button + on-ring dot binding (the
+  // WorkspaceSurface DesignSurface flow) and re-verifies the Design projection
+  // after import. Pin both profiles to the fallback surface.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
@@ -106,6 +111,9 @@ test('export → wipe → import reproduces the project identically, offline', a
   // A clean second profile (the "wipe"): loaded online, then taken offline.
   const cleanContext = await browser.newContext()
   const cleanPage = await cleanContext.newPage()
+  // The clean profile re-opens the imported project on the Design route — pin it
+  // to the WorkspaceSurface fallback too (see forceWorkspaceSurface).
+  await forceWorkspaceSurface(cleanPage)
   await cleanPage.goto('/')
   await expect(cleanPage.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
 

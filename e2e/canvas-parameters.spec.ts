@@ -1,9 +1,14 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 023 — regression guard for the bug report: "the canvas is not showing
 // the parameters in each dimension." 2 dimensions, 2 parameters each — the
 // exact shape from the bug report screenshot. Mirrors canvas.spec.ts's setup.
 async function setUpCanvas(page: Page) {
+  // 089-P7: these assert `.canvas-shell` label tiers driven by the container's
+  // measured width, resizing the viewport across breakpoints — a WorkspaceSurface
+  // responsive concern. Pin to that fallback at any width.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

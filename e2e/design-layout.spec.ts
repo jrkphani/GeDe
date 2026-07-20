@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Narrows Playwright's nullable boundingBox() return without a non-null
 // assertion (forbidden repo-wide — @typescript-eslint/no-non-null-assertion).
@@ -15,6 +16,11 @@ async function requireBox(locator: Locator) {
 // untouched; the "never both" behavior lives in base.css, which only a real
 // browser fully applies).
 async function setUpTwoDimensionCanvas(page: Page) {
+  // 089-P7: asserts DesignSurface stacking geometry (`.editing-zone`,
+  // `.canvas-shell`) + the child-canvas empty-state prompts — WorkspaceSurface
+  // (< 1024px / data-saver) layout the canvas flip retained. The canvas decomposes
+  // this into RF nodes (covered by d3-canvas.spec.ts); pin to the fallback.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
@@ -110,6 +116,11 @@ test('the canvas sits above the full-width editing zone (larger ring), with the 
 test('dimensions, parameters, and contexts can all be defined by keyboard alone — Tab bridges rail -> register without ever touching the canvas', async ({
   page,
 }) => {
+  // 089-P7: the rail→register Tab BRIDGE is a WorkspaceSurface layout invariant
+  // (one editing zone, canvas as the last DOM child). On the canvas the register
+  // and ring are separate RF nodes, so this bridge does not apply. Pin to the
+  // fallback; cross-node Tab on the canvas is covered by d3-canvas.spec.ts.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

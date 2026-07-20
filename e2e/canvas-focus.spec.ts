@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 028(a) — canvas hover/focus adjacency emphasis (STYLE_GUIDE §7/§8,
 // amended). Mirrors canvas.spec.ts / recursion.spec.ts's setup (three
@@ -9,6 +10,11 @@ import { expect, test, type Page } from '@playwright/test'
 // Phase B retired the Composer strip and its `.composer-bar[data-composing]`
 // gate — the canvas's own compose marker is the equivalent signal now.
 async function setUpCanvas(page: Page) {
+  // 089-P7: on-ring hover/compose via the `New context` button — the
+  // WorkspaceSurface DesignSurface flow (canvas dropped the button in 093 and
+  // scales its dots inside a node). Pin to the fallback; canvas hover/compose is
+  // covered by d3-canvas.spec.ts.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

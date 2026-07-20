@@ -1,8 +1,13 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Shared canvas setup: project → Design tab → 3 dimensions (Value/Stake/Process)
 // each with one parameter (Comfort/Users/Engagement). Used by every test below.
 async function setUpCanvas(page: Page) {
+  // 089-P7: register grid keyboard grammar + binding in the native-scroll
+  // DesignSurface register (WorkspaceSurface fallback). Canvas register grammar
+  // is covered by d3-canvas.spec.ts. Pin to the fallback.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

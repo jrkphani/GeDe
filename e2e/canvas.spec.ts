@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 008 — read-only circle canvas. Structural assertions on the rendered
 // SVG rather than pixel screenshots (no visual-snapshot infra in this repo
@@ -6,6 +7,12 @@ import { expect, test, type Page } from '@playwright/test'
 // makes toHaveScreenshot()-style baselines a real flakiness risk — deferred
 // to a later polish issue). Mirrors context-register.spec.ts's setup.
 async function setUpCanvas(page: Page) {
+  // 089-P7: these specs assert the DesignSurface DOM (`.canvas-shell`,
+  // `.editing-zone`, the `New context` button, container-width label tiers) and
+  // resize themselves to prove responsive behaviour — all WorkspaceSurface
+  // (< 1024px / data-saver fallback) concerns. Pin to that surface at any width;
+  // the canvas ring/register has its own coverage in d3-canvas.spec.ts.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

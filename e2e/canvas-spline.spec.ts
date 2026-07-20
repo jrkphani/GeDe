@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 039 (028 phase b) — canvas spoke bundling. Structural assertions on
 // the rendered SVG (this repo has no visual-snapshot/toHaveScreenshot infra
@@ -13,6 +14,9 @@ import { expect, test, type Page } from '@playwright/test'
 // Phase B retired the Composer strip and its `.composer-bar[data-composing]`
 // gate — the canvas's own compose marker is the equivalent signal now.
 async function setUpCanvas(page: Page) {
+  // 089-P7: dense-spline geometry on the full-size DesignSurface ring, composing
+  // via the `New context` button (WorkspaceSurface fallback). Pin to it.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

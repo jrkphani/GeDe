@@ -1,10 +1,15 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 012 — the coverage matrix (SPEC §4.5, test-plan #4 at n = 3): from a
 // hollow cell, compose pre-filled, justify, and watch the cell fill and the
 // stat increment. Mirrors canvas-compose.spec.ts's setup but gives every
 // dimension two parameters, so the tuple space (∏ mᵢ = 8) is non-trivial.
 async function setUpCanvas(page: Page) {
+  // 089-P7: the coverage matrix via the DesignSurface `Coverage` view-swap
+  // (WorkspaceSurface fallback). On the canvas coverage is an edge-connected twin
+  // node, covered by d3-canvas.spec.ts. Pin to the fallback surface.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

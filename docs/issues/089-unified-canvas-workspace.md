@@ -326,6 +326,8 @@ Two Design-tier features are today *view/route swaps* that fight the "one canvas
 
 ## SITEMAP & routing impact (must land WITH this issue — `docs/SITEMAP.md`)
 
+> **⚠ SUPERSEDED by the P7 subsection `### SITEMAP + 085 lockstep edits` above (the APPROVED BUILD PLAN, which GOVERNS).** This older proposal called for *removing* the per-tier / `:ctx` / `?view` route grammar and dropping `DesignView`/`contextPath` from `routes.ts`. The approved graduation **RETAINS the route grammar** as viewport/cluster deep-links (tier → pan-to-lane, `:ctx` → open-cluster, `?view=coverage` → open-twin); the URL simplification is deferred as separate post-graduation work. The SITEMAP edits SHIPPED at P7 (2026-07-20) followed the P7 subsection, not the removal list below. Kept for history only — **do not action the removals below.**
+
 This proposal rewrites the route model SITEMAP §1 locks; per SITEMAP §6, "deviations are spec changes," so **`docs/SITEMAP.md` must be updated in lockstep when this ships** (a forward-pointer note is already parked at the top of SITEMAP §1). Precise changes:
 
 - **§1 Route map (`SITEMAP.md:14-18`)** — the per-tier routes plus the recursion/view segments collapse into **one workspace route**. `/p/:projectId/foundation|architecture|design`, the `/design/:ctx/:ctx…` child-canvas segments, and `?view=canvas|coverage` are all removed; `/p/:projectId` **is** the canvas. **Tier, canvas depth, and view stop being URL state** and become viewport/cluster state (`routes.ts:6,12` — `DesignView` + `contextPath` go away).

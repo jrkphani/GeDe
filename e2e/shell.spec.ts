@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 async function createAndOpenProject(page: import('@playwright/test').Page, name: string) {
   await page.goto('/')
@@ -31,6 +32,10 @@ test('tier tabs navigate, history walks back, reload restores', async ({ page })
 })
 
 test('deep link with view param restores tier, depth and view', async ({ page }) => {
+  // 089-P7: `?view=coverage` restoring the coverage VIEW (`[data-view="coverage"]`)
+  // is a DesignSurface route-swap; on the canvas coverage is a `v`-toggled twin
+  // node (covered by d3-canvas.spec.ts). Pin this deep-link check to the fallback.
+  await forceWorkspaceSurface(page)
   const id = await createAndOpenProject(page, 'Deep')
   await page.goto(`/p/${id}/design?view=coverage`)
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })

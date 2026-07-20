@@ -10,6 +10,12 @@ export default defineConfig({
   testDir: './e2e',
   timeout: CI ? 60_000 : 30_000,
   expect: { timeout: CI ? 15_000 : 5_000 },
+  // 089-P7: the canvas specs now gate deploys alongside the ~57 others (P6), so a
+  // single focus-timing flake under full-suite parallelism (e.g. the cross-node
+  // Tab spec) could freeze prod — the 096 failure mode. CI retries recover a
+  // transient flake WITHOUT masking a real regression (which fails all attempts);
+  // local stays 0 so flakes surface during development, not just in CI.
+  retries: CI ? 2 : 0,
   use: {
     baseURL: 'http://localhost:5173',
     trace: 'retain-on-failure',

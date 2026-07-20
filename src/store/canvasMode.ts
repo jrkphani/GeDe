@@ -18,6 +18,15 @@ import { create } from 'zustand'
 // mid-flow — the P0 persistence guarantee still holds. Mirrors activeLane.ts /
 // focusedEditor.ts: a small, shell-owned Zustand slice App depends on, never
 // the reverse.
+//
+// DELIBERATELY NOT re-seeded on viewport resize: crossing the 1024px boundary
+// mid-session (undocking a laptop, restoring a window) keeps the surface chosen
+// at load until a full reload. WorkspaceCanvas and WorkspaceSurface are
+// structurally different React trees; hot-swapping one for the other mid-edit
+// would unmount live editing state and the React Flow instance — a jarring,
+// data-risky surprise far worse than staying on a slightly-too-wide/narrow
+// surface until the next reload. `reseed()` is exposed if a future explicit
+// "switch layout" affordance ever wants it.
 
 // Canvas is the default when the viewport is desktop/tablet-wide (>= 1024px,
 // matching the base.css narrow-reflow boundary) AND the user is not in a

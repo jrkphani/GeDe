@@ -1,5 +1,6 @@
 import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 014, test-first plan item 5: build the example's Architecture tables,
 // promote them into 3rd-Tier dimensions, and confirm the link is live in both
@@ -48,6 +49,9 @@ async function promoteTable(page: Page, tableName: string, entryNames: string[],
 test('architecture: build tables, promote to dimensions, register offers params, rename propagates', async ({
   page,
 }) => {
+  // 089-P7: builds/promotes tables on the stacked `.t2-table` Architecture
+  // surface and reads the Design register — WorkspaceSurface flow. Pin to it.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
@@ -122,6 +126,10 @@ test('architecture: build tables, promote to dimensions, register offers params,
 test('architecture: selection bar stays in view (sticky) on a tall table without scrolling to the bottom', async ({
   page,
 }) => {
+  // Pin to WorkspaceSurface: `position: sticky` + in-viewport on native page
+  // scroll is a WorkspaceSurface-fallback behavior; the canvas pans/zooms rather
+  // than native-scrolls (issue 025 guard belongs on the fallback surface).
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
@@ -161,6 +169,12 @@ test('architecture: selection bar stays in view (sticky) on a tall table without
 
 /** Fresh empty project on the Architecture route (typed create, no seed). */
 async function openArchitecture(page: Page, projectName: string) {
+  // 089-P7: these P6 specs assert the stacked `.t2-table` Architecture panels
+  // (forward cross-table keyboard threading, the promote listbox + `<main>` axe
+  // scope, `.key-hint` reveal-on-focus) — the WorkspaceSurface tier surface. The
+  // canvas decomposes Architecture into per-table RF nodes (covered by
+  // d3-canvas.spec.ts). Pin to the fallback surface.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
@@ -362,6 +376,10 @@ test('architecture P6: renders and stays operable at volume (~20 tables × ~50 e
   page,
 }) => {
   test.setTimeout(120_000)
+  // 089-P7: asserts all 20 `.t2-table` panels mount (no LOD summarisation) and
+  // cross-table keyboard threading — the WorkspaceSurface Architecture surface.
+  // Pin to it (canvas volume/LOD is covered by d3-canvas.spec.ts).
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
 

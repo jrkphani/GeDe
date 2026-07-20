@@ -1,10 +1,17 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 010 — compose & bind a context entirely on the canvas, then assert the
 // register projection matches (SPEC §6 M2 done-when: recreate prototype image 1
 // by direct manipulation). Mirrors canvas-selection.spec.ts's setup: 3
 // dimensions (Value/Stake/Process), one parameter each.
 async function setUpCanvas(page: Page) {
+  // 089-P7: compose here goes through the `New context` button + on-ring dot
+  // binding — the WorkspaceSurface DesignSurface flow. The canvas dropped that
+  // button (093; `c` enters compose there) and its dots live in a transformed
+  // node. Pin to the WorkspaceSurface fallback; canvas compose is covered by
+  // d3-canvas.spec.ts.
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

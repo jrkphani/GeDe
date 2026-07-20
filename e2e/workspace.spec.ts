@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 089 D2 Phase 1 — the unified workspace. All three tier surfaces
 // (Foundation · Architecture · Design) now render as side-by-side vertical
@@ -8,6 +9,10 @@ import { expect, test } from '@playwright/test'
 test('workspace: foundation, architecture, and design lanes all mount on one page', async ({
   page,
 }) => {
+  // 089-P7: this asserts the WorkspaceSurface stacked-lane co-mount (the
+  // `.workspace__lane--*` DOM), which is the < 1024px / data-saver fallback the
+  // canvas flip retained. Pin it to that surface (see forceWorkspaceSurface).
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
 

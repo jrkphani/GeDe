@@ -1254,7 +1254,16 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   )
 
   return (
-    <div className="workspace-canvas" ref={wrapperRef} onFocusCapture={onFocusCapture}>
+    // 089-P7: the canvas is now the DEFAULT primary content region, so it carries
+    // the `main` landmark (role, not <main>, to keep the HTMLDivElement ref +
+    // FocusEvent typing) that the tier surfaces provide on the fallback path.
+    <div
+      className="workspace-canvas"
+      ref={wrapperRef}
+      onFocusCapture={onFocusCapture}
+      role="main"
+      aria-label="Workspace canvas"
+    >
       <ReactFlow
         nodes={nodes}
         edges={edges}

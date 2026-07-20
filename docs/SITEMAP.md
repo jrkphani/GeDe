@@ -8,7 +8,7 @@ Decisions locked 2026-07-05: app-only routes (`/` is the app) · top tier tabs +
 
 ## 1. Route map
 
-> **Pending supersession — issues 089 / 090 (proposal).** The unified-canvas workspace (`docs/issues/089-unified-canvas-workspace.md`) collapses the per-tier routes and the `design/:ctx…?view=` depth/view segments below into **one workspace route** (`/p/:projectId` = the canvas), where **tier, canvas depth, and view become spatial state** (pan / zoom / focused cluster), not URL segments; deep links target a **viewport + node/cluster id**. **090** (multiple design canvases) adds a **root-canvas id** to that target. This section stays authoritative until 089 ships — the full change list is in 089 → "SITEMAP & routing impact".
+> **GRADUATED — issue 089-D3 P7 (SHIPPED 2026-07-20).** The unified-canvas workspace is now the **DEFAULT** mount for `/p/:projectId`, `/p/:projectId/foundation|architecture`, and `/p/:projectId/design[/:ctx…]` on capable (desktop/tablet ≥ 1024px, non-data-saver) clients; narrow / reduced-data clients fall back to the stacked-lane `WorkspaceSurface` (D2). **The route grammar below is RETAINED** — but tier, canvas depth (`:ctx`), and `view` now resolve to **spatial state**: a tier segment pans/zooms to its lane, `:ctx` opens the focused cluster, `?view=coverage` opens the coverage twin. Deep links restore a **viewport + focused cluster / node id** (and, with **090**, a root-canvas id). The eventual REMOVAL of `:ctx`/`view` from the URL is a separate post-graduation simplification, not this change.
 
 ```text
 /                                   Projects list (root; last-opened project is one Enter away)
@@ -24,14 +24,14 @@ Decisions locked 2026-07-05: app-only routes (`/` is the app) · top tier tabs +
 /*                                  Not-found: quiet panel, "Back to projects"
 ```
 
-- **URL segments use context ids** (stable under rename); breadcrumbs display symbols. Deep links restore tier, canvas depth, view, and selection.
+- **URL segments use context ids** (stable under rename); breadcrumbs display symbols. Deep links restore tier, canvas depth, view, and selection — on the canvas these resolve to a **viewport + focused cluster / node id** (pan/zoom to the lane, open the `:ctx` cluster, open the `?view=coverage` twin); on the narrow `WorkspaceSurface` fallback they scroll to the lane/selection as before.
 - Browser back/forward mirror breadcrumb navigation exactly (SPEC §4.1); tier switches and `view` changes are history entries too.
 - **Auth is an on-ramp, not a gate** (v2, issue 033 / ADR-0009): `/welcome` + `/login` unlock the *shared* server features (sync, workspaces), but the single-user **local-first app is fully usable without an account** — signed-out users can still open `/` and every project route. The hero offers "Use locally" alongside "Sign in". v1 had no public/marketing routes (the GitHub README was the public face).
   - **Deployed-build reality (verified 2026-07-07 — issue 044 OPEN):** on the live app (`https://d1nzod71m3rz6x.cloudfront.net`), `/welcome` and the `/login` screen render, but sign-in is **disabled**: the frontend build shipped without the `VITE_COGNITO_*` ids, so `LoginScreen` shows *"Sign-in isn't configured for this build"* and the button is greyed out. The Cognito User Pool itself is live — only the client's config injection is missing. **Issue 044** wires it; until then the on-ramp is UI-only and the account-free local app is the whole live experience.
 
 ## 2. Shell anatomy
 
-Three fixed chrome bands; everything between them scrolls per-surface (the page itself never scrolls).
+Three fixed chrome bands; the page itself never scrolls. On capable (desktop/tablet ≥ 1024px) clients the single **SURFACE** band is a **pan/zoom infinite canvas** (089-D3 P7) — tier lanes, the Design {register + ring} core, and the 011/012 satellite/twin cluster are positioned nodes on it, reached by panning/zooming rather than native scroll; per-lane and per-node sticky headers stand. On narrow (< 1024px) / reduced-data clients the surface falls back to the D2 stacked-lane `WorkspaceSurface` (per-surface native scroll). The context bar still hosts only the D1 FormatStrip.
 
 ```text
 ┌──────────────────────────────────────────────────────────────────┐
@@ -71,7 +71,7 @@ Three fixed chrome bands; everything between them scrolls per-surface (the page 
 
 - **Tier tabs**: Inter 13/500; active = ink + 2px accent underline (square, flush with the bar's hairline); inactive = muted ink; hover = ink. Keyboard: ⌘1/⌘2/⌘3.
 - **Breadcrumbs**: JetBrains Mono 13; crumbs are links (accent on hover/focus); separator `▸` muted; current crumb = ink, not a link. Overflow: middle crumbs collapse to `…` (menu on click), root and current always visible.
-- **Command palette (⌘K)**: centered panel (0 radius, popover shadow), type-ahead over: tier jumps, canvases (by lineage `α ▸ α2`), contexts (by symbol/name/justification), and verbs ("New context", "Export project…"). Mono for symbols/tuples in results. Esc closes, focus returns to origin. **Semantic search (v2, issue 042)**: an on-device embedding model (client-side, $0 AWS, offline) blends a *meaning* score into the lexical ranking — "hide the unconnected" finds the adjacency toggle — while exact/prefix matches still rank first; degrades to pure lexical until the model loads.
+- **Command palette (⌘K)**: centered panel (0 radius, popover shadow), type-ahead over: tier jumps (**pan/zoom to the lane** on the canvas), canvases (by lineage `α ▸ α2` — **pan to the cluster**, not a route push), contexts (by symbol/name/justification), and verbs ("New context", "Export project…"). Mono for symbols/tuples in results. Esc closes, focus returns to origin. **Semantic search (v2, issue 042)**: an on-device embedding model (client-side, $0 AWS, offline) blends a *meaning* score into the lexical ranking — "hide the unconnected" finds the adjacency toggle — while exact/prefix matches still rank first; degrades to pure lexical until the model loads.
 - **Links** in surfaces: accent color, underline on hover only.
 
 ## 4. Keyboard map (global)
@@ -79,10 +79,10 @@ Three fixed chrome bands; everything between them scrolls per-surface (the page 
 | Keys | Action |
 | --- | --- |
 | ⌘K | Command palette |
-| ⌘1 / ⌘2 / ⌘3 | Foundation / Architecture / Design |
+| ⌘1 / ⌘2 / ⌘3 | Foundation / Architecture / Design — **pan/zoom to the lane** on the canvas (`d3CanvasNav.ts` interceptor) |
 | ⌘Z / ⇧⌘Z | Undo / redo |
-| c | New context (Design, compose mode) |
-| v | Toggle canvas / coverage view (Design) |
+| c | New context / compose in the Design core |
+| v | Open / collapse the coverage twin (Design) — an edge-connected analytical node, not a route swap |
 | d | Focus the dimension rail's first phantom (Design, canvas view — issue 082) |
 | Esc | Close popover → clear selection → (never exits a tier) |
 

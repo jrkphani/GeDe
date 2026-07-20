@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test'
+import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 090 Phase 4c — the root-canvas switcher: create / name / switch /
 // delete multiple design canvases per project, with fully INDEPENDENT
@@ -9,6 +10,10 @@ import { expect, test, type Page } from '@playwright/test'
 // create → open → Design link; the phantom-row add grammar for dimensions).
 
 async function openDesign(page: Page, projectName: string) {
+  // 089-P7: the root-canvas switcher flow drives the DesignSurface rail
+  // (`.dim-rail`) + switcher popover in one native-scroll surface. Pin to the
+  // WorkspaceSurface fallback (the switcher itself is unchanged on either surface).
+  await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)

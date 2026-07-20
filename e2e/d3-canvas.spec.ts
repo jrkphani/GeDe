@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 
 // ── DEPLOY-GATE CONTRACT (issue 096 → GRADUATED 089-P6) ──────────────────────
@@ -1283,4 +1284,24 @@ test('entering compose expands the register even when zoomed-out-collapsed', { t
   await page.keyboard.press('c')
   await expect(register.getByRole('columnheader', { name: 'Value', exact: true })).toBeVisible()
   await expect(register.getByRole('columnheader', { name: 'Tuple', exact: true })).toHaveCount(0)
+})
+
+// 089-P7 — the canvas is now the DEFAULT surface, so it gets the automated a11y
+// regression coverage the fallback (WorkspaceSurface / architecture.spec.ts) has
+// always had. Scoped to the canvas `main` landmark (role="main" on
+// .workspace-canvas), serious/critical WCAG 2 A/AA only — the same bar the
+// Architecture axe scan uses.
+test('the canvas surface is axe-clean (no serious/critical WCAG 2 A/AA violations)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page)
+  await expect(page.locator('.wc-node--design-register .context-register-shell')).toBeVisible({ timeout: 15_000 })
+
+  const results = await new AxeBuilder({ page })
+    .include('[role="main"]')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze()
+  const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
 })
