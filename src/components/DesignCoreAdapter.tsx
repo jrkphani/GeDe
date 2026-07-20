@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useStore } from '@xyflow/react'
 import type { CanvasEmphasis } from '../domain/canvasAdjacency'
+import { quantizeHitScale } from '../domain/canvasResponsive'
 import { firstUnbound } from '../domain/composeMode'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
@@ -408,6 +409,12 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
     canvasId,
   )
 
+  // 099-2c — the ring renders inside the canvas's `transform: scale()`, so the
+  // dots' 44px hit target has to be sized in SCREEN space. QUANTIZED (bucketed)
+  // rather than raw, on the same discipline as `registerCollapsed`'s boolean
+  // selector: the ring re-renders only when a bucket is crossed, never per frame.
+  const hitScale = useStore((s) => quantizeHitScale(s.transform[2]))
+
   const dimensions = useDimensionsStore((s) => s.dimensions)
   const contexts = useContextsStore((s) => s.contexts)
   const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
@@ -510,6 +517,7 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
         onExitCompose={() => useCanvasComposeStore.getState().exitCompose()}
         hoveredMark={hoveredMark}
         onHoverChange={setHoveredMark}
+        scale={hitScale}
       />
     </div>
   )

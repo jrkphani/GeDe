@@ -480,6 +480,7 @@ describe('Canvas', () => {
         onBindParameter?: (dimensionId: string, parameterId: string) => void
         onUnbindParameter?: (dimensionId: string) => void
         onExitCompose?: () => void
+        scale?: number
       } = {},
     ) {
       return render(
@@ -495,6 +496,7 @@ describe('Canvas', () => {
           onBindParameter={opts.onBindParameter ?? (() => {})}
           onUnbindParameter={opts.onUnbindParameter ?? (() => {})}
           onExitCompose={opts.onExitCompose ?? (() => {})}
+          scale={opts.scale ?? 1}
         />,
       )
     }
@@ -582,6 +584,43 @@ describe('Canvas', () => {
         const hit = container.querySelector('.canvas-dot-hit') as SVGCircleElement
         expect(hit).not.toBeNull()
         expect(Number(hit.getAttribute('r'))).toBeCloseTo(expected)
+      } finally {
+        window.ResizeObserver = Original
+      }
+    })
+
+    // Issue 099-2c — the WIRING of the screen-space fix: the measured width is
+    // the zoom-INVARIANT layout width, so a host inside a `transform: scale()`
+    // passes its (quantized) scale and the rendered radius must grow to keep the
+    // 44px target. The arithmetic itself is unit-tested in canvasResponsive.test;
+    // this proves the prop actually reaches the circle.
+    it('compose mode: a zoomed-out host scales the hit circle up, keeping the 44px target on screen', () => {
+      type ResizeCallback = (entries: { contentRect: { width: number } }[]) => void
+      let observed: ResizeCallback | null = null
+      const Original = window.ResizeObserver
+      window.ResizeObserver = function (cb: ResizeCallback) {
+        observed = cb
+        return { observe: () => {}, unobserve: () => {}, disconnect: () => {} }
+      } as unknown as typeof ResizeObserver
+      try {
+        // Same 500px layout width as the sparse case above, but the host is at
+        // zoom 0.5 → 250px on screen → the radius must DOUBLE (44 → 88 units).
+        const { container } = renderCompose({ composeContextId: 'draft', scale: 0.5 })
+        act(() => observed?.([{ contentRect: { width: 500 } }]))
+        const geometry = layout({
+          dimensions: composeDims,
+          parametersByDimension: composeParams,
+          contexts: [],
+          bindingsByContext: {},
+        })
+        // Pin the precondition: this fixture's no-overlap cap must be wider than
+        // the DOUBLED radius, or the assertion below would be measuring the cap
+        // and silently stop testing the scale wiring at all.
+        expect(geometry.maxDotHitRadius).toBeGreaterThan(dotHitRadiusUnits(250))
+        const hit = container.querySelector('.canvas-dot-hit') as SVGCircleElement
+        expect(hit).not.toBeNull()
+        expect(Number(hit.getAttribute('r'))).toBeCloseTo(dotHitRadiusUnits(250))
+        expect(Number(hit.getAttribute('r'))).toBeCloseTo(2 * dotHitRadiusUnits(500))
       } finally {
         window.ResizeObserver = Original
       }

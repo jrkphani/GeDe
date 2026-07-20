@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { cn } from '@/lib/utils'
 import { adjacentSet, dotKey, type CanvasEmphasis } from '../domain/canvasAdjacency'
 import { CENTER, DOT_RADIUS, layout, NODE_RADIUS, spokePath } from '../domain/canvasLayout'
-import { dotHitRadiusUnits, labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
+import { hitRadiusUnits, labelTierForWidth, type CanvasLabelTier } from '../domain/canvasResponsive'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
 import type { ContextRow, DimensionRow, ParameterRow } from '../db/mutations'
@@ -49,6 +49,12 @@ export interface CanvasProps {
   // and test keeps its exact prior rendering.
   hoveredMark?: CanvasEmphasis | null
   onHoverChange?: (mark: CanvasEmphasis | null) => void
+  // Issue 099-2c — the host's viewport scale, QUANTIZED by `quantizeHitScale`
+  // (the ring must not re-render per zoom frame). Only the 44px dot hit target
+  // consumes it; the label tier is correctly zoom-invariant (099 item 2).
+  // Defaults to 1 — the untransformed WorkspaceSurface fallback, and every
+  // pre-099 caller and test, are unaffected.
+  scale?: number
 }
 
 function useElementWidth(): [React.RefObject<HTMLDivElement | null>, number | null] {
@@ -105,6 +111,7 @@ export function Canvas({
   lineage,
   hoveredMark = null,
   onHoverChange,
+  scale = 1,
 }: CanvasProps) {
   const [shellRef, width] = useElementWidth()
   const labelTier = width === null ? LABEL_TIER_FALLBACK : labelTierForWidth(width)
@@ -126,10 +133,16 @@ export function Canvas({
   // crowded ring this deliberately falls below STYLE_GUIDE §7's 44px floor —
   // honoring 44px there is physically impossible without overlap; on a sparse
   // ring the dots spread wide and the full 44px target is honored.
-  const hitRadius = Math.min(
-    dotHitRadiusUnits(width && width > 0 ? width : HIT_REFERENCE_WIDTH),
-    geometry.maxDotHitRadius,
-  )
+  // 099-2c — `width` is the ResizeObserver's LAYOUT width, which is invariant
+  // under the canvas's `transform: scale()`, so the screen width (what the 44px
+  // target is measured in) is `width * scale`. `scale` is 1 on the untransformed
+  // fallback surface. The compensation is clamped at MIN_HIT_SCALE — see
+  // canvasResponsive.ts for why over-compensating is actively harmful here.
+  const hitRadius = hitRadiusUnits({
+    layoutWidthPx: width && width > 0 ? width : HIT_REFERENCE_WIDTH,
+    scale,
+    maxDotHitRadius: geometry.maxDotHitRadius,
+  })
 
   const dimensionIds = useMemo(() => dimensions.map((d) => d.id), [dimensions])
 

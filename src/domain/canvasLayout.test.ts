@@ -528,6 +528,18 @@ describe('layout', () => {
       expect(geometry.maxDotHitRadius).toBeCloseTo(globalMinPairwise(geometry.dots) / 2, 9)
     })
 
+    // A single dot genuinely has no pair to overlap, so the cap stays open.
+    it('a single dot leaves the cap open — nothing to overlap', () => {
+      const geometry = layout({
+        dimensions: [dimension('d0', 0)],
+        parametersByDimension: { d0: params('d0', 1) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      expect(geometry.dots).toHaveLength(1)
+      expect(geometry.maxDotHitRadius).toBe(ARC_RADIUS)
+    })
+
     it('sparse arc: dots spread wide, so the cap does not bite and the full 44px target is honored at ~500px', () => {
       // 3 dots on a full single-dimension arc are ~120° apart — far wider than
       // the 44px target, so min(dotHitRadiusUnits, cap) = the 44px radius.
@@ -614,7 +626,15 @@ describe('layout', () => {
       expect(geometry.maxDotHitRadius).toBeLessThanOrEqual(globalMin / 2 + 1e-9)
     })
 
-    it('defaults the cap to ARC_RADIUS (uncapped) when no dimension has two dots to overlap', () => {
+    // Issue 099-2c — this used to assert `=== ARC_RADIUS` under the title "when no
+    // dimension has two dots to overlap". That PREMISE was the bug: there are two
+    // dots here, in DIFFERENT dimensions, and they can certainly overlap — the old
+    // within-dimension-only scan just could not see them, so the cap fell through
+    // to the open fallback. The cap is now derived from the real pair. (For two
+    // single-parameter dimensions the dots sit diametrically opposite, so the
+    // derived value lands on ARC_RADIUS anyway — but as a MEASUREMENT, not a
+    // fallback, and it tightens correctly as soon as the ring is less symmetric.)
+    it('measures a cross-dimension pair even when no single dimension has two dots', () => {
       const dimensions = [dimension('d0', 0), dimension('d1', 1)]
       const geometry = layout({
         dimensions,
@@ -622,7 +642,18 @@ describe('layout', () => {
         contexts: [],
         bindingsByContext: {},
       })
-      expect(geometry.maxDotHitRadius).toBe(ARC_RADIUS)
+      expect(geometry.dots).toHaveLength(2)
+      expect(geometry.maxDotHitRadius).toBeCloseTo(globalMinPairwise(geometry.dots) / 2, 9)
+      // Three such dimensions are 120° apart, so the cap must drop WELL below the
+      // open fallback — the case the old scan silently left uncapped.
+      const three = layout({
+        dimensions: [dimension('d0', 0), dimension('d1', 1), dimension('d2', 2)],
+        parametersByDimension: { d0: params('d0', 1), d1: params('d1', 1), d2: params('d2', 1) },
+        contexts: [],
+        bindingsByContext: {},
+      })
+      expect(three.maxDotHitRadius).toBeLessThan(ARC_RADIUS)
+      expect(three.maxDotHitRadius).toBeCloseTo(globalMinPairwise(three.dots) / 2, 9)
     })
   })
 

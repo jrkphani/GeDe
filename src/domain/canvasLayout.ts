@@ -64,18 +64,26 @@ const DOT_LABEL_RADIUS = ARC_RADIUS + 32
 // Under 085's even-fill the tightest spacing is no longer a constant (a sparse
 // arc spreads its dots wide, a dense one compresses them), so the safe cap is
 // computed PER LAYOUT: `CanvasGeometry.maxDotHitRadius` is HALF the tightest
-// chord between two adjacent within-dimension dots this call produced (half of
-// it sits exactly at the midpoint between the two dots, so two circles of that
-// radius touch but never overlap past each other's center). Because pure
-// even-fill can never overflow an arc, within-dimension adjacency is provably
-// the GLOBAL minimum pairwise distance over all dots: the cross-gap distance
-// between dimension A's last dot and B's first is `slotA + GAP_RADIANS + slotB`
-// angular — strictly greater than either slot alone — so no cross-dimension
-// pair is ever tighter than the within-dimension minimum. There is therefore
-// no DOT_RADIUS floor: flooring would let the cap exceed half the true spacing
-// on an over-dense arc and re-introduce the exact overlap 5bbc8bc fixed. When
-// no dimension has two dots there is no pair to overlap, so the cap defaults to
-// ARC_RADIUS (effectively uncapped — the 44px target wins).
+// chord between any two dots this call produced (half of it sits exactly at the
+// midpoint between the two, so two circles of that radius touch but never
+// overlap past each other's center). There is no DOT_RADIUS floor: flooring
+// would let the cap exceed half the true spacing on an over-dense arc and
+// re-introduce the exact overlap 5bbc8bc fixed.
+//
+// Issue 099-2c — this is a TRUE all-pairs minimum. It used to be a
+// within-dimension-only minimum, justified thus: the cross-gap distance between
+// dimension A's last dot and B's first is `slotA + GAP_RADIANS + slotB` angular
+// — strictly greater than either slot alone — so no cross-dimension pair can be
+// tighter than the within-dimension minimum. That argument is SOUND, but it only
+// establishes a minimum over the pairs it actually ranges over, and the loop
+// skipped any dimension with m < 2. So a ring where NO dimension has two dots
+// (e.g. three dimensions of one parameter each) has real, finite cross-dimension
+// pairs and yet fell through to an effectively open ARC_RADIUS cap. Harmless
+// while the hit radius was small; not once 2c sizes it in SCREEN space, where
+// zooming out grows it until neighbours overlap — and in compose mode an
+// overlapping circle carries the bind handler, so the WRONG parameter binds.
+// Measuring every pair closes the hole and returns an identical value whenever
+// some dimension has m >= 2, so the normal case is unchanged.
 //
 // Consumers (Canvas.tsx) take `min(dotHitRadiusUnits(width),
 // geometry.maxDotHitRadius)`. This deliberately lets the effective hit radius
@@ -334,7 +342,6 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
   // Tightest chord between two adjacent within-dimension dots this call
   // produced; drives maxDotHitRadius below. Infinity until a dimension with
   // >= 2 dots is seen (a lone or absent dot has no neighbour to overlap).
-  let minAdjacentChord = Infinity
 
   sortedDimensions.forEach((dim, i) => {
     const segmentSpan = spanFor(i)
@@ -371,7 +378,6 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
     // whatever spacing this actually produces so hit circles never overlap.
     const m = params.length
     const slot = m > 0 ? segmentSpan / (m + 1) : 0
-    if (m >= 2) minAdjacentChord = Math.min(minAdjacentChord, 2 * ARC_RADIUS * Math.sin(slot / 2))
     params.forEach((param, j) => {
       const angle = startAngle + slot * (j + 1)
       const pos = pointAt(ARC_RADIUS, angle)
@@ -444,15 +450,32 @@ export function layout(input: CanvasLayoutInput): CanvasGeometry {
   })
 
   // Half the tightest adjacent-dot chord keeps two neighbouring hit circles
-  // touching but never overlapping. `minAdjacentChord` is the global minimum
-  // pairwise distance over ALL dots (pure even-fill can't overflow, so
-  // within-dimension adjacency is provably tightest — see the block comment
-  // above), so half of it is a hard no-overlap cap at any density. No
-  // DOT_RADIUS floor: flooring would let the cap exceed half the true spacing
-  // on an over-dense arc and re-admit the overlap 5bbc8bc fixed. When no
-  // dimension has two dots there is nothing to overlap, so leave the cap
-  // effectively open (ARC_RADIUS) and let dotHitRadiusUnits' 44px target win.
-  const maxDotHitRadius = Number.isFinite(minAdjacentChord) ? minAdjacentChord / 2 : ARC_RADIUS
+  // touching but never overlapping. No DOT_RADIUS floor: flooring would let the
+  // cap exceed half the true spacing on an over-dense arc and re-admit the
+  // overlap 5bbc8bc fixed.
+  //
+  // Issue 099-2c — this is now a TRUE all-pairs minimum, which is what this
+  // comment always CLAIMED but the code did not do: the per-arc pass above only
+  // measures WITHIN-dimension chords (`if (m >= 2)`), so two dots in DIFFERENT
+  // dimensions facing each other across a 6° arc gap were never measured, and a
+  // ring where no dimension has two dots fell through to an effectively open
+  // ARC_RADIUS cap. That hole was harmless while the hit radius was small, but
+  // 2c sizes it in SCREEN space, so under zoom-out it grows until neighbours
+  // overlap — and in compose mode an overlapping circle carries the bind
+  // handler, so the wrong parameter gets bound. Measuring every pair closes it
+  // at the source. O(n²) over a ring's worth of dots (tens) — negligible, and it
+  // runs inside the same `useMemo` as the rest of the layout.
+  let minPairwise = Number.POSITIVE_INFINITY
+  for (let i = 0; i < dots.length; i++) {
+    for (let j = i + 1; j < dots.length; j++) {
+      const a = dots[i] as (typeof dots)[number]
+      const b = dots[j] as (typeof dots)[number]
+      minPairwise = Math.min(minPairwise, Math.hypot(a.x - b.x, a.y - b.y))
+    }
+  }
+  // A single dot (or none) has nothing to overlap, so leave the cap effectively
+  // open (ARC_RADIUS) and let dotHitRadiusUnits' 44px target win.
+  const maxDotHitRadius = Number.isFinite(minPairwise) ? minPairwise / 2 : ARC_RADIUS
 
   return { viewBox, arcs, dots, nodes, maxDotHitRadius }
 }
