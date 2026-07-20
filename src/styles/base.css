@@ -2364,6 +2364,12 @@ body {
   position: relative;
 }
 
+/* 099-2b — the ARIA row wrapper generates NO box, so the cells it owns keep
+   resolving their absolute position against .coverage-grid. Semantics only. */
+.coverage-row {
+  display: contents;
+}
+
 .coverage-cell {
   position: absolute;
   box-sizing: border-box;

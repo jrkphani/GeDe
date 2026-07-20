@@ -1314,10 +1314,7 @@ test('the canvas surface is axe-clean (no serious/critical WCAG 2 A/AA violation
 
 // 099 — extend the canvas a11y smoke beyond the EMPTY design view to a POPULATED
 // register (3 dims × 2 params) — the data-rich authoring surface the empty smoke
-// above doesn't reach. (The coverage TWIN is intentionally NOT scanned here: its
-// CoverageMatrix has a PRE-EXISTING ARIA-grid structure violation on BOTH
-// surfaces — absolutely-positioned role="gridcell"s with no role="row" parent —
-// tracked in issue 099 for a focused fix; it is not a P7/canvas regression.)
+// above doesn't reach.
 test('the populated canvas register is axe-clean (WCAG 2 A/AA serious/critical)', { tag: '@dev-flag' }, async ({
   page,
 }) => {
@@ -1325,6 +1322,32 @@ test('the populated canvas register is axe-clean (WCAG 2 A/AA serious/critical)'
   await openCanvasWithCoverageData(page)
   await waitForStableViewport(page)
   const results = await new AxeBuilder({ page }).include('[role="main"]').withTags(['wcag2a', 'wcag2aa']).analyze()
+  const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+// 099-2b — the coverage TWIN's matrix, scanned on the CANVAS host. Deferred at
+// 099b because `CoverageMatrix` had a pre-existing invalid ARIA grid (absolutely
+// -positioned `role="gridcell"`s with no `role="row"` parent) on BOTH surfaces;
+// now that the rows are real (`display: contents`), the twin is in the a11y
+// regression net. Twin on the canvas here; fallback in coverage.spec.ts.
+test('the canvas coverage twin is axe-clean (WCAG 2 A/AA serious/critical)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openCanvasWithCoverageData(page)
+  await page.locator('.wc-node--design-ring .canvas-svg').click()
+  await waitForStableViewport(page)
+  await page.keyboard.press('v')
+
+  const twin = page.locator('.wc-node--coverage-twin')
+  await expect(twin.locator('.coverage-matrix')).toBeVisible()
+  await waitForStableViewport(page)
+
+  const results = await new AxeBuilder({ page })
+    .include('.wc-node--coverage-twin')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze()
   const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
   expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
 })

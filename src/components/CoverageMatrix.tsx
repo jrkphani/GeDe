@@ -419,49 +419,57 @@ export function CoverageMatrix({
             ))}
           </div>
 
-          {visibleRows.map((r) =>
-            visibleCols.map((c) => {
-              const hash = assignmentTupleHash(orderedDimensionIds, assignmentFor(r, c))
-              const cell = docMap.get(hash)
-              const documented = cell !== undefined
-              const symbol = cell?.symbols[0] ?? ''
-              const stacked = (cell?.symbols.length ?? 0) > 1
-              const isSelected = documented && cell.contextIds.includes(selectedContextId ?? '')
-              const label = documented
-                ? `${cell.symbols.join(', ')} — ${cellTuple(r, c)}`
-                : `Unexplored — ${cellTuple(r, c)}`
-              return (
-                <Button
-                  key={`${r}:${c}`}
-                  variant="bare"
-                  ref={(el) => {
-                    if (el) cellRefs.current.set(`${r}:${c}`, el)
-                    else cellRefs.current.delete(`${r}:${c}`)
-                  }}
-                  role="gridcell"
-                  aria-rowindex={r + 1}
-                  aria-colindex={c + 1}
-                  aria-label={label}
-                  aria-selected={isSelected}
-                  title={label}
-                  data-documented={documented}
-                  data-stacked={stacked || undefined}
-                  data-selected={isSelected || undefined}
-                  data-count={stacked ? cell?.symbols.length : undefined}
-                  className="coverage-cell font-mono"
-                  style={{ left: ROW_HEADER_W + c * CELL, top: COL_HEADER_H + r * CELL }}
-                  tabIndex={r === focus.r && c === focus.c ? 0 : -1}
-                  onFocus={() => setFocus({ r, c })}
-                  onMouseEnter={() => setHoverTuple(cellTuple(r, c))}
-                  onMouseLeave={() => setHoverTuple(null)}
-                  onKeyDown={(e) => onCellKeyDown(e, r, c)}
-                  onClick={() => activate(r, c)}
-                >
-                  {documented ? symbol : ''}
-                </Button>
-              )
-            }),
-          )}
+          {/* 099-2b — a `role="grid"` needs `role="row"` children and a
+              `role="gridcell"` needs a `role="row"` parent (both CRITICAL in
+              axe). The cells are absolutely positioned, so the row wrapper must
+              generate NO box: `display: contents` keeps `.coverage-grid`
+              (position: relative) as the containing block, leaving the layout
+              byte-identical while making the ARIA structure valid. */}
+          {visibleRows.map((r) => (
+            <div key={r} className="coverage-row" role="row" aria-rowindex={r + 1}>
+              {visibleCols.map((c) => {
+                const hash = assignmentTupleHash(orderedDimensionIds, assignmentFor(r, c))
+                const cell = docMap.get(hash)
+                const documented = cell !== undefined
+                const symbol = cell?.symbols[0] ?? ''
+                const stacked = (cell?.symbols.length ?? 0) > 1
+                const isSelected = documented && cell.contextIds.includes(selectedContextId ?? '')
+                const label = documented
+                  ? `${cell.symbols.join(', ')} — ${cellTuple(r, c)}`
+                  : `Unexplored — ${cellTuple(r, c)}`
+                return (
+                  <Button
+                    key={`${r}:${c}`}
+                    variant="bare"
+                    ref={(el) => {
+                      if (el) cellRefs.current.set(`${r}:${c}`, el)
+                      else cellRefs.current.delete(`${r}:${c}`)
+                    }}
+                    role="gridcell"
+                    aria-rowindex={r + 1}
+                    aria-colindex={c + 1}
+                    aria-label={label}
+                    aria-selected={isSelected}
+                    title={label}
+                    data-documented={documented}
+                    data-stacked={stacked || undefined}
+                    data-selected={isSelected || undefined}
+                    data-count={stacked ? cell?.symbols.length : undefined}
+                    className="coverage-cell font-mono"
+                    style={{ left: ROW_HEADER_W + c * CELL, top: COL_HEADER_H + r * CELL }}
+                    tabIndex={r === focus.r && c === focus.c ? 0 : -1}
+                    onFocus={() => setFocus({ r, c })}
+                    onMouseEnter={() => setHoverTuple(cellTuple(r, c))}
+                    onMouseLeave={() => setHoverTuple(null)}
+                    onKeyDown={(e) => onCellKeyDown(e, r, c)}
+                    onClick={() => activate(r, c)}
+                  >
+                    {documented ? symbol : ''}
+                  </Button>
+                )
+              })}
+            </div>
+          ))}
         </div>
       </div>
     </section>

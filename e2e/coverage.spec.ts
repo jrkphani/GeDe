@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright'
 import { expect, test, type Page } from '@playwright/test'
 import { forceWorkspaceSurface } from './workspaceSurface'
 
@@ -101,6 +102,23 @@ test('coverage matrix: a hollow cell composes pre-filled, and justifying fills i
   const filled = page.getByRole('gridcell', { name: /— Comfort · Users · Engagement/ })
   await expect(filled).toHaveAttribute('data-documented', 'true')
   await expect(filled).toHaveText('α')
+})
+
+// 099-2b — the coverage matrix is an ARIA grid, and its STRUCTURE must be valid:
+// `role="gridcell"` requires a `role="row"` parent (`aria-required-parent`) and
+// `role="grid"` requires row/rowgroup children (`aria-required-children`) — both
+// CRITICAL. The matrix lays its cells out absolutely (no row boxes), so the rows
+// are `display: contents` wrappers that carry the semantics without a layout box.
+// Scanned on BOTH surfaces: this fallback scan, plus the canvas coverage twin in
+// d3-canvas.spec.ts (same component, two hosts).
+test('the coverage matrix is axe-clean (WCAG 2 A/AA serious/critical)', async ({ page }) => {
+  await setUpCanvas(page)
+  await page.getByRole('button', { name: 'Coverage' }).click()
+  await expect(page.locator('.coverage-matrix')).toBeVisible()
+
+  const results = await new AxeBuilder({ page }).include('.coverage-matrix').withTags(['wcag2a', 'wcag2aa']).analyze()
+  const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
 })
 
 test('the `v` key toggles between canvas and coverage', async ({ page }) => {

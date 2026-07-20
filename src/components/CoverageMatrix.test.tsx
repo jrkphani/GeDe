@@ -73,6 +73,26 @@ describe('CoverageMatrix (issue 012)', () => {
     expect(props.onSelectContext).toHaveBeenCalledWith('c1')
   })
 
+  // 099-2b — the grid's ARIA STRUCTURE, not just its cells: every gridcell must
+  // sit under a role="row" (axe `aria-required-parent`/`aria-required-children`,
+  // both CRITICAL). The rows are display:contents wrappers, so this invariant is
+  // invisible to layout and easy to break — lock it here, cheaply.
+  it('every gridcell has a role="row" parent, and the rows carry aria-rowindex', () => {
+    const { container } = render(<CoverageMatrix {...baseProps()} />)
+
+    const cells = [...container.querySelectorAll('[role="gridcell"]')]
+    expect(cells.length).toBeGreaterThan(0)
+    for (const cell of cells) {
+      expect(cell.parentElement?.getAttribute('role')).toBe('row')
+      // The row's index must agree with the cell it owns (1-based).
+      expect(cell.parentElement?.getAttribute('aria-rowindex')).toBe(cell.getAttribute('aria-rowindex'))
+    }
+    // The rows are the grid's own children — nothing between them and role="grid".
+    const rows = [...container.querySelectorAll('[role="row"]')]
+    expect(rows.length).toBe(2) // dim A has two parameters
+    for (const row of rows) expect(row.parentElement?.getAttribute('role')).toBe('grid')
+  })
+
   it('stacks duplicate contexts in one cell', () => {
     const props = baseProps({
       contexts: [ctx('c1', 'α', 'j'), ctx('c2', 'β', 'j')],
