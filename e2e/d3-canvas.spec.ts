@@ -429,6 +429,11 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   await page.keyboard.press('Enter')
   await expect(beta.getByRole('cell', { name: 'B-entry', exact: true })).toBeVisible()
 
+  // Adding two tables re-measures + re-fits the lane; wait for the one-time fit to
+  // settle BEFORE the focus handoffs so the cross-node focus-pan isn't racing it
+  // (the 096 focus-pan race — this spec flaked under full-suite load without it).
+  await waitForStableViewport(page)
+
   // FORWARD: from Alpha's empty phantom (the grid's forward boundary), Tab hands
   // off to the NEXT-by-sort node (Beta) and lands on its first editable cell —
   // even though Beta is DOM-BEFORE Alpha (reverse-sort DOM order), so native Tab
@@ -443,6 +448,7 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   // hands off to the PREV-by-sort node (Alpha) and lands on its last editable
   // position — the phantom "Name an entry" row.
   await beta.getByRole('cell', { name: 'B-entry', exact: true }).click()
+  await waitForStableViewport(page)
   await page.keyboard.press('Shift+Tab')
   await expect(alpha.getByPlaceholder('Name an entry')).toBeFocused()
 })
@@ -1302,6 +1308,23 @@ test('the canvas surface is axe-clean (no serious/critical WCAG 2 A/AA violation
     .include('[role="main"]')
     .withTags(['wcag2a', 'wcag2aa'])
     .analyze()
+  const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+// 099 — extend the canvas a11y smoke beyond the EMPTY design view to a POPULATED
+// register (3 dims × 2 params) — the data-rich authoring surface the empty smoke
+// above doesn't reach. (The coverage TWIN is intentionally NOT scanned here: its
+// CoverageMatrix has a PRE-EXISTING ARIA-grid structure violation on BOTH
+// surfaces — absolutely-positioned role="gridcell"s with no role="row" parent —
+// tracked in issue 099 for a focused fix; it is not a P7/canvas regression.)
+test('the populated canvas register is axe-clean (WCAG 2 A/AA serious/critical)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openCanvasWithCoverageData(page)
+  await waitForStableViewport(page)
+  const results = await new AxeBuilder({ page }).include('[role="main"]').withTags(['wcag2a', 'wcag2aa']).analyze()
   const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
   expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
 })
