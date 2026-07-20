@@ -3,21 +3,26 @@ import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
-// ── 089-D3 prod-bundle guard ────────────────────────────────────────────────
-// A real `npm run build` confirms `@xyflow/react` (JS + its ~18.6 KB stylesheet)
-// is fully excluded from the production bundle ONLY because WorkspaceCanvas — the
-// sole importer of React Flow and `@xyflow/react/dist/style.css` — is reached
-// exclusively through a dynamic `import()` (its own async chunk), gated on
-// `import.meta.env.DEV`. A single STATIC `import ... from '.../WorkspaceCanvas'`
-// anywhere would pull React Flow's JS back into the main bundle, and — because
-// Vite/Rollup NEVER tree-shake a side-effect CSS import even out of dead JS — its
-// CSS would silently re-enter every prod user's payload.
+// ── 089-D3 prod-bundle guard (P7: RF now SHIPS — keep it in its own chunk) ────
+// GRADUATED at P7: the canvas is the default workspace, so `@xyflow/react` (JS +
+// its ~18.6 KB stylesheet, ~88 KB gz all-in) now legitimately SHIPS to prod. But
+// it must stay in WorkspaceCanvas's OWN `React.lazy` async chunk, NEVER the main
+// bundle — because the capability gate renders WorkspaceSurface (not the canvas)
+// on narrow (< 1024px) / reduced-data clients, and those clients must NOT pay to
+// download React Flow to boot. WorkspaceCanvas is the sole importer of React Flow
+// and `@xyflow/react/dist/style.css`; a single STATIC `import … from
+// '.../WorkspaceCanvas'` anywhere would pull RF's JS into the main bundle, and —
+// because Vite/Rollup NEVER tree-shake a side-effect CSS import — its CSS would
+// re-enter every client's boot payload. So the invariant is no longer "RF is
+// excluded" but "RF is BUDGETED to its lazy chunk, off the main-bundle critical
+// path."
 //
 // Rather than run the multi-minute production build in the fast unit suite, this
-// asserts the STRUCTURAL invariant that makes the exclusion hold: WorkspaceCanvas
-// is imported only dynamically. It's fast, deterministic, and never flaky. The
-// end-to-end proof (grep `dist/assets/*.js` for `xyflow`) stays a manual /
-// pre-release check.
+// asserts the STRUCTURAL invariant that holds the budget: WorkspaceCanvas is
+// imported only dynamically. It's fast, deterministic, and never flaky. The
+// end-to-end size proof (grep `dist/assets/*.js` — RF must appear ONLY in a
+// `WorkspaceCanvas-*` chunk, never the entry/index chunk; ceiling ~88 KB gz)
+// stays a manual / pre-release check.
 
 const SRC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..')
 

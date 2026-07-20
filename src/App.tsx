@@ -58,12 +58,13 @@ function AuthCallbackRedirect() {
 }
 
 function Surface({ route }: { route: AppRoute }) {
-  // 089-D3 graduation P0 — the dev-only canvas opt-in now lives in a store,
-  // seeded ONCE from the initial `?d3rf` (store/canvasMode.ts). Reading the
-  // store instead of `window.location.search` means an in-app navigate() that
-  // drops `?d3rf` (a tab click, a drill-in, the `v` toggle) no longer unmounts
-  // the canvas mid-flow — a prerequisite for the satellite phases, which all
-  // navigate. Still DEV-gated + folds to a constant `false` in prod builds.
+  // 089-D3 graduation P7 — the canvas is now the DEFAULT workspace, gated by
+  // device capability (desktop/tablet width + not data-saver), seeded ONCE into
+  // a store (store/canvasMode.ts); `?d3rf` is retained only as a force-on
+  // override. Reading the store instead of live capability/URL means an in-app
+  // navigate() (a tab click, a drill-in, the `v` toggle) never re-evaluates the
+  // gate mid-flow — the P0 persistence guarantee. `canvasEnabled` is `false` on
+  // a narrow (< 1024px) / reduced-data client, where WorkspaceSurface renders.
   const canvasEnabled = useCanvasModeStore((s) => s.canvasEnabled)
   switch (route.kind) {
     case 'projects':
@@ -76,9 +77,9 @@ function Surface({ route }: { route: AppRoute }) {
     case 'project':
     case 'tier':
     case 'design':
-      // 089-D3 P1 — dev-only `?d3rf` flag swaps in the React Flow canvas; OFF by
-      // default and dead in prod builds (canvasEnabled folds to `false`), so
-      // normal app behavior is unchanged. The canvas is `React.lazy` (its own
+      // 089-D3 P7 — the React Flow canvas is the primary mount for capable
+      // (desktop/tablet, non-data-saver) clients; WorkspaceSurface is the
+      // < 1024px / reduced-data fallback. The canvas is `React.lazy` (its own
       // async chunk), so it's wrapped in <Suspense> while the chunk loads.
       return canvasEnabled ? (
         <Suspense fallback={null}>

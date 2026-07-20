@@ -20,14 +20,15 @@ export default defineConfig({
       injectRegister: false,
       // PGlite's WASM engine (~9 MB) is loaded on demand, never precached —
       // excluding it keeps `npm run build`'s SW generation under the limit.
-      // The dev-only React Flow canvas (089-D3) is a `React.lazy` async chunk
-      // (WorkspaceCanvas-*.{js,css}, carrying `@xyflow/react` + its stylesheet).
-      // It is gated on `import.meta.env.DEV`, so it never loads at runtime in a
-      // prod build — but generateSW would otherwise precache it, pulling the
-      // canvas JS + CSS into every installed user's cache once SW registration
-      // lands. Ignore it so the canvas ships to NO prod user (same pattern as
-      // the WASM exclusion above).
-      workbox: { globIgnores: ['**/*.wasm', '**/WorkspaceCanvas-*'] },
+      // (089-D3 P7) The React Flow canvas is now the DEFAULT workspace, so its
+      // `React.lazy` chunk (WorkspaceCanvas-*.{js,css}, carrying `@xyflow/react`)
+      // is precache-ELIGIBLE — it's the primary surface for the capable-client
+      // majority, so precaching it (once SW registration lands; `injectRegister`
+      // is still false today) makes their canvas mount instant. It stays a
+      // SEPARATE chunk (d3CanvasNav.guard.test.ts holds it off the main bundle),
+      // so narrow/reduced-data clients that render WorkspaceSurface still never
+      // download React Flow to boot.
+      workbox: { globIgnores: ['**/*.wasm'] },
       manifest: {
         name: 'GeDe',
         short_name: 'GeDe',

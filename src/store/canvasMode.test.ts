@@ -2,52 +2,86 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { resetCanvasMode, useCanvasModeStore } from './canvasMode'
 
-// Issue 089 D3 graduation P0 — the canvas-mode slice persists the `?d3rf`
-// opt-in across an in-app navigate(). Today `d3CanvasEnabled()` re-reads
-// `window.location.search` every render (App.tsx), so any navigate() that
-// rebuilds the URL via serializeRoute (a tab click, a drill-in, the `v`
-// toggle) DROPS `?d3rf` and the canvas exits mid-flow. Seeding the flag into
-// this store ONCE — and reading the store thereafter — lets the canvas survive
-// those navigations (a hard prerequisite for the satellite phases, which all
-// navigate). In DEV/test `import.meta.env.DEV` is true, so the value tracks the
-// URL; in a prod build DEV is statically false so the flag can never turn on.
+// Issue 089 D3 graduation P7 — the canvas GRADUATED to the default workspace.
+// `canvasEnabled` is now driven by device CAPABILITY (desktop/tablet width +
+// not a data-saver), with `?d3rf` retained only as a force-on override. The
+// seed is read once at store-create and App reads the store thereafter, so an
+// in-app navigate() never re-evaluates the gate mid-flow (the P0 persistence
+// guarantee still holds).
 
 function setUrl(search: string): void {
   window.history.replaceState(null, '', `/${search}`)
 }
 
+// jsdom has no matchMedia — install a stub that answers the two capability
+// queries canvasCapable() asks (min-width + prefers-reduced-data).
+function mockMatchMedia(opts: { wide: boolean; reducedData?: boolean }): void {
+  ;(window as unknown as { matchMedia: (q: string) => { matches: boolean; media: string } }).matchMedia = (
+    q: string,
+  ) => ({
+    matches: q.includes('min-width: 1024px')
+      ? opts.wide
+      : q.includes('prefers-reduced-data')
+        ? (opts.reducedData ?? false)
+        : false,
+    media: q,
+  })
+}
+
+function clearMatchMedia(): void {
+  delete (window as Partial<Window>).matchMedia
+}
+
 afterEach(() => {
   resetCanvasMode()
   setUrl('')
+  clearMatchMedia()
 })
 
-describe('canvasMode store (089 D3 graduation P0)', () => {
-  it('seedFromUrl enables the canvas when ?d3rf is present', () => {
-    setUrl('?d3rf=1')
-    useCanvasModeStore.getState().seedFromUrl()
+describe('canvasMode store (089 D3 graduation P7 — capability default)', () => {
+  it('enables the canvas on a desktop/tablet-wide viewport (no ?d3rf needed)', () => {
+    mockMatchMedia({ wide: true })
+    useCanvasModeStore.getState().reseed()
     expect(useCanvasModeStore.getState().canvasEnabled).toBe(true)
   })
 
-  it('seedFromUrl leaves the canvas off when ?d3rf is absent', () => {
-    setUrl('?other=1')
-    useCanvasModeStore.getState().seedFromUrl()
+  it('falls back (canvas OFF → WorkspaceSurface) on a narrow (< 1024px) viewport', () => {
+    mockMatchMedia({ wide: false })
+    useCanvasModeStore.getState().reseed()
     expect(useCanvasModeStore.getState().canvasEnabled).toBe(false)
   })
 
-  it('PERSISTS across a URL that later drops ?d3rf (the P0 guarantee)', () => {
+  it('falls back (canvas OFF) under prefers-reduced-data even when wide', () => {
+    mockMatchMedia({ wide: true, reducedData: true })
+    useCanvasModeStore.getState().reseed()
+    expect(useCanvasModeStore.getState().canvasEnabled).toBe(false)
+  })
+
+  it('?d3rf forces the canvas ON even on a narrow viewport (override / e2e pin)', () => {
+    mockMatchMedia({ wide: false })
     setUrl('?d3rf=1')
-    useCanvasModeStore.getState().seedFromUrl()
-    expect(useCanvasModeStore.getState().canvasEnabled).toBe(true)
-    // A navigate() rebuilds the URL and drops ?d3rf — but WITHOUT a re-seed the
-    // store keeps the flag, so the canvas does not exit.
-    setUrl('p/x/design')
-    // The URL really did drop the flag…
-    expect(new URLSearchParams(window.location.search).has('d3rf')).toBe(false)
-    // …but the store persists it.
+    useCanvasModeStore.getState().reseed()
     expect(useCanvasModeStore.getState().canvasEnabled).toBe(true)
   })
 
-  it('setCanvasEnabled(true) turns it on; false turns it off (DEV-gated setter)', () => {
+  it('stays OFF with no matchMedia (jsdom/SSR) and no ?d3rf', () => {
+    clearMatchMedia()
+    setUrl('?other=1')
+    useCanvasModeStore.getState().reseed()
+    expect(useCanvasModeStore.getState().canvasEnabled).toBe(false)
+  })
+
+  it('PERSISTS across a navigate() that changes the URL (no re-seed) — the P0 guarantee', () => {
+    mockMatchMedia({ wide: true })
+    useCanvasModeStore.getState().reseed()
+    expect(useCanvasModeStore.getState().canvasEnabled).toBe(true)
+    // A navigate() rebuilds the URL — but WITHOUT a re-seed the store keeps the
+    // value, so the canvas does not exit mid-flow.
+    setUrl('p/x/design')
+    expect(useCanvasModeStore.getState().canvasEnabled).toBe(true)
+  })
+
+  it('setCanvasEnabled(true) turns it on; false turns it off (no longer DEV-gated)', () => {
     useCanvasModeStore.getState().setCanvasEnabled(true)
     expect(useCanvasModeStore.getState().canvasEnabled).toBe(true)
     useCanvasModeStore.getState().setCanvasEnabled(false)

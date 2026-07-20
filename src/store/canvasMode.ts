@@ -1,52 +1,70 @@
 import { create } from 'zustand'
 
-// Issue 089 D3 graduation P0 — the canvas-mode registry. The `?d3rf` React Flow
-// canvas is opt-in per URL today; App.tsx's `d3CanvasEnabled()` re-reads
-// `window.location.search` on every render, so any in-app `navigate()` that
-// rebuilds the URL via `serializeRoute` (a tier-tab click, a recursion drill-in
-// `DesignSurface.tsx:493`, the `v` coverage toggle `:567/:584`) DROPS the
-// `?d3rf` param and the canvas silently exits mid-flow. The ⌘1/2/3 interceptor
-// (d3CanvasNav.ts) preserves the flag only for lane jumps, not real navigates.
+// Issue 089 D3 graduation — the canvas-mode registry. GRADUATED at P7: the
+// React Flow pan/zoom canvas is now the DEFAULT workspace for the project /
+// tier / design routes, gated by device CAPABILITY (desktop/tablet width + not
+// a data-saver), NOT the old dev-only `?d3rf` URL flag. `WorkspaceSurface` (the
+// D2 stacked-lane page) is retained as the < 1024px / reduced-data fallback
+// (App.tsx reads `canvasEnabled` and renders one or the other).
 //
-// Graduation's satellite phases (P3 recursion / P4 coverage) all navigate, so
-// the flag must survive a navigate() BEFORE they land. This slice holds the
-// opt-in ONCE (seeded from the initial URL at load) and App reads the store
-// thereafter, so a later navigate that drops `?d3rf` no longer unmounts the
-// canvas. When the canvas graduates to the DEFAULT (P7) this seed becomes a
-// capability check instead of a URL read.
+// `?d3rf` is retained ONLY as a force-ON override — a narrow-screen escape
+// hatch, and the pin the `d3-canvas.spec.ts` e2e suite uses to mount the canvas
+// regardless of the test viewport.
 //
-// `import.meta.env.DEV` is statically `false` in a production build, so
-// `canvasEnabled` folds to a constant `false` there — the canvas stays dead
-// code in prod (the `React.lazy(WorkspaceCanvas)` chunk is never fetched),
-// exactly as the old `d3CanvasEnabled()` guaranteed. Both the seed and the
-// setter re-apply the DEV gate so nothing can force the canvas on in prod.
-//
-// Mirrors activeLane.ts / focusedEditor.ts: a small, shell-owned Zustand slice
-// App depends on, never the reverse.
+// The seed is read ONCE at store-create (App.tsx imports this module before any
+// component mounts) and App reads the store thereafter, so any in-app
+// navigate() that rebuilds the URL via `serializeRoute` (a tier-tab click, a
+// recursion drill-in, the `v` coverage toggle) never re-evaluates the gate
+// mid-flow — the P0 persistence guarantee still holds. Mirrors activeLane.ts /
+// focusedEditor.ts: a small, shell-owned Zustand slice App depends on, never
+// the reverse.
+
+// Canvas is the default when the viewport is desktop/tablet-wide (>= 1024px,
+// matching the base.css narrow-reflow boundary) AND the user is not in a
+// data-saver (prefers-reduced-data) mode — the infinite pan/zoom canvas is
+// desktop/tablet-first by necessity (089). `matchMedia` is guaranteed by the
+// DOM lib types but absent under jsdom (unit tests) and SSR — read it through
+// Partial<Window> so the presence check is a real runtime guard; with no
+// matchMedia the canvas stays OFF and WorkspaceSurface renders. An unsupported
+// `prefers-reduced-data` feature reports `matches: false`, i.e. "not saving
+// data" → canvas stays enabled, the correct default.
+function canvasCapable(): boolean {
+  const matchMedia = (window as Partial<Window>).matchMedia
+  if (!matchMedia) return false
+  const wideEnough = matchMedia('(min-width: 1024px)').matches
+  const reducedData = matchMedia('(prefers-reduced-data: reduce)').matches
+  return wideEnough && !reducedData
+}
+
+// `?d3rf` — the retained force-ON override (see module note).
 function d3rfInUrl(): boolean {
   return new URLSearchParams(window.location.search).has('d3rf')
 }
 
+function resolveCanvasEnabled(): boolean {
+  return canvasCapable() || d3rfInUrl()
+}
+
 interface CanvasModeState {
   canvasEnabled: boolean
-  // Re-read the URL and apply the DEV gate. Called once on load (the initial
-  // state below already does this at store-create time); exposed for an
-  // explicit re-seed and for tests.
-  seedFromUrl: () => void
+  // Re-evaluate capability (+ the `?d3rf` override) and update. Called once at
+  // store-create time (the initial state below already does this); exposed for
+  // an explicit re-seed and for tests.
+  reseed: () => void
   setCanvasEnabled: (enabled: boolean) => void
 }
 
 export const useCanvasModeStore = create<CanvasModeState>()((set) => ({
   // Seeded at store-create time — App.tsx imports this module before any
-  // component mounts, so `window.location.search` still carries the initial
-  // `?d3rf` (before the /p/:id→lastTierRoute redirect or any tab click strips
-  // it). No mount effect / one-frame flicker needed.
-  canvasEnabled: import.meta.env.DEV && d3rfInUrl(),
-  seedFromUrl() {
-    set({ canvasEnabled: import.meta.env.DEV && d3rfInUrl() })
+  // component mounts, so capability (viewport width) is already resolvable and
+  // `?d3rf`, if present, still carries in `window.location.search`. No mount
+  // effect / one-frame flicker needed.
+  canvasEnabled: resolveCanvasEnabled(),
+  reseed() {
+    set({ canvasEnabled: resolveCanvasEnabled() })
   },
   setCanvasEnabled(enabled) {
-    set({ canvasEnabled: import.meta.env.DEV && enabled })
+    set({ canvasEnabled: enabled })
   },
 }))
 
