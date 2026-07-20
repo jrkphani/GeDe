@@ -1164,14 +1164,26 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     return () => clearActiveCanvasInstance(nav)
   }, [reactFlow])
 
-  // Focus-driven pan (D3 spike gate-d): native `scrollIntoView` is a no-op on a
-  // transformed plane, so focusing a cell/editor inside a node needs an explicit
-  // pan. Heuristic is pan-if-outside-margin, never center-on-every-focus: only
-  // when the focused element is near/past a pane edge do we `setCenter` on it,
-  // keeping the CURRENT zoom (pan, don't re-zoom). Reduced-motion snaps. This is
-  // also what brings a cross-node-Tab target on-screen (P3.3).
+  // Focus-driven pan is KEYBOARD-ONLY (issue 101): native `scrollIntoView` is a
+  // no-op on a transformed plane, so a keyboard-navigated focus (Tab / cross-node
+  // Tab / a create's programmatic focus) that lands on an off-screen cell needs an
+  // explicit pan to bring it into view. But a MOUSE/TOUCH click focuses something
+  // the user can already see (you can't click what isn't rendered), so panning
+  // there is pointless + jarring. We track the last input modality with a
+  // persistent ref (NOT a timer — a rAF-cleared flag misclassifies touch, whose
+  // tap→focus can span >1 frame, and races the codebase's own rAF-deferred
+  // `.focus()` calls). `onPointerDownCapture` flips it to pointer; `onKeyDownCapture`
+  // flips it to keyboard; both are passive capture-phase listeners on the wrapper.
+  const lastInputWasKeyboardRef = useRef(false)
+
+  // Focus-driven pan (D3 spike gate-d): pan-if-outside-margin, never
+  // center-on-every-focus — only when the focused element is near/past a pane
+  // edge do we `setCenter` on it, keeping the CURRENT zoom. Reduced-motion snaps.
   const onFocusCapture = useCallback(
     (e: FocusEvent<HTMLDivElement>) => {
+      // Pointer-initiated focus (a click) never pans — the target is already
+      // visible; only keyboard-driven focus can target an off-screen cell.
+      if (!lastInputWasKeyboardRef.current) return
       const target = e.target as HTMLElement | null
       const pane = wrapperRef.current
       if (!target || !pane || typeof target.getBoundingClientRect !== 'function') return
@@ -1261,6 +1273,15 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
       className="workspace-canvas"
       ref={wrapperRef}
       onFocusCapture={onFocusCapture}
+      // Track input modality so the focus-pan fires ONLY for keyboard nav, never
+      // on a click (issue 101). Passive capture-phase listeners — no preventDefault,
+      // so React Flow's own pane-pan / node-drag pointer handling is untouched.
+      onPointerDownCapture={() => {
+        lastInputWasKeyboardRef.current = false
+      }}
+      onKeyDownCapture={() => {
+        lastInputWasKeyboardRef.current = true
+      }}
       role="main"
       aria-label="Workspace canvas"
     >

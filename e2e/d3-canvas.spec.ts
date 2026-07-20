@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 
 // ── DEPLOY-GATE CONTRACT (issue 096 → GRADUATED 089-P6) ──────────────────────
 // These specs now RUN IN the deploy gate: `npm run e2e` = plain `playwright
@@ -1327,4 +1327,91 @@ test('the populated canvas register is axe-clean (WCAG 2 A/AA serious/critical)'
   const results = await new AxeBuilder({ page }).include('[role="main"]').withTags(['wcag2a', 'wcag2aa']).analyze()
   const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
   expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+// 101 — the focus-pan is KEYBOARD-only: CLICKING an element the user can already
+// see must NOT pan/center the viewport (only Tab/⌘-jump focus, which can target
+// an off-screen cell, pans). NORMAL motion here on purpose so a real pan actually
+// animates the transform (a reduced-motion duration-0 setCenter no-ops on an idle
+// zoom — issue 096 — and would HIDE a regression).
+const FOCUS_PAN_MARGIN_PX = 88
+
+interface Box {
+  x: number
+  y: number
+  width: number
+  height: number
+}
+async function boxOf(loc: Locator): Promise<Box> {
+  const b = await loc.boundingBox()
+  if (!b) throw new Error('element has no bounding box (not visible / not laid out)')
+  return b
+}
+
+// Open the canvas and deterministically place the Foundation "Name a value
+// proposition" phantom INSIDE the left pan-margin band (still hittable) by panning
+// the empty pane the measured distance — the regime where the OLD focus-pan
+// centred on interaction. (Zooming overshoots the phantom off-screen; native
+// scroll can't reach it on a transformed plane.) All offsets are RELATIVE:
+//   • land at HALF the margin from the edge → provably inside the band AND hittable;
+//   • drag from ABOVE the measured lane row (midway pane-top → Foundation-top) →
+//     reliably empty graph-paper, so the drag pans the pane, not a node.
+// Returns the phantom locator, sitting in the margin, ready to click/tap.
+async function panFoundationPhantomIntoLeftMargin(page: Page): Promise<Locator> {
+  await openThreeLaneCanvas(page)
+  await waitForStableViewport(page)
+  const foundation = page.locator('.wc-node--foundation')
+  const target = foundation.getByPlaceholder('Name a value proposition')
+  await expect(target).toBeVisible()
+  const pbox = await boxOf(page.locator('.workspace-canvas'))
+  const fbox = await boxOf(foundation)
+  const landingX = pbox.x + FOCUS_PAN_MARGIN_PX / 2
+  const emptyY = pbox.y + (fbox.y - pbox.y) / 2
+  const grabX = pbox.x + pbox.width / 2
+  const panDx = (await boxOf(target)).x - landingX
+  await page.mouse.move(grabX, emptyY)
+  await page.mouse.down()
+  await page.mouse.move(grabX - panDx, emptyY, { steps: 8 })
+  await page.mouse.up()
+  await waitForStableViewport(page)
+  const tbox = await boxOf(target)
+  const inLeftMargin = tbox.x < pbox.x + FOCUS_PAN_MARGIN_PX && tbox.x >= pbox.x
+  expect(inLeftMargin, 'precondition: target must sit inside the left pan margin so the OLD code would pan').toBe(true)
+  return target
+}
+
+// A focus-pan (if it wrongly fired) animates over FOCUS_PAN_DURATION (320ms);
+// wait past it, then assert the viewport transform never moved.
+async function expectNoPan(page: Page, before: string): Promise<void> {
+  await page.waitForTimeout(650)
+  expect(await viewportTransform(page), 'the interaction must not pan the canvas').toBe(before)
+}
+
+test('clicking a cell does NOT pan the viewport (focus-pan is keyboard-only)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1000 })
+  const target = await panFoundationPhantomIntoLeftMargin(page)
+  const before = await viewportTransform(page)
+  await target.click()
+  await expectNoPan(page, before)
+})
+
+test('tapping a cell (touch) does NOT pan the viewport — the tablet-first case', { tag: '@dev-flag' }, async ({
+  browser,
+}) => {
+  // Touch was the exact case a timer-based gate would misclassify (tap→focus can
+  // span >1 frame); the persistent modality ref sets pointer on ANY pointerdown,
+  // including touch. Needs a touch-enabled context.
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, hasTouch: true })
+  const page = await context.newPage()
+  try {
+    const target = await panFoundationPhantomIntoLeftMargin(page)
+    const before = await viewportTransform(page)
+    const b = await boxOf(target)
+    await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2)
+    await expectNoPan(page, before)
+  } finally {
+    await context.close()
+  }
 })
