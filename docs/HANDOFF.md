@@ -61,4 +61,4 @@ P6 (deploy-gate transition) put the canvas specs INTO the gating `verify` — th
 
 ---
 
-*History (shipped + archived to `docs/issues/done/`): 084 grid unification; 087/088/090/091/092/094/095/096/097/098; 089 (D1/D2/D3-graduation) + 093. SHIPPED but not yet archived: 101 (click-no-pan), 099 (partial: 099a/b + 2b + 2c — only the coverage/touch items remain). This HANDOFF was updated 2026-07-20 after the 099-2b + 099-2c a11y fixes.*
+*History (shipped + archived to `docs/issues/done/`): 084 grid unification; 087/088/090/091/092/094/095/096/097/098; 089 (D1/D2/D3-graduation) + 093; 101 (click-no-pan, archived this session). SHIPPED but not yet archived: 099 (partial: 099a/b + 2b + 2c — only the coverage/touch items remain, so the issue stays OPEN). This HANDOFF was updated 2026-07-20 after the 099-2b + 099-2c a11y fixes.*
