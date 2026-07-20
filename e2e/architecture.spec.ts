@@ -416,3 +416,51 @@ test('architecture P6: renders and stays operable at volume (~20 tables × ~50 e
   await page.keyboard.press('Tab')
   await expect(page.getByPlaceholder('Name a table')).toBeFocused()
 })
+
+// Issue 102 — "Add child does nothing" when a rich-text DESCRIPTION cell in the
+// same table is mid-edit. RichTextCell deliberately keeps `editing` on blur (so
+// clicking the FormatStrip doesn't collapse the cell), so its Lexical editor
+// stays mounted and fights the add-child phantom's autoFocus; the phantom's
+// blur-cancel then dismisses it in the same frame. The fix exits any active edit
+// when the phantom arms. RED before the fix (the phantom never appears / vanishes
+// instantly), GREEN after.
+// FIXME(102): RED — reproduces the reported bug. "Add child" produces no child
+// phantom while a rich-text DESCRIPTION cell in the same table is mid-edit
+// (exiting the edit first restores it). `test.fixme` so the repro is captured
+// but does not fail CI until the fix lands. See docs/issues/102.
+test.fixme('architecture 102: Add child works even while a description cell is being edited', async ({ page }) => {
+  await forceWorkspaceSurface(page)
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill('Repro102')
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: 'Open Repro102' }).click()
+  await page.getByRole('link', { name: 'Architecture' }).click()
+  await addTable(page, 'Value')
+  await addEntry(page, 'Value', 'Comfort')
+
+  const panel = tablePanel(page, 'Value')
+  const comfortRow = panel.locator('tr', { has: page.getByRole('cell', { name: 'Comfort', exact: true }) })
+
+  // Open + type into the rich-text description cell — do NOT commit/exit first.
+  await comfortRow.getByRole('cell').nth(2).click()
+  await page.locator('[contenteditable="true"]:focus').pressSequentially('Seating comfort')
+
+  // With the description still in edit mode, click Add child.
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+
+  // The child phantom must appear AND survive (the focus fight used to kill it).
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeVisible({ timeout: 2000 })
+  await page.waitForTimeout(500)
+  await expect(childField).toBeVisible()
+
+  // And it must be usable: type a name + Enter creates the child under Comfort.
+  await childField.fill('Legroom')
+  await childField.press('Enter')
+  await expect(panel.getByRole('cell', { name: 'Legroom', exact: true })).toBeVisible()
+  // The description edit was preserved (committed on blur), not lost.
+  await expect(comfortRow.getByText('Seating comfort')).toBeVisible()
+})
