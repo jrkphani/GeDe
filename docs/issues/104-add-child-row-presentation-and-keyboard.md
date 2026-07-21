@@ -1,0 +1,28 @@
+# 104: Add-child child rows — oversized edit height, odd spacing, keyboard nav
+
+- **Status**: OPEN — user-reported (2026-07-21), **root-caused, awaiting an interaction-design decision before the keyboard fix**. Surfaced immediately after 102 shipped (the child row now appears; its presentation is the problem). Three facets, distinct causes.
+- **Milestone**: M7. **Depends on / follows**: 102 (add-child now works), 084 (typed add-child), 089 D1 P5 (rich-text description cells).
+
+## Facet 1 — the child row is much taller than the parent (edit-mode editor height)
+When a description cell is being edited, the Lexical editor has a fixed **72px min-height** (`base.css` `.grid-cell--richtext .rich-text-editor-root { min-height: 72px }`, mirrored by `.grid-cell__input--multiline`). That floor was designed for the Design register's multi-sentence **justification** prose (issue 085 Phase B, Decision 4 — "roomy editor"). In an Architecture table, descriptions are short, so a cell in edit mode balloons the row to ~72px+ while every read-mode row is ~40px — jarring, and the reported "row height is especially very big." It collapses back on blur.
+- **Fix direction (no owner-fork needed):** right-size the description editor for the *table* context — e.g. an auto-growing editor that starts at the row's rest height (~40px) and grows with content, rather than a fixed 72px floor; or scope the 72px floor to the register/justification cell and give the Architecture/Foundation description cell a smaller floor. Must not regress the register justification editor (085 Decision 4).
+
+## Facet 2 — spacing looks odd
+Largely a symptom of Facet 1 (a tall edit-mode row next to short read-mode rows) plus the child indentation (`--depth`). Re-evaluate once Facet 1 is fixed; may need a small vertical-rhythm pass on child rows.
+
+## Facet 3 — keyboard tab-rotate "does not work as expected" (two causes)
+1. **The add-child phantom isn't wired into the grid's Tab navigation.** It's a bare `PhantomInput` (`ArchitectureSurface.renderAddChildCell`) with no `chain`/`chainId`, so Tab from it falls through to browser-default focus movement instead of rotating to the next grid cell like the normal editing grammar.
+2. **102's `armed` suppression blocks editing while the add-child phantom is up.** The add-child phantom **stays armed** after creating a child (to let you type the next sibling), and 102's fix suppresses cell-editing whenever the inline row is armed (`effectiveEditing = armed ? null : editing`). So until the user presses Esc to leave add-child mode, the table's normal keyboard editing feels dead. This is a direct, acknowledged consequence of the 102 fix — the two-way exclusion of "editing a cell" vs "add-child armed" now always lets *armed* win.
+
+## The interaction-design FORK (blocks Facet 3's fix)
+After adding a child via the add-child phantom, should it be:
+- **(A) Single-shot** — create one child, dismiss the phantom, land focus sensibly (new child's name, or the next cell). Predictable; add another child by clicking "Add child" again.
+- **(B) Continuous** (current) — stay in "add sibling" mode, Enter adds another child and keeps going, Esc exits. Faster bulk entry, but modal — and today it blocks editing other cells and its Tab isn't grid-aware.
+- **(C) Continuous but non-blocking** — stay in add mode, but clicking/Tabbing to another cell cleanly exits add mode and edits that cell (no suppression), and Tab is grid-aware.
+
+The fix for Facet 3 differs materially by choice. (C) is the most consistent with the grid grammar but the most work; (A) is the simplest and most predictable.
+
+## Gate (once decided)
+- Child row edit height is comfortable in a table (not a 72px jump); register justification editor unchanged.
+- Keyboard: Tab from the add-child affordance rotates within the grid grammar (per the chosen model); editing other cells is not dead while/around add-child; no lost edits.
+- e2e covering the chosen add-child interaction + the row-height behavior; existing 102 tests stay green.
