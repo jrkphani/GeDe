@@ -398,6 +398,15 @@ export function TablePanel({
             const section = document.getElementById(`t2-table-${table.id}`)
             setAddingChildTo(null)
             if (!section) return
+            // Timing invariant (issue 104 edge review): the focus handoff MUST run
+            // after React has committed the `setAddingChildTo(null)` above (which
+            // unmounts this `.grid-row--phantom` add-child row). Tab is a discrete
+            // event, so React 18 flushes that state update synchronously before
+            // paint — the next animation frame is therefore guaranteed to observe
+            // the unmounted DOM, so `lastEditablePosition` lands on the table's own
+            // add-entry phantom (not this row) and `firstEditableCell` on the first
+            // real cell. Do not collapse this rAF to a synchronous call: the query
+            // would then still see the not-yet-unmounted add-child row.
             requestAnimationFrame(() => {
               const target =
                 dir === 'forward' ? lastEditablePosition(section) : firstEditableCell(section)

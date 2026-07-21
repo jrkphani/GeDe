@@ -612,3 +612,106 @@ test('architecture 104 (facet 1): editing a short description does not balloon t
   // One line + padding is well under the old 72px min-height floor.
   expect(box.height).toBeLessThan(60)
 })
+
+// Issue 104 LOW-polish edge tests (from the adversarial review). These lock in the
+// four boundary behaviors of the continuous-non-blocking add-child phantom so a
+// future refactor of the arm/edit mutual-exclusion (102) or the dismissOnBlur
+// blur-cancel decoupling (104 Facet 3a) can't silently regress them.
+
+// (a) Escape must still dismiss the phantom even though dismissOnBlur=false removed
+// the blur→cancel path (104 Facet 3a). Escape routes through PhantomInput's own
+// keydown → onCancel, independent of blur.
+test('architecture 104 (edge a): Escape dismisses the add-child phantom with dismissOnBlur=false', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro104d')
+
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeFocused()
+
+  // Type a partial name, then Escape — the phantom dismisses and nothing is created.
+  await childField.fill('Draft')
+  await childField.press('Escape')
+  await expect(childField).toBeHidden()
+  await expect(panel.getByRole('cell', { name: 'Draft', exact: true })).toBeHidden()
+})
+
+// (b) Clicking a PLAIN-TEXT cell (the Name column, kind: 'text') while armed must
+// also dismiss+edit — the same "last action wins" contract as the rich-text case
+// (3a), but through the input editor path rather than the Lexical one.
+test('architecture 104 (edge b): clicking a plain-text cell while armed dismisses it and edits that cell', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro104e')
+
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeVisible()
+
+  // Click Comfort's Name cell (index 1: tree=0, name=1, description=2). The phantom
+  // dismisses and the name cell opens its plain-text editor, focused with the value.
+  await comfortRow.getByRole('cell').nth(1).click()
+  await expect(childField).toBeHidden()
+  const nameInput = page.locator('input:focus')
+  await expect(nameInput).toBeVisible({ timeout: 2000 })
+  await expect(nameInput).toHaveValue('Comfort')
+})
+
+// (c) Shift+Tab from the add-child field must exit add mode and land focus on the
+// table's FIRST editable cell (the backward branch of onTab → firstEditableCell),
+// without committing a child (Shift+Tab never creates).
+test('architecture 104 (edge c): Shift+Tab from the add-child field lands on the first grid cell', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro104f')
+
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeFocused()
+
+  // Shift+Tab: exit add mode, focus the first editable grid cell — never <body>.
+  await childField.press('Shift+Tab')
+  await expect(childField).toBeHidden()
+  // The focus handoff lands inside a requestAnimationFrame (see ArchitectureSurface
+  // onTab), so poll rather than reading activeElement once — the rAF may not have
+  // fired by the time press() resolves, especially under parallel-worker load.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const el = document.activeElement
+          return {
+            isBody: el === document.body || el === null,
+            inGridCell: !!el?.closest('.grid-cell'),
+            inPanel: !!el?.closest('.t2-table'),
+          }
+        }),
+      { timeout: 3000 },
+    )
+    .toEqual({ isBody: false, inGridCell: true, inPanel: true })
+})
+
+// (d) Clicking a NON-cell region (the table title, outside the grid) must LEAVE the
+// phantom armed — there is no outside-pointerdown dismiss (dismissOnBlur=false, and
+// only beginEditing on a real cell drives onDismiss). Documents the intended wart:
+// empty-space clicks don't dismiss; use Esc or click a cell. If a future change adds
+// an outside-pointerdown dismiss, this test is the signal to revisit the contract.
+test('architecture 104 (edge d): clicking outside the grid cells leaves the add-child phantom armed', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro104g')
+
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeVisible()
+
+  // Click the table title (a non-cell region inside the panel). blur fires but is
+  // decoupled from dismissal, and no beginEditing seam runs — so the phantom stays.
+  await panel.locator('.t2-table__name').click()
+  await expect(childField).toBeVisible()
+})
