@@ -22,6 +22,8 @@ After adding a child via the add-child phantom, should it be:
 
 The fix for Facet 3 differs materially by choice. (C) is the most consistent with the grid grammar but the most work; (A) is the simplest and most predictable.
 
+**DECISION (owner, 2026-07-21): (C) Continuous, non-blocking.** After each child, stay in add-sibling mode (Enter keeps adding); BUT clicking or Tabbing to any other cell cleanly EXITS add mode and edits that cell (no dead editing), and Tab from the add-child field rotates within the grid grammar (not browser default). The 102 `armed` suppression must therefore become "starting a new edit dismisses the add-child phantom," not "block all editing while armed" — while KEEPING 102's protection (arming add-child while a cell is mid-edit must still suppress that prior editor synchronously so the phantom isn't focus-killed). Whichever the user did LAST wins.
+
 ## Gate (once decided)
 - Child row edit height is comfortable in a table (not a 72px jump); register justification editor unchanged.
 - Keyboard: Tab from the add-child affordance rotates within the grid grammar (per the chosen model); editing other cells is not dead while/around add-child; no lost edits.
