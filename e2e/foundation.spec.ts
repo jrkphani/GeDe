@@ -50,6 +50,13 @@ test('foundation: enter five value propositions, re-rank by drag, persist across
   // Opening a project lands on Foundation (default tier).
   await expect(page.getByText('1st Tier · Foundation')).toBeVisible()
 
+  // Issue 103 — discoverability framing: Purpose carries a visible label, the
+  // value-prop table has a visible heading, and an orienting empty-state line
+  // shows while there are zero props (it disappears once props exist, below).
+  await expect(page.locator('.tier1-purpose__label')).toHaveText('Purpose')
+  await expect(page.getByRole('heading', { name: 'Value propositions' })).toBeVisible()
+  await expect(page.getByText(/No value propositions yet/i)).toBeVisible()
+
   // Purpose block: a rich-text editor now (issue 089 D1 Phase 5, like the
   // sibling Existing Scenario). Type into the contentEditable and commit on
   // blur (Enter is a newline in a rich editor, never a commit) — clicking the
@@ -71,6 +78,11 @@ test('foundation: enter five value propositions, re-rank by drag, persist across
     await phantomProp.press('Enter')
     await expect(page.getByRole('cell', { name })).toBeVisible()
   }
+
+  // Issue 103 — the empty-state guide is gone now that props exist; the titled
+  // heading stays.
+  await expect(page.getByText(/No value propositions yet/i)).toBeHidden()
+  await expect(page.getByRole('heading', { name: 'Value propositions' })).toBeVisible()
 
   const dataRows = page.locator('.editable-grid tbody tr:not(.grid-row--phantom)')
   await expect(dataRows).toHaveCount(5)

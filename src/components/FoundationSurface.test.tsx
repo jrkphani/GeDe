@@ -156,6 +156,51 @@ describe('FoundationSurface', () => {
   })
 })
 
+// Issue 103 — discoverability / labeling of the Foundation authoring surface:
+// a visible Purpose label, a "Value propositions" section heading, an orienting
+// empty-state line, and the self-teaching phantom key hints. All additive; the
+// value props already live in ONE EditableGrid (the complaint was framing, not
+// architecture) — see docs/issues/103.
+describe('FoundationSurface — authoring discoverability (issue 103)', () => {
+  it('labels the Purpose panel visibly, matching Existing Scenario', async () => {
+    const { container } = render(<FoundationSurface projectId={projectId} />)
+    await screen.findByText('1st Tier · Foundation')
+    const label = container.querySelector('.tier1-purpose__label')
+    expect(label).toHaveTextContent('Purpose')
+    // The editor keeps its own accessible name — the visible label is additive.
+    expect(screen.getByLabelText('System purpose')).toBeInTheDocument()
+  })
+
+  it('titles the value-proposition table with a visible <h3> heading', async () => {
+    render(<FoundationSurface projectId={projectId} />)
+    const heading = await screen.findByRole('heading', { name: 'Value propositions' })
+    // h3 keeps the outline valid under the h2 tier header (no skipped level).
+    expect(heading.tagName).toBe('H3')
+  })
+
+  it('shows an orienting empty-state line when there are no value propositions', async () => {
+    render(<FoundationSurface projectId={projectId} />)
+    expect(await screen.findByText(/No value propositions yet/i)).toBeInTheDocument()
+  })
+
+  it('drops the empty-state line once a value proposition exists', async () => {
+    await addTier1Prop(db, projectId, 'Seating-status comfort')
+    render(<FoundationSurface projectId={projectId} />)
+    await screen.findByText('Seating-status comfort')
+    // The heading persists (a titled table), but the empty guide is gone.
+    expect(screen.getByRole('heading', { name: 'Value propositions' })).toBeInTheDocument()
+    expect(screen.queryByText(/No value propositions yet/i)).not.toBeInTheDocument()
+  })
+
+  it('renders the quiet phantom key hint (aria-hidden, no SR noise) via showKeyHints', async () => {
+    const { container } = render(<FoundationSurface projectId={projectId} />)
+    await screen.findByPlaceholderText('Name a value proposition')
+    const hint = container.querySelector('.grid-row--phantom .key-hint')
+    expect(hint).toBeInTheDocument()
+    expect(hint).toHaveAttribute('aria-hidden', 'true')
+  })
+})
+
 // Issue 083 — Cause A. `members` going non-empty (someone else's row
 // streamed in) never guaranteed the signed-in caller's OWN workspace_members
 // row arrived first (a 067-class materialization race). Before this fix,

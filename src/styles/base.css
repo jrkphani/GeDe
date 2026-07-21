@@ -2095,11 +2095,15 @@ body {
   margin: 0;
 }
 
-/* Purpose: a paper panel that reads as a paragraph, not a textarea — click
-   anywhere to edit in place. */
+/* Purpose: a paper panel that reads as a paragraph. Issue 103 — a visible
+   label above the rich editor (matching Existing Scenario) makes it read as a
+   titled field rather than a stray card, so the two prose panels stop looking
+   like peer "tables". Same flex-column/label layout as .tier1-existing-scenario. */
 .tier1-purpose {
   padding: var(--space-4) var(--space-5);
-  cursor: text;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
 }
 
 .tier1-purpose__display,
@@ -2139,6 +2143,8 @@ body {
   gap: var(--space-2);
 }
 
+/* Shared quiet field label for the two Foundation prose panels (issue 103). */
+.tier1-purpose__label,
 .tier1-existing-scenario__label {
   font-size: var(--text-label);
   line-height: var(--leading-label);
@@ -2248,6 +2254,37 @@ body {
 .tier1-rank__degree {
   font-size: var(--text-mono);
   color: var(--ink);
+}
+
+/* Issue 103 — the value-propositions section stacks a visible heading, an
+   optional empty-state line and the grid. Flex column so they read as one
+   titled table, not three peer cards. */
+.tier1-props {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+/* A titled table heading (issue 103): stronger than the muted field labels
+   above (--ink, 600) so it reads as the section's title, matching the
+   drafting-table aesthetic rather than a loud dashboard header. */
+.tier1-props__heading {
+  margin: 0;
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* Orienting empty-state line (issue 103) — mirrors Architecture's .t2-empty
+   (issue 084 finding 1): one quiet guide line above the bare phantom so a
+   0-prop grid reads as "type here to add", not a stray link. */
+.tier1-props__empty {
+  margin: 0;
+  padding: 0 var(--space-1);
+  color: var(--ink-muted);
+  font-size: var(--text-body);
+  line-height: var(--leading-body);
 }
 
 .tier1-props .drag-handle {

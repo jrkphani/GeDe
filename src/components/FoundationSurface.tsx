@@ -172,6 +172,12 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
           setPurpose keeps the '' empty convention, so onCommit's null (an
           emptied editor) maps back to ''. */}
       <section className="panel tier1-purpose">
+        {/* Issue 103 — a visible label matching Existing Scenario's. Purpose
+            previously carried only an ariaLabel, so it read as a stray card
+            rather than a titled field; the label is the biggest driver of the
+            "these boxes look like stray tables" complaint. The editor keeps its
+            own ariaLabel ("System purpose") for the accessible name. */}
+        <span className="tier1-purpose__label">Purpose</span>
         <RichTextEditor
           value={purpose || null}
           onCommit={(next) => void setPurpose(next ?? '')}
@@ -199,6 +205,24 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
       </section>
 
       <section className="tier1-props" data-empty={props.length === 0 || undefined}>
+        {/* Issue 103 — a visible section heading so the ranked table reads as a
+            titled table, not a third mystery card stacked under two prose panels.
+            An <h3> keeps the heading outline valid (h2 "1st Tier · Foundation" →
+            h3); the section stays an un-named <section> (no aria-labelledby), so
+            no new landmark is introduced. */}
+        <h3 className="tier1-props__heading">Value propositions</h3>
+
+        {/* Issue 103 — an orienting empty-state line (mirrors Architecture's
+            .t2-empty, issue 084 finding 1) so a 0-prop grid + bare phantom reads
+            as "type here to add", not a stray link. Only for an editor: a viewer
+            has no phantom to point at. */}
+        {props.length === 0 && !readOnly ? (
+          <p className="tier1-props__empty">
+            No value propositions yet. Name your first below — e.g. “Comfort on demand”,
+            “Effortless booking”.
+          </p>
+        ) : null}
+
         {readOnly ? (
           <EditableGrid rows={props} columns={columns} getRowId={(prop) => prop.id} readOnly />
         ) : (
@@ -208,6 +232,11 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
                 rows={props}
                 columns={columns}
                 getRowId={(prop) => prop.id}
+                // Issue 103 — teach the existing Enter/Tab phantom grammar with
+                // the same quiet, aria-hidden key hints Architecture already
+                // uses (issue 084 D3 P5). Additive; adds no screen-reader noise
+                // (KeyHint's root is aria-hidden).
+                showKeyHints
                 phantom={{
                   columnId: 'name',
                   placeholder: 'Name a value proposition',
