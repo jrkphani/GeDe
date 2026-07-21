@@ -1,34 +1,34 @@
-# NEXT ORCHESTRATOR — launch prompt: post-089 backlog (099 remainder + 100), fresh session
+# NEXT ORCHESTRATOR — launch prompt: post-polish backlog (099 remainder · 100 planned · 104 polish)
 
-> **089 D3-canvas graduation is COMPLETE + LIVE** (canvas is the prod default; P0–P7 + 093 shipped, live-verified). Since then: `099` partly shipped (099a/b + 2 bugs found) and `101` (click-no-longer-pans) shipped. Nothing is mid-flight. Copy the block below as the next orchestrator's launch prompt.
+> **089 D3-canvas graduation is COMPLETE + LIVE** (canvas is the prod default). This session cleared a user-reported polish stream: `099-2b/2c`, `101`, `102`, `103`, `104` all shipped; `100` (live child core) is SCOPED + PLANNED (build deferred, owner decisions recorded). Nothing is mid-flight. Copy the block below as the next orchestrator's launch prompt.
 
 ---
 
-You are the ORCHESTRATOR for the GeDe repo (`/Users/jrkphani/Projects/GeDe`). 089 has graduated — the React Flow canvas is the capability-gated DEFAULT workspace in production. **START by reading `docs/HANDOFF.md`** (current state, HEAD, the established PATTERNS, non-negotiables) and `docs/issues/README.md` (the backlog index). The authoritative 089 record is `docs/issues/done/089-unified-canvas-workspace.md`.
+You are the ORCHESTRATOR for the GeDe repo (`/Users/jrkphani/Projects/GeDe`). The React Flow canvas is the capability-gated DEFAULT workspace in production. **START by reading `docs/HANDOFF.md`** (current state, HEAD `6d5aa3e`, the established PATTERNS incl. the new EDITING-GRAMMAR ones, non-negotiables) and `docs/issues/README.md` (the backlog index).
 
 You may `git push`, merge, and deploy (push to `main` → CI `verify` → `deploy` via `workflow_run`), and run live-smokes with the throwaway creds passed at launch (`GEDE_PASSWORD=<from owner>`, `GEDE_EMAIL='jrkphani@gmail.com'`; rotate after; never commit — the account-free local app is verifiable without creds).
 
-## The backlog (both NON-blocking)
+## The backlog
 
-- **`099` (`docs/issues/099-canvas-default-coverage-and-a11y-followups.md`)** — PARTLY DONE: `76ebf08` (cross-node-Tab flake hardened; canvas axe smoke extended to a populated register; label-tier-vs-zoom closed as a non-issue) + `bd6a913` (**2b SHIPPED** — CoverageMatrix ARIA grid valid on both surfaces via `display:contents` `role="row"` wrappers; twin axe scan re-enabled) + `8fe656c` (**2c SHIPPED** — dot hit target sized in SCREEN space via an optional `Canvas` `scale` fed a QUANTIZED RF zoom; and `maxDotHitRadius` made a TRUE all-pairs minimum, closing a latent wrong-parameter-bind in compose mode). **Both FOUND bugs are now fixed.** The concrete REMAINING items are coverage only:
-  - Canvas-side e2e for **hover-mute** + **empty-state suppression** (currently only on the WorkspaceSurface fallback).
-  - **Touch/tablet** verification of pan/zoom + node-drag. Worth pairing with 2c: the hit target is now zoom-correct, so a coarse-pointer pass is more meaningful than it was.
-  Do these as small red-first increments; each ships independently.
-- **`100` (`docs/issues/100-canvas-live-child-core.md`)** — the tracked P3 follow-up: promote the recursion satellite STUB → a live child {register+ring} core editable in place. **BIG** — needs a per-canvas store factory (singleton `contexts`/`dimensions`/`parameters`/`canvasCompose` → `canvasId`-keyed instances), a Rule-12 sweep of every consumer, its own budget + MANDATORY adversarial review. Its own multi-file phase; relates to 090. **Worth confirming scope/sequencing with the owner (`AskUserQuestion`) before starting** — a central refactor, not a quick fix.
+- **`100` (`docs/issues/100-canvas-live-child-core.md`) — SCOPED + PLANNED; owner may say "start 100 phase A".** Promote the recursion satellite STUB → a live child {register+ring} core editable in place. **Reframed by investigation: this is a CLIENT store-lifetime refactor (~13 src files), NOT a data-model one — 090 already made the backend fully canvas-parametric.** Seam = a `createCanvasStores(canvasId)` **factory + registry** (NOT React Context — 210 `getState()` calls happen outside React) + a **default-instance shim** so migration is phaseable with zero behavior change. `parameters` stays global (dimension-keyed, collision-free); `canvasCompose` is tiny. **Owner-decided: active core = FOCUS-FOLLOWS; undo = ONE GLOBAL history.** 5-phase plan (A factory → B thread `canvasId` → C active-canvas gating → D satellite-goes-live → E incidentals) is IN THE ISSUE — follow it. One hazard: per-store `syncUnsubscribe` must become per-instance. **MANDATORY adversarial review on Phase A + any store touch.** Phase A is self-contained (zero behavior change) — a good first increment; stop for owner review before Phase B.
+- **`099` (`docs/issues/099-...md`) — coverage remainder only** (both FOUND bugs 2b/2c shipped). Left: canvas-side e2e for **hover-mute** + **empty-state suppression** (fallback-only today); **touch/tablet** verification of pan/zoom + node-drag (more meaningful now 2c made the hit target zoom-correct). Small, independent, red-first each.
+- **`104` (`docs/issues/104-...md`) — LOW polish remainder** (core shipped). Clicking EMPTY space leaves the add-child phantom lingering until Esc/cell-click — consider an outside-pointerdown dismiss. Plus 4 edge tests: Escape-dismiss-with-`dismissOnBlur=false`, plain-text-cell-while-armed dismisses+edits, Shift+Tab lands the first cell, empty-space-leaves-armed.
 
-*(101 is SHIPPED — the focus-pan is now keyboard-only; do NOT re-open it.)*
+*(101/102/103 are SHIPPED + archived — do NOT re-open. 102's fix and 104's `beginEditing` seam are load-bearing: `RichTextCell` KEEPS `editing` on blur on purpose for the FormatStrip — do not "fix" that.)*
 
-## Workflow (per issue)
-**INVESTIGATE** (read-only `Explore` → verbatim file:line map) → **RED-FIRST** (a failing unit/e2e for the gate) → **IMPLEMENT** (`fork` for a big multi-file build; else inline) → **ADVERSARIALLY REVIEW** — the owner values validating the DESIGN adversarially BEFORE implementing (a hot-path fix's first-cut was caught + rejected this way); `code-reviewer` on the diff is MANDATORY for 100's store refactor + any hot-path/store/write-path touch → **VERIFY yourself** (`npm run verify:fast` + full `npm run e2e` + test every route on the canvas + screenshot) → **COMMIT** (`--no-verify` after verifying + explicit `git add`) → push (`--no-verify` if a local e2e loop runs) → confirm CI `verify` green + `deploy`.
+## Workflow (per issue / phase)
+**INVESTIGATE** (read-only `Explore`/subagent → verbatim file:line map) → **RED-FIRST** (a failing unit/e2e for the gate) → **IMPLEMENT** (a `general-purpose` subagent for a big multi-file phase; else inline) → **ADVERSARIALLY REVIEW** — validate the DESIGN before implementing AND the DIFF after; `code-reviewer` on the diff is MANDATORY for 100's store refactor + any hot-path/store/write-path touch → **VERIFY yourself** (`npm run verify:fast` + full `npm run e2e` + test every route on the canvas + screenshot user-facing changes) → **COMMIT** (`--no-verify` after verifying + explicit `git add`) → push → confirm CI `verify` green + `deploy`.
+
+**Subagents must NOT commit/push/add** — they edit + verify + report; YOU review the diff, re-verify, and commit. (One subagent pushed to main unauthorized this session — docs-only, benign, but keep the gate.) Sequence anything sharing `EditableGrid.tsx`/`base.css`; never run two e2e suites at once (port 5173).
 
 ## Non-negotiables (full list in the HANDOFF)
-- **Deploy = push to `main`;** watch CI with `gh run list --json` poll loops. **Rollback if a canvas spec flakes: re-add `--grep-invert @dev-flag` to `package.json` `e2e`.**
+- **Deploy = push to `main`;** watch CI with `gh run list --json` poll loops (`until … completed`). **Rollback if a canvas spec flakes: re-add `--grep-invert @dev-flag` to `package.json` `e2e`.**
 - **STALE-VITE:** `pkill -f "@playwright/test/cli.js test-server"; pkill -f vite; lsof -ti:5173 | xargs -r kill -9` before every e2e re-run.
-- **eslint:** repo forbids non-null assertions (`!` — use a null-checking helper) and requires `interface` over `type`. Run `npx eslint <files>` fully — a green `tail` can hide errors.
-- **Bundle budget:** prod-build + grep `xyflow` stays OUT of the main `index-*.js` (it lives in `WorkspaceCanvas-*.js`) after any chunk/lazy-import change.
-- **e2e:** `d3-canvas.spec.ts` (`@dev-flag`, `?d3rf`) = canvas suite (now 25 tests); everything else pins `WorkspaceSurface` via `forceWorkspaceSurface`. Keep `routes.ts` grammar intact.
+- **eslint:** repo forbids non-null assertions (`!`) and requires `interface` over `type`. Run `npx eslint <files>` fully (one tolerated pre-existing warning in `EditableGrid.tsx`; 0 errors is the bar).
+- **Bundle budget:** prod-build + grep `xyflow` stays OUT of the main `index-*.js` after any chunk/lazy-import change.
+- **e2e:** `d3-canvas.spec.ts` (`@dev-flag`, `?d3rf`) = canvas suite; everything else pins `WorkspaceSurface` via `forceWorkspaceSurface`. Keep `routes.ts` grammar intact.
 - **≤3 concurrent subagents;** worktree-isolate overlapping ones; never two editing the same file on `main`.
 - **Adversarially review** MANDATORY for 100. **Screenshot** user-facing changes. **Schema only via migrations.** CloudWatch (`…WriteApiFunction…`, profile `phani-quadnomics`, read-only) is the authoritative write-path live check.
 
 ## Definition of done
-Ship the `099` remainder (small increments) and `100` (its own reviewed phase) — or surface a genuinely NEW owner-fork via `AskUserQuestion`. Re-triage `docs/issues/README.md` toward open-issue count 0. Leave a compressed HANDOFF update.
+Sequence `100` (its own reviewed phases, on owner go) and/or ship the `099` remainder + `104` polish (small increments) — or surface a genuinely NEW owner-fork via `AskUserQuestion`. Re-triage `docs/issues/README.md` toward open-issue count 0. Leave a compressed HANDOFF update.
