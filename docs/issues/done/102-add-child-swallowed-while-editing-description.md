@@ -1,7 +1,21 @@
 # 102: "Add child" does nothing while a rich-text description cell is being edited
 
-- **Status**: OPEN — user-reported (2026-07-21), **reproduced + root-caused, NOT yet fixed**. On the Architecture surface, clicking a row's "Add child" produces **no child phantom row** whenever a **description** cell in the same table is mid-edit. Exiting the edit first (Esc) restores it. Two candidate fixes were tried and did NOT work (documented below so they aren't repeated). A RED repro is captured as `test.fixme` in `e2e/architecture.spec.ts` ("architecture 102: …").
+- **Status**: ✅ SHIPPED (2026-07-21). Clicking "Add child" while a description cell was mid-edit produced no child row. Fixed in the shared `EditableGrid`; adversarially reviewed; RED→GREEN e2e on both surfaces. verify:fast 1660; full e2e 86/86.
 - **Milestone**: M7 (089 canvas). **Depends on**: 084 (the typed add-child) + 089 D1 P5 (the description became a Lexical rich-text cell).
+
+## Fix (shipped)
+
+**Actual mechanism (differs from the initial hypothesis below):** the phantom DID mount — it was dismissed **appear-then-vanish** in the same frame. `RichTextCell` deliberately keeps `nav.editing` on blur (so the out-of-editor FormatStrip doesn't collapse the cell), so its Lexical editor stays mounted and re-grabs DOM focus the instant the add-child phantom's `autoFocus` input mounts; the phantom then blurs and its `onBlur → onCancel` (`inline-editor.tsx`) dismisses it before paint. My first two guesses failed because they acted too late (an after-paint effect) or targeted the wrong thing (the click was never the problem).
+
+**Fix (`EditableGrid.tsx`):** when the inline add-child row is armed, suppress `editing` **synchronously during that render** via a derived `effectiveEditing = armed ? null : editing` (fed into `nav.editing` and the `onEditingChange` presence seam). The still-mounted editor therefore unmounts in the *same commit* as the phantom mounting, so it can never refocus. An effect then clears the underlying `editing` state (so dismissing the phantom never re-opens the editor) **and** clears the queued-focus refs (`pendingFocus`/`pendingPhantomEdit`) — an adversarial-review follow-up: a text/mono cell whose value CHANGED commits async on blur and queues a focus target that would steal focus from the phantom the same way (a ~50-60% timing race; the ref-clear closes it defensively). No data loss: the pointerdown that activates "Add child" already commits the edited value on the editor's blur before arming.
+
+**Not changed:** `RichTextCell`'s blur behavior (FormatStrip depends on it) — verified intact. Inert for every non-add-child surface (`armed` is only ever true for ArchitectureSurface's inline add-child; `effectiveEditing === editing` everywhere else).
+
+**Tests:** `architecture.spec.ts` "architecture 102" (description mid-edit) + "architecture 102b" (changed-name mid-edit); `d3-canvas.spec.ts` "architecture 102 (canvas)" variant. Note 102b passes with or without the ref-clear (the text-cell race is timing-dependent), so it guards the behavior rather than proving a hard RED.
+
+---
+
+*Original investigation (kept for the record):*
 
 ## Reproduction (confirmed)
 

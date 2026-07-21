@@ -411,6 +411,52 @@ test('the Architecture lane mounts N per-table nodes with in-node grammar at zoo
   await expect(alpha.getByRole('cell', { name: 'Buyers', exact: true })).toBeVisible()
 })
 
+// Issue 102 (canvas variant) — the same "Add child swallowed while a rich-text
+// description cell is mid-edit" bug reproduces inside a per-table React Flow node
+// (the shared ArchitectureSurface `TablePanel` → EditableGrid → inline add-child
+// phantom path is surface-agnostic). The EditableGrid fix (suppress `editing`
+// synchronously while the inline add-child row is armed, so the still-mounted
+// Lexical editor unmounts before it can re-grab focus and blur-dismiss the
+// phantom) must therefore hold on the canvas too.
+test('architecture 102 (canvas): Add child works while a description cell is being edited inside a table node', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page)
+
+  await addArchTable(page, 'Value')
+  const valueNode = page.locator('.wc-node--arch-table').filter({ hasText: 'Value' })
+  await valueNode.getByPlaceholder('Name an entry').click()
+  await page.keyboard.type('Comfort')
+  await page.keyboard.press('Enter')
+  await expect(valueNode.getByRole('cell', { name: 'Comfort', exact: true })).toBeVisible()
+
+  const comfortRow = valueNode.locator('tr', {
+    has: page.getByRole('cell', { name: 'Comfort', exact: true }),
+  })
+
+  // Open + type into the rich-text description cell — do NOT commit/exit first.
+  await comfortRow.getByRole('cell').nth(2).click()
+  await page.locator('[contenteditable="true"]:focus').pressSequentially('Seating comfort')
+
+  // With the description still mid-edit, click Add child.
+  await comfortRow.hover()
+  await valueNode.getByRole('button', { name: 'Add child to Comfort' }).click()
+
+  // The child phantom must appear AND survive the focus fight.
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeVisible({ timeout: 2000 })
+  await page.waitForTimeout(500)
+  await expect(childField).toBeVisible()
+
+  // And be usable: type a name + Enter creates the child under Comfort.
+  await childField.fill('Legroom')
+  await childField.press('Enter')
+  await expect(valueNode.getByRole('cell', { name: 'Legroom', exact: true })).toBeVisible()
+  // The description edit was preserved (committed on blur), not lost.
+  await expect(comfortRow.getByText('Seating comfort')).toBeVisible()
+})
+
 test('cross-node Tab follows sort order between table nodes (forward + backward)', { tag: '@dev-flag' }, async ({
   page,
 }) => {

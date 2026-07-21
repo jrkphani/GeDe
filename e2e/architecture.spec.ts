@@ -428,7 +428,7 @@ test('architecture P6: renders and stays operable at volume (~20 tables × ~50 e
 // phantom while a rich-text DESCRIPTION cell in the same table is mid-edit
 // (exiting the edit first restores it). `test.fixme` so the repro is captured
 // but does not fail CI until the fix lands. See docs/issues/102.
-test.fixme('architecture 102: Add child works even while a description cell is being edited', async ({ page }) => {
+test('architecture 102: Add child works even while a description cell is being edited', async ({ page }) => {
   await forceWorkspaceSurface(page)
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
@@ -463,4 +463,45 @@ test.fixme('architecture 102: Add child works even while a description cell is b
   await expect(panel.getByRole('cell', { name: 'Legroom', exact: true })).toBeVisible()
   // The description edit was preserved (committed on blur), not lost.
   await expect(comfortRow.getByText('Seating comfort')).toBeVisible()
+})
+
+// Issue 102 (adversarial-review follow-up) — the SAME "phantom flashes then
+// vanishes" class also reached the plain-text NAME cell via a different path: a
+// changed text value commits ASYNC on blur, so its `advance(null)` runs a tick
+// later and queues a focus target (`pendingFocus`) that steals focus from the
+// just-mounted add-child phantom. The arm effect clears the queued-focus refs, so
+// add-child must survive being clicked while a CHANGED name cell is mid-edit too.
+test('architecture 102b: Add child works while a CHANGED name cell is being edited', async ({ page }) => {
+  await forceWorkspaceSurface(page)
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill('Repro102b')
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: 'Open Repro102b' }).click()
+  await page.getByRole('link', { name: 'Architecture' }).click()
+  await addTable(page, 'Value')
+  await addEntry(page, 'Value', 'Comfort')
+
+  const panel = tablePanel(page, 'Value')
+  // Locate the row positionally — the name cell becomes an input mid-edit, so a
+  // by-cell-text locator would stop matching once we type into it.
+  const comfortRow = panel.locator('tbody tr').first()
+
+  // Open the NAME cell and CHANGE it (async commit-on-blur) — do NOT commit first.
+  await panel.getByRole('cell', { name: 'Comfort', exact: true }).click()
+  const nameInput = page.locator('input:focus')
+  await nameInput.fill('Comfortable')
+
+  // With the changed name still mid-edit, click Add child (name uncommitted, so
+  // the entry — and the button's aria-label — is still "Comfort").
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: /Add child to Comfort/ }).click()
+
+  const childField = page.getByPlaceholder(/Name a child of Comfort/)
+  await expect(childField).toBeVisible({ timeout: 2000 })
+  await page.waitForTimeout(500)
+  await expect(childField).toBeVisible()
+  // The name edit committed, not lost.
+  await expect(panel.getByRole('cell', { name: 'Comfortable', exact: true })).toBeVisible()
 })

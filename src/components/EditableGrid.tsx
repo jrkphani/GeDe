@@ -1057,13 +1057,29 @@ export function EditableGrid<TRow>({
   const activeInlineRow = readOnly ? undefined : inlineRow
   const [editing, setEditing] = useState<EditingCell | null>(null)
 
+  // Issue 102 — an armed inline add-child phantom must be the ONLY thing holding
+  // focus while it is up. A RichTextCell deliberately keeps `nav.editing` on
+  // blur (so the out-of-editor FormatStrip doesn't collapse it), so its Lexical
+  // editor stays mounted and re-grabs focus the instant the phantom's autoFocus
+  // input mounts — the phantom then blurs and its `onBlur → onCancel` dismisses
+  // it in the same frame (the phantom appears for a beat, then vanishes). An
+  // after-paint effect that cleared `editing` ran too late (the dismiss already
+  // fired). So we suppress `editing` DURING the arming render (`effectiveEditing`)
+  // — the editor unmounts synchronously, before it can refocus — and an effect
+  // then clears the underlying state so dismissing the phantom never re-opens the
+  // editor. No data loss: the pointerdown / focus-shift that activated "Add
+  // child" already committed the rich-text value on the editor's blur.
+  const armed = Boolean(activeInlineRow)
+  const effectiveEditing = armed ? null : editing
+
   // Issue 038 — the presence seam: report every open/close of the shared
   // `editing` state to whoever asked. A plain effect (not folded into
   // `setEditing` calls directly) so every path that changes `editing` — the
-  // grammar's several call sites below — stays a single source of truth.
+  // grammar's several call sites below — stays a single source of truth. Reports
+  // the effective (suppressed) value so an armed phantom reads as "nothing open".
   useEffect(() => {
-    onEditingChange?.(editing)
-  }, [editing, onEditingChange])
+    onEditingChange?.(effectiveEditing)
+  }, [effectiveEditing, onEditingChange])
 
   const refs = useRef<Map<string, HTMLElement>>(new Map())
   // A queued focus target (issue 022): set by `advance` when the destination is
@@ -1075,6 +1091,26 @@ export function EditableGrid<TRow>({
   // editable cell once that row appears in `rows`.
   const pendingPhantomEdit = useRef<string | null>(null)
   const prevRowIdsRef = useRef<string[]>([])
+
+  // Issue 102 — while an inline add-child phantom is armed, the phantom's own
+  // autoFocus input must be the ONLY thing that ends up focused. `effectiveEditing`
+  // (above) already suppresses `editing` synchronously so a RichTextCell's Lexical
+  // editor unmounts before it can re-grab focus. Clear the underlying `editing`
+  // state too (so dismissing the phantom never re-opens the editor), AND drop any
+  // QUEUED focus target: a text/mono/multiline cell whose value CHANGED commits
+  // async on blur, so its `advance(null)` runs a tick later and would set
+  // `pendingFocus` → the post-render focus effect (below) would then steal focus
+  // from the just-mounted phantom, and its blur-cancel would dismiss it — the same
+  // "flash then vanish" bug via a different path. This effect is declared before
+  // that focus effect, so it neutralises the steal on the arming render.
+  useEffect(() => {
+    if (armed) {
+      setEditing(null)
+      pendingFocus.current = null
+      pendingPhantomEdit.current = null
+    }
+  }, [armed])
+
   const rowIds = rows.map(getRowId)
   const allRowIds = activePhantom ? [...rowIds, PHANTOM_ROW_ID] : rowIds
   const columnIds = columns.map((c) => c.id)
@@ -1087,7 +1123,7 @@ export function EditableGrid<TRow>({
     phantomColumnId: activePhantom?.columnId ?? null,
     readOnly,
     refs,
-    editing,
+    editing: effectiveEditing,
     setEditing,
     advance: (target, fromRowId, fromColumnId) => {
       if (target && target.rowId !== PHANTOM_ROW_ID && columnKindById[target.columnId] !== 'combobox') {
