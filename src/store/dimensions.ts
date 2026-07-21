@@ -15,14 +15,14 @@ import {
 } from '../db/mutations'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
-import { useContextsStore } from './contexts'
+import type { CanvasStores } from './canvasStores'
 import { enqueueIfSyncing, enqueueSortDeltas, useSyncStore } from './sync'
 
 // Root-canvas dimensions for the currently open project (child canvases: 011).
 // Every mutating action pushes its inverse onto the shared command log
 // (issue 006) — one gesture, one call, one undo step.
 
-interface DimensionsState {
+export interface DimensionsState {
   projectId: string | null
   // Issue 090 Phase 4b — the canvas currently loaded, keyed on the real
   // `canvas_id` FK now (null ⇒ the project's default root canvas, the tolerant
@@ -58,13 +58,15 @@ function contextIdsOf(rows: readonly BindingRow[]): string[] {
   return [...new Set(rows.map((r) => r.contextId))]
 }
 
-// Issue 075 Part B — the `useSyncStore.dimensionsAppliedAt` subscription
-// below (mirrors src/store/projects.ts's own module-level syncUnsubscribe
-// pattern, 072): re-`load()` re-subscribes rather than accumulating a
-// duplicate listener per canvas navigation.
-let syncUnsubscribe: (() => void) | null = null
+export function createDimensionsStore(getStores: () => CanvasStores) {
+  // Issue 075 Part B — the `useSyncStore.dimensionsAppliedAt` subscription
+  // below (mirrors src/store/projects.ts's own module-level syncUnsubscribe
+  // pattern, 072): re-`load()` re-subscribes rather than accumulating a
+  // duplicate listener per canvas navigation. Issue 100 Phase A moved it inside
+  // the factory so it is a per-instance closure var.
+  let syncUnsubscribe: (() => void) | null = null
 
-export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
+  const useStore = create<DimensionsState>()((set, get) => ({
   projectId: null,
   canvasId: null,
   isChildCanvas: false,
@@ -267,14 +269,14 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
       if (removedRow) enqueueIfSyncing('dimensions', id, 'delete', removedRow)
       enqueueSortDeltas('dimensions', before, after)
       for (const b of deletedBindings) enqueueIfSyncing('bindings', b.id, 'delete', b)
-      await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
+      await getStores().useContexts.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
       useCommandLogStore.getState().push({
         label: `remove dimension "${removedName}"`,
         async undo() {
           const beforeUndo = get().dimensions
           const restored = await dbRestore(db, projectId, id, orderedIds, deletedBindings, canvasId ?? undefined)
           set({ dimensions: restored })
-          await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
+          await getStores().useContexts.getState().syncBindingsForContexts(contextIdsOf(deletedBindings))
           // Issue 094 — the exact reversal of the forward remove's three
           // enqueues: revive the dimension (→ 'revive', un-tombstones the
           // soft-deleted row), re-open the sibling-sort gap (→ 'update' each
@@ -294,7 +296,7 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
           const beforeRedo = get().dimensions
           const result = await dbRemove(db, projectId, id, canvasId ?? undefined)
           set({ dimensions: result.dimensions })
-          await useContextsStore.getState().syncBindingsForContexts(contextIdsOf(result.deletedBindings))
+          await getStores().useContexts.getState().syncBindingsForContexts(contextIdsOf(result.deletedBindings))
           // Issue 094 — re-do the forward remove's three enqueues verbatim.
           if (removedRow) enqueueIfSyncing('dimensions', id, 'delete', removedRow)
           enqueueSortDeltas('dimensions', beforeRedo, result.dimensions)
@@ -307,17 +309,29 @@ export const useDimensionsStore = create<DimensionsState>()((set, get) => ({
       throw err
     }
   },
-}))
+  }))
 
-export function resetDimensionsStore(): void {
-  syncUnsubscribe?.()
-  syncUnsubscribe = null
-  useDimensionsStore.setState({
-    projectId: null,
-    canvasId: null,
-    isChildCanvas: false,
-    contextId: null,
-    dimensions: [],
-    editingId: null,
-  })
+  function reset(): void {
+    syncUnsubscribe?.()
+    syncUnsubscribe = null
+    useStore.setState({
+      projectId: null,
+      canvasId: null,
+      isChildCanvas: false,
+      contextId: null,
+      dimensions: [],
+      editingId: null,
+    })
+  }
+
+  function teardown(): void {
+    syncUnsubscribe?.()
+    syncUnsubscribe = null
+  }
+
+  return { useStore, reset, teardown }
 }
+
+// Issue 100 Phase A — default-instance shims re-exported from the composition
+// root so every existing `./dimensions` import path is unchanged.
+export { useDimensionsStore, resetDimensionsStore } from './canvasStores'

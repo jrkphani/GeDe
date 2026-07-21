@@ -75,13 +75,7 @@ async function readCanvas(
   return { contexts, bindingsByContext, childCountByContext }
 }
 
-// Issue 075 Part B — the `useSyncStore.contextsAppliedAt`/`bindingsAppliedAt`
-// subscription below (mirrors src/store/projects.ts's own module-level
-// syncUnsubscribe pattern, 072): re-`load()` re-subscribes rather than
-// accumulating a duplicate listener per canvas navigation.
-let syncUnsubscribe: (() => void) | null = null
-
-interface ContextsState {
+export interface ContextsState {
   projectId: string | null
   // Issue 090 Phase 4b — the canvas currently loaded, keyed on the real
   // `canvas_id` FK (null ⇒ the project's default root canvas). `contexts` are
@@ -142,7 +136,15 @@ interface ContextsState {
   syncBindingsForContexts: (contextIds: readonly string[]) => Promise<void>
 }
 
-export const useContextsStore = create<ContextsState>()((set, get) => ({
+export function createContextsStore() {
+  // Issue 075 Part B — the `useSyncStore.contextsAppliedAt`/`bindingsAppliedAt`
+  // subscription below (mirrors src/store/projects.ts's own module-level
+  // syncUnsubscribe pattern, 072): re-`load()` re-subscribes rather than
+  // accumulating a duplicate listener per canvas navigation. Issue 100 Phase A
+  // moved it inside the factory so it is a per-instance closure var.
+  let syncUnsubscribe: (() => void) | null = null
+
+  const useStore = create<ContextsState>()((set, get) => ({
   projectId: null,
   canvasId: null,
   parentContextId: null,
@@ -556,20 +558,33 @@ export const useContextsStore = create<ContextsState>()((set, get) => ({
     const updated = await fetchBindingsMap(db, contextIds)
     set((state) => ({ bindingsByContext: { ...state.bindingsByContext, ...updated } }))
   },
-}))
+  }))
 
-export function resetContextsStore(): void {
-  syncUnsubscribe?.()
-  syncUnsubscribe = null
-  useContextsStore.setState({
-    projectId: null,
-    canvasId: null,
-    parentContextId: null,
-    contexts: [],
-    childCountByContext: {},
-    breadcrumbs: [],
-    bindingsByContext: {},
-    generation: 0,
-    selectedContextId: null,
-  })
+  function reset(): void {
+    syncUnsubscribe?.()
+    syncUnsubscribe = null
+    useStore.setState({
+      projectId: null,
+      canvasId: null,
+      parentContextId: null,
+      contexts: [],
+      childCountByContext: {},
+      breadcrumbs: [],
+      bindingsByContext: {},
+      generation: 0,
+      selectedContextId: null,
+    })
+  }
+
+  function teardown(): void {
+    syncUnsubscribe?.()
+    syncUnsubscribe = null
+  }
+
+  return { useStore, reset, teardown }
 }
+
+// Issue 100 Phase A — the default-instance shims live in canvasStores.ts (the
+// composition root); re-exported here so every existing `./contexts` import
+// path keeps resolving to the same singleton it always did.
+export { useContextsStore, resetContextsStore } from './canvasStores'

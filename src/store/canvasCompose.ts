@@ -2,9 +2,8 @@ import { create } from 'zustand'
 import type { ContextRow } from '../db/mutations'
 import { composeReducer, firstUnbound } from '../domain/composeMode'
 import { tupleReadout } from '../domain/contextDescription'
+import type { CanvasStores } from './canvasStores'
 import { useCommandLogStore } from './commandLog'
-import { useContextsStore } from './contexts'
-import { useDimensionsStore } from './dimensions'
 import { useParametersStore } from './parameters'
 import { useStatusStore } from './status'
 
@@ -24,19 +23,7 @@ import { useStatusStore } from './status'
 // readOnly is guarded by the CALLER (the `c` handler / the New-context button
 // only fire for editors), mirroring how DesignSurface's own guard sat upstream.
 
-function orderedDimensionIds(): string[] {
-  return [...useDimensionsStore.getState().dimensions].sort((a, b) => a.sort - b.sort).map((d) => d.id)
-}
-
-function paramNameById(): Record<string, string> {
-  const map: Record<string, string> = {}
-  for (const list of Object.values(useParametersStore.getState().byDimension)) {
-    for (const p of list) map[p.id] = p.name
-  }
-  return map
-}
-
-interface CanvasComposeState {
+export interface CanvasComposeState {
   composeContextId: string | null
   // Entering compose creates a real, persisted draft (SPEC invariant 6) and
   // selects it. A coverage-gap caller passes the whole tuple as `initialBindings`
@@ -53,19 +40,34 @@ interface CanvasComposeState {
   clearIfMissing: (existing: ReadonlySet<string> | readonly string[]) => void
 }
 
-export const useCanvasComposeStore = create<CanvasComposeState>()((set, get) => ({
+export function createCanvasComposeStore(getStores: () => CanvasStores) {
+  function orderedDimensionIds(): string[] {
+    return [...getStores().useDimensions.getState().dimensions]
+      .sort((a, b) => a.sort - b.sort)
+      .map((d) => d.id)
+  }
+
+  function paramNameById(): Record<string, string> {
+    const map: Record<string, string> = {}
+    for (const list of Object.values(useParametersStore.getState().byDimension)) {
+      for (const p of list) map[p.id] = p.name
+    }
+    return map
+  }
+
+  const useStore = create<CanvasComposeState>()((set, get) => ({
   composeContextId: null,
 
   async enterCompose(initialBindings) {
     if (get().composeContextId) return
     const ordered = orderedDimensionIds()
     const run = async (): Promise<ContextRow | null> => {
-      const row = await useContextsStore.getState().create()
+      const row = await getStores().useContexts.getState().create()
       if (!row) return null
       if (initialBindings) {
         for (const dimId of ordered) {
           const paramId = initialBindings[dimId]
-          if (paramId) await useContextsStore.getState().bind(row.id, dimId, paramId)
+          if (paramId) await getStores().useContexts.getState().bind(row.id, dimId, paramId)
         }
       }
       return row
@@ -74,10 +76,10 @@ export const useCanvasComposeStore = create<CanvasComposeState>()((set, get) => 
       ? await useCommandLogStore.getState().batch('compose from gap', run)
       : await run()
     if (!created) return
-    useContextsStore.getState().select(created.id)
+    getStores().useContexts.getState().select(created.id)
     set({ composeContextId: created.id })
-    const firstUnboundName = useDimensionsStore
-      .getState()
+    const firstUnboundName = getStores()
+      .useDimensions.getState()
       .dimensions.find((d) => d.id === firstUnbound(ordered, initialBindings ?? {}))?.name
     useStatusStore
       .getState()
@@ -91,11 +93,11 @@ export const useCanvasComposeStore = create<CanvasComposeState>()((set, get) => 
   exitCompose() {
     const id = get().composeContextId
     if (!id) return
-    const symbol = useContextsStore.getState().contexts.find((c) => c.id === id)?.symbol ?? 'draft'
+    const symbol = getStores().useContexts.getState().contexts.find((c) => c.id === id)?.symbol ?? 'draft'
     set({ composeContextId: null })
     useStatusStore.getState().announce(`Draft ${symbol} kept`, {
       label: `Discard draft ${symbol}`,
-      run: () => useContextsStore.getState().discard(id),
+      run: () => getStores().useContexts.getState().discard(id),
     })
   },
 
@@ -105,17 +107,17 @@ export const useCanvasComposeStore = create<CanvasComposeState>()((set, get) => 
     // The reducer only detects the incomplete→complete transition, so completion
     // is announced exactly once, on the bind that finishes the tuple. The active
     // pointer is derived from live bindings by the ring (activeDimensionId).
-    const before = useContextsStore.getState().bindingsByContext[id] ?? {}
+    const before = getStores().useContexts.getState().bindingsByContext[id] ?? {}
     const transition = composeReducer(
       orderedDimensionIds(),
       { bindings: before, activeDimensionId: null },
       { type: 'bind', dimensionId, parameterId },
     )
-    await useContextsStore.getState().bind(id, dimensionId, parameterId)
+    await getStores().useContexts.getState().bind(id, dimensionId, parameterId)
     if (transition.completed) {
-      const ctx = useContextsStore.getState().contexts.find((c) => c.id === id)
+      const ctx = getStores().useContexts.getState().contexts.find((c) => c.id === id)
       const tuple = tupleReadout(
-        useDimensionsStore.getState().dimensions,
+        getStores().useDimensions.getState().dimensions,
         transition.state.bindings,
         paramNameById(),
       )
@@ -128,7 +130,7 @@ export const useCanvasComposeStore = create<CanvasComposeState>()((set, get) => 
   async unbindParameter(dimensionId) {
     const id = get().composeContextId
     if (!id) return
-    await useContextsStore.getState().unbind(id, dimensionId)
+    await getStores().useContexts.getState().unbind(id, dimensionId)
   },
 
   clearIfMissing(existing) {
@@ -137,9 +139,16 @@ export const useCanvasComposeStore = create<CanvasComposeState>()((set, get) => 
     const present = existing instanceof Set ? existing.has(id) : (existing as readonly string[]).includes(id)
     if (!present) set({ composeContextId: null })
   },
-}))
+  }))
 
-// Session-scoped test/reset seam, mirroring resetActiveLane / resetCanvasMode.
-export function resetCanvasCompose(): void {
-  useCanvasComposeStore.setState({ composeContextId: null })
+  // Session-scoped test/reset seam, mirroring resetActiveLane / resetCanvasMode.
+  function reset(): void {
+    useStore.setState({ composeContextId: null })
+  }
+
+  return { useStore, reset }
 }
+
+// Issue 100 Phase A — default-instance shims re-exported from the composition
+// root so every existing `./canvasCompose` import path is unchanged.
+export { useCanvasComposeStore, resetCanvasCompose } from './canvasStores'
