@@ -1484,3 +1484,171 @@ test('tapping a cell (touch) does NOT pan the viewport — the tablet-first case
     await context.close()
   }
 })
+
+// ── 099 — port two behaviours that today only run on the WorkspaceSurface
+// fallback onto the REAL React Flow canvas wiring. Both use the canvas register
+// (the `?d3rf` authoring surface) to seed contexts, since the on-ring compose
+// flow the fallback specs rely on was dropped in 093.
+
+// Open the canvas + seed exactly two dimensions, each with one parameter, via
+// the Design register node — the minimum a bound context needs (one bindable
+// parameter per dimension). Mirrors `openCanvasWithCoverageData`'s register
+// seeding (force-click past the transformed pane, index the param phantoms in
+// dim order), trimmed to a 2×1 space. Returns the projectId.
+async function openCanvasTwoDimsOneParam(page: Page): Promise<string> {
+  const projectId = await openThreeLaneCanvas(page)
+  const register = page.locator('.wc-node--design-register')
+  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+  async function addDim(name: string) {
+    const p = register.getByPlaceholder('Type to add a dimension')
+    await p.fill(name)
+    await p.press('Enter')
+    await expect(register.locator('.dim-row__name', { hasText: name })).toBeVisible()
+  }
+  await addDim('Value')
+  await addDim('Stake')
+  async function addParam(dimIndex: number, param: string) {
+    const p = register.getByPlaceholder('Type to add a parameter').nth(dimIndex)
+    await p.click({ force: true })
+    await p.pressSequentially(param)
+    await page.keyboard.press('Enter')
+    await expect(register.getByText(param, { exact: true })).toBeVisible()
+  }
+  await addParam(0, 'Comfort')
+  await addParam(1, 'Users')
+  return projectId
+}
+
+// Create a fully-bound context α on the CURRENT canvas via GUIDED COMPOSE. At
+// fit-view zoom the register is LOD-collapsed to a single Tuple column (093), so
+// its per-dimension combobox columns don't exist — but entering compose (`c`)
+// force-expands the register to the full per-dimension columns regardless of
+// zoom (the 089-P5 review-fix, its own test above) WITHOUT re-zooming, so the
+// ring stays framed. `c` composes the draft α; bind both dimensions via their
+// combobox cells (column order Symbol=0, Documented=1, Value=2, Stake=3 — the
+// combobox binding mirrors canvas-selection.spec.ts's `createAndBindAlpha`),
+// then Escape keeps the draft. A fully-bound α is required so its child canvas
+// seeds dimensions from α's bindings (openChildCanvas).
+async function createBoundAlpha(page: Page): Promise<void> {
+  const ring = page.locator('.wc-node--design-ring')
+  const register = page.locator('.wc-node--design-register')
+  await ring.locator('.canvas-svg').click()
+  await waitForStableViewport(page)
+  await page.keyboard.press('c')
+
+  // Compose force-expands the register to the per-dimension combobox columns.
+  await expect(register.getByRole('columnheader', { name: 'Value', exact: true })).toBeVisible()
+  const row = register.locator('.editable-grid tbody tr.grid-row--selected')
+  await expect(row).toHaveCount(1)
+
+  async function bind(cellIndex: number, paramName: string) {
+    const cell = row.locator('td').nth(cellIndex)
+    await cell.getByRole('button').click({ force: true })
+    await page.getByPlaceholder('Type to filter…').fill(paramName)
+    await page.keyboard.press('Enter')
+    await expect(cell).toContainText(paramName)
+  }
+  await bind(2, 'Comfort')
+  await bind(3, 'Users')
+  await page.keyboard.press('Escape') // exit compose, keep the (now-bound) draft
+  await expect(register.getByText('α', { exact: true })).toBeVisible()
+}
+
+// 099 (canvas) — the child-canvas dual-empty-state suppression, ported from the
+// fallback (design-layout.spec.ts "child canvas needing sub-parameters shows
+// exactly one empty-state prompt"). On the canvas the wiring lives across two
+// nodes: the register node renders the `.canvas-seed-hint` (DesignRegisterBody)
+// and the ring node stamps `data-suppress-canvas-empty` on `.design-core-ring`
+// (DesignRingBody), which the base.css rule uses to hide Canvas's own always-on
+// `.canvas-empty-prompt`. Never both voices at once. Reached by drilling α, then
+// entering its child canvas via the satellite — a fresh child inherits α's two
+// dimensions but has no sub-parameters yet (the needs-seeding state).
+test('child canvas (canvas): the ring suppresses its own empty prompt while the register shows the seed-hint', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  const projectId = await openCanvasTwoDimsOneParam(page)
+  await createBoundAlpha(page)
+
+  // Drill α → its summary satellite, then enter the child canvas (the satellite
+  // is a stub; the live child core only mounts after navigating in).
+  await waitForStableViewport(page)
+  const register = page.locator('.wc-node--design-register')
+  await register.locator('.children-drill').first().click()
+  const satellite = page.locator('.wc-satellite')
+  await expect(satellite).toHaveCount(1)
+  await satellite.locator('.wc-satellite__enter').click()
+
+  // On the child canvas: a contextPath segment, and the register + ring re-mount
+  // for the child (which has α's two dimensions but zero sub-parameters yet).
+  await expect(page).toHaveURL(new RegExp(`/p/${projectId}/design/[^/?#]+`))
+  await expect(page.locator('.wc-node--design-register')).toBeVisible()
+
+  // The register node speaks the ONE calm empty-state voice: the seed-hint.
+  const childRegister = page.locator('.wc-node--design-register')
+  await expect(childRegister.locator('.canvas-seed-hint')).toBeVisible()
+
+  // The ring node suppresses Canvas's own always-on prompt: `.design-core-ring`
+  // carries the suppress flag, so the prompt is present in the DOM (Canvas.tsx
+  // always renders it while there are no contexts) but HIDDEN — never both.
+  const ring = page.locator('.wc-node--design-ring')
+  await expect(ring.locator('.design-core-ring')).toHaveAttribute('data-suppress-canvas-empty', 'true')
+  await expect(ring.locator('.canvas-empty-prompt')).toHaveCount(1)
+  await expect(ring.locator('.canvas-empty-prompt')).toBeHidden()
+  // The lineage line was dropped outright (DesignRingBody never passes `lineage`
+  // to Canvas) — it never enters the DOM at all.
+  await expect(ring.locator('.canvas-empty-lineage')).toHaveCount(0)
+})
+
+// 099 (canvas) — hover-emphasis/mute on the canvas RING at node scale, ported
+// from the fallback (canvas-focus.spec.ts "hovering a context node mutes the
+// unrelated context and both arcs"). The fallback drove the on-ring `New
+// context` compose flow that 093 removed, so contexts are seeded via the
+// register instead: α fully bound, β left unbound (shares no binding with α, so
+// α's context-emphasis mutes it). Context-role emphasis lights no arcs, so every
+// arc mutes; α binds both seeded dots, so no dot-group mutes. All assertions are
+// scoped under `.wc-node--design-ring` — this is the canvas wiring, not the
+// fallback surface.
+test('hover-mute works on the canvas ring: hovering a context mutes the unrelated context and both arcs', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openCanvasTwoDimsOneParam(page)
+  await createBoundAlpha(page)
+
+  // A second context β via the register phantom — left UNBOUND, so it shares no
+  // binding with the fully-bound α (α's adjacency won't include it).
+  const register = page.locator('.wc-node--design-register')
+  await register.getByPlaceholder('New context').click()
+  await page.keyboard.type('second justification')
+  await page.keyboard.press('Enter')
+  await expect(register.getByText('β', { exact: true })).toBeVisible()
+
+  const ring = page.locator('.wc-node--design-ring')
+  await expect(ring.locator('.canvas-svg')).toBeVisible()
+  // Both contexts render as ring nodes.
+  await expect(ring.locator('.canvas-node[data-context-id]')).toHaveCount(2)
+
+  // Settle the initial fitView before any hover — the race the helper guards.
+  await waitForStableViewport(page)
+
+  // Resting state: clear any selection (click the ring background corner) so we
+  // test hover-only emphasis, not a locked selection's own view.
+  await ring.locator('.canvas-svg').click({ position: { x: 8, y: 8 } })
+  await expect(ring.locator('.canvas--muted')).toHaveCount(0)
+
+  // Hover α's node (the fully-bound one, symbol α). Both contexts stay in the
+  // DOM; α's context emphasis mutes the unrelated β and every arc, but no dot
+  // (α binds both seeded dots).
+  const alphaNode = ring.locator('.canvas-node[data-context-id]', {
+    has: page.getByText('α', { exact: true }),
+  })
+  await alphaNode.hover()
+  await expect(ring.locator('.canvas-node.canvas--muted')).toHaveCount(1) // β mutes, α does not
+  await expect(ring.locator('.canvas-arc-group.canvas--muted')).toHaveCount(2) // context role lights no arcs
+  await expect(ring.locator('.canvas-dot-group.canvas--muted')).toHaveCount(0) // α binds both seeded dots
+
+  // Leaving clears every mute.
+  await page.mouse.move(8, 8)
+  await expect(ring.locator('.canvas--muted')).toHaveCount(0)
+})
