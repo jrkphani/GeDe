@@ -381,6 +381,29 @@ export function TablePanel({
           stopPropagation
           onSubmit={(name) => void addEntry(table.id, addingChildTo, name)}
           onCancel={() => setAddingChildTo(null)}
+          // Issue 104 Facet 3(a) — do NOT dismiss on blur: clicking another cell
+          // must open THAT cell's editor (the grid's onDismiss handles teardown in
+          // the same click), and a blur-dismiss would re-render the row away before
+          // the click lands. Esc/onTab/edit-another-cell still dismiss.
+          dismissOnBlur={false}
+          // Issue 104 Facet 3(b) — grid-aware Tab: PhantomInput has already committed
+          // the current name (created the child) on a forward Tab; here we exit add
+          // mode and land focus on the next grid position, using the SAME section-
+          // scoped helpers the cross-table chain uses (finding 7 — never a global
+          // DOM-reach). Deferred a frame so the add-child row (which shares the
+          // `.grid-row--phantom` class the forward helper targets) has unmounted,
+          // leaving the table's own add-entry phantom as the forward landing spot;
+          // Shift+Tab lands on the table's first editable cell.
+          onTab={(dir) => {
+            const section = document.getElementById(`t2-table-${table.id}`)
+            setAddingChildTo(null)
+            if (!section) return
+            requestAnimationFrame(() => {
+              const target =
+                dir === 'forward' ? lastEditablePosition(section) : firstEditableCell(section)
+              target?.focus()
+            })
+          }}
         />
       )
     }
@@ -613,6 +636,12 @@ export function TablePanel({
               inlineRow: {
                 afterRowId: addingChildTo,
                 className: 'grid-row--phantom t2-add-child-row',
+                // Issue 104 Facet 3(a) — continuous, non-blocking: if the user
+                // starts editing another cell while this add-child phantom is up,
+                // the grid dismisses it (whichever the user did LAST wins) instead
+                // of 102 blocking the edit. Arming while a cell is mid-edit is the
+                // reverse case and stays suppressed by the grid (102 preserved).
+                onDismiss: () => setAddingChildTo(null),
                 // Match the armed child's depth (parent.depth + 1) on the row so
                 // the phantom's NAME input inherits the same per-level indent as a
                 // real child, sitting clearly under its parent. Same --depth model

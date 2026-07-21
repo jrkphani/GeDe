@@ -1338,6 +1338,23 @@ body {
   min-height: 72px;
 }
 
+/* Issue 104 Facet 1 — the Architecture/Foundation DESCRIPTION cell in edit mode.
+   Unlike the register's justification prose (the roomy 72px floor above, 085
+   Decision 4), a table description is short, so the fixed 72px + the editor's own
+   3-line content floor ballooned the row on click (~40px rest → ~88px editing).
+   Compact drops both floors to a single line: the editor starts at the row's rest
+   height and auto-grows with content (the contentEditable is not height-capped).
+   `min-height: 0` on the root undoes the 72px; the content keeps a one-line floor
+   so an empty editor never collapses to the caret's ~0px box. Width is untouched
+   (min-width: 320px is inherited) — Facet 1 is a height concern only. */
+.grid-cell--richtext-compact .rich-text-editor-root {
+  min-height: 0;
+}
+
+.grid-cell--richtext-compact .rich-text-editor__content {
+  min-height: var(--leading-body);
+}
+
 /* Duplicate-tuple badge (issue 005, invariant 2): quiet, non-blocking, mono —
    navigation to the sibling, never dismissal (no ✕). Explicit width for the
    same reason as .grid-col--status above; `nowrap` still lets a long sibling

@@ -505,3 +505,110 @@ test('architecture 102b: Add child works while a CHANGED name cell is being edit
   // The name edit committed, not lost.
   await expect(panel.getByRole('cell', { name: 'Comfortable', exact: true })).toBeVisible()
 })
+
+// Issue 104 — shared setup: a project on the Architecture surface with one table
+// ("Value") holding one entry ("Comfort"). Returns the table panel + the Comfort
+// row locator, ready for the add-child / edit-height assertions below.
+async function setup104(page: Page, projectName: string) {
+  await forceWorkspaceSurface(page)
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill(projectName)
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: `Open ${projectName}` }).click()
+  await page.getByRole('link', { name: 'Architecture' }).click()
+  await addTable(page, 'Value')
+  await addEntry(page, 'Value', 'Comfort')
+  const panel = tablePanel(page, 'Value')
+  const comfortRow = panel.locator('tr', {
+    has: page.getByRole('cell', { name: 'Comfort', exact: true }),
+  })
+  return { panel, comfortRow }
+}
+
+// Issue 104 Facet 3(a) — CONTINUOUS, NON-BLOCKING add-child (owner decision C):
+// with the add-child phantom armed, clicking ANOTHER cell must cleanly DISMISS the
+// phantom and edit that cell (no dead click). Before the fix, 102's `armed`
+// suppression blocked all editing while the phantom was up. "Whichever the user
+// did LAST wins": here the click wins, so the phantom goes and the cell edits.
+test('architecture 104 (facet 3a): clicking a cell while add-child is armed dismisses it and edits that cell', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro104a')
+
+  // Arm the add-child phantom under Comfort.
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeVisible()
+
+  // Click Comfort's Description cell — the add-child phantom must dismiss…
+  await comfortRow.getByRole('cell').nth(2).click()
+  await expect(childField).toBeHidden()
+
+  // …and that cell must edit normally (its live editor is up + typeable).
+  const editor = page.locator('[contenteditable="true"]:focus')
+  await expect(editor).toBeVisible({ timeout: 2000 })
+  await editor.pressSequentially('Seating')
+  // Commit the rich-text edit (⌘/Ctrl+Enter is the richtext seam) and verify.
+  await editor.press('ControlOrMeta+Enter')
+  await expect(comfortRow.getByText('Seating')).toBeVisible()
+})
+
+// Issue 104 Facet 3(b) — Tab from the add-child field must rotate WITHIN the grid
+// (commit the current input, then land focus in a grid cell), not fall through to
+// browser-default focus movement. Before the fix the add-child PhantomInput had no
+// chain wiring, so Tab left the grid entirely.
+test('architecture 104 (facet 3b): Tab from the add-child field lands in a grid cell, not the browser chrome', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro104b')
+
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await expect(childField).toBeFocused()
+
+  // Type a name, then Tab: the continuous-non-blocking contract is "Tab COMMITS
+  // the current input (creates the child) and moves into the grid". Browser-
+  // default Tab would instead drop the typed value uncommitted.
+  await childField.fill('Legroom')
+  await childField.press('Tab')
+
+  // The child was created (the input committed, not lost to a native tab-out).
+  await expect(panel.getByRole('cell', { name: 'Legroom', exact: true })).toBeVisible()
+  // Focus landed on a grid cell/field inside THIS table panel — never on <body>
+  // (the browser-default fallthrough).
+  const focus = await page.evaluate(() => {
+    const el = document.activeElement
+    return {
+      isBody: el === document.body || el === null,
+      inPanel: !!el?.closest('.t2-table'),
+    }
+  })
+  expect(focus.isBody).toBe(false)
+  expect(focus.inPanel).toBe(true)
+  // The phantom exited add mode.
+  await expect(childField).toBeHidden()
+})
+
+// Issue 104 Facet 1 — a description cell in edit mode must NOT balloon to the
+// register-justification 72px floor; it starts near the row's rest height (one
+// line) and grows with content. Assert the editing rich-text cell stays well under
+// the old 72px jump for short/empty content.
+test('architecture 104 (facet 1): editing a short description does not balloon the row to ~72px', async ({
+  page,
+}) => {
+  const { comfortRow } = await setup104(page, 'Repro104c')
+
+  const descCell = comfortRow.getByRole('cell').nth(2)
+  await descCell.click()
+  // The live editor is up; measure the editing rich-text cell height.
+  const editingCell = comfortRow.locator('.grid-cell--richtext')
+  await expect(editingCell).toBeVisible()
+  const box = await editingCell.boundingBox()
+  if (!box) throw new Error('editing rich-text cell has no bounding box')
+  // One line + padding is well under the old 72px min-height floor.
+  expect(box.height).toBeLessThan(60)
+})

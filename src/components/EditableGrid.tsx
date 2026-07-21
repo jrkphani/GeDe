@@ -69,6 +69,13 @@ export interface RichTextCellKind<TRow> {
   // Foundation/Architecture *description* cell no longer inherits the
   // justification column's "Add justification…" ghost.
   placeholder: string
+  // Issue 104 Facet 1 — the roomy multi-line editor floor (085 Decision 4's
+  // "expand-on-focus" prose height, ~72px). ON only for the Design register's
+  // multi-sentence JUSTIFICATION cell; the Architecture/Foundation DESCRIPTION
+  // cells leave it OFF so the editor starts near the row's rest height (one line)
+  // and auto-grows with content instead of ballooning the row on click. Default
+  // OFF → every description cell is compact without opting in.
+  roomy?: boolean
 }
 
 export type GridCellKind<TRow> =
@@ -108,6 +115,14 @@ export interface InlineRowConfig {
   // cell inherits the same per-level indent as a real child row). Additive and
   // default-off; absent → no style attr → byte-identical.
   style?: CSSProperties
+  // Issue 104 Facet 3(a) — CONTINUOUS, NON-BLOCKING add-child ("whichever the user
+  // did LAST wins"). 102 makes an armed inline row suppress cell-editing so the
+  // phantom isn't focus-killed when it arms mid-edit. But that must NOT block the
+  // reverse: starting a NEW edit while the phantom is up should cleanly DISMISS it
+  // and edit that cell, not be swallowed. The grid calls this the moment it opens
+  // an editor while armed (a click or Tab into a cell) so the caller can clear its
+  // add-child state; absent → the pre-104 always-blocking behavior.
+  onDismiss?: () => void
 }
 
 export interface EditableGridProps<TRow> {
@@ -764,7 +779,10 @@ function RichTextCell<TRow>({
 
   if (editing) {
     const editor = (
-      <div className="grid-cell grid-cell--richtext" ref={registerRef(nav, rowId, columnId)}>
+      <div
+        className={`grid-cell grid-cell--richtext${cellDef.roomy ? '' : ' grid-cell--richtext-compact'}`}
+        ref={registerRef(nav, rowId, columnId)}
+      >
         <RichTextEditor
           value={seedRichValue(stored)}
           namespace={`gede-justification-${rowId}`}
@@ -1116,6 +1134,19 @@ export function EditableGrid<TRow>({
   const columnIds = columns.map((c) => c.id)
   const columnKindById = Object.fromEntries(columns.map((c) => [c.id, c.cell.kind]))
 
+  // Issue 104 Facet 3(a) — every path that OPENS an editor goes through here.
+  // While an add-child phantom is armed, opening an editor means the user chose
+  // to edit a cell OVER the phantom (they acted last), so dismiss the phantom
+  // (the caller clears its add-child state) rather than letting 102's armed
+  // suppression swallow the edit. Reverse direction (arming while a cell is
+  // mid-edit) is untouched — that's still handled synchronously by
+  // `effectiveEditing`/the armed effect, so 102 stays green. A null target
+  // (leaving edit mode) never dismisses; unarmed, this is exactly `setEditing`.
+  const beginEditing = (cell: EditingCell | null) => {
+    if (cell && activeInlineRow?.onDismiss) activeInlineRow.onDismiss()
+    setEditing(cell)
+  }
+
   const nav: NavContext = {
     rowIds: allRowIds,
     columnIds,
@@ -1124,11 +1155,11 @@ export function EditableGrid<TRow>({
     readOnly,
     refs,
     editing: effectiveEditing,
-    setEditing,
+    setEditing: beginEditing,
     advance: (target, fromRowId, fromColumnId) => {
       if (target && target.rowId !== PHANTOM_ROW_ID && columnKindById[target.columnId] !== 'combobox') {
         // Text/mono/multiline editor: mount it in edit mode; autoFocus lands us.
-        setEditing(target)
+        beginEditing(target)
         return
       }
       // Combobox trigger, phantom input, or a stay-put no-op (null): focus an

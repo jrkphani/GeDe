@@ -226,6 +226,10 @@ export function ContextRegister({
         // FormatStrip (089 D1 P1) binds to this cell's editor when focused.
         kind: 'richtext',
         placeholder: 'Add justification…',
+        // Issue 104 Facet 1 — the justification prose keeps the roomy ~72px
+        // editor floor (085 Decision 4); the Architecture/Foundation description
+        // cells opt OUT (compact, auto-grow) so short descriptions don't balloon.
+        roomy: true,
         getValue: (ctx) => ctx.justification ?? '',
         onCommit: async (ctx, value) => {
           await setJustification(ctx.id, value)

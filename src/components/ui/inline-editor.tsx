@@ -315,6 +315,23 @@ export interface PhantomInputProps {
   //     blur does nothing, exactly as before.
   autoFocus?: boolean
   onCancel?: () => void
+  // Issue 104 Facet 3(a) — whether blur triggers `onCancel`. Default true keeps
+  // every existing ephemeral phantom byte-identical. The add-child field sets it
+  // FALSE: dismissing on blur re-renders (removes the phantom row) on the very
+  // mousedown that is trying to click into another cell, detaching that cell
+  // before its `click` lands — the edit is then swallowed. With blur-dismiss off,
+  // dismissal is driven by the grid opening an editor (`InlineRowConfig.onDismiss`
+  // via a single click event), by `onTab`, and by Escape (all still via
+  // `onCancel`) — so "whichever the user did LAST wins" is deterministic.
+  dismissOnBlur?: boolean
+  // Issue 104 Facet 3(b) — grid-aware Tab for an EPHEMERAL phantom that is NOT in
+  // an EditableChain (Architecture's inline add-child field). When present, Tab is
+  // OWNED here (never the browser default): a forward Tab first COMMITS the current
+  // draft (creates the child via `onSubmit`) if non-empty, then this fires so the
+  // caller can exit add mode and land focus on the next grid cell; Shift+Tab fires
+  // `'backward'` without committing. Additive/default-off (takes precedence over
+  // the chain Tab path below, which the add-child field never uses).
+  onTab?: (dir: 'forward' | 'backward', value: string) => void
 }
 
 export function PhantomInput({
@@ -327,6 +344,8 @@ export function PhantomInput({
   onTabSubmit,
   autoFocus = false,
   onCancel,
+  onTab,
+  dismissOnBlur = true,
 }: PhantomInputProps) {
   const [draft, setDraft] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
@@ -349,7 +368,7 @@ export function PhantomInput({
       autoFocus={autoFocus}
       value={draft}
       onChange={(e) => setDraft(e.target.value)}
-      onBlur={onCancel ? () => onCancel() : undefined}
+      onBlur={onCancel && dismissOnBlur ? () => onCancel() : undefined}
       onKeyDown={(e) => {
         if (stopPropagation) e.stopPropagation()
         if (e.key === 'Enter' && draft.trim() && !submittingRef.current) {
@@ -363,6 +382,22 @@ export function PhantomInput({
         } else if (e.key === 'Escape') {
           setDraft('')
           onCancel?.()
+        } else if (e.key === 'Tab' && onTab) {
+          // Issue 104 Facet 3(b) — grid-aware Tab for a non-chain ephemeral phantom
+          // (add-child). Own it fully: forward Tab commits the current draft (create
+          // + continue is Enter; Tab commits-then-leaves), then hands off so the
+          // caller exits add mode and moves focus into the grid. Shift+Tab leaves
+          // without committing.
+          e.preventDefault()
+          const value = draft.trim()
+          if (!e.shiftKey && value && !submittingRef.current) {
+            submittingRef.current = true
+            setDraft('')
+            void Promise.resolve(onSubmit(value)).finally(() => {
+              submittingRef.current = false
+            })
+          }
+          onTab(e.shiftKey ? 'backward' : 'forward', value)
         } else if (e.key === 'Tab' && chain && chainId) {
           if (e.shiftKey) {
             // Go back to the previous chain field — mirrors EditableGrid's
