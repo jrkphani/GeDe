@@ -35,7 +35,7 @@ import {
   useCanvasSatellitesStore,
 } from '../store/canvasSatellites'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
-import { useContextsStore } from '../store/contexts'
+import { resolveCanvasStores } from '../store/canvasStores'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
 import { formatDegree } from '../domain/degree'
@@ -609,8 +609,9 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
 // it. NOT the base `.wc-node` class — the count-4 lane-node invariant must hold.
 function SatelliteNode({ data }: NodeProps<SatelliteNode>) {
   const { parentContextId, onEnter, onCollapse } = data
-  const contexts = useContextsStore((s) => s.contexts)
-  const childCount = useContextsStore((s) => s.childCountByContext[parentContextId] ?? 0)
+  const stores = resolveCanvasStores()
+  const contexts = stores.useContexts((s) => s.contexts)
+  const childCount = stores.useContexts((s) => s.childCountByContext[parentContextId] ?? 0)
   const symbol = contexts.find((c) => c.id === parentContextId)?.symbol ?? '—'
   return (
     <div className="wc-satellite nodrag nopan" data-testid="wc-satellite">

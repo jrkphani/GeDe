@@ -5,11 +5,10 @@ import { tupleReadout } from '../domain/contextDescription'
 import { findDuplicateContextIds } from '../domain/duplicates'
 import { presenceCueLabel } from '../domain/presence'
 import { useCommandLogStore } from '../store/commandLog'
-import { useContextsStore } from '../store/contexts'
-import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
 import { usePresenceCues, usePresenceStore } from '../store/presence'
 import { useStatusStore } from '../store/status'
+import { useCanvasStores } from './CanvasStoresContext'
 import { EditableGrid, PHANTOM_ROW_ID, type GridColumn } from './EditableGrid'
 import { Button } from './ui/button'
 
@@ -84,18 +83,19 @@ export function ContextRegister({
   // edit the full columns. Default off for the D2 / normal-route register.
   collapsed?: boolean
 }) {
-  const dimensions = useDimensionsStore((s) => s.dimensions)
-  const contexts = useContextsStore((s) => s.contexts)
-  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
-  const childCountByContext = useContextsStore((s) => s.childCountByContext)
-  const loadContexts = useContextsStore((s) => s.load)
-  const createContext = useContextsStore((s) => s.create)
-  const setSymbol = useContextsStore((s) => s.setSymbol)
-  const setJustification = useContextsStore((s) => s.setJustification)
-  const bind = useContextsStore((s) => s.bind)
-  const unbind = useContextsStore((s) => s.unbind)
-  const selectedContextId = useContextsStore((s) => s.selectedContextId)
-  const select = useContextsStore((s) => s.select)
+  const stores = useCanvasStores()
+  const dimensions = stores.useDimensions((s) => s.dimensions)
+  const contexts = stores.useContexts((s) => s.contexts)
+  const bindingsByContext = stores.useContexts((s) => s.bindingsByContext)
+  const childCountByContext = stores.useContexts((s) => s.childCountByContext)
+  const loadContexts = stores.useContexts((s) => s.load)
+  const createContext = stores.useContexts((s) => s.create)
+  const setSymbol = stores.useContexts((s) => s.setSymbol)
+  const setJustification = stores.useContexts((s) => s.setJustification)
+  const bind = stores.useContexts((s) => s.bind)
+  const unbind = stores.useContexts((s) => s.unbind)
+  const selectedContextId = stores.useContexts((s) => s.selectedContextId)
+  const select = stores.useContexts((s) => s.select)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
   const loadParams = useParametersStore((s) => s.load)
   const announce = useStatusStore((s) => s.announce)

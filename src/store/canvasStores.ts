@@ -95,6 +95,14 @@ export function releaseCanvasStores(canvasId: string | null): void {
   registry.delete(key)
 }
 
+// Issue 100 — resolves which canvas's stores a live core should use. Phase B
+// ALWAYS returns the default instance (root === default), so behavior is
+// byte-identical to the pre-Phase-B singleton. Phase C changes ONLY this
+// function to return per-canvas instances + decide which is active.
+export function resolveCanvasStores(): CanvasStores {
+  return getCanvasStores(null)
+}
+
 // The default instance — created once, at module load. Its hooks and reset
 // seams are re-exported by contexts.ts / dimensions.ts / canvasCompose.ts so
 // every pre-refactor import path keeps resolving to exactly these singletons.

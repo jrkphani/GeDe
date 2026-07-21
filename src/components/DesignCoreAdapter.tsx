@@ -9,12 +9,10 @@ import { coverageStat } from '../domain/coverage'
 import type { StaleRebindEvent } from '../db/mutations'
 import { canWrite } from '../domain/workspaceRole'
 import { useActiveLaneStore } from '../store/activeLane'
-import { useCanvasComposeStore } from '../store/canvasCompose'
+import { resolveCanvasStores } from '../store/canvasStores'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
 import { useCanvasSatellitesStore } from '../store/canvasSatellites'
 import { useCanvasesStore } from '../store/canvases'
-import { useContextsStore } from '../store/contexts'
-import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
 import { healRichTextOnLoad } from '../store/richTextConvert'
 import { useStatusStore } from '../store/status'
@@ -23,6 +21,7 @@ import type { DesignView } from '../shell/routes'
 import { Breadcrumbs } from './Breadcrumbs'
 import { Button } from './ui/button'
 import { Canvas } from './Canvas'
+import { CanvasStoresProvider } from './CanvasStoresContext'
 import { CanvasSwitcher } from './CanvasSwitcher'
 import { ChildCanvasBanners } from './ChildCanvasBanners'
 import { ContextRegister } from './ContextRegister'
@@ -69,9 +68,10 @@ function useDesignCanvasContext(projectId: string, contextPath: string[], canvas
   }, [atRoot, canvases, canvasId])
   const canvasSelector = atRoot ? activeRootCanvasId : contextId
   const canLoad = !atRoot || activeRootCanvasId !== null
-  const loadedFor = useDimensionsStore((s) => s.projectId)
-  const loadedContextId = useDimensionsStore((s) => s.contextId)
-  const loadedCanvasId = useDimensionsStore((s) => s.canvasId)
+  const stores = resolveCanvasStores()
+  const loadedFor = stores.useDimensions((s) => s.projectId)
+  const loadedContextId = stores.useDimensions((s) => s.contextId)
+  const loadedCanvasId = stores.useDimensions((s) => s.canvasId)
   const canvasReady = atRoot
     ? loadedFor === projectId && loadedCanvasId === activeRootCanvasId
     : loadedFor === projectId && loadedContextId === contextId
@@ -93,12 +93,13 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
 
-  const dimensions = useDimensionsStore((s) => s.dimensions)
-  const contexts = useContextsStore((s) => s.contexts)
-  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
-  const breadcrumbs = useContextsStore((s) => s.breadcrumbs)
+  const stores = resolveCanvasStores()
+  const dimensions = stores.useDimensions((s) => s.dimensions)
+  const contexts = stores.useContexts((s) => s.contexts)
+  const bindingsByContext = stores.useContexts((s) => s.bindingsByContext)
+  const breadcrumbs = stores.useContexts((s) => s.breadcrumbs)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
-  const composeContextId = useCanvasComposeStore((s) => s.composeContextId)
+  const composeContextId = stores.useCompose((s) => s.composeContextId)
 
   // Issue 093 + 089-P5 — collapse the per-dimension columns to a tuple-summary
   // when zoomed out (boolean selector → re-renders only on threshold crossing),
@@ -136,15 +137,15 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
     let cancelled = false
     async function openCanvas() {
       if (contextId !== null) {
-        const stale = await useContextsStore.getState().openChildCanvas(contextId)
+        const stale = await stores.useContexts.getState().openChildCanvas(contextId)
         if (!cancelled) setStaleEvents(stale)
       } else if (!cancelled) {
         setStaleEvents([])
       }
-      await useDimensionsStore.getState().load(projectId, canvasSelector)
-      await useContextsStore.getState().load(projectId, canvasSelector)
+      await stores.useDimensions.getState().load(projectId, canvasSelector)
+      await stores.useContexts.getState().load(projectId, canvasSelector)
       void healRichTextOnLoad(projectId)
-      void useContextsStore.getState().loadBreadcrumbs(contextPath)
+      void stores.useContexts.getState().loadBreadcrumbs(contextPath)
     }
     if (canLoad) void openCanvas()
     return () => {
@@ -208,11 +209,11 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
       }
       e.preventDefault()
       if (readOnly) return
-      void useCanvasComposeStore.getState().enterCompose()
+      void stores.useCompose.getState().enterCompose()
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [view, readOnly])
+  }, [view, readOnly, stores])
 
   // Esc exits compose (defers to an open Radix popover this press).
   useEffect(() => {
@@ -222,11 +223,11 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
       if (document.querySelector('[data-radix-popper-content-wrapper]')) return
       e.preventDefault()
       e.stopPropagation()
-      useCanvasComposeStore.getState().exitCompose()
+      stores.useCompose.getState().exitCompose()
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [composeContextId])
+  }, [composeContextId, stores])
 
   // `v` = open/collapse the coverage TWIN (P4, issue 012) — NOT a route swap. The
   // twin is an adjacent, edge-connected CoverageMatrix node below the core; `v`
@@ -360,10 +361,10 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
           <ChildCanvasBanners
             events={staleEvents}
             onUndo={(event) => {
-              void useContextsStore
+              void stores.useContexts
                 .getState()
                 .revertStale(event)
-                .then(() => useDimensionsStore.getState().load(projectId, contextId))
+                .then(() => stores.useDimensions.getState().load(projectId, contextId))
               setStaleEvents((prev) => prev.filter((e) => e !== event))
             }}
           />
@@ -381,20 +382,22 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
           {/* Issue 093 — the top "New context" button is REMOVED; the register's
               phantom row is now the sole create affordance (the `c` key still
               enters guided compose mode). */}
-          <div className="editing-zone" role="group" aria-label="Dimensions, parameters, and contexts">
-            <section className="dim-rail" aria-label="Dimensions and parameters">
-              <DimensionManagerPanel childCanvas={contextId !== null} />
-            </section>
-            <section className="context-register-shell">
-              <ContextRegister
-                projectId={projectId}
-                contextId={contextId}
-                onDrillIn={handleDrillIn}
-                readOnly={readOnly}
-                collapsed={registerCollapsed}
-              />
-            </section>
-          </div>
+          <CanvasStoresProvider value={stores}>
+            <div className="editing-zone" role="group" aria-label="Dimensions, parameters, and contexts">
+              <section className="dim-rail" aria-label="Dimensions and parameters">
+                <DimensionManagerPanel childCanvas={contextId !== null} />
+              </section>
+              <section className="context-register-shell">
+                <ContextRegister
+                  projectId={projectId}
+                  contextId={contextId}
+                  onDrillIn={handleDrillIn}
+                  readOnly={readOnly}
+                  collapsed={registerCollapsed}
+                />
+              </section>
+            </div>
+          </CanvasStoresProvider>
         </div>
       ) : null}
     </div>
@@ -415,13 +418,14 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
   // selector: the ring re-renders only when a bucket is crossed, never per frame.
   const hitScale = useStore((s) => quantizeHitScale(s.transform[2]))
 
-  const dimensions = useDimensionsStore((s) => s.dimensions)
-  const contexts = useContextsStore((s) => s.contexts)
-  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
-  const childCountByContext = useContextsStore((s) => s.childCountByContext)
-  const selectedContextId = useContextsStore((s) => s.selectedContextId)
+  const stores = resolveCanvasStores()
+  const dimensions = stores.useDimensions((s) => s.dimensions)
+  const contexts = stores.useContexts((s) => s.contexts)
+  const bindingsByContext = stores.useContexts((s) => s.bindingsByContext)
+  const childCountByContext = stores.useContexts((s) => s.childCountByContext)
+  const selectedContextId = stores.useContexts((s) => s.selectedContextId)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
-  const composeContextId = useCanvasComposeStore((s) => s.composeContextId)
+  const composeContextId = stores.useCompose((s) => s.composeContextId)
 
   const [hoveredMark, setHoveredMark] = useState<CanvasEmphasis | null>(null)
 
@@ -446,8 +450,8 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
 
   // Single owner of the vanished-draft cleanup (mirrors DesignSurface.tsx:504-508).
   useEffect(() => {
-    useCanvasComposeStore.getState().clearIfMissing(contexts.map((c) => c.id))
-  }, [contexts])
+    stores.useCompose.getState().clearIfMissing(contexts.map((c) => c.id))
+  }, [contexts, stores])
 
   // Drop a stale hover/focus mark when the open canvas changes (mirrors
   // DesignSurface.tsx:126-131). The register owns the load effect, but hoveredMark
@@ -469,10 +473,10 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
 
   function handleSelect(id: string | null) {
     if (id === null && composeContextId) {
-      useCanvasComposeStore.getState().exitCompose()
+      stores.useCompose.getState().exitCompose()
       return
     }
-    useContextsStore.getState().select(id)
+    stores.useContexts.getState().select(id)
     if (id === null) {
       useStatusStore.getState().announce('Selection cleared')
       return
@@ -512,9 +516,9 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
         onDrillIn={handleDrillIn}
         composeContextId={composeContextId}
         activeDimensionId={activeDimensionId}
-        onBindParameter={(d, p) => void useCanvasComposeStore.getState().bindParameter(d, p)}
-        onUnbindParameter={(d) => void useCanvasComposeStore.getState().unbindParameter(d)}
-        onExitCompose={() => useCanvasComposeStore.getState().exitCompose()}
+        onBindParameter={(d, p) => void stores.useCompose.getState().bindParameter(d, p)}
+        onUnbindParameter={(d) => void stores.useCompose.getState().unbindParameter(d)}
+        onExitCompose={() => stores.useCompose.getState().exitCompose()}
         hoveredMark={hoveredMark}
         onHoverChange={setHoveredMark}
         scale={hitScale}
@@ -539,17 +543,18 @@ export function DesignCoverageTwinBody({
 }) {
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
-  const dimensions = useDimensionsStore((s) => s.dimensions)
+  const stores = resolveCanvasStores()
+  const dimensions = stores.useDimensions((s) => s.dimensions)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
-  const contexts = useContextsStore((s) => s.contexts)
-  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
-  const selectedContextId = useContextsStore((s) => s.selectedContextId)
+  const contexts = stores.useContexts((s) => s.contexts)
+  const bindingsByContext = stores.useContexts((s) => s.bindingsByContext)
+  const selectedContextId = stores.useContexts((s) => s.selectedContextId)
 
   function handleComposeTuple(bindings: Record<string, string>) {
     // Read-only guard (issue 035): a viewer may LOOK at coverage but a gap-cell
     // click must never create a context. CoverageMatrix has no role awareness.
     if (readOnly) return
-    void useCanvasComposeStore.getState().enterCompose(bindings)
+    void stores.useCompose.getState().enterCompose(bindings)
     // Pan back along the edge to the ring so the freshly-composed draft is in view
     // (the old route swap put you on the canvas; the twin keeps both visible).
     onGapComposed()
@@ -562,7 +567,7 @@ export function DesignCoverageTwinBody({
       contexts={contexts}
       bindingsByContext={bindingsByContext}
       selectedContextId={selectedContextId}
-      onSelectContext={(id) => useContextsStore.getState().select(id)}
+      onSelectContext={(id) => stores.useContexts.getState().select(id)}
       onComposeTuple={handleComposeTuple}
     />
   )

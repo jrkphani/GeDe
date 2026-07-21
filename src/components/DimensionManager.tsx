@@ -4,10 +4,9 @@ import { CSS } from '@dnd-kit/utilities'
 import { useState } from 'react'
 import type { DimensionRow } from '../db/mutations'
 import { computeRemovalImpact } from '../domain/dimensionImpact'
-import { useContextsStore } from '../store/contexts'
-import { useDimensionsStore } from '../store/dimensions'
 import { useParametersStore } from '../store/parameters'
 import { DIMENSION_PALETTE } from '../theme/palette'
+import { useCanvasStores } from './CanvasStoresContext'
 import { ParameterList } from './ParameterList'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -18,7 +17,8 @@ import { SwatchButton } from './ui/swatch'
 const FLOOR_TOOLTIP = 'A canvas needs at least 2 dimensions'
 
 function SwatchPicker({ dimension, onDone }: { dimension: DimensionRow; onDone: () => void }) {
-  const setColor = useDimensionsStore((s) => s.setColor)
+  const stores = useCanvasStores()
+  const setColor = stores.useDimensions((s) => s.setColor)
   const [hex, setHex] = useState(dimension.color)
   return (
     <div className="palette-picker">
@@ -60,8 +60,9 @@ function RemoveDimensionConfirm({
   dimension: DimensionRow
   canRemove: boolean
 }) {
-  const remove = useDimensionsStore((s) => s.remove)
-  const bindingsByContext = useContextsStore((s) => s.bindingsByContext)
+  const stores = useCanvasStores()
+  const remove = stores.useDimensions((s) => s.remove)
+  const bindingsByContext = stores.useContexts((s) => s.bindingsByContext)
   const [open, setOpen] = useState(false)
   const { bindingCount } = computeRemovalImpact(dimension.id, bindingsByContext)
 
@@ -119,8 +120,9 @@ function DimensionItem({
   // add/remove/reorder — only the nested sub-parameter list is editable.
   childCanvas?: boolean
 }) {
-  const rename = useDimensionsStore((s) => s.rename)
-  const reorder = useDimensionsStore((s) => s.reorder)
+  const stores = useCanvasStores()
+  const rename = stores.useDimensions((s) => s.rename)
+  const reorder = stores.useDimensions((s) => s.reorder)
   const [picking, setPicking] = useState(false)
   const { attributes, listeners, setNodeRef, transform, transition } = useSortable({
     id: dimension.id,
@@ -198,7 +200,8 @@ function DimensionItem({
 // resolves for descendants of the `<EditableChainProvider>` panel renders —
 // not the panel's own top-level scope.
 function DimensionAddPhantom() {
-  const add = useDimensionsStore((s) => s.add)
+  const stores = useCanvasStores()
+  const add = stores.useDimensions((s) => s.add)
   const chain = useEditableChain()
   return (
     <div className="dim-manager__add-phantom">
@@ -227,10 +230,11 @@ function DimensionAddPhantom() {
 // Exported for direct testing and as the always-open rail panel (issue 082
 // Phase 1 — replaces the guided-start bifurcation, issue 002).
 export function DimensionManagerPanel({ childCanvas = false }: { childCanvas?: boolean }) {
-  const dimensions = useDimensionsStore((s) => s.dimensions)
-  const reorder = useDimensionsStore((s) => s.reorder)
-  const editingId = useDimensionsStore((s) => s.editingId)
-  const setEditingId = useDimensionsStore((s) => s.setEditing)
+  const stores = useCanvasStores()
+  const dimensions = stores.useDimensions((s) => s.dimensions)
+  const reorder = stores.useDimensions((s) => s.reorder)
+  const editingId = stores.useDimensions((s) => s.editingId)
+  const setEditingId = stores.useDimensions((s) => s.setEditing)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
   const canRemove = dimensions.length > 2
 
