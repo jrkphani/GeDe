@@ -1,4 +1,4 @@
-# HANDOFF — 2026-07-22 (100 + 105 + 106 all DONE & archived; 099 automatable tests shipped; 105-txn Phase 1 shipped, remainder → 107; OPEN: only 099-touch [manual] + 107)
+# HANDOFF — 2026-07-22 (100 + 104 + 105 + 106 + 107 all DONE & archived; write path fully transaction-atomic; OPEN: only 099-touch [manual, unautomatable])
 
 **Long autonomous run under owner directives "sequence all open tasks and execute autonomously" → "continue" → "continue until done, use subagents."** Delivered TWO full features end-to-end: **`100` live-child-canvas-core** (all 5 phases A–E) and — from live owner UX feedback mid-run — the **`105` Architecture-tree keyboard grammar** (P0–P5, incl. the `⋯` row-action menu + both LOW review nits). Plus `104` resolved, `099`-coverage, `088` index corrected. **`100` + `104` are now ARCHIVED to `done/`**; `100`'s non-blocking refinements were filed as **`106`**. Nothing is mid-flight.
 
@@ -10,7 +10,7 @@ Launch prompt for the next session: `docs/NEXT-ORCHESTRATOR.md`.
 
 ## Current state
 
-HEAD: **`dc51894`**. This session (continuation of the prior run) shipped — all CI-`verify`-GREEN + DEPLOYED: **105 P1** phantom-anchor fix (`f72596c`), the full **106 trilogy** — ③ presence+palette→child-cores (`c90d787`), ② nested-drill grandchild positioning (`d132bb7`), ① zoom-LOD child-core culling (`3dfe87c`) — the **099 automatable a11y tests** (`6434752`), and **105-txn Phase 1** (`moveTier2Entry` atomic transaction, `dc51894`), plus doc housekeeping (`540e8cd`, archived 105). **106 is now archived → `done/`**; the 105-txn remainder (~20 more multi-write mutations) is filed as **107**. The prior run's `100`/`104`/`105` (`46c8bf3` and earlier) remain deployed. The 106 render wiring passed CI's full e2e each push (the mount-timing flake didn't recur this session). Canvas is the prod default (≥1024px + not data-saver); `WorkspaceSurface` is the fallback. Live URL: https://d1nzod71m3rz6x.cloudfront.net.
+HEAD: **`8126537`**. **Issue `107` is COMPLETE** — all ~21 multi-step DB mutations are now transaction-wrapped (Phase 1 `dc51894` deployed; Phases 2–5 `52955a5`/`c12b894`/`b57fb8e`/`8126537` pushed, CI verifying). Each phase was RED-first + database-reviewer-APPROVE. Earlier this session (all CI-GREEN + DEPLOYED): **105 P1** phantom-anchor fix (`f72596c`), the full **106 trilogy** — ③ presence+palette→child-cores (`c90d787`), ② nested-drill grandchild positioning (`d132bb7`), ① zoom-LOD child-core culling (`3dfe87c`) — the **099 automatable a11y tests** (`6434752`), and **105-txn Phase 1** (`moveTier2Entry` atomic transaction, `dc51894`), plus doc housekeeping (`540e8cd`, archived 105). **106 is now archived → `done/`**; the 105-txn remainder (~20 more multi-write mutations) is filed as **107**. The prior run's `100`/`104`/`105` (`46c8bf3` and earlier) remain deployed. The 106 render wiring passed CI's full e2e each push (the mount-timing flake didn't recur this session). Canvas is the prod default (≥1024px + not data-saver); `WorkspaceSurface` is the fallback. Live URL: https://d1nzod71m3rz6x.cloudfront.net.
 
 ### What shipped THIS session (all CI-green + deployed)
 
@@ -40,11 +40,10 @@ HEAD: **`dc51894`**. This session (continuation of the prior run) shipped — al
 - **`099` coverage** (`8cc03d2`) — canvas hover-mute + dual-empty-state e2e.
 - **`088`** — corrected stale index (was verified-live 2026-07-17).
 
-## Backlog (OPEN) — 2 items, both non-blocking
+## Backlog (OPEN) — 1 item, unautomatable
 
-- **`107` (new, from 105) — transaction-wrap the remaining ~20 multi-step mutations.** Phase 1 (`moveTier2Entry`) shipped; Phases 2–5 (subtree/promote · reorder-family · cascades · binding/param) are **mechanical repeats of the proven, reviewed pattern** in `docs/issues/107-...md`. Each phase: RED-first rollback test + DB/code review + CloudWatch check.
-- **`099` remainder — MANUAL-ONLY.** Just touch/tablet pan-zoom + node-drag on a real coarse-pointer device (cannot be automated). All automatable a11y/coverage items are shipped.
-- **`106` follow-ups (minor, tracked in its done-row):** grandchild breadcrumb trail is shallow (nav-display only); no WorkspaceCanvas render-path unit harness (LOD/positioning wiring is CI-e2e-covered only).
+- **`099` remainder — MANUAL-ONLY.** Just touch/tablet pan-zoom + node-drag on a real coarse-pointer device (cannot be automated — needs a physical device). All automatable a11y/coverage items are shipped. **This is the only open issue.**
+- **Minor tracked follow-ups (non-issues):** `107` — `projectIO.ts:34` could import the shared `Tx` instead of re-deriving it (LOW polish). `106` — grandchild breadcrumb trail is shallow (nav-display only); no WorkspaceCanvas render-path unit harness (LOD/positioning wiring is CI-e2e-covered only).
 
 ## Patterns (this run — reuse)
 
@@ -86,8 +85,8 @@ HEAD: **`dc51894`**. This session (continuation of the prior run) shipped — al
 - **Subagents must NOT commit/push/add** — orchestrator reviews the diff, re-verifies, commits (`--no-verify` after verifying + explicit `git add`). **MANDATORY adversarial review** for any store/render/write-path touch. **Screenshot** user-facing changes. CloudWatch (`…WriteApiFunction…`, profile `phani-quadnomics`, read-only) = authoritative write-path check.
 
 ## Definition of done / next
-`100`, `104`, `105`, and `106` are all SHIPPED, reviewed, deployed, and **archived to `done/`**. `105`'s residuals are resolved (P1 polish shipped; txn Phase 1 shipped). `099` is down to its single **manual-device** item (touch/tablet). HEAD `dc51894` is verify-green + deployed. **Open backlog = just `107` (105-txn Phases 2–5, mechanical repeats) + `099`-touch (manual).** Next session: pick up `107` (the pattern + phasing are fully specced in `docs/issues/107-...md`) — or await direction. Given the machine's memory state (this was a long session), a fresh session is best for the `107` phases; run local unit tests with `--maxWorkers=2` and lean on CI for e2e.
+`100`, `104`, `105`, `106`, and `107` are all SHIPPED, reviewed, and **archived to `done/`** (107 Phases 2–5 are pushed + CI-verifying; Phase 1 deployed). The write path is now fully transaction-atomic. **The only OPEN issue is `099`-touch — a manual-device task an agent cannot do.** So the actionable backlog is empty. Next session: await direction / new work. The write-path txn pattern, per-canvas-store + child-core-refinement patterns, and the memory/e2e lessons are all captured above and in `docs/issues/done/`.
 
 ---
 
-*History (archived to `docs/issues/done/`): 084; 087–098; 089 (D1/D2/D3-graduation); 100; 101/102/103; 104; 105; 106; 088. OPEN: 099 (touch/tablet MANUAL only) · 107 (txn-wrap Phases 2–5). Updated 2026-07-22.*
+*History (archived to `docs/issues/done/`): 084; 087–098; 089 (D1/D2/D3-graduation); 100; 101/102/103; 104; 105; 106; 107; 088. OPEN: only 099 (touch/tablet MANUAL — unautomatable). Updated 2026-07-22.*

@@ -1,6 +1,8 @@
 # 107 — Transaction-wrap the remaining multi-step DB mutations
 
-**Status:** OPEN — non-blocking robustness. **From:** 105 residual MEDIUM. **Milestone:** M8/M11 (write path).
+**Status:** ✅ SHIPPED (all phases). **From:** 105 residual MEDIUM. **Milestone:** M8/M11 (write path).
+
+> **DONE 2026-07-22** — all ~21 multi-step mutations are transaction-wrapped. Phase 1 `moveTier2Entry` (`dc51894`); Phase 2 tier2 subtree/promote (`52955a5`); Phase 3 reorder family (`c12b894`); Phase 4 cascades (`b57fb8e`); Phase 5 binding/param incl. the `deleteParametersUnbinding→removeParameter` composition + `createProject` workspace-hoist + `openChildCanvas` (`8126537`). Each phase: RED-first rollback tests (Proxy `db` failing on the Nth write → full multi-table rollback, falsifiability-verified) + a database-reviewer APPROVE + green CI. Store layer never changed (outbox is in-memory, enqueued after the mutation resolves). `Tx`/`Querier` in `client.ts`; shared helpers (`recomputeTupleHash`, `listDimensions`, `listBindings`, `rewriteSort`, `removeParameter`, …) widened to `Querier` once. The only optional polish left: `projectIO.ts:34` could import the shared `Tx` instead of re-deriving it.
 
 ## Problem
 
