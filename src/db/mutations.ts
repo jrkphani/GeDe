@@ -59,7 +59,7 @@ async function dimensionWorkspaceId(db: Database, dimensionId: string): Promise<
   return firstOrThrow(rows, 'dimension not found').workspaceId
 }
 
-async function contextWorkspaceId(db: Database, contextId: string): Promise<string> {
+async function contextWorkspaceId(db: Querier, contextId: string): Promise<string> {
   const rows = await db
     .select({ workspaceId: contexts.workspaceId })
     .from(contexts)
@@ -79,24 +79,33 @@ export async function createProject(
   db: Database,
   input: { name: string; description?: string | null; workspaceId?: string },
 ): Promise<ProjectRow> {
+  // The workspace resolve/seed is the one pre-write dependency and opens no
+  // transaction — hoist it OUT so the tx wraps ONLY the two inserts (the store
+  // already ensures the workspace row separately via ensureWorkspaceRow).
   const workspaceId = input.workspaceId ?? (await getOrCreateDefaultWorkspace(db))
-  const rows = await db
-    .insert(projects)
-    .values({ id: uuidv7(), workspaceId, name: input.name, description: input.description ?? null })
-    .returning()
-  const project = firstOrThrow(rows)
-  // Issue 090 Correction 1 — seed the project's root canvas in the same call
-  // (creation seeded nothing before; a canvas is now a real row). The same
-  // path covers local + cloud, enqueued like any other create (Open Question 6).
-  await db.insert(canvases).values({
-    id: uuidv7(),
-    projectId: project.id,
-    workspaceId,
-    parentContextId: null,
-    name: 'Canvas 1',
-    sort: 0,
+  // 107 P5 — the project INSERT and its root-canvas seed INSERT commit as one
+  // unit: a mid-sequence failure must not leave a project row with no root
+  // canvas (every "the root canvas" write path — addDimension, root
+  // createContext — assumes createProject seeded exactly one).
+  return db.transaction(async (tx) => {
+    const rows = await tx
+      .insert(projects)
+      .values({ id: uuidv7(), workspaceId, name: input.name, description: input.description ?? null })
+      .returning()
+    const project = firstOrThrow(rows)
+    // Issue 090 Correction 1 — seed the project's root canvas in the same call
+    // (creation seeded nothing before; a canvas is now a real row). The same
+    // path covers local + cloud, enqueued like any other create (Open Question 6).
+    await tx.insert(canvases).values({
+      id: uuidv7(),
+      projectId: project.id,
+      workspaceId,
+      parentContextId: null,
+      name: 'Canvas 1',
+      sort: 0,
+    })
+    return project
   })
-  return project
 }
 
 export async function renameProject(db: Database, id: string, name: string): Promise<ProjectRow> {
@@ -201,7 +210,7 @@ async function liveChildCanvasIdOrNull(db: Database, parentContextId: string): P
 // The child canvas of a context, created on first drill-in (issue 011). Idempotent:
 // returns the existing live child canvas if present, else inserts one. The
 // partial unique index guarantees at most one live child canvas per context.
-async function childCanvasId(db: Database, parentContextId: string): Promise<string> {
+async function childCanvasId(db: Querier, parentContextId: string): Promise<string> {
   const existing = await db
     .select({ id: canvases.id })
     .from(canvases)
@@ -906,8 +915,13 @@ export async function reorderParameter(
   return listParameters(db, dimensionId)
 }
 
+// 107 P5 — widened to `Querier` so deleteParametersUnbinding can compose it
+// INSIDE its transaction (passing `tx`) without opening a nested one. It is not
+// itself a 107 wrap target: its OTHER callers (undo-of-add in store/parameters
+// + tier2, and the parameters tests) still pass the top-level `db` (Database ⊆
+// Querier), each an atomic single-gesture call that needs no wrap of its own.
 export async function removeParameter(
-  db: Database,
+  db: Querier,
   dimensionId: string,
   id: string,
 ): Promise<ParameterRow[]> {
@@ -1133,21 +1147,29 @@ export async function bindParameter(
   dimensionId: string,
   parameterId: string,
 ): Promise<BindingRow[]> {
-  const workspaceId = await contextWorkspaceId(db, contextId)
-  await db
-    .insert(bindings)
-    .values({ id: uuidv7(), contextId, dimensionId, parameterId, workspaceId, tupleHash: '' })
-    .onConflictDoUpdate({
-      target: [bindings.contextId, bindings.dimensionId],
-      // Bindings are current-state pointers, not history (schema.ts). Since
-      // issue 032 made cascadeDeleteBindingsForDimension tombstone rows
-      // (deleted_at) instead of hard-deleting, a re-bind can land on a
-      // tombstoned pointer — clear deleted_at so the upsert always yields a
-      // LIVE binding (else it updates parameterId but stays soft-deleted and
-      // invisible to every live read).
-      set: { parameterId, deletedAt: null, updatedAt: now() },
-    })
-  await recomputeTupleHash(db, contextId)
+  // 107 P5 — the binding upsert and the tuple-hash recompute it invalidates
+  // commit as one unit: a mid-sequence failure must not leave a re-pointed
+  // binding carrying the pre-bind tuple_hash (duplicate-tuple detection reads it
+  // directly — issue 005+). The workspace read runs on `tx` so the whole
+  // mutation sees one snapshot; the authoritative final read runs on `db` after
+  // commit.
+  await db.transaction(async (tx) => {
+    const workspaceId = await contextWorkspaceId(tx, contextId)
+    await tx
+      .insert(bindings)
+      .values({ id: uuidv7(), contextId, dimensionId, parameterId, workspaceId, tupleHash: '' })
+      .onConflictDoUpdate({
+        target: [bindings.contextId, bindings.dimensionId],
+        // Bindings are current-state pointers, not history (schema.ts). Since
+        // issue 032 made cascadeDeleteBindingsForDimension tombstone rows
+        // (deleted_at) instead of hard-deleting, a re-bind can land on a
+        // tombstoned pointer — clear deleted_at so the upsert always yields a
+        // LIVE binding (else it updates parameterId but stays soft-deleted and
+        // invisible to every live read).
+        set: { parameterId, deletedAt: null, updatedAt: now() },
+      })
+    await recomputeTupleHash(tx, contextId)
+  })
   return listBindings(db, contextId)
 }
 
@@ -1163,17 +1185,22 @@ export async function unbindParameter(
   // then undo, could orphan a binding a later remove-undo could no longer bring
   // back (caught by undoRedo.property). Soft-deleting keeps the row addressable
   // by id; every live read already filters `deleted_at IS NULL`.
-  await db
-    .update(bindings)
-    .set({ deletedAt: now(), updatedAt: now() })
-    .where(
-      and(
-        eq(bindings.contextId, contextId),
-        eq(bindings.dimensionId, dimensionId),
-        isNull(bindings.deletedAt),
-      ),
-    )
-  await recomputeTupleHash(db, contextId)
+  // 107 P5 — the binding tombstone and the tuple-hash recompute it invalidates
+  // commit as one unit: a mid-sequence failure must not leave a tombstoned
+  // binding while the surviving siblings keep the pre-unbind tuple_hash.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(bindings)
+      .set({ deletedAt: now(), updatedAt: now() })
+      .where(
+        and(
+          eq(bindings.contextId, contextId),
+          eq(bindings.dimensionId, dimensionId),
+          isNull(bindings.deletedAt),
+        ),
+      )
+    await recomputeTupleHash(tx, contextId)
+  })
   return listBindings(db, contextId)
 }
 
@@ -1205,7 +1232,7 @@ export interface ChildCanvasResult {
   stale: StaleRebindEvent[]
 }
 
-async function getParameter(db: Database, id: string): Promise<ParameterRow> {
+async function getParameter(db: Querier, id: string): Promise<ParameterRow> {
   return firstOrThrow(await db.select().from(parameters).where(eq(parameters.id, id)))
 }
 
@@ -1217,116 +1244,132 @@ export async function openChildCanvas(
   db: Database,
   parentContextId: string,
 ): Promise<ChildCanvasResult> {
-  const parent = firstOrThrow(await db.select().from(contexts).where(eq(contexts.id, parentContextId)))
-  const projectId = parent.projectId
-  // Issue 090 — the child canvas backing this drill-in (created on first open).
-  const canvasId = await childCanvasId(db, parentContextId)
-  // Parent dimensions live on the PARENT context's canvas (Phase 4a: key on
-  // canvas_id, not parent_id).
-  const parentDims = await listDimensions(db, projectId, parent.canvasId)
-  const parentBindings = await listBindings(db, parentContextId)
-  const boundByDim = new Map(parentBindings.map((b) => [b.dimensionId, b.parameterId]))
-  // One prospective child dimension per parent binding, in parent dim order.
-  const slots = parentDims
-    .filter((d) => boundByDim.has(d.id))
-    .map((d, i) => ({
-      parentDimensionId: d.id,
-      parameterId: boundByDim.get(d.id) as string,
-      color: d.color,
-      sort: i,
-    }))
+  // 107 P5 — the heaviest wrap: the child canvas materialization (childCanvasId
+  // may INSERT), every seeded/reconciled child-dimension write, the retired
+  // sub-binding hard-deletes and their tuple-hash recomputes all commit as one
+  // unit. A mid-sequence failure must not leave the child canvas half-seeded
+  // (some dimensions in, others not) or a dimension re-pointed with its retired
+  // sub-bindings still live. Every intra-callback read + write runs on `tx`; the
+  // returned dimensions are read on `tx` just before commit (identical to a
+  // post-commit `db` read on success).
+  return db.transaction(async (tx) => {
+    const parent = firstOrThrow(await tx.select().from(contexts).where(eq(contexts.id, parentContextId)))
+    const projectId = parent.projectId
+    // Issue 090 — the child canvas backing this drill-in (created on first open).
+    const canvasId = await childCanvasId(tx, parentContextId)
+    // Parent dimensions live on the PARENT context's canvas (Phase 4a: key on
+    // canvas_id, not parent_id).
+    const parentDims = await listDimensions(tx, projectId, parent.canvasId)
+    const parentBindings = await listBindings(tx, parentContextId)
+    const boundByDim = new Map(parentBindings.map((b) => [b.dimensionId, b.parameterId]))
+    // One prospective child dimension per parent binding, in parent dim order.
+    const slots = parentDims
+      .filter((d) => boundByDim.has(d.id))
+      .map((d, i) => ({
+        parentDimensionId: d.id,
+        parameterId: boundByDim.get(d.id) as string,
+        color: d.color,
+        sort: i,
+      }))
 
-  const existing = await listDimensions(db, projectId, canvasId)
-  // Each existing child dimension maps to a parent dimension via its source
-  // parameter (a parameter belongs to exactly one dimension, stable across a
-  // re-bind since parameters never change dimension).
-  const existingByParentDim = new Map<string, DimensionRow>()
-  for (const child of existing) {
-    if (!child.sourceParamId) continue
-    const src = await getParameter(db, child.sourceParamId)
-    existingByParentDim.set(src.dimensionId, child)
-  }
-
-  const stale: StaleRebindEvent[] = []
-  for (const slot of slots) {
-    const paramRow = await getParameter(db, slot.parameterId)
-    const child = existingByParentDim.get(slot.parentDimensionId)
-    if (!child) {
-      await db.insert(dimensions).values({
-        id: uuidv7(),
-        projectId,
-        workspaceId: parent.workspaceId,
-        canvasId,
-        contextId: parentContextId,
-        sourceParamId: slot.parameterId,
-        name: paramRow.name,
-        color: slot.color,
-        sort: slot.sort,
-      })
-      continue
+    const existing = await listDimensions(tx, projectId, canvasId)
+    // Each existing child dimension maps to a parent dimension via its source
+    // parameter (a parameter belongs to exactly one dimension, stable across a
+    // re-bind since parameters never change dimension).
+    const existingByParentDim = new Map<string, DimensionRow>()
+    for (const child of existing) {
+      if (!child.sourceParamId) continue
+      const src = await getParameter(tx, child.sourceParamId)
+      existingByParentDim.set(src.dimensionId, child)
     }
-    if (child.sourceParamId !== slot.parameterId) {
-      const retiredBindings = await db
-        .select()
-        .from(bindings)
-        .where(and(eq(bindings.dimensionId, child.id), isNull(bindings.deletedAt)))
-      const fromParam = child.sourceParamId ? await getParameter(db, child.sourceParamId) : null
-      if (retiredBindings.length > 0) {
-        await db.delete(bindings).where(eq(bindings.dimensionId, child.id))
-        for (const cid of new Set(retiredBindings.map((r) => r.contextId))) {
-          await recomputeTupleHash(db, cid)
-        }
+
+    const stale: StaleRebindEvent[] = []
+    for (const slot of slots) {
+      const paramRow = await getParameter(tx, slot.parameterId)
+      const child = existingByParentDim.get(slot.parentDimensionId)
+      if (!child) {
+        await tx.insert(dimensions).values({
+          id: uuidv7(),
+          projectId,
+          workspaceId: parent.workspaceId,
+          canvasId,
+          contextId: parentContextId,
+          sourceParamId: slot.parameterId,
+          name: paramRow.name,
+          color: slot.color,
+          sort: slot.sort,
+        })
+        continue
       }
-      await db
-        .update(dimensions)
-        .set({ sourceParamId: slot.parameterId, name: paramRow.name, sort: slot.sort, updatedAt: now() })
-        .where(eq(dimensions.id, child.id))
-      stale.push({
-        childDimensionId: child.id,
-        fromParameterId: child.sourceParamId as string,
-        toParameterId: slot.parameterId,
-        fromName: fromParam?.name ?? '',
-        toName: paramRow.name,
-        retiredBindings,
-      })
-    } else if (child.sort !== slot.sort || child.name !== paramRow.name) {
-      // Keep order/name synced with the parent binding (parent reorder/rename).
-      await db
-        .update(dimensions)
-        .set({ sort: slot.sort, name: paramRow.name, updatedAt: now() })
-        .where(eq(dimensions.id, child.id))
+      if (child.sourceParamId !== slot.parameterId) {
+        const retiredBindings = await tx
+          .select()
+          .from(bindings)
+          .where(and(eq(bindings.dimensionId, child.id), isNull(bindings.deletedAt)))
+        const fromParam = child.sourceParamId ? await getParameter(tx, child.sourceParamId) : null
+        if (retiredBindings.length > 0) {
+          await tx.delete(bindings).where(eq(bindings.dimensionId, child.id))
+          for (const cid of new Set(retiredBindings.map((r) => r.contextId))) {
+            await recomputeTupleHash(tx, cid)
+          }
+        }
+        await tx
+          .update(dimensions)
+          .set({ sourceParamId: slot.parameterId, name: paramRow.name, sort: slot.sort, updatedAt: now() })
+          .where(eq(dimensions.id, child.id))
+        stale.push({
+          childDimensionId: child.id,
+          fromParameterId: child.sourceParamId as string,
+          toParameterId: slot.parameterId,
+          fromName: fromParam?.name ?? '',
+          toName: paramRow.name,
+          retiredBindings,
+        })
+      } else if (child.sort !== slot.sort || child.name !== paramRow.name) {
+        // Keep order/name synced with the parent binding (parent reorder/rename).
+        await tx
+          .update(dimensions)
+          .set({ sort: slot.sort, name: paramRow.name, updatedAt: now() })
+          .where(eq(dimensions.id, child.id))
+      }
     }
-  }
 
-  return { canvasId, dimensions: await listDimensions(db, projectId, canvasId), stale }
+    return { canvasId, dimensions: await listDimensions(tx, projectId, canvasId), stale }
+  })
 }
 
 // The banner Undo (issue 011): restores a child dimension to the parameter it
 // refined before the parent re-bind and re-inserts the retired sub-bindings.
 export async function revertStaleRebind(db: Database, event: StaleRebindEvent): Promise<void> {
-  await db
-    .update(dimensions)
-    .set({ sourceParamId: event.fromParameterId, name: event.fromName, updatedAt: now() })
-    .where(eq(dimensions.id, event.childDimensionId))
-  if (event.retiredBindings.length > 0) {
-    await db.insert(bindings).values(
-      event.retiredBindings.map((r) => ({
-        id: r.id,
-        contextId: r.contextId,
-        dimensionId: r.dimensionId,
-        parameterId: r.parameterId,
-        // Issue 078 step 2 — the captured BindingRow already carries its own
-        // workspaceId (stamped when it was originally bound); reinsert it
-        // verbatim rather than re-resolving via contextWorkspaceId, since
-        // this row is a faithful restore, not a new bind.
-        workspaceId: r.workspaceId,
-        tupleHash: r.tupleHash,
-      })),
-    )
-    for (const cid of new Set(event.retiredBindings.map((r) => r.contextId))) {
-      await recomputeTupleHash(db, cid)
+  // 107 P5 — the child-dimension re-point, the retired-binding re-inserts, and
+  // each affected context's tuple-hash recompute commit as one unit: a
+  // mid-sequence failure must not leave the dimension pointing back at its
+  // pre-rebind parameter while its sub-bindings are only partly restored.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(dimensions)
+      .set({ sourceParamId: event.fromParameterId, name: event.fromName, updatedAt: now() })
+      .where(eq(dimensions.id, event.childDimensionId))
+    if (event.retiredBindings.length > 0) {
+      await tx.insert(bindings).values(
+        event.retiredBindings.map((r) => ({
+          id: r.id,
+          contextId: r.contextId,
+          dimensionId: r.dimensionId,
+          parameterId: r.parameterId,
+          // Issue 078 step 2 — the captured BindingRow already carries its own
+          // workspaceId (stamped when it was originally bound); reinsert it
+          // verbatim rather than re-resolving via contextWorkspaceId, since
+          // this row is a faithful restore, not a new bind.
+          workspaceId: r.workspaceId,
+          tupleHash: r.tupleHash,
+        })),
+      )
+      for (const cid of new Set(event.retiredBindings.map((r) => r.contextId))) {
+        await recomputeTupleHash(tx, cid)
+      }
     }
-  }
+  })
 }
 
 // Resolve a recursion path (context ids, in depth order) to its context rows,
@@ -2039,12 +2082,18 @@ export async function relinkParameters(
   db: Database,
   links: readonly { id: string; sourceEntryId: string | null }[],
 ): Promise<void> {
-  for (const link of links) {
-    await db
-      .update(parameters)
-      .set({ sourceEntryId: link.sourceEntryId, updatedAt: now() })
-      .where(eq(parameters.id, link.id))
-  }
+  // 107 P5 — the whole re-link loop commits as one unit: a mid-loop failure must
+  // not leave some parameters re-linked to their source entry and others not
+  // (this is the exact inverse of unlinkParametersFromEntries — undo restores
+  // every link or none, keeping invariant 7's entry↔parameter pairing whole).
+  await db.transaction(async (tx) => {
+    for (const link of links) {
+      await tx
+        .update(parameters)
+        .set({ sourceEntryId: link.sourceEntryId, updatedAt: now() })
+        .where(eq(parameters.id, link.id))
+    }
+  })
 }
 
 export interface DeleteParametersResult {
@@ -2065,21 +2114,29 @@ export async function deleteParametersUnbinding(
   const affected = new Set<string>()
   const deletedBindings: BindingRow[] = []
   const removedParameters: DeleteParametersResult['removedParameters'] = []
-  for (const parameterId of parameterIds) {
-    const paramRows = await db.select().from(parameters).where(eq(parameters.id, parameterId)).limit(1)
-    const param = paramRows[0]
-    if (!param) continue
-    const boundRows = await db
-      .select()
-      .from(bindings)
-      .where(and(eq(bindings.parameterId, parameterId), isNull(bindings.deletedAt)))
-    deletedBindings.push(...boundRows)
-    for (const b of boundRows) affected.add(b.contextId)
-    await db.delete(bindings).where(eq(bindings.parameterId, parameterId))
-    await removeParameter(db, param.dimensionId, parameterId)
-    removedParameters.push({ id: param.id, dimensionId: param.dimensionId, sourceEntryId: param.sourceEntryId })
-  }
-  for (const contextId of affected) await recomputeTupleHash(db, contextId)
+  // 107 P5 — per parameter this hard-deletes its bindings AND soft-deletes the
+  // parameter (via removeParameter, composed on `tx` — NOT its own transaction),
+  // then recomputes every affected context's tuple hash. All of it commits as
+  // one unit: a mid-sequence failure must not leave bindings hard-deleted (they
+  // carry no deleted_at — schema.ts, so a partial commit is unrecoverable) while
+  // the parameter they pointed at survives. Reads inside the callback use `tx`.
+  await db.transaction(async (tx) => {
+    for (const parameterId of parameterIds) {
+      const paramRows = await tx.select().from(parameters).where(eq(parameters.id, parameterId)).limit(1)
+      const param = paramRows[0]
+      if (!param) continue
+      const boundRows = await tx
+        .select()
+        .from(bindings)
+        .where(and(eq(bindings.parameterId, parameterId), isNull(bindings.deletedAt)))
+      deletedBindings.push(...boundRows)
+      for (const b of boundRows) affected.add(b.contextId)
+      await tx.delete(bindings).where(eq(bindings.parameterId, parameterId))
+      await removeParameter(tx, param.dimensionId, parameterId)
+      removedParameters.push({ id: param.id, dimensionId: param.dimensionId, sourceEntryId: param.sourceEntryId })
+    }
+    for (const contextId of affected) await recomputeTupleHash(tx, contextId)
+  })
   return { affectedContextIds: [...affected], deletedBindings, removedParameters }
 }
 
@@ -2090,27 +2147,35 @@ export async function restoreParametersWithBindings(
   removedParameters: readonly { id: string; dimensionId: string; sourceEntryId: string | null }[],
   deletedBindings: readonly BindingRow[],
 ): Promise<string[]> {
-  for (const p of removedParameters) {
-    await db
-      .update(parameters)
-      .set({ deletedAt: null, sourceEntryId: p.sourceEntryId, updatedAt: now() })
-      .where(eq(parameters.id, p.id))
-  }
-  if (deletedBindings.length > 0) {
-    await db.insert(bindings).values(
-      deletedBindings.map((b) => ({
-        id: b.id,
-        contextId: b.contextId,
-        dimensionId: b.dimensionId,
-        parameterId: b.parameterId,
-        // Issue 078 step 2 — reinsert the captured row's own workspaceId
-        // verbatim (see revertStaleRebind's identical comment above).
-        workspaceId: b.workspaceId,
-        tupleHash: b.tupleHash,
-      })),
-    )
-  }
+  // 107 P5 — the exact inverse of deleteParametersUnbinding: un-soft-delete the
+  // parameters (restoring linkage), reinsert the captured bindings, recompute
+  // the affected tuple hashes. All commit as one unit so undo is atomic — a
+  // mid-sequence failure must not revive the parameters while their bindings are
+  // only partly reinserted. `affected` derives purely from the input, so it is
+  // computed outside the callback and returned after commit.
   const affected = [...new Set(deletedBindings.map((b) => b.contextId))]
-  for (const contextId of affected) await recomputeTupleHash(db, contextId)
+  await db.transaction(async (tx) => {
+    for (const p of removedParameters) {
+      await tx
+        .update(parameters)
+        .set({ deletedAt: null, sourceEntryId: p.sourceEntryId, updatedAt: now() })
+        .where(eq(parameters.id, p.id))
+    }
+    if (deletedBindings.length > 0) {
+      await tx.insert(bindings).values(
+        deletedBindings.map((b) => ({
+          id: b.id,
+          contextId: b.contextId,
+          dimensionId: b.dimensionId,
+          parameterId: b.parameterId,
+          // Issue 078 step 2 — reinsert the captured row's own workspaceId
+          // verbatim (see revertStaleRebind's identical comment above).
+          workspaceId: b.workspaceId,
+          tupleHash: b.tupleHash,
+        })),
+      )
+    }
+    for (const contextId of affected) await recomputeTupleHash(tx, contextId)
+  })
   return affected
 }
