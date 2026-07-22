@@ -30,11 +30,26 @@ The reparent engine exists + is tested; the rest is a store wrapper + a few keyd
 - Add tree semantics the surface currently lacks: `aria-level` (= depth+1) + `aria-expanded` on rows with children (selection already uses `role="listbox"`).
 - Expose promote/demote in the row-action gutter too (not keyboard-only). Escape still exits editing + restores native Tab.
 
-## Phased build plan
-- **P1 (biggest win):** `moveEntry` store wrapper + `⌘]`/`⌘[` indent/outdent on the focused entry, with first-child/top-level guards, undo, announce. Works mid-edit and at rest.
-- **P2 (sibling parity):** **Enter = new sibling at the current entry's depth** (call `addEntry` with the current entry's `parentId`, not just the top-level phantom) — symmetric with typed add-child.
+## Red-team findings (end-to-end trace, 2026-07-22) — REORDERS the plan
+
+An adversarial end-to-end trace (from owner feedback: "Tab keeps landing me on Add-child and Enter there makes a SUB-child; how do I keep making SIBLINGS of a child by keyboard?") found **`⌘]`/`⌘[` alone does NOT fix the owner's complaint**, and surfaced three things the original plan missed:
+
+1. **The actual bug is a Tab-FALLTHROUGH, not a missing shortcut.** Row Tab-order managed by the grid is only `name → description` (tree/actions are `static` cells). But **Tab inside the description richtext is deliberately never intercepted** (`rich-text-editor.tsx:173-202` binds only Cmd+Enter/Esc/Cmd+B/I/U), so it falls through to **native browser Tab** → the next focusable is the **"Add child" `<button>`** in the same row (`ArchitectureSurface.tsx:558-571`); Enter/Space there → `setAddingChildTo(entry.id)` → a child (a grandchild if the row is already a child). **This is the sub-child bug, reproduced.** The fix is (a) **intercept Tab in the description editor** → commit + `advance('right'/'left')` (a new `onTabAdvance` seam on `RichTextEditor`), and (b) **drop "Add child" from the tab order** (`tabIndex={-1}`, keep it a click/hover affordance). **Neither is `⌘]`/`⌘[`** — so this must be P0, or the complaint stays live.
+2. **The insertion-context wrinkle.** A fast keyboard series lives in a PHANTOM input with NO focused entry row — so `⌘]`/`⌘[` "on the focused entry" is insufficient. The phantom must carry a **mutable `{parentId, depth}` insertion context** that `⌘]` (reparent under the last-created sibling) / `⌘[` (up one level) mutate, so subsequent Enters continue at the new depth. Without this the series flow breaks.
+3. **Enter=sibling MUST be Architecture-scoped, never a global EditableGrid change.** Design's register/rail + Foundation reuse EditableGrid with **Enter = commit + move DOWN** (`EditableGrid.tsx:461-463`); a blanket change regresses them. Wire an opt-in `onEnterCreateSibling` seam used ONLY by Architecture. Keep the 104 add-child phantom as the MOUSE path (fix its 2 warts: empty-space-armed; Tab→depth-0 jump) — do not delete it.
+
+**Verified keystroke script** (target end state) — `Users⏎ Buyers⏎ Sellers⏎ ⌘] Superstars⏎ Casuals⏎ ⌘[ Admins⏎` builds:
+```
+Users / Buyers / [Sellers, Superstars under Buyers] / Casuals / Admins
+```
+mouse-free, mixed depths — proving the model works once P0+P1 land.
+
+## Phased build plan (reordered per the red-team)
+- **P0 (the actual owner-reported fix — do FIRST):** intercept Tab in the description richtext (commit + advance, not native fallthrough) + `tabIndex={-1}` on the "Add child" button. Kills the accidental sub-child. Small, high-value, no new grammar.
+- **P1 (sibling series):** **Enter = new sibling at the current depth**, via an **Architecture-scoped `onEnterCreateSibling` opt-in seam** (NOT a global EditableGrid change), with the phantom carrying a mutable `{parentId, depth}` insertion context. Answers "keep making siblings by keyboard."
+- **P2 (promote/demote):** `moveEntry` store wrapper over the existing `moveTier2Entry` + `⌘]`/`⌘[` operating on BOTH the focused resting entry AND the phantom's insertion context; first-child/top-level guards, one undo step, announce.
 - **P3:** `⌥⇧↑/↓` move among siblings (`moveEntry`, `toIndex ± 1`).
-- **P4:** tree ARIA + visible row-menu affordance + quiet `KeyHint` chips teaching `⌘]`/`⌘[` (reuse 084-D3 P5 hint pattern).
+- **P4:** tree ARIA (`aria-level`/`aria-expanded`) + visible row-menu affordance + quiet `KeyHint` chips teaching `⏎`=sibling / `⌘]`=child (reuse 084-D3 P5 hint pattern).
 
 ## Test-first plan
 - `tier2.test.ts`: `moveEntry` reparents + resorts + one undo entry reverses it; sync enqueue asserted.
