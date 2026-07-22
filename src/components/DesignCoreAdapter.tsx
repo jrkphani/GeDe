@@ -223,7 +223,11 @@ export function DesignRegisterBody({
     // independent, on its own store instance), editable in place; collapse via the
     // child header's ×. This replaced the 089-P3 summary-satellite STUB and its
     // "Enter ▸" deep-navigate.
-    useCanvasSatellitesStore.getState().openSatellite(id)
+    //
+    // Issue 106 item 2 — pass THIS core's store id as the drilled child's
+    // parentCoreId: undefined on the primary → null (a direct child hangs off the
+    // primary); a child core's own id → the grandchild hangs off it.
+    useCanvasSatellitesStore.getState().openSatellite(id, storeCanvasId ?? null)
   }
 
   // `c` = New context (Design canvas view only), capture phase + text-field guard.
@@ -518,7 +522,11 @@ export function DesignRingBody({ projectId, contextPath, canvasId, storeCanvasId
     // independent, on its own store instance), editable in place; collapse via the
     // child header's ×. This replaced the 089-P3 summary-satellite STUB and its
     // "Enter ▸" deep-navigate.
-    useCanvasSatellitesStore.getState().openSatellite(id)
+    //
+    // Issue 106 item 2 — pass THIS core's store id as the drilled child's
+    // parentCoreId: undefined on the primary → null (a direct child hangs off the
+    // primary); a child core's own id → the grandchild hangs off it.
+    useCanvasSatellitesStore.getState().openSatellite(id, storeCanvasId ?? null)
   }
 
   function handleSelect(id: string | null) {

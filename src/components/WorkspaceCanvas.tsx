@@ -26,6 +26,7 @@ import {
 import {
   computeSatelliteLayout,
   type ClusterLayoutConfig,
+  type ParentColumn,
 } from '../domain/clusterLayout'
 import {
   resetCanvasSatellites,
@@ -157,16 +158,22 @@ const ARCH_COLUMN_X = laneColumnX('architecture')
 // The Design column's x = its LANE_ORDER index × the column stride.
 const DESIGN_COLUMN_X = LANE_ORDER.indexOf('design') * (LANE_CONFIG.laneWidth + LANE_CONFIG.laneGap)
 const SATELLITE_ESTIMATE = 168
-// Base cluster geometry; `coreWidth` is overridden per-derive with the register's
-// MEASURED width (see withDerivedPositions) so satellites clear a 093-widened
-// (max-content, uncapped) register instead of overlapping it.
+// Base cluster geometry. Per-core column x + measured width are supplied per-derive
+// (see withDerivedPositions) via the clusterLayout `rootColumns`/`SatelliteItem`
+// contract, so a child clears a 093-widened (max-content, uncapped) register + a
+// grandchild anchors off its own parent core rather than the primary.
 const CLUSTER_CONFIG: ClusterLayoutConfig = {
-  originX: DESIGN_COLUMN_X,
-  coreWidth: LANE_CONFIG.laneWidth,
   coreGap: 120,
   satelliteHeight: SATELLITE_ESTIMATE,
   vGap: LANE_CONFIG.nodeGap,
 }
+
+// 106 item 2 — the REGISTER node id of the core a child core hangs off. A direct
+// child (parentCoreId null, drilled off the primary) anchors to the PRIMARY
+// register; a grandchild anchors to its own parent child-core's register. This is
+// both the satellite's column anchor and its parent→child edge source.
+const parentCoreNodeIdFor = (parentCoreId: string | null): string =>
+  parentCoreId === null ? LANE_NODE_ID.design : childRegisterNodeId(parentCoreId)
 
 const FOCUS_PAN_DURATION = 320
 // Focus-driven pan is pan-if-outside-margin, NOT center-on-every-focus: only
@@ -198,6 +205,12 @@ type DesignBodyNodeData = {
   // the discriminator `withDerivedPositions` uses to hang a child core in the
   // satellite column rather than the primary Design lane stack.
   storeCanvasId?: string | null | undefined
+  // Issue 106 item 2 — the store id of the core this child core was drilled FROM:
+  // null for a direct child (off the PRIMARY), the parent child-core's id for a
+  // grandchild. Undefined on the primary core itself. Drives the satellite column
+  // anchor + parent→child edge source (parentCoreNodeIdFor). Only the REGISTER node
+  // carries it (edges + columns anchor off registers); the ring never needs it.
+  parentCoreId?: string | null | undefined
   // Issue 100 Phase D — collapse a live child core (undefined on the primary).
   onCollapse?: (() => void) | undefined
 }
@@ -320,7 +333,7 @@ function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
   // stacked directly below its own register. Both are pure derived projections —
   // no {x,y} is ever persisted.
   const laneItems: LaneItem[] = []
-  const childRegisters: CanvasNode[] = []
+  const childRegisters: DesignRegisterNode[] = []
   const childRingByParent = new Map<string, CanvasNode>()
   for (const n of nodes) {
     const childParent = childCoreParentId(n)
@@ -338,31 +351,50 @@ function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
   }
   const posById = new Map<string, { x: number; y: number }>()
   for (const p of computeLaneLayout(laneItems, LANE_CONFIG)) posById.set(p.id, { x: p.x, y: p.y })
-  // Child cores hang off the PRIMARY Design core's real right edge. 093 made the
-  // register `width: max-content` (uncapped) and P4 added a coverage twin that can
-  // be even wider — all three primary design nodes share the column, so children
-  // must clear the WIDEST measured PRIMARY design-column node (a child core's own
-  // width never feeds the clearance). Width feeds clearance only, never the lane
-  // x-stride.
-  let coreWidth = CLUSTER_CONFIG.coreWidth
+  // Child cores hang off the real right edge of their PARENT core's column. 093
+  // made the register `width: max-content` (uncapped) and P4 added a coverage twin
+  // that can be even wider — all three primary design nodes share the primary
+  // column, so a DIRECT child must clear the WIDEST measured PRIMARY design-column
+  // node. A GRANDCHILD (106-②) instead clears its own parent child-core's measured
+  // register width. Width feeds clearance only, never a lane x-stride.
+  let primaryWidth = LANE_CONFIG.laneWidth
   for (const n of nodes) {
     if (childCoreParentId(n) === null && n.data.tier === 'design' && n.measured?.width) {
-      coreWidth = Math.max(coreWidth, n.measured.width)
+      primaryWidth = Math.max(primaryWidth, n.measured.width)
     }
   }
-  const clusterConfig: ClusterLayoutConfig = { ...CLUSTER_CONFIG, coreWidth }
-  // computeSatelliteLayout gives the shared column x (and, for a single child, the
-  // stub's original y=0 slot). A live core is far taller than the fixed stub
-  // height, so stack each child's register+ring by their MEASURED heights to avoid
-  // overlap when several children are open, seeded at that x/first-slot baseline.
-  const slots = computeSatelliteLayout(
-    childRegisters.map((n) => ({ id: n.id })),
-    LANE_NODE_ID.design,
-    clusterConfig,
-  ).positions
-  const childColumnX = slots[0]?.x ?? clusterConfig.originX + coreWidth + clusterConfig.coreGap
-  let childY = 0
+  // Seed only the PRIMARY column; computeSatelliteLayout derives every child +
+  // grandchild column parents-before-children off it. Each child register carries
+  // its own measured width so its grandchildren anchor off its real right edge, and
+  // its parentCoreNodeId (primary register for a direct child; the parent
+  // child-core's register for a grandchild) — 106 item 2's per-parent anchoring.
+  const rootColumns = new Map<string, ParentColumn>([
+    [LANE_NODE_ID.design, { x: DESIGN_COLUMN_X, coreWidth: primaryWidth }],
+  ])
+  const columnXById = new Map<string, number>()
+  for (const p of computeSatelliteLayout(
+    childRegisters.map((reg) => ({
+      id: reg.id,
+      parentCoreNodeId: parentCoreNodeIdFor(reg.data.parentCoreId ?? null),
+      coreWidth: reg.measured?.width ?? LANE_CONFIG.laneWidth,
+    })),
+    rootColumns,
+    CLUSTER_CONFIG,
+  ).positions) {
+    columnXById.set(p.id, p.x)
+  }
+  // A live core is far taller than the fixed stub height, so the consumer OWNS
+  // vertical stacking (Domain design A): stack each child's register+ring by their
+  // MEASURED heights within ITS parent's column. A per-parent-column y-cursor keeps
+  // siblings sharing a column from overlapping while distinct parents stack
+  // independently. Direct children (all under the primary column) preserve the
+  // pre-106 single-column stack byte-for-byte.
+  const yByColumn = new Map<string, number>()
+  const primaryFallbackX = DESIGN_COLUMN_X + primaryWidth + CLUSTER_CONFIG.coreGap
   for (const reg of childRegisters) {
+    const parentNodeId = parentCoreNodeIdFor(reg.data.parentCoreId ?? null)
+    const childColumnX = columnXById.get(reg.id) ?? primaryFallbackX
+    let childY = yByColumn.get(parentNodeId) ?? 0
     posById.set(reg.id, { x: childColumnX, y: childY })
     const regHeight = reg.measured?.height ?? reg.data.estimate
     const ringY = childY + regHeight + LANE_CONFIG.nodeGap
@@ -373,6 +405,7 @@ function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
     } else {
       childY = ringY
     }
+    yByColumn.set(parentNodeId, childY)
   }
   const next = nodes.map((n) => {
     const p = posById.get(n.id)
@@ -837,19 +870,24 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // instance (per-instance DB-sync teardown — the whole point of the independent
   // instance). Collapse is an explicit user action, so a mid-edit unmount is
   // user-chosen (deferred: zoom-LOD auto-culling of off-screen child cores).
-  const onSatelliteCollapse = useCallback((parentContextId: string) => {
-    useCanvasSatellitesStore.getState().collapse(parentContextId)
-    releaseCanvasStores(parentContextId)
-    // Issue 106 item 3 — releaseCanvasStores only drops the DB listener; the
-    // released instance is a live "zombie" object with its last selection frozen.
-    // If it was the focus-active core, its key still sits in `activeCanvas`, so
-    // presence's selection subscription would stay bound to the zombie and keep
-    // publishing its stale selection (Finding 2), and the c/v/d verbs would keep
-    // targeting a released instance (100-C arbitration staleness). Reset the
-    // arbiter so presence rebinds/republishes to the DEFAULT core.
-    if (useActiveCanvasStore.getState().activeCanvas === parentContextId) {
-      resetActiveCanvas()
-    }
+  //
+  // Issue 106 item 2 — collapse CASCADES: `collapse` tears down this core AND every
+  // descendant (a grandchild hangs off this one; leaving it would dangle an orphan
+  // edge/column) and RETURNS every torn-down context id. Release each released
+  // store instance, and reset the arbiter if ANY released id was the focus-active
+  // core (the 106-③ fix below, now generalized across the whole cascaded subtree).
+  const onSatelliteCollapse = useCallback((contextId: string) => {
+    const released = useCanvasSatellitesStore.getState().collapse(contextId)
+    for (const id of released) releaseCanvasStores(id)
+    // Issue 106 item 3 — releaseCanvasStores only drops the DB listener; a released
+    // instance is a live "zombie" object with its last selection frozen. If one was
+    // the focus-active core, its key still sits in `activeCanvas`, so presence's
+    // selection subscription would stay bound to the zombie and keep publishing its
+    // stale selection (Finding 2), and the c/v/d verbs would keep targeting a
+    // released instance (100-C arbitration staleness). Reset the arbiter so presence
+    // rebinds/republishes to the DEFAULT core.
+    const active = useActiveCanvasStore.getState().activeCanvas
+    if (active !== null && released.includes(active)) resetActiveCanvas()
   }, [])
 
   // Child cores are per-canvas: reset the open set whenever the active canvas
@@ -865,11 +903,11 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   useEffect(() => {
     const released = openSatellitesRef.current
     const active = useActiveCanvasStore.getState().activeCanvas
-    for (const parentContextId of released) releaseCanvasStores(parentContextId)
+    for (const { contextId } of released) releaseCanvasStores(contextId)
     // If a released child was the focus-active core, reset the arbiter too — else
     // presence stays bound to the now-zombie instance (same Finding-2 leak as the
     // collapse path, via the nav / breadcrumb route instead of the ⋯ collapse).
-    if (active !== null && released.includes(active)) resetActiveCanvas()
+    if (active !== null && released.some((s) => s.contextId === active)) resetActiveCanvas()
     resetCanvasSatellites()
   }, [canvasIdentity])
 
@@ -1015,10 +1053,18 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     // materializes + loads the child canvas. Positions are derived (satellite
     // column); not draggable (no reorder). The primary core's nodes/ids/data
     // above are UNTOUCHED (storeCanvasId omitted → default instance).
-    for (const parentContextId of openSatellites) {
-      const childContextPath = [...design.contextPath, parentContextId]
+    for (const { contextId, parentCoreId } of openSatellites) {
+      // Issue 106 item 2 — contextPath is LEFT extending the PRIMARY's path (not the
+      // parent core's) on purpose: the load effect materializes + loads a child
+      // canvas purely from `contextId` (= storeCanvasId = canvasSelector) — see
+      // DesignRegisterBody's openChildCanvas(contextId)/load(canvasSelector), which
+      // take the single context id, never the path prefix. contextPath's prefix
+      // feeds only loadBreadcrumbs (nav/display), so it is NOT load-critical here;
+      // keeping it primary-rooted preserves direct-child behavior byte-identical.
+      // (A deeper breadcrumb trail for grandchildren is a nav-only follow-up.)
+      const childContextPath = [...design.contextPath, contextId]
       list.push({
-        id: childRegisterNodeId(parentContextId),
+        id: childRegisterNodeId(contextId),
         type: 'designRegister',
         position: { x: 0, y: 0 },
         draggable: false,
@@ -1029,13 +1075,18 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           projectId,
           contextPath: childContextPath,
           view: 'canvas',
-          canvasId: parentContextId,
-          storeCanvasId: parentContextId,
-          onCollapse: () => onSatelliteCollapse(parentContextId),
+          canvasId: contextId,
+          storeCanvasId: contextId,
+          // 106 item 2 — the anchor for this core's column + parent→child edge:
+          // null → the primary register; a parent contextId → that child-core's
+          // register (a grandchild). Threaded onto the RECONCILED node so the edge
+          // builder can source off `nodes` (the "edges off reconciled nodes" invariant).
+          parentCoreId,
+          onCollapse: () => onSatelliteCollapse(contextId),
         },
       })
       list.push({
-        id: childRingNodeId(parentContextId),
+        id: childRingNodeId(contextId),
         type: 'designRing',
         position: { x: 0, y: 0 },
         draggable: false,
@@ -1046,8 +1097,8 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           projectId,
           contextPath: childContextPath,
           view: 'canvas',
-          canvasId: parentContextId,
-          storeCanvasId: parentContextId,
+          canvasId: contextId,
+          storeCanvasId: contextId,
         },
       })
     }
@@ -1089,27 +1140,32 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(desiredNodes)
 
-  // The recursion edges: one PRIMARY→child edge per open live child core. Derived
+  // The recursion edges: one parent→child edge per open live child core. Derived
   // from the RECONCILED child-register NODES (not the store's open set) so an edge
   // never targets a node React Flow doesn't yet have in `nodes` — the reconcile
   // effect adds a child core one commit after the store opens it, so sourcing
   // edges off `nodes` keeps them in lockstep. Fully derived + never user-edited
   // (nodesConnectable stays false), so there is no useEdgesState; a stable
   // join-key memo keeps the edges array identity constant across measure-only node
-  // updates, and stable edge ids keep RF's edge reconcile from churning. Every
-  // edge sources from LANE_NODE_ID.design (the PRIMARY register) — a nested child
-  // core's own edge origin is a deferred follow-up.
-  const childRegisterIds = nodes.flatMap((n) =>
-    n.type === 'designRegister' && n.data.storeCanvasId != null ? [n.id] : [],
+  // updates, and stable edge ids keep RF's edge reconcile from churning.
+  // Issue 106 item 2 — each edge sources from ITS PARENT core's register, read off
+  // the reconciled node's `parentCoreId` (null → PRIMARY register; a parent
+  // contextId → that child-core's register): a direct child still hangs off
+  // LANE_NODE_ID.design byte-identically, a grandchild off childRegisterNodeId(parent).
+  const childCores = nodes.flatMap((n) =>
+    n.type === 'designRegister' && n.data.storeCanvasId != null
+      ? [{ id: n.id, source: parentCoreNodeIdFor(n.data.parentCoreId ?? null) }]
+      : [],
   )
   const hasCoverageTwin = nodes.some((n) => n.type === 'coverageTwin')
-  // Key on the child-core set + the twin presence so the edges array identity only
-  // changes when the edge SET changes, not on measure-only `nodes` updates.
-  const edgeKey = `${childRegisterIds.join('|')}#${hasCoverageTwin ? '1' : '0'}`
+  // Key on the child-core set (id + its parent source) + the twin presence so the
+  // edges array identity only changes when the edge SET changes, not on measure-only
+  // `nodes` updates.
+  const edgeKey = `${childCores.map((c) => `${c.source}>${c.id}`).join('|')}#${hasCoverageTwin ? '1' : '0'}`
   const edges = useMemo<Edge[]>(() => {
-    const childEdges: Edge[] = childRegisterIds.map((id) => ({
-      id: `edge:${LANE_NODE_ID.design}:${id}`,
-      source: LANE_NODE_ID.design,
+    const childEdges: Edge[] = childCores.map(({ id, source }) => ({
+      id: `edge:${source}:${id}`,
+      source,
       target: id,
       className: 'wc-edge',
       markerEnd: { type: MarkerType.ArrowClosed },
@@ -1188,9 +1244,9 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // never yanks the viewport back. Reduced-motion snaps.
   useEffect(() => {
     if (!satelliteFocus) return
-    const parentContextId = openSatellites.find((id) => satelliteNodeId(id) === satelliteFocus)
-    if (!parentContextId) return
-    const targetId = childRegisterNodeId(parentContextId)
+    const focused = openSatellites.find((s) => satelliteNodeId(s.contextId) === satelliteFocus)
+    if (!focused) return
+    const targetId = childRegisterNodeId(focused.contextId)
     const node = reactFlow.getNode(targetId)
     if (node?.measured?.height == null) return
     void reactFlow.fitView({
