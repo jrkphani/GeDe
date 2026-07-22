@@ -1,7 +1,9 @@
 import type { CommandItem } from '../domain/paletteRanking'
 import { richTextToPlainText } from '../domain/richText'
+import { listCanvasStores } from '../store/canvasStores'
 import type { CommandProvider } from '../store/commandRegistry'
 import { useContextsStore } from '../store/contexts'
+import type { ContextRow } from '../db/mutations'
 import { currentRoute, navigate } from './router'
 import type { AppRoute } from './routes'
 
@@ -72,29 +74,43 @@ const canvasSource: CommandProvider = () => {
 
 // Contexts (SITEMAP §3) — matched by symbol/name/justification. Selecting one
 // navigates to its canvas AND selects it, reusing the shared selection field
-// (issue 009). Reads the live store, so it only lists contexts once the design
-// surface has loaded them this session.
+// (issue 009). Issue 106 item 3 — enumerate ALL currently-live store instances
+// (listCanvasStores()), not just the default, so a drilled-in child core's
+// contexts are reachable too. Reads the live stores, so it only lists contexts
+// once the design surface has loaded them this session.
 const contextSource: CommandProvider = () => {
   const projectId = projectIdOf(currentRoute())
   if (projectId === null) return []
-  const { contexts } = useContextsStore.getState()
-  return contexts.map(
-    (c): CommandItem => ({
-      id: `context.${c.id}`,
-      kind: 'context',
-      title: c.name?.trim() ? c.name.trim() : c.symbol,
-      symbol: c.symbol,
-      // Index the authored PROSE, not the Lexical-JSON envelope (089 D1 P2):
-      // once justification can be rich text, stuffing the raw JSON here would
-      // pollute the corpus with structural tokens and drop real word matches.
-      // richTextToPlainText is correct on both legacy strings and JSON.
-      keywords: [c.symbol, richTextToPlainText(c.justification)],
-      run: () => {
-        navigate({ kind: 'design', projectId, contextPath: [], view: 'canvas' })
-        useContextsStore.getState().select(c.id)
-      },
-    }),
-  )
+
+  const toItem = (c: ContextRow, contextPath: string[]): CommandItem => ({
+    id: `context.${c.id}`,
+    kind: 'context',
+    title: c.name?.trim() ? c.name.trim() : c.symbol,
+    symbol: c.symbol,
+    // Index the authored PROSE, not the Lexical-JSON envelope (089 D1 P2):
+    // once justification can be rich text, stuffing the raw JSON here would
+    // pollute the corpus with structural tokens and drop real word matches.
+    // richTextToPlainText is correct on both legacy strings and JSON.
+    keywords: [c.symbol, richTextToPlainText(c.justification)],
+    run: () => {
+      // Option A (drill/re-scope): a root hit navigates at depth 0
+      // (contextPath: []) as before; a CHILD hit re-scopes to its parent
+      // (contextPath: [parentContextId]) so that child becomes the PRIMARY
+      // core — which by invariant resolves the DEFAULT instance — then we
+      // select on that same default instance. Net change vs. today is only
+      // the contextPath value.
+      navigate({ kind: 'design', projectId, contextPath, view: 'canvas' })
+      useContextsStore.getState().select(c.id)
+    },
+  })
+
+  // A live instance's `canvasId` IS the store-instance key: null ⇒ the DEFAULT
+  // (root) core (drill depth 0), a parentContextId ⇒ a child core (drill to
+  // [parentContextId]). Single-level children only (grandchild nav deferred).
+  return listCanvasStores().flatMap((stores) => {
+    const contextPath = stores.canvasId === null ? [] : [stores.canvasId]
+    return stores.useContexts.getState().contexts.map((c) => toItem(c, contextPath))
+  })
 }
 
 export function coreCommandSources(): CommandProvider[] {

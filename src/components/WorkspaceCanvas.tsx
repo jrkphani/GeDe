@@ -34,7 +34,7 @@ import {
 } from '../store/canvasSatellites'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
 import { releaseCanvasStores } from '../store/canvasStores'
-import { useActiveCanvasStore } from '../store/activeCanvas'
+import { resetActiveCanvas, useActiveCanvasStore } from '../store/activeCanvas'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
 import { formatDegree } from '../domain/degree'
@@ -840,6 +840,16 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   const onSatelliteCollapse = useCallback((parentContextId: string) => {
     useCanvasSatellitesStore.getState().collapse(parentContextId)
     releaseCanvasStores(parentContextId)
+    // Issue 106 item 3 — releaseCanvasStores only drops the DB listener; the
+    // released instance is a live "zombie" object with its last selection frozen.
+    // If it was the focus-active core, its key still sits in `activeCanvas`, so
+    // presence's selection subscription would stay bound to the zombie and keep
+    // publishing its stale selection (Finding 2), and the c/v/d verbs would keep
+    // targeting a released instance (100-C arbitration staleness). Reset the
+    // arbiter so presence rebinds/republishes to the DEFAULT core.
+    if (useActiveCanvasStore.getState().activeCanvas === parentContextId) {
+      resetActiveCanvas()
+    }
   }, [])
 
   // Child cores are per-canvas: reset the open set whenever the active canvas
@@ -853,7 +863,13 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   openSatellitesRef.current = openSatellites
   const canvasIdentity = `${projectId}::${design.contextPath.join('/')}::${design.canvasId ?? ''}`
   useEffect(() => {
-    for (const parentContextId of openSatellitesRef.current) releaseCanvasStores(parentContextId)
+    const released = openSatellitesRef.current
+    const active = useActiveCanvasStore.getState().activeCanvas
+    for (const parentContextId of released) releaseCanvasStores(parentContextId)
+    // If a released child was the focus-active core, reset the arbiter too — else
+    // presence stays bound to the now-zombie instance (same Finding-2 leak as the
+    // collapse path, via the nav / breadcrumb route instead of the ⋯ collapse).
+    if (active !== null && released.includes(active)) resetActiveCanvas()
     resetCanvasSatellites()
   }, [canvasIdentity])
 

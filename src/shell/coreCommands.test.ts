@@ -6,10 +6,11 @@
 // find a context by the words its author actually wrote.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { coreCommandSources } from './coreCommands'
-import { navigate } from './router'
+import { currentRoute, navigate } from './router'
 import { rankCommands, type CommandItem } from '../domain/paletteRanking'
 import { plainTextToRichJson } from '../domain/richText'
 import { useContextsStore } from '../store/contexts'
+import { getCanvasStores, releaseCanvasStores } from '../store/canvasStores'
 import type { ContextRow } from '../db/mutations'
 
 const PROJECT_ID = 'proj-089-d1-p2'
@@ -50,6 +51,8 @@ beforeEach(() => {
 
 afterEach(() => {
   useContextsStore.setState({ contexts: [] })
+  // Drop any live child instance so the registry doesn't leak across tests.
+  releaseCanvasStores('parent-A')
 })
 
 describe('contextSource keyword corpus (089 D1 P2)', () => {
@@ -76,5 +79,39 @@ describe('contextSource keyword corpus (089 D1 P2)', () => {
     })
     const items = contextItems()
     expect(rankCommands(items, 'beneficiaries', []).map((i) => i.id)).toEqual(['context.ctx-1'])
+  })
+})
+
+describe('contextSource reaches live child cores (issue 106 item 3)', () => {
+  it('includes a live child instance\'s contexts (registry enumeration, not a DB read)', () => {
+    useContextsStore.setState({ contexts: [] })
+    const child = getCanvasStores('parent-A')
+    child.useContexts.setState({
+      contexts: [contextRow({ id: 'child-ctx-1', symbol: 'α1' })],
+    })
+
+    expect(contextItems().map((i) => i.id)).toContain('context.child-ctx-1')
+  })
+
+  it('a child item drills to contextPath:[parentContextId]; a root item stays contextPath:[] (regression)', () => {
+    useContextsStore.setState({ contexts: [contextRow({ id: 'root-ctx-1', symbol: 'β1' })] })
+    const child = getCanvasStores('parent-A')
+    child.useContexts.setState({
+      contexts: [contextRow({ id: 'child-ctx-1', symbol: 'α1' })],
+    })
+
+    const items = contextItems()
+    const rootItem = items.find((i) => i.id === 'context.root-ctx-1')
+    const childItem = items.find((i) => i.id === 'context.child-ctx-1')
+    expect(rootItem).toBeDefined()
+    expect(childItem).toBeDefined()
+
+    // Root context — Option A degenerate case: navigate at depth 0 (unchanged).
+    rootItem?.run()
+    expect(currentRoute()).toMatchObject({ kind: 'design', contextPath: [] })
+
+    // Child context — Option A: re-scope so the child becomes the PRIMARY core.
+    childItem?.run()
+    expect(currentRoute()).toMatchObject({ kind: 'design', contextPath: ['parent-A'] })
   })
 })

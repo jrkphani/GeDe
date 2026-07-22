@@ -18,8 +18,9 @@ import {
   type PresenceHandle,
 } from '../presence/presenceChannel'
 import { isSyncEnabled } from '../sync/config'
+import { useActiveCanvasStore } from './activeCanvas'
 import { useAuthStore } from './auth'
-import { useContextsStore } from './contexts'
+import { listCanvasStores, resolveCanvasStores } from './canvasStores'
 
 // Issue 038 — the store-layer seam for presence, mirroring store/sync.ts's
 // own split (032): the pure roster reducer + cue derivations live in
@@ -58,7 +59,13 @@ interface PresenceState {
   setFocusedCell: (cell: FocusedCell | null) => void
 }
 
-let contextsUnsubscribe: (() => void) | null = null
+// Issue 106 item 3 — the selection publish now tracks the FOCUS-ACTIVE core, not
+// just the default instance. `selectionUnsubscribe` is the subscription to the
+// currently-active instance's `selectedContextId` (rebound whenever the active
+// core flips); `activeCanvasUnsubscribe` watches the active-core arbiter itself.
+// Both are torn down together.
+let selectionUnsubscribe: (() => void) | null = null
+let activeCanvasUnsubscribe: (() => void) | null = null
 let pruneInterval: ReturnType<typeof setInterval> | null = null
 
 function selfIdentity(): { userSub: string; label: string } | null {
@@ -67,9 +74,31 @@ function selfIdentity(): { userSub: string; label: string } | null {
   return { userSub: user.sub, label: user.email ?? user.sub }
 }
 
+// Resolve the contexts store of the focus-active core. The active-canvas key is
+// NOT a store-instance key: 'root'/null is the primary core, a parentContextId is
+// a LIVE CHILD core, but it is ALSO any ROOT canvas id (Issue-090 multi-root
+// selector — WorkspaceCanvas sets activeCanvas from `data.canvasId`, which for the
+// PRIMARY core is `route.canvasId`). So a non-'root'/non-null key does NOT imply a
+// child instance. Resolve a child instance ONLY when that key already EXISTS in
+// the live registry (a non-creating membership check against listCanvasStores) —
+// never CREATE one from the activeCanvas key (that would leak a phantom empty
+// instance and publish its frozen null). The primary core on ANY root canvas id
+// finds no matching child → the DEFAULT instance (today's behavior); a live child
+// core (its parentContextId IS registered) → that child's own instance.
+function activeContextsStore() {
+  const { activeCanvas } = useActiveCanvasStore.getState()
+  if (activeCanvas != null && activeCanvas !== 'root') {
+    const child = listCanvasStores().find((s) => s.canvasId === activeCanvas)
+    if (child) return child.useContexts
+  }
+  return resolveCanvasStores(null).useContexts
+}
+
 function teardown(): void {
-  contextsUnsubscribe?.()
-  contextsUnsubscribe = null
+  selectionUnsubscribe?.()
+  selectionUnsubscribe = null
+  activeCanvasUnsubscribe?.()
+  activeCanvasUnsubscribe = null
   if (pruneInterval) clearInterval(pruneInterval)
   pruneInterval = null
 }
@@ -102,16 +131,34 @@ export const usePresenceStore = create<PresenceState>()((set, get) => ({
       },
     })
 
-    // The ephemeral "selected context" cue (test-first plan #2): reads
-    // useContextsStore reactively (never the other way — contexts.ts has no
-    // idea presence exists) and republishes only when the value actually
-    // changes, so an unrelated contexts-store update never spams the channel.
-    let lastSelected = useContextsStore.getState().selectedContextId
+    // The ephemeral "selected context" cue (test-first plan #2, extended by
+    // 106 item 3 to reach LIVE CHILD cores): the wire carries one
+    // selectedContextId per user — whichever the FOCUS-ACTIVE core has selected.
+    // Reads the active contexts store reactively (never the other way — the
+    // contexts stores have no idea presence exists) and republishes only when
+    // the value actually changes, so an unrelated store update never spams the
+    // channel.
+    let lastSelected: string | null = activeContextsStore().getState().selectedContextId
     handle.setSelection(lastSelected)
-    contextsUnsubscribe = useContextsStore.subscribe((state) => {
-      if (state.selectedContextId === lastSelected) return
-      lastSelected = state.selectedContextId
-      handle.setSelection(lastSelected)
+    const publishSelection = (): void => {
+      // Resolve the active instance LAZILY every time — never cache an instance
+      // ref, because a child core can be released between publishes.
+      const selected = activeContextsStore().getState().selectedContextId
+      if (selected === lastSelected) return
+      lastSelected = selected
+      handle.setSelection(selected)
+    }
+    // (Re)bind the selection subscription to the currently-active instance.
+    const bindSelectionSubscription = (): void => {
+      selectionUnsubscribe?.()
+      selectionUnsubscribe = activeContextsStore().subscribe(publishSelection)
+    }
+    bindSelectionSubscription()
+    // When the focus-active core flips, rebind the selection subscription to the
+    // newly-active instance AND republish its current selection immediately.
+    activeCanvasUnsubscribe = useActiveCanvasStore.subscribe(() => {
+      bindSelectionSubscription()
+      publishSelection()
     })
 
     pruneInterval = setInterval(() => {

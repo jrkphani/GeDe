@@ -84,6 +84,16 @@ export function getCanvasStores(canvasId: string | null): CanvasStores {
   return created
 }
 
+// Issue 106 item 3 — every currently-live store instance, in insertion order
+// (default first). A pure synchronous Map read: presence's palette/cue paths
+// enumerate the LIVE cores from this, never a DB query. Released instances are
+// already `registry.delete`d (releaseCanvasStores) so they self-exclude — no
+// stale entry can leak out. Callers distinguish the default from a child purely
+// by `.canvasId` (null ⇒ default, parentContextId ⇒ child).
+export function listCanvasStores(): CanvasStores[] {
+  return [...registry.values()]
+}
+
 // Tear down and drop a non-default canvas's stores. The default instance is
 // process-lifetime and is never released.
 export function releaseCanvasStores(canvasId: string | null): void {

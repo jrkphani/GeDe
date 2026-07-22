@@ -9,6 +9,8 @@ import { startPresence, type PresenceChannelFactory, type PresenceChannelLike } 
 import type { PresenceWireEvent } from '../domain/presence'
 import { resetAuthStoreForTests, useAuthStore } from './auth'
 import { resetContextsStore, useContextsStore } from './contexts'
+import { resetActiveCanvas, useActiveCanvasStore } from './activeCanvas'
+import { getCanvasStores, listCanvasStores, releaseCanvasStores } from './canvasStores'
 import { resetPresenceStoreForTests, usePresenceStore } from './presence'
 
 // A shared in-memory bus per workspace id — the same fixture shape as
@@ -45,12 +47,18 @@ function signIn(sub: string, email: string): void {
 beforeEach(() => {
   resetAuthStoreForTests()
   resetContextsStore()
+  resetActiveCanvas()
   resetPresenceStoreForTests()
   vi.stubEnv('VITE_SYNC_ENABLED', 'true')
 })
 
 afterEach(() => {
   resetPresenceStoreForTests()
+  releaseCanvasStores('parent-A')
+  // Guard: if a regression ever CREATES a phantom instance from a root-canvas
+  // key, drop it so the leak can't bleed into a later test's registry count.
+  releaseCanvasStores('root-canvas-xyz')
+  resetActiveCanvas()
   vi.unstubAllEnvs()
   vi.useRealTimers()
 })
@@ -164,6 +172,161 @@ describe('usePresenceStore — ephemeral selection cue (test-first plan #2)', ()
     expect(bindingRowsAfter).toHaveLength(bindingRowsBefore.length)
     // The row content itself is untouched too (no stray column written).
     expect(contextRowsAfter).toEqual(contextRowsBefore)
+
+    peer.stop()
+  })
+})
+
+describe('usePresenceStore — selection cue follows the focus-active core (issue 106 item 3)', () => {
+  it('publishes a LIVE CHILD core\'s selection to a peer when that child is focus-active', () => {
+    const { factory } = fakeChannelFactory()
+    signIn('alice-sub', 'alice@x.test')
+    usePresenceStore.getState().start('ws1', { channelFactory: factory })
+
+    const seenByPeer: PresenceWireEvent[] = []
+    const peer = startPresence(
+      'ws1',
+      { userSub: 'bob-sub', label: 'bob' },
+      { channelFactory: factory, onEvent: (e) => seenByPeer.push(e) },
+    )
+
+    // Drill into a child core (its own store instance, keyed by parentContextId)
+    // and make it focus-active, then select a context on ITS instance.
+    const child = getCanvasStores('parent-A')
+    useActiveCanvasStore.getState().setActiveCanvas('parent-A')
+    child.useContexts.setState({ selectedContextId: 'child-ctx' })
+
+    const latest = seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop()
+    expect(latest).toMatchObject({ selectedContextId: 'child-ctx' })
+
+    peer.stop()
+  })
+
+  it('regression — the DEFAULT selection is still published when the root core is active (or nothing is focused)', () => {
+    const { factory } = fakeChannelFactory()
+    signIn('alice-sub', 'alice@x.test')
+    usePresenceStore.getState().start('ws1', { channelFactory: factory })
+
+    const seenByPeer: PresenceWireEvent[] = []
+    const peer = startPresence(
+      'ws1',
+      { userSub: 'bob-sub', label: 'bob' },
+      { channelFactory: factory, onEvent: (e) => seenByPeer.push(e) },
+    )
+
+    // activeCanvas === 'root' (the primary core) resolves the default instance.
+    useActiveCanvasStore.getState().setActiveCanvas('root')
+    useContextsStore.setState({ selectedContextId: 'root-ctx' })
+    expect(
+      seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop(),
+    ).toMatchObject({ selectedContextId: 'root-ctx' })
+
+    // activeCanvas === null (nothing focused) also falls back to the default.
+    useActiveCanvasStore.getState().setActiveCanvas(null)
+    useContextsStore.setState({ selectedContextId: 'root-ctx-2' })
+    expect(
+      seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop(),
+    ).toMatchObject({ selectedContextId: 'root-ctx-2' })
+
+    peer.stop()
+  })
+
+  it('flipping the active core republishes the newly-active core\'s selection (no store write)', () => {
+    const { factory } = fakeChannelFactory()
+    signIn('alice-sub', 'alice@x.test')
+    usePresenceStore.getState().start('ws1', { channelFactory: factory })
+
+    const seenByPeer: PresenceWireEvent[] = []
+    const peer = startPresence(
+      'ws1',
+      { userSub: 'bob-sub', label: 'bob' },
+      { channelFactory: factory, onEvent: (e) => seenByPeer.push(e) },
+    )
+
+    // Seed distinct selections on the two live cores.
+    useContextsStore.setState({ selectedContextId: 'root-ctx' })
+    const child = getCanvasStores('parent-A')
+    child.useContexts.setState({ selectedContextId: 'child-ctx' })
+
+    // Root active → the wire carries the root selection.
+    useActiveCanvasStore.getState().setActiveCanvas('root')
+    expect(
+      seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop(),
+    ).toMatchObject({ selectedContextId: 'root-ctx' })
+
+    // Flip focus to the child core — republishes the child's selection WITHOUT
+    // touching either store's selectedContextId.
+    useActiveCanvasStore.getState().setActiveCanvas('parent-A')
+    expect(
+      seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop(),
+    ).toMatchObject({ selectedContextId: 'child-ctx' })
+
+    peer.stop()
+  })
+
+  it('primary core on a non-default root canvas resolves the DEFAULT instance (no phantom instance created, no stale/null publish)', () => {
+    const { factory } = fakeChannelFactory()
+    signIn('alice-sub', 'alice@x.test')
+    usePresenceStore.getState().start('ws1', { channelFactory: factory })
+
+    const seenByPeer: PresenceWireEvent[] = []
+    const peer = startPresence(
+      'ws1',
+      { userSub: 'bob-sub', label: 'bob' },
+      { channelFactory: factory, onEvent: (e) => seenByPeer.push(e) },
+    )
+
+    const instancesBefore = listCanvasStores().length
+    // The Issue-090 multi-root selector sets activeCanvas to a ROOT canvas id
+    // (CanvasSwitcher / ?canvas=<id>) that is NOT a registered child-store key.
+    // The primary core on ANY root canvas must resolve the DEFAULT instance —
+    // never CREATE a phantom instance from that key.
+    useActiveCanvasStore.getState().setActiveCanvas('root-canvas-xyz')
+    useContextsStore.setState({ selectedContextId: 'default-ctx' })
+
+    // The peer sees the DEFAULT instance's live selection, not a phantom's null.
+    expect(
+      seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop(),
+    ).toMatchObject({ selectedContextId: 'default-ctx' })
+    // No phantom store instance was created (and thus leaked) from the root key.
+    expect(listCanvasStores().length).toBe(instancesBefore)
+
+    peer.stop()
+  })
+
+  it('collapsing the focus-active child core (release + activeCanvas reset) stops the zombie publish and rebinds to DEFAULT', () => {
+    const { factory } = fakeChannelFactory()
+    signIn('alice-sub', 'alice@x.test')
+    usePresenceStore.getState().start('ws1', { channelFactory: factory })
+
+    const seenByPeer: PresenceWireEvent[] = []
+    const peer = startPresence(
+      'ws1',
+      { userSub: 'bob-sub', label: 'bob' },
+      { channelFactory: factory, onEvent: (e) => seenByPeer.push(e) },
+    )
+
+    // A live child core is focus-active with its own selection; the DEFAULT core
+    // holds a different one.
+    const child = getCanvasStores('parent-A')
+    useActiveCanvasStore.getState().setActiveCanvas('parent-A')
+    child.useContexts.setState({ selectedContextId: 'child-stale' })
+    useContextsStore.setState({ selectedContextId: 'root-live' })
+    expect(
+      seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop(),
+    ).toMatchObject({ selectedContextId: 'child-stale' })
+
+    // Collapse — exactly the two operations WorkspaceCanvas.onSatelliteCollapse
+    // performs: release the child instance (now a frozen zombie) AND reset the
+    // active-canvas arbiter. WITHOUT the reset, presence stays bound to the
+    // zombie and keeps publishing 'child-stale' forever (the Finding-2 bug).
+    releaseCanvasStores('parent-A')
+    resetActiveCanvas()
+
+    // Presence rebinds to the DEFAULT core and republishes ITS selection.
+    expect(
+      seenByPeer.filter((e) => e.type === 'presence' && e.userSub === 'alice-sub').pop(),
+    ).toMatchObject({ selectedContextId: 'root-live' })
 
     peer.stop()
   })
