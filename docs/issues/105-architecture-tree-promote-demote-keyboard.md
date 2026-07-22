@@ -30,7 +30,7 @@ Keep **Tab = commit + next cell** and **Enter = commit + continue**; add tree ve
 
 ### B. Row-command IA — controls belong in a gutter, not a data cell
 - **Keyboard-first (primary):** the verbs above — no per-row button needed for keyboard users.
-- **Mouse (secondary), OUT of the data cells:** consolidate single-row commands (Add child, Add sibling, Promote/Demote, Move, **Remove**) into ONE row-hover **`⋯` menu in a dedicated action gutter** — a real command control (`tabIndex` managed, `role` NOT `gridcell`, aria-labeled menu). Keep the 104 add-child phantom as the mouse create-path (fix its 2 warts: empty-space-armed; Tab→depth-0 jump) — don't delete it.
+- **Mouse (secondary), OUT of the data cells:** consolidate single-row commands (Add child, Add sibling, Promote/Demote, Move, **Remove**) into ONE row-hover **`⋯` menu in a dedicated action gutter** — a real command control (`tabIndex` managed, `role` NOT `gridcell`, aria-labeled menu). Keep the 104 add-child phantom as the mouse create-path — don't delete it. NB the **empty-space-armed** behavior is DECIDED kept as-is (104 owner decision, 2026-07-22) — do NOT "fix" it. P1's insertion context supersedes the old Tab→depth-0 jump.
 - **Bulk stays on the selection bar (025/035):** the checkbox-select → selection-bar pattern is correct for BULK multi-select (bulk Remove/Promote) — keep it. This app's selection is the role-gated PROMOTE-candidate multi-select, so the bar stays promote/bulk-focused. `Remove` appears in BOTH the row `⋯` menu (one row) and the bar (bulk) — same verb, two scopes.
 - **Grid seam:** `EditableGrid` owns `<tr>/<td>`, so a clean "row affordance outside the cell model" wants a small per-row action-SLOT seam (rendered as an overlay/gutter, not a cell). Cheap 80% = `tabIndex={-1}` + menu-trigger (this also *is* the P0 fix for #1); clean = the gutter seam + consolidated `⋯` menu.
 
@@ -42,6 +42,10 @@ The reparent engine exists + is tested; the rest is a store wrapper + keydown ha
 
 ### E. A11y + undo
 One `commandLog.push` per gesture = one undo step. Announce every reparent via `useStatusStore.getState().announce(...)` ("Indented Buyers under Users", "New sibling at level 2"). Add the tree semantics the surface lacks: `aria-level` (= depth+1) + `aria-expanded` on rows with children (selection already uses `role="listbox"`). No keyboard trap — Escape still exits editing.
+
+### F. Load-bearing invariants to PRESERVE (do not regress)
+- **102's arm-suppression + 104's `beginEditing` seam are load-bearing** — arming add-child while a cell is mid-edit still suppresses that editor; a new edit while armed dismisses the phantom. P0/P1's Tab/Enter changes must not break these (`RichTextCell` deliberately keeps `editing` on blur for the FormatStrip — do not "fix" that).
+- **`ArchitectureSurface` also renders on the CANVAS** (084-D3 per-table nodes) with **cross-node Tab** at the grid boundary via the `onExitBoundary` seam (089-D3). Intercepting Tab in the description is INTRA-grid (commit + advance to the next cell), so it must not swallow the boundary Tab that hands off between canvas table nodes — the `d3-canvas.spec.ts` cross-node-Tab test must stay green. Enter=sibling is Architecture-scoped and applies on BOTH hosts (fallback + canvas).
 
 ## Phased build plan (single ordered list)
 
