@@ -488,9 +488,27 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   // could never reach it this way.
   await alpha.getByPlaceholder('Name an entry').click()
   await page.keyboard.press('Tab')
-  const betaFirstCell = beta.locator('tbody tr[data-row-id] .grid-cell[tabindex]').first()
-  await expect(betaFirstCell).toBeFocused()
-  await expect(betaFirstCell).toHaveText('B-entry')
+  // 099 — DETERMINISTIC FOCUS-SETTLE (was retry-mitigated / relied on retries:2).
+  // The cross-node handoff focuses Beta's first data cell from inside a rAF (the
+  // EditableGrid.onExitBoundary seam), and the focus-pan can re-run it — so a
+  // one-shot `toBeFocused()` snapshot can read before the rAF fires and flake
+  // (HANDOFF e2e lesson: poll activeElement, never read it once). Poll the SAME
+  // invariant the old `toBeFocused()` + `toHaveText('B-entry')` pair asserted:
+  // focus crossed to the BETA node and landed on its B-entry grid cell.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const el = document.activeElement
+          return {
+            inGridCell: !!el?.closest('.grid-cell'),
+            inBetaNode: (el?.closest('.wc-node--arch-table')?.textContent ?? '').includes('Beta'),
+            hasBEntry: (el?.textContent ?? '').includes('B-entry'),
+          }
+        }),
+      { timeout: 3000 },
+    )
+    .toEqual({ inGridCell: true, inBetaNode: true, hasBEntry: true })
 
   // BACKWARD: from Beta's first editable cell (its backward boundary), Shift+Tab
   // hands off to the PREV-by-sort node (Alpha) and lands on its last editable
@@ -498,7 +516,23 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   await beta.getByRole('cell', { name: 'B-entry', exact: true }).click()
   await waitForStableViewport(page)
   await page.keyboard.press('Shift+Tab')
-  await expect(alpha.getByPlaceholder('Name an entry')).toBeFocused()
+  // Same rAF/focus-pan race on the reverse boundary → poll activeElement rather
+  // than a one-shot `toBeFocused()`. Assert focus crossed back to ALPHA and landed
+  // on its "Name an entry" phantom input (input OR textarea — read the attribute,
+  // don't assume the element kind).
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const el = document.activeElement
+          return {
+            isEntryPhantom: el?.getAttribute('placeholder') === 'Name an entry',
+            inAlphaNode: (el?.closest('.wc-node--arch-table')?.textContent ?? '').includes('Alpha'),
+          }
+        }),
+      { timeout: 3000 },
+    )
+    .toEqual({ isEntryPhantom: true, inAlphaNode: true })
 })
 
 // ── 089-D3 P3.4 — constrained drag reorders `sort` (persisted, derived pos) ───
@@ -1399,6 +1433,138 @@ test('the canvas coverage twin is axe-clean (WCAG 2 A/AA serious/critical)', { t
     .analyze()
   const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
   expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+// 099 — DEDICATED per-lane axe scans on the CANVAS. The whole-`main` scans above
+// (empty canvas-surface + populated register) leave the Foundation and
+// Architecture LANES empty — their populated authoring surfaces (the header's
+// rich Purpose/Existing-Scenario editors + per-prop grids; the add-table phantom +
+// per-table TablePanel grids) never enter the a11y regression net. These populate
+// each lane and scan it dedicated at the SAME bar as the twin scan above:
+// serious/critical WCAG 2 A/AA only, identical AxeBuilder config. Chained
+// `.include()` unions the header node with its item nodes.
+test('the populated Foundation lane is axe-clean (WCAG 2 A/AA serious/critical)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+  await expect(page.locator('.wc-node--foundation')).toBeVisible()
+
+  // Populate the lane: the header keeps its Purpose editor; one value prop mounts a
+  // per-prop item node with its real name/description grid.
+  await addFoundationProp(page, 'Comfort')
+  await waitForStableViewport(page)
+
+  const results = await new AxeBuilder({ page })
+    .include('.wc-node--foundation')
+    .include('.wc-node--foundation-item')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze()
+  const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+test('the populated Architecture lane is axe-clean (WCAG 2 A/AA serious/critical)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+  await expect(page.locator('.wc-node--architecture')).toBeVisible()
+
+  // Populate: one table (its own node) with one entry, so the TablePanel grid + the
+  // add-table / add-entry phantoms are all inside the scanned surface.
+  await addArchTable(page, 'Stakeholders')
+  const table = page.locator('.wc-node--arch-table').filter({ hasText: 'Stakeholders' })
+  await table.getByPlaceholder('Name an entry').click()
+  await page.keyboard.type('Buyers')
+  await page.keyboard.press('Enter')
+  await expect(table.getByRole('cell', { name: 'Buyers', exact: true })).toBeVisible()
+  await waitForStableViewport(page)
+
+  const results = await new AxeBuilder({ page })
+    .include('.wc-node--architecture')
+    .include('.wc-node--arch-table')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze()
+  const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+// 099 — a keyboard-reachability / LANDMARK invariant across the React Flow lane
+// nodes, complementing the static axe scans. Asserts (a) the canvas exposes
+// exactly ONE `main` landmark that CONTAINS all three tier lanes (landmark
+// uniqueness — the same guarantee the fallback WorkspaceSurface has), and (b)
+// forward Tab from a known register field keeps focus INSIDE that landmark — it
+// never falls through to <body> / browser chrome. activeElement is read via
+// expect.poll: a focus-pan can land focus in a rAF, so a one-shot read flakes
+// (HANDOFF e2e lesson). The invariant is deliberately tolerant (in-main, not-body)
+// rather than a brittle exact-next-element assertion.
+test('the canvas is one main landmark containing all lanes, and Tab keeps focus inside it', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page)
+
+  const main = page.getByRole('main')
+  await expect(main).toHaveCount(1)
+  const register = main.locator('.wc-node--design-register')
+  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+
+  // All three tier lanes live inside the single main landmark.
+  await expect(main.locator('.wc-node--foundation')).toHaveCount(1)
+  await expect(main.locator('.wc-node--architecture')).toHaveCount(1)
+  await expect(register).toHaveCount(1)
+
+  await waitForStableViewport(page)
+
+  // Focus a known, on-screen register field, then Tab forward: focus must stay
+  // within the main landmark (the RF controls also live inside it) and never reach
+  // <body> — the focus-order integrity the keyboard user depends on.
+  await register.getByPlaceholder('Type to add a dimension').click()
+  await page.keyboard.press('Tab')
+  await expect
+    .poll(
+      () =>
+        page.evaluate(() => {
+          const el = document.activeElement
+          return {
+            isBody: el === document.body || el === null,
+            inMain: !!el?.closest('[role="main"]'),
+          }
+        }),
+      { timeout: 3000 },
+    )
+    .toEqual({ isBody: false, inMain: true })
+})
+
+// 099 (LOW) — the canvas label tier is ZOOM-INVARIANT. `labelTierForWidth`
+// (canvasResponsive.ts) derives the tier from the ring's ResizeObserver
+// `contentRect` width, which is LAYOUT width and therefore UNCHANGED by React
+// Flow's `transform: scale()` (the explicit 099-2c contract in canvasResponsive.ts
+// and Canvas.tsx's `data-label-tier`). So changing the RF viewport zoom must NOT
+// change the tier. Zoom IN from fit (scale < 1) to scale > 1 and assert the
+// `.canvas-shell[data-label-tier]` on the design ring node is byte-stable.
+test('the canvas label tier is stable across zoom (derived from layout width, not RF scale)', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+
+  const shell = page.locator('.wc-node--design-ring .canvas-shell')
+  await expect(shell).toBeVisible({ timeout: 15_000 })
+  await waitForStableViewport(page)
+
+  const tierBefore = await shell.getAttribute('data-label-tier')
+  if (!tierBefore) throw new Error('design ring must expose a data-label-tier')
+
+  // Zoom IN well past 1:1 (fit frames below 1:1). The layout width is untouched by
+  // the transform, so the tier must not move off its fit-zoom value.
+  const zoomIn = page.locator('.react-flow__controls-zoomin')
+  for (let i = 0; i < 8; i++) await zoomIn.click()
+  await expect.poll(() => viewportScale(page)).toBeGreaterThan(1)
+
+  await expect(shell).toBeVisible()
+  await expect(shell).toHaveAttribute('data-label-tier', tierBefore)
 })
 
 // 101 — the focus-pan is KEYBOARD-only: CLICKING an element the user can already
