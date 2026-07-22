@@ -10,6 +10,7 @@ import { EditableGrid, type GridColumn } from './EditableGrid'
 import {
   CHAIN_PHANTOM_ID,
   chainOrder,
+  entryNameCell,
   firstEditableCell,
   lastEditablePosition,
   tableInId,
@@ -262,6 +263,7 @@ export function TablePanel({
   const renameEntry = useTier2Store((s) => s.renameEntry)
   const setEntryDescription = useTier2Store((s) => s.setEntryDescription)
   const removeEntry = useTier2Store((s) => s.removeEntry)
+  const moveEntry = useTier2Store((s) => s.moveEntry)
 
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set())
   const [selected, setSelected] = useState<Set<string>>(() => new Set())
@@ -295,6 +297,91 @@ export function TablePanel({
     return map
   }, [flat])
   const flatIds = flat.map((f) => f.entry.id)
+
+  // Issue 105 P2/P3 — keyboard tree verbs on the free modifier chords the grid
+  // leaves inert (handleGridArrowKeys early-returns on Cmd/Ctrl/Alt): ⌘] demote
+  // / ⌘[ promote / ⌥⇧↑↓ move-among-siblings. Architecture-SCOPED: this handler
+  // lives on THIS surface's <section> (a bubbling keydown), never in the shared
+  // EditableGrid — Design's register/rail and Foundation never see it. Acts only
+  // on a resting-focused data cell (a real entry row); editing inputs/richtext
+  // and the phantoms are excluded so typing ] or an arrow is never hijacked.
+  function siblingsOfIn(parentId: string | null): Tier2EntryRow[] {
+    return entries.filter((e) => e.parentId === parentId).sort((a, b) => a.sort - b.sort)
+  }
+
+  function runMove(id: string, newParentId: string | null, toIndex: number, message: string) {
+    void moveEntry(table.id, id, newParentId, toIndex).then(() => {
+      useStatusStore.getState().announce(message)
+      const section = document.getElementById(`t2-table-${table.id}`)
+      if (!section) return
+      // The moved row re-renders at a new depth/position — re-plant focus on the
+      // moved entry by id next frame (its old DOM node is gone), like the P1
+      // gridBoundaryFocus deferral.
+      requestAnimationFrame(() => entryNameCell(section, id)?.focus())
+    })
+  }
+
+  function handleTreeKey(e: React.KeyboardEvent<HTMLElement>) {
+    if (readOnly) return
+    const demote = e.metaKey && !e.altKey && (e.key === ']' || e.code === 'BracketRight')
+    const promote = e.metaKey && !e.altKey && (e.key === '[' || e.code === 'BracketLeft')
+    const moveUp = e.altKey && e.shiftKey && !e.metaKey && e.key === 'ArrowUp'
+    const moveDown = e.altKey && e.shiftKey && !e.metaKey && e.key === 'ArrowDown'
+    if (!demote && !promote && !moveUp && !moveDown) return
+
+    // Resting-focused only: ignore while a name/description editor (input,
+    // textarea, contenteditable richtext) or a phantom holds focus.
+    const target = e.target as HTMLElement
+    if (
+      target.isContentEditable ||
+      target.tagName === 'INPUT' ||
+      target.tagName === 'TEXTAREA'
+    ) {
+      return
+    }
+    const rowEl = target.closest<HTMLElement>('tr[data-row-id]')
+    const id = rowEl?.dataset.rowId
+    if (!id) return
+    const entry = entries.find((x) => x.id === id)
+    if (!entry) return
+    // A recognized chord on a real entry — own it (never let the browser act).
+    e.preventDefault()
+    // Ignore OS key-repeat (held chord): moveEntry is a multi-step async DB
+    // mutation, so overlapping repeats could interleave against the un-transacted
+    // moveTier2Entry and leave a sibling group with non-contiguous sort. One move
+    // per physical press (review MEDIUM).
+    if (e.repeat) return
+
+    if (demote) {
+      // Last child of the immediately-preceding VISIBLE sibling (same parent).
+      const group = siblingsOfIn(entry.parentId)
+      const idx = group.findIndex((x) => x.id === id)
+      if (idx <= 0) return // first child → no preceding sibling → no-op
+      const preceding = group[idx - 1] as Tier2EntryRow
+      const toIndex = siblingsOfIn(preceding.id).length // append as last child
+      runMove(id, preceding.id, toIndex, `Indented ${entry.name} under ${preceding.name}`)
+      return
+    }
+    if (promote) {
+      if (entry.parentId === null) return // top level → nothing to outdent to
+      const parent = entries.find((x) => x.id === entry.parentId)
+      if (!parent) return
+      const grandParentId = parent.parentId
+      const parentIdx = siblingsOfIn(grandParentId).findIndex((x) => x.id === parent.id)
+      runMove(id, grandParentId, parentIdx + 1, `Outdented ${entry.name}`)
+      return
+    }
+    // Move among siblings (⌥⇧↑ / ⌥⇧↓).
+    const group = siblingsOfIn(entry.parentId)
+    const idx = group.findIndex((x) => x.id === id)
+    if (moveUp) {
+      if (idx <= 0) return // already first → no-op
+      runMove(id, entry.parentId, idx - 1, `Moved ${entry.name} up`)
+    } else {
+      if (idx === -1 || idx >= group.length - 1) return // already last → no-op
+      runMove(id, entry.parentId, idx + 1, `Moved ${entry.name} down`)
+    }
+  }
 
   function toggleCollapse(id: string) {
     setCollapsed((prev) => {
@@ -639,6 +726,11 @@ export function TablePanel({
       className="panel t2-table t2-table--indent"
       id={`t2-table-${table.id}`}
       data-selecting={selected.size > 0 || undefined}
+      // Issue 105 P2/P3 — Architecture-scoped keyboard tree verbs (⌘]/⌘[/⌥⇧↑↓).
+      // A bubbling keydown on THIS surface's section only; the shared EditableGrid
+      // (Design/Foundation) never carries it. handleTreeKey acts on a resting
+      // data cell and no-ops otherwise, so grid nav/editing is unaffected.
+      onKeyDown={handleTreeKey}
     >
       <InlineEdit
         value={table.name}

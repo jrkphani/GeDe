@@ -10,6 +10,7 @@ import {
   listPromotedLinks,
   listTier2Entries as dbListEntries,
   listTier2Tables as dbListTables,
+  moveTier2Entry as dbMoveEntry,
   promoteEntries,
   relinkParameters,
   removeParameter,
@@ -131,6 +132,18 @@ function refreshDesignLane(): void {
   useSyncStore.getState().notifyLocalApply(['dimensions', 'parameters'])
 }
 
+// Issue 105 P2/P3 — the live siblings under `parentId`, in dense sort order.
+// enqueueSortDeltas treats each row's ARRAY INDEX as its persisted `sort`, so
+// the `after` slice must be sort-ordered (moveTier2Entry re-densifies, so
+// index === sort holds post-move); the `before` slice's order is irrelevant
+// (the helper reads its `.sort` field), but sorting both keeps this uniform.
+function siblingGroup(
+  entries: readonly Tier2EntryRow[],
+  parentId: string | null,
+): Tier2EntryRow[] {
+  return entries.filter((e) => e.parentId === parentId).sort((a, b) => a.sort - b.sort)
+}
+
 interface Tier2State {
   projectId: string | null
   tables: Tier2TableRow[]
@@ -150,6 +163,10 @@ interface Tier2State {
   renameTable: (id: string, name: string) => Promise<void>
   reorderTable: (id: string, toIndex: number) => Promise<void>
   addEntry: (tableId: string, parentId: string | null, name: string) => Promise<Tier2EntryRow | null>
+  // Issue 105 P2/P3 — reparent (⌘]/⌘[) or reorder-among-siblings (⌥⇧↑/↓) an
+  // existing entry: newParentId reparents (subtree travels), toIndex places it
+  // among the destination siblings. One undo step; Architecture-only.
+  moveEntry: (tableId: string, id: string, newParentId: string | null, toIndex: number) => Promise<void>
   renameEntry: (tableId: string, id: string, name: string) => Promise<number>
   setEntryDescription: (tableId: string, id: string, description: string) => Promise<void>
   removeEntry: (tableId: string, id: string) => Promise<RemoveEntryResult>
@@ -413,6 +430,63 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
         },
       })
       return row
+    },
+
+    // Issue 105 P2/P3 — the store seam behind ⌘]/⌘[ (promote/demote) and
+    // ⌥⇧↑/↓ (move-among-siblings). Wraps the already-unit-tested moveTier2Entry
+    // (db/mutations.ts:1708 — reparents + re-densifies BOTH affected sibling
+    // groups, subtree travels intact) with ONE command-log entry per gesture
+    // and the 073/094 sync enqueue: a sibling-group sort-delta for each affected
+    // group + an explicit 'update' for the moved row when its parentId changed
+    // (its own `sort` may be unchanged, so enqueueSortDeltas alone can miss it).
+    async moveEntry(tableId, id, newParentId, toIndex) {
+      const { projectId } = get()
+      if (projectId === null) return
+      const before = get().entriesByTable[tableId] ?? []
+      const moved = before.find((e) => e.id === id)
+      if (!moved) return
+      const oldParentId = moved.parentId
+      // The moved row's index among its ORIGINAL siblings — the undo target.
+      const oldIndex = siblingGroup(before, oldParentId).findIndex((e) => e.id === id)
+
+      // Apply a single reparent/reorder: mutate PGlite, refresh this lane's
+      // slice from the returned rows (the reload pattern), then enqueue the
+      // sibling-group deltas relative to `from` (the pre-mutation snapshot).
+      async function apply(
+        from: readonly Tier2EntryRow[],
+        targetParentId: string | null,
+        targetIndex: number,
+      ) {
+        const fromParentId = from.find((e) => e.id === id)?.parentId ?? null
+        const after = await dbMoveEntry(db(), tableId, id, targetParentId, targetIndex)
+        set({ entriesByTable: { ...get().entriesByTable, [tableId]: after } })
+        if (fromParentId === targetParentId) {
+          // Same group: one delta covers the moved row AND its shifted siblings.
+          enqueueSortDeltas('tier2_entries', siblingGroup(from, targetParentId), siblingGroup(after, targetParentId))
+        } else {
+          // Cross-group: the old group closes its gap, the new group opens one —
+          // enqueue both. The moved row is absent from each group's `before`, so
+          // enqueueSortDeltas skips it; enqueue its parentId change explicitly.
+          enqueueSortDeltas('tier2_entries', siblingGroup(from, fromParentId), siblingGroup(after, fromParentId))
+          enqueueSortDeltas('tier2_entries', siblingGroup(from, targetParentId), siblingGroup(after, targetParentId))
+          const movedRow = after.find((e) => e.id === id)
+          if (movedRow) enqueueIfSyncing('tier2_entries', id, 'update', movedRow)
+        }
+      }
+
+      bump()
+      await apply(before, newParentId, toIndex)
+      useCommandLogStore.getState().push({
+        label: 'move entry',
+        async undo() {
+          const beforeUndo = get().entriesByTable[tableId] ?? []
+          await apply(beforeUndo, oldParentId, oldIndex)
+        },
+        async redo() {
+          const beforeRedo = get().entriesByTable[tableId] ?? []
+          await apply(beforeRedo, newParentId, toIndex)
+        },
+      })
     },
 
     async renameEntry(tableId, id, name) {

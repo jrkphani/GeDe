@@ -877,3 +877,115 @@ test('architecture 104 (edge d): clicking outside the grid cells leaves the add-
   await panel.locator('.t2-table__name').click()
   await expect(childField).toBeVisible()
 })
+
+// Issue 105 P2/P3 — keyboard PROMOTE/DEMOTE (⌘]/⌘[) and MOVE (⌥⇧↑/↓) for a
+// resting-focused Architecture entry. All Architecture-SCOPED (a bubbling
+// keydown on the surface's <section>, never in the shared EditableGrid), on the
+// free modifier chords the grid ignores. Focus rests on a display name cell
+// (a tabbable div; .focus() rests without opening the editor); the moved entry
+// keeps focus. Depth is read off the .t2-tree[data-depth] the row already
+// carries; undo is the toolbar button (one step per gesture).
+async function setup105Tree(page: Page, projectName: string, names: string[]) {
+  await forceWorkspaceSurface(page)
+  await page.goto('/')
+  await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
+  const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
+  await projectPhantom.fill(projectName)
+  await projectPhantom.press('Enter')
+  await page.getByRole('button', { name: `Open ${projectName}` }).click()
+  await page.getByRole('link', { name: 'Architecture' }).click()
+  await addTable(page, 'Tree')
+  for (const n of names) await addEntry(page, 'Tree', n)
+  return tablePanel(page, 'Tree')
+}
+
+function entryRow(page: Page, panel: ReturnType<typeof tablePanel>, name: string) {
+  return panel.locator('tr', { has: page.getByRole('cell', { name, exact: true }) })
+}
+// The resting (non-editing) name cell: a tabbable div — .focus() rests on it,
+// unlike .click() which opens the editor.
+function nameCell(page: Page, panel: ReturnType<typeof tablePanel>, name: string) {
+  return entryRow(page, panel, name).locator('.grid-cell[tabindex]').first()
+}
+
+test('architecture 105 (P2): ⌘] demotes under the preceding sibling, ⌘[ promotes back out; first-child ⌘] and top-level ⌘[ are no-ops', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'Repro105P2', ['Alpha', 'Bravo', 'Charlie'])
+  const bravoRow = entryRow(page, panel, 'Bravo')
+  const alphaRow = entryRow(page, panel, 'Alpha')
+
+  // All three start at depth 0.
+  await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
+
+  // ⌘] on Bravo (preceding sibling = Alpha) → Bravo becomes Alpha's last child.
+  await nameCell(page, panel, 'Bravo').focus()
+  await page.keyboard.press('Meta+BracketRight')
+  await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '1')
+  await expect(page.getByRole('cell', { name: 'Bravo', exact: true })).toBeVisible() // still visible
+  // Focus stays on the moved entry's name cell.
+  await expect(nameCell(page, panel, 'Bravo')).toBeFocused()
+
+  // ⌘[ on Bravo → promoted back to depth 0 (sibling of Alpha, right after it).
+  await page.keyboard.press('Meta+BracketLeft')
+  await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
+
+  // Guard: first-child ⌘] is a no-op (Alpha has no preceding sibling).
+  await nameCell(page, panel, 'Alpha').focus()
+  await page.keyboard.press('Meta+BracketRight')
+  await expect(alphaRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
+
+  // Guard: top-level ⌘[ is a no-op (nothing to outdent to).
+  await page.keyboard.press('Meta+BracketLeft')
+  await expect(alphaRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
+})
+
+test('architecture 105 (P3): ⌥⇧↓ / ⌥⇧↑ reorder among siblings; ends are no-ops', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'Repro105P3', ['Alpha', 'Bravo', 'Charlie'])
+  const rows = panel.locator('tbody tr[data-row-id]')
+
+  // Start order: Alpha, Bravo, Charlie.
+  await expect(rows.nth(0)).toContainText('Alpha')
+
+  // ⌥⇧↓ on Alpha → Bravo, Alpha, Charlie.
+  await nameCell(page, panel, 'Alpha').focus()
+  await page.keyboard.press('Alt+Shift+ArrowDown')
+  await expect(rows.nth(0)).toContainText('Bravo')
+  await expect(rows.nth(1)).toContainText('Alpha')
+  // Focus follows the moved entry.
+  await expect(nameCell(page, panel, 'Alpha')).toBeFocused()
+
+  // ⌥⇧↑ on Alpha → back to Alpha, Bravo, Charlie.
+  await page.keyboard.press('Alt+Shift+ArrowUp')
+  await expect(rows.nth(0)).toContainText('Alpha')
+  await expect(rows.nth(1)).toContainText('Bravo')
+
+  // Guard: ⌥⇧↑ on the first sibling is a no-op.
+  await page.keyboard.press('Alt+Shift+ArrowUp')
+  await expect(rows.nth(0)).toContainText('Alpha')
+
+  // Guard: ⌥⇧↓ on the last sibling is a no-op.
+  await nameCell(page, panel, 'Charlie').focus()
+  await page.keyboard.press('Alt+Shift+ArrowDown')
+  await expect(rows.nth(2)).toContainText('Charlie')
+})
+
+test('architecture 105 (P2/P3): each keyboard gesture is exactly ONE undo step', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'Repro105Undo', ['Alpha', 'Bravo'])
+  const bravoRow = entryRow(page, panel, 'Bravo')
+
+  // Demote Bravo under Alpha (depth 0 → 1).
+  await nameCell(page, panel, 'Bravo').focus()
+  await page.keyboard.press('Meta+BracketRight')
+  await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '1')
+
+  // A single Undo fully reverses the gesture (one command-log step). Focus rests
+  // on the moved display cell (a div, not an input), so ⌘Z is the app undo — not
+  // deferred to native — and the section handler ignores it (not a tree chord).
+  await page.keyboard.press('ControlOrMeta+z')
+  await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
+})

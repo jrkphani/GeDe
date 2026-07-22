@@ -496,3 +496,103 @@ describe('tier2 store — undo/redo of a cross-tier op refreshes the co-mounted 
     })
   })
 })
+
+// Issue 105 P2/P3 — the store wrapper the keyboard promote/demote (⌘]/⌘[) and
+// move (⌥⇧↑/↓) gestures drive. Wraps the already-unit-tested moveTier2Entry
+// (db/tier2.test.ts "children follow their parent") with ONE command-log entry
+// per gesture (undo = move back to the old parentId + old index) and the sync
+// enqueue the 073/094 contract requires (sibling-group sort deltas for both
+// affected groups + an 'update' for the moved row's changed parentId).
+describe('tier2 store — moveEntry (105 P2/P3 keyboard promote/demote/move)', () => {
+  function rootOf(tableId: string) {
+    return entriesOf(tableId)
+      .filter((e) => e.parentId === null)
+      .sort((a, b) => a.sort - b.sort)
+  }
+  function byId(tableId: string) {
+    return new Map(entriesOf(tableId).map((e) => [e.id, e]))
+  }
+
+  it('moveEntry reparents + resorts both sibling groups, subtree travels, and is ONE undo step that reverses it exactly', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const users = nn(await useTier2Store.getState().addEntry(table.id, null, 'Users'))
+    const buyers = nn(await useTier2Store.getState().addEntry(table.id, null, 'Buyers'))
+    await useTier2Store.getState().addEntry(table.id, null, 'Sellers')
+    const superstars = nn(await useTier2Store.getState().addEntry(table.id, buyers.id, 'Superstars'))
+    // root: Users(0) Buyers(1) Sellers(2) ; Buyers > Superstars(0)
+
+    const pastBefore = useCommandLogStore.getState().past.length
+    // Demote Buyers under Users (its last child → index 0, Users has no kids).
+    await useTier2Store.getState().moveEntry(table.id, buyers.id, users.id, 0)
+
+    // Exactly one undo step pushed.
+    expect(useCommandLogStore.getState().past.length).toBe(pastBefore + 1)
+    // Reparented; subtree travelled.
+    expect(byId(table.id).get(buyers.id)?.parentId).toBe(users.id)
+    expect(byId(table.id).get(superstars.id)?.parentId).toBe(buyers.id)
+    // Old sibling group re-densified: Users(0) Sellers(1).
+    expect(rootOf(table.id).map((e) => e.name)).toEqual(['Users', 'Sellers'])
+    expect(rootOf(table.id).map((e) => e.sort)).toEqual([0, 1])
+    // New sibling group (Users' children) holds Buyers at sort 0.
+    expect(byId(table.id).get(buyers.id)?.sort).toBe(0)
+
+    // ONE undo reverses exactly.
+    await useCommandLogStore.getState().undo()
+    expect(byId(table.id).get(buyers.id)?.parentId).toBeNull()
+    expect(rootOf(table.id).map((e) => e.name)).toEqual(['Users', 'Buyers', 'Sellers'])
+    expect(rootOf(table.id).map((e) => e.sort)).toEqual([0, 1, 2])
+    expect(byId(table.id).get(superstars.id)?.parentId).toBe(buyers.id) // subtree still intact
+
+    // Redo re-applies.
+    await useCommandLogStore.getState().redo()
+    expect(byId(table.id).get(buyers.id)?.parentId).toBe(users.id)
+    expect(rootOf(table.id).map((e) => e.name)).toEqual(['Users', 'Sellers'])
+  })
+
+  it('moveEntry reorders among the SAME parent (⌥⇧↑/↓) and undoes in one step', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const a = nn(await useTier2Store.getState().addEntry(table.id, null, 'A'))
+    const b = nn(await useTier2Store.getState().addEntry(table.id, null, 'B'))
+    const c = nn(await useTier2Store.getState().addEntry(table.id, null, 'C'))
+    void a
+    void b
+
+    const pastBefore = useCommandLogStore.getState().past.length
+    // Move C up to the top (index 0) — no reparent.
+    await useTier2Store.getState().moveEntry(table.id, c.id, null, 0)
+    expect(useCommandLogStore.getState().past.length).toBe(pastBefore + 1)
+    expect(rootOf(table.id).map((e) => e.name)).toEqual(['C', 'A', 'B'])
+    expect(rootOf(table.id).map((e) => e.sort)).toEqual([0, 1, 2])
+
+    await useCommandLogStore.getState().undo()
+    expect(rootOf(table.id).map((e) => e.name)).toEqual(['A', 'B', 'C'])
+  })
+
+  it('moveEntry enqueues tier2_entries updates for the moved row (changed parentId) and the resorted siblings', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const users = nn(await useTier2Store.getState().addEntry(table.id, null, 'Users'))
+    const buyers = nn(await useTier2Store.getState().addEntry(table.id, null, 'Buyers'))
+    const sellers = nn(await useTier2Store.getState().addEntry(table.id, null, 'Sellers'))
+    // Only queue mutations from here on.
+    useSyncStore.setState({ workspaceId: 'ws1' })
+
+    // Demote Buyers under Users: old root group closes its gap (Sellers 2→1),
+    // and the moved row's parentId flips → an 'update' for each.
+    await useTier2Store.getState().moveEntry(table.id, buyers.id, users.id, 0)
+
+    const updates = useSyncStore
+      .getState()
+      .queue.entries.filter((e) => e.table === 'tier2_entries' && e.op === 'update')
+    const ids = updates.map((e) => e.rowId)
+    expect(ids).toContain(buyers.id) // moved row (parentId changed)
+    expect(ids).toContain(sellers.id) // shifted sibling (sort 2→1)
+    expect(ids).not.toContain(users.id) // unchanged (sort 0→0, same parent)
+    // Never persists a derived position field.
+    for (const e of updates) {
+      const keys = Object.keys(e.row)
+      expect(keys).not.toContain('x')
+      expect(keys).not.toContain('y')
+      expect(keys).not.toContain('position')
+    }
+  })
+})

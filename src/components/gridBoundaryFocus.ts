@@ -46,6 +46,19 @@ export function lastEditablePosition(section: HTMLElement): HTMLElement | null {
   return cells[cells.length - 1] ?? null
 }
 
+/**
+ * The name (first editable) grid cell of a specific data row inside a table
+ * `section`. Issue 105 P2/P3 — after a keyboard promote/demote/move the row
+ * re-renders at a new depth/position, so focus must be re-planted on the moved
+ * entry by id (the old DOM node is gone). Section-scoped like the helpers above
+ * (never a global reach); `null` when the row/cell is absent (e.g. collapsed).
+ */
+export function entryNameCell(section: HTMLElement, id: string): HTMLElement | null {
+  return section.querySelector<HTMLElement>(
+    `tbody tr[data-row-id="${id}"] .grid-cell[tabindex]`,
+  )
+}
+
 // ── Pure chain order + neighbor resolution (084-D3) ──────────────────────────
 // The Architecture column is one flat focus chain: each table contributes an
 // `:in` (its first editable cell) then an `:out` (its add-entry phantom), and
