@@ -1,4 +1,4 @@
-# HANDOFF — 2026-07-22 (100 A–E + 105 P0–P4 SHIPPED & CI-green; 100 & 104 archived; 099/105/106 open)
+# HANDOFF — 2026-07-22 (100 A–E + 105 P0–P5 SHIPPED & CI-green; 100 & 104 archived; 099/106 + 105-nits open)
 
 **Long autonomous run under owner directives "sequence all open tasks and execute autonomously" → "continue" → "continue until done, use subagents."** Delivered TWO full features end-to-end: **`100` live-child-canvas-core** (all 5 phases A–E) and — from live owner UX feedback mid-run — the **`105` Architecture-tree keyboard grammar** (P0–P4). Plus `104` resolved, `099`-coverage, `088` index corrected. **`100` + `104` are now ARCHIVED to `done/`**; `100`'s non-blocking refinements were filed as **`106`**. Nothing is mid-flight.
 
@@ -20,17 +20,18 @@ HEAD: **`771287b`** + the archiving/docs commit on top. **CI `verify` CONFIRMED 
   - **C** (`6af0754`) — `src/store/activeCanvas.ts`: `c`/`v`/`d` verbs gate on `activeCanvas === coreKey`. Single-core inert.
   - **D** (`51852e6`) — namespaced live `{register+ring}` per child (`${id}:${parentContextId}`; PRIMARY keeps bare ids), `storeCanvasId=parentContextId` → own instance (primary → default); collapse/nav-reset → `releaseCanvasStores` (leak-free). Removed the dead SatelliteNode stub + `Enter ▸`. RED-first two-core independence e2e + screenshot.
   - **E** (`8314e92`, no code) — tier2 promote root-stamps by construction (`mutations.ts:1836`); DesignSurface never co-mounts; presence/palette stay root (→ 106).
-- **`105` — Architecture-tree keyboard, P0–P4 (SHIPPED; issue stays OPEN for P5).**
+- **`105` — Architecture-tree keyboard, P0–P5 (SHIPPED; only 2 LOW nits remain).**
   - **P0** (`510ac53`) kill the sub-child **Tab-fallthrough** (intercept Tab in the description richtext + `tabIndex=-1` on Add-child). **P1** Enter = new-sibling series (type-to-create phantom). Both via Architecture-scoped opt-in seams (`richTextTabAdvances`, `onEnterCreateSibling`) → Design/Foundation byte-identical.
   - **P2/P3** (`2fe39b1`) `⌘]`/`⌘[` promote/demote + `⌥⇧↑/↓` move, via a `moveEntry` store action over the tested `moveTier2Entry` (one undo/gesture, complete sync-enqueue, focus-follows, `e.repeat` guard).
   - **P4** (`4d0af2a`) tree ARIA — a SR-only `role="tree"` of `role="treeitem"`s (`aria-level`/`aria-expanded`, off the `<tr>` to stay axe-clean; promote `role="option"` listbox preserved) + aria-hidden `⏎`/`⌘]`/`⌘[` KeyHint chips. `EditableGrid` byte-identical.
+  - **P5** (`4bade78`) the `⋯` row-action gutter menu — every single-row verb (Add child · Add sibling · Promote · Make child · Move up/down · Remove) consolidated into ONE row-hover menu (mirrors AppShell `ProjectMenu`: `Popover` + `.menu`), replacing the per-cell Add-child button; bulk Remove stays on the selection bar. A POINTER TWIN of the chords, not a 2nd path: `handleTreeKey`'s targets refactored into pure `demoteTarget`/`promoteTarget`/`moveTarget` driving BOTH chords + menu (a `null` target → DISABLED item; every verb routes the one `runMove`/`handleDelete` → one undo/announce). Trigger `tabIndex=-1` (preserves P0 + `?d3rf` cross-node Tab). CSS scoped under `.t2-row-menu` (AppShell menus byte-identical); `siblingsOfIn` memoized. `EditableGrid`/store/mutations byte-identical. Adversarial review: 0 crit, logic APPROVED; 3 HIGH (all test-migration: d3-canvas add-child, hover-before-tabindex, project-open click landed on the row's nested Archive → left-edge click) + 3 MEDIUM + 2 LOW all fixed. New open-menu axe scan green.
 - **`104`** (`85a5e47`, **archived → `done/104-...md`**) — 4 edge regression tests + rAF-invariant comment; empty-space fork DECIDED leave-as-is.
 - **`099` coverage** (`8cc03d2`) — canvas hover-mute + dual-empty-state e2e.
 - **`088`** — corrected stale index (was verified-live 2026-07-17).
 
 ## Backlog (OPEN)
 
-- **`105` — P5 + nits.** **P5** = the `⋯` row-action gutter menu (move single-row commands OUT of data cells — the owner's IA critique; keep the selection bar for bulk). **NEEDS OWNER GO** (restructures the row-command model). Plus 2 LOW nits (dedupe `siblingGroup`/`siblingsOfIn`; exclude `ctrlKey`), a systemic MEDIUM (multi-step DB mutations like `moveTier2Entry` aren't transaction-wrapped — consider PGlite transactions), and minor P1 polish (the sibling phantom stays anchored after the series-start row, not the newest sibling).
+- **`105` — nits only (P0–P5 SHIPPED).** 2 LOW nits (dedupe `siblingGroup`/`siblingsOfIn`; exclude `ctrlKey` on the chords), a systemic MEDIUM (multi-step DB mutations like `moveTier2Entry` aren't transaction-wrapped — consider PGlite transactions), and minor P1 polish (the sibling phantom stays anchored after the series-start row, not the newest sibling). None blocking.
 - **`099` remainder** — touch/tablet pan-zoom + node-drag (**manual-device**), optional label-tier-stable lock (LOW), axe extension.
 - **`106` (new) — 100 refinements** — zoom-LOD child-core culling (edit-aware); nested-drill grandchild edge/position; presence + palette reach child cores. All non-blocking, none crash.
 

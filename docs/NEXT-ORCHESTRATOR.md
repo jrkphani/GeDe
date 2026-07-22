@@ -1,4 +1,4 @@
-# NEXT ORCHESTRATOR — launch prompt: 100 + 105-core shipped & archived · 105-P5 (owner) / 099 / 106 remain
+# NEXT ORCHESTRATOR — launch prompt: 100 + 105 (P0–P5) shipped & archived · 099 / 106 + 105-nits remain
 
 > **Run 2026-07-21→22 shipped two full features:** `100` live-child-canvas-core (A–E) and `105` Architecture-tree keyboard grammar (P0–P4) — all CI-green + deployed. `100` + `104` are archived to `done/`; `100`'s refinements are the new issue `106`. Nothing mid-flight. Copy the block below as the next orchestrator's launch prompt.
 
@@ -13,7 +13,7 @@ You may `git push`, merge, and deploy (push to `main` → CI `verify` → `deplo
 
 ## The backlog
 
-- **`105` (`docs/issues/105-...md`) — P0–P4 SHIPPED; P5 + nits OPEN.** The full keyboard tree grammar is live (Enter=sibling, `⌘]`/`⌘[` promote/demote, `⌥⇧↑/↓` move, tree ARIA + KeyHints). **P5 = the `⋯` row-action gutter menu — move single-row commands (Add child/sibling, Promote/Demote, Move, Remove) OUT of the data cells into one row-hover `⋯` menu; keep the selection bar for BULK (025/035). NEEDS OWNER GO** — it restructures the row-command model (the owner raised the IA critique but hasn't approved building it). See the 105 "Row-command IA" section. Also open: 2 LOW nits (dedupe `siblingGroup`/`siblingsOfIn`; exclude `ctrlKey` on the chords), a systemic MEDIUM (multi-step DB mutations like `moveTier2Entry` aren't PGlite-transaction-wrapped), and minor P1 polish (the sibling phantom stays anchored after the series-start row, not the newest sibling).
+- **`105` (`docs/issues/105-...md`) — P0–P5 SHIPPED (2026-07-22); only nits OPEN.** The full keyboard tree grammar (Enter=sibling, `⌘]`/`⌘[` promote/demote, `⌥⇧↑/↓` move, tree ARIA + KeyHints) AND the **P5 `⋯` row-action gutter menu** are live: every single-row verb (Add child/sibling, Promote/Make-child, Move up/down, Remove) is now in one row-hover menu — a POINTER TWIN of the chords (shared pure `demoteTarget`/`promoteTarget`/`moveTarget`; disabled item = keyboard no-op; one undo/announce each) — replacing the per-cell Add-child button; bulk Remove stays on the selection bar (025/035). Only OPEN: 2 LOW nits (dedupe `siblingGroup`/`siblingsOfIn`; exclude `ctrlKey` on the chords), a systemic MEDIUM (multi-step DB mutations like `moveTier2Entry` aren't PGlite-transaction-wrapped), and minor P1 polish (the sibling phantom stays anchored after the series-start row, not the newest sibling). None blocking — the issue can be archived once the nits are cleared or waived.
 - **`099` (`docs/issues/099-...md`) — remainder.** touch/tablet pan-zoom + node-drag (**manual-device** — real pinch/drag wants a device), optional label-tier-stable lock (LOW), axe extension.
 - **`106` (`docs/issues/106-...md`) — 100 refinements (non-blocking).** zoom-LOD auto-culling of off-screen/deep child cores → stubs (edit-aware, never unmount mid-edit; the deferred 100 DoD LOD clause); nested-drill grandchild edge/position (cosmetic; store IS independent); presence + palette reach child-core selections. None crash.
 
@@ -31,4 +31,4 @@ You may `git push`, merge, and deploy (push to `main` → CI `verify` → `deplo
 - **Shared EditableGrid: any new grammar MUST be Architecture-scoped opt-in** (Design/Foundation depend on Enter=commit+down + native richtext Tab).
 
 ## Definition of done
-Build the open backlog — but **P5 needs an owner go first** (surface it), and the `099`/`106` items are small/non-blocking. Re-triage `docs/issues/README.md` toward open-count 0. Leave a compressed HANDOFF update.
+Build the open backlog — `105` is now P0–P5 SHIPPED (only 2 LOW nits + a systemic transaction MEDIUM remain, non-blocking); the `099`/`106` items are small/non-blocking. Re-triage `docs/issues/README.md` toward open-count 0. Leave a compressed HANDOFF update.
