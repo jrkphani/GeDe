@@ -1,6 +1,6 @@
 # 105: Architecture tree — keyboard tree-building (sibling/child, promote/demote) + row-command IA
 
-- **Status**: OPEN — scoped from owner UX feedback + web research + an end-to-end red-team (2026-07-22); **not started, pending owner decisions** (see "Open questions"). The Tier-2 parent/child editing is clunky: no keyboard way to add a sibling vs a child, no promote/demote, an accidental sub-child bug, and row *controls* live inside data cells.
+- **Status**: IN PROGRESS — scoped from owner UX feedback + web research + an end-to-end red-team (2026-07-22). **Owner decisions made (2026-07-22): build P0–P3; promote/demote binding = `⌘]`/`⌘[`.** P0+P1 (kill the sub-child bug + Enter=sibling) building first, then P2+P3 (`⌘]`/`⌘[` + move). The Tier-2 parent/child editing is clunky: no keyboard way to add a sibling vs a child, no promote/demote, an accidental sub-child bug, and row *controls* live inside data cells.
 - **Milestone**: M7 (canvas/architecture UX). **Follows**: 084 (typed add-child), 102/104 (add-child grammar), 025/035 (selection bar).
 
 ## Context (what exists)
@@ -59,9 +59,9 @@ One `commandLog.push` per gesture = one undo step. Announce every reparent via `
 - **P3:** `⌥⇧↑/↓` reorders; undo reverses.
 - **P4/P5:** axe/ARIA lock (`aria-level`/`aria-expanded`); `⋯` menu opens with the row commands, Remove works one-row, selection bar still does bulk; the menu trigger is not a grid tab-stop.
 
-## Open questions (owner decisions before build)
-1. **Primary keybinding for promote/demote** — recommend **`⌘]`/`⌘[`** (conflict-free, Google-Docs-familiar) over Tab/Shift+Tab (familiar to outliner users but conflicts with the committed Tab=commit+move grammar + WCAG). Optional later: resting-cell Tab/Shift+Tab alias.
-2. **IA depth** — ship the cheap P0 (`tabIndex={-1}` + menu-trigger) now, and do the full `⋯`-gutter/menu consolidation (P5) as a follow-up? Or design the gutter seam up front?
-3. **Sequencing** — P0 alone already removes the reported pain; confirm P0→P1 first, with P2–P5 to follow.
+## Owner decisions (2026-07-22 — RESOLVED)
+1. **Promote/demote binding = `⌘]`/`⌘[`** ✅ (over Tab/Shift+Tab). Optional resting-cell Tab/Shift+Tab alias may be added later.
+2. **Scope = build P0–P3** ✅ (P0 sub-child fix → P1 Enter=sibling → P2 `⌘]`/`⌘[` promote/demote → P3 `⌥⇧↑/↓` move). P4 (ARIA/hints) + P5 (`⋯`-gutter menu IA consolidation) follow after.
+3. **Sequencing:** P0+P1 first (the reported pain), then P2+P3. The cheap P0 (`tabIndex={-1}` + intercept-Tab) ships within P0; the full `⋯`-gutter menu is P5 (later).
 
 *Sources: Workflowy, Notion, Roam, Logseq, Tana, Dynalist, OmniOutliner, Org-mode, Google Docs indent, macOS Finder, WCAG 2.1.1/2.1.2; libs react-arborist, react-complex-tree/headless-tree, dnd-kit, react-sortable-tree (dep.), @atlaskit/tree (dep.), Lexical, ProseMirror/TipTap sink/liftListItem.*
