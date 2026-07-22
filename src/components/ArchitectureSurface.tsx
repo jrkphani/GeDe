@@ -620,6 +620,10 @@ export function TablePanel({
     depth: number
     placeholder: string
     dismiss: () => void
+    // Issue 105 P1 residual — a hook fired after a non-empty commit lands, so a
+    // mode can re-anchor its own phantom. The sibling series re-anchors after the
+    // just-created sibling (below); add-child stays pinned under its parent.
+    onCommitted?: (created: Tier2EntryRow) => void
   }
 
   function activeInlinePhantom(): InlinePhantom | null {
@@ -635,6 +639,7 @@ export function TablePanel({
       }
     }
     if (addingSiblingAfter) {
+      const seriesAnchor = addingSiblingAfter
       const meta = metaById.get(addingSiblingAfter)
       if (!meta) return null
       const parentId = entries.find((e) => e.id === addingSiblingAfter)?.parentId ?? null
@@ -645,6 +650,15 @@ export function TablePanel({
         depth: meta.depth,
         placeholder: parent ? `Name a sibling under ${parent.name}` : 'Name a sibling',
         dismiss: () => setAddingSiblingAfter(null),
+        // Issue 105 P1 residual — walk the phantom to sit right after the sibling
+        // just created, so a rapid Enter-Enter-Enter series lays siblings down in
+        // visual order instead of the phantom snapping back to the series start.
+        // The functional update GUARDS against a late-resolving create resurrecting
+        // a phantom the user has since dismissed (Esc) or superseded (armed Add-child
+        // elsewhere): only re-anchor when THIS series is still the one armed at its
+        // own anchor — otherwise leave the current state untouched.
+        onCommitted: (created) =>
+          setAddingSiblingAfter((current) => (current === seriesAnchor ? created.id : current)),
       }
     }
     return null
@@ -675,7 +689,15 @@ export function TablePanel({
           inputClassName="grid-cell__input t2-add-child__input"
           autoFocus
           stopPropagation
-          onSubmit={(name) => void addEntry(table.id, ph.parentId, name)}
+          // Return the promise (do NOT `void` it) so PhantomInput's issue-069
+          // submit guard (`submittingRef`) genuinely gates on the DB round-trip
+          // completing — not just the synchronous tick — blocking a real in-flight
+          // second Enter from double-creating with a duplicate sort index.
+          onSubmit={(name) =>
+            addEntry(table.id, ph.parentId, name).then((created) => {
+              if (created) ph.onCommitted?.(created)
+            })
+          }
           onCancel={ph.dismiss}
           // Issue 104 Facet 3(a) — do NOT dismiss on blur: clicking another cell
           // must open THAT cell's editor (the grid's onDismiss handles teardown in

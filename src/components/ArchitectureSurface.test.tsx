@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { beforeEach, describe, expect, it } from 'vitest'
-import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
+import { act, render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { openDatabase } from '../db/client'
 import { addTier2Entry, addTier2Table, createProject, setTier2EntryDescription } from '../db/mutations'
@@ -608,6 +608,97 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
       const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
       expect(entries.find((e) => e.name === 'Topline')?.parentId).toBeNull()
     })
+  })
+
+  it('P1 residual — the sibling phantom follows the NEWEST sibling through an Enter series (never re-anchors at the series start)', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars') // depth 1 — series start
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    // Arm the sibling series on the series-start row (Superstars).
+    await user.click(screen.getByText('Superstars'))
+    await user.type(await screen.findByDisplayValue('Superstars'), '{Enter}')
+
+    // Create the 2nd sibling (Whales).
+    await user.type(await screen.findByPlaceholderText('Name a sibling under Buyers'), 'Whales')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByText('Whales')).toBeInTheDocument())
+
+    // Create the 3rd sibling (Minnows) via the same, re-armed phantom.
+    await user.type(await screen.findByPlaceholderText('Name a sibling under Buyers'), 'Minnows')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByText('Minnows')).toBeInTheDocument())
+
+    // The still-open phantom must now trail the NEWEST sibling (Minnows), not the
+    // series-start row (Superstars). The grid renders the inline phantom <tr>
+    // immediately after the data row it is anchored to, so previousElementSibling
+    // identifies the anchor.
+    const phantomInput = await screen.findByPlaceholderText('Name a sibling under Buyers')
+    // The re-anchor remounts the phantom <tr> under the new anchor row; keyboard
+    // focus must survive the remount so the Enter series stays continuous (LOW nit).
+    expect(phantomInput).toHaveFocus()
+    const phantomRow = phantomInput.closest('tr') as HTMLElement
+    const anchorRow = phantomRow.previousElementSibling as HTMLElement
+    expect(anchorRow.textContent).toContain('Minnows')
+    expect(anchorRow.textContent).not.toContain('Superstars')
+  })
+
+  it('P1 residual — a series dismissed (Esc) mid-create does NOT resurface when the in-flight create resolves late', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars') // series start
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    // Gate addEntry's returned promise so the component's onCommitted fires
+    // STRICTLY AFTER we dismiss — the exact "late-resolving create" race the review
+    // HIGH describes. The real create still runs (Whales lands + the grid
+    // refreshes); only the promise the component awaits is held pending until we
+    // release it, making the ordering deterministic rather than DB-timing-dependent.
+    const realAddEntry = useTier2Store.getState().addEntry
+    let releaseCreate!: () => void
+    const createGate = new Promise<void>((r) => {
+      releaseCreate = r
+    })
+    const gatedAddEntry: typeof realAddEntry = async (tableId, parentId, name) => {
+      const row = await realAddEntry(tableId, parentId, name)
+      await createGate
+      return row
+    }
+    act(() => {
+      useTier2Store.setState({ addEntry: gatedAddEntry })
+    })
+
+    try {
+      // Arm the sibling series on Superstars and fire a create (held pending).
+      await user.click(screen.getByText('Superstars'))
+      await user.type(await screen.findByDisplayValue('Superstars'), '{Enter}')
+      await user.type(await screen.findByPlaceholderText('Name a sibling under Buyers'), 'Whales')
+      await user.keyboard('{Enter}')
+
+      // The real create lands (grid shows Whales) while its promise is still pending.
+      await waitFor(() => expect(screen.getByText('Whales')).toBeInTheDocument())
+
+      // Dismiss the series (Esc) BEFORE the create's promise resolves.
+      await user.keyboard('{Escape}')
+      expect(screen.queryByPlaceholderText('Name a sibling under Buyers')).not.toBeInTheDocument()
+
+      // Now let the create resolve — the stale re-anchor must NOT resurrect the
+      // phantom the user explicitly dismissed (would steal focus mid-edit).
+      await act(async () => {
+        releaseCreate()
+        await createGate
+      })
+      expect(screen.queryByPlaceholderText('Name a sibling under Buyers')).not.toBeInTheDocument()
+    } finally {
+      act(() => {
+        useTier2Store.setState({ addEntry: realAddEntry })
+      })
+    }
   })
 
   it('review fix — arming Add-child while a sibling series is open clears it (no resurface)', async () => {
