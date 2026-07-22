@@ -5,18 +5,30 @@ import { bindings } from './schema'
 import {
   addDimension,
   addParameter,
+  addTier1Prop,
   addTier2Entry,
   addTier2Table,
   archiveProject,
   bindParameter,
+  createCanvas,
   createContext,
   createProject,
   deleteParametersUnbinding,
   getTier1Purpose,
   listArchivedProjects,
+  listCanvases,
+  listDimensions,
+  listParameters,
   listProjects,
+  listTier1Props,
+  listTier2Tables,
   promoteEntries,
   renameProject,
+  reorderCanvas,
+  reorderDimension,
+  reorderParameter,
+  reorderTier1Prop,
+  reorderTier2Table,
   restoreParametersWithBindings,
   restoreProject,
   revertStaleRebind,
@@ -27,6 +39,37 @@ import {
 async function freshDb() {
   const { db } = await openDatabase('memory://')
   return db
+}
+
+type AnyFn = (...args: unknown[]) => unknown
+
+// 107 P3 — a Database facade that throws on its Nth `.update()` call, counting
+// across the top-level handle AND any transaction handle it hands a callback
+// (both share one counter). Injects a mid-densify write failure so each reorder
+// mutation's multi-UPDATE `sort` rewrite can be proven to roll back as one unit.
+// (Mirror of the helper in tier2.test.ts.)
+function dbFailingOnNthUpdate<T extends object>(real: T, n: number): T {
+  let calls = 0
+  const wrap = <U extends object>(target: U): U =>
+    new Proxy(target, {
+      get(t, prop) {
+        const bag = t as Record<PropertyKey, unknown>
+        if (prop === 'update') {
+          return (...args: unknown[]) => {
+            calls += 1
+            if (calls === n) throw new Error('injected update failure')
+            return (bag.update as AnyFn)(...args)
+          }
+        }
+        if (prop === 'transaction') {
+          return (cb: (tx: object) => unknown, ...rest: unknown[]) =>
+            (bag.transaction as AnyFn)((tx: object) => cb(wrap(tx)), ...rest)
+        }
+        const value = bag[prop]
+        return typeof value === 'function' ? (value as AnyFn).bind(t) : value
+      },
+    })
+  return wrap(real)
 }
 
 describe('project mutations', () => {
@@ -260,5 +303,98 @@ describe('setTier1ExistingScenario — NOT NULL subtlety (issue 081)', () => {
     const cleared = await setTier1ExistingScenario(db, project.id, null)
     expect(cleared?.existingScenario).toBeNull()
     expect(cleared?.body).toBe('Purpose text')
+  })
+})
+
+// 107 P3 — each reorder densifies `sort` (tier1 also `rank`) across a loop of
+// UPDATEs, one per row whose ordinal moved. Dragging the last row to the head of
+// a 3-row lane changes all three ordinals ⇒ 3 UPDATEs. Injecting a throw on the
+// 2nd proves the sequence is atomic: the 1st UPDATE auto-commits un-wrapped
+// (partial re-sort — test FAILS), but rolls back once wrapped in a transaction
+// (re-read via the REAL db is byte-identical to the pre-move snapshot).
+describe('107 P3 — reorder mutations roll back fully on a mid-densify UPDATE failure', () => {
+  it('reorderCanvas rolls back the whole sort rewrite (atomicity)', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' }) // seeds root canvas #1
+    await createCanvas(db, project.id, 'B')
+    const c = await createCanvas(db, project.id, 'C')
+
+    const snapshot = await listCanvases(db, project.id)
+    expect(snapshot).toHaveLength(3)
+
+    await expect(
+      reorderCanvas(dbFailingOnNthUpdate(db, 2), project.id, c.id, 0),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await listCanvases(db, project.id)).toEqual(snapshot)
+  })
+
+  it('reorderDimension rolls back the whole sort rewrite (atomicity)', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    await addDimension(db, project.id)
+    await addDimension(db, project.id)
+    const d3 = await addDimension(db, project.id)
+
+    const snapshot = await listDimensions(db, project.id)
+    expect(snapshot).toHaveLength(3)
+
+    await expect(
+      reorderDimension(dbFailingOnNthUpdate(db, 2), project.id, d3.id, 0),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await listDimensions(db, project.id)).toEqual(snapshot)
+  })
+
+  it('reorderParameter rolls back the whole sort rewrite (atomicity)', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const dim = await addDimension(db, project.id)
+    await addParameter(db, dim.id, 'A')
+    await addParameter(db, dim.id, 'B')
+    const c = await addParameter(db, dim.id, 'C')
+
+    const snapshot = await listParameters(db, dim.id)
+    expect(snapshot).toHaveLength(3)
+
+    await expect(
+      reorderParameter(dbFailingOnNthUpdate(db, 2), dim.id, c.id, 0),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await listParameters(db, dim.id)).toEqual(snapshot)
+  })
+
+  it('reorderTier1Prop rolls back the whole rank+sort rewrite (atomicity)', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    await addTier1Prop(db, project.id, 'A')
+    await addTier1Prop(db, project.id, 'B')
+    const c = await addTier1Prop(db, project.id, 'C')
+
+    const snapshot = await listTier1Props(db, project.id)
+    expect(snapshot).toHaveLength(3)
+
+    await expect(
+      reorderTier1Prop(dbFailingOnNthUpdate(db, 2), project.id, c.id, 0),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await listTier1Props(db, project.id)).toEqual(snapshot)
+  })
+
+  it('reorderTier2Table rolls back the whole sort rewrite (atomicity)', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    await addTier2Table(db, project.id, 'A')
+    await addTier2Table(db, project.id, 'B')
+    const c = await addTier2Table(db, project.id, 'C')
+
+    const snapshot = await listTier2Tables(db, project.id)
+    expect(snapshot).toHaveLength(3)
+
+    await expect(
+      reorderTier2Table(dbFailingOnNthUpdate(db, 2), project.id, c.id, 0),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await listTier2Tables(db, project.id)).toEqual(snapshot)
   })
 })

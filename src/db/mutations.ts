@@ -171,7 +171,7 @@ export async function canvasWorkspaceId(db: Database, canvasId: string): Promise
 // The project's default (first live) root canvas. Every pre-090 write path that
 // operated on "the root canvas" (addDimension, createContext for root contexts)
 // stamps this. A project always has at least one — createProject seeds it.
-async function rootCanvasIdOrNull(db: Database, projectId: string): Promise<string | null> {
+async function rootCanvasIdOrNull(db: Querier, projectId: string): Promise<string | null> {
   const rows = await db
     .select({ id: canvases.id })
     .from(canvases)
@@ -270,7 +270,7 @@ export async function restoreCanvas(db: Database, id: string): Promise<CanvasRow
 
 // Live ROOT canvases of a project, in lane order. Child canvases are entered by
 // drilling into a context (011), not listed here.
-export async function listCanvases(db: Database, projectId: string): Promise<CanvasRow[]> {
+export async function listCanvases(db: Querier, projectId: string): Promise<CanvasRow[]> {
   return db
     .select()
     .from(canvases)
@@ -292,7 +292,7 @@ export async function renameCanvas(db: Database, id: string, name: string): Prom
 
 // Rewrites `sort` on every root canvas whose ordinal actually moved (mirrors
 // the dimensions `rewriteSort` cascade — only touches rows that changed).
-async function rewriteCanvasSort(db: Database, ordered: CanvasRow[]): Promise<void> {
+async function rewriteCanvasSort(db: Querier, ordered: CanvasRow[]): Promise<void> {
   for (const [index, row] of ordered.entries()) {
     if (row.sort !== index) {
       await db.update(canvases).set({ sort: index, updatedAt: now() }).where(eq(canvases.id, row.id))
@@ -309,12 +309,20 @@ export async function reorderCanvas(
   toIndex: number,
 ): Promise<CanvasRow[]> {
   const rows = await listCanvases(db, projectId)
-  const from = rows.findIndex((c) => c.id === id)
-  if (from === -1) return rows
-  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
-  const moved = firstOrThrow(rows.splice(from, 1))
-  rows.splice(target, 0, moved)
-  await rewriteCanvasSort(db, rows)
+  if (rows.findIndex((c) => c.id === id) === -1) return rows
+  // 107 P3 — every `sort` rewrite in the densify loop commits as one unit: a
+  // mid-loop failure must not leave the lane half-re-sorted. The ordering read
+  // runs on `tx` so it sees a consistent snapshot; the authoritative final read
+  // runs on `db` after commit.
+  await db.transaction(async (tx) => {
+    const current = await listCanvases(tx, projectId)
+    const from = current.findIndex((c) => c.id === id)
+    if (from === -1) return
+    const target = Math.max(0, Math.min(current.length - 1, toIndex))
+    const moved = firstOrThrow(current.splice(from, 1))
+    current.splice(target, 0, moved)
+    await rewriteCanvasSort(tx, current)
+  })
   return listCanvases(db, projectId)
 }
 
@@ -524,7 +532,7 @@ function canvasScope(projectId: string, canvasId: string) {
 // pre-090 root-canvas default, resolved to a concrete canvas id here so every
 // caller that only knows a projectId keeps working unchanged.
 export async function listDimensions(
-  db: Database,
+  db: Querier,
   projectId: string,
   canvasId: string | null = null,
 ): Promise<DimensionRow[]> {
@@ -602,7 +610,7 @@ export async function setDimensionColor(
   return firstOrThrow(rows)
 }
 
-async function rewriteSort(db: Database, ordered: DimensionRow[]): Promise<void> {
+async function rewriteSort(db: Querier, ordered: DimensionRow[]): Promise<void> {
   for (const [index, row] of ordered.entries()) {
     if (row.sort !== index) {
       await db
@@ -626,12 +634,20 @@ export async function reorderDimension(
   canvasId?: string,
 ): Promise<DimensionRow[]> {
   const rows = await listDimensions(db, projectId, canvasId ?? null)
-  const from = rows.findIndex((d) => d.id === id)
-  if (from === -1) return rows
-  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
-  const moved = firstOrThrow(rows.splice(from, 1))
-  rows.splice(target, 0, moved)
-  await rewriteSort(db, rows)
+  if (rows.findIndex((d) => d.id === id) === -1) return rows
+  // 107 P3 — every `sort` rewrite in the densify loop commits as one unit: a
+  // mid-loop failure must not leave the lane half-re-sorted. The ordering read
+  // runs on `tx` so it sees a consistent snapshot; the authoritative final read
+  // runs on `db` after commit.
+  await db.transaction(async (tx) => {
+    const current = await listDimensions(tx, projectId, canvasId ?? null)
+    const from = current.findIndex((d) => d.id === id)
+    if (from === -1) return
+    const target = Math.max(0, Math.min(current.length - 1, toIndex))
+    const moved = firstOrThrow(current.splice(from, 1))
+    current.splice(target, 0, moved)
+    await rewriteSort(tx, current)
+  })
   return listDimensions(db, projectId, canvasId ?? null)
 }
 
@@ -826,7 +842,7 @@ export async function renameParameter(
   return firstOrThrow(rows)
 }
 
-async function rewriteParameterSort(db: Database, ordered: ParameterRow[]): Promise<void> {
+async function rewriteParameterSort(db: Querier, ordered: ParameterRow[]): Promise<void> {
   for (const [index, row] of ordered.entries()) {
     if (row.sort !== index) {
       await db
@@ -845,12 +861,20 @@ export async function reorderParameter(
   toIndex: number,
 ): Promise<ParameterRow[]> {
   const rows = await listParameters(db, dimensionId)
-  const from = rows.findIndex((p) => p.id === id)
-  if (from === -1) return rows
-  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
-  const moved = firstOrThrow(rows.splice(from, 1))
-  rows.splice(target, 0, moved)
-  await rewriteParameterSort(db, rows)
+  if (rows.findIndex((p) => p.id === id) === -1) return rows
+  // 107 P3 — every `sort` rewrite in the densify loop commits as one unit: a
+  // mid-loop failure must not leave the group half-re-sorted. The ordering read
+  // runs on `tx` so it sees a consistent snapshot; the authoritative final read
+  // runs on `db` after commit.
+  await db.transaction(async (tx) => {
+    const current = await listParameters(tx, dimensionId)
+    const from = current.findIndex((p) => p.id === id)
+    if (from === -1) return
+    const target = Math.max(0, Math.min(current.length - 1, toIndex))
+    const moved = firstOrThrow(current.splice(from, 1))
+    current.splice(target, 0, moved)
+    await rewriteParameterSort(tx, current)
+  })
   return listParameters(db, dimensionId)
 }
 
@@ -1387,14 +1411,14 @@ function tier1PropScope(projectId: string) {
   return and(eq(tier1Props.projectId, projectId), isNull(tier1Props.deletedAt))
 }
 
-export async function listTier1Props(db: Database, projectId: string): Promise<Tier1PropRow[]> {
+export async function listTier1Props(db: Querier, projectId: string): Promise<Tier1PropRow[]> {
   return db.select().from(tier1Props).where(tier1PropScope(projectId)).orderBy(asc(tier1Props.sort))
 }
 
 // rank (1-based, degree notation) and sort (0-based order) move in lockstep in
 // this tier — rewritten to their positional index on every add/reorder/remove
 // so both stay contiguous (issue 013 unit test).
-async function rewriteTier1PropRanks(db: Database, ordered: Tier1PropRow[]): Promise<void> {
+async function rewriteTier1PropRanks(db: Querier, ordered: Tier1PropRow[]): Promise<void> {
   for (const [index, row] of ordered.entries()) {
     if (row.sort !== index || row.rank !== index + 1) {
       await db
@@ -1461,12 +1485,20 @@ export async function reorderTier1Prop(
   toIndex: number,
 ): Promise<Tier1PropRow[]> {
   const rows = await listTier1Props(db, projectId)
-  const from = rows.findIndex((p) => p.id === id)
-  if (from === -1) return rows
-  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
-  const moved = firstOrThrow(rows.splice(from, 1))
-  rows.splice(target, 0, moved)
-  await rewriteTier1PropRanks(db, rows)
+  if (rows.findIndex((p) => p.id === id) === -1) return rows
+  // 107 P3 — sort+rank move in lockstep across the rewrite loop; every row's
+  // rewrite commits as one unit so a mid-loop failure can't leave rank/sort
+  // half-densified. The ordering read runs on `tx` for a consistent snapshot;
+  // the authoritative final read runs on `db` after commit.
+  await db.transaction(async (tx) => {
+    const current = await listTier1Props(tx, projectId)
+    const from = current.findIndex((p) => p.id === id)
+    if (from === -1) return
+    const target = Math.max(0, Math.min(current.length - 1, toIndex))
+    const moved = firstOrThrow(current.splice(from, 1))
+    current.splice(target, 0, moved)
+    await rewriteTier1PropRanks(tx, current)
+  })
   return listTier1Props(db, projectId)
 }
 
@@ -1523,7 +1555,7 @@ function tier2TableScope(projectId: string) {
   return and(eq(tier2Tables.projectId, projectId), isNull(tier2Tables.deletedAt))
 }
 
-export async function listTier2Tables(db: Database, projectId: string): Promise<Tier2TableRow[]> {
+export async function listTier2Tables(db: Querier, projectId: string): Promise<Tier2TableRow[]> {
   return db.select().from(tier2Tables).where(tier2TableScope(projectId)).orderBy(asc(tier2Tables.sort))
 }
 
@@ -1554,7 +1586,7 @@ export async function renameTier2Table(
   return firstOrThrow(rows)
 }
 
-async function rewriteTier2TableSort(db: Database, ordered: Tier2TableRow[]): Promise<void> {
+async function rewriteTier2TableSort(db: Querier, ordered: Tier2TableRow[]): Promise<void> {
   for (const [index, row] of ordered.entries()) {
     if (row.sort !== index) {
       await db.update(tier2Tables).set({ sort: index, updatedAt: now() }).where(eq(tier2Tables.id, row.id))
@@ -1609,12 +1641,20 @@ export async function reorderTier2Table(
   toIndex: number,
 ): Promise<Tier2TableRow[]> {
   const rows = await listTier2Tables(db, projectId)
-  const from = rows.findIndex((t) => t.id === id)
-  if (from === -1) return rows
-  const target = Math.max(0, Math.min(rows.length - 1, toIndex))
-  const moved = firstOrThrow(rows.splice(from, 1))
-  rows.splice(target, 0, moved)
-  await rewriteTier2TableSort(db, rows)
+  if (rows.findIndex((t) => t.id === id) === -1) return rows
+  // 107 P3 — every `sort` rewrite in the densify loop commits as one unit: a
+  // mid-loop failure must not leave the lane half-re-sorted. The ordering read
+  // runs on `tx` so it sees a consistent snapshot; the authoritative final read
+  // runs on `db` after commit.
+  await db.transaction(async (tx) => {
+    const current = await listTier2Tables(tx, projectId)
+    const from = current.findIndex((t) => t.id === id)
+    if (from === -1) return
+    const target = Math.max(0, Math.min(current.length - 1, toIndex))
+    const moved = firstOrThrow(current.splice(from, 1))
+    current.splice(target, 0, moved)
+    await rewriteTier2TableSort(tx, current)
+  })
   return listTier2Tables(db, projectId)
 }
 
