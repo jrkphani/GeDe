@@ -1,6 +1,6 @@
-# HANDOFF — 2026-07-22 (100 live-child-core A–E SHIPPED; 104-LOW + 099-coverage shipped; 088 corrected; 105 filed)
+# HANDOFF — 2026-07-22 (100 A–E SHIPPED; 105 P0–P3 SHIPPED; 104 resolved; 099-coverage; 088 corrected)
 
-**Long autonomous run under owner directives "sequence all open tasks and execute autonomously; archive only once shipped + verified" → "continue" → "continue until done, use subagents."** Delivered the whole **`100` live-child-canvas-core** feature (all 5 phases A–E) plus the earlier `104`-LOW and `099`-coverage remainders, corrected `088`'s stale index, and — from live owner UX feedback mid-run — filed + refined **`105`** (Architecture-tree keyboard model). Nothing is mid-flight.
+**Long autonomous run under owner directives "sequence all open tasks and execute autonomously" → "continue" → "continue until done, use subagents."** Delivered the whole **`100` live-child-canvas-core** (all 5 phases A–E), and — from live owner UX feedback mid-run — the whole **`105` Architecture-tree keyboard grammar** (P0–P3: sub-child fix, Enter=sibling, `⌘]`/`⌘[` promote/demote, `⌥⇧↑/↓` move). Plus `104` fully resolved (fork decided), `099`-coverage, and `088`'s stale index corrected. Nothing is mid-flight. Every store/render/write-path change got a mandatory `code-reviewer` pass; the reviews caught **10+ HIGH regressions pre-commit** (5 on 105-P0/P1, 4 on 100-A-Phase-D-first-cut, etc.) — `main` never saw them.
 
 Launch prompt for the next session: `docs/NEXT-ORCHESTRATOR.md`.
 
@@ -23,18 +23,14 @@ HEAD: **`8314e92`** (100 Phase-E docs). **CI `verify` CONFIRMED GREEN** through 
 - **`104`-LOW (`85a5e47`)** — 4 edge regression tests (edge c polled — the rAF focus race) + rAF-invariant comment. Item (1) empty-space-dismiss left as an owner fork.
 - **`099` coverage (`8cc03d2`)** — canvas hover-mute + dual-empty-state e2e (hover-emphasis confirmed working at node scale).
 - **`088`** — corrected stale index (was already verified-live 2026-07-17; fix `8354f04`).
-- **`105`** (docs) — Architecture-tree keyboard model, from owner UX feedback: coherent **P0–P5** plan. See "Owner decisions pending."
+- **`105` — P0–P3 SHIPPED** (`510ac53` P0+P1, `2fe39b1` P2+P3). Architecture-tree keyboard tree-building, from owner UX feedback: P0 kills the sub-child Tab-fallthrough; P1 Enter=new-sibling series; P2 `⌘]`/`⌘[` promote/demote; P3 `⌥⇧↑/↓` move. All Architecture-scoped (Design/Foundation byte-identical). 3 review rounds (5 HIGH found+fixed on P0/P1). See Backlog for the P4/P5 follow-ups.
 
 ## Backlog
 
 - **`100` refinements (non-blocking, in the issue):** (1) zoom-LOD auto-culling of off-screen/deep child cores back to stubs (the DoD's LOD clause — deferred; today many drilled children all stay live until `×`); (2) nested drill-in-a-child mispositions the grandchild (edge/position source the PRIMARY register — cosmetic; store IS independent); (3) presence doesn't highlight a child-core selection (`presence.ts:109`); (4) palette "go to context" is root-only (`coreCommands.ts:80`). None crash/corrupt.
 - **`099` remainder:** touch/tablet pan-zoom + node-drag (**manual-device** item), optional label-tier-stable lock (LOW), axe extension.
-- **`104`:** ONE owner fork — empty-space-dismiss of the armed add-child phantom.
-- **`105` (Architecture-tree keyboard) — needs owner go on the keybinding**, then P0→P1 are the high-value build (P0 kills the sub-child bug; P1 adds Enter=sibling). See below.
-
-## Owner decisions pending
-1. **`105` keybinding:** confirm `⌘]`/`⌘[` for promote/demote (recommended — conflict-free vs the committed Tab=commit+move grammar + WCAG) vs Tab/Shift+Tab. Plus: ship cheap P0 (`tabIndex=-1` + menu-trigger) first, full `⋯`-gutter menu (P5) later?
-2. **`104`:** empty-space-dismiss — implement (safe, but changes a prod-canvas interaction + contradicts the tested current behavior) or leave as-is?
+- **`104`:** ✅ RESOLVED — owner decided the empty-space fork is leave-as-is (2026-07-22). Nothing remains.
+- **`105` (Architecture-tree keyboard) — P0–P3 SHIPPED (2026-07-22).** Owner approved the full scope + `⌘]`/`⌘[`. Delivered: P0 sub-child Tab-fallthrough fix, P1 Enter=sibling series, P2 `⌘]`/`⌘[` promote/demote (`moveEntry` over `moveTier2Entry`), P3 `⌥⇧↑/↓` move — all Architecture-scoped, reviewed (5 HIGH found+fixed on P0/P1; P2/P3 approve). **Remaining follow-ups (NOT the approved scope):** P4 tree ARIA (`aria-level`/`aria-expanded`) + `KeyHint` chips teaching the shortcuts; P5 the `⋯` row-action gutter menu (moves single-row commands out of data cells; see the 105 IA section); 2 LOW review nits (dedupe `siblingGroup`/`siblingsOfIn`; exclude `ctrlKey`); a MEDIUM systemic note (multi-step DB mutations like `moveTier2Entry` aren't transaction-wrapped — mitigated here by an `e.repeat` guard). Minor P1 polish: the sibling phantom stays anchored after the series-start row rather than trailing the newest sibling.
 
 ## Patterns (this run — reuse)
 

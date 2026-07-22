@@ -1,4 +1,4 @@
-# NEXT ORCHESTRATOR — launch prompt: 100 done (A–E) · 099/104 remainders · 105 pending owner
+# NEXT ORCHESTRATOR — launch prompt: 100 A–E done · 105 P0–P3 done · 099 + 105-P4/P5 + 100-refinements remain
 
 > **Run 2026-07-21→22 shipped the whole `100` live-child-canvas-core (all 5 phases A–E)**, plus `104`-LOW and `099`-coverage, corrected `088`'s index, and filed **`105`** (Architecture-tree keyboard model) from owner UX feedback. Nothing mid-flight. Two owner decisions are pending (105 keybinding; 104 fork). Copy the block below as the next orchestrator's launch prompt.
 
@@ -13,10 +13,10 @@ Owner reports **>2 concurrent agents exhausts app memory.** Keep to **≤2 subag
 
 ## The backlog
 
-- **`105` (`docs/issues/105-...md`) — Architecture-tree keyboard model, PENDING OWNER GO on the keybinding**, then the highest-value UX build. Owner found tree editing clunky (no keyboard sibling-vs-child, no promote/demote, an accidental sub-child bug, and a control living in a data cell). The issue is a coherent P0–P5 plan. **P0 (kill the sub-child bug) + P1 (Enter=new-sibling) are the big win** and need no owner input beyond confirming the shortcut philosophy. **Owner decision:** `⌘]`/`⌘[` for promote/demote (recommended — the committed grammar already reserves Tab for commit+move) vs Tab/Shift+Tab. Key facts already established: the sub-child bug is a Tab-fallthrough in the description richtext (fix at source: intercept Tab + `tabIndex=-1` on Add-child); Enter=sibling MUST be an Architecture-scoped opt-in seam (never a global EditableGrid change); the reparent engine `moveTier2Entry` already exists + is tested (`mutations.ts:1708`) — P2 is a thin `moveEntry` store wrapper, no tree library.
+- **`105` (`docs/issues/105-...md`) — P0–P3 SHIPPED (`510ac53`, `2fe39b1`); P4/P5 remain.** The full keyboard tree grammar is live: Enter=sibling series, `⌘]`/`⌘[` promote/demote, `⌥⇧↑/↓` move — Architecture-scoped opt-in seams (Design/Foundation byte-identical), `moveEntry` over the tested `moveTier2Entry`. **Remaining:** **P4** tree ARIA (`aria-level`/`aria-expanded`) + `KeyHint` chips teaching the shortcuts; **P5** the `⋯` row-action gutter menu (move single-row commands OUT of data cells — the owner's IA critique; keep the selection bar for bulk). Plus 2 LOW nits (dedupe `siblingGroup`/`siblingsOfIn`; exclude `ctrlKey`) and a systemic MEDIUM (multi-step DB mutations like `moveTier2Entry` aren't transaction-wrapped — consider PGlite transactions; `moveEntry` has an `e.repeat` guard). Minor P1 polish: the sibling phantom stays anchored after the series-start row, not the newest sibling.
 - **`100` refinements (non-blocking):** zoom-LOD auto-culling of off-screen/deep child cores back to stubs (the deferred DoD LOD clause); nested-drill mispositioning (grandchild edge/position source the PRIMARY register — cosmetic); presence + palette don't reach a child-core selection (root-scoped). All documented in the 100 issue; none crash.
 - **`099` remainder:** touch/tablet pan-zoom + node-drag (**manual-device** — real pinch/drag wants a device), optional label-tier-stable lock (LOW), axe extension.
-- **`104`:** ONE owner fork — empty-space-dismiss of the armed add-child phantom (safe to build, but changes a prod-canvas interaction + contradicts the tested current behavior).
+- **`104`:** ✅ RESOLVED — the empty-space fork was decided (leave as-is, owner 2026-07-22). Do NOT re-open.
 
 *(088/101/102/103 are SHIPPED + archived — do NOT re-open.)*
 
