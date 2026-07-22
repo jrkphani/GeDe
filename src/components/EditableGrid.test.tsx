@@ -603,6 +603,64 @@ describe('EditableGrid — richtext cell (089 D1 Phase 3)', () => {
     expect(document.querySelector('[contenteditable="true"]')).toBeNull()
   })
 
+  // Issue 105 P0 (review HIGH 4) — Tab INSIDE the live richtext editor commits +
+  // advances ONLY when the grid opts in via `richTextTabAdvances` (Architecture's
+  // description). Without it (Design's justification, Foundation's description),
+  // Tab in the editor is native — no commit, no advance — byte-identical.
+  it('richtext editor Tab commits + advances ONLY with richTextTabAdvances set', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    const noteRows: Note[] = [
+      { id: 'r1', body: richJson('One') },
+      { id: 'r2', body: richJson('Two') },
+    ]
+    render(
+      <EditableGrid
+        rows={noteRows}
+        columns={makeCols(onCommit)}
+        getRowId={(r) => r.id}
+        richTextTabAdvances
+      />,
+    )
+    await user.click(screen.getByText('One'))
+    const editable = await screen.findByLabelText('Body')
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+
+    fireEvent.keyDown(editable, { key: 'Tab' })
+    // Committed on Tab (opt-in ON), and advanced into row 2's editor.
+    await waitFor(() => expect(onCommit).toHaveBeenCalledWith(noteRows[0], ''))
+    await waitFor(() => {
+      const next = screen.getByLabelText('Body')
+      expect(next).toHaveAttribute('contenteditable', 'true')
+      expect(next).toHaveFocus()
+    })
+  })
+
+  it('richtext editor Tab is native (no commit, no advance) WITHOUT richTextTabAdvances', async () => {
+    const onCommit = vi.fn()
+    const user = userEvent.setup()
+    const noteRows: Note[] = [
+      { id: 'r1', body: richJson('One') },
+      { id: 'r2', body: richJson('Two') },
+    ]
+    render(<EditableGrid rows={noteRows} columns={makeCols(onCommit)} getRowId={(r) => r.id} />)
+    await user.click(screen.getByText('One'))
+    const editable = await screen.findByLabelText('Body')
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+
+    fireEvent.keyDown(editable, { key: 'Tab' })
+    // Native Tab: no commit. Row 2 stays a read-mode display (no editor mounted
+    // there — the only contenteditable is still row 1's own, unadvanced).
+    expect(onCommit).not.toHaveBeenCalled()
+    expect(screen.getByText('Two').closest('.grid-cell--multiline')).toBeInTheDocument()
+  })
+
   it('renders a legacy plain-string value visibly and does NOT persist it on view', () => {
     const onCommit = vi.fn()
     const noteRows: Note[] = [{ id: 'r1', body: 'Legacy plain justification' }]

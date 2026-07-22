@@ -193,6 +193,23 @@ export interface EditableGridProps<TRow> {
   // render and the grid is byte-identical for every existing caller
   // (WorkspaceCanvas/Foundation/ContextRegister and the ?d3rf canvas).
   showKeyHints?: boolean
+  // Issue 105 P1 — an OPT-IN seam that changes Enter on a committed text (name)
+  // cell from "commit + move DOWN" to "commit + start a NEW SIBLING at the
+  // current entry's depth". The grid commits the current value and calls this
+  // with the row Enter fired on; the caller opens its own type-to-create sibling
+  // affordance (ArchitectureSurface's inline PhantomInput — nothing is persisted
+  // until a non-empty name is committed, so there are no orphan empty rows).
+  // Enter-on-EMPTY exits editing instead (outdent is deferred). Undefined by
+  // default → Enter stays commit+down, so Design's register/rail and Foundation
+  // (which rely on Enter=commit+down) are byte-identical; only Architecture opts in.
+  onEnterCreateSibling?: (rowId: string) => void
+  // Issue 105 P0 review HIGH 4 — an OPT-IN flag that makes THIS grid's richtext
+  // cells intercept Tab (commit + advance to the next/prev editable cell) instead
+  // of letting it fall through to native browser Tab. Only Architecture's
+  // description cell opts in; Design's justification (ContextRegister) and
+  // Foundation's description keep native richtext Tab (byte-identical). Default
+  // false.
+  richTextTabAdvances?: boolean
 }
 
 export const PHANTOM_ROW_ID = '__phantom__'
@@ -233,6 +250,14 @@ interface NavContext extends GridNav {
   // Issue 084 D3 P5 — render the quiet keyboard-shortcut hints (see
   // EditableGridProps.showKeyHints). Absent/false → no chips, byte-identical.
   showKeyHints?: boolean
+  // Issue 105 P1 — the Architecture-scoped Enter=new-sibling seam (see
+  // EditableGridProps.onEnterCreateSibling). A text cell branches on its presence
+  // to swap Enter's commit+down for commit+start-sibling. Undefined → unchanged.
+  onEnterCreateSibling?: ((rowId: string) => void) | undefined
+  // Issue 105 P0 review HIGH 4 — richtext cells intercept Tab (commit + advance)
+  // only when this opt-in is set (Architecture); otherwise native Tab. See
+  // EditableGridProps.richTextTabAdvances.
+  richTextTabAdvances: boolean
 }
 
 // Issue 084 D3 P5 — the decorative keyboard-shortcut hints for an actively-
@@ -418,6 +443,27 @@ function TextOrMonoCell<TRow>({
     nav.advance(target, rowId, columnId)
   }
 
+  // Issue 105 P1 — Enter with the Architecture sibling seam wired: commit the
+  // in-flight name, then ask the host to START a new-sibling series at this
+  // entry's depth (the host opens its own type-to-create phantom — nothing is
+  // persisted until the user commits a non-empty name, so no orphan rows). Enter
+  // on an EMPTY name instead exits editing (setEditing(null) → the ensuing blur
+  // reverts/stays put, reusing the empty-name rejection path); outdent deferred.
+  async function commitThenStartSibling(next: string, start: (rowId: string) => void) {
+    if (next === '') {
+      nav.setEditing(null)
+      return
+    }
+    if (next !== value) {
+      const ok = await cellDef.onCommit(row, next)
+      if (ok === false) {
+        setDraft(value) // rejected: revert, don't start a series off a bad commit
+        return
+      }
+    }
+    start(rowId)
+  }
+
   // Issue 089-D3 P3.0 — commit-then-signal: commit the in-flight edit, THEN fire
   // the boundary callback, THEN close the editor WITHOUT `advance` (no stay-put
   // refocus), so the caller relocates focus cleanly with nothing to race.
@@ -460,7 +506,13 @@ function TextOrMonoCell<TRow>({
           e.stopPropagation()
           if (e.key === 'Enter') {
             e.preventDefault()
-            void commitAndAdvance(draft.trim(), nextEditableCell(nav, rowId, columnId, 'down'))
+            // Issue 105 P1 — opt-in: Enter starts a sibling series at this depth
+            // instead of moving down. Off → unchanged commit+down.
+            if (nav.onEnterCreateSibling) {
+              void commitThenStartSibling(draft.trim(), nav.onEnterCreateSibling)
+            } else {
+              void commitAndAdvance(draft.trim(), nextEditableCell(nav, rowId, columnId, 'down'))
+            }
           } else if (e.key === 'Tab') {
             e.preventDefault()
             const target = nextEditableCell(nav, rowId, columnId, e.shiftKey ? 'left' : 'right')
@@ -799,6 +851,28 @@ function RichTextCell<TRow>({
             refocusDisplay.current = true
             nav.setEditing(null)
           }}
+          // Issue 105 P0 (review HIGH 4) — Tab-commit-advance is OPT-IN per grid:
+          // ONLY when `richTextTabAdvances` is set (Architecture's description)
+          // does Tab commit + move to the next/prev editable cell, exactly like a
+          // plain text cell's Tab. This replaces the old native-Tab fallthrough
+          // that landed on the "Add child" button and armed an accidental
+          // sub-child. Design (ContextRegister) / Foundation leave the flag off →
+          // `onTabAdvance` stays undefined → native richtext Tab, byte-identical.
+          // Backward off the first editable cell hands off to the cross-node
+          // boundary consumer (089-D3); forward wraps to the next row's first cell.
+          {...(nav.richTextTabAdvances
+            ? {
+                onTabAdvance: (dir: 'forward' | 'backward') => {
+                  if (dir === 'backward') {
+                    const target = nextEditableCell(nav, rowId, columnId, 'left')
+                    if (target === null && nav.onExitBoundary) nav.onExitBoundary('backward')
+                    else nav.advance(target, rowId, columnId)
+                  } else {
+                    nav.advance(nextEditableCell(nav, rowId, columnId, 'right'), rowId, columnId)
+                  }
+                },
+              }
+            : {})}
         />
       </div>
     )
@@ -1066,6 +1140,8 @@ export function EditableGrid<TRow>({
   onExitBoundary,
   inlineRow,
   showKeyHints = false,
+  onEnterCreateSibling,
+  richTextTabAdvances = false,
 }: EditableGridProps<TRow>) {
   // Issue 035 — a read-only grid never shows the phantom row, regardless of
   // what the caller passed; callers don't need their own conditional.
@@ -1171,6 +1247,10 @@ export function EditableGrid<TRow>({
       pendingPhantomEdit.current = columnId
       activePhantom?.onCreate(value)
     },
+    // Issue 105 P1 — the Enter=new-sibling seam (Architecture only; see props).
+    onEnterCreateSibling,
+    // Issue 105 P0 review HIGH 4 — richtext Tab-commit-advance opt-in.
+    richTextTabAdvances,
     onExitBoundary,
     // Issue 084 D3 P5 — a viewer's read-only grid shows no editing/phantom hints
     // (there's nothing to edit); otherwise pass the caller's opt-in through.
@@ -1194,9 +1274,9 @@ export function EditableGrid<TRow>({
   // next entry. Diffed against the previous render's ids so we edit the row
   // that was just added, not a pre-existing one.
   useEffect(() => {
+    const previous = new Set(prevRowIdsRef.current)
     const column = pendingPhantomEdit.current
     if (column) {
-      const previous = new Set(prevRowIdsRef.current)
       const createdId = rowIds.find((id) => !previous.has(id))
       if (createdId) {
         pendingPhantomEdit.current = null

@@ -138,6 +138,7 @@ function EditorChrome({
   readOnly,
   onCommitAndAdvance,
   onEscape,
+  onTabAdvance,
   autoFocus,
 }: {
   value: string | null
@@ -147,6 +148,7 @@ function EditorChrome({
   readOnly: boolean
   onCommitAndAdvance?: ((dir: 'down') => void) | undefined
   onEscape?: (() => void) | undefined
+  onTabAdvance?: ((dir: 'forward' | 'backward') => void) | undefined
   autoFocus?: boolean | undefined
 }) {
   const [editor] = useLexicalComposerContext()
@@ -170,27 +172,43 @@ function EditorChrome({
   //   • plain Enter    = newline (Lexical default — we return false, untouched).
   //   • Esc            = revert + hand back to the cell (which refocuses its
   //                      read-mode display; Tab/arrows resume from there).
-  //   • Tab            = never intercepted here — traversal happens only from
-  //                      the non-editing display element, sidestepping indent.
+  //   • Tab            = when the host opts in via `onTabAdvance` (issue 105 P0,
+  //                      the grid-embedded description/justification cells):
+  //                      preventDefault so it never reaches native browser Tab
+  //                      (which fell through to the "Add child" <button> and
+  //                      armed an accidental sub-child), commit the current
+  //                      value, then ask the host to advance to the next/prev
+  //                      editable cell — exactly like Tab in a plain text cell.
+  //                      When NOT opted in (the always-mounted existing_scenario
+  //                      editor), Tab is untouched → native traversal, unchanged.
   // Registered on KEY_DOWN_COMMAND like ShortcutsPlugin, so returning true
   // short-circuits Lexical's own KEY_ENTER_COMMAND (LexicalEvents onKeyDown).
   useEffect(() => {
     if (readOnly) return
-    if (!onCommitAndAdvance && !onEscape) return
+    if (!onCommitAndAdvance && !onEscape && !onTabAdvance) return
+    // Commit the current content (same path as handleBlur / Cmd+Enter); the
+    // ensuing unmount-blur is then idempotent (next === lastSyncedRef).
+    const commitNow = () => {
+      const next = serializeForCommit(editor.getEditorState())
+      if (next !== lastSyncedRef.current) {
+        lastSyncedRef.current = next
+        onCommit(next)
+      }
+    }
     return editor.registerCommand(
       KEY_DOWN_COMMAND,
       (event: KeyboardEvent) => {
         const modifier = event.metaKey || event.ctrlKey
         if (event.key === 'Enter' && modifier && onCommitAndAdvance) {
           event.preventDefault()
-          // Commit the current content first (same path as handleBlur), then
-          // ask the host to advance — the ensuing unmount-blur is idempotent.
-          const next = serializeForCommit(editor.getEditorState())
-          if (next !== lastSyncedRef.current) {
-            lastSyncedRef.current = next
-            onCommit(next)
-          }
+          commitNow()
           onCommitAndAdvance('down')
+          return true
+        }
+        if (event.key === 'Tab' && onTabAdvance) {
+          event.preventDefault()
+          commitNow()
+          onTabAdvance(event.shiftKey ? 'backward' : 'forward')
           return true
         }
         if (event.key === 'Escape' && onEscape) {
@@ -203,7 +221,7 @@ function EditorChrome({
       },
       COMMAND_PRIORITY_NORMAL,
     )
-  }, [editor, readOnly, onCommitAndAdvance, onEscape, onCommit])
+  }, [editor, readOnly, onCommitAndAdvance, onEscape, onTabAdvance, onCommit])
 
   // Land focus when the cell swaps its read-mode display for this editor
   // (click / Enter / commit-and-advance). Focus the root element directly (DOM
@@ -325,6 +343,13 @@ export interface RichTextEditorProps {
    *  commits) and hands control back to the host, which returns focus to its
    *  read-mode display element. Undefined by default. */
   onEscape?: () => void
+  /** Grid-cell seam (issue 105 P0): Tab commits the current value and asks the
+   *  host to move to the next ('forward') / previous ('backward') editable cell,
+   *  matching Tab in a plain text cell. `preventDefault` stops the native Tab
+   *  that used to fall through onto the "Add child" button and arm a stray
+   *  sub-child. Undefined by default → Tab is untouched (native traversal), so
+   *  the always-mounted existing_scenario editor is byte-identical. */
+  onTabAdvance?: (dir: 'forward' | 'backward') => void
   /** Focus the editable on mount — a grid cell swaps its read-mode display for
    *  this editor on click / Enter / advance and needs the caret to land. */
   autoFocus?: boolean
@@ -340,6 +365,7 @@ export function RichTextEditor({
   namespace = 'gede-existing-scenario',
   onCommitAndAdvance,
   onEscape,
+  onTabAdvance,
   autoFocus,
   className,
 }: RichTextEditorProps) {
@@ -389,6 +415,7 @@ export function RichTextEditor({
           readOnly={readOnly}
           onCommitAndAdvance={onCommitAndAdvance}
           onEscape={onEscape}
+          onTabAdvance={onTabAdvance}
           autoFocus={autoFocus}
         />
       </LexicalComposer>

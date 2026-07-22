@@ -273,6 +273,17 @@ export function TablePanel({
   // The entry whose "Add child" opened a typed phantom (never a literal row).
   const [addingChildTo, setAddingChildTo] = useState<string | null>(null)
 
+  // Issue 105 P1 — the entry AFTER which a keyboard "new sibling" series is
+  // open. Pressing Enter in a committed name cell arms this: an inline phantom
+  // (the SAME type-to-create PhantomInput as add-child, at the row's OWN depth)
+  // appears under that row and creates siblings under its parent on type+Enter.
+  // Nothing is persisted until a non-empty name is committed (no orphan empty
+  // rows — issue 105 review HIGH 1), and PhantomInput's issue-069 submit guard
+  // blocks a double-Enter double-create (HIGH 2). Mutually exclusive with
+  // `addingChildTo` (arming one clears the other). The bottom add-entry phantom
+  // is deliberately NOT coupled to this — it always creates top-level (HIGH 3).
+  const [addingSiblingAfter, setAddingSiblingAfter] = useState<string | null>(null)
+
   const flat = useMemo(
     () => flattenEntryTree(buildEntryTree(entries), collapsed),
     [entries, collapsed],
@@ -348,19 +359,57 @@ export function TablePanel({
     setSelected(new Set())
   }
 
-  // Issue 084 D3 P3 — the inline add-child phantom's per-column content. The
-  // grid owns the <tr>/<td>; this fills the tree cell with a depth-indented
-  // spacer (parent.depth+1, token-driven via the same `--depth` model as data
-  // rows — no raw px) and the Name cell with a typed create input. Every other
-  // column is blank. Only ever called while `addingChildTo` is set.
-  function renderAddChildCell(columnId: string): React.ReactNode {
-    if (!addingChildTo) return null
-    const parent = entries.find((e) => e.id === addingChildTo)
-    if (!parent) return null
-    const childDepth = (metaById.get(addingChildTo)?.depth ?? 0) + 1
+  // Issue 084 D3 P3 / issue 105 P1 — the ONE inline typed-create phantom, in two
+  // modes (mutually exclusive). ADD-CHILD (mouse, 084/104): a child under the
+  // armed parent, one level deeper. ADD-SIBLING (keyboard, 105 P1): a sibling of
+  // the edited row, at its OWN depth, under its parent. Both reuse the SAME
+  // PhantomInput type-to-create primitive, so both inherit its two safety
+  // properties for free: nothing is persisted until a non-empty name is
+  // committed (no orphan empty rows — HIGH 1) and its issue-069 submit guard
+  // blocks a double-Enter double-create (HIGH 2).
+  interface InlinePhantom {
+    afterRowId: string
+    parentId: string | null
+    depth: number
+    placeholder: string
+    dismiss: () => void
+  }
+
+  function activeInlinePhantom(): InlinePhantom | null {
+    if (addingChildTo) {
+      const parent = entries.find((e) => e.id === addingChildTo)
+      if (!parent) return null
+      return {
+        afterRowId: addingChildTo,
+        parentId: addingChildTo,
+        depth: (metaById.get(addingChildTo)?.depth ?? 0) + 1,
+        placeholder: `Name a child of ${parent.name}`,
+        dismiss: () => setAddingChildTo(null),
+      }
+    }
+    if (addingSiblingAfter) {
+      const meta = metaById.get(addingSiblingAfter)
+      if (!meta) return null
+      const parentId = entries.find((e) => e.id === addingSiblingAfter)?.parentId ?? null
+      const parent = parentId ? entries.find((e) => e.id === parentId) : null
+      return {
+        afterRowId: addingSiblingAfter,
+        parentId,
+        depth: meta.depth,
+        placeholder: parent ? `Name a sibling under ${parent.name}` : 'Name a sibling',
+        dismiss: () => setAddingSiblingAfter(null),
+      }
+    }
+    return null
+  }
+
+  // The grid owns the <tr>/<td>; this fills the tree cell with a depth-indented
+  // spacer (token-driven via the same `--depth` model as data rows — no raw px)
+  // and the Name cell with a typed create input. Every other column is blank.
+  function renderInlinePhantomCell(columnId: string, ph: InlinePhantom): React.ReactNode {
     if (columnId === 'tree') {
       return (
-        <div className="t2-tree" data-depth={childDepth} style={{ '--depth': childDepth } as CSSProperties}>
+        <div className="t2-tree" data-depth={ph.depth} style={{ '--depth': ph.depth } as CSSProperties}>
           <span className="t2-chevron-spacer" />
         </div>
       )
@@ -368,45 +417,43 @@ export function TablePanel({
     if (columnId === 'name') {
       // Reuse the shared PhantomInput primitive (the layer-boundary rule's
       // sanctioned create control) in its EPHEMERAL mode: autofocus on arm,
-      // Enter creates the named child and CONTINUES (clears + self-refocuses for
-      // the next sibling), Esc/blur dismiss. Named-on-create → no placeholder
-      // row, no rename step (finding 4). `stopPropagation` keeps the grid's own
-      // key grammar from also seeing these keystrokes.
+      // Enter creates the named entry and CONTINUES (clears + self-refocuses for
+      // the next one), Esc/blur dismiss. Named-on-create → no placeholder row, no
+      // rename step. `stopPropagation` keeps the grid's own key grammar from also
+      // seeing these keystrokes.
       return (
         <PhantomInput
-          placeholder={`Name a child of ${parent.name}`}
-          ariaLabel={`Name a child of ${parent.name}`}
+          placeholder={ph.placeholder}
+          ariaLabel={ph.placeholder}
           inputClassName="grid-cell__input t2-add-child__input"
           autoFocus
           stopPropagation
-          onSubmit={(name) => void addEntry(table.id, addingChildTo, name)}
-          onCancel={() => setAddingChildTo(null)}
+          onSubmit={(name) => void addEntry(table.id, ph.parentId, name)}
+          onCancel={ph.dismiss}
           // Issue 104 Facet 3(a) — do NOT dismiss on blur: clicking another cell
           // must open THAT cell's editor (the grid's onDismiss handles teardown in
           // the same click), and a blur-dismiss would re-render the row away before
           // the click lands. Esc/onTab/edit-another-cell still dismiss.
           dismissOnBlur={false}
           // Issue 104 Facet 3(b) — grid-aware Tab: PhantomInput has already committed
-          // the current name (created the child) on a forward Tab; here we exit add
-          // mode and land focus on the next grid position, using the SAME section-
-          // scoped helpers the cross-table chain uses (finding 7 — never a global
-          // DOM-reach). Deferred a frame so the add-child row (which shares the
-          // `.grid-row--phantom` class the forward helper targets) has unmounted,
-          // leaving the table's own add-entry phantom as the forward landing spot;
-          // Shift+Tab lands on the table's first editable cell.
+          // the current name on a forward Tab; here we exit add mode and land focus on
+          // the next grid position, using the SAME section-scoped helpers the
+          // cross-table chain uses (finding 7 — never a global DOM-reach). Deferred a
+          // frame so the phantom row (which shares the `.grid-row--phantom` class the
+          // forward helper targets) has unmounted, leaving the table's own add-entry
+          // phantom as the forward landing spot; Shift+Tab lands on the first editable
+          // cell.
           onTab={(dir) => {
             const section = document.getElementById(`t2-table-${table.id}`)
-            setAddingChildTo(null)
+            ph.dismiss()
             if (!section) return
             // Timing invariant (issue 104 edge review): the focus handoff MUST run
-            // after React has committed the `setAddingChildTo(null)` above (which
-            // unmounts this `.grid-row--phantom` add-child row). Tab is a discrete
-            // event, so React 18 flushes that state update synchronously before
-            // paint — the next animation frame is therefore guaranteed to observe
-            // the unmounted DOM, so `lastEditablePosition` lands on the table's own
-            // add-entry phantom (not this row) and `firstEditableCell` on the first
-            // real cell. Do not collapse this rAF to a synchronous call: the query
-            // would then still see the not-yet-unmounted add-child row.
+            // after React has committed the dismiss above (which unmounts this
+            // `.grid-row--phantom` row). Tab is a discrete event, so React 18 flushes
+            // that state update synchronously before paint — the next animation frame
+            // is therefore guaranteed to observe the unmounted DOM, so
+            // `lastEditablePosition` lands on the table's own add-entry phantom (not
+            // this row) and `firstEditableCell` on the first real cell.
             requestAnimationFrame(() => {
               const target =
                 dir === 'forward' ? lastEditablePosition(section) : firstEditableCell(section)
@@ -418,6 +465,8 @@ export function TablePanel({
     }
     return null
   }
+
+  const inlinePhantom = activeInlinePhantom()
 
   const columns: GridColumn<Tier2EntryRow>[] = [
     {
@@ -558,12 +607,23 @@ export function TablePanel({
             <Button
               className="t2-add-child-trigger"
               aria-label={`Add child to ${entry.name}`}
+              // Issue 105 P0 — a row COMMAND, never a form tab-stop. Native Tab
+              // (now intercepted inside the description editor, above) must never
+              // land here and arm an accidental sub-child; it stays a click/hover
+              // affordance. The row-hover reveal + click are unchanged.
+              tabIndex={-1}
               onClick={() => {
                 setCollapsed((prev) => {
                   const next = new Set(prev)
                   next.delete(entry.id)
                   return next
                 })
+                // Issue 105 (review fix) — arming add-child clears any armed
+                // sibling phantom, so mutual exclusivity is BIDIRECTIONAL (the
+                // Enter-sibling path already clears addingChildTo). Otherwise a
+                // stale sibling phantom would silently reappear once this
+                // add-child session is dismissed.
+                setAddingSiblingAfter(null)
                 setAddingChildTo(entry.id)
               }}
             >
@@ -629,36 +689,55 @@ export function TablePanel({
         phantom={{
           columnId: 'name',
           placeholder: 'Name an entry',
+          // Issue 105 review HIGH 3 — the bottom add-entry phantom ALWAYS creates
+          // top-level (parentId null). It is intentionally decoupled from the
+          // keyboard Enter-series depth: a sibling series creates under
+          // `parentIdOf(editedRow)` via the inline sibling phantom (below), never
+          // through this shared persistent affordance.
           onCreate: (name) => void addEntry(table.id, null, name),
         }}
+        // Issue 105 P1 — Architecture-scoped opt-in: Enter on a committed name
+        // ARMS an inline "new sibling" phantom under that row, at its OWN depth
+        // (parent = the edited row's parent). Only this surface passes the seam,
+        // so the shared grid's default Enter=commit+down (Design register/rail,
+        // Foundation) is untouched. The phantom (PhantomInput) creates on
+        // type+Enter and continues — no orphan empty rows (HIGH 1), guarded
+        // against double-Enter (HIGH 2). Mutually exclusive with add-child.
+        onEnterCreateSibling={(rowId) => {
+          setAddingChildTo(null)
+          setAddingSiblingAfter(rowId)
+        }}
+        // Issue 105 review HIGH 4 — OPT-IN (Architecture only): the richtext
+        // description cell's Tab commits + advances to the next editable cell
+        // instead of falling through to native Tab (which armed a stray
+        // sub-child). Design (ContextRegister) and Foundation richtext cells do
+        // NOT set this, so their Tab stays native/byte-identical.
+        richTextTabAdvances
         // Conditional spread (not `onExitBoundary={onExitBoundary}`) so the prop
         // is ABSENT — not `undefined` — for the normal surface, honoring
         // exactOptionalPropertyTypes and keeping EditableGrid byte-identical.
         {...(onExitBoundary ? { onExitBoundary } : {})}
-        // Issue 084 D3 P3 — the inline typed add-child phantom: a transient row
-        // rendered directly under the armed parent (at parent.depth+1), reusing
-        // the grid's tier-agnostic `inlineRow` seam. Absent (nothing armed) →
-        // byte-identical to the normal grid; spread conditionally so the prop is
-        // ABSENT, not `undefined` (exactOptionalPropertyTypes).
-        {...(addingChildTo
+        // Issue 084 D3 P3 / issue 105 P1 — the inline typed create phantom (add-
+        // child OR add-sibling), a transient row rendered directly under its
+        // anchor at the right depth, reusing the grid's tier-agnostic `inlineRow`
+        // seam. Absent (nothing armed) → byte-identical to the normal grid;
+        // spread conditionally so the prop is ABSENT, not `undefined`.
+        {...(inlinePhantom
           ? {
               inlineRow: {
-                afterRowId: addingChildTo,
+                afterRowId: inlinePhantom.afterRowId,
                 className: 'grid-row--phantom t2-add-child-row',
                 // Issue 104 Facet 3(a) — continuous, non-blocking: if the user
-                // starts editing another cell while this add-child phantom is up,
-                // the grid dismisses it (whichever the user did LAST wins) instead
-                // of 102 blocking the edit. Arming while a cell is mid-edit is the
-                // reverse case and stays suppressed by the grid (102 preserved).
-                onDismiss: () => setAddingChildTo(null),
-                // Match the armed child's depth (parent.depth + 1) on the row so
-                // the phantom's NAME input inherits the same per-level indent as a
-                // real child, sitting clearly under its parent. Same --depth model
-                // as data rows (rowStyle above); no raw px.
-                style: {
-                  '--depth': (metaById.get(addingChildTo)?.depth ?? 0) + 1,
-                } as CSSProperties,
-                cell: (columnId: string) => renderAddChildCell(columnId),
+                // starts editing another cell while this phantom is up, the grid
+                // dismisses it (whichever the user did LAST wins) instead of 102
+                // blocking the edit. Arming while a cell is mid-edit is the reverse
+                // case and stays suppressed by the grid (102 preserved).
+                onDismiss: inlinePhantom.dismiss,
+                // Match the phantom's depth on the row so its NAME input inherits
+                // the same per-level indent as a real row. Same --depth model as
+                // data rows (rowStyle above); no raw px.
+                style: { '--depth': inlinePhantom.depth } as CSSProperties,
+                cell: (columnId: string) => renderInlinePhantomCell(columnId, inlinePhantom),
               },
             }
           : {})}

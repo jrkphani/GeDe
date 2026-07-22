@@ -102,7 +102,11 @@ test('architecture: build tables, promote to dimensions, register offers params,
   const usersCell = tablePanel(page, 'Stakeholders').getByRole('cell', { name: 'Users', exact: true })
   await usersCell.click()
   await page.locator('input:focus').fill('People')
-  await page.keyboard.press('Enter')
+  // Issue 105 P1 — on the Architecture surface Enter now = "commit + new sibling"
+  // (the keyboard series grammar), so committing a one-off rename uses blur
+  // instead: clicking a neutral element outside the cell commits via the
+  // unchanged commit-on-blur path, without spawning an empty sibling.
+  await page.getByText('2nd Tier · Architecture').click()
   await expect(tablePanel(page, 'Stakeholders').getByRole('cell', { name: 'People', exact: true })).toBeVisible()
   await expect(page.locator('.status-bar')).toContainText(/parameter updated/)
 
@@ -415,6 +419,164 @@ test('architecture P6: renders and stays operable at volume (~20 tables × ~50 e
   await last.getByPlaceholder('Name an entry').focus()
   await page.keyboard.press('Tab')
   await expect(page.getByPlaceholder('Name a table')).toBeFocused()
+})
+
+// Issue 105 P0 — the accidental sub-child bug. Tab inside the description
+// richtext used to fall through to NATIVE browser Tab → the next focusable was
+// the "Add child" <button> → Enter/Space there armed add-child → an accidental
+// sub-child. The fix intercepts Tab in the editor (commit + advance to the next
+// editable cell, exactly like a text cell) and drops the Add-child button from
+// the tab order (tabIndex=-1). RED before the fix (Tab lands on the button, no
+// input focused), GREEN after (Tab lands in the next row's name editor).
+test('architecture 105 (P0): Tab from a description commits + moves to the next cell, never arming add-child', async ({
+  page,
+}) => {
+  const { panel } = await setup104(page, 'Repro105a')
+  // A second top-level entry so there's a clear "next editable cell" to land on.
+  await addEntry(page, 'Value', 'Legroom')
+
+  const comfortRow = panel.locator('tr', {
+    has: page.getByRole('cell', { name: 'Comfort', exact: true }),
+  })
+  // Open Comfort's rich-text description (index 2) and type — do NOT commit/exit.
+  await comfortRow.getByRole('cell').nth(2).click()
+  const editor = page.locator('[contenteditable="true"]:focus')
+  await editor.pressSequentially('Seat')
+
+  // Tab must commit the description AND move to the NEXT editable cell — the
+  // next row's Name in edit mode — never the Add-child button, never a phantom.
+  await page.keyboard.press('Tab')
+  await expect(page.locator('input:focus')).toHaveValue('Legroom')
+  await expect(page.getByPlaceholder(/Name a child of/)).toHaveCount(0)
+
+  // The typed description committed on Tab (same commit path as ⌘⏎ / blur).
+  await expect(comfortRow.getByText('Seat')).toBeVisible()
+
+  // A Tab run never created a sub-child: Comfort stays a depth-0 leaf and no
+  // nested (depth-1) row exists.
+  await expect(comfortRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
+  await expect(panel.locator('tbody .t2-tree[data-depth="1"]')).toHaveCount(0)
+})
+
+// Issue 105 P1 — Enter = new sibling at the current depth (Architecture-scoped
+// opt-in seam; Design/Foundation keep Enter=commit+down). Pressing Enter in a
+// committed name ARMS an inline type-to-create sibling phantom at that row's own
+// depth (same parent); a run of type+Enter builds N siblings under a parent,
+// none nested under each other. Nothing persists until a non-empty name is
+// committed (no orphan empty rows — review HIGH 1). RED before the fix (Enter
+// moved DOWN to the depth-0 phantom), GREEN after.
+test('architecture 105 (P1): Enter on a name opens a same-depth sibling phantom; a run builds N siblings', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro105b')
+
+  // Give Comfort one child so the sibling series runs at depth 1, not depth 0.
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await childField.fill('Legroom')
+  await childField.press('Enter')
+  await expect(panel.getByRole('cell', { name: 'Legroom', exact: true })).toBeVisible()
+  await childField.press('Escape') // dismiss the add-child phantom
+
+  // Edit Legroom's name; Enter arms a SIBLING phantom at depth 1 (under Comfort).
+  await panel.getByRole('cell', { name: 'Legroom', exact: true }).click()
+  await expect(page.locator('input:focus')).toHaveValue('Legroom')
+  await page.keyboard.press('Enter')
+
+  // The sibling phantom is an inline type-to-create field at depth 1, focused.
+  const sibField = page.getByPlaceholder('Name a sibling under Comfort')
+  await expect(sibField).toBeFocused()
+  await expect(sibField.locator('xpath=ancestor::tr').locator('.t2-tree')).toHaveAttribute(
+    'data-depth',
+    '1',
+  )
+
+  // A run of type+Enter builds siblings; the phantom clears + continues each time.
+  await page.keyboard.type('Headroom')
+  await page.keyboard.press('Enter')
+  await expect(panel.getByRole('cell', { name: 'Headroom', exact: true })).toBeVisible()
+  await expect(sibField).toHaveValue('')
+  await page.keyboard.type('Seatwidth')
+  await page.keyboard.press('Enter')
+  await expect(panel.getByRole('cell', { name: 'Seatwidth', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape') // stop the series
+  await expect(sibField).toBeHidden()
+
+  // All three are depth-1 siblings (children of Comfort), NOT nested under each
+  // other — a run of Enters builds siblings, not a nesting chain.
+  for (const n of ['Legroom', 'Headroom', 'Seatwidth']) {
+    const row = panel.locator('tr', { has: page.getByRole('cell', { name: n, exact: true }) })
+    await expect(row.locator('.t2-tree')).toHaveAttribute('data-depth', '1')
+  }
+  await expect(panel.locator('tbody .t2-tree[data-depth="2"]')).toHaveCount(0)
+  // Three children now exist (not a plain down-move / no-op).
+  await expect(panel.locator('tbody .t2-tree[data-depth="1"]')).toHaveCount(3)
+})
+
+// Issue 105 review HIGH 1 — abandoning an empty just-armed sibling phantom
+// (Escape, or blurring without typing) must leave NO new row. The phantom is a
+// type-to-create input, so nothing is ever persisted until a non-empty commit.
+test('architecture 105 (HIGH 1): abandoning an empty sibling phantom creates no row', async ({
+  page,
+}) => {
+  const { panel } = await setup104(page, 'Repro105c')
+
+  // Arm a top-level sibling phantom off Comfort (Enter on its name).
+  await panel.getByRole('cell', { name: 'Comfort', exact: true }).click()
+  await expect(page.locator('input:focus')).toHaveValue('Comfort')
+  await page.keyboard.press('Enter')
+  const sibField = page.getByPlaceholder('Name a sibling')
+  await expect(sibField).toBeFocused()
+
+  // Escape without typing → dismissed, and no empty row persisted.
+  await page.keyboard.press('Escape')
+  await expect(sibField).toBeHidden()
+
+  // Only Comfort exists — no orphaned empty ("—") row was created.
+  await expect(panel.locator('tbody tr[data-row-id]')).toHaveCount(1)
+  await expect(panel.getByRole('cell', { name: 'Comfort', exact: true })).toBeVisible()
+
+  // Undo is clean: nothing to undo from an abandoned series (Undo stays a no-op
+  // for it — Comfort remains).
+  await page.getByRole('button', { name: 'Undo' }).click()
+  await expect(panel.getByRole('cell', { name: 'Comfort', exact: true })).toBeVisible()
+})
+
+// Issue 105 review HIGH 3 — the bottom "Name an entry" phantom must ALWAYS
+// create TOP-LEVEL, even after an Enter-series has created nested siblings (it
+// must not inherit the series' depth via a shared insertion ref).
+test('architecture 105 (HIGH 3): the bottom phantom still creates top-level after a sibling series', async ({
+  page,
+}) => {
+  const { panel, comfortRow } = await setup104(page, 'Repro105d')
+
+  // Run a depth-1 sibling series under Comfort (child Legroom, then a sibling).
+  await comfortRow.hover()
+  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  const childField = page.getByPlaceholder('Name a child of Comfort')
+  await childField.fill('Legroom')
+  await childField.press('Enter')
+  await expect(panel.getByRole('cell', { name: 'Legroom', exact: true })).toBeVisible()
+  await childField.press('Escape')
+
+  await panel.getByRole('cell', { name: 'Legroom', exact: true }).click()
+  await page.keyboard.press('Enter')
+  const sibField = page.getByPlaceholder('Name a sibling under Comfort')
+  await sibField.fill('Headroom')
+  await page.keyboard.press('Enter')
+  await expect(panel.getByRole('cell', { name: 'Headroom', exact: true })).toBeVisible()
+  await page.keyboard.press('Escape')
+
+  // Now use the bottom add-entry phantom — it must create a TOP-LEVEL entry
+  // (depth 0), NOT a child under the last-touched depth.
+  const bottomPhantom = panel.getByPlaceholder('Name an entry')
+  await bottomPhantom.fill('Topline')
+  await bottomPhantom.press('Enter')
+  const toplineRow = panel.locator('tr', {
+    has: page.getByRole('cell', { name: 'Topline', exact: true }),
+  })
+  await expect(toplineRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
 })
 
 // Issue 102 — "Add child does nothing" when a rich-text DESCRIPTION cell in the

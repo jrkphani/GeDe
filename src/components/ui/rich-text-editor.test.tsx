@@ -113,6 +113,83 @@ describe('RichTextEditor — commit granularity (test-first plan item 8/9)', () 
   })
 })
 
+// Issue 105 P0 (review HIGH 4) — the Tab seam is OPT-IN. Only when the host
+// passes `onTabAdvance` (Architecture's grid-embedded description cell) does Tab
+// commit + hand off to the host; without it (Design's justification, Foundation's
+// description, the standalone existing_scenario editor) Tab is NEVER intercepted
+// here → native traversal, byte-identical.
+describe('RichTextEditor — Tab seam (issue 105 P0, opt-in)', () => {
+  it('with onTabAdvance: Tab commits the current value and advances forward', async () => {
+    const onCommit = vi.fn()
+    const onTabAdvance = vi.fn()
+    render(
+      <RichTextEditor
+        value={plainTextEditorStateJson('Comfort')}
+        onCommit={onCommit}
+        onTabAdvance={onTabAdvance}
+        ariaLabel="Justification"
+        placeholder="Add justification…"
+      />,
+    )
+    const editable = screen.getByLabelText('Justification')
+    await screen.findByText('Comfort')
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+
+    fireEvent.keyDown(editable, { key: 'Tab' })
+    expect(onTabAdvance).toHaveBeenCalledWith('forward')
+    // Committed on Tab (same path as ⌘⏎ / blur): emptied → null.
+    expect(onCommit).toHaveBeenCalledWith(null)
+  })
+
+  it('with onTabAdvance: Shift+Tab advances backward', () => {
+    const onTabAdvance = vi.fn()
+    render(
+      <RichTextEditor
+        value={null}
+        onCommit={vi.fn()}
+        onTabAdvance={onTabAdvance}
+        ariaLabel="Justification"
+        placeholder="Add justification…"
+      />,
+    )
+    const editable = screen.getByLabelText('Justification')
+    fireEvent.focus(editable)
+    fireEvent.keyDown(editable, { key: 'Tab', shiftKey: true })
+    expect(onTabAdvance).toHaveBeenCalledWith('backward')
+  })
+
+  it('WITHOUT onTabAdvance (Design/Foundation richtext): Tab is native — no commit, no advance', async () => {
+    const onCommit = vi.fn()
+    const onCommitAndAdvance = vi.fn()
+    // Mirrors a Design/Foundation grid richtext cell: Cmd+Enter/Esc seams wired,
+    // but the Tab opt-in is OFF (richTextTabAdvances not set on that grid).
+    render(
+      <RichTextEditor
+        value={plainTextEditorStateJson('Comfort')}
+        onCommit={onCommit}
+        onCommitAndAdvance={onCommitAndAdvance}
+        onEscape={vi.fn()}
+        ariaLabel="Justification"
+        placeholder="Add justification…"
+      />,
+    )
+    const editable = screen.getByLabelText('Justification')
+    await screen.findByText('Comfort')
+    fireEvent.focus(editable)
+    selectAllTextIn(editable)
+    fireEvent.keyDown(editable, { key: 'Backspace' })
+    await waitFor(() => expect(editable.textContent).toBe(''))
+
+    fireEvent.keyDown(editable, { key: 'Tab' })
+    // Native Tab: the editor never commits or advances on Tab.
+    expect(onCommitAndAdvance).not.toHaveBeenCalled()
+    expect(onCommit).not.toHaveBeenCalled()
+  })
+})
+
 // The in-editor "toolbar" describe (role=toolbar buttons, roving tabindex,
 // Bold/Underline/list/indent commands, Cmd+B) was RELOCATED to
 // FormatStrip.test.tsx: the toolbar is no longer rendered inside RichTextEditor

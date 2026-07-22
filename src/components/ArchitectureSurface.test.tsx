@@ -424,6 +424,151 @@ describe('ArchitectureSurface — D3 P3 inline typed add-child (issue 084 Direct
   })
 })
 
+// Issue 105 P1 + adversarial-review HIGH 1/2/3 — the keyboard "new sibling"
+// series. Pressing Enter in a committed name arms an inline type-to-create
+// sibling phantom (reusing PhantomInput) at the row's OWN depth. Nothing is
+// persisted until a non-empty commit (no orphan empty rows — HIGH 1), the
+// issue-069 submit guard blocks a double-Enter double-create (HIGH 2), and the
+// bottom add-entry phantom is decoupled — it always creates top-level (HIGH 3).
+describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
+  it('Enter on a name opens a same-depth sibling phantom that creates a SIBLING, not a child', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars') // depth 1
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    // Edit Superstars' name, Enter → sibling phantom under Buyers, at depth 1.
+    await user.click(screen.getByText('Superstars'))
+    const nameInput = await screen.findByDisplayValue('Superstars')
+    await user.type(nameInput, '{Enter}')
+
+    const sibField = await screen.findByPlaceholderText('Name a sibling under Buyers')
+    const phantomTree = (sibField.closest('tr') as HTMLElement).querySelector(
+      '[data-depth]',
+    ) as HTMLElement
+    expect(phantomTree.style.getPropertyValue('--depth')).toBe('1')
+
+    // Type + Enter creates a SIBLING (parent = Buyers), NOT a child of Superstars.
+    await user.type(sibField, 'Whales')
+    await user.keyboard('{Enter}')
+    await waitFor(() => {
+      const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+      expect(entries.find((e) => e.name === 'Whales')?.parentId).toBe(buyers.id)
+    })
+  })
+
+  it('HIGH 1 — abandoning an empty sibling phantom (Esc) creates NO row and pushes NO undo step', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    const undoDepthBefore = useCommandLogStore.getState().past.length
+    await user.click(screen.getByText('Buyers'))
+    const nameInput = await screen.findByDisplayValue('Buyers')
+    await user.type(nameInput, '{Enter}')
+    const sibField = await screen.findByPlaceholderText('Name a sibling')
+    await user.type(sibField, '{Escape}')
+
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText('Name a sibling')).not.toBeInTheDocument(),
+    )
+    const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+    // Only Buyers — no orphaned empty ("") row was persisted.
+    expect(entries).toHaveLength(1)
+    expect(entries.every((e) => e.name !== '')).toBe(true)
+    // Clean undo: the abandoned series pushed nothing onto the command log.
+    expect(useCommandLogStore.getState().past.length).toBe(undoDepthBefore)
+  })
+
+  it('HIGH 2 — a double-Enter in the sibling phantom does not double-create (issue-069 guard)', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    await user.click(screen.getByText('Superstars'))
+    const nameInput = await screen.findByDisplayValue('Superstars')
+    await user.type(nameInput, '{Enter}')
+    const sibField = await screen.findByPlaceholderText('Name a sibling under Buyers')
+    await user.type(sibField, 'Whales')
+
+    // Two synchronous Enters before the async create settles: the second is a
+    // no-op (submittingRef guard), so exactly ONE "Whales" is created.
+    fireEvent.keyDown(sibField, { key: 'Enter' })
+    fireEvent.keyDown(sibField, { key: 'Enter' })
+    await waitFor(() => {
+      const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+      expect(entries.filter((e) => e.name === 'Whales')).toHaveLength(1)
+    })
+    // Give any (blocked) second create a chance to appear, then re-assert.
+    await new Promise((r) => setTimeout(r, 50))
+    const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+    expect(entries.filter((e) => e.name === 'Whales')).toHaveLength(1)
+  })
+
+  it('HIGH 3 — the bottom add-entry phantom creates TOP-LEVEL even after a sibling series', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    // Run a depth-1 sibling series under Buyers.
+    await user.click(screen.getByText('Superstars'))
+    const nameInput = await screen.findByDisplayValue('Superstars')
+    await user.type(nameInput, '{Enter}')
+    const sibField = await screen.findByPlaceholderText('Name a sibling under Buyers')
+    await user.type(sibField, 'Whales')
+    await user.keyboard('{Enter}')
+    await waitFor(() => expect(screen.getByText('Whales')).toBeInTheDocument())
+    await user.keyboard('{Escape}')
+
+    // The bottom phantom must still create a TOP-LEVEL entry (parentId null),
+    // NOT inherit the series' depth.
+    const bottom = screen.getByPlaceholderText('Name an entry')
+    await user.type(bottom, 'Topline')
+    await user.keyboard('{Enter}')
+    await waitFor(() => {
+      const entries = useTier2Store.getState().entriesByTable[table.id] ?? []
+      expect(entries.find((e) => e.name === 'Topline')?.parentId).toBeNull()
+    })
+  })
+
+  it('review fix — arming Add-child while a sibling series is open clears it (no resurface)', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    // Arm a sibling series under Buyers.
+    await user.click(screen.getByText('Superstars'))
+    await user.type(await screen.findByDisplayValue('Superstars'), '{Enter}')
+    await screen.findByPlaceholderText('Name a sibling under Buyers')
+
+    // Click "Add child" on Superstars → the add-child phantom takes over AND the
+    // sibling state is cleared (bidirectional exclusivity), not merely hidden.
+    await user.click(await screen.findByLabelText('Add child to Superstars'))
+    await screen.findByPlaceholderText('Name a child of Superstars')
+    expect(screen.queryByPlaceholderText('Name a sibling under Buyers')).not.toBeInTheDocument()
+
+    // Dismiss the add-child phantom (Esc) → NEITHER phantom resurfaces.
+    await user.type(screen.getByPlaceholderText('Name a child of Superstars'), '{Escape}')
+    await waitFor(() =>
+      expect(screen.queryByPlaceholderText('Name a child of Superstars')).not.toBeInTheDocument(),
+    )
+    expect(screen.queryByPlaceholderText('Name a sibling under Buyers')).not.toBeInTheDocument()
+  })
+})
+
 describe('ArchitectureSurface source — inline add-child, no popover literal (issue 084 D3 P3)', () => {
   const source = readFileSync(resolve(process.cwd(), 'src/components/ArchitectureSurface.tsx'), 'utf8')
 
