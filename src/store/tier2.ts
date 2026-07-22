@@ -34,7 +34,7 @@ import {
   type Tier2EntryRow,
   type Tier2TableRow,
 } from '../db/mutations'
-import { subtreeIds } from '../domain/entryTree'
+import { siblingsOf, subtreeIds } from '../domain/entryTree'
 import { requireDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { enqueueIfSyncing, enqueueSortDeltas, useSyncStore } from './sync'
@@ -130,18 +130,6 @@ function enqueueEntryRestore(
 // subscriptions themselves: they re-list for their store's CURRENT canvasId.
 function refreshDesignLane(): void {
   useSyncStore.getState().notifyLocalApply(['dimensions', 'parameters'])
-}
-
-// Issue 105 P2/P3 — the live siblings under `parentId`, in dense sort order.
-// enqueueSortDeltas treats each row's ARRAY INDEX as its persisted `sort`, so
-// the `after` slice must be sort-ordered (moveTier2Entry re-densifies, so
-// index === sort holds post-move); the `before` slice's order is irrelevant
-// (the helper reads its `.sort` field), but sorting both keeps this uniform.
-function siblingGroup(
-  entries: readonly Tier2EntryRow[],
-  parentId: string | null,
-): Tier2EntryRow[] {
-  return entries.filter((e) => e.parentId === parentId).sort((a, b) => a.sort - b.sort)
 }
 
 interface Tier2State {
@@ -447,11 +435,14 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       if (!moved) return
       const oldParentId = moved.parentId
       // The moved row's index among its ORIGINAL siblings — the undo target.
-      const oldIndex = siblingGroup(before, oldParentId).findIndex((e) => e.id === id)
+      const oldIndex = siblingsOf(before, oldParentId).findIndex((e) => e.id === id)
 
       // Apply a single reparent/reorder: mutate PGlite, refresh this lane's
       // slice from the returned rows (the reload pattern), then enqueue the
       // sibling-group deltas relative to `from` (the pre-mutation snapshot).
+      // enqueueSortDeltas treats each row's ARRAY INDEX as its persisted `sort`,
+      // so both slices come from `siblingsOf` (sort-ordered); dbMoveEntry
+      // re-densifies, so index === sort holds on the `after` slice.
       async function apply(
         from: readonly Tier2EntryRow[],
         targetParentId: string | null,
@@ -462,13 +453,13 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
         set({ entriesByTable: { ...get().entriesByTable, [tableId]: after } })
         if (fromParentId === targetParentId) {
           // Same group: one delta covers the moved row AND its shifted siblings.
-          enqueueSortDeltas('tier2_entries', siblingGroup(from, targetParentId), siblingGroup(after, targetParentId))
+          enqueueSortDeltas('tier2_entries', siblingsOf(from, targetParentId), siblingsOf(after, targetParentId))
         } else {
           // Cross-group: the old group closes its gap, the new group opens one —
           // enqueue both. The moved row is absent from each group's `before`, so
           // enqueueSortDeltas skips it; enqueue its parentId change explicitly.
-          enqueueSortDeltas('tier2_entries', siblingGroup(from, fromParentId), siblingGroup(after, fromParentId))
-          enqueueSortDeltas('tier2_entries', siblingGroup(from, targetParentId), siblingGroup(after, targetParentId))
+          enqueueSortDeltas('tier2_entries', siblingsOf(from, fromParentId), siblingsOf(after, fromParentId))
+          enqueueSortDeltas('tier2_entries', siblingsOf(from, targetParentId), siblingsOf(after, targetParentId))
           const movedRow = after.find((e) => e.id === id)
           if (movedRow) enqueueIfSyncing('tier2_entries', id, 'update', movedRow)
         }

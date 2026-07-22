@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest'
 import type { Tier2EntryRow } from '../db/mutations'
-import { buildEntryTree, flattenEntryTree, subtreeIds } from './entryTree'
+import {
+  buildEntryTree,
+  flattenEntryTree,
+  groupSiblingsBySort,
+  siblingsOf,
+  subtreeIds,
+} from './entryTree'
 
 // A minimal row factory — the tree helpers only read id/parentId/sort/name.
 function entry(id: string, parentId: string | null, sort: number): Tier2EntryRow {
@@ -35,6 +41,45 @@ describe('buildEntryTree', () => {
     expect(tree[0]?.depth).toBe(0)
     expect(tree[0]?.children[0]?.depth).toBe(1)
     expect(tree[0]?.children[0]?.children[0]?.depth).toBe(2)
+  })
+})
+
+describe('siblingsOf', () => {
+  it('returns only the rows under the given parent, sorted by sort', () => {
+    const rows = [
+      entry('b', null, 1),
+      entry('a', null, 0),
+      entry('a2', 'a', 1),
+      entry('a1', 'a', 0),
+    ]
+    expect(siblingsOf(rows, null).map((e) => e.id)).toEqual(['a', 'b'])
+    expect(siblingsOf(rows, 'a').map((e) => e.id)).toEqual(['a1', 'a2'])
+    expect(siblingsOf(rows, 'missing')).toEqual([])
+  })
+})
+
+describe('groupSiblingsBySort', () => {
+  it('groups every parent bucket in one pass, each sorted by sort', () => {
+    const rows = [
+      entry('b', null, 1),
+      entry('a', null, 0),
+      entry('a2', 'a', 1),
+      entry('a1', 'a', 0),
+    ]
+    const map = groupSiblingsBySort(rows)
+    expect(map.get(null)?.map((e) => e.id)).toEqual(['a', 'b'])
+    expect(map.get('a')?.map((e) => e.id)).toEqual(['a1', 'a2'])
+    expect(map.get('missing')).toBeUndefined()
+  })
+
+  it('agrees with siblingsOf for every present parent (shared ordering)', () => {
+    const rows = [entry('a', null, 0), entry('b', null, 1), entry('a1', 'a', 0)]
+    const map = groupSiblingsBySort(rows)
+    for (const parentId of [null, 'a']) {
+      expect(map.get(parentId)?.map((e) => e.id)).toEqual(
+        siblingsOf(rows, parentId).map((e) => e.id),
+      )
+    }
   })
 })
 

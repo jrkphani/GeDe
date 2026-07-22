@@ -1,7 +1,7 @@
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Tier2EntryRow, Tier2TableRow } from '../db/mutations'
-import { buildEntryTree, flattenEntryTree } from '../domain/entryTree'
+import { buildEntryTree, flattenEntryTree, groupSiblingsBySort } from '../domain/entryTree'
 import { canWrite } from '../domain/workspaceRole'
 import { useStatusStore } from '../store/status'
 import { useTier2Store, type EntryLink } from '../store/tier2'
@@ -428,16 +428,7 @@ export function TablePanel({
   // group sorted by `sort`). The trailing ⋯ menu computes four MoveTargets PER ROW
   // on every render; without this, each siblingsOfIn was an O(n) filter+sort, i.e.
   // O(n² log n) across the table. handleTreeKey reads the same map.
-  const siblingsByParent = useMemo(() => {
-    const map = new Map<string | null, Tier2EntryRow[]>()
-    for (const e of entries) {
-      const group = map.get(e.parentId)
-      if (group) group.push(e)
-      else map.set(e.parentId, [e])
-    }
-    for (const group of map.values()) group.sort((a, b) => a.sort - b.sort)
-    return map
-  }, [entries])
+  const siblingsByParent = useMemo(() => groupSiblingsBySort(entries), [entries])
   function siblingsOfIn(parentId: string | null): Tier2EntryRow[] {
     return siblingsByParent.get(parentId) ?? NO_ENTRIES
   }
@@ -509,10 +500,13 @@ export function TablePanel({
 
   function handleTreeKey(e: React.KeyboardEvent<HTMLElement>) {
     if (readOnly) return
-    const demote = e.metaKey && !e.altKey && (e.key === ']' || e.code === 'BracketRight')
-    const promote = e.metaKey && !e.altKey && (e.key === '[' || e.code === 'BracketLeft')
-    const moveUp = e.altKey && e.shiftKey && !e.metaKey && e.key === 'ArrowUp'
-    const moveDown = e.altKey && e.shiftKey && !e.metaKey && e.key === 'ArrowDown'
+    // `!e.ctrlKey` on every chord (review LOW) — the tree verbs are ⌘/⌥ gestures;
+    // a Ctrl-modified combo (a foreign OS/browser binding, e.g. Windows Ctrl+])
+    // must never be swallowed as a promote/demote/move.
+    const demote = e.metaKey && !e.altKey && !e.ctrlKey && (e.key === ']' || e.code === 'BracketRight')
+    const promote = e.metaKey && !e.altKey && !e.ctrlKey && (e.key === '[' || e.code === 'BracketLeft')
+    const moveUp = e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && e.key === 'ArrowUp'
+    const moveDown = e.altKey && e.shiftKey && !e.metaKey && !e.ctrlKey && e.key === 'ArrowDown'
     if (!demote && !promote && !moveUp && !moveDown) return
 
     // Resting-focused only: ignore while a name/description editor (input,

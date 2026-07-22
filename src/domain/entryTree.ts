@@ -5,6 +5,33 @@ import type { Tier2EntryRow } from '../db/mutations'
 // nesting the Architecture surface renders (STYLE_GUIDE §6 — 24px indent per
 // level, no tree lines). No React/DB imports.
 
+// The live siblings under `parentId`, ordered by `sort` — the ONE canonical
+// sibling ordering shared by the store's sort-delta enqueue (tier2.moveEntry)
+// and the Architecture surface's tree verbs (issue 105). `parentId === null` is
+// a top-level row of its table.
+export function siblingsOf(
+  entries: readonly Tier2EntryRow[],
+  parentId: string | null,
+): Tier2EntryRow[] {
+  return entries.filter((e) => e.parentId === parentId).sort((a, b) => a.sort - b.sort)
+}
+
+// Group a flat entry list into { parentId → siblings sorted by `sort` } in ONE
+// pass — the shared index behind buildEntryTree and the Architecture surface's
+// per-render sibling lookups (four tree-move targets per row).
+export function groupSiblingsBySort(
+  entries: readonly Tier2EntryRow[],
+): Map<string | null, Tier2EntryRow[]> {
+  const byParent = new Map<string | null, Tier2EntryRow[]>()
+  for (const e of entries) {
+    const list = byParent.get(e.parentId)
+    if (list) list.push(e)
+    else byParent.set(e.parentId, [e])
+  }
+  for (const list of byParent.values()) list.sort((a, b) => a.sort - b.sort)
+  return byParent
+}
+
 export interface EntryNode {
   entry: Tier2EntryRow
   depth: number
@@ -14,13 +41,7 @@ export interface EntryNode {
 // Build the nested tree from a flat list. `parentId === null` is a top-level
 // row of its table; siblings are ordered by `sort`.
 export function buildEntryTree(entries: Tier2EntryRow[]): EntryNode[] {
-  const byParent = new Map<string | null, Tier2EntryRow[]>()
-  for (const e of entries) {
-    const list = byParent.get(e.parentId) ?? []
-    list.push(e)
-    byParent.set(e.parentId, list)
-  }
-  for (const list of byParent.values()) list.sort((a, b) => a.sort - b.sort)
+  const byParent = groupSiblingsBySort(entries)
   function build(parentId: string | null, depth: number): EntryNode[] {
     return (byParent.get(parentId) ?? []).map((entry) => ({
       entry,
