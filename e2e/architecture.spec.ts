@@ -989,3 +989,73 @@ test('architecture 105 (P2/P3): each keyboard gesture is exactly ONE undo step',
   await page.keyboard.press('ControlOrMeta+z')
   await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
 })
+
+// Issue 105 P4 — tree a11y semantics the surface lacked, exposed via a parallel
+// SR-only `role="tree"` of `role="treeitem"`s (mirroring the promote listbox):
+// `aria-level` (= depth + 1) and, on rows that HAVE children, `aria-expanded`
+// (true unless collapsed). Kept off the <tr> because aria-level/aria-expanded on
+// a plain-table row is an axe aria-conditional-attr violation, and role="treegrid"
+// would remap every <td>→gridcell (breaking getByRole('cell')). Architecture-only
+// → the axe scan stays green on both this fallback and the ?d3rf canvas nodes.
+test('architecture 105 (P4): a role="tree" exposes aria-level + aria-expanded (flipping on collapse) and stays axe-clean', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'P4Tree', ['Users', 'Buyers'])
+
+  // Demote Buyers under Users → Users is a parent, Buyers its depth-1 child.
+  await nameCell(page, panel, 'Buyers').focus()
+  await page.keyboard.press('Meta+BracketRight')
+  await expect(entryRow(page, panel, 'Buyers').locator('.t2-tree')).toHaveAttribute('data-depth', '1')
+
+  const tree = panel.getByRole('tree', { name: 'Tree entry tree' })
+  const usersItem = tree.getByRole('treeitem', { name: 'Users' })
+  const buyersItem = tree.getByRole('treeitem', { name: 'Buyers' })
+
+  // Depth → 1-based aria-level; a parent with children exposes aria-expanded
+  // (true while open); a leaf carries none.
+  await expect(usersItem).toHaveAttribute('aria-level', '1')
+  await expect(buyersItem).toHaveAttribute('aria-level', '2')
+  await expect(usersItem).toHaveAttribute('aria-expanded', 'true')
+  await expect(buyersItem).not.toHaveAttribute('aria-expanded')
+
+  // Collapsing the parent flips aria-expanded to false and drops the now-hidden
+  // child from both the visible table and the flattened tree.
+  await entryRow(page, panel, 'Users').getByRole('button', { name: 'Collapse Users' }).click()
+  await expect(usersItem).toHaveAttribute('aria-expanded', 'false')
+  await expect(page.getByRole('cell', { name: 'Buyers', exact: true })).toBeHidden()
+  await expect(tree.getByRole('treeitem', { name: 'Buyers' })).toHaveCount(0)
+
+  // Zero serious/critical WCAG 2 A/AA violations with the nested tree present.
+  const results = await new AxeBuilder({ page })
+    .include('main')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze()
+  const blocking = results.violations.filter(
+    (v) => v.impact === 'serious' || v.impact === 'critical',
+  )
+  expect(blocking, JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2)).toEqual([])
+})
+
+// Issue 105 P4 — quiet keyboard-hint chips teach the new tree verbs (⏎ = new
+// sibling, ⌘] = make child, ⌘[ = promote), reusing the 084-D3 P5 KeyHint
+// pattern: decorative (aria-hidden — the real semantics ride on aria-level/
+// aria-expanded above), hidden at rest, revealed only when the row is focused.
+test('architecture 105 (P4): the row gutter teaches the tree verbs with quiet aria-hidden hints, revealed on row focus', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'P4Hints', ['Users'])
+  const usersRow = entryRow(page, panel, 'Users')
+  const hints = usersRow.locator('.t2-row-hints')
+
+  // Decorative — aria-hidden, so nothing new lands in the accessibility tree.
+  await expect(hints.locator('.key-hint').first()).toHaveAttribute('aria-hidden', 'true')
+  // Taught verbs present: ⏎ new sibling, ⌘] make child, ⌘[ promote.
+  await expect(hints.locator('.key-hint__cap', { hasText: '⏎' })).toBeAttached()
+  await expect(hints.locator('.key-hint__cap', { hasText: ']' })).toBeAttached()
+  await expect(hints.locator('.key-hint__cap', { hasText: '[' })).toBeAttached()
+
+  // Quiet: hidden at rest, revealed only when the row is focused (keyboard).
+  await expect.poll(() => hints.evaluate((el) => getComputedStyle(el).visibility)).toBe('hidden')
+  await nameCell(page, panel, 'Users').focus()
+  await expect.poll(() => hints.evaluate((el) => getComputedStyle(el).visibility)).toBe('visible')
+})

@@ -109,6 +109,63 @@ describe('ArchitectureSurface', () => {
     expect(nameCell.className).toContain('t2-col--name')
   })
 
+  // Issue 105 P4 — the surface exposes the tree hierarchy it lacked to assistive
+  // tech via a parallel SR-only role="tree" (mirroring the promote listbox): each
+  // visible entry is a role="treeitem" carrying `aria-level` (= depth + 1) and,
+  // on rows that HAVE children, `aria-expanded` (true while open, flips to false
+  // when collapsed). Kept off the <tr> because aria-level/aria-expanded on a
+  // plain-table row is an axe aria-conditional-attr violation, and role="treegrid"
+  // would remap every <td>→gridcell (breaking the cell-name grammar).
+  it('105 P4: exposes tree semantics — a role="tree" of treeitems with aria-level + aria-expanded, flipping on collapse', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    const tree = screen.getByRole('tree', { name: 'Stakeholders entry tree' })
+    const item = (name: string) => within(tree).getByRole('treeitem', { name })
+    // Depth → 1-based aria-level.
+    expect(item('Buyers').getAttribute('aria-level')).toBe('1')
+    expect(item('Superstars').getAttribute('aria-level')).toBe('2')
+    // A parent WITH children exposes aria-expanded (true while expanded); a leaf
+    // carries none (only expandable rows do).
+    expect(item('Buyers').getAttribute('aria-expanded')).toBe('true')
+    expect(item('Superstars').getAttribute('aria-expanded')).toBeNull()
+
+    // Collapsing the parent flips its treeitem's aria-expanded to false and drops
+    // the now-hidden child from the flattened tree.
+    await user.click(screen.getByLabelText('Collapse Buyers'))
+    expect(item('Buyers').getAttribute('aria-expanded')).toBe('false')
+    expect(within(tree).queryByRole('treeitem', { name: 'Superstars' })).not.toBeInTheDocument()
+  })
+
+  // Issue 105 P4 — quiet keyboard-hint chips teach the tree verbs (⏎ new sibling,
+  // ⌘] make child, ⌘[ promote), reusing the 084-D3 P5 KeyHint pattern. The chips
+  // are decorative (aria-hidden) — the real AT semantics ride on the aria-level/
+  // aria-expanded above, so the hints add ZERO screen-reader noise.
+  it('105 P4: teaches the tree verbs with quiet aria-hidden key-hint chips in the row gutter', async () => {
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    const buyersRow = screen.getByText('Buyers').closest('tr') as HTMLElement
+    const hints = buyersRow.querySelector('.t2-row-hints') as HTMLElement
+    expect(hints).toBeTruthy()
+    // Every hint is aria-hidden — zero SR noise.
+    for (const h of hints.querySelectorAll('.key-hint')) {
+      expect(h.getAttribute('aria-hidden')).toBe('true')
+    }
+    // The taught verbs: ⏎ = new sibling, ⌘] = make child, ⌘[ = promote.
+    const caps = [...hints.querySelectorAll('.key-hint__cap')].map((c) => c.textContent)
+    expect(caps).toContain('⏎')
+    expect(caps).toContain('⌘')
+    expect(caps).toContain(']')
+    expect(caps).toContain('[')
+  })
+
   it('promote selection spans nesting levels and previews the parameter count', async () => {
     const user = userEvent.setup()
     const table = await addTier2Table(db, projectId, 'Stakeholders')

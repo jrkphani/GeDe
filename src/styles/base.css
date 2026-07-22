@@ -2655,6 +2655,25 @@ body {
   visibility: visible;
 }
 
+/* Issue 105 P4 — the quiet tree-verb key-hint chips (⏎ / ⌘] / ⌘[) sit in the
+   row-command gutter beneath the Add-child affordance. Same reveal grammar as
+   the button and the phantom/add-table ⏎ hints (STYLE_GUIDE §6: hidden at rest,
+   shown on row hover or focus — quiet until relevant). Decorative + aria-hidden,
+   so they never join the accessibility tree; the real semantics live on the
+   role="tree" overlay's aria-level/aria-expanded. */
+.t2-row-hints {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline-start: var(--space-2);
+  visibility: hidden;
+}
+
+.t2-table tbody tr:hover .t2-row-hints,
+.t2-table tbody tr:focus-within .t2-row-hints {
+  visibility: visible;
+}
+
 .t2-tree {
   display: flex;
   align-items: center;

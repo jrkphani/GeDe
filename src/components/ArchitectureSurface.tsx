@@ -685,37 +685,54 @@ export function TablePanel({
         kind: 'static',
         render: (entry) =>
           readOnly ? null : (
-            // Typed add-child (issue 084 finding 4 / D3 P3): un-collapses the
-            // parent then reveals an INLINE typed phantom child ROW directly under
-            // it (at depth+1, via the grid's `inlineRow` seam below) — type →
-            // Enter — instead of a floating popover or a literal placeholder row
-            // the user must hunt down and rename. Same type-first grammar as every
-            // other add on this surface, at a lower interaction cost.
-            <Button
-              className="t2-add-child-trigger"
-              aria-label={`Add child to ${entry.name}`}
-              // Issue 105 P0 — a row COMMAND, never a form tab-stop. Native Tab
-              // (now intercepted inside the description editor, above) must never
-              // land here and arm an accidental sub-child; it stays a click/hover
-              // affordance. The row-hover reveal + click are unchanged.
-              tabIndex={-1}
-              onClick={() => {
-                setCollapsed((prev) => {
-                  const next = new Set(prev)
-                  next.delete(entry.id)
-                  return next
-                })
-                // Issue 105 (review fix) — arming add-child clears any armed
-                // sibling phantom, so mutual exclusivity is BIDIRECTIONAL (the
-                // Enter-sibling path already clears addingChildTo). Otherwise a
-                // stale sibling phantom would silently reappear once this
-                // add-child session is dismissed.
-                setAddingSiblingAfter(null)
-                setAddingChildTo(entry.id)
-              }}
-            >
-              <span aria-hidden>＋ </span>Add child
-            </Button>
+            <>
+              {/* Typed add-child (issue 084 finding 4 / D3 P3): un-collapses the
+                  parent then reveals an INLINE typed phantom child ROW directly
+                  under it (at depth+1, via the grid's `inlineRow` seam below) —
+                  type → Enter — instead of a floating popover or a literal
+                  placeholder row the user must hunt down and rename. Same
+                  type-first grammar as every other add on this surface, at a
+                  lower interaction cost. */}
+              <Button
+                className="t2-add-child-trigger"
+                aria-label={`Add child to ${entry.name}`}
+                // Issue 105 P0 — a row COMMAND, never a form tab-stop. Native Tab
+                // (now intercepted inside the description editor, above) must never
+                // land here and arm an accidental sub-child; it stays a click/hover
+                // affordance. The row-hover reveal + click are unchanged.
+                tabIndex={-1}
+                onClick={() => {
+                  setCollapsed((prev) => {
+                    const next = new Set(prev)
+                    next.delete(entry.id)
+                    return next
+                  })
+                  // Issue 105 (review fix) — arming add-child clears any armed
+                  // sibling phantom, so mutual exclusivity is BIDIRECTIONAL (the
+                  // Enter-sibling path already clears addingChildTo). Otherwise a
+                  // stale sibling phantom would silently reappear once this
+                  // add-child session is dismissed.
+                  setAddingSiblingAfter(null)
+                  setAddingChildTo(entry.id)
+                }}
+              >
+                <span aria-hidden>＋ </span>Add child
+              </Button>
+              {/* Issue 105 P4 — quiet key-hint chips teaching the keyboard tree
+                  grammar this surface added: ⏎ = new sibling (P1), ⌘] = make
+                  child (P2 demote), ⌘[ = promote (P2). Reuses the 084-D3 P5
+                  KeyHint pattern: decorative (aria-hidden — the real AT semantics
+                  ride on the role="tree" overlay's aria-level/aria-expanded),
+                  hidden at rest and revealed only on row hover/focus (base.css).
+                  Gated by `showKeyHints` so the ?d3rf canvas (opts out) stays quiet. */}
+              {showKeyHints ? (
+                <span className="t2-row-hints">
+                  <KeyHint keys={['⏎']} />
+                  <KeyHint keys={['⌘', ']']} />
+                  <KeyHint keys={['⌘', '[']} />
+                </span>
+              ) : null}
+            </>
           ),
       },
     },
@@ -834,6 +851,38 @@ export function TablePanel({
             }
           : {})}
       />
+      {/* Issue 105 P4 — the tree a11y semantics the Architecture surface lacked.
+          EditableGrid renders the entries as a native <table> (its <td> cells
+          back the exact-name getByRole('cell') grammar the whole suite relies on),
+          and putting aria-level/aria-expanded on a <tr> in a plain table is an
+          axe `aria-conditional-attr` violation (those attrs need a treegrid row —
+          and promoting to role="treegrid" would remap every <td>→gridcell). So we
+          MIRROR the promote listbox pattern (below): a parallel, SR-only
+          `role="tree"` of `role="treeitem"`s that carries the hierarchy to
+          assistive tech — `aria-level` (= depth + 1) and, on parents,
+          `aria-expanded` (true unless collapsed) — without touching the table's
+          cell semantics. Only the VISIBLE (non-collapsed) rows appear, matching
+          the flattened render, so a collapsed parent's descendants drop out and
+          its `aria-expanded` reads false. Purely additive; present whenever there
+          are entries (viewers benefit too). */}
+      {flatIds.length > 0 && (
+        <div role="tree" aria-label={`${table.name} entry tree`} className="visually-hidden">
+          {flat.map((f) => (
+            // Named via aria-label (NOT text content) — same as the promote
+            // options ("Select X") — so the entry name isn't duplicated as a
+            // second text node (which would break every getByText(name) lookup).
+            <div
+              key={f.entry.id}
+              role="treeitem"
+              aria-label={f.entry.name}
+              aria-level={f.depth + 1}
+              // aria-expanded only on rows that HAVE children (a leaf omits it);
+              // true while expanded, false when this parent is collapsed.
+              aria-expanded={f.hasChildren ? !collapsed.has(f.entry.id) : undefined}
+            />
+          ))}
+        </div>
+      )}
       {/* 084-D3 P4 (decision 4): the labeled listbox that OWNS the per-row
           `role="option"` select controls. The options live in grid cells (they
           can't be DOM children of the listbox — EditableGrid owns the table), so
