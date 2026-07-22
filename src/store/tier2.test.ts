@@ -497,6 +497,61 @@ describe('tier2 store — undo/redo of a cross-tier op refreshes the co-mounted 
   })
 })
 
+type AnyFn = (...args: unknown[]) => unknown
+
+// 105 P1 — a Database facade that throws on its Nth `.update()` call, counting
+// across the top-level handle AND the transaction handle it hands a callback.
+function dbFailingOnNthUpdate<T extends object>(real: T, n: number): T {
+  let calls = 0
+  const wrap = <U extends object>(target: U): U =>
+    new Proxy(target, {
+      get(t, prop) {
+        const bag = t as Record<PropertyKey, unknown>
+        if (prop === 'update') {
+          return (...args: unknown[]) => {
+            calls += 1
+            if (calls === n) throw new Error('injected update failure')
+            return (bag.update as AnyFn)(...args)
+          }
+        }
+        if (prop === 'transaction') {
+          return (cb: (tx: object) => unknown, ...rest: unknown[]) =>
+            (bag.transaction as AnyFn)((tx: object) => cb(wrap(tx)), ...rest)
+        }
+        const value = bag[prop]
+        return typeof value === 'function' ? (value as AnyFn).bind(t) : value
+      },
+    })
+  return wrap(real)
+}
+
+// 105 P1 — the store sequences the outbox enqueue + command-log push AFTER the
+// awaited DB mutation, so a rejected moveTier2Entry must never enqueue a sync op
+// or log an undo step. This locks that ordering in against the atomic mutation:
+// a mid-sequence DB failure rejects with the outbox and command log untouched.
+describe('tier2 store — a rejected moveEntry neither enqueues nor logs (105 P1 ordering guard)', () => {
+  it('a mid-sequence DB write failure rejects and leaves the outbox + command log empty', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const p = nn(await useTier2Store.getState().addEntry(table.id, null, 'P'))
+    const q = nn(await useTier2Store.getState().addEntry(table.id, null, 'Q'))
+    await useTier2Store.getState().addEntry(table.id, p.id, 'x')
+    await useTier2Store.getState().addEntry(table.id, p.id, 'y')
+
+    // Enable sync AFTER seeding (so the adds didn't enqueue) and clear the log
+    // the adds pushed — the move is now the only op under observation.
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    useCommandLogStore.getState().clear()
+    setDatabase(dbFailingOnNthUpdate(db, 2))
+
+    await expect(useTier2Store.getState().moveEntry(table.id, q.id, p.id, 0)).rejects.toThrow(
+      'injected update failure',
+    )
+
+    expect(useSyncStore.getState().queue.entries).toEqual([])
+    expect(useCommandLogStore.getState().past).toHaveLength(0)
+  })
+})
+
 // Issue 105 P2/P3 — the store wrapper the keyboard promote/demote (⌘]/⌘[) and
 // move (⌥⇧↑/↓) gestures drive. Wraps the already-unit-tested moveTier2Entry
 // (db/tier2.test.ts "children follow their parent") with ONE command-log entry

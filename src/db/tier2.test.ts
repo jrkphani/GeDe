@@ -26,6 +26,36 @@ function nn<T>(value: T | null | undefined): T {
   return value
 }
 
+type AnyFn = (...args: unknown[]) => unknown
+
+// 105 P1 — a Database facade that throws on its Nth `.update()` call, counting
+// across the top-level handle AND any transaction handle it hands a callback
+// (both share one counter). Lets a test inject a mid-sequence write failure to
+// prove moveTier2Entry's multi-UPDATE sequence rolls back as one unit.
+function dbFailingOnNthUpdate<T extends object>(real: T, n: number): T {
+  let calls = 0
+  const wrap = <U extends object>(target: U): U =>
+    new Proxy(target, {
+      get(t, prop) {
+        const bag = t as Record<PropertyKey, unknown>
+        if (prop === 'update') {
+          return (...args: unknown[]) => {
+            calls += 1
+            if (calls === n) throw new Error('injected update failure')
+            return (bag.update as AnyFn)(...args)
+          }
+        }
+        if (prop === 'transaction') {
+          return (cb: (tx: object) => unknown, ...rest: unknown[]) =>
+            (bag.transaction as AnyFn)((tx: object) => cb(wrap(tx)), ...rest)
+        }
+        const value = bag[prop]
+        return typeof value === 'function' ? (value as AnyFn).bind(t) : value
+      },
+    })
+  return wrap(real)
+}
+
 async function freshProject() {
   const { db } = await openDatabase('memory://')
   const project = await createProject(db, { name: 'Tavalo' })
@@ -116,6 +146,30 @@ describe('tier2 entries (arbitrary nesting)', () => {
     const byId = new Map(entries.map((e) => [e.id, e]))
     expect(byId.get(buyers.id)?.parentId).toBe(users.id)
     expect(byId.get(child.id)?.parentId).toBe(buyers.id) // subtree intact
+  })
+
+  // 105 P1 — the reparent + sibling-sort rewrites are a single unit of work. A
+  // failure partway through must leave ZERO trace: no changed parent_id, no
+  // half-densified sort. Inject a throw on the 2nd UPDATE (the parent_id write
+  // is #1, the first sort rewrite is #2) and assert the real db is byte-identical
+  // to the pre-move snapshot. FAILS against the un-wrapped mutation (the parent_id
+  // UPDATE auto-commits before the throw); PASSES once wrapped in a transaction.
+  it('moveTier2Entry rolls back fully when a mid-sequence UPDATE fails (atomicity)', async () => {
+    const { db, projectId } = await freshProject()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const p = await addTier2Entry(db, table.id, null, 'P')
+    const q = await addTier2Entry(db, table.id, null, 'Q')
+    await addTier2Entry(db, table.id, p.id, 'x')
+    await addTier2Entry(db, table.id, p.id, 'y')
+
+    const snapshot = await listTier2Entries(db, table.id)
+
+    await expect(
+      moveTier2Entry(dbFailingOnNthUpdate(db, 2), table.id, q.id, p.id, 0),
+    ).rejects.toThrow('injected update failure')
+
+    // Full rollback: re-reading via the REAL db is byte-identical to the snapshot.
+    expect(await listTier2Entries(db, table.id)).toEqual(snapshot)
   })
 
   it('removeTier2EntrySubtree soft-deletes the whole subtree', async () => {

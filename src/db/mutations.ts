@@ -1,6 +1,6 @@
 import { and, asc, desc, eq, inArray, isNotNull, isNull } from 'drizzle-orm'
 import { uuidv7 } from 'uuidv7'
-import type { Database } from './client'
+import type { Database, Querier } from './client'
 import { firstOrThrow } from './util'
 import {
   bindings,
@@ -1626,7 +1626,7 @@ function tier2EntryScope(tableId: string) {
 
 // All live entries of a table (every level); the nesting is assembled purely in
 // domain/entryTree.ts. `sort` orders siblings within a parent.
-export async function listTier2Entries(db: Database, tableId: string): Promise<Tier2EntryRow[]> {
+export async function listTier2Entries(db: Querier, tableId: string): Promise<Tier2EntryRow[]> {
   return db.select().from(tier2Entries).where(tier2EntryScope(tableId)).orderBy(asc(tier2Entries.sort))
 }
 
@@ -1649,7 +1649,7 @@ function siblingsOf(entries: Tier2EntryRow[], parentId: string | null): Tier2Ent
   return entries.filter((e) => e.parentId === parentId).sort((a, b) => a.sort - b.sort)
 }
 
-async function rewriteEntrySiblingSort(db: Database, ordered: Tier2EntryRow[]): Promise<void> {
+async function rewriteEntrySiblingSort(db: Querier, ordered: Tier2EntryRow[]): Promise<void> {
   for (const [index, row] of ordered.entries()) {
     if (row.sort !== index) {
       await db.update(tier2Entries).set({ sort: index, updatedAt: now() }).where(eq(tier2Entries.id, row.id))
@@ -1716,21 +1716,29 @@ export async function moveTier2Entry(
   const moved = before.find((e) => e.id === id)
   if (!moved) return before
   const oldParentId = moved.parentId
-  await db
-    .update(tier2Entries)
-    .set({ parentId: newParentId, updatedAt: now() })
-    .where(eq(tier2Entries.id, id))
 
-  const after = await listTier2Entries(db, tableId)
-  // Order the destination group with the moved entry spliced to toIndex.
-  const destOthers = siblingsOf(after, newParentId).filter((e) => e.id !== id)
-  const target = Math.max(0, Math.min(destOthers.length, toIndex))
-  const movedRow = after.find((e) => e.id === id) as Tier2EntryRow
-  destOthers.splice(target, 0, movedRow)
-  await rewriteEntrySiblingSort(db, destOthers)
-  if (oldParentId !== newParentId) {
-    await rewriteEntrySiblingSort(db, siblingsOf(await listTier2Entries(db, tableId), oldParentId))
-  }
+  // 105 P1 — the reparent UPDATE and both sibling-group sort rewrites commit as
+  // one unit: a mid-sequence failure must not leave a changed parent_id or a
+  // half-densified sort behind. Reads inside the callback use `tx` so they see
+  // the uncommitted writes; the authoritative final read below runs after commit.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(tier2Entries)
+      .set({ parentId: newParentId, updatedAt: now() })
+      .where(eq(tier2Entries.id, id))
+
+    const after = await listTier2Entries(tx, tableId)
+    // Order the destination group with the moved entry spliced to toIndex.
+    const destOthers = siblingsOf(after, newParentId).filter((e) => e.id !== id)
+    const target = Math.max(0, Math.min(destOthers.length, toIndex))
+    const movedRow = after.find((e) => e.id === id)
+    if (!movedRow) throw new Error('moved entry vanished mid-transaction')
+    destOthers.splice(target, 0, movedRow)
+    await rewriteEntrySiblingSort(tx, destOthers)
+    if (oldParentId !== newParentId) {
+      await rewriteEntrySiblingSort(tx, siblingsOf(await listTier2Entries(tx, tableId), oldParentId))
+    }
+  })
   return listTier2Entries(db, tableId)
 }
 
