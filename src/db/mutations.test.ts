@@ -1,13 +1,14 @@
-import { eq } from 'drizzle-orm'
+import { asc, eq } from 'drizzle-orm'
 import { describe, expect, it } from 'vitest'
 import { openDatabase } from './client'
-import { bindings } from './schema'
+import { bindings, canvases, contexts, dimensions } from './schema'
 import {
   addDimension,
   addParameter,
   addTier1Prop,
   addTier2Entry,
   addTier2Table,
+  archiveCanvasCascade,
   archiveProject,
   bindParameter,
   createCanvas,
@@ -23,12 +24,15 @@ import {
   listTier1Props,
   listTier2Tables,
   promoteEntries,
+  removeDimension,
   renameProject,
   reorderCanvas,
   reorderDimension,
   reorderParameter,
   reorderTier1Prop,
   reorderTier2Table,
+  restoreCanvasCascade,
+  restoreDimension,
   restoreParametersWithBindings,
   restoreProject,
   revertStaleRebind,
@@ -396,5 +400,113 @@ describe('107 P3 — reorder mutations roll back fully on a mid-densify UPDATE f
     ).rejects.toThrow('injected update failure')
 
     expect(await listTier2Tables(db, project.id)).toEqual(snapshot)
+  })
+})
+
+// 107 P4 — the four cascade mutations each fan a single gesture across multiple
+// tables (canvas/dimensions/contexts/bindings). A mid-cascade UPDATE failure
+// must roll back EVERY table, not just the tables written after the failure.
+// Each test snapshots all affected tables via the REAL db, injects a throw on an
+// UPDATE that lands AFTER the first write, and asserts a full multi-table
+// re-read is byte-identical to the snapshot. Un-wrapped, the first write
+// auto-commits and the re-read diverges (RED); wrapped in one transaction it
+// rolls back whole (GREEN).
+describe('107 P4 — cascade mutations roll back across all tables on a mid-cascade UPDATE failure', () => {
+  // Full state of every cascade-touched table, ordered deterministically so two
+  // snapshots compare by value (uuidv7 ids are monotonic → stable order).
+  async function snapshotTables(db: Awaited<ReturnType<typeof freshDb>>) {
+    return {
+      canvases: await db.select().from(canvases).orderBy(asc(canvases.id)),
+      dimensions: await db.select().from(dimensions).orderBy(asc(dimensions.id)),
+      contexts: await db.select().from(contexts).orderBy(asc(contexts.id)),
+      bindings: await db.select().from(bindings).orderBy(asc(bindings.id)),
+    }
+  }
+
+  it('archiveCanvasCascade rolls back the canvas tombstone when a later cascade UPDATE fails', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' }) // seeds root canvas #1
+    const canvasB = await createCanvas(db, project.id, 'B')
+    const d1 = await addDimension(db, project.id, undefined, canvasB.id)
+    await addDimension(db, project.id, undefined, canvasB.id)
+    const ctx = await createContext(db, project.id, null, canvasB.id)
+    const param = await addParameter(db, d1.id, 'X')
+    await bindParameter(db, ctx.id, d1.id, param.id)
+
+    const snapshot = await snapshotTables(db)
+    // Cascade order: canvas UPDATE (#1), dimensions UPDATE (#2 → throws),
+    // contexts, bindings. The canvas tombstone is already applied when #2 fails.
+    await expect(
+      archiveCanvasCascade(dbFailingOnNthUpdate(db, 2), canvasB.id),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await snapshotTables(db)).toEqual(snapshot)
+  })
+
+  it('restoreCanvasCascade rolls back the canvas revive when a later cascade UPDATE fails', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const canvasB = await createCanvas(db, project.id, 'B')
+    const d1 = await addDimension(db, project.id, undefined, canvasB.id)
+    await addDimension(db, project.id, undefined, canvasB.id)
+    const ctx = await createContext(db, project.id, null, canvasB.id)
+    const param = await addParameter(db, d1.id, 'X')
+    await bindParameter(db, ctx.id, d1.id, param.id)
+
+    const captured = await archiveCanvasCascade(db, canvasB.id)
+    // Snapshot the fully-tombstoned state; a failed restore must preserve it.
+    const snapshot = await snapshotTables(db)
+    // Restore order: canvas un-delete (#1), dimensions un-delete (#2 → throws).
+    await expect(
+      restoreCanvasCascade(dbFailingOnNthUpdate(db, 2), captured),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await snapshotTables(db)).toEqual(snapshot)
+  })
+
+  it('removeDimension rolls back the binding tombstone when the dimension UPDATE fails', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const d1 = await addDimension(db, project.id)
+    await addDimension(db, project.id)
+    await addDimension(db, project.id) // 3 dims → floor (2) not tripped by removing one
+    const ctx = await createContext(db, project.id)
+    const param = await addParameter(db, d1.id, 'X')
+    await bindParameter(db, ctx.id, d1.id, param.id)
+
+    const snapshot = await snapshotTables(db)
+    // Cascade order: binding tombstone (#1), tuple-hash recompute (no UPDATE —
+    // the only binding is now tombstoned), dimension tombstone (#2 → throws).
+    // The binding tombstone is already applied when #2 fails.
+    await expect(
+      removeDimension(dbFailingOnNthUpdate(db, 2), project.id, d1.id),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await snapshotTables(db)).toEqual(snapshot)
+  })
+
+  it('restoreDimension rolls back the dimension revive when a later cascade UPDATE fails', async () => {
+    const db = await freshDb()
+    const project = await createProject(db, { name: 'P' })
+    const d1 = await addDimension(db, project.id)
+    await addDimension(db, project.id)
+    await addDimension(db, project.id)
+    const ctx = await createContext(db, project.id)
+    const param = await addParameter(db, d1.id, 'X')
+    await bindParameter(db, ctx.id, d1.id, param.id)
+
+    const orderedIds = (await listDimensions(db, project.id)).map((d) => d.id)
+    const { deletedBindings } = await removeDimension(db, project.id, d1.id)
+    // Snapshot the post-remove state (d1 + its binding tombstoned); a failed
+    // restore must preserve it exactly.
+    const snapshot = await snapshotTables(db)
+    // Restore order: dimension un-delete (#1), sibling-sort rewrite (#2 → throws
+    // on the first row whose sort ordinal shifts). The un-delete is applied when
+    // #2 fails; a full rollback re-tombstones it.
+    await expect(
+      restoreDimension(dbFailingOnNthUpdate(db, 2), project.id, d1.id, orderedIds, deletedBindings),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await snapshotTables(db)).toEqual(snapshot)
   })
 })

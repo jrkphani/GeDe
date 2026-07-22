@@ -398,7 +398,7 @@ export interface CanvasCascadeResult {
   bindings: BindingRow[]
 }
 
-async function liveRootCanvasCount(db: Database, projectId: string): Promise<number> {
+async function liveRootCanvasCount(db: Querier, projectId: string): Promise<number> {
   const rows = await db
     .select({ id: canvases.id })
     .from(canvases)
@@ -414,59 +414,67 @@ async function liveRootCanvasCount(db: Database, projectId: string): Promise<num
 // guarded: a project must keep >= 1 live root canvas (RootCanvasFloorError).
 // Child canvases (parent_context_id set) have no floor.
 export async function archiveCanvasCascade(db: Database, id: string): Promise<CanvasCascadeResult> {
-  const canvasRow = firstOrThrow(
-    await db.select().from(canvases).where(eq(canvases.id, id)),
-    'canvas not found',
-  )
-  if (canvasRow.parentContextId === null && (await liveRootCanvasCount(db, canvasRow.projectId)) <= 1) {
-    throw new RootCanvasFloorError()
-  }
-  const affectedDimensions = await db
-    .select()
-    .from(dimensions)
-    .where(and(eq(dimensions.canvasId, id), isNull(dimensions.deletedAt)))
-  const affectedContexts = await db
-    .select()
-    .from(contexts)
-    .where(and(eq(contexts.canvasId, id), isNull(contexts.deletedAt)))
-  const contextIds = affectedContexts.map((c) => c.id)
-  const affectedBindings =
-    contextIds.length > 0
-      ? await db
-          .select()
-          .from(bindings)
-          .where(and(inArray(bindings.contextId, contextIds), isNull(bindings.deletedAt)))
-      : []
-  const ts = now()
-  const canvasRows = await db
-    .update(canvases)
-    .set({ deletedAt: ts, updatedAt: ts })
-    .where(eq(canvases.id, id))
-    .returning()
-  if (affectedDimensions.length > 0) {
-    await db
-      .update(dimensions)
+  // 107 P4 — the canvas tombstone and its up-to-three cascade UPDATEs (dims +
+  // contexts + bindings) commit as one unit: a mid-sequence failure must not
+  // leave a tombstoned canvas whose dimensions/contexts/bindings are still live
+  // (or vice versa). The floor guard reads on `tx` so it sees a snapshot
+  // consistent with the writes; a throw (not-found or floor) just rolls back an
+  // empty transaction.
+  return db.transaction(async (tx) => {
+    const canvasRow = firstOrThrow(
+      await tx.select().from(canvases).where(eq(canvases.id, id)),
+      'canvas not found',
+    )
+    if (canvasRow.parentContextId === null && (await liveRootCanvasCount(tx, canvasRow.projectId)) <= 1) {
+      throw new RootCanvasFloorError()
+    }
+    const affectedDimensions = await tx
+      .select()
+      .from(dimensions)
+      .where(and(eq(dimensions.canvasId, id), isNull(dimensions.deletedAt)))
+    const affectedContexts = await tx
+      .select()
+      .from(contexts)
+      .where(and(eq(contexts.canvasId, id), isNull(contexts.deletedAt)))
+    const contextIds = affectedContexts.map((c) => c.id)
+    const affectedBindings =
+      contextIds.length > 0
+        ? await tx
+            .select()
+            .from(bindings)
+            .where(and(inArray(bindings.contextId, contextIds), isNull(bindings.deletedAt)))
+        : []
+    const ts = now()
+    const canvasRows = await tx
+      .update(canvases)
       .set({ deletedAt: ts, updatedAt: ts })
-      .where(inArray(dimensions.id, affectedDimensions.map((d) => d.id)))
-  }
-  if (affectedContexts.length > 0) {
-    await db
-      .update(contexts)
-      .set({ deletedAt: ts, updatedAt: ts })
-      .where(inArray(contexts.id, contextIds))
-  }
-  if (affectedBindings.length > 0) {
-    await db
-      .update(bindings)
-      .set({ deletedAt: ts, updatedAt: ts })
-      .where(inArray(bindings.id, affectedBindings.map((b) => b.id)))
-  }
-  return {
-    canvas: firstOrThrow(canvasRows),
-    dimensions: affectedDimensions,
-    contexts: affectedContexts,
-    bindings: affectedBindings,
-  }
+      .where(eq(canvases.id, id))
+      .returning()
+    if (affectedDimensions.length > 0) {
+      await tx
+        .update(dimensions)
+        .set({ deletedAt: ts, updatedAt: ts })
+        .where(inArray(dimensions.id, affectedDimensions.map((d) => d.id)))
+    }
+    if (affectedContexts.length > 0) {
+      await tx
+        .update(contexts)
+        .set({ deletedAt: ts, updatedAt: ts })
+        .where(inArray(contexts.id, contextIds))
+    }
+    if (affectedBindings.length > 0) {
+      await tx
+        .update(bindings)
+        .set({ deletedAt: ts, updatedAt: ts })
+        .where(inArray(bindings.id, affectedBindings.map((b) => b.id)))
+    }
+    return {
+      canvas: firstOrThrow(canvasRows),
+      dimensions: affectedDimensions,
+      contexts: affectedContexts,
+      bindings: affectedBindings,
+    }
+  })
 }
 
 // Undo of archiveCanvasCascade: revive exactly the rows it tombstoned (the
@@ -477,25 +485,31 @@ export async function restoreCanvasCascade(
   captured: CanvasCascadeResult,
 ): Promise<CanvasCascadeResult> {
   const ts = now()
-  await db.update(canvases).set({ deletedAt: null, updatedAt: ts }).where(eq(canvases.id, captured.canvas.id))
-  if (captured.dimensions.length > 0) {
-    await db
-      .update(dimensions)
-      .set({ deletedAt: null, updatedAt: ts })
-      .where(inArray(dimensions.id, captured.dimensions.map((d) => d.id)))
-  }
-  if (captured.contexts.length > 0) {
-    await db
-      .update(contexts)
-      .set({ deletedAt: null, updatedAt: ts })
-      .where(inArray(contexts.id, captured.contexts.map((c) => c.id)))
-  }
-  if (captured.bindings.length > 0) {
-    await db
-      .update(bindings)
-      .set({ deletedAt: null, updatedAt: ts })
-      .where(inArray(bindings.id, captured.bindings.map((b) => b.id)))
-  }
+  // 107 P4 — reviving the canvas and its captured dimensions/contexts/bindings
+  // commit as one unit: a mid-sequence failure must not leave the canvas revived
+  // while its rows stay tombstoned (or vice versa). The inverse of the archive
+  // cascade, so it carries the same atomicity guarantee.
+  await db.transaction(async (tx) => {
+    await tx.update(canvases).set({ deletedAt: null, updatedAt: ts }).where(eq(canvases.id, captured.canvas.id))
+    if (captured.dimensions.length > 0) {
+      await tx
+        .update(dimensions)
+        .set({ deletedAt: null, updatedAt: ts })
+        .where(inArray(dimensions.id, captured.dimensions.map((d) => d.id)))
+    }
+    if (captured.contexts.length > 0) {
+      await tx
+        .update(contexts)
+        .set({ deletedAt: null, updatedAt: ts })
+        .where(inArray(contexts.id, captured.contexts.map((c) => c.id)))
+    }
+    if (captured.bindings.length > 0) {
+      await tx
+        .update(bindings)
+        .set({ deletedAt: null, updatedAt: ts })
+        .where(inArray(bindings.id, captured.bindings.map((b) => b.id)))
+    }
+  })
   return captured
 }
 
@@ -675,7 +689,7 @@ export interface DimensionRemoveResult {
 // Returns the tombstoned rows verbatim so the caller can restore them exactly
 // on undo (restoreDimension below).
 async function cascadeDeleteBindingsForDimension(
-  db: Database,
+  db: Querier,
   dimensionId: string,
 ): Promise<BindingRow[]> {
   const rows = await db
@@ -701,7 +715,7 @@ async function cascadeDeleteBindingsForDimension(
 // Issue 090 Phase 4c — `canvasId` scopes the removal (and its sibling-sort
 // rewrite) to a specific root canvas; omitted ⇒ the default root canvas.
 async function removeDimensionUnchecked(
-  db: Database,
+  db: Querier,
   projectId: string,
   id: string,
   canvasId?: string,
@@ -733,7 +747,13 @@ export async function removeDimension(
   // 043) — one predicate, enforced identically client-side (here) and
   // server-side, per ADR-0010's "share the rules, don't fork them".
   if (violatesDimensionFloor(rows.length)) throw new DimensionFloorError()
-  return removeDimensionUnchecked(db, projectId, id, canvasId)
+  // 107 P4 — the whole unchecked cascade (binding tombstones + their tuple-hash
+  // recompute, the dimension tombstone, the sibling-sort rewrite) commits as one
+  // unit: a mid-sequence failure must not leave a dimension tombstoned with its
+  // bindings still live, or a half-densified sort. The floor pre-check reads on
+  // `db`; the delegate runs entirely on `tx` (it must NOT open its own
+  // transaction — undoAddDimension still calls it un-wrapped on the top-level db).
+  return db.transaction((tx) => removeDimensionUnchecked(tx, projectId, id, canvasId))
 }
 
 // Exported specifically for the command log's undo-of-add (issue 006) — see
@@ -761,34 +781,42 @@ export async function restoreDimension(
   bindingsToRestore: readonly BindingRow[] = [],
   canvasId?: string,
 ): Promise<DimensionRow[]> {
-  await db
-    .update(dimensions)
-    .set({ deletedAt: null, updatedAt: now() })
-    .where(eq(dimensions.id, id))
-  const rows = await listDimensions(db, projectId, canvasId ?? null)
-  const byId = new Map(rows.map((d) => [d.id, d]))
-  const ordered = orderedIds
-    .map((oid) => byId.get(oid))
-    .filter((d): d is DimensionRow => d !== undefined)
-  await rewriteSort(db, ordered)
-  if (bindingsToRestore.length > 0) {
-    // Restore each binding to its captured state — not merely un-tombstone.
-    // The binding rows are unique per (context, dimension); while this
-    // dimension was removed, a bind onto the same (context, dimension) — which
-    // the parameters store still permits, since a removed dimension's
-    // parameters linger there — can have revived and re-pointed the SAME row to
-    // a different parameter. Clearing deleted_at alone would then revive it with
-    // the WRONG parameter (caught by undoRedo.property). Rewriting parameterId
-    // from the captured row makes undo-of-remove a faithful inverse regardless.
-    for (const b of bindingsToRestore) {
-      await db
-        .update(bindings)
-        .set({ deletedAt: null, parameterId: b.parameterId, updatedAt: now() })
-        .where(eq(bindings.id, b.id))
+  // 107 P4 — the un-delete, the full sibling-sort rewrite, every binding
+  // restore, and each affected context's tuple-hash recompute commit as one
+  // unit: a mid-sequence failure must not leave the dimension revived with a
+  // half-rewritten sort or only some bindings restored. Reads inside the
+  // callback use `tx` so they see the un-delete; the authoritative final read
+  // runs on `db` after commit.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(dimensions)
+      .set({ deletedAt: null, updatedAt: now() })
+      .where(eq(dimensions.id, id))
+    const rows = await listDimensions(tx, projectId, canvasId ?? null)
+    const byId = new Map(rows.map((d) => [d.id, d]))
+    const ordered = orderedIds
+      .map((oid) => byId.get(oid))
+      .filter((d): d is DimensionRow => d !== undefined)
+    await rewriteSort(tx, ordered)
+    if (bindingsToRestore.length > 0) {
+      // Restore each binding to its captured state — not merely un-tombstone.
+      // The binding rows are unique per (context, dimension); while this
+      // dimension was removed, a bind onto the same (context, dimension) — which
+      // the parameters store still permits, since a removed dimension's
+      // parameters linger there — can have revived and re-pointed the SAME row to
+      // a different parameter. Clearing deleted_at alone would then revive it with
+      // the WRONG parameter (caught by undoRedo.property). Rewriting parameterId
+      // from the captured row makes undo-of-remove a faithful inverse regardless.
+      for (const b of bindingsToRestore) {
+        await tx
+          .update(bindings)
+          .set({ deletedAt: null, parameterId: b.parameterId, updatedAt: now() })
+          .where(eq(bindings.id, b.id))
+      }
+      const contextIds = [...new Set(bindingsToRestore.map((r) => r.contextId))]
+      for (const contextId of contextIds) await recomputeTupleHash(tx, contextId)
     }
-    const contextIds = [...new Set(bindingsToRestore.map((r) => r.contextId))]
-    for (const contextId of contextIds) await recomputeTupleHash(db, contextId)
-  }
+  })
   return listDimensions(db, projectId, canvasId ?? null)
 }
 
@@ -1070,7 +1098,7 @@ export async function setContextJustification(
 // Live bindings only — a tombstoned row (issue 032: cascadeDeleteBindingsForDimension
 // below) never surfaces through this read path. recomputeTupleHash, the register,
 // and the sync read-path all key off this same filter.
-export async function listBindings(db: Database, contextId: string): Promise<BindingRow[]> {
+export async function listBindings(db: Querier, contextId: string): Promise<BindingRow[]> {
   return db
     .select()
     .from(bindings)
@@ -1079,7 +1107,7 @@ export async function listBindings(db: Database, contextId: string): Promise<Bin
 
 // All of a context's binding rows share one tuple_hash, kept in dimension-sort
 // order — a single indexed scan then finds duplicate-tuple contexts (issue 005+).
-async function recomputeTupleHash(db: Database, contextId: string): Promise<void> {
+async function recomputeTupleHash(db: Querier, contextId: string): Promise<void> {
   const contextRows = await db.select().from(contexts).where(eq(contexts.id, contextId))
   const contextRow = firstOrThrow(contextRows)
   // A context's tuple is over the dimensions of ITS canvas (its canvas_id),
