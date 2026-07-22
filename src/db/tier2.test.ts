@@ -8,6 +8,7 @@ import {
   createContext,
   createProject,
   deleteParametersUnbinding,
+  listDimensions,
   listParameters,
   listParametersBySourceEntries,
   listTier2Entries,
@@ -18,6 +19,7 @@ import {
   renameTier2Entry,
   renameTier2Table,
   reorderTier2Table,
+  restoreTier2EntrySubtree,
   unlinkParametersFromEntries,
 } from './mutations'
 
@@ -43,6 +45,34 @@ function dbFailingOnNthUpdate<T extends object>(real: T, n: number): T {
             calls += 1
             if (calls === n) throw new Error('injected update failure')
             return (bag.update as AnyFn)(...args)
+          }
+        }
+        if (prop === 'transaction') {
+          return (cb: (tx: object) => unknown, ...rest: unknown[]) =>
+            (bag.transaction as AnyFn)((tx: object) => cb(wrap(tx)), ...rest)
+        }
+        const value = bag[prop]
+        return typeof value === 'function' ? (value as AnyFn).bind(t) : value
+      },
+    })
+  return wrap(real)
+}
+
+// 107 P2 — the insert-side twin of dbFailingOnNthUpdate: throws on the Nth
+// `.insert()` (counted across the top-level handle AND any transaction handle),
+// used to prove promoteEntries' multi-INSERT sequence (dimension + parameters)
+// rolls back as one unit.
+function dbFailingOnNthInsert<T extends object>(real: T, n: number): T {
+  let calls = 0
+  const wrap = <U extends object>(target: U): U =>
+    new Proxy(target, {
+      get(t, prop) {
+        const bag = t as Record<PropertyKey, unknown>
+        if (prop === 'insert') {
+          return (...args: unknown[]) => {
+            calls += 1
+            if (calls === n) throw new Error('injected insert failure')
+            return (bag.insert as AnyFn)(...args)
           }
         }
         if (prop === 'transaction') {
@@ -184,6 +214,49 @@ describe('tier2 entries (arbitrary nesting)', () => {
     expect(entries.map((e) => e.name)).toEqual(['Users'])
     expect(entries[0]?.sort).toBe(0) // sibling gap closed
   })
+
+  // 107 P2 — the subtree soft-delete UPDATE and the sibling re-densify are one
+  // unit of work. Remove B from [A, B, C]: the soft-delete is UPDATE #1, closing
+  // C's sort gap (2 → 1) is UPDATE #2. Inject a throw on #2 and assert the real db
+  // is byte-identical to the pre-remove snapshot. FAILS un-wrapped (B stays
+  // soft-deleted after the throw); PASSES once wrapped in a transaction.
+  it('removeTier2EntrySubtree rolls back fully when a mid-sequence UPDATE fails (atomicity)', async () => {
+    const { db, projectId } = await freshProject()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'A')
+    const b = await addTier2Entry(db, table.id, null, 'B')
+    await addTier2Entry(db, table.id, null, 'C')
+
+    const snapshot = await listTier2Entries(db, table.id)
+
+    await expect(
+      removeTier2EntrySubtree(dbFailingOnNthUpdate(db, 2), table.id, b.id),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await listTier2Entries(db, table.id)).toEqual(snapshot)
+  })
+
+  // 107 P2 — restore's un-delete UPDATE and the per-parent sibling re-densify are
+  // one unit. After removing B from [A, B, C] (live rows re-densify to A@0, C@1,
+  // B tombstoned with stale sort 1), restoring B un-deletes it (UPDATE #1) then
+  // re-closes the now-colliding sort group (UPDATE #2). Inject a throw on #2 and
+  // assert the real db still matches the post-remove snapshot (B stays deleted).
+  it('restoreTier2EntrySubtree rolls back fully when a mid-sequence UPDATE fails (atomicity)', async () => {
+    const { db, projectId } = await freshProject()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'A')
+    const b = await addTier2Entry(db, table.id, null, 'B')
+    await addTier2Entry(db, table.id, null, 'C')
+
+    const { removedIds } = await removeTier2EntrySubtree(db, table.id, b.id)
+    const snapshot = await listTier2Entries(db, table.id) // [A@0, C@1], B gone
+
+    await expect(
+      restoreTier2EntrySubtree(dbFailingOnNthUpdate(db, 2), table.id, removedIds),
+    ).rejects.toThrow('injected update failure')
+
+    expect(await listTier2Entries(db, table.id)).toEqual(snapshot)
+  })
 })
 
 describe('promote entries to a dimension (invariant 7)', () => {
@@ -225,6 +298,32 @@ describe('promote entries to a dimension (invariant 7)', () => {
     expect(second.createdParameters.map((p) => p.name)).toEqual(['Users'])
     expect(second.skippedEntryIds).toEqual([buyers.id])
     expect(await listParameters(db, first.dimensionId)).toHaveLength(2)
+  })
+
+  // 107 P2 — the new-dimension INSERT and the per-entry parameter INSERTs are one
+  // unit of work. The dimension is INSERT #1, the first parameter is INSERT #2.
+  // Inject a throw on #2 and assert NO dimension survives — a half-seeded
+  // dimension (created, zero/partial parameters) would violate invariant 7.
+  // FAILS un-wrapped (the dimension INSERT auto-commits before the throw);
+  // PASSES once both inserts share one transaction.
+  it('promoteEntries rolls back the new dimension when a parameter INSERT fails (atomicity)', async () => {
+    const { db, projectId } = await freshProject()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    const maintainer = await addTier2Entry(db, table.id, null, 'Maintainer')
+
+    const dimsBefore = await listDimensions(db, projectId)
+
+    await expect(
+      promoteEntries(dbFailingOnNthInsert(db, 2), {
+        projectId,
+        entryIds: [buyers.id, maintainer.id],
+        target: { kind: 'new', name: 'Stake' },
+      }),
+    ).rejects.toThrow('injected insert failure')
+
+    // Full rollback: no dimension was created, so no parameters could linger.
+    expect(await listDimensions(db, projectId)).toEqual(dimsBefore)
   })
 })
 

@@ -787,7 +787,7 @@ function parameterScope(dimensionId: string) {
   return and(eq(parameters.dimensionId, dimensionId), isNull(parameters.deletedAt))
 }
 
-export async function listParameters(db: Database, dimensionId: string): Promise<ParameterRow[]> {
+export async function listParameters(db: Querier, dimensionId: string): Promise<ParameterRow[]> {
   return db.select().from(parameters).where(parameterScope(dimensionId)).orderBy(asc(parameters.sort))
 }
 
@@ -1762,15 +1762,22 @@ export async function removeTier2EntrySubtree(
     removedIds.push(current)
     for (const childId of childrenOf.get(current) ?? []) stack.push(childId)
   }
-  await db
-    .update(tier2Entries)
-    .set({ deletedAt: now(), updatedAt: now() })
-    .where(inArray(tier2Entries.id, removedIds))
   const removedRoot = before.find((e) => e.id === id)
-  await rewriteEntrySiblingSort(
-    db,
-    siblingsOf(await listTier2Entries(db, tableId), removedRoot?.parentId ?? null),
-  )
+
+  // 107 P2 — the subtree soft-delete UPDATE and the removed root's sibling
+  // re-densify commit as one unit: a mid-sequence failure must not leave
+  // tombstoned rows with a half-closed sort gap. The densify read uses `tx` so
+  // it sees the soft-delete; the authoritative final read runs after commit.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(tier2Entries)
+      .set({ deletedAt: now(), updatedAt: now() })
+      .where(inArray(tier2Entries.id, removedIds))
+    await rewriteEntrySiblingSort(
+      tx,
+      siblingsOf(await listTier2Entries(tx, tableId), removedRoot?.parentId ?? null),
+    )
+  })
   return { entries: await listTier2Entries(db, tableId), removedIds }
 }
 
@@ -1779,14 +1786,20 @@ export async function restoreTier2EntrySubtree(
   tableId: string,
   removedIds: readonly string[],
 ): Promise<Tier2EntryRow[]> {
-  await db
-    .update(tier2Entries)
-    .set({ deletedAt: null, updatedAt: now() })
-    .where(inArray(tier2Entries.id, [...removedIds]))
-  const restored = await listTier2Entries(db, tableId)
-  // Re-close each affected sibling group so restored rows regain contiguous sort.
-  const parents = new Set(restored.filter((e) => removedIds.includes(e.id)).map((e) => e.parentId))
-  for (const parentId of parents) await rewriteEntrySiblingSort(db, siblingsOf(restored, parentId))
+  // 107 P2 — the un-delete UPDATE and every affected parent's sibling re-densify
+  // commit as one unit: a mid-sequence failure must not leave rows restored with
+  // a half-rewritten sort. Reads inside the callback use `tx` so they see the
+  // un-delete; the authoritative final read runs on `db` after commit.
+  await db.transaction(async (tx) => {
+    await tx
+      .update(tier2Entries)
+      .set({ deletedAt: null, updatedAt: now() })
+      .where(inArray(tier2Entries.id, [...removedIds]))
+    const restored = await listTier2Entries(tx, tableId)
+    // Re-close each affected sibling group so restored rows regain contiguous sort.
+    const parents = new Set(restored.filter((e) => removedIds.includes(e.id)).map((e) => e.parentId))
+    for (const parentId of parents) await rewriteEntrySiblingSort(tx, siblingsOf(restored, parentId))
+  })
   return listTier2Entries(db, tableId)
 }
 
@@ -1811,7 +1824,7 @@ export interface PromoteOutcome {
 // used both to skip already-linked entries on re-promote and to find the
 // parameters that a to-be-deleted entry subtree links to.
 export async function listParametersBySourceEntries(
-  db: Database,
+  db: Querier,
   entryIds: readonly string[],
 ): Promise<ParameterRow[]> {
   if (entryIds.length === 0) return []
@@ -1837,51 +1850,63 @@ export async function promoteEntries(db: Database, input: PromoteInput): Promise
   // point (a fresh dimension already carries it; an existing one is looked
   // up the same way addParameter does).
   let workspaceId: string
+  // Read-only target resolution stays on `db` — it depends on no write below.
+  // For a 'new' dimension, the id is generated here so `dimensionId` is definitely
+  // assigned before the transaction (the INSERT itself runs on `tx` inside it).
+  let dimensionInsert: typeof dimensions.$inferInsert | null = null
   if (target.kind === 'new') {
     const existingDims = await listDimensions(db, projectId)
     workspaceId = await projectWorkspaceId(db, projectId)
     // Issue 090 — promotion seeds a root-canvas dimension; stamp the root canvas.
     const canvasId = await rootCanvasId(db, projectId)
-    const rows = await db
-      .insert(dimensions)
-      .values({
-        id: uuidv7(),
-        projectId,
-        workspaceId,
-        canvasId,
-        name: target.name,
-        color: paletteColor(existingDims.length),
-        sort: existingDims.length,
-      })
-      .returning()
-    createdDimension = firstOrThrow(rows)
-    dimensionId = createdDimension.id
+    dimensionId = uuidv7()
+    dimensionInsert = {
+      id: dimensionId,
+      projectId,
+      workspaceId,
+      canvasId,
+      name: target.name,
+      color: paletteColor(existingDims.length),
+      sort: existingDims.length,
+    }
   } else {
     dimensionId = target.dimensionId
     workspaceId = await dimensionWorkspaceId(db, dimensionId)
   }
 
-  const alreadyLinked = new Set(
-    (await listParametersBySourceEntries(db, entryIds)).map((p) => p.sourceEntryId),
-  )
   const skippedEntryIds: string[] = []
   const createdParameters: ParameterRow[] = []
-  let sort = (await listParameters(db, dimensionId)).length
-  for (const entryId of entryIds) {
-    if (alreadyLinked.has(entryId)) {
-      skippedEntryIds.push(entryId)
-      continue
+
+  // 107 P2 — the (optional) new-dimension INSERT and every parameter INSERT commit
+  // as one unit: a mid-sequence failure must not leave a dimension seeded with
+  // only some of its parameters (invariant 7 links entries ↔ parameters). Reads
+  // inside the callback use `tx` so they see the uncommitted dimension/parameters.
+  await db.transaction(async (tx) => {
+    if (dimensionInsert) {
+      const rows = await tx.insert(dimensions).values(dimensionInsert).returning()
+      createdDimension = firstOrThrow(rows)
     }
-    const entryRows = await db.select().from(tier2Entries).where(eq(tier2Entries.id, entryId)).limit(1)
-    const entry = entryRows[0]
-    if (!entry) continue
-    const inserted = await db
-      .insert(parameters)
-      .values({ id: uuidv7(), dimensionId, workspaceId, name: entry.name, sort, sourceEntryId: entryId })
-      .returning()
-    createdParameters.push(firstOrThrow(inserted))
-    sort += 1
-  }
+
+    const alreadyLinked = new Set(
+      (await listParametersBySourceEntries(tx, entryIds)).map((p) => p.sourceEntryId),
+    )
+    let sort = (await listParameters(tx, dimensionId)).length
+    for (const entryId of entryIds) {
+      if (alreadyLinked.has(entryId)) {
+        skippedEntryIds.push(entryId)
+        continue
+      }
+      const entryRows = await tx.select().from(tier2Entries).where(eq(tier2Entries.id, entryId)).limit(1)
+      const entry = entryRows[0]
+      if (!entry) continue
+      const inserted = await tx
+        .insert(parameters)
+        .values({ id: uuidv7(), dimensionId, workspaceId, name: entry.name, sort, sourceEntryId: entryId })
+        .returning()
+      createdParameters.push(firstOrThrow(inserted))
+      sort += 1
+    }
+  })
 
   return { dimensionId, createdDimension, createdParameters, skippedEntryIds }
 }
