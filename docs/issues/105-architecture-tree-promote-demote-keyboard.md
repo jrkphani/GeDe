@@ -44,6 +44,21 @@ Users / Buyers / [Sellers, Superstars under Buyers] / Casuals / Admins
 ```
 mouse-free, mixed depths — proving the model works once P0+P1 land.
 
+## Row-command placement (IA) — owner critique, 2026-07-22
+
+**"Add child" is a CONTROL, not data — it should not live inside a data `<td>`.** Today it's a `<Button className="t2-add-child-trigger">` in the trailing `actions` static cell (`ArchitectureSurface.tsx:558-571`). That placement is the *mechanism* of the sub-child bug (a focusable button in native tab order — see red-team finding 1), conflates command with content for AT (announced as gridcell content), and competes with data. In a real outliner there is no per-row "Add child" button at all — child creation is keyboard + a bullet/⋯ context menu.
+
+**Recommended IA:**
+- **Keyboard-first (primary):** Enter=sibling / ⌘]=child (P0/P1/P2 below) — no button needed for keyboard users.
+- **Mouse affordance OUT of the data cells (secondary):** consolidate ALL row commands — Add child, Add sibling, Promote/Demote, Move, Remove — into ONE row-hover **`⋯` menu in a dedicated row-action gutter**, rendered as a real command control (`tabIndex` managed, `role` NOT `gridcell`, aria-labeled menu), instead of today's split (Add-child in a cell, Remove in the selection bar — inconsistent).
+- **Architectural note:** `EditableGrid` owns the `<tr>/<td>`, so a clean "row affordance outside the cell model" wants a small grid seam (a per-row action SLOT the grid renders as an overlay/gutter, not a cell). Cheap 80% version: `tabIndex={-1}` + make the existing trigger a menu button (also satisfies P0's "drop Add-child from tab order"). Clean version: the gutter seam + consolidated `⋯` menu. Sequence the cheap version into P0 and the gutter/menu consolidation as its own P (below).
+
+### Selection-bar vs per-row menu (owner follow-up) — scope, not scatter
+The checkbox-select → contextual **selection bar** (issue 025/035 — Remove/Promote appear on select) is a GOOD, standard pattern **for BULK multi-select** (Gmail/Notion/Linear/Finder). The problem is NOT the bar; it's that **single-row commands are split across two mental models**: Add-child is a per-row hover button, but Remove requires select→bar. Forcing a single-row delete through multi-select is heavyweight. Fix by separating by SCOPE:
+- **Single-row commands → the per-row `⋯` menu** (Add child/sibling, Promote/Demote, Move, **Remove**), keyboard-first. One consistent home.
+- **Bulk commands → the selection bar** (bulk Remove, bulk Promote) — keep it; it's correct for multi-select. This app's selection is specifically the role-gated PROMOTE-candidate multi-select (035), so the bar stays focused on promote + bulk.
+- `Remove` lives in BOTH (single-row menu + bulk bar) — same verb, two scopes; expected. **New sub-phase P5:** consolidate single-row commands into the `⋯` gutter menu; leave the selection bar for bulk/promote.
+
 ## Phased build plan (reordered per the red-team)
 - **P0 (the actual owner-reported fix — do FIRST):** intercept Tab in the description richtext (commit + advance, not native fallthrough) + `tabIndex={-1}` on the "Add child" button. Kills the accidental sub-child. Small, high-value, no new grammar.
 - **P1 (sibling series):** **Enter = new sibling at the current depth**, via an **Architecture-scoped `onEnterCreateSibling` opt-in seam** (NOT a global EditableGrid change), with the phantom carrying a mutable `{parentId, depth}` insertion context. Answers "keep making siblings by keyboard."
