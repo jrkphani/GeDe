@@ -36,6 +36,7 @@ import {
 } from '../store/canvasSatellites'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
 import { resolveCanvasStores } from '../store/canvasStores'
+import { useActiveCanvasStore } from '../store/activeCanvas'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
 import { formatDegree } from '../domain/degree'
@@ -268,6 +269,10 @@ type CoverageTwinNodeData = {
   sort: number
   estimate: number
   projectId: string
+  // Issue 100 Phase C — the active-canvas key of the core this twin belongs to
+  // (same as its register/ring siblings), so focusing the twin records the SAME
+  // core active. Undefined for the root core → 'root'.
+  canvasId: string | undefined
   // Pan back along the edge to the ring after a gap-cell compose (so the new
   // draft dot is in view).
   onGapComposed: () => void
@@ -371,8 +376,14 @@ function DesignRegisterNode({ data }: NodeProps<DesignRegisterNode>) {
       </div>
       <div
         className="nodrag nopan nowheel wc-node__body"
-        onFocusCapture={() => setActiveLane('design')}
-        onPointerDown={() => setActiveLane('design')}
+        onFocusCapture={() => {
+          setActiveLane('design')
+          useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
+        }}
+        onPointerDown={() => {
+          setActiveLane('design')
+          useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
+        }}
       >
         <DesignRegisterBody
           projectId={data.projectId}
@@ -405,8 +416,14 @@ function DesignRingNode({ data }: NodeProps<DesignRingNode>) {
       </div>
       <div
         className="nodrag nopan nowheel wc-node__body"
-        onFocusCapture={() => setActiveLane('design')}
-        onPointerDown={() => setActiveLane('design')}
+        onFocusCapture={() => {
+          setActiveLane('design')
+          useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
+        }}
+        onPointerDown={() => {
+          setActiveLane('design')
+          useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
+        }}
       >
         <DesignRingBody
           projectId={data.projectId}
@@ -657,8 +674,14 @@ function CoverageTwinNode({ data }: NodeProps<CoverageTwinNode>) {
       </div>
       <div
         className="nodrag nopan nowheel wc-node__body"
-        onFocusCapture={() => setActiveLane('design')}
-        onPointerDown={() => setActiveLane('design')}
+        onFocusCapture={() => {
+          setActiveLane('design')
+          useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
+        }}
+        onPointerDown={() => {
+          setActiveLane('design')
+          useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
+        }}
       >
         <DesignCoverageTwinBody projectId={data.projectId} onGapComposed={data.onGapComposed} />
       </div>
@@ -1001,6 +1024,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           sort: 2,
           estimate: COVERAGE_TWIN_ESTIMATE,
           projectId,
+          canvasId: design.canvasId,
           onGapComposed,
         },
       })

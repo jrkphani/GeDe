@@ -8,6 +8,7 @@ import { describeContext, tupleReadout } from '../domain/contextDescription'
 import { coverageStat } from '../domain/coverage'
 import type { StaleRebindEvent } from '../db/mutations'
 import { canWrite } from '../domain/workspaceRole'
+import { useActiveCanvasStore } from '../store/activeCanvas'
 import { useActiveLaneStore } from '../store/activeLane'
 import { resolveCanvasStores } from '../store/canvasStores'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
@@ -92,6 +93,14 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
 
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
+
+  // Issue 100 Phase C — this core's stable active-canvas key (parallel to the
+  // `activeLane === 'design'` gate). The root core's `canvasId` is undefined →
+  // 'root'; a Phase-D child core passes its own canvas id. The `c`/`v`/`d` window
+  // verbs gate on `activeCanvas === coreKey` so a keypress fires only in the
+  // FOCUSED core. With one live core, coreKey is always the active canvas when
+  // focused, so the gate is inert.
+  const coreKey = canvasId ?? 'root'
 
   const stores = resolveCanvasStores()
   const dimensions = stores.useDimensions((s) => s.dimensions)
@@ -199,6 +208,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'c' || e.metaKey || e.ctrlKey || e.altKey) return
       if (useActiveLaneStore.getState().activeLane !== 'design') return
+      if (useActiveCanvasStore.getState().activeCanvas !== coreKey) return
       const el = document.activeElement
       if (
         el instanceof HTMLInputElement ||
@@ -213,7 +223,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [view, readOnly, stores])
+  }, [view, readOnly, stores, coreKey])
 
   // Esc exits compose (defers to an open Radix popover this press).
   useEffect(() => {
@@ -237,6 +247,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'v' || e.metaKey || e.ctrlKey || e.altKey) return
       if (useActiveLaneStore.getState().activeLane !== 'design') return
+      if (useActiveCanvasStore.getState().activeCanvas !== coreKey) return
       const el = document.activeElement
       if (
         el instanceof HTMLInputElement ||
@@ -250,7 +261,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [])
+  }, [coreKey])
 
   // `d` = focus the dimension rail's first phantom.
   useEffect(() => {
@@ -258,6 +269,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
     function onKeyDown(e: KeyboardEvent) {
       if (e.key !== 'd' || e.metaKey || e.ctrlKey || e.altKey) return
       if (useActiveLaneStore.getState().activeLane !== 'design') return
+      if (useActiveCanvasStore.getState().activeCanvas !== coreKey) return
       const el = document.activeElement
       if (
         el instanceof HTMLInputElement ||
@@ -276,7 +288,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
     }
     window.addEventListener('keydown', onKeyDown, true)
     return () => window.removeEventListener('keydown', onKeyDown, true)
-  }, [view])
+  }, [view, coreKey])
 
   // Rail → register Tab bridge (issue 085 Phase C): Tab out of the rail's LAST
   // empty phantom lands on the register's phantom row, not the first existing row.

@@ -95,12 +95,13 @@ export function releaseCanvasStores(canvasId: string | null): void {
   registry.delete(key)
 }
 
-// Issue 100 — resolves which canvas's stores a live core should use. Phase B
-// ALWAYS returns the default instance (root === default), so behavior is
-// byte-identical to the pre-Phase-B singleton. Phase C changes ONLY this
-// function to return per-canvas instances + decide which is active.
-export function resolveCanvasStores(): CanvasStores {
-  return getCanvasStores(null)
+// Issue 100 — resolves which canvas's stores a live core should use. The optional
+// `canvasId` is the Phase-D seam: a child core passes its own canvas id to get an
+// independent store instance. In Phase C EVERY caller passes NO argument →
+// `getCanvasStores(null)` → the single default instance (root === default), so
+// behavior is byte-identical to the pre-Phase-B singleton.
+export function resolveCanvasStores(canvasId?: string | null): CanvasStores {
+  return getCanvasStores(canvasId ?? null)
 }
 
 // The default instance — created once, at module load. Its hooks and reset
