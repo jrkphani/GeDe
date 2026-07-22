@@ -17,6 +17,16 @@ export const LANE_NODE_ID: Record<LaneTier, string> = {
   design: 'workspace-canvas-design-lane',
 }
 
+// Issue 100 Phase D / 106 item 1 — the register node id of a drilled-in live CHILD
+// core, NAMESPACED off the parent context / store id so the PRIMARY design lane id
+// stays a singleton. The SINGLE source of truth: both WorkspaceCanvas (which builds
+// the node) and DesignCoreAdapter's `useCoreLod` (which reads the node's rect for
+// the coupled register+ring demote geometry) import it from HERE. This module is a
+// leaf — no `@xyflow/react`, importing only `activeLane` + the `LaneTier` type — so
+// sharing it adds no import cycle (WorkspaceCanvas → DesignCoreAdapter → this leaf).
+export const childRegisterNodeId = (parentContextId: string): string =>
+  `${LANE_NODE_ID.design}:${parentContextId}`
+
 // 089-D3 P4 (nav layer) — ⌘1/2/3 maps to a lane, exactly as AppShell's global
 // route-navigate does (Digit1→foundation, Digit2→architecture, Digit3→design).
 // On the canvas these must PAN, not navigate — see onCanvasNavKeydown.

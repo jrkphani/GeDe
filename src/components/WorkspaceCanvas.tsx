@@ -38,6 +38,7 @@ import { releaseCanvasStores } from '../store/canvasStores'
 import { resetActiveCanvas, useActiveCanvasStore } from '../store/activeCanvas'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
+import { coreDepth } from '../domain/coreLod'
 import { formatDegree } from '../domain/degree'
 import { useTier1Store } from '../store/tier1'
 import { useTier2Store } from '../store/tier2'
@@ -55,6 +56,7 @@ import { PhantomInput } from './ui/inline-editor'
 // THEM eagerly (register the listener before AppShell) while `React.lazy`-loading
 // this heavy canvas — keeping React Flow's JS AND its stylesheet out of prod.
 import {
+  childRegisterNodeId,
   clearActiveCanvasInstance,
   LANE_NODE_ID,
   prefersReducedMotion,
@@ -114,8 +116,9 @@ const DESIGN_RING_NODE_ID = 'workspace-canvas-design-ring'
 // types but NAMESPACES their ids off the parent context id, so the PRIMARY ids
 // (LANE_NODE_ID.design / DESIGN_RING_NODE_ID — the ⌘3 pan, coverage-twin edge,
 // and gap-compose pan targets) stay singletons pointing at the root core. Child
-// cores are purely additive.
-const childRegisterNodeId = (parentContextId: string): string => `${LANE_NODE_ID.design}:${parentContextId}`
+// cores are purely additive. `childRegisterNodeId` is imported from d3CanvasNav (the
+// single source of truth shared with DesignCoreAdapter's culling geometry); the ring
+// id stays local (it keys only WorkspaceCanvas's own node build).
 const childRingNodeId = (parentContextId: string): string => `${DESIGN_RING_NODE_ID}:${parentContextId}`
 // P4 (issue 012) — the coverage TWIN node, stacked in the Design lane BELOW the
 // ring (sort 2) and edge-connected to it. One per canvas (a singleton).
@@ -211,6 +214,10 @@ type DesignBodyNodeData = {
   // anchor + parent→child edge source (parentCoreNodeIdFor). Only the REGISTER node
   // carries it (edges + columns anchor off registers); the ring never needs it.
   parentCoreId?: string | null | undefined
+  // Issue 106 item 1 — this core's drill-in depth (direct child 0, grandchild 1, …)
+  // for zoom-LOD depth-culling. Stamped on child cores only; undefined on the
+  // PRIMARY (which never demotes), read as 0 by useCoreLod.
+  depth?: number | undefined
   // Issue 100 Phase D — collapse a live child core (undefined on the primary).
   onCollapse?: (() => void) | undefined
 }
@@ -465,6 +472,7 @@ function DesignRegisterNode({ data }: NodeProps<DesignRegisterNode>) {
           view={data.view}
           canvasId={data.canvasId}
           storeCanvasId={data.storeCanvasId}
+          depth={data.depth}
           onCollapse={data.onCollapse}
         />
       </div>
@@ -507,6 +515,7 @@ function DesignRingNode({ data }: NodeProps<DesignRingNode>) {
           view={data.view}
           canvasId={data.canvasId}
           storeCanvasId={data.storeCanvasId}
+          depth={data.depth}
         />
       </div>
     </div>
@@ -1063,6 +1072,9 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
       // keeping it primary-rooted preserves direct-child behavior byte-identical.
       // (A deeper breadcrumb trail for grandchildren is a nav-only follow-up.)
       const childContextPath = [...design.contextPath, contextId]
+      // Issue 106 item 1 — this core's drill-in depth for zoom-LOD depth-culling,
+      // stamped on BOTH bodies so the register + ring evaluate the same depth axis.
+      const depth = coreDepth(openSatellites, contextId)
       list.push({
         id: childRegisterNodeId(contextId),
         type: 'designRegister',
@@ -1077,6 +1089,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           view: 'canvas',
           canvasId: contextId,
           storeCanvasId: contextId,
+          depth,
           // 106 item 2 — the anchor for this core's column + parent→child edge:
           // null → the primary register; a parent contextId → that child-core's
           // register (a grandchild). Threaded onto the RECONCILED node so the edge
@@ -1099,6 +1112,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           view: 'canvas',
           canvasId: contextId,
           storeCanvasId: contextId,
+          depth,
         },
       })
     }

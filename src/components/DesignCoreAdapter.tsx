@@ -1,7 +1,14 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState, type FocusEvent } from 'react'
 import { useStore } from '@xyflow/react'
 import type { CanvasEmphasis } from '../domain/canvasAdjacency'
 import { quantizeHitScale } from '../domain/canvasResponsive'
+import {
+  shouldCoreBeLive,
+  viewportRect,
+  type CoreLodConfig,
+  type Rect,
+} from '../domain/coreLod'
+import { childRegisterNodeId } from './d3CanvasNav'
 import { firstUnbound } from '../domain/composeMode'
 import { documentedStatus, isComplete } from '../domain/completeness'
 import { describeContext, tupleReadout } from '../domain/contextDescription'
@@ -14,6 +21,7 @@ import { resolveCanvasStores } from '../store/canvasStores'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
 import { useCanvasSatellitesStore } from '../store/canvasSatellites'
 import { useCanvasesStore } from '../store/canvases'
+import { useCoreEditingStore } from '../store/coreEditing'
 import { useParametersStore } from '../store/parameters'
 import { healRichTextOnLoad } from '../store/richTextConvert'
 import { useStatusStore } from '../store/status'
@@ -54,6 +62,9 @@ export interface DesignBodyProps {
   // LIVE CHILD core passes its `parentContextId` → its OWN independent instance
   // (one parent context ↔ one child canvas, so the key is stable + collision-free).
   storeCanvasId?: string | null | undefined
+  // Issue 106 item 1 — this core's drill-in depth (direct child 0, grandchild 1, …)
+  // for zoom-LOD depth-culling. Undefined on the PRIMARY core (which never demotes).
+  depth?: number | undefined
   // Issue 100 Phase D — a live CHILD core is collapsible in place: when provided,
   // the register header shows a `×` that tears the child core down. Undefined for
   // the primary core (which is never collapsed), so its header is unchanged.
@@ -103,6 +114,136 @@ function useDesignCanvasContext(
   }
 }
 
+// Issue 106 item 1 — the culling thresholds. `minZoom` reuses WorkspaceCanvas's
+// LANE_LOD_ZOOM (0.35 — a small project fit-views at ~0.5, so a child core stays
+// live at fit and only demotes when zoomed out further). `maxLiveDepth` 2 means
+// depth-culling only bites great-great-grandchildren+ — zoom + off-screen are the
+// real cullers. `offscreenMargin` ≈ one lane width of flow coords, so a core one
+// column off-edge stays live (no thrash on a small pan).
+const CORE_LOD_CONFIG: CoreLodConfig = { minZoom: 0.35, maxLiveDepth: 2, offscreenMargin: 960 }
+
+// Issue 106 item 1 — zoom-LOD auto-culling for a drilled-in child core. Mirrors
+// useLaneLod (WorkspaceCanvas.tsx): a body-local BOOLEAN `useStore` selector so a
+// core body re-renders only when the demote/promote threshold is CROSSED, never on
+// every pan/zoom frame (089-P5/093 boolean-selector discipline). The whole
+// shouldCoreBeLive computation runs INSIDE the selector and collapses to one
+// boolean, so React Flow's default equality bails out of a re-render on any frame
+// that doesn't flip it. `isEditing` is SUPPLIED BY THE CALLER (read inside the
+// selector) so each body feeds its own edit-gate source: the register passes its
+// LOCAL focus ref (mutated on focus WITHOUT a re-render → click-to-edit is never
+// cancelled, per useLaneLod); the ring passes the SHARED coreEditing signal the
+// register writes, so an actively-edited core keeps BOTH bodies live in lockstep
+// (HIGH review fix — before, the ring's own gate was permanently false, demoting the
+// ring to a stub beside a live register). storeCanvasId null = the PRIMARY core →
+// never demotes (locked decision 4). Both `useCoreLod` and `shouldCoreBeLive` treat a
+// core being edited as always-live, so a wheel-zoom/pan re-runs the selector, sees
+// `isEditing()` true, and STAYS live (its grids never unmount → no dropped keystrokes).
+function useCoreLod(
+  storeCanvasId: string | null | undefined,
+  depth: number,
+  isEditing: () => boolean,
+): boolean {
+  return useStore((s) => {
+    // Primary never demotes (locked decision 4).
+    if (storeCanvasId == null) return false
+    const node = s.nodeLookup.get(childRegisterNodeId(storeCanvasId))
+    // Before the register node is in the lookup / measured, keep it live (no
+    // pre-measure cull flash — it promotes/demotes once geometry settles).
+    if (!node) return false
+    const coreRect: Rect = {
+      x: node.internals.positionAbsolute.x,
+      y: node.internals.positionAbsolute.y,
+      width: node.measured.width ?? 0,
+      height: node.measured.height ?? 0,
+    }
+    const live = shouldCoreBeLive(
+      {
+        zoom: s.transform[2],
+        depth,
+        coreRect,
+        viewportRect: viewportRect(s.transform, s.width, s.height),
+        isEditing: isEditing(),
+      },
+      CORE_LOD_CONFIG,
+    )
+    return !live
+  })
+}
+
+// Issue 106 item 1 (HIGH review fix) — the REGISTER's edit gate. The register owns
+// the editing signal for its core: it keeps a LOCAL focus-within ref (read by its own
+// `useCoreLod` — mutating a ref triggers NO re-render, so focusing a cell never
+// cancels the click-to-edit, per the 089-P5 / useLaneLod regression) AND imperatively
+// mirrors that state into the SHARED coreEditing store via `getState()` — write-only,
+// so the register does NOT subscribe and does NOT re-render on its own focus. The ring
+// (a separate node body that can't see this ref) reads that shared store instead, so
+// register + ring demote in lockstep on the editing axis. The unmount cleanup clears
+// the shared signal so a released/collapsed core never leaves a stale `true` pinning a
+// phantom ring live. The primary core (storeCanvasId null) never demotes and has no
+// child ring reading it, so it skips the shared write entirely.
+function useCoreEditingGate(storeCanvasId: string | null | undefined): {
+  isEditing: () => boolean
+  onFocusCapture: () => void
+  onBlurCapture: (e: FocusEvent<HTMLElement>) => void
+} {
+  const focusedRef = useRef(false)
+  useEffect(() => {
+    return () => {
+      if (storeCanvasId != null) {
+        useCoreEditingStore.getState().setCoreEditing(storeCanvasId, false)
+      }
+    }
+  }, [storeCanvasId])
+  return {
+    isEditing: () => focusedRef.current,
+    onFocusCapture: () => {
+      focusedRef.current = true
+      if (storeCanvasId != null) {
+        useCoreEditingStore.getState().setCoreEditing(storeCanvasId, true)
+      }
+    },
+    onBlurCapture: (e) => {
+      // Clear only when focus truly leaves the core body (not an intra-body move);
+      // relatedTarget null (focus to nothing) also clears — correct. The register's
+      // own re-demote then lands on the next zoom/pan re-render (ref-based, no
+      // re-render on blur), per locked decision 2; the ring re-renders now (it reads
+      // the shared store) — harmless, it is read-only (085).
+      if (!e.currentTarget.contains(e.relatedTarget)) {
+        focusedRef.current = false
+        if (storeCanvasId != null) {
+          useCoreEditingStore.getState().setCoreEditing(storeCanvasId, false)
+        }
+      }
+    },
+  }
+}
+
+// The lightweight demoted stand-in for a culled child core: a small summary that
+// drops the heavy grid/editor (register) or Canvas SVG (ring) while the store stays
+// mounted above (no releaseCanvasStores — locked decision 1). Styled small so its
+// measured height shrinks and the cluster restacks tight.
+function CoreStub({ symbol, count }: { symbol: string; count: number }) {
+  return (
+    <div
+      className="wc-core-stub"
+      data-testid="wc-core-stub"
+      style={{
+        display: 'flex',
+        gap: 8,
+        alignItems: 'baseline',
+        padding: '8px 12px',
+        fontSize: 13,
+        opacity: 0.7,
+      }}
+    >
+      <span className="wc-core-stub__symbol font-mono">{symbol}</span>
+      <span className="wc-core-stub__meta">
+        {count} context{count === 1 ? '' : 's'}
+      </span>
+    </div>
+  )
+}
+
 // ── The REGISTER body: header + rail + context register (the authoring surface).
 export function DesignRegisterBody({
   projectId,
@@ -110,6 +251,7 @@ export function DesignRegisterBody({
   view,
   canvasId,
   storeCanvasId,
+  depth,
   onCollapse,
 }: DesignBodyProps) {
   const { contextId, atRoot, activeRootCanvasId, canvasSelector, canLoad, canvasReady } =
@@ -117,6 +259,13 @@ export function DesignRegisterBody({
 
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
+
+  // Issue 106 item 1 — the register carries the edit gate: its focus handlers feed
+  // the LOCAL focus ref (its own gate — no re-render on focus) AND the shared
+  // coreEditing signal the ring reads. Called with the OTHER hooks (before any early
+  // return) to satisfy the Rules of Hooks.
+  const editingGate = useCoreEditingGate(storeCanvasId)
+  const demoted = useCoreLod(storeCanvasId, depth ?? 0, editingGate.isEditing)
 
   // Issue 100 Phase C — this core's stable active-canvas key (parallel to the
   // `activeLane === 'design'` gate). The root core's `canvasId` is undefined →
@@ -346,6 +495,23 @@ export function DesignRegisterBody({
 
   if (!canvasReady) return null
 
+  // Issue 106 item 1 — demoted: swap the heavy header + rail + register grid for a
+  // lightweight stub. RENDER-ONLY — the store stays mounted (every hook above still
+  // ran: the load effect + subscriptions persist), so re-promotion needs no reload
+  // (locked decision 1: no releaseCanvasStores, no arbiter reset on demote). The
+  // focus handlers stay wired so focusing back in re-arms the edit gate.
+  if (demoted) {
+    return (
+      <div
+        className="design-core-register design-core-register--stub"
+        onFocusCapture={editingGate.onFocusCapture}
+        onBlurCapture={editingGate.onBlurCapture}
+      >
+        <CoreStub symbol={breadcrumbs[breadcrumbs.length - 1]?.symbol ?? '·'} count={contexts.length} />
+      </div>
+    )
+  }
+
   const dimensionNames = dimensions.map((d) => d.name)
   const needsSeeding =
     contextId !== null &&
@@ -354,7 +520,11 @@ export function DesignRegisterBody({
   const belowFloor = !needsSeeding && dimensions.length < 2
 
   return (
-    <div className="design-core-register">
+    <div
+      className="design-core-register"
+      onFocusCapture={editingGate.onFocusCapture}
+      onBlurCapture={editingGate.onBlurCapture}
+    >
       <div className="workspace__lane-header design-lane-header">
         {/* Issue 100 Phase D — a live CHILD core carries a `×` that collapses it
             (tears down its own store instance). The primary core passes no
@@ -458,13 +628,33 @@ export function DesignRegisterBody({
 }
 
 // ── The RING body: the Canvas (or, in coverage view, the CoverageMatrix).
-export function DesignRingBody({ projectId, contextPath, canvasId, storeCanvasId }: DesignBodyProps) {
+export function DesignRingBody({
+  projectId,
+  contextPath,
+  canvasId,
+  storeCanvasId,
+  depth,
+}: DesignBodyProps) {
   const { contextId, canvasSelector, canvasReady } = useDesignCanvasContext(
     projectId,
     contextPath,
     canvasId,
     storeCanvasId,
   )
+
+  // Issue 106 item 1 — the ring shares the register's coupled geometry (useCoreLod
+  // evaluates against the REGISTER node's rect either way), so it demotes/promotes in
+  // lockstep. It cannot see the register's LOCAL focus ref (separate node body), so it
+  // reads the SHARED coreEditing signal the register writes — a BOOLEAN `useStore`
+  // selector, so the ring re-renders only when the register's editing FLIPS (harmless:
+  // the ring is read-only per 085, never the click-to-edit target). This is the HIGH
+  // review fix: previously the ring's own gate was permanently false, so editing a
+  // register then panning the core off-screen demoted the ring to a stub beside a live
+  // register — a visible violation of the "register + ring demote in lockstep" contract.
+  const ringIsEditing = useCoreEditingStore(
+    (s) => storeCanvasId != null && s.editing[storeCanvasId] === true,
+  )
+  const ringDemoted = useCoreLod(storeCanvasId, depth ?? 0, () => ringIsEditing)
 
   // 099-2c — the ring renders inside the canvas's `transform: scale()`, so the
   // dots' 44px hit target has to be sized in SCREEN space. QUANTIZED (bucketed)
@@ -549,6 +739,17 @@ export function DesignRingBody({ projectId, contextPath, canvasId, storeCanvasId
   }
 
   if (!canvasReady) return null
+
+  // Issue 106 item 1 — demoted: drop the heavy Canvas SVG for the stub. Render-only,
+  // store stays mounted (locked decision 1). The ring is read-only so there is
+  // nothing to lose; it rides the register's coupled demote decision.
+  if (ringDemoted) {
+    return (
+      <div className="design-core-ring design-core-ring--stub">
+        <CoreStub symbol="◍" count={contexts.length} />
+      </div>
+    )
+  }
 
   const needsSeeding =
     contextId !== null &&
