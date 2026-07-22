@@ -29,6 +29,15 @@ function selectAllTextIn(container: Element) {
   document.dispatchEvent(new Event('selectionchange'))
 }
 
+// Issue 105 P5 — add-child moved from a directly-labeled trailing button into the
+// ⋯ row-action gutter menu. This drives it the way a user now does: open the
+// row's ⋯ menu, then click its "Add child" item.
+async function openAddChild(user: ReturnType<typeof userEvent.setup>, name: string) {
+  await user.click(screen.getByLabelText(`Row actions for ${name}`))
+  const menu = document.querySelector('.menu') as HTMLElement
+  await user.click(within(menu).getByText('Add child'))
+}
+
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
 let workspaceId: string
@@ -292,7 +301,9 @@ describe('ArchitectureSurface — viewer read-only affordance (issue 035)', () =
     await screen.findByText('Buyers')
 
     expect(screen.queryByRole('option', { name: 'Select Buyers' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Add child to Buyers' })).not.toBeInTheDocument()
+    // Issue 105 P5 — the row verbs (add-child + the tree/remove menu) live behind
+    // the ⋯ row-action gutter menu, which a viewer never sees.
+    expect(screen.queryByLabelText('Row actions for Buyers')).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Remove Buyers' })).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Name an entry')).not.toBeInTheDocument()
     expect(screen.queryByPlaceholderText('Name a table')).not.toBeInTheDocument()
@@ -388,15 +399,16 @@ describe('ArchitectureSurface — typed add-child in the trailing gutter (issue 
     const buyersRow = (await screen.findByText('Buyers')).closest('tr') as HTMLElement
 
     // Add child is a trailing row action, not wedged between data columns: it
-    // lives in the last cell (.t2-col--actions), after Name and Description.
-    // (Looked up by aria-label within the cell — a role query here is fragile
-    // against a pre-existing cross-file Radix-overlay leak that spuriously
-    // marks the document aria-hidden; the button itself is correctly labeled.)
+    // lives in the last cell (.t2-col--actions), after Name and Description —
+    // now inside that cell's ⋯ row-action menu (issue 105 P5). The ⋯ trigger is
+    // looked up by aria-label within the cell (a role query is fragile against a
+    // pre-existing cross-file Radix-overlay leak that spuriously marks the
+    // document aria-hidden; the trigger itself is correctly labeled).
     const actionsCell = buyersRow.querySelector('.t2-col--actions') as HTMLElement
-    const addChildBtn = within(actionsCell).getByLabelText('Add child to Buyers')
-    expect(actionsCell).toContainElement(addChildBtn)
+    const menuTrigger = within(actionsCell).getByLabelText('Row actions for Buyers')
+    expect(actionsCell).toContainElement(menuTrigger)
 
-    await user.click(addChildBtn)
+    await openAddChild(user, 'Buyers')
     const childField = await screen.findByPlaceholderText('Name a child of Buyers')
     await user.type(childField, 'Superstars')
     await user.keyboard('{Enter}')
@@ -420,7 +432,7 @@ describe('ArchitectureSurface — D3 P3 inline typed add-child (issue 084 Direct
     const { container } = render(<ArchitectureSurface projectId={projectId} />)
     await screen.findByText('Buyers')
 
-    await user.click(await screen.findByLabelText('Add child to Buyers'))
+    await openAddChild(user, 'Buyers')
     const childField = await screen.findByPlaceholderText('Name a child of Buyers')
 
     // Inline grid ROW, not a floating popover: no dialog, and the input lives
@@ -443,7 +455,7 @@ describe('ArchitectureSurface — D3 P3 inline typed add-child (issue 084 Direct
     render(<ArchitectureSurface projectId={projectId} />)
     await screen.findByText('Buyers')
 
-    await user.click(await screen.findByLabelText('Add child to Buyers'))
+    await openAddChild(user, 'Buyers')
     const childField = await screen.findByPlaceholderText('Name a child of Buyers')
     await user.type(childField, 'Superstars')
     await user.keyboard('{Enter}')
@@ -468,7 +480,7 @@ describe('ArchitectureSurface — D3 P3 inline typed add-child (issue 084 Direct
     render(<ArchitectureSurface projectId={projectId} />)
     await screen.findByText('Buyers')
 
-    await user.click(await screen.findByLabelText('Add child to Buyers'))
+    await openAddChild(user, 'Buyers')
     const childField = await screen.findByPlaceholderText('Name a child of Buyers')
     await user.type(childField, 'Discarded')
     await user.keyboard('{Escape}')
@@ -613,7 +625,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
 
     // Click "Add child" on Superstars → the add-child phantom takes over AND the
     // sibling state is cleared (bidirectional exclusivity), not merely hidden.
-    await user.click(await screen.findByLabelText('Add child to Superstars'))
+    await openAddChild(user, 'Superstars')
     await screen.findByPlaceholderText('Name a child of Superstars')
     expect(screen.queryByPlaceholderText('Name a sibling under Buyers')).not.toBeInTheDocument()
 
@@ -623,6 +635,102 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
       expect(screen.queryByPlaceholderText('Name a child of Superstars')).not.toBeInTheDocument(),
     )
     expect(screen.queryByPlaceholderText('Name a sibling under Buyers')).not.toBeInTheDocument()
+  })
+})
+
+// Issue 105 P5 — the ⋯ row-action gutter menu. Every keyboard tree verb (⏎ new
+// sibling, ⌘] make child, ⌘[ promote, ⌥⇧↑↓ move) plus Remove now has a
+// pointer-reachable twin behind a per-row ⋯ menu, mirroring the AppShell
+// ProjectMenu grammar (Popover + .menu / .menu__item). The trigger is
+// tabIndex=-1 (a row COMMAND, never a form/grid tab-stop — 105 P0 + cross-node
+// Tab). No-op verbs (a top-level Promote, a first-child Make child) render
+// DISABLED, keeping the pointer path's guards identical to the keyboard no-ops.
+describe('ArchitectureSurface — row action menu (issue 105 P5)', () => {
+  function actionsCellFor(name: string): HTMLElement {
+    const row = screen.getByText(name).closest('tr') as HTMLElement
+    return row.querySelector('.t2-col--actions') as HTMLElement
+  }
+  function openMenu(): HTMLElement {
+    return document.querySelector('.menu') as HTMLElement
+  }
+
+  it('renders a ⋯ trigger per row with an aria-label and a load-bearing tabIndex=-1', async () => {
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    const trigger = within(actionsCellFor('Buyers')).getByLabelText('Row actions for Buyers')
+    expect(trigger).toHaveClass('t2-row-menu-trigger')
+    // Never a form/grid tab-stop (105 P0 + the ?d3rf cross-node Tab test).
+    expect(trigger.getAttribute('tabindex')).toBe('-1')
+  })
+
+  it('opening the menu reveals every row verb in order', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(within(actionsCellFor('Buyers')).getByLabelText('Row actions for Buyers'))
+    const menu = await waitFor(() => {
+      const m = openMenu()
+      expect(m).not.toBeNull()
+      return m
+    })
+    const order = ['Add child', 'Add sibling', 'Promote', 'Make child', 'Move up', 'Move down', 'Remove']
+    for (const label of order) expect(within(menu).getByText(label)).toBeInTheDocument()
+    // In this exact top-to-bottom order.
+    const items = [...menu.querySelectorAll('.menu__item')]
+    const positionOf = (label: string) => items.findIndex((i) => i.textContent.includes(label))
+    const positions = order.map(positionOf)
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    expect(positions.every((p) => p >= 0)).toBe(true)
+  })
+
+  it('disables Promote on a top-level entry and Make child on a first child (pointer no-ops mirror the keyboard)', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const buyers = await addTier2Entry(db, table.id, null, 'Buyers')
+    await addTier2Entry(db, table.id, buyers.id, 'Superstars') // Buyers' only (first) child
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Superstars')
+
+    // Top-level Buyers → nothing to outdent to → Promote disabled.
+    await user.click(within(actionsCellFor('Buyers')).getByLabelText('Row actions for Buyers'))
+    expect(within(openMenu()).getByText('Promote').closest('button')).toBeDisabled()
+    await user.keyboard('{Escape}')
+
+    // First child Superstars → no preceding sibling → Make child (demote) disabled,
+    // but Promote is available (it can outdent under Buyers' parent).
+    await user.click(within(actionsCellFor('Superstars')).getByLabelText('Row actions for Superstars'))
+    expect(within(openMenu()).getByText('Make child').closest('button')).toBeDisabled()
+    expect(within(openMenu()).getByText('Promote').closest('button')).not.toBeDisabled()
+  })
+
+  it('Add child arms the inline typed child phantom', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(within(actionsCellFor('Buyers')).getByLabelText('Row actions for Buyers'))
+    await user.click(within(openMenu()).getByText('Add child'))
+    expect(await screen.findByPlaceholderText('Name a child of Buyers')).toBeInTheDocument()
+  })
+
+  it('Remove on a plain (unlinked) entry deletes it', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    await addTier2Entry(db, table.id, null, 'Buyers')
+    render(<ArchitectureSurface projectId={projectId} />)
+    await screen.findByText('Buyers')
+
+    await user.click(within(actionsCellFor('Buyers')).getByLabelText('Row actions for Buyers'))
+    await user.click(within(openMenu()).getByText('Remove'))
+    await waitFor(() => expect(screen.queryByText('Buyers')).not.toBeInTheDocument())
   })
 })
 

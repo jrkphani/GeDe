@@ -1,5 +1,5 @@
 import AxeBuilder from '@axe-core/playwright'
-import { expect, test, type Page } from '@playwright/test'
+import { expect, test, type Locator, type Page } from '@playwright/test'
 import { forceWorkspaceSurface } from './workspaceSurface'
 
 // Issue 014, test-first plan item 5: build the example's Architecture tables,
@@ -28,6 +28,16 @@ async function addEntry(page: Page, tableName: string, entryName: string) {
   await phantom.fill(entryName)
   await phantom.press('Enter')
   await expect(panel.getByRole('cell', { name: entryName, exact: true })).toBeVisible()
+}
+
+// Issue 105 P5 — add-child moved from a directly-labeled trailing button into the
+// ⋯ row-action gutter menu (mirroring the AppShell ProjectMenu). This drives it
+// the way a user now does: hover the row to reveal the quiet ⋯ trigger, open it,
+// then click the "Add child" item. `row` is the entry's <tr> locator.
+async function addChildViaMenu(page: Page, row: Locator, name: string) {
+  await row.hover()
+  await row.getByRole('button', { name: `Row actions for ${name}` }).click()
+  await page.locator('.menu').getByRole('button', { name: 'Add child' }).click()
 }
 
 async function promoteTable(page: Page, tableName: string, entryNames: string[], dimensionName: string) {
@@ -471,8 +481,7 @@ test('architecture 105 (P1): Enter on a name opens a same-depth sibling phantom;
   const { panel, comfortRow } = await setup104(page, 'Repro105b')
 
   // Give Comfort one child so the sibling series runs at depth 1, not depth 0.
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await childField.fill('Legroom')
   await childField.press('Enter')
@@ -552,8 +561,7 @@ test('architecture 105 (HIGH 3): the bottom phantom still creates top-level afte
   const { panel, comfortRow } = await setup104(page, 'Repro105d')
 
   // Run a depth-1 sibling series under Comfort (child Legroom, then a sibling).
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await childField.fill('Legroom')
   await childField.press('Enter')
@@ -610,8 +618,7 @@ test('architecture 102: Add child works even while a description cell is being e
   await page.locator('[contenteditable="true"]:focus').pressSequentially('Seating comfort')
 
   // With the description still in edit mode, click Add child.
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
 
   // The child phantom must appear AND survive (the focus fight used to kill it).
   const childField = page.getByPlaceholder('Name a child of Comfort')
@@ -657,8 +664,7 @@ test('architecture 102b: Add child works while a CHANGED name cell is being edit
 
   // With the changed name still mid-edit, click Add child (name uncommitted, so
   // the entry — and the button's aria-label — is still "Comfort").
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: /Add child to Comfort/ }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
 
   const childField = page.getByPlaceholder(/Name a child of Comfort/)
   await expect(childField).toBeVisible({ timeout: 2000 })
@@ -697,11 +703,10 @@ async function setup104(page: Page, projectName: string) {
 test('architecture 104 (facet 3a): clicking a cell while add-child is armed dismisses it and edits that cell', async ({
   page,
 }) => {
-  const { panel, comfortRow } = await setup104(page, 'Repro104a')
+  const { comfortRow } = await setup104(page, 'Repro104a')
 
   // Arm the add-child phantom under Comfort.
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await expect(childField).toBeVisible()
 
@@ -727,8 +732,7 @@ test('architecture 104 (facet 3b): Tab from the add-child field lands in a grid 
 }) => {
   const { panel, comfortRow } = await setup104(page, 'Repro104b')
 
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await expect(childField).toBeFocused()
 
@@ -788,8 +792,7 @@ test('architecture 104 (edge a): Escape dismisses the add-child phantom with dis
 }) => {
   const { panel, comfortRow } = await setup104(page, 'Repro104d')
 
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await expect(childField).toBeFocused()
 
@@ -806,10 +809,9 @@ test('architecture 104 (edge a): Escape dismisses the add-child phantom with dis
 test('architecture 104 (edge b): clicking a plain-text cell while armed dismisses it and edits that cell', async ({
   page,
 }) => {
-  const { panel, comfortRow } = await setup104(page, 'Repro104e')
+  const { comfortRow } = await setup104(page, 'Repro104e')
 
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await expect(childField).toBeVisible()
 
@@ -828,10 +830,9 @@ test('architecture 104 (edge b): clicking a plain-text cell while armed dismisse
 test('architecture 104 (edge c): Shift+Tab from the add-child field lands on the first grid cell', async ({
   page,
 }) => {
-  const { panel, comfortRow } = await setup104(page, 'Repro104f')
+  const { comfortRow } = await setup104(page, 'Repro104f')
 
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await expect(childField).toBeFocused()
 
@@ -867,8 +868,7 @@ test('architecture 104 (edge d): clicking outside the grid cells leaves the add-
 }) => {
   const { panel, comfortRow } = await setup104(page, 'Repro104g')
 
-  await comfortRow.hover()
-  await panel.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await addChildViaMenu(page, comfortRow, 'Comfort')
   const childField = page.getByPlaceholder('Name a child of Comfort')
   await expect(childField).toBeVisible()
 
@@ -892,7 +892,13 @@ async function setup105Tree(page: Page, projectName: string, names: string[]) {
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
   await projectPhantom.fill(projectName)
   await projectPhantom.press('Enter')
-  await page.getByRole('button', { name: `Open ${projectName}` }).click()
+  // The .project-row is a role=button ("Open X") that CONTAINS the "Archive X"
+  // button at its right edge; a default center-click can land on Archive
+  // depending on row width. Click the row's left (name) area so we always open,
+  // never archive.
+  await page
+    .getByRole('button', { name: `Open ${projectName}`, exact: true })
+    .click({ position: { x: 8, y: 8 } })
   await page.getByRole('link', { name: 'Architecture' }).click()
   await addTable(page, 'Tree')
   for (const n of names) await addEntry(page, 'Tree', n)
@@ -1058,4 +1064,128 @@ test('architecture 105 (P4): the row gutter teaches the tree verbs with quiet ar
   await expect.poll(() => hints.evaluate((el) => getComputedStyle(el).visibility)).toBe('hidden')
   await nameCell(page, panel, 'Users').focus()
   await expect.poll(() => hints.evaluate((el) => getComputedStyle(el).visibility)).toBe('visible')
+})
+
+// Issue 105 P5 — the ⋯ row-action gutter menu: a pointer-reachable twin of every
+// keyboard tree verb (make child / promote / move up-down) plus Remove, routed
+// through the SAME store seams as the chords (one undo step / one announce each).
+// The quiet ⋯ trigger reveals on row hover/focus (same grammar the add-child
+// button used) and is tabIndex=-1 (a row COMMAND, never a form/grid tab-stop —
+// 105 P0 + the ?d3rf cross-node Tab test). No-op verbs render DISABLED, so the
+// pointer path's guards match the keyboard early-returns.
+
+// Open a row's ⋯ menu and return the (portaled) `.menu` popover locator.
+async function openRowMenu(page: Page, panel: Locator, name: string): Promise<Locator> {
+  const row = entryRow(page, panel, name)
+  await row.hover()
+  await row.getByRole('button', { name: `Row actions for ${name}` }).click()
+  return page.locator('.menu')
+}
+
+test('architecture 105 (P5): the ⋯ menu make-child / promote / move verbs mirror the keyboard chords; trigger is tabindex=-1', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'Repro105P5', ['Alpha', 'Bravo', 'Charlie'])
+  const bravoRow = entryRow(page, panel, 'Bravo')
+  const rows = panel.locator('tbody tr[data-row-id]')
+
+  // The ⋯ trigger is a row COMMAND, never a tab-stop. It's visibility:hidden at
+  // rest (removed from the a11y tree) — hover the row to reveal it before the
+  // role query can resolve it.
+  await bravoRow.hover()
+  await expect(bravoRow.getByRole('button', { name: 'Row actions for Bravo' })).toHaveAttribute(
+    'tabindex',
+    '-1',
+  )
+
+  // Make child → Bravo indents under its preceding sibling Alpha (same as ⌘]).
+  await (await openRowMenu(page, panel, 'Bravo')).getByRole('button', { name: 'Make child' }).click()
+  await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '1')
+
+  // Promote → Bravo outdents back to depth 0 (same as ⌘[).
+  await (await openRowMenu(page, panel, 'Bravo')).getByRole('button', { name: 'Promote' }).click()
+  await expect(bravoRow.locator('.t2-tree')).toHaveAttribute('data-depth', '0')
+
+  // Move up → Alpha, Bravo, Charlie ⇒ Bravo, Alpha, Charlie.
+  await (await openRowMenu(page, panel, 'Bravo')).getByRole('button', { name: 'Move up' }).click()
+  await expect(rows.nth(0)).toContainText('Bravo')
+  await expect(rows.nth(1)).toContainText('Alpha')
+
+  // Move down → back to Alpha, Bravo, Charlie.
+  await (await openRowMenu(page, panel, 'Bravo')).getByRole('button', { name: 'Move down' }).click()
+  await expect(rows.nth(0)).toContainText('Alpha')
+  await expect(rows.nth(1)).toContainText('Bravo')
+})
+
+// The ⋯ menu is a new interactive surface (a portaled popover with a disabled
+// Promote, a danger-tinted Remove and aria-hidden KeyHint chips) — lock it clean
+// with the menu OPEN (P4's tree axe scan only covers the at-rest surface).
+test('architecture 105 (P5): the open ⋯ row menu has no serious/critical a11y violations', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'P5Axe', ['Alpha', 'Bravo'])
+  // Bravo (top level, preceded by Alpha) → Promote DISABLED, Make child ENABLED:
+  // a mix of item states, plus the danger Remove + KeyHint glyphs, all present.
+  await openRowMenu(page, panel, 'Bravo')
+  await expect(page.locator('.t2-row-menu')).toBeVisible()
+  const results = await new AxeBuilder({ page })
+    .include('.t2-row-menu')
+    .withTags(['wcag2a', 'wcag2aa'])
+    .analyze()
+  const blocking = results.violations.filter(
+    (v) => v.impact === 'serious' || v.impact === 'critical',
+  )
+  expect(
+    blocking,
+    JSON.stringify(blocking.map((v) => ({ id: v.id, nodes: v.nodes.length })), null, 2),
+  ).toEqual([])
+})
+
+test('architecture 105 (P5): no-op verbs are DISABLED — a top-level Promote and a first-child Make child', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'Repro105P5Dis', ['Alpha', 'Bravo'])
+
+  // Demote Bravo under Alpha so Bravo is Alpha's first (only) child.
+  await (await openRowMenu(page, panel, 'Bravo')).getByRole('button', { name: 'Make child' }).click()
+  await expect(entryRow(page, panel, 'Bravo').locator('.t2-tree')).toHaveAttribute('data-depth', '1')
+
+  // Top-level Alpha → nothing to outdent to → Promote disabled.
+  const alphaMenu = await openRowMenu(page, panel, 'Alpha')
+  await expect(alphaMenu.getByRole('button', { name: 'Promote' })).toBeDisabled()
+  await page.keyboard.press('Escape')
+
+  // First-child Bravo → no preceding sibling → Make child disabled, Promote live.
+  const bravoMenu = await openRowMenu(page, panel, 'Bravo')
+  await expect(bravoMenu.getByRole('button', { name: 'Make child' })).toBeDisabled()
+  await expect(bravoMenu.getByRole('button', { name: 'Promote' })).toBeEnabled()
+})
+
+test('architecture 105 (P5): ⋯ Remove deletes a plain entry, and a promoted entry surfaces the resolution popover', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'Repro105P5Rm', ['Alpha', 'Bravo'])
+
+  // Plain entry: ⋯ → Remove deletes it outright.
+  await (await openRowMenu(page, panel, 'Bravo')).getByRole('button', { name: 'Remove' }).click()
+  await expect(page.getByRole('cell', { name: 'Bravo', exact: true })).toBeHidden()
+
+  // Promote Alpha, then ⋯ → Remove surfaces the linked-parameter resolution
+  // (invariant 7 — never a silent cascade), same flow the selection-bar Remove uses.
+  await promoteTable(page, 'Tree', ['Alpha'], 'AlphaDim')
+  await (await openRowMenu(page, panel, 'Alpha')).getByRole('button', { name: 'Remove' }).click()
+  await expect(page.getByText(/Keep parameter as unlinked copy/)).toBeVisible()
+  await expect(page.getByText(/It is linked to/)).toBeVisible()
+})
+
+test('architecture 105 (P5): the selection-bar bulk Remove still deletes every selected entry', async ({
+  page,
+}) => {
+  const panel = await setup105Tree(page, 'Repro105P5Bulk', ['Alpha', 'Bravo'])
+  await panel.getByRole('option', { name: 'Select Alpha' }).click()
+  await panel.getByRole('option', { name: 'Select Bravo' }).click()
+  await expect(panel.getByText('2 selected')).toBeVisible()
+  await panel.locator('.t2-selection-bar').getByText('Remove').click()
+  await expect(page.getByRole('cell', { name: 'Alpha', exact: true })).toBeHidden()
+  await expect(page.getByRole('cell', { name: 'Bravo', exact: true })).toBeHidden()
 })

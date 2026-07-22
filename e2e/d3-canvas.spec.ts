@@ -439,9 +439,11 @@ test('architecture 102 (canvas): Add child works while a description cell is bei
   await comfortRow.getByRole('cell').nth(2).click()
   await page.locator('[contenteditable="true"]:focus').pressSequentially('Seating comfort')
 
-  // With the description still mid-edit, click Add child.
+  // With the description still mid-edit, open the ⋯ row menu and click Add child
+  // (issue 105 P5 — the single-row verbs now live in one gutter menu).
   await comfortRow.hover()
-  await valueNode.getByRole('button', { name: 'Add child to Comfort' }).click()
+  await valueNode.getByRole('button', { name: 'Row actions for Comfort' }).click()
+  await page.locator('.menu').getByRole('button', { name: 'Add child' }).click()
 
   // The child phantom must appear AND survive the focus fight.
   const childField = page.getByPlaceholder('Name a child of Comfort')

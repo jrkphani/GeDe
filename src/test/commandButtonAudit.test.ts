@@ -30,15 +30,19 @@ const STANDALONE_COMMAND_BUTTONS: readonly { file: string; label: string }[] = [
   { file: 'src/App.tsx', label: 'Back to projects' },
 ]
 
-// Finds the JSX child text ">Label" (i.e. Label rendered directly as a
-// Button's children, not inside an attribute like aria-label={`Label ...`}),
+// Finds the JSX child text ">Label</Button>" (i.e. Label rendered as a Button's
+// SOLE terminal child, not inside an attribute like aria-label={`Label ...`}),
 // then walks back to that Button's own opening tag. Slicing on `>` index
 // boundaries (rather than a `[^>]*` capture group) is deliberate — several of
 // these buttons carry `onClick={() => …}` handlers whose arrow `=>` contains
 // a `>` character that would otherwise truncate a naive prop capture early.
+// Anchoring on the trailing `</Button>` (issue 105 P5) skips same-label buttons
+// that render a trailing sibling — e.g. the ⋯ row-action menu's "Promote" /
+// "Make child" items carry a KeyHint chip after the text, so they're NOT these
+// standalone command buttons and must not be mistaken for them.
 function openingTagProps(source: string, label: string): string {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const childMatch = new RegExp(`>\\s*${escaped}`, 'm').exec(source)
+  const childMatch = new RegExp(`>\\s*${escaped}\\s*</Button>`, 'm').exec(source)
   if (childMatch?.index === undefined) {
     throw new Error(`No JSX child text ">${label}" was found`)
   }
@@ -66,14 +70,16 @@ describe('command-button audit (issue 026 test-first plan item 3)', () => {
 describe('row-hover actions remain quiet (issue 026 test-first plan item 4 — regression)', () => {
   const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
 
-  // Issue 084 — the meta data-column was deleted; the per-row "Add child" verb
-  // moved to the trailing .t2-col--actions gutter. The regression guard tracks
-  // that rename: the row affordance must still be quiet at rest (STYLE_GUIDE §6).
-  it('table row actions (.t2-col--actions add-child) stay visibility: hidden at rest', () => {
-    const match = /\.t2-col--actions \.t2-add-child-trigger\s*\{([^}]*)\}/.exec(css)
+  // Issue 084 — the meta data-column was deleted; the per-row verb moved to the
+  // trailing .t2-col--actions gutter. Issue 105 P5 — that gutter is now the ⋯
+  // row-action menu trigger (.t2-row-menu-trigger), same reveal grammar. The
+  // regression guard tracks the rename: the row affordance must still be quiet at
+  // rest (STYLE_GUIDE §6).
+  it('table row actions (.t2-col--actions ⋯ menu trigger) stay visibility: hidden at rest', () => {
+    const match = /\.t2-col--actions \.t2-row-menu-trigger\s*\{([^}]*)\}/.exec(css)
     expect(match).not.toBeNull()
     expect((match as RegExpMatchArray)[1]).toMatch(/visibility:\s*hidden/)
-    expect(css).toContain('.t2-table tbody tr:hover .t2-col--actions .t2-add-child-trigger,')
+    expect(css).toContain('.t2-table tbody tr:hover .t2-col--actions .t2-row-menu-trigger,')
   })
 
   it('project row actions (.project-row .row-action) stay visibility: hidden at rest', () => {

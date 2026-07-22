@@ -851,6 +851,43 @@ body {
   background: var(--accent-wash);
 }
 
+/* Issue 105 P5 — the ⋯ row-action menu reuses the shared .menu shell but scopes
+   its own item grammar under .t2-row-menu, so the pre-existing AppShell ProjectMenu
+   / AccountMenu (same .menu / .menu__item classes) stay byte-identical. A no-op verb
+   (a top-level Promote, a first-child Make child) renders DISABLED — muted, no
+   pointer, no hover wash — mirroring the keyboard no-ops. A KeyHint chip on Promote
+   / Make child sits at the row's end (teaching the chord). Remove carries a quiet
+   danger tint (same --danger token as the selection-bar Remove), and a hairline
+   divider sets it off from the move verbs above. */
+.t2-row-menu .menu__item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.t2-row-menu .menu__item .key-hint {
+  margin-inline-start: auto;
+}
+
+.t2-row-menu .menu__item:disabled {
+  color: var(--ink-muted);
+  cursor: not-allowed;
+}
+
+.t2-row-menu .menu__item:disabled:hover {
+  background: transparent;
+}
+
+.t2-row-menu .menu__item--danger,
+.t2-row-menu .menu__item--danger:hover {
+  color: var(--danger);
+}
+
+.t2-row-menu .menu__sep {
+  margin: var(--space-1) 0;
+  border-top: 1px solid var(--hairline);
+}
+
 /* In-place editing: borderless input at identical metrics (STYLE_GUIDE §6). */
 .inplace-input {
   font: inherit;
@@ -2645,13 +2682,20 @@ body {
   text-align: right;
 }
 
-.t2-col--actions .t2-add-child-trigger {
+/* Issue 105 P5 — the trailing gutter's ⋯ row-action menu trigger. Same quiet
+   reveal grammar the add-child button used (STYLE_GUIDE §6: hidden at rest, shown
+   on row hover or focus — a precision instrument, not always-on chrome). The ⋯
+   glyph sits inside the existing 132px .t2-col--actions gutter (unchanged width,
+   still fits the 960px canvas node); the portaled menu takes its own min-width
+   from `.menu`. The trigger keeps its visibility while its OWN menu is open
+   (:focus-within on the cell) so the pointer doesn't lose the affordance. */
+.t2-col--actions .t2-row-menu-trigger {
   visibility: hidden;
 }
 
-.t2-table tbody tr:hover .t2-col--actions .t2-add-child-trigger,
-.t2-col--actions .t2-add-child-trigger:focus-visible,
-.t2-col--actions:focus-within .t2-add-child-trigger {
+.t2-table tbody tr:hover .t2-col--actions .t2-row-menu-trigger,
+.t2-col--actions .t2-row-menu-trigger:focus-visible,
+.t2-col--actions:focus-within .t2-row-menu-trigger {
   visibility: visible;
 }
 

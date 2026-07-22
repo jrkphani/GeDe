@@ -34,6 +34,19 @@ interface RowMeta {
   hasChildren: boolean
 }
 
+// Issue 105 P5 — a pure, precomputed tree-move: where a row lands (new parent +
+// index) and the announce string. The keyboard verbs (handleTreeKey) and the ⋯
+// row-action menu (RowActionMenu) both route the SAME MoveTarget through the one
+// `runMove`, so a gesture is always exactly one undo step / one announce whether
+// it came from a chord or a click. `null` means "no legal target" — a no-op the
+// menu renders as a DISABLED item, keeping the pointer path's guards identical to
+// the keyboard early-returns.
+interface MoveTarget {
+  newParentId: string | null
+  toIndex: number
+  message: string
+}
+
 // SPEC §4.6 / SITEMAP §1 — the 2nd Tier Architecture tab: one nested-row table
 // per intended dimension, stacked as paper panels. Selected entries promote
 // into 3rd-Tier dimensions + parameters, each linked back (invariant 7). Reuses
@@ -233,6 +246,112 @@ function AddTablePhantom({
   )
 }
 
+// Issue 105 P5 — the ⋯ row-action gutter menu. A presentational twin of the
+// keyboard tree grammar: it renders the precomputed MoveTargets its parent hands
+// down and calls back through the SAME `runMove`/`handleDelete` seams, so a
+// pointer gesture is byte-for-byte the same store mutation (one undo step / one
+// announce) as its chord. Mirrors the AppShell ProjectMenu shape (Popover +
+// .menu / .menu__item). A `null` MoveTarget → the item is DISABLED, keeping the
+// pointer no-ops identical to the keyboard early-returns. The Promote / Make-child
+// items always carry their KeyHint chord glyph (they TEACH the shortcut) — that
+// is independent of `showKeyHints`, which only gates the at-rest row-hover chips.
+function RowActionMenu({
+  entry,
+  addChild,
+  addSibling,
+  promote,
+  demote,
+  moveUp,
+  moveDown,
+  onMove,
+  onRemove,
+}: {
+  entry: Tier2EntryRow
+  addChild: () => void
+  addSibling: () => void
+  promote: MoveTarget | null
+  demote: MoveTarget | null
+  moveUp: MoveTarget | null
+  moveDown: MoveTarget | null
+  onMove: (t: MoveTarget) => void
+  onRemove: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  // Close the menu, then act — the mutation drives a re-render/refocus that must
+  // not race the popover's own close.
+  const act = (fn: () => void) => {
+    setOpen(false)
+    fn()
+  }
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="rowAction"
+          className="t2-row-menu-trigger"
+          aria-label={`Row actions for ${entry.name}`}
+          // Issue 105 P0 + cross-node Tab — a row COMMAND, never a form/grid
+          // tab-stop. Native Tab (intercepted inside the description editor) must
+          // never land here; it stays a click/hover affordance.
+          tabIndex={-1}
+        >
+          ⋯
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="end" className="menu t2-row-menu" aria-label={`Row actions for ${entry.name}`}>
+        <Button variant="bare" className="menu__item" onClick={() => act(addChild)}>
+          <span aria-hidden>＋ </span>Add child
+        </Button>
+        <Button variant="bare" className="menu__item" onClick={() => act(addSibling)}>
+          Add sibling
+        </Button>
+        <Button
+          variant="bare"
+          className="menu__item"
+          disabled={!promote}
+          onClick={() => promote && act(() => onMove(promote))}
+        >
+          Promote
+          <KeyHint keys={['⌘', '[']} />
+        </Button>
+        <Button
+          variant="bare"
+          className="menu__item"
+          disabled={!demote}
+          onClick={() => demote && act(() => onMove(demote))}
+        >
+          Make child
+          <KeyHint keys={['⌘', ']']} />
+        </Button>
+        <Button
+          variant="bare"
+          className="menu__item"
+          disabled={!moveUp}
+          onClick={() => moveUp && act(() => onMove(moveUp))}
+        >
+          Move up
+        </Button>
+        <Button
+          variant="bare"
+          className="menu__item"
+          disabled={!moveDown}
+          onClick={() => moveDown && act(() => onMove(moveDown))}
+        >
+          Move down
+        </Button>
+        <div className="menu__sep" />
+        <Button
+          variant="bare"
+          className="menu__item menu__item--danger"
+          onClick={() => act(onRemove)}
+        >
+          Remove
+        </Button>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 // 089-D3 P3.2 — exported so the decomposed D3 canvas (WorkspaceCanvas, behind
 // the dev-only `?d3rf` flag) can mount ONE real table per React Flow node while
 // the normal (flag-off) ArchitectureSurface keeps rendering N of these stacked
@@ -305,8 +424,22 @@ export function TablePanel({
   // EditableGrid — Design's register/rail and Foundation never see it. Acts only
   // on a resting-focused data cell (a real entry row); editing inputs/richtext
   // and the phantoms are excluded so typing ] or an arrow is never hijacked.
+  // Issue 105 P5 (review) — group entries by parent ONCE per entries change (each
+  // group sorted by `sort`). The trailing ⋯ menu computes four MoveTargets PER ROW
+  // on every render; without this, each siblingsOfIn was an O(n) filter+sort, i.e.
+  // O(n² log n) across the table. handleTreeKey reads the same map.
+  const siblingsByParent = useMemo(() => {
+    const map = new Map<string | null, Tier2EntryRow[]>()
+    for (const e of entries) {
+      const group = map.get(e.parentId)
+      if (group) group.push(e)
+      else map.set(e.parentId, [e])
+    }
+    for (const group of map.values()) group.sort((a, b) => a.sort - b.sort)
+    return map
+  }, [entries])
   function siblingsOfIn(parentId: string | null): Tier2EntryRow[] {
-    return entries.filter((e) => e.parentId === parentId).sort((a, b) => a.sort - b.sort)
+    return siblingsByParent.get(parentId) ?? NO_ENTRIES
   }
 
   function runMove(id: string, newParentId: string | null, toIndex: number, message: string) {
@@ -319,6 +452,59 @@ export function TablePanel({
       // gridBoundaryFocus deferral.
       requestAnimationFrame(() => entryNameCell(section, id)?.focus())
     })
+  }
+
+  // Issue 105 P5 — the pure target-computation helpers behind BOTH the keyboard
+  // chords and the ⋯ menu items. Each returns the MoveTarget for the gesture or
+  // `null` when it is a no-op (so the menu can disable the item and the keyboard
+  // path can early-return on the same condition).
+  function demoteTarget(entry: Tier2EntryRow): MoveTarget | null {
+    // Last child of the immediately-preceding sibling (same parent).
+    const group = siblingsOfIn(entry.parentId)
+    const idx = group.findIndex((x) => x.id === entry.id)
+    if (idx <= 0) return null // first child → no preceding sibling → no-op
+    const preceding = group[idx - 1] as Tier2EntryRow
+    return {
+      newParentId: preceding.id,
+      toIndex: siblingsOfIn(preceding.id).length, // append as last child
+      message: `Indented ${entry.name} under ${preceding.name}`,
+    }
+  }
+  function promoteTarget(entry: Tier2EntryRow): MoveTarget | null {
+    if (entry.parentId === null) return null // top level → nothing to outdent to
+    const parent = entries.find((x) => x.id === entry.parentId)
+    if (!parent) return null
+    const grandParentId = parent.parentId
+    const parentIdx = siblingsOfIn(grandParentId).findIndex((x) => x.id === parent.id)
+    return { newParentId: grandParentId, toIndex: parentIdx + 1, message: `Outdented ${entry.name}` }
+  }
+  function moveTarget(entry: Tier2EntryRow, dir: 'up' | 'down'): MoveTarget | null {
+    const group = siblingsOfIn(entry.parentId)
+    const idx = group.findIndex((x) => x.id === entry.id)
+    if (dir === 'up') {
+      if (idx <= 0) return null // already first → no-op
+      return { newParentId: entry.parentId, toIndex: idx - 1, message: `Moved ${entry.name} up` }
+    }
+    if (idx === -1 || idx >= group.length - 1) return null // already last → no-op
+    return { newParentId: entry.parentId, toIndex: idx + 1, message: `Moved ${entry.name} down` }
+  }
+
+  // Issue 105 P5 — arm the inline typed create phantoms (add-child / add-sibling),
+  // shared by the trailing gutter's ⋯ menu and (add-sibling) the keyboard Enter
+  // seam. Both keep the mutual exclusivity bidirectional (arming one clears the
+  // other) so a stale phantom never silently resurfaces.
+  function armAddChild(entry: Tier2EntryRow) {
+    setCollapsed((prev) => {
+      const next = new Set(prev)
+      next.delete(entry.id)
+      return next
+    })
+    setAddingSiblingAfter(null)
+    setAddingChildTo(entry.id)
+  }
+  function armAddSibling(entry: Tier2EntryRow) {
+    setAddingChildTo(null)
+    setAddingSiblingAfter(entry.id)
   }
 
   function handleTreeKey(e: React.KeyboardEvent<HTMLElement>) {
@@ -352,35 +538,15 @@ export function TablePanel({
     // per physical press (review MEDIUM).
     if (e.repeat) return
 
-    if (demote) {
-      // Last child of the immediately-preceding VISIBLE sibling (same parent).
-      const group = siblingsOfIn(entry.parentId)
-      const idx = group.findIndex((x) => x.id === id)
-      if (idx <= 0) return // first child → no preceding sibling → no-op
-      const preceding = group[idx - 1] as Tier2EntryRow
-      const toIndex = siblingsOfIn(preceding.id).length // append as last child
-      runMove(id, preceding.id, toIndex, `Indented ${entry.name} under ${preceding.name}`)
-      return
-    }
-    if (promote) {
-      if (entry.parentId === null) return // top level → nothing to outdent to
-      const parent = entries.find((x) => x.id === entry.parentId)
-      if (!parent) return
-      const grandParentId = parent.parentId
-      const parentIdx = siblingsOfIn(grandParentId).findIndex((x) => x.id === parent.id)
-      runMove(id, grandParentId, parentIdx + 1, `Outdented ${entry.name}`)
-      return
-    }
-    // Move among siblings (⌥⇧↑ / ⌥⇧↓).
-    const group = siblingsOfIn(entry.parentId)
-    const idx = group.findIndex((x) => x.id === id)
-    if (moveUp) {
-      if (idx <= 0) return // already first → no-op
-      runMove(id, entry.parentId, idx - 1, `Moved ${entry.name} up`)
-    } else {
-      if (idx === -1 || idx >= group.length - 1) return // already last → no-op
-      runMove(id, entry.parentId, idx + 1, `Moved ${entry.name} down`)
-    }
+    // Route the recognized chord through the shared pure target-computers (105
+    // P5) → the one `runMove`. A `null` target is the same no-op the old inline
+    // guards produced; the ⋯ menu reuses these exact functions for its items.
+    const move = demote
+      ? demoteTarget(entry)
+      : promote
+        ? promoteTarget(entry)
+        : moveTarget(entry, moveUp ? 'up' : 'down')
+    if (move) runMove(entry.id, move.newParentId, move.toIndex, move.message)
   }
 
   function toggleCollapse(id: string) {
@@ -673,10 +839,11 @@ export function TablePanel({
       },
     },
     {
-      // Trailing row-command gutter (issue 084): row verbs are never a data
-      // column. The typed "Add child" affordance lives here, quiet at rest and
-      // revealed on row hover/focus (see .t2-col--actions). Remove moved to the
-      // selection bar. A viewer (issue 035) sees no affordance at all.
+      // Trailing row-command gutter (issue 084 → 105 P5): row verbs are never a
+      // data column. A single ⋯ menu lives here (quiet at rest, revealed on row
+      // hover/focus — see .t2-col--actions) carrying every single-row verb incl.
+      // Remove; bulk Remove stays on the selection bar (025/035). A viewer (issue
+      // 035) sees no affordance at all.
       id: 'actions',
       header: '',
       headClassName: 't2-col--actions',
@@ -686,38 +853,25 @@ export function TablePanel({
         render: (entry) =>
           readOnly ? null : (
             <>
-              {/* Typed add-child (issue 084 finding 4 / D3 P3): un-collapses the
-                  parent then reveals an INLINE typed phantom child ROW directly
-                  under it (at depth+1, via the grid's `inlineRow` seam below) —
-                  type → Enter — instead of a floating popover or a literal
-                  placeholder row the user must hunt down and rename. Same
-                  type-first grammar as every other add on this surface, at a
-                  lower interaction cost. */}
-              <Button
-                className="t2-add-child-trigger"
-                aria-label={`Add child to ${entry.name}`}
-                // Issue 105 P0 — a row COMMAND, never a form tab-stop. Native Tab
-                // (now intercepted inside the description editor, above) must never
-                // land here and arm an accidental sub-child; it stays a click/hover
-                // affordance. The row-hover reveal + click are unchanged.
-                tabIndex={-1}
-                onClick={() => {
-                  setCollapsed((prev) => {
-                    const next = new Set(prev)
-                    next.delete(entry.id)
-                    return next
-                  })
-                  // Issue 105 (review fix) — arming add-child clears any armed
-                  // sibling phantom, so mutual exclusivity is BIDIRECTIONAL (the
-                  // Enter-sibling path already clears addingChildTo). Otherwise a
-                  // stale sibling phantom would silently reappear once this
-                  // add-child session is dismissed.
-                  setAddingSiblingAfter(null)
-                  setAddingChildTo(entry.id)
-                }}
-              >
-                <span aria-hidden>＋ </span>Add child
-              </Button>
+              {/* Issue 105 P5 — the trailing row-command gutter is now a single ⋯
+                  menu (mirroring the AppShell ProjectMenu): the typed add-child
+                  (084 D3 P3, un-collapse + inline phantom) plus pointer twins of
+                  every keyboard tree verb (add-sibling / promote / make-child /
+                  move up-down — the SAME MoveTarget → runMove, so one undo step
+                  each) plus Remove. The trigger stays tabIndex=-1 (a row COMMAND,
+                  never a form/grid tab-stop — 105 P0 + the ?d3rf cross-node Tab).
+                  No-op verbs render DISABLED, matching the keyboard early-returns. */}
+              <RowActionMenu
+                entry={entry}
+                addChild={() => armAddChild(entry)}
+                addSibling={() => armAddSibling(entry)}
+                promote={promoteTarget(entry)}
+                demote={demoteTarget(entry)}
+                moveUp={moveTarget(entry, 'up')}
+                moveDown={moveTarget(entry, 'down')}
+                onMove={(t) => runMove(entry.id, t.newParentId, t.toIndex, t.message)}
+                onRemove={() => void handleDelete(entry)}
+              />
               {/* Issue 105 P4 — quiet key-hint chips teaching the keyboard tree
                   grammar this surface added: ⏎ = new sibling (P1), ⌘] = make
                   child (P2 demote), ⌘[ = promote (P2). Reuses the 084-D3 P5
