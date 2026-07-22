@@ -46,6 +46,18 @@ export interface DesignBodyProps {
   contextPath: string[]
   view: DesignView
   canvasId?: string | undefined
+  // Issue 100 Phase D — WHICH store instance this core resolves, SEPARATE from
+  // `canvasId` (which is the active-canvas key for the `c`/`v`/`d` gate). The
+  // PRIMARY (root) core passes nothing → `resolveCanvasStores(undefined)` → the
+  // process-lifetime DEFAULT instance (byte-identical to Phase C, and the ONE
+  // instance `presence`/`coreCommands`/`DesignSurface` also read). A drilled-in
+  // LIVE CHILD core passes its `parentContextId` → its OWN independent instance
+  // (one parent context ↔ one child canvas, so the key is stable + collision-free).
+  storeCanvasId?: string | null | undefined
+  // Issue 100 Phase D — a live CHILD core is collapsible in place: when provided,
+  // the register header shows a `×` that tears the child core down. Undefined for
+  // the primary core (which is never collapsed), so its header is unchanged.
+  onCollapse?: (() => void) | undefined
 }
 
 // Issue 093 — below this viewport zoom the register's per-dimension columns
@@ -58,7 +70,12 @@ const LOD_ZOOM = 0.6
 // Pure derivation shared by both bodies: which canvas is open + whether its
 // content has loaded. Mirrors DesignSurface.tsx:44-99,515-518 exactly. No side
 // effects — the register body owns every load; the ring body only reads.
-function useDesignCanvasContext(projectId: string, contextPath: string[], canvasId: string | undefined) {
+function useDesignCanvasContext(
+  projectId: string,
+  contextPath: string[],
+  canvasId: string | undefined,
+  storeCanvasId: string | null | undefined,
+) {
   const contextId = contextPath.length > 0 ? (contextPath[contextPath.length - 1] as string) : null
   const atRoot = contextPath.length === 0
   const canvases = useCanvasesStore((s) => s.canvases)
@@ -69,7 +86,7 @@ function useDesignCanvasContext(projectId: string, contextPath: string[], canvas
   }, [atRoot, canvases, canvasId])
   const canvasSelector = atRoot ? activeRootCanvasId : contextId
   const canLoad = !atRoot || activeRootCanvasId !== null
-  const stores = resolveCanvasStores()
+  const stores = resolveCanvasStores(storeCanvasId)
   const loadedFor = stores.useDimensions((s) => s.projectId)
   const loadedContextId = stores.useDimensions((s) => s.contextId)
   const loadedCanvasId = stores.useDimensions((s) => s.canvasId)
@@ -87,9 +104,16 @@ function useDesignCanvasContext(projectId: string, contextPath: string[], canvas
 }
 
 // ── The REGISTER body: header + rail + context register (the authoring surface).
-export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: DesignBodyProps) {
+export function DesignRegisterBody({
+  projectId,
+  contextPath,
+  view,
+  canvasId,
+  storeCanvasId,
+  onCollapse,
+}: DesignBodyProps) {
   const { contextId, atRoot, activeRootCanvasId, canvasSelector, canLoad, canvasReady } =
-    useDesignCanvasContext(projectId, contextPath, canvasId)
+    useDesignCanvasContext(projectId, contextPath, canvasId, storeCanvasId)
 
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
@@ -102,7 +126,7 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
   // focused, so the gate is inert.
   const coreKey = canvasId ?? 'root'
 
-  const stores = resolveCanvasStores()
+  const stores = resolveCanvasStores(storeCanvasId)
   const dimensions = stores.useDimensions((s) => s.dimensions)
   const contexts = stores.useContexts((s) => s.contexts)
   const bindingsByContext = stores.useContexts((s) => s.bindingsByContext)
@@ -194,11 +218,11 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
   )
 
   function handleDrillIn(id: string) {
-    // P3 (issue 011) — on the canvas, drilling OPENS the child canvas as an
-    // edge-connected SUMMARY satellite beside the core (the parent stays visible),
-    // instead of navigating away. Deep entry into the child still happens via the
-    // satellite's "Enter ▸" (the same navigate). Promoting the summary satellite to
-    // a live child {register+ring} core is the tracked 089 follow-up.
+    // Issue 100 Phase D (011) — on the canvas, drilling OPENS the child canvas as
+    // a LIVE {register+ring} core mounted beside this one (the parent stays live +
+    // independent, on its own store instance), editable in place; collapse via the
+    // child header's ×. This replaced the 089-P3 summary-satellite STUB and its
+    // "Enter ▸" deep-navigate.
     useCanvasSatellitesStore.getState().openSatellite(id)
   }
 
@@ -328,6 +352,19 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
   return (
     <div className="design-core-register">
       <div className="workspace__lane-header design-lane-header">
+        {/* Issue 100 Phase D — a live CHILD core carries a `×` that collapses it
+            (tears down its own store instance). The primary core passes no
+            `onCollapse`, so this renders nothing and its header is unchanged. */}
+        {onCollapse ? (
+          <Button
+            variant="bare"
+            className="wc-child-collapse"
+            onClick={onCollapse}
+            aria-label="Collapse child canvas"
+          >
+            ×
+          </Button>
+        ) : null}
         <div className="context-bar__location">
           <Breadcrumbs projectId={projectId} crumbs={breadcrumbs} dimensionNames={dimensionNames} />
           {atRoot ? (
@@ -417,11 +454,12 @@ export function DesignRegisterBody({ projectId, contextPath, view, canvasId }: D
 }
 
 // ── The RING body: the Canvas (or, in coverage view, the CoverageMatrix).
-export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyProps) {
+export function DesignRingBody({ projectId, contextPath, canvasId, storeCanvasId }: DesignBodyProps) {
   const { contextId, canvasSelector, canvasReady } = useDesignCanvasContext(
     projectId,
     contextPath,
     canvasId,
+    storeCanvasId,
   )
 
   // 099-2c — the ring renders inside the canvas's `transform: scale()`, so the
@@ -430,7 +468,7 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
   // selector: the ring re-renders only when a bucket is crossed, never per frame.
   const hitScale = useStore((s) => quantizeHitScale(s.transform[2]))
 
-  const stores = resolveCanvasStores()
+  const stores = resolveCanvasStores(storeCanvasId)
   const dimensions = stores.useDimensions((s) => s.dimensions)
   const contexts = stores.useContexts((s) => s.contexts)
   const bindingsByContext = stores.useContexts((s) => s.bindingsByContext)
@@ -475,11 +513,11 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
   }, [canvasSelector])
 
   function handleDrillIn(id: string) {
-    // P3 (issue 011) — on the canvas, drilling OPENS the child canvas as an
-    // edge-connected SUMMARY satellite beside the core (the parent stays visible),
-    // instead of navigating away. Deep entry into the child still happens via the
-    // satellite's "Enter ▸" (the same navigate). Promoting the summary satellite to
-    // a live child {register+ring} core is the tracked 089 follow-up.
+    // Issue 100 Phase D (011) — on the canvas, drilling OPENS the child canvas as
+    // a LIVE {register+ring} core mounted beside this one (the parent stays live +
+    // independent, on its own store instance), editable in place; collapse via the
+    // child header's ×. This replaced the 089-P3 summary-satellite STUB and its
+    // "Enter ▸" deep-navigate.
     useCanvasSatellitesStore.getState().openSatellite(id)
   }
 
@@ -549,13 +587,18 @@ export function DesignRingBody({ projectId, contextPath, canvasId }: DesignBodyP
 export function DesignCoverageTwinBody({
   projectId,
   onGapComposed,
+  storeCanvasId,
 }: {
   projectId: string
   onGapComposed: () => void
+  // Issue 100 Phase D — same store-instance seam as the register/ring bodies.
+  // The primary twin passes nothing → default instance (unchanged); a child twin
+  // (none emitted this phase) would pass its parent context id.
+  storeCanvasId?: string | null | undefined
 }) {
   const { role } = useWorkspaceRole(projectId)
   const readOnly = !canWrite(role)
-  const stores = resolveCanvasStores()
+  const stores = resolveCanvasStores(storeCanvasId)
   const dimensions = stores.useDimensions((s) => s.dimensions)
   const paramsByDimension = useParametersStore((s) => s.byDimension)
   const contexts = stores.useContexts((s) => s.contexts)

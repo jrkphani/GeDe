@@ -26,16 +26,14 @@ import {
 import {
   computeSatelliteLayout,
   type ClusterLayoutConfig,
-  type SatelliteItem,
 } from '../domain/clusterLayout'
-import { navigate } from '../shell/router'
 import {
   resetCanvasSatellites,
   satelliteNodeId,
   useCanvasSatellitesStore,
 } from '../store/canvasSatellites'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
-import { resolveCanvasStores } from '../store/canvasStores'
+import { releaseCanvasStores } from '../store/canvasStores'
 import { useActiveCanvasStore } from '../store/activeCanvas'
 import { useActiveLaneStore } from '../store/activeLane'
 import { canWrite } from '../domain/workspaceRole'
@@ -50,7 +48,6 @@ import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
 import { focusPanTarget } from './workspaceFocusPan'
 import { FoundationHeaderPanel, FoundationPropPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
-import { Button } from './ui/button'
 import { PhantomInput } from './ui/inline-editor'
 // The ⌘1/2/3 pan-to-lane interceptor + its module-level `activeCanvasInstance`
 // handle live in this tiny, `@xyflow/react`-free module so App.tsx can import
@@ -112,6 +109,13 @@ const DESIGN_RING_ESTIMATE = 560
 // Stable node id for the ring (the register keeps LANE_NODE_ID.design so ⌘3 still
 // frames the Design column top).
 const DESIGN_RING_NODE_ID = 'workspace-canvas-design-ring'
+// Issue 100 Phase D — a drilled-in LIVE CHILD core reuses the register/ring node
+// types but NAMESPACES their ids off the parent context id, so the PRIMARY ids
+// (LANE_NODE_ID.design / DESIGN_RING_NODE_ID — the ⌘3 pan, coverage-twin edge,
+// and gap-compose pan targets) stay singletons pointing at the root core. Child
+// cores are purely additive.
+const childRegisterNodeId = (parentContextId: string): string => `${LANE_NODE_ID.design}:${parentContextId}`
+const childRingNodeId = (parentContextId: string): string => `${DESIGN_RING_NODE_ID}:${parentContextId}`
 // P4 (issue 012) — the coverage TWIN node, stacked in the Design lane BELOW the
 // ring (sort 2) and edge-connected to it. One per canvas (a singleton).
 const COVERAGE_TWIN_NODE_ID = 'workspace-canvas-coverage-twin'
@@ -188,6 +192,14 @@ type DesignBodyNodeData = {
   contextPath: string[]
   view: DesignView
   canvasId: string | undefined
+  // Issue 100 Phase D — WHICH store instance this core resolves (SEPARATE from
+  // canvasId). Undefined on the PRIMARY core → the default instance; set to the
+  // parent context id on a live CHILD core → its own independent instance. Also
+  // the discriminator `withDerivedPositions` uses to hang a child core in the
+  // satellite column rather than the primary Design lane stack.
+  storeCanvasId?: string | null | undefined
+  // Issue 100 Phase D — collapse a live child core (undefined on the primary).
+  onCollapse?: (() => void) | undefined
 }
 type DesignRegisterNode = Node<DesignBodyNodeData, 'designRegister'>
 type DesignRingNode = Node<DesignBodyNodeData, 'designRing'>
@@ -241,23 +253,11 @@ type ArchTableData = {
 }
 type ArchTableNode = Node<ArchTableData, 'archTable'>
 
-// 089-D3 P3 — a recursion SATELLITE node: the SUMMARY of a context's child canvas
-// (issue 011), opened to the right of the Design core + connected by an edge. NOT
-// a live {register+ring} core (the contexts store is a singleton — promoting a
-// stub to a live core is the tracked 089 follow-up); it shows the parent symbol +
-// child-context count, reads them itself from the contexts store, and offers
-// Enter ▸ (navigate deep — the existing drill) and Collapse ×. It has no lane
-// `tier` — its position comes from `computeSatelliteLayout`, not the lane stack.
-// eslint-disable-next-line @typescript-eslint/consistent-type-definitions
-type SatelliteNodeData = {
-  kind: 'satellite'
-  parentContextId: string
-  // Navigate into the child canvas (re-scopes the core — the existing deep drill).
-  onEnter: (parentContextId: string) => void
-  // Unmount this satellite (collapse the child cluster).
-  onCollapse: (parentContextId: string) => void
-}
-type SatelliteNode = Node<SatelliteNodeData, 'satellite'>
+// Issue 100 Phase D — the P3 summary SATELLITE stub is GONE: drilling now mounts
+// a second LIVE {register + ring} core (namespaced `designRegister`/`designRing`
+// nodes, storeCanvasId = the parent context id) in the rightward column the stub
+// used to occupy. The contexts store is no longer a singleton (Phase A/B factory
+// + registry), so a child core holds its own instance and edits in place.
 
 // P4 (issue 012) — the coverage TWIN node: a design-lane node (tier 'design',
 // sort 2) so computeLaneLayout stacks it below the ring, edge-connected to it. It
@@ -286,7 +286,6 @@ type CanvasNode =
   | FoundationItemNode
   | ArchHeaderNode
   | ArchTableNode
-  | SatelliteNode
   | CoverageTwinNode
 
 // ── Cross-node focus helpers (P3.3). A table node's DOM is `.react-flow__node
@@ -306,41 +305,74 @@ function nodeElement(nodeId: string): HTMLElement | null {
 // seed estimate before measurement) and re-derives every node's {x,y} via
 // computeLaneLayout. Returns the SAME array reference when nothing moved so it
 // can be called from a measurement effect without churning. ──────────────────
+// Issue 100 Phase D — a design-tier node belongs to a live CHILD core (not the
+// primary) exactly when it carries a storeCanvasId. Child cores hang in the
+// satellite column; the primary register/ring/twin stack in the Design lane.
+function childCoreParentId(node: CanvasNode): string | null {
+  if (node.type !== 'designRegister' && node.type !== 'designRing') return null
+  return node.data.storeCanvasId ?? null
+}
+
 function withDerivedPositions(nodes: CanvasNode[]): CanvasNode[] {
-  // Lane nodes stack in tier columns (computeLaneLayout); satellite nodes hang in
-  // a rightward column off the Design core (computeSatelliteLayout, P3). Both are
-  // pure derived projections — no {x,y} is ever persisted.
+  // Lane nodes stack in tier columns (computeLaneLayout). A drilled-in live CHILD
+  // core (Phase D) hangs in a rightward column off the Design core — where the P3
+  // summary stub used to sit — its REGISTER taking the satellite slot and its RING
+  // stacked directly below its own register. Both are pure derived projections —
+  // no {x,y} is ever persisted.
   const laneItems: LaneItem[] = []
-  const satelliteItems: SatelliteItem[] = []
+  const childRegisters: CanvasNode[] = []
+  const childRingByParent = new Map<string, CanvasNode>()
   for (const n of nodes) {
-    if (n.type === 'satellite') {
-      satelliteItems.push({ id: n.id })
-    } else {
-      laneItems.push({
-        id: n.id,
-        tier: n.data.tier,
-        sort: n.data.sort,
-        height: n.measured?.height ?? n.data.estimate,
-      })
+    const childParent = childCoreParentId(n)
+    if (childParent !== null) {
+      if (n.type === 'designRegister') childRegisters.push(n)
+      else childRingByParent.set(childParent, n)
+      continue
     }
+    laneItems.push({
+      id: n.id,
+      tier: n.data.tier,
+      sort: n.data.sort,
+      height: n.measured?.height ?? n.data.estimate,
+    })
   }
   const posById = new Map<string, { x: number; y: number }>()
   for (const p of computeLaneLayout(laneItems, LANE_CONFIG)) posById.set(p.id, { x: p.x, y: p.y })
-  // Satellites hang off the Design core's real right edge. 093 made the register
-  // `width: max-content` (uncapped) and P4 added a coverage twin that can be even
-  // wider (up to 1200px) — all three (register, ring, twin) share the Design
-  // column, so satellites must clear the WIDEST measured design-column node, not
-  // just the register (else a wide twin + a deep satellite stack overlap — review
-  // MEDIUM). Width feeds the satellite clearance only, never the lane x-stride.
+  // Child cores hang off the PRIMARY Design core's real right edge. 093 made the
+  // register `width: max-content` (uncapped) and P4 added a coverage twin that can
+  // be even wider — all three primary design nodes share the column, so children
+  // must clear the WIDEST measured PRIMARY design-column node (a child core's own
+  // width never feeds the clearance). Width feeds clearance only, never the lane
+  // x-stride.
   let coreWidth = CLUSTER_CONFIG.coreWidth
   for (const n of nodes) {
-    if (n.type !== 'satellite' && n.data.tier === 'design' && n.measured?.width) {
+    if (childCoreParentId(n) === null && n.data.tier === 'design' && n.measured?.width) {
       coreWidth = Math.max(coreWidth, n.measured.width)
     }
   }
   const clusterConfig: ClusterLayoutConfig = { ...CLUSTER_CONFIG, coreWidth }
-  for (const p of computeSatelliteLayout(satelliteItems, LANE_NODE_ID.design, clusterConfig).positions) {
-    posById.set(p.id, { x: p.x, y: p.y })
+  // computeSatelliteLayout gives the shared column x (and, for a single child, the
+  // stub's original y=0 slot). A live core is far taller than the fixed stub
+  // height, so stack each child's register+ring by their MEASURED heights to avoid
+  // overlap when several children are open, seeded at that x/first-slot baseline.
+  const slots = computeSatelliteLayout(
+    childRegisters.map((n) => ({ id: n.id })),
+    LANE_NODE_ID.design,
+    clusterConfig,
+  ).positions
+  const childColumnX = slots[0]?.x ?? clusterConfig.originX + coreWidth + clusterConfig.coreGap
+  let childY = 0
+  for (const reg of childRegisters) {
+    posById.set(reg.id, { x: childColumnX, y: childY })
+    const regHeight = reg.measured?.height ?? reg.data.estimate
+    const ringY = childY + regHeight + LANE_CONFIG.nodeGap
+    const ring = childRingByParent.get(childCoreParentId(reg) as string)
+    if (ring) {
+      posById.set(ring.id, { x: childColumnX, y: ringY })
+      childY = ringY + (ring.measured?.height ?? ring.data.estimate) + LANE_CONFIG.nodeGap
+    } else {
+      childY = ringY
+    }
   }
   const next = nodes.map((n) => {
     const p = posById.get(n.id)
@@ -362,12 +394,21 @@ function DesignRegisterNode({ data }: NodeProps<DesignRegisterNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
   return (
     <div className="wc-node wc-node--design-register">
-      {/* P3 — the parent end of a recursion edge to any open child satellite.
-          Hidden + non-connectable (nodesConnectable stays false): a pure edge
-          anchor, not a user-draggable connection point. */}
+      {/* The parent end of a recursion edge to any open live child core (P3's
+          satellite is now a live core, Phase D). Hidden + non-connectable
+          (nodesConnectable stays false): a pure edge anchor. */}
       <Handle
         type="source"
         position={Position.Right}
+        isConnectable={false}
+        className="wc-edge-anchor"
+      />
+      {/* Issue 100 Phase D — the CHILD end of the parent→child edge. Harmless on
+          the primary register (no edge targets it): a hidden, non-connectable
+          anchor. */}
+      <Handle
+        type="target"
+        position={Position.Left}
         isConnectable={false}
         className="wc-edge-anchor"
       />
@@ -390,6 +431,8 @@ function DesignRegisterNode({ data }: NodeProps<DesignRegisterNode>) {
           contextPath={data.contextPath}
           view={data.view}
           canvasId={data.canvasId}
+          storeCanvasId={data.storeCanvasId}
+          onCollapse={data.onCollapse}
         />
       </div>
     </div>
@@ -430,6 +473,7 @@ function DesignRingNode({ data }: NodeProps<DesignRingNode>) {
           contextPath={data.contextPath}
           view={data.view}
           canvasId={data.canvasId}
+          storeCanvasId={data.storeCanvasId}
         />
       </div>
     </div>
@@ -617,46 +661,6 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
   )
 }
 
-// 089-D3 P3 — a recursion SATELLITE node: the summary card for a context's child
-// canvas (issue 011), opened to the right of the Design core + edge-connected to
-// it. It reads the parent context's symbol + child-context count straight from
-// the contexts store (a separate React tree from the register that opened it), so
-// the count stays live as the parent canvas mutates. `Enter ▸` navigates deep
-// (the existing drill, which re-scopes the single core); `Collapse ×` unmounts
-// it. NOT the base `.wc-node` class — the count-4 lane-node invariant must hold.
-function SatelliteNode({ data }: NodeProps<SatelliteNode>) {
-  const { parentContextId, onEnter, onCollapse } = data
-  const stores = resolveCanvasStores()
-  const contexts = stores.useContexts((s) => s.contexts)
-  const childCount = stores.useContexts((s) => s.childCountByContext[parentContextId] ?? 0)
-  const symbol = contexts.find((c) => c.id === parentContextId)?.symbol ?? '—'
-  return (
-    <div className="wc-satellite nodrag nopan" data-testid="wc-satellite">
-      {/* The child end of the parent→child recursion edge. */}
-      <Handle type="target" position={Position.Left} isConnectable={false} className="wc-edge-anchor" />
-      <div className="wc-satellite__head">
-        <span className="wc-satellite__symbol">{symbol} ▸</span>
-        <Button
-          variant="bare"
-          className="wc-satellite__collapse"
-          onClick={() => onCollapse(parentContextId)}
-          aria-label={`Collapse child canvas of ${symbol}`}
-        >
-          ×
-        </Button>
-      </div>
-      <div className="wc-satellite__body">
-        <span className="wc-satellite__count">
-          {childCount === 0 ? 'Empty child canvas' : `${childCount} context${childCount === 1 ? '' : 's'}`}
-        </span>
-        <Button variant="bare" className="wc-satellite__enter" onClick={() => onEnter(parentContextId)}>
-          Enter ▸
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 // P4 (issue 012) — the coverage TWIN node: the analytical twin of the ring,
 // stacked below the Design core + edge-connected to it. Its body (DesignCoverageTwinBody)
 // renders the read-only CoverageMatrix from the current-canvas stores; a gap-cell
@@ -698,7 +702,6 @@ const NODE_TYPES = {
   foundationItem: FoundationItemNode,
   archHeader: ArchHeaderNode,
   archTable: ArchTableNode,
-  satellite: SatelliteNode,
   coverageTwin: CoverageTwinNode,
 }
 
@@ -820,43 +823,37 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     })
   }, [])
 
-  // 089-D3 P3 — the open recursion satellites (issue 011). Opening a satellite is
-  // pure canvas state (NO DB write): the register/ring drill affordances call
-  // openSatellite; this canvas renders one summary node + a parent→child edge per
-  // open child, and pans to the newly-focused one. The child canvas is only
-  // materialized (openChildCanvas) when the user actually Enters it (lazy).
+  // Issue 100 Phase D — the open drilled-in child cores (issue 011 recursion).
+  // Opening is pure canvas state (NO DB write): the register/ring drill
+  // affordances call openSatellite; this canvas mounts a LIVE {register + ring}
+  // child core (its own store instance, keyed by the parent context id) + a
+  // parent→child edge per open child, and pans to the newly-focused one. The
+  // child canvas is materialized (openChildCanvas) by the child register's own
+  // load effect once it mounts.
   const openSatellites = useCanvasSatellitesStore((s) => s.open)
   const satelliteFocus = useCanvasSatellitesStore((s) => s.focus)
 
-  // The current context path in a ref so the (stable) satellite-Enter callback
-  // navigates into [...currentPath, parentContextId] without re-subscribing.
-  const contextPathRef = useRef(design.contextPath)
-  contextPathRef.current = design.contextPath
-
-  // Enter ▸ on a satellite: the existing deep drill — navigate into the child
-  // canvas (re-scopes the single core; the canvas-nav reset clears satellites).
-  const onSatelliteEnter = useCallback(
-    (parentContextId: string) => {
-      navigate({
-        kind: 'design',
-        projectId,
-        contextPath: [...contextPathRef.current, parentContextId],
-        view: 'canvas',
-      })
-    },
-    [projectId],
-  )
+  // Collapse a live child core: drop it from the open set AND release its store
+  // instance (per-instance DB-sync teardown — the whole point of the independent
+  // instance). Collapse is an explicit user action, so a mid-edit unmount is
+  // user-chosen (deferred: zoom-LOD auto-culling of off-screen child cores).
   const onSatelliteCollapse = useCallback((parentContextId: string) => {
     useCanvasSatellitesStore.getState().collapse(parentContextId)
+    releaseCanvasStores(parentContextId)
   }, [])
 
-  // Satellites are per-canvas: reset the open set whenever the active canvas
-  // changes (deep-link / ⌘ / breadcrumb). The satellite nodes have stable ids and
-  // never unmount, so this reset must be explicit (P2's hoveredMark lesson — a
-  // stable id means there is no unmount to hang the reset on). Opening a satellite
-  // does NOT change this identity (no navigate), so the set survives on-canvas.
+  // Child cores are per-canvas: reset the open set whenever the active canvas
+  // changes (deep-link / ⌘ / breadcrumb), releasing every child store the
+  // previous canvas held (else its DB-sync subscription leaks — the reset only
+  // clears the id list). Read via a ref so this effect keys only on canvasIdentity
+  // (at reset time the store still holds the OLD canvas's open set — the reset
+  // below is what clears it). Opening a child core does NOT change this identity
+  // (no navigate), so the set survives on-canvas.
+  const openSatellitesRef = useRef(openSatellites)
+  openSatellitesRef.current = openSatellites
   const canvasIdentity = `${projectId}::${design.contextPath.join('/')}::${design.canvasId ?? ''}`
   useEffect(() => {
+    for (const parentContextId of openSatellitesRef.current) releaseCanvasStores(parentContextId)
     resetCanvasSatellites()
   }, [canvasIdentity])
 
@@ -995,19 +992,46 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         },
       })
     }
-    // P3 — one satellite summary node per open child canvas, in open order (the
-    // clusterLayout stack order). Position is derived; not draggable (no reorder).
+    // Issue 100 Phase D — one LIVE {register + ring} child core per open child
+    // canvas, in open order (the clusterLayout stack order). NAMESPACED ids +
+    // storeCanvasId = parentContextId give each child its own independent store
+    // instance; contextPath grows by the parent context id so its load effect
+    // materializes + loads the child canvas. Positions are derived (satellite
+    // column); not draggable (no reorder). The primary core's nodes/ids/data
+    // above are UNTOUCHED (storeCanvasId omitted → default instance).
     for (const parentContextId of openSatellites) {
+      const childContextPath = [...design.contextPath, parentContextId]
       list.push({
-        id: satelliteNodeId(parentContextId),
-        type: 'satellite',
+        id: childRegisterNodeId(parentContextId),
+        type: 'designRegister',
         position: { x: 0, y: 0 },
         draggable: false,
         data: {
-          kind: 'satellite',
-          parentContextId,
-          onEnter: onSatelliteEnter,
-          onCollapse: onSatelliteCollapse,
+          tier: 'design',
+          sort: 0,
+          estimate: DESIGN_REGISTER_ESTIMATE,
+          projectId,
+          contextPath: childContextPath,
+          view: 'canvas',
+          canvasId: parentContextId,
+          storeCanvasId: parentContextId,
+          onCollapse: () => onSatelliteCollapse(parentContextId),
+        },
+      })
+      list.push({
+        id: childRingNodeId(parentContextId),
+        type: 'designRing',
+        position: { x: 0, y: 0 },
+        draggable: false,
+        data: {
+          tier: 'design',
+          sort: 1,
+          estimate: DESIGN_RING_ESTIMATE,
+          projectId,
+          contextPath: childContextPath,
+          view: 'canvas',
+          canvasId: parentContextId,
+          storeCanvasId: parentContextId,
         },
       })
     }
@@ -1042,7 +1066,6 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     onPropCreated,
     onPropExitBoundary,
     openSatellites,
-    onSatelliteEnter,
     onSatelliteCollapse,
     coverageOpen,
     onGapComposed,
@@ -1050,29 +1073,28 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(desiredNodes)
 
-  // P3 — the recursion edges (the app's FIRST React Flow edges): one parent→child
-  // edge per open satellite. Derived from the RECONCILED satellite NODES (not the
-  // store's open set) so an edge never targets a node React Flow doesn't yet have
-  // in `nodes` — the reconcile effect adds a satellite node one commit after the
-  // store opens it, so sourcing edges off `nodes` keeps them in lockstep. Fully
-  // derived + never user-edited (nodesConnectable stays false), so there is no
-  // useEdgesState; a stable join-key memo keeps the edges array identity constant
-  // across measure-only node updates, and computeSatelliteLayout's stable edge ids
-  // keep RF's edge reconcile from churning (the loop-avoidance discipline).
-  const satelliteNodeIds = nodes.flatMap((n) => (n.type === 'satellite' ? [n.id] : []))
+  // The recursion edges: one PRIMARY→child edge per open live child core. Derived
+  // from the RECONCILED child-register NODES (not the store's open set) so an edge
+  // never targets a node React Flow doesn't yet have in `nodes` — the reconcile
+  // effect adds a child core one commit after the store opens it, so sourcing
+  // edges off `nodes` keeps them in lockstep. Fully derived + never user-edited
+  // (nodesConnectable stays false), so there is no useEdgesState; a stable
+  // join-key memo keeps the edges array identity constant across measure-only node
+  // updates, and stable edge ids keep RF's edge reconcile from churning. Every
+  // edge sources from LANE_NODE_ID.design (the PRIMARY register) — a nested child
+  // core's own edge origin is a deferred follow-up.
+  const childRegisterIds = nodes.flatMap((n) =>
+    n.type === 'designRegister' && n.data.storeCanvasId != null ? [n.id] : [],
+  )
   const hasCoverageTwin = nodes.some((n) => n.type === 'coverageTwin')
-  // Key on the satellite set + the twin presence so the edges array identity only
+  // Key on the child-core set + the twin presence so the edges array identity only
   // changes when the edge SET changes, not on measure-only `nodes` updates.
-  const edgeKey = `${satelliteNodeIds.join('|')}#${hasCoverageTwin ? '1' : '0'}`
+  const edgeKey = `${childRegisterIds.join('|')}#${hasCoverageTwin ? '1' : '0'}`
   const edges = useMemo<Edge[]>(() => {
-    const satelliteEdges = computeSatelliteLayout(
-      satelliteNodeIds.map((id) => ({ id })),
-      LANE_NODE_ID.design,
-      CLUSTER_CONFIG,
-    ).edges.map((e) => ({
-      id: e.id,
-      source: e.source,
-      target: e.target,
+    const childEdges: Edge[] = childRegisterIds.map((id) => ({
+      id: `edge:${LANE_NODE_ID.design}:${id}`,
+      source: LANE_NODE_ID.design,
+      target: id,
       className: 'wc-edge',
       markerEnd: { type: MarkerType.ArrowClosed },
     }))
@@ -1089,8 +1111,8 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           },
         ]
       : []
-    return [...satelliteEdges, ...twinEdges]
-    // satelliteNodeIds/hasCoverageTwin are derived from edgeKey; keying on the
+    return [...childEdges, ...twinEdges]
+    // childRegisterIds/hasCoverageTwin are derived from edgeKey; keying on the
     // string keeps the edges array stable across measure-only `nodes` updates.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [edgeKey])
@@ -1142,23 +1164,28 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     return () => cancelAnimationFrame(raf)
   }, [nodesInitialized, reactFlow])
 
-  // P3 — pan/zoom to a freshly-opened (or re-focused) satellite. `focus` is a
-  // one-shot set by openSatellite; we wait for the node to mount + measure (this
-  // effect re-runs as `nodes` updates), fit it into view, then consumeFocus so a
-  // later reconcile never yanks the viewport back. Reduced-motion snaps.
+  // Pan/zoom to a freshly-opened (or re-focused) live child core. `focus` is the
+  // one-shot `satelliteNodeId(parentContextId)` token set by openSatellite; we map
+  // it back to the parent context id (the open set holds the raw ids) → the child
+  // REGISTER node id, wait for that node to mount + measure (this effect re-runs as
+  // `nodes` updates), fit it into view, then consumeFocus so a later reconcile
+  // never yanks the viewport back. Reduced-motion snaps.
   useEffect(() => {
     if (!satelliteFocus) return
-    const node = reactFlow.getNode(satelliteFocus)
+    const parentContextId = openSatellites.find((id) => satelliteNodeId(id) === satelliteFocus)
+    if (!parentContextId) return
+    const targetId = childRegisterNodeId(parentContextId)
+    const node = reactFlow.getNode(targetId)
     if (node?.measured?.height == null) return
     void reactFlow.fitView({
-      nodes: [{ id: satelliteFocus }],
+      nodes: [{ id: targetId }],
       padding: 0.3,
       maxZoom: 1,
       duration: prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION,
     })
     useCanvasSatellitesStore.getState().consumeFocus()
     // `nodes` is a re-run trigger only (the node must exist + be measured first).
-  }, [satelliteFocus, nodes, reactFlow])
+  }, [satelliteFocus, openSatellites, nodes, reactFlow])
 
   // P4 — pan/zoom to the coverage twin when it opens (same one-shot pattern as the
   // satellite pan: wait for mount + measure, fit, then consumeFocus).

@@ -916,107 +916,107 @@ test('the D3 register extends right, drops the New-context button, and LOD-colla
   await expect(register.getByRole('columnheader', { name: 'Dim1', exact: true })).toHaveCount(0)
 })
 
-// ── 089-D3 P3 — recursion as edge-connected satellites (issue 011) ──────────
-// Drilling into a context OPENS its child canvas as a SUMMARY satellite node to
-// the right of the Design core + a parent→child edge (the app's FIRST React Flow
-// edges), pans to it, and collapse unmounts it — the parent core stays put. The
-// child satellite is a summary STUB, not a second live {register+ring} core (the
-// contexts store is a singleton); deep entry still navigates (Enter ▸). Promoting
-// the stub to a live child core is the tracked 089 follow-up.
+// ── Issue 100 Phase D — recursion drills to a LIVE child core ────────────────
+// Drilling into a context PROMOTES its child canvas from a summary STUB to a
+// second LIVE {register + ring} core mounted beside the parent, editable in
+// place, backed by its OWN INDEPENDENT store instance (keyed by the parent
+// context id). Adding a context inside the child core must appear THERE ONLY,
+// never in the parent — the proof that the two cores hold separate stores. The
+// parent→child edge connects the two cores; collapse (×) tears down the child
+// store and unmounts both child bodies, leaving the parent byte-unchanged.
 
-test('drill-in spawns an edge-connected child satellite; pan-to-child; collapse unmounts; parent unchanged', { tag: '@dev-flag' }, async ({ page }) => {
-  await page.setViewportSize({ width: 1600, height: 1100 })
-  await openThreeLaneCanvas(page)
-
-  const register = page.locator('.wc-node--design-register .context-register-shell')
-  await expect(register).toBeVisible({ timeout: 15_000 })
-
-  // One real context α via the register phantom.
-  const phantom = register.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
-  await phantom.click()
-  await page.keyboard.type('first justification')
-  await page.keyboard.press('Enter')
-  await expect(register.getByText('α', { exact: true })).toBeVisible()
-
-  // Nothing spatial before drilling: no satellites, no edges.
-  await expect(page.locator('.wc-satellite')).toHaveCount(0)
-  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
-
-  // Settle the initial fit, capture the framing, then drill: "Open ▸" on α.
-  await waitForStableViewport(page)
-  const beforeOpen = await viewportTransform(page)
-  await register.locator('.children-drill').first().click()
-
-  // A child satellite node + the parent→child edge appear; the satellite reads α.
-  const satellite = page.locator('.wc-satellite')
-  await expect(satellite).toHaveCount(1)
-  await expect(satellite).toContainText('α')
-  await expect(page.locator('.react-flow__edge')).toHaveCount(1)
-
-  // Parent core UNCHANGED — still four lane nodes (satellites are NOT `.wc-node`),
-  // the Design register still mounted.
-  await expect(page.locator('.wc-node')).toHaveCount(4)
-  await expect(page.locator('.wc-node--design-register')).toBeVisible()
-
-  // Pan-to-child: the viewport moved to frame the satellite.
-  await expect.poll(async () => (await viewportTransform(page)) !== beforeOpen).toBe(true)
-
-  // Collapse × unmounts the satellite + its edge; the parent core stays put.
-  await waitForStableViewport(page)
-  await satellite.locator('.wc-satellite__collapse').click()
-  await expect(page.locator('.wc-satellite')).toHaveCount(0)
-  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
-  await expect(page.locator('.wc-node')).toHaveCount(4)
-  await expect(page.locator('.wc-node--design-register')).toBeVisible()
-})
-
-test('a satellite Enter ▸ deep-links into the child canvas (contextPath resolves) and resets satellites', { tag: '@dev-flag' }, async ({ page }) => {
-  await page.setViewportSize({ width: 1600, height: 1100 })
-  const projectId = await openThreeLaneCanvas(page)
-
-  const register = page.locator('.wc-node--design-register .context-register-shell')
-  await expect(register).toBeVisible({ timeout: 15_000 })
-  const phantom = register.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
-  await phantom.click()
-  await page.keyboard.type('first justification')
-  await page.keyboard.press('Enter')
-  await expect(register.getByText('α', { exact: true })).toBeVisible()
-
-  await waitForStableViewport(page)
-  await register.locator('.children-drill').first().click()
-  const satellite = page.locator('.wc-satellite')
-  await expect(satellite).toHaveCount(1)
-
-  // Enter ▸ navigates into the child canvas: the URL grows a contextPath segment
-  // (routes.ts grammar, PRESERVED), the canvas persists (canvasMode, P0), and — the
-  // child being a different canvas — the satellite set resets (the stable-id
-  // per-canvas-nav reset). Deep-link resolution: the core still mounts.
-  await satellite.locator('.wc-satellite__enter').click()
-  await expect(page).toHaveURL(new RegExp(`/p/${projectId}/design/[^/?#]+`))
-  await expect(page.locator('.wc-node--design-register')).toBeVisible()
-  await expect(page.locator('.wc-satellite')).toHaveCount(0)
-})
-
-test('a satellite clears a 093-widened register — no overlap (review HIGH guard)', { tag: '@dev-flag' }, async ({ page }) => {
+test('drilling α promotes a LIVE child core with an INDEPENDENT store (parent unaffected)', { tag: '@dev-flag' }, async ({ page }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
   await openThreeLaneCanvas(page)
-  const register = page.locator('.wc-node--design-register')
-  await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
 
-  // Widen the register well past the nominal 960px lane width (093 made it
+  const parentRegister = page.locator('.wc-node--design-register').nth(0)
+  const parentShell = parentRegister.locator('.context-register-shell')
+  await expect(parentShell).toBeVisible({ timeout: 15_000 })
+
+  // Seed a dimension + one parameter + one context (α) in the ROOT core.
+  const dimPhantom = parentRegister.getByPlaceholder('Type to add a dimension')
+  await dimPhantom.click()
+  await page.keyboard.type('Value')
+  await page.keyboard.press('Enter')
+  await expect(parentRegister.locator('.dim-row__name', { hasText: 'Value' })).toBeVisible()
+  const paramPhantom = parentRegister.getByPlaceholder('Type to add a parameter').first()
+  await paramPhantom.click({ force: true })
+  await paramPhantom.pressSequentially('Comfort')
+  await page.keyboard.press('Enter')
+  await expect(parentRegister.getByText('Comfort', { exact: true })).toBeVisible()
+
+  const parentPhantom = parentShell.getByPlaceholder(/it becomes α|New context/)
+  await parentPhantom.click()
+  await page.keyboard.type('root-alpha justification')
+  await page.keyboard.press('Enter')
+  await expect(parentShell.getByText('α', { exact: true })).toBeVisible()
+
+  // Before drilling: exactly the four primary lane nodes, one Design register.
+  await expect(page.locator('.wc-node')).toHaveCount(4)
+  await expect(page.locator('.wc-node--design-register')).toHaveCount(1)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
+
+  // Drill α ("Open ▸") → a SECOND live {register + ring} core mounts beside the
+  // parent (NOT a summary stub): two registers, two rings, six .wc-node total.
+  await waitForStableViewport(page)
+  await parentShell.locator('.children-drill').first().click()
+
+  await expect(page.locator('.wc-node--design-register')).toHaveCount(2)
+  await expect(page.locator('.wc-node--design-ring')).toHaveCount(2)
+  await expect(page.locator('.wc-node')).toHaveCount(6)
+  // The parent→child edge connects the two cores.
+  await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+
+  const childRegister = page.locator('.wc-node--design-register').nth(1)
+  const childShell = childRegister.locator('.context-register-shell')
+  await expect(childShell).toBeVisible({ timeout: 15_000 })
+
+  // Add a context in the CHILD core. Its child canvas starts empty, so the first
+  // context becomes α1 (child-of-α, SPEC §3). INDEPENDENT-STORE PROOF: this must
+  // land in the child core ONLY — a shared singleton store would leak it into the
+  // parent register too.
+  const childPhantom = childShell.getByPlaceholder(/Type to create the first context on this canvas|New context/)
+  await childPhantom.click()
+  await page.keyboard.type('child-beta justification')
+  await page.keyboard.press('Enter')
+  await expect(childShell.getByText('α1', { exact: true })).toBeVisible()
+
+  // Parent core STILL shows α and does NOT show α1 (independent stores).
+  await expect(parentShell.getByText('α', { exact: true })).toBeVisible()
+  await expect(parentShell.getByText('α1', { exact: true })).toHaveCount(0)
+  // Child core shows its own α1.
+  await expect(childShell.getByText('α1', { exact: true })).toBeVisible()
+
+  // Collapse the child core (×) → tears down its store + unmounts both bodies;
+  // the parent core is byte-unchanged (still α, four nodes, one register, no edge).
+  await waitForStableViewport(page)
+  await childRegister.locator('.wc-child-collapse').click()
+  await expect(page.locator('.wc-node--design-register')).toHaveCount(1)
+  await expect(page.locator('.wc-node')).toHaveCount(4)
+  await expect(page.locator('.react-flow__edge')).toHaveCount(0)
+  await expect(parentShell.getByText('α', { exact: true })).toBeVisible()
+})
+
+test('a live child core clears a 093-widened parent register — no overlap (review HIGH guard)', { tag: '@dev-flag' }, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1200 })
+  await openThreeLaneCanvas(page)
+  const parentRegister = page.locator('.wc-node--design-register').nth(0)
+  await expect(parentRegister.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
+
+  // Widen the parent register well past the nominal 960px lane width (093 made it
   // width:max-content, uncapped). Six dimensions push it past 960 + coreGap.
-  const dimPhantom = register.getByPlaceholder('Type to add a dimension')
+  const dimPhantom = parentRegister.getByPlaceholder('Type to add a dimension')
   for (const name of ['Dim1', 'Dim2', 'Dim3', 'Dim4', 'Dim5', 'Dim6']) {
     await dimPhantom.click()
     await page.keyboard.type(name)
     await page.keyboard.press('Enter')
   }
-  await expect(register.locator('.dim-row')).toHaveCount(6)
-  expect(await register.evaluate((el) => (el as HTMLElement).offsetWidth)).toBeGreaterThan(1080)
+  await expect(parentRegister.locator('.dim-row')).toHaveCount(6)
+  expect(await parentRegister.evaluate((el) => (el as HTMLElement).offsetWidth)).toBeGreaterThan(1080)
 
-  // One context, then drill to spawn its satellite.
-  const shell = register.locator('.context-register-shell')
-  const phantom = shell.getByPlaceholder(/Type to create your first context — it becomes α|New context/)
+  // One context, then drill to promote its child canvas to a live child core.
+  const shell = parentRegister.locator('.context-register-shell')
+  const phantom = shell.getByPlaceholder(/it becomes α|New context/)
   await phantom.click()
   await page.keyboard.type('first justification')
   await page.keyboard.press('Enter')
@@ -1024,20 +1024,21 @@ test('a satellite clears a 093-widened register — no overlap (review HIGH guar
 
   await waitForStableViewport(page)
   await shell.locator('.children-drill').first().click()
-  const satellite = page.locator('.wc-satellite')
-  await expect(satellite).toHaveCount(1)
+  await expect(page.locator('.wc-node--design-register')).toHaveCount(2)
+  const childRegister = page.locator('.wc-node--design-register').nth(1)
+  await expect(childRegister.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
   await waitForStableViewport(page)
 
-  // NO OVERLAP: the satellite's left edge is at/after the register node's right
-  // edge (screen coords — both share the viewport transform, so the relative
-  // check is scale-invariant). The pre-fix bug used a nominal-960 offset, landing
-  // the satellite on top of the wide register's CHILDREN/DUPLICATE columns.
-  const regBox = await register.boundingBox()
-  const satBox = await satellite.boundingBox()
+  // NO OVERLAP: the child core's left edge is at/after the parent register node's
+  // right edge (screen coords — both share the viewport transform, so the relative
+  // check is scale-invariant). The clearance is derived from the WIDEST measured
+  // primary design-column node, so a 093-widened parent never overlaps its child.
+  const regBox = await parentRegister.boundingBox()
+  const childBox = await childRegister.boundingBox()
   expect(regBox).not.toBeNull()
-  expect(satBox).not.toBeNull()
-  if (regBox && satBox) {
-    expect(satBox.x).toBeGreaterThanOrEqual(regBox.x + regBox.width - 1)
+  expect(childBox).not.toBeNull()
+  if (regBox && childBox) {
+    expect(childBox.x).toBeGreaterThanOrEqual(regBox.x + regBox.width - 1)
   }
 })
 
@@ -1560,44 +1561,38 @@ async function createBoundAlpha(page: Page): Promise<void> {
 // nodes: the register node renders the `.canvas-seed-hint` (DesignRegisterBody)
 // and the ring node stamps `data-suppress-canvas-empty` on `.design-core-ring`
 // (DesignRingBody), which the base.css rule uses to hide Canvas's own always-on
-// `.canvas-empty-prompt`. Never both voices at once. Reached by drilling α, then
-// entering its child canvas via the satellite — a fresh child inherits α's two
-// dimensions but has no sub-parameters yet (the needs-seeding state).
-test('child canvas (canvas): the ring suppresses its own empty prompt while the register shows the seed-hint', { tag: '@dev-flag' }, async ({
+// `.canvas-empty-prompt`. Never both voices at once. Issue 100 Phase D — drilling
+// α now mounts a LIVE child core in place (no navigate); the child inherits α's
+// two dimensions but has no sub-parameters yet (the needs-seeding state), so the
+// assertions run against the CHILD core (the second register/ring pair).
+test('child core (canvas): the child ring suppresses its own empty prompt while the child register shows the seed-hint', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
-  const projectId = await openCanvasTwoDimsOneParam(page)
+  await openCanvasTwoDimsOneParam(page)
   await createBoundAlpha(page)
 
-  // Drill α → its summary satellite, then enter the child canvas (the satellite
-  // is a stub; the live child core only mounts after navigating in).
+  // Drill α → a LIVE child core mounts beside the parent (its canvas seeds α's two
+  // dimensions from α's bindings, but has zero sub-parameters yet).
   await waitForStableViewport(page)
-  const register = page.locator('.wc-node--design-register')
-  await register.locator('.children-drill').first().click()
-  const satellite = page.locator('.wc-satellite')
-  await expect(satellite).toHaveCount(1)
-  await satellite.locator('.wc-satellite__enter').click()
+  const parentRegister = page.locator('.wc-node--design-register').nth(0)
+  await parentRegister.locator('.children-drill').first().click()
+  await expect(page.locator('.wc-node--design-register')).toHaveCount(2)
 
-  // On the child canvas: a contextPath segment, and the register + ring re-mount
-  // for the child (which has α's two dimensions but zero sub-parameters yet).
-  await expect(page).toHaveURL(new RegExp(`/p/${projectId}/design/[^/?#]+`))
-  await expect(page.locator('.wc-node--design-register')).toBeVisible()
-
-  // The register node speaks the ONE calm empty-state voice: the seed-hint.
-  const childRegister = page.locator('.wc-node--design-register')
+  // The CHILD core's register node speaks the ONE calm empty-state voice: seed-hint.
+  const childRegister = page.locator('.wc-node--design-register').nth(1)
   await expect(childRegister.locator('.canvas-seed-hint')).toBeVisible()
 
-  // The ring node suppresses Canvas's own always-on prompt: `.design-core-ring`
-  // carries the suppress flag, so the prompt is present in the DOM (Canvas.tsx
-  // always renders it while there are no contexts) but HIDDEN — never both.
-  const ring = page.locator('.wc-node--design-ring')
-  await expect(ring.locator('.design-core-ring')).toHaveAttribute('data-suppress-canvas-empty', 'true')
-  await expect(ring.locator('.canvas-empty-prompt')).toHaveCount(1)
-  await expect(ring.locator('.canvas-empty-prompt')).toBeHidden()
+  // The CHILD core's ring node suppresses Canvas's own always-on prompt:
+  // `.design-core-ring` carries the suppress flag, so the prompt is present in the
+  // DOM (Canvas.tsx always renders it while there are no contexts) but HIDDEN.
+  const childRing = page.locator('.wc-node--design-ring').nth(1)
+  await expect(childRing.locator('.design-core-ring')).toHaveAttribute('data-suppress-canvas-empty', 'true')
+  await expect(childRing.locator('.canvas-empty-prompt')).toHaveCount(1)
+  await expect(childRing.locator('.canvas-empty-prompt')).toBeHidden()
   // The lineage line was dropped outright (DesignRingBody never passes `lineage`
   // to Canvas) — it never enters the DOM at all.
-  await expect(ring.locator('.canvas-empty-lineage')).toHaveCount(0)
+  await expect(childRing.locator('.canvas-empty-lineage')).toHaveCount(0)
 })
 
 // 099 (canvas) — hover-emphasis/mute on the canvas RING at node scale, ported
