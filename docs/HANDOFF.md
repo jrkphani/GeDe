@@ -1,4 +1,4 @@
-# HANDOFF — 2026-07-22 (100 A–E + 105 P0–P5 COMPLETE incl. both LOW nits; 100, 104 & 105 archived; only 099/106 open + 105 residual txn-MEDIUM tracked)
+# HANDOFF — 2026-07-22 (100 + 105 + 106 all DONE & archived; 099 automatable tests shipped; 105-txn Phase 1 shipped, remainder → 107; OPEN: only 099-touch [manual] + 107)
 
 **Long autonomous run under owner directives "sequence all open tasks and execute autonomously" → "continue" → "continue until done, use subagents."** Delivered TWO full features end-to-end: **`100` live-child-canvas-core** (all 5 phases A–E) and — from live owner UX feedback mid-run — the **`105` Architecture-tree keyboard grammar** (P0–P5, incl. the `⋯` row-action menu + both LOW review nits). Plus `104` resolved, `099`-coverage, `088` index corrected. **`100` + `104` are now ARCHIVED to `done/`**; `100`'s non-blocking refinements were filed as **`106`**. Nothing is mid-flight.
 
@@ -10,9 +10,19 @@ Launch prompt for the next session: `docs/NEXT-ORCHESTRATOR.md`.
 
 ## Current state
 
-HEAD: **`46c8bf3`** (105-nits) — on top of P5 `4bade78` + docs `37b3b6b`. **CI `verify` CONFIRMED GREEN + DEPLOYED** for 100 A–E (`be33140`/`f5b6420`/`6af0754`/`51852e6`), 105 P0–P4 (`510ac53`/`2fe39b1`/`4d0af2a`) and **105 P5 `4bade78`** (verify 22m + deploy 2m13s, live). The **105-nits `46c8bf3`** is also **verify-GREEN + DEPLOYED** — its verify flaked ONCE on a Design canvas child-core mount-timing e2e (`d3-canvas.spec.ts:930` "drilling α promotes a LIVE child core" — a `toBeVisible('α1')` timeout, **disjoint from the nits' Architecture-only change**, green locally in isolation + in P5's identical run), then **re-ran green (attempt 2) and deployed**. A local `docs/issues/README.md` compression (53% smaller, all rows/links intact) is staged, uncommitted, along with these HANDOFF + NEXT-ORCHESTRATOR updates. Canvas is the prod default (≥1024px + not data-saver); `WorkspaceSurface` is the fallback. Live URL: https://d1nzod71m3rz6x.cloudfront.net.
+HEAD: **`dc51894`**. This session (continuation of the prior run) shipped — all CI-`verify`-GREEN + DEPLOYED: **105 P1** phantom-anchor fix (`f72596c`), the full **106 trilogy** — ③ presence+palette→child-cores (`c90d787`), ② nested-drill grandchild positioning (`d132bb7`), ① zoom-LOD child-core culling (`3dfe87c`) — the **099 automatable a11y tests** (`6434752`), and **105-txn Phase 1** (`moveTier2Entry` atomic transaction, `dc51894`), plus doc housekeeping (`540e8cd`, archived 105). **106 is now archived → `done/`**; the 105-txn remainder (~20 more multi-write mutations) is filed as **107**. The prior run's `100`/`104`/`105` (`46c8bf3` and earlier) remain deployed. The 106 render wiring passed CI's full e2e each push (the mount-timing flake didn't recur this session). Canvas is the prod default (≥1024px + not data-saver); `WorkspaceSurface` is the fallback. Live URL: https://d1nzod71m3rz6x.cloudfront.net.
 
-### What shipped (all CI-green + deployed)
+### What shipped THIS session (all CI-green + deployed)
+
+- **`106` — live-child-core refinements, ALL 3 (SHIPPED & archived → `done/106-...md`).**
+  - **③** (`c90d787`) presence's "selected" cue + ⌘K palette reach LIVE child cores (were default-instance-only). New `listCanvasStores()`; presence publishes the focus-active core's selection; palette drills a child hit to `contextPath:[parentContextId]`. Review caught a **CRITICAL** (see patterns) + a **HIGH** (zombie cue), both fixed pre-commit.
+  - **②** (`d132bb7`) nested-drill grandchild positioning — satellite state → parent-aware `OpenSatellite[]`; pure `computeSatelliteLayout` anchors each core's column-x + edge to its PARENT core; cascade-collapse. Direct-child behavior byte-identical.
+  - **①** (`3dfe87c`) zoom-LOD auto-culling → `CoreStub` when (not editing) AND (zoom<0.35 OR off-screen OR depth>2). Pure `domain/coreLod.ts`. **Stub-swap render-only, KEEP the store** (no `releaseCanvasStores` on demote → flash-free re-promote, no zombie hazard). Review found a **HIGH** (ring edit-gate decoupled from register) → fixed with a shared `coreEditing` store (register writes imperatively, ring reads).
+- **`105` P1** (`f72596c`) sibling phantom follows the newest sibling through an Enter series. Review HIGH: guard the re-anchor against a late-resolving create resurrecting a dismissed phantom (deterministic gated-promise test); MEDIUM: return the promise so the double-Enter guard gates on the DB round-trip.
+- **`105`-txn Phase 1** (`dc51894`) `moveTier2Entry` wrapped in one `db.transaction` — atomic reparent+resort. `Tx`/`Querier` exported from `client.ts`; store layer UNCHANGED (outbox is in-memory, enqueued after the mutation resolves). DB-reviewer APPROVE (falsifiability-verified rollback). Remaining 20 mutations → **107**.
+- **`099` tests** (`6434752`) per-lane canvas axe scans (Foundation/Architecture) + landmark/focus-order + deterministic `expect.poll` focus-settle + label-tier lock. E2E-only; CI-validated (local Playwright OOMs).
+
+### What shipped (prior run — all CI-green + deployed)
 
 - **`100` — live child-canvas core, ALL 5 PHASES (SHIPPED & archived → `done/100-...md`).** Drilling ("Open ▸") a child mounts a LIVE {register+ring} core editable in place beside its live, INDEPENDENT parent.
   - **A** (`be33140`) — `src/store/canvasStores.ts`: `createCanvasStores(canvasId)` factory + registry (`getCanvasStores`/`releaseCanvasStores`) + default-instance shims. Store bodies → hoisted `createXStore()` factories; per-instance `syncUnsubscribe`; sibling reads → `getStores().use*`. `parameters` stays global. Zero behavior change.
@@ -30,11 +40,11 @@ HEAD: **`46c8bf3`** (105-nits) — on top of P5 `4bade78` + docs `37b3b6b`. **CI
 - **`099` coverage** (`8cc03d2`) — canvas hover-mute + dual-empty-state e2e.
 - **`088`** — corrected stale index (was verified-live 2026-07-17).
 
-## Backlog (OPEN)
+## Backlog (OPEN) — 2 items, both non-blocking
 
-- **`105` — ARCHIVED → `done/105-...md` (P0–P5 + both LOW nits DONE).** Two non-blocking residuals tracked in its README row: a systemic MEDIUM (multi-step DB mutations like `moveTier2Entry` aren't transaction-wrapped — consider PGlite transactions) and minor P1 polish (the sibling phantom stays anchored after the series-start row, not the newest sibling).
-- **`099` remainder** — touch/tablet pan-zoom + node-drag (**manual-device**), optional label-tier-stable lock (LOW), axe extension.
-- **`106` (new) — 100 refinements** — zoom-LOD child-core culling (edit-aware); nested-drill grandchild edge/position; presence + palette reach child cores. All non-blocking, none crash.
+- **`107` (new, from 105) — transaction-wrap the remaining ~20 multi-step mutations.** Phase 1 (`moveTier2Entry`) shipped; Phases 2–5 (subtree/promote · reorder-family · cascades · binding/param) are **mechanical repeats of the proven, reviewed pattern** in `docs/issues/107-...md`. Each phase: RED-first rollback test + DB/code review + CloudWatch check.
+- **`099` remainder — MANUAL-ONLY.** Just touch/tablet pan-zoom + node-drag on a real coarse-pointer device (cannot be automated). All automatable a11y/coverage items are shipped.
+- **`106` follow-ups (minor, tracked in its done-row):** grandchild breadcrumb trail is shallow (nav-display only); no WorkspaceCanvas render-path unit harness (LOD/positioning wiring is CI-e2e-covered only).
 
 ## Patterns (this run — reuse)
 
@@ -51,6 +61,18 @@ HEAD: **`46c8bf3`** (105-nits) — on top of P5 `4bade78` + docs `37b3b6b`. **CI
 - **`moveEntry`** wraps the tested `moveTier2Entry`; one commandLog entry/gesture, undo re-enqueues (094 lesson), enqueue BOTH sibling groups + the moved row's `parentId`.
 - **Tree ARIA:** a SR-only parallel `role="tree"` (not `role="treegrid"`, which remaps `<td>`→gridcell and breaks `getByRole('cell')`); `aria-level` on a plain `<tr>` is an axe violation.
 
+### Child-core refinements (106) — reuse
+- **⚠️ `activeCanvas` is NOT a store-instance key (the 106-③ CRITICAL).** `WorkspaceCanvas` sets `activeCanvas` from `data.canvasId`, which for the PRIMARY core is `route.canvasId` — the **090 multi-root-canvas** id, NOT `'root'`/`parentContextId`. To resolve the active core's store instance, do a **non-creating registry membership check** (`listCanvasStores().find(s => s.canvasId === activeCanvas)`); any unregistered key → DEFAULT. Never `resolveCanvasStores(activeCanvas)` blindly — it would `getCanvasStores(rootCanvasId)` and **leak a phantom empty instance**.
+- **Releasing the active core must reset the arbiter** (`resetActiveCanvas`) or presence stays bound to the released "zombie" store (teardown only unsubscribes, never resets state). Both `onSatelliteCollapse` + the nav-reset effect do this.
+- **LOD demote = stub-swap render-only; KEEP the store** (never `releaseCanvasStores` on demote — that's collapse/nav-reset only). Flash-free re-promote, no zombie hazard.
+- **Cross-node coupled state (register↔ring) needs a shared store, not a local ref** — they're separate React Flow nodes with no shared parent. But the WRITER (register) must write imperatively via `getState()` (non-subscribing) to avoid a re-render-on-focus that cancels click-to-edit; only the READER (ring) subscribes.
+- **`data-label-tier` is zoom-invariant** (derived from ResizeObserver `contentRect`, not RF `transform: scale()`) — the 099-2c contract.
+
+### Write-path transactions (105 / 107)
+- **Multi-write mutation atomicity = wrap in `db.transaction(async tx => …)`** (drizzle/pglite; precedents in `sync.ts`/`projectIO.ts`/`invitations.ts`). Intra-callback reads/writes use `tx` (see uncommitted state); the not-found pre-read + authoritative final read run on `db` (final one AFTER commit). Widen touched helpers `Database → Querier` (`= Database | Tx`, exported from `client.ts`; `Database` is assignable, so callers don't break).
+- **Do NOT put the outbox enqueue inside the txn** — it's an in-memory Zustand queue (`enqueueIfSyncing`), not a PGlite write, so a rollback can't revert it. It already runs in the STORE layer *after* the mutation resolves, so a rejected mutation skips enqueue+commandLog. **The store layer never changes.**
+- **RED-first rollback proof**: a Proxy `db` that throws on the Nth `.update()` → assert full rollback (re-read via the REAL db == snapshot). Falsifiability-check by stashing the txn out (test must fail).
+
 ### e2e
 - A focus assertion reading `document.activeElement` in a ONE-SHOT `page.evaluate` FLAKES if focus lands in a `requestAnimationFrame` → use `expect.poll`.
 - Seed canvas contexts via the register + **guided-compose `c`** (register is LOD-collapsed at fit-view zoom); `waitForStableViewport` before interaction.
@@ -64,8 +86,8 @@ HEAD: **`46c8bf3`** (105-nits) — on top of P5 `4bade78` + docs `37b3b6b`. **CI
 - **Subagents must NOT commit/push/add** — orchestrator reviews the diff, re-verifies, commits (`--no-verify` after verifying + explicit `git add`). **MANDATORY adversarial review** for any store/render/write-path touch. **Screenshot** user-facing changes. CloudWatch (`…WriteApiFunction…`, profile `phani-quadnomics`, read-only) = authoritative write-path check.
 
 ## Definition of done / next
-`100` and `105` (P0–P5 **plus** both LOW review nits) are SHIPPED + reviewed. **`100`/`104`/`105` are archived to `done/`.** `46c8bf3` is verify-green + deployed; `105`'s two non-blocking residuals (systemic txn MEDIUM + minor P1 phantom-anchor polish) are tracked in its README row. Remaining open backlog = `099` touch/axe (manual-device) · `106` 100-refinements (non-blocking). The `docs/issues/README.md` compression + these HANDOFF/NEXT edits are committed; the 099 README row was corrected (its canvas-side hover-mute + dual-empty-state e2e were already shipped in `8cc03d2`, not "fallback-only"). Per the standing directive: build the backlog or await direction; given the machine's memory state, a fresh session is best for the next heavy build.
+`100`, `104`, `105`, and `106` are all SHIPPED, reviewed, deployed, and **archived to `done/`**. `105`'s residuals are resolved (P1 polish shipped; txn Phase 1 shipped). `099` is down to its single **manual-device** item (touch/tablet). HEAD `dc51894` is verify-green + deployed. **Open backlog = just `107` (105-txn Phases 2–5, mechanical repeats) + `099`-touch (manual).** Next session: pick up `107` (the pattern + phasing are fully specced in `docs/issues/107-...md`) — or await direction. Given the machine's memory state (this was a long session), a fresh session is best for the `107` phases; run local unit tests with `--maxWorkers=2` and lean on CI for e2e.
 
 ---
 
-*History (archived to `docs/issues/done/`): 084; 087–098; 089 (D1/D2/D3-graduation); 100; 101/102/103; 104; 105; 088. OPEN: 099 (coverage done; touch/tablet manual + axe extension) · 106 (100 refinements). Updated 2026-07-22.*
+*History (archived to `docs/issues/done/`): 084; 087–098; 089 (D1/D2/D3-graduation); 100; 101/102/103; 104; 105; 106; 088. OPEN: 099 (touch/tablet MANUAL only) · 107 (txn-wrap Phases 2–5). Updated 2026-07-22.*
