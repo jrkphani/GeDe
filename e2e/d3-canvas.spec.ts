@@ -1654,6 +1654,155 @@ test('tapping a cell (touch) does NOT pan the viewport — the tablet-first case
   }
 })
 
+// ── 099 item #4 — TOUCH / TABLET (emulated). The canvas is the DEFAULT surface
+// on iPad-landscape-class devices (~1024 CSS px, touch) by design (089 tablet-
+// first), yet only ONE touch spec existed (`tapping a cell … does NOT pan`).
+// These cover the faithfully-emulable touch slices — a single-finger touch-drag
+// PANS the pane, a touch-drag on a table-node HEADER reorders it, and a tap
+// FOCUSES an editable target — mirroring the existing passing mouse specs (the
+// pan geometry of `panFoundationPhantomIntoLeftMargin`, the arch drag-reorder at
+// its mouse twin above, the `page.touchscreen.tap` of the tap-no-pan spec).
+// REAL multi-touch PINCH-ZOOM cannot be emulated with fidelity (it needs two
+// tracked contact points + platform gesture recognition) — that stays the
+// irreducible real-device manual remainder (see the 099 doc).
+
+// A single-finger touch drag via CDP `Input.dispatchTouchEvent` — the high-
+// fidelity path d3-zoom (React Flow's pan/drag engine) actually listens to.
+// Playwright's `page.touchscreen` only exposes `tap`, so a swipe/drag needs the
+// raw protocol. Coordinates are viewport CSS px (same basis as `boundingBox()`).
+// touchEnd carries an empty touchPoints list (the sole contact is released).
+async function touchDrag(
+  page: Page,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  steps = 12,
+): Promise<void> {
+  const client = await page.context().newCDPSession(page)
+  try {
+    await client.send('Input.dispatchTouchEvent', {
+      type: 'touchStart',
+      touchPoints: [{ x: from.x, y: from.y }],
+    })
+    for (let i = 1; i <= steps; i++) {
+      await client.send('Input.dispatchTouchEvent', {
+        type: 'touchMove',
+        touchPoints: [
+          {
+            x: from.x + ((to.x - from.x) * i) / steps,
+            y: from.y + ((to.y - from.y) * i) / steps,
+          },
+        ],
+      })
+    }
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  } finally {
+    await client.detach()
+  }
+}
+
+test('a single-finger touch-drag on the empty canvas pane pans the viewport', { tag: '@dev-flag' }, async ({
+  browser,
+}) => {
+  // Touch counterpart of the mouse pan inside `panFoundationPhantomIntoLeftMargin`
+  // (same empty-graph-paper grab region: midway between the pane top and the
+  // Foundation lane row, horizontally centred). A one-finger drag on empty pane
+  // must pan — proving the canvas is navigable by touch, not just mouse.
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, hasTouch: true })
+  const page = await context.newPage()
+  try {
+    await openThreeLaneCanvas(page)
+    await waitForStableViewport(page)
+    const pbox = await boxOf(page.locator('.workspace-canvas'))
+    const fbox = await boxOf(page.locator('.wc-node--foundation'))
+    const grabX = pbox.x + pbox.width / 2
+    const grabY = pbox.y + (fbox.y - pbox.y) / 2 // provably-empty band above the lane
+    const before = await viewportTransform(page)
+    await touchDrag(page, { x: grabX, y: grabY }, { x: grabX + 260, y: grabY }, 14)
+    await waitForStableViewport(page)
+    expect(await viewportTransform(page), 'a single-finger touch-drag on empty pane must pan the viewport').not.toBe(
+      before,
+    )
+  } finally {
+    await context.close()
+  }
+})
+
+test('a touch-drag on a table-node header reorders + persists sort (touch twin of the mouse drag-reorder)', { tag: '@dev-flag' }, async ({
+  browser,
+}) => {
+  // Exact touch mirror of the mouse `dragging a table node down its lane reorders
+  // + persists sort` spec above — same seed, same fit + settle, same drop target
+  // (below Gamma → last), same derived-slot + column-invariant + reload-persist
+  // assertions. The only difference is the drag is dispatched as touch events.
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1200 }, hasTouch: true })
+  const page = await context.newPage()
+  try {
+    const projectId = await openThreeLaneCanvas(page)
+    await addArchTable(page, 'Alpha')
+    await addArchTable(page, 'Beta')
+    await addArchTable(page, 'Gamma')
+    await expect(page.locator('.wc-node--arch-table')).toHaveCount(3)
+
+    await page.locator('.react-flow__controls-fitview').click()
+    await waitForStableArchStack(page)
+
+    const before = await archTablesByY(page)
+    expect(before.names).toEqual(['Alpha', 'Beta', 'Gamma'])
+    expect(new Set(before.xs).size).toBe(1)
+
+    const alphaHandle = page
+      .locator('.wc-node--arch-table')
+      .filter({ hasText: 'Alpha' })
+      .locator('.wc-node__handle')
+    const gammaNode = page.locator('.wc-node--arch-table').filter({ hasText: 'Gamma' })
+    const start = await boxOf(alphaHandle)
+    const gammaBox = await boxOf(gammaNode)
+    const startX = start.x + start.width / 2
+    const startY = start.y + start.height / 2
+    const dropY = gammaBox.y + gammaBox.height + 24 // below Gamma's center → last
+
+    // A touch drag from the header, past Gamma. The interpolated moves cross React
+    // Flow's node-drag threshold on the first few steps (as the mouse nudge does).
+    await touchDrag(page, { x: startX, y: startY }, { x: startX, y: dropY }, 18)
+
+    await expect
+      .poll(async () => (await archTablesByY(page)).names)
+      .toEqual(['Beta', 'Gamma', 'Alpha'])
+    const afterDrop = await archTablesByY(page)
+    expect(new Set(afterDrop.xs).size).toBe(1) // x invariant — lane stays vertical
+
+    // PERSISTED — reload re-reads `sort` from PGlite; the touch reorder survives.
+    await page.goto(`/p/${projectId}/design?d3rf=1`)
+    await expect(page.locator('.wc-node--arch-table')).toHaveCount(3)
+    await expect
+      .poll(async () => (await archTablesByY(page)).names)
+      .toEqual(['Beta', 'Gamma', 'Alpha'])
+    const afterReload = await archTablesByY(page)
+    expect(new Set(afterReload.xs).size).toBe(1)
+  } finally {
+    await context.close()
+  }
+})
+
+test('tapping the Foundation phantom (touch) focuses it — tap-to-activate on the canvas', { tag: '@dev-flag' }, async ({
+  browser,
+}) => {
+  // The positive counterpart of the `tapping a cell … does NOT pan` spec: same
+  // `panFoundationPhantomIntoLeftMargin` setup + `page.touchscreen.tap`, asserting
+  // the tap lands ON the target (it becomes the focused editing surface). Proves
+  // tap-to-select/activate reaches a node's editable content through touch.
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, hasTouch: true })
+  const page = await context.newPage()
+  try {
+    const target = await panFoundationPhantomIntoLeftMargin(page)
+    const b = await boxOf(target)
+    await page.touchscreen.tap(b.x + b.width / 2, b.y + b.height / 2)
+    await expect(target).toBeFocused()
+  } finally {
+    await context.close()
+  }
+})
+
 // ── 099 — port two behaviours that today only run on the WorkspaceSurface
 // fallback onto the REAL React Flow canvas wiring. Both use the canvas register
 // (the `?d3rf` authoring surface) to seed contexts, since the on-ring compose
