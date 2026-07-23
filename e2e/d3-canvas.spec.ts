@@ -1006,16 +1006,23 @@ test('drilling α promotes a LIVE child core with an INDEPENDENT store (parent u
   const childRegister = page.locator('.wc-node--design-register').nth(1)
   const childShell = childRegister.locator('.context-register-shell')
   await expect(childShell).toBeVisible({ timeout: 15_000 })
+  // 100-D flake hardening — the child core mounts async and, under full-suite CI
+  // load, its register + phantom settle slowly; the α1 render can exceed the
+  // default expect timeout (this spec was losing all retries to it). Wait for the
+  // viewport to settle and the child phantom to be interactable before typing, and
+  // give the α1 render a generous timeout so it never loses to mount-timing.
+  await waitForStableViewport(page)
 
   // Add a context in the CHILD core. Its child canvas starts empty, so the first
   // context becomes α1 (child-of-α, SPEC §3). INDEPENDENT-STORE PROOF: this must
   // land in the child core ONLY — a shared singleton store would leak it into the
   // parent register too.
   const childPhantom = childShell.getByPlaceholder(/Type to create the first context on this canvas|New context/)
+  await expect(childPhantom).toBeVisible({ timeout: 15_000 })
   await childPhantom.click()
   await page.keyboard.type('child-beta justification')
   await page.keyboard.press('Enter')
-  await expect(childShell.getByText('α1', { exact: true })).toBeVisible()
+  await expect(childShell.getByText('α1', { exact: true })).toBeVisible({ timeout: 30_000 })
 
   // Parent core STILL shows α and does NOT show α1 (independent stores).
   await expect(parentShell.getByText('α', { exact: true })).toBeVisible()
