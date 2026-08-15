@@ -222,9 +222,9 @@ async function checkInvariants(mutation: MutationEnvelope, store: WriteStore): P
   if (mutation.table === 'dimensions' && mutation.op === 'delete') {
     const existing = await store.getRow('dimensions', mutation.entityId)
     const projectId = existing?.data.projectId as string | undefined
-    if (existing && projectId) {
-      const contextId = (existing.data.contextId as string | null | undefined) ?? null
-      const liveCount = await store.countLiveDimensions(projectId, contextId)
+    const canvasId = existing?.data.canvasId as string | undefined
+    if (existing && projectId && canvasId) {
+      const liveCount = await store.countLiveDimensions(projectId, canvasId)
       if (violatesDimensionFloor(liveCount)) return dimensionFloorViolation()
     }
   }

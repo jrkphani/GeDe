@@ -220,7 +220,7 @@ describe('ArchitectureSurface', () => {
     expect(addField).toHaveAttribute('aria-label', 'Add architecture table')
   })
 
-  it('renders the promoted source badge INLINE within the Name cell, not a separate meta column (issue 084 test a)', async () => {
+  it('summarizes the promoted dimension once per table and keeps a compact inline row cue', async () => {
     const table = await addTier2Table(db, projectId, 'Stakeholders')
     const users = await addTier2Entry(db, table.id, null, 'Users')
     // Promote via the store so the link exists before the surface loads.
@@ -232,7 +232,8 @@ describe('ArchitectureSurface', () => {
 
     render(<ArchitectureSurface projectId={projectId} />)
     const row = (await screen.findByText('Users')).closest('tr') as HTMLElement
-    const badge = within(row).getByText('→ Stake')
+    expect(screen.getByText('Design dimensions · Stake')).toBeInTheDocument()
+    const badge = within(row).getByTitle('Promoted to Stake')
     expect(badge).toBeInTheDocument()
     // The badge sits inside the same Name cell as the entry text — inline
     // adornment, not its own data column.
@@ -241,6 +242,28 @@ describe('ArchitectureSurface', () => {
     // The meta data column is gone entirely.
     expect(row.querySelector('.t2-col--meta')).toBeNull()
     expect(row.querySelector('.t2-meta')).toBeNull()
+  })
+
+  it('defaults promotion to extend the one dimension already linked from the table', async () => {
+    const user = userEvent.setup()
+    const table = await addTier2Table(db, projectId, 'Stakeholders')
+    const users = await addTier2Entry(db, table.id, null, 'Users')
+    await addTier2Entry(db, table.id, null, 'Partners')
+    await useTier2Store.getState().load(projectId)
+    await useTier2Store
+      .getState()
+      .promote({ projectId, entryIds: [users.id], target: { kind: 'new', name: 'Stake' } })
+
+    render(<ArchitectureSurface projectId={projectId} />)
+    await user.click(await screen.findByRole('option', { name: 'Select Partners' }))
+    await user.click(screen.getByRole('button', { name: /Use as dimension/ }))
+
+    expect(await screen.findByRole('button', { name: 'Extend existing' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+    expect(screen.getByRole('button', { name: 'Stake' })).toHaveAttribute('aria-pressed', 'true')
+    expect(screen.getByText('Adds 1 parameter on Stake')).toBeInTheDocument()
   })
 })
 

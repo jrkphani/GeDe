@@ -518,6 +518,11 @@ export function DesignRegisterBody({
     dimensions.length > 0 &&
     dimensions.some((d) => (paramsByDimension[d.id]?.length ?? 0) === 0)
   const belowFloor = !needsSeeding && dimensions.length < 2
+  const composeBindings = composeContextId ? (bindingsByContext[composeContextId] ?? {}) : {}
+  const connectedCount = orderedDimensionIds.filter((id) => composeBindings[id] !== undefined).length
+  const nextComposeDimension = dimensions.find(
+    (dimension) => dimension.id === firstUnbound(orderedDimensionIds, composeBindings),
+  )
 
   return (
     <div
@@ -602,9 +607,28 @@ export function DesignRegisterBody({
               Add a second dimension to start binding contexts.
             </p>
           ) : null}
-          {/* Issue 093 — the top "New context" button is REMOVED; the register's
-              phantom row is now the sole create affordance (the `c` key still
-              enters guided compose mode). */}
+          {!readOnly ? (
+            <div className="canvas-toolbar canvas-toolbar--compose">
+              <Button
+                variant="command"
+                disabled={composeContextId !== null || belowFloor || needsSeeding}
+                onClick={() => void stores.useCompose.getState().enterCompose()}
+              >
+                New context
+              </Button>
+              <span className="canvas-toolbar__hint" role="status">
+                {composeContextId
+                  ? nextComposeDimension
+                    ? `${connectedCount} of ${dimensions.length} connected — choose a ${nextComposeDimension.name} parameter next.`
+                    : `${connectedCount} of ${dimensions.length} connected — complete the new context row.`
+                  : belowFloor
+                    ? 'Add a second dimension before connecting parameters.'
+                    : needsSeeding
+                      ? 'Add parameters to every dimension before connecting them.'
+                      : 'Connect parameters by choosing one option from each dimension.'}
+              </span>
+            </div>
+          ) : null}
           <CanvasStoresProvider value={stores}>
             <div className="editing-zone" role="group" aria-label="Dimensions, parameters, and contexts">
               <section className="dim-rail" aria-label="Dimensions and parameters">

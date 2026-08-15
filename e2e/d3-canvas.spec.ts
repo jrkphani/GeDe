@@ -896,10 +896,10 @@ test('the Design lane is a register node stacked over a ring node, with cross-no
 // ── Issue 093 — the D3 register extends RIGHT + LOD tuple-summary collapse ─────
 // On the canvas the Design register grows to its content width (no clip behind
 // the frozen symbol column, no inner horizontal scrollbar) so far proof columns
-// are reached by panning; the stranded top "New context" button is gone (the
-// phantom row is the sole create); and below ~0.6 zoom the per-dimension columns
+// are reached by panning; the visible "New context" entry starts guided compose;
+// and below ~0.6 zoom the per-dimension columns
 // collapse to one tuple-summary column for overview legibility.
-test('the D3 register extends right, drops the New-context button, and LOD-collapses when zoomed out', { tag: '@dev-flag' }, async ({
+test('the D3 register extends right, exposes guided New context, and LOD-collapses when zoomed out', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
@@ -908,9 +908,8 @@ test('the D3 register extends right, drops the New-context button, and LOD-colla
   const register = page.locator('.wc-node--design-register')
   await expect(register.locator('.context-register-shell')).toBeVisible({ timeout: 15_000 })
 
-  // The stranded top "New context" button is removed (the register body no longer
-  // renders `.canvas-toolbar`); the phantom row is the sole create affordance.
-  await expect(register.locator('.canvas-toolbar')).toHaveCount(0)
+  await expect(register.getByRole('button', { name: 'New context' })).toBeVisible()
+  await expect(register.getByText(/Connect parameters by choosing one option from each dimension|Add a second dimension/)).toBeVisible()
 
   // Add six dimensions so the register is wider than the old fixed 960px node.
   const dimPhantom = register.getByPlaceholder('Type to add a dimension')
