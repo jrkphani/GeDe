@@ -70,13 +70,13 @@ function fixture(): EnvelopeTables {
   t.canvases.push({ ...baseWs('cv1'), projectId: 'p1', parentContextId: null, name: 'Canvas 1', sort: 0 })
   t.canvases.push({ ...baseWs('cvc1'), projectId: 'p1', parentContextId: 'c1', name: null, sort: 0 })
   t.canvases.push({ ...baseWs('cvc2'), projectId: 'p1', parentContextId: 'c2', name: null, sort: 0 })
-  t.tier1_purpose.push({ ...baseWs('pu1'), projectId: 'p1', body: 'why', existingScenario: null })
-  t.tier1_props.push({ ...baseWs('pr1'), projectId: 'p1', rank: 1, name: 'Prop', description: null, sort: 0 })
-  t.tier2_tables.push({ ...baseWs('tt1'), projectId: 'p1', name: 'Value', sort: 0 })
+  t.tier1_purpose.push({ ...baseWs('pu1'), projectId: 'p1', body: 'why', existingScenario: null, valuePropNameHeader: null, valuePropDescriptionHeader: null })
+  t.tier1_props.push({ ...baseWs('pr1'), projectId: 'p1', rank: 1, name: 'Prop', nameRichText: null, description: null, sort: 0 })
+  t.tier2_tables.push({ ...baseWs('tt1'), projectId: 'p1', name: 'Value', nameHeader: null, descriptionHeader: null, sort: 0 })
   // tier2 entries: root → child → grandchild (self-ref chain, depth 3)
-  t.tier2_entries.push({ ...baseWs('te1'), tableId: 'tt1', parentId: null, name: 'E1', description: null, sort: 0 })
-  t.tier2_entries.push({ ...baseWs('te2'), tableId: 'tt1', parentId: 'te1', name: 'E2', description: null, sort: 0 })
-  t.tier2_entries.push({ ...baseWs('te3'), tableId: 'tt1', parentId: 'te2', name: 'E3', description: null, sort: 0 })
+  t.tier2_entries.push({ ...baseWs('te1'), tableId: 'tt1', parentId: null, name: 'E1', nameRichText: null, description: null, sort: 0 })
+  t.tier2_entries.push({ ...baseWs('te2'), tableId: 'tt1', parentId: 'te1', name: 'E2', nameRichText: null, description: null, sort: 0 })
+  t.tier2_entries.push({ ...baseWs('te3'), tableId: 'tt1', parentId: 'te2', name: 'E3', nameRichText: null, description: null, sort: 0 })
   // root-canvas dimensions
   t.dimensions.push({ ...baseWs('d1'), projectId: 'p1', canvasId: 'cv1', contextId: null, sourceParamId: null, name: 'D1', color: '#111', sort: 0 })
   t.dimensions.push({ ...baseWs('d2'), projectId: 'p1', canvasId: 'cv1', contextId: null, sourceParamId: null, name: 'D2', color: '#222', sort: 1 })
@@ -124,16 +124,16 @@ const arbTables = fc
     // off it via canvasId.
     const rootCanvas = nid('cv')
     t.canvases.push({ ...baseWs(rootCanvas), projectId: pid, parentContextId: null, name: 'Canvas 1', sort: 0 })
-    t.tier1_purpose.push({ ...baseWs(nid('pu')), projectId: pid, body: 'b', existingScenario: null })
+    t.tier1_purpose.push({ ...baseWs(nid('pu')), projectId: pid, body: 'b', existingScenario: null, valuePropNameHeader: null, valuePropDescriptionHeader: null })
 
     const tableId = nid('tt')
-    t.tier2_tables.push({ ...baseWs(tableId), projectId: pid, name: 'T', sort: 0 })
+    t.tier2_tables.push({ ...baseWs(tableId), projectId: pid, name: 'T', nameHeader: null, descriptionHeader: null, sort: 0 })
     // A linear entry chain of length entryDepth (self-ref, depth ≤ 4)
     let parentEntry: string | null = null
     const entryIds: string[] = []
     for (let d = 0; d < entryDepth; d++) {
       const eid = nid('te')
-      t.tier2_entries.push({ ...baseWs(eid), tableId, parentId: parentEntry, name: `E${d}`, description: null, sort: 0 })
+      t.tier2_entries.push({ ...baseWs(eid), tableId, parentId: parentEntry, name: `E${d}`, nameRichText: null, description: null, sort: 0 })
       entryIds.push(eid)
       parentEntry = eid
     }
@@ -412,11 +412,39 @@ describe('projectEnvelope — v3 -> v4 upgrade (issue 081)', () => {
     expect(envelopeToJson(serializeEnvelope(parsed.tables))).toBe(json)
   })
 
-  it('FORMAT_VERSION is 5', () => {
+  it('FORMAT_VERSION is 6', () => {
     // Issue 090 — bumped 4 -> 5 when canvases joined the envelope and canvasId
     // was added to dimension/context rows (upgradeV4ToV5 synthesizes the canvas
     // layer for a legacy v4 export).
-    expect(FORMAT_VERSION).toBe(5)
+    expect(FORMAT_VERSION).toBe(6)
+  })
+
+  it('upgrades v5 files with default header and rich-name metadata', () => {
+    const current = JSON.parse(envelopeToJson(serializeEnvelope(fixture()))) as Envelope & {
+      tables: Record<string, Row[]>
+    }
+    const omit = (row: Row, fields: readonly string[]): Row =>
+      Object.fromEntries(Object.entries(row).filter(([key]) => !fields.includes(key)))
+    const legacy: Record<string, unknown> = {
+      formatVersion: 5,
+      tables: {
+        ...current.tables,
+        tier1_purpose: current.tables.tier1_purpose.map((row) =>
+          omit(row, ['valuePropNameHeader', 'valuePropDescriptionHeader']),
+        ),
+        tier1_props: current.tables.tier1_props.map((row) => omit(row, ['nameRichText'])),
+        tier2_tables: current.tables.tier2_tables.map((row) =>
+          omit(row, ['nameHeader', 'descriptionHeader']),
+        ),
+        tier2_entries: current.tables.tier2_entries.map((row) => omit(row, ['nameRichText'])),
+      },
+    }
+
+    const parsed = parseEnvelope(JSON.stringify(legacy))
+    expect(parsed.tables.tier1_purpose[0]?.valuePropNameHeader).toBeNull()
+    expect(parsed.tables.tier1_props[0]?.nameRichText).toBeNull()
+    expect(parsed.tables.tier2_tables[0]?.descriptionHeader).toBeNull()
+    expect(parsed.tables.tier2_entries[0]?.nameRichText).toBeNull()
   })
 })
 

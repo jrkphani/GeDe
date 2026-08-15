@@ -16,6 +16,7 @@ function entry(id: string, parentId: string | null, sort: number): Tier2EntryRow
     workspaceId: 'ws1',
     parentId,
     name: id,
+    nameRichText: null,
     description: null,
     sort,
     createdAt: '',

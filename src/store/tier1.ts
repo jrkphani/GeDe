@@ -8,8 +8,10 @@ import {
   reorderTier1Prop as dbReorder,
   restoreTier1Prop as dbRestore,
   setTier1ExistingScenario as dbSetExistingScenario,
+  setTier1PropFormattedName as dbSetFormattedName,
   setTier1PropDescription as dbSetDescription,
   setTier1Purpose as dbSetPurpose,
+  setTier1ValuePropHeaders as dbSetHeaders,
   type Tier1PropRow,
 } from '../db/mutations'
 import { requireDatabase } from './database'
@@ -53,6 +55,8 @@ interface Tier1State {
   // field has never been written (a legitimate terminal state). A
   // JSON-stringified Lexical EditorState, never HTML.
   existingScenario: string | null
+  valuePropNameHeader: string
+  valuePropDescriptionHeader: string
   props: Tier1PropRow[]
   // Mirrors the per-scope generation guard used by contexts.ts (issue 004/007
   // CI race): Foundation's mount effect calls load(projectId) once, but a
@@ -63,8 +67,10 @@ interface Tier1State {
   load: (projectId: string) => Promise<void>
   setPurpose: (body: string) => Promise<void>
   setExistingScenario: (existingScenario: string | null) => Promise<void>
+  setHeaders: (nameHeader: string, descriptionHeader: string) => Promise<void>
   addProp: (name: string) => Promise<Tier1PropRow | null>
   renameProp: (id: string, name: string) => Promise<void>
+  setFormattedName: (id: string, name: string, nameRichText: string | null) => Promise<void>
   setDescription: (id: string, description: string) => Promise<void>
   reorderProp: (id: string, toIndex: number) => Promise<void>
   removeProp: (id: string) => Promise<void>
@@ -74,6 +80,8 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
   projectId: null,
   purpose: '',
   existingScenario: null,
+  valuePropNameHeader: 'Name',
+  valuePropDescriptionHeader: 'Description',
   props: [],
   generation: 0,
 
@@ -85,7 +93,13 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     const db = requireDatabase()
     const [purpose, props] = await Promise.all([dbGetPurpose(db, projectId), dbList(db, projectId)])
     if (get().generation !== startGen) return // a mutation landed mid-load; it already set fresh state
-    set({ purpose: purpose?.body ?? '', existingScenario: purpose?.existingScenario ?? null, props })
+    set({
+      purpose: purpose?.body ?? '',
+      existingScenario: purpose?.existingScenario ?? null,
+      valuePropNameHeader: purpose?.valuePropNameHeader ?? 'Name',
+      valuePropDescriptionHeader: purpose?.valuePropDescriptionHeader ?? 'Description',
+      props,
+    })
 
     // Issue 075 Part B — load() only ever ran once per project-open, so a
     // tier1_purpose OR tier1_props delta that streamed in (or that 075A's own
@@ -106,6 +120,8 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
           set({
             purpose: freshPurpose?.body ?? '',
             existingScenario: freshPurpose?.existingScenario ?? null,
+            valuePropNameHeader: freshPurpose?.valuePropNameHeader ?? 'Name',
+            valuePropDescriptionHeader: freshPurpose?.valuePropDescriptionHeader ?? 'Description',
             props: freshProps,
           })
         },
@@ -126,7 +142,11 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     // prior write was setExistingScenario already has a row, so this edit
     // must be 'update', or the server's `ON CONFLICT (id) DO NOTHING`
     // silently no-ops it (the 066-class bug).
-    const rowExistedBefore = get().purpose !== '' || get().existingScenario !== null
+    const rowExistedBefore =
+      get().purpose !== '' ||
+      get().existingScenario !== null ||
+      get().valuePropNameHeader !== 'Name' ||
+      get().valuePropDescriptionHeader !== 'Description'
     set((s) => ({ generation: s.generation + 1 }))
     const row = await dbSetPurpose(db, projectId, body)
     set({ purpose: row?.body ?? body })
@@ -161,7 +181,11 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
     if (projectId === null) return
     const db = requireDatabase()
     const previous = get().existingScenario
-    const rowExistedBefore = get().purpose !== '' || get().existingScenario !== null
+    const rowExistedBefore =
+      get().purpose !== '' ||
+      get().existingScenario !== null ||
+      get().valuePropNameHeader !== 'Name' ||
+      get().valuePropDescriptionHeader !== 'Description'
     set((s) => ({ generation: s.generation + 1 }))
     const row = await dbSetExistingScenario(db, projectId, existingScenario)
     set({ existingScenario: row?.existingScenario ?? existingScenario })
@@ -179,6 +203,39 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
         const r = await dbSetExistingScenario(db, projectId, existingScenario)
         set({ existingScenario: r?.existingScenario ?? existingScenario })
         if (r) enqueueIfSyncing('tier1_purpose', r.id, 'update', r)
+      },
+    })
+  },
+
+  async setHeaders(nameHeader, descriptionHeader) {
+    const { projectId } = get()
+    if (projectId === null) return
+    const nextName = nameHeader.trim() || 'Name'
+    const nextDescription = descriptionHeader.trim() || 'Description'
+    const previousName = get().valuePropNameHeader
+    const previousDescription = get().valuePropDescriptionHeader
+    if (nextName === previousName && nextDescription === previousDescription) return
+    const db = requireDatabase()
+    const rowExistedBefore =
+      get().purpose !== '' ||
+      get().existingScenario !== null ||
+      previousName !== 'Name' ||
+      previousDescription !== 'Description'
+    set((s) => ({ generation: s.generation + 1 }))
+    const row = await dbSetHeaders(db, projectId, nextName, nextDescription)
+    set({ valuePropNameHeader: nextName, valuePropDescriptionHeader: nextDescription })
+    if (row) enqueueIfSyncing('tier1_purpose', row.id, rowExistedBefore ? 'update' : 'upsert', row)
+    useCommandLogStore.getState().push({
+      label: 'rename value-proposition columns',
+      async undo() {
+        const reverted = await dbSetHeaders(db, projectId, previousName, previousDescription)
+        set({ valuePropNameHeader: previousName, valuePropDescriptionHeader: previousDescription })
+        if (reverted) enqueueIfSyncing('tier1_purpose', reverted.id, 'update', reverted)
+      },
+      async redo() {
+        const reapplied = await dbSetHeaders(db, projectId, nextName, nextDescription)
+        set({ valuePropNameHeader: nextName, valuePropDescriptionHeader: nextDescription })
+        if (reapplied) enqueueIfSyncing('tier1_purpose', reapplied.id, 'update', reapplied)
       },
     })
   },
@@ -252,6 +309,32 @@ export const useTier1Store = create<Tier1State>()((set, get) => ({
       },
       async redo() {
         const reapplied = await dbRename(db, id, name)
+        set({ props: await dbList(db, projectId) })
+        enqueueIfSyncing('tier1_props', reapplied.id, 'update', reapplied)
+      },
+    })
+  },
+
+  async setFormattedName(id, name, nameRichText) {
+    const { projectId } = get()
+    if (projectId === null) return
+    const current = get().props.find((p) => p.id === id)
+    if (!current || name.trim() === '') return
+    const db = requireDatabase()
+    const previous = { name: current.name, nameRichText: current.nameRichText }
+    set((s) => ({ generation: s.generation + 1 }))
+    const updated = await dbSetFormattedName(db, id, name, nameRichText)
+    set({ props: await dbList(db, projectId) })
+    enqueueIfSyncing('tier1_props', updated.id, 'update', updated)
+    useCommandLogStore.getState().push({
+      label: `format value proposition "${name}"`,
+      async undo() {
+        const reverted = await dbSetFormattedName(db, id, previous.name, previous.nameRichText)
+        set({ props: await dbList(db, projectId) })
+        enqueueIfSyncing('tier1_props', reverted.id, 'update', reverted)
+      },
+      async redo() {
+        const reapplied = await dbSetFormattedName(db, id, name, nameRichText)
         set({ props: await dbList(db, projectId) })
         enqueueIfSyncing('tier1_props', reapplied.id, 'update', reapplied)
       },

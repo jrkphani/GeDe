@@ -1,4 +1,5 @@
 import type { Tier1PropRow } from '../db/mutations'
+import { plainTextToRichJson, richTextToPlainText } from '../domain/richText'
 import { useTier1Store } from '../store/tier1'
 import { EditableGrid, type GridColumn } from './EditableGrid'
 import { PhantomInput } from './ui/inline-editor'
@@ -97,27 +98,34 @@ export function FoundationPropPanel({
   readOnly: boolean
   onExitBoundary?: ((dir: 'forward' | 'backward') => void) | undefined
 }) {
-  const renameProp = useTier1Store((s) => s.renameProp)
+  const nameHeader = useTier1Store((s) => s.valuePropNameHeader)
+  const descriptionHeader = useTier1Store((s) => s.valuePropDescriptionHeader)
+  const setHeaders = useTier1Store((s) => s.setHeaders)
+  const setFormattedName = useTier1Store((s) => s.setFormattedName)
   const setDescription = useTier1Store((s) => s.setDescription)
 
   const columns: GridColumn<Tier1PropRow>[] = [
     {
       id: 'name',
-      header: 'Name',
+      header: nameHeader,
+      onHeaderCommit: (value) => setHeaders(value, descriptionHeader),
       cell: {
-        kind: 'text',
-        getValue: (p) => p.name,
+        kind: 'richtext',
+        inlineOnly: true,
+        placeholder: 'Add name…',
+        getValue: (p) => p.nameRichText ?? plainTextToRichJson(p.name),
         onCommit: async (p, value) => {
-          // Never let a cleared name orphan a row (no name-delete affordance
-          // here); an empty commit is a no-op revert — identical to FoundationSurface.
-          if (value.length > 0 && value !== p.name) await renameProp(p.id, value)
-          return value.length > 0
+          const name = richTextToPlainText(value).trim()
+          if (!name) return false
+          await setFormattedName(p.id, name, value)
+          return true
         },
       },
     },
     {
       id: 'description',
-      header: 'Description',
+      header: descriptionHeader,
+      onHeaderCommit: (value) => setHeaders(nameHeader, value),
       cell: {
         kind: 'richtext',
         placeholder: 'Add description…',

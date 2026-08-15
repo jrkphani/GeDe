@@ -9,6 +9,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useEffect, useMemo, useState } from 'react'
 import type { Tier1PropRow } from '../db/mutations'
 import { formatDegree } from '../domain/degree'
+import { plainTextToRichJson, richTextToPlainText } from '../domain/richText'
 import { canWrite } from '../domain/workspaceRole'
 import { useTier1Store } from '../store/tier1'
 import { useWorkspaceRole } from '../store/workspace'
@@ -60,12 +61,15 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
   const readOnly = !canWrite(role)
   const purpose = useTier1Store((s) => s.purpose)
   const existingScenario = useTier1Store((s) => s.existingScenario)
+  const valuePropNameHeader = useTier1Store((s) => s.valuePropNameHeader)
+  const valuePropDescriptionHeader = useTier1Store((s) => s.valuePropDescriptionHeader)
   const props = useTier1Store((s) => s.props)
   const load = useTier1Store((s) => s.load)
   const setPurpose = useTier1Store((s) => s.setPurpose)
   const setExistingScenario = useTier1Store((s) => s.setExistingScenario)
   const addProp = useTier1Store((s) => s.addProp)
-  const renameProp = useTier1Store((s) => s.renameProp)
+  const setFormattedName = useTier1Store((s) => s.setFormattedName)
+  const setHeaders = useTier1Store((s) => s.setHeaders)
   const setDescription = useTier1Store((s) => s.setDescription)
   const reorderProp = useTier1Store((s) => s.reorderProp)
 
@@ -126,21 +130,25 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
     },
     {
       id: 'name',
-      header: 'Name',
+      header: valuePropNameHeader,
+      onHeaderCommit: (value) => setHeaders(value, valuePropDescriptionHeader),
       cell: {
-        kind: 'text',
-        getValue: (prop) => prop.name,
+        kind: 'richtext',
+        placeholder: 'Add name…',
+        inlineOnly: true,
+        getValue: (prop) => prop.nameRichText ?? plainTextToRichJson(prop.name),
         onCommit: async (prop, value) => {
-          // Never let a cleared name orphan a row (there is no name-delete
-          // affordance in this slice); an empty commit is a no-op revert.
-          if (value.length > 0 && value !== prop.name) await renameProp(prop.id, value)
-          return value.length > 0
+          const name = richTextToPlainText(value).trim()
+          if (!name) return false
+          await setFormattedName(prop.id, name, value)
+          return true
         },
       },
     },
     {
       id: 'description',
-      header: 'Description',
+      header: valuePropDescriptionHeader,
+      onHeaderCommit: (value) => setHeaders(valuePropNameHeader, value),
       cell: {
         // Issue 089 D1 Phase 5 — the value-proposition description is now a rich
         // cell (Lexical), mirroring the justification column (P3). Same stored-

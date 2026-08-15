@@ -26,6 +26,8 @@ import {
   restoreTier2EntrySubtree,
   restoreTier2Table as dbRestoreTable,
   setTier2EntryDescription as dbSetEntryDescription,
+  setTier2EntryFormattedName as dbSetEntryFormattedName,
+  setTier2TableHeaders as dbSetTableHeaders,
   undoAddDimension,
   unlinkParametersFromEntries,
   type DimensionRow,
@@ -149,6 +151,7 @@ interface Tier2State {
   load: (projectId: string) => Promise<void>
   addTable: (name: string) => Promise<Tier2TableRow | null>
   renameTable: (id: string, name: string) => Promise<void>
+  setTableHeaders: (id: string, nameHeader: string, descriptionHeader: string) => Promise<void>
   reorderTable: (id: string, toIndex: number) => Promise<void>
   addEntry: (tableId: string, parentId: string | null, name: string) => Promise<Tier2EntryRow | null>
   // Issue 105 P2/P3 — reparent (⌘]/⌘[) or reorder-among-siblings (⌥⇧↑/↓) an
@@ -156,6 +159,12 @@ interface Tier2State {
   // among the destination siblings. One undo step; Architecture-only.
   moveEntry: (tableId: string, id: string, newParentId: string | null, toIndex: number) => Promise<void>
   renameEntry: (tableId: string, id: string, name: string) => Promise<number>
+  setEntryFormattedName: (
+    tableId: string,
+    id: string,
+    name: string,
+    nameRichText: string | null,
+  ) => Promise<number>
   setEntryDescription: (tableId: string, id: string, description: string) => Promise<void>
   removeEntry: (tableId: string, id: string) => Promise<RemoveEntryResult>
   resolveKeep: (tableId: string, id: string) => Promise<void>
@@ -342,6 +351,35 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
       })
     },
 
+    async setTableHeaders(id, nameHeader, descriptionHeader) {
+      const { projectId } = get()
+      if (projectId === null) return
+      const current = get().tables.find((t) => t.id === id)
+      if (!current) return
+      const nextName = nameHeader.trim() || 'Name'
+      const nextDescription = descriptionHeader.trim() || 'Description'
+      const previousName = current.nameHeader ?? 'Name'
+      const previousDescription = current.descriptionHeader ?? 'Description'
+      if (nextName === previousName && nextDescription === previousDescription) return
+      bump()
+      const updated = await dbSetTableHeaders(db(), id, nextName, nextDescription)
+      await reloadTables(projectId)
+      enqueueIfSyncing('tier2_tables', updated.id, 'update', updated)
+      useCommandLogStore.getState().push({
+        label: 'rename architecture columns',
+        async undo() {
+          const reverted = await dbSetTableHeaders(db(), id, previousName, previousDescription)
+          await reloadTables(projectId)
+          enqueueIfSyncing('tier2_tables', reverted.id, 'update', reverted)
+        },
+        async redo() {
+          const reapplied = await dbSetTableHeaders(db(), id, nextName, nextDescription)
+          await reloadTables(projectId)
+          enqueueIfSyncing('tier2_tables', reapplied.id, 'update', reapplied)
+        },
+      })
+    },
+
     async reorderTable(id, toIndex) {
       const { projectId } = get()
       if (projectId === null) return
@@ -520,6 +558,57 @@ export const useTier2Store = create<Tier2State>()((set, get) => {
         async redo() {
           const renamedEntry = await dbRenameEntry(db(), id, name)
           enqueueIfSyncing('tier2_entries', renamedEntry.id, 'update', renamedEntry)
+          for (const p of prevParamNames) {
+            const renamedParam = await renameParameter(db(), p.id, name)
+            enqueueIfSyncing('parameters', renamedParam.id, 'update', renamedParam)
+          }
+          await reloadEntries(tableId)
+          await refreshLinks(projectId)
+          if (prevParamNames.length > 0) refreshDesignLane()
+        },
+      })
+      return linked.length
+    },
+
+    async setEntryFormattedName(tableId, id, name, nameRichText) {
+      const { projectId } = get()
+      if (projectId === null || name.trim() === '') return 0
+      const current = (get().entriesByTable[tableId] ?? []).find((e) => e.id === id)
+      if (!current) return 0
+      const previous = { name: current.name, nameRichText: current.nameRichText }
+      const linked = await listParametersBySourceEntries(db(), [id])
+      const prevParamNames = linked.map((p) => ({ id: p.id, name: p.name }))
+      bump()
+      const updated = await dbSetEntryFormattedName(db(), id, name, nameRichText)
+      enqueueIfSyncing('tier2_entries', updated.id, 'update', updated)
+      for (const p of linked) {
+        const renamedParam = await renameParameter(db(), p.id, name)
+        enqueueIfSyncing('parameters', renamedParam.id, 'update', renamedParam)
+      }
+      await reloadEntries(tableId)
+      await refreshLinks(projectId)
+      if (linked.length > 0) refreshDesignLane()
+      useCommandLogStore.getState().push({
+        label: `format "${name}"`,
+        async undo() {
+          const reverted = await dbSetEntryFormattedName(
+            db(),
+            id,
+            previous.name,
+            previous.nameRichText,
+          )
+          enqueueIfSyncing('tier2_entries', reverted.id, 'update', reverted)
+          for (const p of prevParamNames) {
+            const revertedParam = await renameParameter(db(), p.id, p.name)
+            enqueueIfSyncing('parameters', revertedParam.id, 'update', revertedParam)
+          }
+          await reloadEntries(tableId)
+          await refreshLinks(projectId)
+          if (prevParamNames.length > 0) refreshDesignLane()
+        },
+        async redo() {
+          const reapplied = await dbSetEntryFormattedName(db(), id, name, nameRichText)
+          enqueueIfSyncing('tier2_entries', reapplied.id, 'update', reapplied)
           for (const p of prevParamNames) {
             const renamedParam = await renameParameter(db(), p.id, name)
             enqueueIfSyncing('parameters', renamedParam.id, 'update', renamedParam)

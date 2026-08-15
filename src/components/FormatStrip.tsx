@@ -98,6 +98,7 @@ function useToolbarState(editor: LexicalEditor | null) {
 // and inert.
 export function FormatStrip() {
   const activeEditor = useFocusedEditorStore((s) => s.activeEditor)
+  const activeInlineOnly = useFocusedEditorStore((s) => s.activeInlineOnly)
   const { isBold, isItalic, isUnderline, isBulletList, isNumberedList } = useToolbarState(activeEditor)
   const [activeIndex, setActiveIndex] = useState(0)
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -162,13 +163,15 @@ export function FormatStrip() {
       onClick: () => activeEditor?.dispatchCommand(OUTDENT_CONTENT_COMMAND, undefined),
     },
   ]
+  const availableButtonCount = activeInlineOnly ? 3 : buttons.length
+  const rovingIndex = activeIndex < availableButtonCount ? activeIndex : 0
 
   function handleToolbarKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
     if (disabled) return
     if (event.key !== 'ArrowRight' && event.key !== 'ArrowLeft') return
     event.preventDefault()
     const delta = event.key === 'ArrowRight' ? 1 : -1
-    const next = (activeIndex + delta + buttons.length) % buttons.length
+    const next = (rovingIndex + delta + availableButtonCount) % availableButtonCount
     setActiveIndex(next)
     buttonRefs.current[next]?.focus()
   }
@@ -181,34 +184,37 @@ export function FormatStrip() {
       aria-disabled={disabled || undefined}
       onKeyDown={handleToolbarKeyDown}
     >
-      {buttons.map((button, index) => (
-        <Button
-          key={button.key}
-          ref={(el) => {
-            buttonRefs.current[index] = el
-          }}
-          variant="command"
-          aria-label={button.label}
-          aria-pressed={button.pressed}
-          aria-disabled={disabled || undefined}
-          // Non-tabbable while inert; otherwise roving tabindex (one button 0).
-          tabIndex={disabled ? -1 : index === activeIndex ? 0 : -1}
-          // Preserves the focused editor's text selection — a mousedown on a
-          // <button> steals focus (and with it, Lexical's selection anchor)
-          // before the click handler ever runs. Critical for a GLOBAL strip:
-          // the button lives outside the editor's DOM, so without this a click
-          // would blur the editor entirely (losing selection AND the active
-          // binding) rather than format it.
-          onMouseDown={(event) => event.preventDefault()}
-          onFocus={() => setActiveIndex(index)}
-          onClick={() => {
-            if (disabled) return
-            button.onClick()
-          }}
-        >
-          <button.Icon size={16} strokeWidth={1.5} aria-hidden="true" />
-        </Button>
-      ))}
+      {buttons.map((button, index) => {
+        const unavailable = disabled || (activeInlineOnly && index > 2)
+        return (
+          <Button
+            key={button.key}
+            ref={(el) => {
+              buttonRefs.current[index] = el
+            }}
+            variant="command"
+            aria-label={button.label}
+            aria-pressed={button.pressed}
+            aria-disabled={unavailable || undefined}
+            // Non-tabbable while inert; otherwise roving tabindex (one button 0).
+            tabIndex={unavailable ? -1 : index === rovingIndex ? 0 : -1}
+            // Preserves the focused editor's text selection — a mousedown on a
+            // <button> steals focus (and with it, Lexical's selection anchor)
+            // before the click handler ever runs. Critical for a GLOBAL strip:
+            // the button lives outside the editor's DOM, so without this a click
+            // would blur the editor entirely (losing selection AND the active
+            // binding) rather than format it.
+            onMouseDown={(event) => event.preventDefault()}
+            onFocus={() => setActiveIndex(index)}
+            onClick={() => {
+              if (unavailable) return
+              button.onClick()
+            }}
+          >
+            <button.Icon size={16} strokeWidth={1.5} aria-hidden="true" />
+          </Button>
+        )
+      })}
     </div>
   )
 }
