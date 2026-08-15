@@ -36,8 +36,6 @@ const DIGIT_TO_TIER: Record<string, LaneTier | undefined> = {
   Digit3: 'design',
 }
 
-// Frame a single lane node with a little breathing room when jumping to it.
-const LANE_FIT_PADDING = 0.16
 // Animation duration (ms). Reduced-motion snaps to 0 (STYLE_GUIDE §8 —
 // "the app never animates what it can simply do").
 const LANE_JUMP_DURATION = 450
@@ -51,11 +49,12 @@ export function prefersReducedMotion(): boolean {
 }
 
 // The minimal slice of the React Flow instance the interceptor needs — typed
-// loosely on purpose so this module never imports `@xyflow/react`. The real
-// `ReactFlowInstance.fitView` (a superset) satisfies this; WorkspaceCanvas
-// publishes an adapter that forwards to it (see setActiveCanvasInstance).
+// loosely on purpose so this module never imports `@xyflow/react`.
+// WorkspaceCanvas publishes an adapter that centers the requested node with
+// React Flow's CURRENT zoom. A lane shortcut therefore moves only x/y and never
+// overrides the user's chosen scale.
 export interface CanvasNavInstance {
-  fitView: (options: { nodes: { id: string }[]; padding: number; duration: number }) => unknown
+  panToNode: (nodeId: string, duration: number) => unknown
 }
 
 // ── ⌘1/2/3 pan-to-lane interceptor (module-level, capture phase) ────────────
@@ -97,7 +96,7 @@ function onCanvasNavKeydown(e: KeyboardEvent): void {
   e.preventDefault()
   e.stopImmediatePropagation()
   const duration = prefersReducedMotion() ? 0 : LANE_JUMP_DURATION
-  void instance.fitView({ nodes: [{ id: LANE_NODE_ID[tier] }], padding: LANE_FIT_PADDING, duration })
+  void instance.panToNode(LANE_NODE_ID[tier], duration)
   // Mirror AppShell / D2: the keyboard lane-jump also makes the lane ACTIVE, so
   // Design's `c`/`v`/`d` verbs scope to it without needing focus to land.
   useActiveLaneStore.getState().setActiveLane(tier)

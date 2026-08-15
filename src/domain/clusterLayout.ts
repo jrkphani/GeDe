@@ -18,9 +18,8 @@
 // No `Date.now()` / `Math.random()` / DOM / store — deterministic by design.
 
 export interface SatelliteItem {
-  // The satellite node's stable id (see `satelliteNodeId` in the store). For a
-  // live child core this is its REGISTER node id, which also serves as the
-  // `parentCoreNodeId` of any grandchild drilled from inside it.
+  // The satellite node's stable register id. For a live child core it also
+  // serves as the `parentCoreNodeId` of any grandchild drilled from inside it.
   id: string
   // 106 item 2 — the node id of the PARENT core this satellite hangs off. A direct
   // child names the PRIMARY register (LANE_NODE_ID.design); a grandchild names its

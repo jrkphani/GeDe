@@ -5,11 +5,9 @@ import { expect, test, type Locator, type Page } from '@playwright/test'
 // These specs now RUN IN the deploy gate: `npm run e2e` = plain `playwright
 // test` (no more `--grep-invert @dev-flag`), so `verify` executes them and a
 // real canvas regression blocks a prod deploy again. They earned this by proving
-// 22 consecutive green (21 local runs + CI) with zero flakes before the un-tag;
-// the sole quarantined `test.fixme` (focus-pan) was converted to a pure unit
-// test (src/components/workspaceFocusPan.test.ts), so nothing here is a known
-// flaker. The non-gating visibility job (.github/workflows/dev-canvas-e2e.yml)
-// is retired — redundant now that these gate directly.
+// 22 consecutive green (21 local runs + CI) with zero flakes before the un-tag.
+// The non-gating visibility job (.github/workflows/dev-canvas-e2e.yml) is retired
+// — redundant now that these gate directly.
 //
 // The `@dev-flag` tag is RETAINED on every test, but ONLY as a one-line ROLLBACK
 // LEVER: if a canvas spec ever flakes and threatens to freeze the pipeline (the
@@ -47,15 +45,8 @@ async function viewportTransform(page: Page): Promise<string> {
 }
 
 // Block until the React Flow viewport transform is identical across two
-// consecutive polls — i.e. all pending viewport moves have settled. WorkspaceCanvas
-// fires a ONE-TIME initial `fitView` once every node is measured/initialized
-// (guarded by `useNodesInitialized`), dispatched from a rAF whose timing is
-// nondeterministic relative to a test's keystrokes. If a test drives a pan (⌘1/2/3
-// or focus-pan) BEFORE that fit lands, the late fit re-frames all lanes and undoes
-// the pan (issue 096's residual focus-pan flake). Waiting for a stable transform
-// first guarantees the initial fit is done — after which the viewport never moves
-// on its own — so subsequent pans are deterministic (reduced-motion makes them
-// snap, so each settles within a poll tick).
+// consecutive polls — i.e. an EXPLICIT Fit / zoom / lane-pan has settled. The
+// app itself never fits or recenters in response to content or focus changes.
 async function waitForStableViewport(page: Page): Promise<void> {
   let prev = ''
   await expect
@@ -159,7 +150,7 @@ test('EditableGrid keyboard grammar survives inside a React Flow node at zoom �
 // Create the example project and open the dev-only canvas at the Design route
 // (the `?d3rf` flag can't ride a tab click — navigate the full URL directly, as
 // in the P1 test). Returns once the canvas + the three lane nodes are mounted.
-async function openThreeLaneCanvas(page: Page): Promise<string> {
+async function openThreeLaneCanvas(page: Page, { fit = true }: { fit?: boolean } = {}): Promise<string> {
   await page.goto('/')
   await expect(page.locator('[data-db-ready="true"]')).toBeVisible({ timeout: 15_000 })
   const projectPhantom = page.getByPlaceholder(/Name your first project|New project/)
@@ -173,6 +164,12 @@ async function openThreeLaneCanvas(page: Page): Promise<string> {
 
   await expect(page.locator('.react-flow')).toBeVisible()
   await expect(page.locator('.wc-node')).toHaveCount(4)
+  // Most legacy grammar specs need every lane interactable; make that camera
+  // setup an explicit user action. Camera-ownership specs opt out with fit:false.
+  if (fit) {
+    await page.locator('.react-flow__controls-fitview').click()
+    await waitForStableViewport(page)
+  }
   return projectId as string
 }
 
@@ -195,23 +192,15 @@ test('all three tier lanes mount as React Flow nodes, in tier column order', { t
   expect(a.x).toBeLessThan(d.x)
 })
 
-// HARDENED (issue 096) — was CI-rendering-fragile: the Radix popover anchor at
-// zoom ≠ 1 landed ~200px off under headless CI. Root cause: clicking the "Use as
-// dimension…" trigger focuses it, which fires the canvas's focus-driven pan
-// (onFocusCapture → setCenter). Under normal motion that pan ANIMATES for
-// FOCUS_PAN_DURATION ms, moving the trigger out from under Radix's already-taken
-// popover measurement → the popover anchors to the trigger's stale pre-pan rect.
-// Fix: emulate `prefers-reduced-motion: reduce`, which the app honors
-// (prefersReducedMotion in d3CanvasNav.ts) to snap every pan to `duration: 0`, so
-// the viewport is settled before the popover measures; and assert the (zoom-
-// invariant) anchor relationship via expect.poll so it converges as floating-ui
-// finishes positioning. Un-quarantined per 096 — see the deploy-gate note in the
-// issue: the ?d3rf D3 canvas is dev-flag-only and must never gate prod deploys.
+// HARDENED (issue 096) — the Radix popover anchor at zoom != 1 once landed about
+// 200px off under headless CI. The canvas now treats focus as content state only,
+// so clicking the trigger cannot move the camera beneath Floating UI. Keep the
+// reduced-motion setup and poll the zoom-invariant anchor relationship while
+// Floating UI finishes positioning.
 test('the Architecture promote popover anchors at its trigger at viewport scale ≠ 1', { tag: '@dev-flag' }, async ({
   page,
 }) => {
-  // Reduced motion → the focus-pan setCenter + lane fitView snap to duration 0,
-  // removing the animation window this test used to race against.
+  // Reduced motion makes the helper's explicit Fit settle immediately.
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.setViewportSize({ width: 1920, height: 1400 })
   await openThreeLaneCanvas(page)
@@ -222,15 +211,14 @@ test('the Architecture promote popover anchors at its trigger at viewport scale 
   const arch = page.locator('.wc-node--architecture')
   await expect(arch).toBeVisible()
 
-  // The app fit-views all three lanes on load, so the viewport is below 1:1 —
-  // the gate-c condition (popovers under a transformed plane).
+  // The helper's explicit Fit leaves the viewport below 1:1 — the gate-c
+  // condition (popovers under a transformed plane).
   await expect.poll(() => viewportScale(page)).not.toBe(1)
   const scale = await viewportScale(page)
   expect(scale).not.toBe(1)
 
-  // Let the initial fit-view settle before interacting: adding a table mounts a
-  // new node → re-measure, and clicking the trigger fires a focus-pan; a late fit
-  // racing either would move the trigger under the popover's measurement.
+  // Let the explicit Fit settle before interacting. Mounting a table or focusing
+  // the trigger must not start another camera move.
   await waitForStableViewport(page)
 
   // Add a table via the header's add-table phantom; it mounts its own node.
@@ -327,17 +315,20 @@ test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf
 }) => {
   await page.setViewportSize({ width: 1400, height: 1000 })
   await openThreeLaneCanvas(page)
-  // Wait until every lane surface has mounted and the initial fit-view settled.
+  // Wait until every lane surface has mounted and the explicit fit-view settled.
   await expect(page.locator('.wc-node--design-register .context-register-shell')).toBeVisible({ timeout: 15_000 })
 
   const before = await viewportTransform(page)
+  const zoomBefore = await viewportScale(page)
 
   // Capture-phase interception must win over AppShell's window-capture ⌘1/2/3
   // handler: it PANS, it does not navigate().
   await page.keyboard.press('Meta+Digit2')
 
-  // The viewport genuinely moved/zoomed toward the lane (RF animates the pan).
+  // The viewport genuinely moved toward the lane (RF animates the pan), but the
+  // camera scale remains exactly the user's explicit-fit scale.
   await expect.poll(() => viewportTransform(page)).not.toBe(before)
+  await expect.poll(() => viewportScale(page)).toBe(zoomBefore)
 
   // Critically, we did NOT navigate away: AppShell's navigate() would have
   // rebuilt the URL (dropping ?d3rf, leaving the Design route) — instead the URL
@@ -348,8 +339,7 @@ test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf
   // WorkspaceSurface, unmounting React Flow entirely).
   await expect(page.locator('.react-flow')).toBeVisible()
 
-  // The pan centered the Architecture lane: its on-screen center-x settles near
-  // the pane's center-x (fitView framed the single lane node).
+  // The pan centered the Architecture lane at the existing zoom.
   await expect
     .poll(async () => {
       const a = await page.locator('.wc-node--architecture').boundingBox()
@@ -360,12 +350,66 @@ test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf
     .toBeLessThan(120)
 })
 
-// NOTE: the "focusing a cell in an off-screen lane pans it into view" invariant
-// used to live here as a quarantined `test.fixme` — it could not be made e2e-
-// deterministic (issue 096: the focus-pan setCenter races a one-time post-
-// measurement fitView and no-ops under reduced motion). The app-owned decision
-// (pan-if-outside-margin, and to what point) is now unit-tested directly in
-// src/components/workspaceFocusPan.test.ts — the race left to React Flow (089-P6).
+test('the camera is stable while focusing, typing, and mounting a new table node', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page, { fit: false })
+
+  // There is no automatic initial Fit. React Flow's deterministic identity
+  // viewport is the starting camera until the user pans/zooms/fits it.
+  await expect.poll(() => viewportScale(page)).toBe(1)
+  const cameraBefore = await viewportTransform(page)
+
+  const tablePhantom = page.locator('.wc-node--architecture').getByPlaceholder('Name a table')
+  await tablePhantom.click()
+  await tablePhantom.fill('A deliberately long table name that wraps during measurement')
+  await tablePhantom.press('Enter')
+  await expect(page.locator('.wc-node--arch-table')).toHaveCount(1)
+  await expect(page.locator('.wc-node--arch-table')).toContainText('A deliberately long table name')
+
+  // Wait past the former focus/refit animation window. Focus, editing,
+  // wrapping/measurement, and the new node changed content only.
+  await page.waitForTimeout(650)
+  expect(await viewportTransform(page)).toBe(cameraBefore)
+})
+
+test('trackpad grammar pans in 2D; Ctrl-wheel zooms and updates the live percentage', { tag: '@dev-flag' }, async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page, { fit: false })
+
+  const pane = await page.locator('.react-flow').boundingBox()
+  if (!pane) throw new Error('workspace pane must have a bounding box')
+  // Bottom-right is empty graph paper at the identity viewport (the primary
+  // nodes occupy the upper lane row). Ordinary two-axis wheel deltas pan.
+  await page.mouse.move(pane.x + pane.width - 24, pane.y + pane.height - 24)
+  const beforePan = await viewportTransform(page)
+  const zoomBeforePan = await viewportScale(page)
+  await page.mouse.wheel(180, 140)
+  await expect.poll(() => viewportTransform(page)).not.toBe(beforePan)
+  await expect.poll(() => viewportScale(page)).toBe(zoomBeforePan)
+
+  // React Flow's platform zoom-activation modifier converts the same wheel
+  // gesture to pointer-centered zoom while panOnScroll remains the default.
+  const beforeZoom = await viewportScale(page)
+  await page.keyboard.down('Control')
+  await page.mouse.wheel(0, -240)
+  await page.keyboard.up('Control')
+  await expect.poll(() => viewportScale(page)).not.toBe(beforeZoom)
+
+  const percent = Math.round((await viewportScale(page)) * 100)
+  await expect(page.locator('.workspace-zoom-controls__percent')).toHaveText(`${percent}%`)
+  await expect(page.locator('.workspace-zoom-controls')).toHaveAttribute(
+    'aria-label',
+    'Workspace zoom controls',
+  )
+})
+
+// Focus is content state, never camera state. Cross-node Tab may focus an element
+// outside the current viewport; the user can invoke a lane shortcut or pan there
+// without the application silently overriding position or zoom.
 
 // ── 089-D3 P3.2 / P3.3 — the Architecture lane decomposed into per-table nodes ─
 // P3.2 emits one React Flow node per `tier2` table (plus a small header node with
@@ -399,7 +443,7 @@ test('the Architecture lane mounts N per-table nodes with in-node grammar at zoo
   await addArchTable(page, 'Beta')
   await expect(page.locator('.wc-node--arch-table')).toHaveCount(2)
 
-  // The app fit-views on load, so this runs at a non-unity viewport scale.
+  // The helper's explicit Fit makes this run at a non-unity viewport scale.
   await expect.poll(() => viewportScale(page)).not.toBe(1)
 
   // In-node grammar works inside a per-table node at zoom ≠ 1: the phantom row
@@ -477,9 +521,8 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   await page.keyboard.press('Enter')
   await expect(beta.getByRole('cell', { name: 'B-entry', exact: true })).toBeVisible()
 
-  // Adding two tables re-measures + re-fits the lane; wait for the one-time fit to
-  // settle BEFORE the focus handoffs so the cross-node focus-pan isn't racing it
-  // (the 096 focus-pan race — this spec flaked under full-suite load without it).
+  // Wait for any preceding explicit camera motion before testing the focus
+  // handoff; table measurement itself must leave the viewport untouched.
   await waitForStableViewport(page)
 
   // FORWARD: from Alpha's empty phantom (the grid's forward boundary), Tab hands
@@ -490,8 +533,8 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   await page.keyboard.press('Tab')
   // 099 — DETERMINISTIC FOCUS-SETTLE (was retry-mitigated / relied on retries:2).
   // The cross-node handoff focuses Beta's first data cell from inside a rAF (the
-  // EditableGrid.onExitBoundary seam), and the focus-pan can re-run it — so a
-  // one-shot `toBeFocused()` snapshot can read before the rAF fires and flake
+  // EditableGrid.onExitBoundary seam), so a one-shot `toBeFocused()` snapshot
+  // can read before the rAF fires and flake
   // (HANDOFF e2e lesson: poll activeElement, never read it once). Poll the SAME
   // invariant the old `toBeFocused()` + `toHaveText('B-entry')` pair asserted:
   // focus crossed to the BETA node and landed on its B-entry grid cell.
@@ -516,7 +559,7 @@ test('cross-node Tab follows sort order between table nodes (forward + backward)
   await beta.getByRole('cell', { name: 'B-entry', exact: true }).click()
   await waitForStableViewport(page)
   await page.keyboard.press('Shift+Tab')
-  // Same rAF/focus-pan race on the reverse boundary → poll activeElement rather
+  // Same rAF handoff timing on the reverse boundary → poll activeElement rather
   // than a one-shot `toBeFocused()`. Assert focus crossed back to ALPHA and landed
   // on its "Name an entry" phantom input (input OR textarea — read the attribute,
   // don't assume the element kind).
@@ -725,11 +768,11 @@ test('the Foundation lane decomposes into a header + per-prop nodes, editable at
   await addFoundationProp(page, 'Mobility')
   await expect(page.locator('.wc-node--foundation-item')).toHaveCount(2)
 
-  // The app fit-views on load, so this runs at a non-unity viewport scale.
+  // The helper's explicit Fit makes this run at a non-unity viewport scale.
   await expect.poll(() => viewportScale(page)).not.toBe(1)
 
-  // Let the create-focus (onPropCreated rAF) + its focus-pan settle before the
-  // next interaction, so a delayed programmatic focus can't steal our typing.
+  // Let the delayed create-focus (onPropCreated rAF) settle before the next
+  // interaction so it cannot steal our typing. Focus must not move the camera.
   await waitForStableViewport(page)
 
   // Purpose is editable in the header node at zoom ≠ 1 (the proven foundation.spec
@@ -877,7 +920,7 @@ test('the Design lane is a register node stacked over a ring node, with cross-no
   await page.keyboard.press('Enter')
   await expect(register.locator('.dim-row')).toHaveCount(2)
 
-  // The app fit-views on load, so the cross-node interaction below runs at a
+  // The helper's explicit Fit makes the cross-node interaction below run at a
   // non-unity viewport scale.
   await expect.poll(() => viewportScale(page)).not.toBe(1)
 
@@ -995,6 +1038,7 @@ test('drilling α promotes a LIVE child core with an INDEPENDENT store (parent u
   // Drill α ("Open ▸") → a SECOND live {register + ring} core mounts beside the
   // parent (NOT a summary stub): two registers, two rings, six .wc-node total.
   await waitForStableViewport(page)
+  const cameraBeforeDrill = await viewportTransform(page)
   await parentShell.locator('.children-drill').first().click()
 
   await expect(page.locator('.wc-node--design-register')).toHaveCount(2)
@@ -1002,6 +1046,19 @@ test('drilling α promotes a LIVE child core with an INDEPENDENT store (parent u
   await expect(page.locator('.wc-node')).toHaveCount(6)
   // The parent→child edge connects the two cores.
   await expect(page.locator('.react-flow__edge')).toHaveCount(1)
+  await page.waitForTimeout(650)
+  expect(await viewportTransform(page), 'drilling must not move or zoom the camera').toBe(cameraBeforeDrill)
+
+  // The child intentionally opens off-camera. Fit is an explicit user action
+  // before this test continues editing inside the new core. A whole-workspace
+  // fit can cross the existing child-core LOD threshold, so explicitly zoom back
+  // to the live-editor tier as well.
+  await page.locator('.react-flow__controls-fitview').click()
+  await waitForStableViewport(page)
+  while ((await viewportScale(page)) < 0.36) {
+    await page.locator('.react-flow__controls-zoomin').click()
+  }
+  await waitForStableViewport(page)
 
   const childRegister = page.locator('.wc-node--design-register').nth(1)
   const childShell = childRegister.locator('.context-register-shell')
@@ -1089,8 +1146,8 @@ test('a live child core clears a 093-widened parent register — no overlap (rev
 // The `v` key (and the header Coverage toggle) now OPEN a coverage TWIN node
 // below the Design core + a ring→twin edge, instead of the old route swap that
 // REPLACED the ring. The twin is FULLY LIVE (CoverageMatrix reads the same
-// current-canvas stores the ring reads). A gap-cell click composes pre-filled +
-// pans back along the edge to the ring. routes.ts `?view=` grammar is preserved.
+// current-canvas stores the ring reads). Opening the twin or composing from a
+// gap never moves the user-owned camera. routes.ts `?view=` grammar is preserved.
 
 // Open the ?d3rf canvas + seed 3 dimensions × 2 parameters (tuple space = 8),
 // mirroring the flag-off coverage.spec so the same gap-cell selectors apply.
@@ -1147,14 +1204,15 @@ test('the `v` key opens an edge-connected coverage twin (not a route swap); v ag
   await page.keyboard.press('v')
   const twin = page.locator('.wc-node--coverage-twin')
   await expect(twin).toHaveCount(1)
-  await expect(twin.locator('.coverage-matrix')).toBeVisible()
   await expect(page.locator('.react-flow__edge')).toHaveCount(1)
   await expect(page.locator('.wc-node')).toHaveCount(5)
   await expect(page.locator('.wc-node--design-ring .canvas-svg')).toBeVisible()
   expect(page.url()).toBe(urlBefore)
 
-  // Pan-to-twin: the viewport moved to frame it.
-  await expect.poll(async () => (await viewportTransform(page)) !== beforeOpen).toBe(true)
+  // Wait past the former twin-refit window. Mounting the twin does not pan, fit,
+  // or change zoom.
+  await page.waitForTimeout(650)
+  expect(await viewportTransform(page)).toBe(beforeOpen)
 
   // `v` again collapses the twin + its edge; back to four lane nodes.
   await page.locator('.wc-node--design-ring .canvas-svg').click()
@@ -1165,7 +1223,7 @@ test('the `v` key opens an edge-connected coverage twin (not a route swap); v ag
   await expect(page.locator('.wc-node')).toHaveCount(4)
 })
 
-test('a coverage-twin gap cell composes pre-filled and pans back to the ring; the stat is live', { tag: '@dev-flag' }, async ({
+test('a coverage-twin gap cell composes pre-filled without moving the camera; the stat is live', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
@@ -1175,18 +1233,25 @@ test('a coverage-twin gap cell composes pre-filled and pans back to the ring; th
   await waitForStableViewport(page)
   await page.keyboard.press('v')
 
+  // The new twin may be outside the current viewport. Fit is an explicit user
+  // action before interacting with the analytical node.
+  await page.locator('.react-flow__controls-fitview').click()
+  await waitForStableViewport(page)
+
   const twin = page.locator('.wc-node--coverage-twin')
   await expect(twin.locator('.coverage-matrix')).toBeVisible()
   // Live stat derived from the 3×2 tuple space (8), 0 documented yet — a stub
   // would not know the real total.
   await expect(twin.locator('.coverage-stat--lead')).toHaveText('0 / 8 documented')
 
-  // A hollow gap cell → compose pre-filled with that tuple, then pan back to the
-  // ring (the draft's compose dot group is now in the ring, which was NOT replaced).
+  // A hollow gap cell → compose pre-filled with that tuple, while the viewport
+  // stays byte-identical (the ring was not replaced).
   const gap = twin.getByRole('gridcell', { name: 'Unexplored — Comfort · Users · Engagement' })
   await expect(gap).toHaveAttribute('data-documented', 'false')
+  const beforeCompose = await viewportTransform(page)
   await gap.click()
   await expect(page.locator('.wc-node--design-ring .canvas-dot-group--compose').first()).toBeVisible()
+  expect(await viewportTransform(page)).toBe(beforeCompose)
 })
 
 // ── 089-D3 P5 — LOD + perf at volume ────────────────────────────────────────
@@ -1503,8 +1568,8 @@ test('the populated Architecture lane is axe-clean (WCAG 2 A/AA serious/critical
 // uniqueness — the same guarantee the fallback WorkspaceSurface has), and (b)
 // forward Tab from a known register field keeps focus INSIDE that landmark — it
 // never falls through to <body> / browser chrome. activeElement is read via
-// expect.poll: a focus-pan can land focus in a rAF, so a one-shot read flakes
-// (HANDOFF e2e lesson). The invariant is deliberately tolerant (in-main, not-body)
+// expect.poll: a handoff can land focus in a rAF, so a one-shot read flakes.
+// The invariant is deliberately tolerant (in-main, not-body)
 // rather than a brittle exact-next-element assertion.
 test('the canvas is one main landmark containing all lanes, and Tab keeps focus inside it', { tag: '@dev-flag' }, async ({
   page,
@@ -1574,12 +1639,10 @@ test('the canvas label tier is stable across zoom (derived from layout width, no
   await expect(shell).toHaveAttribute('data-label-tier', tierBefore)
 })
 
-// 101 — the focus-pan is KEYBOARD-only: CLICKING an element the user can already
-// see must NOT pan/center the viewport (only Tab/⌘-jump focus, which can target
-// an off-screen cell, pans). NORMAL motion here on purpose so a real pan actually
-// animates the transform (a reduced-motion duration-0 setCenter no-ops on an idle
-// zoom — issue 096 — and would HIDE a regression).
-const FOCUS_PAN_MARGIN_PX = 88
+// User-owned camera: clicking or tapping an editable cell never pans/centers the
+// viewport. Place the target near an edge to catch any reintroduction of React
+// Flow autoPanOnNodeFocus or app-owned focus centering.
+const CAMERA_EDGE_TEST_PX = 88
 
 interface Box {
   x: number
@@ -1594,9 +1657,9 @@ async function boxOf(loc: Locator): Promise<Box> {
 }
 
 // Open the canvas and deterministically place the Foundation "Name a value
-// proposition" phantom INSIDE the left pan-margin band (still hittable) by panning
-// the empty pane the measured distance — the regime where the OLD focus-pan
-// centred on interaction. (Zooming overshoots the phantom off-screen; native
+// proposition" phantom INSIDE the left edge band (still hittable) by panning
+// the empty pane the measured distance — the regime where auto-focus pan would
+// visibly move the camera. (Zooming overshoots the phantom off-screen; native
 // scroll can't reach it on a transformed plane.) All offsets are RELATIVE:
 //   • land at HALF the margin from the edge → provably inside the band AND hittable;
 //   • drag from ABOVE the measured lane row (midway pane-top → Foundation-top) →
@@ -1610,7 +1673,7 @@ async function panFoundationPhantomIntoLeftMargin(page: Page): Promise<Locator> 
   await expect(target).toBeVisible()
   const pbox = await boxOf(page.locator('.workspace-canvas'))
   const fbox = await boxOf(foundation)
-  const landingX = pbox.x + FOCUS_PAN_MARGIN_PX / 2
+  const landingX = pbox.x + CAMERA_EDGE_TEST_PX / 2
   const emptyY = pbox.y + (fbox.y - pbox.y) / 2
   const grabX = pbox.x + pbox.width / 2
   const panDx = (await boxOf(target)).x - landingX
@@ -1620,19 +1683,18 @@ async function panFoundationPhantomIntoLeftMargin(page: Page): Promise<Locator> 
   await page.mouse.up()
   await waitForStableViewport(page)
   const tbox = await boxOf(target)
-  const inLeftMargin = tbox.x < pbox.x + FOCUS_PAN_MARGIN_PX && tbox.x >= pbox.x
-  expect(inLeftMargin, 'precondition: target must sit inside the left pan margin so the OLD code would pan').toBe(true)
+  const inLeftMargin = tbox.x < pbox.x + CAMERA_EDGE_TEST_PX && tbox.x >= pbox.x
+  expect(inLeftMargin, 'precondition: target must sit inside the left camera-edge band').toBe(true)
   return target
 }
 
-// A focus-pan (if it wrongly fired) animates over FOCUS_PAN_DURATION (320ms);
-// wait past it, then assert the viewport transform never moved.
+// Wait past the old auto-pan animation window, then assert the camera stayed put.
 async function expectNoPan(page: Page, before: string): Promise<void> {
   await page.waitForTimeout(650)
   expect(await viewportTransform(page), 'the interaction must not pan the canvas').toBe(before)
 }
 
-test('clicking a cell does NOT pan the viewport (focus-pan is keyboard-only)', { tag: '@dev-flag' }, async ({
+test('clicking a cell does NOT pan the user-owned viewport', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1000 })
@@ -1645,9 +1707,7 @@ test('clicking a cell does NOT pan the viewport (focus-pan is keyboard-only)', {
 test('tapping a cell (touch) does NOT pan the viewport — the tablet-first case', { tag: '@dev-flag' }, async ({
   browser,
 }) => {
-  // Touch was the exact case a timer-based gate would misclassify (tap→focus can
-  // span >1 frame); the persistent modality ref sets pointer on ANY pointerdown,
-  // including touch. Needs a touch-enabled context.
+  // Touch focus can arrive after pointerdown; neither event may own the camera.
   const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, hasTouch: true })
   const page = await context.newPage()
   try {
@@ -1955,7 +2015,7 @@ test('hover-mute works on the canvas ring: hovering a context mutes the unrelate
   // Both contexts render as ring nodes.
   await expect(ring.locator('.canvas-node[data-context-id]')).toHaveCount(2)
 
-  // Settle the initial fitView before any hover — the race the helper guards.
+  // Settle the helper's explicit Fit before any hover.
   await waitForStableViewport(page)
 
   // Resting state: clear any selection (click the ring background corner) so we

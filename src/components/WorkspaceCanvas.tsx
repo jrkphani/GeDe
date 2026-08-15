@@ -4,10 +4,10 @@ import {
   Controls,
   Handle,
   MarkerType,
+  PanOnScrollMode,
   Position,
   ReactFlow,
   ReactFlowProvider,
-  useNodesInitialized,
   useNodesState,
   useReactFlow,
   useStore,
@@ -30,7 +30,6 @@ import {
 } from '../domain/clusterLayout'
 import {
   resetCanvasSatellites,
-  satelliteNodeId,
   useCanvasSatellitesStore,
 } from '../store/canvasSatellites'
 import { useCanvasCoverageStore } from '../store/canvasCoverage'
@@ -47,7 +46,6 @@ import type { Tier1PropRow, Tier2TableRow } from '../db/mutations'
 import type { AppRoute, DesignView } from '../shell/routes'
 import { DesignCoverageTwinBody, DesignRegisterBody, DesignRingBody } from './DesignCoreAdapter'
 import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
-import { focusPanTarget } from './workspaceFocusPan'
 import { FoundationHeaderPanel, FoundationPropPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
 import { PhantomInput } from './ui/inline-editor'
@@ -115,7 +113,7 @@ const DESIGN_RING_NODE_ID = 'workspace-canvas-design-ring'
 // Issue 100 Phase D — a drilled-in LIVE CHILD core reuses the register/ring node
 // types but NAMESPACES their ids off the parent context id, so the PRIMARY ids
 // (LANE_NODE_ID.design / DESIGN_RING_NODE_ID — the ⌘3 pan, coverage-twin edge,
-// and gap-compose pan targets) stay singletons pointing at the root core. Child
+// and coverage compose targets) stay singletons pointing at the root core. Child
 // cores are purely additive. `childRegisterNodeId` is imported from d3CanvasNav (the
 // single source of truth shared with DesignCoreAdapter's culling geometry); the ring
 // id stays local (it keys only WorkspaceCanvas's own node build).
@@ -178,12 +176,7 @@ const CLUSTER_CONFIG: ClusterLayoutConfig = {
 const parentCoreNodeIdFor = (parentCoreId: string | null): string =>
   parentCoreId === null ? LANE_NODE_ID.design : childRegisterNodeId(parentCoreId)
 
-const FOCUS_PAN_DURATION = 320
-// Focus-driven pan is pan-if-outside-margin, NOT center-on-every-focus: only
-// pan when the focused element is within this many px of (or past) a pane edge,
-// so the viewport never fights a typist whose caret is already comfortably in
-// view (D3 spike finding — "center on every focus is too jerky").
-const FOCUS_PAN_MARGIN = 88
+const CAMERA_MOVE_DURATION = 320
 
 // ── Node data shapes (a `type`, not `interface`, so each satisfies React Flow's
 // `Record<string, unknown>` Data constraint — interfaces lack the implicit index
@@ -293,9 +286,6 @@ type CoverageTwinNodeData = {
   // (same as its register/ring siblings), so focusing the twin records the SAME
   // core active. Undefined for the root core → 'root'.
   canvasId: string | undefined
-  // Pan back along the edge to the ring after a gap-cell compose (so the new
-  // draft dot is in view).
-  onGapComposed: () => void
 }
 type CoverageTwinNode = Node<CoverageTwinNodeData, 'coverageTwin'>
 
@@ -311,9 +301,9 @@ type CanvasNode =
 // ── Cross-node focus helpers (P3.3). A table node's DOM is `.react-flow__node
 // [data-id="<tableId>"]`; within it we land focus on the FIRST editable grid
 // cell (forward entry) or the LAST editable position — the phantom "add entry"
-// row (backward entry). Focusing an off-screen target trips the wrapper's
-// `onFocusCapture` pan, bringing it on-screen (spike gate-d). `firstEditableCell`
-// / `lastEditablePosition` now live in the shared `gridBoundaryFocus` seam module
+// row (backward entry). The camera is deliberately NOT involved: editing and
+// keyboard focus never recenter a user-owned viewport. `firstEditableCell` /
+// `lastEditablePosition` live in the shared `gridBoundaryFocus` seam module
 // (084-D3 P0) so this consumer and the 084 Architecture chain adapter share one
 // set of edge semantics. ─────────────────────────────────────────────────────
 
@@ -706,7 +696,7 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
 // P4 (issue 012) — the coverage TWIN node: the analytical twin of the ring,
 // stacked below the Design core + edge-connected to it. Its body (DesignCoverageTwinBody)
 // renders the read-only CoverageMatrix from the current-canvas stores; a gap-cell
-// click composes pre-filled then pans back to the ring. Body is `nodrag nopan
+// click composes pre-filled without moving the camera. Body is `nodrag nopan
 // nowheel` (the matrix scrolls/clicks internally) and records the Design lane
 // active on focus/pointer (D2 activeLane gating), like the other design bodies.
 function CoverageTwinNode({ data }: NodeProps<CoverageTwinNode>) {
@@ -729,7 +719,7 @@ function CoverageTwinNode({ data }: NodeProps<CoverageTwinNode>) {
           useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
         }}
       >
-        <DesignCoverageTwinBody projectId={data.projectId} onGapComposed={data.onGapComposed} />
+        <DesignCoverageTwinBody projectId={data.projectId} />
       </div>
     </div>
   )
@@ -747,9 +737,34 @@ const NODE_TYPES = {
   coverageTwin: CoverageTwinNode,
 }
 
-// The exported shell wraps the canvas in a ReactFlowProvider so both the
-// imperative viewport handle (`useReactFlow`, for ⌘1/2/3 pan-to-lane + focus-pan)
-// and `useNodesInitialized` live inside the RF context.
+// A small, canvas-native camera readout. Keeping the zoom subscription in this
+// leaf prevents the large WorkspaceCanvas node builder from re-rendering on
+// every trackpad frame. The stock zoom/fit buttons remain recognizable and keep
+// their tested class names; the surrounding chrome and live percentage are ours.
+function WorkspaceZoomControls() {
+  const zoomPercent = useStore((s) => Math.round(s.transform[2] * 100))
+  return (
+    <Controls
+      className="workspace-zoom-controls"
+      aria-label="Workspace zoom controls"
+      orientation="horizontal"
+      showInteractive={false}
+      fitViewOptions={{ padding: 0.12, duration: prefersReducedMotion() ? 0 : CAMERA_MOVE_DURATION }}
+    >
+      <output
+        className="workspace-zoom-controls__percent"
+        aria-label={`Zoom ${zoomPercent}%`}
+        aria-live="polite"
+        aria-atomic="true"
+      >
+        {zoomPercent}%
+      </output>
+    </Controls>
+  )
+}
+
+// The exported shell supplies the React Flow context used by the imperative
+// lane-pan handle (`useReactFlow`) and the isolated zoom readout (`useStore`).
 export function WorkspaceCanvas({ route }: { route: WorkspaceRoute }) {
   return (
     <ReactFlowProvider>
@@ -821,8 +836,8 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // next-by-`sort` (forward) or prev-by-`sort` (backward) table node. Traversal
   // follows the store's `sort` order — NOT DOM/array order — exactly as the spike
   // required (native Tab desyncs from `sort` after a reorder). One frame lets the
-  // grid's own commit/close settle before we relocate; focusing the target trips
-  // the wrapper's focus-pan if it is off-screen.
+  // grid's own commit/close settle before we relocate. The camera remains under
+  // the user's control even when the focused target is off-screen.
   const onTableExitBoundary = useCallback((tableId: string, dir: 'forward' | 'backward') => {
     const list = tablesRef.current
     const idx = list.findIndex((t) => t.id === tableId)
@@ -869,11 +884,10 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   // Opening is pure canvas state (NO DB write): the register/ring drill
   // affordances call openSatellite; this canvas mounts a LIVE {register + ring}
   // child core (its own store instance, keyed by the parent context id) + a
-  // parent→child edge per open child, and pans to the newly-focused one. The
+  // parent→child edge per open child. Opening never moves the user-owned camera. The
   // child canvas is materialized (openChildCanvas) by the child register's own
   // load effect once it mounts.
   const openSatellites = useCanvasSatellitesStore((s) => s.open)
-  const satelliteFocus = useCanvasSatellitesStore((s) => s.focus)
 
   // Collapse a live child core: drop it from the open set AND release its store
   // instance (per-instance DB-sync teardown — the whole point of the independent
@@ -920,9 +934,9 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     resetCanvasSatellites()
   }, [canvasIdentity])
 
-  // P4 (issue 012) — the coverage twin's open state + its one-shot pan target.
+  // P4 (issue 012) — the coverage twin's open state. Opening the analytical
+  // node is a content change only; it never moves or zooms the viewport.
   const coverageOpen = useCanvasCoverageStore((s) => s.open)
-  const coverageFocus = useCanvasCoverageStore((s) => s.focus)
 
   // Seed the twin from the route's `view` on canvas-nav: a `?view=coverage`
   // deep-link opens the twin (grammar preserved), a normal canvas-nav closes it
@@ -932,17 +946,6 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
   useEffect(() => {
     useCanvasCoverageStore.getState().setOpen(design.view === 'coverage')
   }, [canvasIdentity, design.view])
-
-  // Pan back along the edge to the ring after a coverage gap-cell compose, so the
-  // freshly-composed draft dot is in view (the twin + ring coexist).
-  const onGapComposed = useCallback(() => {
-    void reactFlow.fitView({
-      nodes: [{ id: DESIGN_RING_NODE_ID }],
-      padding: 0.3,
-      maxZoom: 1,
-      duration: prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION,
-    })
-  }, [reactFlow])
 
   // The desired node set for the current tables + props + route + role. The
   // Foundation column is a header node (sort -1) + one `foundationItem` node per
@@ -1130,7 +1133,6 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           estimate: COVERAGE_TWIN_ESTIMATE,
           projectId,
           canvasId: design.canvasId,
-          onGapComposed,
         },
       })
     }
@@ -1149,7 +1151,6 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     openSatellites,
     onSatelliteCollapse,
     coverageOpen,
-    onGapComposed,
   ])
 
   const [nodes, setNodes, onNodesChange] = useNodesState<CanvasNode>(desiredNodes)
@@ -1236,107 +1237,31 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     setNodes((prev) => withDerivedPositions(prev))
   }, [measuredSignature, setNodes])
 
-  // fitView-vs-measurement race (spike gate-e): the `fitView` prop can frame the
-  // pre-measurement estimate layout. Once every node has been measured
-  // (`useNodesInitialized`), refit ONCE against the settled positions so nothing
-  // is off-screen on first paint. Guarded so a later table-add (which briefly
-  // re-initializes) never yanks the viewport out from under the user.
-  const nodesInitialized = useNodesInitialized()
-  const didInitialFit = useRef(false)
-  useEffect(() => {
-    if (!nodesInitialized || didInitialFit.current) return
-    didInitialFit.current = true
-    const raf = requestAnimationFrame(() => void reactFlow.fitView({ padding: 0.12, duration: 0 }))
-    return () => cancelAnimationFrame(raf)
-  }, [nodesInitialized, reactFlow])
-
-  // Pan/zoom to a freshly-opened (or re-focused) live child core. `focus` is the
-  // one-shot `satelliteNodeId(parentContextId)` token set by openSatellite; we map
-  // it back to the parent context id (the open set holds the raw ids) → the child
-  // REGISTER node id, wait for that node to mount + measure (this effect re-runs as
-  // `nodes` updates), fit it into view, then consumeFocus so a later reconcile
-  // never yanks the viewport back. Reduced-motion snaps.
-  useEffect(() => {
-    if (!satelliteFocus) return
-    const focused = openSatellites.find((s) => satelliteNodeId(s.contextId) === satelliteFocus)
-    if (!focused) return
-    const targetId = childRegisterNodeId(focused.contextId)
-    const node = reactFlow.getNode(targetId)
-    if (node?.measured?.height == null) return
-    void reactFlow.fitView({
-      nodes: [{ id: targetId }],
-      padding: 0.3,
-      maxZoom: 1,
-      duration: prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION,
-    })
-    useCanvasSatellitesStore.getState().consumeFocus()
-    // `nodes` is a re-run trigger only (the node must exist + be measured first).
-  }, [satelliteFocus, openSatellites, nodes, reactFlow])
-
-  // P4 — pan/zoom to the coverage twin when it opens (same one-shot pattern as the
-  // satellite pan: wait for mount + measure, fit, then consumeFocus).
-  useEffect(() => {
-    if (!coverageFocus) return
-    const node = reactFlow.getNode(COVERAGE_TWIN_NODE_ID)
-    if (node?.measured?.height == null) return
-    void reactFlow.fitView({
-      nodes: [{ id: COVERAGE_TWIN_NODE_ID }],
-      padding: 0.3,
-      maxZoom: 1,
-      duration: prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION,
-    })
-    useCanvasCoverageStore.getState().consumeFocus()
-  }, [coverageFocus, nodes, reactFlow])
-
-  // The pane wrapper — its rect is the on-screen viewport bounds the focus-pan
-  // margin test is measured against.
-  const wrapperRef = useRef<HTMLDivElement>(null)
-
-  // ⌘1/2/3 → pan/zoom to the Foundation / Architecture / Design lane node. The
+  // ⌘1/2/3 → pan to the Foundation / Architecture / Design lane node. The
   // key listener is the MODULE-LEVEL interceptor in `./d3CanvasNav` (registered
   // eagerly by App.tsx); this effect publishes this canvas's live React Flow
   // instance as the active pan target while mounted, and clears it on unmount.
-  useEffect(() => {
-    const nav: CanvasNavInstance = { fitView: (options) => reactFlow.fitView(options) }
-    setActiveCanvasInstance(nav)
-    return () => clearActiveCanvasInstance(nav)
-  }, [reactFlow])
-
-  // Focus-driven pan is KEYBOARD-ONLY (issue 101): native `scrollIntoView` is a
-  // no-op on a transformed plane, so a keyboard-navigated focus (Tab / cross-node
-  // Tab / a create's programmatic focus) that lands on an off-screen cell needs an
-  // explicit pan to bring it into view. But a MOUSE/TOUCH click focuses something
-  // the user can already see (you can't click what isn't rendered), so panning
-  // there is pointless + jarring. We track the last input modality with a
-  // persistent ref (NOT a timer — a rAF-cleared flag misclassifies touch, whose
-  // tap→focus can span >1 frame, and races the codebase's own rAF-deferred
-  // `.focus()` calls). `onPointerDownCapture` flips it to pointer; `onKeyDownCapture`
-  // flips it to keyboard; both are passive capture-phase listeners on the wrapper.
-  const lastInputWasKeyboardRef = useRef(false)
-
-  // Focus-driven pan (D3 spike gate-d): pan-if-outside-margin, never
-  // center-on-every-focus — only when the focused element is near/past a pane
-  // edge do we `setCenter` on it, keeping the CURRENT zoom. Reduced-motion snaps.
-  const onFocusCapture = useCallback(
-    (e: FocusEvent<HTMLDivElement>) => {
-      // Pointer-initiated focus (a click) never pans — the target is already
-      // visible; only keyboard-driven focus can target an off-screen cell.
-      if (!lastInputWasKeyboardRef.current) return
-      const target = e.target as HTMLElement | null
-      const pane = wrapperRef.current
-      if (!target || !pane || typeof target.getBoundingClientRect !== 'function') return
-      // Pure pan-decision (unit-tested in workspaceFocusPan.test.ts) — returns
-      // the screen point to centre on, or null when the element is already in
-      // view. The flaky setCenter-vs-fitView race is React Flow's, not ours.
-      const point = focusPanTarget(target.getBoundingClientRect(), pane.getBoundingClientRect(), FOCUS_PAN_MARGIN)
-      if (!point) return
-      const center = reactFlow.screenToFlowPosition(point)
+  // Unlike fitView, setCenter receives the CURRENT zoom, so a lane jump never
+  // changes the scale the user chose.
+  const panToNode = useCallback(
+    (nodeId: string, duration: number) => {
+      const node = reactFlow.getNode(nodeId)
+      if (!node) return
+      const width = node.measured?.width ?? LANE_CONFIG.laneWidth
+      const height = node.measured?.height ?? node.data.estimate
       const { zoom } = reactFlow.getViewport()
-      const duration = prefersReducedMotion() ? 0 : FOCUS_PAN_DURATION
-      void reactFlow.setCenter(center.x, center.y, { zoom, duration })
+      void reactFlow.setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+        zoom,
+        duration,
+      })
     },
     [reactFlow],
   )
+  useEffect(() => {
+    const nav: CanvasNavInstance = { panToNode }
+    setActiveCanvasInstance(nav)
+    return () => clearActiveCanvasInstance(nav)
+  }, [panToNode])
 
   // P3.4 — constrained table-node drag. During the drag, pin the dragged table's
   // x to the Architecture column (honoring its LIVE dragged y) so the lane never
@@ -1405,21 +1330,9 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
 
   return (
     // 089-P7: the canvas is now the DEFAULT primary content region, so it carries
-    // the `main` landmark (role, not <main>, to keep the HTMLDivElement ref +
-    // FocusEvent typing) that the tier surfaces provide on the fallback path.
+    // the `main` landmark that the tier surfaces provide on the fallback path.
     <div
       className="workspace-canvas"
-      ref={wrapperRef}
-      onFocusCapture={onFocusCapture}
-      // Track input modality so the focus-pan fires ONLY for keyboard nav, never
-      // on a click (issue 101). Passive capture-phase listeners — no preventDefault,
-      // so React Flow's own pane-pan / node-drag pointer handling is untouched.
-      onPointerDownCapture={() => {
-        lastInputWasKeyboardRef.current = false
-      }}
-      onKeyDownCapture={() => {
-        lastInputWasKeyboardRef.current = true
-      }}
       role="main"
       aria-label="Workspace canvas"
     >
@@ -1430,13 +1343,26 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         nodeTypes={NODE_TYPES}
-        // Frame everything into the pane on first paint; the post-measurement
-        // effect above refits once measured heights settle (fit-vs-measure race).
-        fitView
-        fitViewOptions={{ padding: 0.12 }}
         minZoom={0.2}
         maxZoom={2}
+        // Numbers/Excel-like camera grammar: ordinary wheel/trackpad gestures
+        // pan freely in 2D; holding the platform zoom modifier (Cmd/Ctrl) turns
+        // the same gesture into zoom, and native pinch remains zoom. Double-click
+        // is reserved for app actions such as drilling into a context.
+        panOnScroll
+        panOnScrollMode={PanOnScrollMode.Free}
+        panOnScrollSpeed={0.8}
+        zoomOnScroll
+        zoomOnPinch
+        zoomActivationKeyCode={['Meta', 'Control']}
+        zoomOnDoubleClick={false}
         nodesConnectable={false}
+        // The viewport is user-owned. Focus, selection, connection, node drag,
+        // content measurement, and node mounting may update content but never
+        // recenter, fit, or change zoom. Fit is available only in the control.
+        autoPanOnNodeFocus={false}
+        autoPanOnSelection={false}
+        autoPanOnConnect={false}
         autoPanOnNodeDrag={false}
         // NOTE (089-P5): `onlyRenderVisibleElements` was evaluated + REMOVED — it
         // unmounts off-screen nodes, which breaks specs (and UX) that zoom into a
@@ -1447,7 +1373,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         proOptions={{ hideAttribution: true }}
       >
         <Background />
-        <Controls showInteractive={false} />
+        <WorkspaceZoomControls />
       </ReactFlow>
     </div>
   )
