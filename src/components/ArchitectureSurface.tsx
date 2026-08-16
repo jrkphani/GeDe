@@ -806,6 +806,7 @@ export function TablePanel({
       // so its per-depth left inset (base.css .t2-col--name, keyed on the row's
       // --depth) makes a child's name step visibly right of its parent's — the
       // leading tree column alone only indents the chevron.
+      headClassName: 't2-col--name',
       cellClassName: 't2-col--name',
       cell: {
         kind: 'richtext',
@@ -849,6 +850,8 @@ export function TablePanel({
       header: table.descriptionHeader ?? 'Description',
       onHeaderCommit: (value) =>
         setTableHeaders(table.id, table.nameHeader ?? 'Name', value),
+      headClassName: 'grid-col--description',
+      cellClassName: 'grid-col--description',
       cell: {
         // Issue 089 D1 Phase 5 — the entry description is now a rich cell
         // (Lexical), mirroring the justification column (P3). Same stored-string

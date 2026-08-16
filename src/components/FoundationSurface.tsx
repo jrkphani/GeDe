@@ -61,109 +61,13 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
   const readOnly = !canWrite(role)
   const purpose = useTier1Store((s) => s.purpose)
   const existingScenario = useTier1Store((s) => s.existingScenario)
-  const valuePropNameHeader = useTier1Store((s) => s.valuePropNameHeader)
-  const valuePropDescriptionHeader = useTier1Store((s) => s.valuePropDescriptionHeader)
-  const props = useTier1Store((s) => s.props)
   const load = useTier1Store((s) => s.load)
   const setPurpose = useTier1Store((s) => s.setPurpose)
   const setExistingScenario = useTier1Store((s) => s.setExistingScenario)
-  const addProp = useTier1Store((s) => s.addProp)
-  const setFormattedName = useTier1Store((s) => s.setFormattedName)
-  const setHeaders = useTier1Store((s) => s.setHeaders)
-  const setDescription = useTier1Store((s) => s.setDescription)
-  const reorderProp = useTier1Store((s) => s.reorderProp)
-
-  // Live re-rank preview: while dragging, `previewOrder` overrides the stored
-  // order so the rank digits renumber before the drop commits.
-  const [previewOrder, setPreviewOrder] = useState<string[] | null>(null)
 
   useEffect(() => {
     void load(projectId)
   }, [projectId, load])
-
-  const propIds = props.map((p) => p.id)
-  const displayRankById = useMemo(() => {
-    const order = previewOrder ?? propIds
-    return Object.fromEntries(order.map((id, i) => [id, i + 1]))
-    // propIds is derived from props; recompute when either it or the preview moves.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [previewOrder, props])
-
-  function onDragOver(event: DragOverEvent) {
-    const { active, over } = event
-    if (!over || active.id === over.id) return
-    const base = previewOrder ?? propIds
-    const from = base.indexOf(String(active.id))
-    const to = base.indexOf(String(over.id))
-    if (from === -1 || to === -1) return
-    setPreviewOrder(arrayMove(base, from, to))
-  }
-
-  function onDragEnd(event: DragEndEvent) {
-    const { active, over } = event
-    const order = previewOrder
-    setPreviewOrder(null)
-    if (!over) return
-    const toIndex = (order ?? propIds).indexOf(String(active.id))
-    if (toIndex >= 0) void reorderProp(String(active.id), toIndex)
-  }
-
-  const columns: GridColumn<Tier1PropRow>[] = [
-    {
-      id: 'rank',
-      header: 'Rank',
-      headClassName: 'tier1-col--rank',
-      cellClassName: 'tier1-col--rank',
-      cell: {
-        kind: 'static',
-        // Issue 035 — a viewer sees the same degree notation, minus the drag
-        // handle (there's nothing for it to reorder into, RLS-wise).
-        render: (prop) =>
-          readOnly ? (
-            <span className="tier1-rank__degree font-mono">
-              {formatDegree(displayRankById[prop.id] ?? prop.rank)}
-            </span>
-          ) : (
-            <RankCell prop={prop} rank={displayRankById[prop.id] ?? prop.rank} />
-          ),
-      },
-    },
-    {
-      id: 'name',
-      header: valuePropNameHeader,
-      onHeaderCommit: (value) => setHeaders(value, valuePropDescriptionHeader),
-      cell: {
-        kind: 'richtext',
-        placeholder: 'Add name…',
-        inlineOnly: true,
-        getValue: (prop) => prop.nameRichText ?? plainTextToRichJson(prop.name),
-        onCommit: async (prop, value) => {
-          const name = richTextToPlainText(value).trim()
-          if (!name) return false
-          await setFormattedName(prop.id, name, value)
-          return true
-        },
-      },
-    },
-    {
-      id: 'description',
-      header: valuePropDescriptionHeader,
-      onHeaderCommit: (value) => setHeaders(valuePropNameHeader, value),
-      cell: {
-        // Issue 089 D1 Phase 5 — the value-proposition description is now a rich
-        // cell (Lexical), mirroring the justification column (P3). Same stored-
-        // string value contract in/out; legacy plain strings still render and
-        // wrap-on-edit. The global FormatStrip binds when this cell is focused.
-        kind: 'richtext',
-        placeholder: 'Add description…',
-        getValue: (prop) => prop.description ?? '',
-        onCommit: async (prop, value) => {
-          await setDescription(prop.id, value)
-          return true
-        },
-      },
-    },
-  ]
 
   return (
     <main className="foundation">
@@ -212,49 +116,155 @@ export function FoundationSurface({ projectId }: { projectId: string }) {
         />
       </section>
 
-      <section className="tier1-props" data-empty={props.length === 0 || undefined}>
-        {/* Issue 103 — a visible section heading so the ranked table reads as a
-            titled table, not a third mystery card stacked under two prose panels.
-            An <h3> keeps the heading outline valid (h2 "1st Tier · Foundation" →
-            h3); the section stays an un-named <section> (no aria-labelledby), so
-            no new landmark is introduced. */}
-        <h3 className="tier1-props__heading">Value propositions</h3>
-
-        {/* Issue 103 — an orienting empty-state line (mirrors Architecture's
-            .t2-empty, issue 084 finding 1) so a 0-prop grid + bare phantom reads
-            as "type here to add", not a stray link. Only for an editor: a viewer
-            has no phantom to point at. */}
-        {props.length === 0 && !readOnly ? (
-          <p className="tier1-props__empty">
-            No value propositions yet. Name your first below — e.g. “Comfort on demand”,
-            “Effortless booking”.
-          </p>
-        ) : null}
-
-        {readOnly ? (
-          <EditableGrid rows={props} columns={columns} getRowId={(prop) => prop.id} readOnly />
-        ) : (
-          <DndContext collisionDetection={closestCenter} onDragOver={onDragOver} onDragEnd={onDragEnd}>
-            <SortableContext items={propIds} strategy={verticalListSortingStrategy}>
-              <EditableGrid
-                rows={props}
-                columns={columns}
-                getRowId={(prop) => prop.id}
-                // Issue 103 — teach the existing Enter/Tab phantom grammar with
-                // the same quiet, aria-hidden key hints Architecture already
-                // uses (issue 084 D3 P5). Additive; adds no screen-reader noise
-                // (KeyHint's root is aria-hidden).
-                showKeyHints
-                phantom={{
-                  columnId: 'name',
-                  placeholder: 'Name a value proposition',
-                  onCreate: (name) => void addProp(name),
-                }}
-              />
-            </SortableContext>
-          </DndContext>
-        )}
-      </section>
+      <FoundationValueTable readOnly={readOnly} />
     </main>
+  )
+}
+
+// The shared ranked value-proposition table. Both the fallback Foundation route
+// and the primary React Flow canvas mount this exact component, so the canvas no
+// longer fragments each proposition into a separate one-row table/node. Keeping
+// the DnD + EditableGrid grammar here also makes re-ranking, phantom creation,
+// viewer mode and keyboard behavior identical on both surfaces.
+export function FoundationValueTable({
+  readOnly,
+  collapsed = false,
+}: {
+  readOnly: boolean
+  collapsed?: boolean
+}) {
+  const props = useTier1Store((s) => s.props)
+  const addProp = useTier1Store((s) => s.addProp)
+  const valuePropNameHeader = useTier1Store((s) => s.valuePropNameHeader)
+  const valuePropDescriptionHeader = useTier1Store((s) => s.valuePropDescriptionHeader)
+  const setHeaders = useTier1Store((s) => s.setHeaders)
+  const setFormattedName = useTier1Store((s) => s.setFormattedName)
+  const setDescription = useTier1Store((s) => s.setDescription)
+  const reorderProp = useTier1Store((s) => s.reorderProp)
+  const [previewOrder, setPreviewOrder] = useState<string[] | null>(null)
+
+  const propIds = props.map((p) => p.id)
+  const displayRankById = useMemo(() => {
+    const order = previewOrder ?? propIds
+    return Object.fromEntries(order.map((id, i) => [id, i + 1]))
+    // propIds is derived from props; recompute when either it or the preview moves.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [previewOrder, props])
+
+  function onDragOver(event: DragOverEvent) {
+    const { active, over } = event
+    if (!over || active.id === over.id) return
+    const base = previewOrder ?? propIds
+    const from = base.indexOf(String(active.id))
+    const to = base.indexOf(String(over.id))
+    if (from === -1 || to === -1) return
+    setPreviewOrder(arrayMove(base, from, to))
+  }
+
+  function onDragEnd(event: DragEndEvent) {
+    const { active, over } = event
+    const order = previewOrder
+    setPreviewOrder(null)
+    if (!over) return
+    const toIndex = (order ?? propIds).indexOf(String(active.id))
+    if (toIndex >= 0) void reorderProp(String(active.id), toIndex)
+  }
+
+  const columns: GridColumn<Tier1PropRow>[] = [
+    {
+      id: 'rank',
+      header: 'Rank',
+      headClassName: 'tier1-col--rank',
+      cellClassName: 'tier1-col--rank',
+      cell: {
+        kind: 'static',
+        render: (prop) =>
+          readOnly ? (
+            <span className="tier1-rank__degree font-mono">
+              {formatDegree(displayRankById[prop.id] ?? prop.rank)}
+            </span>
+          ) : (
+            <RankCell prop={prop} rank={displayRankById[prop.id] ?? prop.rank} />
+          ),
+      },
+    },
+    {
+      id: 'name',
+      header: valuePropNameHeader,
+      onHeaderCommit: (value) => setHeaders(value, valuePropDescriptionHeader),
+      headClassName: 'tier1-col--name',
+      cellClassName: 'tier1-col--name',
+      cell: {
+        kind: 'richtext',
+        inlineOnly: true,
+        placeholder: 'Add name…',
+        getValue: (prop) => prop.nameRichText ?? plainTextToRichJson(prop.name),
+        onCommit: async (prop, value) => {
+          const name = richTextToPlainText(value).trim()
+          if (!name) return false
+          await setFormattedName(prop.id, name, value)
+          return true
+        },
+      },
+    },
+    {
+      id: 'description',
+      header: valuePropDescriptionHeader,
+      onHeaderCommit: (value) => setHeaders(valuePropNameHeader, value),
+      headClassName: 'grid-col--description',
+      cellClassName: 'grid-col--description',
+      cell: {
+        kind: 'richtext',
+        placeholder: 'Add description…',
+        getValue: (prop) => prop.description ?? '',
+        onCommit: async (prop, value) => {
+          await setDescription(prop.id, value)
+          return true
+        },
+      },
+    },
+  ]
+
+  return (
+    <section className="tier1-props" data-empty={props.length === 0 || undefined}>
+      <h3 className="tier1-props__heading">Value propositions</h3>
+      {collapsed ? (
+        <div className="wc-lane-summary" data-testid="wc-lane-summary">
+          <span className="wc-lane-summary__name">
+            {props.length} value {props.length === 1 ? 'proposition' : 'propositions'}
+          </span>
+          <span className="wc-lane-summary__meta">Zoom in to view the table</span>
+        </div>
+      ) : (
+        <>
+          {props.length === 0 && !readOnly ? (
+            <p className="tier1-props__empty">
+              No value propositions yet. Name your first below — e.g. “Comfort on demand”,
+              “Effortless booking”.
+            </p>
+          ) : null}
+
+          {readOnly ? (
+            <EditableGrid rows={props} columns={columns} getRowId={(prop) => prop.id} readOnly />
+          ) : (
+            <DndContext collisionDetection={closestCenter} onDragOver={onDragOver} onDragEnd={onDragEnd}>
+              <SortableContext items={propIds} strategy={verticalListSortingStrategy}>
+                <EditableGrid
+                  rows={props}
+                  columns={columns}
+                  getRowId={(prop) => prop.id}
+                  showKeyHints
+                  phantom={{
+                    columnId: 'name',
+                    placeholder: 'Name a value proposition',
+                    onCreate: (name) => void addProp(name),
+                  }}
+                />
+              </SortableContext>
+            </DndContext>
+          )}
+        </>
+      )}
+    </section>
   )
 }
