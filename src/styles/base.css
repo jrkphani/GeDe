@@ -364,6 +364,47 @@ body {
   height: 100%;
 }
 
+/* The camera is user-owned: keep explicit - / + / fit actions familiar, but
+   present them as one quiet Numbers-like horizontal strip with a live readout. */
+.workspace-zoom-controls.react-flow__controls {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  overflow: hidden;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-popover);
+}
+
+.workspace-zoom-controls .react-flow__controls-button {
+  width: 32px;
+  height: 30px;
+  color: var(--ink-muted);
+  background: var(--panel);
+  border: 0;
+  border-right: 1px solid var(--hairline);
+}
+
+.workspace-zoom-controls .react-flow__controls-button:hover,
+.workspace-zoom-controls .react-flow__controls-button:focus-visible {
+  color: var(--ink);
+  background: var(--grid-minor);
+}
+
+.workspace-zoom-controls__percent {
+  min-width: 54px;
+  padding: 0 var(--space-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--ink-muted);
+  background: var(--panel);
+  font-family: var(--font-mono);
+  font-size: var(--text-label);
+  font-variant-numeric: tabular-nums;
+}
+
 /* All three tier lanes share one node chrome (P2). The per-tier `.wc-node--*`
    modifier is a DOM hook only (the header handle already labels the tier, and
    column x is derived by computeLaneLayout, not CSS) — no per-tier rule needed. */

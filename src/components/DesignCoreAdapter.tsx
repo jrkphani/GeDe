@@ -791,15 +791,13 @@ export function DesignRingBody({
 // stacks it at design-lane sort 2). Fully LIVE (not a P3-style stub): CoverageMatrix
 // is read-only + fully derived and reads the SAME current-canvas stores the ring
 // reads, so no second canvas scope / multi-canvas refactor is needed. A gap-cell
-// click composes pre-filled (read-only-guarded, issue 035) then pans back along the
-// edge to the ring (onGapComposed) so the new draft dot is in view.
+// click composes pre-filled (read-only-guarded, issue 035) without moving the
+// user-owned workspace camera.
 export function DesignCoverageTwinBody({
   projectId,
-  onGapComposed,
   storeCanvasId,
 }: {
   projectId: string
-  onGapComposed: () => void
   // Issue 100 Phase D — same store-instance seam as the register/ring bodies.
   // The primary twin passes nothing → default instance (unchanged); a child twin
   // (none emitted this phase) would pass its parent context id.
@@ -819,9 +817,6 @@ export function DesignCoverageTwinBody({
     // click must never create a context. CoverageMatrix has no role awareness.
     if (readOnly) return
     void stores.useCompose.getState().enterCompose(bindings)
-    // Pan back along the edge to the ring so the freshly-composed draft is in view
-    // (the old route swap put you on the canvas; the twin keeps both visible).
-    onGapComposed()
   }
 
   return (
