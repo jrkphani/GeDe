@@ -1268,9 +1268,12 @@ describe('ArchitectureSurface — entry Description is a rich cell (issue 089 D1
     render(<ArchitectureSurface projectId={projectId} />)
 
     const row = (await screen.findByText('Comfort')).closest('tr') as HTMLElement
-    // Legacy plain string renders as a clamped read-mode summary.
+    // The shared summary element remains, while Architecture's scoped column CSS
+    // removes its one-line clamp and wraps the complete description.
     const summary = within(row).getByText('The rider stays comfortable.')
     expect(summary).toHaveClass('grid-cell__clamp')
+    expect(summary.closest('td')).toHaveClass('grid-col--description')
+    expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveClass('t2-col--name')
 
     // Click swaps to a live Lexical contentEditable (NOT a textarea).
     await user.click(summary)

@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import { render, screen, waitFor, within, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { $createParagraphNode, $createTextNode, $getRoot, createEditor } from 'lexical'
@@ -57,6 +59,7 @@ import { resetSyncStore, useSyncStore } from '../store/sync'
 import { resetTier1Store, useTier1Store } from '../store/tier1'
 import { resetWorkspaceStore } from '../store/workspace'
 import { FoundationSurface } from './FoundationSurface'
+import { FoundationHeaderPanel } from './FoundationCanvasNodes'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
@@ -153,6 +156,38 @@ describe('FoundationSurface', () => {
     const scenarioField = await screen.findByLabelText('Existing scenario')
     expect(scenarioField).toHaveAttribute('contenteditable', 'false')
     expect(container.querySelector('.rich-text-editor__toolbar')).not.toBeInTheDocument()
+  })
+})
+
+describe('Foundation canvas — unified value-proposition table', () => {
+  it('renders every proposition as a row in one table, with rank and add grammar', async () => {
+    await addTier1Prop(db, projectId, 'Comfort')
+    await addTier1Prop(db, projectId, 'Mobility')
+    await useTier1Store.getState().load(projectId)
+
+    const { container } = render(<FoundationHeaderPanel readOnly={false} tableCollapsed={false} />)
+
+    expect(container.querySelectorAll('.tier1-props table.editable-grid')).toHaveLength(1)
+    expect(container.querySelectorAll('.tier1-props tbody tr[data-row-id]')).toHaveLength(2)
+    expect(screen.getByRole('columnheader', { name: 'Name' })).toHaveClass('tier1-col--name')
+    expect(screen.getByRole('columnheader', { name: 'Description' })).toHaveClass('grid-col--description')
+    expect(screen.getByText('1°')).toBeInTheDocument()
+    expect(screen.getByText('2°')).toBeInTheDocument()
+    expect(screen.getByPlaceholderText('Name a value proposition')).toBeInTheDocument()
+  })
+
+  it('keeps viewer mode read-only and replaces only the table with its LOD summary', async () => {
+    await addTier1Prop(db, projectId, 'Comfort')
+    await useTier1Store.getState().load(projectId)
+
+    const { container } = render(<FoundationHeaderPanel readOnly tableCollapsed />)
+
+    expect(screen.getByText('1 value proposition')).toBeInTheDocument()
+    expect(container.querySelector('.tier1-props table.editable-grid')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('Name a value proposition')).not.toBeInTheDocument()
+    // Purpose/Scenario remain mounted so the overview keeps its Foundation framing.
+    expect(screen.getByLabelText('System purpose')).toBeInTheDocument()
+    expect(screen.getByLabelText('Existing scenario')).toBeInTheDocument()
   })
 })
 
@@ -334,9 +369,11 @@ describe('FoundationSurface — value-proposition Description is a rich cell (is
     render(<FoundationSurface projectId={projectId} />)
 
     const row = (await screen.findByText('Seating comfort')).closest('tr') as HTMLElement
-    // Legacy plain string renders as a clamped read-mode summary.
+    // The shared summary element remains, while Foundation's scoped column CSS
+    // removes its one-line clamp and wraps the complete description.
     const summary = within(row).getByText('Comfort, on demand.')
     expect(summary).toHaveClass('grid-cell__clamp')
+    expect(summary.closest('td')).toHaveClass('grid-col--description')
 
     // Click swaps to a live Lexical contentEditable (NOT a textarea).
     await user.click(summary)
@@ -356,5 +393,24 @@ describe('FoundationSurface — value-proposition Description is a rich cell (is
       expect(useTier1Store.getState().props.find((p) => p.id === prop.id)?.description ?? '').toBe(''),
     )
     await waitFor(() => expect(within(row).queryByLabelText('Description')).not.toBeInTheDocument())
+  })
+})
+
+describe('Foundation/Architecture table readability CSS', () => {
+  const css = readFileSync(resolve(process.cwd(), 'src/styles/base.css'), 'utf8')
+
+  it('shows complete descriptions only in Foundation/Architecture, preserving Design clamps', () => {
+    expect(css).toMatch(
+      /\.foundation \.grid-col--description \.grid-cell__clamp,[\s\S]*\.t2-table \.grid-col--description \.grid-cell__clamp\s*\{[^}]*white-space:\s*pre-wrap;[^}]*overflow-wrap:\s*anywhere;[^}]*-webkit-line-clamp:\s*unset;/,
+    )
+    expect(css).toMatch(/\.grid-cell__clamp\s*\{[^}]*-webkit-line-clamp:\s*1;/)
+  })
+
+  it('uses scoped fixed table layouts and stable Name widths without touching Design', () => {
+    expect(css).toMatch(/\.foundation \.editable-grid\s*\{[^}]*table-layout:\s*fixed;/)
+    expect(css).toMatch(/\.tier1-col--name\s*\{[^}]*width:\s*240px;/)
+    expect(css).toMatch(/\.t2-table--indent \.editable-grid\s*\{[^}]*table-layout:\s*fixed;/)
+    expect(css).toMatch(/\.editable-grid \.t2-col--name\s*\{[^}]*width:\s*220px;/)
+    expect(css).not.toMatch(/\.wc-node--design-register \.editable-grid\s*\{[^}]*table-layout:\s*fixed;/)
   })
 })

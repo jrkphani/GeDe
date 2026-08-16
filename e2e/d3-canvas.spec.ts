@@ -650,67 +650,37 @@ test('dragging a table node down its lane reorders + persists sort, and the lane
   expect(new Set(afterReload.xs).size).toBe(1)
 })
 
-// ── 089-D3 graduation P1 — DECOMPOSE the Foundation lane into per-item nodes ──
-// Where P2 mounted Foundation as ONE whole-surface `lane` node, the Foundation
-// column now emits a header node (`.wc-node--foundation`: heading + Purpose +
-// Existing-Scenario rich editors + the add-prop phantom) plus one node PER
-// `tier1_props` value-prop (`.wc-node--foundation-item`, id = prop id), each
-// hosting the real name/description EditableGrid. This mirrors the Architecture
-// decomposition exactly — the one difference is Foundation reorders by RANK
-// (`reorderProp`), not `sort`. Positions stay DERIVED (never a persisted x/y).
+// ── Foundation's unified value-proposition table on the primary canvas ───────
 
 async function addFoundationProp(page: Page, name: string): Promise<void> {
   const header = page.locator('.wc-node--foundation')
   await header.getByPlaceholder('Name a value proposition').click()
   await page.keyboard.type(name)
   await page.keyboard.press('Enter')
-  await expect(
-    page.locator('.wc-node--foundation-item').filter({ hasText: name }),
-  ).toBeVisible()
+  await expect(header.locator('tbody tr[data-row-id]').filter({ hasText: name })).toBeVisible()
 }
 
-// Value-prop names top-to-bottom by each foundation-item node's on-screen y,
-// plus their rounded left-x — the visual `rank` stack and the column invariant.
-// The name is read from the item's first editable grid cell (the name column).
-async function foundationPropsByY(
-  page: Page,
-): Promise<{ names: string[]; xs: number[] }> {
-  const items = await page.locator('.wc-node--foundation-item').evaluateAll((els) =>
-    els.map((el) => {
-      const r = el.getBoundingClientRect()
-      const cell = el.querySelector('tbody tr[data-row-id] .grid-cell[tabindex]')
-      const name = cell ? cell.textContent.trim() : ''
-      return { name, y: r.top, x: Math.round(r.left) }
-    }),
-  )
-  items.sort((a, b) => a.y - b.y)
-  return { names: items.map((i) => i.name), xs: items.map((i) => i.x) }
+async function foundationPropNames(page: Page): Promise<string[]> {
+  return page.locator('.wc-node--foundation tbody tr[data-row-id] td.tier1-col--name').allTextContents()
 }
 
-async function foundationItemTransforms(page: Page): Promise<string> {
-  return page.locator('.wc-node--foundation-item').evaluateAll((els) =>
-    els
-      .map((el) => {
-        const node = el.closest('.react-flow__node')
-        return node ? (node as HTMLElement).style.transform : ''
-      })
-      .join('|'),
-  )
+async function dragFoundationRow(page: Page, fromName: string, toName: string): Promise<void> {
+  const table = page.locator('.wc-node--foundation .editable-grid')
+  const from = table.locator('tbody tr[data-row-id]', { hasText: fromName })
+  const to = table.locator('tbody tr[data-row-id]', { hasText: toName })
+  await from.hover()
+  const start = await from.getByRole('button', { name: `Reorder ${fromName}` }).boundingBox()
+  await to.hover()
+  const target = await to.getByRole('button', { name: `Reorder ${toName}` }).boundingBox()
+  if (!start || !target) throw new Error('Foundation row drag handles must have boxes')
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2)
+  await page.mouse.down()
+  await page.mouse.move(start.x + start.width / 2, start.y + start.height / 2 - 6, { steps: 4 })
+  await page.mouse.move(target.x + target.width / 2, target.y + target.height / 2, { steps: 12 })
+  await page.mouse.up()
 }
 
-async function waitForStableFoundationStack(page: Page): Promise<void> {
-  let prev = ''
-  await expect
-    .poll(async () => {
-      const cur = await foundationItemTransforms(page)
-      const stable = cur !== '' && cur === prev
-      prev = cur
-      return stable
-    })
-    .toBe(true)
-}
-
-test('the Foundation lane decomposes into a header + per-prop nodes, editable at zoom ≠ 1', { tag: '@dev-flag' }, async ({
+test('the Foundation lane keeps all value propositions in one editable table at zoom ≠ 1', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
@@ -720,16 +690,16 @@ test('the Foundation lane decomposes into a header + per-prop nodes, editable at
   await expect(page.locator('.wc-node--foundation')).toBeVisible()
   await expect(page.getByRole('heading', { name: /1st Tier/ })).toBeVisible()
 
-  // Two value props → two per-prop nodes (the whole-surface Foundation node is gone).
+  // Two value props remain two rows in ONE table/node.
   await addFoundationProp(page, 'Comfort')
   await addFoundationProp(page, 'Mobility')
-  await expect(page.locator('.wc-node--foundation-item')).toHaveCount(2)
+  await expect(page.locator('.wc-node--foundation .editable-grid')).toHaveCount(1)
+  await expect(page.locator('.wc-node--foundation tbody tr[data-row-id]')).toHaveCount(2)
+  await expect(page.locator('.wc-node--foundation-item')).toHaveCount(0)
 
   // The app fit-views on load, so this runs at a non-unity viewport scale.
   await expect.poll(() => viewportScale(page)).not.toBe(1)
 
-  // Let the create-focus (onPropCreated rAF) + its focus-pan settle before the
-  // next interaction, so a delayed programmatic focus can't steal our typing.
   await waitForStableViewport(page)
 
   // Purpose is editable in the header node at zoom ≠ 1 (the proven foundation.spec
@@ -741,67 +711,44 @@ test('the Foundation lane decomposes into a header + per-prop nodes, editable at
   await page.keyboard.type('Move people comfortably')
   await expect(purpose).toContainText('Move people comfortably')
 
-  // In-node grid grammar works at zoom ≠ 1: clicking a prop's name cell opens an
-  // editable input inside that per-prop node.
-  const comfort = page.locator('.wc-node--foundation-item').filter({ hasText: 'Comfort' })
-  const nameCell = comfort.locator('tbody tr[data-row-id] .grid-cell[tabindex]').first()
+  // In-table grid grammar works at zoom ≠ 1.
+  const comfort = page.locator('.wc-node--foundation tbody tr[data-row-id]').filter({ hasText: 'Comfort' })
+  const nameCell = comfort.locator('td.tier1-col--name .grid-cell[tabindex]')
   await nameCell.click()
-  await expect(comfort.locator('input, textarea, [contenteditable="true"]').first()).toBeVisible()
+  // Input values are not part of a row's textContent. Once editing starts, the
+  // live `hasText` row locator no longer matches, so anchor to the stable node.
+  await expect(page.locator('.wc-node--foundation td.tier1-col--name input:focus')).toBeVisible()
 })
 
-test('dragging a value-prop node down its lane reorders + persists rank, and the lane stays a clean vertical column', { tag: '@dev-flag' }, async ({
+test('dragging a value-proposition row reorders and persists rank in the unified table', { tag: '@dev-flag' }, async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1600, height: 1200 })
   const projectId = await openThreeLaneCanvas(page)
 
-  // Three props → derived rank stack Comfort (1°), Mobility (2°), Speed (3°).
+  // Three props → ranked rows Comfort (1°), Mobility (2°), Speed (3°).
   await addFoundationProp(page, 'Comfort')
   await addFoundationProp(page, 'Mobility')
   await addFoundationProp(page, 'Speed')
-  await expect(page.locator('.wc-node--foundation-item')).toHaveCount(3)
+  await expect(page.locator('.wc-node--foundation tbody tr[data-row-id]')).toHaveCount(3)
 
   await page.locator('.react-flow__controls-fitview').click()
-  await waitForStableFoundationStack(page)
+  await waitForStableViewport(page)
+  expect(await foundationPropNames(page)).toEqual(['Comfort', 'Mobility', 'Speed'])
 
-  const before = await foundationPropsByY(page)
-  expect(before.names).toEqual(['Comfort', 'Mobility', 'Speed'])
-  expect(new Set(before.xs).size).toBe(1) // clean vertical column
-
-  // Drag Comfort's HEADER (its only drag origin) down past Speed → it becomes last.
-  const comfortHandle = page
-    .locator('.wc-node--foundation-item')
-    .filter({ hasText: 'Comfort' })
-    .locator('.wc-node__handle')
-  const speedNode = page.locator('.wc-node--foundation-item').filter({ hasText: 'Speed' })
-  const start = await comfortHandle.boundingBox()
-  const speedBox = await speedNode.boundingBox()
-  if (!start || !speedBox) throw new Error('drag handle + speed node must have boxes')
-  const startX = start.x + start.width / 2
-  const startY = start.y + start.height / 2
-  const dropY = speedBox.y + speedBox.height + 24
-
-  await page.mouse.move(startX, startY)
-  await page.mouse.down()
-  await page.mouse.move(startX, startY + 12, { steps: 4 })
-  await page.mouse.move(startX, dropY, { steps: 12 })
-  await page.mouse.up()
+  await dragFoundationRow(page, 'Comfort', 'Speed')
 
   await expect
-    .poll(async () => (await foundationPropsByY(page)).names)
+    .poll(async () => foundationPropNames(page))
     .toEqual(['Mobility', 'Speed', 'Comfort'])
-  const afterDrop = await foundationPropsByY(page)
-  expect(new Set(afterDrop.xs).size).toBe(1) // x invariant — lane stays vertical
 
   // PERSISTED — a reload re-reads `rank` from PGlite; the new order survives (a
   // real rank write via reorderProp, not in-memory node coords).
   await page.goto(`/p/${projectId}/design?d3rf=1`)
-  await expect(page.locator('.wc-node--foundation-item')).toHaveCount(3)
+  await expect(page.locator('.wc-node--foundation tbody tr[data-row-id]')).toHaveCount(3)
   await expect
-    .poll(async () => (await foundationPropsByY(page)).names)
+    .poll(async () => foundationPropNames(page))
     .toEqual(['Mobility', 'Speed', 'Comfort'])
-  const afterReload = await foundationPropsByY(page)
-  expect(new Set(afterReload.xs).size).toBe(1)
 })
 
 // 089-D3 graduation P0 — the `?d3rf` opt-in now persists in the canvasMode store
@@ -1271,10 +1218,10 @@ test('at volume, overview renders lane summary cards (not full grids); zooming i
     return true
   }, { timeout: 20_000 }).toBe(true)
 
-  // Lane items are summary cards, NOT full grids.
+  // Lane tables are summary cards, NOT full grids.
   await expect(page.locator('.wc-lane-summary').first()).toBeVisible()
   expect(await page.locator('.wc-lane-summary').count()).toBeGreaterThan(0)
-  await expect(page.locator('.wc-node--foundation-item .editable-grid')).toHaveCount(0)
+  await expect(page.locator('.wc-node--foundation .tier1-props .editable-grid')).toHaveCount(0)
   await expect(page.locator('.wc-node--arch-table .editable-grid')).toHaveCount(0)
 
   // ZOOM IN near 1:1: the real grids remount, the summaries disappear.
@@ -1288,7 +1235,7 @@ test('at volume, overview renders lane summary cards (not full grids); zooming i
   }, { timeout: 20_000 }).toBe(true)
 
   await expect(page.locator('.wc-lane-summary')).toHaveCount(0)
-  expect(await page.locator('.wc-node--foundation-item .editable-grid').count()).toBeGreaterThan(0)
+  await expect(page.locator('.wc-node--foundation .tier1-props .editable-grid')).toHaveCount(1)
 
   // No console errors across import + pan/zoom (Gate: interactive, no render loop).
   expect(consoleErrors).toEqual([])
@@ -1306,10 +1253,11 @@ test('a lane node being edited does NOT collapse on zoom-out (no lost edit)', { 
   await addFoundationProp(page, 'Comfort')
   await waitForStableViewport(page)
 
-  const item = page.locator('.wc-node--foundation-item').filter({ hasText: 'Comfort' })
-  const nameCell = item.locator('tbody tr[data-row-id] .grid-cell[tabindex]').first()
+  const foundation = page.locator('.wc-node--foundation')
+  const row = foundation.locator('tbody tr[data-row-id]').filter({ hasText: 'Comfort' })
+  const nameCell = row.locator('td.tier1-col--name .grid-cell[tabindex]')
   await nameCell.click()
-  const input = item.locator('input, textarea, [contenteditable="true"]').first()
+  const input = foundation.locator('td.tier1-col--name input:focus')
   await expect(input).toBeVisible()
   await input.fill('Comfort-EDIT')
 
@@ -1329,13 +1277,13 @@ test('a lane node being edited does NOT collapse on zoom-out (no lost edit)', { 
     })
     .toBe(true)
 
-  // The edited node stayed EXPANDED (focus-within guard) — no summary card, the
+  // The unified table stayed EXPANDED (focus-within guard) — no summary card, the
   // real grid + the in-flight input are still mounted, so no keystroke is lost.
-  await expect(item.locator('.wc-lane-summary')).toHaveCount(0)
-  await expect(item.locator('input, textarea, [contenteditable="true"]').first()).toBeVisible()
+  await expect(foundation.locator('.tier1-props .wc-lane-summary')).toHaveCount(0)
+  await expect(input).toBeVisible()
   await page.keyboard.press('Enter')
-  await expect(item).toContainText('Comfort-EDIT')
-  // (That unfocused per-item lane nodes DO summarize at this overview zoom is
+  await expect(row).toContainText('Comfort-EDIT')
+  // (That unfocused lane tables DO summarize at this overview zoom is
   // covered by the volume test above; here the point is the edited node did not.)
 })
 
@@ -1444,11 +1392,11 @@ test('the canvas coverage twin is axe-clean (WCAG 2 A/AA serious/critical)', { t
 // 099 — DEDICATED per-lane axe scans on the CANVAS. The whole-`main` scans above
 // (empty canvas-surface + populated register) leave the Foundation and
 // Architecture LANES empty — their populated authoring surfaces (the header's
-// rich Purpose/Existing-Scenario editors + per-prop grids; the add-table phantom +
+// rich Purpose/Existing-Scenario editors + unified value table; the add-table phantom +
 // per-table TablePanel grids) never enter the a11y regression net. These populate
 // each lane and scan it dedicated at the SAME bar as the twin scan above:
 // serious/critical WCAG 2 A/AA only, identical AxeBuilder config. Chained
-// `.include()` unions the header node with its item nodes.
+// Foundation needs only its single node include.
 test('the populated Foundation lane is axe-clean (WCAG 2 A/AA serious/critical)', { tag: '@dev-flag' }, async ({
   page,
 }) => {
@@ -1456,14 +1404,12 @@ test('the populated Foundation lane is axe-clean (WCAG 2 A/AA serious/critical)'
   await openThreeLaneCanvas(page)
   await expect(page.locator('.wc-node--foundation')).toBeVisible()
 
-  // Populate the lane: the header keeps its Purpose editor; one value prop mounts a
-  // per-prop item node with its real name/description grid.
+  // Populate the lane: the same node keeps its Purpose editor and value table.
   await addFoundationProp(page, 'Comfort')
   await waitForStableViewport(page)
 
   const results = await new AxeBuilder({ page })
     .include('.wc-node--foundation')
-    .include('.wc-node--foundation-item')
     .withTags(['wcag2a', 'wcag2aa'])
     .analyze()
   const blocking = results.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical')
