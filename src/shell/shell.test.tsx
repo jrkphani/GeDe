@@ -59,21 +59,21 @@ beforeEach(() => {
 describe('tier tabs', () => {
   it('renders all three tabs with the route-matching tab active', () => {
     render(<TestShell />)
-    const foundation = screen.getByRole('link', { name: 'Foundation' })
+    const foundation = screen.getByRole('link', { name: 'Focus Foundation lane (⌘1)' })
     expect(foundation.className).toContain('tab--active')
     expect(foundation).toHaveAttribute('aria-current', 'page')
-    expect(screen.getByRole('link', { name: 'Architecture' }).className).not.toContain(
+    expect(screen.getByRole('link', { name: 'Focus Architecture lane (⌘2)' }).className).not.toContain(
       'tab--active',
     )
-    expect(screen.getByRole('link', { name: 'Design' }).className).not.toContain('tab--active')
+    expect(screen.getByRole('link', { name: 'Focus Design lane (⌘3)' }).className).not.toContain('tab--active')
   })
 
   it('clicking a tab navigates', async () => {
     const user = userEvent.setup()
     render(<TestShell />)
-    await user.click(screen.getByRole('link', { name: 'Design' }))
+    await user.click(screen.getByRole('link', { name: 'Focus Design lane (⌘3)' }))
     expect(window.location.pathname).toBe('/p/proj-1/design')
-    expect(screen.getByRole('link', { name: 'Design' }).className).toContain('tab--active')
+    expect(screen.getByRole('link', { name: 'Focus Design lane (⌘3)' }).className).toContain('tab--active')
   })
 
   it('⌘1/⌘2/⌘3 switch tiers AND scroll the target lane into view (089 D2 P2)', async () => {
