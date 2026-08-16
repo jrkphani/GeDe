@@ -959,6 +959,17 @@ test('the D3 register extends right, exposes guided New context, and LOD-collaps
 // store and unmounts both child bodies, leaving the parent byte-unchanged.
 
 test('drilling α promotes a LIVE child core with an INDEPENDENT store (parent unaffected)', { tag: '@dev-flag' }, async ({ page }) => {
+  // Drilling mounts a SECOND canvas store instance plus its register body — the
+  // slowest async path in the suite. Locally the whole test runs in ~8s, but on
+  // a contended GitHub runner the α1 render alone has blown the 30s ceiling and
+  // failed all 3 retries, twice, on commits containing no product code. It did
+  // so again from inside the serial canvas lane at --workers=1, which rules out
+  // cross-file contention and leaves plain CPU starvation. Raising the ceiling
+  // is therefore the honest fix: the assertion still fails a REAL regression
+  // (α1 never arrives at all), it just stops reading a slow runner as one.
+  // The per-test budget has to move with it, or the 60s config cap kills the
+  // test before the longer assertion can settle.
+  test.setTimeout(process.env.CI ? 180_000 : 60_000)
   await page.setViewportSize({ width: 1600, height: 1200 })
   await openThreeLaneCanvas(page)
 
@@ -1033,7 +1044,9 @@ test('drilling α promotes a LIVE child core with an INDEPENDENT store (parent u
   await childPhantom.click()
   await page.keyboard.type('child-beta justification')
   await page.keyboard.press('Enter')
-  await expect(childShell.getByText('α1', { exact: true })).toBeVisible({ timeout: 30_000 })
+  await expect(childShell.getByText('α1', { exact: true })).toBeVisible({
+    timeout: process.env.CI ? 90_000 : 30_000,
+  })
 
   // Parent core STILL shows α and does NOT show α1 (independent stores).
   await expect(parentShell.getByText('α', { exact: true })).toBeVisible()
