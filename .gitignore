@@ -28,6 +28,11 @@ playwright-report/
 # Generated knowledge graph
 graphify-out/
 
+# impeccable skill's local live-preview server + critique session notes
+# (ephemeral, per-machine; design.json is the only tracked artifact)
+.impeccable/live/
+.impeccable/critique/
+
 # Local throwaway working dir (e2e artifacts, probe scripts, HAR dumps)
 scratchpad/
 
