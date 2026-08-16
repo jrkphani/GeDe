@@ -1744,6 +1744,13 @@ async function touchDrag(
       type: 'touchStart',
       touchPoints: [{ x: from.x, y: from.y }],
     })
+    // A real touch delivers move events a frame apart; dispatching the CDP
+    // sequence back-to-back can outrun the browser's own event processing on a
+    // loaded CI runner, so the drag-start threshold never registers and the
+    // whole gesture is dropped (mirrors the mouse twin's own real pointer-
+    // sequence requirement above — see its "needs a real pointer sequence"
+    // comment).
+    await page.waitForTimeout(16)
     for (let i = 1; i <= steps; i++) {
       await client.send('Input.dispatchTouchEvent', {
         type: 'touchMove',
@@ -1754,6 +1761,7 @@ async function touchDrag(
           },
         ],
       })
+      await page.waitForTimeout(16)
     }
     await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
   } finally {
