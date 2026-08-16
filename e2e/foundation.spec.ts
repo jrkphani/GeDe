@@ -35,8 +35,8 @@ test('foundation: enter five value propositions, re-rank by drag, persist across
 }) => {
   // 089-P7: re-ranks value props via in-grid `Reorder …` drag handles on the
   // stacked Foundation `.editable-grid` (rank shown as `1°…5°`) — the
-  // WorkspaceSurface tier surface. The canvas decomposes Foundation into per-prop
-  // RF nodes reordered by dragging the node handle (covered by d3-canvas.spec.ts).
+  // WorkspaceSurface tier surface. The canvas reuses this same unified table and
+  // row-drag grammar (covered by d3-canvas.spec.ts).
   // Pin to the fallback surface.
   await forceWorkspaceSurface(page)
   await page.goto('/')
