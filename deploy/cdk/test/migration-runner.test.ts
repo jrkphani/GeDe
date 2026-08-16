@@ -38,12 +38,32 @@ function fakeExecutor(): MigrationSqlExecutor & { readonly executedSql: readonly
   };
 }
 
+/**
+ * The migrations directory as read straight off disk — the ground truth this
+ * suite compares `listMigrationFiles` against.
+ *
+ * Deliberately DERIVED rather than a hardcoded count/last-filename: those had
+ * to be hand-bumped on every single new migration (0016 in issue 081, then
+ * 0017 in issue 090), and a missed bump fails the build for a reason that has
+ * nothing to do with the change that tripped it. Deriving keeps the assertion
+ * that actually matters — listMigrationFiles sees exactly the *.sql files that
+ * are really there, in filename order, with nothing dropped or forked.
+ */
+function realMigrationFilesOnDisk(): string[] {
+  return fs
+    .readdirSync(REAL_MIGRATIONS_DIR)
+    .filter((f) => f.endsWith('.sql'))
+    .sort();
+}
+
 describe('listMigrationFiles (issue 045)', () => {
-  it('lists the real src/db/migrations/*.sql files, sorted in filename order (0000 first, 0016 last — issue 081 added 0016)', () => {
+  it('lists exactly the real src/db/migrations/*.sql files, in filename order (0000 first)', () => {
     const files = listMigrationFiles(REAL_MIGRATIONS_DIR);
-    expect(files).toHaveLength(17); // 0000-0016
+    const onDisk = realMigrationFilesOnDisk();
+
+    expect(onDisk.length).toBeGreaterThan(0); // guard: a bad dir must not vacuously pass
+    expect(files).toEqual(onDisk); // same set AND same order — nothing dropped, nothing extra
     expect(files[0]).toBe('0000_init.sql');
-    expect(files.at(-1)).toBe('0016_tier1_existing_scenario.sql');
     expect(files).toEqual([...files].sort());
   });
 });
@@ -98,7 +118,9 @@ describe('applyMigrations (issue 045 test-first plan item 1 — idempotency + or
 
   it('parity guard: the runner reads the SAME migrations directory check-migrations.sh globs — no forked SQL (test-first plan item 3)', () => {
     const files = listMigrationFiles(REAL_MIGRATIONS_DIR);
-    expect(files).toHaveLength(17); // 0000-0016 (issue 081 added 0016)
+    // Parity is about reading the SAME directory, not about how many files
+    // live in it — compare against disk rather than a hand-bumped count.
+    expect(files).toEqual(realMigrationFilesOnDisk());
 
     const parityScript = fs.readFileSync(
       path.resolve(__dirname, '..', '..', 'migration-parity', 'check-migrations.sh'),
