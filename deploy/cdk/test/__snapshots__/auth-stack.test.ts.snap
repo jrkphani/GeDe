@@ -125,7 +125,7 @@ exports[`AuthStack (Gede-Test-Auth) — issue 033, ADR-0009 matches the snapshot
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "410e90855bde0444b2c470e8bab8023ee032fa42342d1813afb8c25cd70e9200.zip",
+          "S3Key": "[ASSET_HASH].zip",
         },
         "Description": "Gede-Test-Auth Cognito PostConfirmation trigger (issue 050) - idempotently creates the confirmed user's personal workspace + owner membership in Postgres.",
         "Environment": {
