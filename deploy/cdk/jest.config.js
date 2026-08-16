@@ -6,4 +6,8 @@ module.exports = {
   transform: {
     '^.+\\.tsx?$': ['ts-jest', {}],
   },
+  // Stack snapshots assert TEMPLATE STRUCTURE, not build output — see
+  // test/assetHashSerializer.ts for why the bundled-Lambda asset hash must not
+  // be part of the contract.
+  snapshotSerializers: ['<rootDir>/test/assetHashSerializer.js'],
 };

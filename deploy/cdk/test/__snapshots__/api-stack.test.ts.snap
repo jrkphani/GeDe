@@ -41,7 +41,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "c5b93f0fd276a959cc03bdfe6464847f8ab95db7abaf23a9ac63ed0091d22e34.zip",
+          "S3Key": "[ASSET_HASH].zip",
         },
         "Description": "Gede-Test-Api dedicated accept-invite API (issue 080) - verifies the Cognito JWT, loads the pending invite for the caller's VERIFIED email, and atomically seats the membership + marks the invite accepted.",
         "Environment": {
@@ -666,7 +666,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "2a65c66a84308976647371e374db58dd9159cebf17017b4adf3aa5f7cc0c61cc.zip",
+          "S3Key": "[ASSET_HASH].zip",
         },
         "Description": "Gede-Test-Api one-shot DATABASE_URL composer for the Electric task (issue 058) - reads the Data stack's RDS secret, writes a composed connection string into ElectricDatabaseUrlSecret.",
         "Environment": {
@@ -807,7 +807,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "e16ffb3b34af185b8b30c88fdb19faa13b6c42bb38580485c4e84b384ee48b63.zip",
+          "S3Key": "[ASSET_HASH].zip",
         },
         "Description": "AWS CDK resource provider framework - onEvent (Gede-Test-Api/ElectricDbUrlProvider)",
         "Environment": {
@@ -1175,7 +1175,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "066b6c6959c4c7c00327df61ae46f0d643177adac1f890c9cadacf281d8ef58d.zip",
+          "S3Key": "[ASSET_HASH].zip",
         },
         "Description": "Gede-Test-Api ElectricSQL shape-proxy (issue 058) - verifies the Cognito JWT, resolves the caller's workspace memberships, builds a workspace-scoped shape request, forwards to Electric's private endpoint.",
         "Environment": {
@@ -1675,7 +1675,7 @@ exports[`ApiStack (Gede-Test-Api) matches the snapshot 1`] = `
       "Properties": {
         "Code": {
           "S3Bucket": "cdk-hnb659fds-assets-975049998516-us-east-1",
-          "S3Key": "b263060ba538ba5a90d98d45c0ca175f2cd1d16c14c618d914158a9545702a5a.zip",
+          "S3Key": "[ASSET_HASH].zip",
         },
         "Description": "Gede-Test-Api Tier-2 write-path API (issue 043/046, ADR-0010) - validates the Cognito JWT + workspace scope + domain invariants, then persists to Postgres as the least-privileged app_user role (034/045).",
         "Environment": {
