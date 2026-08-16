@@ -1,0 +1,7 @@
+[mcp_servers.aws-api]
+command = "uvx"
+args = ["awslabs.aws-api-mcp-server@latest"]
+
+[mcp_servers.aws-api.env]
+AWS_PROFILE = "phani-quadnomics"
+AWS_REGION = "us-east-1"

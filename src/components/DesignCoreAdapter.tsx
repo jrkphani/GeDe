@@ -523,6 +523,20 @@ export function DesignRegisterBody({
   const nextComposeDimension = dimensions.find(
     (dimension) => dimension.id === firstUnbound(orderedDimensionIds, composeBindings),
   )
+  // The blocked states already announce themselves above the toolbar — the
+  // seed hint for needsSeeding, the floor hint for belowFloor, both
+  // role="status". Repeating them here published the SAME instruction twice
+  // to assistive tech in two different wordings ("Add a second dimension to
+  // start binding contexts." + "Add a second dimension before connecting
+  // parameters."). Say only what those hints cannot: compose progress, and
+  // the default affordance once composing is actually possible.
+  const toolbarHint = composeContextId
+    ? nextComposeDimension
+      ? `${connectedCount} of ${dimensions.length} connected — choose a ${nextComposeDimension.name} parameter next.`
+      : `${connectedCount} of ${dimensions.length} connected — complete the new context row.`
+    : belowFloor || needsSeeding
+      ? null
+      : 'Connect parameters by choosing one option from each dimension.'
 
   return (
     <div
@@ -616,17 +630,11 @@ export function DesignRegisterBody({
               >
                 New context
               </Button>
-              <span className="canvas-toolbar__hint" role="status">
-                {composeContextId
-                  ? nextComposeDimension
-                    ? `${connectedCount} of ${dimensions.length} connected — choose a ${nextComposeDimension.name} parameter next.`
-                    : `${connectedCount} of ${dimensions.length} connected — complete the new context row.`
-                  : belowFloor
-                    ? 'Add a second dimension before connecting parameters.'
-                    : needsSeeding
-                      ? 'Add parameters to every dimension before connecting them.'
-                      : 'Connect parameters by choosing one option from each dimension.'}
-              </span>
+              {toolbarHint ? (
+                <span className="canvas-toolbar__hint" role="status">
+                  {toolbarHint}
+                </span>
+              ) : null}
             </div>
           ) : null}
           <CanvasStoresProvider value={stores}>
