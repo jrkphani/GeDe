@@ -45,7 +45,17 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          cache-dependency-path: deploy/cdk/package-lock.json
+          cache-dependency-path: |
+            package-lock.json
+            deploy/cdk/package-lock.json
+      # MigrationRunnerFunction pins `depsLockFilePath` to the REPO ROOT lock
+      # file (migration-stack.ts), because its handler depends on the root's
+      # node_modules (pg, @aws-sdk/*). That also makes NodejsFunction run the
+      # esbuild bundling command with cwd = repo root - so a deploy/cdk-only
+      # install leaves esbuild unresolvable there and `npx --no-install
+      # esbuild` aborts ("npx canceled due to missing packages"). Install the
+      # root deps too so synth can bundle without Docker.
+      - run: npm ci
       - run: npm ci
         working-directory: deploy/cdk
       - run: npx cdk synth
