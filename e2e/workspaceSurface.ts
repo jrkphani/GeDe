@@ -17,7 +17,7 @@ import type { Page } from '@playwright/test'
 // they are exactly what a narrow / data-saver client renders — so exercising
 // them is honest fallback-path coverage, NOT a weakened test. The CANVAS
 // equivalents (register-in-node grammar, `c`-key compose, the coverage twin,
-// recursion satellites, per-table/per-prop decomposed nodes + node-handle drag,
+// recursion satellites, per-table Architecture nodes, unified Foundation table,
 // LOD summaries, cross-node Tab) have their own dedicated suite in
 // `d3-canvas.spec.ts` (21 `@dev-flag` specs that gate the deploy).
 //

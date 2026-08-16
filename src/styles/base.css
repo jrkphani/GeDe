@@ -1378,6 +1378,19 @@ body {
   overflow: hidden;
 }
 
+/* Foundation/Architecture descriptions are reference prose, not register
+   summaries: show the complete value at rest and in viewer mode. Keep this
+   opt-in on the description column so Design's justification summary retains
+   its compact one-line register grammar. */
+.foundation .grid-col--description .grid-cell__clamp,
+.t2-table .grid-col--description .grid-cell__clamp {
+  display: block;
+  overflow: visible;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  -webkit-line-clamp: unset;
+}
+
 /* Issue 085 Phase B, Decision 4 — "justification expand-on-focus": the
    (now-removed) Composer strip's one genuinely non-redundant capability was a
    roomier prose editor than the register's cramped column. Rehomed here: the
@@ -1903,8 +1916,8 @@ body {
   min-width: 0;
 }
 
-/* 089-P5 — the lane LOD summary card: replaces a per-item lane node's heavy real
-   grid (FoundationPropPanel / TablePanel) when zoomed out below LANE_LOD_ZOOM, so
+/* 089-P5 — the lane LOD summary card: replaces a lane table's heavy real grid
+   (FoundationValueTable / TablePanel) when zoomed out below LANE_LOD_ZOOM, so
    overview stays legible + fewer grids mount at volume. A compact glance — the
    item name + a muted type label. */
 .wc-lane-summary {
@@ -2297,6 +2310,22 @@ body {
   white-space: nowrap;
 }
 
+/* Stable spreadsheet geometry for the unified proposition table. Scoped to
+   Foundation so Design's dynamic register columns remain content-sized. */
+.foundation .editable-grid {
+  table-layout: fixed;
+}
+
+.tier1-col--name {
+  width: 240px;
+}
+
+.tier1-col--name .grid-cell,
+.tier1-col--name .grid-cell__input {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .tier1-rank {
   display: flex;
   align-items: center;
@@ -2671,6 +2700,7 @@ body {
 .t2-table--indent .editable-grid {
   width: calc(100% - var(--space-5));
   margin-inline-start: var(--space-5);
+  table-layout: fixed;
 }
 
 /* Font-weight hierarchy (issue 084 Direction 3 P1, owner req): parent records
@@ -2712,6 +2742,20 @@ body {
    `.editable-grid td { padding: 0 }` reset (which zeroes the inline padding). */
 .editable-grid td.t2-col--name {
   padding-inline-start: calc(var(--depth, 0) * var(--space-5));
+}
+
+/* Name stays a fixed hierarchy viewport: deeper indentation consumes space
+   inside this column instead of changing its intrinsic width and squeezing the
+   Description column. Header + body share the same class from TablePanel. */
+.editable-grid .t2-col--name {
+  width: 220px;
+  box-sizing: border-box;
+}
+
+.t2-col--name .grid-cell,
+.t2-col--name .grid-cell__input {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 /* Trailing row-command gutter (issue 084): row verbs are never a data column.
