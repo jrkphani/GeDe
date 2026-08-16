@@ -391,8 +391,12 @@ body {
   }
 
   .workspace-lane-navigator__button[aria-pressed='true'],
-  .workspace-lane-navigator__button:hover,
   .workspace-lane-navigator__button:focus-visible {
+    color: var(--accent-strong);
+    background: var(--accent-surface);
+  }
+
+  .workspace-lane-navigator__button:hover:not([aria-pressed='true']) {
     color: var(--ink);
     background: var(--grid-minor);
   }
@@ -458,9 +462,15 @@ body {
   color: var(--ink-muted);
   border-bottom: 1px solid var(--hairline);
   font-size: var(--text-label);
-  cursor: grab;
+  cursor: default;
   touch-action: none;
   user-select: none;
+}
+
+/* A table header is a ranked object, so it alone advertises the reorder
+   gesture. The fixed lane panels are anchors in the model, not movable cards. */
+.wc-node--arch-table .wc-node__handle {
+  cursor: grab;
 }
 
 .wc-node__body {

@@ -356,11 +356,14 @@ test('the intermediate-width lane navigator pans to a named workspace lane', { t
 
   const navigator = page.getByRole('group', { name: 'Workspace lanes' })
   await expect(navigator).toBeVisible()
+  await expect(page.locator('.wc-node--foundation')).not.toHaveClass(/draggable/)
+  await expect(page.locator('.wc-node--architecture')).not.toHaveClass(/draggable/)
   const before = await viewportTransform(page)
   await navigator.getByRole('button', { name: 'Architecture' }).click()
 
   await expect.poll(() => viewportTransform(page)).not.toBe(before)
   await expect(navigator.getByRole('button', { name: 'Architecture' })).toHaveAttribute('aria-pressed', 'true')
+  await expect(navigator.getByRole('button', { name: 'Architecture' })).toHaveCSS('background-color', 'rgb(232, 240, 235)')
 })
 
 test('the camera is stable while focusing, typing, and mounting a new table node', { tag: '@dev-flag' }, async ({

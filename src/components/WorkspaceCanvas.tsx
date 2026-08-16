@@ -957,6 +957,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         id: LANE_NODE_ID.foundation,
         type: 'foundationHeader',
         position: { x: 0, y: 0 },
+        draggable: false,
         dragHandle: '.wc-node__handle',
         data: {
           tier: 'foundation',
@@ -969,6 +970,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         id: LANE_NODE_ID.architecture,
         type: 'archHeader',
         position: { x: 0, y: 0 },
+        draggable: false,
         dragHandle: '.wc-node__handle',
         data: {
           tier: 'architecture',
@@ -983,6 +985,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         id: LANE_NODE_ID.design,
         type: 'designRegister',
         position: { x: 0, y: 0 },
+        draggable: false,
         dragHandle: '.wc-node__handle',
         data: {
           tier: 'design',
@@ -1003,6 +1006,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         id: DESIGN_RING_NODE_ID,
         type: 'designRing',
         position: { x: 0, y: 0 },
+        draggable: false,
         dragHandle: '.wc-node__handle',
         data: {
           tier: 'design',
