@@ -979,13 +979,18 @@ function RichTextCell<TRow>({
         />
       </div>
     )
-    // Issue 084 D3 P5 — off → bare editor; on → editor + quiet ⌘⏎/Esc chips
-    // (the richtext commit is Cmd/Ctrl+Enter, not Tab — the Numbers-grammar seam).
+    // Issue 084 D3 P5 — off → bare editor; on → editor + quiet chips.
+    // The chips must name the key that ACTUALLY advances, or they teach the
+    // wrong grammar: a richtext cell commits with ⌘⏎ (the Numbers-grammar
+    // seam), EXCEPT where `richTextTabAdvances` is on (Architecture), where
+    // Tab commits + moves exactly like a plain text cell. Before rich Name
+    // formatting this never diverged, because the only richtext cell on that
+    // surface was the description.
     if (!nav.showKeyHints) return editor
     return (
       <span className="grid-cell__editing">
         {editor}
-        <CellKeyHints variant="cmdEnter" />
+        <CellKeyHints variant={nav.richTextTabAdvances ? 'tab' : 'cmdEnter'} />
       </span>
     )
   }
