@@ -17,6 +17,8 @@ const CI = !!process.env.CI
 // Splitting by project rather than by timeout keeps the ceilings meaningful:
 // a spec that blows 30s here is slow for a real reason, not a contended one.
 const HEAVY_CANVAS_SPECS = /(d3-canvas|architecture)\.spec\.ts/
+const TOUCH_CANVAS_SPECS = /d3-canvas\.spec\.ts/
+const TOUCH_TAG = /@touch/
 
 export default defineConfig({
   testDir: './e2e',
@@ -34,7 +36,8 @@ export default defineConfig({
     screenshot: 'only-on-failure',
   },
   projects: [
-    { name: 'canvas-serial', testMatch: HEAVY_CANVAS_SPECS },
+    { name: 'canvas-serial', testMatch: HEAVY_CANVAS_SPECS, grepInvert: TOUCH_TAG },
+    { name: 'touch-serial', testMatch: TOUCH_CANVAS_SPECS, grep: TOUCH_TAG },
     { name: 'app', testIgnore: HEAVY_CANVAS_SPECS },
   ],
   webServer: {

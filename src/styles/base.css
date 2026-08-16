@@ -364,6 +364,40 @@ body {
   height: 100%;
 }
 
+/* The drafting table stays intact at tablet landscape widths. The compact lane
+   rail is a navigation instrument, not a second shell: it is visible only in
+   the interval where the canvas remains capable but all lanes do not fit. */
+.workspace-lane-navigator {
+  display: none;
+}
+
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .workspace-lane-navigator {
+    display: inline-flex;
+    gap: 1px;
+    margin: var(--space-3);
+    background: var(--hairline);
+    border: 1px solid var(--hairline);
+  }
+
+  .workspace-lane-navigator__button {
+    min-height: 44px;
+    padding: 0 var(--space-3);
+    color: var(--ink-muted);
+    background: var(--panel);
+    border: 0;
+    font-size: var(--text-label);
+    text-transform: capitalize;
+  }
+
+  .workspace-lane-navigator__button[aria-pressed='true'],
+  .workspace-lane-navigator__button:hover,
+  .workspace-lane-navigator__button:focus-visible {
+    color: var(--ink);
+    background: var(--grid-minor);
+  }
+}
+
 /* The camera is user-owned: keep explicit - / + / fit actions familiar, but
    present them as one quiet Numbers-like horizontal strip with a live readout. */
 .workspace-zoom-controls.react-flow__controls {
@@ -418,13 +452,14 @@ body {
 .wc-node__handle {
   display: flex;
   align-items: center;
-  height: 28px;
+  min-height: 44px;
   padding: 0 var(--space-4);
   background: var(--grid-minor);
   color: var(--ink-muted);
   border-bottom: 1px solid var(--hairline);
   font-size: var(--text-label);
   cursor: grab;
+  touch-action: none;
   user-select: none;
 }
 

@@ -5,6 +5,7 @@ import {
   Handle,
   MarkerType,
   PanOnScrollMode,
+  Panel,
   Position,
   ReactFlow,
   ReactFlowProvider,
@@ -22,6 +23,7 @@ import {
   LANE_ORDER,
   type LaneItem,
   type LaneLayoutConfig,
+  type LaneTier,
 } from '../domain/laneLayout'
 import {
   computeSatelliteLayout,
@@ -48,6 +50,7 @@ import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
 import { FoundationHeaderPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
 import { PhantomInput } from './ui/inline-editor'
+import { Button } from './ui/button'
 // The ⌘1/2/3 pan-to-lane interceptor + its module-level `activeCanvasInstance`
 // handle live in this tiny, `@xyflow/react`-free module so App.tsx can import
 // THEM eagerly (register the listener before AppShell) while `React.lazy`-loading
@@ -243,6 +246,9 @@ type ArchTableData = {
   // Cross-node Tab (P3.3): the grid hit a forward/backward boundary — relocate
   // focus to the next/prev-by-`sort` table node.
   onExitBoundary: (tableId: string, dir: 'forward' | 'backward') => void
+  // React Flow's D3 drag adapter does not reliably receive emulated touch drags.
+  // The header owns the touch drop, while the canvas continues to own sort + layout.
+  onTouchReorder: (tableId: string, clientY: number) => void
 }
 type ArchTableNode = Node<ArchTableData, 'archTable'>
 
@@ -605,9 +611,29 @@ function ArchHeaderNode({ data }: NodeProps<ArchHeaderNode>) {
 function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
   const setActiveLane = useActiveLaneStore((s) => s.setActiveLane)
   const lod = useLaneLod()
+  const touchStartY = useRef<number | null>(null)
   return (
     <div className="wc-node wc-node--arch-table" data-table-id={data.table.id}>
-      <div className="wc-node__handle" aria-hidden="true">
+      <div
+        className="wc-node__handle"
+        aria-hidden="true"
+        onTouchStart={(event) => {
+          const touch = event.touches[0]
+          if (!touch) return
+          touchStartY.current = touch.clientY
+          event.preventDefault()
+          event.stopPropagation()
+        }}
+        onTouchEnd={(event) => {
+          const touch = event.changedTouches[0]
+          const startY = touchStartY.current
+          touchStartY.current = null
+          if (!touch || startY === null || Math.abs(touch.clientY - startY) < 8) return
+          event.preventDefault()
+          event.stopPropagation()
+          data.onTouchReorder(data.table.id, touch.clientY)
+        }}
+      >
         {data.table.name}
       </div>
       <div
@@ -706,6 +732,46 @@ function WorkspaceZoomControls() {
   )
 }
 
+// At intermediate widths the canvas remains the shared model, but the complete
+// three-lane composition is no longer legible at a glance. This compact rail
+// gives operators a direct, named jump to each lane without changing their
+// zoom, collapsing the model, or turning the canvas into a card dashboard.
+function WorkspaceLaneNavigator() {
+  const reactFlow = useReactFlow<CanvasNode>()
+  const activeLane = useActiveLaneStore((state) => state.activeLane)
+  const jumpToLane = useCallback(
+    (tier: LaneTier) => {
+      const node = reactFlow.getNode(LANE_NODE_ID[tier])
+      if (!node) return
+      const width = node.measured?.width ?? LANE_CONFIG.laneWidth
+      const height = node.measured?.height ?? node.data.estimate
+      const { zoom } = reactFlow.getViewport()
+      void reactFlow.setCenter(node.position.x + width / 2, node.position.y + height / 2, {
+        zoom,
+        duration: prefersReducedMotion() ? 0 : CAMERA_MOVE_DURATION,
+      })
+      useActiveLaneStore.getState().setActiveLane(tier)
+    },
+    [reactFlow],
+  )
+
+  return (
+    <Panel className="workspace-lane-navigator" position="top-left" role="group" aria-label="Workspace lanes">
+      {LANE_ORDER.map((tier) => (
+        <Button
+          key={tier}
+          variant="bare"
+          className="workspace-lane-navigator__button"
+          aria-pressed={activeLane === tier}
+          onClick={() => jumpToLane(tier)}
+        >
+          {tier}
+        </Button>
+      ))}
+    </Panel>
+  )
+}
+
 // The exported shell supplies the React Flow context used by the imperative
 // lane-pan handle (`useReactFlow`) and the isolated zoom readout (`useStore`).
 export function WorkspaceCanvas({ route }: { route: WorkspaceRoute }) {
@@ -791,6 +857,22 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
       cell?.focus()
     })
   }, [])
+
+  // Touch table reordering is resolved from the drop point rather than temporary
+  // node coordinates: a table node never owns a persisted `{x,y}`. This mirrors
+  // the mouse drop invariant while avoiding React Flow's unreliable CDP touch drag.
+  const onTableTouchReorder = useCallback(
+    (tableId: string, clientY: number) => {
+      const flowY = reactFlow.screenToFlowPosition({ x: 0, y: clientY }).y
+      const siblings = reactFlow.getNodes().filter((node) => node.type === 'archTable' && node.id !== tableId)
+      const targetIndex = siblings.filter((node) => {
+        const height = node.measured?.height ?? ('estimate' in node.data ? node.data.estimate : ARCH_TABLE_ESTIMATE)
+        return flowY > node.position.y + height / 2
+      }).length
+      void useTier2Store.getState().reorderTable(tableId, targetIndex)
+    },
+    [reactFlow],
+  )
 
   // Issue 100 Phase D — the open drilled-in child cores (issue 011 recursion).
   // Opening is pure canvas state (NO DB write): the register/ring drill
@@ -947,6 +1029,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
           table,
           readOnly,
           onExitBoundary: onTableExitBoundary,
+          onTouchReorder: onTableTouchReorder,
         },
       })
     }
@@ -1037,6 +1120,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     readOnly,
     onTableCreated,
     onTableExitBoundary,
+    onTableTouchReorder,
     openSatellites,
     onSatelliteCollapse,
     coverageOpen,
@@ -1249,6 +1333,7 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         proOptions={{ hideAttribution: true }}
       >
         <Background />
+        <WorkspaceLaneNavigator />
         <WorkspaceZoomControls />
       </ReactFlow>
     </div>

@@ -350,6 +350,19 @@ test('⌘2 pans the viewport toward the Architecture lane and stays on the ?d3rf
     .toBeLessThan(120)
 })
 
+test('the intermediate-width lane navigator pans to a named workspace lane', { tag: '@dev-flag' }, async ({ page }) => {
+  await page.setViewportSize({ width: 1100, height: 1000 })
+  await openThreeLaneCanvas(page)
+
+  const navigator = page.getByRole('group', { name: 'Workspace lanes' })
+  await expect(navigator).toBeVisible()
+  const before = await viewportTransform(page)
+  await navigator.getByRole('button', { name: 'Architecture' }).click()
+
+  await expect.poll(() => viewportTransform(page)).not.toBe(before)
+  await expect(navigator.getByRole('button', { name: 'Architecture' })).toHaveAttribute('aria-pressed', 'true')
+})
+
 test('the camera is stable while focusing, typing, and mounting a new table node', { tag: '@dev-flag' }, async ({
   page,
 }) => {
@@ -1745,14 +1758,10 @@ async function touchDrag(
   }
 }
 
-// 099 item 4 — HELD (test.fixme) despite passing in CI: these 3 emulated-touch
-// specs each spin up a fresh hasTouch browser context (two also open CDP sessions),
-// which raised peak e2e-suite load enough to tip the documented, load-sensitive
-// 100-D child-core mount-timing flake (`drilling α promotes a LIVE child core`,
-// α1 toBeVisible) into losing all 3 retries two runs in a row. The CDP-touch
-// approach is PROVEN to work in headless (all 3 passed); re-enable them in a
-// dedicated/serial touch e2e lane so they don't contend with the canvas specs.
-test.fixme('a single-finger touch-drag on the empty canvas pane pans the viewport', { tag: '@dev-flag' }, async ({
+// These cases create fresh touch contexts (two use CDP), so `touch-serial`
+// runs them apart from the heavyweight canvas lane. That preserves coverage
+// without reintroducing the historical load-sensitive canvas mount flake.
+test('a single-finger touch-drag on the empty canvas pane pans the viewport', { tag: ['@dev-flag', '@touch'] }, async ({
   browser,
 }) => {
   // Touch counterpart of the mouse pan inside `panFoundationPhantomIntoLeftMargin`
@@ -1779,7 +1788,7 @@ test.fixme('a single-finger touch-drag on the empty canvas pane pans the viewpor
   }
 })
 
-test.fixme('a touch-drag on a table-node header reorders + persists sort (touch twin of the mouse drag-reorder)', { tag: '@dev-flag' }, async ({
+test('a touch-drag on a table-node header reorders + persists sort (touch twin of the mouse drag-reorder)', { tag: ['@dev-flag', '@touch'] }, async ({
   browser,
 }) => {
   // Exact touch mirror of the mouse `dragging a table node down its lane reorders
@@ -1836,7 +1845,7 @@ test.fixme('a touch-drag on a table-node header reorders + persists sort (touch 
   }
 })
 
-test.fixme('tapping the Foundation phantom (touch) focuses it — tap-to-activate on the canvas', { tag: '@dev-flag' }, async ({
+test('tapping the Foundation phantom (touch) focuses it — tap-to-activate on the canvas', { tag: ['@dev-flag', '@touch'] }, async ({
   browser,
 }) => {
   // The positive counterpart of the `tapping a cell … does NOT pan` spec: same
