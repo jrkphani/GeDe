@@ -1844,6 +1844,24 @@ body {
   margin-bottom: var(--space-4);
 }
 
+.canvas-toolbar--compose {
+  align-items: center;
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+}
+
+.canvas-toolbar__hint {
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+}
+
+.dim-manager__floor-note {
+  margin: 0 0 var(--space-3);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+}
+
 /* ── 089-D3 graduation P2 — the DECOMPOSED Design core ────────────────────────
    On the `?d3rf` canvas the Design lane is TWO separate React Flow nodes — a
    register body stacked over a ring body — instead of one `.design-surface-row`
@@ -2714,6 +2732,12 @@ body {
   line-height: var(--leading-header);
   font-weight: var(--font-weight-strong);
   cursor: text;
+}
+
+.t2-table__dimension-summary {
+  margin: 0 0 var(--space-3);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
 }
 
 /* Child records: entry name/description cells sit a quiet step below the

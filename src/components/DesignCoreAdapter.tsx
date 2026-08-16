@@ -518,6 +518,25 @@ export function DesignRegisterBody({
     dimensions.length > 0 &&
     dimensions.some((d) => (paramsByDimension[d.id]?.length ?? 0) === 0)
   const belowFloor = !needsSeeding && dimensions.length < 2
+  const composeBindings = composeContextId ? (bindingsByContext[composeContextId] ?? {}) : {}
+  const connectedCount = orderedDimensionIds.filter((id) => composeBindings[id] !== undefined).length
+  const nextComposeDimension = dimensions.find(
+    (dimension) => dimension.id === firstUnbound(orderedDimensionIds, composeBindings),
+  )
+  // The blocked states already announce themselves above the toolbar — the
+  // seed hint for needsSeeding, the floor hint for belowFloor, both
+  // role="status". Repeating them here published the SAME instruction twice
+  // to assistive tech in two different wordings ("Add a second dimension to
+  // start binding contexts." + "Add a second dimension before connecting
+  // parameters."). Say only what those hints cannot: compose progress, and
+  // the default affordance once composing is actually possible.
+  const toolbarHint = composeContextId
+    ? nextComposeDimension
+      ? `${connectedCount} of ${dimensions.length} connected — choose a ${nextComposeDimension.name} parameter next.`
+      : `${connectedCount} of ${dimensions.length} connected — complete the new context row.`
+    : belowFloor || needsSeeding
+      ? null
+      : 'Connect parameters by choosing one option from each dimension.'
 
   return (
     <div
@@ -602,9 +621,22 @@ export function DesignRegisterBody({
               Add a second dimension to start binding contexts.
             </p>
           ) : null}
-          {/* Issue 093 — the top "New context" button is REMOVED; the register's
-              phantom row is now the sole create affordance (the `c` key still
-              enters guided compose mode). */}
+          {!readOnly ? (
+            <div className="canvas-toolbar canvas-toolbar--compose">
+              <Button
+                variant="command"
+                disabled={composeContextId !== null || belowFloor || needsSeeding}
+                onClick={() => void stores.useCompose.getState().enterCompose()}
+              >
+                New context
+              </Button>
+              {toolbarHint ? (
+                <span className="canvas-toolbar__hint" role="status">
+                  {toolbarHint}
+                </span>
+              ) : null}
+            </div>
+          ) : null}
           <CanvasStoresProvider value={stores}>
             <div className="editing-zone" role="group" aria-label="Dimensions, parameters, and contexts">
               <section className="dim-rail" aria-label="Dimensions and parameters">

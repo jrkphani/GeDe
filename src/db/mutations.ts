@@ -2030,8 +2030,9 @@ export interface PromotedLink {
 }
 
 // Every live root-canvas parameter that carries a source_entry_id, with its
-// dimension's current name — powers the `→ Stake` source badge on 2nd-Tier
-// entries (both sides of the link stay visible, invariant 7).
+// dimension's current name — powers the per-row ↗ source cue and the
+// table-level "Design dimensions · Stake" summary on 2nd-Tier entries (both
+// sides of the link stay visible, invariant 7).
 export async function listPromotedLinks(db: Database, projectId: string): Promise<PromotedLink[]> {
   const dims = await listDimensions(db, projectId)
   const dimById = new Map(dims.map((d) => [d.id, d]))

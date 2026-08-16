@@ -81,6 +81,19 @@ function parseSetClause(sql: string): [string, string][] {
   })
 }
 
+describe('PgWriteStore dimension floor scope', () => {
+  it('counts live dimensions by canvas_id, never the legacy context_id', async () => {
+    const { pool, calls } = fakePool({ 'SELECT count(*) FROM dimensions': [{ count: '2' }] })
+    const store = new PgWriteStore({ pool: asPool(pool) })
+
+    await expect(store.countLiveDimensions('project-1', 'canvas-1')).resolves.toBe(2)
+    expect(calls).toHaveLength(1)
+    expect(calls[0]?.text).toContain('canvas_id = $2')
+    expect(calls[0]?.text).not.toContain('context_id')
+    expect(calls[0]?.params).toEqual(['project-1', 'canvas-1'])
+  })
+})
+
 describe('PgWriteStore.applyIfNew — tenant-context wiring (defense-in-depth, test-first plan item 2)', () => {
   it('sets the user + workspace GUCs, in a BEGIN...COMMIT, before the ledger insert or the actual write', async () => {
     const { pool, calls } = fakePool({ applied_mutations: [{ mutation_id: 'x' }] })

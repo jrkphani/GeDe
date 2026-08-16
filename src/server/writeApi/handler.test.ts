@@ -159,9 +159,10 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
   it('rejects a dimension delete that would drop the canvas below the floor', async () => {
     const store = new InMemoryWriteStore()
     const projectId = uuidv7()
+    const canvasId = uuidv7()
     const [firstDimId, secondDimId] = [uuidv7(), uuidv7()] // exactly 2 — the floor
     for (const id of [firstDimId, secondDimId]) {
-      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, contextId: null }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, canvasId }, updatedAt: new Date(0).toISOString(), deletedAt: null })
     }
     const token = await tokenFor('user-1', WS1)
     const mutation = envelope({ table: 'dimensions', op: 'delete', entityId: firstDimId, payload: {} })
@@ -175,9 +176,10 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
   it('allows a dimension delete when above the floor', async () => {
     const store = new InMemoryWriteStore()
     const projectId = uuidv7()
+    const canvasId = uuidv7()
     const [firstDimId, secondDimId, thirdDimId] = [uuidv7(), uuidv7(), uuidv7()]
     for (const id of [firstDimId, secondDimId, thirdDimId]) {
-      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, contextId: null }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, canvasId }, updatedAt: new Date(0).toISOString(), deletedAt: null })
     }
     const token = await tokenFor('user-1', WS1)
     const mutation = envelope({ table: 'dimensions', op: 'delete', entityId: firstDimId, payload: {} })
@@ -185,6 +187,27 @@ describe('handleWriteRequest — invariant enforcement (test-first plan item 3)'
     expect(result.status).toBe(200)
     if (result.status === 200) {
       expect(result.outcomes[0]).toMatchObject({ status: 'applied' })
+    }
+  })
+
+  it('scopes the dimension floor to the target canvas when a project has multiple roots', async () => {
+    const store = new InMemoryWriteStore()
+    const projectId = uuidv7()
+    const targetCanvasId = uuidv7()
+    const otherCanvasId = uuidv7()
+    const targetIds = [uuidv7(), uuidv7()] as const
+    for (const id of targetIds) {
+      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, canvasId: targetCanvasId }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    }
+    for (const id of [uuidv7(), uuidv7(), uuidv7()]) {
+      store.seed({ id, workspaceId: WS1, table: 'dimensions', data: { projectId, canvasId: otherCanvasId }, updatedAt: new Date(0).toISOString(), deletedAt: null })
+    }
+    const token = await tokenFor('user-1', WS1)
+    const mutation = envelope({ table: 'dimensions', op: 'delete', entityId: targetIds[0], payload: {} })
+    const result = await handleWriteRequest({ authorizationHeader: `Bearer ${token}`, mutations: [mutation] }, deps(store))
+    expect(result.status).toBe(200)
+    if (result.status === 200) {
+      expect(result.outcomes[0]).toMatchObject({ status: 'rejected', reason: 'dimension_floor' })
     }
   })
 

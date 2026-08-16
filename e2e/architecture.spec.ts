@@ -83,8 +83,12 @@ test('architecture: build tables, promote to dimensions, register offers params,
   await addEntry(page, 'Stakeholders', 'Users')
   await promoteTable(page, 'Stakeholders', ['Buyers', 'Maintainer', 'Users'], 'Stake')
 
-  // The promoted entries carry the mirrored source badge (both sides visible).
-  await expect(tablePanel(page, 'Stakeholders').getByText('→ Stake').first()).toBeVisible()
+  // Both sides of the tier link stay visible (invariant 7), but the dimension
+  // name is now stated ONCE at table level instead of repeated in every
+  // promoted row: each row keeps a compact aria-hidden cue (it must not join
+  // the cell's accessible name), and the summary names the dimension itself.
+  await expect(tablePanel(page, 'Stakeholders').locator('.t2-source-badge').first()).toBeVisible()
+  await expect(tablePanel(page, 'Stakeholders').getByText('Design dimensions · Stake')).toBeVisible()
 
   // Design tab: two dimensions exist, so the register renders. Its Stake column
   // combobox now offers the promoted parameters.
