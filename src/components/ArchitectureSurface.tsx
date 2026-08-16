@@ -418,6 +418,15 @@ export function TablePanel({
     return map
   }, [flat])
   const flatIds = flat.map((f) => f.entry.id)
+  const promotedDimensions = useMemo(() => {
+    const byId = new Map<string, string>()
+    for (const entry of entries) {
+      const link = linkByEntryId[entry.id]
+      if (link) byId.set(link.dimensionId, link.dimensionName)
+    }
+    return [...byId].map(([id, name]) => ({ id, name }))
+  }, [entries, linkByEntryId])
+  const preferredDimensionId = promotedDimensions.length === 1 ? promotedDimensions[0]?.id ?? null : null
 
   // Issue 105 P2/P3 — keyboard tree verbs on the free modifier chords the grid
   // leaves inert (handleGridArrowKeys early-returns on Cmd/Ctrl/Alt): ⌘] demote
@@ -825,9 +834,9 @@ export function TablePanel({
           }
           return name.length > 0
         },
-        // Source badge rides inline on the Name cell (issue 084) — both sides of
-        // the tier link stay visible (invariant 7) without a data column of its
-        // own. Read-mode only; the grid hides it while the name is being edited.
+        // Keep a compact per-row link cue, while the table-level summary names
+        // each promoted Design dimension once (rather than repeating a heading
+        // in every selected row).
         // `aria-hidden`: the badge is a decorative derived cue, so it must NOT
         // join the cell's accessible name (else the cell reads "Users → Stake"
         // and `getByRole('cell', {name})` exact lookups break — e2e + AT noise).
@@ -839,7 +848,7 @@ export function TablePanel({
               title={`Promoted to ${link.dimensionName}`}
               aria-hidden="true"
             >
-              → {link.dimensionName}
+              ↗
             </span>
           ) : null
         },
@@ -940,6 +949,11 @@ export function TablePanel({
         selectOnFocus
         readOnly={readOnly}
       />
+      {promotedDimensions.length > 0 ? (
+        <p className="t2-table__dimension-summary">
+          Design dimensions · {promotedDimensions.map((dimension) => dimension.name).join(', ')}
+        </p>
+      ) : null}
       {/* Delete-with-link resolution rehomed out of the cramped .t2-meta icon
           strip (issue 084): it anchors at the panel level now, opened by any
           row's quiet-text Remove. */}
@@ -1088,6 +1102,7 @@ export function TablePanel({
             projectId={projectId}
             tableName={table.name}
             entryIds={[...selected]}
+            preferredDimensionId={preferredDimensionId}
             onDone={() => setSelected(new Set())}
           />
           {/* Remove moved off the row into the selection bar (issue 084). It
@@ -1163,20 +1178,25 @@ function PromotePopover({
   projectId,
   tableName,
   entryIds,
+  preferredDimensionId,
   onDone,
 }: {
   projectId: string
   tableName: string
   entryIds: string[]
+  preferredDimensionId: string | null
   onDone: () => void
 }) {
   const promote = useTier2Store((s) => s.promote)
   const linkByEntryId = useTier2Store((s) => s.linkByEntryId)
   const rootDimensions = useTier2Store((s) => s.rootDimensions)
   const [open, setOpen] = useState(false)
-  const [mode, setMode] = useState<'new' | 'existing'>('new')
+  const preferredExists = rootDimensions.some((dimension) => dimension.id === preferredDimensionId)
+  const [mode, setMode] = useState<'new' | 'existing'>(preferredExists ? 'existing' : 'new')
   const [name, setName] = useState(tableName)
-  const [dimId, setDimId] = useState<string | null>(rootDimensions[0]?.id ?? null)
+  const [dimId, setDimId] = useState<string | null>(
+    preferredExists ? preferredDimensionId : (rootDimensions[0]?.id ?? null),
+  )
 
   const unlinkedCount = entryIds.filter((id) => !linkByEntryId[id]).length
   const targetName = mode === 'new' ? name.trim() : (rootDimensions.find((d) => d.id === dimId)?.name ?? '')
@@ -1195,7 +1215,17 @@ function PromotePopover({
   }
 
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(nextOpen) => {
+        if (nextOpen) {
+          setMode(preferredExists ? 'existing' : 'new')
+          setDimId(preferredExists ? preferredDimensionId : (rootDimensions[0]?.id ?? null))
+          setName(tableName)
+        }
+        setOpen(nextOpen)
+      }}
+    >
       <PopoverTrigger asChild>
         <Button variant="command" className="t2-promote-trigger">
           Use as dimension…
@@ -1247,7 +1277,7 @@ function PromotePopover({
 
         <p className="t2-promote__preview">
           {unlinkedCount > 0
-            ? `Creates ${plural(unlinkedCount, 'parameter')} on ${targetName || '…'}`
+            ? `${mode === 'existing' ? 'Adds' : 'Creates'} ${plural(unlinkedCount, 'parameter')} on ${targetName || '…'}`
             : 'All selected entries are already linked'}
         </p>
         <Button

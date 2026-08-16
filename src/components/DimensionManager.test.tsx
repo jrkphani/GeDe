@@ -9,18 +9,22 @@ import { setDatabase } from '../store/database'
 import { resetContextsStore, useContextsStore } from '../store/contexts'
 import { resetDimensionsStore, useDimensionsStore } from '../store/dimensions'
 import { resetParametersStore } from '../store/parameters'
+import { useStatusStore } from '../store/status'
 import { DimensionManagerPanel } from './DimensionManager'
 
 let db: Awaited<ReturnType<typeof openDatabase>>['db']
 let projectId: string
+const realRemoveDimension = useDimensionsStore.getState().remove
 
 beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
   setDatabase(db)
   resetDimensionsStore()
+  useDimensionsStore.setState({ remove: realRemoveDimension })
   resetContextsStore()
   resetParametersStore()
   useCommandLogStore.getState().clear()
+  useStatusStore.getState().clear()
   const project = await createProject(db, { name: 'Tavalo' })
   projectId = project.id
   await useDimensionsStore.getState().load(projectId)
@@ -81,6 +85,9 @@ describe('DimensionManagerPanel', () => {
     const removeFirst = screen.getByRole('button', { name: 'Remove Dimension 1' })
     expect(removeFirst).toBeDisabled()
     expect(removeFirst).toHaveAttribute('title', 'A canvas needs at least 2 dimensions')
+    expect(
+      screen.getByText('Minimum 2 dimensions. Add another dimension before removing one.'),
+    ).toBeInTheDocument()
 
     await addDimensions(1)
     rerender(<DimensionManagerPanel />)
@@ -126,6 +133,7 @@ describe('DimensionManagerPanel', () => {
       ]),
     )
     expect(useCommandLogStore.getState().past).toHaveLength(1)
+    expect(useStatusStore.getState().message).toBe('Removed Dimension 1 — 0 bindings deleted')
   })
 
   it('shows the exact number of bindings the removal will delete', async () => {
@@ -141,6 +149,23 @@ describe('DimensionManagerPanel', () => {
     render(<DimensionManagerPanel />)
     await user.click(screen.getByRole('button', { name: `Remove ${first.name}` }))
     await waitFor(() => expect(confirmCopy()).toMatch(/Deletes 1 binding\./))
+  })
+
+  it('narrates a removal error and leaves the confirmation available for retry', async () => {
+    const user = userEvent.setup()
+    await addDimensions(3)
+    useDimensionsStore.setState({
+      remove: () => Promise.reject(new Error('offline')),
+    })
+    render(<DimensionManagerPanel />)
+
+    await user.click(screen.getByRole('button', { name: 'Remove Dimension 1' }))
+    await user.click(await screen.findByRole('button', { name: 'Confirm remove Dimension 1' }))
+
+    await waitFor(() =>
+      expect(useStatusStore.getState().message).toBe('Could not remove Dimension 1 — try again'),
+    )
+    expect(screen.getByRole('button', { name: 'Confirm remove Dimension 1' })).toBeInTheDocument()
   })
 
   it('Alt+Arrow reorders the focused row', async () => {

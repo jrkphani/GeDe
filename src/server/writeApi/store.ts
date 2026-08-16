@@ -110,8 +110,8 @@ export interface WriteStore extends WorkspaceScopeResolver {
    * workspace never touches/re-provisions the owner's row.
    */
   ensureOwnWorkspace(sub: string): Promise<void>
-  /** Live dimension count for a canvas (project + context, null = root canvas) — the dimension-floor primitive. */
-  countLiveDimensions(projectId: string, contextId: string | null): Promise<number>
+  /** Live dimension count for one canvas — the dimension-floor primitive. */
+  countLiveDimensions(projectId: string, canvasId: string): Promise<number>
   /** Live bindings already occupying a (context, dimension) pair, excluding `excludeBindingId` (a rebind of itself). */
   countLiveBindingsForPair(contextId: string, dimensionId: string, excludeBindingId?: string): Promise<number>
   /** Idempotency ledger check (mutation id, not entity id). */
@@ -315,11 +315,11 @@ export class InMemoryWriteStore implements WriteStore {
     return Promise.resolve(null)
   }
 
-  countLiveDimensions(projectId: string, contextId: string | null): Promise<number> {
+  countLiveDimensions(projectId: string, canvasId: string): Promise<number> {
     let count = 0
     for (const row of this.rows.values()) {
       if (row.table !== 'dimensions' || row.deletedAt !== null) continue
-      if (row.data.projectId === projectId && (row.data.contextId ?? null) === contextId) count++
+      if (row.data.projectId === projectId && row.data.canvasId === canvasId) count++
     }
     return Promise.resolve(count)
   }
@@ -685,14 +685,12 @@ export class PgWriteStore implements WriteStore {
     }
   }
 
-  async countLiveDimensions(projectId: string, contextId: string | null): Promise<number> {
+  async countLiveDimensions(projectId: string, canvasId: string): Promise<number> {
     const client = await this.config.pool.connect()
     try {
       const result = await client.query<{ count: string }>(
-        contextId === null
-          ? 'SELECT count(*) FROM dimensions WHERE project_id = $1 AND context_id IS NULL AND deleted_at IS NULL'
-          : 'SELECT count(*) FROM dimensions WHERE project_id = $1 AND context_id = $2 AND deleted_at IS NULL',
-        contextId === null ? [projectId] : [projectId, contextId],
+        'SELECT count(*) FROM dimensions WHERE project_id = $1 AND canvas_id = $2 AND deleted_at IS NULL',
+        [projectId, canvasId],
       )
       return Number(result.rows[0]?.count ?? 0)
     } finally {

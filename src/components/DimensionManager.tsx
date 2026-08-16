@@ -5,6 +5,7 @@ import { useState } from 'react'
 import type { DimensionRow } from '../db/mutations'
 import { computeRemovalImpact } from '../domain/dimensionImpact'
 import { useParametersStore } from '../store/parameters'
+import { useStatusStore } from '../store/status'
 import { DIMENSION_PALETTE } from '../theme/palette'
 import { useCanvasStores } from './CanvasStoresContext'
 import { ParameterList } from './ParameterList'
@@ -91,7 +92,24 @@ function RemoveDimensionConfirm({
             variant="danger"
             aria-label={`Confirm remove ${dimension.name}`}
             onClick={() => {
-              void remove(dimension.id).then(() => setOpen(false))
+              void remove(dimension.id)
+                .then((result) => {
+                  if (!result.ok) {
+                    useStatusStore.getState().announce(result.reason ?? FLOOR_TOOLTIP)
+                    return
+                  }
+                  useStatusStore
+                    .getState()
+                    .announce(
+                      `Removed ${dimension.name} — ${bindingCount} ${bindingCount === 1 ? 'binding' : 'bindings'} deleted`,
+                    )
+                  setOpen(false)
+                })
+                .catch(() => {
+                  useStatusStore
+                    .getState()
+                    .announce(`Could not remove ${dimension.name} — try again`)
+                })
             }}
           >
             Remove
@@ -262,6 +280,11 @@ export function DimensionManagerPanel({ childCanvas = false }: { childCanvas?: b
   return (
     <EditableChainProvider order={order}>
       <div className="dim-manager">
+        {!childCanvas && !canRemove ? (
+          <p className="dim-manager__floor-note" role="note">
+            Minimum 2 dimensions. Add another dimension before removing one.
+          </p>
+        ) : null}
         <DndContext collisionDetection={closestCenter} onDragEnd={onDragEnd}>
           <SortableContext items={dimensions.map((d) => d.id)} strategy={verticalListSortingStrategy}>
             {dimensions.map((d, i) => (
