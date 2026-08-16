@@ -26,6 +26,7 @@ import { ContextRegister } from './ContextRegister'
 import { CoverageMatrix } from './CoverageMatrix'
 import { DimensionManagerPanel } from './DimensionManager'
 import { CanvasSwitcher } from './CanvasSwitcher'
+import { useDesignOnboarding } from './designOnboarding'
 import type { DesignView } from '../shell/routes'
 
 export function DesignSurface({
@@ -498,6 +499,21 @@ export function DesignSurface({
   // so the phantom rows are ready — no blocking wizard.
   const needsSeeding =
     contextId !== null && dimensions.length > 0 && dimensions.some((d) => (paramsByDimension[d.id]?.length ?? 0) === 0)
+  const belowFloor = !needsSeeding && dimensions.length < 2
+  const hasCompletedContext = contexts.some((context) =>
+    isComplete(dimensionIds, new Set(Object.keys(bindingsByContext[context.id] ?? {}))),
+  )
+  const canCompose = !readOnly && !belowFloor && !needsSeeding
+  const onboarding = useDesignOnboarding({
+    projectId,
+    canvasScope: canvasSelector ?? 'root',
+    canCompose,
+    hasCompletedContext,
+    isComposing: composing,
+  })
+  const nextDimensionName = activeDimensionId
+    ? dimensions.find((dimension) => dimension.id === activeDimensionId)?.name
+    : undefined
 
   // Drop compose state if the draft vanished (discarded, project switched, or
   // undone) so the canvas never points compose at a context that isn't there.
@@ -518,14 +534,6 @@ export function DesignSurface({
   if (!canvasReady) return null
 
   const dimensionNames = dimensions.map((d) => d.name)
-  // Issue 082 Phase 1, Decision 3 (soft-hint floor) — the guided/populated
-  // bifurcation is gone: one tree renders at every dimension count. Below the
-  // n=2 floor the circle simply renders partial/empty (Canvas already
-  // handles 0/1-dimension geometry) and this quiet inline line replaces the
-  // old hard placeholder wall. Never shown once the seed-hint (child canvas
-  // missing sub-parameters) already owns the surface's one empty-state voice.
-  const belowFloor = !needsSeeding && dimensions.length < 2
-
   return (
     <>
       {/* 089 D2 P4 — this context content used to portal into the ONE shared
@@ -646,7 +654,24 @@ export function DesignSurface({
               {/* Issue 035 — a viewer never sees the write-only "New context"
                   affordance at all (not merely disabled); the read surface
                   otherwise looks identical. */}
-              {readOnly ? null : (
+              {readOnly ? null : onboarding.mode === 'activation' ? (
+                <div className="canvas-onboarding" aria-label="Get started with Design">
+                  <p className="canvas-onboarding__copy">
+                    <strong>Bind your first context.</strong> Create a context, then choose one parameter from each
+                    dimension.
+                  </p>
+                  <Button onClick={() => void enterCompose()}>New context</Button>
+                  <Button variant="bare" className="canvas-onboarding__dismiss" onClick={onboarding.dismiss}>
+                    Hide hint
+                  </Button>
+                </div>
+              ) : onboarding.mode === 'progress' ? (
+                <p className="canvas-onboarding__progress" role="status">
+                  {nextDimensionName
+                    ? `Choose a ${nextDimensionName} parameter to continue binding this context.`
+                    : 'Complete the new context row to finish binding this context.'}
+                </p>
+              ) : (
                 <div className="canvas-toolbar">
                   {/* "New context" or the `c` key enters compose mode (SPEC §4.2,
                       §4.4). No palette verb here — the command palette (017) owns

@@ -67,9 +67,9 @@ body {
 }
 
 .wordmark {
-  font-size: 15px;
+  font-size: var(--text-chrome);
   line-height: 40px;
-  font-weight: 600;
+  font-weight: var(--font-weight-strong);
   margin: 0;
 }
 
@@ -364,6 +364,44 @@ body {
   height: 100%;
 }
 
+/* The drafting table stays intact at tablet landscape widths. The compact lane
+   rail is a navigation instrument, not a second shell: it is visible only in
+   the interval where the canvas remains capable but all lanes do not fit. */
+.workspace-lane-navigator {
+  display: none;
+}
+
+@media (min-width: 1024px) and (max-width: 1279px) {
+  .workspace-lane-navigator {
+    display: inline-flex;
+    gap: 1px;
+    margin: var(--space-3);
+    background: var(--hairline);
+    border: 1px solid var(--hairline);
+  }
+
+  .workspace-lane-navigator__button {
+    min-height: 44px;
+    padding: 0 var(--space-3);
+    color: var(--ink-muted);
+    background: var(--panel);
+    border: 0;
+    font-size: var(--text-label);
+    text-transform: capitalize;
+  }
+
+  .workspace-lane-navigator__button[aria-pressed='true'],
+  .workspace-lane-navigator__button:focus-visible {
+    color: var(--accent-strong);
+    background: var(--accent-surface);
+  }
+
+  .workspace-lane-navigator__button:hover:not([aria-pressed='true']) {
+    color: var(--ink);
+    background: var(--grid-minor);
+  }
+}
+
 /* The camera is user-owned: keep explicit - / + / fit actions familiar, but
    present them as one quiet Numbers-like horizontal strip with a live readout. */
 .workspace-zoom-controls.react-flow__controls {
@@ -418,14 +456,21 @@ body {
 .wc-node__handle {
   display: flex;
   align-items: center;
-  height: 28px;
+  min-height: 44px;
   padding: 0 var(--space-4);
   background: var(--grid-minor);
   color: var(--ink-muted);
   border-bottom: 1px solid var(--hairline);
   font-size: var(--text-label);
-  cursor: grab;
+  cursor: default;
+  touch-action: none;
   user-select: none;
+}
+
+/* A table header is a ranked object, so it alone advertises the reorder
+   gesture. The fixed lane panels are anchors in the model, not movable cards. */
+.wc-node--arch-table .wc-node__handle {
+  cursor: grab;
 }
 
 .wc-node__body {
@@ -734,6 +779,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  min-width: 0;
   min-height: 44px; /* touch target floor */
   padding: 0 var(--space-3);
   border-bottom: 1px solid var(--hairline);
@@ -771,6 +817,10 @@ body {
 }
 
 .project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 500;
 }
 
@@ -783,9 +833,13 @@ body {
 }
 
 .project-desc {
+  min-width: 0;
   color: var(--ink-muted);
   font-size: var(--text-label);
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-title {
@@ -807,8 +861,47 @@ body {
 /* ── Export / import (issue 015) ─────────────────────────────────────────── */
 .projects__toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: space-between;
   margin-bottom: var(--space-3);
+}
+
+.projects__toolbar-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.projects__create-input {
+  width: min(100%, 224px);
+  min-width: 0;
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  background: var(--panel);
+}
+
+.projects__create-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (max-width: 480px) {
+  .projects__toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .projects__toolbar-actions .command-button {
+    flex: 1 1 auto;
+  }
+
+  .projects__create-input {
+    width: 100%;
+  }
 }
 
 /* Accessible hidden file input — off-screen but focusable/clickable. */
@@ -1894,6 +1987,57 @@ body {
   font-size: var(--text-label);
 }
 
+/* One optional, canvas-scoped activation cue. It introduces the real binding
+   workflow without becoming a tutorial surface or competing with the register. */
+.canvas-onboarding {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  margin-bottom: var(--space-4);
+  padding: var(--space-3);
+  border: 1px solid var(--hairline);
+  background: var(--panel);
+}
+
+.canvas-onboarding__copy {
+  flex: 1;
+  min-width: 16rem;
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+  line-height: var(--leading-label);
+}
+
+.canvas-onboarding__copy strong {
+  color: var(--ink);
+  font-weight: var(--font-weight-strong);
+}
+
+.canvas-onboarding__dismiss {
+  flex: none;
+  color: var(--ink-muted);
+}
+
+.canvas-onboarding__progress {
+  margin: 0 0 var(--space-4);
+  color: var(--ink-muted);
+  font-size: var(--text-label);
+}
+
+@container (max-width: 640px) {
+  .canvas-onboarding {
+    flex-wrap: wrap;
+  }
+
+  .canvas-onboarding__copy {
+    min-width: 100%;
+  }
+
+  .canvas-onboarding__dismiss {
+    margin-left: auto;
+  }
+}
+
 .dim-manager__floor-note {
   margin: 0 0 var(--space-3);
   color: var(--ink-muted);
@@ -2474,8 +2618,8 @@ body {
 
 .coverage-stat--lead {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--text-chrome);
+  font-weight: var(--font-weight-strong);
   color: var(--ink);
 }
 
@@ -2493,7 +2637,7 @@ body {
 }
 
 .coverage-axis__label {
-  font-size: 11px;
+  font-size: var(--text-colhead);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-muted);
@@ -2509,7 +2653,7 @@ body {
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   background: var(--panel);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink);
 }
 
@@ -2527,7 +2671,7 @@ body {
   flex-basis: 100%;
   margin: 0;
   min-height: 1.2em;
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
 }
 
@@ -2556,7 +2700,7 @@ body {
   padding: 0;
   border: 1px solid var(--hairline);
   background: var(--panel);
-  font-size: 11px;
+  font-size: var(--text-colhead);
   line-height: 1;
   color: var(--ink);
   cursor: pointer;
@@ -2583,8 +2727,8 @@ body {
   position: absolute;
   top: 0;
   right: 1px;
-  font-size: 7px;
-  line-height: 1;
+  font-size: var(--text-micro);
+  line-height: var(--leading-micro);
   color: var(--paper);
 }
 
@@ -2631,7 +2775,7 @@ body {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--text-colhead);
   color: var(--ink-muted);
 }
 
@@ -2654,7 +2798,7 @@ body {
   align-items: center;
   justify-content: flex-end;
   padding-right: var(--space-2);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
   overflow: hidden;
   white-space: nowrap;
@@ -2671,7 +2815,7 @@ body {
 
 .view-toggle__btn {
   padding: 2px var(--space-3);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
   background: transparent;
   border: 0;
@@ -2691,13 +2835,13 @@ body {
    match both ancestors. */
 .context-bar .coverage-stat,
 .workspace__lane-header .coverage-stat {
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink);
 }
 
 .context-bar .draft-count,
 .workspace__lane-header .draft-count {
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
 }
 
@@ -3318,9 +3462,9 @@ body {
   width: 20px;
   height: 20px;
   flex: none;
-  font-size: 10px;
-  line-height: 1;
-  font-weight: 500;
+  font-size: var(--text-badge);
+  line-height: var(--leading-badge);
+  font-weight: var(--font-weight-medium);
   font-family: var(--font-ui);
   color: var(--paper);
   border: 1px solid var(--panel);

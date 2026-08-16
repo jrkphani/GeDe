@@ -36,6 +36,7 @@ import { ChildCanvasBanners } from './ChildCanvasBanners'
 import { ContextRegister } from './ContextRegister'
 import { CoverageMatrix } from './CoverageMatrix'
 import { DimensionManagerPanel } from './DimensionManager'
+import { useDesignOnboarding } from './designOnboarding'
 
 // Issue 089 D3 graduation P2 — the Design lane, DECOMPOSED into a {register + ring}
 // core: a REGISTER body (rail + ContextRegister + the lane header) stacked OVER a
@@ -345,6 +346,22 @@ export function DesignRegisterBody({
     () => [...dimensions].sort((a, b) => a.sort - b.sort).map((d) => d.id),
     [dimensions],
   )
+  const needsSeeding =
+    contextId !== null &&
+    dimensions.length > 0 &&
+    dimensions.some((d) => (paramsByDimension[d.id]?.length ?? 0) === 0)
+  const belowFloor = !needsSeeding && dimensions.length < 2
+  const hasCompletedContext = contexts.some((context) =>
+    isComplete(dimensionIds, new Set(Object.keys(bindingsByContext[context.id] ?? {}))),
+  )
+  const canCompose = !readOnly && !belowFloor && !needsSeeding
+  const onboarding = useDesignOnboarding({
+    projectId,
+    canvasScope: canvasSelector ?? 'root',
+    canCompose,
+    hasCompletedContext,
+    isComposing: composeContextId !== null,
+  })
 
   // Live coverage stat + draft count for the lane header (SITEMAP §2).
   const coverage = useMemo(() => {
@@ -513,11 +530,6 @@ export function DesignRegisterBody({
   }
 
   const dimensionNames = dimensions.map((d) => d.name)
-  const needsSeeding =
-    contextId !== null &&
-    dimensions.length > 0 &&
-    dimensions.some((d) => (paramsByDimension[d.id]?.length ?? 0) === 0)
-  const belowFloor = !needsSeeding && dimensions.length < 2
   const composeBindings = composeContextId ? (bindingsByContext[composeContextId] ?? {}) : {}
   const connectedCount = orderedDimensionIds.filter((id) => composeBindings[id] !== undefined).length
   const nextComposeDimension = dimensions.find(
@@ -621,7 +633,26 @@ export function DesignRegisterBody({
               Add a second dimension to start binding contexts.
             </p>
           ) : null}
-          {!readOnly ? (
+          {!readOnly && onboarding.mode === 'activation' ? (
+            <div className="canvas-onboarding" aria-label="Get started with Design">
+              <p className="canvas-onboarding__copy">
+                <strong>Bind your first context.</strong> Create a context, then choose one parameter from each
+                dimension.
+              </p>
+              <Button variant="command" onClick={() => void stores.useCompose.getState().enterCompose()}>
+                New context
+              </Button>
+              <Button variant="bare" className="canvas-onboarding__dismiss" onClick={onboarding.dismiss}>
+                Hide hint
+              </Button>
+            </div>
+          ) : !readOnly && onboarding.mode === 'progress' ? (
+            <p className="canvas-onboarding__progress" role="status">
+              {nextComposeDimension
+                ? `Choose a ${nextComposeDimension.name} parameter to continue binding this context.`
+                : 'Complete the new context row to finish binding this context.'}
+            </p>
+          ) : !readOnly ? (
             <div className="canvas-toolbar canvas-toolbar--compose">
               <Button
                 variant="command"

@@ -14,7 +14,12 @@
   --ink-muted: #6b6961;
   --accent: #2d6a4f;
   --accent-strong: #23543f;
-  --accent-wash: rgba(45, 106, 79, 0.1);
+  /* Forest-green state ladder: a quiet opaque surface for selection and
+     hover, the base hue for indicators, and a darker foreground for active
+     text. Keeping the surface explicit avoids contrast changing with the
+     panel it happens to overlay. */
+  --accent-surface: #e8f0eb;
+  --accent-wash: var(--accent-surface);
   --danger: #b3402e;
   --warning: #9a6b00;
 
@@ -39,12 +44,17 @@
   --text-mono: 13px;
   --text-label: 12px;
   --text-colhead: 11px;
+  --text-chrome: 15px;
+  --text-badge: 10px;
+  --text-micro: 8px;
   --leading-title: 28px;
   --leading-header: 24px;
   --leading-body: 20px;
   --leading-mono: 20px;
   --leading-label: 16px;
   --leading-colhead: 16px;
+  --leading-badge: 12px;
+  --leading-micro: 10px;
 
   /* Weight scale — §3 (named by emphasis role; components never hard-code a
      numeric weight). `strong` = headers / parent records, `medium` = quiet
@@ -92,7 +102,8 @@
   --ink-muted: #8f8d85;
   --accent: #63a583;
   --accent-strong: #7fb89a;
-  --accent-wash: rgba(99, 165, 131, 0.16);
+  --accent-surface: #253a2e;
+  --accent-wash: var(--accent-surface);
   --danger: #e06c55;
   --warning: #d0a43c;
   --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.45);

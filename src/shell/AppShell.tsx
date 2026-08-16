@@ -66,10 +66,10 @@ function shouldDeferToNativeUndo(el: Element | null): boolean {
   return false
 }
 
-const TIER_TABS: { key: Tier | 'design'; label: string }[] = [
-  { key: 'foundation', label: 'Foundation' },
-  { key: 'architecture', label: 'Architecture' },
-  { key: 'design', label: 'Design' },
+const TIER_TABS: { key: Tier | 'design'; label: string; shortcut: string }[] = [
+  { key: 'foundation', label: 'Foundation', shortcut: '⌘1' },
+  { key: 'architecture', label: 'Architecture', shortcut: '⌘2' },
+  { key: 'design', label: 'Design', shortcut: '⌘3' },
 ]
 
 function routeForTab(projectId: string, tab: Tier | 'design'): AppRoute {
@@ -352,19 +352,21 @@ export function AppShell({ route, children }: { route: AppRoute; children: React
         </h1>
         {projectId !== null && <ProjectName id={projectId} />}
         {projectId !== null && (
-          <nav className="tabs" aria-label="Tiers">
+          <nav className="tabs" aria-label="Focus workspace lane">
             {TIER_TABS.map((tab) => (
               <a
                 key={tab.key}
                 href={serializeRoute(routeForTab(projectId, tab.key))}
                 className={active === tab.key ? 'tab tab--active' : 'tab'}
                 aria-current={active === tab.key ? 'page' : undefined}
+                aria-label={`Focus ${tab.label} lane (${tab.shortcut})`}
+                title={`Focus ${tab.label} lane (${tab.shortcut})`}
                 onClick={(e) => {
                   e.preventDefault()
                   navigate(routeForTab(projectId, tab.key))
                 }}
               >
-                {tab.label}
+                {tab.label} lane
               </a>
             ))}
           </nav>

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import { HeroLanding } from './components/HeroLanding'
 import { ProjectsList } from './components/ProjectsList'
 import { WorkspaceSurface } from './components/WorkspaceSurface'
@@ -17,6 +17,7 @@ import { ContextBarProvider } from './shell/slots'
 import { useAuthStore } from './store/auth'
 import { useCanvasModeStore } from './store/canvasMode'
 import { useProjectsStore } from './store/projects'
+import { useStatusStore } from './store/status'
 
 const LAST_TIER_PREFIX = 'gede-last-tier:'
 
@@ -119,7 +120,20 @@ function Surface({ route }: { route: AppRoute }) {
 export default function App() {
   const status = useProjectsStore((s) => s.status)
   const error = useProjectsStore((s) => s.error)
+  const announce = useStatusStore((s) => s.announce)
   const route = useRoute()
+  const [retryingStorage, setRetryingStorage] = useState(false)
+
+  async function retryStorage() {
+    if (retryingStorage) return
+    setRetryingStorage(true)
+    announce('Retrying browser storage…')
+    try {
+      await useProjectsStore.getState().init()
+    } finally {
+      setRetryingStorage(false)
+    }
+  }
 
   useEffect(() => {
     void useProjectsStore.getState().init()
@@ -159,6 +173,9 @@ export default function App() {
               <section className="panel" role="alert">
                 <p>Storage is unavailable: {error}</p>
                 <p>Export/import will still work from memory this session.</p>
+                <Button variant="command" disabled={retryingStorage} onClick={() => void retryStorage()}>
+                  {retryingStorage ? 'Retrying storage…' : 'Retry storage'}
+                </Button>
               </section>
             </main>
           )}

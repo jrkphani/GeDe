@@ -36,7 +36,17 @@ describe('ProjectsList', () => {
     expect(await screen.findByText('Tavalo')).toBeInTheDocument()
     expect(useProjectsStore.getState().projects.map((p) => p.name)).toEqual(['Tavalo'])
     // phantom placeholder changes once a project exists
-    expect(screen.getByPlaceholderText('New project')).toHaveValue('')
+    expect(screen.getAllByPlaceholderText('New project')).toHaveLength(2)
+  })
+
+  it('keeps a working project creation field above a populated register', async () => {
+    const user = userEvent.setup()
+    await useProjectsStore.getState().createProject('Existing model')
+    render(<ProjectsList onOpen={noop} />)
+
+    const create = screen.getByRole('textbox', { name: 'Name a new project' })
+    await user.type(create, 'Next model{Enter}')
+    expect(await screen.findByText('Next model')).toBeInTheDocument()
   })
 
   it('renames via the revealed rename control: click, edit, Enter commits', async () => {

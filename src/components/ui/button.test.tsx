@@ -31,7 +31,7 @@ describe('.command-button CSS — resting affordance + contrast (STYLE_GUIDE §1
 
   function ruleBody(selector: string): string {
     const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-    const match = new RegExp(`${escaped}\\s*\\{([^}]*)\\}`).exec(css)
+    const match = new RegExp(`^${escaped}\\s*\\{([^}]*)\\}`, 'm').exec(css)
     if (!match) throw new Error(`No CSS rule found for ${selector}`)
     return match[1] as string
   }

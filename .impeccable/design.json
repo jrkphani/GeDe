@@ -1,0 +1,113 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-16T00:00:00Z",
+  "title": "Design System: GeDe",
+  "extensions": {
+    "colorMeta": {
+      "paper": { "role": "neutral", "displayName": "Drafting Paper", "canonical": "#fbfaf7", "tonalRamp": ["#1a1a18", "#34332f", "#5c5a53", "#817e75", "#aaa69b", "#d1cec4", "#eceae3", "#fbfaf7"] },
+      "panel": { "role": "neutral", "displayName": "Opaque Paper Panel", "canonical": "#ffffff", "tonalRamp": ["#191918", "#343330", "#5b5a55", "#85837c", "#aeaCA3", "#d5d3cd", "#efeee9", "#ffffff"] },
+      "ink": { "role": "neutral", "displayName": "Instrument Ink", "canonical": "#1a1a1a", "tonalRamp": ["#111111", "#272727", "#454545", "#666666", "#898989", "#b0b0b0", "#d8d8d8", "#f2f2f2"] },
+      "forest-green": { "role": "primary", "displayName": "Forest Green Chrome", "canonical": "#2d6a4f", "tonalRamp": ["#10291e", "#1b4634", "#2d6a4f", "#478267", "#63a583", "#92c6aa", "#c4e4d1", "#ebf7f0"] },
+      "dimension-violet": { "role": "secondary", "displayName": "Dimension Violet", "canonical": "#6f5bd6", "tonalRamp": ["#211b40", "#382e70", "#5848aa", "#6f5bd6", "#9787e8", "#b9aef3", "#dcd7fa", "#f3f1ff"] },
+      "dimension-teal": { "role": "secondary", "displayName": "Dimension Teal", "canonical": "#0e8a93", "tonalRamp": ["#073033", "#07545a", "#0b7178", "#0e8a93", "#45abb1", "#83c8cc", "#c1e5e7", "#ebf8f8"] },
+      "dimension-orange": { "role": "secondary", "displayName": "Dimension Orange", "canonical": "#d9542b", "tonalRamp": ["#45170b", "#772716", "#aa3d21", "#d9542b", "#e77c58", "#f2a88d", "#f9d5c8", "#fff1ec"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "App Title", "purpose": "Stable product identity and rare page-level emphasis." },
+      "headline": { "displayName": "Tier Header", "purpose": "Section and lane hierarchy." },
+      "body": { "displayName": "Working Copy", "purpose": "Cells, prose, and in-place editing." },
+      "label": { "displayName": "Operational Label", "purpose": "Compact metadata, control labels, and helper text." },
+      "mono": { "displayName": "Method Notation", "purpose": "Symbols, tuples, ranks, IDs, and coverage measurements." }
+    },
+    "shadows": [
+      { "name": "popover", "value": "0 2px 8px rgba(0, 0, 0, 0.1)", "purpose": "Menus and popovers only." },
+      { "name": "frozen-column", "value": "2px 0 4px rgba(0, 0, 0, 0.08)", "purpose": "Functional separation for the pinned symbol column." }
+    ],
+    "motion": [
+      { "name": "fast", "value": "100ms", "purpose": "Immediate hover, selection, and commit feedback." },
+      { "name": "snappy", "value": "140ms", "purpose": "Default short interface transition." },
+      { "name": "drilldown", "value": "200ms", "purpose": "The one spatial-continuity transition for recursive canvas navigation." }
+    ],
+    "breakpoints": [
+      { "name": "compact", "value": "640px" },
+      { "name": "canvas-label-floor", "value": "400px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Command Button",
+      "kind": "button",
+      "refersTo": "button-command",
+      "description": "A visible, low-noise command that is legible before hover.",
+      "html": "<button class=\"ds-command-button\">Add dimension</button>",
+      "css": ".ds-command-button { padding: 4px 8px; border: 1px solid var(--hairline); border-radius: 0; background: var(--paper); color: var(--ink); font: 500 12px/16px var(--font-ui); cursor: pointer; } .ds-command-button:hover { background: var(--grid-minor); } .ds-command-button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }"
+    },
+    {
+      "name": "Row Action",
+      "kind": "button",
+      "refersTo": "button-row-action",
+      "description": "A contextual row-level verb that remains quiet until its record is active.",
+      "html": "<button class=\"ds-row-action\">Archive</button>",
+      "css": ".ds-row-action { padding: 4px 8px; border: 1px solid var(--hairline); border-radius: 0; background: transparent; color: var(--ink-muted); font: 500 12px/16px var(--font-ui); cursor: pointer; } .ds-row-action:hover { color: var(--ink); background: var(--paper); } .ds-row-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }"
+    },
+    {
+      "name": "In-place Field",
+      "kind": "input",
+      "refersTo": "input-inline",
+      "description": "A square, structural field that keeps the document-like reading rhythm intact.",
+      "html": "<input class=\"ds-inline-field\" value=\"Working label\" aria-label=\"Working label\">",
+      "css": ".ds-inline-field { width: 100%; padding: 4px 8px; border: 1px solid var(--hairline); border-radius: 0; background: var(--panel); color: var(--ink); font: 400 14px/20px var(--font-ui); } .ds-inline-field::placeholder { color: var(--ink-muted); } .ds-inline-field:focus { outline: 2px solid var(--accent); outline-offset: 1px; }"
+    },
+    {
+      "name": "Lane Navigation",
+      "kind": "nav",
+      "refersTo": "workspace-lane-nav",
+      "description": "Compact lane-focus navigation for a shared workspace rather than separate application destinations.",
+      "html": "<nav class=\"ds-lanes\"><a class=\"ds-lane ds-lane--active\" href=\"#foundation\">Foundation lane</a><a class=\"ds-lane\" href=\"#architecture\">Architecture lane</a><a class=\"ds-lane\" href=\"#design\">Design lane</a></nav>",
+      "css": ".ds-lanes { display: flex; gap: 16px; } .ds-lane { display: flex; align-items: center; height: 40px; color: var(--ink-muted); font: 500 13px/20px var(--font-ui); text-decoration: none; } .ds-lane:hover { color: var(--ink); } .ds-lane--active { color: var(--ink); box-shadow: inset 0 -2px 0 var(--accent); } .ds-lane:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }"
+    },
+    {
+      "name": "Paper Panel",
+      "kind": "card",
+      "refersTo": "panel",
+      "description": "An opaque working surface that creates readability over graph paper without decorative elevation.",
+      "html": "<section class=\"ds-panel\"><h2>Context register</h2><p>Records remain primary; chrome remains quiet.</p></section>",
+      "css": ".ds-panel { padding: 16px; border: 1px solid var(--hairline); border-radius: 0; background: var(--panel); color: var(--ink); font: 400 14px/20px var(--font-ui); } .ds-panel h2 { margin: 0 0 8px; font: 600 17px/24px var(--font-ui); } .ds-panel p { margin: 0; color: var(--ink-muted); }"
+    },
+    {
+      "name": "Context Status Chip",
+      "kind": "custom",
+      "refersTo": "context-status",
+      "description": "A compact method-state marker that combines a context symbol with non-color-only status treatment.",
+      "html": "<span class=\"ds-context-chip\"><span class=\"ds-status-dot\"></span>α</span>",
+      "css": ".ds-context-chip { display: inline-flex; align-items: center; gap: 4px; padding: 2px 4px; border: 1px solid var(--hairline); border-radius: 0; color: var(--ink); background: var(--panel); font: 500 13px/20px var(--font-mono); } .ds-status-dot { width: 8px; height: 8px; border: 1px solid var(--accent); background: var(--accent); border-radius: 50%; }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Drafting Table",
+    "overview": "GeDe is a precision instrument for teams building a shared design model. The interface is precise, calm, instrumental, and quietly technical: graph paper is the working ground; opaque paper panels hold records; square geometry and hairline rules make interactions feel deliberate rather than decorative. The interface privileges the model over chrome. Tables are the durable record and the circle canvas is its spatial companion.",
+    "keyCharacteristics": [
+      "Graph-paper ground with rectilinear, opaque working surfaces.",
+      "Forest green is the single chrome accent; dimension colors belong only to data.",
+      "Inter handles UI and content; JetBrains Mono marks the method’s symbols, tuples, ranks, and measurements.",
+      "Interaction is immediate; motion exists only to preserve spatial continuity."
+    ],
+    "rules": [
+      { "name": "The One Chrome Hue Rule", "body": "Use forest green for interface state and keep it out of the dimension-data palette.", "section": "colors" },
+      { "name": "The Meaningful Mono Rule", "body": "Use mono for model notation and measurement, never as a generic technical styling cue.", "section": "typography" },
+      { "name": "The Flat-By-Default Rule", "body": "A surface earns depth only when it temporarily floats above the model or must remain legible while pinned.", "section": "elevation" }
+    ],
+    "dos": [
+      "Do treat the workspace as a precision instrument: use paper, hairlines, square corners, and low-noise hierarchy.",
+      "Do use forest green for chrome state and categorical color only for dimensions and relationships.",
+      "Do preserve in-place editing, keyboard operation, visible focus, and non-blocking inline recovery.",
+      "Do let the model provide visual interest: tuples, coverage, relationships, and data geometry outrank decoration."
+    ],
+    "donts": [
+      "Don't turn GeDe into a dashboard of cards, summary metrics, or decorative charts.",
+      "Don't add gradients, rounded chrome, decorative shadows, or color used only for ornament.",
+      "Don't use mono for arbitrary labels or use dimension colors for generic interface emphasis.",
+      "Don't replace the live table/canvas model with a modal tutorial or separate form workflow."
+    ]
+  }
+}
