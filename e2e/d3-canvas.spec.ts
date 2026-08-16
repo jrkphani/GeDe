@@ -715,9 +715,13 @@ test('the Foundation lane keeps all value propositions in one editable table at 
   const comfort = page.locator('.wc-node--foundation tbody tr[data-row-id]').filter({ hasText: 'Comfort' })
   const nameCell = comfort.locator('td.tier1-col--name .grid-cell[tabindex]')
   await nameCell.click()
-  // Input values are not part of a row's textContent. Once editing starts, the
+  // Editor content is not part of a row's textContent. Once editing starts, the
   // live `hasText` row locator no longer matches, so anchor to the stable node.
-  await expect(page.locator('.wc-node--foundation td.tier1-col--name input:focus')).toBeVisible()
+  // The Name cell edits as a Lexical contenteditable (rich Name formatting), not
+  // a plain <input>.
+  await expect(
+    page.locator('.wc-node--foundation td.tier1-col--name [contenteditable="true"]:focus'),
+  ).toBeVisible()
 })
 
 test('dragging a value-proposition row reorders and persists rank in the unified table', { tag: '@dev-flag' }, async ({
@@ -1258,7 +1262,9 @@ test('a lane node being edited does NOT collapse on zoom-out (no lost edit)', { 
   const row = foundation.locator('tbody tr[data-row-id]').filter({ hasText: 'Comfort' })
   const nameCell = row.locator('td.tier1-col--name .grid-cell[tabindex]')
   await nameCell.click()
-  const input = foundation.locator('td.tier1-col--name input:focus')
+  // Rich Name formatting: the Name cell's editor is a contenteditable, not an
+  // <input>. `fill` works on both.
+  const input = foundation.locator('td.tier1-col--name [contenteditable="true"]:focus')
   await expect(input).toBeVisible()
   await input.fill('Comfort-EDIT')
 
