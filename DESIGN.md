@@ -40,6 +40,21 @@ typography:
     fontSize: "12px"
     fontWeight: 500
     lineHeight: "16px"
+  chrome:
+    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontSize: "15px"
+    fontWeight: 600
+    lineHeight: "20px"
+  badge:
+    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontSize: "10px"
+    fontWeight: 500
+    lineHeight: "12px"
+  micro:
+    fontFamily: "Inter Variable, system-ui, sans-serif"
+    fontSize: "8px"
+    fontWeight: 500
+    lineHeight: "10px"
   mono:
     fontFamily: "JetBrains Mono Variable, ui-monospace, monospace"
     fontSize: "13px"
@@ -133,6 +148,9 @@ The palette separates instrument from information: warm paper and dark ink estab
 - **Body:** 400 at 14px / 20px for cells, prose, and routine operations.
 - **Label:** 500 at 12px / 16px for supporting controls and compact metadata.
 - **Column Head:** 500 at 11px / 16px with uppercase tracking for tabular structure.
+- **Compact Chrome:** 600 at 15px for the stable wordmark and coverage lead; it is not body copy.
+- **Badge:** 500 at 10px / 12px for collaborator initials inside a fixed 20px identity chip.
+- **Matrix Micro:** 500 at 8px / 10px for count overlays inside fixed 24px coverage cells only.
 - **Method Notation:** 500 at 13px / 20px in JetBrains Mono for symbols, tuples, ranks, and counts.
 
 **The Meaningful Mono Rule.** Use mono for model notation and measurement, never as a generic “technical” styling cue.

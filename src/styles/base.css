@@ -67,9 +67,9 @@ body {
 }
 
 .wordmark {
-  font-size: 15px;
+  font-size: var(--text-chrome);
   line-height: 40px;
-  font-weight: 600;
+  font-weight: var(--font-weight-strong);
   margin: 0;
 }
 
@@ -2573,8 +2573,8 @@ body {
 
 .coverage-stat--lead {
   margin: 0;
-  font-size: 15px;
-  font-weight: 600;
+  font-size: var(--text-chrome);
+  font-weight: var(--font-weight-strong);
   color: var(--ink);
 }
 
@@ -2592,7 +2592,7 @@ body {
 }
 
 .coverage-axis__label {
-  font-size: 11px;
+  font-size: var(--text-colhead);
   text-transform: uppercase;
   letter-spacing: 0.04em;
   color: var(--ink-muted);
@@ -2608,7 +2608,7 @@ body {
   border: 1px solid var(--hairline);
   border-radius: var(--radius);
   background: var(--panel);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink);
 }
 
@@ -2626,7 +2626,7 @@ body {
   flex-basis: 100%;
   margin: 0;
   min-height: 1.2em;
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
 }
 
@@ -2655,7 +2655,7 @@ body {
   padding: 0;
   border: 1px solid var(--hairline);
   background: var(--panel);
-  font-size: 11px;
+  font-size: var(--text-colhead);
   line-height: 1;
   color: var(--ink);
   cursor: pointer;
@@ -2682,8 +2682,8 @@ body {
   position: absolute;
   top: 0;
   right: 1px;
-  font-size: 7px;
-  line-height: 1;
+  font-size: var(--text-micro);
+  line-height: var(--leading-micro);
   color: var(--paper);
 }
 
@@ -2730,7 +2730,7 @@ body {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  font-size: 11px;
+  font-size: var(--text-colhead);
   color: var(--ink-muted);
 }
 
@@ -2753,7 +2753,7 @@ body {
   align-items: center;
   justify-content: flex-end;
   padding-right: var(--space-2);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
   overflow: hidden;
   white-space: nowrap;
@@ -2770,7 +2770,7 @@ body {
 
 .view-toggle__btn {
   padding: 2px var(--space-3);
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
   background: transparent;
   border: 0;
@@ -2790,13 +2790,13 @@ body {
    match both ancestors. */
 .context-bar .coverage-stat,
 .workspace__lane-header .coverage-stat {
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink);
 }
 
 .context-bar .draft-count,
 .workspace__lane-header .draft-count {
-  font-size: 12px;
+  font-size: var(--text-label);
   color: var(--ink-muted);
 }
 
@@ -3417,9 +3417,9 @@ body {
   width: 20px;
   height: 20px;
   flex: none;
-  font-size: 10px;
-  line-height: 1;
-  font-weight: 500;
+  font-size: var(--text-badge);
+  line-height: var(--leading-badge);
+  font-weight: var(--font-weight-medium);
   font-family: var(--font-ui);
   color: var(--paper);
   border: 1px solid var(--panel);

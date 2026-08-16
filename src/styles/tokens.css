@@ -44,12 +44,17 @@
   --text-mono: 13px;
   --text-label: 12px;
   --text-colhead: 11px;
+  --text-chrome: 15px;
+  --text-badge: 10px;
+  --text-micro: 8px;
   --leading-title: 28px;
   --leading-header: 24px;
   --leading-body: 20px;
   --leading-mono: 20px;
   --leading-label: 16px;
   --leading-colhead: 16px;
+  --leading-badge: 12px;
+  --leading-micro: 10px;
 
   /* Weight scale — §3 (named by emphasis role; components never hard-code a
      numeric weight). `strong` = headers / parent records, `medium` = quiet
