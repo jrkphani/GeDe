@@ -1,3 +1,5 @@
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import * as cdk from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import { buildAppStacks } from '../lib/build-app';
@@ -82,7 +84,16 @@ describe('MigrationStack (Gede-Test-Migrations) — issue 045', () => {
       Properties: { MigrationSetHash?: string; MigrationFileCount?: number };
     }>;
     expect(resource.Properties.MigrationSetHash).toMatch(/^[0-9a-f]{64}$/);
-    expect(resource.Properties.MigrationFileCount).toBe(18); // 0000-0017 (issue 090 added 0017)
+    // Derived, not hardcoded: a literal count has to be hand-bumped by every PR
+    // that adds a migration (0016, then 0017, then 0018), and a missed bump
+    // fails the build for a reason unrelated to the change that tripped it —
+    // the same trap already removed from migration-runner.test.ts. What matters
+    // is that the stack counts exactly the files that are really there.
+    const migrationsOnDisk = fs
+      .readdirSync(path.resolve(__dirname, '..', '..', '..', 'src', 'db', 'migrations'))
+      .filter((f) => f.endsWith('.sql'));
+    expect(migrationsOnDisk.length).toBeGreaterThan(0); // guard: never vacuously pass
+    expect(resource.Properties.MigrationFileCount).toBe(migrationsOnDisk.length);
 
     // Determinism: synthesizing twice from the same (unchanged) source files
     // produces the identical hash.

@@ -11,6 +11,7 @@ import {
   createProject,
   getTier1Purpose,
   setTier1ExistingScenario,
+  setTier1PropFormattedName,
   setTier1PropDescription,
   setTier1Purpose,
 } from '../db/mutations'
@@ -393,6 +394,29 @@ describe('FoundationSurface — value-proposition Description is a rich cell (is
       expect(useTier1Store.getState().props.find((p) => p.id === prop.id)?.description ?? '').toBe(''),
     )
     await waitFor(() => expect(within(row).queryByLabelText('Description')).not.toBeInTheDocument())
+  })
+})
+
+describe('FoundationSurface — editable headers and rich Name display', () => {
+  it('renames a display header without changing the stable Name field', async () => {
+    const user = userEvent.setup()
+    render(<FoundationSurface projectId={projectId} />)
+    const rename = await screen.findByRole('button', { name: 'Rename Name column' })
+    await user.click(rename)
+    const input = screen.getByRole('textbox', { name: 'Rename Name column' })
+    await user.clear(input)
+    await user.type(input, 'Proposition{Enter}')
+    await waitFor(() => expect(screen.getByText('Proposition')).toBeInTheDocument())
+    expect((await getTier1Purpose(db, projectId))?.valuePropNameHeader).toBe('Proposition')
+  })
+
+  it('renders stored inline formatting while keeping canonical plain text', async () => {
+    const prop = await addTier1Prop(db, projectId, 'Comfort')
+    const rich = '{"root":{"children":[{"children":[{"detail":0,"format":1,"mode":"normal","style":"","text":"Comfort","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":""}],"direction":null,"format":"","indent":0,"type":"root","version":1}}'
+    await setTier1PropFormattedName(db, prop.id, 'Comfort', rich)
+    render(<FoundationSurface projectId={projectId} />)
+    const strong = await screen.findByText('Comfort', { selector: 'strong' })
+    expect(strong).toBeInTheDocument()
   })
 })
 

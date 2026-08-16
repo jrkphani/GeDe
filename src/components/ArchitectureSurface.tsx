@@ -2,6 +2,7 @@ import { ChevronDown, ChevronRight } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from 'react'
 import type { Tier2EntryRow, Tier2TableRow } from '../db/mutations'
 import { buildEntryTree, flattenEntryTree, groupSiblingsBySort } from '../domain/entryTree'
+import { plainTextToRichJson, richTextToPlainText } from '../domain/richText'
 import { canWrite } from '../domain/workspaceRole'
 import { useStatusStore } from '../store/status'
 import { useTier2Store, type EntryLink } from '../store/tier2'
@@ -379,7 +380,8 @@ export function TablePanel({
   const linkByEntryId = useTier2Store((s) => s.linkByEntryId)
   const renameTable = useTier2Store((s) => s.renameTable)
   const addEntry = useTier2Store((s) => s.addEntry)
-  const renameEntry = useTier2Store((s) => s.renameEntry)
+  const setEntryFormattedName = useTier2Store((s) => s.setEntryFormattedName)
+  const setTableHeaders = useTier2Store((s) => s.setTableHeaders)
   const setEntryDescription = useTier2Store((s) => s.setEntryDescription)
   const removeEntry = useTier2Store((s) => s.removeEntry)
   const moveEntry = useTier2Store((s) => s.moveEntry)
@@ -806,7 +808,9 @@ export function TablePanel({
     },
     {
       id: 'name',
-      header: 'Name',
+      header: table.nameHeader ?? 'Name',
+      onHeaderCommit: (value) =>
+        setTableHeaders(table.id, value, table.descriptionHeader ?? 'Description'),
       // Owner req ("indent child records"): the name cell is a targetable column
       // so its per-depth left inset (base.css .t2-col--name, keyed on the row's
       // --depth) makes a child's name step visibly right of its parent's — the
@@ -814,18 +818,21 @@ export function TablePanel({
       headClassName: 't2-col--name',
       cellClassName: 't2-col--name',
       cell: {
-        kind: 'text',
-        getValue: (entry) => entry.name,
+        kind: 'richtext',
+        inlineOnly: true,
+        placeholder: 'Add name…',
+        getValue: (entry) => entry.nameRichText ?? plainTextToRichJson(entry.name),
         onCommit: async (entry, value) => {
-          if (value.length > 0 && value !== entry.name) {
-            const count = await renameEntry(table.id, entry.id, value)
+          const name = richTextToPlainText(value).trim()
+          if (name.length > 0) {
+            const count = await setEntryFormattedName(table.id, entry.id, name, value)
             if (count > 0) {
               useStatusStore
                 .getState()
-                .announce(`Renamed ${value} — ${plural(count, 'parameter')} updated`)
+                .announce(`Renamed ${name} — ${plural(count, 'parameter')} updated`)
             }
           }
-          return value.length > 0
+          return name.length > 0
         },
         // Keep a compact per-row link cue, while the table-level summary names
         // each promoted Design dimension once (rather than repeating a heading
@@ -849,7 +856,9 @@ export function TablePanel({
     },
     {
       id: 'description',
-      header: 'Description',
+      header: table.descriptionHeader ?? 'Description',
+      onHeaderCommit: (value) =>
+        setTableHeaders(table.id, table.nameHeader ?? 'Name', value),
       headClassName: 'grid-col--description',
       cellClassName: 'grid-col--description',
       cell: {

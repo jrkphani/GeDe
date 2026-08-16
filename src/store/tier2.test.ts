@@ -47,6 +47,19 @@ function entriesOf(tableId: string) {
 }
 
 describe('tier2 store — tables & entries', () => {
+  it('persists per-table headers and formatted entry names without changing canonical names', async () => {
+    const table = nn(await useTier2Store.getState().addTable('Stakeholders'))
+    const entry = nn(await useTier2Store.getState().addEntry(table.id, null, 'Buyers'))
+    await useTier2Store.getState().setTableHeaders(table.id, 'Audience', 'Rationale')
+    expect(tables()[0]?.nameHeader).toBe('Audience')
+    expect(tables()[0]?.descriptionHeader).toBe('Rationale')
+
+    const rich = '{"root":{"children":[{"children":[{"detail":0,"format":2,"mode":"normal","style":"","text":"Buyers","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":""}],"direction":null,"format":"","indent":0,"type":"root","version":1}}'
+    await useTier2Store.getState().setEntryFormattedName(table.id, entry.id, 'Buyers', rich)
+    expect(entriesOf(table.id)[0]?.name).toBe('Buyers')
+    expect(entriesOf(table.id)[0]?.nameRichText).toBe(rich)
+  })
+
   it('addTable persists and is one undo step', async () => {
     await useTier2Store.getState().addTable('Stakeholders')
     expect(tables().map((t) => t.name)).toEqual(['Stakeholders'])

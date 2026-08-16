@@ -13,6 +13,14 @@ function tablePanel(page: Page, tableName: string) {
   })
 }
 
+// The entry Name cell now edits as a Lexical contenteditable (rich Name
+// formatting) rather than a plain <input>, matching how the other rich-text
+// specs drive it. Assert with toHaveText, never toHaveValue — a
+// contenteditable has no `.value`.
+function focusedNameEditor(page: Page) {
+  return page.locator('[contenteditable="true"]:focus')
+}
+
 async function addTable(page: Page, name: string) {
   // Issue 084 (D1): the create control is the stable top add-row's typed
   // input ("Name a table"), no longer the trailing "Add table" ghost.
@@ -115,7 +123,7 @@ test('architecture: build tables, promote to dimensions, register offers params,
   await page.getByRole('link', { name: 'Architecture' }).click()
   const usersCell = tablePanel(page, 'Stakeholders').getByRole('cell', { name: 'Users', exact: true })
   await usersCell.click()
-  await page.locator('input:focus').fill('People')
+  await focusedNameEditor(page).fill('People')
   // Issue 105 P1 — on the Architecture surface Enter now = "commit + new sibling"
   // (the keyboard series grammar), so committing a one-off rename uses blur
   // instead: clicking a neutral element outside the cell commits via the
@@ -379,7 +387,7 @@ test('architecture P6: the quiet keyboard hints reveal on focus and are hidden a
 
   // Editing a text cell shows the Tab →/Esc chips inline at the cell's end.
   await panel.getByRole('cell', { name: 'Admin', exact: true }).click()
-  await expect(page.locator('input:focus')).toBeVisible()
+  await expect(focusedNameEditor(page)).toBeVisible()
   const editHints = page.locator('.grid-cell__editing .key-hint__cap')
   await expect(editHints.filter({ hasText: 'Tab' })).toBeVisible()
   await expect(editHints.filter({ hasText: '→' })).toBeVisible()
@@ -423,7 +431,7 @@ test('architecture P6: renders and stays operable at volume (~20 tables × ~50 e
   const cell = last.getByRole('cell', { name: 'T20 Entry 50', exact: true })
   const t0 = Date.now()
   await cell.click()
-  await expect(page.locator('input:focus')).toBeVisible()
+  await expect(focusedNameEditor(page)).toBeVisible()
   const openMs = Date.now() - t0
   expect(openMs, `cell-open at volume took ${openMs}ms`).toBeLessThan(3_000)
   await page.keyboard.press('Escape')
@@ -460,7 +468,7 @@ test('architecture 105 (P0): Tab from a description commits + moves to the next 
   // Tab must commit the description AND move to the NEXT editable cell — the
   // next row's Name in edit mode — never the Add-child button, never a phantom.
   await page.keyboard.press('Tab')
-  await expect(page.locator('input:focus')).toHaveValue('Legroom')
+  await expect(focusedNameEditor(page)).toHaveText('Legroom')
   await expect(page.getByPlaceholder(/Name a child of/)).toHaveCount(0)
 
   // The typed description committed on Tab (same commit path as ⌘⏎ / blur).
@@ -494,7 +502,7 @@ test('architecture 105 (P1): Enter on a name opens a same-depth sibling phantom;
 
   // Edit Legroom's name; Enter arms a SIBLING phantom at depth 1 (under Comfort).
   await panel.getByRole('cell', { name: 'Legroom', exact: true }).click()
-  await expect(page.locator('input:focus')).toHaveValue('Legroom')
+  await expect(focusedNameEditor(page)).toHaveText('Legroom')
   await page.keyboard.press('Enter')
 
   // The sibling phantom is an inline type-to-create field at depth 1, focused.
@@ -537,7 +545,7 @@ test('architecture 105 (HIGH 1): abandoning an empty sibling phantom creates no 
 
   // Arm a top-level sibling phantom off Comfort (Enter on its name).
   await panel.getByRole('cell', { name: 'Comfort', exact: true }).click()
-  await expect(page.locator('input:focus')).toHaveValue('Comfort')
+  await expect(focusedNameEditor(page)).toHaveText('Comfort')
   await page.keyboard.press('Enter')
   const sibField = page.getByPlaceholder('Name a sibling')
   await expect(sibField).toBeFocused()
@@ -663,8 +671,8 @@ test('architecture 102b: Add child works while a CHANGED name cell is being edit
 
   // Open the NAME cell and CHANGE it (async commit-on-blur) — do NOT commit first.
   await panel.getByRole('cell', { name: 'Comfort', exact: true }).click()
-  const nameInput = page.locator('input:focus')
-  await nameInput.fill('Comfortable')
+  const nameEditor = focusedNameEditor(page)
+  await nameEditor.fill('Comfortable')
 
   // With the changed name still mid-edit, click Add child (name uncommitted, so
   // the entry — and the button's aria-label — is still "Comfort").
@@ -820,12 +828,12 @@ test('architecture 104 (edge b): clicking a plain-text cell while armed dismisse
   await expect(childField).toBeVisible()
 
   // Click Comfort's Name cell (index 1: tree=0, name=1, description=2). The phantom
-  // dismisses and the name cell opens its plain-text editor, focused with the value.
+  // dismisses and the name cell opens its rich-text editor, focused with the value.
   await comfortRow.getByRole('cell').nth(1).click()
   await expect(childField).toBeHidden()
-  const nameInput = page.locator('input:focus')
-  await expect(nameInput).toBeVisible({ timeout: 2000 })
-  await expect(nameInput).toHaveValue('Comfort')
+  const nameEditor = focusedNameEditor(page)
+  await expect(nameEditor).toBeVisible({ timeout: 2000 })
+  await expect(nameEditor).toHaveText('Comfort')
 })
 
 // (c) Shift+Tab from the add-child field must exit add mode and land focus on the

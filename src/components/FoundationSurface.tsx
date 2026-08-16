@@ -9,6 +9,7 @@ import { CSS } from '@dnd-kit/utilities'
 import { useEffect, useMemo, useState } from 'react'
 import type { Tier1PropRow } from '../db/mutations'
 import { formatDegree } from '../domain/degree'
+import { plainTextToRichJson, richTextToPlainText } from '../domain/richText'
 import { canWrite } from '../domain/workspaceRole'
 import { useTier1Store } from '../store/tier1'
 import { useWorkspaceRole } from '../store/workspace'
@@ -134,7 +135,10 @@ export function FoundationValueTable({
 }) {
   const props = useTier1Store((s) => s.props)
   const addProp = useTier1Store((s) => s.addProp)
-  const renameProp = useTier1Store((s) => s.renameProp)
+  const valuePropNameHeader = useTier1Store((s) => s.valuePropNameHeader)
+  const valuePropDescriptionHeader = useTier1Store((s) => s.valuePropDescriptionHeader)
+  const setHeaders = useTier1Store((s) => s.setHeaders)
+  const setFormattedName = useTier1Store((s) => s.setFormattedName)
   const setDescription = useTier1Store((s) => s.setDescription)
   const reorderProp = useTier1Store((s) => s.reorderProp)
   const [previewOrder, setPreviewOrder] = useState<string[] | null>(null)
@@ -186,21 +190,27 @@ export function FoundationValueTable({
     },
     {
       id: 'name',
-      header: 'Name',
+      header: valuePropNameHeader,
+      onHeaderCommit: (value) => setHeaders(value, valuePropDescriptionHeader),
       headClassName: 'tier1-col--name',
       cellClassName: 'tier1-col--name',
       cell: {
-        kind: 'text',
-        getValue: (prop) => prop.name,
+        kind: 'richtext',
+        inlineOnly: true,
+        placeholder: 'Add name…',
+        getValue: (prop) => prop.nameRichText ?? plainTextToRichJson(prop.name),
         onCommit: async (prop, value) => {
-          if (value.length > 0 && value !== prop.name) await renameProp(prop.id, value)
-          return value.length > 0
+          const name = richTextToPlainText(value).trim()
+          if (!name) return false
+          await setFormattedName(prop.id, name, value)
+          return true
         },
       },
     },
     {
       id: 'description',
-      header: 'Description',
+      header: valuePropDescriptionHeader,
+      onHeaderCommit: (value) => setHeaders(valuePropNameHeader, value),
       headClassName: 'grid-col--description',
       cellClassName: 'grid-col--description',
       cell: {

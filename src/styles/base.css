@@ -1039,6 +1039,44 @@ body {
   white-space: nowrap;
 }
 
+.grid-header__edit {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  max-width: 100%;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: text;
+}
+
+.grid-header__edit > :last-child {
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+
+.grid-header__edit:hover > :last-child,
+.grid-header__edit:focus-visible > :last-child {
+  opacity: 0.7;
+}
+
+.grid-header__input {
+  width: min(100%, 16rem);
+  min-width: 7rem;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--ink-3);
+  border-radius: var(--radius-sm);
+  color: var(--ink-1);
+  background: var(--paper);
+  font: inherit;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
 .editable-grid td {
   border-bottom: 1px solid var(--hairline);
   padding: 0;

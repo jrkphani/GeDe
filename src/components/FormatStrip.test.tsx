@@ -120,6 +120,33 @@ describe('FormatStrip — binds to the focused editor', () => {
     expect(bold).toHaveAttribute('tabindex', '-1')
   })
 
+  it('limits inline Name editors to Bold, Italic, and Underline', () => {
+    render(
+      <>
+        <FormatStrip />
+        <RichTextEditor
+          value={null}
+          onCommit={vi.fn()}
+          ariaLabel="Name"
+          placeholder="Name"
+          inlineOnly
+        />
+      </>,
+    )
+    fireEvent.focus(screen.getByLabelText('Name'))
+
+    const bold = screen.getByRole('button', { name: 'Bold' })
+    const underline = screen.getByRole('button', { name: 'Underline' })
+    const bulletedList = screen.getByRole('button', { name: 'Bulleted list' })
+    expect(bulletedList).toHaveAttribute('aria-disabled', 'true')
+    expect(bulletedList).toHaveAttribute('tabindex', '-1')
+
+    fireEvent.keyDown(bold, { key: 'ArrowLeft' })
+    expect(underline).toHaveAttribute('tabindex', '0')
+    fireEvent.keyDown(underline, { key: 'ArrowRight' })
+    expect(bold).toHaveAttribute('tabindex', '0')
+  })
+
   it('clicking Bold on a selection wraps it in <strong> and toggles aria-pressed', async () => {
     renderStripWithEditor(vi.fn(), plainTextEditorStateJson('Comfort, on demand.'))
     const editable = screen.getByLabelText('Existing scenario')

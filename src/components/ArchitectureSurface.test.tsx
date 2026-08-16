@@ -533,7 +533,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
 
     // Edit Superstars' name, Enter → sibling phantom under Buyers, at depth 1.
     await user.click(screen.getByText('Superstars'))
-    const nameInput = await screen.findByDisplayValue('Superstars')
+    const nameInput = await screen.findByRole('textbox', { name: 'Name' })
     await user.type(nameInput, '{Enter}')
 
     const sibField = await screen.findByPlaceholderText('Name a sibling under Buyers')
@@ -560,7 +560,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
 
     const undoDepthBefore = useCommandLogStore.getState().past.length
     await user.click(screen.getByText('Buyers'))
-    const nameInput = await screen.findByDisplayValue('Buyers')
+    const nameInput = await screen.findByRole('textbox', { name: 'Name' })
     await user.type(nameInput, '{Enter}')
     const sibField = await screen.findByPlaceholderText('Name a sibling')
     await user.type(sibField, '{Escape}')
@@ -585,7 +585,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
     await screen.findByText('Superstars')
 
     await user.click(screen.getByText('Superstars'))
-    const nameInput = await screen.findByDisplayValue('Superstars')
+    const nameInput = await screen.findByRole('textbox', { name: 'Name' })
     await user.type(nameInput, '{Enter}')
     const sibField = await screen.findByPlaceholderText('Name a sibling under Buyers')
     await user.type(sibField, 'Whales')
@@ -614,7 +614,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
 
     // Run a depth-1 sibling series under Buyers.
     await user.click(screen.getByText('Superstars'))
-    const nameInput = await screen.findByDisplayValue('Superstars')
+    const nameInput = await screen.findByRole('textbox', { name: 'Name' })
     await user.type(nameInput, '{Enter}')
     const sibField = await screen.findByPlaceholderText('Name a sibling under Buyers')
     await user.type(sibField, 'Whales')
@@ -643,7 +643,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
 
     // Arm the sibling series on the series-start row (Superstars).
     await user.click(screen.getByText('Superstars'))
-    await user.type(await screen.findByDisplayValue('Superstars'), '{Enter}')
+    await user.type(await screen.findByRole('textbox', { name: 'Name' }), '{Enter}')
 
     // Create the 2nd sibling (Whales).
     await user.type(await screen.findByPlaceholderText('Name a sibling under Buyers'), 'Whales')
@@ -699,7 +699,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
     try {
       // Arm the sibling series on Superstars and fire a create (held pending).
       await user.click(screen.getByText('Superstars'))
-      await user.type(await screen.findByDisplayValue('Superstars'), '{Enter}')
+      await user.type(await screen.findByRole('textbox', { name: 'Name' }), '{Enter}')
       await user.type(await screen.findByPlaceholderText('Name a sibling under Buyers'), 'Whales')
       await user.keyboard('{Enter}')
 
@@ -734,7 +734,7 @@ describe('ArchitectureSurface — 105 P1 keyboard sibling series', () => {
 
     // Arm a sibling series under Buyers.
     await user.click(screen.getByText('Superstars'))
-    await user.type(await screen.findByDisplayValue('Superstars'), '{Enter}')
+    await user.type(await screen.findByRole('textbox', { name: 'Name' }), '{Enter}')
     await screen.findByPlaceholderText('Name a sibling under Buyers')
 
     // Click "Add child" on Superstars → the add-child phantom takes over AND the

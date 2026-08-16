@@ -76,6 +76,9 @@ export interface RichTextCellKind<TRow> {
   // and auto-grows with content instead of ballooning the row on click. Default
   // OFF → every description cell is compact without opting in.
   roomy?: boolean
+  /** Name columns: render inline marks at rest and reject paragraph breaks. */
+  inlineOnly?: boolean
+  adornment?: (row: TRow) => React.ReactNode
 }
 
 export type GridCellKind<TRow> =
@@ -92,6 +95,65 @@ export interface GridColumn<TRow> {
   cell: GridCellKind<TRow>
   headClassName?: string
   cellClassName?: string
+  /** Optional persisted display-label edit; semantic `id` remains stable. */
+  onHeaderCommit?: (value: string) => Promise<void> | void
+}
+
+function EditableColumnHeader<TRow>({
+  column,
+  readOnly,
+}: {
+  column: GridColumn<TRow>
+  readOnly: boolean
+}) {
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(column.header)
+  useEffect(() => setDraft(column.header), [column.header])
+  if (readOnly || !column.onHeaderCommit) return column.header
+
+  const commit = () => {
+    const next = draft.trim()
+    setEditing(false)
+    if (!next) {
+      setDraft(column.header)
+      return
+    }
+    if (next !== column.header) void column.onHeaderCommit?.(next)
+  }
+
+  if (editing) {
+    return (
+      <input
+        className="grid-header__input"
+        aria-label={`Rename ${column.header} column`}
+        value={draft}
+        autoFocus
+        maxLength={48}
+        onChange={(event) => setDraft(event.target.value)}
+        onBlur={commit}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') commit()
+          if (event.key === 'Escape') {
+            setDraft(column.header)
+            setEditing(false)
+          }
+        }}
+      />
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      className="grid-header__edit"
+      aria-label={`Rename ${column.header} column`}
+      title="Rename column"
+      onClick={() => setEditing(true)}
+    >
+      <span>{column.header}</span>
+      <span aria-hidden="true">✎</span>
+    </button>
+  )
 }
 
 export interface PhantomConfig {
@@ -769,6 +831,39 @@ function seedRichValue(stored: string): string | null {
   return plainTextToRichJson(stored)
 }
 
+interface SerializedRichNode {
+  type?: string
+  text?: string
+  format?: number
+  children?: SerializedRichNode[]
+}
+
+// Safe React-by-construction renderer for the small Lexical whitelist. It
+// never injects HTML; malformed/legacy values fall back to canonical plain
+// text. Only inline marks are surfaced because this is used by Name cells.
+function RichInlineDisplay({ value, fallback }: { value: string; fallback: string }) {
+  const safe = value.trimStart().startsWith('{') ? safeRichTextJson(value) : null
+  if (safe === null) return <>{fallback}</>
+  try {
+    const root = (JSON.parse(safe) as { root: SerializedRichNode }).root
+    let key = 0
+    const renderNode = (node: SerializedRichNode): React.ReactNode => {
+      if (node.type === 'text') {
+        let content: React.ReactNode = node.text ?? ''
+        const format = node.format ?? 0
+        if ((format & 8) !== 0) content = <u>{content}</u>
+        if ((format & 2) !== 0) content = <em>{content}</em>
+        if ((format & 1) !== 0) content = <strong>{content}</strong>
+        return <Fragment key={key++}>{content}</Fragment>
+      }
+      return (node.children ?? []).map(renderNode)
+    }
+    return <>{renderNode(root)}</>
+  } catch {
+    return <>{fallback}</>
+  }
+}
+
 // Issue 089 D1 Phase 3 — the rich-text justification cell. Modeled on
 // MultilineCell (click-to-swap: a clamped read-mode display becomes a live
 // editor on click/Enter), but the editor is RichTextEditor — an always-live
@@ -819,7 +914,12 @@ function RichTextCell<TRow>({
         title={plain || undefined}
       >
         {plain ? (
-          <span className="grid-cell__clamp">{plain}</span>
+          <>
+            <span className="grid-cell__clamp">
+              {cellDef.inlineOnly ? <RichInlineDisplay value={stored} fallback={plain} /> : plain}
+            </span>
+            {cellDef.adornment?.(row)}
+          </>
         ) : (
           <span className="grid-cell__placeholder" aria-hidden="true">
             —
@@ -841,11 +941,14 @@ function RichTextCell<TRow>({
           ariaLabel={name}
           placeholder={cellDef.placeholder}
           autoFocus
+          {...(cellDef.inlineOnly ? { inlineOnly: true } : {})}
           onCommit={(next) => {
             void cellDef.onCommit(row, next ?? '')
           }}
           onCommitAndAdvance={() =>
-            nav.advance(nextEditableCell(nav, rowId, columnId, 'down'), rowId, columnId)
+            cellDef.inlineOnly && nav.onEnterCreateSibling
+              ? nav.onEnterCreateSibling(rowId)
+              : nav.advance(nextEditableCell(nav, rowId, columnId, 'down'), rowId, columnId)
           }
           onEscape={() => {
             refocusDisplay.current = true
@@ -876,13 +979,18 @@ function RichTextCell<TRow>({
         />
       </div>
     )
-    // Issue 084 D3 P5 — off → bare editor; on → editor + quiet ⌘⏎/Esc chips
-    // (the richtext commit is Cmd/Ctrl+Enter, not Tab — the Numbers-grammar seam).
+    // Issue 084 D3 P5 — off → bare editor; on → editor + quiet chips.
+    // The chips must name the key that ACTUALLY advances, or they teach the
+    // wrong grammar: a richtext cell commits with ⌘⏎ (the Numbers-grammar
+    // seam), EXCEPT where `richTextTabAdvances` is on (Architecture), where
+    // Tab commits + moves exactly like a plain text cell. Before rich Name
+    // formatting this never diverged, because the only richtext cell on that
+    // surface was the description.
     if (!nav.showKeyHints) return editor
     return (
       <span className="grid-cell__editing">
         {editor}
-        <CellKeyHints variant="cmdEnter" />
+        <CellKeyHints variant={nav.richTextTabAdvances ? 'tab' : 'cmdEnter'} />
       </span>
     )
   }
@@ -907,7 +1015,12 @@ function RichTextCell<TRow>({
       }}
     >
       {plain ? (
-        <span className="grid-cell__clamp">{plain}</span>
+        <>
+          <span className="grid-cell__clamp">
+            {cellDef.inlineOnly ? <RichInlineDisplay value={stored} fallback={plain} /> : plain}
+          </span>
+          {cellDef.adornment?.(row)}
+        </>
       ) : (
         <>
           <span className="grid-cell__placeholder" aria-hidden="true">—</span>
@@ -1320,7 +1433,11 @@ export function EditableGrid<TRow>({
             <tr key={headerGroup.id}>
               {headerGroup.headers.map((header, i) => (
                 <th key={header.id} scope="col" className={columns[i]?.headClassName}>
-                  {flexRender(header.column.columnDef.header, header.getContext())}
+                  {columns[i] ? (
+                    <EditableColumnHeader column={columns[i]} readOnly={readOnly} />
+                  ) : (
+                    flexRender(header.column.columnDef.header, header.getContext())
+                  )}
                 </th>
               ))}
             </tr>

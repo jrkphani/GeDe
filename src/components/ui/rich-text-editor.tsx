@@ -140,6 +140,7 @@ function EditorChrome({
   onEscape,
   onTabAdvance,
   autoFocus,
+  inlineOnly,
 }: {
   value: string | null
   onCommit: (next: string | null) => void
@@ -150,6 +151,7 @@ function EditorChrome({
   onEscape?: (() => void) | undefined
   onTabAdvance?: ((dir: 'forward' | 'backward') => void) | undefined
   autoFocus?: boolean | undefined
+  inlineOnly: boolean
 }) {
   const [editor] = useLexicalComposerContext()
   // Stable per-instance key for the focused-editor registry (089 D1 P1): the
@@ -199,6 +201,14 @@ function EditorChrome({
       KEY_DOWN_COMMAND,
       (event: KeyboardEvent) => {
         const modifier = event.metaKey || event.ctrlKey
+        if (event.key === 'Enter' && inlineOnly) {
+          event.preventDefault()
+          if (onCommitAndAdvance) {
+            commitNow()
+            onCommitAndAdvance('down')
+          }
+          return true
+        }
         if (event.key === 'Enter' && modifier && onCommitAndAdvance) {
           event.preventDefault()
           commitNow()
@@ -221,7 +231,7 @@ function EditorChrome({
       },
       COMMAND_PRIORITY_NORMAL,
     )
-  }, [editor, readOnly, onCommitAndAdvance, onEscape, onTabAdvance, onCommit])
+  }, [editor, readOnly, inlineOnly, onCommitAndAdvance, onEscape, onTabAdvance, onCommit])
 
   // Land focus when the cell swaps its read-mode display for this editor
   // (click / Enter / commit-and-advance). Focus the root element directly (DOM
@@ -273,9 +283,9 @@ function EditorChrome({
   // re-renders on strip focus changes — it only writes to the store.
   useEffect(() => {
     if (readOnly) return
-    useFocusedEditorStore.getState().register(editorId, editor)
+    useFocusedEditorStore.getState().register(editorId, editor, inlineOnly)
     return () => useFocusedEditorStore.getState().unregister(editorId)
-  }, [editorId, editor, readOnly])
+  }, [editorId, editor, inlineOnly, readOnly])
 
   // focusin/focusout on the scroller drive BOTH the strip binding and the
   // existing commit-on-blur. The strip's buttons preventDefault their own
@@ -353,6 +363,8 @@ export interface RichTextEditorProps {
   /** Focus the editable on mount — a grid cell swaps its read-mode display for
    *  this editor on click / Enter / advance and needs the caret to land. */
   autoFocus?: boolean
+  /** Restricts the editor to one line and inline text marks (Name columns). */
+  inlineOnly?: boolean
   className?: string
 }
 
@@ -367,6 +379,7 @@ export function RichTextEditor({
   onEscape,
   onTabAdvance,
   autoFocus,
+  inlineOnly = false,
   className,
 }: RichTextEditorProps) {
   // Read once on mount (Lexical's own contract for initialConfig.editorState
@@ -417,6 +430,7 @@ export function RichTextEditor({
           onEscape={onEscape}
           onTabAdvance={onTabAdvance}
           autoFocus={autoFocus}
+          inlineOnly={inlineOnly}
         />
       </LexicalComposer>
     </div>

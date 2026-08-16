@@ -119,6 +119,8 @@ export const tier1Purpose = pgTable(
     // JSON-stringified Lexical EditorState, never HTML (see
     // src/domain/projectEnvelope.ts's tier1PurposeRow comment).
     existingScenario: text('existing_scenario'),
+    valuePropNameHeader: text('value_prop_name_header'),
+    valuePropDescriptionHeader: text('value_prop_description_header'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
     deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
@@ -141,6 +143,7 @@ export const tier1Props = pgTable('tier1_props', {
     .references(() => workspaces.id),
   rank: integer('rank').notNull(),
   name: text('name').notNull(),
+  nameRichText: text('name_rich_text'),
   description: text('description'),
   sort: integer('sort').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -160,6 +163,8 @@ export const tier2Tables = pgTable('tier2_tables', {
     .notNull()
     .references(() => workspaces.id),
   name: text('name').notNull(),
+  nameHeader: text('name_header'),
+  descriptionHeader: text('description_header'),
   sort: integer('sort').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
@@ -188,6 +193,7 @@ export const tier2Entries = pgTable('tier2_entries', {
     .references(() => workspaces.id),
   parentId: text('parent_id').references((): AnyPgColumn => tier2Entries.id),
   name: text('name').notNull(),
+  nameRichText: text('name_rich_text'),
   description: text('description'),
   sort: integer('sort').notNull(),
   createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),

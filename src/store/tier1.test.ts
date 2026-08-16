@@ -29,6 +29,20 @@ beforeEach(async () => {
 })
 
 describe('tier1 store — props', () => {
+  it('persists editable headers and rich Name metadata as undoable display state', async () => {
+    const prop = await useTier1Store.getState().addProp('Comfort')
+    if (!prop) throw new Error('expected prop')
+    await useTier1Store.getState().setHeaders('Proposition', 'Why it matters')
+    expect(useTier1Store.getState().valuePropNameHeader).toBe('Proposition')
+    expect((await getTier1Purpose(db, projectId))?.valuePropDescriptionHeader).toBe('Why it matters')
+
+    const rich = '{"root":{"children":[{"children":[{"detail":0,"format":1,"mode":"normal","style":"","text":"Comfort","type":"text","version":1}],"direction":null,"format":"","indent":0,"type":"paragraph","version":1,"textFormat":0,"textStyle":""}],"direction":null,"format":"","indent":0,"type":"root","version":1}}'
+    await useTier1Store.getState().setFormattedName(prop.id, 'Comfort', rich)
+    expect(useTier1Store.getState().props[0]?.nameRichText).toBe(rich)
+    await useCommandLogStore.getState().undo()
+    expect(useTier1Store.getState().props[0]?.nameRichText).toBeNull()
+  })
+
   it('addProp persists and pushes one undoable step', async () => {
     await useTier1Store.getState().addProp('Seating-status comfort')
     expect(useTier1Store.getState().props.map((p) => p.name)).toEqual(['Seating-status comfort'])

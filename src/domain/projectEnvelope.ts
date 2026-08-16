@@ -51,7 +51,11 @@ import { z } from 'zod'
 // canvas per DISTINCT child context — the union of `dimensions.contextId` and
 // `contexts.parentId` — then repointing every dimension/context's canvasId), so
 // a legacy export still imports losslessly.
-export const FORMAT_VERSION = 5 as const
+//
+// Version 6 adds nullable display metadata for editable Name/Description
+// headers and rich Name formatting. Canonical plain names remain authoritative;
+// upgradeV5ToV6 supplies null defaults for every legacy row.
+export const FORMAT_VERSION = 6 as const
 const MIN_SUPPORTED_IMPORT_VERSION = 1
 
 // ── Row schemas — mirror src/db/schema.ts column-for-column (camelCase, as
@@ -113,6 +117,8 @@ const tier1PurposeRow = z.object({
   // field has never been written (a legitimate terminal state, not a
   // migration waypoint — see FORMAT_VERSION's header).
   existingScenario: z.string().nullable(),
+  valuePropNameHeader: z.string().nullable(),
+  valuePropDescriptionHeader: z.string().nullable(),
   createdAt: iso,
   updatedAt: iso,
   deletedAt: nullableIso,
@@ -124,6 +130,7 @@ const tier1PropRow = z.object({
   workspaceId: z.string().nullable(),
   rank: z.number().int(),
   name: z.string(),
+  nameRichText: z.string().nullable(),
   description: z.string().nullable(),
   sort: z.number().int(),
   createdAt: iso,
@@ -136,6 +143,8 @@ const tier2TableRow = z.object({
   projectId: z.string(),
   workspaceId: z.string().nullable(),
   name: z.string(),
+  nameHeader: z.string().nullable(),
+  descriptionHeader: z.string().nullable(),
   sort: z.number().int(),
   createdAt: iso,
   updatedAt: iso,
@@ -151,6 +160,7 @@ const tier2EntryRow = z.object({
   workspaceId: z.string().nullable(),
   parentId: z.string().nullable(),
   name: z.string(),
+  nameRichText: z.string().nullable(),
   description: z.string().nullable(),
   sort: z.number().int(),
   createdAt: iso,
@@ -585,6 +595,28 @@ function upgradeV4ToV5(raw: Record<string, unknown>): void {
 
     tables.canvases = canvases
   }
+  raw.formatVersion = 5
+}
+
+// Editable headers and rich Name formatting are additive display metadata.
+// Older files keep the established labels and plain names by receiving nulls;
+// the canonical `name` columns remain unchanged and authoritative.
+function upgradeV5ToV6(raw: Record<string, unknown>): void {
+  const tables = raw.tables
+  if (isRecord(tables)) {
+    const addNulls = (table: string, fields: readonly string[]) => {
+      const rows = tables[table]
+      if (!Array.isArray(rows)) return
+      for (const row of rows) {
+        if (!isRecord(row)) continue
+        for (const field of fields) if (!(field in row)) row[field] = null
+      }
+    }
+    addNulls('tier1_purpose', ['valuePropNameHeader', 'valuePropDescriptionHeader'])
+    addNulls('tier1_props', ['nameRichText'])
+    addNulls('tier2_tables', ['nameHeader', 'descriptionHeader'])
+    addNulls('tier2_entries', ['nameRichText'])
+  }
   raw.formatVersion = FORMAT_VERSION
 }
 
@@ -606,15 +638,21 @@ export function parseEnvelope(text: string): Envelope {
     upgradeV2ToV3(raw)
     upgradeV3ToV4(raw)
     upgradeV4ToV5(raw)
+    upgradeV5ToV6(raw)
   } else if (raw.formatVersion === 2) {
     upgradeV2ToV3(raw)
     upgradeV3ToV4(raw)
     upgradeV4ToV5(raw)
+    upgradeV5ToV6(raw)
   } else if (raw.formatVersion === 3) {
     upgradeV3ToV4(raw)
     upgradeV4ToV5(raw)
+    upgradeV5ToV6(raw)
   } else if (raw.formatVersion === 4) {
     upgradeV4ToV5(raw)
+    upgradeV5ToV6(raw)
+  } else if (raw.formatVersion === 5) {
+    upgradeV5ToV6(raw)
   } else if (raw.formatVersion !== FORMAT_VERSION) {
     throw new NotGeDeExportError()
   }

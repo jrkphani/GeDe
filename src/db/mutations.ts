@@ -1478,6 +1478,32 @@ export async function setTier1ExistingScenario(
   return getTier1Purpose(db, projectId)
 }
 
+export async function setTier1ValuePropHeaders(
+  db: Database,
+  projectId: string,
+  valuePropNameHeader: string | null,
+  valuePropDescriptionHeader: string | null,
+): Promise<Tier1PurposeRow | null> {
+  const workspaceId = await projectWorkspaceId(db, projectId)
+  const current = await getTier1Purpose(db, projectId)
+  await db
+    .insert(tier1Purpose)
+    .values({
+      id: uuidv7(),
+      projectId,
+      workspaceId,
+      body: current?.body ?? '',
+      existingScenario: current?.existingScenario ?? null,
+      valuePropNameHeader,
+      valuePropDescriptionHeader,
+    })
+    .onConflictDoUpdate({
+      target: tier1Purpose.projectId,
+      set: { valuePropNameHeader, valuePropDescriptionHeader, updatedAt: now() },
+    })
+  return getTier1Purpose(db, projectId)
+}
+
 function tier1PropScope(projectId: string) {
   return and(eq(tier1Props.projectId, projectId), isNull(tier1Props.deletedAt))
 }
@@ -1529,7 +1555,21 @@ export async function renameTier1Prop(
 ): Promise<Tier1PropRow> {
   const rows = await db
     .update(tier1Props)
-    .set({ name, updatedAt: now() })
+    .set({ name, nameRichText: null, updatedAt: now() })
+    .where(eq(tier1Props.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function setTier1PropFormattedName(
+  db: Database,
+  id: string,
+  name: string,
+  nameRichText: string | null,
+): Promise<Tier1PropRow> {
+  const rows = await db
+    .update(tier1Props)
+    .set({ name, nameRichText, updatedAt: now() })
     .where(eq(tier1Props.id, id))
     .returning()
   return firstOrThrow(rows)
@@ -1652,6 +1692,20 @@ export async function renameTier2Table(
   const rows = await db
     .update(tier2Tables)
     .set({ name, updatedAt: now() })
+    .where(eq(tier2Tables.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function setTier2TableHeaders(
+  db: Database,
+  id: string,
+  nameHeader: string | null,
+  descriptionHeader: string | null,
+): Promise<Tier2TableRow> {
+  const rows = await db
+    .update(tier2Tables)
+    .set({ nameHeader, descriptionHeader, updatedAt: now() })
     .where(eq(tier2Tables.id, id))
     .returning()
   return firstOrThrow(rows)
@@ -1794,7 +1848,21 @@ export async function addTier2Entry(
 export async function renameTier2Entry(db: Database, id: string, name: string): Promise<Tier2EntryRow> {
   const rows = await db
     .update(tier2Entries)
-    .set({ name, updatedAt: now() })
+    .set({ name, nameRichText: null, updatedAt: now() })
+    .where(eq(tier2Entries.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function setTier2EntryFormattedName(
+  db: Database,
+  id: string,
+  name: string,
+  nameRichText: string | null,
+): Promise<Tier2EntryRow> {
+  const rows = await db
+    .update(tier2Entries)
+    .set({ name, nameRichText, updatedAt: now() })
     .where(eq(tier2Entries.id, id))
     .returning()
   return firstOrThrow(rows)

@@ -85,6 +85,8 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     // existingScenario the moment it round-trips through Electric, even
     // though the local write worked fine (078 step 2's own risk, repeated).
     existing_scenario: 'existingScenario',
+    value_prop_name_header: 'valuePropNameHeader',
+    value_prop_description_header: 'valuePropDescriptionHeader',
     created_at: 'createdAt',
     updated_at: 'updatedAt',
     deleted_at: 'deletedAt',
@@ -95,6 +97,7 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     workspace_id: 'workspaceId',
     rank: 'rank',
     name: 'name',
+    name_rich_text: 'nameRichText',
     description: 'description',
     sort: 'sort',
     created_at: 'createdAt',
@@ -106,6 +109,8 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     project_id: 'projectId',
     workspace_id: 'workspaceId',
     name: 'name',
+    name_header: 'nameHeader',
+    description_header: 'descriptionHeader',
     sort: 'sort',
     created_at: 'createdAt',
     updated_at: 'updatedAt',
@@ -119,6 +124,7 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     workspace_id: 'workspaceId',
     parent_id: 'parentId',
     name: 'name',
+    name_rich_text: 'nameRichText',
     description: 'description',
     sort: 'sort',
     created_at: 'createdAt',
