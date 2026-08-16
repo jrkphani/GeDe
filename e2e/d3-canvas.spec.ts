@@ -646,6 +646,12 @@ test('dragging a table node down its lane reorders + persists sort, and the lane
   // Frame all three table nodes into the pane so the drag origin + drop target
   // are both on-screen, then wait for the fit-view pan to settle before dragging.
   await page.locator('.react-flow__controls-fitview').click()
+  // The Fit is ANIMATED under the user-owned camera grammar, and the *Stack
+  // helpers below poll NODE transforms (flow coords), which hold steady while
+  // the CAMERA is still moving — so they report stable mid-animation and the
+  // drag then runs against a shifting viewport, computing screen coords that
+  // land the node in the wrong slot. Wait for the pane transform to settle too.
+  await waitForStableViewport(page)
   await waitForStableArchStack(page)
 
   const before = await archTablesByY(page)
@@ -805,6 +811,12 @@ test('dragging a value-prop node down its lane reorders + persists rank, and the
   await expect(page.locator('.wc-node--foundation-item')).toHaveCount(3)
 
   await page.locator('.react-flow__controls-fitview').click()
+  // The Fit is ANIMATED under the user-owned camera grammar, and the *Stack
+  // helpers below poll NODE transforms (flow coords), which hold steady while
+  // the CAMERA is still moving — so they report stable mid-animation and the
+  // drag then runs against a shifting viewport, computing screen coords that
+  // land the node in the wrong slot. Wait for the pane transform to settle too.
+  await waitForStableViewport(page)
   await waitForStableFoundationStack(page)
 
   const before = await foundationPropsByY(page)
@@ -1383,12 +1395,18 @@ test('a lane node being edited does NOT collapse on zoom-out (no lost edit)', { 
   // background — the review's actual hazard (wheel/pinch/trackpad zoom does NOT
   // blur the focused cell, unlike clicking the zoom-out button which would blur +
   // commit first). Wheel over a background point (not a node — node bodies are
-  // `nowheel`), keeping the in-flight edit focused throughout.
+  // `nowheel`), keeping the in-flight edit focused throughout. Under the
+  // Numbers/Excel camera grammar an ordinary wheel PANS, so zooming needs the
+  // platform zoom-activation modifier — same gesture the trackpad-grammar spec
+  // above drives. Without it this polled forever: the camera panned instead of
+  // zooming and the scale never crossed the threshold.
   await page.mouse.move(800, 120)
   await expect
     .poll(async () => {
       if ((await viewportScale(page)) >= 0.3) {
+        await page.keyboard.down('Control')
         await page.mouse.wheel(0, 300)
+        await page.keyboard.up('Control')
         return false
       }
       return true
