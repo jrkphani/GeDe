@@ -70,7 +70,7 @@ test('canvas renders one arc per dimension and the empty-state prompt before any
   await expect(page.locator('.canvas-arc')).toHaveCount(3)
   await expect(page.locator('.canvas-dot')).toHaveCount(3) // one parameter per dimension
   await expect(page.locator('.canvas-svg[data-empty="true"]')).toBeVisible()
-  await expect(page.getByText('Bind your first context')).toBeVisible()
+  await expect(page.locator('.canvas-empty-prompt')).toHaveText('Bind your first context')
 })
 
 test('binding a context renders exactly one non-draft node with its symbol; the empty-state prompt clears', async ({

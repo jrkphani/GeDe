@@ -46,7 +46,7 @@ test('⌘K → type a tier name → Enter navigates there, keyboard-only', async
   await page.keyboard.press('Enter')
 
   await expect(page.locator('.command-palette')).toBeHidden()
-  await expect(page.locator('.tab--active')).toHaveText('Foundation')
+  await expect(page.locator('.tab--active')).toHaveText('Foundation lane')
 })
 
 test('⌘K → type a context symbol → Enter selects it on the canvas', async ({ page }) => {

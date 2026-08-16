@@ -236,5 +236,5 @@ test('root canvas (no contexts yet, params present) shows Canvas\'s own prompt, 
 
   await expect(page.locator('.canvas-seed-hint')).toHaveCount(0)
   await expect(page.locator('.canvas-empty-prompt')).toBeVisible()
-  await expect(page.getByText('Bind your first context')).toBeVisible()
+  await expect(page.locator('.canvas-empty-prompt')).toHaveText('Bind your first context')
 })
