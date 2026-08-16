@@ -88,28 +88,38 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
   return (
     <main className="projects">
       <div className="projects__toolbar">
-        {!showArchived && (
-          <>
-            <Button variant="command" onClick={() => fileInputRef.current?.click()}>
-              Import project
-            </Button>
-            <Input
-              ref={fileInputRef}
-              type="file"
-              accept="application/json,.json"
-              className="visually-hidden"
-              aria-label="Import project file"
-              onChange={(e) => {
-                const file = e.target.files?.[0]
-                if (file) void importFile(file)
-                e.target.value = ''
-              }}
-            />
-          </>
+        {!showArchived && !first && (
+          <PhantomInput
+            inputClassName="projects__create-input"
+            placeholder="New project"
+            ariaLabel="Name a new project"
+            onSubmit={(name) => createProject(name)}
+          />
         )}
-        <Button variant="command" onClick={() => setShowArchived((v) => !v)}>
-          {showArchived ? 'Back to projects' : 'Archived projects'}
-        </Button>
+        <div className="projects__toolbar-actions">
+          {!showArchived && (
+            <>
+              <Button variant="command" onClick={() => fileInputRef.current?.click()}>
+                Import project
+              </Button>
+              <Input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                className="visually-hidden"
+                aria-label="Import project file"
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void importFile(file)
+                  e.target.value = ''
+                }}
+              />
+            </>
+          )}
+          <Button variant="command" onClick={() => setShowArchived((v) => !v)}>
+            {showArchived ? 'Back to projects' : 'Archived projects'}
+          </Button>
+        </div>
       </div>
 
       {importError !== null && (

@@ -14,7 +14,12 @@
   --ink-muted: #6b6961;
   --accent: #2d6a4f;
   --accent-strong: #23543f;
-  --accent-wash: rgba(45, 106, 79, 0.1);
+  /* Forest-green state ladder: a quiet opaque surface for selection and
+     hover, the base hue for indicators, and a darker foreground for active
+     text. Keeping the surface explicit avoids contrast changing with the
+     panel it happens to overlay. */
+  --accent-surface: #e8f0eb;
+  --accent-wash: var(--accent-surface);
   --danger: #b3402e;
   --warning: #9a6b00;
 
@@ -92,7 +97,8 @@
   --ink-muted: #8f8d85;
   --accent: #63a583;
   --accent-strong: #7fb89a;
-  --accent-wash: rgba(99, 165, 131, 0.16);
+  --accent-surface: #253a2e;
+  --accent-wash: var(--accent-surface);
   --danger: #e06c55;
   --warning: #d0a43c;
   --shadow-popover: 0 2px 8px rgba(0, 0, 0, 0.45);

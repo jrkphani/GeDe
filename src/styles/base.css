@@ -734,6 +734,7 @@ body {
   display: flex;
   align-items: center;
   gap: var(--space-3);
+  min-width: 0;
   min-height: 44px; /* touch target floor */
   padding: 0 var(--space-3);
   border-bottom: 1px solid var(--hairline);
@@ -771,6 +772,10 @@ body {
 }
 
 .project-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 500;
 }
 
@@ -783,9 +788,13 @@ body {
 }
 
 .project-desc {
+  min-width: 0;
   color: var(--ink-muted);
   font-size: var(--text-label);
   flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .project-title {
@@ -807,8 +816,47 @@ body {
 /* ── Export / import (issue 015) ─────────────────────────────────────────── */
 .projects__toolbar {
   display: flex;
-  justify-content: flex-end;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+  flex-wrap: wrap;
+  justify-content: space-between;
   margin-bottom: var(--space-3);
+}
+
+.projects__toolbar-actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-left: auto;
+}
+
+.projects__create-input {
+  width: min(100%, 224px);
+  min-width: 0;
+  min-height: 28px;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--accent);
+  background: var(--panel);
+}
+
+.projects__create-input:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+@media (max-width: 480px) {
+  .projects__toolbar-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .projects__toolbar-actions .command-button {
+    flex: 1 1 auto;
+  }
+
+  .projects__create-input {
+    width: 100%;
+  }
 }
 
 /* Accessible hidden file input — off-screen but focusable/clickable. */
