@@ -17,7 +17,7 @@ As a designer I export a whole project to one JSON file and import it elsewhere,
 ## Design brief
 
 - **Placement**: export lives in the project menu ("Export project…") and downloads `{project-name}.gede.json` immediately — no options screen. Import lives on the projects list: a button plus drag-a-file-anywhere onto the list panel (drop target highlights with the accent wash + dashed hairline).
-- **Import lands safely**: always a *new* project (never merges/overwrites); on success the list selects it with the status line "Imported *Tavalo* — 4 canvases, 23 contexts".
+- **Import lands safely**: a matching exported project ID restores that project atomically; a different ID creates a copy even when its name matches. On success the list selects it with an "Updated" or "Imported" status line.
 - **Error states are specific and calm**: wrong file type → "Not a GeDe export"; newer format → "This file is from a newer version of GeDe — update to open it"; corrupted → "File damaged at `contexts[4]` — nothing was imported". Errors render in the panel, not as dialogs; nothing partial ever appears in the list.
 - **Progress**: no spinner under 150ms (typical files parse instantly); large files show a one-line inline progress note, never a blocking overlay.
 - **Trust surface**: this is the v1 backup story (ADR-0006) — the projects list footer quietly notes "Projects live in this browser. Export to back up." on first visit (dismissable, remembered).
@@ -93,7 +93,7 @@ Rows are emitted sorted by `id`, fields in schema order, so re-exporting the sam
 
 1. **Validate** (`parseEnvelope`) before touching the DB — typed, calm rejections: `NotGeDeExportError` ("Not a GeDe export"), `NewerVersionError` ("This file is from a newer version of GeDe — update to open it"), `CorruptedEnvelopeError` ("File damaged at `contexts[4]` — nothing was imported"). Validation covers the schema, referential integrity (no dangling FK), and self-referential acyclicity (no cyclic parent chains).
 2. **Remap** every id to a fresh UUIDv7 and rewrite every reference (`remapEnvelope`) — a global old→new map drives pk, fk, self-ref, and cross-link fields uniformly.
-3. **Write atomically** (`importProject`) inside one `db.transaction`. Insert order sidesteps the schema's non-deferrable FK cycles by inserting the self-referential parent columns and the `dimensions.sourceParamId` cross-cycle column as NULL, then setting them in a second UPDATE pass once every row exists. Any failure rolls the whole thing back — an import **never partially applies**, and always creates a **new** project (fresh id), never merges or overwrites.
+3. **Write atomically** (`importProject`) inside one `db.transaction`. A project whose exported ID already exists in the target workspace is restored in place; otherwise the importer remaps every ID and creates a copy. Insert order sidesteps the schema's non-deferrable FK cycles by inserting the self-referential parent columns and the `dimensions.sourceParamId` cross-cycle column as NULL, then setting them in a second UPDATE pass once every row exists. Any failure rolls the whole thing back — an import **never partially applies**.
 
 ### Implementation map
 

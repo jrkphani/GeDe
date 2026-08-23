@@ -59,11 +59,10 @@ interface ProjectsState {
   // Refreshes BOTH lists and pushes an undo/redo pair onto the shared
   // command log, mirroring archiveProject's own pattern.
   restoreArchivedProject: (id: string) => Promise<void>
-  // Issue 015 — export gathers a project's rows into the versioned JSON
-  // envelope; import always creates a NEW project (fresh ids) atomically and
-  // throws a typed rejection (parseEnvelope) the caller renders calmly.
+  // Import restores a project when the envelope's stable project ID already
+  // belongs to the destination workspace; otherwise it creates a fresh copy.
   exportProject: (id: string) => Promise<{ name: string; json: string }>
-  importProject: (text: string) => Promise<{ project: ProjectRow; stats: EnvelopeStats }>
+  importProject: (text: string) => Promise<{ project: ProjectRow; stats: EnvelopeStats; restored: boolean }>
   // Issue 037 — the local→cloud on-ramp. Moves a local project into a
   // workspace (see src/db/projectIO.ts's adoptProject for the atomicity/
   // idempotency contract) and, for a genuinely new adoption, enqueues every
@@ -326,18 +325,14 @@ export const useProjectsStore = create<ProjectsState>()((set, get) => ({
     // CorruptedEnvelopeError before the DB is touched; the DB import is atomic.
     const envelope = parseEnvelope(text)
     const result = await dbImport(db, envelope)
-    // Re-list so the imported clone slots into persisted (updatedAt) order,
-    // matching what a reload would show.
+    // Re-list so the restored project or imported copy follows persisted order.
     set({ projects: await dbList(db) })
-    // Issue 073 — importProject creates a WHOLE project tree (fresh uuidv7
-    // ids from remapEnvelope — every row genuinely new, never an edit), so
-    // enqueue an 'upsert' for every row it inserted, across all 9 tables, in
+    // Queue the complete restored/imported tree across all 9 tables, in
     // the same FK-dependency order the transactional insert itself used
     // (ENVELOPE_TABLE_NAMES — projects → tier1_*/tier2_tables → tier2_entries
     // → dimensions → parameters → contexts → bindings, src/domain/
-    // projectEnvelope.ts). gatherProjectRows re-reads the just-inserted clone
-    // (mirrors adoptProject's own post-import gather, src/db/projectIO.ts) —
-    // importProject's own ImportResult never carries the row set itself.
+    // projectEnvelope.ts). gatherProjectRows re-reads the committed tree
+    // (mirrors adoptProject's own post-import gather, src/db/projectIO.ts).
     const tables = await gatherProjectRows(db, result.project.id)
     for (const table of ENVELOPE_TABLE_NAMES) {
       for (const row of tables[table]) {

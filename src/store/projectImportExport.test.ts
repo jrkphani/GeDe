@@ -39,18 +39,18 @@ describe('projects store — export/import (issue 015)', () => {
     expect(envelope.tables.dimensions).toHaveLength(1)
   })
 
-  it('importProject adds a new project and reports stats', async () => {
+  it('importProject restores a matching project ID and reports stats', async () => {
     await useProjectsStore.getState().createProject('Tavalo')
     const id = useProjectsStore.getState().projects[0]?.id as string
     await addDimension(db, id)
     const { json } = await useProjectsStore.getState().exportProject(id)
 
-    const { project, stats } = await useProjectsStore.getState().importProject(json)
-    expect(project.id).not.toBe(id)
+    const { project, stats, restored } = await useProjectsStore.getState().importProject(json)
+    expect(project.id).toBe(id)
+    expect(restored).toBe(true)
     expect(project.name).toBe('Tavalo')
     expect(stats.contexts).toBe(0)
-    // Both original and clone are in the store now.
-    expect(useProjectsStore.getState().projects.filter((p) => p.name === 'Tavalo')).toHaveLength(2)
+    expect(useProjectsStore.getState().projects.filter((p) => p.name === 'Tavalo')).toHaveLength(1)
   })
 
   it('rejects wrong / newer / corrupt files with typed errors, importing nothing', async () => {

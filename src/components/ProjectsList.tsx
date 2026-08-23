@@ -65,16 +65,16 @@ export function ProjectsList({ onOpen }: { onOpen: (id: string) => void }) {
 
   // The one import path (button or drop): parse+import through the store, which
   // throws a typed, calm error we render in the panel — never partial, never a
-  // dialog. On success the new project is selected and the status line narrates.
+  // dialog. On success the restored project or new copy is selected and narrated.
   async function importFile(file: File) {
     setImportError(null)
     try {
       const text = await file.text()
-      const { project, stats } = await importProject(text)
+      const { project, stats, restored } = await importProject(text)
       setImportedId(project.id)
       const canvases = count(stats.canvases, 'canvas', 'canvases')
       const contexts = count(stats.contexts, 'context', 'contexts')
-      announce(`Imported ${project.name} — ${canvases}, ${contexts}`)
+      announce(`${restored ? 'Updated' : 'Imported'} ${project.name} — ${canvases}, ${contexts}`)
     } catch (err) {
       setImportError(err instanceof Error ? err.message : 'Could not import this file')
     }

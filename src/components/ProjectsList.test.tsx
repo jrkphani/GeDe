@@ -177,7 +177,7 @@ describe('ProjectsList — export/import (issue 015)', () => {
     expect(useProjectsStore.getState().projects).toHaveLength(0)
   })
 
-  it('imports a dropped GeDe export as a new project and narrates', async () => {
+  it('restores a dropped GeDe export with its matching project ID and narrates', async () => {
     await useProjectsStore.getState().createProject('Tavalo')
     const id = useProjectsStore.getState().projects[0]?.id as string
     const { json } = await useProjectsStore.getState().exportProject(id)
@@ -193,10 +193,10 @@ describe('ProjectsList — export/import (issue 015)', () => {
     fireEvent.drop(panel, { dataTransfer: { files: [file] } })
 
     await waitFor(() =>
-      expect(useProjectsStore.getState().projects.filter((p) => p.name === 'Tavalo')).toHaveLength(2),
+      expect(useProjectsStore.getState().projects.filter((p) => p.name === 'Tavalo')).toHaveLength(1),
     )
     // Empty project → just the root canvas, no contexts.
-    expect(screen.getByRole('status')).toHaveTextContent(/Imported Tavalo — 1 canvas, 0 contexts/)
+    expect(screen.getByRole('status')).toHaveTextContent(/Updated Tavalo — 1 canvas, 0 contexts/)
   })
 })
 

@@ -16,6 +16,7 @@ import {
   listProjects,
   openChildCanvas,
   promoteEntries,
+  renameProject,
   setContextJustification,
   setTier1Purpose,
 } from './mutations'
@@ -121,23 +122,24 @@ describe('projectIO — export gather', () => {
   })
 })
 
-describe('projectIO — import round-trip (atomic, new project)', () => {
-  it('import creates a fresh project whose graph is referentially intact', async () => {
+describe('projectIO — import round-trip (atomic restore)', () => {
+  it('re-import restores the existing project identity and keeps its graph referentially intact', async () => {
     const db = await freshDb()
     const projectId = await seedRichProject(db)
 
     const json = envelopeToJson(serializeEnvelope(await gatherProjectRows(db, projectId)))
     const envelope = parseEnvelope(json)
+    await renameProject(db, projectId, 'Unsaved local rename')
     const { project: imported, stats } = await importProject(db, envelope)
 
-    expect(imported.id).not.toBe(projectId)
+    expect(imported.id).toBe(projectId)
     expect(imported.name).toBe('Tavalo')
     // Root canvas + one drilled child canvas.
     expect(stats.canvases).toBe(2)
     expect(stats.contexts).toBe(2)
 
-    // Re-gathering the imported project yields the same shape and a graph that
-    // still parses cleanly (every FK resolves) — proves the remap + insert order.
+    // Re-gathering the restored project yields the same shape and a graph that
+    // still parses cleanly (every FK resolves) — proves the restore write order.
     const reExport = serializeEnvelope(await gatherProjectRows(db, imported.id))
     const source = serializeEnvelope(await gatherProjectRows(db, projectId))
     for (const name of ENVELOPE_TABLE_NAMES) {
@@ -145,11 +147,26 @@ describe('projectIO — import round-trip (atomic, new project)', () => {
     }
     expect(() => parseEnvelope(envelopeToJson(reExport))).not.toThrow()
 
-    // The imported child-canvas dimension points at an imported parameter.
+    // The restored child-canvas dimension points at a restored parameter.
     const childDim = reExport.tables.dimensions.find((d) => d.sourceParamId !== null)
     expect(reExport.tables.parameters.some((p) => p.id === childDim?.sourceParamId)).toBe(true)
-    // Both projects now coexist (import never overwrites).
-    expect((await listProjects(db)).length).toBe(2)
+    // An import of a known project ID is a restore, never a duplicate.
+    expect((await listProjects(db)).length).toBe(1)
+  })
+
+  it('imports a copy when a same-named project has a different exported ID', async () => {
+    const db = await freshDb()
+    await createProject(db, { name: 'Tavalo' })
+    const sourceDb = await freshDb()
+    const sourceId = await seedRichProject(sourceDb)
+    const envelope = parseEnvelope(envelopeToJson(serializeEnvelope(await gatherProjectRows(sourceDb, sourceId))))
+
+    const { project, restored } = await importProject(db, envelope)
+
+    expect(restored).toBe(false)
+    expect(project.id).not.toBe(sourceId)
+    expect(project.name).toBe('Tavalo')
+    expect((await listProjects(db)).filter((row) => row.name === 'Tavalo')).toHaveLength(2)
   })
 
   it('is atomic: a constraint violation mid-import writes nothing', async () => {

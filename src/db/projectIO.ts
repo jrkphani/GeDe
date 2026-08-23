@@ -15,6 +15,7 @@ import {
   tier2Tables,
 } from './schema'
 import {
+  ENVELOPE_TABLE_NAMES,
   type Envelope,
   type EnvelopeTables,
   type EnvelopeStats,
@@ -91,6 +92,7 @@ export async function gatherProjectRows(db: Database, projectId: string): Promis
 export interface ImportResult {
   project: ProjectRow
   stats: EnvelopeStats
+  restored: boolean
 }
 
 // After remapEnvelope, every workspace-scoped table's rows carry a real
@@ -104,10 +106,84 @@ function withWorkspace<T extends { workspaceId: string | null }>(
   return rows.map((row) => ({ ...row, workspaceId: row.workspaceId as string }))
 }
 
-// Import ALWAYS creates a NEW project (fresh ids, every reference rewritten) and
-// is ATOMIC: the whole write runs in one transaction, so a failure at any step
-// (e.g. a unique-index violation a tampered file slipped past validation) rolls
-// back the lot — nothing partial ever appears. See docs/issues/015 appendix.
+function stampWorkspace(tables: EnvelopeTables, workspaceId: string): EnvelopeTables {
+  const stamped = {} as EnvelopeTables
+  const target = stamped as Record<string, unknown>
+  for (const name of ENVELOPE_TABLE_NAMES) {
+    target[name] = tables[name].map((row) => ({ ...row, workspaceId }))
+  }
+  return stamped
+}
+
+// A restore preserves the envelope's IDs. Insert any rows added since the
+// previous restore, then update every row once all non-null FK targets exist.
+// The nullable half of each cycle stays deferred until the final pass.
+async function restoreProjectGraph(tx: Tx, tables: EnvelopeTables): Promise<ProjectRow> {
+  const projectRows = withWorkspace(tables.projects)
+  const project = firstOrThrow(projectRows)
+  const existing = firstOrThrow(
+    await tx.update(projects).set(project).where(eq(projects.id, project.id)).returning(),
+  )
+
+  const canvasRows = withWorkspace(tables.canvases)
+  const purposeRows = withWorkspace(tables.tier1_purpose)
+  const propRows = withWorkspace(tables.tier1_props)
+  const tableRows = withWorkspace(tables.tier2_tables)
+  const entryRows = withWorkspace(tables.tier2_entries)
+  const dimensionRows = withWorkspace(tables.dimensions)
+  const parameterRows = withWorkspace(tables.parameters)
+  const contextRows = withWorkspace(tables.contexts)
+  const bindingRows = withWorkspace(tables.bindings)
+
+  if (canvasRows.length) await tx.insert(canvases).values(canvasRows.map((row) => ({ ...row, parentContextId: null }))).onConflictDoNothing()
+  if (contextRows.length) await tx.insert(contexts).values(contextRows.map((row) => ({ ...row, parentId: null, canvasId: row.canvasId as string }))).onConflictDoNothing()
+  if (purposeRows.length) await tx.insert(tier1Purpose).values(purposeRows).onConflictDoNothing()
+  if (propRows.length) await tx.insert(tier1Props).values(propRows).onConflictDoNothing()
+  if (tableRows.length) await tx.insert(tier2Tables).values(tableRows).onConflictDoNothing()
+  if (entryRows.length) await tx.insert(tier2Entries).values(entryRows.map((row) => ({ ...row, parentId: null }))).onConflictDoNothing()
+  if (dimensionRows.length) await tx.insert(dimensions).values(dimensionRows.map((row) => ({ ...row, sourceParamId: null, canvasId: row.canvasId as string }))).onConflictDoNothing()
+  if (parameterRows.length) await tx.insert(parameters).values(parameterRows.map((row) => ({ ...row, parentParamId: null }))).onConflictDoNothing()
+  // Bindings also have a content unique key (context + dimension), so do not
+  // hide a malformed snapshot behind ON CONFLICT DO NOTHING. Only a matching
+  // primary key is an existing row eligible for restore.
+  for (const row of bindingRows) {
+    const found = await tx.select({ id: bindings.id }).from(bindings).where(eq(bindings.id, row.id))
+    if (!found.length) await tx.insert(bindings).values(row)
+  }
+
+  for (const row of canvasRows) await tx.update(canvases).set({ ...row, parentContextId: null }).where(eq(canvases.id, row.id))
+  for (const row of contextRows) await tx.update(contexts).set({ ...row, parentId: null, canvasId: row.canvasId as string }).where(eq(contexts.id, row.id))
+  for (const row of purposeRows) await tx.update(tier1Purpose).set(row).where(eq(tier1Purpose.id, row.id))
+  for (const row of propRows) await tx.update(tier1Props).set(row).where(eq(tier1Props.id, row.id))
+  for (const row of tableRows) await tx.update(tier2Tables).set(row).where(eq(tier2Tables.id, row.id))
+  for (const row of entryRows) await tx.update(tier2Entries).set({ ...row, parentId: null }).where(eq(tier2Entries.id, row.id))
+  for (const row of dimensionRows) await tx.update(dimensions).set({ ...row, sourceParamId: null, canvasId: row.canvasId as string }).where(eq(dimensions.id, row.id))
+  for (const row of parameterRows) await tx.update(parameters).set({ ...row, parentParamId: null }).where(eq(parameters.id, row.id))
+  for (const row of bindingRows) await tx.update(bindings).set(row).where(eq(bindings.id, row.id))
+
+  for (const row of canvasRows) {
+    if (row.parentContextId !== null) await tx.update(canvases).set({ parentContextId: row.parentContextId }).where(eq(canvases.id, row.id))
+  }
+  for (const row of contextRows) {
+    if (row.parentId !== null) await tx.update(contexts).set({ parentId: row.parentId }).where(eq(contexts.id, row.id))
+  }
+  for (const row of entryRows) {
+    if (row.parentId !== null) await tx.update(tier2Entries).set({ parentId: row.parentId }).where(eq(tier2Entries.id, row.id))
+  }
+  for (const row of parameterRows) {
+    if (row.parentParamId !== null) await tx.update(parameters).set({ parentParamId: row.parentParamId }).where(eq(parameters.id, row.id))
+  }
+  for (const row of dimensionRows) {
+    if (row.sourceParamId !== null) await tx.update(dimensions).set({ sourceParamId: row.sourceParamId }).where(eq(dimensions.id, row.id))
+  }
+
+  return existing
+}
+
+// Import restores a project whose stable exported ID already exists in the
+// destination workspace. Otherwise it creates a NEW project (fresh ids, every
+// reference rewritten). Both paths are ATOMIC: a failure rolls back the lot —
+// nothing partial ever appears. See docs/issues/015 appendix.
 //
 // Insert order sidesteps FK cycles without touching the (non-deferrable) schema:
 // the self-referential parent columns and the dimensions↔parameters cross-cycle
@@ -140,10 +216,17 @@ export async function importProject(
   options?: ImportOptions,
 ): Promise<ImportResult> {
   const workspaceId = targetWorkspaceId ?? (await getOrCreateDefaultWorkspace(db))
-  const { tables } = remapEnvelope(envelope.tables, uuidv7, workspaceId)
+  const sourceProject = envelope.tables.projects[0]
+  if (!sourceProject) throw new Error('project envelope has no project')
+  const existing = await db.select().from(projects).where(eq(projects.id, sourceProject.id))
+  const restoresExisting = existing[0]?.workspaceId === workspaceId
+  const tables = restoresExisting
+    ? stampWorkspace(envelope.tables, workspaceId)
+    : remapEnvelope(envelope.tables, uuidv7, workspaceId).tables
   const stats = envelopeStats(tables)
 
   const project = await db.transaction(async (tx) => {
+    if (restoresExisting) return restoreProjectGraph(tx, tables)
     const insertedProject = firstOrThrow(
       await tx.insert(projects).values(withWorkspace(tables.projects)).returning(),
     )
@@ -230,7 +313,7 @@ export async function importProject(
     return insertedProject
   })
 
-  return { project, stats }
+  return { project, stats, restored: restoresExisting }
 }
 
 export class ProjectNotFoundError extends Error {
