@@ -31,13 +31,27 @@ import { tableColumns as envelopeTableColumns, type TableName as EnvelopeTableNa
 // ENVELOPE_TABLE_NAMES — projectEnvelope.ts's own projectIO.test.ts
 // cross-checks ENVELOPE_TABLE_NAMES against drizzle's live schema, which
 // would (rightly) reject a table that never appears in a project export.
-export type SyncOnlyTableName = 'invitations' | 'workspace_members'
+// Phase 3 (design-prose-references) — `design_prose_references` is genuinely
+// project-domain content (a Design context's prose reference tokens), not
+// workspace-identity bookkeeping like `invitations`/`workspace_members`
+// above; it belongs in the portable export/import envelope in principle. It
+// is placed here as a DELIBERATE INTERIM step: Phase 3's approved scope is
+// the DB schema/RLS + local mutation layer only, and full envelope wiring
+// (a FORMAT_VERSION bump, a zod row schema, ID_FIELDS/FK_TARGETS remap
+// entries, a legacy-upgrade function) is real, separate scope this phase
+// does not cover. Local sync (enqueueIfSyncing) works today via this entry;
+// project file export/import does NOT yet carry these rows — see
+// src/db/projectIO.test.ts's NON_ENVELOPE_TABLES, which excludes this table
+// with the same note, and revisit both together when a later phase wires
+// export/import for Design prose references.
+export type SyncOnlyTableName = 'invitations' | 'workspace_members' | 'design_prose_references'
 export type TableName = EnvelopeTableName | SyncOnlyTableName
 
 // Column set for each sync-only table, schema order — mirrors
-// src/db/schema.ts's `invitations`/`workspaceMembers` pgTable() definitions.
-// Kept here (not a third copy delegated elsewhere) since these two tables
-// intentionally have no `rowSchemas`/envelope entry to borrow columns from.
+// src/db/schema.ts's `invitations`/`workspaceMembers`/`designProseReferences`
+// pgTable() definitions. Kept here (not a third copy delegated elsewhere)
+// since these tables intentionally have no `rowSchemas`/envelope entry to
+// borrow columns from.
 const SYNC_ONLY_COLUMNS: Readonly<Record<SyncOnlyTableName, readonly string[]>> = {
   invitations: [
     'id',
@@ -52,10 +66,11 @@ const SYNC_ONLY_COLUMNS: Readonly<Record<SyncOnlyTableName, readonly string[]>> 
     'deletedAt',
   ],
   workspace_members: ['id', 'workspaceId', 'userSub', 'role', 'createdAt', 'updatedAt', 'deletedAt'],
+  design_prose_references: ['id', 'workspaceId', 'contextId', 'sourceEntryId', 'createdAt', 'updatedAt', 'deletedAt'],
 }
 
 function isSyncOnlyTable(name: TableName): name is SyncOnlyTableName {
-  return name === 'invitations' || name === 'workspace_members'
+  return name === 'invitations' || name === 'workspace_members' || name === 'design_prose_references'
 }
 
 // Public: the exact column set of a table, schema order — delegates to
@@ -123,6 +138,7 @@ export function emptySyncState(): SyncState {
     parameters: NO_ENTRIES,
     contexts: NO_ENTRIES,
     bindings: NO_ENTRIES,
+    design_prose_references: NO_ENTRIES,
     invitations: NO_ENTRIES,
     workspace_members: NO_ENTRIES,
   }

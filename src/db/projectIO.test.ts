@@ -86,8 +86,23 @@ async function seedRichProject(db: Database): Promise<string> {
 // - Issue 035: `invitations` is workspace-level membership state, not content.
 // - Issue 043: `applied_mutations` is the write-path idempotency ledger —
 //   server-side replay-safety bookkeeping with no `project_id`.
+// - Phase 3 (design-prose-references): `design_prose_references` IS genuine
+//   project-domain content, unlike the three tables above — it is excluded
+//   here as a DELIBERATE INTERIM step, not because it doesn't belong. Phase
+//   3's approved scope is the DB schema/RLS + local mutation layer only;
+//   wiring it into the portable export/import envelope (a FORMAT_VERSION
+//   bump, a zod row schema, ID_FIELDS/FK_TARGETS remap entries, a
+//   legacy-upgrade function) is separate scope for a later phase. See
+//   src/domain/syncDelta.ts's matching SyncOnlyTableName note — local sync
+//   already works via that seam; only file export/import doesn't yet.
 // Any OTHER new pgTable still breaks this test loudly, exactly as designed.
-const NON_ENVELOPE_TABLES = ['workspaces', 'workspace_members', 'invitations', 'applied_mutations']
+const NON_ENVELOPE_TABLES = [
+  'workspaces',
+  'workspace_members',
+  'invitations',
+  'applied_mutations',
+  'design_prose_references',
+]
 
 describe('projectIO — schema coverage guard', () => {
   it('the envelope covers exactly every project-domain pgTable in the schema (infra tables excepted)', () => {

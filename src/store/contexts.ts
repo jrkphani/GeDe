@@ -9,6 +9,7 @@ import {
   getContextsByIds as dbGetByIds,
   listBindings as dbListBindings,
   listContexts as rawListContexts,
+  listDesignProseReferences as dbListDesignProseReferences,
   listDimensions as rawListDimensions,
   openChildCanvas as dbOpenChildCanvas,
   resolveCanvasScope,
@@ -16,10 +17,12 @@ import {
   restoreContext as dbRestore,
   revertStaleRebind as dbRevertStale,
   setContextJustification as dbSetJustification,
+  setContextJustificationWithReferences as dbSetJustificationWithReferences,
   setContextSymbol as dbSetSymbol,
   unbindParameter as dbUnbind,
   type BindingRow,
   type ContextRow,
+  type JustificationWithReferencesResult,
   type StaleRebindEvent,
 } from '../db/mutations'
 import { useCommandLogStore } from './commandLog'
@@ -53,6 +56,25 @@ async function fetchBindingsMap(
     map[id] = Object.fromEntries(rows.map((r) => [r.dimensionId, r.parameterId]))
   }
   return map
+}
+
+// Phase 3 (design-prose-references) — enqueue the right sync op per row a
+// justification-with-references commit touched (073's op-selection rule),
+// mirroring canvases.ts's own enqueueCascade: a genuinely new row -> upsert,
+// an un-tombstoned row -> revive, a newly-tombstoned row -> delete. The
+// context itself is always a plain field edit on an already-synced row ->
+// update.
+function enqueueJustificationResult(result: JustificationWithReferencesResult): void {
+  enqueueIfSyncing('contexts', result.context.id, 'update', result.context)
+  for (const row of result.createdReferences) {
+    enqueueIfSyncing('design_prose_references', row.id, 'upsert', row)
+  }
+  for (const row of result.revivedReferences) {
+    enqueueIfSyncing('design_prose_references', row.id, 'revive', row)
+  }
+  for (const row of result.tombstonedReferences) {
+    enqueueIfSyncing('design_prose_references', row.id, 'delete', row)
+  }
 }
 
 // Issue 075 Part B — the shared read shared by load() and the delta-driven
@@ -128,6 +150,17 @@ export interface ContextsState {
   discard: (id: string) => Promise<void>
   setSymbol: (id: string, symbol: string) => Promise<{ ok: boolean; reason?: string }>
   setJustification: (id: string, text: string) => Promise<void>
+  // Phase 3 (design-prose-references) — commits the justification prose AND
+  // its full desired reference set (a later phase's Lexical extraction builds
+  // `referencedEntryIds`; this store action never parses the editor state
+  // itself) as one atomic operation, one undo/redo entry. Duplicates in
+  // `referencedEntryIds` are meaningful (the same entry cited twice in the
+  // prose) — see db/mutations.ts's setContextJustificationWithReferences.
+  setJustificationWithReferences: (
+    contextId: string,
+    justificationJson: string,
+    referencedEntryIds: readonly string[],
+  ) => Promise<void>
   bind: (contextId: string, dimensionId: string, parameterId: string) => Promise<void>
   unbind: (contextId: string, dimensionId: string) => Promise<void>
   // Re-reads bindings for exactly these contexts from the DB and merges them
@@ -420,6 +453,54 @@ export function createContextsStore() {
         const reapplied = await dbSetJustification(db, id, text)
         set({ contexts: await rawListContexts(db, projectId, canvasId) })
         enqueueIfSyncing('contexts', reapplied.id, 'update', reapplied)
+      },
+    })
+  },
+
+  async setJustificationWithReferences(contextId, justificationJson, referencedEntryIds) {
+    const { projectId, canvasId } = get()
+    if (projectId === null) return
+    const db = requireDatabase()
+    const symbol = get().contexts.find((c) => c.id === contextId)?.symbol ?? contextId
+    const previousJustification = get().contexts.find((c) => c.id === contextId)?.justification ?? ''
+    // The multiset of entries live on this context BEFORE this commit — undo
+    // replays the setter with THIS captured state (not a row-level snapshot),
+    // exactly like setJustification/setSymbol's own undo/redo above; see
+    // db/mutations.ts's setContextJustificationWithReferences doc comment for
+    // why replaying the setter keeps reference ids stable across the cycle.
+    const previousReferencedEntryIds = (await dbListDesignProseReferences(db, contextId)).map(
+      (r) => r.sourceEntryId,
+    )
+    const desiredEntryIds = [...referencedEntryIds]
+
+    set({ generation: get().generation + 1 })
+    const result = await dbSetJustificationWithReferences(db, contextId, justificationJson, desiredEntryIds)
+    set({ contexts: await rawListContexts(db, projectId, canvasId) })
+    enqueueJustificationResult(result)
+
+    useCommandLogStore.getState().push({
+      label: `edit justification for ${symbol}`,
+      async undo() {
+        set({ generation: get().generation + 1 })
+        const reverted = await dbSetJustificationWithReferences(
+          db,
+          contextId,
+          previousJustification,
+          previousReferencedEntryIds,
+        )
+        set({ contexts: await rawListContexts(db, projectId, canvasId) })
+        enqueueJustificationResult(reverted)
+      },
+      async redo() {
+        set({ generation: get().generation + 1 })
+        const reapplied = await dbSetJustificationWithReferences(
+          db,
+          contextId,
+          justificationJson,
+          desiredEntryIds,
+        )
+        set({ contexts: await rawListContexts(db, projectId, canvasId) })
+        enqueueJustificationResult(reapplied)
       },
     })
   },

@@ -66,6 +66,11 @@ export const FK_SCHEMA: Readonly<Record<MutationTable, Readonly<Record<string, F
   parameters: { dimensionId: 'dimensions', parentParamId: 'parameters', sourceEntryId: 'tier2Entries' },
   contexts: { projectId: 'projects', canvasId: 'canvases', parentId: 'contexts' },
   bindings: { contextId: 'contexts', dimensionId: 'dimensions', parameterId: 'parameters' },
+  // Phase 3 (design-prose-references) — mirrors src/db/schema.ts's
+  // designProseReferences FKs. workspaceId is intentionally absent here (it
+  // points at `workspaces`, not a mutable MutationTable — same convention as
+  // every other project-content table above).
+  designProseReferences: { contextId: 'contexts', sourceEntryId: 'tier2Entries' },
   // Issue 056 — both point OUTWARD at `workspaces` (never at each other or
   // at another mutable table), matching src/db/schema.ts:31-45,59-75.
   invitations: { workspaceId: 'workspaces' },
@@ -462,6 +467,7 @@ const SQL_TABLE_NAMES: Readonly<Record<MutationTable, string>> = {
   parameters: 'parameters',
   contexts: 'contexts',
   bindings: 'bindings',
+  designProseReferences: 'design_prose_references',
   invitations: 'invitations',
   workspaceMembers: 'workspace_members',
 }

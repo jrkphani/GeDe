@@ -224,6 +224,18 @@ const SQL_TO_JS_COLUMNS: Record<TableName, Record<string, string>> = {
     updated_at: 'updatedAt',
     deleted_at: 'deletedAt',
   },
+  // Phase 3 (design-prose-references) — see designProseReferences in
+  // schema.ts; every column mapped for the same reason as canvases' own
+  // comment above (an unmapped column silently drops on a remote round-trip).
+  design_prose_references: {
+    id: 'id',
+    workspace_id: 'workspaceId',
+    context_id: 'contextId',
+    source_entry_id: 'sourceEntryId',
+    created_at: 'createdAt',
+    updated_at: 'updatedAt',
+    deleted_at: 'deletedAt',
+  },
 }
 
 export class MalformedElectricMessageError extends Error {

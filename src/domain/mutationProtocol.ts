@@ -48,6 +48,14 @@ export type MutationTable =
   | 'parameters'
   | 'contexts'
   | 'bindings'
+  // Phase 3 (design-prose-references) — a reference token inside a Design
+  // context's justification prose; joins the same camelCase (protocol)
+  // vocabulary as the other project-content tables above. No live /write
+  // endpoint exercises this yet (Phase 5's server tenancy validation is where
+  // that lands) — this entry only keeps writeTransport.ts's TableName ->
+  // MutationTable bridge (and store.ts's FK_SCHEMA/SQL_TABLE_NAMES) exhaustive
+  // and type-sound now that the sync layer (syncDelta.ts) knows this table.
+  | 'designProseReferences'
   | 'invitations'
   | 'workspaceMembers'
 
