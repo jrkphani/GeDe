@@ -47,6 +47,9 @@ const TABLE_TO_MUTATION_TABLE: Readonly<Record<TableName, MutationTable>> = {
   parameters: 'parameters',
   contexts: 'contexts',
   bindings: 'bindings',
+  // Phase 3 (design-prose-references) — same snake_case (queue) <-> camelCase
+  // (protocol) bridge as the original nine.
+  design_prose_references: 'designProseReferences',
   // Issue 056 — invitations/workspace_members join the same snake_case
   // (queue) <-> camelCase (protocol) bridge as the original nine.
   invitations: 'invitations',

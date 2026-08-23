@@ -1,6 +1,7 @@
 import { sql } from 'drizzle-orm'
 import {
   type AnyPgColumn,
+  index,
   integer,
   pgEnum,
   pgTable,
@@ -319,6 +320,44 @@ export const contexts = pgTable('contexts', {
   updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
   deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
 })
+
+// Phase 3 (design-prose-references) — a reference token inside a Design
+// context's justification prose (Lexical JSON), pointing at the Architecture
+// (Tier 2) entry it cites. Carries its own first-class workspace_id (0008's
+// direct-read RLS pattern, matching dimensions/contexts/canvases — not the
+// FK-chain subquery form 0015 uses for parameters/bindings/tier2_entries).
+// Deliberately NOT unique on (contextId, sourceEntryId): the same entry can
+// legitimately be referenced more than once in the same prose, one row per
+// inline token occurrence — src/db/mutations.ts's
+// setContextJustificationWithReferences diffs this table as a multiset per
+// sourceEntryId, not a set. No SQL cascade (this schema's convention);
+// deleting the context or the source entry requires app-level resolution.
+export const designProseReferences = pgTable(
+  'design_prose_references',
+  {
+    id: text('id').primaryKey(),
+    workspaceId: text('workspace_id')
+      .notNull()
+      .references(() => workspaces.id),
+    contextId: text('context_id')
+      .notNull()
+      .references(() => contexts.id),
+    sourceEntryId: text('source_entry_id')
+      .notNull()
+      .references(() => tier2Entries.id),
+    createdAt: timestamp('created_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true, mode: 'string' }).notNull().defaultNow(),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'string' }),
+  },
+  (table) => [
+    // Deliberate deviation from this schema's usual "no FK-column indexes"
+    // convention (bindings/parameters/tier2_entries carry none) — this table
+    // IS queried by both FKs at meaningful scale, so it gets them on purpose.
+    // Not an oversight to "clean up" later.
+    index('design_prose_references_context_id_idx').on(table.contextId),
+    index('design_prose_references_source_entry_id_idx').on(table.sourceEntryId),
+  ],
+)
 
 // SPEC.md §3 — the pair (context × dimension → parameter). A binding is a
 // current-state pointer, not a history-bearing entity: rebinding upserts.

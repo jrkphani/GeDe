@@ -85,6 +85,13 @@ const WORKSPACE_SCOPE_SQL: Readonly<Record<TableName, string>> = {
   tier2_entries: 'workspace_id = ANY($1::text[])',
   parameters: 'workspace_id = ANY($1::text[])',
   bindings: 'workspace_id = ANY($1::text[])',
+  // Phase 3 (design-prose-references) — same direct-workspace_id predicate
+  // shape as every other table above. Not yet in SYNCED_TABLES (no read-path
+  // shape is subscribed for it client-side until a later phase wires the
+  // server-side Electric shape), but WORKSPACE_SCOPE_SQL's Record<TableName,
+  // string> type is exhaustive over every TableName, so this entry exists
+  // regardless — it's simply unused until then.
+  design_prose_references: 'workspace_id = ANY($1::text[])',
   // `invitations`' base (membership-only) predicate — the fallback used when
   // no caller email is available (see scopeToWorkspaces below for the real,
   // email-OR-membership predicate issue 062 actually ships for this table).

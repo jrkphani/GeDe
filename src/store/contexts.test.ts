@@ -1,7 +1,14 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { openDatabase } from '../db/client'
 import * as mutations from '../db/mutations'
-import { addDimension, addParameter, createProject, listContexts } from '../db/mutations'
+import {
+  addDimension,
+  addParameter,
+  addTier2Entry,
+  addTier2Table,
+  createProject,
+  listContexts,
+} from '../db/mutations'
 import { setDatabase } from './database'
 import { useCommandLogStore } from './commandLog'
 import { resetContextsStore, useContextsStore } from './contexts'
@@ -13,6 +20,8 @@ let valueId: string
 let stakeId: string
 let comfortId: string
 let usersId: string
+let entryAId: string
+let entryBId: string
 
 beforeEach(async () => {
   ;({ db } = await openDatabase('memory://'))
@@ -28,6 +37,9 @@ beforeEach(async () => {
   stakeId = stake.id
   comfortId = (await addParameter(db, value.id, 'Comfort')).id
   usersId = (await addParameter(db, stake.id, 'Users')).id
+  const table = await addTier2Table(db, projectId, 'Architecture')
+  entryAId = (await addTier2Entry(db, table.id, null, 'Entry A')).id
+  entryBId = (await addTier2Entry(db, table.id, null, 'Entry B')).id
   await useContextsStore.getState().load(projectId)
 })
 
@@ -82,6 +94,35 @@ describe('contexts store — command log (issue 006)', () => {
 
     await useCommandLogStore.getState().redo()
     expect(useContextsStore.getState().contexts[0]?.justification).toBe('second')
+  })
+
+  // Phase 3 (design-prose-references) — one atomic commit, one undo/redo
+  // entry, restoring BOTH the prose text and the reference-row state together.
+  it('undo of setJustificationWithReferences restores the previous text AND reference set; redo re-applies both', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    await useContextsStore.getState().setJustificationWithReferences(id, 'cites A', [entryAId])
+    await useContextsStore.getState().setJustificationWithReferences(id, 'cites A and B', [entryAId, entryBId])
+
+    await useCommandLogStore.getState().undo()
+    expect(useContextsStore.getState().contexts[0]?.justification).toBe('cites A')
+    expect((await mutations.listDesignProseReferences(db, id)).map((r) => r.sourceEntryId)).toEqual([entryAId])
+
+    await useCommandLogStore.getState().redo()
+    expect(useContextsStore.getState().contexts[0]?.justification).toBe('cites A and B')
+    expect((await mutations.listDesignProseReferences(db, id)).map((r) => r.sourceEntryId).sort()).toEqual(
+      [entryAId, entryBId].sort(),
+    )
+  })
+
+  it('undo of setJustificationWithReferences all the way back to a never-referenced context leaves it with no live references', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    await useContextsStore.getState().setJustificationWithReferences(id, 'cites A', [entryAId])
+
+    await useCommandLogStore.getState().undo()
+    expect(useContextsStore.getState().contexts[0]?.justification).toBe('')
+    expect(await mutations.listDesignProseReferences(db, id)).toEqual([])
   })
 
   it('undo of bind unbinds (or restores the previous parameter); redo re-binds', async () => {
@@ -277,6 +318,41 @@ describe('contexts store — sync enqueue (issue 073 pt1)', () => {
       op: 'update',
       status: 'pending',
     })
+  })
+
+  // Phase 3 — the load-bearing correction: both tables sync out together from
+  // the SAME commit, never as two separate races.
+  it('setJustificationWithReferences enqueues a contexts update AND a design_prose_references upsert per new reference', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    useSyncStore.setState({ queue: { entries: [] }, workspaceId: 'ws1' })
+
+    await useContextsStore.getState().setJustificationWithReferences(id, 'cites A and B', [entryAId, entryBId])
+    const queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(3)
+    expect(queued[0]).toMatchObject({ table: 'contexts', rowId: id, op: 'update', status: 'pending' })
+    const referenceOps = queued.slice(1)
+    expect(referenceOps.every((q) => q.table === 'design_prose_references' && q.op === 'upsert')).toBe(true)
+    expect(referenceOps.map((q) => q.rowId).sort()).toEqual(
+      (await mutations.listDesignProseReferences(db, id)).map((r) => r.id).sort(),
+    )
+  })
+
+  it('removing a reference enqueues a design_prose_references delete; undo enqueues a revive', async () => {
+    const ctx = await useContextsStore.getState().create()
+    const id = (ctx as { id: string }).id
+    useSyncStore.setState({ workspaceId: 'ws1' })
+    await useContextsStore.getState().setJustificationWithReferences(id, 'cites A', [entryAId])
+    useSyncStore.setState({ queue: { entries: [] } })
+
+    await useContextsStore.getState().setJustificationWithReferences(id, 'cites nothing', [])
+    let queued = useSyncStore.getState().queue.entries
+    expect(queued).toHaveLength(2)
+    expect(queued[1]).toMatchObject({ table: 'design_prose_references', op: 'delete', status: 'pending' })
+
+    await useCommandLogStore.getState().undo()
+    queued = useSyncStore.getState().queue.entries
+    expect(queued.at(-1)).toMatchObject({ table: 'design_prose_references', op: 'revive', status: 'pending' })
   })
 })
 

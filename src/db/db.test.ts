@@ -24,6 +24,17 @@ describe('migrations', () => {
     expect(res.rows).toHaveLength(1)
   })
 
+  // Phase 3 (design-prose-references, migration 0019) — applies cleanly
+  // against a fresh PGlite instance alongside every other migration, exactly
+  // like 0017_canvases.sql's own coverage above.
+  it('creates the design_prose_references table', async () => {
+    const pg = await freshPg()
+    const res = await pg.query(
+      `SELECT table_name FROM information_schema.tables WHERE table_name = 'design_prose_references'`,
+    )
+    expect(res.rows).toHaveLength(1)
+  })
+
   it('is idempotent — a second run applies nothing', async () => {
     const pg = new PGlite()
     const first = await runMigrations(pg)

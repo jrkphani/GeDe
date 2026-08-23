@@ -272,6 +272,28 @@ export async function applyInboundDeltas(db: Database, deltas: readonly RowDelta
             .returning({ id: schema.workspaceMembers.id })
           return applied.length > 0
         }
+        // Phase 3 (design-prose-references) — no deferred FK (contextId and
+        // sourceEntryId are never self/cross-referential the way
+        // contexts.parentId etc. are), and no ensureWorkspaceStub: its
+        // workspaceId is satisfied transitively the same way bindings/
+        // dimensions/contexts's is — via contextId -> contexts -> projectId ->
+        // projects, whose own apply already ran ensureWorkspaceStub, and this
+        // table sorts after every ENVELOPE_TABLE_NAMES entry in
+        // RETRY_APPLY_ORDER (syncEngine.ts's unlisted-table fallback), so
+        // `projects` has always already applied by the time this case runs.
+        case 'design_prose_references': {
+          const row = delta.row as typeof schema.designProseReferences.$inferInsert
+          const applied = await tx
+            .insert(schema.designProseReferences)
+            .values(row)
+            .onConflictDoUpdate({
+              target: schema.designProseReferences.id,
+              set: row,
+              setWhere: sql`${schema.designProseReferences.updatedAt} < ${delta.updatedAt}`,
+            })
+            .returning({ id: schema.designProseReferences.id })
+          return applied.length > 0
+        }
       }
     }
 

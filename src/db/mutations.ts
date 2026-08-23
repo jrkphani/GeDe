@@ -6,6 +6,7 @@ import {
   bindings,
   canvases,
   contexts,
+  designProseReferences,
   dimensions,
   parameters,
   projects,
@@ -1107,6 +1108,173 @@ export async function setContextJustification(
     .where(eq(contexts.id, id))
     .returning()
   return firstOrThrow(rows)
+}
+
+// ── Design prose references (Phase 3) ───────────────────────────────────────
+// A reference token inside a Design context's justification prose, pointing
+// at the Tier 2 (Architecture) entry it cites. This block mirrors contexts'
+// own create/archive/restore shape (createContext/archiveContext/
+// restoreContext above) one table over — same id/timestamp/deletedAt
+// conventions — plus the transactional commit API below, which is the one
+// this feature's UI actually calls.
+
+export type DesignProseReferenceRow = typeof designProseReferences.$inferSelect
+
+// Live references for a context, in insertion order. NOT deduplicated by
+// sourceEntryId — the same entry can have multiple live rows (one per inline
+// token occurrence, schema.ts's designProseReferences comment).
+export async function listDesignProseReferences(
+  db: Querier,
+  contextId: string,
+): Promise<DesignProseReferenceRow[]> {
+  return db
+    .select()
+    .from(designProseReferences)
+    .where(and(eq(designProseReferences.contextId, contextId), isNull(designProseReferences.deletedAt)))
+    .orderBy(asc(designProseReferences.createdAt))
+}
+
+export async function createDesignProseReference(
+  db: Querier,
+  contextId: string,
+  sourceEntryId: string,
+  workspaceId: string,
+): Promise<DesignProseReferenceRow> {
+  const rows = await db
+    .insert(designProseReferences)
+    .values({ id: uuidv7(), workspaceId, contextId, sourceEntryId })
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function archiveDesignProseReference(db: Querier, id: string): Promise<DesignProseReferenceRow> {
+  const rows = await db
+    .update(designProseReferences)
+    .set({ deletedAt: now(), updatedAt: now() })
+    .where(eq(designProseReferences.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+export async function restoreDesignProseReference(db: Querier, id: string): Promise<DesignProseReferenceRow> {
+  const rows = await db
+    .update(designProseReferences)
+    .set({ deletedAt: null, updatedAt: now() })
+    .where(eq(designProseReferences.id, id))
+    .returning()
+  return firstOrThrow(rows)
+}
+
+// The rows a justification-with-references commit touched, verbatim, bucketed
+// by what happened to each — mirrors CanvasCascadeResult's "verbatim rows a
+// cascade touched" contract (archiveCanvasCascade above), so a caller can
+// enqueue the right sync op per bucket (073's op-selection rule: a genuinely
+// new row -> upsert, an un-tombstoned row -> revive, a newly tombstoned row ->
+// delete) without re-deriving it from a before/after diff itself.
+export interface JustificationWithReferencesResult {
+  context: ContextRow
+  createdReferences: DesignProseReferenceRow[]
+  revivedReferences: DesignProseReferenceRow[]
+  tombstonedReferences: DesignProseReferenceRow[]
+}
+
+// Commits a Design context's justification prose AND which Tier 2 entries it
+// references as ONE atomic operation — the correction this phase makes over
+// plain setContextJustification (above), which only ever touched `contexts`
+// and can't keep prose and references consistent if a caller edits both at
+// once. `referencedEntryIds` is the FULL desired set for this commit, as a
+// MULTISET (duplicates meaningful — one entry cited twice in the prose is two
+// entries in this array): the caller (a later phase's Lexical extraction, not
+// this one) is responsible for building it from the editor state; this
+// function never parses Lexical JSON itself.
+//
+// Diffs `referencedEntryIds` against the context's CURRENT rows (live AND
+// tombstoned — a tombstoned row is a candidate for revival, not a fresh
+// insert) as a multiset per sourceEntryId, since two rows can legitimately
+// share a sourceEntryId (no uniqueness constraint — schema.ts's comment):
+//   - a desired occurrence matched by a LIVE row of the same sourceEntryId:
+//     unchanged, left alone.
+//   - a desired occurrence matched by a TOMBSTONED row of the same
+//     sourceEntryId (none live left): revived (deleted_at cleared).
+//   - a desired occurrence matched by neither: a fresh row is inserted.
+//   - any LIVE row left unmatched once every desired occurrence is consumed:
+//     tombstoned (no longer referenced).
+// This keeps ids stable across repeated commits of the same desired state
+// (including a command-log undo/redo cycle that alternates between two
+// states — see src/store/contexts.ts's setJustificationWithReferences),
+// rather than churning fresh ids on every save.
+export async function setContextJustificationWithReferences(
+  db: Database,
+  contextId: string,
+  justification: string,
+  referencedEntryIds: readonly string[],
+): Promise<JustificationWithReferencesResult> {
+  // 107-style — the prose update and every reference row insert/revive/
+  // tombstone commit as one unit: a mid-sequence failure must not leave the
+  // justification text pointing at a reference set that was only partially
+  // reconciled.
+  return db.transaction(async (tx) => {
+    const contextRows = await tx
+      .update(contexts)
+      .set({ justification, updatedAt: now() })
+      .where(eq(contexts.id, contextId))
+      .returning()
+    const context = firstOrThrow(contextRows, 'context not found')
+
+    const existing = await tx.select().from(designProseReferences).where(eq(designProseReferences.contextId, contextId))
+
+    const live = new Map<string, DesignProseReferenceRow[]>()
+    const dead = new Map<string, DesignProseReferenceRow[]>()
+    for (const row of existing) {
+      const bucket = row.deletedAt === null ? live : dead
+      const queue = bucket.get(row.sourceEntryId) ?? []
+      queue.push(row)
+      bucket.set(row.sourceEntryId, queue)
+    }
+
+    const createdReferences: DesignProseReferenceRow[] = []
+    const revivedReferences: DesignProseReferenceRow[] = []
+
+    for (const sourceEntryId of referencedEntryIds) {
+      const liveQueue = live.get(sourceEntryId)
+      if (liveQueue !== undefined && liveQueue.length > 0) {
+        liveQueue.shift() // still referenced this many times — unchanged
+        continue
+      }
+      const deadQueue = dead.get(sourceEntryId)
+      const stale = deadQueue?.shift()
+      if (stale !== undefined) {
+        const revivedRows = await tx
+          .update(designProseReferences)
+          .set({ deletedAt: null, updatedAt: now() })
+          .where(eq(designProseReferences.id, stale.id))
+          .returning()
+        revivedReferences.push(firstOrThrow(revivedRows))
+        continue
+      }
+      const insertedRows = await tx
+        .insert(designProseReferences)
+        .values({ id: uuidv7(), workspaceId: context.workspaceId, contextId, sourceEntryId })
+        .returning()
+      createdReferences.push(firstOrThrow(insertedRows))
+    }
+
+    // Every live row left unclaimed once every desired occurrence has been
+    // matched is no longer referenced.
+    const tombstonedReferences: DesignProseReferenceRow[] = []
+    for (const queue of live.values()) {
+      for (const row of queue) {
+        const tombstonedRows = await tx
+          .update(designProseReferences)
+          .set({ deletedAt: now(), updatedAt: now() })
+          .where(eq(designProseReferences.id, row.id))
+          .returning()
+        tombstonedReferences.push(firstOrThrow(tombstonedRows))
+      }
+    }
+
+    return { context, createdReferences, revivedReferences, tombstonedReferences }
+  })
 }
 
 // Live bindings only — a tombstoned row (issue 032: cascadeDeleteBindingsForDimension
