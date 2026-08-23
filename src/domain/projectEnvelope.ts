@@ -818,5 +818,6 @@ export function projectName(tables: EnvelopeTables): string {
   return tables.projects[0]?.name ?? 'project'
 }
 
-// Re-exported for the DB layer's insert plan and the schema cross-check test.
-export { ID_FIELDS, FK_TARGETS, SELF_PARENT_FIELD, WORKSPACE_SCOPED_TABLES }
+// Re-exported for the schema cross-check test (projectEnvelope.test.ts).
+// SELF_PARENT_FIELD stays internal — only validateAcyclic (above) uses it.
+export { ID_FIELDS, FK_TARGETS, WORKSPACE_SCOPED_TABLES }
