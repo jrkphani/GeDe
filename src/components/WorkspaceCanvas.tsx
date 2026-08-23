@@ -46,6 +46,7 @@ import { useWorkspaceRole } from '../store/workspace'
 import type { Tier2TableRow } from '../db/mutations'
 import type { AppRoute, DesignView } from '../shell/routes'
 import { DesignCoverageTwinBody, DesignRegisterBody, DesignRingBody } from './DesignCoreAdapter'
+import { attachCanvasGestureRouter } from './canvasGestureRouter'
 import { firstEditableCell, lastEditablePosition } from './gridBoundaryFocus'
 import { FoundationHeaderPanel } from './FoundationCanvasNodes'
 import { TablePanel } from './ArchitectureSurface'
@@ -86,9 +87,16 @@ import {
 // so the header handle stays a visual no-op reorder gesture for now.
 //
 // Spike-proven annotations that are load-bearing (all node kinds):
-//   • each node's interactive body is `nodrag nopan nowheel` — else a pointerdown
-//     starts a node-drag instead of a cell edit (`nodrag`), and a wheel zooms the
-//     canvas instead of scrolling the cell (`nowheel`);
+//   • each node's interactive body is never node-draggable on its own — node drag
+//     only ever starts from the header `dragHandle` below, so a pointerdown inside
+//     a body is already a cell edit, not a node drag (belt-and-suspenders: the
+//     body also never carries React Flow's own drag-start selector);
+//   • wheel/pan/pinch over a body is resolved by `canvasGestureRouter`'s single
+//     capture-phase router (not React Flow's own nowheel/nopan DOM-class filter,
+//     which has no way to tell a zoom-intent gesture from a plain one) — under
+//     `panOnScroll` a plain wheel PANS by default, a `[data-gesture-scroll]` body
+//     with real overflow scrolls itself first, and Cmd/Ctrl+wheel, trackpad pinch,
+//     and real two-finger touch pinch all zoom, everywhere, including over a table;
 //   • each node carries a header `dragHandle` (`.wc-node__handle`) so the ONLY
 //     drag origin is the header, never a grid body (belt-and-suspenders);
 //   • `autoPanOnNodeDrag={false}` — the viewport must not chase a dragged node;
@@ -96,6 +104,11 @@ import {
 //     Design's `c`/`v`/`d` capture-phase verbs stay lane-scoped.
 
 type WorkspaceRoute = Extract<AppRoute, { kind: 'project' | 'tier' | 'design' }>
+
+// Shared with `canvasGestureRouter`'s self-driven touch-pinch zoom, so its clamp
+// matches the `<ReactFlow>` props below exactly rather than duplicating literals.
+const MIN_ZOOM = 0.2
+const MAX_ZOOM = 2
 
 // Estimated node heights for the derived layout's FIRST frame — used only until
 // React Flow measures each node (`node.measured.height`) and the stack is
@@ -427,11 +440,12 @@ function DesignRegisterNode({ data }: NodeProps<DesignRegisterNode>) {
         isConnectable={false}
         className="wc-edge-anchor"
       />
-      <div className="wc-node__handle" aria-hidden="true">
+      <div className="wc-node__handle" data-gesture-drag-handle="true" aria-hidden="true">
         Design
       </div>
       <div
-        className="nodrag nopan nowheel wc-node__body"
+        className="wc-node__body"
+        data-gesture-scroll="true"
         onFocusCapture={() => {
           setActiveLane('design')
           useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
@@ -470,11 +484,12 @@ function DesignRingNode({ data }: NodeProps<DesignRingNode>) {
         isConnectable={false}
         className="wc-edge-anchor"
       />
-      <div className="wc-node__handle" aria-hidden="true">
+      <div className="wc-node__handle" data-gesture-drag-handle="true" aria-hidden="true">
         Design · canvas
       </div>
       <div
-        className="nodrag nopan nowheel wc-node__body"
+        className="wc-node__body"
+        data-gesture-scroll="true"
         onFocusCapture={() => {
           setActiveLane('design')
           useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
@@ -505,11 +520,12 @@ function FoundationHeaderNode({ data }: NodeProps<FoundationHeaderNode>) {
   const lod = useLaneLod()
   return (
     <div className="wc-node wc-node--foundation wc-node--foundation-header">
-      <div className="wc-node__handle" aria-hidden="true">
+      <div className="wc-node__handle" data-gesture-drag-handle="true" aria-hidden="true">
         Foundation
       </div>
       <div
-        className="nodrag nopan nowheel wc-node__body"
+        className="wc-node__body"
+        data-gesture-scroll="true"
         onFocusCapture={() => {
           setActiveLane('foundation')
           lod.onFocusCapture()
@@ -568,11 +584,12 @@ function ArchHeaderNode({ data }: NodeProps<ArchHeaderNode>) {
   const addTable = useTier2Store((s) => s.addTable)
   return (
     <div className="wc-node wc-node--architecture wc-node--arch-header">
-      <div className="wc-node__handle" aria-hidden="true">
+      <div className="wc-node__handle" data-gesture-drag-handle="true" aria-hidden="true">
         Architecture
       </div>
       <div
-        className="nodrag nopan nowheel wc-node__body"
+        className="wc-node__body"
+        data-gesture-scroll="true"
         onFocusCapture={() => setActiveLane('architecture')}
         onPointerDown={() => setActiveLane('architecture')}
       >
@@ -616,6 +633,7 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
     <div className="wc-node wc-node--arch-table" data-table-id={data.table.id}>
       <div
         className="wc-node__handle"
+        data-gesture-drag-handle="true"
         aria-hidden="true"
         onTouchStart={(event) => {
           const touch = event.touches[0]
@@ -637,7 +655,8 @@ function ArchTableNode({ data }: NodeProps<ArchTableNode>) {
         {data.table.name}
       </div>
       <div
-        className="nodrag nopan nowheel wc-node__body"
+        className="wc-node__body"
+        data-gesture-scroll="true"
         onFocusCapture={() => {
           setActiveLane('architecture')
           lod.onFocusCapture()
@@ -675,11 +694,12 @@ function CoverageTwinNode({ data }: NodeProps<CoverageTwinNode>) {
     <div className="wc-node wc-node--coverage-twin" data-testid="wc-coverage-twin">
       {/* The child end of the ring→twin edge. */}
       <Handle type="target" position={Position.Top} isConnectable={false} className="wc-edge-anchor" />
-      <div className="wc-node__handle" aria-hidden="true">
+      <div className="wc-node__handle" data-gesture-drag-handle="true" aria-hidden="true">
         Design · coverage
       </div>
       <div
-        className="nodrag nopan nowheel wc-node__body"
+        className="wc-node__body"
+        data-gesture-scroll="true"
         onFocusCapture={() => {
           setActiveLane('design')
           useActiveCanvasStore.getState().setActiveCanvas(data.canvasId ?? 'root')
@@ -1292,10 +1312,23 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
     [reactFlow, setNodes],
   )
 
+  // The gesture router runs as ONE capture-phase listener pair on this wrapper —
+  // upstream of React Flow's own bubble-phase pane listeners — so it always
+  // classifies a wheel/touch gesture before React Flow's own (now largely
+  // unblocked, see the `noWheelClassName`/`noPanClassName` props below) handling
+  // gets a chance to. See `canvasGestureRouter.ts` for the full rationale.
+  const canvasWrapperRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const wrapper = canvasWrapperRef.current
+    if (!wrapper) return
+    return attachCanvasGestureRouter(wrapper, reactFlow, { min: MIN_ZOOM, max: MAX_ZOOM })
+  }, [reactFlow])
+
   return (
     // 089-P7: the canvas is now the DEFAULT primary content region, so it carries
     // the `main` landmark that the tier surfaces provide on the fallback path.
     <div
+      ref={canvasWrapperRef}
       className="workspace-canvas"
       role="main"
       aria-label="Workspace canvas"
@@ -1307,8 +1340,8 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         onNodeDrag={onNodeDrag}
         onNodeDragStop={onNodeDragStop}
         nodeTypes={NODE_TYPES}
-        minZoom={0.2}
-        maxZoom={2}
+        minZoom={MIN_ZOOM}
+        maxZoom={MAX_ZOOM}
         // Numbers/Excel-like camera grammar: ordinary wheel/trackpad gestures
         // pan freely in 2D; holding the platform zoom modifier (Cmd/Ctrl) turns
         // the same gesture into zoom, and native pinch remains zoom. Double-click
@@ -1320,6 +1353,17 @@ function WorkspaceCanvasInner({ route }: { route: WorkspaceRoute }) {
         zoomOnPinch
         zoomActivationKeyCode={['Meta', 'Control']}
         zoomOnDoubleClick={false}
+        // `nowheel` is fully neutralized (points at a class nothing carries) —
+        // `canvasGestureRouter` now owns 100% of wheel classification (see its
+        // module comment). `nopan` stays pointed at the real, always-present
+        // `wc-node__body` class: single-pointer drag-inside-a-table protection
+        // was never the bug (only the 2+-touch pinch case was), and the router
+        // intercepts that case before this filter ever runs. `nodrag` is inert
+        // either way — node-drag already only ever starts from `dragHandle`
+        // (`.wc-node__handle`) — pointed at an unused class for documentation.
+        noWheelClassName="__rf-inert-nowheel"
+        noPanClassName="wc-node__body"
+        noDragClassName="__rf-inert-nodrag"
         nodesConnectable={false}
         // The viewport is user-owned. Focus, selection, connection, node drag,
         // content measurement, and node mounting may update content but never
