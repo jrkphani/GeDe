@@ -423,6 +423,101 @@ test('trackpad grammar pans in 2D; Ctrl-wheel zooms and updates the live percent
   )
 })
 
+// ── canvasGestureRouter (fix/uniform-canvas-zoom-gesture-router) ─────────────
+// Root cause (confirmed against @xyflow/react 12.11.2 / d3-zoom source): every
+// node body's `nowheel`/`nopan` class blocked EVERY wheel/touch gesture
+// underneath it with zero modifier-key awareness — Cmd/Ctrl+wheel, a trackpad
+// pinch (a `wheel` event with `ctrlKey: true` and no real Control keydown), and
+// real touch pinch were all swallowed the moment the cursor was over a table,
+// which is why zoom "sometimes worked" and users reported it broken
+// specifically over the tables. `canvasGestureRouter` replaces the per-node
+// class special-casing with one capture-phase router; these specs cover the
+// gestures that were broken over a table body and are now fixed, plus the
+// table-scroll dead-zone decision documented in that module (scroll the
+// table's own overflow if it has any, else fall through as canvas-pan).
+test('Cmd/Ctrl+wheel zooms even with the cursor over a table body', { tag: '@dev-flag' }, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page, { fit: false })
+  await addArchTable(page, 'Alpha')
+  const body = page.locator('.wc-node--arch-table .wc-node__body')
+  const box = await boxOf(body)
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+
+  const before = await viewportScale(page)
+  await page.keyboard.down('Control')
+  await page.mouse.wheel(0, -240)
+  await page.keyboard.up('Control')
+  await expect.poll(() => viewportScale(page)).not.toBe(before)
+})
+
+test('a synthetic trackpad-pinch wheel (ctrlKey, no real Control keydown) zooms over a table body', {
+  tag: '@dev-flag',
+}, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page, { fit: false })
+  await addArchTable(page, 'Alpha')
+  const body = page.locator('.wc-node--arch-table .wc-node__body')
+
+  const before = await viewportScale(page)
+  // macOS reports a trackpad pinch as a plain `wheel` event with `ctrlKey: true`
+  // and NO real Control keydown — dispatched directly (not via `page.keyboard`)
+  // so this proves the fix covers the synthetic-ctrlKey path, not just a
+  // physically held modifier key.
+  await body.dispatchEvent('wheel', { deltaY: -120, ctrlKey: true, bubbles: true, cancelable: true })
+  await expect.poll(() => viewportScale(page)).not.toBe(before)
+})
+
+test('plain wheel over a table body with no internal overflow pans the canvas (no dead zone)', {
+  tag: '@dev-flag',
+}, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page, { fit: false })
+  await addArchTable(page, 'Alpha')
+  const body = page.locator('.wc-node--arch-table .wc-node__body')
+  const box = await boxOf(body)
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+
+  const before = await viewportTransform(page)
+  await page.mouse.wheel(0, 160)
+  await expect.poll(() => viewportTransform(page)).not.toBe(before)
+})
+
+test('plain wheel over a table body WITH internal overflow scrolls the table, not the canvas', {
+  tag: '@dev-flag',
+}, async ({ page }) => {
+  await page.setViewportSize({ width: 1600, height: 1100 })
+  await openThreeLaneCanvas(page, { fit: false })
+  await addArchTable(page, 'Alpha')
+  const alpha = page.locator('.wc-node--arch-table').filter({ hasText: 'Alpha' })
+  for (const name of ['One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight']) {
+    await alpha.getByPlaceholder('Name an entry').click()
+    await page.keyboard.type(name)
+    await page.keyboard.press('Enter')
+  }
+  await expect(alpha.getByRole('cell', { name: 'Eight', exact: true })).toBeVisible()
+
+  // No node body ships height-constrained today — every canvas node grows to its
+  // content, and the app relies on panning (not internal scroll) for overflow.
+  // A small inline cap simulates the one real scenario `data-gesture-scroll`
+  // exists to serve, without changing any shipped layout.
+  const scrollEl = alpha.locator('.register-scroll')
+  await scrollEl.evaluate((el) => {
+    el.style.maxHeight = '120px'
+    el.style.overflowY = 'auto'
+  })
+  const box = await boxOf(scrollEl)
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+
+  const beforeViewport = await viewportTransform(page)
+  const beforeScrollTop = await scrollEl.evaluate((el) => el.scrollTop)
+  await page.mouse.wheel(0, 160)
+  await expect.poll(() => scrollEl.evaluate((el) => el.scrollTop)).toBeGreaterThan(beforeScrollTop)
+  expect(
+    await viewportTransform(page),
+    'a table with room left to scroll must not also pan the canvas',
+  ).toBe(beforeViewport)
+})
+
 // Focus is content state, never camera state. Cross-node Tab may focus an element
 // outside the current viewport; the user can invoke a lane shortcut or pan there
 // without the application silently overriding position or zoom.
@@ -1794,6 +1889,60 @@ test('a single-finger touch-drag on the empty canvas pane pans the viewport', { 
     expect(await viewportTransform(page), 'a single-finger touch-drag on empty pane must pan the viewport').not.toBe(
       before,
     )
+  } finally {
+    await context.close()
+  }
+})
+
+// A synthetic two-finger pinch via CDP `Input.dispatchTouchEvent` — unlike
+// `touchDrag` above (one contact point), `touchPoints` here carries BOTH
+// fingers in the same call, each with a stable `id` across the touchStart /
+// touchMove sequence so the resulting `TouchEvent.touches` genuinely has
+// `length === 2` throughout — the real signal `canvasGestureRouter` keys its
+// self-driven pinch off. `radius` is the half-distance between the two
+// fingers; growing it over the sequence is an outward pinch (zoom in).
+async function touchPinch(
+  page: Page,
+  center: { x: number; y: number },
+  fromRadius: number,
+  toRadius: number,
+  steps = 12,
+): Promise<void> {
+  const client = await page.context().newCDPSession(page)
+  const pointsAt = (radius: number): { x: number; y: number; id: number }[] => [
+    { x: center.x - radius, y: center.y, id: 0 },
+    { x: center.x + radius, y: center.y, id: 1 },
+  ]
+  try {
+    await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: pointsAt(fromRadius) })
+    await page.waitForTimeout(16)
+    for (let i = 1; i <= steps; i++) {
+      const radius = fromRadius + ((toRadius - fromRadius) * i) / steps
+      await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: pointsAt(radius) })
+      await page.waitForTimeout(16)
+    }
+    await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] })
+  } finally {
+    await client.detach()
+  }
+}
+
+test('a real two-finger touch pinch zooms even over a table body', { tag: ['@dev-flag', '@touch'] }, async ({
+  browser,
+}) => {
+  // Unlike the header touch-drag-reorder spec below, CDP's `touchPoints` array
+  // genuinely supports multiple simultaneous contacts in one dispatch, so this
+  // is a real (not simulated) two-finger pinch, not a stand-in for one.
+  const context = await browser.newContext({ viewport: { width: 1600, height: 1000 }, hasTouch: true })
+  const page = await context.newPage()
+  try {
+    await openThreeLaneCanvas(page)
+    await addArchTable(page, 'Alpha')
+    const box = await boxOf(page.locator('.wc-node--arch-table .wc-node__body'))
+    const center = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+    const before = await viewportScale(page)
+    await touchPinch(page, center, 40, 160, 14)
+    await expect.poll(() => viewportScale(page)).not.toBe(before)
   } finally {
     await context.close()
   }
