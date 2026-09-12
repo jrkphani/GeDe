@@ -7,13 +7,28 @@ import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { Awareness } from 'y-protocols/awareness';
 
 /** Any Yjs shared type (Y.Map, Y.Array, Y.XmlFragment …); structural so generics stay out of callers. */
-export interface DeepObservable {
+export interface Observable {
+  observe(handler: (event: unknown, transaction: unknown) => void): void;
+  unobserve(handler: (event: unknown, transaction: unknown) => void): void;
   observeDeep(handler: (events: unknown, transaction: unknown) => void): void;
   unobserveDeep(handler: (events: unknown, transaction: unknown) => void): void;
 }
 
-/** Re-render when anything under `type` changes (observeDeep). Returns a change counter. */
-export function useYVersion(type: DeepObservable | null | undefined): number {
+export interface UseYVersionOptions {
+  /**
+   * `deep` (default) re-renders on any change beneath the type; `shallow` only
+   * when the type's own entries change — the shell watches the tables map
+   * shallowly (tables added or removed) and each TableView watches its own
+   * map deeply, so a cell edit re-renders that table alone.
+   */
+  depth?: 'deep' | 'shallow' | undefined;
+}
+
+/** Re-render when `type` changes. Returns a change counter. */
+export function useYVersion(
+  type: Observable | null | undefined,
+  { depth = 'deep' }: UseYVersionOptions = {},
+): number {
   const version = useRef(0);
   const subscribe = useCallback(
     (onChange: () => void) => {
@@ -22,12 +37,18 @@ export function useYVersion(type: DeepObservable | null | undefined): number {
         version.current += 1;
         onChange();
       };
-      type.observeDeep(handler);
+      if (depth === 'deep') {
+        type.observeDeep(handler);
+        return () => {
+          type.unobserveDeep(handler);
+        };
+      }
+      type.observe(handler);
       return () => {
-        type.unobserveDeep(handler);
+        type.unobserve(handler);
       };
     },
-    [type],
+    [type, depth],
   );
   return useSyncExternalStore(
     subscribe,

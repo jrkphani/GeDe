@@ -153,10 +153,12 @@ function OpenDocument({
   const { gd } = session;
   const { state: sessionState } = useSession();
   const wide = useMediaQuery('(min-width: 1200px)');
-  useYVersion(gd.sheets);
-  useYVersion(gd.tables);
-  useYVersion(gd.graphs);
-  useAwarenessVersion(session.sync.awareness);
+  // The shell watches structure only (sheets and objects added or removed); each
+  // TableView watches its own map deeply, so a cell edit re-renders one table.
+  useYVersion(gd.sheets); // deep: a sheet label lives in a nested map
+  useYVersion(gd.tables, { depth: 'shallow' });
+  useYVersion(gd.graphs, { depth: 'shallow' });
+  const awarenessVersion = useAwarenessVersion(session.sync.awareness);
 
   // Viewer state (never document state): active sheet, selection, viewport, chrome toggles.
   const sheets = listSheets(gd);
@@ -175,17 +177,21 @@ function OpenDocument({
 
   const tables = activeSheetId === null ? [] : tablesOnSheet(gd, activeSheetId);
   const selectedTable = selection === null ? null : tableById(gd, selection.tableId);
-  const cell = selectedCell(selection);
+  const cell = useMemo(() => selectedCell(selection), [selection]);
   const tier = zoomTier(viewport.zoom);
 
   // -- presence ---------------------------------------------------------------
   const colour = useRef<PresenceColour | null>(null);
-  const others: PresenceState[] = [];
-  session.sync.awareness.getStates().forEach((state, clientId) => {
-    if (clientId === gd.doc.clientID) return;
-    const p = toPresenceState(state);
-    if (p !== null) others.push(p);
-  });
+  const others = useMemo(() => {
+    const list: PresenceState[] = [];
+    session.sync.awareness.getStates().forEach((state, clientId) => {
+      if (clientId === gd.doc.clientID) return;
+      const p = toPresenceState(state);
+      if (p !== null) list.push(p);
+    });
+    return list;
+    // awarenessVersion is the change signal for the awareness map read above.
+  }, [session, gd, awarenessVersion]);
   const user = sessionState.status === 'signed-in' ? sessionState.user : null;
   useEffect(() => {
     if (user === null) return;
@@ -200,7 +206,10 @@ function OpenDocument({
     session.sync.awareness.setLocalState(state);
     // `others` is derived from awareness itself and deliberately not a dependency: it would loop.
   }, [session, user, activeSheetId, cell?.tableId, cell?.rowId, cell?.colId]);
-  const onSheet = others.filter((o) => o.sheetId === activeSheetId);
+  const onSheet = useMemo(
+    () => others.filter((o) => o.sheetId === activeSheetId),
+    [others, activeSheetId],
+  );
 
   // -- selection --------------------------------------------------------------
   const selectCell = useCallback(

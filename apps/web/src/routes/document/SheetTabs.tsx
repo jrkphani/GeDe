@@ -15,9 +15,9 @@ export interface SheetTabsProps {
 
 /** DOC-03: ordinal, name and object count per sheet; a trailing + appends. */
 export function SheetTabs({ gd, activeSheetId, onSelect, onAppend, bottom }: SheetTabsProps) {
-  useYVersion(gd.sheets);
-  useYVersion(gd.tables);
-  useYVersion(gd.graphs);
+  useYVersion(gd.sheets); // deep: a sheet label lives in a nested map
+  useYVersion(gd.tables, { depth: 'shallow' });
+  useYVersion(gd.graphs, { depth: 'shallow' });
   const sheets = listSheets(gd);
   const value = activeSheetId ?? sheets[0]?.id ?? '';
   return (
