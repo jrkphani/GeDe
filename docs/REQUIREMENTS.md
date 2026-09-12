@@ -4,7 +4,7 @@ Source: `handover/specs/Text-Oriented Spreadsheet PRD.dc.html`, section 24. Text
 
 > Every interaction in the product, stated as a testable requirement. Each carries an ID for traceability from design through implementation to QA. Must is binding; should is a default that may be overridden with a recorded reason.
 
-> Prefixes: AUTH identity · LIB library · DOC document shell · GRID table and cells · FMT formats · FX formulas · REF references · HIER hierarchy · FIND search · KEYS shortcuts · SORT sort, filter, group · MENU context menus · INSP inspector · GRAPH context graphs · SHARE sharing and collaboration · LOAD loading and sync · I18N language · A11Y accessibility · RESP responsive.
+> Prefixes: AUTH identity · LIB library · DOC document shell · GRID table and cells · FMT formats · FX formulas · REF references · HIER hierarchy · FIND search · KEYS shortcuts · SORT sort, filter, group · MENU context menus · INSP inspector · GRAPH context graphs · SHARE sharing and collaboration · LOAD loading and sync · I18N language · A11Y accessibility · RESP responsive · ONB first-run onboarding · LIB-D delete and archive.
 
 ## AUTH — Identity and access (10)
 
@@ -240,6 +240,41 @@ _Breakpoints 480 / 768 / 1024 / 1440._
 - **RESP-04** — Desktop: From 1024 px the inspector docks at 322 px and collapses to a 38 px strip; toolbars wrap rather than clip.
 - **RESP-05** — Targets: Below 1024 px every interactive target is at least 44 × 44 px.
 
+## ONB — First-run guided tour (14)
+
+_Five steps over the live interface. Written for users fluent in iCloud Numbers, so it teaches only what Numbers does not. Direction 1a of the explored options._
+
+- **ONB-01** — Sample workscape: A workscape named `Q3 Delivery — Guided sample` must be present in every library, pinned above all other rows and flagged Sample in the shared column. It must be seeded with the tables, formulas and dates the tour refers to.
+- **ONB-02** — Trigger: The tour must start on the user’s first arrival at the library after authentication, and only when the per-user completion flag is unset. Users arriving from a shared invitation get the same tour.
+- **ONB-03** — Completion state: Completing the final step, or skipping at any step, must set a per-user server-side flag. The flag is per account, not per device or browser.
+- **ONB-04** — Spotlight: Each step must spotlight its target element by live bounding box, re-measured on scroll, resize, zoom and any layout change, with the surrounding page dimmed. The dim layer must not intercept pointer events.
+- **ONB-05** — Advance condition: A step must advance only when the user performs its action. No Next control is provided. Step order: open the sample, write a cross-table reference, add a context graph, open Find and search, invite by email.
+- **ONB-06** — Step 2 targeting: The cross-table reference step has no single target element, because formulas are typed in the cell. Its card must centre in the viewport with no spotlight.
+- **ONB-07** — Skip: Skip must be present on every step and must end the tour permanently, setting the flag as in ONB-03.
+- **ONB-08** — Replay: Replay must be available from the help control in the library header at any time, and must clear the flag and restart at step 1.
+- **ONB-09** — Card anatomy: Each card must carry a step counter, progress dots, a title, an instruction body, a comparison note, and the pending action rendered in amber. The card must flip above its target when there is insufficient room below.
+- **ONB-10** — Comparison copy: Guidance must name the iCloud Numbers equivalent and then state the difference. Behaviour that Numbers already teaches must not be taught. Context graphs, having no Numbers analogue, are introduced on their own terms.
+- **ONB-11** — Interactivity: The spotlit element must remain fully operable while the tour is active. The tour must never block an edit.
+- **ONB-12** — Localisation: All tour strings must live in the same message catalogue as the rest of the interface and must render in all six supported locales.
+- **ONB-13** — Responsive: The tour must not run below 768 px, where documents are read-only. The flag must remain unset so the user receives it on a larger viewport.
+- **ONB-14** — Completion: On completing step 5 the product must confirm completion and state where the tour can be replayed.
+
+## LIB-D — Library: delete and archive (11)
+
+_Deletion is conditional on sharing history. A workscape that has ever had a participant can only be archived, so that no one loses access to a document they were given._
+
+- **LIB-D1** — Delete, unshared: A workscape with no participants and no active share link must be deletable. The toolbar action reads Delete.
+- **LIB-D2** — Archive, shared: A workscape that has ever been shared must not be deletable. The same toolbar slot must become Archive, with a tooltip stating that shared workscapes cannot be deleted.
+- **LIB-D3** — Archive semantics: Archiving must preserve every participant’s access and all share links. It removes the workscape from the owner’s Recents, Browse and Shared views only. Participants see no change.
+- **LIB-D4** — Deletability transition: A workscape must become non-deletable at the moment the first invitation is accepted, not when it is sent. Revoking all access must restore deletability.
+- **LIB-D5** — Recently Deleted: Deleting must move the workscape to Recently Deleted, where it remains recoverable. Retention is 30 days, after which purge is automatic.
+- **LIB-D6** — Archived view: The sidebar must carry an Archived view listing archived workscapes, each with an Unarchive action. Archive has no expiry.
+- **LIB-D7** — Bulk actions: Recently Deleted must offer per-item Recover, Recover All and Delete All.
+- **LIB-D8** — Permanence: Delete All must be permanent and irreversible, and must say so before proceeding.
+- **LIB-D9** — Feedback: Every delete, archive, recover and unarchive must raise a confirmation. Reversible actions must carry Undo; permanent ones must state that they cannot be undone.
+- **LIB-D10** — Sample exemption: The guided sample workscape must be exempt from both delete and archive. Its toolbar action is disabled with an explanatory tooltip.
+- **LIB-D11** — Shared state: Archive and trash are document states, not library-local flags. A second client signed in to the same account must observe the same state without a reload.
+
 ## Count
 
 | Area | Count |
@@ -263,4 +298,6 @@ _Breakpoints 480 / 768 / 1024 / 1440._
 | I18N | 5 |
 | A11Y | 6 |
 | RESP | 5 |
-| **Total** | **147** |
+| ONB | 14 |
+| LIB-D | 11 |
+| **Total** | **172** |

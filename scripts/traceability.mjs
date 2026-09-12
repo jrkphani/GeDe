@@ -5,7 +5,9 @@
  * Run with:  node scripts/traceability.mjs
  * (root package.json exposes it as `npm run traceability`)
  *
- * 1. Reads every `**XXX-nn**` id from docs/REQUIREMENTS.md.
+ * 1. Reads every `**XXX-nn**` id from docs/REQUIREMENTS.md. Ids are `AREA-nn` (two or three
+ *    digits, e.g. `GRID-03`, `ONB-14`) or `AREA-Ln` with a letter sub-area and one to three
+ *    digits, exactly as the PRD spells them (`LIB-D1`, `LIB-D11`). The area of `LIB-D1` is `LIB-D`.
  * 2. Scans apps/, packages/ and services/ for *.test.ts, *.test.tsx and *.spec.ts files
  *    (node_modules, dist, cdk.out and coverage are skipped).
  * 3. Collects the ids that appear in it( / test( / describe( names. An id followed by a
@@ -31,7 +33,11 @@ const outputPath = join(root, 'docs', 'TRACEABILITY.md');
 const scanRoots = ['apps', 'packages', 'services'];
 const skipDirs = new Set(['node_modules', 'dist', 'cdk.out', 'coverage', '.vite', 'test-results']);
 const testFilePattern = /\.(test\.tsx?|spec\.ts)$/;
-const idPattern = /\b([A-Z][A-Z0-9]{1,5})-(\d{2,3})\b/g;
+// `AUTH-01`, `GRID-11`, `ONB-14` (two or three digits) or `LIB-D1`, `LIB-D11` (letter sub-area,
+// one to three digits — the PRD does not zero-pad these).
+const idPattern = /\b([A-Z][A-Z0-9]{1,5})-([A-Z]\d{1,3}|\d{2,3})\b/g;
+// Area of an id: `AUTH-01` → `AUTH`, `LIB-D1` → `LIB-D`.
+const areaOf = (id) => id.replace(/-?\d+$/, '');
 const partialQualifier = /^\s*\((?:partial|button only)\b[^)]*\)/;
 const testNamePattern =
   /\b(?:it|test|describe)(?:\.(?:only|skip|todo|concurrent|sequential|each))?\s*\(\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
@@ -43,12 +49,12 @@ function readRequirements() {
   const text = readFileSync(requirementsPath, 'utf8');
   const requirements = [];
   const areaOrder = [];
-  const linePattern = /^- \*\*([A-Z][A-Z0-9]*-\d+)\*\*\s+[—-]\s+(.*)$/;
+  const linePattern = /^- \*\*([A-Z][A-Z0-9]*-[A-Z]?\d+)\*\*\s+[—-]\s+(.*)$/;
   for (const line of text.split('\n')) {
     const match = linePattern.exec(line);
     if (!match) continue;
     const [, id, description] = match;
-    const area = id.split('-')[0];
+    const area = areaOf(id);
     if (!areaOrder.includes(area)) areaOrder.push(area);
     requirements.push({ id, area, description: description.trim() });
   }

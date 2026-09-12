@@ -17,6 +17,7 @@ specification, the architecture, and the design system with its tokens.
                                               responsive, motion, a11y, voice, emails.
       GeDe Error Pages.dc.html                4xx and 5xx states.
       GeDe Sign-in Options.dc.html            Sign-in and sign-out directions (1c shipped).
+      GeDe First Run.dc.html                  First-run tour directions (1a shipped).
 
     tokens/
       tokens.css                    CSS custom properties. The source of truth.
@@ -25,20 +26,27 @@ specification, the architecture, and the design system with its tokens.
     reference/
       shortcuts.md                  Keyboard map, matching iCloud Numbers.
 
+    CHANGELOG.md                    What changed since the last package, with the
+                                    requirement IDs for anything the PRD prose
+                                    does not cover yet. Read this first.
+
 Open any .html file directly in a browser — no build step, no server.
 
 ## Reading order
 
+0. **CHANGELOG.md** — what changed since the last package, and the open items.
 1. **PRD §1–23** — what the product is and why the grid is a lattice.
-2. **PRD §24** — 110 numbered, testable requirements across sixteen areas
-   (AUTH, LIB, DOC, GRID, FMT, FX, REF, HIER, FIND, KEYS, SORT, MENU, INSP,
-   GRAPH, SHARE, LOAD, I18N, A11Y, RESP). Each ID is the unit of QA traceability.
+2. **PRD §24** — 135 numbered, testable requirements across eighteen areas
+   (AUTH, LIB, LIB-D, DOC, GRID, FMT, FX, REF, HIER, FIND, KEYS, SORT, MENU,
+   INSP, GRAPH, SHARE, LOAD, I18N, A11Y, RESP, ONB). Each ID is the unit of QA
+   traceability.
 3. **Architecture** — containers, the reactive dependency graph, persistence,
    deployment on ARM, and the capacity model.
 4. **Design system** — before writing any component.
 5. **Prototype** — the behavioural reference when prose is ambiguous.
 
 Where the prototype and the PRD disagree, the PRD wins; file the difference.
+The CHANGELOG is orientation; the PRD carries the binding wording.
 
 ## Stack decisions already made
 
