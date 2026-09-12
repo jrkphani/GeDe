@@ -7,8 +7,16 @@
  * where the pair is read-only.
  */
 import type { Page } from '@playwright/test';
-import { openDocument, setCellText, tableRecord, type GedeDoc, type Id } from '@gede/core';
-import { expect, test } from './fixtures/test.js';
+import {
+  createShapedTableWithGraph,
+  listSheets,
+  openDocument,
+  setCellText,
+  tableRecord,
+  type GedeDoc,
+  type Id,
+} from '@gede/core';
+import { expect, test, zoomed200 } from './fixtures/test.js';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
@@ -356,4 +364,49 @@ test('RESP-02 GRAPH-01 at 480 the pair renders read-only: no drag, no corner, no
   expect(Object.values(rowsAfter)[0]?.rows.length).toBe(count);
   await checkA11y('graph phone at 480');
   await snapshot('graph-480');
+});
+
+test('GRAPH-01 GRAPH-11 RESP-03 at 768 the pair renders editable on its lattice', async ({
+  page,
+  checkA11y,
+  snapshot,
+}) => {
+  await installFakes(page);
+  await page.setViewportSize({ width: 768, height: 1024 });
+  await signInTo(page, `/d/${DOC_ID}`);
+  await page.getByRole('button', { name: 'Add shaped table here' }).click();
+  const ring = page.getByRole('region', { name: 'Ring graph of Contexts 1' });
+  await expect(ring).toBeVisible();
+  await expect(ring.getByRole('button', { name: /^Move Ring graph/ })).toBeVisible();
+  await expect(ring).toHaveCSS('width', '960px');
+  await checkA11y('graph tablet at 768');
+  await snapshot('graph-768');
+});
+
+test.describe('200 % zoom', () => {
+  test.use(zoomed200(1440));
+  test('A11Y-06 GRAPH-01 at 200 % zoom the pair still sits on its lattice and reads', async ({
+    page,
+    checkA11y,
+    snapshot,
+  }) => {
+    // 1440 at 200 % is a 720 px layout viewport: the phone contract holds (RESP-02), so the
+    // pair is made on the collaborator's replica and arrives over the socket, read-only here.
+    const room = await installFakes(page);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByRole('tab', { name: /Sheet 1/ })).toBeVisible();
+    const gd = openDocument(room.doc);
+    const sheetId = listSheets(gd)[0]?.id ?? '';
+    const made = createShapedTableWithGraph(gd, { sheetId, at: { col: 1, row: 1 } });
+    const t = tableTitled(gd, 'Contexts 1');
+    setCellText(gd, made.tableId, t.rows[0] ?? '', t.cols[0] ?? '', 'Base camp');
+    const ring = page.getByRole('region', { name: 'Ring graph of Contexts 1' });
+    await expect(ring).toBeVisible();
+    await expect(
+      page.getByTestId('ring-graph').getByRole('button', { name: /^Context α/ }),
+    ).toBeVisible();
+    await expect(ring.getByRole('button', { name: /^Move Ring graph/ })).toHaveCount(0);
+    await checkA11y('graph zoom200 1440');
+    await snapshot('graph-zoom200-1440');
+  });
 });
