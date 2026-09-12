@@ -1,6 +1,7 @@
 /**
  * Grid commands — the contract the toolbar, inspector and context menus call
- * to change table structure (GRID-02, GRID-04, GRID-07..11, KEYS-06).
+ * to change table structure (GRID-02, GRID-04, GRID-07..11, KEYS-06) and the
+ * row hierarchy (HIER-01, HIER-06).
  *
  * Every command:
  *   - is a no-op that returns `null` / `false` / `[]` when the document is not
@@ -20,14 +21,20 @@
 import {
   addColumn,
   addRow,
+  ancestorIds,
   cellAddress,
   cellReadOnlyReason,
   clearCell as clearCellText,
+  collapseAll as collapseAllMutation,
   commitCellText,
   deleteColumn as deleteColumnMutation,
   deleteRow as deleteRowMutation,
+  expandAll as expandAllMutation,
   hideColumn as hideColumnMutation,
   insertRowBefore,
+  nestRow as nestRowMutation,
+  promoteRow as promoteRowMutation,
+  rowOutline,
   scaleTable as scaleTableMutation,
   plainText,
   setCellRich,
@@ -36,6 +43,7 @@ import {
   setFooterRows as setFooterRowsMutation,
   setFrozenColumns as setFrozenColumnsMutation,
   setHeaderRows as setHeaderRowsMutation,
+  setRowCollapsed,
   setRowWrapped,
   tableById,
   tableMap,
@@ -47,6 +55,7 @@ import {
   type RichDoc,
   type ScaleTableOptions,
   type StripCount,
+  type TableMap,
   type TableRecord,
 } from '@gede/core';
 
@@ -96,6 +105,26 @@ export interface GridCommands {
   commitRichCell(cell: CellSelection, doc: RichDoc): boolean;
   /** GRID-04: why a cell will not take typing, or null when it will. */
   readOnlyReason(cell: CellSelection): ReadOnlyReason | null;
+  /**
+   * HIER-01 / KEYS-06 `⌘]`: nest the row one level under the row above, its
+   * subtree with it. False when HIER-02 refuses (the control is disabled then).
+   */
+  nestRow(tableId: Id, rowId: Id): boolean;
+  /** HIER-01 / KEYS-06 `⌘[`: promote the row one level. False at depth 0. */
+  promoteRow(tableId: Id, rowId: Id): boolean;
+  /**
+   * HIER-06: collapse or expand a row with descendants. The selection leaves
+   * a subtree about to be hidden for its parent first, so it never sits on a
+   * row that does not render. False for a childless row or when the row
+   * already reads that way.
+   */
+  setCollapsed(tableId: Id, rowId: Id, collapsed: boolean): boolean;
+  /** HIER-06: the chevron. `setCollapsed` with the opposite of the row's state. */
+  toggleCollapse(tableId: Id, rowId: Id): boolean;
+  /** HIER-06: collapse every row with descendants. Returns the ids collapsed. */
+  collapseAll(tableId: Id): Id[];
+  /** HIER-06: expand every collapsed row. Returns the ids expanded. */
+  expandAll(tableId: Id): Id[];
 }
 
 export interface GridCommandDeps {
@@ -144,7 +173,20 @@ export function readOnlyLabel(reason: ReadOnlyReason): string {
       return 'pulled column';
     case 'group':
       return 'category band';
+    case 'splitChild':
+      return 'split child row';
   }
+}
+
+/** HIER-06: whether `rowId` sits anywhere in `parentId`'s subtree. */
+function isUnder(table: TableMap, rowId: Id, parentId: Id): boolean {
+  return ancestorIds(table, rowId).includes(parentId);
+}
+
+/** The top-level row above `rowId` (itself when already at depth 0), or null when unknown. */
+function topLevelAncestor(table: TableMap, rowId: Id): Id | null {
+  if (rowOutline(table, rowId) === null) return null;
+  return ancestorIds(table, rowId).at(-1) ?? rowId;
 }
 
 function firstVisibleColumn(record: TableRecord, preferred?: Id): Id | null {
@@ -360,6 +402,73 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       return setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
     },
     readOnlyReason,
+    nestRow(tableId, rowId) {
+      if (!editable() || record(tableId) === null) return false;
+      const depth = nestRowMutation(gd, tableId, rowId);
+      if (depth === null) {
+        announce('Cannot nest deeper than one level under the row above');
+        return false;
+      }
+      announce(`Nested to level ${String(depth + 1)}`);
+      return true;
+    },
+    promoteRow(tableId, rowId) {
+      if (!editable() || record(tableId) === null) return false;
+      const depth = promoteRowMutation(gd, tableId, rowId);
+      if (depth === null) {
+        announce('Already at the top level');
+        return false;
+      }
+      announce(
+        depth === 0 ? 'Promoted to the top level' : `Promoted to level ${String(depth + 1)}`,
+      );
+      return true;
+    },
+    setCollapsed(tableId, rowId, collapsed) {
+      const table = map(tableId);
+      if (!editable() || table === null) return false;
+      const row = rowOutline(table, rowId);
+      if (row === null || !row.hasChildren || row.collapsed === collapsed) return false;
+      if (collapsed) {
+        // A selection inside the subtree would be on a hidden row after the write;
+        // hand it to the parent before the write so the observer sees nothing to fix.
+        const sel = selectedIn(tableId);
+        if (sel !== null && sel.rowId !== rowId && isUnder(table, sel.rowId, rowId)) {
+          select({ tableId, rowId, colId: sel.colId });
+        }
+      }
+      const stored = setRowCollapsed(gd, tableId, rowId, collapsed);
+      if (stored === null) return false;
+      announce(stored ? 'Collapsed the row' : 'Expanded the row');
+      return true;
+    },
+    toggleCollapse(tableId, rowId) {
+      const table = map(tableId);
+      const row = table === null ? null : rowOutline(table, rowId);
+      if (row === null) return false;
+      return commands.setCollapsed(tableId, rowId, !row.collapsed);
+    },
+    collapseAll(tableId) {
+      const table = map(tableId);
+      if (!editable() || table === null) return [];
+      // Every selection below the top level ends up hidden: move it to its top-level ancestor first.
+      const sel = selectedIn(tableId);
+      if (sel !== null) {
+        const top = topLevelAncestor(table, sel.rowId);
+        if (top !== null && top !== sel.rowId) select({ tableId, rowId: top, colId: sel.colId });
+      }
+      const ids = collapseAllMutation(gd, tableId);
+      if (ids.length > 0)
+        announce(`Collapsed ${String(ids.length)} ${ids.length === 1 ? 'row' : 'rows'}`);
+      return ids;
+    },
+    expandAll(tableId) {
+      if (!editable() || record(tableId) === null) return [];
+      const ids = expandAllMutation(gd, tableId);
+      if (ids.length > 0)
+        announce(`Expanded ${String(ids.length)} ${ids.length === 1 ? 'row' : 'rows'}`);
+      return ids;
+    },
   };
   return settled(commands, deps.settle);
 }

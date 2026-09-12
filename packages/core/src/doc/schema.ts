@@ -107,12 +107,20 @@ export interface ColumnRecord {
 }
 
 export interface RowMeta {
+  /** Outline depth, 0 at the top level (HIER-01..03, HIER-10). Stored, never derived from position. */
   readonly depth: number;
+  /** A collapsed row hides every row of its subtree (HIER-06, HIER-10). */
   readonly collapsed: boolean;
   /** Whole lattice units; 2 when the row itself is wrapped (GRID-09). */
   readonly height: number;
   /** A category band (PRD §15): its cells are not editable (GRID-04). Set by grouping. */
   readonly group: boolean;
+  /**
+   * A row `Split()` produced beneath its parent (HIER-07): rendered as a nested
+   * child, read-only, collapsing with the parent. The formula engine sets it
+   * when it materialises the split; nothing else writes it.
+   */
+  readonly splitChild: boolean;
 }
 
 /** Header and footer counts are 0 or 1 (GRID-11). */
@@ -131,6 +139,18 @@ export interface TableRecord {
   readonly frozenColumns: number;
   readonly headerRows: StripCount;
   readonly footerRows: StripCount;
+  /**
+   * The column that carries the outline — indentation, ↳ and the chevron
+   * (HIER-04, HIER-05). `null` means "the first visible column"; see
+   * `outlineColumnId`. Stored as `outlineColumn`.
+   */
+  readonly outlineColumn: Id | null;
+  /**
+   * The column the table is grouped by (PRD §15), or null. Written by the
+   * grouping feature; read here because group bands take over the outline
+   * column while it is set (HIER-08). Stored as `groupBy`.
+   */
+  readonly groupBy: Id | null;
 }
 
 export interface GraphRecord {
@@ -303,7 +323,26 @@ export function tableRecord(map: TableMap): TableRecord {
     ),
     headerRows: readStripCount(map, 'headerRows', TABLE_HEADER_ROWS),
     footerRows: readStripCount(map, 'footerRows', DEFAULT_FOOTER_ROWS),
+    outlineColumn: readColumnRef(map, 'outlineColumn', columns),
+    groupBy: readColumnRef(map, 'groupBy', columns),
   };
+}
+
+/** A stored column id, or null when absent or no longer a column of the table. */
+function readColumnRef(map: TableMap, key: string, columns: readonly ColumnRecord[]): Id | null {
+  const v = map.get(key);
+  return typeof v === 'string' && columns.some((c) => c.id === v) ? v : null;
+}
+
+/**
+ * The column that shows the outline (HIER-04): the designated one when it is
+ * set and visible, else the first visible column; null when every column is
+ * hidden.
+ */
+export function outlineColumnId(record: TableRecord): Id | null {
+  const designated = record.columns.find((c) => c.id === record.outlineColumn && !c.hidden);
+  if (designated !== undefined) return designated.id;
+  return record.columns.find((c) => !c.hidden)?.id ?? null;
 }
 
 export function tableById(gd: GedeDoc, tableId: Id): TableRecord | null {
@@ -347,7 +386,13 @@ export function objectCount(gd: GedeDoc, sheetId: Id): number {
 export function rowMeta(table: TableMap, rowId: Id): RowMeta {
   const meta = rowMetaMap(table).get(rowId);
   if (meta === undefined) {
-    return { depth: 0, collapsed: false, height: DEFAULT_ROW_HEIGHT, group: false };
+    return {
+      depth: 0,
+      collapsed: false,
+      height: DEFAULT_ROW_HEIGHT,
+      group: false,
+      splitChild: false,
+    };
   }
   return {
     depth: Math.max(0, Math.round(readNumber(meta, 'depth', 0))),
@@ -358,15 +403,26 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
         ? WRAPPED_ROW_HEIGHT
         : DEFAULT_ROW_HEIGHT,
     group: readBoolean(meta, 'group', false),
+    splitChild: readBoolean(meta, 'splitChild', false),
   };
 }
 
 /**
- * Whether a cell takes typing (GRID-04). Derived, linked and pulled columns
- * and category-band rows are read-only; the reason names which, so the grid
- * can say so rather than merely tint the cell (A11Y-04).
+ * Whether a cell takes typing (GRID-04). Derived, linked and pulled columns,
+ * category-band rows and `Split()` child rows (HIER-07) are read-only; the
+ * reason names which, so the grid can say so rather than merely tint the
+ * cell (A11Y-04).
  */
-export type ReadOnlyReason = Exclude<ColumnSource, 'entered'> | 'group';
+export type ReadOnlyReason = Exclude<ColumnSource, 'entered'> | 'group' | 'splitChild';
+
+/** The row-level read-only reason, or null: a category band, else a split child. */
+export function rowReadOnlyReason(
+  meta: RowMeta,
+): Extract<ReadOnlyReason, 'group' | 'splitChild'> | null {
+  if (meta.group) return 'group';
+  if (meta.splitChild) return 'splitChild';
+  return null;
+}
 
 export function cellReadOnlyReason(table: TableMap, rowId: Id, colId: Id): ReadOnlyReason | null {
   const column = columnsArray(table)
@@ -376,7 +432,7 @@ export function cellReadOnlyReason(table: TableMap, rowId: Id, colId: Id): ReadO
     const source = readColumnSource(column);
     if (source !== 'entered') return source;
   }
-  return rowMeta(table, rowId).group ? 'group' : null;
+  return rowReadOnlyReason(rowMeta(table, rowId));
 }
 
 export function documentMeta(gd: GedeDoc): DocumentMeta {

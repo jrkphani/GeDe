@@ -501,13 +501,18 @@ function setRowHeight(table: TableMap, rowId: Id, height: number): void {
   const existing = rowMetaMap(table).get(rowId);
   if (existing === undefined) {
     if (height === DEFAULT_ROW_HEIGHT) return;
-    metaFor(table, rowId).set('height', height);
+    rowMetaFor(table, rowId).set('height', height);
     return;
   }
   if (existing.get('height') !== height) existing.set('height', height);
 }
 
-function metaFor(table: TableMap, rowId: Id): RowMetaMap {
+/**
+ * The row's meta map, created with defaults when the row has none yet. Call it
+ * inside a transaction; a row with no meta reads as depth 0, expanded, one
+ * unit (`rowMeta` in `schema.ts`), so creating one is never itself a change.
+ */
+export function rowMetaFor(table: TableMap, rowId: Id): RowMetaMap {
   const metas = rowMetaMap(table);
   let meta = metas.get(rowId);
   if (meta === undefined) {
@@ -531,9 +536,14 @@ export function setRowWrapped(gd: GedeDoc, tableId: Id, rowId: Id, wrapped: bool
   });
 }
 
+/**
+ * Raw depth write, unvalidated: what the projection and fixtures use. The
+ * user path is `nestRow` / `promoteRow` in `hier/mutations.ts`, which enforce
+ * HIER-02 and move the subtree with the row.
+ */
 export function setRowDepth(gd: GedeDoc, tableId: Id, rowId: Id, depth: number): void {
   transact(gd, () => {
-    metaFor(requireTable(gd, tableId), rowId).set('depth', Math.max(0, Math.round(depth)));
+    rowMetaFor(requireTable(gd, tableId), rowId).set('depth', Math.max(0, Math.round(depth)));
   });
 }
 
