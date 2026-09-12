@@ -334,8 +334,10 @@ export function registerApi(
        * data). The database side is one transaction in the repository; then
        * the caller's sockets close everywhere, rooms of documents that went
        * to the trash close, the resolver forgets the row, and the Cognito
-       * user is deleted when the deploy allows it. Idempotent: a second call
-       * for a tombstone answers the same shape.
+       * user is deleted when the deploy allows it. A second call for a
+       * tombstone is answered 403 by the auth hook before it gets here; the
+       * `null` branch below is for a request that passed the hook from the
+       * resolver's cache on another task.
        */
       api.delete('/me', async (request) => {
         const user = currentUser(request);
