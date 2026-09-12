@@ -221,7 +221,7 @@ describe('FormulaEngine over a Y.Doc', () => {
     expect(numberOf(h.results.get(b.id(0, 0)))).toBe(2860);
   });
 
-  test('FX-04 nested rows are qualified by their parent row', () => {
+  test('FX-04 (partial: entity index only) nested rows are qualified by their parent row', () => {
     const h = harness();
     const g = grid(h.gd, h.sheetId, 3, 2);
     g.set(0, 0, 'Nepal');

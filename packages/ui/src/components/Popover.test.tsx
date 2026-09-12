@@ -28,7 +28,7 @@ function Host() {
 }
 
 describe('Popover', () => {
-  it('FX-04 opens anchored to an editor without taking its focus, and Escape closes it', async () => {
+  it('FX-04 (partial: primitive only) opens anchored to an editor without taking its focus, and Escape closes it', async () => {
     render(<Host />);
     const editor = screen.getByLabelText('Editor');
     await userEvent.click(editor);

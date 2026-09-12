@@ -89,7 +89,9 @@ describe('useFormulaAdornments', () => {
     await userEvent.type(editor, '=');
     const forms = await screen.findByRole('listbox', { name: 'Formula forms' });
     expect(editor).toHaveFocus();
-    expect(editor).toHaveAttribute('aria-expanded', 'true');
+    // `aria-expanded` is not allowed on a textbox (axe critical); the open signal is aria-controls.
+    expect(editor).not.toHaveAttribute('aria-expanded');
+    expect(editor).toHaveAttribute('aria-controls', forms.id);
     const sum = screen.getByRole('option', { name: /Sum/ });
     expect(sum).toHaveAttribute('aria-disabled', 'true');
     expect(sum).toHaveTextContent('Sum is offered on Number or Currency columns');
@@ -111,7 +113,7 @@ describe('useFormulaAdornments', () => {
     });
   });
 
-  it('FX-04 @ opens the entity index at the caret, Enter inserts the dotted path and leaves the editor open', async () => {
+  it('FX-04 (partial: test host, grid editor not wired) @ opens the entity index at the caret, Enter inserts the dotted path and leaves the editor open', async () => {
     const d = testDoc(3, 2);
     setTableTitle(d.gd, d.tableId, 'Everest trek');
     d.set(0, 0, 'Lukla');
@@ -138,7 +140,7 @@ describe('useFormulaAdornments', () => {
     expect(again.textContent).toContain('@"Everest trek".Namche."Column 2"');
   });
 
-  it('FX-05 a cell clicked while editing lands at the caret with the right separator', async () => {
+  it('FX-05 (partial: test host, grid editor not wired) a cell clicked while editing lands at the caret with the right separator', async () => {
     const d = testDoc(3, 2);
     let insert: ((address: string) => void) | null = null;
     render(
@@ -166,7 +168,7 @@ describe('useFormulaAdornments', () => {
     });
   });
 
-  it('KEYS-06 Escape closes an open surface first and does not cancel the edit; the next Escape reaches the host', async () => {
+  it('KEYS-06 (partial: Escape ordering only, test host) Escape closes an open surface first and does not cancel the edit; the next Escape reaches the host', async () => {
     const d = testDoc(2, 1);
     render(<Host d={d} colId={d.colId(0)} />);
     const editor = screen.getByLabelText('Edit');
@@ -182,7 +184,7 @@ describe('useFormulaAdornments', () => {
     expect(screen.getByTestId('cancelled')).toHaveTextContent('1');
   });
 
-  it('FX-04 the component form exposes the same handle', async () => {
+  it('FX-04 (partial: test host, grid editor not wired) the component form exposes the same handle', async () => {
     const d = testDoc(2, 1);
     d.set(0, 0, 'Lukla');
     function Comp() {

@@ -52,12 +52,15 @@ export interface FormulaAdornments {
   readonly onKeyDown: (e: KeyLike) => boolean;
   /** FX-05: another cell was clicked while editing; its address goes in at the caret. */
   readonly onCellClickWhileEditing: (address: string) => void;
-  /** Spread onto the textarea so assistive tech knows a listbox is driving it. */
+  /**
+   * Spread onto the textarea so assistive tech knows a listbox is driving it.
+   * No `aria-expanded`: it is not permitted on the textbox role (axe
+   * `aria-allowed-attr`, critical); `aria-controls` being set is the open signal.
+   */
   readonly inputProps: {
     readonly 'aria-autocomplete': 'list';
     readonly 'aria-controls': string | undefined;
     readonly 'aria-activedescendant': string | undefined;
-    readonly 'aria-expanded': boolean;
   };
   readonly open: 'forms' | 'entities' | null;
 }
@@ -274,7 +277,6 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
       'aria-autocomplete': 'list',
       'aria-controls': open === null ? undefined : listboxId,
       'aria-activedescendant': activeId,
-      'aria-expanded': open !== null,
     },
     open,
   };

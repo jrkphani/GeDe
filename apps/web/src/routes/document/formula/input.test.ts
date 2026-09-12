@@ -18,7 +18,7 @@ describe('formula input helpers', () => {
     expect(isBareEquals('=S')).toBe(false);
   });
 
-  it('FX-04 entityQueryAt finds the @ path under the caret, quoted segments included', () => {
+  it('FX-04 (partial: helper only) entityQueryAt finds the @ path under the caret, quoted segments included', () => {
     expect(entityQueryAt('=Sum(@Ever', 10)).toEqual({ start: 5, query: 'Ever' });
     expect(entityQueryAt('=@"Everest trek".Luk', 20)).toEqual({
       start: 1,
@@ -31,7 +31,7 @@ describe('formula input helpers', () => {
     expect(entityQueryAt('=@Ever', 1)).toBeNull();
   });
 
-  it('FX-05 insertReferenceAt adds a separator only where the grammar needs one', () => {
+  it('FX-05 (partial: helper only) insertReferenceAt adds a separator only where the grammar needs one', () => {
     expect(separatorBefore('=Sum(')).toBe('');
     expect(separatorBefore('=Sum(B2, ')).toBe('');
     expect(separatorBefore('=B2:')).toBe('');
