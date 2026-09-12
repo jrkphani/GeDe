@@ -6,7 +6,8 @@
  *    `audit_log.document_id`, so a purge's audit row outlives the document).
  * 4. Requires every index `schema.ts` declares to exist (0004) and the ledger
  *    to carry a checksum for every applied file (0005).
- * 5. Bootstraps the app role from `PGAPPUSER`/`PGAPPPASSWORD` on both runs and,
+ * 5. Bootstraps the app role from `PGAPPUSER`/`PGAPPPASSWORD` on both runs — as
+ *    a non-superuser CREATEROLE database owner, what the RDS master is — and,
  *    connected as that role, requires DML on every schema table, read-only on
  *    the ledger, no TRUNCATE, no CREATE on the schema, no DDL, and none of the
  *    superuser-class attributes (#36).
@@ -51,6 +52,25 @@ if (appRole === undefined)
   throw new Error('parity needs PGAPPUSER and PGAPPPASSWORD (parity.sh sets them)');
 const dir = new URL('../migrations', import.meta.url).pathname;
 try {
+  // The bootstrap must be proven from the privileges production has: the RDS master
+  // is CREATEROLE and the database owner, not a superuser. A superuser here would
+  // pass statements RDS refuses (parity.sh creates the equivalent role).
+  const { rows: runner } = await pool.query<{
+    rolsuper: boolean;
+    rolcreaterole: boolean;
+    owner: boolean;
+  }>(
+    `SELECT r.rolsuper, r.rolcreaterole, d.datdba = r.oid AS owner
+       FROM pg_roles r JOIN pg_database d ON d.datname = current_database()
+      WHERE r.rolname = current_user`,
+  );
+  const who = runner[0];
+  if (who === undefined || who.rolsuper || !who.rolcreaterole || !who.owner) {
+    throw new Error(
+      `parity must run as a non-superuser CREATEROLE role that owns the database, like the RDS master; got ${JSON.stringify(who)}`,
+    );
+  }
+
   const first = await applyMigrations(pool, dir, { logger: log, appRole });
   const second = await applyMigrations(pool, dir, { logger: log, appRole });
   if (second.applied.length !== 0) {

@@ -242,6 +242,24 @@ describe('applyMigrations', () => {
       expect(sql).not.toMatch(/ALTER ROLE[^']*(SUPERUSER|REPLICATION|BYPASSRLS)/);
     });
 
+    test('SHARE-03 a failing ALTER ROLE is caught and re-raised without its statement text, so the server log never carries the password literal', () => {
+      const sql = APP_ROLE_BOOTSTRAP_SQL;
+      // The one statement whose text holds the password sits inside its own
+      // EXCEPTION block; a caught error is flushed by the server, not logged
+      // with `CONTEXT: SQL statement "ALTER ROLE … PASSWORD '…'"`.
+      const alter = sql.indexOf("'ALTER ROLE %I");
+      const guard = sql.indexOf('EXCEPTION WHEN OTHERS THEN', alter);
+      const reraise = sql.indexOf('RAISE EXCEPTION', guard);
+      expect(alter).toBeGreaterThan(0);
+      expect(guard).toBeGreaterThan(alter);
+      expect(reraise).toBeGreaterThan(guard);
+      // The inner block holds exactly that one EXECUTE, and the re-raise never
+      // mentions the password variable.
+      const block = sql.slice(sql.lastIndexOf('BEGIN', alter), guard);
+      expect(block.match(/EXECUTE/g)).toHaveLength(1);
+      expect(sql.slice(reraise, sql.indexOf(';', reraise))).not.toContain('role_password');
+    });
+
     test('SHARE-03 without an app role nothing about roles is sent (local database)', async () => {
       const db = fakePool();
       await applyMigrations(db.pool, '/ignored', { readFiles });

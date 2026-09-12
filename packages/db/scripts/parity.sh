@@ -42,7 +42,17 @@ for _ in $(seq 1 60); do
 done
 docker exec "$name" pg_isready -U gede -d gede >/dev/null
 
-export PGHOST=127.0.0.1 PGPORT="$port" PGUSER=gede PGPASSWORD="$password" PGDATABASE=gede PGSSLMODE=disable
+# The RDS master user is rds_superuser: CREATEROLE and CREATEDB and the owner of
+# the database, but not a superuser. The container's POSTGRES_USER is a superuser,
+# and a superuser would hide a bootstrap statement that RDS refuses (PostgreSQL 16+
+# lets only a superuser mention REPLICATION/BYPASSRLS in ALTER ROLE, even negated),
+# so the runner connects as an equivalent non-superuser owner instead (#36).
+admin_password="parity-admin"
+docker exec "$name" psql -v ON_ERROR_STOP=1 -q -U gede -d gede \
+  -c "CREATE ROLE gede_admin LOGIN NOSUPERUSER CREATEDB CREATEROLE PASSWORD '$admin_password'" \
+  -c "ALTER DATABASE gede OWNER TO gede_admin" >/dev/null
+
+export PGHOST=127.0.0.1 PGPORT="$port" PGUSER=gede_admin PGPASSWORD="$admin_password" PGDATABASE=gede PGSSLMODE=disable
 export PGAPPUSER=gede_app PGAPPPASSWORD="parity-app"
 
 cd "$root"

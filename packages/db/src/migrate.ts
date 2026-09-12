@@ -116,6 +116,7 @@ export const APP_ROLE_BOOTSTRAP_SQL = `DO $bootstrap$
 DECLARE
   role_name text := current_setting('${APP_ROLE_SETTING_USER}');
   role_password text := current_setting('${APP_ROLE_SETTING_PASSWORD}');
+  alter_detail text;
 BEGIN
   -- The RDS master user is rds_superuser (CREATEROLE), not a superuser: it may
   -- create a role with SUPERUSER/REPLICATION/BYPASSRLS off, but ALTER ROLE
@@ -126,9 +127,19 @@ BEGIN
       'CREATE ROLE %I NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
       role_name);
   END IF;
-  EXECUTE format(
-    'ALTER ROLE %I LOGIN NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L',
-    role_name, role_password);
+  -- An ALTER ROLE that fails (no ADMIN OPTION on a role someone else created)
+  -- would reach the server log with its statement text as CONTEXT, password
+  -- literal included. An error caught here is flushed, never logged; what is
+  -- re-raised carries the message and detail but no statement text.
+  BEGIN
+    EXECUTE format(
+      'ALTER ROLE %I LOGIN NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD %L',
+      role_name, role_password);
+  EXCEPTION WHEN OTHERS THEN
+    GET STACKED DIAGNOSTICS alter_detail = PG_EXCEPTION_DETAIL;
+    RAISE EXCEPTION 'ALTER ROLE % failed: %', role_name, SQLERRM
+      USING ERRCODE = SQLSTATE, DETAIL = alter_detail;
+  END;
   EXECUTE format('GRANT CONNECT ON DATABASE %I TO %I', current_database(), role_name);
   EXECUTE 'REVOKE CREATE ON SCHEMA public FROM PUBLIC';
   EXECUTE format('GRANT USAGE ON SCHEMA public TO %I', role_name);
