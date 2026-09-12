@@ -1,0 +1,248 @@
+/* Find bar (FIND-02): floats at the foot of the canvas, iCloud Numbers style,
+   and never displaces content. Chrome pads on the space scale. */
+
+.gd-find {
+  position: absolute;
+  left: 50%;
+  bottom: var(--space-4);
+  z-index: 3; /* above rulers (2–3 inside the canvas); the md inspector sheet (4) stays on top */
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  width: min(44rem, calc(100% - var(--space-5) * 2));
+  padding: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: var(--elev-overlay);
+  animation: gd-find-enter var(--dur-base) var(--ease-standard);
+}
+/* lg and up: the docked inspector narrows the canvas; centre within what is left. */
+.gd-doc--inspector .gd-find {
+  left: calc((100% - var(--gd-inspector)) / 2);
+  width: min(44rem, calc(100% - var(--gd-inspector) - var(--space-5) * 2));
+}
+@media (max-width: 1023.98px) {
+  .gd-doc--inspector .gd-find {
+    left: 50%;
+    width: min(44rem, calc(100% - var(--space-5) * 2));
+  }
+}
+@keyframes gd-find-enter {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) translateY(var(--space-2));
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0);
+  }
+}
+.gd-find__row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.gd-find__row--replace {
+  flex-wrap: wrap;
+}
+.gd-find__gear {
+  flex: none;
+  color: var(--ink);
+}
+.gd-find__gear-spacer {
+  flex: none;
+  width: 2rem;
+}
+.gd-find__field {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+}
+.gd-find__field:focus-within {
+  border-color: var(--focus-ring);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 18%, transparent);
+}
+.gd-find__glass {
+  flex: none;
+  color: var(--ink-muted);
+}
+.gd-find__input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.5rem 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  line-height: 1.4;
+  outline: none;
+}
+.gd-find__input::placeholder {
+  color: var(--ink-muted);
+}
+.gd-find__input:disabled {
+  color: var(--ink-muted);
+}
+/* The field carries the visible focus: the input itself has none so the ring is not doubled. */
+.gd-find__input:focus-visible {
+  outline: none;
+}
+.gd-find__count {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.gd-find__count:empty {
+  display: none;
+}
+.gd-find__count--none {
+  color: var(--warning);
+}
+.gd-find__nav {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: var(--space-1);
+}
+.gd-find__nav .gd-btn {
+  color: var(--ink);
+}
+.gd-find__done {
+  flex: none;
+}
+.gd-find__skipped {
+  flex-basis: 100%;
+  padding-left: calc(2rem + var(--space-2));
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+}
+
+/* ---- result list (FIND-06): a panel that opens above the bar ------------ */
+.gd-find__results {
+  position: relative;
+  flex: none;
+}
+.gd-find__panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + var(--space-2));
+  z-index: 1;
+  width: min(28rem, 80vw);
+  max-height: 50vh;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  box-shadow: var(--elev-overlay);
+}
+.gd-find__group + .gd-find__group {
+  border-top: 1px solid var(--border);
+}
+.gd-find__group-label {
+  margin: 0;
+  padding: var(--space-2) var(--space-3) var(--space-1);
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.gd-find__items {
+  margin: 0;
+  padding: 0 0 var(--space-1);
+  list-style: none;
+}
+.gd-find__item {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  width: 100%;
+  padding: var(--space-1) var(--space-3);
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 0.8125rem;
+  text-align: left;
+  cursor: pointer;
+}
+.gd-find__item:hover {
+  background: var(--surface-sunken);
+}
+.gd-find__item--current {
+  background: color-mix(in srgb, var(--selection-ring) 14%, var(--surface));
+  font-weight: 600;
+}
+.gd-find__item-where {
+  flex: none;
+  font-size: 0.65625rem;
+  color: var(--ink-muted);
+}
+.gd-find__item-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-find__item-near,
+.gd-find__item-lock {
+  flex: none;
+  font-size: 0.625rem;
+  color: var(--ink-muted);
+}
+
+/* ---- highlights on the canvas (FIND-06) ---------------------------------- */
+.gd-find-hits {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+}
+.gd-find-hit {
+  position: absolute;
+  box-sizing: border-box;
+  /* Live amber over the cell; the tint survives the dark token swap. */
+  background: color-mix(in srgb, var(--selection-ring) 24%, transparent);
+  outline: 1px solid color-mix(in srgb, var(--selection-ring) 60%, transparent);
+  outline-offset: -1px;
+}
+.gd-find-hit--current {
+  background: color-mix(in srgb, var(--selection-ring) 40%, transparent);
+  outline: 2px solid var(--selection-ring);
+  outline-offset: -2px;
+}
+
+/* RESP-05: below lg every target is at least the hit-target token (44 px). */
+@media (max-width: 1023.98px) {
+  .gd-find .gd-btn {
+    min-width: var(--hit-target);
+    min-height: var(--hit-target);
+  }
+  .gd-find__input {
+    min-height: calc(var(--hit-target) - 2px);
+  }
+}
+/* Phone (RESP-02): the bar sits above the bottom sheet bar. */
+.gd-doc--phone .gd-find {
+  bottom: var(--space-3);
+}
+@media (prefers-reduced-motion: reduce) {
+  .gd-find {
+    animation: none;
+  }
+}

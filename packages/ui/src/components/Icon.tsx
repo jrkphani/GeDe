@@ -48,6 +48,11 @@ export const ICON_NAMES = [
   // identity
   'passkey',
   'apple',
+  // find (FIND-01, FIND-02)
+  'search',
+  'settings',
+  'chevron-left',
+  'chevron-right',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -142,6 +147,13 @@ const GLYPHS: Record<IconName, Glyph> = {
     d: 'M6.5 8.5a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM1.5 15.5c.4-3 2.5-4.5 5-4.5 1 0 1.9.2 2.6.6M11.5 10.5l4.5 4.5M13.5 12.5l1.5-1.5',
     extra: [{ kind: 'node', cx: 13.4, cy: 8.4, r: 1.9 }],
   },
+  search: { d: 'M8 2.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM12 12l3.8 3.8' },
+  settings: {
+    d: 'M9 2.2l1.4 1.5 2-.4.9 1.9 1.9.9-.4 2L16.3 9l-1.5 1.4.4 2-1.9.9-.9 1.9-2-.4L9 15.8l-1.4-1.5-2 .4-.9-1.9-1.9-.9.4-2L1.7 9l1.5-1.4-.4-2 1.9-.9.9-1.9 2 .4z',
+    extra: [{ kind: 'node', cx: 9, cy: 9, r: 2.2 }],
+  },
+  'chevron-left': { d: 'M11 3.5 5.5 9l5.5 5.5' },
+  'chevron-right': { d: 'M7 3.5 12.5 9 7 14.5' },
   apple: {
     d: '',
     extra: [

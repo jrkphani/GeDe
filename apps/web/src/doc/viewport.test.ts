@@ -4,6 +4,7 @@ import {
   fitViewport,
   INITIAL_VIEWPORT,
   pan,
+  revealBounds,
   visibleRange,
   wheelZoomFactor,
   ZOOM_MAX,
@@ -75,6 +76,44 @@ describe('viewport', () => {
       colEnd: 11,
       rowStart: 0,
       rowEnd: 21,
+    });
+  });
+});
+
+describe('revealBounds (FIND-07)', () => {
+  const size = { width: 800, height: 600 };
+  const cell = { x: 1600, y: 1100, width: 160, height: 22 };
+
+  it('FIND-07 pans just enough to bring a cell into view and keeps the zoom', () => {
+    const v = revealBounds({ x: 0, y: 0, zoom: 1 }, size, cell, 16);
+    expect(v).toEqual({ x: 1600 + 160 + 16 - 800, y: 1100 + 22 + 16 - 600, zoom: 1 });
+    // Already in view: unchanged.
+    expect(revealBounds(v, size, cell, 16)).toEqual(v);
+    // Above and to the left: aligns the padded top-left edge.
+    expect(revealBounds({ x: 3000, y: 3000, zoom: 1 }, size, cell, 16)).toEqual({
+      x: 1584,
+      y: 1084,
+      zoom: 1,
+    });
+  });
+
+  it('FIND-07 scales the target by the zoom and clamps at A1', () => {
+    expect(revealBounds({ x: 0, y: 0, zoom: 0.5 }, size, cell, 16)).toEqual({
+      x: (1600 + 160) * 0.5 + 16 - 800,
+      y: 0,
+      zoom: 0.5,
+    });
+    expect(
+      revealBounds({ x: 900, y: 900, zoom: 1 }, size, { x: 0, y: 0, width: 160, height: 22 }, 16),
+    ).toEqual({
+      x: 0,
+      y: 0,
+      zoom: 1,
+    });
+    expect(revealBounds({ x: 5, y: 5, zoom: 1 }, { width: 0, height: 0 }, cell, 16)).toEqual({
+      x: 5,
+      y: 5,
+      zoom: 1,
     });
   });
 });

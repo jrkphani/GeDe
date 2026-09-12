@@ -41,6 +41,7 @@ import {
   clampViewport,
   fitViewport,
   INITIAL_VIEWPORT,
+  revealBounds,
   visibleRange,
   ZOOM_STEP,
   zoomBy,
@@ -51,6 +52,10 @@ import {
 } from '../../doc/viewport.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { Canvas } from './Canvas.js';
+import { FindBar } from './find/FindBar.js';
+import { MatchHighlights } from './find/MatchHighlights.js';
+import { matchBounds } from './find/match-geometry.js';
+import { useFind, type FindNavigation } from './find/useFind.js';
 import { pinnedPanelOffset } from './grid/pinned.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
@@ -341,8 +346,90 @@ function OpenDocument({
     grid.commands.insertColumnAfter(selection.tableId, selection.cell?.colId);
   }, [grid, selection]);
 
-  // -- keyboard (KEYS-07, KEYS-06) --------------------------------------------
+  // -- find (FIND-01..10) ------------------------------------------------------
+  const findNavigation = useMemo<FindNavigation>(
+    () => ({
+      onReveal: (match) => {
+        if (match.target.kind === 'document') return;
+        const { sheetId } = match.target;
+        const bounds = matchBounds(gd, match);
+        const switching = sheetId !== activeSheetId;
+        if (switching) {
+          setChosenSheetId(sheetId);
+          grid.actions.clear();
+        }
+        if (bounds === null) return;
+        // A sheet switch starts from A1 (as selectSheet does), then pans to the match.
+        setViewport((v) =>
+          revealBounds(
+            switching ? { x: 0, y: 0, zoom: v.zoom } : v,
+            measured ?? { width: 0, height: 0 },
+            bounds,
+            FIT_PADDING,
+          ),
+        );
+      },
+      onOpenDocument: (docId) => {
+        void navigate(`/d/${encodeURIComponent(docId)}`);
+      },
+      onSelect: (match) => {
+        if (match.target.kind !== 'cell') return;
+        const { tableId, rowId, colId } = match.target;
+        if (tableMap(gd, tableId) === null) return;
+        grid.actions.selectCell({ tableId, rowId, colId });
+      },
+    }),
+    [gd, activeSheetId, measured, navigate, grid],
+  );
+  const find = useFind({ gd, docId: doc.id, editable, navigation: findNavigation });
+
+  // -- keyboard (KEYS-07, KEYS-06, KEYS-04) -----------------------------------
   const bindings: ShortcutBinding[] = [
+    // Find first: ⌘F and friends work from the Find field too (inEditors), and
+    // Esc closes the bar before it would clear the selection.
+    {
+      id: 'find',
+      chord: CHORDS.find,
+      label: LABELS.find,
+      run: () => {
+        find.actions.open();
+      },
+      inEditors: true,
+    },
+    {
+      id: 'findReplace',
+      chord: CHORDS.findReplace,
+      label: LABELS.findReplace,
+      run: () => {
+        find.actions.open({ replace: true });
+      },
+      inEditors: true,
+      disabled: phone,
+    },
+    {
+      id: 'findNext',
+      chord: CHORDS.findNext,
+      label: LABELS.findNext,
+      run: find.actions.next,
+      inEditors: true,
+      disabled: !find.state.open,
+    },
+    {
+      id: 'findPrevious',
+      chord: CHORDS.findPrevious,
+      label: LABELS.findPrevious,
+      run: find.actions.previous,
+      inEditors: true,
+      disabled: !find.state.open,
+    },
+    {
+      id: 'closeFind',
+      chord: CHORDS.escape,
+      label: LABELS.escape,
+      run: find.actions.close,
+      inEditors: true,
+      disabled: !find.state.open,
+    },
     {
       id: 'zoomIn',
       chord: CHORDS.zoomIn,
@@ -521,6 +608,9 @@ function OpenDocument({
           onZoomTo={zoomPreset}
           onFit={fit}
           onInspector={setInspector}
+          onFind={() => {
+            find.actions.open();
+          }}
         />
       )}
 
@@ -645,6 +735,13 @@ function OpenDocument({
                 />
               );
             })}
+            {/* FIND-06: amber match highlights, in the layer so they pan and zoom with the tables. */}
+            <MatchHighlights
+              gd={gd}
+              matches={find.state.matches}
+              current={find.state.current}
+              sheetId={activeSheetId}
+            />
             {ready && tables.length === 0 && (
               <div className="gd-canvas__empty" style={emptyStyle()}>
                 <span className="gd-mono gd-canvas__empty-label">empty sheet</span>
@@ -668,6 +765,8 @@ function OpenDocument({
             )}
           </Canvas>
         </Skeleton>
+        {/* FIND-02: the Find bar floats at the foot of the canvas and never displaces content. */}
+        <FindBar gd={gd} find={find} editable={editable} phone={phone} />
         {inspector !== null && !phone && (
           <Inspector
             gd={gd}

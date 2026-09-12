@@ -105,6 +105,11 @@ export const CHORDS = {
   escape: { code: 'Escape' } satisfies Chord,
   undo: { code: 'KeyZ', mod: true } satisfies Chord,
   redo: { code: 'KeyZ', mod: true, shift: true } satisfies Chord,
+  // Find (KEYS-04): ⌘F · ⌥⌘F · ⌘G · ⇧⌘G; Esc closes the bar through `escape`.
+  find: { code: 'KeyF', mod: true } satisfies Chord,
+  findReplace: { code: 'KeyF', mod: true, alt: true } satisfies Chord,
+  findNext: { code: 'KeyG', mod: true } satisfies Chord,
+  findPrevious: { code: 'KeyG', mod: true, shift: true } satisfies Chord,
 } as const;
 
 /**
@@ -126,6 +131,10 @@ export const ARIA_KEYS = {
   escape: 'Escape',
   undo: 'Meta+Z',
   redo: 'Shift+Meta+Z',
+  find: 'Meta+F',
+  findReplace: 'Alt+Meta+F',
+  findNext: 'Meta+G',
+  findPrevious: 'Shift+Meta+G',
 } as const satisfies Record<keyof typeof CHORDS, string>;
 
 export const LABELS = {
@@ -143,4 +152,8 @@ export const LABELS = {
   escape: 'Esc',
   undo: '⌘Z',
   redo: '⇧⌘Z',
+  find: '⌘F',
+  findReplace: '⌥⌘F',
+  findNext: '⌘G',
+  findPrevious: '⇧⌘G',
 } as const satisfies Record<keyof typeof CHORDS, string>;

@@ -2,6 +2,7 @@
 @import './routes/sign-in/sign-in.css';
 @import './routes/library/library.css';
 @import './routes/document/document.css';
+@import './routes/document/find/find.css';
 @import './routes/errors/errors.css';
 
 #root {
