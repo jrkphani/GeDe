@@ -37,6 +37,9 @@ export function indexTable(table: TableStructure): IndexedCell[] {
   const originRow = dataOriginRow(table);
   const out: IndexedCell[] = [];
   table.rows.forEach((rowId, r) => {
+    // A row hidden under a collapsed parent has no lattice presence (HIER-06): no
+    // address, no outline, and it must not shadow the row that took its position.
+    if (table.rowHeights[r] === 0) return;
     table.columns.forEach((column, c) => {
       if (column.width === 0) return; // hidden: no address, no outline (GRID-02)
       const key = cellKey(rowId, column.id);

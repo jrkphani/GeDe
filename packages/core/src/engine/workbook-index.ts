@@ -189,7 +189,12 @@ export class WorkbookIndex {
     if (t === undefined || t.rows.length === 0) return null;
     const cells = this.sheetIndex(t.sheetId);
     let extent: TableExtent | null = null;
-    for (const rowId of [t.rows[0], t.rows[t.rows.length - 1]]) {
+    // The first and last rows that are on the lattice: a row hidden under a
+    // collapsed parent (HIER-06) has height 0 and no cell in the index.
+    const shown = (h: number | undefined) => h !== 0;
+    const firstRow = t.rows[t.rowHeights.findIndex(shown)];
+    const lastRow = t.rows[t.rowHeights.findLastIndex(shown)];
+    for (const rowId of [firstRow, lastRow]) {
       for (const column of t.columns) {
         if (column.width === 0 || rowId === undefined) continue;
         const cell = cells.byCellId.get(workbookCellId(tableId, cellKey(rowId, column.id)));
