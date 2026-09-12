@@ -6,7 +6,6 @@
  */
 import { useCallback, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 
-
 export interface Roving {
   /** `tabIndex` for the item at `index`. */
   tabIndex: (index: number) => 0 | -1;
