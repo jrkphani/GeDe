@@ -17,6 +17,8 @@ export interface DocumentContextMenuProps {
   phone: boolean;
   context: MenuContext;
   actions: GridActions;
+  /** The shell keeps Escape for the menu while one is open (D7). */
+  onOpenChange?: ((open: boolean) => void) | undefined;
   children: ReactNode;
 }
 
@@ -68,6 +70,7 @@ export function DocumentContextMenu({
   phone,
   context,
   actions,
+  onOpenChange,
   children,
 }: DocumentContextMenuProps) {
   useYVersion(gd.tables);
@@ -98,6 +101,7 @@ export function DocumentContextMenu({
       entries={entries}
       onOpenChange={(open) => {
         if (!open) setTarget(null);
+        onOpenChange?.(open);
       }}
       // MENU-05: back to the cell that had focus — or to the cell a command just selected
       // (an inserted row, the neighbour of a deleted one), which is where the keyboard should be.

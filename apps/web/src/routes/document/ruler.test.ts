@@ -31,7 +31,7 @@ describe('row ruler labels (DOC-06, issue #65)', () => {
     }
   });
 
-  it('DOC-06 row 1 is always labelled; then the multiples of the step', () => {
+  it('DOC-06 row 1 is labelled, then every step-th row after it, so consecutive labels keep the step apart', () => {
     expect([0, 1, 2, 3, 4, 9].map((r) => rowIsLabelled(r, 1))).toEqual([
       true,
       true,
@@ -40,8 +40,18 @@ describe('row ruler labels (DOC-06, issue #65)', () => {
       true,
       true,
     ]);
-    expect([0, 1, 2, 3, 4, 9].map((r) => rowIsLabelled(r, 5))).toEqual([
+    // Step 2: rows 1, 3, 5 … — never rows 1 and 2 together, which would be one pitch apart.
+    expect([0, 1, 2, 3, 4, 9].map((r) => rowIsLabelled(r, 2))).toEqual([
       true,
+      false,
+      true,
+      false,
+      true,
+      false,
+    ]);
+    expect([0, 1, 2, 3, 4, 5, 10].map((r) => rowIsLabelled(r, 5))).toEqual([
+      true,
+      false,
       false,
       false,
       false,

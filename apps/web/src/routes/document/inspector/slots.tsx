@@ -31,8 +31,10 @@ export function CategoriesTab({ slot }: { slot: ReactNode | undefined }) {
   return (
     <Section label="categories">
       {/* slot: hierarchy */}
-      <Slot name="hierarchy" reason="Categories arrive with the hierarchy release." />
-      <Unavailable label="Add a category" reason="arrives with the hierarchy release" />
+      <Slot
+        name="hierarchy"
+        reason="Categories are the sort and filter release's SortPanel (#74)."
+      />
     </Section>
   );
 }
@@ -42,8 +44,7 @@ export function SortTab({ slot }: { slot: ReactNode | undefined }) {
   return (
     <Section label="sort">
       {/* slot: sort */}
-      <Slot name="sort" reason="Sorting arrives with the sort and filter release." />
-      <Unavailable label="Sort now" reason="arrives with the sort and filter release" />
+      <Slot name="sort" reason="Sorting is the sort and filter release's SortPanel (#74)." />
     </Section>
   );
 }
@@ -53,8 +54,7 @@ export function FilterTab({ slot }: { slot: ReactNode | undefined }) {
   return (
     <Section label="filter">
       {/* slot: sort */}
-      <Slot name="filter" reason="Filters arrive with the sort and filter release." />
-      <Unavailable label="Add a filter" reason="arrives with the sort and filter release" />
+      <Slot name="filter" reason="Filters are the sort and filter release's SortPanel (#74)." />
     </Section>
   );
 }
@@ -77,13 +77,22 @@ export function DeriveTab({
       {/* The panel is its own labelled section (`.gd-hier`), styled as one rail block. */}
       {hierarchy}
       <Section label="relate to another table">
-        <Slot name="derive" reason="Cross-table relations arrive with the references release." />
+        <Slot
+          name="derive"
+          reason="Cross-table relations arrive with the references release (#77)."
+        />
       </Section>
       <Section label="derive column">
-        <Unavailable label="Add a derived column" reason="arrives with the references release" />
+        <Unavailable
+          label="Add a derived column"
+          reason="arrives with the references release (#77)"
+        />
       </Section>
       <Section label="pipeline">
-        <Slot name="derive" reason="The pipeline audit list arrives with the references release." />
+        <Slot
+          name="derive"
+          reason="The pipeline audit list arrives with the references release (#77)."
+        />
       </Section>
     </>
   );

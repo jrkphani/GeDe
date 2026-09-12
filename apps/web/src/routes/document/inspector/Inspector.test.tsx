@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { act, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
@@ -31,6 +31,7 @@ import {
 import { TooltipProvider } from '@gede/ui';
 
 import { LiveRegion } from '../../../announce.js';
+import { installMatchMedia } from '../../../test/match-media.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import type { Find } from '../find/useFind.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
@@ -203,6 +204,30 @@ describe('Inspector', () => {
     expect(css).toMatch(/\.gd-inspector--collapsed\s*\{[^}]*width:\s*var\(--gd-inspector-strip\)/);
   });
 
+  it('RESP-03 in overlay mode (below 1024 px) Escape and a press outside collapse the rail; Escape is taken before the shell sees it', async () => {
+    installMatchMedia((q) => q.includes('max-width: 1023.98px'));
+    const onOpenChange = vi.fn();
+    await mount({ onOpenChange });
+    expect(rail()).toHaveAttribute('data-overlay', 'true');
+    const escape = fireEvent.keyDown(window, { code: 'Escape', key: 'Escape' });
+    expect(escape).toBe(false); // prevented: the shell's Escape (clear the selection) stays quiet
+    expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    // A press inside the rail is not outside; one on the canvas is.
+    fireEvent.pointerDown(rail(), { pointerId: 1 });
+    expect(onOpenChange).toHaveBeenCalledTimes(1);
+    const outside = document.body.appendChild(document.createElement('div'));
+    fireEvent.pointerDown(outside, { pointerId: 2 });
+    expect(onOpenChange).toHaveBeenCalledTimes(2);
+    outside.remove();
+    // The toolbar's own toggles are never "outside": they decide the rail's state themselves.
+    const toolbar = document.body.appendChild(document.createElement('div'));
+    toolbar.className = 'gd-doc__toolbar';
+    const button = toolbar.appendChild(document.createElement('button'));
+    fireEvent.pointerDown(button, { pointerId: 3 });
+    expect(onOpenChange).toHaveBeenCalledTimes(2);
+    toolbar.remove();
+  });
+
   it('RESP-03 below 1024 px the rail is an absolute overlay on the canvas', () => {
     const css = readFileSync(resolve(__dirname, '../document.css'), 'utf8');
     const block = /@media \(max-width: 1023\.98px\) \{([\s\S]*?)\n\}/g;
@@ -366,28 +391,42 @@ describe('Inspector', () => {
     expect(hierarchy.getByText(/top level/)).toBeInTheDocument();
     expect(hierarchy.getByRole('button', { name: /Nest/ }).title).not.toMatch(/release/);
     expect(screen.getByRole('button', { name: 'Add a derived column' }).title).toBe(
-      'Add a derived column — arrives with the references release',
+      'Add a derived column — arrives with the references release (#77)',
     );
     rerender(<Harness mode="organize" />);
     expect(screen.getByRole('tabpanel').querySelector('[data-slot="hierarchy"]')).not.toBeNull();
     await userEvent.click(tab('Sort'));
-    expect(screen.getByRole('button', { name: 'Sort now' })).toHaveAttribute(
-      'title',
-      'Sort now — arrives with the sort and filter release',
-    );
+    expect(screen.getByRole('tabpanel').querySelector('[data-slot="sort"]')).not.toBeNull();
     // A mounted slot replaces the marker.
     rerender(<Harness mode="organize" slots={{ sort: <p>Sort panel</p> }} />);
     expect(screen.getByText('Sort panel')).toBeInTheDocument();
-    expect(screen.queryByRole('button', { name: 'Sort now' })).not.toBeInTheDocument();
+    expect(screen.getByRole('tabpanel').querySelector('[data-slot="sort"]')).toBeNull();
   });
 
-  it('INSP-11 an unimplemented control is disabled with its reason, never operable; view-only disables the writes with that reason', async () => {
+  it('INSP-11 a control no release has built is disabled with the issue that owns it as its reason, never operable; view-only disables the writes with that reason', async () => {
     const { rerender } = await mount();
     await userEvent.click(tab('Cell'));
-    const fill = within(section('fill')).getByRole('button', { name: 'Amber' });
+    const fill = within(section('fill')).getByRole('button', { name: 'Fill' });
     expect(fill).toHaveAttribute('aria-disabled', 'true');
-    expect(fill.title).toBe('Amber — not implemented in this release');
-    expect(within(section('border')).getByRole('combobox', { name: 'Weight' })).toBeDisabled();
+    expect(fill.title).toBe('Fill — arrives with #83 (cell appearance)');
+    const weight = within(section('border')).getByRole('combobox', { name: 'Weight' });
+    expect(weight).toBeDisabled();
+    expect(weight).toHaveAttribute('title', 'arrives with #83 (cell appearance)');
+    // Every disabled reason in the rail names an issue; none says "not implemented" and stops.
+    for (const tabName of ['Table', 'Text', 'Arrange'] as const) {
+      await userEvent.click(tab(tabName));
+      const reasons = Array.from(
+        screen.getByRole('tabpanel').querySelectorAll<HTMLElement>('[aria-disabled="true"][title]'),
+      ).map((el) => el.title);
+      expect(reasons.length).toBeGreaterThan(0);
+      // Live limits ("already at …", "nests at most one level") say why now; a control that
+      // waits for a release names the issue that owns it — never a bare "not implemented".
+      for (const reason of reasons) {
+        expect(reason).not.toMatch(/not implemented|in this release/);
+        if (reason.includes('arrives')) expect(reason).toMatch(/#\d+/);
+      }
+    }
+    await userEvent.click(tab('Cell'));
     rerender(<Harness editable={false} />);
     expect(screen.getByRole('combobox', { name: 'Format' })).toHaveAttribute(
       'title',

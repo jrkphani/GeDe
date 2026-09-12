@@ -20,16 +20,11 @@ import {
   type PresenceState,
   type ToggleMark,
 } from '@gede/core';
-import { below, theme } from '@gede/tokens';
+import { atLeast, below, theme } from '@gede/tokens';
 import { Banner, Button, Skeleton, useLoadingTiers, type LoadingTiers } from '@gede/ui';
 
 import { announce } from '../../announce.js';
-import {
-  createDocument,
-  getDocument,
-  permissionOf,
-  type DocumentSummary,
-} from '../../api/documents.js';
+import { getDocument, permissionOf, type DocumentSummary } from '../../api/documents.js';
 import { signOutLocal } from '../../auth/cognito.js';
 import { rememberReturnTo, useSession } from '../../auth/session.js';
 import { ApiError } from '../../api/client.js';
@@ -218,7 +213,7 @@ function OpenDocument({
   const { state: sessionState } = useSession();
   const navigate = useNavigate();
   const location = useLocation();
-  const wide = useMediaQuery('(min-width: 1200px)');
+  const wide = useMediaQuery(atLeast('inspector'));
   // The shell watches structure only (sheets and objects added or removed); each
   // TableView watches its own map deeply, so a cell edit re-renders one table.
   useYVersion(gd.sheets); // deep: a sheet label lives in a nested map
@@ -247,6 +242,7 @@ function OpenDocument({
   const [inspectorMode, setInspectorMode] = useState<InspectorMode>('format');
   const [inspectorOpen, setInspectorOpen] = useState(() => wide);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
   const [activeLocale] = useLocale();
   const locale = toFormatLocale(activeLocale);
@@ -304,19 +300,6 @@ function OpenDocument({
     const id = createSheet(gd);
     selectSheet(id);
   }, [gd, selectSheet]);
-  const stepSheet = useCallback(
-    (delta: number) => {
-      const list = listSheets(gd);
-      if (list.length === 0) return;
-      const index = Math.max(
-        0,
-        list.findIndex((s) => s.id === activeSheetId),
-      );
-      const next = list[(index + delta + list.length) % list.length];
-      if (next !== undefined && next.id !== activeSheetId) selectSheet(next.id);
-    },
-    [gd, activeSheetId, selectSheet],
-  );
 
   // -- viewport (DOC-04, DOC-07) ----------------------------------------------
   const measured = size.width > 0 ? size : null;
@@ -475,23 +458,14 @@ function OpenDocument({
         previous: find.actions.previous,
       },
       document: {
-        newWorkscape: () => {
-          createDocument()
-            .then((created) => navigate(`/d/${created.id}?new=1`))
-            .catch(() => {
-              announce('Could not create a workscape');
-            });
-        },
         open: () => {
           void navigate('/');
         },
         print: () => {
           window.print();
         },
-        close: () => {
-          void navigate('/');
-        },
       },
+      layerOpen: shortcutsOpen || menuOpen,
       view: {
         zoomIn: () => {
           zoomStep(ZOOM_STEP);
@@ -503,12 +477,6 @@ function OpenDocument({
           zoomPreset(1);
         },
         fit,
-        nextSheet: () => {
-          stepSheet(1);
-        },
-        previousSheet: () => {
-          stepSheet(-1);
-        },
         toggleInspector: () => {
           setInspectorOpen((o) => !o);
         },
@@ -761,7 +729,13 @@ function OpenDocument({
       </div>
 
       {/* MENU-01..05: one context menu over the canvas, the tables and the sheet strip. */}
-      <DocumentContextMenu gd={gd} phone={phone} context={menuContext} actions={grid.actions}>
+      <DocumentContextMenu
+        gd={gd}
+        phone={phone}
+        context={menuContext}
+        actions={grid.actions}
+        onOpenChange={setMenuOpen}
+      >
         <div className="gd-doc__main">
           <Skeleton
             active={!ready}

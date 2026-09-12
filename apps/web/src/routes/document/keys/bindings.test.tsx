@@ -15,6 +15,7 @@ function handlers(overrides: Partial<KeyHandlers> = {}): KeyHandlers {
     cut: vi.fn(() => Promise.resolve()),
     paste: vi.fn(() => Promise.resolve()),
     pasteMatchStyle: vi.fn(() => Promise.resolve()),
+    armMatchStyle: vi.fn(),
     reason: () => undefined,
   };
   return {
@@ -24,14 +25,13 @@ function handlers(overrides: Partial<KeyHandlers> = {}): KeyHandlers {
     editing: false,
     hasSelection: true,
     find: { open: false, show: vi.fn(), close: vi.fn(), next: vi.fn(), previous: vi.fn() },
-    document: { newWorkscape: vi.fn(), open: vi.fn(), print: vi.fn(), close: vi.fn() },
+    document: { open: vi.fn(), print: vi.fn() },
+    layerOpen: false,
     view: {
       zoomIn: vi.fn(),
       zoomOut: vi.fn(),
       actualSize: vi.fn(),
       fit: vi.fn(),
-      nextSheet: vi.fn(),
-      previousSheet: vi.fn(),
       toggleInspector: vi.fn(),
       showInspector: vi.fn(),
       toggleShortcutSheet: vi.fn(),
@@ -68,49 +68,47 @@ describe('document key bindings', () => {
     vi.restoreAllMocks();
   });
 
-  it('KEYS-02 ⌘N ⌘O ⌘P ⌘W and ? resolve from event.code and reach the document handlers', () => {
+  it('KEYS-02 ⌘O ⌘P and ? resolve from event.code; ⌘N and ⌘W are the browser’s and are not claimed', () => {
     const h = handlers();
     render(<Host h={h} />);
-    press({ code: 'KeyN', metaKey: true });
     press({ code: 'KeyO', metaKey: true });
     press({ code: 'KeyP', metaKey: true });
-    press({ code: 'KeyW', metaKey: true });
     // Shift+/ is `?` on the reference layout; the physical key is what counts.
     press({ code: 'Slash', shiftKey: true, key: '?' });
-    expect(h.document.newWorkscape).toHaveBeenCalledTimes(1);
     expect(h.document.open).toHaveBeenCalledTimes(1);
     expect(h.document.print).toHaveBeenCalledTimes(1);
-    expect(h.document.close).toHaveBeenCalledTimes(1);
     expect(h.view.toggleShortcutSheet).toHaveBeenCalledTimes(1);
+    // Reserved (ADR-030): the default is left to the browser, whatever it does with it.
+    expect(press({ code: 'KeyN', metaKey: true })).toBe(true);
+    expect(press({ code: 'KeyW', metaKey: true })).toBe(true);
     // `key` is never consulted: a `?` typed on a key whose code is not Slash does nothing.
     press({ code: 'Digit7', shiftKey: true, key: '?' });
     expect(h.view.toggleShortcutSheet).toHaveBeenCalledTimes(1);
   });
 
-  it('KEYS-03 ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌥⇧⌘V ⌘A and ⌫ reach the edit and clipboard handlers', () => {
+  it('KEYS-03 ⌘Z ⇧⌘Z ⌘A and ⌫ reach the edit handlers; ⌘X ⌘C ⌘V are never claimed, so the browser’s own copy / cut / paste run; ⌥⇧⌘V arms match-style without preventing its default', () => {
     const h = handlers();
-    const { unmount } = render(<Host h={h} />);
+    render(<Host h={h} />);
     press({ code: 'KeyZ', metaKey: true });
     press({ code: 'KeyZ', metaKey: true, shiftKey: true });
-    press({ code: 'KeyV', metaKey: true, altKey: true, shiftKey: true });
     press({ code: 'KeyA', metaKey: true });
     press({ code: 'Backspace' });
     press({ code: 'Delete' });
     expect(h.edit.undo).toHaveBeenCalledTimes(1);
     expect(h.edit.redo).toHaveBeenCalledTimes(1);
-    expect(h.clipboard.pasteMatchStyle).toHaveBeenCalledTimes(1);
     expect(h.edit.selectAll).toHaveBeenCalledTimes(1);
     expect(h.edit.clear).toHaveBeenCalledTimes(2);
-    press({ code: 'KeyX', metaKey: true });
-    press({ code: 'KeyC', metaKey: true });
-    press({ code: 'KeyV', metaKey: true });
-    expect(h.clipboard.cut).toHaveBeenCalledTimes(1);
-    expect(h.clipboard.copy).toHaveBeenCalledTimes(1);
-    expect(h.clipboard.paste).toHaveBeenCalledTimes(1);
-    // With no cell selected the chords are not claimed: the browser keeps them.
-    unmount();
-    render(<Host h={handlers({ cell: null })} />);
+    // ADR-028: the native clipboard events are the keyboard route — not prevented, not handled here.
+    expect(press({ code: 'KeyX', metaKey: true })).toBe(true);
     expect(press({ code: 'KeyC', metaKey: true })).toBe(true);
+    expect(press({ code: 'KeyV', metaKey: true })).toBe(true);
+    expect(h.clipboard.cut).not.toHaveBeenCalled();
+    expect(h.clipboard.copy).not.toHaveBeenCalled();
+    expect(h.clipboard.paste).not.toHaveBeenCalled();
+    // ⌥⇧⌘V: armed, and the default stays so the browser's paste (where it raises one) follows.
+    expect(press({ code: 'KeyV', metaKey: true, altKey: true, shiftKey: true })).toBe(true);
+    expect(h.clipboard.armMatchStyle).toHaveBeenCalledTimes(1);
+    expect(h.clipboard.pasteMatchStyle).not.toHaveBeenCalled();
   });
 
   it('KEYS-04 ⌘F ⌥⌘F work from a text field; ⌘G ⇧⌘G only while the bar is open', () => {
@@ -182,7 +180,7 @@ describe('document key bindings', () => {
     expect(hierarchy.expand).toHaveBeenCalledWith(CELL);
   });
 
-  it('KEYS-07 ⌘+ ⌘− ⌘0 ⇧⌘0 ⌥⌘I ⌃⇥ ⌃⇧⇥ reach the view handlers, numpad included', () => {
+  it('KEYS-07 ⌘+ ⌘− ⌘0 ⇧⌘0 ⌥⌘I reach the view handlers, numpad included; ⌃⇥ ⌃⇧⇥ are the browser’s and are not claimed', () => {
     const h = handlers();
     render(<Host h={h} />);
     press({ code: 'Equal', metaKey: true });
@@ -192,15 +190,25 @@ describe('document key bindings', () => {
     press({ code: 'Digit0', metaKey: true });
     press({ code: 'Numpad0', metaKey: true, shiftKey: true });
     press({ code: 'KeyI', metaKey: true, altKey: true });
-    press({ code: 'Tab', ctrlKey: true });
-    press({ code: 'Tab', ctrlKey: true, shiftKey: true });
+    expect(press({ code: 'Tab', ctrlKey: true })).toBe(true);
+    expect(press({ code: 'Tab', ctrlKey: true, shiftKey: true })).toBe(true);
     expect(h.view.zoomIn).toHaveBeenCalledTimes(3);
     expect(h.view.zoomOut).toHaveBeenCalledTimes(1);
     expect(h.view.actualSize).toHaveBeenCalledTimes(1);
     expect(h.view.fit).toHaveBeenCalledTimes(1);
     expect(h.view.toggleInspector).toHaveBeenCalledTimes(1);
-    expect(h.view.nextSheet).toHaveBeenCalledTimes(1);
-    expect(h.view.previousSheet).toHaveBeenCalledTimes(1);
+  });
+
+  it('GRID-03 Escape clears the selection only while no layered surface is open', () => {
+    const closed = handlers();
+    const { unmount } = render(<Host h={closed} />);
+    expect(press({ code: 'Escape' })).toBe(false);
+    expect(closed.edit.clearSelection).toHaveBeenCalledTimes(1);
+    unmount();
+    const layered = handlers({ layerOpen: true });
+    render(<Host h={layered} />);
+    expect(press({ code: 'Escape' })).toBe(true);
+    expect(layered.edit.clearSelection).not.toHaveBeenCalled();
   });
 
   it('I18N-01 RESP-02 nothing fires while an IME composes; on phone the inspector and find-replace chords are off; view-only drops the edits', () => {

@@ -13,7 +13,7 @@ import {
 import type { GridCommands } from '../grid/commands.js';
 import { markAriaKeys, markLabel } from '../keys/shortcut-map.js';
 import type { CellSelection } from '../selection.js';
-import { Section, UnavailableRow } from './controls.js';
+import { Section, TRACKED, Unavailable } from './controls.js';
 
 export interface TextTabProps {
   table: TableMap;
@@ -66,23 +66,26 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
           <Select
             label="Family"
             value="ui"
-            disabledReason="not implemented in this release"
+            disabledReason={TRACKED.typography}
             onValueChange={() => undefined}
-            options={[{ value: 'ui', label: 'System UI' }]}
+            options={[
+              { value: 'ui', label: 'UI' },
+              { value: 'mono', label: 'Mono' },
+            ]}
           />
           <Select
             label="Weight"
-            value="regular"
-            disabledReason="not implemented in this release"
+            value="400"
+            disabledReason={TRACKED.typography}
             onValueChange={() => undefined}
             options={[
-              { value: 'thin', label: 'Thin' },
-              { value: 'regular', label: 'Regular' },
-              { value: 'medium', label: 'Medium' },
-              { value: 'bold', label: 'Bold' },
+              { value: '400', label: 'Regular' },
+              { value: '500', label: 'Medium' },
+              { value: '600', label: 'Semibold' },
+              { value: '700', label: 'Bold' },
             ]}
           />
-          <UnavailableRow labels={['Smaller', 'Larger']} />
+          <Unavailable label="Size" reason={TRACKED.typography} />
         </div>
       </Section>
       <Section
@@ -134,14 +137,16 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
         </div>
       </Section>
       <Section label="character styles">
-        <UnavailableRow labels={['Title', 'Heading', 'Body']} />
+        <Unavailable label="Character style" reason={TRACKED.typography} />
       </Section>
       <Section label="text colour">
-        <UnavailableRow labels={['Ink', 'Muted', 'Brand', 'Danger']} />
+        <Unavailable label="Text colour" reason={TRACKED.typography} />
       </Section>
       <Section label="alignment">
-        <UnavailableRow labels={['Left', 'Centre', 'Right', 'Justify']} />
-        <UnavailableRow labels={['Top', 'Middle', 'Bottom']} />
+        <div className="gd-insp__row">
+          <Unavailable label="Horizontal alignment" reason={TRACKED.typography} />
+          <Unavailable label="Vertical alignment" reason={TRACKED.typography} />
+        </div>
       </Section>
       <Section label="wrap" hint="Wrapped rows take two lattice units; addresses never move.">
         <div className="gd-insp__stack">

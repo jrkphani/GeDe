@@ -29,7 +29,7 @@ import {
 
 import { announce } from '../../../announce.js';
 import type { CellSelection } from '../selection.js';
-import { Section, Unavailable, UnavailableRow } from './controls.js';
+import { Section, TRACKED, Unavailable } from './controls.js';
 import { FormulaSection } from './FormulaSection.js';
 
 export interface CellTabProps {
@@ -226,7 +226,7 @@ export function CellTab({ gd, table, cell, editable }: CellTabProps) {
       {/* FX-07 / FX-08: the formula behind the cell (filled from the formula release). */}
       {cell !== null && <FormulaSection table={table} cell={cell} />}
       <Section label="fill">
-        <UnavailableRow labels={['None', 'Amber', 'Forest', 'Slate']} />
+        <Unavailable label="Fill" reason={TRACKED.cellAppearance} />
       </Section>
       <Section label="border">
         <div className="gd-insp__matrix" role="group" aria-label="Border edges">
@@ -241,13 +241,13 @@ export function CellTab({ gd, table, cell, editable }: CellTabProps) {
             'Left and right',
             'No border',
           ].map((edge) => (
-            <Unavailable key={edge} label={edge} />
+            <Unavailable key={edge} label={edge} reason={TRACKED.cellAppearance} />
           ))}
         </div>
         <Select
           label="Weight"
           value="hairline"
-          disabledReason="not implemented in this release"
+          disabledReason={TRACKED.cellAppearance}
           onValueChange={() => undefined}
           options={[
             { value: 'hairline', label: 'Hairline' },
@@ -257,7 +257,7 @@ export function CellTab({ gd, table, cell, editable }: CellTabProps) {
         />
       </Section>
       <Section label="conditional highlighting">
-        <Unavailable label="Add a rule" />
+        <Unavailable label="Add a rule" reason={TRACKED.cellAppearance} />
       </Section>
     </>
   );

@@ -41,18 +41,16 @@ export interface KeyHandlers {
     previous: () => void;
   };
   document: {
-    newWorkscape: () => void;
     open: () => void;
     print: () => void;
-    close: () => void;
   };
+  /** A shortcut sheet, context menu or overlay rail is open: Escape belongs to it (D7). */
+  layerOpen: boolean;
   view: {
     zoomIn: () => void;
     zoomOut: () => void;
     actualSize: () => void;
     fit: () => void;
-    nextSheet: () => void;
-    previousSheet: () => void;
     toggleInspector: () => void;
     showInspector: (mode: InspectorMode) => void;
     toggleShortcutSheet: () => void;
@@ -121,17 +119,12 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
       inEditors: true,
       disabled: !h.find.open,
     },
-    // Document (KEYS-02). Print and close are the browser's too; the shell claims them
-    // so ⌘W leaves the document the way the library's Back does, keeping the session.
-    {
-      id: 'newWorkscape',
-      chord: CHORDS.newWorkscape,
-      label: LABELS.newWorkscape,
-      run: h.document.newWorkscape,
-    },
+    // Document (KEYS-02). ⌘N and ⌘W are the browser's (new window, close tab) in Chrome
+    // and Safari and never reach the page; they are listed on the sheet as reserved
+    // (ADR-030) and not bound, so the one engine that lets ⌘W through closes the tab
+    // as the person expects rather than something else.
     { id: 'open', chord: CHORDS.open, label: LABELS.open, run: h.document.open },
     { id: 'print', chord: CHORDS.print, label: LABELS.print, run: h.document.print },
-    { id: 'close', chord: CHORDS.close, label: LABELS.close, run: h.document.close },
     {
       id: 'shortcutSheet',
       chord: CHORDS.shortcutSheet,
@@ -155,20 +148,8 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
       run: h.view.actualSize,
     },
     { id: 'fit', chord: CHORDS.fit, label: LABELS.fit, run: h.view.fit },
-    {
-      id: 'nextSheet',
-      chord: CHORDS.nextSheet,
-      label: LABELS.nextSheet,
-      run: h.view.nextSheet,
-      inEditors: true,
-    },
-    {
-      id: 'previousSheet',
-      chord: CHORDS.previousSheet,
-      label: LABELS.previousSheet,
-      run: h.view.previousSheet,
-      inEditors: true,
-    },
+    // ⌃⇥ / ⌃⇧⇥ (KEYS-07) are the browser's tab switch everywhere: reserved on the
+    // sheet, not bound; the sheet strip is the route (KEYS-08).
     {
       id: 'inspector',
       chord: CHORDS.inspector,
@@ -245,46 +226,21 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
       },
       disabled: cellEdit || h.hierarchy === undefined,
     },
-    // Edit (KEYS-03). The clipboard chords act on the selected cell through the async
-    // Clipboard API (`clipboard.ts`): a cell is not an editable element, so the browser
-    // raises no paste event of its own for it. Inside the editor the chords are the
-    // editor's (inEditors is off), so typing is never intercepted.
+    // Edit (KEYS-03). ⌘X ⌘C ⌘V are NOT bound here: the browser's own copy / cut / paste
+    // commands run on the focused cell and raise the native `copy` / `cut` / `paste`
+    // events that `keys/clipboard.ts` handles — no permission prompt, no popup
+    // (ADR-028). Binding them would prevent that default and force the async API.
     { id: 'undo', chord: CHORDS.undo, label: LABELS.undo, run: h.edit.undo, disabled: !h.editable },
     { id: 'redo', chord: CHORDS.redo, label: LABELS.redo, run: h.edit.redo, disabled: !h.editable },
     {
-      id: 'cut',
-      chord: CHORDS.cut,
-      label: LABELS.cut,
-      run: () => {
-        void h.clipboard.cut();
-      },
-      disabled: cellEdit,
-    },
-    {
-      id: 'copy',
-      chord: CHORDS.copy,
-      label: LABELS.copy,
-      run: () => {
-        void h.clipboard.copy();
-      },
-      disabled: noCell,
-    },
-    {
-      id: 'paste',
-      chord: CHORDS.paste,
-      label: LABELS.paste,
-      run: () => {
-        void h.clipboard.paste();
-      },
-      disabled: cellEdit,
-    },
-    {
+      // ⌥⇧⌘V has no browser command on most engines; Chromium and WebKit raise a `paste`
+      // for Paste and Match Style. Passive: the flag is armed, the browser's paste (if any)
+      // consumes it as plain text, and the clipboard falls back to `readText` otherwise.
       id: 'pasteMatchStyle',
       chord: CHORDS.pasteMatchStyle,
       label: LABELS.pasteMatchStyle,
-      run: () => {
-        void h.clipboard.pasteMatchStyle();
-      },
+      run: h.clipboard.armMatchStyle,
+      passive: true,
       disabled: cellEdit,
     },
     {
@@ -314,8 +270,15 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
         disabled: cellEdit,
       })),
     ),
-    // Last: Escape clears the selection (GRID-03).
-    { id: 'escape', chord: CHORDS.escape, label: LABELS.escape, run: h.edit.clearSelection },
+    // Last: Escape clears the selection (GRID-03) — unless a layered surface (the
+    // shortcut sheet, a menu, the tablet overlay) is what Escape is closing.
+    {
+      id: 'escape',
+      chord: CHORDS.escape,
+      label: LABELS.escape,
+      run: h.edit.clearSelection,
+      disabled: h.layerOpen,
+    },
   ];
   return bindings;
 }

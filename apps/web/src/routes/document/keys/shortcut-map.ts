@@ -18,6 +18,11 @@ export interface ShortcutRow {
   readonly action: string;
   /** Not in `docs/handover/reference/shortcuts.md`; the ADR that added it. */
   readonly extra?: string;
+  /**
+   * The chord is the browser's own and never reaches the page in Chrome and
+   * Safari (ADR-030); the sheet says so and names the other route (KEYS-08).
+   */
+  readonly reserved?: string;
   /** Chords bound by the shell, in the order the keys column shows them. */
   readonly ids?: readonly ChordId[];
   /** Inline marks bound by the cell editor and the shell (KEYS-05). */
@@ -35,10 +40,18 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
   {
     group: 'Document',
     rows: [
-      { action: 'New workscape', ids: ['newWorkscape'] },
+      {
+        action: 'New workscape',
+        ids: ['newWorkscape'],
+        reserved: 'the browser’s in Chrome and Safari — use + in the library',
+      },
       { action: 'Open', ids: ['open'] },
       { action: 'Print', ids: ['print'] },
-      { action: 'Close document', ids: ['close'] },
+      {
+        action: 'Close document',
+        ids: ['close'],
+        reserved: 'the browser’s in Chrome and Safari — use the mark to go back to the library',
+      },
       { action: 'Show shortcut sheet', ids: ['shortcutSheet'] },
     ],
   },
@@ -91,7 +104,11 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
       { action: 'Actual size', ids: ['actualSize'] },
       { action: 'Fit to canvas', ids: ['fit'] },
       { action: 'Show or hide inspector', ids: ['inspector'] },
-      { action: 'Next / previous sheet', ids: ['nextSheet', 'previousSheet'] },
+      {
+        action: 'Next / previous sheet',
+        ids: ['nextSheet', 'previousSheet'],
+        reserved: 'the browser’s tab switch — use the sheet strip',
+      },
     ],
   },
 ];
@@ -146,6 +163,11 @@ export function rowAriaKeys(row: ShortcutRow): string | undefined {
     ...(row.marks ?? []).map(markAriaKeys),
   ];
   return tokens.length === 0 ? undefined : tokens.join(' ');
+}
+
+/** Rows the browser keeps for itself (KEYS-02, KEYS-07): listed, marked, unbound. */
+export function reservedRows(): ShortcutRow[] {
+  return SHORTCUT_SECTIONS.flatMap((s) => s.rows.filter((r) => r.reserved !== undefined));
 }
 
 /** Chord ids the sheet does not list — must be empty (KEYS-08: no unlisted shortcut). */

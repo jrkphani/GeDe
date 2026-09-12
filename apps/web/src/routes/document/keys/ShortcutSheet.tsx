@@ -1,3 +1,4 @@
+import clsx from 'clsx';
 import { Button, Dialog, DialogClose } from '@gede/ui';
 
 import { rowAriaKeys, rowKeys, SHORTCUT_SECTIONS } from './shortcut-map.js';
@@ -35,8 +36,16 @@ export function ShortcutSheet({ open, onOpenChange, returnFocusTo }: ShortcutShe
             <h3 className="gd-mono gd-keys__heading">{section.group}</h3>
             <dl className="gd-keys__rows">
               {section.rows.map((row) => (
-                <div key={row.action} className="gd-keys__row">
-                  <dt className="gd-keys__action">{row.action}</dt>
+                <div
+                  key={row.action}
+                  className={clsx('gd-keys__row', { 'gd-keys__row--reserved': row.reserved })}
+                >
+                  <dt className="gd-keys__action">
+                    {row.action}
+                    {row.reserved !== undefined && (
+                      <span className="gd-keys__reserved"> — {row.reserved}</span>
+                    )}
+                  </dt>
                   <dd className="gd-keys__keys" aria-keyshortcuts={rowAriaKeys(row)}>
                     {rowKeys(row).map((key, i) => (
                       <kbd key={`${key}-${String(i)}`} className="gd-keys__kbd">

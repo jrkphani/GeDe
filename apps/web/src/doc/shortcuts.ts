@@ -29,6 +29,12 @@ export interface ShortcutBinding {
   readonly inEditors?: boolean | undefined;
   /** Skip without preventing default. */
   readonly disabled?: boolean | undefined;
+  /**
+   * Run without preventing the browser's default: the chord's default action is
+   * the route (⌥⇧⌘V lets the browser raise its `paste` event), the handler only
+   * arms what that route should do.
+   */
+  readonly passive?: boolean | undefined;
 }
 
 export function isApplePlatform(userAgent: string = navigator.userAgent): boolean {
@@ -77,7 +83,7 @@ export function useShortcuts(bindings: readonly ShortcutBinding[]): void {
         if (binding.disabled === true) continue;
         if (editable && binding.inEditors !== true) continue;
         if (!matchesChord(event, binding.chord, apple)) continue;
-        event.preventDefault();
+        if (binding.passive !== true) event.preventDefault();
         binding.run(event);
         return;
       }

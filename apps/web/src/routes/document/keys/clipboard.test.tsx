@@ -1,7 +1,7 @@
 // FAKE, labelled: jsdom has no ClipboardEvent with data, so the native events
 // below carry a hand-made `clipboardData` store; `navigator.clipboard` is a
 // spy pair. The document, the grid commands and the marks are real.
-import { act, render } from '@testing-library/react';
+import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
@@ -83,8 +83,16 @@ describe('cell clipboard (KEYS-03, MENU-04)', () => {
     vi.restoreAllMocks();
   });
 
-  it('KEYS-03 ⌘C copies the cell as text plus its marks; ⌘V into another cell restores the marks; ⌥⇧⌘V pastes plain text', async () => {
+  it('KEYS-03 ⌘C copies the cell as text plus its marks; ⌘V into another cell restores the marks; ⌥⇧⌘V pastes plain text — all through the browser’s own events, never the permission-gated API', () => {
     const { rerender } = render(<Harness cell={0} />);
+    // ADR-028: the chords are not claimed, so the browser runs its own command, which is
+    // what raises the native event. Nothing here may touch `navigator.clipboard`.
+    const read = vi.fn(() => Promise.reject(new Error('must not be called')));
+    const readText = vi.fn(() => Promise.reject(new Error('must not be called')));
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { read, readText, writeText: vi.fn(() => Promise.resolve()) },
+      configurable: true,
+    });
     const data = new FakeClipboardData();
     const copy = clipboardEvent('copy', data);
     act(() => {
@@ -104,18 +112,44 @@ describe('cell clipboard (KEYS-03, MENU-04)', () => {
       { type: 'bold' },
     ]);
 
-    // Paste and match style: the async API, text only.
+    // ⌥⇧⌘V arms match-style; the browser's paste for the chord (Chromium, WebKit)
+    // arrives in the same task and is taken as text only.
+    act(() => {
+      handle.current!.armMatchStyle();
+      document.dispatchEvent(clipboardEvent('paste', data));
+    });
+    expect(cellText(table, rows[1]!, cols[0]!)).toBe('Base camp');
+    expect(cellRich(table, rows[1]!, cols[0]!).content[0]?.content?.[0]?.marks).toBeUndefined();
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Pasted plain text into B5');
+    expect(read).not.toHaveBeenCalled();
+    expect(readText).not.toHaveBeenCalled();
+    // The flag is consumed: the next plain paste restores marks again.
+    act(() => {
+      document.dispatchEvent(clipboardEvent('paste', data));
+    });
+    expect(cellRich(table, rows[1]!, cols[0]!).content[0]?.content?.[0]?.marks).toEqual([
+      { type: 'bold' },
+    ]);
+  });
+
+  it('KEYS-03 ⌥⇧⌘V on an engine that raises no paste for the chord falls back to readText once the task ends', async () => {
+    render(<Harness cell={1} />);
     const readText = vi.fn(() => Promise.resolve('Plain'));
     Object.defineProperty(navigator, 'clipboard', {
       value: { readText, writeText: vi.fn(() => Promise.resolve()) },
       configurable: true,
     });
+    act(() => {
+      handle.current!.armMatchStyle();
+    });
+    expect(readText).not.toHaveBeenCalled();
     await act(async () => {
-      await handle.current!.pasteMatchStyle();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await Promise.resolve();
     });
     expect(readText).toHaveBeenCalledTimes(1);
+    const table = gd.tables.get(tableId)!;
     expect(cellText(table, rows[1]!, cols[0]!)).toBe('Plain');
-    expect(cellRich(table, rows[1]!, cols[0]!).content[0]?.content?.[0]?.marks).toBeUndefined();
   });
 
   it('KEYS-03 ⌘X copies then clears; the native event is left alone with no cell or in a text field, and cut is refused view-only', () => {

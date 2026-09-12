@@ -34,6 +34,7 @@ import {
   type Band,
   type ColumnRecord,
   type FormatLocale,
+  type FormatOpts,
   type Id,
   type OutlineRow,
   type PresenceState,
@@ -923,20 +924,63 @@ interface CellProps {
   commands: GridCommands;
 }
 
+/**
+ * Field-by-field equality for a record the parent rebuilds every render. The
+ * key set is typed against the record, so a field added to `OutlineRow`,
+ * `ColumnRecord` or `FormatOpts` without a line here fails to compile rather
+ * than silently never re-rendering the memoised cell.
+ */
+function fieldsEqual<T extends object>(keys: Readonly<Record<keyof T, true>>, a: T, b: T): boolean {
+  for (const key of Object.keys(keys) as (keyof T)[]) {
+    if (a[key] !== b[key]) return false;
+  }
+  return true;
+}
+
+const OUTLINE_ROW_KEYS = {
+  id: true,
+  depth: true,
+  collapsed: true,
+  hidden: true,
+  hasChildren: true,
+  parent: true,
+  splitChild: true,
+  canNest: true,
+  canPromote: true,
+} as const satisfies Record<keyof OutlineRow, true>;
+
+const FORMAT_OPTS_KEYS = {
+  decimals: true,
+  grouping: true,
+  currency: true,
+  datePattern: true,
+  textCase: true,
+} as const satisfies Record<keyof FormatOpts, true>;
+
+const COLUMN_KEYS = {
+  id: true,
+  label: true,
+  width: true,
+  hidden: true,
+  wrap: true,
+  source: true,
+  format: true,
+  formatOpts: true,
+} as const satisfies Record<keyof ColumnRecord, true>;
+
 /** The outline row is rebuilt per render too (HIER-04); compare what the cell draws. */
 function outlineRowsEqual(a: OutlineRow | null, b: OutlineRow | null): boolean {
   if (a === b) return true;
   if (a === null || b === null) return false;
+  return fieldsEqual(OUTLINE_ROW_KEYS, a, b);
+}
+
+function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
+  const { formatOpts: _a, ...restA } = a;
+  const { formatOpts: _b, ...restB } = b;
+  const { formatOpts: _keys, ...restKeys } = COLUMN_KEYS;
   return (
-    a.id === b.id &&
-    a.depth === b.depth &&
-    a.collapsed === b.collapsed &&
-    a.hidden === b.hidden &&
-    a.hasChildren === b.hasChildren &&
-    a.parent === b.parent &&
-    a.splitChild === b.splitChild &&
-    a.canNest === b.canNest &&
-    a.canPromote === b.canPromote
+    fieldsEqual(restKeys, restA, restB) && fieldsEqual(FORMAT_OPTS_KEYS, a.formatOpts, b.formatOpts)
   );
 }
 
@@ -1006,22 +1050,7 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
   ) {
     return false;
   }
-  const c = a.column;
-  const d = b.column;
-  return (
-    c.id === d.id &&
-    c.label === d.label &&
-    c.width === d.width &&
-    c.hidden === d.hidden &&
-    c.wrap === d.wrap &&
-    c.source === d.source &&
-    c.format === d.format &&
-    c.formatOpts.decimals === d.formatOpts.decimals &&
-    c.formatOpts.grouping === d.formatOpts.grouping &&
-    c.formatOpts.currency === d.formatOpts.currency &&
-    c.formatOpts.datePattern === d.formatOpts.datePattern &&
-    c.formatOpts.textCase === d.formatOpts.textCase
-  );
+  return columnsEqual(a.column, b.column);
 }
 
 function arrowDirection(code: string): Direction | null {

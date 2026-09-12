@@ -10,7 +10,7 @@ import {
 import { announce } from '../../../announce.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
-import { Section, Slot, Stepper, UnavailableRow } from './controls.js';
+import { Section, Stepper, TRACKED, Unavailable, UnavailableRow } from './controls.js';
 
 export interface ArrangeTabProps {
   gd: GedeDoc;
@@ -36,11 +36,14 @@ export function ArrangeTab({ gd, table, editable }: ArrangeTabProps) {
   };
   return (
     <>
-      <Section label="order">
-        <UnavailableRow labels={['Back', 'Backward', 'Forward', 'Front']} />
+      <Section label="stacking order">
+        <UnavailableRow
+          labels={['Back', 'Backward', 'Forward', 'Front']}
+          reason={TRACKED.arrange}
+        />
       </Section>
-      <Section label="align on canvas">
-        <UnavailableRow labels={['Side by side', 'Pipeline lanes', 'Stacked']} />
+      <Section label="canvas layout">
+        <Unavailable label="Canvas layout" reason={TRACKED.arrange} />
       </Section>
       <Section label="size" hint="Whole lattice units; change the width from the Table tab.">
         <dl className="gd-insp__facts">
@@ -102,8 +105,10 @@ export function ArrangeTab({ gd, table, editable }: ArrangeTabProps) {
         </div>
       </Section>
       <Section label="viewport">
-        <UnavailableRow labels={['Pin to viewport', 'DAG edges']} />
-        <Slot name="graph" reason="Edges arrive with the context graph release." />
+        <div className="gd-insp__row">
+          <Unavailable label="Pin to viewport" reason={TRACKED.arrange} />
+          <Unavailable label="DAG edges" reason={TRACKED.arrange} />
+        </div>
       </Section>
     </>
   );

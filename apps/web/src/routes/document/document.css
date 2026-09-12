@@ -486,6 +486,9 @@
   letter-spacing: 0.02em;
   line-height: 1.4;
   pointer-events: none;
+  /* The tag is chrome, not content: it keeps its screen size while the layer zooms (#65). */
+  transform: scale(calc(1 / var(--gd-zoom, 1)));
+  transform-origin: top right;
 }
 /* Below the micro tier a 9 px tag has no legible room; the outline alone carries presence. */
 .gd-table--meso .gd-cell__presence-tag,
@@ -1124,6 +1127,11 @@ button.gd-cell__chevron:hover {
   font-family: var(--font-mono);
   font-size: 0.6875rem;
   white-space: nowrap;
+}
+/* A chord the browser keeps: the keycaps stay (the map is the PRD's), the note says why (A11Y-04: text). */
+.gd-keys__reserved {
+  color: var(--ink-muted);
+  font-size: 0.78125rem;
 }
 .gd-keys__foot {
   margin: var(--space-4) 0 0;

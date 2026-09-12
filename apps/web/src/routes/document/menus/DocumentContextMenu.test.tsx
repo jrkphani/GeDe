@@ -35,6 +35,7 @@ const clipboard: CellClipboard = {
   cut: vi.fn(() => Promise.resolve()),
   paste: vi.fn(() => Promise.resolve()),
   pasteMatchStyle: vi.fn(() => Promise.resolve()),
+  armMatchStyle: vi.fn(),
   reason: () => undefined,
 };
 const canvas = { addTable: vi.fn(), fit: vi.fn(), actualSize: vi.fn() };
@@ -139,12 +140,12 @@ describe('context menus', () => {
     const sort = screen.getByRole('menuitem', { name: 'Show sort options' });
     expect(sort).toHaveAttribute('aria-disabled', 'true');
     expect(sort).toHaveAttribute('title', 'arrives with the sort and filter release');
-    const merge = screen.getByRole('menuitem', { name: 'Merge cells' });
-    expect(merge).toHaveAttribute('title', 'not implemented in this release');
     expect(screen.getByRole('menuitem', { name: 'Graph this table' })).toHaveAttribute(
       'title',
-      'arrives with the context graph release',
+      'arrives with #86 (context graphs)',
     );
+    const merge = screen.getByRole('menuitem', { name: 'Merge cells' });
+    expect(merge).toHaveAttribute('title', 'arrives with #87 (merge controls)');
   });
 
   it('MENU-04 MENU-05 the commands act on the right-clicked cell and the menu closes with focus back on it', async () => {
@@ -265,11 +266,9 @@ describe('context menus', () => {
       'fit',
       'actual',
     ]);
+    // DOC-03 names an appending +; rename and delete have no requirement, so they are not listed.
     expect(menuEntriesFor(ctx, { kind: 'sheet', sheetId: 'x' }).map((e) => e.id)).toEqual([
       'sheet-add',
-      'sheet-rename',
-      's-delete',
-      'sheet-delete',
     ]);
     expect(menuEntriesFor(ctx, { kind: 'table', tableId }).some((e) => e.id === 'fit')).toBe(true);
     const record = tableById(gd, tableId)!;

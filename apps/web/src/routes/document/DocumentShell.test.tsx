@@ -254,10 +254,9 @@ describe('DocumentShell', () => {
 
     await userEvent.click(first);
     expect(screen.getByRole('grid')).toBeInTheDocument();
-    // ⌃⇥ steps to the next sheet, ⌃⇧⇥ back (KEYS-07).
-    fireEvent.keyDown(window, { code: 'Tab', ctrlKey: true });
-    expect(screen.getByRole('tab', { name: /Sheet 2/ })).toHaveAttribute('aria-selected', 'true');
-    fireEvent.keyDown(window, { code: 'Tab', ctrlKey: true, shiftKey: true });
+    // ⌃⇥ / ⌃⇧⇥ (KEYS-07) are the browser's tab switch and never reach the page; the shell
+    // does not claim them (ADR-030) — the sheet strip is the route, the sheet lists them as reserved.
+    expect(fireEvent.keyDown(window, { code: 'Tab', ctrlKey: true })).toBe(true);
     expect(screen.getByRole('tab', { name: /Sheet 1/ })).toHaveAttribute('aria-selected', 'true');
   });
 

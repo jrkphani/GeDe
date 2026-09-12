@@ -5,7 +5,7 @@ import { frozenOptions } from '../grid/TableMenu.js';
 import type { GridCommands } from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
 import type { Selection } from '../selection.js';
-import { Section, Stepper, Unavailable, UnavailableRow } from './controls.js';
+import { Section, Stepper, TRACKED, Unavailable } from './controls.js';
 
 export interface TableTabProps {
   gd: GedeDoc;
@@ -34,15 +34,23 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
 
   return (
     <>
-      <Section label="table styles">
-        <UnavailableRow labels={['Plain', 'Banded', 'Outlined']} />
+      <Section label="table style">
+        <Select
+          label="Style"
+          value="plain"
+          disabledReason={TRACKED.tableAppearance}
+          onValueChange={() => undefined}
+          options={[{ value: 'plain', label: 'Plain' }]}
+        />
       </Section>
-      <Section label="table options">
+      <Section label="title and caption">
         <div className="gd-insp__stack">
           <Switch label="Title" checked disabled onCheckedChange={() => undefined} />
-          <p className="gd-insp__reason">Title — always shown in this release</p>
+          <p className="gd-insp__reason">
+            Title — always shown; hiding it {TRACKED.tableAppearance}
+          </p>
           <Switch label="Caption" checked={false} disabled onCheckedChange={() => undefined} />
-          <p className="gd-insp__reason">Caption — not implemented in this release</p>
+          <p className="gd-insp__reason">Caption — {TRACKED.tableAppearance}</p>
         </div>
       </Section>
       <Section label="headers and footer">
@@ -106,21 +114,38 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           />
         </div>
       </Section>
-      <Section label="table outline">
-        <UnavailableRow labels={['None', 'Hairline', 'Solid', 'Accent']} />
-      </Section>
-      <Section label="gridlines">
-        <UnavailableRow labels={['No gridlines', 'Light', 'High contrast']} />
+      <Section label="outline and gridlines">
         <div className="gd-insp__stack">
+          <Select
+            label="Table outline"
+            value="none"
+            disabledReason={TRACKED.tableAppearance}
+            onValueChange={() => undefined}
+            options={[
+              { value: 'none', label: 'None' },
+              { value: 'hairline', label: 'Hairline' },
+              { value: 'strong', label: 'Strong' },
+              { value: 'accent', label: 'Accent' },
+            ]}
+          />
+          <Select
+            label="Gridline density"
+            value="light"
+            disabledReason={TRACKED.tableAppearance}
+            onValueChange={() => undefined}
+            options={[
+              { value: 'none', label: 'None' },
+              { value: 'light', label: 'Light' },
+              { value: 'high', label: 'High contrast' },
+            ]}
+          />
           <Switch
             label="Alternating row colour"
             checked={false}
             disabled
             onCheckedChange={() => undefined}
           />
-          <p className="gd-insp__reason">
-            Alternating row colour — not implemented in this release
-          </p>
+          <p className="gd-insp__reason">Alternating row colour — {TRACKED.tableAppearance}</p>
         </div>
       </Section>
       <Section
@@ -148,8 +173,8 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }}
           />
           <div className="gd-insp__row">
-            <Unavailable label="Fit rows to content" />
-            <Unavailable label="Fit columns to content" />
+            <Unavailable label="Fit rows to content" reason={TRACKED.tableAppearance} />
+            <Unavailable label="Fit columns to content" reason={TRACKED.tableAppearance} />
           </div>
         </div>
       </Section>

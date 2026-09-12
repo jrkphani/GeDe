@@ -1,13 +1,20 @@
 /**
- * Cell clipboard (KEYS-03, MENU-04). The OS clipboard is the source of truth.
+ * Cell clipboard (KEYS-03, MENU-04). The OS clipboard is the source of truth,
+ * reached by two routes with one payload (ADR-028):
  *
- * Two routes into it, one payload. The chords (⌘X ⌘C ⌘V, bound by physical
- * key) and the menu commands go through the async Clipboard API: a selected
- * cell is not an editable element, so the browser would never dispatch `paste`
- * to it on its own. The native `cut` / `copy` / `paste` events are still
- * handled — the browser's Edit menu and other hosts raise them — and both
- * routes carry the cell's marks in a private flavour beside `text/plain`, so
- * a paste restores them. "Paste and match style" (⌥⇧⌘V) takes the text only.
+ * - The keyboard (⌘X ⌘C ⌘V) is the browser's own copy / cut / paste command on
+ *   the focused cell, which raises the native `copy` / `cut` / `paste` events
+ *   handled here. No permission prompt, no paste popup, every engine. The
+ *   shell binds none of those chords, so the default is never prevented.
+ * - The menu commands (a click is a user gesture) use the async Clipboard API:
+ *   `write` needs no prompt; `read` may prompt once, which a menu item can
+ *   afford and a keystroke cannot.
+ *
+ * Both routes carry the cell's marks in a private flavour beside `text/plain`.
+ * The two stores are not one: Chromium exposes the async route's custom web
+ * format only through `navigator.clipboard.read`, never through a
+ * `DataTransfer`, so marks copied by the menu and pasted by keyboard (or the
+ * reverse) degrade to text. "Paste and match style" (⌥⇧⌘V) takes the text only.
  */
 import { useEffect, useMemo, useRef } from 'react';
 import {
@@ -16,6 +23,7 @@ import {
   effectiveCellFormat,
   isRichDoc,
   plainText,
+  richFromText,
   tableMap,
   type FormatLocale,
   type GedeDoc,
@@ -47,6 +55,11 @@ export interface ClipboardDeps {
 }
 
 export interface CellClipboard {
+  /**
+   * ⌥⇧⌘V (KEYS-03): the next native `paste` in this task pastes text only; when
+   * the browser raises none for the chord, `readText` fills in.
+   */
+  armMatchStyle: () => void;
   /** Menu commands (MENU-04); each announces its outcome. */
   copy: () => Promise<void>;
   /** Copies the displayed text — the formatted value, marks dropped. */
@@ -100,6 +113,16 @@ function writeInto(
     return deps.commands.commitRichCell(cell, rich);
   }
   return deps.commands.commitCell(cell, text);
+}
+
+/**
+ * Match style: the text and nothing else. A cell that already holds the same
+ * text with marks must lose them, so the rich path writes an unmarked document;
+ * a formula still commits as text so its references bind (PRD §20).
+ */
+function writePlain(deps: ClipboardDeps, cell: CellSelection, text: string): boolean {
+  if (text.startsWith('=') || text === '') return deps.commands.commitCell(cell, text);
+  return deps.commands.commitRichCell(cell, richFromText(text));
 }
 
 function systemClipboard(): Clipboard | undefined {
@@ -171,6 +194,8 @@ const NO_CLIPBOARD = 'The clipboard is not available here';
 export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
   const ref = useRef(deps);
   ref.current = deps;
+  /** Armed by ⌥⇧⌘V; cleared by the paste that consumes it or the fallback timer. */
+  const matchStyle = useRef<{ timer: number } | null>(null);
 
   useEffect(() => {
     /** The cell the native event applies to, or null when the event is someone else's. */
@@ -212,10 +237,16 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
       if (!d.editable) return;
       event.preventDefault();
       const text = data.getData('text/plain');
-      const richJson = data.getData(RICH_MIME);
-      if (writeInto(d, cell, text, richJson === '' ? null : parseRich(richJson))) {
-        announce(`Pasted into ${d.addressOf(cell)}`);
+      const plainOnly = matchStyle.current !== null;
+      if (matchStyle.current !== null) {
+        window.clearTimeout(matchStyle.current.timer);
+        matchStyle.current = null;
       }
+      const richJson = data.getData(RICH_MIME);
+      const written = plainOnly
+        ? writePlain(d, cell, text)
+        : writeInto(d, cell, text, richJson === '' ? null : parseRich(richJson));
+      if (written) announce(`Pasted${plainOnly ? ' plain text' : ''} into ${d.addressOf(cell)}`);
     };
     document.addEventListener('copy', onCopy);
     document.addEventListener('cut', onCut);
@@ -234,7 +265,30 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
       if (d.cell === null || text === null) return;
       announce((await writeSystem(text, rich)) ? `${what} ${d.addressOf(d.cell)}` : NO_CLIPBOARD);
     };
+    const pastePlain = async () => {
+      const d = ref.current;
+      if (d.cell === null || !d.editable) return;
+      const read = await readSystem();
+      if (read === null) {
+        announce(NO_CLIPBOARD);
+        return;
+      }
+      if (writePlain(d, d.cell, read.text)) {
+        announce(`Pasted plain text into ${d.addressOf(d.cell)}`);
+      }
+    };
     return {
+      armMatchStyle: () => {
+        if (matchStyle.current !== null) window.clearTimeout(matchStyle.current.timer);
+        matchStyle.current = {
+          // The browser's paste event for the chord arrives in this task; none by the
+          // next means the engine has no such command, and the async read stands in.
+          timer: window.setTimeout(() => {
+            matchStyle.current = null;
+            void pastePlain();
+          }, 0),
+        };
+      },
       reason: (command) => {
         const d = ref.current;
         if (d.cell === null) return 'select a cell first';
@@ -275,18 +329,7 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
           announce(`Pasted into ${d.addressOf(d.cell)}`);
         }
       },
-      pasteMatchStyle: async () => {
-        const d = ref.current;
-        if (d.cell === null || !d.editable) return;
-        const read = await readSystem();
-        if (read === null) {
-          announce(NO_CLIPBOARD);
-          return;
-        }
-        if (d.commands.commitCell(d.cell, read.text)) {
-          announce(`Pasted plain text into ${d.addressOf(d.cell)}`);
-        }
-      },
+      pasteMatchStyle: pastePlain,
     };
   }, []);
 }

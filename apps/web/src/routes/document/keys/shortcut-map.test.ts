@@ -10,6 +10,7 @@ import {
   markAriaKeys,
   markLabel,
   rowAriaKeys,
+  reservedRows,
   rowKeys,
   SHORTCUT_SECTIONS,
   unlistedChords,
@@ -65,6 +66,13 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
     expect(extras.map((row) => [row.action, row.extra])).toEqual([
       ['Collapse / expand row', 'ADR-025, ADR-030'],
     ]);
+    // KEYS-02 / KEYS-07: the PRD's chords the browser keeps are listed, marked, and not bound (ADR-030).
+    expect(reservedRows().map((row) => row.action)).toEqual([
+      'New workscape',
+      'Close document',
+      'Next / previous sheet',
+    ]);
+    for (const row of reservedRows()) expect(row.reserved).toMatch(/browser/);
     expect(ours.map((r) => r.group)).toEqual(reference.map((r) => r.group));
     expect(ours.map((r) => r.action)).toEqual(reference.map((r) => r.action));
     // Keys: the reference writes "⏎ or double-click"; the sheet lists them as two chips.

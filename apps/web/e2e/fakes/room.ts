@@ -56,6 +56,23 @@ export class FakeRoom {
     });
   }
 
+  /**
+   * Another participant's presence (SHARE-04): set as the room's own awareness
+   * state and broadcast to every connected page, the way the service relays a
+   * collaborator's. `state` is the `PresenceState` shape from `@gede/core`.
+   */
+  announcePresence(state: Record<string, unknown>): void {
+    this.awareness.setLocalState(state);
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
+    encoding.writeVarUint8Array(
+      encoder,
+      awarenessProtocol.encodeAwarenessUpdate(this.awareness, [this.awareness.clientID]),
+    );
+    const out = Buffer.from(encoding.toUint8Array(encoder));
+    for (const ws of this.sockets) ws.send(out);
+  }
+
   /** Route every `/ws/` socket of this page into the room. */
   async install(page: Page): Promise<void> {
     await page.routeWebSocket(/\/ws\//, (ws) => {

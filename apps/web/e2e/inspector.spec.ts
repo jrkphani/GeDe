@@ -44,8 +44,11 @@ const record = {
   deletedAt: null,
 };
 
-// The Desktop Chrome profile reports a Windows UA, so `mod` is Control (chords resolve by code).
+// The Desktop Chrome profile reports a Windows UA, so `mod` is Control for the app's own chords
+// (they resolve by code against the UA). The browser's built-in copy / paste accelerator is the
+// host's: Meta on a macOS runner, Control elsewhere.
 const mod = 'Control';
+const hostMod = process.platform === 'darwin' ? 'Meta' : 'Control';
 
 async function installFakes(page: Page): Promise<FakeRoom> {
   await page.route('**/config.json', (route) => route.fulfill({ json: CONFIG }));
@@ -187,6 +190,56 @@ test.describe('inspector rail', () => {
     await expect(rail).toHaveCSS('position', 'absolute');
     await checkA11y('inspector overlay 768');
     await snapshot('inspector-768');
+    // An overlay dismisses like every layered surface: a press outside it, or Escape —
+    // and that Escape does not also clear the selection (D7).
+    await firstCell(page).click();
+    await expect(rail).toHaveAttribute('data-state', 'collapsed');
+    await expect(firstCell(page)).toHaveAttribute('aria-selected', 'true');
+    await page.getByRole('button', { name: 'Format inspector' }).click();
+    await expect(rail).toHaveAttribute('data-state', 'open');
+    await expect(rail.getByLabel('Address B5')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(rail).toHaveAttribute('data-state', 'collapsed');
+    await expect(firstCell(page)).toHaveAttribute('aria-selected', 'true');
+    await page.getByRole('button', { name: 'Format inspector' }).click();
+    await expect(rail).toHaveAttribute('data-state', 'open');
+    const plane = (await page.getByTestId('plane').boundingBox())!;
+    await page.mouse.click(plane.x + 40, plane.y + plane.height - 60);
+    await expect(rail).toHaveAttribute('data-state', 'collapsed');
+  });
+
+  test('SHARE-04 DOC-06 (#65) at 50 % the presence tag keeps its screen size and the row labels stay a label apart', async ({
+    page,
+  }) => {
+    const room = await openDoc(page, 1440);
+    const gd = openDocument(room.doc);
+    const tableId = Array.from(gd.tables.keys())[0]!;
+    const record = tableById(gd, tableId)!;
+    room.announcePresence({
+      userId: 'e2e-user-2',
+      name: 'Shankar',
+      colour: 2,
+      sheetId: record.sheetId,
+      cell: { tableId, rowId: record.rows[0]!, colId: record.columns[0]!.id },
+    });
+    const tag = page.locator('.gd-cell__presence-tag');
+    await expect(tag).toHaveText('Shankar');
+    const at100 = (await tag.boundingBox())!;
+    expect(at100.height).toBeGreaterThanOrEqual(12);
+    await page.getByRole('button', { name: /^Zoom \d+%/ }).click();
+    await page.getByRole('menuitem', { name: '50%', exact: true }).click();
+    await expect(page.getByRole('button', { name: 'Zoom 50%' })).toBeVisible();
+    const at50 = (await tag.boundingBox())!;
+    expect(at50.height).toBeCloseTo(at100.height, 0);
+    expect(at50.width).toBeCloseTo(at100.width, 0);
+    // Ruler: every other row is labelled and the labels never come closer than 12 px.
+    const rows = page.getByTestId('ruler-rows').locator('[data-labelled]');
+    const boxes = await rows.evaluateAll((els) => els.map((el) => el.getBoundingClientRect().top));
+    expect(boxes.length).toBeGreaterThan(2);
+    for (let i = 1; i < boxes.length; i += 1)
+      expect(boxes[i]! - boxes[i - 1]!).toBeGreaterThanOrEqual(12);
+    await expect(page.getByTestId('ruler-rows').locator('[data-row="1"]')).toHaveText('');
+    await expect(page.getByTestId('ruler-rows').locator('[data-row="2"]')).toHaveText('3');
   });
 
   test('RESP-02 at 480 there is no inspector, no strip, no context menu and no edit affordance', async ({
@@ -244,7 +297,7 @@ test.describe('inspector rail', () => {
     await rail.getByRole('tab', { name: 'Arrange' }).click();
     const front = rail.getByRole('button', { name: 'Front' });
     await expect(front).toHaveAttribute('aria-disabled', 'true');
-    await expect(front).toHaveAttribute('title', /not implemented in this release/);
+    await expect(front).toHaveAttribute('title', /arrives with #85/);
     await checkA11y('inspector arrange tab 1440');
     await page.getByRole('button', { name: 'Organize inspector' }).click();
     await expect(rail.getByRole('tab', { name: 'Categories' })).toBeVisible();
@@ -282,7 +335,7 @@ test.describe('context menus', () => {
     await expect(menu.getByRole('menuitem', { name: /^Add row below/ })).toContainText('⌥⌘↓');
     const merge = menu.getByRole('menuitem', { name: 'Merge cells', exact: true });
     await expect(merge).toHaveAttribute('aria-disabled', 'true');
-    await expect(merge).toHaveAttribute('title', 'not implemented in this release');
+    await expect(merge).toHaveAttribute('title', 'arrives with #87 (merge controls)');
     await settled(page, '[role="menu"]');
     await checkA11y('cell context menu 1440');
     await snapshot('cell-menu-1440');
@@ -324,7 +377,7 @@ test.describe('context menus', () => {
     // MENU-02: what no release has yet stays present, disabled, with its reason.
     await expect(menu.getByRole('menuitem', { name: 'Fit width to content' })).toHaveAttribute(
       'title',
-      'not implemented in this release',
+      'arrives with #82 (table appearance)',
     );
     await settled(page, '[role="menu"]');
     await checkA11y('column context menu 1440');
@@ -383,6 +436,10 @@ test.describe('keyboard map', () => {
       .evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
     expect(groups).toEqual(['Document', 'Edit', 'Find', 'Format', 'Table and cells', 'View']);
     await expect(sheet.getByRole('region', { name: 'View' })).toContainText('⌥⌘I');
+    // KEYS-02 / KEYS-07: the browser's own chords are listed and say so (ADR-030).
+    await expect(sheet.getByRole('region', { name: 'Document' })).toContainText(
+      'Close document — the browser’s in Chrome and Safari',
+    );
     await settled(page, '[role="dialog"]');
     await checkA11y('shortcut sheet 1440');
     await snapshot('shortcut-sheet-1440');
@@ -407,7 +464,32 @@ test.describe('keyboard map', () => {
     );
   });
 
-  test('KEYS-05 KEYS-03 ⌘B on a selected cell bolds the whole cell; ⌘C and ⌘V copy it into the cell below', async ({
+  test.describe('clipboard, no permissions', () => {
+    // ADR-028: the keyboard route is the browser's own copy / paste command and needs no
+    // clipboard permission; the config grants them to every other test, so this one
+    // revokes them to prove the chords never reach `navigator.clipboard.read`.
+    test.use({ permissions: [] });
+    test('KEYS-05 KEYS-03 ⌘B on a selected cell bolds the whole cell; ⌘C and ⌘V carry it, marks included, into the cell below with no clipboard permission', async ({
+      page,
+    }) => {
+      await openDoc(page, 1440);
+      const grid = page.getByRole('grid').first();
+      const cell = firstCell(page);
+      await cell.click();
+      await page.keyboard.press(`${mod}+KeyB`);
+      await expect(cell.locator('.gd-rich strong')).toHaveText('Kathmandu');
+      await page.keyboard.press(`${hostMod}+KeyC`);
+      await expect(page.getByTestId('live-region')).toHaveText('Copied B5');
+      await grid.getByRole('gridcell').nth(6).click();
+      await page.keyboard.press(`${hostMod}+KeyV`);
+      await expect(grid.getByRole('gridcell').nth(6).locator('.gd-rich strong')).toHaveText(
+        'Kathmandu',
+      );
+      await expect(page.getByTestId('live-region')).toHaveText('Pasted into B7');
+    });
+  });
+
+  test('KEYS-03 ⌥⇧⌘V pastes the text without its marks — through the browser’s paste where it raises one for the chord, else the async read', async ({
     page,
   }) => {
     await openDoc(page, 1440);
@@ -416,12 +498,13 @@ test.describe('keyboard map', () => {
     await cell.click();
     await page.keyboard.press(`${mod}+KeyB`);
     await expect(cell.locator('.gd-rich strong')).toHaveText('Kathmandu');
-    await page.keyboard.press(`${mod}+KeyC`);
-    await grid.getByRole('gridcell').nth(6).click();
-    await page.keyboard.press(`${mod}+KeyV`);
-    await expect(grid.getByRole('gridcell').nth(6).locator('.gd-rich strong')).toHaveText(
-      'Kathmandu',
-    );
+    await page.keyboard.press(`${hostMod}+KeyC`);
+    await expect(page.getByTestId('live-region')).toHaveText('Copied B5');
+    await grid.getByRole('gridcell').nth(9).click();
+    await page.keyboard.press(`Alt+Shift+${mod}+KeyV`);
+    await expect(grid.getByRole('gridcell').nth(9)).toHaveText('Kathmandu');
+    await expect(grid.getByRole('gridcell').nth(9).locator('.gd-rich strong')).toHaveCount(0);
+    await expect(page.getByTestId('live-region')).toHaveText('Pasted plain text into B8');
   });
 });
 

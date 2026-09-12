@@ -23,7 +23,7 @@ import type { MenuEntry } from '@gede/ui';
 import { LABELS } from '../../../doc/shortcuts.js';
 import type { GridCommands } from '../grid/commands.js';
 import type { CellClipboard } from '../keys/clipboard.js';
-import { NOT_YET } from '../inspector/controls.js';
+import { TRACKED } from '../inspector/controls.js';
 
 export type MenuTarget =
   | { kind: 'cell'; tableId: Id; rowId: Id; colId: Id }
@@ -74,7 +74,7 @@ export interface MenuContext {
 
 const SORT_SOON = 'arrives with the sort and filter release';
 const CATEGORY_SOON = 'arrives with the hierarchy release';
-const GRAPH_SOON = 'arrives with the context graph release';
+const GRAPH_SOON = TRACKED.graph;
 const VIEW_ONLY = 'you have view-only access';
 
 function sep(id: string): MenuEntry {
@@ -373,14 +373,14 @@ export function cellMenuEntries(
       kind: 'item',
       id: 'merge',
       label: 'Merge cells',
-      disabledReason: NOT_YET,
+      disabledReason: TRACKED.merge,
       onSelect: () => undefined,
     },
     {
       kind: 'item',
       id: 'unmerge',
       label: 'Unmerge cells',
-      disabledReason: NOT_YET,
+      disabledReason: TRACKED.merge,
       onSelect: () => undefined,
     },
     sep('s-clipboard'),
@@ -389,11 +389,19 @@ export function cellMenuEntries(
     {
       kind: 'check',
       id: 'wrap',
-      label: 'Wrap text',
+      // MENU-04: the cell's wrap is its column's or its row's (GRID-09). On, it wraps the
+      // column; off, it unwraps whichever is wrapping this cell — the row alone when only
+      // the row is, both when both are — so the item's state always answers the click.
+      label: column?.wrap === true ? 'Wrap text' : rowWrapped ? 'Wrap text (row)' : 'Wrap text',
       checked: column?.wrap === true || rowWrapped,
       disabledReason: viewOnly,
       onCheckedChange: (on) => {
-        commands.setColumnWrap(tableId, colId, on);
+        if (on) {
+          commands.setColumnWrap(tableId, colId, true);
+          return;
+        }
+        if (column?.wrap === true) commands.setColumnWrap(tableId, colId, false);
+        if (rowWrapped) commands.setRowWrap(tableId, rowId, false);
       },
     },
   ];
@@ -484,7 +492,7 @@ export function columnMenuEntries(
       kind: 'item',
       id: 'col-fit',
       label: 'Fit width to content',
-      disabledReason: NOT_YET,
+      disabledReason: TRACKED.tableAppearance,
       onSelect: () => undefined,
     },
     sep('s-clipboard'),
@@ -553,15 +561,6 @@ export function tableMenuEntries(
       shortcut: LABELS.fit,
       onSelect: ctx.canvas.fit,
     },
-    sep('s-delete'),
-    {
-      kind: 'item',
-      id: 'table-delete',
-      label: 'Delete table',
-      danger: true,
-      disabledReason: viewOnly ?? NOT_YET,
-      onSelect: () => undefined,
-    },
   ];
 }
 
@@ -594,7 +593,7 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
   ];
 }
 
-/** The sheet-tab menu (DOC-03). */
+/** The sheet-tab menu (DOC-03): what the strip's trailing + does. Rename and delete have no requirement yet. */
 export function sheetMenuEntries(ctx: MenuContext): MenuEntry[] {
   const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
   return [
@@ -604,22 +603,6 @@ export function sheetMenuEntries(ctx: MenuContext): MenuEntry[] {
       label: 'Add sheet',
       disabledReason: viewOnly,
       onSelect: ctx.sheets.add,
-    },
-    {
-      kind: 'item',
-      id: 'sheet-rename',
-      label: 'Rename sheet',
-      disabledReason: viewOnly ?? NOT_YET,
-      onSelect: () => undefined,
-    },
-    sep('s-delete'),
-    {
-      kind: 'item',
-      id: 'sheet-delete',
-      label: 'Delete sheet',
-      danger: true,
-      disabledReason: viewOnly ?? NOT_YET,
-      onSelect: () => undefined,
     },
   ];
 }

@@ -1,10 +1,12 @@
 import clsx from 'clsx';
-import { useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { tableMap, type GedeDoc, type ToggleMark } from '@gede/core';
+import { below } from '@gede/tokens';
 import { Button, Icon, Tabs, type TabItem } from '@gede/ui';
 
 import { ARIA_KEYS, LABELS } from '../../doc/shortcuts.js';
 import { useYVersion } from '../../doc/use-y.js';
+import { useMediaQuery } from '../../use-media-query.js';
 import { ResultList } from './find/FindBar.js';
 import type { Find } from './find/useFind.js';
 import type { GridCommands } from './grid/commands.js';
@@ -69,6 +71,44 @@ export function Inspector({
   slots,
 }: InspectorProps) {
   useYVersion(gd.tables);
+  // RESP-03: below lg the open rail is an overlay over the canvas, and an overlay
+  // dismisses like every layered surface — Escape, or a press outside it. Escape is
+  // taken in the capture phase and prevented, so the shell's Escape (clear the
+  // selection) does not fire for the same key (D7).
+  const overlay = useMediaQuery(below('lg'));
+  const asideRef = useRef<HTMLElement>(null);
+  const onOpenChangeRef = useRef(onOpenChange);
+  onOpenChangeRef.current = onOpenChange;
+  const dismissible = overlay && open;
+  useEffect(() => {
+    if (!dismissible) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.code !== 'Escape' || event.defaultPrevented) return;
+      // A menu, select or dialog above the rail takes its own Escape first.
+      if (document.querySelector('[role="menu"], [role="listbox"], [role="dialog"]') !== null)
+        return;
+      event.preventDefault();
+      onOpenChangeRef.current(false);
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const aside = asideRef.current;
+      if (aside === null || !(event.target instanceof Node) || aside.contains(event.target)) return;
+      // Portaled surfaces (a select's list) belong to the rail; the toolbar's own
+      // toggles decide the rail's state themselves (a press on Format is not "outside").
+      if (
+        event.target instanceof Element &&
+        event.target.closest('[data-radix-popper-content-wrapper], .gd-doc__toolbar') !== null
+      )
+        return;
+      onOpenChangeRef.current(false);
+    };
+    window.addEventListener('keydown', onKeyDown, true);
+    document.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true);
+      document.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, [dismissible]);
   const table = selection === null ? null : tableMap(gd, selection.tableId);
   const cell: CellSelection | null =
     selection?.cell && table !== null ? { tableId: selection.tableId, ...selection.cell } : null;
@@ -175,10 +215,12 @@ export function Inspector({
 
   return (
     <aside
-      className={clsx('gd-inspector', 'gd-inspector--open')}
+      ref={asideRef}
+      className={clsx('gd-inspector', 'gd-inspector--open', { 'gd-inspector--overlay': overlay })}
       aria-label={name}
       data-testid="inspector"
       data-state="open"
+      data-overlay={overlay || undefined}
     >
       <div className="gd-inspector__head">
         <span className="gd-mono gd-inspector__label">{modeLabel}</span>

@@ -96,7 +96,7 @@
   --hit-target: 44px;
 
   /* breakpoints, for reference in JS */
-  --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px; --bp-xl: 1440px;
+  --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px; --bp-inspector: 1200px; --bp-xl: 1440px;
 
   /* form controls, scrollbars and the canvas background follow the theme */
   color-scheme: light;

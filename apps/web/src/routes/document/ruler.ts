@@ -21,8 +21,8 @@ export function rowLabelStep(rowPx: number): number {
   return MAX_STEP;
 }
 
-/** Is row `index0` (0-based) labelled at this step? Row 1 always is; then every multiple. */
+/** Is row `index0` (0-based) labelled at this step? Row 1, then every `step`th row after it (1, 3, 5 … at 2). */
 export function rowIsLabelled(index0: number, step: number): boolean {
   if (step <= 1) return true;
-  return index0 === 0 || (index0 + 1) % step === 0;
+  return index0 % step === 0;
 }

@@ -208,9 +208,11 @@ export function Canvas({
     if (!d.moved) onClearSelection();
   };
 
-  const layerStyle: CSSProperties = {
+  const layerStyle = {
     transform: `translate(${String(-viewport.x)}px, ${String(-viewport.y)}px) scale(${String(viewport.zoom)})`,
-  };
+    // Screen-space overlays inside the layer (presence tags) counter-scale by this (#65).
+    '--gd-zoom': viewport.zoom,
+  } as CSSProperties;
   const colPx = LATTICE.col * viewport.zoom;
   const rowPx = LATTICE.row * viewport.zoom;
   const cols: number[] = [];
