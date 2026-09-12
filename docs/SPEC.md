@@ -110,6 +110,8 @@ Notes:
 
 ### 4.2 Circle canvas (the critical piece)
 
+> Authoritative canvas detail — geometry constants, DOM contract, emphasis/compose grammar, live child cores, coverage twin, LOD, keyboard map, verification targets — lives in **CANVAS.md** (v1.0, 2026-09-12), whose §0 records what shipped versus each bullet below. The bullets here are the original v0.2 intent and are retained as such.
+
 - SVG, responsive. **One arc per dimension**: the circle is divided into n equal arc segments (with gaps), one per dimension in sort order, each in its dimension color (defaults drawn from a categorical palette; editable). Parameter dots ordered along each arc; labels outside. The 3-arc prototypes are the n = 3 case.
 - Degenerate/high-n handling: n = 2 renders as two half-circle arcs; for large n (> 8) arcs compress and labels collapse to hover/legend — functional but the UI is optimized for 2–8.
 - Canvas header exposes **dimension management**: add/rename/recolor/reorder/remove dimensions (invariant 4 warnings on add/remove).
