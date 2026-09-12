@@ -22,7 +22,7 @@ import type { HighlightToken, TextColourToken } from '../text/types.js';
  * design system gives each hue one job — amber is the live state, forest the
  * brand, "grey = everything else, no third meaning" (DS §2) — so a table
  * band may only be neutral: Plain (the prototype's 6) and Slate (its 1). The
- * blue, green, red and amber pairs are not offered (ADR-033).
+ * blue, green, red and amber pairs are not offered (ADR-034).
  */
 export const TABLE_STYLES = ['plain', 'slate'] as const;
 export type TableStyle = (typeof TABLE_STYLES)[number];

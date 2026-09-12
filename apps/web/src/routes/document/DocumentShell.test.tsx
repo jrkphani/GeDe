@@ -194,7 +194,7 @@ describe('DocumentShell', () => {
     );
     const pin = screen.getByRole('button', { name: 'Pin to viewport' });
     expect(pin).toHaveAttribute('aria-disabled', 'true');
-    expect(pin.title).toMatch(/arrives with a later release/);
+    expect(pin.title).toMatch(/select a table first/); // INSP-07: live, needs a table
     expect(pin).not.toBeDisabled(); // reachable, so the reason is available on hover and focus
     const addRow = screen.getByRole('button', { name: 'Add row' });
     expect(addRow).toHaveAttribute('aria-disabled', 'true');

@@ -25,7 +25,7 @@ Read the root `CLAUDE.md` first; everything there applies here.
 
 - The Yjs document is the document state. React renders it; it never owns a copy. No document data in `useState`, `useReducer` or Context. Subscribe with `observeDeep` and re-render by cell id.
 - Formula evaluation, regex and fuzzy matching run in Web Workers. The main thread never evaluates a formula (`packages/core` exposes a message-shaped API for this).
-- Rendering is DOM-first: one CSS-transformed layer for tables and graphs, virtualised. Canvas is only for gridlines, ruler backgrounds and DAG edges "once they number in the hundreds" (PRD §20); until then edges are an SVG in the layer (`style/DagEdges.tsx`, ADR-033).
+- Rendering is DOM-first: one CSS-transformed layer for tables and graphs, virtualised. Canvas is only for gridlines, ruler backgrounds and DAG edges "once they number in the hundreds" (PRD §20); until then edges are an SVG in the layer (`style/DagEdges.tsx`, ADR-034).
 - Below 768 px the document is read-only: no edit affordance renders, the inspector and toolbar are absent (RESP-02).
 
 ## Input
