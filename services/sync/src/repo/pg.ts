@@ -14,6 +14,7 @@ import {
   desc,
   eq,
   exists,
+  getTableColumns,
   gt,
   inArray,
   isNotNull,
@@ -105,13 +106,35 @@ function toDocument(row: DocumentRow): DocumentRecord {
   };
 }
 
-function toUser(row: typeof users.$inferSelect): UserRecord {
+/**
+ * The user row plus its guided sample's id (ONB-01), as one scalar subquery
+ * so every read and `RETURNING` of `users` answers "does this account have
+ * its sample yet" without a second round trip. The partial unique index
+ * (migration 0009) makes the subquery an index probe and guarantees `LIMIT 1`
+ * is not hiding a second row.
+ */
+const userColumns = {
+  ...getTableColumns(users),
+  // Qualified by hand: in a `RETURNING` list Drizzle renders `${users.id}` as the bare
+  // `"id"`, which inside the subquery would resolve to `d.id`.
+  sampleDocumentId: sql<string | null>`(
+    select d.id from documents d
+    where d.owner_id = ${sql.identifier('users')}.${sql.identifier('id')} and d.sample
+    limit 1
+  )`.as('sample_document_id'),
+};
+
+type UserRow = typeof users.$inferSelect & { sampleDocumentId: string | null };
+
+function toUser(row: UserRow): UserRecord {
   return {
     id: row.id,
     cognitoSub: row.cognitoSub,
     email: row.email,
     displayName: row.displayName,
     locale: row.locale,
+    tourDoneAt: row.tourDoneAt,
+    sampleDocumentId: row.sampleDocumentId,
   };
 }
 
@@ -421,8 +444,8 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
                 target: users.cognitoSub,
                 set: { lastSeenAt: now, email: sql`coalesce(${users.email}, excluded.email)` },
               })
-              .returning();
-          let rows: (typeof users.$inferSelect)[];
+              .returning(userColumns);
+          let rows: UserRow[];
           try {
             // A savepoint: the unique violation below must not poison the transaction.
             rows = await tx.transaction((inner) => upsert(inner, identity.email));
@@ -455,14 +478,14 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       bindEmail(id, email) {
         return db.transaction(async (tx) => {
-          let row: typeof users.$inferSelect | undefined;
+          let row: UserRow | undefined;
           try {
             [row] = await tx.transaction((inner) =>
               inner
                 .update(users)
                 .set({ email: sql`coalesce(${users.email}, ${email})` })
                 .where(eq(users.id, id))
-                .returning(),
+                .returning(userColumns),
             );
           } catch (error) {
             if (isUniqueViolation(error, 'users_email_key')) throw new EmailTakenError();
@@ -480,7 +503,11 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       },
 
       async findByEmail(email) {
-        const [row] = await db.select().from(users).where(eq(users.email, email)).limit(1);
+        const [row] = await db
+          .select(userColumns)
+          .from(users)
+          .where(eq(users.email, email))
+          .limit(1);
         return row ? toUser(row) : undefined;
       },
 
@@ -488,20 +515,27 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         const set: Partial<typeof users.$inferInsert> = {};
         if (patch.displayName !== undefined) set.displayName = patch.displayName;
         if (patch.locale !== undefined) set.locale = patch.locale;
+        // ONB-03: the flag is a timestamp so support can see when; `false` is Replay (ONB-08).
+        if (patch.tourDone !== undefined) set.tourDoneAt = patch.tourDone ? new Date() : null;
         if (Object.keys(set).length === 0) {
-          const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+          const [row] = await db.select(userColumns).from(users).where(eq(users.id, id)).limit(1);
           return row ? toUser(row) : undefined;
         }
-        const [row] = await db.update(users).set(set).where(eq(users.id, id)).returning();
+        const [row] = await db
+          .update(users)
+          .set(set)
+          .where(eq(users.id, id))
+          .returning(userColumns);
         return row ? toUser(row) : undefined;
       },
     },
 
     documents: {
       async listForUser(userId, view) {
+        // ONB-01: the guided sample is pinned above every other row in every view it appears in.
         const rows = await summaryQuery(userId)
           .where(scopeFor(userId, view))
-          .orderBy(desc(documents.updatedAt), desc(documents.id));
+          .orderBy(desc(documents.sample), desc(documents.updatedAt), desc(documents.id));
         const listings: DocumentListing[] = [];
         for (const row of rows) {
           const permission: DocumentPermission | null =
@@ -542,6 +576,49 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             target: null,
           });
           return toDocument(row);
+        });
+      },
+
+      createSample({ id, ownerId, title, snapshot }) {
+        return db.transaction(async (tx) => {
+          // ONB-01: at most one per owner. The partial unique index
+          // (`documents_owner_sample_key`, migration 0009) is the guard; a
+          // conflict means another request seeded it first, and this
+          // insert — with its snapshot and audit rows — writes nothing.
+          const [row] = await tx
+            .insert(documents)
+            .values({
+              id,
+              ownerId,
+              title,
+              sample: true,
+              snapshotKey: snapshot.s3Key,
+              snapshotSeq: snapshot.seq,
+            })
+            .onConflictDoNothing({ target: documents.ownerId, where: sql`sample` })
+            .returning();
+          if (!row) {
+            const [existing] = await tx
+              .select()
+              .from(documents)
+              .where(and(eq(documents.ownerId, ownerId), eq(documents.sample, true)))
+              .limit(1);
+            if (!existing) throw new Error('sample insert conflicted but no sample row exists');
+            return { document: toDocument(existing), created: false };
+          }
+          await tx.insert(snapshots).values({
+            documentId: id,
+            seq: snapshot.seq,
+            s3Key: snapshot.s3Key,
+            sizeBytes: snapshot.sizeBytes,
+          });
+          await tx.insert(auditLog).values({
+            documentId: id,
+            userId: ownerId,
+            action: 'document.create',
+            target: 'sample',
+          });
+          return { document: toDocument(row), created: true };
         });
       },
 

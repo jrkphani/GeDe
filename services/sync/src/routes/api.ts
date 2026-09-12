@@ -64,11 +64,18 @@ const profileBody = z
       .max(8192)
       .regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u, 'Not a token')
       .optional(),
+    /** ONB-03 / ONB-07 / ONB-08: `true` when the tour ends (done or skipped), `false` on Replay. */
+    tourDone: z.boolean().optional(),
   })
   .strict()
-  .refine((b) => b.displayName !== undefined || b.locale !== undefined || b.idToken !== undefined, {
-    message: 'Nothing to change',
-  });
+  .refine(
+    (b) =>
+      b.displayName !== undefined ||
+      b.locale !== undefined ||
+      b.idToken !== undefined ||
+      b.tourDone !== undefined,
+    { message: 'Nothing to change' },
+  );
 
 /** The seed snapshot's sequence number; the first client update is seq 2. */
 export const INITIAL_SNAPSHOT_SEQ = 1;
@@ -106,6 +113,10 @@ export interface ProfileView {
   email: string | null;
   displayName: string | null;
   locale: string | null;
+  /** ONB-03: ISO time the tour was completed or skipped; null means the tour is due. */
+  tourDoneAt: string | null;
+  /** ONB-01: the account's guided sample workscape. */
+  sampleDocumentId: string | null;
 }
 
 function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView {
@@ -154,6 +165,8 @@ function profileView(user: AuthUser): ProfileView {
     email: user.email,
     displayName: user.displayName,
     locale: user.locale,
+    tourDoneAt: user.tourDoneAt === null ? null : user.tourDoneAt.toISOString(),
+    sampleDocumentId: user.sampleDocumentId,
   };
 }
 
@@ -225,6 +238,7 @@ export function registerApi(
         const patch: ProfilePatch = {
           ...(body.displayName !== undefined && { displayName: body.displayName }),
           ...(body.locale !== undefined && { locale: body.locale }),
+          ...(body.tourDone !== undefined && { tourDone: body.tourDone }),
         };
         let updated = await repo.users.updateProfile(user.id, patch);
         if (!updated) throw new Error('user row missing after the auth hook resolved it');

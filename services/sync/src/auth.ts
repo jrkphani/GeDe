@@ -36,6 +36,15 @@ export interface AuthUser {
   readonly displayName: string | null;
   /** I18N-05: the persisted locale choice, or null until the user makes one. */
   readonly locale: string | null;
+  /** ONB-03: when the tour was completed or skipped; null until then and after Replay. */
+  readonly tourDoneAt: Date | null;
+  /** ONB-01: the account's guided sample, seeded on first sight; null only if seeding is off. */
+  readonly sampleDocumentId: string | null;
+}
+
+/** Gives an account its guided sample on first sight (`SampleSeeder`); the resolver calls it after the upsert. */
+export interface SampleEnsurer {
+  ensure(user: UserRecord): Promise<UserRecord>;
 }
 
 declare module 'fastify' {
@@ -117,6 +126,7 @@ export class UserResolver {
     private readonly verifier: TokenVerifier,
     private readonly repo: Repo,
     private readonly ttlMs = 60_000,
+    private readonly samples: SampleEnsurer | null = null,
   ) {}
 
   async fromToken(token: string): Promise<AuthUser> {
@@ -135,7 +145,10 @@ export class UserResolver {
     ) {
       return toAuthUser(cached.user);
     }
-    const user = await this.repo.users.upsertFromToken(identity);
+    const upserted = await this.repo.users.upsertFromToken(identity);
+    // ONB-01: the first request an account ever makes — whatever it is —
+    // leaves the guided sample in its library; the seed is idempotent.
+    const user = this.samples === null ? upserted : await this.samples.ensure(upserted);
     this.cache.set(identity.sub, { user, at: now });
     return toAuthUser(user);
   }
@@ -153,6 +166,8 @@ export function toAuthUser(user: UserRecord): AuthUser {
     email: user.email,
     displayName: user.displayName,
     locale: user.locale,
+    tourDoneAt: user.tourDoneAt,
+    sampleDocumentId: user.sampleDocumentId,
   };
 }
 

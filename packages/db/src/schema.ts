@@ -94,6 +94,11 @@ export const users = pgTable('users', {
   locale: text('locale'),
   createdAt: timestamptz('created_at').notNull().defaultNow(),
   lastSeenAt: timestamptz('last_seen_at'),
+  /**
+   * ONB-03 (migration 0009): when the account completed or skipped the guided tour; null
+   * until then and again after Replay (ONB-08). Per account, never per device.
+   */
+  tourDoneAt: timestamptz('tour_done_at'),
 });
 
 /** One row per workbook. `snapshot_key` points into S3 `docs`. */
@@ -132,6 +137,10 @@ export const documents = pgTable(
     index('documents_archived_owner_idx')
       .on(t.ownerId)
       .where(sql`archived_at IS NOT NULL`),
+    /** Migration 0009: one guided sample per owner (ONB-01); the seed is `ON CONFLICT DO NOTHING`. */
+    uniqueIndex('documents_owner_sample_key')
+      .on(t.ownerId)
+      .where(sql`sample`),
     /** Migration 0008: archived or deleted, never both. */
     check('documents_archived_or_deleted_check', sql`archived_at IS NULL OR deleted_at IS NULL`),
   ],

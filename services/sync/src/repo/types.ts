@@ -15,6 +15,13 @@ export interface UserRecord {
   readonly displayName: string | null;
   /** I18N-05: one of the supported BCP 47 tags, or null until chosen. */
   readonly locale: string | null;
+  /** ONB-03: when the account completed or skipped the guided tour; null until then, and after Replay. */
+  readonly tourDoneAt: Date | null;
+  /**
+   * ONB-01: the account's guided sample workscape, or null while none exists
+   * yet (the resolver seeds it on first sight, `SampleSeeder`).
+   */
+  readonly sampleDocumentId: string | null;
 }
 
 export interface DocumentRecord {
@@ -182,6 +189,8 @@ export interface AppendedRange {
 export interface ProfilePatch {
   readonly displayName?: string;
   readonly locale?: string;
+  /** ONB-03: `true` stamps `tour_done_at` now; `false` clears it (Replay, ONB-08). */
+  readonly tourDone?: boolean;
 }
 
 export interface UsersRepo {
@@ -367,6 +376,19 @@ export interface DocumentsRepo {
     title: string;
     snapshot: { seq: number; s3Key: string; sizeBytes: number };
   }): Promise<DocumentRecord>;
+  /**
+   * The guided sample (ONB-01), like `create` but `sample = true` and at most
+   * one per owner: the insert is `ON CONFLICT DO NOTHING` on
+   * `documents_owner_sample_key` (migration 0009), so a race on first sight
+   * yields the row the other request created, with `created: false` so the
+   * caller can log its now-orphaned snapshot object.
+   */
+  createSample(input: {
+    id: string;
+    ownerId: string;
+    title: string;
+    snapshot: { seq: number; s3Key: string; sizeBytes: number };
+  }): Promise<{ document: DocumentRecord; created: boolean }>;
   rename(id: string, title: string): Promise<DocumentRecord | undefined>;
   /**
    * Move to Recently Deleted (LIB-D5): set `deleted_at` and clear

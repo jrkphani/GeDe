@@ -14,6 +14,7 @@ import { AddressLimiter, registerAddressLimit } from './ip-limit.js';
 import { ProjectionWorker } from './projection/worker.js';
 import { registerApi } from './routes/api.js';
 import { registerHealth } from './routes/health.js';
+import { SampleSeeder } from './sample.js';
 import { RoomManager } from './ws/room-manager.js';
 import { registerWs, selectSubprotocol } from './ws/route.js';
 
@@ -92,7 +93,15 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
     },
   });
 
-  const resolver = new UserResolver(deps.verifier, deps.db);
+  // ONB-01: every account's first request seeds its guided sample (S3 object, then row).
+  const samples = new SampleSeeder({
+    repo: deps.db,
+    s3: deps.s3,
+    config: deps.config,
+    projection,
+    logger: deps.logger,
+  });
+  const resolver = new UserResolver(deps.verifier, deps.db, undefined, samples);
 
   registerHealth(app, deps);
   registerApi(app, deps, resolver, rooms, projection);

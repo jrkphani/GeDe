@@ -23,9 +23,11 @@ import * as Y from 'yjs';
 import {
   createGraphPair,
   createTable,
+  encodeSampleWorkscape,
   encodeSeededDocument,
   listSheets,
   openDocument,
+  SAMPLE_TITLE,
   setCellText,
   tableById,
 } from '@gede/core';
@@ -1191,5 +1193,77 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       { id: linked.id, ever_shared: true },
       { id: shared.id, ever_shared: true },
     ]);
+  });
+
+  test('ONB-03 tour_done_at round-trips as the app role: null on first sight, stamped by tourDone true, cleared by false, read back by the upsert', async () => {
+    const first = await repo.users.upsertFromToken({ sub: 'sub-tour', email: null });
+    expect(first.tourDoneAt).toBeNull();
+    const before = Date.now();
+    const done = await repo.users.updateProfile(first.id, { tourDone: true });
+    expect(done?.tourDoneAt).toBeInstanceOf(Date);
+    expect(done!.tourDoneAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    // Per account: the next sight of the same sub (another device) reads the stamp.
+    const again = await repo.users.upsertFromToken({ sub: 'sub-tour', email: null });
+    expect(again.tourDoneAt?.getTime()).toBe(done!.tourDoneAt!.getTime());
+    const replay = await repo.users.updateProfile(first.id, { tourDone: false });
+    expect(replay?.tourDoneAt).toBeNull();
+    expect(
+      (await repo.users.upsertFromToken({ sub: 'sub-tour', email: null })).tourDoneAt,
+    ).toBeNull();
+    // A patch without the field leaves it alone.
+    await repo.users.updateProfile(first.id, { tourDone: true });
+    expect(
+      (await repo.users.updateProfile(first.id, { locale: 'ta-IN' }))?.tourDoneAt,
+    ).toBeInstanceOf(Date);
+  });
+
+  test('ONB-01 createSample is idempotent per owner through documents_owner_sample_key; the upsert reports the sample id', async () => {
+    const owner = await repo.users.upsertFromToken({ sub: 'sub-sample-seed', email: null });
+    expect(owner.sampleDocumentId).toBeNull();
+    const bytes = encodeSampleWorkscape();
+    const seed = (id: string) =>
+      repo.documents.createSample({
+        id,
+        ownerId: owner.id,
+        title: SAMPLE_TITLE,
+        snapshot: { seq: 1, s3Key: `docs/${id}/1.yjs`, sizeBytes: bytes.byteLength },
+      });
+    const firstId = crypto.randomUUID();
+    const first = await seed(firstId);
+    expect(first).toMatchObject({ created: true, document: { id: firstId, sample: true } });
+    // A racing second insert writes nothing and adopts the first row.
+    const second = await seed(crypto.randomUUID());
+    expect(second.created).toBe(false);
+    expect(second.document.id).toBe(firstId);
+    const rows = await pool.query<{ n: number }>(
+      'select count(*)::int as n from documents where owner_id = $1 and sample',
+      [owner.id],
+    );
+    expect(rows.rows[0]?.n).toBe(1);
+    const snapshots = await pool.query<{ n: number }>(
+      'select count(*)::int as n from snapshots where document_id = $1',
+      [firstId],
+    );
+    expect(snapshots.rows[0]?.n).toBe(1);
+    const audit = await pool.query<{ target: string | null }>(
+      "select target from audit_log where document_id = $1 and action = 'document.create'",
+      [firstId],
+    );
+    expect(audit.rows).toEqual([{ target: 'sample' }]);
+    // Every users read carries the id: the upsert, the profile update, the email lookup.
+    expect(
+      (await repo.users.upsertFromToken({ sub: 'sub-sample-seed', email: null })).sampleDocumentId,
+    ).toBe(firstId);
+    expect((await repo.users.updateProfile(owner.id, { locale: 'en-GB' }))?.sampleDocumentId).toBe(
+      firstId,
+    );
+    // Pinned first in Recents and Browse, above a newer document.
+    await createDoc(owner.id, 'newer');
+    for (const view of ['recents', 'browse'] as const) {
+      const listing = await repo.documents.listForUser(owner.id, view);
+      expect(listing[0]).toMatchObject({ id: firstId, sample: true });
+    }
+    // The guard: the sample cannot be deleted (LIB-D10).
+    expect(await repo.documents.tryDelete(firstId)).toEqual({ status: 'sample' });
   });
 });

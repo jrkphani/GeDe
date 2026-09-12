@@ -68,3 +68,4 @@ export {
   type TableTouch,
 } from './observe.js';
 export { isGraphDimensionCandidate } from './graph.js';
+export { boundTableIds, crossTableReferenceCount, isCrossTableFormula } from './cross-table.js';

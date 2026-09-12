@@ -177,6 +177,19 @@ describe('migrations', () => {
     expect(sql).not.toMatch(/SET ever_shared = false/);
   });
 
+  test('ONB-03 ONB-01 0009 adds users.tour_done_at and one guided sample per owner', () => {
+    expect(files[9]).toBe('0009_users_tour_done_at_sample_key.sql');
+    const sql = stripComments(
+      readFileSync(join(dir, '0009_users_tour_done_at_sample_key.sql'), 'utf8'),
+    );
+    expect(sql).toMatch(/ALTER TABLE users ADD COLUMN IF NOT EXISTS tour_done_at timestamptz/);
+    expect(sql).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS documents_owner_sample_key ON documents (owner_id) WHERE sample',
+    );
+    // Additive only: nothing about existing rows changes.
+    expect(sql).not.toMatch(/\bUPDATE\b/);
+  });
+
   test('LOAD-06 every index declared in schema.ts exists in the migrations', () => {
     const sql = stripComments(allSql);
     const declared = [...sql.matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map(
