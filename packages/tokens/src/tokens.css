@@ -148,6 +148,12 @@
     --warning: #e0a04a;
     --danger:  #f0857a;
     --info:    #6fc7e0;
+    --reference-1:       #e0a04a;
+    --reference-2:       color-mix(in srgb, var(--presence-2) 55%, var(--slate-0));
+    --reference-3:       color-mix(in srgb, var(--presence-3) 55%, var(--slate-0));
+    --reference-4:       color-mix(in srgb, var(--presence-5) 55%, var(--slate-0));
+    --reference-5:       color-mix(in srgb, var(--presence-6) 55%, var(--slate-0));
+    --reference-6:       var(--ink-muted);
     --skeleton-base:  #16231c;
     --skeleton-sheen: #1d2e25;
   }

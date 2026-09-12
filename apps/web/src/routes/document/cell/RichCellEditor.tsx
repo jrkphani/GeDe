@@ -66,10 +66,11 @@ export interface RichCellEditorProps {
   /**
    * The table and cell being edited. The formula adornments (FX-02, FX-04,
    * FX-05) read the column's format, the workbook's `@` index and the lattice
-   * from the table; the cell identifies the draft to the outlines layer.
+   * from the table; the cell identifies the draft to the outlines layer. A
+   * detached host (no table) gets a plain rich editor.
    */
-  table: TableMap;
-  cell: CellSelection;
+  table?: TableMap | null | undefined;
+  cell?: CellSelection | null | undefined;
 }
 
 /** The draft as the formula adornments see it: plain text and a caret in it. */
@@ -157,8 +158,8 @@ export function RichCellEditor({
   });
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const adornments = useFormulaAdornments({
-    table,
-    colId: cell.colId,
+    table: table ?? null,
+    colId: cell?.colId ?? '',
     text: draft.text,
     selectionStart: draft.start,
     selectionEnd: draft.end,
@@ -175,25 +176,47 @@ export function RichCellEditor({
     },
   });
   const adornKeyDown: (e: KeyLike) => boolean = adornments.onKeyDown;
-  const latest = useRef({ onCommit, onCancel, onCommitRich, onSelectionMarks, locale, adornKeyDown });
+  const latest = useRef({
+    onCommit,
+    onCancel,
+    onCommitRich,
+    onSelectionMarks,
+    locale,
+    adornKeyDown,
+  });
   latest.current = { onCommit, onCancel, onCommitRich, onSelectionMarks, locale, adornKeyDown };
   const insertRef = useRef(adornments.onCellClickWhileEditing);
   insertRef.current = adornments.onCellClickWhileEditing;
   // Publish the draft: outlines follow it (FX-08) and cell presses insert into it (FX-05).
   const handle = useRef({
-    state: { ...cell, draft: draft.text, formula: isFormulaInput(draft.text) },
+    state: {
+      tableId: cell?.tableId ?? '',
+      rowId: cell?.rowId ?? '',
+      colId: cell?.colId ?? '',
+      draft: draft.text,
+      formula: isFormulaInput(draft.text),
+    },
     insert: (a: string) => {
       insertRef.current(a);
     },
   });
-  useEffect(() => registerFormulaEditor(handle.current), []);
+  const tableId = cell?.tableId;
+  const rowId = cell?.rowId;
+  const colId = cell?.colId;
+  useEffect(
+    () => (tableId === undefined ? undefined : registerFormulaEditor(handle.current)),
+    [tableId],
+  );
   useEffect(() => {
+    if (tableId === undefined || rowId === undefined || colId === undefined) return;
     updateFormulaEditor(handle.current, {
-      ...cell,
+      tableId,
+      rowId,
+      colId,
       draft: draft.text,
       formula: isFormulaInput(draft.text),
     });
-  }, [cell, draft.text]);
+  }, [tableId, rowId, colId, draft.text]);
   // The listbox ARIA lives on the editable itself; EditorView attributes are static, so set them here.
   useEffect(() => {
     const dom = viewRef.current?.dom;

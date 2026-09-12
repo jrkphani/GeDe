@@ -19,11 +19,14 @@ import {
   replaceRange,
   type Replacement,
 } from './input.js';
-import { columnFormatOf, docOf } from './workbook.js';
+import { columnFormatOf } from './workbook.js';
 
 export interface FormulaAdornmentsOptions {
-  /** The table and column of the cell being edited (FX-02: Sum is offered per column format). */
-  table: TableMap;
+  /**
+   * The table and column of the cell being edited (FX-02: Sum is offered per
+   * column format). A host with no table (a detached editor) gets no surfaces.
+   */
+  table: TableMap | null;
   colId: Id;
   /** The editor's draft and selection, straight from the textarea. */
   text: string;
@@ -103,8 +106,8 @@ function forms(summable: boolean): FormOption[] {
  */
 export function useFormulaAdornments(options: FormulaAdornmentsOptions): FormulaAdornments {
   const { table, colId, text, selectionStart, selectionEnd, anchor, onReplace } = options;
-  const enabled = options.enabled ?? true;
-  const doc = docOf(table);
+  const doc = table?.doc ?? null;
+  const enabled = (options.enabled ?? true) && table !== null && doc !== null;
   // The column's cells decide whether Sum is offered; the workbook's labels feed the @ index.
   const version = useYVersion(table);
   const indexVersion = useWorkbookIndexVersion(doc);
@@ -116,7 +119,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   latest.current = { text, selectionStart, selectionEnd, onReplace };
 
   const summable = useMemo(
-    () => isSummable(columnFormatOf(table, colId)),
+    () => table !== null && isSummable(columnFormatOf(table, colId)),
     // version: the column's cells changed.
     [table, colId, version],
   );
@@ -127,7 +130,9 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   const formOptions = useMemo(() => forms(summable), [summable]);
   const entities = useMemo<readonly EntityEntry[]>(
     () =>
-      showEntities ? searchEntities(workbookIndexFor(doc).entityIndex(), entityQuery.query) : [],
+      showEntities && doc !== null
+        ? searchEntities(workbookIndexFor(doc).entityIndex(), entityQuery.query)
+        : [],
     // indexVersion: labels or tables changed; the index itself is cached per document.
     [doc, showEntities, entityQuery?.query, indexVersion],
   );
@@ -203,7 +208,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   }, []);
 
   const activeId = open === null ? undefined : `${listboxId}-${String(highlighted)}`;
-  const tableTitle = readString(table, 'title');
+  const tableTitle = table === null ? '' : readString(table, 'title');
 
   const element: ReactNode = (
     <Popover

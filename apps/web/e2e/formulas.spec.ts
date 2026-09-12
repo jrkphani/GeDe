@@ -73,7 +73,7 @@ async function signInTo(page: Page, path: string): Promise<void> {
   await expect(page).toHaveURL(/\/sign-in$/);
   await page.getByLabel('Email').fill(SESSION.email);
   await page.getByLabel('Email').press('Enter');
-  await page.getByRole('button', { name: 'Email me a code' }).click();
+  await page.getByRole('button', { name: 'Email me a one-time code' }).click();
   await page.getByLabel('Six-digit code').fill(FAKE_CODE);
   await page.getByRole('button', { name: 'Verify and sign in' }).click();
   const notNow = page.getByRole('button', { name: 'Not now' });
@@ -85,7 +85,7 @@ async function signInTo(page: Page, path: string): Promise<void> {
   await expect(page).toHaveURL(target);
 }
 
-/** Type into a cell through the Wave 1 editor: double-click, fill, Enter. */
+/** Type into a cell through the rich editor: double-click, fill, Enter. */
 async function enter(page: Page, address: string, text: string): Promise<void> {
   const cell = page.locator(`[data-address="${address}"]`);
   await cell.dblclick();
@@ -123,15 +123,15 @@ test.describe('formulas', () => {
     await expect(forms.getByRole('option', { name: /Sum/ })).not.toHaveAttribute('aria-disabled');
     await page.keyboard.press('ArrowDown');
     await page.keyboard.press('Enter');
-    await expect(editor).toHaveValue('=Sum(');
+    await expect(editor).toHaveText('=Sum(');
     await expect(editor).toBeFocused();
 
     // FX-05: clicking cells inserts their addresses with separators; the outline follows the draft.
     await page.locator('[data-address="B5"]').click();
-    await expect(editor).toHaveValue('=Sum(B5');
+    await expect(editor).toHaveText('=Sum(B5');
     await expect(editor).toBeFocused();
     await page.locator('[data-address="B6"]').click();
-    await expect(editor).toHaveValue('=Sum(B5, B6');
+    await expect(editor).toHaveText('=Sum(B5, B6');
     const outlines = page.getByTestId('reference-outlines');
     await expect(outlines.locator('.gd-outline')).toHaveCount(2);
     await editor.press('End');
@@ -208,7 +208,7 @@ test.describe('formulas', () => {
 
     // FX-07: re-opening the cell restores the expression, not the value.
     await b8.dblclick();
-    await expect(page.getByLabel('Edit B8')).toHaveValue('=Sum(B6, B7)');
+    await expect(page.getByLabel('Edit B8')).toHaveText('=Sum(B6, B7)');
     await page.keyboard.press('Escape');
 
     // FX-08: outlines clear on deselect.
@@ -236,7 +236,7 @@ test.describe('formulas', () => {
     await expect(list).toContainText('@"Table 1".Lukla');
     await expect(editor).toBeFocused();
     await page.keyboard.press('Enter');
-    await expect(editor).toHaveValue('=Sum(@"Table 1".Lukla');
+    await expect(editor).toHaveText('=Sum(@"Table 1".Lukla');
     await expect(editor).toBeFocused();
     await editor.press('End');
     await editor.pressSequentially('."Column 2")');

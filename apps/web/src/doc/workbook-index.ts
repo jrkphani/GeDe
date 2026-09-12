@@ -115,11 +115,12 @@ export function projectFormulaFor(doc: Y.Doc, source: string): string {
   return text;
 }
 
-/** Re-render when the workbook's shape or labels change; returns a change counter. */
-export function useWorkbookIndexVersion(doc: Y.Doc): number {
-  const entry = entryFor(doc);
+/** Re-render when the workbook's shape or labels change; returns a change counter (0 without a document). */
+export function useWorkbookIndexVersion(doc: Y.Doc | null): number {
+  const entry = doc === null ? null : entryFor(doc);
   const subscribe = useCallback(
     (onChange: () => void) => {
+      if (entry === null) return () => undefined;
       entry.listeners.add(onChange);
       return () => {
         entry.listeners.delete(onChange);
@@ -129,7 +130,7 @@ export function useWorkbookIndexVersion(doc: Y.Doc): number {
   );
   return useSyncExternalStore(
     subscribe,
-    () => entry.version,
+    () => entry?.version ?? 0,
     () => 0,
   );
 }
