@@ -24,7 +24,7 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
       NODE_ENV: 'test',
       LOG_LEVEL: 'silent',
       COGNITO_USER_POOL_ID: 'ap-southeast-1_TEST',
-      COGNITO_CLIENT_ID: 'test-client',
+      COGNITO_CLIENT_IDS: 'test-client',
       COGNITO_REGION: 'ap-southeast-1',
       DOCS_BUCKET: 'gede-docs-test',
       DOCS_PREFIX: 'docs',

@@ -4,7 +4,7 @@ import { ConfigError, loadConfig } from './config.js';
 
 const required = {
   COGNITO_USER_POOL_ID: 'ap-southeast-1_abc',
-  COGNITO_CLIENT_ID: 'client',
+  COGNITO_CLIENT_IDS: 'client',
   COGNITO_REGION: 'ap-southeast-1',
   DOCS_BUCKET: 'bucket',
   WEB_ORIGIN: 'https://gede.work',
@@ -22,6 +22,15 @@ describe('loadConfig', () => {
       LOG_LEVEL: 'info',
       NODE_ENV: 'production',
     });
+  });
+
+  test('AUTH-01 COGNITO_CLIENT_IDS is a comma-separated allow-list; blanks are dropped and an empty list is refused', () => {
+    expect(loadConfig(required).COGNITO_CLIENT_IDS).toEqual(['client']);
+    expect(
+      loadConfig({ ...required, COGNITO_CLIENT_IDS: ' spa-client, gede-e2e ,, ' })
+        .COGNITO_CLIENT_IDS,
+    ).toEqual(['spa-client', 'gede-e2e']);
+    expect(() => loadConfig({ ...required, COGNITO_CLIENT_IDS: ' , ' })).toThrow(ConfigError);
   });
 
   test('LOAD-06 coerces numbers and normalises the S3 prefix', () => {

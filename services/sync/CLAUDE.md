@@ -41,20 +41,20 @@ Read the root `CLAUDE.md` first.
 
 Set by `infra/lib/stacks/service-stack.ts` (the names are the contract; change both sides in one PR):
 
-| Variable                                                     | Purpose                                                                    |
-| ------------------------------------------------------------ | -------------------------------------------------------------------------- |
-| `PORT`                                                       | Listen port (3000)                                                         |
-| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE`         | Injected from the RDS master secret by ECS; migrations and bootstrap only  |
-| `PGAPPUSER` `PGAPPPASSWORD`                                  | Injected from `gede/prod/db-app`; the runtime pool. Required in production |
-| `PGSSLMODE` `PGSSLROOTCERT`                                  | `verify-full` with `/app/rds-global-bundle.pem` (copied by the Dockerfile) |
-| `COGNITO_USER_POOL_ID` `COGNITO_CLIENT_ID` `COGNITO_REGION`  | JWT issuer, expected `client_id`, JWKS region                              |
-| `DOCS_BUCKET` `DOCS_PREFIX`                                  | Snapshot bucket and key prefix (`docs/`); the task role is scoped to it    |
-| `WEB_ORIGIN`                                                 | CORS origin (`https://gede.work`)                                          |
-| `NODE_ENV`                                                   | `production` in the task                                                   |
-| `LOG_LEVEL`                                                  | Optional; pino level, default `info`                                       |
-| `PROJECTION_DEBOUNCE_MS`                                     | Optional; wait after a compaction before the projection write (1 s)        |
-| `RATE_LIMIT_PER_MINUTE` `RATE_LIMIT_INVITES_PER_HOUR` `WS_*` | Optional; the limits above (README has the defaults)                       |
-| `GEDE_VERSION`                                               | Baked into the image by the `GEDE_VERSION` build arg (short git sha)       |
+| Variable                                                     | Purpose                                                                           |
+| ------------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `PORT`                                                       | Listen port (3000)                                                                |
+| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE`         | Injected from the RDS master secret by ECS; migrations and bootstrap only         |
+| `PGAPPUSER` `PGAPPPASSWORD`                                  | Injected from `gede/prod/db-app`; the runtime pool. Required in production        |
+| `PGSSLMODE` `PGSSLROOTCERT`                                  | `verify-full` with `/app/rds-global-bundle.pem` (copied by the Dockerfile)        |
+| `COGNITO_USER_POOL_ID` `COGNITO_CLIENT_IDS` `COGNITO_REGION` | JWT issuer, accepted `client_id`s (comma-separated: SPA, `gede-e2e`), JWKS region |
+| `DOCS_BUCKET` `DOCS_PREFIX`                                  | Snapshot bucket and key prefix (`docs/`); the task role is scoped to it           |
+| `WEB_ORIGIN`                                                 | CORS origin (`https://gede.work`)                                                 |
+| `NODE_ENV`                                                   | `production` in the task                                                          |
+| `LOG_LEVEL`                                                  | Optional; pino level, default `info`                                              |
+| `PROJECTION_DEBOUNCE_MS`                                     | Optional; wait after a compaction before the projection write (1 s)               |
+| `RATE_LIMIT_PER_MINUTE` `RATE_LIMIT_INVITES_PER_HOUR` `WS_*` | Optional; the limits above (README has the defaults)                              |
+| `GEDE_VERSION`                                               | Baked into the image by the `GEDE_VERSION` build arg (short git sha)              |
 
 Locally, `PG*` point at a local PostgreSQL 17, `PGSSLMODE=disable`, and `PGAPPUSER` is unset (the runtime is the master user; the boot log says which). Read everything once in `config.ts` with `zod`; nothing else touches `process.env`. The SES sender is `no-reply@<WEB_ORIGIN host>`.
 
