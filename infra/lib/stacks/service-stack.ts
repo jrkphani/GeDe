@@ -24,6 +24,8 @@ export interface ServiceStackProps extends cdk.StackProps {
   readonly hostedZoneId: string;
   readonly vpc: ec2.IVpc;
   readonly database: rds.DatabaseInstance;
+  /** `{ username, password }` of the least-privilege runtime role (#36), from DataStack. */
+  readonly dbAppSecret: secretsmanager.ISecret;
   readonly dbSecurityGroup: ec2.ISecurityGroup;
   readonly docsBucket: s3.IBucket;
   readonly emailIdentity: ses.IEmailIdentity;
@@ -116,12 +118,18 @@ export class ServiceStack extends cdk.Stack {
       DOCS_PREFIX,
       WEB_ORIGIN: `https://${config.domain}`,
     };
+    // Two database identities in every task (#36): the master user (`PG*`) runs the
+    // migrations and bootstraps the app role at boot, then the runtime pool connects as
+    // `PGAPPUSER` with DML only. Both are injected by the execution role; the process
+    // refuses to start in production when `PGAPPUSER`/`PGAPPPASSWORD` are missing.
     const secrets = () => ({
       PGHOST: ecs.Secret.fromSecretsManager(dbSecret, 'host'),
       PGPORT: ecs.Secret.fromSecretsManager(dbSecret, 'port'),
       PGUSER: ecs.Secret.fromSecretsManager(dbSecret, 'username'),
       PGPASSWORD: ecs.Secret.fromSecretsManager(dbSecret, 'password'),
       PGDATABASE: ecs.Secret.fromSecretsManager(dbSecret, 'dbname'),
+      PGAPPUSER: ecs.Secret.fromSecretsManager(props.dbAppSecret, 'username'),
+      PGAPPPASSWORD: ecs.Secret.fromSecretsManager(props.dbAppSecret, 'password'),
     });
     // The service task keeps its generated family (a new family would replace the
     // deployed resource for nothing); the jobs family is named so alarms can match it.

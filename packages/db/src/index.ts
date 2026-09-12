@@ -5,6 +5,7 @@
 export * as schema from './schema.js';
 export * from './schema.js';
 export {
+  appRoleFromEnv,
   createDb,
   createPool,
   poolConfigFromEnv,
@@ -16,6 +17,7 @@ export {
 export {
   applyMigrations,
   MigrationError,
+  type AppRole,
   type MigrationClient,
   type MigrationLogger,
   type MigrationOptions,

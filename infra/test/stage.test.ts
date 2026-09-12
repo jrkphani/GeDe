@@ -8,6 +8,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../lib/app.js';
 import { type GedeStage } from '../lib/gede-stage.js';
+import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
 import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
 import { PURGE_SCHEDULE } from '../lib/stacks/ops-stack.js';
 import { PURGE_COMMAND, gedeVersion } from '../lib/stacks/service-stack.js';
@@ -150,6 +151,66 @@ describe('GeDe CDK app', () => {
       ToPort: 5432,
       IpProtocol: 'tcp',
     });
+  });
+
+  it('SHARE-03 a second, generated secret holds the least-privilege app role; both tasks receive it as PGAPPUSER/PGAPPPASSWORD next to the master PG* (#36)', () => {
+    // The RDS-generated master secret plus gede/prod/db-app, nothing else.
+    stacks.Data!.resourceCountIs('AWS::SecretsManager::Secret', 2);
+    stacks.Data!.hasResourceProperties('AWS::SecretsManager::Secret', {
+      Name: 'gede/prod/db-app',
+      GenerateSecretString: {
+        SecretStringTemplate: JSON.stringify({ username: DB_APP_USERNAME }),
+        GenerateStringKey: 'password',
+        PasswordLength: 48,
+        ExcludePunctuation: true,
+      },
+    });
+    expect(DB_APP_USERNAME).toBe('gede_app');
+
+    const taskDefs = Object.values(stacks.Service!.findResources('AWS::ECS::TaskDefinition')) as {
+      Properties: { ContainerDefinitions: { Secrets: { Name: string; ValueFrom: unknown }[] }[] };
+    }[];
+    expect(taskDefs).toHaveLength(2);
+    for (const taskDef of taskDefs) {
+      const secrets = taskDef.Properties.ContainerDefinitions[0]!.Secrets;
+      const names = secrets.map((s) => s.Name).sort();
+      expect(names).toEqual([
+        'PGAPPPASSWORD',
+        'PGAPPUSER',
+        'PGDATABASE',
+        'PGHOST',
+        'PGPASSWORD',
+        'PGPORT',
+        'PGUSER',
+      ]);
+      // The app credentials come from a different secret (the Data stack's `AppUser`) than
+      // the master credentials; the json key is the last segment of the ARN reference.
+      const source = (name: string) =>
+        JSON.stringify(secrets.find((s) => s.Name === name)!.ValueFrom).replace(
+          /:(username|password)::/,
+          ':<key>::',
+        );
+      expect(source('PGAPPPASSWORD')).toBe(source('PGAPPUSER'));
+      expect(source('PGAPPPASSWORD')).not.toBe(source('PGPASSWORD'));
+      expect(source('PGAPPPASSWORD')).toContain('AppUser');
+      expect(source('PGPASSWORD')).not.toContain('AppUser');
+    }
+    // The execution roles may read both secrets; the task roles still read none.
+    for (const prefix of ['TaskExecutionRole', 'JobsTaskExecutionRole']) {
+      const policy = Object.entries(stacks.Service!.findResources('AWS::IAM::Policy')).find(
+        ([id]) => id.startsWith(prefix),
+      )?.[1] as {
+        Properties: {
+          PolicyDocument: { Statement: { Action: string | string[]; Resource: unknown }[] };
+        };
+      };
+      const secretStatements = policy.Properties.PolicyDocument.Statement.filter((st) =>
+        (Array.isArray(st.Action) ? st.Action : [st.Action]).includes(
+          'secretsmanager:GetSecretValue',
+        ),
+      );
+      expect(JSON.stringify(secretStatements)).toContain('AppUser');
+    }
   });
 
   it('LIB-08 the docs bucket is versioned and expires noncurrent versions (purged snapshots) after 90 days', () => {

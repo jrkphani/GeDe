@@ -8,6 +8,7 @@ import { readFileSync } from 'node:fs';
 import { drizzle, type NodePgDatabase } from 'drizzle-orm/node-postgres';
 import pg from 'pg';
 
+import type { AppRole } from './migrate.js';
 import * as schema from './schema.js';
 
 const { Pool } = pg;
@@ -19,6 +20,12 @@ export interface PoolOptions {
   max?: number;
   /** Fail a `connect()` that takes longer than this (ms). */
   connectionTimeoutMillis?: number;
+  /**
+   * Connect as this role instead of `PGUSER`/`PGPASSWORD` (#36): the runtime
+   * pool uses the least-privilege role the migration runner bootstrapped;
+   * the runner's own pool keeps the master credentials.
+   */
+  as?: AppRole;
 }
 
 export type SslMode = 'disable' | 'require' | 'verify-full';
@@ -57,14 +64,38 @@ function required(env: Env, name: string): string {
   return value;
 }
 
+/**
+ * The least-privilege runtime role from `PGAPPUSER`/`PGAPPPASSWORD` (#36),
+ * injected by ECS from the `gede/<env>/db-app` secret. `undefined` when
+ * neither is set: a local database, where the runtime is the master user.
+ * Production never falls back to the master user: a task whose secret
+ * injection failed must refuse to boot, not run with `rds_superuser`.
+ */
+export function appRoleFromEnv(env: Env): AppRole | undefined {
+  const user = env.PGAPPUSER;
+  const password = env.PGAPPPASSWORD;
+  const hasUser = user !== undefined && user !== '';
+  const hasPassword = password !== undefined && password !== '';
+  if (hasUser && hasPassword) return { user, password };
+  if (hasUser || hasPassword) {
+    throw new Error('PGAPPUSER and PGAPPPASSWORD must be set together');
+  }
+  if (env.NODE_ENV === 'production') {
+    throw new Error(
+      'PGAPPUSER and PGAPPPASSWORD are required when NODE_ENV=production; the runtime never connects as the master user',
+    );
+  }
+  return undefined;
+}
+
 /** Translate `PG*` env into `pg.PoolConfig`. Exported for tests; `createPool` wraps it. */
 export function poolConfigFromEnv(env: Env, options: PoolOptions = {}): pg.PoolConfig {
   const mode = sslMode(env);
   const config: pg.PoolConfig = {
     host: required(env, 'PGHOST'),
     port: Number(env.PGPORT ?? '5432'),
-    user: required(env, 'PGUSER'),
-    password: required(env, 'PGPASSWORD'),
+    user: options.as?.user ?? required(env, 'PGUSER'),
+    password: options.as?.password ?? required(env, 'PGPASSWORD'),
     database: required(env, 'PGDATABASE'),
     max: options.max ?? 8,
     connectionTimeoutMillis: options.connectionTimeoutMillis ?? 10_000,

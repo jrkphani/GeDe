@@ -50,6 +50,7 @@ export class GedeStage extends cdk.Stage {
     const data = new DataStack(this, 'Data', {
       env,
       stackName: name('Data'),
+      config,
       vpc: network.vpc,
     });
 
@@ -86,6 +87,7 @@ export class GedeStage extends cdk.Stage {
       hostedZoneId,
       vpc: network.vpc,
       database: data.database,
+      dbAppSecret: data.appSecret,
       dbSecurityGroup: data.dbSecurityGroup,
       docsBucket: data.docsBucket,
       emailIdentity: auth.emailIdentity,

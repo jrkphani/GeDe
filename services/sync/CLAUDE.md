@@ -32,7 +32,7 @@ Read the root `CLAUDE.md` first.
 
 ## Migrations
 
-`@gede/db` migrations run on boot under `pg_advisory_lock` before the server listens. A failed migration exits non-zero; ECS restarts the task and the previous task definition stays live (circuit breaker).
+`@gede/db` migrations run on boot under `pg_advisory_lock`, as the master user (`PG*`) on a one-connection pool that is closed before the server listens. The same step bootstraps the least-privilege role the runtime pool then connects as (`PGAPPUSER`/`PGAPPPASSWORD`, #36, ADR-022): DML only, no DDL, no `TRUNCATE`, read-only on `__migrations`. A query that needs more than DML belongs in the bootstrap's grants, never in a master-user pool; `pg.live.test.ts` runs the whole repository as the app role so it fails there first. A failed migration or bootstrap exits non-zero; ECS restarts the task and the previous task definition stays live (circuit breaker). In production a missing `PGAPPUSER`/`PGAPPPASSWORD` is fatal; there is no fallback to the master user.
 
 ## Environment
 
@@ -41,7 +41,8 @@ Set by `infra/lib/stacks/service-stack.ts` (the names are the contract; change b
 | Variable                                                    | Purpose                                                                    |
 | ----------------------------------------------------------- | -------------------------------------------------------------------------- |
 | `PORT`                                                      | Listen port (3000)                                                         |
-| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE`        | Injected from the RDS secret by ECS; `pg` reads them natively              |
+| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE`        | Injected from the RDS master secret by ECS; migrations and bootstrap only  |
+| `PGAPPUSER` `PGAPPPASSWORD`                                 | Injected from `gede/prod/db-app`; the runtime pool. Required in production |
 | `PGSSLMODE` `PGSSLROOTCERT`                                 | `verify-full` with `/app/rds-global-bundle.pem` (copied by the Dockerfile) |
 | `COGNITO_USER_POOL_ID` `COGNITO_CLIENT_ID` `COGNITO_REGION` | JWT issuer, expected `client_id`, JWKS region                              |
 | `DOCS_BUCKET` `DOCS_PREFIX`                                 | Snapshot bucket and key prefix (`docs/`); the task role is scoped to it    |
@@ -52,7 +53,7 @@ Set by `infra/lib/stacks/service-stack.ts` (the names are the contract; change b
 | `RATE_LIMIT_PER_MINUTE` `WS_*`                              | Optional; the limits above (README has the defaults)                       |
 | `GEDE_VERSION`                                              | Baked into the image by the `GEDE_VERSION` build arg (short git sha)       |
 
-Locally, `PG*` point at a local PostgreSQL 17 and `PGSSLMODE=disable`. Read everything once in `config.ts` with `zod`; nothing else touches `process.env`. The SES sender is `no-reply@<WEB_ORIGIN host>`.
+Locally, `PG*` point at a local PostgreSQL 17, `PGSSLMODE=disable`, and `PGAPPUSER` is unset (the runtime is the master user; the boot log says which). Read everything once in `config.ts` with `zod`; nothing else touches `process.env`. The SES sender is `no-reply@<WEB_ORIGIN host>`.
 
 ## Errors and logging
 
