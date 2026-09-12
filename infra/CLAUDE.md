@@ -84,6 +84,38 @@ so same-region cross-stack references render as `Fn::GetStackOutput` rather than
   `AWSCloudFrontPartitionHostedZoneIdMap` mapping in `GeDe-Prod-Web` is CDK-internal
   (`CloudFrontTarget` copies the mapping into `Dns`). Harmless.
 
+## Playwright on CodeBuild
+
+The Synth step runs `npm run e2e` between `npm run verify` and the web build, on the same
+`aws/codebuild/amazonlinux-aarch64-standard:3.0` (AL2023, arm64, `SMALL`) project. A red
+journey fails Synth, so nothing is published or deployed. Why this and not a Playwright
+Docker image (`mcr.microsoft.com/playwright:v<ver>-noble` via
+`LinuxArmBuildImage.fromDockerRegistry`):
+
+- **The arm64 Chromium binaries run on AL2023.** Playwright 1.63 pins Chrome for Testing
+  153.0.8010.12; its `chrome-headless-shell-linux-arm64` binary imports `GLIBC_2.17/2.18/2.25`
+  only and its `deb.deps` asks for `libc6 >= 2.25` and `libnss3 >= 3.35`. AL2023 ships glibc
+  2.34 and nss 3.112 (checked in the AL2023 aarch64 core repo metadata, 2026-09-12).
+- **`npx playwright install --with-deps` cannot work on AL2023.** `installDependenciesLinux`
+  in `playwright-core` always runs `apt-get`; AL2023 (`ID=amzn`) is not a distro Playwright
+  recognises, so it falls back to the `ubuntu24.04-arm64` package list with a warning. The
+  pipeline therefore installs the dnf equivalents itself (`CHROMIUM_DNF_PACKAGES` in
+  `lib/pipeline-stack.ts`, one per Debian package in Playwright's list; every name verified
+  against the repo) and then `npx playwright install --only-shell chromium`.
+- **One less image to trust and pull.** A pulled image would add a registry dependency to
+  every deploy and a second CodeBuild project; the dnf step is ~20 packages from the AL2023
+  mirror the build already uses.
+- **Cost.** ~2–3 min on `SMALL`: dnf ≈ 40 s, headless shell download ≈ 95 MB (cached in
+  `/root/.cache/ms-playwright` by the local custom cache when the host is reused), e2e build
+  ≈ 15 s, journeys ≈ 30–60 s with two workers.
+
+Fallback if the dnf approach ever breaks (for example CfT starts requiring a newer glibc):
+move `npm run e2e` into a dedicated `pipelines.CodeBuildStep` whose `buildEnvironment` is
+`codebuild.LinuxArmBuildImage.fromDockerRegistry('mcr.microsoft.com/playwright:v<ver>-noble')`
+and add it as a `pre` step of the Prod stage. Keep `CI=true` in `env` either way.
+
+`docs/TESTING.md` explains the suite itself.
+
 ## Switches
 
 **Staging + manual approval.** In `lib/pipeline-stack.ts`, add a second `GedeStage` with a
