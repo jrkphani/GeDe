@@ -13,9 +13,9 @@ import { approximateFind, editDistance, exactFind } from './distance.js';
 import { createSearchEngine, replaceInText } from './engine.js';
 import { inferFormat, resolveFormat } from './format.js';
 import { foldGraphemes, graphemes } from './graphemes.js';
-import { fuzzyBudget, search, type SearchMatch } from './matcher.js';
+import { fuzzyBudget, indexEntry, search, type IndexedEntry, type SearchMatch } from './matcher.js';
 import { parseQuery } from './query.js';
-import { buildSearchSnapshot, cellTexts, tableEntries, type SearchEntry } from './snapshot.js';
+import { buildSearchSnapshot, cellTexts, tableEntries } from './snapshot.js';
 
 /** A minimal entry for matcher tests; only what the matcher reads. */
 function cell(
@@ -31,7 +31,7 @@ function cell(
     tableId: string;
     formula: boolean;
   }> = {},
-): SearchEntry {
+): IndexedEntry {
   const field = extra.formula === true ? 'formula' : 'value';
   return {
     kind: 'cell',
@@ -211,7 +211,7 @@ describe('matcher', () => {
   });
 
   test('FIND-03 document names form their own group after cells and can be excluded', () => {
-    const withDoc: SearchEntry[] = [
+    const withDoc: IndexedEntry[] = [
       ...entries,
       {
         kind: 'document',
@@ -329,7 +329,10 @@ describe('snapshot', () => {
         ],
       }),
     ]);
-    const matches = search([...withGraph.tables[0]!.entries, ...withGraph.graphs], 'Quarter');
+    const matches = search(
+      [...withGraph.tables[0]!.entries, ...withGraph.graphs].map(indexEntry),
+      'Quarter',
+    );
     expect(matches).toHaveLength(1);
     expect(matches[0]?.target.kind).toBe('graph');
     expect(matches[0]?.readOnly).toBe(true);
@@ -380,7 +383,7 @@ describe('engine', () => {
           docId: 'd',
           title: 'Singapore',
           readOnly: true,
-          texts: [{ field: 'name', text: 'Singapore', folded: foldGraphemes('Singapore') }],
+          texts: [{ field: 'name', text: 'Singapore' }],
         },
       ],
     });

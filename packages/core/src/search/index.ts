@@ -34,8 +34,11 @@ export {
 export {
   DEFAULT_SEARCH_OPTIONS,
   fuzzyBudget,
+  indexEntry,
   MAX_EDIT_DISTANCE,
   search,
+  type IndexedEntry,
+  type IndexedText,
   type MatchTarget,
   type SearchMatch,
   type SearchOptions,

@@ -5,8 +5,7 @@
 import { bench, describe } from 'vitest';
 
 import { createSearchEngine } from './engine.js';
-import { foldGraphemes } from './graphemes.js';
-import { search } from './matcher.js';
+import { indexEntry, search } from './matcher.js';
 import type { CellEntry, TableEntries } from './snapshot.js';
 
 const CITIES = [
@@ -49,12 +48,13 @@ function entry(i: number): CellEntry {
     colLabel: ['Name', 'City', 'Amount', 'Date', 'Notes'][i % 5] ?? 'Name',
     format: i % 5 === 2 ? 'currency' : 'text',
     readOnly: false,
-    texts: [{ field: 'value', text: value, folded: foldGraphemes(value) }],
+    texts: [{ field: 'value', text: value }],
   };
 }
 
 const COUNT = 10_000;
 const entries = Array.from({ length: COUNT }, (_, i) => entry(i));
+const indexed = entries.map(indexEntry);
 const tables = new Map<string, CellEntry[]>();
 for (const e of entries) {
   const list = tables.get(e.tableId) ?? [];
@@ -76,16 +76,19 @@ const options = { fuzzy: true, formulas: true, documents: true };
 
 describe(`fuzzy query over ${String(COUNT)} cells`, () => {
   bench('matcher: "Sngapore" (fuzzy, distance 2)', () => {
-    search(entries, 'Sngapore', options);
+    search(indexed, 'Sngapore', options);
   });
   bench('matcher: "சிஙகப்பூர்" (Tamil, fuzzy)', () => {
-    search(entries, 'சிஙகப்பூர்', options);
+    search(indexed, 'சிஙகப்பூர்', options);
   });
   bench('matcher: "col:City Mumbai" (operator + fuzzy)', () => {
-    search(entries, 'col:City Mumbai', options);
+    search(indexed, 'col:City Mumbai', options);
   });
   bench('matcher: "Singapore" (fuzzy off)', () => {
-    search(entries, 'Singapore', { ...options, fuzzy: false });
+    search(indexed, 'Singapore', { ...options, fuzzy: false });
+  });
+  bench('engine: index 10,000 cells (reset message, segments and folds)', () => {
+    createSearchEngine().handle({ type: 'reset', snapshot });
   });
   bench('engine round trip: query message → results', () => {
     engine.handle({ type: 'query', id: 1, query: 'Sngapore', options });

@@ -12,7 +12,33 @@
 import { approximateFind, type Found } from './distance.js';
 import { foldGraphemes } from './graphemes.js';
 import { parseQuery, type FormatKind, type ParsedQuery } from './query.js';
-import type { CellEntry, SearchEntry, SearchField, SearchText } from './snapshot.js';
+import type {
+  CellEntry,
+  DocumentEntry,
+  GraphEntry,
+  SearchEntry,
+  SearchField,
+  SearchText,
+} from './snapshot.js';
+
+/** A snapshot text plus its case-folded clusters, segmented once at index time. */
+export interface IndexedText extends SearchText {
+  readonly folded: readonly string[];
+}
+
+type WithIndexedTexts<E extends SearchEntry> = Omit<E, 'texts'> & {
+  readonly texts: readonly IndexedText[];
+};
+export type IndexedEntry =
+  WithIndexedTexts<CellEntry> | WithIndexedTexts<GraphEntry> | WithIndexedTexts<DocumentEntry>;
+
+/** Segment and fold an entry's texts. Runs in the Worker, off the main thread. */
+export function indexEntry(entry: SearchEntry): IndexedEntry {
+  return {
+    ...entry,
+    texts: entry.texts.map((t) => ({ ...t, folded: foldGraphemes(t.text) })),
+  };
+}
 
 /** FIND-05: at most two edits; short needles get less so "ab" does not match everything. */
 export const MAX_EDIT_DISTANCE = 2;
@@ -86,7 +112,7 @@ const FIELD_ORDER: Record<SearchField, number> = {
 };
 const KIND_ORDER = { cell: 0, graph: 1, document: 2 } as const;
 
-function targetOf(entry: SearchEntry): MatchTarget {
+function targetOf(entry: IndexedEntry): MatchTarget {
   switch (entry.kind) {
     case 'cell':
       return {
@@ -118,7 +144,7 @@ function targetOf(entry: SearchEntry): MatchTarget {
 /** Column labels repeat across every row of a table: fold each label once per query. */
 function columnMatcher(columns: readonly (readonly string[])[], budget: number) {
   const cache = new Map<string, boolean>();
-  return (entry: CellEntry): boolean => {
+  return (entry: WithIndexedTexts<CellEntry>): boolean => {
     const hit = cache.get(entry.colLabel);
     if (hit !== undefined) return hit;
     const label = foldGraphemes(entry.colLabel);
@@ -134,12 +160,12 @@ function searchable(field: SearchField, options: SearchOptions): boolean {
 }
 
 function bestText(
-  texts: readonly SearchText[],
+  texts: readonly IndexedText[],
   needle: readonly string[],
   budget: number,
   options: SearchOptions,
-): { text: SearchText; found: Found } | null {
-  let best: { text: SearchText; found: Found } | null = null;
+): { text: IndexedText; found: Found } | null {
+  let best: { text: IndexedText; found: Found } | null = null;
   for (const t of texts) {
     if (!searchable(t.field, options)) continue;
     const found = approximateFind(t.folded, needle, budget);
@@ -182,7 +208,7 @@ function compare(a: SearchMatch, b: SearchMatch): number {
 
 /** Run `query` over `entries`. An empty query yields no matches. */
 export function search(
-  entries: Iterable<SearchEntry>,
+  entries: Iterable<IndexedEntry>,
   query: string | ParsedQuery,
   options: SearchOptions = DEFAULT_SEARCH_OPTIONS,
 ): SearchMatch[] {

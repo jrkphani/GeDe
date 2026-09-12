@@ -3,7 +3,8 @@
  * can see — cell values, formula expressions, reference paths, graph
  * dimension values and library document names. The main thread builds it
  * from the Yjs document (per table, so an edit re-indexes one table) and posts
- * it to the search Worker; nothing here is a Yjs type or a class instance.
+ * it to the search Worker, which folds and segments the text (`engine.ts`);
+ * nothing here is a Yjs type or a class instance, and nothing here segments.
  */
 import * as Y from 'yjs';
 
@@ -24,7 +25,6 @@ import {
   type GraphMap,
   type TableMap,
 } from '../doc/schema.js';
-import { foldGraphemes } from './graphemes.js';
 import { resolveFormat } from './format.js';
 import type { FormatKind } from './query.js';
 
@@ -34,8 +34,6 @@ export type SearchField = 'value' | 'formula' | 'reference' | 'dimension' | 'nam
 export interface SearchText {
   readonly field: SearchField;
   readonly text: string;
-  /** Case-folded grapheme clusters of `text`, computed once at index time. */
-  readonly folded: readonly string[];
 }
 
 export interface CellEntry {
@@ -97,7 +95,7 @@ export interface DocumentName {
 }
 
 function text(field: SearchField, value: string): SearchText {
-  return { field, text: value, folded: foldGraphemes(value) };
+  return { field, text: value };
 }
 
 /**
