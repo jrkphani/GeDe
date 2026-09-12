@@ -103,8 +103,9 @@ export function createSearchEngine(): SearchEngine {
  * FIND-08: the text after replacing one match's span. Offsets are grapheme
  * clusters of the case-folded text; when folding changed the cluster count
  * (rare: some scripts lower-case to a different number of clusters) the span
- * cannot be trusted and the whole text is replaced instead. An operator-only
- * match (empty span) is left alone — there is nothing to replace.
+ * cannot be trusted and the text is left unchanged — Replace never rewrites
+ * more than the match it can locate. An operator-only match (empty span) is
+ * left alone too: there is nothing to replace.
  */
 export function replaceInText(
   text: string,
@@ -114,6 +115,6 @@ export function replaceInText(
   if (span.end <= span.start) return text;
   const clusters = graphemes(text);
   const folded = graphemes(text.toLocaleLowerCase());
-  if (clusters.length !== folded.length || span.end > clusters.length) return replacement;
+  if (clusters.length !== folded.length || span.end > clusters.length) return text;
   return clusters.slice(0, span.start).join('') + replacement + clusters.slice(span.end).join('');
 }

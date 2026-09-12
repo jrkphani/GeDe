@@ -4,8 +4,10 @@ import type { GedeDoc, SearchMatch } from '@gede/core';
 import { Button, Collapsible, Icon, Menu, Tooltip, type MenuEntry } from '@gede/ui';
 
 import { ARIA_KEYS, LABELS } from '../../../doc/shortcuts.js';
+import { formatNumber } from '../../../intl.js';
+import { activeLocale } from '../../../locale.js';
 import { describeMatch } from './match-geometry.js';
-import type { Find } from './useFind.js';
+import { counterText, type Find } from './useFind.js';
 
 export interface FindBarProps {
   gd: GedeDoc;
@@ -13,13 +15,6 @@ export interface FindBarProps {
   /** SHARE-03 / RESP-02: Replace is disabled with the reason when false; absent on phone. */
   editable: boolean;
   phone: boolean;
-}
-
-/** FIND-10: the counter's words. */
-export function counterText(matches: number, current: number, query: string): string {
-  if (query.trim() === '') return '';
-  if (matches === 0) return 'No matches';
-  return `${String(current + 1)} of ${String(matches)}`;
 }
 
 /**
@@ -186,7 +181,7 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
               size="sm"
               variant="ghost"
               className="gd-find__list-toggle"
-              aria-label={`Results${none ? '' : ` (${String(total)})`}`}
+              aria-label={`Results${none ? '' : ` (${formatNumber(activeLocale(), total)})`}`}
               aria-controls={listId}
               title="Show the result list"
               disabled={none}
@@ -228,7 +223,8 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
                 actions.setReplacement(e.target.value);
               }}
               onKeyDown={(e) => {
-                if (e.nativeEvent.isComposing) return;
+                // eslint-disable-next-line @typescript-eslint/no-deprecated -- required by the IME contract
+                if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
                 if (e.code === 'Enter' || e.code === 'NumpadEnter') {
                   e.preventDefault();
                   actions.replaceCurrent();
@@ -266,7 +262,8 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
           </div>
           {state.skipped !== null && state.skipped > 0 && (
             <span className="gd-find__skipped" data-testid="find-skipped">
-              {state.skipped} skipped: derived, linked, pulled and graph matches are not rewritten
+              {formatNumber(activeLocale(), state.skipped)} skipped: derived, linked, pulled and
+              graph matches are not rewritten
             </span>
           )}
         </div>

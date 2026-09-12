@@ -81,6 +81,9 @@ export function approximateFind(
   const m = needle.length;
   const n = haystack.length;
   if (m === 0) return { distance: 0, start: 0, end: 0 };
+  // A needle longer than the haystack plus the budget cannot fit within `max`
+  // edits: skip the O(n·m) table, so a pasted essay costs nothing per cell.
+  if (m > n + max) return null;
   // An exact hit is always the best answer and costs a fraction of the table.
   const exact = exactFind(haystack, needle);
   if (exact !== null) return exact;

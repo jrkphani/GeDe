@@ -69,7 +69,11 @@
   border-radius: var(--radius-md);
   background: var(--surface-sunken);
 }
+/* A11Y-02: the 2 px amber ring at 2 px offset is never removed — the field box carries
+   it (plus the text-field glow) for the input inside, so the ring is not doubled. */
 .gd-find__field:focus-within {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
   border-color: var(--focus-ring);
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 18%, transparent);
 }

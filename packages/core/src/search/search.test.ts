@@ -105,6 +105,20 @@ describe('approximateFind', () => {
       end: 3,
     });
   });
+
+  test('FIND-05 a needle longer than the haystack plus the budget is rejected before the table is built', () => {
+    // 200k clusters pasted into the field against a 2,000-cluster cell: without the guard
+    // that is a 400M-cell table for this one cell (seconds), with it nothing.
+    const essay = foldGraphemes('Singapore '.repeat(20_000));
+    const started = performance.now();
+    expect(approximateFind(foldGraphemes('Singapore '.repeat(200)), essay, 2)).toBeNull();
+    expect(performance.now() - started).toBeLessThan(100);
+    // Exactly at the boundary the needle can still match with `max` deletions.
+    expect(approximateFind(foldGraphemes('abc'), foldGraphemes('abcde'), 2)).toMatchObject({
+      distance: 2,
+    });
+    expect(approximateFind(foldGraphemes('abc'), foldGraphemes('abcdef'), 2)).toBeNull();
+  });
 });
 
 describe('parseQuery', () => {
@@ -348,6 +362,18 @@ describe('snapshot', () => {
     const t = tableEntries(gd, tableId)!;
     expect(t.entries.map((e) => e.readOnly)).toEqual([false, true, false, false]);
   });
+
+  test('FIND-08 a column `source` of entered stays editable; derived, linked and pulled sources are read-only', () => {
+    const { gd, tableId } = fixture();
+    const table = gd.tables.get(tableId)!;
+    const columns = table.get('columns') as Y.Array<Y.Map<unknown>>;
+    gd.doc.transact(() => {
+      columns.get(0).set('source', 'entered');
+      columns.get(1).set('source', 'pulled');
+    });
+    const t = tableEntries(gd, tableId)!;
+    expect(t.entries.map((e) => e.readOnly)).toEqual([false, true, false, false]);
+  });
 });
 
 describe('engine', () => {
@@ -399,5 +425,8 @@ describe('engine', () => {
     const tamil = 'சிங்கப்பூர் அலுவலகம்';
     const span = approximateFind(foldGraphemes(tamil), foldGraphemes('சிங்கப்பூர்'), 0)!;
     expect(replaceInText(tamil, span, 'மும்பை')).toBe('மும்பை அலுவலகம்');
+    // A span past the end of the text cannot be located: the text is left as it is, never
+    // swapped wholesale for the replacement.
+    expect(replaceInText('short', { start: 0, end: 40 }, 'x')).toBe('short');
   });
 });

@@ -7,6 +7,7 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addRow,
   cellText,
   createSheet,
   createTable,
@@ -21,10 +22,10 @@ import { LiveRegion } from '../../../announce.js';
 import type * as DocumentsApi from '../../../api/documents.js';
 import { withConfig } from '../../../test/helpers.js';
 import { TooltipProvider } from '@gede/ui';
-import { FindBar, counterText } from './FindBar.js';
+import { FindBar } from './FindBar.js';
 import { MatchHighlights } from './MatchHighlights.js';
 import { createSearchClient } from './search-client.js';
-import { useFind, type FindNavigation } from './useFind.js';
+import { counterText, useFind, type FindNavigation } from './useFind.js';
 
 vi.mock('../../../api/documents.js', async (importOriginal) => {
   const actual = await importOriginal<typeof DocumentsApi>();
@@ -476,11 +477,22 @@ describe('Find', () => {
     });
     const region = screen.getByTestId('live-region');
     expect(region).toHaveAttribute('aria-live', 'polite');
-    await userEvent.type(screen.getByRole('textbox', { name: 'Find' }), 'zzzz');
+    // Four keystrokes, each slow enough to run its own query: the region speaks once the
+    // results settle, not once per keystroke.
+    const spoken: string[] = [];
+    const observer = new MutationObserver(() => {
+      spoken.push(region.textContent ?? '');
+    });
+    observer.observe(region, { childList: true, characterData: true, subtree: true });
+    await userEvent.type(screen.getByRole('textbox', { name: 'Find' }), 'zzzz', { delay: 60 });
     await waitFor(() => {
       expect(count()).toBe('No matches');
     });
-    expect(region).toHaveTextContent('No matches');
+    await waitFor(() => {
+      expect(region).toHaveTextContent('No matches');
+    });
+    observer.disconnect();
+    expect(spoken.filter((t) => t.startsWith('No matches'))).toHaveLength(1);
     expect(screen.getByRole('search', { name: 'Find' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Next match' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Previous match' })).toBeDisabled();
@@ -539,6 +551,44 @@ describe('Find', () => {
     });
     t1.unobserveDeep(noop);
     t2.unobserveDeep(noop);
+  });
+
+  it('FIND-03 a row added with its cells in one transaction, and a fresh table with cells in one transaction, both reach the index', async () => {
+    const { gd, sheet1, table1, ids } = fixture();
+    // Each TableView observes its own table map deeply, as in the shell.
+    const noop = () => undefined;
+    gd.tables.get(table1)!.observeDeep(noop);
+    render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
+    await openAndType('Mumbai');
+    await waitFor(() => {
+      expect(count()).toBe('1 of 1');
+    });
+    // The row id is new and the cell is set inside the same transaction: the only events
+    // are on the existing `rows` array and `cells` map, whose parent chain names the table.
+    act(() => {
+      gd.doc.transact(() => {
+        const rowId = addRow(gd, table1);
+        setCellText(gd, table1, rowId, ids.cols[0]!, 'Mumbai annex');
+        setCellText(gd, table1, rowId, ids.cols[1]!, 'Mumbai desk');
+      }, gd.origin);
+    });
+    await waitFor(() => {
+      expect(count()).toBe('1 of 3');
+    });
+    // A table created and filled in one transaction is a fresh Y.Map: Yjs fires no event
+    // for its own content, only the `tables` key add, which must be enough to index it.
+    let table3 = '';
+    act(() => {
+      gd.doc.transact(() => {
+        table3 = createTable(gd, { sheetId: sheet1, at: { col: 8, row: 1 }, columns: 1, rows: 1 });
+        const t3 = tableById(gd, table3)!;
+        setCellText(gd, table3, t3.rows[0]!, t3.columns[0]!.id, 'Mumbai north');
+      }, gd.origin);
+    });
+    await waitFor(() => {
+      expect(count()).toBe('1 of 4');
+    });
+    gd.tables.get(table1)!.unobserveDeep(noop);
   });
 
   it('I18N-01 Enter during IME composition does not step', async () => {

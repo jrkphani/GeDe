@@ -29,13 +29,28 @@ import {
 
 import { announce } from '../../../announce.js';
 import { listDocuments } from '../../../api/documents.js';
+import { formatNumber } from '../../../intl.js';
+import { activeLocale } from '../../../locale.js';
 import { describeMatch } from './match-geometry.js';
 import { createSearchClient, type SearchClient } from './search-client.js';
+
+/** FIND-02 / FIND-10: the counter's words; the numbers go through `Intl` for the active locale (I18N-04). */
+export function counterText(matches: number, current: number, query: string): string {
+  if (query.trim() === '') return '';
+  if (matches === 0) return 'No matches';
+  const locale = activeLocale();
+  return `${formatNumber(locale, current + 1)} of ${formatNumber(locale, matches)}`;
+}
 
 /** Re-index debounce after a document change (ms); short enough to feel live while typing in a cell. */
 const REINDEX_DELAY_MS = 150;
 /** Query debounce while typing in the Find field (ms). */
 const QUERY_DELAY_MS = 40;
+/**
+ * A11Y-05: the counter is announced once the results settle, not on every
+ * keystroke — the visible counter still updates per query.
+ */
+const ANNOUNCE_DELAY_MS = 350;
 const QUERY_STORAGE_PREFIX = 'gede.find.query:';
 
 export interface FindState {
@@ -171,6 +186,24 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   const latest = useRef({ query, options, open, matches, current });
   latest.current = { query, options, open, matches, current };
 
+  // A11Y-05: one pending counter announcement at a time; typing keeps deferring it.
+  const announceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelAnnounce = useCallback(() => {
+    if (announceTimer.current !== null) clearTimeout(announceTimer.current);
+    announceTimer.current = null;
+  }, []);
+  const announceCount = useCallback(
+    (text: string) => {
+      cancelAnnounce();
+      announceTimer.current = setTimeout(() => {
+        announceTimer.current = null;
+        announce(text);
+      }, ANNOUNCE_DELAY_MS);
+    },
+    [cancelAnnounce],
+  );
+  useEffect(() => cancelAnnounce, [cancelAnnounce]);
+
   // -- the worker ------------------------------------------------------------
   useEffect(() => {
     const c = createSearchClient();
@@ -191,11 +224,10 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
             : Math.min(Math.max(0, latest.current.current), list.length - 1);
       setCurrent(next);
       currentId.current = next < 0 ? null : (list[next]?.id ?? null);
-      // A11Y-05: the counter announces politely; an empty query has no counter (FIND-10 is for a query).
+      // A11Y-05: the counter announces politely once results settle; an empty query has
+      // no counter (FIND-10 is for a query). Numbers go through Intl (I18N-04).
       if (latest.current.query.trim() !== '') {
-        announce(
-          list.length === 0 ? 'No matches' : `${String(next + 1)} of ${String(list.length)}`,
-        );
+        announceCount(counterText(list.length, next, latest.current.query));
       }
     });
     return () => {
@@ -203,7 +235,7 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       c.dispose();
       client.current = null;
     };
-  }, []);
+  }, [announceCount]);
 
   const runQuery = useCallback(() => {
     const c = client.current;
@@ -329,20 +361,25 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   // -- navigation (FIND-07) --------------------------------------------------
   const gdRef = useRef(gd);
   gdRef.current = gd;
-  const step = useCallback((index: number, reveal = true) => {
-    const list = latest.current.matches;
-    if (list.length === 0) return;
-    const bounded = ((index % list.length) + list.length) % list.length;
-    const match = list[bounded];
-    if (match === undefined) return;
-    setCurrent(bounded);
-    currentId.current = match.id;
-    setSkipped(null);
-    if (reveal) nav.current.onReveal(match);
-    announce(
-      `${String(bounded + 1)} of ${String(list.length)}, ${describeMatch(gdRef.current, match)}`,
-    );
-  }, []);
+  const step = useCallback(
+    (index: number, reveal = true) => {
+      const list = latest.current.matches;
+      if (list.length === 0) return;
+      const bounded = ((index % list.length) + list.length) % list.length;
+      const match = list[bounded];
+      if (match === undefined) return;
+      setCurrent(bounded);
+      currentId.current = match.id;
+      setSkipped(null);
+      if (reveal) nav.current.onReveal(match);
+      // A step is a user action: say it now, and drop any settling counter announcement.
+      cancelAnnounce();
+      announce(
+        `${counterText(list.length, bounded, latest.current.query)}, ${describeMatch(gdRef.current, match)}`,
+      );
+    },
+    [cancelAnnounce],
+  );
 
   const next = useCallback(() => {
     step(latest.current.current + 1);
@@ -381,8 +418,9 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
     setSkipped(null);
     firstRun.current = true;
     if (match !== undefined && match.target.kind !== 'document') nav.current.onSelect(match);
+    cancelAnnounce();
     announce('Find closed');
-  }, []);
+  }, [cancelAnnounce]);
   const setQuery = useCallback((q: string) => {
     setQueryState(q);
     setSkipped(null);
@@ -453,8 +491,11 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       }
     }, gd.origin);
     setSkipped(skippedCount);
+    const locale = activeLocale();
     announce(
-      `Replaced ${String(replaced)}${skippedCount > 0 ? `, skipped ${String(skippedCount)} not editable` : ''}`,
+      `Replaced ${formatNumber(locale, replaced)}${
+        skippedCount > 0 ? `, skipped ${formatNumber(locale, skippedCount)} not editable` : ''
+      }`,
     );
   }, [editable, gd, replacement, replaceOne]);
 

@@ -99,16 +99,19 @@ function text(field: SearchField, value: string): SearchText {
 }
 
 /**
- * TODO(grid branch): replace with the shared read-only cell predicate once
- * derived, linked and pulled columns land. Until then a column flagged
- * `derived`, `linked` or `pulled` (or carrying a `source`) is read-only, and
- * everything else is a plain cell.
+ * TODO(grid branch): replace with the shared `cellReadOnlyReason` once
+ * derived, linked and pulled columns (and category-band rows) land. Until
+ * then a column whose `source` is anything other than `entered` — the grid
+ * branch stores `entered | derived | linked | pulled` — or one flagged
+ * `derived`, `linked` or `pulled` is read-only; everything else is a plain
+ * cell.
  */
 export function isReadOnlyCell(column: ColumnMap): boolean {
   for (const key of ['derived', 'linked', 'pulled']) {
     if (column.get(key) === true) return true;
   }
-  return column.get('source') !== undefined;
+  const source = column.get('source');
+  return source !== undefined && source !== 'entered';
 }
 
 /** The texts Find sees for one cell: its value, or a formula's source plus each reference it names. */
