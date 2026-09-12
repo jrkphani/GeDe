@@ -79,7 +79,7 @@ export function inferColumnFormat(values: readonly CellValue[]): InferredFormat 
   let seen: InferredFormat | null = null;
   for (const v of values) {
     if (v.kind === 'blank' || v.kind === 'error') continue;
-    const kind: InferredFormat = v.kind;
+    const kind: InferredFormat = v.kind === 'list' ? 'text' : v.kind;
     if (seen === null) seen = kind;
     else if (seen !== kind) return 'text';
   }

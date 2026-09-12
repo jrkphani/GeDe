@@ -165,6 +165,8 @@ export function evaluatedText(value: CellValue | null | undefined): string {
       return `${value.code} ${canonicalNumber(value.value)}`;
     case 'date':
       return value.iso;
+    case 'list':
+      return value.items.map(evaluatedText).join(', ');
     case 'blank':
     case 'error':
       return '';

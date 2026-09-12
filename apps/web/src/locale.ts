@@ -108,7 +108,7 @@ export function applyLang(locale: Locale): void {
   document.documentElement.lang = locale;
 }
 
-function subscribe(l: () => void): () => void {
+export function subscribeLocale(l: () => void): () => void {
   listeners.add(l);
   return () => {
     listeners.delete(l);
@@ -116,7 +116,7 @@ function subscribe(l: () => void): () => void {
 }
 
 export function useLocale(): [Locale, (locale: Locale) => void] {
-  const locale = useSyncExternalStore(subscribe, activeLocale, () => DEFAULT_LOCALE);
+  const locale = useSyncExternalStore(subscribeLocale, activeLocale, () => DEFAULT_LOCALE);
   useEffect(() => {
     applyLang(locale);
   }, [locale]);

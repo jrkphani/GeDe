@@ -12,9 +12,11 @@
  */
 import type { CellRange, CellRef } from '../address.js';
 import type { UnitBounds } from '../doc/geometry.js';
+import type { DeriveSpec } from '../doc/schema.js';
 import type { CellKey, Id } from '../ids.js';
 import type { ParseError, Span } from '../formula/ast.js';
 import type { CellValue, FormulaError } from '../formula/evaluate.js';
+import type { RichDoc } from '../text/types.js';
 
 /** `${tableId}/${rowId}:${colId}` — see `workbookCellId`. */
 export type WorkbookCellId = string;
@@ -36,6 +38,11 @@ export interface ColumnStructure {
   readonly label: string;
   /** Lattice units (GRID-01); 0 for a hidden column, which has no lattice presence (GRID-02). */
   readonly width: number;
+  /**
+   * A derived column (REF-04): the engine owns its cells, synthesising
+   * `={c:T:R:SRC}.Method(args)` for every row; nothing is stored for them.
+   */
+  readonly derive?: DeriveSpec | undefined;
 }
 
 /** A table's geometry and labels — everything but its cell contents. */
@@ -57,7 +64,8 @@ export interface TableStructure {
 }
 
 export type CellSnapshot =
-  | { readonly kind: 'text'; readonly text: string }
+  /** `rich` is present only when the cell carries marks (`Extract(Style=…)` reads them). */
+  | { readonly kind: 'text'; readonly text: string; readonly rich?: RichDoc | undefined }
   | { readonly kind: 'formula'; readonly source: string };
 
 export interface TableSnapshot extends TableStructure {
@@ -153,7 +161,14 @@ export interface PingRequest {
   readonly seq: number;
 }
 
-export type EngineRequest = ApplyRequest | PingRequest;
+/** The active locale (I18N): `Format` presets case through `Intl` for it; every formula re-evaluates. */
+export interface LocaleRequest {
+  readonly type: 'locale';
+  readonly seq: number;
+  readonly locale: string;
+}
+
+export type EngineRequest = ApplyRequest | PingRequest | LocaleRequest;
 
 export interface ResultsResponse {
   readonly type: 'results';

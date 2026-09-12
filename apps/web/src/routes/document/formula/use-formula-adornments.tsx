@@ -16,6 +16,7 @@ import {
   insertReferenceAt,
   isBareEquals,
   isFormulaInput,
+  isReferenceDraft,
   replaceRange,
   type Replacement,
 } from './input.js';
@@ -125,7 +126,8 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   );
   const entityQuery = enabled ? entityQueryAt(text, selectionStart) : null;
   const showForms = enabled && isBareEquals(text) && dismissed !== text;
-  const showEntities = entityQuery !== null && dismissed !== text && isFormulaInput(text);
+  const showEntities =
+    entityQuery !== null && dismissed !== text && (isFormulaInput(text) || isReferenceDraft(text));
 
   const formOptions = useMemo(() => forms(summable), [summable]);
   const entities = useMemo<readonly EntityEntry[]>(
@@ -160,7 +162,10 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
         const entry = entities[index];
         const q = entityQueryAt(current.text, current.selectionStart);
         if (entry === undefined || q === null) return;
-        replacement = replaceRange(current.text, q.start, current.selectionStart, entry.text);
+        replacement = isFormulaInput(current.text)
+          ? replaceRange(current.text, q.start, current.selectionStart, entry.text)
+          : // REF-01: in a plain cell the pick is the whole value, and it commits as a reference.
+            { text: `=${entry.text}`, caret: entry.text.length + 1, commit: true };
       }
       if (replacement === null) return;
       // The surface closes on pick; typing on (a `.`, a `,`) reopens it for the new draft.

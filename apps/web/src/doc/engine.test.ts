@@ -94,10 +94,11 @@ describe('engine host', () => {
     const host = createEngineHost(f.gd, () => transport);
     f.set(0, 0, '1');
     await host.settled();
-    expect(transport.requests.map((r) => r.type)).toEqual(['apply', 'apply']);
-    const first = transport.requests[0];
+    // The active locale goes first (I18N: `Format` cases through Intl in the Worker), then the batches.
+    expect(transport.requests.map((r) => r.type)).toEqual(['locale', 'apply', 'apply']);
+    const first = transport.requests[1];
     expect(first?.type === 'apply' && first.changes[0]?.type).toBe('reset');
-    const last = transport.requests[1];
+    const last = transport.requests[2];
     expect(last?.type === 'apply' && last.changes).toEqual([
       {
         type: 'cells',

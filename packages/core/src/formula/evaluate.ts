@@ -9,11 +9,14 @@
  */
 import { formatAddress, cellsInRange, type CellRef } from '../address.js';
 import { err, ok, type Result } from '../result.js';
-import type { Ast, Expr, Reference, Separator } from './ast.js';
+import type { Ast, Expr, MethodCall, Reference, Separator } from './ast.js';
 import type { BoundReference } from './bound.js';
+import { applyMethod } from './methods.js';
+import { richFromText, type RichDoc } from '../text/types.js';
 
 export type CellValue =
-  | { readonly kind: 'text'; readonly text: string }
+  /** `rich` carries the cell's marks when it has any, so `Extract(Style=…)` can read them. */
+  | { readonly kind: 'text'; readonly text: string; readonly rich?: RichDoc | undefined }
   /** `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not `String(value)`. */
   | { readonly kind: 'number'; readonly value: number; readonly text?: string }
   | {
@@ -24,6 +27,8 @@ export type CellValue =
     }
   | { readonly kind: 'date'; readonly iso: string; readonly text?: string }
   | { readonly kind: 'blank' }
+  /** `Split()` pieces (HIER-07): each renders as a child row; as text they read joined by `, `. */
+  | { readonly kind: 'list'; readonly items: readonly CellValue[] }
   /** A referenced formula cell that is itself in error. Its error propagates (FX-06). */
   | { readonly kind: 'error'; readonly error: FormulaError };
 
@@ -76,6 +81,8 @@ export interface EvaluateOptions {
   readonly maxDepth?: number;
   /** Text form of a value for Concat and lists. Defaults to a locale-neutral rendering. */
   readonly formatValue?: (value: CellValue) => string;
+  /** BCP 47 tag of the active locale, for `Format` case presets (I18N). */
+  readonly locale?: string | undefined;
 }
 
 export const DEFAULT_MAX_DEPTH = 64;
@@ -112,6 +119,8 @@ export function defaultFormatValue(value: CellValue): string {
       return value.text ?? value.iso;
     case 'blank':
       return '';
+    case 'list':
+      return value.items.map(defaultFormatValue).join(', ');
     case 'error':
       return errorLabel(value.error);
   }
@@ -150,6 +159,7 @@ interface Operand {
 class Evaluator {
   private readonly depth: number;
   private readonly format: (value: CellValue) => string;
+  private readonly locale: string | undefined;
 
   constructor(
     private readonly resolver: Resolver,
@@ -157,11 +167,34 @@ class Evaluator {
   ) {
     this.depth = options.depth ?? 0;
     this.format = options.formatValue ?? defaultFormatValue;
+    this.locale = options.locale;
   }
 
   evaluate(ast: Ast): CellValue {
     if (ast.kind === 'call') return this.call(ast);
+    if (ast.kind === 'method') return this.method(ast);
     return { kind: 'text', text: ast.items.map((item) => this.listItemText(item)).join('') };
+  }
+
+  /**
+   * `reference.Method(args)`: the text algebra on the first cell the reference
+   * names (REF-04), over its rich text when the cell carries marks.
+   */
+  private method(node: MethodCall): CellValue {
+    const first = this.operands(node.target)[0];
+    const value = first === undefined ? { kind: 'blank' as const } : this.unwrap(first.value);
+    const doc =
+      value.kind === 'text' && value.rich !== undefined
+        ? value.rich
+        : richFromText(this.format(value));
+    const outcome = applyMethod(
+      node.name,
+      node.args.map((a) => ({ value: a.value, name: a.name })),
+      doc,
+      this.locale,
+    );
+    if (!outcome.ok) fail(outcome.error);
+    return outcome.value;
   }
 
   private listItemText(item: Reference | Separator): string {
@@ -189,6 +222,8 @@ class Evaluator {
         return this.format({ kind: 'number', value: arg.value });
       case 'call':
         return this.format(this.call(arg));
+      case 'method':
+        return this.format(this.method(arg));
       default:
         return this.operands(arg)
           .map((o) => this.format(this.unwrap(o.value)))
@@ -215,6 +250,7 @@ class Evaluator {
           return;
         case 'text':
         case 'date':
+        case 'list':
           fail({ kind: 'text-in-range', address });
           break;
         case 'error':
@@ -234,6 +270,9 @@ class Evaluator {
           break;
         case 'call':
           add(`${arg.name}(…)`, this.call(arg));
+          break;
+        case 'method':
+          add(`${arg.name}(…)`, this.method(arg));
           break;
         default:
           for (const o of this.operands(arg)) add(o.address, o.value);

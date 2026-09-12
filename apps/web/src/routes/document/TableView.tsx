@@ -39,6 +39,7 @@ import {
   type OutlineRow,
   type PresenceState,
   type ReadOnlyReason,
+  type RowMeta,
   type TableMap,
   type TableOutline,
   type TableRecord,
@@ -69,6 +70,15 @@ import { useWorkbookIndexVersion } from '../../doc/workbook-index.js';
 import { useCellVersions } from './grid/cell-versions.js';
 import { readOnlyLabel, type GridCommands } from './grid/commands.js';
 import { HIER_ARIA_KEYS, hierarchyKey } from './grid/hier-keys.js';
+import {
+  DerivedCell,
+  LineageHeader,
+  MappingCell,
+  refCellKind,
+  ReferenceCell,
+  useReferenceReconciler,
+  type MappingCellHandle,
+} from './ref/index.js'; // wave3/references
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
@@ -298,12 +308,17 @@ export const TableView = memo(function TableView({
   const columnReadOnly = new Map<Id, ReadOnlyReason | null>(
     record.columns.map((c) => [c.id, c.source === 'entered' ? null : c.source]),
   );
-  // One rowMeta read per row: the row-level read-only reason (GRID-04: a category
-  // band; HIER-07: a split child) and the row's own wrap (GRID-09).
-  const rowFacts = (rowId: Id): { readOnly: ReadOnlyReason | null; wrapped: boolean } => {
+  // One rowMeta read per row: the row-level read-only reason (GRID-04: a category band;
+  // REF-02: a pulled row; HIER-07: a split child), the row's own wrap (GRID-09) and the
+  // meta itself for the cell bodies that need provenance.
+  const rowFacts = (
+    rowId: Id,
+  ): { readOnly: ReadOnlyReason | null; wrapped: boolean; meta: RowMeta } => {
     const meta = rowMeta(table, rowId);
-    return { readOnly: rowReadOnlyReason(meta), wrapped: meta.height === WRAPPED_ROW_HEIGHT };
+    return { readOnly: rowReadOnlyReason(meta), wrapped: meta.height === WRAPPED_ROW_HEIGHT, meta };
   };
+  // REF-02 / HIER-07: pulls and Split children stay materialised while this replica can write.
+  useReferenceReconciler(table.doc, editable);
   // HIER-04..08: while the viewer groups the table the bands own the outline column,
   // and while the viewer sorts or filters it a child could draw above its parent:
   // in both the outline shows no depth, though the data keeps it (HIER-08, ADR-026).
@@ -363,6 +378,7 @@ export const TableView = memo(function TableView({
           {columnLetter(record.gridCol)}
           {record.gridRow + 1}
         </span>
+        {tier !== 'macro' && <LineageHeader record={record} />}
       </header>
 
       {tier === 'macro' ? (
@@ -495,7 +511,11 @@ export const TableView = memo(function TableView({
                     // here (the sections leave them out, HIER-06).
                     const outlineRow = outline.rows[ri];
                     const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
-                    const { readOnly: rowReadOnly, wrapped: rowWrapped } = rowFacts(rowId);
+                    const {
+                      readOnly: rowReadOnly,
+                      wrapped: rowWrapped,
+                      meta: rowMetaOf,
+                    } = rowFacts(rowId);
                     const parentRow = hierarchical && outlineRow?.hasChildren === true;
                     return (
                       <div
@@ -555,6 +575,7 @@ export const TableView = memo(function TableView({
                               }
                               outlineLocked={outlineLocked}
                               column={col}
+                              rowMeta={rowMetaOf}
                               locale={locale}
                               undo={undo ?? null}
                               frozen={frozenIds.has(col.id)}
@@ -907,6 +928,8 @@ interface CellProps {
   outlineLocked: string | null;
   /** The column record, resolved once per table render; carries the column's data format (FMT-01). */
   column: ColumnRecord;
+  /** The row's meta, resolved once per row render (REF-02 provenance, HIER-07 children). */
+  rowMeta: RowMeta;
   locale: FormatLocale;
   undo: Y.UndoManager | null;
   frozen: boolean;
@@ -1082,6 +1105,7 @@ const Cell = memo(function Cell({
   outline,
   outlineLocked,
   column,
+  rowMeta: row,
   locale,
   undo,
   frozen,
@@ -1110,6 +1134,12 @@ const Cell = memo(function Cell({
     if (selected && editing === null) ref.current?.focus({ preventScroll: true });
   }, [selected, editing]);
   const canEdit = editable && readOnly === null;
+  // REF-01..04: a reference, pulled, derived or mapping cell has its own body; a mapping
+  // cell's picker is its edit affordance (Enter opens it) and is absent without edit rights.
+  const refKind = tier === 'micro' ? refCellKind(column, row, source) : null;
+  const picker = useRef<MappingCellHandle>(null);
+  const mappingEditable =
+    refKind === 'mapping' && editable && !row.group && row.pulledFrom === null && !row.splitChild;
 
   const refuse = () => {
     if (readOnly !== null) {
@@ -1179,6 +1209,10 @@ const Cell = memo(function Cell({
         e.preventDefault();
         e.stopPropagation();
         if (!editable) return;
+        if (mappingEditable) {
+          picker.current?.open();
+          return;
+        }
         if (readOnly !== null) {
           refuse();
           return;
@@ -1325,6 +1359,21 @@ const Cell = memo(function Cell({
             commands.commitRichCell(cell, doc);
           }}
           onCancel={actions.cancel}
+        />
+      ) : refKind === 'reference' || refKind === 'pulled' ? (
+        <ReferenceCell table={table} cell={cell} kind={refKind} expression={wrap} />
+      ) : refKind === 'derived' && column.derive !== null ? (
+        <DerivedCell table={table} cell={cell} spec={column.derive} expression={wrap} />
+      ) : refKind === 'mapping' && column.link !== null ? (
+        <MappingCell
+          ref={picker}
+          table={table}
+          cell={cell}
+          link={column.link}
+          address={address}
+          editable={mappingEditable}
+          active={selected}
+          onPick={(value, locale) => commands.pickMappingValue(cell, value, locale)}
         />
       ) : formula && tier === 'micro' ? (
         <FormulaCell table={table} cell={cell} expression={wrap} />

@@ -120,3 +120,68 @@ describe('Select', () => {
     expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
   });
 });
+
+const REGIONS = [
+  { value: 'nepal', label: 'Nepal' },
+  { value: 'india', label: 'India' },
+  { value: 'tibet', label: 'Tibet', disabled: true },
+];
+
+function Picker({ initial = '' }: { initial?: string }) {
+  const [value, setValue] = useState(initial);
+  return (
+    <>
+      <Select
+        label="Region"
+        value={value}
+        onValueChange={setValue}
+        options={REGIONS}
+        placeholder="Pick a region"
+        clearLabel="No region"
+      />
+      <output data-testid="value">{value}</output>
+    </>
+  );
+}
+
+describe('Select as a picker (REF-03)', () => {
+  it('REF-03 an empty value shows the placeholder; a keyboard pick fills it', async () => {
+    render(<Picker />);
+    const trigger = screen.getByRole('combobox', { name: 'Region' });
+    expect(trigger).toHaveTextContent('Pick a region');
+    await userEvent.tab();
+    expect(trigger).toHaveFocus();
+    await userEvent.keyboard('{Enter}');
+    expect(await screen.findByRole('listbox')).toBeVisible();
+    await userEvent.keyboard('{ArrowDown}{Enter}');
+    expect(screen.getByTestId('value')).toHaveTextContent('india');
+    expect(trigger).toHaveTextContent('India');
+  });
+
+  it('REF-03 a chosen value can be cleared through the clear item and the placeholder returns', async () => {
+    render(<Picker initial="nepal" />);
+    const trigger = screen.getByRole('combobox', { name: 'Region' });
+    expect(trigger).toHaveTextContent('Nepal');
+    await userEvent.click(trigger);
+    await userEvent.click(await screen.findByRole('option', { name: 'No region' }));
+    expect(screen.getByTestId('value')).toHaveTextContent('');
+    expect(trigger).toHaveTextContent('Pick a region');
+  });
+
+  it('REF-03 an empty option list shows the empty sentence', async () => {
+    render(
+      <Select
+        label="Region"
+        value=""
+        onValueChange={() => undefined}
+        options={[]}
+        placeholder="Pick a region"
+        emptyText="The target column has no values yet"
+      />,
+    );
+    await userEvent.click(screen.getByRole('combobox', { name: 'Region' }));
+    expect(await screen.findByRole('note')).toHaveTextContent(
+      'The target column has no values yet',
+    );
+  });
+});

@@ -7,6 +7,7 @@ import { act, renderHook } from '@testing-library/react';
 import { beforeEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addDerivedColumn,
   cellText,
   createSheet,
   createTable,
@@ -203,5 +204,47 @@ describe('undo granularity (KEYS-03)', () => {
       undo.undo();
     });
     expect(tableById(a, tableId)?.columns[0]?.width).toBe(2);
+  });
+});
+
+describe('column rename and derived lineage (REF-04)', () => {
+  it('REF-04 renaming a source column re-spells the derived columns that name it, as one undo step; a derived column refuses', () => {
+    const undo = createUndoManager(a, { captureTimeout: 0 });
+    const { result } = renderHook(() => useGrid(a, true, { undo }));
+    const derived = addDerivedColumn(a, tableId, {
+      sourceColId: cols[0]!,
+      method: 'Format',
+      args: ['UPPERCASE'],
+    })!;
+    expect(tableById(a, tableId)?.columns[1]?.label).toBe('@"Column 1".Format("UPPERCASE")');
+    let ok = false;
+    act(() => {
+      ok = result.current.commands.renameColumn(tableId, cols[0]!, 'Site');
+    });
+    expect(ok).toBe(true);
+    const after = tableById(a, tableId)!;
+    expect(after.columns[0]?.label).toBe('Site');
+    expect(after.columns[1]?.label).toBe('@Site.Format("UPPERCASE")');
+    // Both replicas see the same labels; one undo step restores both.
+    expect(tableById(b, tableId)?.columns[1]?.label).toBe('@Site.Format("UPPERCASE")');
+    act(() => {
+      undo.undo();
+    });
+    expect(tableById(a, tableId)?.columns[0]?.label).toBe('Column 1');
+    expect(tableById(a, tableId)?.columns[1]?.label).toBe('@"Column 1".Format("UPPERCASE")');
+    act(() => {
+      ok = result.current.commands.renameColumn(tableId, derived, 'Shout');
+    });
+    expect(ok).toBe(false);
+    expect(tableById(a, tableId)?.columns[1]?.label).toBe('@"Column 1".Format("UPPERCASE")');
+  });
+
+  it('REF-04 deleting the source column leaves the derived column naming #REF', () => {
+    const { result } = renderHook(() => useGrid(a, true));
+    addDerivedColumn(a, tableId, { sourceColId: cols[0]!, method: 'Format', args: ['Trimmed'] });
+    act(() => {
+      result.current.commands.deleteColumn(tableId, cols[0]!);
+    });
+    expect(tableById(a, tableId)?.columns[0]?.label).toBe('@#REF.Format("Trimmed")');
   });
 });

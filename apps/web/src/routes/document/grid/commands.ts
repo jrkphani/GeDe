@@ -37,7 +37,12 @@ import {
   rowOutline,
   scaleTable as scaleTableMutation,
   plainText,
+  refreshDerivedLabels,
+  renameColumn as renameColumnMutation,
+  rowMeta,
+  rowReadOnlyReason,
   setCellRich,
+  setMappingValue,
   setColumnWidth as setColumnWidthMutation,
   setColumnWrap as setColumnWrapMutation,
   setFooterRows as setFooterRowsMutation,
@@ -78,6 +83,11 @@ export interface GridCommands {
   insertColumnBefore(tableId: Id, colId: Id): Id | null;
   /** Delete a column; the selection moves to the column after, else before, else the table. */
   deleteColumn(tableId: Id, colId: Id): boolean;
+  /**
+   * Rename a column; derived columns that name it re-spell their signature
+   * (REF-04). A derived column refuses — its label is its signature.
+   */
+  renameColumn(tableId: Id, colId: Id, label: string): boolean;
   /** Hide a column (its data stays); the selection leaves it the same way a delete would. */
   hideColumn(tableId: Id, colId: Id): boolean;
   unhideColumn(tableId: Id, colId: Id): boolean;
@@ -99,6 +109,12 @@ export interface GridCommands {
   setFooterRows(tableId: Id, count: StripCount): boolean;
   /** GRID-04: Delete clears the cell; read-only cells refuse and say why. */
   clearCell(cell: CellSelection): boolean;
+  /**
+   * REF-03: the mapping picker's write — one of the target column's distinct
+   * values (or '' to clear) into a linked cell. The only write a linked
+   * column accepts; a pulled or split row still refuses (REF-05).
+   */
+  pickMappingValue(cell: CellSelection, value: string, locale?: string): boolean;
   /** GRID-06: write the editor's text; read-only cells refuse. */
   commitCell(cell: CellSelection, text: string): boolean;
   /** GRID-06: write the editor's rich text (marks included); read-only cells refuse. */
@@ -170,7 +186,7 @@ export function readOnlyLabel(reason: ReadOnlyReason): string {
     case 'linked':
       return 'linked column';
     case 'pulled':
-      return 'pulled column';
+      return 'pulled from another table';
     case 'group':
       return 'category band';
     case 'splitChild':
@@ -293,8 +309,20 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       if (!editable() || before === null) return false;
       const index = before.columns.findIndex((c) => c.id === colId);
       if (index < 0 || !deleteColumnMutation(gd, tableId, colId)) return false;
+      // A derived column that named the deleted source now reads `@#REF.…` (REF-04).
+      refreshDerivedLabels(gd, tableId);
       reselectAfterColumn(tableId, before, index);
       announce('Deleted the column');
+      return true;
+    },
+    renameColumn(tableId, colId, label) {
+      const before = record(tableId);
+      if (!editable() || before === null) return false;
+      if (!renameColumnMutation(gd, tableId, colId, label)) {
+        announce('A derived column is named by its signature');
+        return false;
+      }
+      announce(`Column renamed to ${label}`);
       return true;
     },
     hideColumn(tableId, colId) {
@@ -384,6 +412,22 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     clearCell(cell) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
       return clearCellText(gd, cell.tableId, cell.rowId, cell.colId);
+    },
+    pickMappingValue(cell, value, locale) {
+      const t = map(cell.tableId);
+      if (!editable() || t === null) return false;
+      const rowReason = rowReadOnlyReason(rowMeta(t, cell.rowId));
+      if (rowReason !== null) {
+        announce(`${addressOf(cell)} is read-only: ${readOnlyLabel(rowReason)}`);
+        return false;
+      }
+      const ok = setMappingValue(gd, cell.tableId, cell.rowId, cell.colId, value, locale);
+      announce(
+        ok
+          ? `${addressOf(cell)} set to ${value === '' ? 'nothing' : value}`
+          : `${value} is not a value of the target column`,
+      );
+      return ok;
     },
     commitCell(cell, text) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;

@@ -10,6 +10,9 @@ const col = (id: string, width = 1, hidden = false) => ({
   hidden,
   wrap: false,
   source: 'entered' as const,
+  derive: null,
+  link: null,
+  pull: null,
   format: 'auto' as const,
   formatOpts: {},
 });
