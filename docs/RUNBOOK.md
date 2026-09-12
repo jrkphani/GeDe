@@ -274,11 +274,35 @@ aws ecs run-task --cluster "$CLUSTER" --task-definition "$TASKDEF" --launch-type
   --overrides '{"containerOverrides":[{"name":"purge","command":["node","main.js","--job","reproject","all"]}]}'
 ```
 
-Order of operations, per batch of 50: the rows are claimed (`FOR UPDATE SKIP LOCKED`), each document's S3 prefix is removed while the claim is held, and only the documents whose objects went are deleted when the transaction commits. When the job reports `snapshot objects not removed; the document is kept for the next run` (and exits 1 with `purge could not remove every document`), nothing is orphaned: the document's rows and objects are both still there and the next night retries them. Fix the S3 error (permissions, throttling) and either wait for the schedule or run the task by hand. The bucket is versioned, so a removal writes delete markers; the lifecycle rule expires the noncurrent versions and the markers after 90 days.
+Order of operations, per batch of 50 (#109): the expired rows are read (no transaction held), each document's S3 prefix is removed outside any transaction — so a slow or retried S3 call cannot hit the pool's 30 s idle-in-transaction timeout — and then one short transaction deletes the rows of the documents whose objects went, re-checking under the lock that each is still past the window. When the job reports `snapshot objects not removed; the document is kept for the next run` (and exits 1 with `purge could not remove every document`), nothing is orphaned: the document's rows and objects are both still there and the next night retries them. When it reports `purge batch failed after its objects were removed; rows kept for the next run` (a database error between the two steps), the objects are gone and the rows wait: the next night finds nothing to remove in S3 and deletes them. Fix the error (permissions, throttling, the database) and either wait for the schedule or run the task by hand. The bucket is versioned, so a removal writes delete markers; the lifecycle rule expires the noncurrent versions and the markers after 90 days.
 
-What the purge never touches: live documents, documents deleted less than 30 days ago (measured on the database clock, `deleted_at < now() - 30 days`), and `audit_log`.
+What the purge never touches: live documents, documents deleted less than 30 days ago (measured on the database clock, `deleted_at < now() - 30 days`), the guided sample (which the schema keeps out of the trash, migration 0010), and `audit_log`.
 
-## 15. Ops review — 2026-09-13
+## 15. Account erasure (#111, ADR-038)
+
+A person deletes their account with `DELETE /api/me` (signed in). The service erases the
+database side in one transaction — shares, invitations, ownership to the earliest editor or
+into the trash, authors nulled, audit targets scrubbed, the `users` row left as a tombstone —
+closes their sockets, and then deletes the Cognito user when `COGNITO_ERASE_IDENTITY` is
+`true` on the service task definition. The answer names what happened to the identity:
+
+- `identity: 'deleted'` — nothing to do.
+- `identity: 'skipped'` — the flag is off (the task role does not hold
+  `cognito-idp:AdminDeleteUser` on the pool yet). Delete the pool user by hand:
+  `aws cognito-idp admin-delete-user --user-pool-id <pool> --username <sub>` (the `sub` is in
+  the `account erased` log line as `userId`'s row, `select cognito_sub from users where id =
+'<userId>'`). Until then the tombstone refuses every token the identity presents (403
+  `account_deleted`), so nothing is exposed; the person simply cannot sign in to an empty account.
+- `identity: 'failed'` — Cognito refused (throttle, IAM). The log line `cognito user not deleted
+after account erasure` carries the `ref`; the `GeDe/Sync UserErasureIdentityFailures` metric
+  counts it. Delete the pool user by hand as above; the data side is already done.
+
+Turning the flag on: grant the service task role `cognito-idp:AdminDeleteUser` on the user pool
+ARN and set `COGNITO_ERASE_IDENTITY=true` in the service task definition
+(`infra/lib/stacks/service-stack.ts`), in one change. A second `DELETE /api/me` on a tombstone
+answers 403 and changes nothing. `audit_log` rows are kept with the actor id (ADR-038).
+
+## 16. Ops review — 2026-09-13
 
 Read-only pass over the production account (`aws --profile phani-quadnomics`, `ap-southeast-1`) at the end of Wave 4, one Fargate task and one `db.t4g.micro`. What was found, what this PR changed in `infra/lib/stacks/ops-stack.ts`, and what still needs a person.
 

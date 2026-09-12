@@ -7,7 +7,7 @@
 --                    UPDATE can put a sample where the purge would find it
 --                    (#114). Any sample that is in the trash today (none is
 --                    expected) is recovered first, never purged.
---   `users.deleted_at` — set by account erasure (#111, ADR-037): the row is
+--   `users.deleted_at` — set by account erasure (#111, ADR-038): the row is
 --                    kept as a tombstone with every personal column nulled,
 --                    so `audit_log.user_id`, `shares.invited_by` and
 --                    `doc_updates.author_id` still resolve and the Cognito

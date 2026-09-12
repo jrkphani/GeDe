@@ -1,5 +1,5 @@
 /**
- * The identity provider's half of account erasure (#111, ADR-037): once the
+ * The identity provider's half of account erasure (#111, ADR-038): once the
  * database holds a tombstone, the Cognito user is deleted so the identity
  * cannot sign in again. `AdminDeleteUser` needs the task role to hold
  * `cognito-idp:AdminDeleteUser` on the pool; `main.ts` wires this only when

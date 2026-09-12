@@ -100,7 +100,7 @@ export const users = pgTable('users', {
    */
   tourDoneAt: timestamptz('tour_done_at'),
   /**
-   * Migration 0010 (#111, ADR-037): set by account erasure. The row stays as a tombstone —
+   * Migration 0010 (#111, ADR-038): set by account erasure. The row stays as a tombstone —
    * email, display name, locale, tour and last-seen nulled — so the foreign keys that point at
    * it still resolve and the Cognito `sub` cannot come back as a fresh account.
    */

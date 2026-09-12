@@ -9,7 +9,7 @@
  *   - decodes every client update itself before applying it (#105): a frame
  *     that does not decode is refused (1007) and never reaches the document,
  *     the log or the other sockets;
- *   - bounds what one connection and one document may cost (#99, ADR-036):
+ *   - bounds what one connection and one document may cost (#99, ADR-037):
  *     bytes per second per connection, a hard ceiling on the document's
  *     size, a bounded send buffer that is cut immediately when exceeded;
  *   - hands every accepted update to the persistence writer.
@@ -471,7 +471,7 @@ export class Room {
    */
   private applyClientUpdate(conn: Conn, update: Uint8Array): void {
     if (this.stateBytes + update.byteLength > this.config.DOC_MAX_BYTES) {
-      // ADR-036: the document would pass its ceiling. The socket is closed
+      // ADR-037: the document would pass its ceiling. The socket is closed
       // with a code the provider treats as terminal (4413); the client keeps
       // its edits locally and shows the LOAD-05 banner.
       this.stats.tooLarge += 1;

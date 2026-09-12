@@ -23,7 +23,7 @@ export interface UserRecord {
    */
   readonly sampleDocumentId: string | null;
   /**
-   * Set by account erasure (#111, ADR-037). The row is a tombstone from then
+   * Set by account erasure (#111, ADR-038). The row is a tombstone from then
    * on: the auth hook refuses it, nothing personal remains on it.
    */
   readonly deletedAt: Date | null;
@@ -182,7 +182,7 @@ export interface PurgedDocument {
 }
 
 /**
- * What account erasure did (#111, ADR-037), so the route can close sockets,
+ * What account erasure did (#111, ADR-038), so the route can close sockets,
  * free rooms and delete the Cognito identity afterwards.
  */
 export interface ErasureOutcome {
@@ -256,7 +256,7 @@ export interface UsersRepo {
   /** The user registered under `email` (case-insensitive), if any. */
   findByEmail(email: string): Promise<UserRecord | undefined>;
   /**
-   * Erase an account (#111, ADR-037, AUTH-09 partial), in one transaction:
+   * Erase an account (#111, ADR-038, AUTH-09 partial), in one transaction:
    * every share the user holds goes (`share.remove`), every pending
    * invitation they sent is withdrawn (`share.invite_withdraw`), every
    * invitation row addressed to them is deleted, each owned live document is

@@ -1,5 +1,5 @@
 /**
- * Account erasure, `DELETE /api/me` (#111, ADR-037; AUTH-09 partial): what
+ * Account erasure, `DELETE /api/me` (#111, ADR-038; AUTH-09 partial): what
  * goes, what is handed over, what the tombstone refuses, and the Cognito
  * half behind its flag.
  */

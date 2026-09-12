@@ -6,31 +6,39 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 
 ## Environment
 
-| Variable                                             | Required         | Default   | Notes                                                                                      |
-| ---------------------------------------------------- | ---------------- | --------- | ------------------------------------------------------------------------------------------ |
-| `PORT`                                               |                  | `3000`    |                                                                                            |
-| `LOG_LEVEL`                                          |                  | `info`    | pino level                                                                                 |
-| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |           | libpq names; the master user, injected from Secrets Manager in ECS; boot (migrations) only |
-| `PGAPPUSER` `PGAPPPASSWORD`                          | in production    |           | least-privilege role the runtime pool uses (#36); created by the boot; unset = master user |
-| `PGSSLMODE`                                          |                  | `disable` | `verify-full` in production                                                                |
-| `PGSSLROOTCERT`                                      | with verify-full |           | `/app/rds-global-bundle.pem` in the image                                                  |
-| `COGNITO_USER_POOL_ID`                               | yes              |           |                                                                                            |
-| `COGNITO_CLIENT_IDS`                                 | yes              |           | comma-separated app client ids a token may carry (the SPA's, the pipeline's `gede-e2e`)    |
-| `COGNITO_REGION`                                     | yes              |           | also the S3 client region                                                                  |
-| `DOCS_BUCKET`                                        | yes              |           | S3 bucket for snapshots                                                                    |
-| `DOCS_PREFIX`                                        |                  | ``        | key prefix, e.g. `docs/`                                                                   |
-| `WEB_ORIGIN`                                         | yes              |           | exact SPA origin; CORS and the WebSocket `Origin` check                                    |
-| `SNAPSHOT_EVERY_UPDATES`                             |                  | `500`     | compact after this many persisted updates                                                  |
-| `SNAPSHOT_IDLE_MS`                                   |                  | `300000`  | …or after this long idle                                                                   |
-| `ROOM_IDLE_MS`                                       |                  | `600000`  | evict a room this long after its last socket leaves                                        |
-| `PROJECTION_DEBOUNCE_MS`                             |                  | `1000`    | wait after a compaction before writing the projection                                      |
-| `RATE_LIMIT_PER_MINUTE`                              |                  | `300`     | `/api` requests per verified user per minute → 429                                         |
-| `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`    | requests per address per minute, every route → 429                                         |
-| `RATE_LIMIT_INVITES_PER_HOUR`                        |                  | `30`      | invitations per verified user per hour (each is an outbound mail) → 429                    |
-| `WS_MAX_BUFFERED_BYTES`                              |                  | `16 MiB`  | unread bytes a socket may hold before it is closed 1013                                    |
-| `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400` | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429 |
-| `WS_AWARENESS_PER_SEC` `WS_AWARENESS_BURST`          |                  | `20/40`   | awareness per connection; excess dropped                                                   |
-| `GEDE_VERSION`                                       |                  | build     | reported by `GET /api/version`; the short git sha                                          |
+| Variable                                             | Required         | Default    | Notes                                                                                                           |
+| ---------------------------------------------------- | ---------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
+| `PORT`                                               |                  | `3000`     |                                                                                                                 |
+| `LOG_LEVEL`                                          |                  | `info`     | pino level                                                                                                      |
+| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |            | libpq names; the master user, injected from Secrets Manager in ECS; boot (migrations) only                      |
+| `PGAPPUSER` `PGAPPPASSWORD`                          | in production    |            | least-privilege role the runtime pool uses (#36); created by the boot; unset = master user                      |
+| `PGSSLMODE`                                          |                  | `disable`  | `verify-full` in production                                                                                     |
+| `PGSSLROOTCERT`                                      | with verify-full |            | `/app/rds-global-bundle.pem` in the image                                                                       |
+| `COGNITO_USER_POOL_ID`                               | yes              |            |                                                                                                                 |
+| `COGNITO_CLIENT_IDS`                                 | yes              |            | comma-separated app client ids a token may carry (the SPA's, the pipeline's `gede-e2e`)                         |
+| `COGNITO_REGION`                                     | yes              |            | also the S3 client region                                                                                       |
+| `COGNITO_ERASE_IDENTITY`                             |                  | `false`    | `true` once the task role may `cognito-idp:AdminDeleteUser`; `DELETE /api/me` then deletes the pool user (#111) |
+| `DOCS_BUCKET`                                        | yes              |            | S3 bucket for snapshots                                                                                         |
+| `DOCS_PREFIX`                                        |                  | ``         | key prefix, e.g. `docs/`                                                                                        |
+| `WEB_ORIGIN`                                         | yes              |            | exact SPA origin; CORS and the WebSocket `Origin` check                                                         |
+| `SNAPSHOT_EVERY_UPDATES`                             |                  | `500`      | compact after this many persisted updates                                                                       |
+| `SNAPSHOT_IDLE_MS`                                   |                  | `300000`   | …or after this long idle                                                                                        |
+| `ROOM_IDLE_MS`                                       |                  | `600000`   | evict a room this long after its last socket leaves                                                             |
+| `PROJECTION_DEBOUNCE_MS`                             |                  | `1000`     | wait after a compaction before writing the projection                                                           |
+| `RATE_LIMIT_PER_MINUTE`                              |                  | `300`      | `/api` requests per verified user per minute → 429                                                              |
+| `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`     | requests per address per minute, every route → 429                                                              |
+| `RATE_LIMIT_INVITES_PER_HOUR`                        |                  | `30`       | invitations per verified user per hour (each is an outbound mail) → 429                                         |
+| `WS_MAX_UPDATE_BYTES`                                |                  | `2 MiB`    | largest client → server frame; `ws` closes 1009 on the declared length (#99)                                    |
+| `WS_MAX_BUFFERED_BYTES`                              |                  | `2 MiB`    | unread bytes a socket may hold (plus its join step 2, once) before it is closed 1013 and terminated             |
+| `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400`  | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429                      |
+| `WS_BYTES_PER_SEC` `WS_BYTES_BURST`                  |                  | `1/4 MiB`  | sync payload bytes per connection; over the burst → 4429 (#99)                                                  |
+| `WS_AWARENESS_PER_SEC` `WS_AWARENESS_BURST`          |                  | `20/40`    | awareness per connection; excess dropped                                                                        |
+| `WS_MAX_ROOMS` `WS_MAX_SOCKETS`                      |                  | `500/2000` | open rooms / sockets one task serves; a join past either → 1013 (#99)                                           |
+| `WS_MAX_SOCKETS_PER_USER`                            |                  | `16`       | sockets one verified user may hold on one task; the next → 4429 (#99)                                           |
+| `WS_PERMISSION_RECHECK_MS`                           |                  | `60000`    | every connection's permission and token expiry re-resolved on this cadence (#104)                               |
+| `DOC_LOG_MAX_BYTES`                                  |                  | `8 MiB`    | `doc_updates` bytes since the last snapshot before the room compacts early (#99)                                |
+| `DOC_MAX_BYTES`                                      |                  | `64 MiB`   | ceiling on one document's state; an update that would pass it → 4413 (#99, ADR-037)                             |
+| `GEDE_VERSION`                                       |                  | build      | reported by `GET /api/version`; the short git sha                                                               |
 
 There is no auth bypass in any environment. Tests inject a fake verifier through `buildServer` deps.
 
@@ -78,6 +86,19 @@ and the per-user limit is the precise one.
   for another account's token, 409 `conflict` when the address already belongs to another
   account, 409 `email_bound` when this account already carries a different address. The SPA
   sends it once, right after sign-in, when `GET /api/me` answers `email: null`.
+  `DELETE /api/me` → `{ erased: true, identity: 'deleted'|'skipped'|'failed', documentsTransferred,
+documentsDeleted }` — account erasure (#111, ADR-038). In one transaction: every share the caller
+  holds goes (`share.remove`), every pending invitation they sent is withdrawn, every invitation
+  row addressed to them is deleted, each owned live document goes to its earliest editor
+  (`document.transfer`) or — with no editor, or the guided sample — loses its shares and link and
+  is soft-deleted (`document.delete`), `doc_updates.author_id` is nulled, the address is scrubbed
+  from `audit_log.target`, and the `users` row becomes a tombstone (`display_name` `Deleted user`,
+  everything else null, `deleted_at` set, `cognito_sub` kept). Audit rows keep the actor id. Then
+  the caller's sockets close 4403 everywhere, rooms of trashed documents close 4404, the new
+  owners' sockets close 1001, and the Cognito user is deleted when `COGNITO_ERASE_IDENTITY` is on
+  (`identity: 'skipped'` otherwise; `'failed'` when Cognito refused — logged as a
+  `GeDe/Sync UserErasureIdentityFailures` datapoint, see the runbook). A token that outlives the
+  erasure answers 403 `account_deleted` on every route; a second `DELETE` does the same.
 - `GET /api/documents?view=recents|browse|shared|deleted|archived` (default `recents`) →
   `{ documents: [{ id, title, kind: 'workscape', sizeBytes, createdAt, updatedAt, ownerId, ownerName,
 sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', linkAccess, deletedAt,
@@ -89,8 +110,10 @@ archivedAt, everShared, sample }] }`.
   `deleted` = owned, deleted within 30 days; `archived` = owned, live, `archivedAt` set (LIB-D6,
   no expiry). The owner's archived documents are absent from `recents`, `browse` and `shared`; a
   participant still sees them there (LIB-D3). `sizeBytes` is the latest snapshot plus every update
-  logged since it, computed in the same query. `ownerName` / `sharedBy.name` fall back to the
-  person's email and are `null` when neither is known. `everShared` (LIB-D2/D4) is true while the
+  logged since it, computed in the same query. `ownerName` / `sharedBy.name` are display names;
+  for the owner and editors they fall back to the person's email, for a viewer (or anyone who
+  redeemed a view link) they are `null` when no display name is set — the share sheet's rule,
+  #102: a viewer is never handed an address. `everShared` (LIB-D2/D4) is true while the
   document has a participant or its link is on (once it had either); `sample` marks the guided
   sample (LIB-D10).
 - `POST /api/documents { title? }` → 201 `{ document }`. The room's initial state is written here
@@ -195,11 +218,22 @@ rowId, columnId, snippet }] }`, at most 50, in sheet / table / row / column orde
 gede.v1, bearer.<access JWT>` (`new WebSocket(url, ['gede.v1', 'bearer.' + token])`); the server
   selects `gede.v1` and never echoes the bearer entry. A `?token=` query parameter is not read
   (#63; the request log still redacts it). Close codes: 4401 unauthenticated, 4403 not
-  a participant / wrong origin, 4404 unknown or deleted document, 4429 more sync messages per
-  second than `WS_UPDATES_BURST` allows — step 1 and awareness queries count too, since each makes
-  the server encode and send (the client treats it as terminal), 1013 the socket stopped
-  reading and `WS_MAX_BUFFERED_BYTES` piled up (the client reconnects with backoff), 1001 on
-  shutdown. Awareness over `WS_AWARENESS_BURST` is dropped, not fanned out (#37).
+  a participant / wrong origin / access removed / account erased, 4404 unknown or deleted
+  document, 4429 more sync messages per second than `WS_UPDATES_BURST` allows — step 1 and
+  awareness queries count too, since each makes the server encode and send — or more bytes than
+  `WS_BYTES_BURST`, or more sockets than `WS_MAX_SOCKETS_PER_USER` (the client treats 44xx as
+  terminal), 4413 the update would take the document past `DOC_MAX_BYTES` (terminal; edits stay on
+  the device, ADR-037), 1009 a frame over `WS_MAX_UPDATE_BYTES` (terminal on the client too: a
+  reconnect would send it again), 1007 a frame that is not the protocol or an update that does not
+  decode (#105: refused whole, nothing half-applied, counted, never a stack trace on stderr), 1013
+  the socket stopped reading and `WS_MAX_BUFFERED_BYTES` piled up (closed and terminated at once,
+  the client reconnects with backoff) or the task is full (`WS_MAX_ROOMS` / `WS_MAX_SOCKETS`), 1001
+  on shutdown, on a permission change and on token expiry (the client reconnects and resolves
+  afresh). Every refusal is a `GeDe/Sync WsRefusals` datapoint dimensioned by `Reason` (embedded
+  metric format in the log line; `src/metrics.ts`). Awareness over `WS_AWARENESS_BURST` is dropped,
+  not fanned out (#37). A permission resolved at upgrade is re-resolved every
+  `WS_PERMISSION_RECHECK_MS` (#104), so a share change made on another task or by hand closes the
+  socket within a minute; the in-process share routes still close it at once.
 
 Errors are `{ error: { code, message, ref } }`; `ref` is also sent as `x-request-id`. A
 non-participant gets 403 (never the title); a participant of a deleted document gets 404, the
@@ -207,9 +241,11 @@ non-participant gets 403 (never the title); a participant of a deleted document 
 
 Audit rows (`audit_log.action`): `document.create`, `document.rename`, `document.delete`,
 `document.archive`, `document.unarchive`, `document.recover`, `document.purge` (target = the
-title; the row outlives the document).
+title; the row outlives the document), `document.transfer` (erasure handed the document to the
+editor named in `target`).
 `user_id` is null on a `document.purge` written by the nightly job (the system actor); Delete All
-writes the owner's id.
+writes the owner's id. Audit rows are kept when an account is erased (ADR-038): the actor id
+still points at the tombstone row, addresses in `target` are replaced by `[erased]`.
 
 ## Projection
 
@@ -232,13 +268,17 @@ node main.js --job purge                    # LIB-08: delete documents soft-dele
 node main.js --job reproject <docId>|all    # rebuild the projection from snapshot + log
 ```
 
-`purge` works in batches of 50: it claims the rows in a transaction, removes each document's S3
-objects under `${DOCS_PREFIX}${docId}/` while the claim is held, and deletes only the documents
-whose objects went (a `document.purge` audit row each with `user_id` null) when it commits. A
-document whose objects could not be removed keeps its rows and is retried next run, so an S3
-failure never orphans an object; the job then exits 1, which alerts. EventBridge Scheduler runs it
-nightly (`infra/lib/stacks/ops-stack.ts`). `reproject all` skips deleted
-documents and exits 1 if any document failed (its log line says which). See `docs/RUNBOOK.md`.
+`purge` works in batches of 50 (#109): it reads the expired documents (no transaction held),
+removes each one's S3 objects under `${DOCS_PREFIX}${docId}/` outside any transaction — a slow
+or retried S3 call can no longer hit the pool's 30 s idle-in-transaction timeout — and then
+deletes the rows of the documents whose objects went in one short transaction (a `document.purge`
+audit row each with `user_id` null), re-checking under the lock that each is still past the
+window and not a sample. A document whose objects could not be removed keeps its rows and is
+retried next run, so an S3 failure never orphans an object; a batch whose row delete fails is
+logged with its ids and left for the next run (which finds nothing to remove in S3 and deletes
+them); either makes the job exit 1, which alerts. EventBridge Scheduler runs it nightly
+(`infra/lib/stacks/ops-stack.ts`). `reproject all` skips deleted documents and exits 1 if any
+document failed (its log line says which). See `docs/RUNBOOK.md`.
 
 ## Runbook
 

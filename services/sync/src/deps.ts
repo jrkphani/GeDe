@@ -40,7 +40,7 @@ export interface Mailer {
 }
 
 /**
- * The identity provider's side of account erasure (#111, ADR-037): delete the
+ * The identity provider's side of account erasure (#111, ADR-038): delete the
  * Cognito user so the identity cannot sign in again. Cognito
  * (`AdminDeleteUser`) in production when `COGNITO_ERASE_IDENTITY` is on, a
  * recording fake in tests, `null` when the deploy has not granted the task

@@ -38,7 +38,7 @@ export const CLOSE_TRY_AGAIN_LATER = 1013;
 export const CLOSE_MALFORMED = 1007;
 /** Standard "message too big": what `ws` sends for a frame over `WS_MAX_UPDATE_BYTES` (#99). */
 export const CLOSE_MESSAGE_TOO_BIG = 1009;
-/** The update would take the document past `DOC_MAX_BYTES` (#99, ADR-036); the client treats 44xx as terminal. */
+/** The update would take the document past `DOC_MAX_BYTES` (#99, ADR-037); the client treats 44xx as terminal. */
 export const CLOSE_TOO_LARGE = 4413;
 
 /** The subprotocol the server selects; the client must offer it alongside `bearer.<token>`. */

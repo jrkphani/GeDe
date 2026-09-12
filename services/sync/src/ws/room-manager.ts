@@ -4,7 +4,7 @@
  * treated as one of many — nothing here assumes it owns a document forever,
  * which is what lets growth step 1 (a second task + Redis fan-out) slot in.
  *
- * It also bounds what one task holds (#99, ADR-036): rooms, sockets, and
+ * It also bounds what one task holds (#99, ADR-037): rooms, sockets, and
  * sockets per user — a join past a bound is refused with a close code and a
  * `GeDe/Sync WsRefusals` datapoint — and re-resolves every connection's
  * permission on a cadence (#104), so a share change that did not pass through

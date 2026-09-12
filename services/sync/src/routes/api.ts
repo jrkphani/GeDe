@@ -85,7 +85,7 @@ export const INITIAL_SNAPSHOT_SEQ = 1;
 /** Documents per transaction for Delete All (#109): bounded like the nightly purge. */
 export const DELETE_ALL_BATCH_SIZE = 50;
 
-/** What `DELETE /api/me` answers (#111, ADR-037). */
+/** What `DELETE /api/me` answers (#111, ADR-038). */
 export interface ErasureView {
   erased: true;
   /** `deleted` when the Cognito user is gone; `skipped` when the deploy has not enabled it; `failed` when Cognito refused (logged, alarmed). */
@@ -330,7 +330,7 @@ export function registerApi(
       });
 
       /**
-       * Account erasure (#111, ADR-037; AUTH-09 partial: sign-out plus the
+       * Account erasure (#111, ADR-038; AUTH-09 partial: sign-out plus the
        * data). The database side is one transaction in the repository; then
        * the caller's sockets close everywhere, rooms of documents that went
        * to the trash close, the resolver forgets the row, and the Cognito

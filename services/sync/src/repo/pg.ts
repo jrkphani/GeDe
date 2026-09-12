@@ -730,7 +730,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             deleted.push(doc.id);
           }
 
-          // Edits stop being attributable; audit rows keep the actor id (ADR-037)
+          // Edits stop being attributable; audit rows keep the actor id (ADR-038)
           // but not the address.
           await tx.update(docUpdates).set({ authorId: null }).where(eq(docUpdates.authorId, id));
           if (row.email !== null) {

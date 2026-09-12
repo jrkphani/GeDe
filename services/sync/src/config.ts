@@ -33,7 +33,7 @@ export const configSchema = z.object({
   COGNITO_REGION: z.string().min(1),
   /**
    * `true` once the task role holds `cognito-idp:AdminDeleteUser` on the pool
-   * (#111, ADR-037): `DELETE /api/me` then deletes the Cognito user after the
+   * (#111, ADR-038): `DELETE /api/me` then deletes the Cognito user after the
    * database erasure. Off, the erasure still happens and the tombstone row
    * refuses the identity; the operator deletes the pool user by hand.
    */
@@ -66,7 +66,7 @@ export const configSchema = z.object({
   /** Largest awareness update accepted from a client, in bytes. */
   AWARENESS_MAX_BYTES: positiveInt.default(4096),
   /**
-   * Largest client → server frame, in bytes (#99, ADR-036): `ws` closes 1009
+   * Largest client → server frame, in bytes (#99, ADR-037): `ws` closes 1009
    * before the frame is assembled. A client's sync step 2 or update never
    * approaches this; server → client frames (a step 2 of a large document)
    * are not bounded by it.
@@ -101,12 +101,12 @@ export const configSchema = z.object({
   WS_PERMISSION_RECHECK_MS: positiveInt.default(60_000),
   /**
    * Bytes appended to `doc_updates` since the last snapshot before the room
-   * compacts early (#99, ADR-036): the log never holds more than this per
+   * compacts early (#99, ADR-037): the log never holds more than this per
    * document between snapshots, whatever the update count.
    */
   DOC_LOG_MAX_BYTES: positiveInt.default(8 * 1024 * 1024),
   /**
-   * Hard ceiling on one document's state, in bytes (#99, ADR-036). An update
+   * Hard ceiling on one document's state, in bytes (#99, ADR-037). An update
    * that would take the document past it is refused and the socket closed
    * 4413; the ceiling is checked against the room's running estimate, which
    * the next snapshot corrects to the encoded size.

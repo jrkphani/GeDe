@@ -62,7 +62,7 @@ export const CLOSE_BAD_REQUEST = 4400;
 export const CLOSE_UNAUTHENTICATED = 4401;
 export const CLOSE_FORBIDDEN = 4403;
 export const CLOSE_NOT_FOUND = 4404;
-/** An update would take the document past the server's ceiling (#99, ADR-036). */
+/** An update would take the document past the server's ceiling (#99, ADR-037). */
 export const CLOSE_TOO_LARGE = 4413;
 /** Standard "message too big": a frame over the server's per-frame limit (#99). */
 export const CLOSE_MESSAGE_TOO_BIG = 1009;
