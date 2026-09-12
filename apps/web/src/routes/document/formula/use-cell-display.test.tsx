@@ -6,7 +6,7 @@ import { setColumnFormat } from '@gede/core';
 import { setLocale } from '../../../locale.js';
 import { testDoc } from '../../../test/formula-doc.js';
 import { FormulaCellContent } from './FormulaCellContent.js';
-import { formatCellValue, useCellDisplay } from './use-cell-display.js';
+import { formatCellValue, renderResult, useCellDisplay } from './use-cell-display.js';
 
 describe('useCellDisplay', () => {
   it('FX-07 a formula cell reports its value, expression and badge once the engine answers; a text cell its text', async () => {
@@ -174,6 +174,40 @@ describe('useCellDisplay', () => {
       message: `${d.addr(0, 2)} is in USD; the sum so far is in SGD`,
     });
     expect(mixed.result.current.value).toBe('');
+  });
+
+  it('FMT-05 FX-01 I18N-04 a text result in a Number column is text, left, never invalid; a numeric result follows the locale', async () => {
+    const number = { kind: 'number' as const, opts: { decimals: 2 } };
+    // Concat in a Number column: the result is text, not an unparsable number (no tint, no glyph).
+    expect(renderResult('en-US', { kind: 'text', text: 'camp fee' }, number)).toEqual({
+      text: 'camp fee',
+      align: 'left',
+    });
+    // A list result stays the inferred rendering under any format.
+    expect(
+      renderResult('en-US', { kind: 'list', items: [{ kind: 'number', value: 1 }] }, number).align,
+    ).toBe('left');
+    // The locale groups and spells digits for the result as it does for a typed cell.
+    expect(renderResult('ta-IN', { kind: 'number', value: 1234567 }, number).text).toBe(
+      '12,34,567.00',
+    );
+    expect(
+      renderResult('en-IN', { kind: 'currency', value: 1234567, code: 'INR' }, number).text,
+    ).toBe('₹12,34,567.00');
+    const d = testDoc(3, 1);
+    setColumnFormat(d.gd, d.tableId, d.colId(0), 'number', { decimals: 0 });
+    d.set(0, 0, '1234567');
+    d.set(1, 0, `=Sum(${d.addr(0, 0)})`);
+    const { result } = renderHook(() => useCellDisplay(d.table, d.key(1, 0)));
+    await act(() => d.settled());
+    expect(result.current.value).toBe('1,234,567');
+    act(() => {
+      setLocale('ta-IN');
+    });
+    expect(result.current.value).toBe('12,34,567');
+    act(() => {
+      setLocale('en-US');
+    });
   });
 });
 

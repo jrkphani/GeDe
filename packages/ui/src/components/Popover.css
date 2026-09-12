@@ -9,6 +9,15 @@
   background: var(--surface);
   color: var(--ink);
   box-shadow: var(--elev-overlay);
-  animation: gd-fade-in var(--dur-fast) var(--ease-out);
   z-index: 20;
+}
+/*
+ * The enter fade runs only while open. Radix keeps closed content mounted until
+ * the animation it sees on the closed state ends; an unconditional `animation`
+ * left the surface in the DOM as `data-state="closed"` and its dismissable layer
+ * took the next Escape before the editor beneath could (KEYS-06). Scoped to the
+ * open state, closing unmounts at once.
+ */
+.gd-popover[data-state='open'] {
+  animation: gd-fade-in var(--dur-fast) var(--ease-out);
 }

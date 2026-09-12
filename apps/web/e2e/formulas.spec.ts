@@ -122,15 +122,12 @@ test.describe('formulas', () => {
       'aria-disabled',
       'true',
     );
-    // Escape closes the list (KEYS-06); the draft is emptied and committed rather than cancelled
-    // with a second Escape, which a closed Popover's still-mounted content can take while its
-    // enter animation settles (a `@gede/ui` Popover matter, see the #122 PR).
+    // KEYS-06 ordering: the first Escape closes the list, the second cancels the edit.
     await page.keyboard.press('Escape');
     await expect(automatic).toHaveCount(0);
-    await page.getByLabel('Edit B7').press('Backspace');
-    await expect(page.getByLabel('Edit B7')).toHaveText('');
-    await page.getByLabel('Edit B7').press('Enter');
+    await page.keyboard.press('Escape');
     await expect(page.getByLabel('Edit B7')).toHaveCount(0);
+    await expect(b7).toHaveText('');
     await page.locator('[data-address="B5"]').click();
     const rail = page.getByTestId('inspector');
     await rail.getByRole('tab', { name: 'Cell' }).click();

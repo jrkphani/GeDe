@@ -143,21 +143,16 @@ async function sumOption(page: Page, address: string) {
 }
 
 /**
- * Close the forms menu and leave the cell empty: Escape closes the list
- * (KEYS-06); an emptied draft committed with Enter writes nothing. The
- * second Escape that would cancel the edit is not used here: the closed
- * Popover's content can stay mounted while its enter animation settles and
- * its dismiss layer takes that Escape (a `@gede/ui` Popover matter, noted in
- * the PR; the Escape ordering itself is covered by `formulas.spec.ts`).
+ * Close the forms menu and cancel the edit as a person does: Escape closes
+ * the list, a second Escape cancels the editor (KEYS-06 ordering). The
+ * closed Popover unmounts at once, so the second Escape reaches the editor.
  */
 async function closeMenuAndEditor(page: Page, address: string): Promise<void> {
   await page.keyboard.press('Escape');
   await expect(page.getByRole('listbox', { name: 'Formula forms' })).toHaveCount(0);
   const editor = page.getByLabel(`Edit ${address}`);
   await expect(editor).toBeFocused();
-  await editor.press('Backspace');
-  await expect(editor).toHaveText('');
-  await editor.press('Enter');
+  await page.keyboard.press('Escape');
   await expect(editor).toHaveCount(0);
   await expect(cell(page, address)).toHaveText('');
 }
