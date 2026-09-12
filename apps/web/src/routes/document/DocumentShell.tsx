@@ -1,10 +1,9 @@
 import clsx from 'clsx';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams, useSearchParams } from 'react-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   addColumn,
   addRow,
-  assignPresenceColour,
   cellAddress,
   clearCell,
   createSheet,
@@ -20,21 +19,24 @@ import {
   toPresenceState,
   unitBoundsToPx,
   type Id,
-  type PresenceColour,
   type PresenceState,
 } from '@gede/core';
 import { below, theme } from '@gede/tokens';
-import { Banner, Button, Skeleton } from '@gede/ui';
+import { Banner, Button, Skeleton, useLoadingTiers, type LoadingTiers } from '@gede/ui';
 
 import { announce } from '../../announce.js';
 import { getDocument, permissionOf, type DocumentSummary } from '../../api/documents.js';
-import { useSession } from '../../auth/session.js';
+import { signOutLocal } from '../../auth/cognito.js';
+import { rememberReturnTo, useSession } from '../../auth/session.js';
+import { ApiError } from '../../api/client.js';
+import { usePresenceColour } from '../../doc/presence.js';
 import { rememberLastDocument } from '../../last-document.js';
 import { CHORDS, LABELS, useShortcuts, type ShortcutBinding } from '../../doc/shortcuts.js';
 import {
   CLOSE_FORBIDDEN,
   CLOSE_NOT_FOUND,
   CLOSE_UNAUTHENTICATED,
+  type SyncFailure,
   type SyncSnapshot,
 } from '../../doc/sync-client.js';
 import { useDocument, type DocumentSession, type ReplicaState } from '../../doc/use-document.js';
@@ -79,6 +81,8 @@ export function DocumentShell() {
   const { id = '' } = useParams();
   const [params] = useSearchParams();
   const phone = useMediaQuery(below('md'));
+  const { state: sessionState } = useSession();
+  const userSub = sessionState.status === 'signed-in' ? sessionState.user.sub : null;
   const [load, setLoad] = useState<LoadState>({ status: 'loading' });
 
   useEffect(() => {
@@ -99,17 +103,31 @@ export function DocumentShell() {
     () => (doc === null ? null : { title: doc.title, createdAt: doc.createdAt }),
     [doc],
   );
-  const { session, sync, ready, replica } = useDocument(id, { seed });
+  const { session, sync, ready, replica } = useDocument(id, { seed, userSub });
+  // One timer spans the REST record and the replica, so the 400 ms hold is one hold (LOAD-02).
+  const tiers = useLoadingTiers(doc === null || session === null || !ready);
 
   if (load.status === 'error') throw load.error;
+  // A deliberate refusal before anything rendered is a full page, not a permanent skeleton:
+  // 4401 → the session page (path retained), 4403 → no access, 4404 → nothing at this address.
+  if (!ready && sync.failure !== null && isCatalogueClose(sync.failure)) {
+    throw new ApiError(sync.failure.code - 4000, sync.failure.reason, undefined);
+  }
 
-  const editable = !phone && doc !== null && permissionOf(doc) !== 'view';
+  const editable = !phone && doc !== null && permissionOf(doc) !== 'view' && !sync.readOnly;
+  const statusLabel = doc === null ? 'Loading workscape' : `Loading ${doc.title}`;
 
   if (doc === null || session === null) {
     return (
       <div className={clsx('gd-doc', { 'gd-doc--phone': phone })}>
         <div className="gd-doc__loading">
-          <Skeleton active rows={8} statusLabel="Loading workscape" className="gd-doc__skeleton" />
+          <Skeleton
+            active
+            tiers={tiers}
+            rows={8}
+            statusLabel={statusLabel}
+            className="gd-doc__skeleton"
+          />
         </div>
       </div>
     );
@@ -122,6 +140,7 @@ export function DocumentShell() {
       session={session}
       sync={sync}
       ready={ready}
+      tiers={tiers}
       replica={replica}
       phone={phone}
       editable={editable}
@@ -130,11 +149,19 @@ export function DocumentShell() {
   );
 }
 
+/** Server closes that mirror an HTTP status the error catalogue has a page for. */
+function isCatalogueClose(failure: SyncFailure): boolean {
+  if (failure.local === true) return false; // no token on this device: the session provider's call
+  const { code } = failure;
+  return code === CLOSE_UNAUTHENTICATED || code === CLOSE_FORBIDDEN || code === CLOSE_NOT_FOUND;
+}
+
 interface OpenDocumentProps {
   doc: DocumentSummary;
   session: DocumentSession;
   sync: SyncSnapshot;
   ready: boolean;
+  tiers: LoadingTiers;
   replica: ReplicaState;
   phone: boolean;
   editable: boolean;
@@ -146,6 +173,7 @@ function OpenDocument({
   session,
   sync,
   ready,
+  tiers,
   replica,
   phone,
   editable,
@@ -153,6 +181,8 @@ function OpenDocument({
 }: OpenDocumentProps) {
   const { gd } = session;
   const { state: sessionState } = useSession();
+  const navigate = useNavigate();
+  const location = useLocation();
   const wide = useMediaQuery('(min-width: 1200px)');
   // The shell watches structure only (sheets and objects added or removed); each
   // TableView watches its own map deeply, so a cell edit re-renders one table.
@@ -182,7 +212,8 @@ function OpenDocument({
   const tier = zoomTier(viewport.zoom);
 
   // -- presence ---------------------------------------------------------------
-  const colour = useRef<PresenceColour | null>(null);
+  // Assigned once the room has answered (first sync or first remote state), re-picked on collision.
+  const colour = usePresenceColour(session.sync.awareness, sync.everSynced);
   const others = useMemo(() => {
     const list: PresenceState[] = [];
     session.sync.awareness.getStates().forEach((state, clientId) => {
@@ -195,18 +226,16 @@ function OpenDocument({
   }, [session, gd, awarenessVersion]);
   const user = sessionState.status === 'signed-in' ? sessionState.user : null;
   useEffect(() => {
-    if (user === null) return;
-    colour.current ??= assignPresenceColour(others.map((o) => o.colour));
+    if (user === null || colour === null) return;
     const state: PresenceState = {
       userId: user.sub,
       name: user.name ?? user.email,
-      colour: colour.current,
+      colour,
       sheetId: activeSheetId,
       cell: cell ?? undefined,
     };
     session.sync.awareness.setLocalState(state);
-    // `others` is derived from awareness itself and deliberately not a dependency: it would loop.
-  }, [session, user, activeSheetId, cell?.tableId, cell?.rowId, cell?.colId]);
+  }, [session, user, colour, activeSheetId, cell?.tableId, cell?.rowId, cell?.colId]);
   const onSheet = useMemo(
     () => others.filter((o) => o.sheetId === activeSheetId),
     [others, activeSheetId],
@@ -519,6 +548,7 @@ function OpenDocument({
         sharedFlag={sharedFlag}
         participants={others}
         sync={sync}
+        ready={ready}
         phone={phone}
         editable={editable}
         focusTitle={focusTitle}
@@ -567,7 +597,29 @@ function OpenDocument({
             }
           />
         )}
-        {failure !== null && (
+        {failure !== null && failure.code === CLOSE_UNAUTHENTICATED && (
+          <Banner
+            cause="Your session ended."
+            remedy="Sign in again to keep syncing; edits are held on this device and sync once you are back."
+            action={
+              <Button
+                size="sm"
+                variant="primary"
+                onClick={() => {
+                  // AUTH-01 / AUTH-09: the document path survives the round trip; the dead
+                  // tokens are dropped first so the sign-in screen does not bounce back.
+                  rememberReturnTo(`${location.pathname}${location.search}${location.hash}`);
+                  void signOutLocal()
+                    .catch(() => undefined)
+                    .then(() => navigate('/sign-in'));
+                }}
+              >
+                Sign in
+              </Button>
+            }
+          />
+        )}
+        {failure !== null && failure.code !== CLOSE_UNAUTHENTICATED && (
           <Banner
             cause="Changes are not syncing."
             remedy={failureRemedy(failure.code)}
@@ -582,6 +634,12 @@ function OpenDocument({
                 Retry
               </Button>
             }
+          />
+        )}
+        {sync.readOnly && permissionOf(doc) !== 'view' && (
+          <Banner
+            cause="Your access is now view-only."
+            remedy="The owner changed your permission. Edits made since are held on this device and will not sync."
           />
         )}
         {failure === null && sync.status === 'offline' && (
@@ -605,8 +663,9 @@ function OpenDocument({
       <div className="gd-doc__main">
         <Skeleton
           active={!ready}
+          tiers={tiers}
           rows={8}
-          statusLabel="Loading workscape"
+          statusLabel={`Loading ${doc.title}`}
           className="gd-doc__skeleton"
         >
           <Canvas
@@ -704,8 +763,6 @@ function emptyStyle() {
 
 function failureRemedy(code: number): string {
   switch (code) {
-    case CLOSE_UNAUTHENTICATED:
-      return 'Your session ended. Sign in again to keep syncing; edits are held on this device.';
     case CLOSE_FORBIDDEN:
       return 'You no longer have access to this workscape. Edits are held on this device.';
     case CLOSE_NOT_FOUND:

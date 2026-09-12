@@ -6,7 +6,7 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Y from 'yjs';
-import { LATTICE, openDocument, tableById, type GedeDoc } from '@gede/core';
+import { createSheet, LATTICE, openDocument, tableById, type GedeDoc } from '@gede/core';
 import type * as DocumentsApi from '../../api/documents.js';
 import { setDocumentSeamsForTests } from '../../doc/use-document.js';
 import { TIER_MESO_MIN } from '../../doc/viewport.js';
@@ -20,6 +20,7 @@ const user = { sub: 'sub-1', email: 'meena@1cloudhub.com', name: 'Meena' };
 vi.mock('../../auth/cognito.js', () => ({
   isPasskeySupported: () => true,
   accessToken: () => Promise.resolve('tok'),
+  refreshAccessToken: () => Promise.resolve('fresh'),
   currentUser: () => Promise.resolve(user),
   onAuthEvent: () => () => undefined,
   signOutLocal: vi.fn(() => Promise.resolve()),
@@ -32,6 +33,7 @@ vi.mock('../../api/documents.js', async (importOriginal) => {
 });
 
 const docs = await import('../../api/documents.js');
+const cognito = await import('../../auth/cognito.js');
 const ID = '6f1b2c3d-0000-4000-8000-00000000abcd';
 const record = {
   id: ID,
@@ -160,7 +162,7 @@ describe('DocumentShell', () => {
     expect(screen.getByLabelText('Shared · Sembian V is here')).toBeInTheDocument();
   });
 
-  it('DOC-02 toolbar clusters: working commands work, unimplemented ones are present but disabled with a reason', async () => {
+  it('DOC-02 toolbar clusters: working commands work, unimplemented ones are present but disabled with a reason; aria-keyshortcuts carry key tokens', async () => {
     await openShell();
     const toolbar = screen.getByRole('toolbar', { name: 'Document tools' });
     for (const name of ['Insert', 'Arrange', 'Data', 'View', 'Inspectors']) {
@@ -176,11 +178,12 @@ describe('DocumentShell', () => {
     // Every command shows its shortcut beside it (KEYS-08).
     expect(screen.getByRole('button', { name: 'Zoom in' })).toHaveAttribute(
       'aria-keyshortcuts',
-      '⌘+',
+      'Meta+Equal',
     );
+    expect(screen.getByRole('button', { name: 'Zoom in' }).title).toBe('Zoom in (⌘+)');
     expect(screen.getByRole('button', { name: 'Fit to canvas' })).toHaveAttribute(
       'aria-keyshortcuts',
-      '⇧⌘0',
+      'Shift+Meta+0',
     );
 
     const grid = await addTable();
@@ -361,7 +364,7 @@ describe('DocumentShell', () => {
     expect(Number.parseFloat(second.style.top) % LATTICE.row).toBe(0);
   });
 
-  it('GRID-02 GRID-03 INSP-03 single click arms a cell with the selection ring, the inspector head states the object and its A1 address, Escape clears', async () => {
+  it('GRID-02 (partial) GRID-03 INSP-03 single click arms a cell with the selection ring, the inspector head states the object and its A1 address, Escape clears', async () => {
     await openShell();
     const grid = await addTable();
     const cells = within(grid).getAllByRole('gridcell');
@@ -466,17 +469,47 @@ describe('DocumentShell', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent('Synced');
   });
 
-  it('LOAD-05 SHARE-03 a terminal refusal surfaces one banner with Retry; nothing else interrupts editing', async () => {
+  it('SHARE-03 a 4403 before first render is the catalogue 403 page, not a permanent skeleton', async () => {
     room.options = { refuseWith: { code: 4403, reason: 'not a participant' } };
     renderRoutes(routes, [`/d/${ID}`]);
+    expect(
+      await screen.findByRole('heading', { name: 'You do not have access to this workscape' }),
+    ).toBeInTheDocument();
+    expect(document.querySelector('.gd-skeleton')).toBeNull();
+  });
+
+  it('a 4404 before first render is the catalogue 404 page', async () => {
+    room.options = { refuseWith: { code: 4404, reason: 'document deleted' } };
+    renderRoutes(routes, [`/d/${ID}`]);
+    expect(
+      await screen.findByRole('heading', { name: 'Nothing at this address' }),
+    ).toBeInTheDocument();
+  });
+
+  it('AUTH-09 a terminal 4401 before first render is the catalogue session page, path retained', async () => {
+    room.options = { refuseWith: { code: 4401, reason: 'expired' } };
+    renderRoutes(routes, [`/d/${ID}?cell=B5`]);
+    expect(await screen.findByRole('heading', { name: 'Your session ended' })).toBeInTheDocument();
+    // One retry with a refreshed token happened before it became terminal.
+    expect(room.urls).toHaveLength(2);
+    expect(room.urls[1]).toContain('token=fresh');
+    // The path is remembered synchronously on the click; the sign-in screen then takes it.
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(sessionStorage.getItem('gede.returnTo')).toBe(`/d/${ID}?cell=B5`);
+  });
+
+  it('LOAD-05 SHARE-03 a terminal refusal after render surfaces one banner with Retry; editing goes on', async () => {
+    await openShell();
+    await addTable();
+    room.options = { refuseWith: { code: 4403, reason: 'not a participant' } };
+    act(() => {
+      room.dropAll();
+    });
     await waitFor(() => {
       expect(screen.getByText('Changes are not syncing.')).toBeInTheDocument();
     });
     expect(screen.getByText(/no longer have access/)).toBeInTheDocument();
-    // A never-synced, never-persisted document keeps its content-shaped skeleton (LOAD-01) behind the banner.
-    await waitFor(() => {
-      expect(document.querySelector('.gd-skeleton')).not.toBeNull();
-    });
+    expect(screen.getByRole('grid')).toBeInTheDocument(); // the document stays on screen
     room.options = {};
     await userEvent.click(screen.getByRole('button', { name: 'Retry' }));
     await waitFor(() => {
@@ -485,9 +518,72 @@ describe('DocumentShell', () => {
     await waitFor(() => {
       expect(screen.getByTestId('sync-status')).toHaveTextContent('Synced');
     });
-    await waitFor(() => {
-      expect(screen.getByRole('tab', { name: /Sheet 1/ })).toBeInTheDocument();
+  });
+
+  it('AUTH-09 a terminal 4401 after render shows the session banner; Sign in keeps the document path', async () => {
+    const { router } = await openShell(`/d/${ID}?cell=B5`);
+    room.options = { refuseWith: { code: 4401, reason: 'expired' } };
+    act(() => {
+      room.dropAll();
     });
+    await waitFor(() => {
+      expect(screen.getByText('Your session ended.')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(sessionStorage.getItem('gede.returnTo')).toBe(`/d/${ID}?cell=B5`);
+    // The dead tokens are dropped before the sign-in screen (which, with this test's always-signed-in
+    // session, bounces straight back to the retained path — the round trip AUTH-01 asks for).
+    await waitFor(() => {
+      expect(cognito.signOutLocal).toHaveBeenCalled();
+    });
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(`/d/${ID}`);
+    });
+  });
+
+  it('SHARE-03 the server’s read-only notice removes edit affordances mid-session and says why', async () => {
+    room.options = { viewOnly: true };
+    await openShell();
+    await waitFor(() => {
+      expect(screen.getByText('Your access is now view-only.')).toBeInTheDocument();
+    });
+    const add = screen.getByRole('button', { name: 'Add table' });
+    expect(add).toHaveAttribute('aria-disabled', 'true');
+    expect(screen.queryByLabelText('Workscape title')).not.toBeInTheDocument();
+  });
+
+  it('DOC-01 the record’s title shows at once and wins over a stale room title', async () => {
+    const other = openDocument(roomDoc());
+    createSheet(other);
+    room.edit((d) => {
+      d.getMap('meta').set('title', 'Stale room title');
+    });
+    await openShell();
+    await waitFor(() => {
+      expect(screen.getByLabelText('Workscape title')).toHaveValue('Everest trek');
+    });
+    await until(() => roomDoc().getMap('meta').get('title') === 'Everest trek');
+  });
+
+  it('A11Y-01 a keyboard user can Tab to a table’s first cell, arm it, and press Enter to edit', async () => {
+    await openShell();
+    const grid = await addTable();
+    // Clear the selection the add left behind, then walk in with Tab.
+    fireEvent.keyDown(window, { code: 'Escape' });
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    expect(first).toHaveAttribute('tabindex', '0');
+    expect(within(grid).getAllByRole('gridcell')[1]).toHaveAttribute('tabindex', '-1');
+    act(() => {
+      first.focus();
+    });
+    expect(first).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(first, { code: 'Enter' });
+    const editor = screen.getByLabelText('Edit B5');
+    expect(editor.tagName).toBe('TEXTAREA');
+    await userEvent.type(editor, 'Line one{Shift>}{Enter}{/Shift}Line two');
+    fireEvent.keyDown(editor, { code: 'Enter' });
+    expect(first).toHaveTextContent('Line one');
+    expect(first.getAttribute('aria-label')).toBe('B5, Line one\nLine two');
   });
 
   it('LOAD-01 LOAD-02 LOAD-03 while the document loads a content-shaped skeleton appears after 200 ms with 22 px lattice rows', async () => {
@@ -584,7 +680,7 @@ describe('DocumentShell', () => {
     expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
   });
 
-  it('GRID-02 addresses recompute after a row is added above: the same cell reads one row lower', async () => {
+  it('GRID-02 (partial: delete and hide are Wave 2) addresses recompute after a row is added above: the same cell reads one row lower', async () => {
     await openShell();
     const grid = await addTable();
     const cells = within(grid).getAllByRole('gridcell');

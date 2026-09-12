@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import type { ReactNode } from 'react';
 import { Button, Icon, Menu, Tooltip, type IconName, type MenuEntry } from '@gede/ui';
 
-import { LABELS } from '../../doc/shortcuts.js';
+import { ARIA_KEYS, LABELS } from '../../doc/shortcuts.js';
 import { formatZoom, ZOOM_PRESETS } from '../../doc/viewport.js';
 
 export type InspectorMode = 'format' | 'organize';
@@ -29,7 +29,10 @@ export interface ToolbarProps {
 interface ToolProps {
   icon: IconName;
   label: string;
+  /** Glyph label shown beside the command (KEYS-08), e.g. "⌘+". */
   shortcut?: string | undefined;
+  /** ARIA key tokens for the same chord, e.g. "Meta+Equal" (L4). */
+  ariaKeys?: string | undefined;
   onClick?: (() => void) | undefined;
   /** MENU-02 / INSP-11: unavailable commands render disabled with their reason, never hidden. */
   disabledReason?: string | undefined;
@@ -37,7 +40,15 @@ interface ToolProps {
 }
 
 /** One toolbar command: icon button, tooltip with its shortcut (KEYS-08), disabled-with-reason. */
-export function Tool({ icon, label, shortcut, onClick, disabledReason, pressed }: ToolProps) {
+export function Tool({
+  icon,
+  label,
+  shortcut,
+  ariaKeys,
+  onClick,
+  disabledReason,
+  pressed,
+}: ToolProps) {
   const disabled = disabledReason !== undefined;
   const tip = disabled
     ? `${label} — ${disabledReason}`
@@ -59,7 +70,7 @@ export function Tool({ icon, label, shortcut, onClick, disabledReason, pressed }
         className={clsx('gd-tool', { 'gd-tool--pressed': pressed === true })}
         icon={<Icon name={icon} size={15} />}
         aria-label={label}
-        aria-keyshortcuts={shortcut}
+        aria-keyshortcuts={ariaKeys}
         aria-pressed={pressed}
         aria-disabled={disabled || undefined}
         title={tip}
@@ -73,12 +84,14 @@ function InspectorToggle({
   mode,
   label,
   shortcut,
+  ariaKeys,
   active,
   onInspector,
 }: {
   mode: InspectorMode;
   label: string;
   shortcut: string;
+  ariaKeys: string;
   active: InspectorMode | null;
   onInspector: (mode: InspectorMode | null) => void;
 }) {
@@ -97,7 +110,7 @@ function InspectorToggle({
         variant="ghost"
         className={clsx('gd-tool', 'gd-tool--text', { 'gd-tool--pressed': pressed })}
         aria-pressed={pressed}
-        aria-keyshortcuts={shortcut}
+        aria-keyshortcuts={ariaKeys}
         aria-label={`${label} inspector`}
         onClick={() => {
           onInspector(pressed ? null : mode);
@@ -162,6 +175,7 @@ export function Toolbar({
           icon="add-row"
           label="Add row"
           shortcut={LABELS.addRow}
+          ariaKeys={ARIA_KEYS.addRow}
           onClick={onAddRow}
           disabledReason={needsTable}
         />
@@ -169,6 +183,7 @@ export function Toolbar({
           icon="add-column"
           label="Add column"
           shortcut={LABELS.addColumn}
+          ariaKeys={ARIA_KEYS.addColumn}
           onClick={onAddColumn}
           disabledReason={needsTable}
         />
@@ -192,7 +207,13 @@ export function Toolbar({
       </Cluster>
       <span className="gd-doc__toolgap" />
       <Cluster label="View">
-        <Tool icon="zoom-out" label="Zoom out" shortcut={LABELS.zoomOut} onClick={onZoomOut} />
+        <Tool
+          icon="zoom-out"
+          label="Zoom out"
+          shortcut={LABELS.zoomOut}
+          ariaKeys={ARIA_KEYS.zoomOut}
+          onClick={onZoomOut}
+        />
         <Menu
           label="Zoom"
           align="center"
@@ -208,14 +229,27 @@ export function Toolbar({
             </button>
           }
         />
-        <Tool icon="zoom-in" label="Zoom in" shortcut={LABELS.zoomIn} onClick={onZoomIn} />
-        <Tool icon="fit" label="Fit to canvas" shortcut={LABELS.fit} onClick={onFit} />
+        <Tool
+          icon="zoom-in"
+          label="Zoom in"
+          shortcut={LABELS.zoomIn}
+          ariaKeys={ARIA_KEYS.zoomIn}
+          onClick={onZoomIn}
+        />
+        <Tool
+          icon="fit"
+          label="Fit to canvas"
+          shortcut={LABELS.fit}
+          ariaKeys={ARIA_KEYS.fit}
+          onClick={onFit}
+        />
       </Cluster>
       <Cluster label="Inspectors">
         <InspectorToggle
           mode="format"
           label="Format"
           shortcut={LABELS.formatInspector}
+          ariaKeys={ARIA_KEYS.formatInspector}
           active={inspector}
           onInspector={onInspector}
         />
@@ -223,6 +257,7 @@ export function Toolbar({
           mode="organize"
           label="Organize"
           shortcut={LABELS.organizeInspector}
+          ariaKeys={ARIA_KEYS.organizeInspector}
           active={inspector}
           onInspector={onInspector}
         />

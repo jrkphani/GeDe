@@ -22,6 +22,7 @@ import {
 } from '@gede/core';
 import { Icon } from '@gede/ui';
 
+import { ARIA_KEYS } from '../../doc/shortcuts.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import { useYVersion } from '../../doc/use-y.js';
 import type { CellSelection } from './selection.js';
@@ -90,6 +91,8 @@ export const TableView = memo(function TableView({
     return start;
   });
 
+  // M8: with nothing selected in this table, its first cell is the tab stop (roving tabindex).
+  const tableHasSelection = selectedCell !== null && selectedCell.tableId === record.id;
   const presenceByCell = new Map<string, PresenceState>();
   for (const p of presence) {
     if (p.cell?.tableId === record.id) presenceByCell.set(`${p.cell.rowId}:${p.cell.colId}`, p);
@@ -189,6 +192,7 @@ export const TableView = memo(function TableView({
                       tier={tier}
                       address={address}
                       selected={isSelected}
+                      tabStop={isSelected || (!tableHasSelection && ri === 0 && ci === 0)}
                       editing={isEditing}
                       editable={editable}
                       other={other}
@@ -220,6 +224,7 @@ export const TableView = memo(function TableView({
             }}
             title="Add a row beneath the last row (⌥⌘↓)"
             aria-label={`Add row to ${record.title}`}
+            aria-keyshortcuts={ARIA_KEYS.addRow}
           >
             <Icon name="add-row" size={13} /> Add row
           </button>
@@ -241,6 +246,7 @@ export const TableView = memo(function TableView({
             }}
             title="Add a column at the right edge (⌥⌘→)"
             aria-label={`Add column to ${record.title}`}
+            aria-keyshortcuts={ARIA_KEYS.addColumn}
           >
             <Icon name="add-column" size={13} /> Add column
           </button>
@@ -257,6 +263,8 @@ interface CellProps {
   tier: ZoomTier;
   address: string | undefined;
   selected: boolean;
+  /** Reachable with Tab: the selected cell, or the table's first cell when none is. */
+  tabStop: boolean;
   editing: boolean;
   editable: boolean;
   other: PresenceState | undefined;
@@ -273,6 +281,7 @@ function Cell({
   tier,
   address,
   selected,
+  tabStop,
   editing,
   editable,
   other,
@@ -307,7 +316,7 @@ function Cell({
     <div
       ref={ref}
       role="gridcell"
-      tabIndex={selected ? 0 : -1}
+      tabIndex={tabStop ? 0 : -1}
       aria-selected={selected || undefined}
       aria-label={address === undefined ? undefined : `${address}${text === '' ? '' : `, ${text}`}`}
       className={clsx('gd-cell', {
@@ -320,6 +329,10 @@ function Cell({
       onPointerDown={(e) => {
         e.stopPropagation();
         onSelect(cell);
+      }}
+      onFocus={() => {
+        // Tabbing onto a cell arms it (A11Y-01), so Enter can open the editor.
+        if (!selected) onSelect(cell);
       }}
       onDoubleClick={() => {
         if (editable) onEdit(cell);
@@ -364,7 +377,7 @@ interface CellEditorProps {
  */
 function CellEditor({ initial, address, onCommit, onCancel }: CellEditorProps) {
   const [value, setValue] = useState(initial);
-  const ref = useRef<HTMLInputElement>(null);
+  const ref = useRef<HTMLTextAreaElement>(null);
   const done = useRef(false);
   const latest = useRef({ value, onCommit });
   latest.current = { value, onCommit };
@@ -393,8 +406,10 @@ function CellEditor({ initial, address, onCommit, onCancel }: CellEditorProps) {
     else onCancel();
   };
   return (
-    <input
+    // A textarea sized as the cell: multi-line text survives a round trip (⇧⏎ adds a line).
+    <textarea
       ref={ref}
+      rows={1}
       className="gd-cell__editor"
       aria-label={address === undefined ? 'Cell' : `Edit ${address}`}
       value={value}
@@ -402,10 +417,12 @@ function CellEditor({ initial, address, onCommit, onCancel }: CellEditorProps) {
         setValue(e.target.value);
       }}
       onKeyDown={(e) => {
+        // The editor owns its keys; the cell beneath must not see them (⇧⏎ is a newline here).
+        e.stopPropagation();
         // I18N-01: `keyCode === 229` is the legacy IME signal some engines still send.
         // eslint-disable-next-line @typescript-eslint/no-deprecated -- required by the IME contract
         if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-        if (e.code === 'Enter') {
+        if (e.code === 'Enter' && !e.shiftKey) {
           e.preventDefault();
           e.stopPropagation();
           finish(true);

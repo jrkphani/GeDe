@@ -63,20 +63,10 @@ export function Inspector({ gd, mode, selection, onClose }: InspectorProps) {
           </>
         )}
       </div>
-      <div className="gd-inspector__tabs" role="tablist" aria-label={`${mode} tabs`}>
-        {tabs.map((t) => (
-          <span
-            key={t}
-            role="tab"
-            aria-selected={false}
-            aria-disabled="true"
-            className="gd-inspector__tab"
-            title={`${t} controls arrive in Wave 2`}
-          >
-            {t}
-          </span>
-        ))}
-      </div>
+      {/* INSP-11: not yet implemented, so plain disabled text — no hand-rolled tablist. */}
+      <p className="gd-inspector__note" aria-disabled="true">
+        {tabs.join(' · ')}
+      </p>
       <p className="gd-inspector__note">
         {mode === 'format' ? 'Format' : 'Organize'} controls arrive in Wave 2.
       </p>

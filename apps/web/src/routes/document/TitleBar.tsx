@@ -18,6 +18,8 @@ export interface TitleBarProps {
   /** Other participants currently in the room (SHARE-05 avatars). */
   participants: readonly PresenceState[];
   sync: SyncSnapshot;
+  /** Until the document is ready, the field shows the record's title and does not edit. */
+  ready: boolean;
   phone: boolean;
   editable: boolean;
   focusTitle: boolean;
@@ -47,6 +49,7 @@ export function TitleBar({
   sharedFlag,
   participants,
   sync,
+  ready,
   phone,
   editable,
   focusTitle,
@@ -65,11 +68,11 @@ export function TitleBar({
 
   // LIB-06: a freshly created workscape places the caret in the title.
   useEffect(() => {
-    if (focusTitle && editable) {
+    if (focusTitle && editable && ready) {
       titleRef.current?.focus();
       titleRef.current?.select();
     }
-  }, [focusTitle, editable]);
+  }, [focusTitle, editable, ready]);
 
   const save = (next: string) => {
     const trimmed = next.trim();
@@ -148,7 +151,9 @@ export function TitleBar({
             ref={titleRef}
             className="gd-doc__title"
             aria-label="Workscape title"
-            value={title}
+            // The record is the source of truth until the document reconciles with it (M6).
+            value={ready ? title : serverTitle}
+            disabled={!ready}
             onChange={(e) => {
               onChange(e.target.value);
             }}

@@ -12,14 +12,24 @@ import * as Y from 'yjs';
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
+/** GeDe's server → client notice (`services/sync/src/ws/protocol.ts`). */
+const MESSAGE_NOTICE = 4;
+
+export interface FakeRoomOptions {
+  /** Drop every write and send the read-only notice once, as the service does for `view` (SHARE-03). */
+  viewOnly?: boolean | undefined;
+}
 
 export class FakeRoom {
+  readonly options: FakeRoomOptions;
+  private readonly notified = new Set<WebSocketRoute>();
   readonly doc = new Y.Doc();
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
   readonly sockets = new Set<WebSocketRoute>();
   readonly urls: string[] = [];
 
-  constructor() {
+  constructor(options: FakeRoomOptions = {}) {
+    this.options = options;
     this.doc.on('update', (update: Uint8Array, origin: unknown) => {
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
@@ -52,9 +62,22 @@ export class FakeRoom {
     const decoder = decoding.createDecoder(bytes);
     const type = decoding.readVarUint(decoder);
     if (type === MESSAGE_SYNC) {
+      const subtype = decoding.readVarUint(decoder);
+      if (subtype !== syncProtocol.messageYjsSyncStep1 && this.options.viewOnly === true) {
+        if (!this.notified.has(ws)) {
+          this.notified.add(ws);
+          const notice = encoding.createEncoder();
+          encoding.writeVarUint(notice, MESSAGE_NOTICE);
+          encoding.writeVarString(notice, JSON.stringify({ code: 'read-only' }));
+          ws.send(Buffer.from(encoding.toUint8Array(notice)));
+        }
+        return;
+      }
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
-      syncProtocol.readSyncMessage(decoder, encoder, this.doc, ws);
+      const replay = decoding.createDecoder(bytes);
+      decoding.readVarUint(replay);
+      syncProtocol.readSyncMessage(replay, encoder, this.doc, ws);
       if (encoding.length(encoder) > 1) ws.send(Buffer.from(encoding.toUint8Array(encoder)));
     } else if (type === MESSAGE_AWARENESS) {
       const update = decoding.readVarUint8Array(decoder);

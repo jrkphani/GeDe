@@ -42,7 +42,7 @@ const record = {
   deletedAt: null,
 };
 
-async function installFakes(page: Page): Promise<FakeRoom> {
+async function installFakes(page: Page, viewOnly = false): Promise<FakeRoom> {
   await page.route('**/config.json', (route) => route.fulfill({ json: CONFIG }));
   await installFakeCognito(page, SESSION);
   await page.route(`**/api/documents/${DOC_ID}`, (route) => {
@@ -54,7 +54,18 @@ async function installFakes(page: Page): Promise<FakeRoom> {
     return route.fulfill({ json: { document: record } });
   });
   await page.route('**/api/documents', (route) => route.fulfill({ json: { documents: [record] } }));
-  const room = new FakeRoom();
+  await page.route('**/api/me', (route) =>
+    route.fulfill({
+      json: {
+        id: SESSION.sub,
+        sub: SESSION.sub,
+        email: SESSION.email,
+        displayName: SESSION.name,
+        locale: 'en-US',
+      },
+    }),
+  );
+  const room = new FakeRoom({ viewOnly });
   await room.install(page);
   return room;
 }
@@ -68,9 +79,14 @@ async function signInTo(page: Page, path: string): Promise<void> {
   await page.getByRole('button', { name: 'Email me a code' }).click();
   await page.getByLabel('Six-digit code').fill(FAKE_CODE);
   await page.getByRole('button', { name: 'Verify and sign in' }).click();
+  // AUTH-07: the passkey offer follows a code sign-in; decline it whenever it appears.
   const notNow = page.getByRole('button', { name: 'Not now' });
-  if (await notNow.isVisible({ timeout: 2000 }).catch(() => false)) await notNow.click();
-  await expect(page).toHaveURL(new RegExp(`${path.replace('?', '\\?')}$`));
+  const target = new RegExp(`${path.replace('?', '\\?')}$`);
+  await Promise.race([
+    notNow.waitFor({ state: 'visible', timeout: 8000 }).then(() => notNow.click()),
+    page.waitForURL(target, { timeout: 8000 }),
+  ]).catch(() => undefined);
+  await expect(page).toHaveURL(target);
 }
 
 test.describe('document shell', () => {
@@ -235,6 +251,23 @@ test.describe('document shell', () => {
       });
     });
   }
+
+  test('SHARE-03 the service’s read-only notice takes the edit affordances away and says why', async ({
+    page,
+  }) => {
+    // The record still says the caller may edit; the room disagrees (permission changed since).
+    const room = await installFakes(page, true);
+    const gd = openDocument(room.doc);
+    createSheet(gd);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByText('Your access is now view-only.')).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Add table' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await expect(page.getByLabel('Workscape title')).toHaveCount(0);
+  });
 
   test('A11Y-05 selection and sync status announce through the polite live region', async ({
     page,
