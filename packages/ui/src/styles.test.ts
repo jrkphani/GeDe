@@ -17,6 +17,11 @@ describe('global styles', () => {
 
   it('imports the token sheet exactly once and sets base typography from tokens', () => {
     expect(css.match(/@import '@gede\/tokens\/tokens\.css'/g)).toHaveLength(1);
-    expect(css).toMatch(/html\s*\{[^}]*font:\s*400 0\.9375rem\/1\.6 var\(--font-ui\)/);
+    expect(css).toMatch(/body\s*\{[^}]*font:\s*400 0\.9375rem\/1\.6 var\(--font-ui\)/);
+  });
+
+  it('AUTH-08 RESP-05 the root font size stays at 100 % so 2.75rem is 44 px, not 41.25', () => {
+    expect(css).toMatch(/html\s*\{[^}]*font-size:\s*100%/);
+    expect(css).not.toMatch(/html\s*\{[^}]*font:\s*400 0\.9375rem/);
   });
 });

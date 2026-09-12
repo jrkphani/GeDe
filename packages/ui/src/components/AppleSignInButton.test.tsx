@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -14,6 +16,14 @@ describe('AppleSignInButton', () => {
     expect(b).toHaveFocus();
     await userEvent.keyboard('{Enter}');
     expect(onClick).toHaveBeenCalled();
+  });
+
+  it('AUTH-08 the height never drops below the 44 px target token, whatever the root font size', () => {
+    const css = readFileSync(resolve(__dirname, 'AppleSignInButton.css'), 'utf8');
+    expect(css).toMatch(/--gd-apple-height:\s*max\(2\.75rem, var\(--hit-target\)\)/);
+    expect(css).toMatch(/min-height:\s*var\(--gd-apple-height\)/);
+    const tokens = readFileSync(resolve(__dirname, '../../../tokens/src/tokens.css'), 'utf8');
+    expect(tokens).toMatch(/--hit-target:\s*44px/);
   });
 
   it('accepts only the second approved wording', () => {
