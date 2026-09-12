@@ -63,6 +63,9 @@ export interface MenuContext {
   selectedCell: { tableId: Id; rowId: Id; colId: Id } | null;
   canvas: {
     addTable: () => void;
+    /** GRAPH-01: the empty-sheet menu's Graph and Shaped table entries. */
+    addGraph?: (() => void) | undefined;
+    addShapedTable?: (() => void) | undefined;
     fit: () => void;
     actualSize: () => void;
   };
@@ -574,6 +577,25 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
       label: 'Add table here',
       disabledReason: viewOnly,
       onSelect: ctx.canvas.addTable,
+    },
+    {
+      kind: 'item',
+      id: 'add-shaped-table',
+      label: 'Add shaped table here',
+      disabledReason:
+        viewOnly ?? (ctx.canvas.addShapedTable === undefined ? GRAPH_SOON : undefined),
+      onSelect: () => {
+        ctx.canvas.addShapedTable?.();
+      },
+    },
+    {
+      kind: 'item',
+      id: 'add-graph',
+      label: 'Add graph here',
+      disabledReason: viewOnly ?? (ctx.canvas.addGraph === undefined ? GRAPH_SOON : undefined),
+      onSelect: () => {
+        ctx.canvas.addGraph?.();
+      },
     },
     sep('s-view'),
     {

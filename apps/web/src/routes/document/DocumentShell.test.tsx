@@ -188,10 +188,14 @@ describe('DocumentShell', () => {
     for (const name of ['Insert', 'Arrange', 'Data', 'View', 'Inspectors']) {
       expect(within(toolbar).getByRole('group', { name })).toBeInTheDocument();
     }
-    const graph = screen.getByRole('button', { name: 'Add graph' });
-    expect(graph).toHaveAttribute('aria-disabled', 'true');
-    expect(graph.title).toMatch(/arrives with the context graph release/);
-    expect(graph).not.toBeDisabled(); // reachable, so the reason is available on hover and focus
+    // GRAPH-01: + Graph is live; the still-unbuilt Arrange tools are present but disabled with a reason.
+    expect(within(toolbar).getByRole('button', { name: 'Add graph' })).not.toHaveAttribute(
+      'aria-disabled',
+    );
+    const pin = screen.getByRole('button', { name: 'Pin to viewport' });
+    expect(pin).toHaveAttribute('aria-disabled', 'true');
+    expect(pin.title).toMatch(/arrives with a later release/);
+    expect(pin).not.toBeDisabled(); // reachable, so the reason is available on hover and focus
     const addRow = screen.getByRole('button', { name: 'Add row' });
     expect(addRow).toHaveAttribute('aria-disabled', 'true');
     expect(addRow.title).toMatch(/select a table first/);

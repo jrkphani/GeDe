@@ -259,6 +259,12 @@ export function Canvas({
         onPointerMove={onPointerMove}
         onPointerUp={endPointer}
         onPointerCancel={endPointer}
+        onScroll={(e) => {
+          // The plane is `overflow: hidden` over a transformed layer, never a scroller: a
+          // focus() that scrolls it into view would shift every object off its lattice.
+          e.currentTarget.scrollLeft = 0;
+          e.currentTarget.scrollTop = 0;
+        }}
         onDoubleClick={(e) => {
           if (onPlaceTable === undefined || e.target !== e.currentTarget) return;
           const rect = e.currentTarget.getBoundingClientRect();

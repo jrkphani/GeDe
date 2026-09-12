@@ -127,6 +127,8 @@ export interface TableViewProps {
    * Not tied to `editable`: the view is the viewer's own (ADR-025).
    */
   sort?: SortCommands | undefined;
+  /** GRAPH-09: the row a hovered graph node, dot or cell lights, or null. */
+  litRowId?: Id | null | undefined;
 }
 
 const TITLE_PX = TABLE_TITLE_ROWS * LATTICE.row;
@@ -171,6 +173,7 @@ export const TableView = memo(function TableView({
   actions,
   commands,
   sort,
+  litRowId = null,
 }: TableViewProps) {
   // Per-cell counters (not just the table's): a keystroke re-renders its own cell only.
   const versions = useCellVersions(table);
@@ -520,8 +523,11 @@ export const TableView = memo(function TableView({
                     return (
                       <div
                         key={rowId}
-                        className="gd-table__row"
+                        className={clsx('gd-table__row', {
+                          'gd-table__row--lit': litRowId === rowId,
+                        })}
                         role="row"
+                        data-lit={litRowId === rowId || undefined}
                         aria-rowindex={firstIndex + (band === null ? 0 : 1) + vi}
                         aria-level={
                           hierarchical && outlineRow !== undefined

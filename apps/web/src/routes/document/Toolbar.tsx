@@ -16,6 +16,8 @@ export interface ToolbarProps {
   editable: boolean;
   inspector: InspectorMode | null;
   onAddTable: () => void;
+  /** GRAPH-01: `+ Graph` enters pointing mode (GRAPH-03). */
+  onAddGraph?: (() => void) | undefined;
   onAddRow: () => void;
   onAddColumn: () => void;
   onGridlines: (on: boolean) => void;
@@ -150,6 +152,7 @@ export function Toolbar({
   editable,
   inspector,
   onAddTable,
+  onAddGraph,
   onAddRow,
   onAddColumn,
   onGridlines,
@@ -166,6 +169,7 @@ export function Toolbar({
   const viewOnly = editable ? undefined : 'you have view-only access';
   const needsTable = viewOnly ?? (hasTable ? undefined : 'select a table first');
   const graphSoon = 'arrives with the context graph release';
+  const arrangeSoon = 'arrives with a later release (pin and DAG edges)';
   const zoomEntries: MenuEntry[] = [
     ...ZOOM_PRESETS.map<MenuEntry>((z) => ({
       kind: 'item',
@@ -199,12 +203,17 @@ export function Toolbar({
           onClick={onAddColumn}
           disabledReason={needsTable}
         />
-        <Tool icon="graph" label="Add graph" disabledReason={graphSoon} />
+        <Tool
+          icon="graph"
+          label="Add graph"
+          onClick={onAddGraph}
+          disabledReason={viewOnly ?? (onAddGraph === undefined ? graphSoon : undefined)}
+        />
       </Cluster>
       {tableMenu !== undefined && <Cluster label="Table">{tableMenu}</Cluster>}
       <Cluster label="Arrange">
-        <Tool icon="pin" label="Pin to viewport" disabledReason={graphSoon} />
-        <Tool icon="edges" label="DAG edges" disabledReason={graphSoon} />
+        <Tool icon="pin" label="Pin to viewport" disabledReason={arrangeSoon} />
+        <Tool icon="edges" label="DAG edges" disabledReason={arrangeSoon} />
       </Cluster>
       <Cluster label="Data">
         <Tool

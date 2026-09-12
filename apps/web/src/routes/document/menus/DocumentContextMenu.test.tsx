@@ -262,6 +262,8 @@ describe('context menus', () => {
     };
     expect(menuEntriesFor(ctx, { kind: 'canvas' }).map((e) => e.id)).toEqual([
       'add-table',
+      'add-shaped-table',
+      'add-graph',
       's-view',
       'fit',
       'actual',

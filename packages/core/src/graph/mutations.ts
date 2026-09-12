@@ -23,6 +23,7 @@ import {
   readString,
   tableById,
   tableMap,
+  tablesOnSheet,
   type GedeDoc,
   type GraphKind,
   type GraphMap,
@@ -287,14 +288,17 @@ export interface ShapedTableOptions {
   title?: string | undefined;
 }
 
-/** A pre-shaped table: Dimension A · B · C · Notes with six empty rows; called inside a transaction. */
+/**
+ * A pre-shaped table: Dimension A · B · C · Notes with six empty rows, titled
+ * `Contexts N` unless told otherwise; called inside a transaction.
+ */
 function shapeTable(gd: GedeDoc, options: ShapedTableOptions): Id {
   const id = createTable(gd, {
     sheetId: options.sheetId,
     at: options.at,
     columns: SHAPED_TABLE_COLUMNS.length,
     rows: SHAPED_TABLE_ROWS,
-    ...(options.title === undefined ? {} : { title: options.title }),
+    title: options.title ?? `Contexts ${String(tablesOnSheet(gd, options.sheetId).length + 1)}`,
   });
   const table = tableMap(gd, id);
   if (table !== null) {
