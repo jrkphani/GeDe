@@ -64,6 +64,24 @@ export class FakeSnapshotStore implements SnapshotStore {
   get(key: string): Promise<Uint8Array | undefined> {
     return Promise.resolve(this.objects.get(key));
   }
+
+  /** Set to make the next `deletePrefix` fail (the purge must still have committed). */
+  failNextDelete = false;
+
+  deletePrefix(prefix: string): Promise<number> {
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      return Promise.reject(new Error('simulated S3 failure'));
+    }
+    let deleted = 0;
+    for (const key of [...this.objects.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.objects.delete(key);
+        deleted += 1;
+      }
+    }
+    return Promise.resolve(deleted);
+  }
 }
 
 export interface TestServer {

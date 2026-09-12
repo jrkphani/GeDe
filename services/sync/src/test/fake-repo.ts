@@ -1,19 +1,36 @@
 /**
  * FAKE — an in-memory `Repo` for tests. It implements exactly the queries the
  * service issues, with the same semantics the Postgres implementation has
- * (sequence assignment, soft-delete visibility, snapshot commit pruning). It
- * is not a database and is never used outside tests.
+ * (sequence assignment, soft-delete visibility, snapshot commit pruning,
+ * library views, retention window, size accounting, purge cascade). It is not
+ * a database and is never used outside tests.
+ *
+ * Keeping it honest: when `Repo` grows a method, add it here with the
+ * semantics `pg.ts` gives it and a test that exercises both sides of the
+ * behaviour. The library views (`listForUser`), `sizeBytes` and `purgeDeleted`
+ * below mirror the SQL in `pg.ts` line for line:
+ *   - `recents`  = live, owned or shared with me, newest `updatedAt` first
+ *   - `browse`   = live, owned
+ *   - `shared`   = live, shared with me, plus my own documents that have a share
+ *   - `deleted`  = owned, `deletedAt` within `RECENTLY_DELETED_DAYS`
+ *   - sizeBytes  = size of the snapshot at `snapshotSeq` + bytes of updates after it
+ *   - purge      = every owned soft-deleted document (retention or not), cascade
+ *                  to updates/snapshots/shares, one `document.purge` audit row each;
+ *                  audit rows for the document are kept (no cascade, migration 0003)
  */
 import { randomUUID } from 'node:crypto';
 
 import type { Permission } from '@gede/db';
 
-import type {
-  DocumentListing,
-  DocumentRecord,
-  Repo,
-  StoredUpdate,
-  UserRecord,
+import {
+  RECENTLY_DELETED_DAYS,
+  type DocumentListing,
+  type DocumentRecord,
+  type DocumentSummary,
+  type LibraryView,
+  type Repo,
+  type StoredUpdate,
+  type UserRecord,
 } from '../repo/types.js';
 
 interface MutableDocument extends DocumentRecord {
@@ -24,6 +41,18 @@ interface MutableDocument extends DocumentRecord {
   deletedAt: Date | null;
 }
 
+interface MutableUser extends UserRecord {
+  email: string | null;
+  displayName: string | null;
+  locale: string | null;
+}
+
+export interface FakeShare {
+  permission: Permission;
+  invitedBy: string;
+  createdAt: Date;
+}
+
 export interface AuditEntry {
   documentId: string;
   userId: string | null;
@@ -31,10 +60,12 @@ export interface AuditEntry {
   target: string | null;
 }
 
+const RETENTION_MS = RECENTLY_DELETED_DAYS * 24 * 60 * 60 * 1000;
+
 export class FakeRepo implements Repo {
-  readonly usersBySub = new Map<string, UserRecord>();
+  readonly usersBySub = new Map<string, MutableUser>();
   readonly docs = new Map<string, MutableDocument>();
-  readonly sharesByDoc = new Map<string, Map<string, Permission>>();
+  readonly sharesByDoc = new Map<string, Map<string, FakeShare>>();
   readonly updatesByDoc = new Map<string, StoredUpdate[]>();
   readonly snapshotsByDoc = new Map<string, { seq: number; s3Key: string; sizeBytes: number }[]>();
   readonly auditLog: AuditEntry[] = [];
@@ -43,6 +74,8 @@ export class FakeRepo implements Repo {
   /** Set to make `append` fail once (to exercise retry). */
   failNextAppend = false;
   appendCalls = 0;
+  /** Set to make `purgeDeleted` fail before anything changes. */
+  failNextPurge = false;
 
   ping(): Promise<void> {
     return this.down ? Promise.reject(new Error('connection refused')) : Promise.resolve();
@@ -50,14 +83,28 @@ export class FakeRepo implements Repo {
 
   // --- test helpers ---------------------------------------------------------
 
-  seedUser(sub: string, email: string | null = null): UserRecord {
-    const user: UserRecord = { id: randomUUID(), cognitoSub: sub, email, displayName: null };
+  seedUser(
+    sub: string,
+    email: string | null = null,
+    displayName: string | null = null,
+  ): UserRecord {
+    const user: MutableUser = {
+      id: randomUUID(),
+      cognitoSub: sub,
+      email,
+      displayName,
+      locale: null,
+    };
     this.usersBySub.set(sub, user);
     return user;
   }
 
-  seedDocument(ownerId: string, title = 'Untitled'): DocumentRecord {
-    const now = new Date();
+  userById(id: string): MutableUser | undefined {
+    for (const user of this.usersBySub.values()) if (user.id === id) return user;
+    return undefined;
+  }
+
+  seedDocument(ownerId: string, title = 'Untitled', at = new Date()): DocumentRecord {
     const doc: MutableDocument = {
       id: randomUUID(),
       ownerId,
@@ -65,17 +112,52 @@ export class FakeRepo implements Repo {
       linkAccess: 'none',
       snapshotKey: null,
       snapshotSeq: 0,
-      updatedAt: now,
+      createdAt: at,
+      updatedAt: at,
       deletedAt: null,
     };
     this.docs.set(doc.id, doc);
     return { ...doc };
   }
 
-  share(documentId: string, userId: string, permission: Permission): void {
-    const map = this.sharesByDoc.get(documentId) ?? new Map<string, Permission>();
-    map.set(userId, permission);
+  /** Add a share; `invitedBy` defaults to the document's owner, as the share sheet does. */
+  share(documentId: string, userId: string, permission: Permission, invitedBy?: string): void {
+    const map = this.sharesByDoc.get(documentId) ?? new Map<string, FakeShare>();
+    const owner = this.docs.get(documentId)?.ownerId;
+    map.set(userId, {
+      permission,
+      invitedBy: invitedBy ?? owner ?? userId,
+      createdAt: new Date(),
+    });
     this.sharesByDoc.set(documentId, map);
+  }
+
+  private sizeBytes(doc: MutableDocument): number {
+    const snapshot = this.snapshotsByDoc.get(doc.id)?.find((s) => s.seq === doc.snapshotSeq);
+    const tail = (this.updatesByDoc.get(doc.id) ?? [])
+      .filter((u) => u.seq > doc.snapshotSeq)
+      .reduce((n, u) => n + u.update.byteLength, 0);
+    return (snapshot?.sizeBytes ?? 0) + tail;
+  }
+
+  private personName(userId: string): string | null {
+    const user = this.userById(userId);
+    return user?.displayName ?? user?.email ?? null;
+  }
+
+  private summarise(doc: MutableDocument, userId: string): DocumentSummary {
+    const share = doc.ownerId === userId ? undefined : this.sharesByDoc.get(doc.id)?.get(userId);
+    return {
+      ...doc,
+      ownerName: this.personName(doc.ownerId),
+      sizeBytes: this.sizeBytes(doc),
+      sharedBy: share ? { id: share.invitedBy, name: this.personName(share.invitedBy) } : null,
+      sharedWithOthers: (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0,
+    };
+  }
+
+  private withinRetention(doc: MutableDocument, now: number): boolean {
+    return doc.deletedAt !== null && now - doc.deletedAt.getTime() < RETENTION_MS;
   }
 
   // --- Repo -------------------------------------------------------------------
@@ -84,34 +166,50 @@ export class FakeRepo implements Repo {
     upsertFromToken: (identity) => {
       const existing = this.usersBySub.get(identity.sub);
       if (existing) {
-        const merged: UserRecord = { ...existing, email: existing.email ?? identity.email };
-        this.usersBySub.set(identity.sub, merged);
-        return Promise.resolve(merged);
+        existing.email = existing.email ?? identity.email;
+        return Promise.resolve({ ...existing });
       }
       return Promise.resolve(this.seedUser(identity.sub, identity.email));
+    },
+    updateProfile: (id, patch) => {
+      const user = this.userById(id);
+      if (!user) return Promise.resolve(undefined);
+      if (patch.displayName !== undefined) user.displayName = patch.displayName;
+      if (patch.locale !== undefined) user.locale = patch.locale;
+      return Promise.resolve({ ...user });
     },
   };
 
   readonly documents: Repo['documents'] = {
-    listForUser: (userId, view) => {
+    listForUser: (userId, view: LibraryView) => {
+      const now = Date.now();
       const out: DocumentListing[] = [];
       for (const doc of this.docs.values()) {
-        const shared = this.sharesByDoc.get(doc.id)?.get(userId);
-        if (view === 'deleted') {
-          if (doc.deletedAt !== null && doc.ownerId === userId)
-            out.push({ ...doc, permission: 'owner' });
-          continue;
-        }
-        if (doc.deletedAt !== null) continue;
-        if (doc.ownerId === userId) out.push({ ...doc, permission: 'owner' });
-        else if (shared) out.push({ ...doc, permission: shared });
+        const share = this.sharesByDoc.get(doc.id)?.get(userId);
+        const owned = doc.ownerId === userId;
+        const permission = owned ? 'owner' : share?.permission;
+        if (permission === undefined) continue;
+        const live = doc.deletedAt === null;
+        const include =
+          view === 'recents'
+            ? live
+            : view === 'browse'
+              ? live && owned
+              : view === 'shared'
+                ? live && (!owned || (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0)
+                : owned && this.withinRetention(doc, now);
+        if (include) out.push({ ...this.summarise(doc, userId), permission });
       }
-      out.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+      out.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || (a.id < b.id ? 1 : -1));
       return Promise.resolve(out);
     },
     get: (id) => {
       const doc = this.docs.get(id);
       return Promise.resolve(doc ? { ...doc } : undefined);
+    },
+    summarise: (id, userId) => {
+      const doc = this.docs.get(id);
+      return Promise.resolve(doc ? this.summarise(doc, userId) : undefined);
     },
     create: ({ ownerId, title }) => Promise.resolve(this.seedDocument(ownerId, title)),
     rename: (id, title) => {
@@ -125,10 +223,77 @@ export class FakeRepo implements Repo {
       const doc = this.docs.get(id);
       if (doc?.deletedAt !== null) return Promise.resolve(undefined);
       doc.deletedAt = new Date();
+      doc.updatedAt = doc.deletedAt;
       return Promise.resolve({ ...doc });
     },
+    recover: (id) => {
+      const doc = this.docs.get(id);
+      if (doc?.deletedAt == null) return Promise.resolve(undefined);
+      doc.deletedAt = null;
+      doc.updatedAt = new Date();
+      return Promise.resolve({ ...doc });
+    },
+    recoverAllDeleted: (ownerId) => {
+      const now = Date.now();
+      const recovered: DocumentRecord[] = [];
+      for (const doc of this.docs.values()) {
+        if (doc.ownerId !== ownerId || !this.withinRetention(doc, now)) continue;
+        doc.deletedAt = null;
+        doc.updatedAt = new Date(now);
+        recovered.push({ ...doc });
+      }
+      return Promise.resolve(recovered);
+    },
+    purgeDeleted: (ownerId, actorId) => {
+      if (this.failNextPurge) {
+        this.failNextPurge = false;
+        return Promise.reject(new Error('simulated purge failure'));
+      }
+      const purged: { id: string; title: string }[] = [];
+      for (const doc of [...this.docs.values()]) {
+        if (doc.ownerId !== ownerId || doc.deletedAt === null) continue;
+        this.auditLog.push({
+          documentId: doc.id,
+          userId: actorId,
+          action: 'document.purge',
+          target: doc.title,
+        });
+        this.docs.delete(doc.id);
+        this.updatesByDoc.delete(doc.id);
+        this.snapshotsByDoc.delete(doc.id);
+        this.sharesByDoc.delete(doc.id);
+        purged.push({ id: doc.id, title: doc.title });
+      }
+      return Promise.resolve(purged);
+    },
     sharePermission: (documentId, userId) =>
-      Promise.resolve(this.sharesByDoc.get(documentId)?.get(userId)),
+      Promise.resolve(this.sharesByDoc.get(documentId)?.get(userId)?.permission),
+    participants: (documentId) => {
+      const doc = this.docs.get(documentId);
+      if (!doc) return Promise.resolve(undefined);
+      const owner = this.userById(doc.ownerId);
+      const participants = [...(this.sharesByDoc.get(documentId) ?? [])]
+        .sort(([, a], [, b]) => a.createdAt.getTime() - b.createdAt.getTime())
+        .map(([userId, share]) => {
+          const user = this.userById(userId);
+          return {
+            userId,
+            name: user?.displayName ?? null,
+            email: user?.email ?? null,
+            permission: share.permission,
+            invitedBy: share.invitedBy,
+          };
+        });
+      return Promise.resolve({
+        owner: {
+          id: doc.ownerId,
+          name: owner?.displayName ?? null,
+          email: owner?.email ?? null,
+        },
+        participants,
+        linkAccess: doc.linkAccess,
+      });
+    },
   };
 
   readonly updates: Repo['updates'] = {

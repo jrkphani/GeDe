@@ -3,18 +3,26 @@
  * operation runs in one transaction; sequence numbers are assigned under the
  * document row lock so two writers can never collide (ARCHITECTURE §1.7 step 1
  * — a second task — needs no change here).
+ *
+ * Every value that reaches SQL goes through Drizzle's parameter binding; the
+ * `sql` fragments below reference columns and bind values, never interpolate
+ * strings.
  */
-import { and, asc, desc, eq, gt, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 
 import { auditLog, docUpdates, documents, shares, snapshots, users, type Db } from '@gede/db';
 
 import type { Logger } from '../logger.js';
-import type {
-  DocumentListing,
-  DocumentPermission,
-  DocumentRecord,
-  Repo,
-  UserRecord,
+import {
+  RECENTLY_DELETED_DAYS,
+  type DocumentListing,
+  type DocumentPermission,
+  type DocumentRecord,
+  type DocumentSummary,
+  type LibraryView,
+  type Repo,
+  type UserRecord,
 } from './types.js';
 
 const PG_UNIQUE_VIOLATION = '23505';
@@ -43,16 +51,108 @@ function toDocument(row: DocumentRow): DocumentRecord {
     linkAccess: row.linkAccess,
     snapshotKey: row.snapshotKey,
     snapshotSeq: row.snapshotSeq,
+    createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
   };
 }
 
 function toUser(row: typeof users.$inferSelect): UserRecord {
-  return { id: row.id, cognitoSub: row.cognitoSub, email: row.email, displayName: row.displayName };
+  return {
+    id: row.id,
+    cognitoSub: row.cognitoSub,
+    email: row.email,
+    displayName: row.displayName,
+    locale: row.locale,
+  };
 }
 
+/** Aliases for the extra `users` joins in the library query and the shares-exist probe. */
+const owner = alias(users, 'owner');
+const inviter = alias(users, 'inviter');
+const anyShare = alias(shares, 'any_share');
+
+/** Deleted within the retention window (LIB-08), evaluated on the database's clock. */
+const withinRetention = sql`${documents.deletedAt} > now() - (${RECENTLY_DELETED_DAYS}::int * interval '1 day')`;
+
 export function createPgRepo(db: Db, logger: Logger): Repo {
+  /** `EXISTS (SELECT 1 FROM shares WHERE document_id = documents.id)` for the current row. */
+  const hasShares = () =>
+    exists(
+      db
+        .select({ one: sql`1` })
+        .from(anyShare)
+        .where(eq(anyShare.documentId, documents.id)),
+    );
+
+  /**
+   * The library projection of `documents` for one caller: the row, the owner's
+   * name, the caller's share (permission and who invited them), whether any
+   * share exists, and the size. Correlated subqueries keep it one statement
+   * however many rows come back (no N+1).
+   */
+  function summaryQuery(userId: string) {
+    return db
+      .select({
+        doc: documents,
+        ownerName: sql<string | null>`coalesce(${owner.displayName}, ${owner.email})`,
+        sharePermission: shares.permission,
+        invitedBy: shares.invitedBy,
+        inviterName: sql<string | null>`coalesce(${inviter.displayName}, ${inviter.email})`,
+        sharedWithOthers: hasShares(),
+        // bigint aggregates arrive from pg as strings; converted below.
+        sizeBytes: sql<string | number>`
+          coalesce(${snapshots.sizeBytes}, 0)::bigint
+          + coalesce((
+              select sum(octet_length(${docUpdates.update}))
+              from ${docUpdates}
+              where ${docUpdates.documentId} = ${documents.id}
+                and ${docUpdates.seq} > ${documents.snapshotSeq}
+            ), 0)::bigint`,
+      })
+      .from(documents)
+      .innerJoin(owner, eq(owner.id, documents.ownerId))
+      .leftJoin(shares, and(eq(shares.documentId, documents.id), eq(shares.userId, userId)))
+      .leftJoin(inviter, eq(inviter.id, shares.invitedBy))
+      .leftJoin(
+        snapshots,
+        and(eq(snapshots.documentId, documents.id), eq(snapshots.seq, documents.snapshotSeq)),
+      );
+  }
+
+  type SummaryRow = Awaited<ReturnType<ReturnType<typeof summaryQuery>['execute']>>[number];
+
+  function toSummary(row: SummaryRow, userId: string): DocumentSummary {
+    const doc = toDocument(row.doc);
+    const sharedBy =
+      doc.ownerId !== userId && row.invitedBy !== null
+        ? { id: row.invitedBy, name: row.inviterName }
+        : null;
+    return {
+      ...doc,
+      ownerName: row.ownerName,
+      sizeBytes: Number(row.sizeBytes),
+      sharedBy,
+      sharedWithOthers: Boolean(row.sharedWithOthers),
+    };
+  }
+
+  function scopeFor(userId: string, view: LibraryView) {
+    const owned = eq(documents.ownerId, userId);
+    const sharedWithMe = isNotNull(shares.userId);
+    const live = isNull(documents.deletedAt);
+    switch (view) {
+      case 'recents':
+        return and(live, or(owned, sharedWithMe));
+      case 'browse':
+        return and(live, owned);
+      case 'shared':
+        return and(live, or(sharedWithMe, and(owned, hasShares())));
+      case 'deleted':
+        return and(owned, isNotNull(documents.deletedAt), withinRetention);
+    }
+  }
+
   return {
     async ping() {
       await db.execute(sql`SELECT 1`);
@@ -89,27 +189,31 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         if (!row) throw new Error('users upsert returned no row');
         return toUser(row);
       },
+
+      async updateProfile(id, patch) {
+        const set: Partial<typeof users.$inferInsert> = {};
+        if (patch.displayName !== undefined) set.displayName = patch.displayName;
+        if (patch.locale !== undefined) set.locale = patch.locale;
+        if (Object.keys(set).length === 0) {
+          const [row] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+          return row ? toUser(row) : undefined;
+        }
+        const [row] = await db.update(users).set(set).where(eq(users.id, id)).returning();
+        return row ? toUser(row) : undefined;
+      },
     },
 
     documents: {
       async listForUser(userId, view) {
-        const ownedOrShared = or(eq(documents.ownerId, userId), isNotNull(shares.userId));
-        const scope =
-          view === 'active'
-            ? and(isNull(documents.deletedAt), ownedOrShared)
-            : and(isNotNull(documents.deletedAt), eq(documents.ownerId, userId));
-        const rows = await db
-          .select({ doc: documents, shared: shares.permission })
-          .from(documents)
-          .leftJoin(shares, and(eq(shares.documentId, documents.id), eq(shares.userId, userId)))
-          .where(scope)
-          .orderBy(desc(documents.updatedAt));
+        const rows = await summaryQuery(userId)
+          .where(scopeFor(userId, view))
+          .orderBy(desc(documents.updatedAt), desc(documents.id));
         const listings: DocumentListing[] = [];
-        for (const { doc, shared } of rows) {
+        for (const row of rows) {
           const permission: DocumentPermission | null =
-            doc.ownerId === userId ? 'owner' : (shared ?? null);
+            row.doc.ownerId === userId ? 'owner' : (row.sharePermission ?? null);
           if (permission === null) continue; // cannot happen given the WHERE, but never invent access
-          listings.push({ ...toDocument(doc), permission });
+          listings.push({ ...toSummary(row, userId), permission });
         }
         return listings;
       },
@@ -117,6 +221,11 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       async get(id) {
         const [row] = await db.select().from(documents).where(eq(documents.id, id)).limit(1);
         return row ? toDocument(row) : undefined;
+      },
+
+      async summarise(id, userId) {
+        const [row] = await summaryQuery(userId).where(eq(documents.id, id)).limit(1);
+        return row ? toSummary(row, userId) : undefined;
       },
 
       async create({ ownerId, title }) {
@@ -144,6 +253,49 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         return row ? toDocument(row) : undefined;
       },
 
+      async recover(id) {
+        const [row] = await db
+          .update(documents)
+          .set({ deletedAt: null, updatedAt: new Date() })
+          .where(and(eq(documents.id, id), isNotNull(documents.deletedAt)))
+          .returning();
+        return row ? toDocument(row) : undefined;
+      },
+
+      async recoverAllDeleted(ownerId) {
+        const rows = await db
+          .update(documents)
+          .set({ deletedAt: null, updatedAt: new Date() })
+          .where(
+            and(eq(documents.ownerId, ownerId), isNotNull(documents.deletedAt), withinRetention),
+          )
+          .returning();
+        return rows.map(toDocument);
+      },
+
+      purgeDeleted(ownerId, actorId) {
+        return db.transaction(async (tx) => {
+          const doomed = await tx
+            .select({ id: documents.id, title: documents.title })
+            .from(documents)
+            .where(and(eq(documents.ownerId, ownerId), isNotNull(documents.deletedAt)))
+            .for('update');
+          if (doomed.length === 0) return [];
+          const ids = doomed.map((d) => d.id);
+          await tx.insert(auditLog).values(
+            doomed.map((d) => ({
+              documentId: d.id,
+              userId: actorId,
+              action: 'document.purge',
+              target: d.title,
+            })),
+          );
+          // shares, invites, doc_updates and snapshots cascade from documents.
+          await tx.delete(documents).where(inArray(documents.id, ids));
+          return doomed;
+        });
+      },
+
       async sharePermission(documentId, userId) {
         const [row] = await db
           .select({ permission: shares.permission })
@@ -151,6 +303,38 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           .where(and(eq(shares.documentId, documentId), eq(shares.userId, userId)))
           .limit(1);
         return row?.permission;
+      },
+
+      async participants(documentId) {
+        const [head] = await db
+          .select({
+            ownerId: documents.ownerId,
+            ownerName: users.displayName,
+            ownerEmail: users.email,
+            linkAccess: documents.linkAccess,
+          })
+          .from(documents)
+          .innerJoin(users, eq(users.id, documents.ownerId))
+          .where(eq(documents.id, documentId))
+          .limit(1);
+        if (!head) return undefined;
+        const rows = await db
+          .select({
+            userId: shares.userId,
+            name: users.displayName,
+            email: users.email,
+            permission: shares.permission,
+            invitedBy: shares.invitedBy,
+          })
+          .from(shares)
+          .innerJoin(users, eq(users.id, shares.userId))
+          .where(eq(shares.documentId, documentId))
+          .orderBy(asc(shares.createdAt), asc(shares.userId));
+        return {
+          owner: { id: head.ownerId, name: head.ownerName, email: head.ownerEmail },
+          participants: rows,
+          linkAccess: head.linkAccess,
+        };
       },
     },
 
