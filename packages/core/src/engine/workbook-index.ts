@@ -13,13 +13,15 @@ import { formatAddress, formatColumn, formatRange, type CellRef } from '../addre
 import type { UnitBounds } from '../doc/geometry.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
 import { references, type Ast, type Reference } from '../formula/ast.js';
-import { encodeBound, type BoundReference } from '../formula/bound.js';
+import { encodeBound, isOpenCorner, type BoundReference, type CornerId } from '../formula/bound.js';
 import {
   bindFormula,
   projectFormula,
   type Binder,
   type BoundTarget,
+  type CornerTarget,
   type Projector,
+  type TableExtent,
 } from '../formula/project.js';
 import { buildEntityIndex, type EntityIndex } from './entities.js';
 import {
@@ -113,11 +115,33 @@ export class WorkbookIndex {
     return o;
   }
 
-  /** Whether the row (when named) and column still exist in the table. */
-  hasCell(target: BoundTarget): boolean {
+  /** Whether the row and column still exist in the table; an open corner (`^`, `*`) needs only the table. */
+  hasCell(target: CornerTarget): boolean {
     const o = this.ordinalsOf(target.tableId);
     if (o === undefined) return false;
-    return (target.rowId === '' || o.rows.has(target.rowId)) && o.cols.has(target.colId);
+    return (
+      (isOpenCorner(target.rowId) || o.rows.has(target.rowId)) &&
+      (isOpenCorner(target.colId) || o.cols.has(target.colId))
+    );
+  }
+
+  /** Resolve an open corner to the row/column id at that edge today; null when the table is empty there. */
+  private cornerCell(target: CornerTarget): BoundTarget | null {
+    const t = this.tables.get(target.tableId);
+    if (t === undefined) return null;
+    const rowId = isOpenCorner(target.rowId)
+      ? target.rowId === '^'
+        ? t.rows[0]
+        : t.rows[t.rows.length - 1]
+      : target.rowId;
+    const visible = t.columns.filter((c) => c.width > 0);
+    const colId = isOpenCorner(target.colId)
+      ? target.colId === '^'
+        ? visible[0]?.id
+        : visible[visible.length - 1]?.id
+      : target.colId;
+    if (rowId === undefined || colId === undefined) return null;
+    return { tableId: target.tableId, rowId, colId };
   }
 
   sheetIndex(sheetId: Id): SheetIndex {
@@ -145,16 +169,48 @@ export class WorkbookIndex {
     return this.entityByCell.get(cellId);
   }
 
-  indexedCell(target: BoundTarget): IndexedCell | undefined {
+  indexedCell(target: CornerTarget): IndexedCell | undefined {
     const t = this.tables.get(target.tableId);
     if (t === undefined || !this.hasCell(target)) return undefined;
+    const cell = this.cornerCell(target);
+    if (cell === null) return undefined;
     return this.sheetIndex(t.sheetId).byCellId.get(
-      workbookCellId(target.tableId, cellKey(target.rowId, target.colId)),
+      workbookCellId(cell.tableId, cellKey(cell.rowId, cell.colId)),
     );
   }
 
-  positionOf(target: BoundTarget): CellRef | null {
+  positionOf(target: CornerTarget): CellRef | null {
     return this.indexedCell(target)?.ref ?? null;
+  }
+
+  /** Lattice extent of a table's addressable data cells, for open-ended range corners. */
+  extentOf(tableId: Id): TableExtent | null {
+    const t = this.tables.get(tableId);
+    if (t === undefined || t.rows.length === 0) return null;
+    const cells = this.sheetIndex(t.sheetId);
+    let extent: TableExtent | null = null;
+    for (const rowId of [t.rows[0], t.rows[t.rows.length - 1]]) {
+      for (const column of t.columns) {
+        if (column.width === 0 || rowId === undefined) continue;
+        const cell = cells.byCellId.get(workbookCellId(tableId, cellKey(rowId, column.id)));
+        if (cell === undefined) continue;
+        extent =
+          extent === null
+            ? {
+                firstRow: cell.ref.row,
+                lastRow: cell.ref.row,
+                firstCol: cell.ref.col,
+                lastCol: cell.ref.col,
+              }
+            : {
+                firstRow: Math.min(extent.firstRow, cell.ref.row),
+                lastRow: Math.max(extent.lastRow, cell.ref.row),
+                firstCol: Math.min(extent.firstCol, cell.ref.col),
+                lastCol: Math.max(extent.lastCol, cell.ref.col),
+              };
+      }
+    }
+    return extent;
   }
 
   /** Current A1 label of a cell id, for messages; `#REF`-style when gone. */
@@ -187,13 +243,18 @@ export class WorkbookIndex {
         const t = this.tables.get(ref.tableId);
         const o = this.ordinalsOf(ref.tableId);
         if (t === undefined || o === undefined) return undefined;
-        const r1 = o.rows.get(ref.from.rowId);
-        const r2 = o.rows.get(ref.to.rowId);
-        const c1 = o.cols.get(ref.from.colId);
-        const c2 = o.cols.get(ref.to.colId);
+        const rowOrdinal = (id: CornerId): number | undefined =>
+          id === '^' ? 0 : id === '*' ? t.rows.length - 1 : o.rows.get(id);
+        const colOrdinal = (id: CornerId): number | undefined =>
+          id === '^' ? 0 : id === '*' ? t.columns.length - 1 : o.cols.get(id);
+        const r1 = rowOrdinal(ref.from.rowId);
+        const r2 = rowOrdinal(ref.to.rowId);
+        const c1 = colOrdinal(ref.from.colId);
+        const c2 = colOrdinal(ref.to.colId);
         if (r1 === undefined || r2 === undefined || c1 === undefined || c2 === undefined) {
           return undefined;
         }
+        if (r1 < 0 || r2 < 0 || c1 < 0 || c2 < 0) return []; // an open corner on an empty table
         const out: WorkbookCellId[] = [];
         for (let r = Math.min(r1, r2); r <= Math.max(r1, r2); r += 1) {
           for (let c = Math.min(c1, c2); c <= Math.max(c1, c2); c += 1) {
@@ -251,6 +312,7 @@ export class WorkbookIndex {
         const colon = key.indexOf(':');
         return { tableId: entry.tableId, rowId: key.slice(0, colon), colId: key.slice(colon + 1) };
       },
+      extentOf: (tableId) => this.extentOf(tableId),
     };
   }
 
@@ -277,9 +339,16 @@ export class WorkbookIndex {
     };
   }
 
-  /** Bind a typed formula on `sheetId` (the sheet of the cell being committed). */
-  bind(sheetId: Id, text: string): string {
-    return bindFormula(text, this.binder(sheetId));
+  /**
+   * Bind a typed formula on `sheetId` (the sheet of the cell being committed).
+   * With the cell's previous source, `#REF` / `#hidden` operands keep their tokens.
+   */
+  bind(sheetId: Id, text: string, previous?: string): string {
+    return bindFormula(
+      text,
+      this.binder(sheetId),
+      previous === undefined ? undefined : { source: previous, projector: this.projector() },
+    );
   }
 
   /** Today's A1 / `@` text for a stored formula. */
@@ -317,12 +386,19 @@ export class WorkbookIndex {
   /**
    * One outline per operand of a formula as it reads on `sheetId`: label as
    * the person sees it, the lattice block to draw, and the cells read. Works
-   * for a stored (bound) source and for a typed draft alike.
+   * for a stored (bound) source and for a typed draft alike. `stored` says the
+   * text is what the cell holds: then an operand that is not a bound token is
+   * positional — it follows the address, not a cell — and is flagged so the
+   * UI can say so; in a draft nothing is bound yet, so nothing is flagged.
    */
-  operands(sheetId: Id, ast: Ast): OperandOutline[] {
+  operands(sheetId: Id, ast: Ast, stored = false): OperandOutline[] {
     const index = this.sheetIndex(sheetId);
     const projector = this.projector();
-    return references(ast).map((ref, i) => this.operand(sheetId, index, projector, ref, i));
+    return references(ast).map((ref, i) => {
+      const outline = this.operand(sheetId, index, projector, ref, i);
+      const anchored = !stored || ref.kind === 'bound';
+      return anchored ? outline : { ...outline, anchored: false };
+    });
   }
 
   private operand(
@@ -347,6 +423,7 @@ export class WorkbookIndex {
             rows: cell?.rows ?? 1,
           },
           cellIds: cell === undefined ? [] : [cell.cellId],
+          anchored: true,
         };
       }
       case 'range': {
@@ -364,6 +441,7 @@ export class WorkbookIndex {
             rows: ref.range.end.row - ref.range.start.row + (end?.rows ?? 1),
           },
           cellIds: cells.map((c) => c.cellId),
+          anchored: true,
         };
       }
       case 'column': {
@@ -375,6 +453,7 @@ export class WorkbookIndex {
           span: ref.span,
           rect: this.rectOfCells(cells),
           cellIds: cells.map((c) => c.cellId),
+          anchored: true,
         };
       }
       case 'entity': {
@@ -387,8 +466,19 @@ export class WorkbookIndex {
           span: ref.span,
           rect: cell === undefined ? null : this.rectOfCells([cell]),
           cellIds: cell === undefined ? [] : [cell.cellId],
+          anchored: true,
         };
       }
+      case 'placeholder':
+        return {
+          index: i,
+          kind: 'address',
+          label: `#${ref.label}`,
+          span: ref.span,
+          rect: null,
+          cellIds: [],
+          anchored: true,
+        };
       case 'bound': {
         const ids = this.boundCells(ref.ref) ?? [];
         const cells = this.indexedById(sheetId, ids);
@@ -405,6 +495,7 @@ export class WorkbookIndex {
           span: ref.span,
           rect: this.rectOfCells(cells),
           cellIds: ids,
+          anchored: true,
         };
       }
     }

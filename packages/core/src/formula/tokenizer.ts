@@ -19,6 +19,7 @@ export type TokenKind =
   | 'rparen'
   | 'space'
   | 'bound'
+  | 'placeholder'
   | 'other'
   | 'eof';
 
@@ -70,6 +71,11 @@ export function tokenize(text: string): TokenizeResult {
       push('lparen', start, ++i);
     } else if (ch === ')') {
       push('rparen', start, ++i);
+    } else if (ch === '#' && /^#(?:REF|hidden)\b/u.test(text.slice(i))) {
+      // A projected reference whose target is gone (`#REF`) or has no address (`#hidden`).
+      const length = text.startsWith('#REF', i) ? 4 : 7;
+      i += length;
+      push('placeholder', start, i, text.slice(start + 1, i));
     } else if (ch === '{') {
       // An id-bound token (`{c:…}`); a brace that is not one is ordinary text.
       const close = text.indexOf('}', i);

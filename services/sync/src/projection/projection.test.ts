@@ -6,6 +6,7 @@ import {
   addRow,
   cellKey,
   cellsMap,
+  commitCellText,
   createSheet,
   createTable,
   encodeSeededDocument,
@@ -112,6 +113,14 @@ describe('projectDocument', () => {
       formula: '=Sum(B2:B3)',
       rich: null,
     });
+    // A committed formula holds id tokens (PRD §20): `text_plain` carries the A1 form the person
+    // reads (searchable, auditable), `formula` the stored contract.
+    commitCellText(gd, tableId, rows[1]!, cols[1]!, '=Sum(B4:B5)');
+    const bound = projectDocument(gd.doc, DOC_ID).cells.find(
+      (x) => x.rowId === rows[1] && x.columnId === cols[1],
+    );
+    expect(bound?.formula).toMatch(/^=Sum\(\{r:[0-9A-Z]{26}:/);
+    expect(bound?.textPlain).toBe('=Sum(B4:B5)');
     // Two paragraphs flatten to two lines.
     expect(cell(1, 0)?.textPlain).toBe('Sleeping bag\nminus twenty');
     expect(cell(1, 0)?.rich?.content).toHaveLength(2);

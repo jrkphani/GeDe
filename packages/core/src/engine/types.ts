@@ -98,6 +98,8 @@ export interface ResolvedOperand {
   readonly kind: OperandKind;
   readonly cellIds: readonly WorkbookCellId[];
   readonly missing: boolean;
+  /** False when the operand is not bound to ids and follows the address instead (PRD §20). */
+  readonly anchored: boolean;
 }
 
 /**
@@ -114,6 +116,12 @@ export interface OperandOutline {
   readonly span: Span;
   readonly rect: UnitBounds | null;
   readonly cellIds: readonly WorkbookCellId[];
+  /**
+   * False for an operand in a stored formula that is not bound to ids — an
+   * address that named empty canvas at commit — so it follows the position,
+   * not a cell, and the UI must say so (PRD §20).
+   */
+  readonly anchored: boolean;
 }
 
 export interface CellResult {
@@ -136,7 +144,13 @@ export interface ApplyRequest {
   readonly changes: readonly WorkbookChange[];
 }
 
-export type EngineRequest = ApplyRequest;
+/** Liveness probe: a Worker killed without an `error` event (out of memory) answers nothing. */
+export interface PingRequest {
+  readonly type: 'ping';
+  readonly seq: number;
+}
+
+export type EngineRequest = ApplyRequest | PingRequest;
 
 export interface ResultsResponse {
   readonly type: 'results';
@@ -148,7 +162,12 @@ export interface ResultsResponse {
   readonly elapsedMs: number;
 }
 
-export type EngineResponse = ResultsResponse;
+export interface PongResponse {
+  readonly type: 'pong';
+  readonly seq: number;
+}
+
+export type EngineResponse = ResultsResponse | PongResponse;
 
 /** A resolved position on a sheet's lattice: the cell there and how many units it covers. */
 export interface IndexedCell {

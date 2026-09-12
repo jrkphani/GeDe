@@ -25,12 +25,17 @@ export function FormulaCellContent({
   expression = true,
   className,
 }: FormulaCellContentProps) {
-  const { value, formula, error, badge, pending, operands } = display;
+  const { value, formula, error, badge, pending, operands, positional } = display;
+  const positionalNote =
+    positional === 0
+      ? ''
+      : ` — ${String(positional)} ${positional === 1 ? 'reference is' : 'references are'} not anchored to a cell`;
   return (
     <span
       className={clsx('gd-formula', { 'gd-formula--error': error !== null }, className)}
       data-testid="formula-cell"
-      title={error?.message ?? formula ?? undefined}
+      data-positional={positional === 0 ? undefined : positional}
+      title={(error?.message ?? formula ?? '') + positionalNote || undefined}
     >
       <span className="gd-formula__line">
         {error !== null ? (
@@ -46,9 +51,10 @@ export function FormulaCellContent({
         {badge !== null && (
           <span
             className="gd-mono gd-formula__badge"
-            aria-label={`Formula, ${String(operands.length)} ${operands.length === 1 ? 'reference' : 'references'}`}
+            aria-label={`Formula, ${String(operands.length)} ${operands.length === 1 ? 'reference' : 'references'}${positionalNote}`}
           >
             {badge}
+            {positional > 0 && <span className="gd-formula__positional">·</span>}
           </span>
         )}
       </span>

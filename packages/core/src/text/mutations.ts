@@ -15,6 +15,7 @@ import {
   type GedeDoc,
   type TableMap,
 } from '../doc/schema.js';
+import { commitCellText, projectCellText } from '../engine/commit.js';
 import { cellKey, type Id } from '../ids.js';
 import { replaceSpan } from './algebra.js';
 import {
@@ -87,7 +88,10 @@ export function setCellRich(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, doc:
 
 /**
  * FIND-08 on a rich cell: replace one UTF-16 span of the cell's plain text
- * and keep the marks around it (a formula cell is edited as its source).
+ * and keep the marks around it. A formula cell is edited as the expression
+ * the person reads (its stored id tokens projected to today's addresses, the
+ * same text Find indexed) and re-bound on the way back through
+ * `commitCellText`, so a replace never stores an unbound reference.
  * False when the span does not fit the cell's current text — Replace never
  * rewrites more than the match it can locate — or the row or column went.
  */
@@ -101,6 +105,13 @@ export function replaceInCell(
 ): boolean {
   const table = tableMap(gd, tableId);
   if (table === null) return false;
+  const stored = cellsMap(table).get(cellKey(rowId, colId));
+  if (isFormula(stored)) {
+    const shown = projectCellText(gd, stored);
+    if (span.from < 0 || span.to > shown.length || span.from >= span.to) return false;
+    const next = shown.slice(0, span.from) + replacement + shown.slice(span.to);
+    return commitCellText(gd, tableId, rowId, colId, next);
+  }
   const current = cellRich(table, rowId, colId);
   const length = plainText(current).length;
   if (span.from < 0 || span.to > length || span.from >= span.to) return false;

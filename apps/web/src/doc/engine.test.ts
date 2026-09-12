@@ -18,6 +18,8 @@ import {
 import {
   createEngineHost,
   engineFor,
+  HEARTBEAT_INTERVAL_MS,
+  HEARTBEAT_TIMEOUT_MS,
   inlineTransport,
   MAX_WORKER_RESTARTS,
   setEngineTransportForTests,
@@ -93,10 +95,10 @@ describe('engine host', () => {
     f.set(0, 0, '1');
     await host.settled();
     expect(transport.requests.map((r) => r.type)).toEqual(['apply', 'apply']);
-    const first = transport.requests[0]?.changes[0];
-    expect(first?.type).toBe('reset');
+    const first = transport.requests[0];
+    expect(first?.type === 'apply' && first.changes[0]?.type).toBe('reset');
     const last = transport.requests[1];
-    expect(last?.changes).toEqual([
+    expect(last?.type === 'apply' && last.changes).toEqual([
       {
         type: 'cells',
         tableId: f.tableId,
@@ -247,5 +249,52 @@ describe('engine host', () => {
     await host.settled();
     expect(host.result(f.id(0, 1))?.value).toEqual({ kind: 'text', text: 'a' });
     host.dispose();
+  });
+
+  it('FX-06 a Worker that stops answering (killed without an error event) is detected by the heartbeat and restarted', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fixture();
+      const made: EngineTransport[] = [];
+      // FAKE transports: the first answers apply requests but never a ping (a Worker the browser
+      // reclaimed after its last answer); the replacement is a real inline engine labelled as a worker.
+      const makeTransport = (): EngineTransport => {
+        const inner = inlineTransport();
+        const mute = made.length === 0;
+        const t: EngineTransport = {
+          mode: 'worker',
+          post: (r) => {
+            if (mute && r.type === 'ping') return;
+            inner.post(r);
+          },
+          onResponse: (h) => {
+            inner.onResponse(h);
+          },
+          terminate: () => {
+            inner.terminate();
+          },
+        };
+        made.push(t);
+        return t;
+      };
+      const host = createEngineHost(f.gd, makeTransport);
+      f.set(0, 0, '=Concat("a")');
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.result(f.id(0, 0))?.value).toEqual({ kind: 'text', text: 'a' });
+      expect(host.status.restarts).toBe(0);
+      // One interval later the ping goes out; one timeout later, unanswered, the Worker is replaced.
+      await vi.advanceTimersByTimeAsync(HEARTBEAT_INTERVAL_MS + HEARTBEAT_TIMEOUT_MS + 1);
+      expect(made).toHaveLength(2);
+      expect(host.status).toMatchObject({ restarts: 1, failed: false, mode: 'worker' });
+      expect(host.status.lastError).toMatch(/stopped answering/);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(host.result(f.id(0, 0))?.value).toEqual({ kind: 'text', text: 'a' });
+      // The replacement answers pings: no further restarts.
+      await vi.advanceTimersByTimeAsync(3 * (HEARTBEAT_INTERVAL_MS + HEARTBEAT_TIMEOUT_MS));
+      expect(host.status.restarts).toBe(1);
+      host.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

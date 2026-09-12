@@ -7,6 +7,8 @@
  *   list      := (reference | separator)+               at least one reference
  *   reference := address | range | column | entity | bound
  *   bound     := '{' … '}'                             id-bound token, see bound.ts
+ *   placeholder := '#REF' | '#hidden'                  a projected reference whose target is gone or
+ *                                                      unaddressable; keeps its stored token on re-commit
  *   address   := letters{1,3} digits                     B14
  *   range     := address ':' address                     B2:B14
  *   column    := letters ':' letters                     B:B
@@ -62,7 +64,19 @@ export interface BoundRef {
   readonly span: Span;
 }
 
-export type Reference = AddressRef | RangeRef | ColumnRefNode | EntityRef | BoundRef;
+/**
+ * `#REF` / `#hidden` as the editor shows them. On commit the binder swaps a
+ * placeholder for the token the cell already held at that operand; one with
+ * no token behind it evaluates to `⚠ reference removed`.
+ */
+export interface PlaceholderRef {
+  readonly kind: 'placeholder';
+  readonly label: 'REF' | 'hidden';
+  readonly span: Span;
+}
+
+export type Reference =
+  AddressRef | RangeRef | ColumnRefNode | EntityRef | BoundRef | PlaceholderRef;
 
 export interface StringLiteral {
   readonly kind: 'string';
@@ -112,7 +126,8 @@ export function isReference(node: Expr | Separator): node is Reference {
     node.kind === 'range' ||
     node.kind === 'column' ||
     node.kind === 'entity' ||
-    node.kind === 'bound'
+    node.kind === 'bound' ||
+    node.kind === 'placeholder'
   );
 }
 

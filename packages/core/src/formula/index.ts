@@ -10,6 +10,7 @@ export type {
   ListExpr,
   NumberLiteral,
   ParseError,
+  PlaceholderRef,
   RangeRef,
   Reference,
   Separator,
@@ -22,12 +23,15 @@ export {
   BOUND_RE,
   decodeBound,
   encodeBound,
+  isOpenCorner,
   HIDDEN_REFERENCE_TEXT,
   REMOVED_REFERENCE_TEXT,
   type BoundCell,
   type BoundColumn,
   type BoundRange,
   type BoundReference,
+  type CornerId,
+  type OpenCorner,
 } from './bound.js';
 export {
   bindFormula,

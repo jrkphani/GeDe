@@ -75,8 +75,13 @@ function parseDraft(text: string) {
  * current geometry (FX-08 "during editing the outline updates live"). Takes
  * a typed draft or a stored source. A draft that cannot be read yields none.
  */
-export function operandsOf(doc: Y.Doc, sheetId: Id, text: string): OperandOutline[] {
+export function operandsOf(
+  doc: Y.Doc,
+  sheetId: Id,
+  text: string,
+  stored = false,
+): OperandOutline[] {
   const parsed = parseDraft(text);
   if (!parsed.ok) return [];
-  return workbookIndexFor(doc).operands(sheetId, parsed.value);
+  return workbookIndexFor(doc).operands(sheetId, parsed.value, stored);
 }

@@ -46,6 +46,26 @@ describe('ReferenceOutlines', () => {
     expect(second).toHaveAttribute('data-label', single);
   });
 
+  it('FX-08 A11Y-04 an operand of a stored formula that is not bound to a cell is drawn as not anchored, with the reason as text', () => {
+    const d = testDoc(3, 1);
+    d.set(0, 0, `=Sum(${d.addr(1, 0)}, H20)`);
+    const stored = d.stored(0, 0);
+    expect(stored).toMatch(/H20\)$/);
+    render(<ReferenceOutlines operands={operandsOf(d.doc, d.sheetId, stored, true)} zoom={1} />);
+    const blocks = screen
+      .getByTestId('reference-outlines')
+      .querySelectorAll<HTMLElement>('.gd-outline');
+    expect(blocks[0]).toHaveAttribute('data-anchored', 'true');
+    expect(blocks[0]).not.toHaveClass('gd-outline--positional');
+    expect(blocks[1]).toHaveAttribute('data-anchored', 'false');
+    expect(blocks[1]).toHaveClass('gd-outline--positional');
+    expect(blocks[1]).toHaveTextContent('not anchored');
+    expect(blocks[1]?.title).toMatch(/H20 is not anchored to a cell/);
+    // A draft being typed is not flagged: nothing is bound until commit.
+    const draft = operandsOf(d.doc, d.sheetId, `=Sum(${d.addr(1, 0)}, H20)`);
+    expect(draft.every((o) => o.anchored)).toBe(true);
+  });
+
   it('FX-08 colours cycle after six operands; the badge keeps them apart', () => {
     expect(referenceColourVar(5)).toBe('var(--reference-6)');
     expect(referenceColourVar(6)).toBe('var(--reference-1)');

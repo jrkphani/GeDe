@@ -12,6 +12,7 @@ import {
   tableMap,
   type GedeDoc,
 } from '../doc/index.js';
+import { commitCellText } from '../engine/commit.js';
 import { cellFragment, cellRich, replaceInCell, setCellRich } from './mutations.js';
 import { docNode, EMPTY_DOC, paragraphNode, richFromText, textNode } from './types.js';
 
@@ -87,6 +88,31 @@ describe('rich cell reads and writes', () => {
     setCellText(gd, tableId, rowId, colId, '=Concat(@Trek.Singapore)');
     expect(replaceInCell(gd, tableId, rowId, colId, { from: 14, to: 23 }, 'Mumbai')).toBe(true);
     expect(cellText(table, rowId, colId)).toBe('=Concat(@Trek.Mumbai)');
+  });
+
+  test('FIND-08 replaceInCell on a committed formula edits the expression the person reads and re-binds it', () => {
+    const { gd, tableId, rowId, colId } = fixture();
+    // A second table gives the formula something to bind to: its first cell is C1.
+    const sheetId = tableById(gd, tableId)!.sheetId;
+    const other = createTable(gd, { sheetId, at: { col: 2, row: 0 }, columns: 2, rows: 3 });
+    setCellText(
+      gd,
+      other,
+      tableById(gd, other)!.rows[0]!,
+      tableById(gd, other)!.columns[0]!.id,
+      '5',
+    );
+    commitCellText(gd, tableId, rowId, colId, '=Sum(C4:C6)');
+    const table = tableMap(gd, tableId)!;
+    const stored = cellText(table, rowId, colId);
+    expect(stored).toMatch(/^=Sum\(\{r:/);
+    // The span is in the projected text (`=Sum(C4:C6)`), as Find indexed it: replace `C4:C6` with `D4`.
+    expect(replaceInCell(gd, tableId, rowId, colId, { from: 5, to: 10 }, 'D4')).toBe(true);
+    const next = cellText(table, rowId, colId);
+    expect(next).toMatch(/^=Sum\(\{c:/);
+    expect(next).not.toBe(stored);
+    // Spans are measured on the projected text, not the token string.
+    expect(replaceInCell(gd, tableId, rowId, colId, { from: 5, to: 60 }, 'x')).toBe(false);
   });
 
   test('setCellRich returns false when the row went while the editor was open (GRID-02)', () => {

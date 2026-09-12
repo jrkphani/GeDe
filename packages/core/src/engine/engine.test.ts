@@ -10,6 +10,7 @@ import {
   createTable,
   createUndoManager,
   deleteTable,
+  insertRowBefore,
   openDocument,
   setCellText,
   setRowDepth,
@@ -280,8 +281,14 @@ describe('FormulaEngine over a Y.Doc', () => {
     g.set(2, 1, `=Sum(${g.addr(0, 0)}:${g.addr(1, 0)}, ${g.addr(0, 1)})`);
     const operands = h.results.get(g.id(2, 1))!.operands;
     expect(operands).toEqual([
-      { index: 0, kind: 'range', cellIds: [g.id(0, 0), g.id(1, 0)], missing: false },
-      { index: 1, kind: 'address', cellIds: [g.id(0, 1)], missing: false },
+      {
+        index: 0,
+        kind: 'range',
+        cellIds: [g.id(0, 0), g.id(1, 0)],
+        missing: false,
+        anchored: true,
+      },
+      { index: 1, kind: 'address', cellIds: [g.id(0, 1)], missing: false, anchored: true },
     ]);
   });
 
@@ -410,6 +417,8 @@ describe('FormulaEngine over a Y.Doc', () => {
     a.set(0, 0, '=Sum(H20)');
     expect(a.stored(0, 0)).toBe('=Sum(H20)');
     expect(numberOf(h.results.get(a.id(0, 0)))).toBe(0);
+    // The result says so, so the UI can mark the operand as not anchored.
+    expect(h.results.get(a.id(0, 0))?.operands[0]?.anchored).toBe(false);
     // A table whose first data cell lands on H20: col H = 7, data row 19 = gridRow 16 + 3.
     const b = grid(h.gd, h.sheetId, 1, 1, { col: 7, row: 16 });
     expect(b.addr(0, 0)).toBe('H20');
@@ -496,5 +505,67 @@ describe('FormulaEngine over a Y.Doc', () => {
     expect(g.shown(1, 2)).toBe('=Sum(#hidden)');
     setColumnHidden(h.gd, g.tableId, g.colId(1), false);
     expect(g.shown(1, 2)).toBe(`=Sum(${g.addr(0, 1)})`);
+  });
+
+  test('FX-06 a range that reaches past the table binds open-ended: a row inserted above slides it, a row appended joins it, nothing shifts silently', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 3, 1);
+    g.set(0, 0, '1');
+    g.set(1, 0, '1');
+    // A formula in another table so the range's own table can grow freely.
+    const f = grid(h.gd, h.sheetId, 1, 1, { col: 6, row: 1 });
+    const start = g.addr(0, 0);
+    const past = start.replace(/\d+$/, (n) => String(Number(n) + 19)); // 20 rows down: empty canvas
+    f.set(0, 0, `=Sum(${start}:${past})`);
+    expect(f.stored(0, 0)).toBe(
+      `=Sum({r:${g.tableId}:${g.rowId(0)}:${g.colId(0)}:*:${g.colId(0)}})`,
+    );
+    expect(f.shown(0, 0)).toBe(`=Sum(${g.addr(0, 0)}:${g.addr(2, 0)})`);
+    expect(numberOf(h.results.get(f.id(0, 0)))).toBe(2);
+    expect(h.results.get(f.id(0, 0))?.operands[0]?.missing).toBe(false);
+    // A row inserted above the anchored corner, with a value: outside the range; the range slides.
+    const above = insertRowBefore(h.gd, g.tableId, g.rowId(0));
+    setCellText(h.gd, g.tableId, above, g.colId(0), '100');
+    expect(numberOf(h.results.get(f.id(0, 0)))).toBe(2);
+    expect(f.shown(0, 0)).toBe(`=Sum(${g.addr(1, 0)}:${g.addr(3, 0)})`);
+    // A row appended at the end joins the open end.
+    const appended = addRow(h.gd, g.tableId, undefined);
+    setCellText(h.gd, g.tableId, appended, g.colId(0), '10');
+    expect(numberOf(h.results.get(f.id(0, 0)))).toBe(12);
+    expect(f.shown(0, 0)).toBe(`=Sum(${g.addr(1, 0)}:${g.addr(4, 0)})`);
+  });
+
+  test('FX-07 re-committing a formula shown with #hidden keeps the binding; it evaluates again once the column is unhidden', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 2, 3);
+    g.set(0, 1, '8');
+    g.set(1, 2, `=Sum(${g.addr(0, 1)})`);
+    setColumnHidden(h.gd, g.tableId, g.colId(1), true);
+    expect(g.shown(1, 2)).toBe('=Sum(#hidden)');
+    const stored = g.stored(1, 2);
+    // The person opens the cell (sees `=Sum(#hidden)`), adds an operand and commits as shown.
+    g.set(1, 2, '=Sum(#hidden, 1)');
+    expect(g.stored(1, 2)).toBe(stored.replace(/\)$/, ', 1)'));
+    expect(numberOf(h.results.get(g.id(1, 2)))).toBe(9);
+    setColumnHidden(h.gd, g.tableId, g.colId(1), false);
+    expect(g.shown(1, 2)).toBe(`=Sum(${g.addr(0, 1)}, 1)`);
+    expect(numberOf(h.results.get(g.id(1, 2)))).toBe(9);
+    // An unchanged re-commit of `#REF` keeps the token too, so an undo of the delete still repairs it.
+    const undo = createUndoManager(h.gd);
+    undo.stopCapturing();
+    h.gd.doc.transact(() => {
+      const rows = tableMap(h.gd, g.tableId)!.get('rows') as Y.Array<Id>;
+      rows.delete(0, 1);
+    }, h.gd.origin);
+    expect(g.shown(0, 2)).toBe('=Sum(#REF, 1)');
+    undo.stopCapturing();
+    g.set(0, 2, '=Sum(#REF, 1)');
+    expect(h.results.get(g.id(0, 2))?.error).toEqual({
+      kind: 'reference-removed',
+      label: 'a cell',
+    });
+    undo.undo();
+    undo.undo();
+    expect(numberOf(h.results.get(g.id(1, 2)))).toBe(9);
   });
 });

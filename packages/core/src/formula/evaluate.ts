@@ -282,6 +282,9 @@ class Evaluator {
         }
         return operands.map((o) => ({ address: o.address, value: o.value }));
       }
+      case 'placeholder':
+        // A placeholder that no stored token stood behind: the target is gone.
+        fail({ kind: 'reference-removed', label: 'a cell' });
     }
   }
 }

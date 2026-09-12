@@ -8,6 +8,7 @@ import type {
   Ast,
   BoundRef,
   CallExpr,
+  PlaceholderRef,
   EntityRef,
   Expr,
   FunctionName,
@@ -151,16 +152,12 @@ class Parser {
         return this.parseEntity();
       case 'bound':
         return this.parseBound();
+      case 'placeholder':
+        return this.parsePlaceholder();
       case 'ident':
         if (this.peekPastSpace(1).kind === 'lparen') return this.parseCall();
         return this.parseCellReference();
       case 'other':
-        if (t.text === '#' && this.peek(1).text.toUpperCase() === 'REF') {
-          fail('#REF names a cell that was removed; replace it', {
-            start: t.span.start,
-            end: this.peek(1).span.end,
-          });
-        }
         if (t.text === '-' && this.peek(1).kind === 'number') {
           this.next();
           const num = this.next();
@@ -253,10 +250,15 @@ class Parser {
     return { kind: 'bound', ref, span: t.span };
   }
 
-  /** In list mode a token starts a reference when it is `@`, a bound token, an address, or a column. */
+  private parsePlaceholder(): PlaceholderRef {
+    const t = this.next();
+    return { kind: 'placeholder', label: t.text === '#REF' ? 'REF' : 'hidden', span: t.span };
+  }
+
+  /** In list mode a token starts a reference when it is `@`, a bound token, a placeholder, an address, or a column. */
   private startsReference(): boolean {
     const t = this.peek();
-    if (t.kind === 'at' || t.kind === 'bound') return true;
+    if (t.kind === 'at' || t.kind === 'bound' || t.kind === 'placeholder') return true;
     if (t.kind !== 'ident') return false;
     if (ADDRESS_RE.test(t.text)) return true;
     return (
@@ -292,7 +294,9 @@ class Parser {
             ? this.parseEntity()
             : head === 'bound'
               ? this.parseBound()
-              : this.parseCellReference();
+              : head === 'placeholder'
+                ? this.parsePlaceholder()
+                : this.parseCellReference();
         items.push(ref);
         referenceCount += 1;
         continue;

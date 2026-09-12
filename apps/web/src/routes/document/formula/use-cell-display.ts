@@ -43,6 +43,8 @@ export interface CellDisplay {
   readonly operands: readonly ResolvedOperand[];
   /** True until the Worker has answered for this exact source. */
   readonly pending: boolean;
+  /** How many operands follow an address rather than a cell (PRD §20); the badge says so. */
+  readonly positional: number;
 }
 
 const TEXT_DISPLAY = (value: string): CellDisplay => ({
@@ -53,6 +55,7 @@ const TEXT_DISPLAY = (value: string): CellDisplay => ({
   badge: null,
   operands: [],
   pending: false,
+  positional: 0,
 });
 
 export function formatCellValue(locale: Locale, value: CellValue): string {
@@ -103,6 +106,7 @@ export function displayOf(
       badge: 'ƒ',
       operands: [],
       pending: true,
+      positional: 0,
     };
   }
   const error =
@@ -117,6 +121,7 @@ export function displayOf(
     badge: badgeFor(result.operands),
     operands: result.operands,
     pending: false,
+    positional: result.operands.filter((o) => !o.anchored).length,
   };
 }
 

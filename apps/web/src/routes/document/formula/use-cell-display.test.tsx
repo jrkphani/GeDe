@@ -79,6 +79,25 @@ describe('useCellDisplay', () => {
     expect(result.current.value).toBe('');
   });
 
+  it('FX-06 A11Y-04 a positional operand is counted and named in the badge label and tooltip', async () => {
+    const d = testDoc(3, 1);
+    d.set(0, 0, '4');
+    d.set(1, 0, `=Sum(${d.addr(0, 0)}, H20)`);
+    function Host() {
+      const display = useCellDisplay(d.table, d.key(1, 0));
+      return <FormulaCellContent display={display} />;
+    }
+    render(<Host />);
+    await waitFor(() => {
+      expect(screen.getByText('4')).toBeInTheDocument();
+    });
+    expect(
+      screen.getByLabelText('Formula, 2 references — 1 reference is not anchored to a cell'),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId('formula-cell')).toHaveAttribute('data-positional', '1');
+    expect(screen.getByTestId('formula-cell').title).toMatch(/not anchored to a cell$/);
+  });
+
   it('I18N-04 values format through Intl for the active locale', () => {
     setLocale('en-IN');
     expect(formatCellValue('en-IN', { kind: 'number', value: 1234567.5 })).toBe('12,34,567.5');

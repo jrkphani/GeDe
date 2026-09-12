@@ -9,10 +9,18 @@
  *   {c:T:R:C}            a cell, spelled as an address when projected (`B14`)
  *   {e:T:R:C}            a cell, spelled as an entity path (`@Table.Row.Column`)
  *   {r:T:R1:C1:R2:C2}    a range: two corner cells of one table; the interior
- *                        is whatever rows and columns lie between them now
+ *                        is whatever rows and columns lie between them now.
+ *                        A corner that reached past the table at commit is
+ *                        open-ended: `^` = the table's first row/column,
+ *                        `*` = its last, so `=Sum(B5:B20)` over a five-row
+ *                        table follows the table as rows come and go
  *   {k:T:C|T:C}          a lattice column: the table columns that sat under it
  *
- * T, R and C are ULIDs. Display projects the tokens back to A1 / `@` from the
+ * T, R and C are ULIDs. The kind letter is the grammar version: a new shape
+ * takes a new letter and an existing letter keeps decoding forever, so a
+ * document written today reads tomorrow without a migration. A token typed
+ * or pasted by hand binds like any other (it is the parser's grammar, not a
+ * hidden one); inside quotes it is text. Display projects the tokens back to A1 / `@` from the
  * current geometry, so inserting a row above `B6` shows `B7` and still reads
  * the same cell. A token whose target is gone projects as `#REF` and
  * evaluates to `⚠ reference removed`.
@@ -31,11 +39,21 @@ export interface BoundCell {
   readonly spelling: 'address' | 'entity';
 }
 
+/** `^` the table's first row or column, `*` its last: a corner that reached past the table. */
+export type OpenCorner = '^' | '*';
+// `Id` is `string`, so the union is documentary: a corner is a ULID or one of the two edge markers.
+// eslint-disable-next-line @typescript-eslint/no-redundant-type-constituents
+export type CornerId = Id | OpenCorner;
+
 export interface BoundRange {
   readonly kind: 'range';
   readonly tableId: Id;
-  readonly from: { readonly rowId: Id; readonly colId: Id };
-  readonly to: { readonly rowId: Id; readonly colId: Id };
+  readonly from: { readonly rowId: CornerId; readonly colId: CornerId };
+  readonly to: { readonly rowId: CornerId; readonly colId: CornerId };
+}
+
+export function isOpenCorner(id: CornerId): id is OpenCorner {
+  return id === '^' || id === '*';
 }
 
 export interface BoundColumn {
@@ -47,9 +65,10 @@ export interface BoundColumn {
 export type BoundReference = BoundCell | BoundRange | BoundColumn;
 
 const ID = '[0-9A-Z]{26}';
+const CORNER = `(?:${ID}|\\^|\\*)`;
 /** Whole-token grammar. Anything else in braces is separator text, not a token. */
 export const BOUND_RE = new RegExp(
-  `^\\{(?:[ce]:${ID}:${ID}:${ID}|r:${ID}:${ID}:${ID}:${ID}:${ID}|k:${ID}:${ID}(?:\\|${ID}:${ID})*)\\}$`,
+  `^\\{(?:[ce]:${ID}:${ID}:${ID}|r:${ID}:${CORNER}:${CORNER}:${CORNER}:${CORNER}|k:${ID}:${ID}(?:\\|${ID}:${ID})*)\\}$`,
 );
 
 export function encodeBound(ref: BoundReference): string {

@@ -69,6 +69,13 @@ export interface EngineHost {
 
 /** A Worker that dies this many times in one session stays down until Retry. */
 export const MAX_WORKER_RESTARTS = 3;
+/**
+ * Liveness: a Worker killed without an `error` event (the browser reclaiming
+ * it under memory pressure) answers nothing, so the host pings it and treats a
+ * missed answer as a death. Only the `worker` transport is probed.
+ */
+export const HEARTBEAT_INTERVAL_MS = 5_000;
+export const HEARTBEAT_TIMEOUT_MS = 5_000;
 
 export function workerTransport(): EngineTransport {
   const worker = new Worker(new URL('../workers/formula.worker.ts', import.meta.url), {
@@ -166,7 +173,19 @@ export function createEngineHost(
     const set = cellListeners.get(cellId);
     if (set !== undefined) for (const cb of set) cb();
   };
+  let awaitingPong: number | null = null;
+  let pongTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeat: ReturnType<typeof setInterval> | null = null;
+
   const onResponse = (response: EngineResponse) => {
+    if (response.type === 'pong') {
+      if (response.seq === awaitingPong) {
+        awaitingPong = null;
+        if (pongTimer !== null) clearTimeout(pongTimer);
+        pongTimer = null;
+      }
+      return;
+    }
     lastElapsedMs = response.elapsedMs;
     const touched: WorkbookCellId[] = [];
     for (const id of response.removed) {
@@ -193,10 +212,34 @@ export function createEngineHost(
     transport.post(request);
   };
 
-  // A Worker that dies (script blocked, uncaught throw) is replaced by a fresh
-  // one seeded from the current document. Evaluation never moves to the main
-  // thread; after MAX_WORKER_RESTARTS the host reports failure and waits for Retry.
+  const stopHeartbeat = () => {
+    if (heartbeat !== null) clearInterval(heartbeat);
+    if (pongTimer !== null) clearTimeout(pongTimer);
+    heartbeat = null;
+    pongTimer = null;
+    awaitingPong = null;
+  };
+  const startHeartbeat = () => {
+    stopHeartbeat();
+    if (transport.mode !== 'worker') return;
+    heartbeat = setInterval(() => {
+      if (awaitingPong !== null || status.failed) return; // one probe in flight at a time
+      seq += 1;
+      awaitingPong = seq;
+      transport.post({ type: 'ping', seq });
+      pongTimer = setTimeout(() => {
+        if (awaitingPong === null) return;
+        restart(new Error('formula worker stopped answering'));
+      }, HEARTBEAT_TIMEOUT_MS);
+    }, HEARTBEAT_INTERVAL_MS);
+  };
+
+  // A Worker that dies (script blocked, uncaught throw, or silently — see the
+  // heartbeat) is replaced by a fresh one seeded from the current document.
+  // Evaluation never moves to the main thread; after MAX_WORKER_RESTARTS the
+  // host reports failure and waits for Retry.
   const restart = (error: unknown) => {
+    stopHeartbeat();
     transport.terminate();
     pending.clear();
     const message = error instanceof Error ? error.message : String(error);
@@ -214,9 +257,11 @@ export function createEngineHost(
     setStatus({ mode: transport.mode });
     transport.onResponse(onResponse);
     transport.onError?.(restart);
+    startHeartbeat();
   };
   transport.onResponse(onResponse);
   transport.onError?.(restart);
+  startHeartbeat();
   const stopObserving = observeWorkbook(gd, post);
 
   return {
@@ -271,6 +316,7 @@ export function createEngineHost(
           }),
     dispose: () => {
       stopObserving();
+      stopHeartbeat();
       transport.terminate();
       cellListeners.clear();
       allListeners.clear();

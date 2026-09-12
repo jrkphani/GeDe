@@ -22,6 +22,7 @@ import {
   rowMeta,
   splitCellKey,
   tablesOnSheet,
+  workbookIndexOf,
   type TableMap,
 } from '@gede/core';
 
@@ -143,6 +144,7 @@ function projectCells(
   table: TableMap,
   rowIds: Set<string>,
   columnIds: Set<string>,
+  project: (source: string) => string,
 ): ProjectedCell[] {
   const out: ProjectedCell[] = [];
   cellsMap(table).forEach((value, key) => {
@@ -156,7 +158,9 @@ function projectCells(
     // A cell whose row or column no longer exists cannot satisfy the foreign keys.
     if (!rowIds.has(rowId) || !columnIds.has(columnId)) return;
     if (isFormula(value)) {
-      out.push({ rowId, columnId, textPlain: value, rich: null, formula: value });
+      // The stored source holds id tokens (PRD §20); what is searched and audited is the
+      // expression as the person reads it today (FIND-03). `formula` keeps the stored form.
+      out.push({ rowId, columnId, textPlain: project(value), rich: null, formula: value });
       return;
     }
     if (!(value instanceof Y.XmlFragment)) return;
@@ -174,6 +178,9 @@ function projectCells(
 /** Every projection row for a document, in a deterministic order. */
 export function projectDocument(doc: Y.Doc, documentId: string): Projection {
   const gd = openDocument(doc);
+  const index = workbookIndexOf(gd);
+  const project = (source: string): string =>
+    source.includes('{') ? index.project(source) : source;
   const sheets: ProjectedSheet[] = [];
   const tables: ProjectedTable[] = [];
   const columns: ProjectedColumn[] = [];
@@ -229,7 +236,7 @@ export function projectDocument(doc: Y.Doc, documentId: string): Projection {
           collapsed: meta.collapsed,
         });
       });
-      cells.push(...projectCells(map, rowIds, columnIds));
+      cells.push(...projectCells(map, rowIds, columnIds, project));
     }
   }
   return { documentId, sheets, tables, columns, rows, cells };

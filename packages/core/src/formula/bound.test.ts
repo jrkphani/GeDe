@@ -90,12 +90,24 @@ describe('bound reference tokens (PRD §20: references store ids)', () => {
     ]);
   });
 
-  test('FX-07 a projected #REF does not re-commit silently: the parser names it', () => {
-    const r = parse('=Sum(#REF, B2)');
-    expect(r.ok).toBe(false);
-    if (r.ok) return;
-    expect(r.error.message).toMatch(/#REF names a cell that was removed/);
-    expect(r.error.span).toEqual({ start: 5, end: 9 });
+  test('FX-07 a projected #REF or #hidden parses as a placeholder reference with its span', () => {
+    const r = parse('=Sum(#REF, B2, #hidden)');
+    expect(r.ok).toBe(true);
+    if (!r.ok || r.value.kind !== 'call') throw new Error('expected a call');
+    expect(r.value.args.map((a) => a.kind)).toEqual(['placeholder', 'address', 'placeholder']);
+    const [first, , third] = r.value.args;
+    expect(first?.kind === 'placeholder' && first.label).toBe('REF');
+    expect(first?.span).toEqual({ start: 5, end: 9 });
+    expect(third?.kind === 'placeholder' && third.label).toBe('hidden');
+    // In a list too.
+    const list = parse('=#REF / B2');
+    expect(list.ok && list.value.kind === 'list' && list.value.items.map((i) => i.kind)).toEqual([
+      'placeholder',
+      'separator',
+      'address',
+    ]);
+    // `#Ref` or `#REFERENCE` is not a placeholder.
+    expect(parse('=Sum(#REFERENCE)').ok).toBe(false);
   });
 
   test('FX-06 evaluation reads bound operands through the resolver and reports a removed target', () => {
@@ -142,9 +154,19 @@ const binder: Binder = {
   columnsAt: (col) => (col === 1 ? [{ tableId: T, colId: C1 }] : []),
   entity: (path) =>
     path.join('.') === 'Trek.Namche' ? { tableId: T, rowId: R2, colId: C1 } : null,
+  extentOf: (tableId) =>
+    tableId === T ? { firstRow: 4, lastRow: 5, firstCol: 1, lastCol: 2 } : null,
 };
+/** Open corners resolve to the fake table's edges: rows R1 (first) / R2 (last), columns C1 / C2. */
+function cornerOf(t: { rowId: string; colId: string }): { rowId: string; colId: string } {
+  return {
+    rowId: t.rowId === '^' ? R1 : t.rowId === '*' ? R2 : t.rowId,
+    colId: t.colId === '^' ? C1 : t.colId === '*' ? C2 : t.colId,
+  };
+}
 const projector: Projector = {
-  positionOf: (t) => {
+  positionOf: (target) => {
+    const t = cornerOf(target);
     for (const [k, v] of Object.entries(cells)) {
       if (v.rowId === t.rowId && v.colId === t.colId) {
         const [col, row] = k.split(',').map(Number);
@@ -153,7 +175,10 @@ const projector: Projector = {
     }
     return null;
   },
-  exists: (t) => Object.values(cells).some((c) => c.rowId === t.rowId && c.colId === t.colId),
+  exists: (target) => {
+    const t = cornerOf(target);
+    return Object.values(cells).some((c) => c.rowId === t.rowId && c.colId === t.colId);
+  },
   entityPathOf: (t) => (t.rowId === R2 && t.colId === C1 ? '@Trek.Namche' : null),
   columnOf: (_tableId, colId) => (colId === C1 ? 1 : null),
 };
@@ -163,11 +188,42 @@ describe('bind at commit, project for display', () => {
     expect(bindFormula('=Sum(B5:C6, B5, B:B, @Trek.Namche, H20, @Trek.Nowhere)', binder)).toBe(
       `=Sum(${encodeBound(range)}, ${encodeBound(cell)}, {k:${T}:${C1}}, ${encodeBound(entity)}, H20, @Trek.Nowhere)`,
     );
-    // A range with corners in different tables (here: one corner off the table) is not bound.
-    expect(bindFormula('=Sum(B5:D9)', binder)).toBe('=Sum(B5:D9)');
+    // A range with a corner past the table binds that corner open-ended: it follows the table.
+    expect(bindFormula('=Sum(B5:B20)', binder)).toBe(`=Sum({r:${T}:${R1}:${C1}:*:${C1}})`);
+    expect(bindFormula('=Sum(B1:C6)', binder)).toBe(`=Sum({r:${T}:^:${C1}:${R2}:${C2}})`);
+    expect(bindFormula('=Sum(B5:Z99)', binder)).toBe(`=Sum({r:${T}:${R1}:${C1}:*:*})`);
+    // Neither corner on a table: nothing to anchor to, stays positional.
+    expect(bindFormula('=Sum(H20:H30)', binder)).toBe('=Sum(H20:H30)');
     // Text that does not parse is stored as typed so the engine can report the error.
     expect(bindFormula('=Sum(', binder)).toBe('=Sum(');
     expect(bindFormula('plain', binder)).toBe('plain');
+  });
+
+  test('FX-06 an open-ended corner projects to the table edge and round-trips through its token', () => {
+    const open = `{r:${T}:${R1}:${C1}:*:${C1}}`;
+    expect(decodeBound(open)).toEqual({
+      kind: 'range',
+      tableId: T,
+      from: { rowId: R1, colId: C1 },
+      to: { rowId: '*', colId: C1 },
+    });
+    expect(projectFormula(`=Sum(${open})`, projector)).toBe('=Sum(B5:B6)');
+    expect(projectFormula(`=Sum({r:${T}:^:^:*:*})`, projector)).toBe('=Sum(B5:C6)');
+  });
+
+  test('FX-07 a #REF / #hidden shown by the editor keeps the token the cell held when re-committed', () => {
+    const gone = { ...cell, rowId: '01ARZ3NDEKTSV4RRFFQ69G5FA9' };
+    const previous = `=Sum(${encodeBound(gone)}, ${encodeBound(cell)})`;
+    expect(projectFormula(previous, projector)).toBe('=Sum(#REF, B5)');
+    // The person adds an operand and commits the text as shown: the removed reference stays bound.
+    expect(bindFormula('=Sum(#REF, B5, C6)', binder, { source: previous, projector })).toBe(
+      `=Sum(${encodeBound(gone)}, ${encodeBound(cell)}, {c:${T}:${R2}:${C2}})`,
+    );
+    // Without a previous token behind it, a placeholder stays a placeholder (evaluates as removed).
+    expect(bindFormula('=Sum(#REF, B5)', binder)).toBe(`=Sum(#REF, ${encodeBound(cell)})`);
+    // Placeholders match previous placeholder tokens in order; a bound reference is never consumed.
+    const two = `=Sum(${encodeBound(cell)}, ${encodeBound(gone)}, ${encodeBound({ ...gone, colId: C2 })})`;
+    expect(bindFormula('=Sum(B5, #REF, #REF)', binder, { source: two, projector })).toBe(two);
   });
 
   test('FX-07 projection writes the addresses of today and paths, and #REF for a removed target', () => {

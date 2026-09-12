@@ -23,6 +23,8 @@ function describeRef(ref: Reference): string {
       return `@${ref.path.join('.')}`;
     case 'bound':
       return `bound ${ref.ref.kind}`;
+    case 'placeholder':
+      return `#${ref.label}`;
   }
 }
 

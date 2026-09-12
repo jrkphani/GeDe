@@ -14,6 +14,7 @@ import {
   createTable,
   insertRowBefore,
   openDocument,
+  setColumnHidden,
   setTableTitle,
   tableById,
   tableMap,
@@ -100,6 +101,18 @@ async function typeText(editor: HTMLElement, text: string): Promise<void> {
     node = p.appendChild(document.createTextNode(text));
   }
   document.getSelection()?.collapse(node, node.textContent?.length ?? 0);
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
+/** Replace the editor's text the way a browser edit does (select all, type), via PM's DOM observer. */
+async function retype(editor: HTMLElement, text: string): Promise<void> {
+  const p = editor.querySelector('p') ?? editor;
+  const node = p.firstChild;
+  if (node?.nodeType !== Node.TEXT_NODE) throw new Error('no text to retype');
+  node.textContent = text;
+  document.getSelection()?.collapse(node, text.length);
   await act(async () => {
     await Promise.resolve();
   });
@@ -259,5 +272,34 @@ describe('formula entry in the grid editor', () => {
       'title',
       expect.stringContaining('deleted') as string,
     );
+  });
+
+  it('FX-07 a formula shown with #hidden survives an edit through the editor: the binding stays and evaluates after unhide', async () => {
+    render(<Harness gd={gd} tableId={tableId} />);
+    await type(cellAt(0, 1), '8');
+    press('Enter');
+    await type(cellAt(2, 2), '=Sum(C5)');
+    press('Enter');
+    await act(() => settled());
+    act(() => {
+      setColumnHidden(gd, tableId, cols[1]!, true);
+    });
+    // Column C is hidden: the grid has two visible columns now; the formula cell shows #hidden.
+    const formulaCell = cells()[2 * 2 + 1]!;
+    expect(formulaCell).toHaveAttribute('title', '=Sum(#hidden)');
+    await userEvent.dblClick(formulaCell);
+    expect(editable()).toHaveTextContent('=Sum(#hidden)');
+    await retype(editable(), '=Sum(#hidden, 1)');
+    press('Enter');
+    const stored = cellText(tableMap(gd, tableId)!, rows[2]!, cols[2]!);
+    expect(stored).toMatch(/^=Sum\(\{c:[0-9A-Z:]+\}, 1\)$/);
+    await act(() => settled());
+    await waitFor(() => {
+      expect(within(cells()[2 * 2 + 1]!).getByText('9')).toBeInTheDocument();
+    });
+    act(() => {
+      setColumnHidden(gd, tableId, cols[1]!, false);
+    });
+    expect(cells()[2 * 3 + 2]).toHaveAttribute('title', '=Sum(C5, 1)');
   });
 });

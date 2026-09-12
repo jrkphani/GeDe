@@ -40,7 +40,7 @@ export function FormulaLayer({ gd, sheetId, zoom, selected, editing }: FormulaLa
       ? live.draft
       : null;
   const formula = draft ?? (isFormula(stored) ? stored : null);
-  const operands = useOperandsOf(gd.doc, sheetId, formula);
+  const operands = useOperandsOf(gd.doc, sheetId, formula, draft === null);
   return (
     <>
       <span

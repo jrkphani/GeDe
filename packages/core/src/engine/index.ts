@@ -17,6 +17,8 @@ export type {
   IndexedCell,
   OperandKind,
   OperandOutline,
+  PingRequest,
+  PongResponse,
   ResolvedOperand,
   ResultsResponse,
   TableSnapshot,
@@ -40,7 +42,7 @@ export {
   type SheetIndex,
 } from './sheet-index.js';
 export { WorkbookIndex, type LabelReader } from './workbook-index.js';
-export { commitCellText, workbookIndexOf } from './commit.js';
+export { commitCellText, projectCellText, workbookIndexOf } from './commit.js';
 export {
   buildEntityIndex,
   formatEntityPath,

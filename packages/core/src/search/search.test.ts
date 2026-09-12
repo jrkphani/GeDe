@@ -2,15 +2,20 @@ import { describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 
 import {
+  addRow,
+  cellText,
   createSheet,
   createTable,
   hideColumn,
+  insertRowBefore,
   openDocument,
   setCellText,
   tableById,
+  tableMap,
   unhideColumn,
   type GedeDoc,
 } from '../doc/index.js';
+import { commitCellText } from '../engine/commit.js';
 import { approximateFind, editDistance, exactFind } from './distance.js';
 import { createSearchEngine, replaceInText } from './engine.js';
 import { inferFormat, resolveFormat } from './format.js';
@@ -326,6 +331,42 @@ describe('snapshot', () => {
     expect(search(t.entries.map(indexEntry), 'is:text column')).toEqual([]);
     expect(tableEntries(gd, 'nope')).toBeNull();
     expect(cellTexts('=Sum(')).toEqual([expect.objectContaining({ field: 'formula' })]);
+  });
+
+  test('FIND-03 a committed (id-bound) formula is indexed as the expression the person reads, never as its tokens', () => {
+    const { gd, tableId } = fixture();
+    const record = tableById(gd, tableId)!;
+    const [r1, r2] = record.rows;
+    const c1 = record.columns[0]!.id;
+    commitCellText(gd, tableId, r2!, c1, '=Sum(B5:B7)');
+    const stored = cellText(tableMap(gd, tableId)!, r2!, c1);
+    expect(stored).toMatch(/^=Sum\(\{r:/);
+    const t = tableEntries(gd, tableId)!;
+    const texts = t.entries.find((e) => e.kind === 'cell' && e.rowId === r2)!.texts;
+    expect(texts).toEqual([
+      { field: 'formula', text: '=Sum(B5:B7)' },
+      { field: 'reference', text: 'B5:B7' },
+    ]);
+    const entries = t.entries.map(indexEntry);
+    expect(search(entries, 'B5:B7').map((m) => m.field)).toContain('formula');
+    expect(search(entries, 'Sum(B5').length).toBeGreaterThan(0);
+    // A ULID fragment out of the stored token finds nothing.
+    const ulid = /\{r:([0-9A-Z]{26})/.exec(stored)![1]!;
+    expect(
+      search(entries, ulid.slice(0, 10), { fuzzy: false, formulas: true, documents: true }),
+    ).toEqual([]);
+    // Inserting a row above re-spells the indexed expression to where the cells sit now.
+    addRow(gd, tableId, undefined);
+    insertRowBefore(gd, tableId, r1!);
+    const after = tableEntries(gd, tableId)!.entries.find(
+      (e) => e.kind === 'cell' && e.rowId === r2,
+    )!;
+    expect(after.texts[0]).toEqual({ field: 'formula', text: '=Sum(B6:B8)' });
+    expect(
+      buildSearchSnapshot(gd).tables[0]!.entries.some((e) =>
+        e.texts.some((x) => x.text.includes('{r:')),
+      ),
+    ).toBe(false);
   });
 
   test('FIND-03 the whole snapshot carries tables, graph dimension values (even when the map is empty) and document names', () => {

@@ -148,6 +148,7 @@ export class FormulaEngine {
 
   /** Message-shaped entry point for the Worker. */
   handle(request: EngineRequest): EngineResponse {
+    if (request.type === 'ping') return { type: 'pong', seq: request.seq };
     const started = now();
     const outcome = this.apply(request.changes);
     return {
@@ -397,6 +398,7 @@ export class FormulaEngine {
           kind: 'address',
           cellIds: cell === undefined ? [] : [cell.cellId],
           missing: false,
+          anchored: false,
         };
       }
       case 'range': {
@@ -407,7 +409,7 @@ export class FormulaEngine {
             if (cell !== undefined) ids.push(cell.cellId);
           }
         }
-        return { index, kind: 'range', cellIds: ids, missing: false };
+        return { index, kind: 'range', cellIds: ids, missing: false, anchored: false };
       }
       case 'column':
         return {
@@ -415,6 +417,7 @@ export class FormulaEngine {
           kind: 'column',
           cellIds: cellsInColumnOn(sheet, ref.col).map((c) => c.cellId),
           missing: false,
+          anchored: false,
         };
       case 'entity': {
         const entry = this.index.entityIndex().byKey.get(entityKey(ref.path));
@@ -423,6 +426,7 @@ export class FormulaEngine {
           kind: 'entity',
           cellIds: entry === undefined ? [] : [entry.cellId],
           missing: false,
+          anchored: false,
         };
       }
       case 'bound': {
@@ -433,8 +437,11 @@ export class FormulaEngine {
               ? 'entity'
               : 'address'
             : ref.ref.kind;
-        return { index, kind, cellIds: ids ?? [], missing: ids === undefined };
+        return { index, kind, cellIds: ids ?? [], missing: ids === undefined, anchored: true };
       }
+      case 'placeholder':
+        // Nothing stood behind it at commit: the target is gone.
+        return { index, kind: 'address', cellIds: [], missing: true, anchored: true };
     }
   }
 

@@ -99,6 +99,19 @@
 [data-theme='dark'] .gd-outline__index {
   color: var(--surface);
 }
+/* PRD §20: an operand that follows the address, not a cell — muted ramp, dashed, labelled. */
+.gd-outline--positional {
+  --gd-outline: var(--ink-muted);
+  border-style: dashed;
+  background: transparent;
+  pointer-events: auto;
+}
+.gd-outline__positional {
+  margin-left: 0.25rem;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+}
+
 /* ---- entry popovers (FX-02, FX-04) -------------------------------------- */
 .gd-formula-popover {
   min-width: 16rem;

@@ -17,7 +17,7 @@ import {
   type TableMap,
 } from '../doc/schema.js';
 import { setCellText } from '../doc/mutations.js';
-import type { CellKey, Id } from '../ids.js';
+import { cellKey, type CellKey, type Id } from '../ids.js';
 import { tableStructure } from './snapshot.js';
 import type { TableStructure } from './types.js';
 import { WorkbookIndex } from './workbook-index.js';
@@ -60,5 +60,20 @@ export function commitCellText(
     return setCellText(gd, tableId, rowId, colId, text);
   }
   const index = options.index ?? workbookIndexOf(gd);
-  return setCellText(gd, tableId, rowId, colId, index.bind(readString(table, 'sheetId'), text));
+  // The source the cell held: a `#REF` / `#hidden` the editor showed keeps its token.
+  const current = cellsMap(table).get(cellKey(rowId, colId));
+  const previous = isFormula(current) ? current : undefined;
+  return setCellText(
+    gd,
+    tableId,
+    rowId,
+    colId,
+    index.bind(readString(table, 'sheetId'), text, previous),
+  );
+}
+
+/** The stored formula as the person reads it today; plain text passes through. */
+export function projectCellText(gd: GedeDoc, source: string, index?: WorkbookIndex): string {
+  if (!source.startsWith('=') || !source.includes('{')) return source;
+  return (index ?? workbookIndexOf(gd)).project(source);
 }
