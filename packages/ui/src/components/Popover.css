@@ -1,0 +1,14 @@
+.gd-popover {
+  min-width: 12rem;
+  max-width: min(24rem, 90vw);
+  max-height: 60vh;
+  overflow: auto;
+  padding: 0.3125rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--elev-overlay);
+  animation: gd-fade-in var(--dur-fast) var(--ease-out);
+  z-index: 20;
+}
