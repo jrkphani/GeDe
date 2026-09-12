@@ -23,6 +23,7 @@ import { PersistenceWriter } from './persistence.js';
 import {
   decodeMessage,
   encodeAwareness,
+  encodeNotice,
   encodeSyncStep1,
   encodeSyncStep2,
   encodeUpdate,
@@ -41,6 +42,8 @@ export interface Member {
 export class Conn {
   /** Awareness client ids this socket has announced; cleared when it leaves. */
   readonly awarenessIds = new Set<number>();
+  /** Set once the read-only notice (type 4) has been sent; it goes out at most once per connection. */
+  readOnlyNotified = false;
   /** Serialises message handling per socket so order is preserved across the async load. */
   queue: Promise<void> = Promise.resolve();
 
@@ -209,6 +212,12 @@ export class Room {
             { documentId: this.documentId, userId: conn.member.userId },
             'update from view-only socket dropped',
           );
+          if (!conn.readOnlyNotified) {
+            // LOAD-05: tell the client once so it can show its read-only state
+            // rather than wait for an echo that will never arrive.
+            conn.readOnlyNotified = true;
+            this.send(conn, encodeNotice({ code: 'read-only' }));
+          }
           return;
         }
         if (message.subtype === SYNC_STEP2) {

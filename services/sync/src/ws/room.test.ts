@@ -5,7 +5,7 @@ import * as Y from 'yjs';
 
 import { json, startServer, WEB_ORIGIN, type TestServer } from '../test/fakes.js';
 import { sleep, waitFor, YClient } from '../test/y-client.js';
-import { MESSAGE_SYNC } from './protocol.js';
+import { decodeNotice, MESSAGE_NOTICE, MESSAGE_SYNC } from './protocol.js';
 import { CLOSE_FORBIDDEN, CLOSE_NOT_FOUND, CLOSE_UNAUTHENTICATED } from './route.js';
 
 let server: TestServer;
@@ -145,6 +145,40 @@ describe('sync protocol', () => {
     const room = server.app.rooms.get(docId);
     await room?.persistence.flush();
     expect(server.repo.updatesByDoc.get(docId)?.length ?? 0).toBe(1);
+  });
+
+  test('SHARE-03 LOAD-05 a view-only client is told it is read-only once, on its first rejected write', async () => {
+    const editor = await connect(ownerToken);
+    const viewer = await connect(viewerToken);
+    await Promise.all([editor.synced, viewer.synced]);
+    const notices = (c: YClient) => c.received.filter((m) => m[0] === MESSAGE_NOTICE);
+
+    // The provider answers the server's sync step 1 with a step 2, which the
+    // room drops like any write from a view socket — so the notice arrives
+    // during the handshake, before the user has typed anything.
+    await waitFor(() => notices(viewer).length === 1);
+    expect(decodeNotice(notices(viewer)[0]!)).toEqual({ code: 'read-only' });
+    // Type 4 carries exactly a varUint tag and a varString JSON payload.
+    expect(Buffer.from(notices(viewer)[0]!.subarray(1)).toString('utf8')).toMatch(
+      /^.\{"code":"read-only"\}$/s,
+    );
+
+    viewer.setCell('r1:c1', 'first attempt');
+    viewer.setCell('r1:c2', 'second attempt');
+    viewer.setCell('r1:c3', 'third attempt');
+    await waitFor(() => (server.app.rooms.get(docId)?.stats.droppedUpdates ?? 0) >= 3);
+    await sleep(30);
+    expect(notices(viewer)).toHaveLength(1);
+
+    // Editors never see it, and the stream to the viewer is unaffected.
+    editor.setCell('r2:c1', 'from editor');
+    await waitFor(() => viewer.cell('r2:c1') === 'from editor');
+    expect(notices(editor)).toEqual([]);
+
+    // A fresh connection for the same viewer is told again.
+    const again = await connect(viewerToken);
+    await again.synced;
+    await waitFor(() => notices(again).length === 1);
   });
 
   test('SHARE-03 a forged sync step 2 from a viewer is dropped too', async () => {
@@ -303,6 +337,53 @@ describe('persistence', () => {
     expect(server.s3.objects.has(`docs/${docId}/1.yjs`)).toBe(true);
     expect(server.repo.updatesByDoc.get(docId)).toEqual([]);
     server = await startServer(); // afterEach closes this one
+  });
+});
+
+describe('deletion', () => {
+  test('LIB-08 DELETE closes the open room with 4404 after flushing and compacting its state', async () => {
+    const a = await connect(ownerToken);
+    const b = await connect(viewerToken);
+    await Promise.all([a.synced, b.synced]);
+    a.setCell('r1:c1', 'kept for recovery');
+    // Do not wait for the coalescing window: the close must flush it.
+    const res = await json<null>(server, 'DELETE', `/api/documents/${docId}`, {
+      token: ownerToken,
+    });
+    expect(res.status).toBe(204);
+    expect((await a.closed).code).toBe(CLOSE_NOT_FOUND);
+    expect((await b.closed).code).toBe(CLOSE_NOT_FOUND);
+    expect(server.app.rooms.get(docId)).toBeUndefined();
+    expect(server.repo.snapshotsByDoc.get(docId)?.map((s) => s.seq)).toEqual([1]);
+    expect(server.repo.updatesByDoc.get(docId)).toEqual([]);
+
+    // Recover, reopen: the edit made just before deletion is there.
+    const recovered = await json(server, 'POST', `/api/documents/${docId}/recover`, {
+      token: ownerToken,
+    });
+    expect(recovered.status).toBe(200);
+    const c = await connect(editorToken);
+    await c.synced;
+    expect(c.cell('r1:c1')).toBe('kept for recovery');
+  });
+
+  test('LIB-08 delete-all frees an idling room without a compaction', async () => {
+    const a = await connect(ownerToken);
+    await a.synced;
+    a.setCell('r1:c1', 'x');
+    await waitFor(() => (server.repo.updatesByDoc.get(docId)?.length ?? 0) === 1);
+    await server.repo.documents.softDelete(docId);
+    a.close();
+    await waitFor(() => server.app.rooms.get(docId)?.size === 0);
+
+    const res = await json<{ deleted: number }>(server, 'POST', '/api/documents/delete-all', {
+      token: ownerToken,
+    });
+    expect(res.body).toEqual({ deleted: 1 });
+    expect(server.app.rooms.get(docId)).toBeUndefined();
+    expect(server.repo.docs.has(docId)).toBe(false);
+    expect(server.s3.puts).toBe(0);
+    expect(server.repo.snapshotsByDoc.has(docId)).toBe(false);
   });
 });
 

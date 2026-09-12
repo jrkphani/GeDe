@@ -13,7 +13,7 @@ Read the root `CLAUDE.md` first.
 
 ## Wire protocol
 
-- y-websocket: message type 0 = sync (step 1, step 2, update), type 1 = awareness. Encoded with `lib0` and `y-protocols`. Do not invent message types; the browser uses the stock `y-websocket` provider.
+- y-websocket: message type 0 = sync (step 1, step 2, update), type 1 = awareness. Encoded with `lib0` and `y-protocols`. The browser uses the stock `y-websocket` provider. The one GeDe addition is type 4, a server-to-client notice (`{ "code": "read-only" }`, sent once per view-only connection); it is documented in `src/ws/protocol.ts` and the SPA reads it through `provider.messageHandlers[4]`. Do not add others.
 - One room per open document (`/ws/:docId`). One in-memory `Y.Doc` per room, evicted after idle. The process assumes it is one of many (fan-out is behind an interface) even though production runs one task today.
 
 ## Persistence contract
