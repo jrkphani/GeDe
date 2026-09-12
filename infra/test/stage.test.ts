@@ -264,30 +264,55 @@ describe('GeDe CDK app', () => {
     });
   });
 
-  it('LOAD-06 Synth runs the migrations against a throwaway Postgres in Docker before anything deploys', () => {
-    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project')) as {
+  it('LOAD-06 Synth installs Chromium, then runs verify, db:parity, e2e, the web build and cdk synth in that order', () => {
+    interface Project {
       Properties: {
-        Source: { BuildSpec: string };
+        Source: { BuildSpec?: string };
         Environment: {
           PrivilegedMode?: boolean;
           EnvironmentVariables?: { Name: string; Value: string }[];
         };
       };
-    }[];
-    const synth = projects.filter((p) => p.Properties.Source.BuildSpec.includes('npm run verify'));
-    expect(synth).toHaveLength(1);
-    const buildSpec = JSON.parse(synth[0]!.Properties.Source.BuildSpec) as {
-      phases: { build: { commands: string[] } };
-    };
-    const commands = buildSpec.phases.build.commands;
-    // Parity runs right after verify and before the web build and cdk synth.
-    expect(commands.indexOf('npm run db:parity -w packages/db')).toBe(
-      commands.indexOf('npm run verify') + 1,
+    }
+    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project'));
+    const synthProjects = (projects as Project[]).filter((p) =>
+      p.Properties.Source.BuildSpec?.includes('npm run verify'),
     );
-    // Docker needs a privileged project (`dockerEnabledForSynth`), and CI=true
-    // turns a missing Docker into a failure inside packages/db/scripts/parity.sh.
-    expect(synth[0]!.Properties.Environment.PrivilegedMode).toBe(true);
-    expect(synth[0]!.Properties.Environment.EnvironmentVariables).toEqual(
+    expect(synthProjects).toHaveLength(1);
+    const project = synthProjects[0]!;
+    const spec = JSON.parse(project.Properties.Source.BuildSpec!) as {
+      phases: { install: { commands: string[] }; build: { commands: string[] } };
+      cache: { paths: string[] };
+    };
+
+    // Install: Chromium's shared libraries come from dnf (Playwright's install-deps is
+    // apt-only), then `npm ci`, then the headless shell only.
+    const install = spec.phases.install.commands;
+    expect(install).toHaveLength(3);
+    expect(install[0]).toMatch(/^dnf install -y -q .*\bmesa-libgbm\b.*\bnss\b/);
+    expect(install[1]).toBe('npm ci');
+    expect(install[2]).toBe('npx playwright install --only-shell chromium');
+
+    // Build: verify → migrations parity on a throwaway Postgres (Docker) → Playwright
+    // journeys → web build → cdk synth. Exact lines: nothing may swallow a failure
+    // (no `|| true`, no `--ignore`), so a red journey stops the pipeline before publishing.
+    expect(spec.phases.build.commands).toEqual([
+      'npm run verify',
+      'npm run db:parity -w packages/db',
+      'npm run e2e',
+      'npm run build --workspace apps/web',
+      'npm run synth --workspace infra',
+    ]);
+
+    // node_modules and the Playwright browser cache survive between builds on a reused host.
+    expect(spec.cache.paths).toEqual(
+      expect.arrayContaining(['node_modules/**/*', '/root/.cache/ms-playwright/**/*']),
+    );
+    // Docker needs a privileged project (`dockerEnabledForSynth`); CI=true turns a missing
+    // Docker into a failure inside packages/db/scripts/parity.sh and selects Playwright's
+    // CI workers, retries and reporters.
+    expect(project.Properties.Environment.PrivilegedMode).toBe(true);
+    expect(project.Properties.Environment.EnvironmentVariables).toEqual(
       expect.arrayContaining([expect.objectContaining({ Name: 'CI', Value: 'true' })]),
     );
   });
