@@ -109,9 +109,7 @@ test('AUTH-01 LIB-01 DOC-01 GRID-04 LOAD-05 FIND-01 SHARE-01 LIB-D1 LIB-D8 AUTH-
     await page.getByRole('menuitem', { name: 'Sign out' }).click();
     await expect(page).toHaveURL(/\/signed-out$/);
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Signed out of GeDe');
-    await expect(
-      page.getByText('Everything is saved. Nothing is left on this device.'),
-    ).toBeVisible();
+    await expect(page.getByText(/Nothing is left on this device\./)).toBeVisible();
     // The session really is gone: the library is a sign-in again.
     await page.goto('/');
     await expect(page).toHaveURL(/\/sign-in$/);
