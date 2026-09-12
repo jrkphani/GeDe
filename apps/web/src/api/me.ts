@@ -44,3 +44,17 @@ export interface MePatch {
 export async function updateMe(patch: MePatch, options?: RequestOptions): Promise<void> {
   await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: patch });
 }
+
+/**
+ * SHARE-02: `PATCH /api/me { idToken }`. The service verifies the Cognito ID
+ * token itself and binds the address it attests — the SPA never sends the
+ * address as a plain string. Pending invitations for that address become
+ * shares in the same call. Resolves the profile as bound.
+ */
+export async function bindVerifiedEmail(idToken: string, options?: RequestOptions): Promise<Me> {
+  const me = toMe(
+    await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: { idToken } }),
+  );
+  if (!me) throw new Error('The profile response was not in the expected shape');
+  return me;
+}

@@ -264,6 +264,20 @@ export async function refreshAccessToken(): Promise<string | null> {
   }
 }
 
+/**
+ * The ID token, for `PATCH /api/me { idToken }` (SHARE-02): it carries the
+ * verified email the access token does not, and the service — never this
+ * app — decides what to bind from it. Not a bearer credential for anything else.
+ */
+export async function idToken(): Promise<string | null> {
+  try {
+    const session = await fetchAuthSession();
+    return session.tokens?.idToken?.toString() ?? null;
+  } catch {
+    return null;
+  }
+}
+
 /** Bearer token for the API, refreshed silently by Amplify when expired. */
 export async function accessToken(): Promise<string | null> {
   try {
