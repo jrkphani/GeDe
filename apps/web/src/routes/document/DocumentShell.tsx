@@ -60,6 +60,13 @@ import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2
 import { pinnedPanelOffset } from './grid/pinned.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
+import { useSortCommands } from './sort/index.js';
+import {
+  NULL_VIEW_STORE,
+  openViewStore,
+  useViewStore,
+  ViewStoreProvider,
+} from '../../doc/view-state.js';
 import { Inspector } from './Inspector.js';
 import { SheetTabs } from './SheetTabs.js';
 import { TableView } from './TableView.js';
@@ -108,6 +115,12 @@ export function DocumentShell() {
     [doc],
   );
   const { session, sync, ready, replica } = useDocument(id, { seed, userSub });
+  // ADR-026: the viewer's table views, per (user, document), on this device; nothing
+  // without a signed-in user.
+  const viewStore = useMemo(
+    () => (userSub === null ? NULL_VIEW_STORE : openViewStore(userSub, id)),
+    [userSub, id],
+  );
   // One timer spans the REST record and the replica, so the 400 ms hold is one hold (LOAD-02).
   const tiers = useLoadingTiers(doc === null || session === null || !ready);
 
@@ -138,18 +151,20 @@ export function DocumentShell() {
   }
 
   return (
-    <OpenDocument
-      key={session.docId}
-      doc={doc}
-      session={session}
-      sync={sync}
-      ready={ready}
-      tiers={tiers}
-      replica={replica}
-      phone={phone}
-      editable={editable}
-      focusTitle={params.get('new') === '1'}
-    />
+    <ViewStoreProvider value={viewStore}>
+      <OpenDocument
+        key={session.docId}
+        doc={doc}
+        session={session}
+        sync={sync}
+        ready={ready}
+        tiers={tiers}
+        replica={replica}
+        phone={phone}
+        editable={editable}
+        focusTitle={params.get('new') === '1'}
+      />
+    </ViewStoreProvider>
   );
 }
 
@@ -204,6 +219,9 @@ function OpenDocument({
       : (sheets[0]?.id ?? null);
   // Selection, editing and traversal (GRID-03..06) live in the grid state machine.
   const grid = useGrid(gd, editable, { undo: session.undo });
+  // SORT-01..06 (ADR-026): the viewer's own sort, filter and grouping per table, from the
+  // store the shell mounted above; never document state.
+  const sort = useSortCommands(gd, useViewStore());
   const { selection, editing } = grid.state;
   const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
   const [size, setSize] = useState<Size>({ width: 0, height: 0 });
@@ -738,6 +756,7 @@ function OpenDocument({
                   undo={session.undo}
                   actions={grid.actions}
                   commands={grid.commands}
+                  sort={phone ? undefined : sort}
                 />
               );
             })}

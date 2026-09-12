@@ -23,6 +23,7 @@ import { cognitoUserPoolsTokenProvider } from 'aws-amplify/auth/cognito';
 import { Hub, sharedInMemoryStorage } from 'aws-amplify/utils';
 import type { AppConfig } from '../config.js';
 import { clearReplicas } from '../doc/replica.js';
+import { clearViewState } from '../doc/view-state.js';
 
 export type SignInStep =
   | { kind: 'done' }
@@ -228,7 +229,9 @@ export async function signOutLocal(): Promise<void> {
   try {
     await signOut({ global: false });
   } finally {
-    // "Nothing is left on this device": every local document replica goes with the session.
+    // "Nothing is left on this device": every local document replica and every
+    // per-user table view (ADR-026) goes with the session.
+    clearViewState();
     await clearReplicas();
   }
 }

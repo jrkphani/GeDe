@@ -1,8 +1,11 @@
 import clsx from 'clsx';
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
+  useId,
+  useMemo,
   useRef,
   useState,
   type CSSProperties,
@@ -27,6 +30,7 @@ import {
   EMPTY_DOC,
   plainText,
   richFromText,
+  type Band,
   type ColumnRecord,
   type FormatLocale,
   type Id,
@@ -52,6 +56,7 @@ import {
   type TraversalTable,
 } from '../../doc/selection.js';
 import { CellContent, layoutCell, RichCellEditor, toFormatLocale } from './cell/index.js';
+import { formatNumber } from '../../intl.js';
 import { useLocale } from '../../locale.js';
 import {
   FormulaCell,
@@ -64,6 +69,14 @@ import { HIER_ARIA_KEYS, hierarchyKey } from './grid/hier-keys.js';
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
+import {
+  ariaSortOf,
+  GroupBand,
+  HeaderMenu,
+  headerGlyphs,
+  useTableProjection,
+  type SortCommands,
+} from './sort/index.js';
 
 export interface TableViewProps {
   table: TableMap;
@@ -74,12 +87,10 @@ export interface TableViewProps {
   /** RESP-02 / SHARE-03: no edit affordance renders when false. */
   editable: boolean;
   /**
-   * True while this viewer's sort or filter (per-user view state, ADR on PR #74)
-   * reorders or drops rows. Depth is relative to the row above in *document*
-   * order, so a sorted or filtered view could draw a child above its parent:
-   * the outline is then treated as under grouping (HIER-08) — depth kept, not
-   * shown, no chevron — and nest/promote are refused from this table. The sort
-   * feature wires it; until then it defaults to false.
+   * Force the "view is sorted" treatment of the outline (HIER-08, ADR-026):
+   * depth kept, not shown, no chevron, nest/promote refused. The table reads
+   * its own viewer's sort and filter from the view store and applies this
+   * itself; the prop is for a host that knows better (e.g. a preview).
    */
   viewSorted?: boolean | undefined;
   /** Other participants' selections on this table (SHARE-04). */
@@ -97,9 +108,23 @@ export interface TableViewProps {
   undo?: Y.UndoManager | null | undefined;
   actions: GridActions;
   commands: GridCommands;
+  /**
+   * SORT-01: sort, filter and group commands behind each header's ▼. Absent
+   * renders no menu (the phone, RESP-02) — the viewer's view still applies.
+   * Not tied to `editable`: the view is the viewer's own (ADR-025).
+   */
+  sort?: SortCommands | undefined;
 }
 
 const TITLE_PX = TABLE_TITLE_ROWS * LATTICE.row;
+const EMPTY_ROWS: readonly Id[] = [];
+
+function sameIds(a: readonly Id[], b: readonly Id[]): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
+}
 const HEADER_PX = LATTICE.row;
 const FOOTER_PX = LATTICE.row;
 
@@ -132,11 +157,22 @@ export const TableView = memo(function TableView({
   undo,
   actions,
   commands,
+  sort,
 }: TableViewProps) {
-  useYVersion(table);
+  const version = useYVersion(table);
   const [activeLocale] = useLocale();
   const locale = toFormatLocale(activeLocale);
-  const record = tableRecord(table);
+  // One record per document change: its `rows` and `columns` keep identity between
+  // renders that change nothing, so what derives from them can be memoised.
+  const record = useMemo(() => tableRecord(table), [table, version]);
+  // SORT-01..05: the rows to render, in view order; held still while a cell here is edited.
+  const projection = useTableProjection(
+    table,
+    record,
+    activeLocale,
+    editing !== null && editing.cell.tableId === record.id,
+  );
+  const bandLabelId = useId();
   const ref = useRef<HTMLElement>(null);
   const [columnPreview, setColumnPreview] = useState<ColumnPreview | null>(null);
   const [tablePreview, setTablePreview] = useState<TablePreview | null>(null);
@@ -161,7 +197,6 @@ export const TableView = memo(function TableView({
       : storedHeights.map((h) =>
           tablePreview.wrapped || tableWraps(record) ? WRAPPED_ROW_HEIGHT : Math.min(h, 1),
         );
-  const bodyPx = rowHeights.reduce((a, b) => a + b, 0) * LATTICE.row;
   const allWrapped =
     storedHeights.length > 0 && storedHeights.every((h) => h === WRAPPED_ROW_HEIGHT);
   const addresses = tier === 'micro' ? tableAddresses(table) : null;
@@ -185,10 +220,68 @@ export const TableView = memo(function TableView({
     record.frozenColumns > 0
       ? (visible.filter((c) => frozenIds.has(c.id)).at(-1)?.id ?? null)
       : null;
-  const traversal: TraversalTable = {
-    rows: record.rows,
-    columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
-  };
+  // Sections of the body: one per band when grouped (its rows hidden while collapsed),
+  // else the whole view in one. Row ordinals index `rowHeights` and `addresses`,
+  // which stay in document order — a sorted row keeps its address (non-negotiable 3).
+  // Memoised on the projection, so a render that changes nothing about the rows hands
+  // every cell the same `traversal` and the grid registers its view rows once.
+  const rowOrdinal = useMemo(
+    () => new Map<Id, number>(record.rows.map((id, i) => [id, i])),
+    [record.rows],
+  );
+  // HIER-04..06: the outline, once per document change. A row under a collapsed
+  // parent has left the lattice (no height, no address) and is not drawn, whatever
+  // the viewer's sort, filter or grouping: the sections below leave it out.
+  const outline = useMemo(() => tableOutline(table, record), [table, record]);
+  const { sections, visibleRows, bandCount } = useMemo(() => {
+    const list: { band: Band | null; rows: readonly Id[]; firstIndex: number }[] = [];
+    const shown: Id[] = [];
+    const hiddenRow = (id: Id) => outline.rows[rowOrdinal.get(id) ?? -1]?.hidden === true;
+    // ARIA row indices count what renders, bands included, in view order.
+    let index = 1 + record.headerRows;
+    const add = (band: Band | null, all: readonly Id[]) => {
+      const collapsed = band !== null && projection.collapsed.has(band.key);
+      const rows = all.some(hiddenRow) ? all.filter((id) => !hiddenRow(id)) : all;
+      list.push({ band, rows: collapsed ? EMPTY_ROWS : rows, firstIndex: index });
+      index += (band === null ? 0 : 1) + (collapsed ? 0 : rows.length);
+      if (!collapsed) shown.push(...rows);
+    };
+    if (projection.bands === null) add(null, projection.rowIds);
+    else {
+      for (const band of projection.bands) add(band, band.rowIds);
+      add(null, projection.loose);
+    }
+    return { sections: list, visibleRows: shown, bandCount: projection.bands?.length ?? 0 };
+  }, [projection, record.headerRows, outline, rowOrdinal]);
+  // Keep the array's identity while its content is unchanged (a re-projection that lands the
+  // same order): what depends on it — `traversal`, the grid's view rows — then stays put too.
+  const stableRowsRef = useRef<readonly Id[]>(visibleRows);
+  const stableVisibleRows = sameIds(stableRowsRef.current, visibleRows)
+    ? stableRowsRef.current
+    : visibleRows;
+  stableRowsRef.current = stableVisibleRows;
+  const renderedBodyPx =
+    (visibleRows.reduce((acc, id) => acc + (rowHeights[rowOrdinal.get(id) ?? 0] ?? 1), 0) +
+      bandCount) *
+    LATTICE.row;
+  // Traversal follows what is on screen (SORT-01..05): arrows and Tab move through the
+  // visible order, and past its last row a new row is appended as ever (GRID-05).
+  useEffect(() => {
+    actions.setViewRows(record.id, stableVisibleRows);
+  }, [actions, record.id, stableVisibleRows]);
+  useEffect(
+    () => () => {
+      actions.setViewRows(record.id, null);
+    },
+    [actions, record.id],
+  );
+  const traversal: TraversalTable = useMemo(
+    () => ({
+      rows: stableVisibleRows,
+      columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
+    }),
+    [stableVisibleRows, record.columns],
+  );
   // GRID-04: the read-only reason is a column fact (source) or a row fact (group band);
   // resolve each once per render rather than re-reading the Yjs column array per cell.
   const columnOrdinal = new Map<Id, number>(record.columns.map((c, i) => [c.id, i]));
@@ -201,24 +294,21 @@ export const TableView = memo(function TableView({
     const meta = rowMeta(table, rowId);
     return { readOnly: rowReadOnlyReason(meta), wrapped: meta.height === WRAPPED_ROW_HEIGHT };
   };
-  // HIER-04..08: the outline, once per render. Rows under a collapsed parent are
-  // not drawn at all (HIER-06); while the table is grouped the outline column
-  // shows no depth, though the data keeps it (HIER-08).
-  const outline = tableOutline(table, record);
-  const showOutline = !outline.grouped && !viewSorted && outline.column !== null;
-  const outlineLocked = outline.grouped
+  // HIER-04..08: while the viewer groups the table the bands own the outline column,
+  // and while the viewer sorts or filters it a child could draw above its parent:
+  // in both the outline shows no depth, though the data keeps it (HIER-08, ADR-026).
+  const grouped = projection.view.groupBy !== null;
+  const sorted = viewSorted || projection.view.sortBy !== null || projection.view.filter !== null;
+  const showOutline = !grouped && !sorted && outline.column !== null;
+  const outlineLocked = grouped
     ? 'Hierarchy is unavailable while the table is grouped'
-    : viewSorted
+    : sorted
       ? 'Hierarchy is unavailable while the view is sorted or filtered'
       : null;
   // A table with any nesting is a treegrid to assistive tech: that is the role whose
   // rows carry `aria-level` and `aria-expanded` (a plain grid's may not). A flat table
   // stays a grid, so nothing changes for it.
   const hierarchical = showOutline && outline.rows.some((r) => r.depth > 0 || r.hasChildren);
-  // Ordinal among the rows that render, per row: `aria-rowindex` counts what is in the grid.
-  let drawn = 0;
-  const visibleOrdinals = outline.rows.map((r) => (r.hidden ? -1 : drawn++));
-  const visibleRowCount = drawn;
 
   // M8: with nothing selected in this table, its first cell is the tab stop (roving tabindex).
   const tableHasSelection = selectedCell !== null && selectedCell.tableId === record.id;
@@ -268,7 +358,7 @@ export const TableView = memo(function TableView({
       {tier === 'macro' ? (
         <div
           className="gd-table__block"
-          style={{ height: `${String(headerPx + bodyPx + footerPx)}px` }}
+          style={{ height: `${String(headerPx + renderedBodyPx + footerPx)}px` }}
           aria-hidden="true"
         />
       ) : (
@@ -277,7 +367,7 @@ export const TableView = memo(function TableView({
             className="gd-table__grid"
             role={hierarchical ? 'treegrid' : 'grid'}
             aria-label={record.title}
-            aria-rowcount={visibleRowCount + record.headerRows}
+            aria-rowcount={visibleRows.length + bandCount + record.headerRows}
             aria-colcount={columnCount}
             onPointerDown={(e) => {
               e.stopPropagation();
@@ -292,29 +382,59 @@ export const TableView = memo(function TableView({
                 {visible.map((col, ci) => {
                   const units = columnUnits[ci] ?? 1;
                   const letter = columnLetter(record.gridCol + (columnStarts[ci] ?? 0));
+                  // SORT-01: the active column is tinted and carries ↑ ↓ ⇅ and/or ⌕, plus aria-sort.
+                  const glyphs = headerGlyphs(projection.view, col.id);
+                  const glyph = glyphs[0] ?? null;
+                  const grouped = projection.view.groupBy === col.id;
+                  const columnTabStop =
+                    selectedCell?.tableId === record.id && selectedCell.colId === col.id;
                   return (
                     <div
                       key={col.id}
                       role="columnheader"
+                      aria-sort={ariaSortOf(projection.view, col.id)}
                       className={clsx('gd-table__header', {
                         'gd-table__header--frozen': frozenIds.has(col.id),
                         'gd-table__header--freeze-edge': col.id === freezeEdgeId,
+                        'gd-table__header--view': glyph !== null || grouped,
                       })}
                       style={{ width: `${String(units * LATTICE.col)}px` }}
-                      title={col.label}
+                      title={
+                        glyph === null && !grouped
+                          ? col.label
+                          : `${col.label} — ${[...glyphs.map((g) => g.label), grouped ? 'grouped' : null].filter(Boolean).join(', ')}`
+                      }
                       data-col-id={col.id}
+                      data-view={glyph === null && !grouped ? undefined : 'active'}
                     >
                       <span className="gd-table__header-label">{col.label}</span>
+                      {glyphs.map((g) => (
+                        <span key={g.icon} className="gd-table__header-glyph" data-glyph={g.icon}>
+                          <Icon name={g.icon} size={13} label={g.label} />
+                        </span>
+                      ))}
+                      {grouped && glyph === null && (
+                        <span className="gd-table__header-glyph" data-glyph="group">
+                          <Icon name="group" size={13} label="grouped" />
+                        </span>
+                      )}
                       <span className="gd-mono gd-table__letter" aria-label={`Column ${letter}`}>
                         {letter}
                       </span>
+                      {sort !== undefined && (
+                        <HeaderMenu
+                          tableId={record.id}
+                          column={col}
+                          view={projection.view}
+                          commands={sort}
+                          tabStop={columnTabStop}
+                        />
+                      )}
                       {editable && (
                         <ColumnDivider
                           label={col.label}
                           units={col.width}
-                          tabStop={
-                            selectedCell?.tableId === record.id && selectedCell.colId === col.id
-                          }
+                          tabStop={columnTabStop}
                           scale={scale}
                           onPreview={(preview) => {
                             setColumnPreview(
@@ -331,76 +451,118 @@ export const TableView = memo(function TableView({
                 })}
               </div>
             )}
-            {record.rows.map((rowId, ri) => {
-              // The outline has one entry per row; a missing one cannot happen, but a row
-              // that is not drawn must not be drawn.
-              const outlineRow = outline.rows[ri];
-              if (outlineRow === undefined || outlineRow.hidden) return null; // HIER-06
-              const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
-              const { readOnly: rowReadOnly, wrapped: rowWrapped } = rowFacts(rowId);
-              const parentRow = hierarchical && outlineRow.hasChildren;
+            {sections.map((section, si) => {
+              const { band, rows, firstIndex } = section;
+              const bandCollapsed = band !== null && projection.collapsed.has(band.key);
+              const bandLabel = `${bandLabelId}-${String(si)}`;
+              const groupIndex = visible.findIndex((c) => c.id === projection.view.groupBy);
+              const Wrapper = band === null ? Fragment : 'div';
+              const wrapperProps =
+                band === null
+                  ? {}
+                  : { role: 'rowgroup', 'aria-labelledby': bandLabel, 'data-band': band.key };
               return (
-                <div
-                  key={rowId}
-                  className="gd-table__row"
-                  role="row"
-                  aria-rowindex={(visibleOrdinals[ri] ?? 0) + 1 + record.headerRows}
-                  aria-level={hierarchical ? outlineRow.depth + 1 : undefined}
-                  aria-expanded={parentRow ? !outlineRow.collapsed : undefined}
-                  style={{ height: `${String(heightPx)}px` }}
-                  data-depth={showOutline ? outlineRow.depth : undefined}
-                >
-                  {visible.map((col, ci) => {
-                    const isSelected =
-                      selectedCell !== null &&
-                      selectedCell.tableId === record.id &&
-                      selectedCell.rowId === rowId &&
-                      selectedCell.colId === col.id;
-                    const isEditing =
-                      editing !== null &&
-                      editing.cell.tableId === record.id &&
-                      editing.cell.rowId === rowId &&
-                      editing.cell.colId === col.id;
-                    const other = presenceByCell.get(`${rowId}:${col.id}`);
-                    const address = addresses?.[ri]?.[columnOrdinal.get(col.id) ?? -1] ?? undefined;
-                    const cell = { tableId: record.id, rowId, colId: col.id };
-                    // Column source wins over the row reason, as `cellReadOnlyReason` in core.
-                    const readOnly: ReadOnlyReason | null =
-                      columnReadOnly.get(col.id) ?? rowReadOnly;
+                <Wrapper key={band === null ? `section-${String(si)}` : band.key} {...wrapperProps}>
+                  {band !== null && (
+                    <GroupBand
+                      value={band.value}
+                      count={band.rowIds.length}
+                      collapsed={bandCollapsed}
+                      columnLeft={(columnStarts[groupIndex] ?? 0) * LATTICE.col}
+                      columnWidth={(columnUnits[groupIndex] ?? 1) * LATTICE.col}
+                      columns={columnCount}
+                      rowIndex={firstIndex}
+                      labelId={bandLabel}
+                      countText={`${formatNumber(activeLocale, band.rowIds.length)} ${band.rowIds.length === 1 ? 'row' : 'rows'}`}
+                      onToggle={() => {
+                        projection.toggleBand(band.key);
+                      }}
+                    />
+                  )}
+                  {rows.map((rowId, vi) => {
+                    const ri = rowOrdinal.get(rowId) ?? 0;
+                    // One outline entry per row; rows under a collapsed parent never reach
+                    // here (the sections leave them out, HIER-06).
+                    const outlineRow = outline.rows[ri];
+                    const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
+                    const { readOnly: rowReadOnly, wrapped: rowWrapped } = rowFacts(rowId);
+                    const parentRow = hierarchical && outlineRow?.hasChildren === true;
                     return (
-                      <Cell
-                        key={col.id}
-                        table={table}
-                        cell={cell}
-                        widthPx={(columnUnits[ci] ?? 1) * LATTICE.col}
-                        tier={tier}
-                        address={address}
-                        selected={isSelected}
-                        tabStop={
-                          isSelected ||
-                          (!tableHasSelection && visibleOrdinals[ri] === 0 && ci === 0)
+                      <div
+                        key={rowId}
+                        className="gd-table__row"
+                        role="row"
+                        aria-rowindex={firstIndex + (band === null ? 0 : 1) + vi}
+                        aria-level={
+                          hierarchical && outlineRow !== undefined
+                            ? outlineRow.depth + 1
+                            : undefined
                         }
-                        editing={isEditing ? editing : null}
-                        editable={editable}
-                        readOnly={readOnly}
-                        outline={showOutline && col.id === outline.column ? outlineRow : null}
-                        outlineLocked={outlineLocked}
-                        column={col}
-                        locale={locale}
-                        undo={undo ?? null}
-                        frozen={frozenIds.has(col.id)}
-                        freezeEdge={col.id === freezeEdgeId}
-                        // Per-column wrap clamps that column's cells only; a row wrapped on its
-                        // own wraps all of its cells. Other cells in a two-unit row stay one line.
-                        wrap={col.wrap || rowWrapped}
-                        other={other}
-                        traversal={traversal}
-                        actions={actions}
-                        commands={commands}
-                      />
+                        aria-expanded={parentRow ? !outlineRow.collapsed : undefined}
+                        style={{ height: `${String(heightPx)}px` }}
+                        data-depth={
+                          showOutline && outlineRow !== undefined ? outlineRow.depth : undefined
+                        }
+                      >
+                        {visible.map((col, ci) => {
+                          const isSelected =
+                            selectedCell !== null &&
+                            selectedCell.tableId === record.id &&
+                            selectedCell.rowId === rowId &&
+                            selectedCell.colId === col.id;
+                          const isEditing =
+                            editing !== null &&
+                            editing.cell.tableId === record.id &&
+                            editing.cell.rowId === rowId &&
+                            editing.cell.colId === col.id;
+                          const other = presenceByCell.get(`${rowId}:${col.id}`);
+                          const address =
+                            addresses?.[ri]?.[columnOrdinal.get(col.id) ?? -1] ?? undefined;
+                          const cell = { tableId: record.id, rowId, colId: col.id };
+                          // Column source wins over the row reason, as `cellReadOnlyReason` in core.
+                          const readOnly: ReadOnlyReason | null =
+                            columnReadOnly.get(col.id) ?? rowReadOnly;
+                          return (
+                            <Cell
+                              key={col.id}
+                              table={table}
+                              cell={cell}
+                              widthPx={(columnUnits[ci] ?? 1) * LATTICE.col}
+                              tier={tier}
+                              address={address}
+                              selected={isSelected}
+                              tabStop={
+                                isSelected ||
+                                (!tableHasSelection && rowId === visibleRows[0] && ci === 0)
+                              }
+                              editing={isEditing ? editing : null}
+                              editable={editable}
+                              readOnly={readOnly}
+                              outline={
+                                showOutline && col.id === outline.column && outlineRow !== undefined
+                                  ? outlineRow
+                                  : null
+                              }
+                              outlineLocked={outlineLocked}
+                              column={col}
+                              locale={locale}
+                              undo={undo ?? null}
+                              frozen={frozenIds.has(col.id)}
+                              freezeEdge={col.id === freezeEdgeId}
+                              // Per-column wrap clamps that column's cells only; a row wrapped on its
+                              // own wraps all of its cells. Other cells in a two-unit row stay one line.
+                              wrap={col.wrap || rowWrapped}
+                              other={other}
+                              traversal={traversal}
+                              actions={actions}
+                              commands={commands}
+                            />
+                          );
+                        })}
+                      </div>
                     );
                   })}
-                </div>
+                </Wrapper>
               );
             })}
           </div>
@@ -412,7 +574,19 @@ export const TableView = memo(function TableView({
               data-testid="table-footer"
             >
               <span>
-                {rowCount} {rowCount === 1 ? 'row' : 'rows'}
+                {projection.hidden > 0 ? (
+                  <>
+                    <span className="gd-table__footer-hidden">
+                      {formatNumber(activeLocale, rowCount - projection.hidden)}
+                    </span>
+                    {' of '}
+                    {formatNumber(activeLocale, rowCount)} rows
+                  </>
+                ) : (
+                  <>
+                    {formatNumber(activeLocale, rowCount)} {rowCount === 1 ? 'row' : 'rows'}
+                  </>
+                )}
               </span>
               <span>
                 {columnCount} {columnCount === 1 ? 'column' : 'columns'}
@@ -424,8 +598,13 @@ export const TableView = memo(function TableView({
               table={table}
               record={record}
               outline={showOutline ? outline : null}
+              rowOrdinal={rowOrdinal}
               left={pinnedLeft}
               rowHeights={rowHeights}
+              sections={sections.map((s) => ({
+                band: s.band !== null,
+                rows: s.band !== null && projection.collapsed.has(s.band.key) ? [] : s.rows,
+              }))}
               selectedCell={selectedCell}
               locale={locale}
               onSelect={actions.selectCell}
@@ -497,10 +676,15 @@ export const TableView = memo(function TableView({
 interface PinnedPanelProps {
   table: TableMap;
   record: TableRecord;
-  /** The outline to mirror in the frozen outline column, or null while grouped (HIER-08). */
+  /** The outline to mirror in the frozen outline column, or null while grouped or sorted (HIER-08). */
   outline: TableOutline | null;
+  /** Document ordinal per row id: `rowHeights` and the outline are in document order. */
+  rowOrdinal: ReadonlyMap<Id, number>;
   left: number;
+  /** Heights in document row order; index by the row's ordinal in `record.rows`. */
   rowHeights: readonly number[];
+  /** The grid's sections in view order: a band (one spacer row) and its visible rows. */
+  sections: readonly { band: boolean; rows: readonly Id[] }[];
   selectedCell: CellSelection | null;
   locale: FormatLocale;
   onSelect: (cell: CellSelection) => void;
@@ -517,8 +701,10 @@ function PinnedPanel({
   table,
   record,
   outline,
+  rowOrdinal,
   left,
   rowHeights,
+  sections,
   selectedCell,
   locale,
   onSelect,
@@ -554,53 +740,60 @@ function PinnedPanel({
           ))}
         </div>
       )}
-      {record.rows.map((rowId, ri) => {
-        if (rowHeights[ri] === 0) return null; // HIER-06: hidden under a collapsed parent
-        const outlineRow = outline?.rows[ri];
-        return (
-          <div
-            key={rowId}
-            className="gd-table__row"
-            style={{ height: `${String((rowHeights[ri] ?? 1) * LATTICE.row)}px` }}
-          >
-            {columns.map((col) => {
-              const isSelected =
-                selectedCell !== null &&
-                selectedCell.tableId === record.id &&
-                selectedCell.rowId === rowId &&
-                selectedCell.colId === col.id;
-              const onOutline = outline !== null && col.id === outline.column;
-              return (
-                <div
-                  key={col.id}
-                  className={clsx('gd-cell', 'gd-cell--frozen', {
-                    'gd-cell--selected': isSelected,
-                    'gd-cell--wrap':
-                      col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
-                    'gd-cell--outline': onOutline,
-                  })}
-                  style={{
-                    width: `${String(col.width * LATTICE.col)}px`,
-                    ...outlineStyle(onOutline ? outlineRow : undefined),
-                  }}
-                  onPointerDown={() => {
-                    onSelect({ tableId: record.id, rowId, colId: col.id });
-                  }}
-                >
-                  {onOutline && outlineRow !== undefined && (
-                    <OutlineMarks row={outlineRow} control={null} />
-                  )}
-                  <CellContent
-                    content={cellRich(table, rowId, col.id)}
-                    format={cellFormatFor(table, col, rowId)}
-                    locale={locale}
-                  />
-                </div>
-              );
-            })}
-          </div>
-        );
-      })}
+      {sections.map((section, si) => (
+        <Fragment key={si}>
+          {section.band && (
+            <div className="gd-table__row gd-band" style={{ height: `${String(LATTICE.row)}px` }} />
+          )}
+          {section.rows.map((rowId) => {
+            const ri = rowOrdinal.get(rowId) ?? 0;
+            const outlineRow = outline?.rows[ri];
+            return (
+              <div
+                key={rowId}
+                className="gd-table__row"
+                style={{ height: `${String((rowHeights[ri] ?? 1) * LATTICE.row)}px` }}
+              >
+                {columns.map((col) => {
+                  const isSelected =
+                    selectedCell !== null &&
+                    selectedCell.tableId === record.id &&
+                    selectedCell.rowId === rowId &&
+                    selectedCell.colId === col.id;
+                  const onOutline = outline !== null && col.id === outline.column;
+                  return (
+                    <div
+                      key={col.id}
+                      className={clsx('gd-cell', 'gd-cell--frozen', {
+                        'gd-cell--selected': isSelected,
+                        'gd-cell--wrap':
+                          col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
+                        'gd-cell--outline': onOutline,
+                      })}
+                      style={{
+                        width: `${String(col.width * LATTICE.col)}px`,
+                        ...outlineStyle(onOutline ? outlineRow : undefined),
+                      }}
+                      onPointerDown={() => {
+                        onSelect({ tableId: record.id, rowId, colId: col.id });
+                      }}
+                    >
+                      {onOutline && outlineRow !== undefined && (
+                        <OutlineMarks row={outlineRow} control={null} />
+                      )}
+                      <CellContent
+                        content={cellRich(table, rowId, col.id)}
+                        format={cellFormatFor(table, col, rowId)}
+                        locale={locale}
+                      />
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </Fragment>
+      ))}
     </div>
   );
 }

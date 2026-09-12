@@ -402,22 +402,18 @@ describe('outline column and grouping (HIER-04, HIER-08)', () => {
     expect(tableById(gd, tableId)?.outlineColumn).toBeNull();
   });
 
-  test('HIER-08 while `groupBy` names a column the outline reports grouped and depth is preserved in the data', () => {
+  test('HIER-08 grouping is the viewer’s, not the document’s: a stray `groupBy` key changes nothing here and depth is preserved in the data', () => {
     const gd = fresh();
     const { tableId, rows, cols, table } = outlineFixture(gd);
-    expect(tableOutline(table).grouped).toBe(false);
-    // The grouping feature writes this key (`table.groupBy = columnId | null`).
+    const before = tableOutline(table);
+    // A key an older build stored: the record and the outline ignore it.
     gd.doc.transact(() => {
       table.set('groupBy', cols[1]);
     }, gd.origin);
-    expect(tableById(gd, tableId)?.groupBy).toBe(cols[1]);
-    expect(tableOutline(table).grouped).toBe(true);
+    expect(tableById(gd, tableId)).not.toHaveProperty('groupBy');
+    expect(tableOutline(table)).toEqual(before);
     expect(rowDepths(gd, tableId)).toEqual([0, 1, 2, 1, 0, 0]);
     expect(nestRow(gd, tableId, rows[4] ?? '')).toBe(1); // the data still takes depth
-    gd.doc.transact(() => {
-      table.set('groupBy', null);
-    }, gd.origin);
-    expect(tableOutline(table).grouped).toBe(false);
     expect(rowDepths(gd, tableId)).toEqual([0, 1, 2, 1, 1, 0]);
   });
 });

@@ -113,7 +113,11 @@ export interface RowMeta {
   readonly collapsed: boolean;
   /** Whole lattice units; 2 when the row itself is wrapped (GRID-09). */
   readonly height: number;
-  /** A category band (PRD §15): its cells are not editable (GRID-04). Set by grouping. */
+  /**
+   * A stored category-band row: its cells are not editable (GRID-04). Grouping
+   * (`sort/`, SORT-05) renders bands as view rows over the projection and never
+   * sets this; it stays so a document that carries one still reads correctly.
+   */
   readonly group: boolean;
   /**
    * A row `Split()` produced beneath its parent (HIER-07): rendered as a nested
@@ -145,12 +149,6 @@ export interface TableRecord {
    * `outlineColumnId`. Stored as `outlineColumn`.
    */
   readonly outlineColumn: Id | null;
-  /**
-   * The column the table is grouped by (PRD §15), or null. Written by the
-   * grouping feature; read here because group bands take over the outline
-   * column while it is set (HIER-08). Stored as `groupBy`.
-   */
-  readonly groupBy: Id | null;
 }
 
 export interface GraphRecord {
@@ -324,7 +322,6 @@ export function tableRecord(map: TableMap): TableRecord {
     headerRows: readStripCount(map, 'headerRows', TABLE_HEADER_ROWS),
     footerRows: readStripCount(map, 'footerRows', DEFAULT_FOOTER_ROWS),
     outlineColumn: readColumnRef(map, 'outlineColumn', columns),
-    groupBy: readColumnRef(map, 'groupBy', columns),
   };
 }
 

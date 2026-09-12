@@ -4,7 +4,7 @@
  * harness is the same `useGrid` the shell uses, so what passes here is what
  * the document runs.
  */
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -41,6 +41,7 @@ import { LiveRegion } from '../../announce.js';
 import { useYVersion } from '../../doc/use-y.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import { useGrid, type Grid } from './grid/use-grid.js';
+import { openViewStore, ViewStoreProvider, type ViewStore } from '../../doc/view-state.js';
 import { TableView } from './TableView.js';
 
 interface HarnessProps {
@@ -72,7 +73,7 @@ function Harness({
   const map = tableMap(gd, tableId);
   if (map === null) return null;
   return (
-    <>
+    <ViewStoreProvider value={viewStore}>
       <TableView
         table={map}
         tier={tier}
@@ -88,7 +89,7 @@ function Harness({
         commands={g.commands}
       />
       <LiveRegion />
-    </>
+    </ViewStoreProvider>
   );
 }
 
@@ -101,6 +102,8 @@ function Mount(
 }
 
 let gd: GedeDoc;
+/** The viewer's view store (ADR-026): grouping, sort and filter are the viewer's, never the document's. */
+let viewStore: ViewStore;
 let tableId: Id;
 let rows: readonly Id[];
 let cols: readonly Id[];
@@ -156,6 +159,8 @@ const selected = () =>
     ?.getAttribute('data-address') ?? null;
 
 beforeEach(() => {
+  localStorage.clear();
+  viewStore = openViewStore('user-1', 'doc-table-view');
   gd = openDocument(new Y.Doc());
   const sheet = createSheet(gd);
   // A 3 × 3 table at B2: title rows 2–3, header row 4, data B5:D7.
@@ -1050,23 +1055,23 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
     expect(rowEls()).toHaveLength(5);
   });
 
-  it('HIER-08 while the table is grouped the outline column shows no depth, prefix or chevron, and the data keeps it; ungrouping restores the outline', () => {
+  it('HIER-08 while the viewer groups the table the outline column shows no depth, prefix or chevron, and the data keeps it; ungrouping restores the outline', async () => {
     outlineFixture();
-    gd.doc.transact(() => {
-      tableMap(gd, tableId)!.set('groupBy', cols[1]);
-    });
+    viewStore.set(tableId, { sortBy: null, filter: null, groupBy: cols[1]! });
     mount();
+    // The projection (bands) lands a tick later; the outline is hidden from the first render.
     expect(cellAt(2, 0)).not.toHaveClass('gd-cell--outline');
     expect(screen.queryByTestId('outline-chevron')).toBeNull();
     expect(screen.queryByText('↳')).toBeNull();
     expect(rowEls()[2]).not.toHaveAttribute('aria-level');
     expect(rowMeta(tableMap(gd, tableId)!, rows[2]!).depth).toBe(2);
+    await screen.findAllByTestId('group-band');
     act(() => {
-      gd.doc.transact(() => {
-        tableMap(gd, tableId)!.set('groupBy', null);
-      });
+      viewStore.clear(tableId);
     });
-    expect(cellAt(2, 0)).toHaveClass('gd-cell--outline');
+    await waitFor(() => {
+      expect(cellAt(2, 0)).toHaveClass('gd-cell--outline');
+    });
     expect(rowEls()[2]).toHaveAttribute('aria-level', '3');
   });
 

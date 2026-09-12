@@ -140,14 +140,13 @@ export interface OutlineRow {
 
 export interface TableOutline {
   readonly rows: readonly OutlineRow[];
-  /** The column that carries indentation, ↳ and the chevron, or null when every column is hidden (HIER-04). */
-  readonly column: Id | null;
   /**
-   * HIER-08: while the table is grouped, group bands own the outline column —
-   * depth is kept in the data but not shown. Readers draw no indent, prefix or
-   * chevron when this is true.
+   * The column that carries indentation, ↳ and the chevron, or null when every
+   * column is hidden (HIER-04). Whether it is *shown* is the viewer's affair:
+   * while their view groups, sorts or filters the table (ADR-026) the bands own
+   * the column and depth is kept in the data but not drawn (HIER-08).
    */
-  readonly grouped: boolean;
+  readonly column: Id | null;
 }
 
 /** The outline of every row of a table, in row order, from the document. */
@@ -174,7 +173,7 @@ export function tableOutline(
       canPromote: canPromote(depths, i),
     };
   });
-  return { rows, column: outlineColumnId(record), grouped: record.groupBy !== null };
+  return { rows, column: outlineColumnId(record) };
 }
 
 /** The outline entry of one row, or null when the row is not in the table. */

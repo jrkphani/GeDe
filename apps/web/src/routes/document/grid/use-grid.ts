@@ -40,6 +40,14 @@ export interface GridActions {
   readonly commit: (cell: CellSelection, text: string, then: Direction | null) => void;
   readonly cancel: () => void;
   readonly move: (direction: Direction) => void;
+  /**
+   * SORT-01..05 / HIER-06: the rows a table renders, in view order — the viewer's
+   * sort and filter applied, collapsed bands and collapsed subtrees left out.
+   * Traversal (arrows, Tab, Enter) then follows what is on screen, and a selection
+   * on a row that stopped rendering moves to the row now at its place. `null`
+   * (the table unmounted) restores document order minus collapsed subtrees.
+   */
+  readonly setViewRows: (tableId: Id, rows: readonly Id[] | null) => void;
 }
 
 export interface Grid {
@@ -79,16 +87,27 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
   // selection to the neighbour that took its place.
   const snapshotRef = useRef<{ tableId: Id; table: TraversalTable } | null>(null);
 
+  // Per table, the rows the view renders (registered by `TableView`); absent means `rows`.
+  const viewRowsRef = useRef(new Map<Id, readonly Id[]>());
+
   const lookup = useCallback(
     (tableId: Id): TraversalTable | null => {
       const table = tableMap(gd, tableId);
       if (table === null) return null;
       const record = tableRecord(table);
-      // HIER-06: rows under a collapsed parent are not drawn, so traversal skips
-      // them the way it skips hidden columns, and a selection left on one moves.
-      const hidden = hiddenRowIds(table, record);
+      // One visibility seam: the rows `TableView` registered — its view order with the
+      // filter, collapsed bands and collapsed subtrees applied (SORT-01..05, HIER-06).
+      // Before it registers (or for a table not on screen) the document order minus the
+      // rows under a collapsed parent stands in, so a selection left on one still moves.
+      const registered = viewRowsRef.current.get(tableId);
+      let rows: readonly Id[];
+      if (registered !== undefined) rows = registered;
+      else {
+        const hidden = hiddenRowIds(table, record);
+        rows = hidden.size === 0 ? record.rows : record.rows.filter((id) => !hidden.has(id));
+      }
       return {
-        rows: hidden.size === 0 ? record.rows : record.rows.filter((id) => !hidden.has(id)),
+        rows,
         columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
       };
     },
@@ -184,8 +203,23 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
       move: (direction) => {
         dispatch({ type: 'move', direction });
       },
+      setViewRows: (tableId, rows) => {
+        if (rows === null) viewRowsRef.current.delete(tableId);
+        else viewRowsRef.current.set(tableId, rows);
+        // A11Y-01 / GRID-05: a selection on a row the view no longer draws (filtered out
+        // after an edit, inside a collapsed band, hidden by a collaborator's filter) would
+        // leave the grid with no tab stop and no cell for the arrows to leave from. Move it
+        // to the row now at its place, exactly as after a structural delete.
+        reconcileSelection(
+          stateRef.current,
+          lookup,
+          (id) => tableById(gd, id)?.rows ?? null,
+          snapshotRef.current,
+          dispatch,
+        );
+      },
     }),
-    [dispatch, commands],
+    [gd, dispatch, commands, lookup],
   );
 
   return { state, cell: selectedCell(state.selection), actions, commands };

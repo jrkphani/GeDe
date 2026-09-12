@@ -63,4 +63,47 @@ describe('Popover', () => {
     expect(onOpenChange).toHaveBeenCalledWith(true);
     expect(await screen.findByText('Concat, Sum, list')).toBeInTheDocument();
   });
+
+  it('MENU-05 with keepFocus off: focus moves to the first control on open, Tab reaches the rest, Escape closes and returns focus to `returnFocusTo`', async () => {
+    function Panel() {
+      const [open, setOpen] = useState(false);
+      const home = useRef<HTMLButtonElement>(null);
+      return (
+        <>
+          <button type="button" ref={home}>
+            Home
+          </button>
+          <Popover
+            open={open}
+            onOpenChange={setOpen}
+            label="Filter Country"
+            keepFocus={false}
+            returnFocusTo={home.current}
+            trigger={<button type="button">Filter</button>}
+          >
+            <label>
+              Contains <input />
+            </label>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+              }}
+            >
+              Apply
+            </button>
+          </Popover>
+        </>
+      );
+    }
+    render(<Panel />);
+    await userEvent.click(screen.getByRole('button', { name: 'Filter' }));
+    expect(await screen.findByRole('dialog', { name: 'Filter Country' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Contains')).toHaveFocus();
+    await userEvent.tab();
+    expect(screen.getByRole('button', { name: 'Apply' })).toHaveFocus();
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Home' })).toHaveFocus();
+  });
 });

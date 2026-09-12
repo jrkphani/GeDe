@@ -24,6 +24,13 @@ export interface PopoverProps {
    * editor it annotates; the host handles ↑ ↓ ⏎ ⎋ and forwards them.
    */
   keepFocus?: boolean | undefined;
+  /**
+   * With `keepFocus` false: where focus goes on close. By default Radix
+   * returns it to whatever was focused on open; pass an element when the
+   * opener is gone by then (a menu item that closed with its menu), so focus
+   * lands on that menu's trigger (MENU-05).
+   */
+  returnFocusTo?: HTMLElement | null | undefined;
   className?: string | undefined;
 }
 
@@ -42,6 +49,7 @@ export function Popover({
   align = 'start',
   label,
   keepFocus = true,
+  returnFocusTo,
   className,
 }: PopoverProps) {
   const virtualRef = useMemo(
@@ -67,7 +75,14 @@ export function Popover({
             if (keepFocus) e.preventDefault();
           }}
           onCloseAutoFocus={(e) => {
-            if (keepFocus) e.preventDefault();
+            if (keepFocus) {
+              e.preventDefault();
+              return;
+            }
+            if (returnFocusTo?.isConnected) {
+              e.preventDefault();
+              returnFocusTo.focus();
+            }
           }}
         >
           {children}

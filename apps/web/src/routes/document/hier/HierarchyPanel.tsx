@@ -12,6 +12,7 @@ import { useId } from 'react';
 import {
   cellAddress,
   cellText,
+  normaliseTableView,
   rowOutline,
   tableMap,
   tableOutline,
@@ -24,6 +25,7 @@ import {
 import { Button } from '@gede/ui';
 
 import { useYVersion } from '../../../doc/use-y.js';
+import { useTableView } from '../../../doc/view-state.js';
 import type { GridCommands } from '../grid/commands.js';
 import { HIER_ARIA_KEYS, HIER_LABELS } from '../grid/hier-keys.js';
 import type { Selection } from '../selection.js';
@@ -35,9 +37,10 @@ export interface HierarchyPanelProps {
   /** RESP-02 / SHARE-03: the controls render disabled, with the reason, when false. */
   editable: boolean;
   /**
-   * True while this viewer's sort or filter reorders or drops rows (per-user
-   * view state): the outline is not drawn and nest/promote are disabled, as
-   * under grouping (HIER-08). The sort feature wires it; default false.
+   * Force the "view is sorted" treatment (HIER-08, ADR-026): the outline is not
+   * drawn and nest/promote are disabled, as under grouping. The panel reads the
+   * viewer's own sort, filter and grouping from the view store and applies this
+   * itself; the prop is for a host that knows better.
    */
   viewSorted?: boolean | undefined;
 }
@@ -63,6 +66,9 @@ export function HierarchyPanel({
   const table = selection === null ? null : tableMap(gd, selection.tableId);
   const rowId = selection?.cell?.rowId ?? null;
   const record = table === null ? null : tableRecord(table);
+  // ADR-026: the viewer's own grouping, sort and filter, from the view store.
+  const storedView = useTableView(record?.id ?? '');
+  const view = normaliseTableView(storedView, new Set(record?.columns.map((c) => c.id) ?? []));
   const outline = table === null || record === null ? null : tableOutline(table, record);
   const row = table === null || rowId === null ? null : rowOutline(table, rowId);
   const viewOnly = !editable;
@@ -80,7 +86,8 @@ export function HierarchyPanel({
 
   const tableId = record.id;
   const groupedBy =
-    record.groupBy === null ? null : record.columns.find((c) => c.id === record.groupBy);
+    view.groupBy === null ? null : record.columns.find((c) => c.id === view.groupBy);
+  const sorted = viewSorted || view.sortBy !== null || view.filter !== null;
   const anyCollapsible = outline.rows.some((r) => r.hasChildren && !r.collapsed);
   const anyCollapsed = outline.rows.some((r) => r.collapsed);
   const parentLabel =
@@ -88,7 +95,7 @@ export function HierarchyPanel({
   // Depth is edited only when the drawn order is document order (HIER-08).
   const depthLocked = groupedBy
     ? 'Unavailable while the table is grouped'
-    : viewSorted
+    : sorted
       ? 'Unavailable while the view is sorted or filtered'
       : null;
   const disabledReason = viewOnly ? 'View only' : depthLocked;
@@ -105,7 +112,7 @@ export function HierarchyPanel({
           kept and returns when grouping is removed.
         </p>
       )}
-      {!groupedBy && viewSorted && (
+      {!groupedBy && sorted && (
         <p className="gd-inspector__note gd-hier__grouped" data-testid="hierarchy-sorted">
           The outline is hidden while your view is sorted or filtered; depth is kept and returns
           when the sort or filter is cleared.
