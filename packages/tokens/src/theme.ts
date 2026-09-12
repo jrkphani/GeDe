@@ -8,6 +8,8 @@ export const theme = {
     ink:      { base: '#14201a', muted: '#5b6b63', onBrand: '#ffffff' },
     status:   { success: '#166534', warning: '#b45309', danger: '#b42318', info: '#155e75' },
     presence: ['#14201a', '#155e75', '#6d28d9', '#b45309', '#0f766e', '#9d174d'],
+    /** Formula operand outlines (FX-08), index 0 = --reference-1; cycles past six. */
+    reference: ['#b45309', '#155e75', '#6d28d9', '#0f766e', '#9d174d', '#14201a'],
   },
   space: [0, 4, 8, 12, 16, 24, 32, 48, 64],
   radius: { none: 0, sm: 3, md: 6, lg: 10, pill: 999 },
