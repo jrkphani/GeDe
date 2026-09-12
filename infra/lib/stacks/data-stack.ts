@@ -55,15 +55,18 @@ export class DataStack extends cdk.Stack {
       encryption: s3.BucketEncryption.S3_MANAGED,
       enforceSSL: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
+      // Architecture digest §1.7.3: "S3 docs versioning with 90-day noncurrent retention".
+      // A superseded snapshot (a newer compaction, or the delete marker a purge writes)
+      // is kept 90 days for point-in-time restore, then expires — so what the nightly
+      // purge removes is actually gone after 90 days, and its delete marker with it. A
+      // transition to Glacier IR at the same age would be pointless (S3 refuses an
+      // expiration that is not later than a transition), so there is none.
       lifecycleRules: [
         {
-          id: 'noncurrent-to-glacier-ir',
-          noncurrentVersionTransitions: [
-            {
-              storageClass: s3.StorageClass.GLACIER_INSTANT_RETRIEVAL,
-              transitionAfter: cdk.Duration.days(90),
-            },
-          ],
+          id: 'noncurrent-expire-90d',
+          noncurrentVersionExpiration: cdk.Duration.days(90),
+          expiredObjectDeleteMarker: true,
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
         },
       ],
     });

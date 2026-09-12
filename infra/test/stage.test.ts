@@ -152,6 +152,23 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('LIB-08 the docs bucket is versioned and expires noncurrent versions (purged snapshots) after 90 days', () => {
+    stacks.Data!.hasResourceProperties('AWS::S3::Bucket', {
+      VersioningConfiguration: { Status: 'Enabled' },
+      LifecycleConfiguration: {
+        Rules: [
+          Match.objectLike({
+            Id: 'noncurrent-expire-90d',
+            Status: 'Enabled',
+            NoncurrentVersionExpiration: { NoncurrentDays: 90 },
+            ExpiredObjectDeleteMarker: true,
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 },
+          }),
+        ],
+      },
+    });
+  });
+
   it('VPC has two AZs, no NAT gateway, and an S3 gateway endpoint', () => {
     stacks.Network!.resourceCountIs('AWS::EC2::NatGateway', 0);
     stacks.Network!.resourceCountIs('AWS::EC2::Subnet', 4);
