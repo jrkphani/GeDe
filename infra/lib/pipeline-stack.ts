@@ -21,8 +21,44 @@ const ARM_SMALL: codebuild.BuildEnvironment = {
 };
 
 /**
- * `main` is production. Push → Synth (verify + build web + cdk synth) → self-mutate →
- * publish assets (arm64 image, web bundle) → Prod stage → smoke test.
+ * Shared libraries Chromium needs on Amazon Linux 2023, one dnf package per Debian
+ * package in Playwright's own `ubuntu24.04-arm64` chromium list (`playwright-core`
+ * `deps` table). Playwright's `install-deps` only knows `apt-get`, so on AL2023 this
+ * is the install step. `dejavu-sans-fonts` gives the headless shell a font to shape
+ * text with. Every name was checked against the AL2023 aarch64 core repo metadata.
+ */
+export const CHROMIUM_DNF_PACKAGES: readonly string[] = [
+  'alsa-lib', // libasound2
+  'at-spi2-atk', // libatk-bridge2.0-0
+  'atk', // libatk1.0-0
+  'at-spi2-core', // libatspi2.0-0
+  'cairo', // libcairo2
+  'cups-libs', // libcups2
+  'dbus-libs', // libdbus-1-3
+  'libdrm', // libdrm2
+  'mesa-libgbm', // libgbm1
+  'glib2', // libglib2.0-0
+  'nspr', // libnspr4
+  'nss', // libnss3
+  'pango', // libpango-1.0-0
+  'libX11', // libx11-6
+  'libxcb', // libxcb1
+  'libXcomposite', // libxcomposite1
+  'libXdamage', // libxdamage1
+  'libXext', // libxext6
+  'libXfixes', // libxfixes3
+  'libxkbcommon', // libxkbcommon0
+  'libXrandr', // libxrandr2
+  'dejavu-sans-fonts',
+];
+
+/**
+ * `main` is production. Push → Synth (verify + db:parity + e2e + build web + cdk synth) →
+ * self-mutate → publish assets (arm64 image, web bundle) → Prod stage → smoke test.
+ *
+ * The Playwright journeys (`npm run e2e`) run inside Synth, after `npm run verify` and the
+ * migrations parity check and before the web build: a red journey stops the pipeline before
+ * anything is published. See infra/CLAUDE.md, "Playwright on CodeBuild".
  */
 export class PipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: PipelineStackProps) {
@@ -40,17 +76,26 @@ export class PipelineStack extends cdk.Stack {
 
     const synth = new pipelines.CodeBuildStep('Synth', {
       input: source,
-      installCommands: ['npm ci'],
+      // Playwright reads CI to pick workers, retries and reporters (apps/web/playwright.config.ts);
+      // `db:parity` reads it to fail rather than skip when Docker is missing.
+      env: { CI: 'true' },
+      installCommands: [
+        `dnf install -y -q ${CHROMIUM_DNF_PACKAGES.join(' ')}`,
+        'npm ci',
+        // Chrome Headless Shell only (linux-arm64 build from cdn.playwright.dev, ~95 MB);
+        // it lands in ~/.cache/ms-playwright, which the local cache keeps between builds.
+        'npx playwright install --only-shell chromium',
+      ],
       commands: [
         'npm run verify',
         // Applies every migration to a throwaway postgres:17 (Docker, hence
         // `dockerEnabledForSynth`) before anything reaches production. With
         // CI=true the script fails rather than skips when Docker is missing.
         'npm run db:parity -w packages/db',
+        'npm run e2e',
         'npm run build --workspace apps/web',
         'npm run synth --workspace infra',
       ],
-      env: { CI: 'true' },
       primaryOutputDirectory: 'infra/cdk.out',
       buildEnvironment: ARM_SMALL,
       // LOCAL_CUSTOM_CACHE takes its paths from the buildspec; `Cache.local()` only flags the mode.
@@ -58,7 +103,7 @@ export class PipelineStack extends cdk.Stack {
       partialBuildSpec: codebuild.BuildSpec.fromObject({
         version: '0.2',
         phases: { install: { 'runtime-versions': { nodejs: 22 } } },
-        cache: { paths: ['node_modules/**/*'] },
+        cache: { paths: ['node_modules/**/*', '/root/.cache/ms-playwright/**/*'] },
       }),
     });
 

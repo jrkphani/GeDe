@@ -39,7 +39,7 @@ npm ci                    # once
 npm run verify            # typecheck + lint + format:check + unit tests — must be green before any PR
 npm run build             # all workspaces
 npm run dev               # web dev server
-npm run e2e               # Playwright (needs a built web + running sync, see apps/web/CLAUDE.md)
+npm run e2e               # Playwright journeys + axe, no backend needed (docs/TESTING.md)
 npm run synth             # cdk synth (infra)
 ```
 
@@ -48,7 +48,7 @@ npm run synth             # cdk synth (infra)
 ## Delivery model
 
 - `main` **is production**. Every merge to `main` runs CodePipeline `GeDe` (ap-southeast-1):
-  Synth (verify + build) → self-mutate → assets (arm64 image) → Prod stage → smoke test.
+  Synth (verify + db:parity + e2e + build) → self-mutate → assets (arm64 image) → Prod stage → smoke test.
   Failures roll back (ECS circuit breaker + CloudFormation). Nobody runs `cdk deploy` from a laptop.
 - Work on branches, open a PR using the template, get it reviewed, squash-merge.
 - Every PR names the requirement IDs it closes and adds tests tagged with those IDs
