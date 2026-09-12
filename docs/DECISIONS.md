@@ -104,9 +104,9 @@ Status key: **accepted** is in force; **superseded** points to the replacement.
 
 **Status:** accepted
 
-**Context.** AUTH-01..10: no password is ever stored or accepted. The CDK L2 `UserPool` construct always emits `password: true` in the sign-in policy.
+**Context.** AUTH-01..10: no password is ever stored or accepted. Both the CDK L2 and the Cognito service require `PASSWORD` in the pool's sign-in policy, so passwordless must be enforced at the app-client level.
 
-**Decision.** `featurePlan: ESSENTIALS`; `CfnUserPool` override sets `Policies.SignInPolicy.AllowedFirstAuthFactors` to `[EMAIL_OTP, WEB_AUTHN]`; WebAuthn RP id `gede.work`, user verification preferred. The SPA client enables only `authFlows: { user: true }` (the `USER_AUTH` choice-based flow). The browser uses Amplify v6 `signIn({ options: { authFlowType: 'USER_AUTH' } })` with `EMAIL_OTP` or `WEB_AUTHN` as the preferred challenge.
+**Decision.** `featurePlan: ESSENTIALS`; pool policy `AllowedFirstAuthFactors: [PASSWORD, EMAIL_OTP, WEB_AUTHN]` (Cognito rejects a choice-based pool without PASSWORD — confirmed at first deploy, 2026-09-12); WebAuthn RP id `gede.work`, user verification required. The SPA client enables only `authFlows: { user: true }` (the `USER_AUTH` choice-based flow). The browser uses Amplify v6 `signIn({ options: { authFlowType: 'USER_AUTH' } })` with `EMAIL_OTP` or `WEB_AUTHN` as the preferred challenge.
 
 **Consequences.** Tokens are held in memory only (AUTH-09). Account creation is implicit through email OTP. Email delivery uses Cognito's sender until SES leaves sandbox (see runbook).
 

@@ -72,7 +72,7 @@ describe('GeDe CDK app', () => {
       UserPoolTier: 'ESSENTIALS',
       DeletionProtection: 'ACTIVE',
       Policies: {
-        SignInPolicy: { AllowedFirstAuthFactors: ['EMAIL_OTP', 'WEB_AUTHN'] },
+        SignInPolicy: { AllowedFirstAuthFactors: ['PASSWORD', 'EMAIL_OTP', 'WEB_AUTHN'] },
       },
       WebAuthnRelyingPartyID: 'gede.work',
       WebAuthnUserVerification: 'required',

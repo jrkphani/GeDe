@@ -45,8 +45,11 @@ export class AuthStack extends cdk.Stack {
       autoVerify: { email: true },
       standardAttributes: { email: { required: true, mutable: true } },
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
-      // The L2 insists on `password: true`; the property override below removes PASSWORD
-      // from the rendered template so the pool is truly passwordless.
+      // Cognito requires PASSWORD in the allowed first factors of a choice-based pool
+      // (CloudFormation rejects a policy without it: "PASSWORD should be configured as
+      // one of the allowed first auth factors", deploy 2026-09-12). Passwordless is
+      // therefore enforced one level down: the SPA client below enables only the
+      // USER_AUTH flow, and the web app never renders a password field (CLAUDE.md rule 6).
       signInPolicy: { allowedFirstAuthFactors: { password: true, emailOtp: true, passkey: true } },
       passkeyRelyingPartyId: config.domain,
       passkeyUserVerification: cognito.PasskeyUserVerification.REQUIRED,
@@ -64,16 +67,6 @@ export class AuthStack extends cdk.Stack {
       //   sesRegion: config.region,
       // }),
     });
-
-    // Escape hatch: passwordless first factors only. CAUTION — the Cognito API documents
-    // PASSWORD as always permitted in choice-based sign-in; if CloudFormation rejects this
-    // override at deploy time, revert to the L2 default (PASSWORD + EMAIL_OTP + WEB_AUTHN)
-    // and rely on the web client never rendering a password field (CLAUDE.md rule 6).
-    const cfnPool = this.userPool.node.defaultChild as cognito.CfnUserPool;
-    cfnPool.addPropertyOverride('Policies.SignInPolicy.AllowedFirstAuthFactors', [
-      'EMAIL_OTP',
-      'WEB_AUTHN',
-    ]);
 
     const supportedIdentityProviders = [cognito.UserPoolClientIdentityProvider.COGNITO];
     let apple: cognito.UserPoolIdentityProviderApple | undefined;

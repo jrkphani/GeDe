@@ -68,10 +68,11 @@ so same-region cross-stack references render as `Fn::GetStackOutput` rather than
   through the gateway endpoint. Adding NAT is ≈ US$35/mo per AZ for nothing at this scale.
 - **DB ingress lives in ServiceStack** (`addIngressRule(..., remoteRule = true)`), so DataStack
   never depends on ServiceStack and stateful stacks deploy first.
-- **Passwordless Cognito.** The L2 refuses `password: false`, so `AuthStack` overrides
-  `Policies.SignInPolicy.AllowedFirstAuthFactors` to `['EMAIL_OTP', 'WEB_AUTHN']`. If
-  CloudFormation ever rejects that (Cognito documents PASSWORD as always permitted), remove the
-  override; the web client never renders a password field regardless (root rule 6).
+- **Passwordless Cognito.** Cognito requires PASSWORD in `AllowedFirstAuthFactors` of a
+  choice-based pool (CloudFormation rejected the override on 2026-09-12), so the pool policy is
+  `[PASSWORD, EMAIL_OTP, WEB_AUTHN]`. Passwordless is enforced at the client: the SPA app client
+  has only `authFlows: { user: true }` and the web app never renders a password field (root rule 6).
+  Do not add `userPassword`/`userSrp` flows to the client.
 - **Cognito sends its own mail** until SES leaves the sandbox; the `withSES` block in
   `AuthStack` is ready to swap in (the SES identity and DKIM records already exist).
 - **CloudFront `/api/*` reaches the ALB by hostname** (`api.<domain>`), not by construct
