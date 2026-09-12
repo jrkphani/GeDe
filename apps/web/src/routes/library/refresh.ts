@@ -7,7 +7,7 @@ import { useEffect, useRef } from 'react';
  * from the service on a fixed cadence while the tab is visible, and at once
  * when the tab becomes visible or the window regains focus — the same path
  * every other remote change (a rename, a share, a delete) already takes.
- * ADR-028 records the choice; the per-user channel is the growth step.
+ * ADR-031 records the choice; the per-user channel is the growth step.
  *
  * 15 s is well inside the per-user request budget (300/min) at a few dozen
  * tabs and short enough that a second client reads as live.

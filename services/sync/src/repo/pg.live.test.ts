@@ -969,6 +969,88 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(row).toMatchObject({ id: doc.id, everShared: false, archivedAt: null, sample: false });
   });
 
+  test('LIB-D2 LIB-D4 ever_shared and Delete are serialised on the document row: removing the last participant while another is being accepted keeps the flag, and Delete waits for the acceptance and is refused', async () => {
+    const owner = await user('sub-lock-owner');
+    const alice = await user('sub-lock-alice');
+    const bob = await user('sub-lock-bob');
+    const doc = await createDoc(owner, 'Contended');
+    const flag = async () =>
+      (
+        await pool.query<{ ever_shared: boolean }>(
+          'select ever_shared from documents where id = $1',
+          [doc.id],
+        )
+      ).rows[0]?.ever_shared;
+    const settles = (p: Promise<unknown>) =>
+      Promise.race([
+        p.then(() => 'settled'),
+        new Promise<string>((resolve) => {
+          setTimeout(() => {
+            resolve('waiting');
+          }, 400);
+        }),
+      ]);
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: alice,
+      permission: 'view',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    expect(await flag()).toBe(true);
+
+    // Another task is between inserting Bob's share and committing — what
+    // `accept`, the sign-in conversion and `redeemLink` look like mid-flight.
+    // All it holds on `documents` is the foreign key's KEY SHARE lock.
+    const other = await pool.connect();
+    try {
+      await other.query('begin');
+      await other.query(
+        `insert into shares (document_id, user_id, permission, invited_by, source) values ($1, $2, 'view', $3, 'invite')`,
+        [doc.id, bob, owner],
+      );
+      // The owner removes Alice, the last committed share. Unserialised, this
+      // evaluated "no share remains" on a snapshot that cannot see Bob and
+      // committed ever_shared = false beside his share.
+      const removal = repo.shares.remove({ documentId: doc.id, userId: alice, actorId: owner });
+      expect(await settles(removal)).toBe('waiting');
+      await other.query('commit');
+      expect(await removal).toBe(true);
+      expect(await flag()).toBe(true);
+      expect(await repo.documents.sharePermission(doc.id, bob)).toBe('view');
+
+      // Back to deletable, then Delete lands while a second acceptance is in flight.
+      await repo.shares.remove({ documentId: doc.id, userId: bob, actorId: owner });
+      expect(await flag()).toBe(false);
+      await other.query('begin');
+      await other.query(
+        `insert into shares (document_id, user_id, permission, invited_by, source) values ($1, $2, 'view', $3, 'invite')`,
+        [doc.id, bob, owner],
+      );
+      await other.query(
+        'update documents set ever_shared = true where id = $1 and ever_shared = false',
+        [doc.id],
+      );
+      const deletion = repo.documents.tryDelete(doc.id);
+      expect(await settles(deletion)).toBe('waiting');
+      await other.query('commit');
+      expect(await deletion).toEqual({ status: 'shared' });
+      expect((await repo.documents.get(doc.id))?.deletedAt).toBeNull();
+    } finally {
+      other.release();
+    }
+
+    // The guard itself: shared and sample answer by name, a deletable row goes.
+    await repo.shares.stop({ documentId: doc.id, actorId: owner });
+    await pool.query('update documents set sample = true where id = $1', [doc.id]);
+    expect(await repo.documents.tryDelete(doc.id)).toEqual({ status: 'sample' });
+    await pool.query('update documents set sample = false where id = $1', [doc.id]);
+    const deleted = await repo.documents.tryDelete(doc.id);
+    expect(deleted).toMatchObject({ status: 'deleted', document: { id: doc.id } });
+    expect(await repo.documents.tryDelete(doc.id)).toEqual({ status: 'missing' });
+    expect(await repo.documents.tryDelete(crypto.randomUUID())).toEqual({ status: 'missing' });
+  });
+
   test('LIB-D3 LIB-D5 LIB-D6 archive and unarchive: the owner’s views hide an archived row, a participant’s do not, delete clears the archive (CHECK: never both), purgeExpired never touches an archived row', async () => {
     const owner = await user('sub-arch-owner');
     const bob = await user('sub-arch-bob');

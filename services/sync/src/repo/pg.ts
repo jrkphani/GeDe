@@ -151,6 +151,27 @@ const inviterShare = alias(shares, 'inviter_share');
 const anyShare = alias(shares, 'any_share');
 
 /**
+ * Serialise every change to one document's sharing state, and its deletion,
+ * on the document row. `FOR UPDATE` conflicts with the `FOR KEY SHARE` a
+ * share insert takes through its foreign key, so whoever holds it sees every
+ * committed share when it next reads `shares`, and no share can be inserted
+ * under it. Every share transaction takes it as its first statement (before
+ * it touches `shares` or `invites`, so lock order is always documents →
+ * invites/shares); the guarded delete does too. Without it, a `remove` of the
+ * last participant could evaluate "no share remains" while an acceptance was
+ * inserting one, and commit `ever_shared = false` beside a live share.
+ * `false` when the document does not exist.
+ */
+async function lockDocument(tx: Executor, documentId: string): Promise<boolean> {
+  const rows = await tx
+    .select({ id: documents.id })
+    .from(documents)
+    .where(eq(documents.id, documentId))
+    .for('update');
+  return rows.length > 0;
+}
+
+/**
  * LIB-D2/D4: a share now exists (or the link is on), so the document has been
  * shared and Delete is off the table until every share goes and the link is
  * off. Idempotent; runs inside the caller's transaction.
@@ -165,9 +186,9 @@ async function markShared(tx: Executor, documentId: string): Promise<void> {
 /**
  * LIB-D4 ("revoking all access must restore deletability"): clear
  * `ever_shared` when no share remains and link access is `none`. Evaluated in
- * SQL against the rows the transaction sees, so a concurrent insert in another
- * transaction either commits first (and the clear does not fire) or waits on
- * the row lock this update takes.
+ * SQL against the rows the transaction sees; the caller holds the document
+ * row (`lockDocument`), so a concurrent insert has either committed — and is
+ * seen — or is waiting on that lock.
  */
 async function clearSharedIfNone(tx: Executor, documentId: string): Promise<void> {
   await tx
@@ -267,6 +288,7 @@ async function convertInvites(
       continue;
     }
     if (invite.ownerId !== userId) {
+      await lockDocument(tx, invite.documentId);
       await tx
         .insert(shares)
         .values({
@@ -543,6 +565,39 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         return row ? toDocument(row) : undefined;
       },
 
+      tryDelete(id) {
+        return db.transaction(async (tx) => {
+          // Hold the row so an acceptance in flight commits its share — and
+          // `ever_shared` — before the guard reads them, or waits until after.
+          if (!(await lockDocument(tx, id))) return { status: 'missing' };
+          const now = new Date();
+          const [row] = await tx
+            .update(documents)
+            .set({ deletedAt: now, archivedAt: null, updatedAt: now })
+            .where(
+              and(
+                eq(documents.id, id),
+                isNull(documents.deletedAt),
+                eq(documents.everShared, false),
+                eq(documents.linkAccess, 'none'),
+                eq(documents.sample, false),
+              ),
+            )
+            .returning();
+          if (row) return { status: 'deleted', document: toDocument(row) };
+          const [current] = await tx
+            .select({
+              deletedAt: documents.deletedAt,
+              sample: documents.sample,
+            })
+            .from(documents)
+            .where(eq(documents.id, id))
+            .limit(1);
+          if (current?.deletedAt !== null) return { status: 'missing' };
+          return { status: current.sample ? 'sample' : 'shared' };
+        });
+      },
+
       async archive(id) {
         // `updated_at` is untouched: nothing about the document changed for
         // its participants (LIB-D3), and Recents orders by it.
@@ -725,6 +780,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
     shares: {
       add({ documentId, userId, permission, invitedBy, actorId }) {
         return db.transaction(async (tx) => {
+          if (!(await lockDocument(tx, documentId))) return false;
           const inserted = await tx
             .insert(shares)
             .values({ documentId, userId, permission, invitedBy, source: 'invite' })
@@ -764,6 +820,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       remove({ documentId, userId, actorId }) {
         return db.transaction(async (tx) => {
+          if (!(await lockDocument(tx, documentId))) return false;
           const gone = await tx
             .delete(shares)
             .where(and(eq(shares.documentId, documentId), eq(shares.userId, userId)))
@@ -782,6 +839,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       stop({ documentId, actorId }) {
         return db.transaction(async (tx) => {
+          if (!(await lockDocument(tx, documentId))) return [];
           const gone = await tx
             .delete(shares)
             .where(eq(shares.documentId, documentId))
@@ -878,7 +936,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             })
             .from(documents)
             .where(eq(documents.id, documentId))
-            .limit(1);
+            .for('update');
           if (!doc || doc.linkAccess === 'none' || doc.linkToken === null) return undefined;
           // Compared in JS on the fetched row so the query plan never depends on the secret.
           if (!constantTimeEqual(doc.linkToken, token)) return undefined;
@@ -984,6 +1042,14 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       accept({ inviteId, userId }) {
         return db.transaction(async (tx) => {
+          // The document row first, then the invitation row: the same order as
+          // `stop`, which holds the document while it withdraws invitations.
+          const [target] = await tx
+            .select({ documentId: invites.documentId })
+            .from(invites)
+            .where(eq(invites.id, inviteId))
+            .limit(1);
+          if (!target || !(await lockDocument(tx, target.documentId))) return undefined;
           // The address check is in SQL: the invitation converts only for the
           // account that holds its (citext-equal) email.
           const holdsAddress = exists(

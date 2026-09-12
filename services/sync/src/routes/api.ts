@@ -126,7 +126,7 @@ function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView
 }
 
 /** LIB-D10: the guided sample is exempt from Delete and Archive; say which. */
-function refuseSample(doc: DocumentRecord, verb: 'deleted' | 'archived'): void {
+function refuseSample(doc: Pick<DocumentRecord, 'sample'>, verb: 'deleted' | 'archived'): void {
   if (doc.sample) {
     throw new AppError(409, 'sample', `The guided sample cannot be ${verb}`);
   }
@@ -389,22 +389,23 @@ export function registerApi(
       api.delete('/documents/:id', async (request, reply) => {
         const user = currentUser(request);
         const id = parseId(request.params);
-        const { document } = await requirePermission(repo, user.id, id, 'owner');
-        // Already in Recently Deleted: gone, before any other answer.
-        if (document.deletedAt !== null) throw NOT_FOUND();
-        refuseSample(document, 'deleted');
-        // LIB-D1/D2: a workscape someone was given access to is archived, never
-        // deleted, so nobody loses a document they hold. The flag is read here
-        // and checked again in the SPA only for the toolbar wording.
-        if (document.everShared) {
+        await requirePermission(repo, user.id, id, 'owner');
+        // LIB-D1/D2/D10: a workscape someone was given access to is archived,
+        // never deleted, so nobody loses a document they hold; the sample is
+        // never deleted. The guard is evaluated in the repository, under the
+        // document row lock, so an invitation accepted in the same instant
+        // cannot slip past it. The SPA reads `everShared` for the toolbar
+        // wording only.
+        const outcome = await repo.documents.tryDelete(id);
+        if (outcome.status === 'missing') throw NOT_FOUND();
+        if (outcome.status === 'sample') refuseSample({ sample: true }, 'deleted');
+        if (outcome.status === 'shared') {
           throw new AppError(
             409,
             'shared',
             'This workscape has been shared, so it can be archived but not deleted',
           );
         }
-        const deleted = await repo.documents.softDelete(id);
-        if (!deleted) throw NOT_FOUND();
         await repo.audit.record({
           documentId: id,
           userId: user.id,

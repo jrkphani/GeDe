@@ -138,6 +138,23 @@ describe('upgrade authorisation', () => {
     });
     expect((await gone.closed).code).toBe(CLOSE_NOT_FOUND);
   });
+
+  test('LIB-D3 an archived document is still served to its participants and its owner; archiving closes no socket', async () => {
+    const viewer = await connect(viewerToken);
+    await viewer.synced;
+    const archived = await json(server, 'POST', `/api/documents/${docId}/archive`, {
+      token: ownerToken,
+    });
+    expect(archived.status).toBe(200);
+    expect(viewer.ws.readyState).toBe(viewer.ws.OPEN);
+    const editor = await connect(editorToken);
+    await editor.synced;
+    editor.setCell('r1:c1', 'still editable while archived');
+    await waitFor(() => viewer.cell('r1:c1') === 'still editable while archived');
+    const owner = await connect(ownerToken);
+    await owner.synced;
+    expect(owner.cell('r1:c1')).toBe('still editable while archived');
+  });
 });
 
 describe('sync protocol', () => {

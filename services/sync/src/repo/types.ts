@@ -88,6 +88,11 @@ export type LibraryView = 'recents' | 'browse' | 'shared' | 'deleted' | 'archive
 
 export const RECENTLY_DELETED_DAYS = 30;
 
+/** What `DocumentsRepo.tryDelete` did, or why it did nothing. */
+export type DeleteOutcome =
+  | { readonly status: 'deleted'; readonly document: DocumentRecord }
+  | { readonly status: 'missing' | 'shared' | 'sample' };
+
 export interface Participant {
   readonly userId: string;
   readonly name: string | null;
@@ -366,10 +371,19 @@ export interface DocumentsRepo {
   /**
    * Move to Recently Deleted (LIB-D5): set `deleted_at` and clear
    * `archived_at` (a document is archived or deleted, never both).
-   * `undefined` when the document does not exist or is already deleted. The
-   * route decides whether deletion is allowed at all (`ever_shared`, `sample`).
+   * `undefined` when the document does not exist or is already deleted.
+   * Unguarded — the jobs and tests put any row in the trash with it; the
+   * owner's Delete goes through `tryDelete`.
    */
   softDelete(id: string): Promise<DocumentRecord | undefined>;
+  /**
+   * The owner's Delete (LIB-D1, LIB-D2, LIB-D10): in one transaction, holding
+   * the document row against a share being inserted, soft-delete it only
+   * while `ever_shared` is false, the link is off and it is not the sample.
+   * `shared` and `sample` name the refusal (the route answers 409);
+   * `missing` covers a row that does not exist or is deleted already.
+   */
+  tryDelete(id: string): Promise<DeleteOutcome>;
   /**
    * Clear `deleted_at`; `undefined` when the document is not soft-deleted or
    * its deletion is past the retention window (it is no longer in Recently

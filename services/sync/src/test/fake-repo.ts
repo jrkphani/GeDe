@@ -438,6 +438,16 @@ export class FakeRepo implements Repo {
       doc.updatedAt = doc.deletedAt;
       return Promise.resolve({ ...doc });
     },
+    tryDelete: async (id) => {
+      // As `pg.ts`: the guard and the delete are one step (the fake has no
+      // concurrency to serialise); `sample` wins over `shared`.
+      const doc = this.docs.get(id);
+      if (doc?.deletedAt !== null) return { status: 'missing' };
+      if (doc.sample) return { status: 'sample' };
+      if (doc.everShared || doc.linkAccess !== 'none') return { status: 'shared' };
+      const deleted = await this.documents.softDelete(id);
+      return deleted ? { status: 'deleted', document: deleted } : { status: 'missing' };
+    },
     archive: (id) => {
       const doc = this.docs.get(id);
       if (doc?.deletedAt !== null || doc.archivedAt !== null) {
