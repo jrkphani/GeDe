@@ -264,6 +264,34 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('LOAD-06 Synth runs the migrations against a throwaway Postgres in Docker before anything deploys', () => {
+    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project')) as {
+      Properties: {
+        Source: { BuildSpec: string };
+        Environment: {
+          PrivilegedMode?: boolean;
+          EnvironmentVariables?: { Name: string; Value: string }[];
+        };
+      };
+    }[];
+    const synth = projects.filter((p) => p.Properties.Source.BuildSpec.includes('npm run verify'));
+    expect(synth).toHaveLength(1);
+    const buildSpec = JSON.parse(synth[0]!.Properties.Source.BuildSpec) as {
+      phases: { build: { commands: string[] } };
+    };
+    const commands = buildSpec.phases.build.commands;
+    // Parity runs right after verify and before the web build and cdk synth.
+    expect(commands.indexOf('npm run db:parity -w packages/db')).toBe(
+      commands.indexOf('npm run verify') + 1,
+    );
+    // Docker needs a privileged project (`dockerEnabledForSynth`), and CI=true
+    // turns a missing Docker into a failure inside packages/db/scripts/parity.sh.
+    expect(synth[0]!.Properties.Environment.PrivilegedMode).toBe(true);
+    expect(synth[0]!.Properties.Environment.EnvironmentVariables).toEqual(
+      expect.arrayContaining([expect.objectContaining({ Name: 'CI', Value: 'true' })]),
+    );
+  });
+
   it('applies the organisation tags to stage resources', () => {
     stacks.Data!.hasResourceProperties('AWS::S3::Bucket', {
       Tags: Match.arrayWith([

@@ -52,7 +52,7 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
   const resolver = new UserResolver(deps.verifier, deps.db);
 
   registerHealth(app, deps);
-  registerApi(app, deps, resolver);
+  registerApi(app, deps, resolver, rooms);
   registerWs(app, { config: deps.config, repo: deps.db, resolver, rooms });
 
   // Runs during app.close(), after @fastify/websocket has stopped accepting

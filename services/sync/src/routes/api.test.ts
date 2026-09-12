@@ -239,10 +239,19 @@ describe('documents', () => {
     });
     expect(again.status).toBe(404);
 
+    // A participant is told it is gone (the "may have been deleted" page), never the title.
     const bobSees = await json<ErrorBody>(server, 'GET', `/api/documents/${doc.id}`, {
       token: bob,
     });
-    expect(bobSees.status).toBe(403);
+    expect(bobSees.status).toBe(404);
+    expect(bobSees.body.error.message).toBe('Nothing at this address');
+    expect(JSON.stringify(bobSees.body)).not.toContain('to delete');
+    // A stranger still gets 403.
+    const carol = server.verifier.issue('tok-carol', 'sub-carol');
+    const carolSees = await json<ErrorBody>(server, 'GET', `/api/documents/${doc.id}`, {
+      token: carol,
+    });
+    expect(carolSees.status).toBe(403);
     const ownerSees = await json<{ document: DocumentView }>(
       server,
       'GET',

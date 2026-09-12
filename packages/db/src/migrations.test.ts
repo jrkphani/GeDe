@@ -28,12 +28,39 @@ describe('migrations', () => {
     });
   });
 
-  test('LOAD-06 no migration drops anything', () => {
+  test('LOAD-06 no migration drops data: a constraint may go, nothing that holds rows may', () => {
     for (const name of files) {
       const body = stripComments(readFileSync(join(dir, name), 'utf8'));
-      expect(body, name).not.toMatch(/\bDROP\b/i);
+      expect(body, name).not.toMatch(/\bDROP\s+(?!CONSTRAINT\b)/i);
       expect(body, name).not.toMatch(/\bTRUNCATE\b/i);
+      expect(body, name).not.toMatch(/\bDELETE\s+FROM\b/i);
     }
+  });
+
+  test('LIB-08 0001, 0002 and 0003 follow 0000 and carry the library columns and the audit fix', () => {
+    expect(files.slice(0, 4)).toEqual([
+      '0000_init.sql',
+      '0001_users_locale.sql',
+      '0002_documents_created_at.sql',
+      '0003_audit_log_keeps_purged.sql',
+    ]);
+    const locale = stripComments(readFileSync(join(dir, '0001_users_locale.sql'), 'utf8'));
+    expect(locale).toMatch(/ALTER TABLE users ADD COLUMN IF NOT EXISTS locale text/);
+    const created = stripComments(readFileSync(join(dir, '0002_documents_created_at.sql'), 'utf8'));
+    expect(created).toMatch(
+      /ALTER TABLE documents ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now\(\)/,
+    );
+    const audit = stripComments(readFileSync(join(dir, '0003_audit_log_keeps_purged.sql'), 'utf8'));
+    expect(audit).toMatch(
+      /ALTER TABLE audit_log DROP CONSTRAINT IF EXISTS audit_log_document_id_fkey/,
+    );
+    // 0000 is shipped and must stay byte-for-byte what production ran: it still
+    // declares the cascade that 0003 removes.
+    const init = stripComments(readFileSync(join(dir, '0000_init.sql'), 'utf8'));
+    const auditTable = /CREATE TABLE IF NOT EXISTS audit_log \(([^;]*)\);/s.exec(init)?.[1] ?? '';
+    expect(auditTable).toMatch(
+      /document_id uuid NOT NULL REFERENCES documents\(id\) ON DELETE CASCADE/,
+    );
   });
 
   test('LOAD-06 0000_init creates the ledger, the citext extension and every enum', () => {
@@ -68,8 +95,14 @@ describe('migrations', () => {
       const match = new RegExp(`CREATE TABLE IF NOT EXISTS ${name} \\(([^;]*)\\);`, 's').exec(sql);
       expect(match, `table ${name}`).not.toBeNull();
       const body = match?.[1] ?? '';
+      // A column is declared either in the CREATE TABLE body (0000) or by a
+      // later `ALTER TABLE <name> ADD COLUMN IF NOT EXISTS <column>` (0001+).
+      const added = [
+        ...sql.matchAll(new RegExp(`ALTER TABLE ${name} ADD COLUMN IF NOT EXISTS (\\w+)\\s`, 'g')),
+      ].map((m) => m[1]);
       for (const column of Object.values(getTableColumns(table))) {
-        expect(body, `${name}.${column.name}`).toMatch(new RegExp(`^\\s*${column.name}\\s`, 'm'));
+        const inBody = new RegExp(`^\\s*${column.name}\\s`, 'm').test(body);
+        expect(inBody || added.includes(column.name), `${name}.${column.name}`).toBe(true);
       }
     }
   });

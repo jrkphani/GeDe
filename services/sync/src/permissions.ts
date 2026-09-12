@@ -14,8 +14,10 @@ export interface Resolved {
 
 /**
  * `owner` for the owner, the share's permission for a participant, otherwise
- * `null`. Soft-deleted documents are visible to their owner only (for the
- * Recently Deleted view) and never to participants.
+ * `null`. This is the relationship only; whether a soft-deleted document may
+ * be *served* is decided by the caller (`requirePermission`, the WebSocket
+ * upgrade): the owner sees it in Recently Deleted, a participant is told it
+ * is gone (404), a stranger is told nothing beyond "no access" (403).
  */
 export async function resolvePermission(
   repo: Repo,
@@ -25,7 +27,6 @@ export async function resolvePermission(
   const document = await repo.documents.get(documentId);
   if (!document) return undefined;
   if (document.ownerId === userId) return { document, permission: 'owner' };
-  if (document.deletedAt !== null) return { document, permission: null };
   const shared = await repo.documents.sharePermission(documentId, userId);
   if (shared !== undefined) return { document, permission: shared };
   // TODO(SHARE-01 link access): when `document.linkAccess` is `view` or `edit`
@@ -46,7 +47,12 @@ export function canEdit(permission: DocumentPermission | null): boolean {
   return permission === 'owner' || permission === 'edit';
 }
 
-/** Resolve or throw the matching error-page status: 404 unknown, 403 not a participant. */
+/**
+ * Resolve or throw the matching error-page status (ARCHITECTURE §3): 404 for
+ * an unknown document and for a participant of a deleted one ("may have been
+ * deleted by its owner"), 403 for a non-participant — deleted or not, and
+ * never with the title.
+ */
 export async function requirePermission(
   repo: Repo,
   userId: string,
@@ -58,6 +64,9 @@ export async function requirePermission(
   const { permission } = resolved;
   if (permission === null) {
     throw new AppError(403, 'forbidden', 'You do not have access to this workscape');
+  }
+  if (resolved.document.deletedAt !== null && permission !== 'owner') {
+    throw new AppError(404, 'not_found', 'Nothing at this address');
   }
   const allowed =
     minimum === 'view' ||

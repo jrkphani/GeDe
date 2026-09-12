@@ -43,9 +43,14 @@ export class PipelineStack extends cdk.Stack {
       installCommands: ['npm ci'],
       commands: [
         'npm run verify',
+        // Applies every migration to a throwaway postgres:17 (Docker, hence
+        // `dockerEnabledForSynth`) before anything reaches production. With
+        // CI=true the script fails rather than skips when Docker is missing.
+        'npm run db:parity -w packages/db',
         'npm run build --workspace apps/web',
         'npm run synth --workspace infra',
       ],
+      env: { CI: 'true' },
       primaryOutputDirectory: 'infra/cdk.out',
       buildEnvironment: ARM_SMALL,
       // LOCAL_CUSTOM_CACHE takes its paths from the buildspec; `Cache.local()` only flags the mode.
@@ -64,6 +69,8 @@ export class PipelineStack extends cdk.Stack {
       selfMutation: true,
       crossAccountKeys: false,
       publishAssetsInParallel: false,
+      // The Synth project runs privileged so `db:parity` can start Postgres in Docker.
+      dockerEnabledForSynth: true,
       dockerEnabledForSelfMutation: false,
       codeBuildDefaults: { buildEnvironment: ARM_SMALL },
       assetPublishingCodeBuildDefaults: {
