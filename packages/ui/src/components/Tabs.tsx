@@ -39,13 +39,22 @@ export function Tabs<V extends string>({ label, items, value, onChange, classNam
           </RadixTabs.Trigger>
         ))}
       </RadixTabs.List>
-      {items.map(
-        (t) =>
-          t.content !== undefined && (
-            <RadixTabs.Content key={t.value} value={t.value} className="gd-tabs__panel">
-              {t.content}
-            </RadixTabs.Content>
-          ),
+      {items.map((t) =>
+        t.content !== undefined ? (
+          <RadixTabs.Content key={t.value} value={t.value} className="gd-tabs__panel">
+            {t.content}
+          </RadixTabs.Content>
+        ) : (
+          // A trigger always names its panel (`aria-controls`), so a tab that switches
+          // something outside the component (the sheet strip) still gets a panel: empty,
+          // and out of the tab order (WCAG 4.1.2, axe aria-valid-attr-value).
+          <RadixTabs.Content
+            key={t.value}
+            value={t.value}
+            className="gd-tabs__panel gd-tabs__panel--empty"
+            tabIndex={-1}
+          />
+        ),
       )}
     </RadixTabs.Root>
   );

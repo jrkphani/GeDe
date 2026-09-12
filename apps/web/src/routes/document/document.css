@@ -361,7 +361,10 @@
 /* ---- table (GRID-01, GRID-03, GRID-07) --------------------------------- */
 .gd-table {
   position: absolute;
-  box-sizing: border-box;
+  /* Content-box: the hairline border sits outside the lattice footprint, so every
+     column and row inside keeps its exact unit width (GRID-01) and nothing shrinks. */
+  box-sizing: content-box;
+  margin: -1px 0 0 -1px;
   border: 1px solid var(--border);
   background: var(--surface);
   cursor: default;
@@ -406,6 +409,7 @@
 }
 .gd-table__header {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-1);
@@ -429,6 +433,7 @@
 .gd-cell {
   position: relative;
   display: flex;
+  flex: none;
   align-items: center;
   box-sizing: border-box;
   height: 100%;
@@ -603,12 +608,13 @@
   position: relative;
 }
 .gd-table__divider {
+  /* Inside the header's box (the header clips overflow), flush with its right edge. */
   position: absolute;
   top: 0;
-  right: -4px;
+  right: 0;
   bottom: 0;
   z-index: 3;
-  width: 8px;
+  width: 7px;
   cursor: col-resize;
   touch-action: none;
 }
@@ -617,7 +623,7 @@
   position: absolute;
   top: 0;
   bottom: 0;
-  left: 3px;
+  right: 0;
   width: 2px;
   background: transparent;
   transition: background var(--dur-fast) var(--ease-out);
