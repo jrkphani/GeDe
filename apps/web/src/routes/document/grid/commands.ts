@@ -48,6 +48,7 @@ import {
   scaleTable as scaleTableMutation,
   plainText,
   refreshDerivedLabels,
+  richFromText,
   renameColumn as renameColumnMutation,
   rowMeta,
   rowReadOnlyReason,
@@ -79,6 +80,7 @@ import {
   WRAPPED_ROW_HEIGHT,
   type AppearancePatch,
   type CanvasLayout,
+  type ColumnRecord,
   type ConditionalRule,
   type GedeDoc,
   type Id,
@@ -96,6 +98,12 @@ import {
 import type { CellSelection, GridEvent, GridState } from '../../../doc/selection.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
 import { isFormulaInput } from '../formula/input.js';
+
+/** One cell's worth of clipboard content: its text, and its marks when it had any. */
+export interface ColumnValue {
+  readonly text: string;
+  readonly rich: RichDoc | null;
+}
 
 export interface GridCommands {
   /**
@@ -136,6 +144,13 @@ export interface GridCommands {
   setColumnWidth(tableId: Id, colId: Id, units: number): number | null;
   /** GRID-08: the corner handle. Returns the visible columns' widths after the call. */
   scaleTable(tableId: Id, options: ScaleTableOptions): number[] | null;
+  /**
+   * INSP-04 / GRID-09: every row wrapped (two units) or compact (one), in one
+   * transaction. Unwrapping also clears every column's own wrap — a column
+   * that wraps keeps every row at two units, so the switch could never read
+   * or set "compact" otherwise (#128). Returns how many columns lost their wrap.
+   */
+  setTableWrapped(tableId: Id, wrapped: boolean): number | null;
   /** GRID-10: leading frozen columns, clamped to the table. Returns the count stored. */
   setFrozenColumns(tableId: Id, count: number): number | null;
   /** GRID-11: 0 hides the column-header row, 1 shows it. */
@@ -144,6 +159,26 @@ export interface GridCommands {
   setFooterRows(tableId: Id, count: StripCount): boolean;
   /** GRID-04: Delete clears the cell; read-only cells refuse and say why. */
   clearCell(cell: CellSelection): boolean;
+  /**
+   * MENU-03 / REF-05: clear every cell of one column in one transaction (one
+   * undo step). A derived, linked or pulled column refuses and says why; a
+   * read-only row (a pulled row, a split child) is skipped and counted.
+   * Returns how many cells were cleared, or null when the column refused.
+   */
+  clearColumn(tableId: Id, colId: Id): number | null;
+  /**
+   * MENU-03: write a value into every row of one column in one transaction —
+   * the column menu's Paste. One value fills every row; several fill rows top
+   * to bottom, in order, and the rest of the column is left as it was. `plain`
+   * is Paste and match style: marks are dropped. Read-only rows are skipped.
+   * Returns how many cells were written, or null when the column refused.
+   */
+  fillColumn(
+    tableId: Id,
+    colId: Id,
+    values: readonly ColumnValue[],
+    options?: { plain?: boolean | undefined },
+  ): number | null;
   /**
    * REF-03: the mapping picker's write — one of the target column's distinct
    * values (or '' to clear) into a linked cell. The only write a linked
@@ -345,6 +380,34 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     announce(`${addressOf(cell)} is read-only: ${readOnlyLabel(reason)}`);
     return true;
   };
+  /**
+   * MENU-03 / REF-05: the rows a column-scope write may touch. A column that is
+   * not `entered` refuses outright (its cells are the engine's or the picker's);
+   * a row that is read-only for its own reason (a pulled row, a split child, a
+   * band) is left out and counted, so the announcement can say so.
+   */
+  const writableColumn = (
+    tableId: Id,
+    colId: Id,
+  ): { column: ColumnRecord; rows: Id[]; skipped: number } | null => {
+    const rec = record(tableId);
+    const t = map(tableId);
+    const column = rec?.columns.find((c) => c.id === colId);
+    if (!editable() || rec === null || t === null || column === undefined) return null;
+    if (column.source !== 'entered') {
+      announce(`Column ${column.label} is read-only: ${readOnlyLabel(column.source)}`);
+      return null;
+    }
+    const rows: Id[] = [];
+    let skipped = 0;
+    for (const rowId of rec.rows) {
+      if (cellReadOnlyReason(t, rowId, colId) === null) rows.push(rowId);
+      else skipped += 1;
+    }
+    return { column, rows, skipped };
+  };
+  const skippedNote = (skipped: number): string =>
+    skipped === 0 ? '' : `; ${String(skipped)} read-only ${skipped === 1 ? 'row' : 'rows'} skipped`;
 
   /** After a row or column goes, land the selection on a neighbour, else the table. */
   const reselectAfterRow = (tableId: Id, before: TableRecord, index: number) => {
@@ -510,6 +573,22 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       );
       return widths;
     },
+    setTableWrapped(tableId, wrapped) {
+      const rec = record(tableId);
+      if (!editable() || rec === null) return null;
+      const wrappingColumns = wrapped ? [] : rec.columns.filter((c) => c.wrap);
+      gd.doc.transact(() => {
+        scaleTableMutation(gd, tableId, { wrapped });
+        for (const c of wrappingColumns) setColumnWrapMutation(gd, tableId, c.id, false);
+      }, gd.origin);
+      const n = wrappingColumns.length;
+      announce(
+        wrapped
+          ? `${rec.title}: every row wrapped`
+          : `${rec.title}: every row compact${n === 0 ? '' : `; column wrap cleared on ${String(n)} ${n === 1 ? 'column' : 'columns'}`}`,
+      );
+      return n;
+    },
     setFrozenColumns(tableId, count) {
       const rec = record(tableId);
       if (!editable() || rec === null) return null;
@@ -536,6 +615,56 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     clearCell(cell) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
       return clearCellText(gd, cell.tableId, cell.rowId, cell.colId);
+    },
+    clearColumn(tableId, colId) {
+      const scope = writableColumn(tableId, colId);
+      if (scope === null) return null;
+      let cleared = 0;
+      gd.doc.transact(() => {
+        for (const rowId of scope.rows) {
+          if (clearCellText(gd, tableId, rowId, colId)) cleared += 1;
+        }
+      }, gd.origin);
+      announce(
+        `Cleared column ${scope.column.label}: ${String(cleared)} ${cleared === 1 ? 'cell' : 'cells'}${skippedNote(scope.skipped)}`,
+      );
+      return cleared;
+    },
+    fillColumn(tableId, colId, values, options) {
+      const scope = writableColumn(tableId, colId);
+      if (scope === null) return null;
+      if (values.length === 0) {
+        announce('Nothing to paste');
+        return 0;
+      }
+      const plain = options?.plain === true;
+      const index = workbookIndexFor(gd.doc);
+      let written = 0;
+      gd.doc.transact(() => {
+        scope.rows.forEach((rowId, i) => {
+          // One value fills the column; several fill rows top to bottom and stop.
+          const value = values.length === 1 ? values[0] : values[i];
+          if (value === undefined) return;
+          const formula = isFormulaInput(value.text);
+          let ok: boolean;
+          if (formula || value.text === '') {
+            // A formula is a plain string bound to ids (PRD §20), never a fragment.
+            ok = commitCellText(gd, tableId, rowId, colId, value.text, { index });
+          } else if (plain) {
+            // Match style: an unmarked document, so a cell that held marks loses them.
+            ok = setCellRich(gd, tableId, rowId, colId, richFromText(value.text));
+          } else if (value.rich !== null && plainText(value.rich) === value.text) {
+            ok = setCellRich(gd, tableId, rowId, colId, value.rich);
+          } else {
+            ok = commitCellText(gd, tableId, rowId, colId, value.text, { index });
+          }
+          if (ok) written += 1;
+        });
+      }, gd.origin);
+      announce(
+        `Pasted${plain ? ' plain text' : ''} into column ${scope.column.label}: ${String(written)} ${written === 1 ? 'cell' : 'cells'}${skippedNote(scope.skipped)}`,
+      );
+      return written;
     },
     pickMappingValue(cell, value, locale) {
       const t = map(cell.tableId);

@@ -6,7 +6,15 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Y from 'yjs';
-import { createSheet, LATTICE, openDocument, tableById, type GedeDoc } from '@gede/core';
+import {
+  createSheet,
+  createTable,
+  LATTICE,
+  listSheets,
+  openDocument,
+  tableById,
+  type GedeDoc,
+} from '@gede/core';
 import type * as DocumentsApi from '../../api/documents.js';
 import { setDocumentSeamsForTests } from '../../doc/use-document.js';
 import { TIER_MESO_MIN } from '../../doc/viewport.js';
@@ -695,6 +703,103 @@ describe('DocumentShell', () => {
     expect(first.getAttribute('aria-label')).toBe('B5, Line one\nLine two');
   });
 
+  it('KEYS-01 `?` opens the shortcut sheet from an armed cell instead of starting an edit; Enter then `?` types it (#136, ADR 42)', async () => {
+    await openShell();
+    const grid = await addTable();
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    expect(first).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(first, { code: 'Slash', key: '?', shiftKey: true });
+    expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Edit B5')).toBeNull();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // Any other printable key still overwrites and opens the editor (GRID-04).
+    fireEvent.keyDown(first, { code: 'KeyQ', key: 'q' });
+    expect(screen.getByLabelText('Edit B5')).toBeInTheDocument();
+  });
+
+  it('A11Y-01 ⇧⌘→ and ⇧⌘← move focus to the next and previous object on the sheet — a graph a keyboard user could not reach by Tab (#131, ADR 42)', async () => {
+    await openShell();
+    const grid = await addTable();
+    // GRAPH-01 / GRAPH-04: + Graph, then "Add shaped table" binds a pair to a new table.
+    await userEvent.click(screen.getByRole('button', { name: 'Add graph' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add shaped table' }));
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-graph-id]').length).toBeGreaterThan(0);
+    });
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    // Objects in render order: the two tables, then the graphs. Two steps reach a graph.
+    fireEvent.keyDown(window, { code: 'ArrowRight', metaKey: true, shiftKey: true });
+    expect(document.activeElement?.closest('[data-table-id]')).not.toBe(
+      grid.closest('[data-table-id]'),
+    );
+    fireEvent.keyDown(window, { code: 'ArrowRight', metaKey: true, shiftKey: true });
+    const header = document.activeElement as HTMLElement;
+    expect(header.closest('[data-graph-id]')).not.toBeNull();
+    expect(header).toHaveClass('gd-graph__header');
+    expect(screen.getByTestId('live-region')).toHaveTextContent(/graph/i);
+    fireEvent.keyDown(window, { code: 'ArrowLeft', metaKey: true, shiftKey: true });
+    expect(document.activeElement?.closest('[data-table-id]')).not.toBeNull();
+    expect(document.activeElement).toHaveAttribute('role', 'gridcell');
+  });
+
+  it('A11Y-01 DOC-04 ⇧⌘→ reaches a table the canvas has culled — off screen, not rendered — by revealing it first (#131, ADR 42)', async () => {
+    await openShell();
+    const grid = await addTable();
+    // Another participant places a table far below the viewport: the canvas does not render it.
+    const other = openDocument(roomDoc());
+    const sheetId = listSheets(other)[0]!.id;
+    room.edit(() => {
+      createTable(other, { sheetId, at: { col: 1, row: 400 }, columns: 2, rows: 2 });
+    });
+    // The client's replica has it (the sheet tab counts two objects) yet renders one grid.
+    await waitFor(() => {
+      expect(screen.getByLabelText('2 objects')).toBeInTheDocument();
+    });
+    expect(screen.getAllByRole('grid')).toHaveLength(1);
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    fireEvent.keyDown(window, { code: 'ArrowRight', metaKey: true, shiftKey: true });
+    // The viewport panned to the far table (the first is culled in its turn) and its first
+    // cell holds focus.
+    expect(layerTransform()).not.toBe('translate(0px, 0px) scale(1)');
+    const landed = document.activeElement?.closest('[data-table-id]');
+    expect(landed).not.toBeNull();
+    expect(landed).not.toBe(grid.closest('[data-table-id]'));
+    expect(document.activeElement).toHaveAttribute('role', 'gridcell');
+    expect(document.activeElement).toHaveAttribute('aria-label', 'B404');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Table 2');
+  });
+
+  it('KEYS-03 ⌘A selects the table; ⌫ then says a cell is needed rather than clearing the table (#145, ADR 42)', async () => {
+    await openShell();
+    const grid = await addTable();
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    fireEvent.keyDown(first, { code: 'KeyQ', key: 'q' });
+    fireEvent.keyDown(screen.getByLabelText('Edit B5'), { code: 'Enter' });
+    fireEvent.keyDown(window, { code: 'KeyA', metaKey: true });
+    expect(screen.getByTestId('selected-table')).toBeInTheDocument();
+    expect(screen.queryByRole('gridcell', { selected: true })).toBeNull();
+    fireEvent.keyDown(window, { code: 'Backspace' });
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'The table is selected; select a cell to clear it',
+    );
+    expect(first).toHaveTextContent('q');
+  });
+
   it('LOAD-01 LOAD-02 LOAD-03 while the document loads a content-shaped skeleton appears after 200 ms with 22 px lattice rows', async () => {
     vi.mocked(docs.getDocument).mockReturnValue(new Promise(() => undefined));
     renderRoutes(routes, [`/d/${ID}`]);
@@ -788,6 +893,46 @@ describe('DocumentShell', () => {
     expect(
       await screen.findByRole('heading', { name: 'Nothing at this address' }),
     ).toBeInTheDocument();
+  });
+
+  it('DOC-02 INSP-01 KEYS-08 Filter opens Organize › Filter and Sort opens Organize › Sort; only the Organize toggle carries ⌥⌘2; the Document menu is the pointer route for ⌘O ⌘P ⌘Z ⇧⌘Z (#140, #138, #136)', async () => {
+    await openShell();
+    await addTable();
+    const toolbar = screen.getByRole('toolbar', { name: 'Document tools' });
+    const filter = within(toolbar).getByRole('button', { name: 'Filter' });
+    const sort = within(toolbar).getByRole('button', { name: 'Sort' });
+    expect(filter).not.toHaveAttribute('aria-keyshortcuts');
+    expect(sort).not.toHaveAttribute('aria-keyshortcuts');
+    expect(within(toolbar).getByRole('button', { name: 'Organize inspector' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Alt+Meta+2',
+    );
+    await userEvent.click(filter);
+    expect(screen.getByRole('complementary', { name: 'Organize inspector' })).toHaveAttribute(
+      'data-state',
+      'open',
+    );
+    expect(screen.getByRole('tab', { name: 'Filter' })).toHaveAttribute('aria-selected', 'true');
+    const panel = () => screen.getByRole('tabpanel', { name: 'Filter' });
+    expect(panel()).toHaveTextContent(/contains/);
+    expect(panel()).not.toHaveTextContent(/Group rows by/);
+    await userEvent.click(sort);
+    expect(screen.getByRole('tab', { name: 'Sort' })).toHaveAttribute('aria-selected', 'true');
+    expect(
+      within(screen.getByRole('tabpanel', { name: 'Sort' })).getByRole('combobox', {
+        name: 'Order',
+      }),
+    ).toBeInTheDocument();
+    // The Document menu (ADR-042): every Document and Edit chord has a pointer route.
+    await userEvent.click(within(toolbar).getByRole('button', { name: 'Document menu' }));
+    expect(screen.getByRole('menuitem', { name: /Open the library/ })).toHaveTextContent('⌘O');
+    expect(screen.getByRole('menuitem', { name: /Undo/ })).toHaveTextContent('⌘Z');
+    await userEvent.keyboard('{Escape}');
+    // The Table menu no longer repeats the toolbar's Add row / Add column (DOC-02, ADR-041).
+    await userEvent.click(within(toolbar).getByRole('button', { name: 'Table menu' }));
+    expect(screen.queryByRole('menuitem', { name: /Insert row below/ })).toBeNull();
+    expect(screen.queryByRole('menuitemcheckbox', { name: /Header row/ })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: /Insert row above/ })).toBeInTheDocument();
   });
 
   it('KEYS-07 INSP-02 ⌥⌘I toggles the inspector between the rail and the 38 px strip; ⌥⌘1 and ⌥⌘2 pick Format and Organize', async () => {

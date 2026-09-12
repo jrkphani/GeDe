@@ -17,6 +17,15 @@ function handlers(overrides: Partial<KeyHandlers> = {}): KeyHandlers {
     pasteMatchStyle: vi.fn(() => Promise.resolve()),
     armMatchStyle: vi.fn(),
     reason: () => undefined,
+    column: {
+      copy: vi.fn(() => Promise.resolve()),
+      copySnapshot: vi.fn(() => Promise.resolve()),
+      cut: vi.fn(() => Promise.resolve()),
+      paste: vi.fn(() => Promise.resolve()),
+      pasteMatchStyle: vi.fn(() => Promise.resolve()),
+      clear: vi.fn(),
+      reason: () => undefined,
+    },
   };
   return {
     phone: false,
@@ -35,6 +44,8 @@ function handlers(overrides: Partial<KeyHandlers> = {}): KeyHandlers {
       toggleInspector: vi.fn(),
       showInspector: vi.fn(),
       toggleShortcutSheet: vi.fn(),
+      nextObject: vi.fn(),
+      previousObject: vi.fn(),
     },
     edit: {
       undo: vi.fn(),
@@ -197,6 +208,27 @@ describe('document key bindings', () => {
     expect(h.view.actualSize).toHaveBeenCalledTimes(1);
     expect(h.view.fit).toHaveBeenCalledTimes(1);
     expect(h.view.toggleInspector).toHaveBeenCalledTimes(1);
+    // ADR-042 (#131): ⇧⌘→ / ⇧⌘← move to the next or previous object on the sheet.
+    press({ code: 'ArrowRight', metaKey: true, shiftKey: true });
+    press({ code: 'ArrowLeft', metaKey: true, shiftKey: true });
+    expect(h.view.nextObject).toHaveBeenCalledTimes(1);
+    expect(h.view.previousObject).toHaveBeenCalledTimes(1);
+  });
+
+  it('KEYS-05 KEYS-07 off Apple platforms Ctrl+= zooms and Ctrl+Alt+= is superscript — the two never fire together (#136, ADR 42)', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0) jsdom');
+    const h = handlers();
+    render(<Host h={h} />);
+    press({ code: 'Equal', ctrlKey: true });
+    expect(h.view.zoomIn).toHaveBeenCalledTimes(1);
+    expect(h.edit.toggleMark).not.toHaveBeenCalled();
+    press({ code: 'Equal', ctrlKey: true, altKey: true });
+    press({ code: 'Minus', ctrlKey: true, altKey: true, shiftKey: true });
+    expect(h.view.zoomIn).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(h.edit.toggleMark).mock.calls.map((c) => c[0])).toEqual([
+      'superscript',
+      'subscript',
+    ]);
   });
 
   it('GRID-03 Escape clears the selection only while no layered surface is open', () => {

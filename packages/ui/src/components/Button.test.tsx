@@ -7,8 +7,9 @@ import { Button } from './Button.js';
 
 describe('Button stylesheet', () => {
   const css = readFileSync(resolve(__dirname, 'Button.css'), 'utf8');
+  const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const block = (selector: string) =>
-    new RegExp(`${selector.replace(/[.()]/g, '\\$&')}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? '';
+    new RegExp(`${escape(selector)}\\s*\\{([^}]*)\\}`).exec(css)?.[1] ?? '';
 
   it('DS §3 icon-only buttons have a hit area of at least 32 px at every size, whatever the glyph', () => {
     // 2rem = 32 px at the 100 % root; md and lg keep their own larger floors.
@@ -27,9 +28,19 @@ describe('Button stylesheet', () => {
 
   it('pressed and ghost tints derive from semantic tokens so they hold on the dark theme', () => {
     expect(css).not.toMatch(/--gd-btn-bg:\s*var\(--(slate-200|forest-50|forest-100)\)/);
-    expect(block('.gd-btn--ghost:hover:not(:disabled)')).toMatch(
+    expect(block(".gd-btn--ghost:hover:not(:disabled, [aria-disabled='true'])")).toMatch(
       /color-mix\(in srgb, var\(--link\) \d+%, var\(--surface\)\)/,
     );
+  });
+
+  it('INSP-11 MENU-02 an aria-disabled button looks disabled and takes no hover or pressed tint (#126)', () => {
+    expect(block(".gd-btn:disabled,\n.gd-btn[aria-disabled='true']")).toMatch(
+      /opacity:\s*0\.45;[^}]*cursor:\s*not-allowed/,
+    );
+    // Every hover and active rule excludes the aria-disabled state as it excludes :disabled.
+    for (const rule of css.match(/\.gd-btn[^{]*:(hover|active)[^{]*\{/g) ?? []) {
+      expect(rule).toMatch(/:not\(:disabled, \[aria-disabled='true'\]\)/);
+    }
   });
 });
 

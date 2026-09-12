@@ -1,11 +1,13 @@
 import clsx from 'clsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   cellAddress,
   cellRich,
   createSheet,
   createTable,
+  graphById,
   graphsOnSheet,
   LATTICE,
   listSheets,
@@ -18,6 +20,7 @@ import {
   toggleMarkThroughout,
   toPresenceState,
   unitBoundsToPx,
+  type GedeDoc,
   type Id,
   type PresenceState,
   type ToggleMark,
@@ -69,6 +72,7 @@ import { matchBounds } from './find/match-geometry.js';
 import { useFind, type FindNavigation } from './find/useFind.js';
 import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2/formulas mount points
 import { pinnedPanelOffset } from './grid/pinned.js';
+import { DocumentMenu } from './grid/DocumentMenu.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
 import { DerivePanel } from './ref/index.js'; // wave3/references
@@ -80,10 +84,20 @@ import {
   useViewStore,
   ViewStoreProvider,
 } from '../../doc/view-state.js';
-import { Inspector } from './Inspector.js';
+import { Inspector, type OrganizeTab } from './Inspector.js';
+import type { HeadObject } from './inspector/InspectorHead.js';
 import { documentBindings } from './keys/bindings.js';
 import type { CellSelection } from './selection.js';
 import { useCellClipboard } from './keys/clipboard.js';
+import {
+  currentObject,
+  objectBounds,
+  objectElement,
+  objectEntry,
+  sheetObjects,
+  stepObject,
+  tableEntry,
+} from './keys/objects.js';
 import { setTourDocument } from '../tour/store.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
@@ -264,6 +278,7 @@ function OpenDocument({
   // INSP-02 / RESP-04: the rail is always present above phone width — docked at 322 px or
   // collapsed to a 38 px strip. It starts open from 1200 px and collapsed below.
   const [inspectorMode, setInspectorMode] = useState<InspectorMode>('format');
+  const [organizeTab, setOrganizeTab] = useState<OrganizeTab>('categories');
   const [inspectorOpen, setInspectorOpen] = useState(() => wide);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -316,7 +331,11 @@ function OpenDocument({
       clearSelection();
       setViewport((v) => ({ x: 0, y: 0, zoom: v.zoom }));
       const sheet = listSheets(gd).find((s) => s.id === sheetId);
-      if (sheet !== undefined) announce(`Sheet ${String(sheet.ordinal)}, ${sheet.label}`);
+      // A sheet still named by its ordinal ("Sheet 2") is announced once, not "Sheet 2, Sheet 2" (#142).
+      if (sheet !== undefined) {
+        const ordinal = `Sheet ${String(sheet.ordinal)}`;
+        announce(sheet.label === ordinal ? ordinal : `${ordinal}, ${sheet.label}`);
+      }
     },
     [gd, clearSelection],
   );
@@ -499,10 +518,52 @@ function OpenDocument({
   );
 
   // -- keyboard (KEYS-01..07): one map, listed by the shortcut sheet --------------
-  const showInspector = useCallback((mode: InspectorMode) => {
+  const showInspector = useCallback((mode: InspectorMode, tab?: OrganizeTab) => {
     setInspectorMode(mode);
+    if (tab !== undefined) setOrganizeTab(tab);
     setInspectorOpen(true);
   }, []);
+  // ADR-042 ⇧⌘→ / ⇧⌘←: the next or previous object on the sheet takes focus at its own
+  // entry — a cell (which arms it), a graph's header. Tab cannot do this forward (GRID-05).
+  // The objects are the document's, not the DOM's: a table outside the viewport is culled
+  // (`visibleTables`), so the object is revealed first and focused once it has rendered.
+  const moveObject = useCallback(
+    (direction: 1 | -1) => {
+      if (activeSheetId === null) return;
+      const objects = sheetObjects(gd, activeSheetId);
+      const next = stepObject(objects, currentObject(document.activeElement), direction);
+      if (next === null) {
+        announce('Nothing on this sheet');
+        return;
+      }
+      const bounds = objectBounds(gd, next);
+      const entryCell = next.kind === 'table' ? tableEntry(gd, next.id, cell) : null;
+      // Synchronous, so the revealed table is in the DOM before its entry is looked up.
+      flushSync(() => {
+        if (bounds !== null) {
+          // The same fallback size the culling uses before the canvas is measured.
+          setViewport((v) =>
+            revealBounds(
+              v,
+              measured ?? { width: theme.breakpoint.lg, height: theme.breakpoint.md },
+              bounds,
+              FIT_PADDING,
+            ),
+          );
+        }
+        if (entryCell !== null) grid.actions.selectCell(entryCell);
+      });
+      const section = objectElement(next);
+      const entry = section === null ? null : objectEntry(section);
+      if (section === null || entry === null) {
+        announce('No other object on this sheet');
+        return;
+      }
+      entry.focus({ preventScroll: true });
+      announce(section.getAttribute('aria-label') ?? 'Object');
+    },
+    [gd, activeSheetId, cell, measured, grid.actions],
+  );
   useShortcuts(
     documentBindings({
       phone,
@@ -544,15 +605,25 @@ function OpenDocument({
         toggleShortcutSheet: () => {
           setShortcutsOpen((o) => !o);
         },
+        nextObject: () => {
+          moveObject(1);
+        },
+        previousObject: () => {
+          moveObject(-1);
+        },
       },
       edit: {
         undo: () => session.undo.undo(),
         redo: () => session.undo.redo(),
+        // KEYS-03 ⌘A selects the table (the object); there is no range selection (ADR-042).
         selectAll: () => {
           if (selection !== null) selectTable(selection.tableId);
         },
         clear: () => {
           if (cell !== null) grid.commands.clearCell(cell);
+        },
+        clearNeedsCell: () => {
+          announce('The table is selected; select a cell to clear it');
         },
         clearSelection: clearAll,
         toggleMark,
@@ -589,6 +660,7 @@ function OpenDocument({
       },
     },
     sheets: { add: appendSheet },
+    selectTable,
     slots: {
       // SORT-01..06 (#74): the viewer's own sort, filter and grouping; the options live in
       // the Organize inspector, so "show … options" opens it.
@@ -600,13 +672,13 @@ function OpenDocument({
           sort.setSort(tableId, colId, 'za');
         },
         showSortOptions: () => {
-          showInspector('organize');
+          showInspector('organize', 'sort');
         },
         quickFilter: () => {
-          showInspector('organize');
+          showInspector('organize', 'filter');
         },
         showFilterOptions: () => {
-          showInspector('organize');
+          showInspector('organize', 'filter');
         },
       },
       hierarchy: {
@@ -618,7 +690,7 @@ function OpenDocument({
           sort.setGroupBy(tableId, null);
         },
         showCategoryOptions: () => {
-          showInspector('organize');
+          showInspector('organize', 'categories');
         },
       },
       // GRAPH-01: "Graph this table" creates a pair bound to that table.
@@ -716,9 +788,21 @@ function OpenDocument({
           onShortcuts={() => {
             setShortcutsOpen(true);
           }}
-          onOrganize={() => {
-            showInspector('organize');
+          onOrganize={(tab) => {
+            showInspector('organize', tab);
           }}
+          documentMenu={
+            <DocumentMenu
+              editable={editable}
+              undo={session.undo}
+              onOpen={() => {
+                void navigate('/');
+              }}
+              onPrint={() => {
+                window.print();
+              }}
+            />
+          }
         />
       )}
 
@@ -1026,6 +1110,9 @@ function OpenDocument({
               mode={inspectorMode}
               open={inspectorOpen}
               onOpenChange={setInspectorOpen}
+              organizeTab={organizeTab}
+              onOrganizeTabChange={setOrganizeTab}
+              object={selectedGraphId === null ? undefined : describeGraph(gd, selectedGraphId)}
               selection={selection}
               editing={editing !== null}
               editable={editable}
@@ -1033,13 +1120,32 @@ function OpenDocument({
               find={find}
               onToggleMark={toggleMark}
               slots={{
-                // SORT-01..06 (#74): one panel carries Categories, Sort and Filter; the three
-                // Organize tabs all open it.
+                // SORT-01..06 (#74) / INSP-01: one panel carries Categories, Sort and Filter;
+                // each Organize tab shows its own section of it (#138).
                 hierarchy: (
-                  <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />
+                  <SortPanel
+                    gd={gd}
+                    tableId={selection?.tableId ?? null}
+                    commands={sort}
+                    section="categories"
+                  />
                 ),
-                sort: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
-                filter: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
+                sort: (
+                  <SortPanel
+                    gd={gd}
+                    tableId={selection?.tableId ?? null}
+                    commands={sort}
+                    section="sort"
+                  />
+                ),
+                filter: (
+                  <SortPanel
+                    gd={gd}
+                    tableId={selection?.tableId ?? null}
+                    commands={sort}
+                    section="filter"
+                  />
+                ),
                 // REF-02..04 (#77): cross-table relation, derived-column composition and the
                 // pipeline audit list, for the selected table.
                 derive:
@@ -1084,6 +1190,22 @@ function OpenDocument({
       )}
     </div>
   );
+}
+
+/** INSP-03 / INSP-08: what the head says of a selected graph — its kind, source and dimensions. */
+function describeGraph(gd: GedeDoc, graphId: Id): HeadObject | undefined {
+  const graph = graphById(gd, graphId);
+  if (graph === null) return undefined;
+  const source = graph.tableId === null ? null : tableById(gd, graph.tableId);
+  const kind = graph.kind === 'ring' ? 'Ring graph' : 'Coverage graph';
+  const n = graph.dimensions.length;
+  return {
+    label: source === null ? kind : `${kind} of ${source.title}`,
+    facts: [
+      source === null ? 'not pointed at a table' : `${String(source.rows.length)} source rows`,
+      `${String(n)} ${n === 1 ? 'dimension' : 'dimensions'}`,
+    ],
+  };
 }
 
 /** The empty-sheet affordance sits one unit in from A1, on the lattice. */

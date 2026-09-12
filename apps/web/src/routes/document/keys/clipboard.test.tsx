@@ -240,3 +240,102 @@ describe('cell clipboard (KEYS-03, MENU-04)', () => {
     );
   });
 });
+
+describe('column clipboard (MENU-03, REF-05, #123)', () => {
+  beforeEach(() => {
+    gd = openDocument(new Y.Doc());
+    const sheetId = createSheet(gd);
+    tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 2, rows: 3 });
+    const record = tableById(gd, tableId)!;
+    rows = record.rows;
+    cols = record.columns.map((c) => c.id);
+    setCellRich(
+      gd,
+      tableId,
+      rows[0]!,
+      cols[0]!,
+      docNode([paragraphNode([textNode('Base ', [{ type: 'bold' }]), textNode('camp')])]),
+    );
+    setCellText(gd, tableId, rows[1]!, cols[0]!, 'Lukla');
+    setCellText(gd, tableId, rows[2]!, cols[0]!, 'Namche');
+    setCellText(gd, tableId, rows[0]!, cols[1]!, 'other');
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('MENU-03 Cut column copies every cell of the right-clicked column, one line per row, and clears the column in one undo step — the selected cell in another column is untouched', async () => {
+    render(<Harness cell={0} />);
+    const undo = new Y.UndoManager(gd.tables, { trackedOrigins: new Set([gd.origin]) });
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText, readText: vi.fn(() => Promise.resolve('')) },
+      configurable: true,
+    });
+    const table = gd.tables.get(tableId)!;
+    await act(async () => {
+      await handle.current!.column.cut({ tableId, colId: cols[0]! });
+    });
+    expect(writeText).toHaveBeenCalledWith('Base camp\nLukla\nNamche');
+    expect(rows.map((r) => cellText(table, r, cols[0]!))).toEqual(['', '', '']);
+    expect(cellText(table, rows[0]!, cols[1]!)).toBe('other');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Cleared column Column 1: 3 cells');
+    expect(undo.undoStack).toHaveLength(1);
+    undo.undo();
+    expect(rows.map((r) => cellText(table, r, cols[0]!))).toEqual(['Base camp', 'Lukla', 'Namche']);
+  });
+
+  it('MENU-03 Paste into column fills rows top to bottom from the clipboard lines, and one value fills every row', async () => {
+    render(<Harness cell={null} />);
+    const table = gd.tables.get(tableId)!;
+    const readText = vi.fn(() => Promise.resolve('One\nTwo'));
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { readText, writeText: vi.fn(() => Promise.resolve()) },
+      configurable: true,
+    });
+    await act(async () => {
+      await handle.current!.column.paste({ tableId, colId: cols[1]! });
+    });
+    expect(rows.map((r) => cellText(table, r, cols[1]!))).toEqual(['One', 'Two', '']);
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'Pasted into column Column 2: 2 cells',
+    );
+    readText.mockResolvedValue('Same');
+    await act(async () => {
+      await handle.current!.column.pasteMatchStyle({ tableId, colId: cols[1]! });
+    });
+    expect(rows.map((r) => cellText(table, r, cols[1]!))).toEqual(['Same', 'Same', 'Same']);
+  });
+
+  it('REF-05 a derived column refuses Cut, Paste and Clear with the reason; Copy gives what the column shows', async () => {
+    const table = gd.tables.get(tableId)!;
+    const columns = table.get('columns') as Y.Array<Y.Map<unknown>>;
+    columns.get(0).set('source', 'derived');
+    render(<Harness cell={null} />);
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { writeText, readText: vi.fn(() => Promise.resolve('x')) },
+      configurable: true,
+    });
+    const scope = { tableId, colId: cols[0]! };
+    expect(handle.current!.column.reason(scope, 'cut')).toBe('derived columns are read-only');
+    expect(handle.current!.column.reason(scope, 'paste')).toBe('derived columns are read-only');
+    expect(handle.current!.column.reason(scope, 'copy')).toBeUndefined();
+    act(() => {
+      handle.current!.column.clear(scope);
+    });
+    await act(async () => {
+      await handle.current!.column.paste(scope);
+    });
+    // The guard holds in the commands too, not only in the menu's reason.
+    expect(rows.map((r) => cellText(table, r, cols[0]!))).toEqual(['Base camp', 'Lukla', 'Namche']);
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'Column Column 1 is read-only: derived column',
+    );
+    await act(async () => {
+      await handle.current!.column.copy(scope);
+    });
+    // No engine in jsdom: a derived cell shows nothing yet, and nothing is invented.
+    expect(writeText).toHaveBeenCalledWith('\n\n');
+  });
+});

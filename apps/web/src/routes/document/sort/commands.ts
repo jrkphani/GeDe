@@ -27,8 +27,16 @@ import type { ViewStore } from '../../../doc/view-state.js';
 export interface SortCommands {
   /** SORT-01: sort by a column in a mode; `null` mode is None. Returns what was stored. */
   setSort(tableId: Id, colId: Id, mode: SortMode | null): SortBy | null;
-  /** SORT-01, SORT-03, SORT-04: the table's filter, or `null` to clear it. */
-  setFilter(tableId: Id, filter: TableFilter | null): TableFilter | null;
+  /**
+   * SORT-01, SORT-03, SORT-04: the table's filter, or `null` to clear it.
+   * `announce: false` writes quietly — a live form calls this per keystroke
+   * (INSP-12) and announces once the field settles.
+   */
+  setFilter(
+    tableId: Id,
+    filter: TableFilter | null,
+    options?: { announce?: boolean | undefined },
+  ): TableFilter | null;
   /** SORT-05, HIER-08: group by a column, or `null` to remove the grouping. */
   setGroupBy(tableId: Id, colId: Id | null): Id | null;
   /** SORT-06: reset sort, filter and grouping for the table in one action. */
@@ -83,13 +91,14 @@ export function createSortCommands(deps: SortCommandDeps): SortCommands {
       );
       return sortBy;
     },
-    setFilter(tableId, filter) {
+    setFilter(tableId, filter, options) {
       const ids = columnIds(tableId);
       const current = view(tableId);
       if (ids === null || current === null) return null;
       let next: TableFilter | null = isEmptyFilter(filter) ? null : filter;
       if (next?.colId != null && !ids.has(next.colId)) next = { ...next, colId: null };
       store.set(tableId, { ...current, filter: next });
+      if (options?.announce === false) return next;
       deps.announce(
         next === null
           ? 'Filter cleared'

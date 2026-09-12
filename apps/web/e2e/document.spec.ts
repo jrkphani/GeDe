@@ -508,16 +508,23 @@ test.describe('grid editing', () => {
         await page.mouse.wheel(-240, 0);
         await expect(page.getByTestId('layer')).toHaveAttribute('style', /translate\(0px/);
       }
-      // GRID-09 via the Table menu: wrap the selected column; rows are two lattice units, addresses exact.
+      // GRID-09 via the Text tab — wrap's one home (DOC-02, ADR-041): the selected column wraps;
+      // rows are two lattice units, addresses exact.
       await grid.getByRole('gridcell').first().click();
-      await page.getByRole('button', { name: 'Table menu' }).click();
-      await page.getByRole('menuitemcheckbox', { name: 'Wrap column text' }).click();
+      const rail = page.getByTestId('inspector');
+      if ((await rail.getAttribute('data-state')) === 'collapsed') {
+        await rail.getByRole('button', { name: 'Expand inspector' }).click();
+      }
+      await rail.getByRole('tab', { name: 'Text' }).click();
+      await rail.getByRole('switch', { name: /^Wrap column/ }).click();
       await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '44px');
       await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B7');
       await expect(page.getByTestId('ruler-rows').locator('[data-row="6"]')).toHaveText('7');
-      // GRID-10: freeze one column — shaded, a heavier rule at the boundary, and a pinned panel once scrolled under.
-      await page.getByRole('button', { name: 'Table menu' }).click();
-      await page.getByRole('menuitemradio', { name: '1 column' }).click();
+      // GRID-10 via the Table tab: freeze one column — shaded, a heavier rule at the boundary,
+      // and a pinned panel once scrolled under.
+      await rail.getByRole('tab', { name: 'Table' }).click();
+      await rail.getByRole('combobox', { name: 'Header columns' }).click();
+      await page.getByRole('option', { name: '1 column' }).click();
       const frozen = grid.getByRole('gridcell').first();
       await expect(frozen).toHaveClass(/gd-cell--frozen/);
       await expect(frozen).toHaveCSS('border-right-width', '2px');
@@ -528,13 +535,12 @@ test.describe('grid editing', () => {
       await expect(page.getByTestId('pinned-panel')).toHaveCSS('width', '640px');
       await page.getByRole('button', { name: 'Fit to canvas' }).click();
       await expect(page.getByTestId('pinned-panel')).toHaveCount(0);
-      // GRID-11: header 0 hides the column-header row; footer 1 adds a one-unit count strip.
-      await page.getByRole('button', { name: 'Table menu' }).click();
-      await page.getByRole('menuitemcheckbox', { name: 'Header row' }).click();
+      // GRID-11 / INSP-04: header rows 0 hides the column-header row; footer rows 1 adds a
+      // one-unit count strip — counts in the Table tab, their one home.
+      await rail.getByRole('button', { name: 'Fewer header rows' }).click();
       await expect(grid.getByRole('columnheader')).toHaveCount(0);
       await expect(grid.getByRole('gridcell').first()).toHaveAttribute('data-address', 'B4');
-      await page.getByRole('button', { name: 'Table menu' }).click();
-      await page.getByRole('menuitemcheckbox', { name: 'Footer' }).click();
+      await rail.getByRole('button', { name: 'More footer rows' }).click();
       const footer = page.getByTestId('table-footer');
       await expect(footer).toHaveCSS('height', '22px');
       await expect(footer).toHaveText(/5 rows/);

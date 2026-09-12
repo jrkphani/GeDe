@@ -40,6 +40,15 @@ const clipboard: CellClipboard = {
   pasteMatchStyle: vi.fn(() => Promise.resolve()),
   armMatchStyle: vi.fn(),
   reason: () => undefined,
+  column: {
+    copy: vi.fn(() => Promise.resolve()),
+    copySnapshot: vi.fn(() => Promise.resolve()),
+    cut: vi.fn(() => Promise.resolve()),
+    paste: vi.fn(() => Promise.resolve()),
+    pasteMatchStyle: vi.fn(() => Promise.resolve()),
+    clear: vi.fn(),
+    reason: () => undefined,
+  },
 };
 const canvas = { addTable: vi.fn(), fit: vi.fn(), actualSize: vi.fn() };
 const sheets = { add: vi.fn() };
@@ -129,6 +138,7 @@ describe('context menus', () => {
       'Paste',
       'Paste and match style',
       'Clear all',
+      'Select the table',
       'Wrap text',
     ]);
     expect(within(menu).getAllByRole('separator').length).toBeGreaterThanOrEqual(7);
@@ -261,7 +271,12 @@ describe('context menus', () => {
       'Delete column',
       'Hide column',
       'Fit width to content',
-      'Copy',
+      'Cut column',
+      'Copy column',
+      'Copy column snapshot',
+      'Paste into column',
+      'Paste into column and match style',
+      'Clear column',
       'Wrap text',
     ]);
     await userEvent.click(screen.getByRole('menuitemcheckbox', { name: /Freeze columns/ }));
@@ -273,6 +288,84 @@ describe('context menus', () => {
     await waitFor(() => {
       expect(screen.getAllByRole('columnheader')).toHaveLength(2);
     });
+  });
+
+  it("MENU-03 the column menu's clipboard commands act on the right-clicked column, not the selected cell (#123)", async () => {
+    render(<Harness />);
+    // C1 is selected; the menu opens on column 1's header.
+    await userEvent.click(cells()[2]!);
+    const record = tableById(gd, tableId)!;
+    const header = screen.getAllByRole('columnheader')[0]!;
+    fireEvent.contextMenu(header, { clientX: 20, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Clear column' }));
+    expect(clipboard.column.clear).toHaveBeenLastCalledWith({
+      tableId,
+      colId: record.columns[0]!.id,
+    });
+    expect(clipboard.cut).not.toHaveBeenCalled();
+    fireEvent.contextMenu(header, { clientX: 20, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    await userEvent.click(screen.getByRole('menuitem', { name: 'Cut column' }));
+    expect(clipboard.column.cut).toHaveBeenLastCalledWith({
+      tableId,
+      colId: record.columns[0]!.id,
+    });
+    expect(clipboard.column.paste).not.toHaveBeenCalled();
+  });
+
+  it('REF-05 the column menu disables Cut, Paste and Clear on a read-only column, with the reason (#123)', () => {
+    render(<Harness />);
+    const record = tableById(gd, tableId)!;
+    const ctx: MenuContext = {
+      gd,
+      editable: true,
+      commands: grid.current!.commands,
+      clipboard: {
+        ...clipboard,
+        column: {
+          ...clipboard.column,
+          reason: (_target, command) =>
+            command === 'copy' ? undefined : 'derived columns are read-only',
+        },
+      },
+      selectedCell: null,
+      canvas,
+      sheets,
+    };
+    const entries = columnMenuEntries(ctx, {
+      kind: 'column',
+      tableId,
+      colId: record.columns[0]!.id,
+    });
+    const byId = (id: string) => entries.find((e) => e.id === id);
+    for (const id of ['cut', 'paste', 'paste-match', 'clear']) {
+      expect(byId(id)).toMatchObject({ disabledReason: 'derived columns are read-only' });
+    }
+    expect(byId('copy')).toMatchObject({ disabledReason: undefined });
+    expect(byId('copy-snapshot')).toMatchObject({ disabledReason: undefined });
+  });
+
+  it('MENU-05 Escape from a column menu returns focus to the header it opened on; a command that moves the selection sends focus to the new cell (#131)', async () => {
+    render(<Harness />);
+    await userEvent.click(cells()[0]!);
+    const header = screen.getAllByRole('columnheader')[1]!;
+    fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    expect(header).toHaveFocus();
+    fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    await userEvent.click(screen.getByRole('menuitem', { name: /^Add column after/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    const selected = document.querySelector('[role="gridcell"][aria-selected="true"]');
+    expect(selected).not.toBeNull();
+    expect(selected).toHaveFocus();
   });
 
   it('KEYS Shift+F10 and the ContextMenu key open the menu for the focused cell', async () => {
@@ -343,8 +436,10 @@ describe('context menus', () => {
       tableId,
       colId: record.columns[0]!.id,
     });
+    // #123: the column menu's clipboard group is the column's own, not the selected cell's.
     expect(column.find((e) => e.id === 'copy')).toMatchObject({
-      disabledReason: 'select a cell in this table first',
+      label: 'Copy column',
+      disabledReason: undefined,
     });
     const cell = cellMenuEntries(ctx, {
       kind: 'cell',

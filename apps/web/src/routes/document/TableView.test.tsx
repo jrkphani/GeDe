@@ -36,6 +36,7 @@ import {
   setColumnRules,
   setOutlineColumn,
   setRowCollapsed,
+  setRowWrapped,
   setTableLook,
   tableById,
   tableMap,
@@ -936,7 +937,7 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
     const child = rowEls()[1]!;
     const chevron = chevronIn(parent)!;
     expect(chevron.tagName).toBe('BUTTON');
-    expect(chevron).toHaveAccessibleName('Collapse B5');
+    expect(chevron).toHaveAccessibleName('Collapse B5 (⌥←)');
     expect(chevron).toHaveAttribute('aria-expanded', 'true');
     expect(parent).toHaveAttribute('aria-expanded', 'true');
     // r1 has r2 under it, so it has a chevron; r2, r3.. have none.
@@ -950,7 +951,7 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
       rowEls().map((r) => within(r).getAllByRole('gridcell')[0]!.getAttribute('data-address')),
     ).toEqual(['B5', 'B6', 'B7', 'B8']);
     expect(cellAt(1, 0)).toHaveTextContent('Row 4');
-    expect(chevronIn(rowEls()[0]!)).toHaveAccessibleName('Expand B5');
+    expect(chevronIn(rowEls()[0]!)).toHaveAccessibleName('Expand B5 (⌥→)');
     expect(rowEls()[0]).toHaveAttribute('aria-expanded', 'false');
     expect(grid()).toHaveAttribute('aria-rowcount', '5'); // header + 4
     expect(live()).toHaveTextContent('Collapsed the row');
@@ -1361,6 +1362,27 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
     expect(
       screen.getByRole('gridcell', { name: /^C5, hidden under the span/ }),
     ).toBeInTheDocument();
+  });
+
+  it('FX-07 GRID-09 a formula in a compact row shows its expression beside the value without changing the row height; a wrapped row keeps it on its own line (#142, ADR 43)', () => {
+    commitCellText(gd, tableId, rows[2]!, cols[0]!, '=Sum(B5:B6)');
+    mount();
+    const cell = cellAt(2, 0);
+    expect(cell).not.toHaveClass('gd-cell--wrap');
+    expect(cell.querySelector('.gd-formula__expr')).toHaveTextContent('=Sum(B5:B6)');
+    expect(cell.querySelector('.gd-formula__expr')).toHaveAttribute(
+      'aria-label',
+      'Expression =Sum(B5:B6)',
+    );
+    // The row is one lattice unit still (GRID-09): 22 px, and its address is its own.
+    expect(cell).toHaveAttribute('data-address', 'B7');
+    expect(cell.closest('[role="row"]')).toHaveStyle({ height: '22px' });
+    act(() => {
+      setRowWrapped(gd, tableId, rows[2]!, true);
+    });
+    expect(cellAt(2, 0)).toHaveClass('gd-cell--wrap');
+    expect(cellAt(2, 0).closest('[role="row"]')).toHaveStyle({ height: '44px' });
+    expect(cellAt(2, 0).querySelector('.gd-formula__expr')).toHaveTextContent('=Sum(B5:B6)');
   });
 
   it('INSP-05 FX-07 a rule on a formula cell matches the evaluated value, never the source', async () => {

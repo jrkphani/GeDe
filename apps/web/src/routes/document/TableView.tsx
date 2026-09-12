@@ -52,7 +52,7 @@ import { Icon } from '@gede/ui';
 import type * as Y from 'yjs';
 
 import { announce } from '../../announce.js';
-import { ARIA_KEYS } from '../../doc/shortcuts.js';
+import { ARIA_KEYS, CHORDS, isApplePlatform, matchesChord } from '../../doc/shortcuts.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import {
   nextCell,
@@ -73,7 +73,7 @@ import {
 import { useWorkbookIndexVersion } from '../../doc/workbook-index.js';
 import { useCellVersions } from './grid/cell-versions.js';
 import { readOnlyLabel, type GridCommands } from './grid/commands.js';
-import { HIER_ARIA_KEYS, hierarchyKey } from './grid/hier-keys.js';
+import { HIER_ARIA_KEYS, HIER_LABELS, hierarchyKey } from './grid/hier-keys.js';
 import {
   DerivedCell,
   LineageHeader,
@@ -459,6 +459,9 @@ export const TableView = memo(function TableView({
                     <div
                       key={col.id}
                       role="columnheader"
+                      // MENU-05: focusable by script only, so a column menu opened on the header
+                      // can return focus to it; the grid keeps one tab stop (A11Y-01).
+                      tabIndex={-1}
                       aria-sort={ariaSortOf(projection.view, col.id)}
                       className={clsx('gd-table__header', {
                         'gd-table__header--frozen': frozenIds.has(col.id),
@@ -1408,6 +1411,10 @@ const Cell = memo(function Cell({
       default:
         break;
     }
+    // KEYS-01 (ADR-042, #136): `?` (Shift+/ by physical key) opens the shortcut sheet from an
+    // armed cell as from anywhere else; the shell's binding takes it. Type-to-edit yields to
+    // that one chord — Enter then `?` types the character.
+    if (matchesChord(e, CHORDS.shortcutSheet, isApplePlatform())) return;
     // GRID-04: any printable character overwrites and opens the editor.
     if (mod || e.key.length !== 1 || !editable) return;
     e.preventDefault();
@@ -1439,10 +1446,11 @@ const Cell = memo(function Cell({
     );
   }
   const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
+  // KEYS-08 (#136): the chevron names its chord, so ⌥← / ⌥→ have a route beside the command.
   const chevronControl =
     outline !== null && outline.hasChildren && editable
       ? {
-          label: `${outline.collapsed ? 'Expand' : 'Collapse'} ${address ?? 'row'}`,
+          label: `${outline.collapsed ? 'Expand' : 'Collapse'} ${address ?? 'row'} (${outline.collapsed ? HIER_LABELS.expand : HIER_LABELS.collapse})`,
           onToggle: () => {
             commands.toggleCollapse(cell.tableId, cell.rowId);
           },
@@ -1545,8 +1553,12 @@ const Cell = memo(function Cell({
           onCancel={actions.cancel}
         />
       ) : refKind === 'reference' || refKind === 'pulled' ? (
-        <ReferenceCell table={table} cell={cell} kind={refKind} expression={wrap} />
+        // FX-07 / REF-01 (ADR-043): the path shows in every row — beside the value in a
+        // compact row (document.css), beneath it in a wrapped one.
+        <ReferenceCell table={table} cell={cell} kind={refKind} expression />
       ) : refKind === 'derived' && column.derive !== null ? (
+        // A derived cell's pipeline is the lineage header's (ADR-032); its expression takes
+        // the second line of a wrapped row only.
         <DerivedCell table={table} cell={cell} spec={column.derive} expression={wrap} />
       ) : refKind === 'mapping' && column.link !== null ? (
         <MappingCell
@@ -1560,7 +1572,7 @@ const Cell = memo(function Cell({
           onPick={(value, locale) => commands.pickMappingValue(cell, value, locale)}
         />
       ) : formula && tier === 'micro' ? (
-        <FormulaCell table={table} cell={cell} expression={wrap} format={format} />
+        <FormulaCell table={table} cell={cell} expression format={format} />
       ) : (
         tier === 'micro' && (
           <CellContent content={rich} layout={layout} format={format} locale={locale} />

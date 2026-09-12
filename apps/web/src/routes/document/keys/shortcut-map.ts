@@ -125,6 +125,13 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
         ids: ['nextSheet', 'previousSheet'],
         reserved: 'the browser’s tab switch — use the sheet strip',
       },
+      // A11Y-01 / #131: Tab never leaves a table forward (GRID-05 appends a row), so a
+      // keyboard user needs a chord to reach the next object on the sheet — a graph.
+      {
+        action: 'Next / previous object on the sheet',
+        ids: ['nextObject', 'previousObject'],
+        extra: 'ADR-042',
+      },
     ],
   },
 ];

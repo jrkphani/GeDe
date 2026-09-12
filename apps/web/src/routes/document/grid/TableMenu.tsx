@@ -1,7 +1,6 @@
-import { rowMeta, tableById, tableMap, WRAPPED_ROW_HEIGHT, type GedeDoc } from '@gede/core';
+import { tableById, type GedeDoc } from '@gede/core';
 import { Button, Menu, type MenuEntry } from '@gede/ui';
 
-import { LABELS } from '../../../doc/shortcuts.js';
 import type { CellSelection, Selection } from '../../../doc/selection.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import type { GridCommands } from './commands.js';
@@ -24,10 +23,13 @@ export function frozenOptions(columnCount: number): number[] {
 }
 
 /**
- * The Table menu in the toolbar (GRID-02, GRID-07..11, KEYS-06, A11Y-01): every
- * structural command has a keyboard-reachable home here, beside its shortcut
- * where one exists. Commands that need a cell are present but disabled with
- * the reason (MENU-02). Built on the Radix menu from `@gede/ui`.
+ * The Table menu in the toolbar (GRID-02, GRID-07..08, A11Y-01): the home of
+ * the structure commands no toolbar tool or inspector control carries —
+ * insert above / before, delete, hide and unhide, widen and narrow. Add row
+ * and Add column live in the toolbar, header, footer, frozen columns and wrap
+ * in the Table and Text tabs (DOC-02, ADR-041); this menu does not repeat
+ * them. Commands that need a cell are present but disabled with the reason
+ * (MENU-02). Built on the Radix menu from `@gede/ui`.
  */
 export function TableMenu({ gd, selection, editable, commands }: TableMenuProps) {
   useYVersion(gd.tables);
@@ -55,32 +57,12 @@ export function TableMenu({ gd, selection, editable, commands }: TableMenuProps)
     },
     {
       kind: 'item',
-      id: 'row-below',
-      label: 'Insert row below',
-      shortcut: LABELS.addRow,
-      disabledReason: needsTable,
-      onSelect: () => {
-        commands.insertRowBelow(tableId, cell?.rowId);
-      },
-    },
-    {
-      kind: 'item',
       id: 'row-delete',
       label: 'Delete row',
       danger: true,
       disabledReason: needsCell,
       onSelect: () => {
         commands.deleteRow(tableId, rowId);
-      },
-    },
-    {
-      kind: 'check',
-      id: 'row-wrap',
-      label: 'Wrap row',
-      checked: cell !== null && rowIsWrapped(gd, cell),
-      disabledReason: needsCell,
-      onCheckedChange: (checked) => {
-        commands.setRowWrap(tableId, rowId, checked);
       },
     },
     { kind: 'separator', id: 's1' },
@@ -91,16 +73,6 @@ export function TableMenu({ gd, selection, editable, commands }: TableMenuProps)
       disabledReason: needsCell,
       onSelect: () => {
         commands.insertColumnBefore(tableId, columnId);
-      },
-    },
-    {
-      kind: 'item',
-      id: 'col-after',
-      label: 'Insert column after',
-      shortcut: LABELS.addColumn,
-      disabledReason: needsTable,
-      onSelect: () => {
-        commands.insertColumnAfter(tableId, column?.id);
       },
     },
     {
@@ -153,52 +125,6 @@ export function TableMenu({ gd, selection, editable, commands }: TableMenuProps)
         commands.setColumnWidth(tableId, columnId, (column?.width ?? 1) - 1);
       },
     },
-    {
-      kind: 'check',
-      id: 'col-wrap',
-      label: 'Wrap column text',
-      checked: column?.wrap === true,
-      disabledReason: needsCell,
-      onCheckedChange: (checked) => {
-        commands.setColumnWrap(tableId, columnId, checked);
-      },
-    },
-    { kind: 'separator', id: 's2' },
-    {
-      kind: 'radio',
-      id: 'freeze',
-      label: 'Frozen columns',
-      value: String(record?.frozenColumns ?? 0),
-      onValueChange: (value) => {
-        commands.setFrozenColumns(tableId, Number(value));
-      },
-      options: frozenOptions(record?.columns.length ?? 0).map((n) => ({
-        value: String(n),
-        label: n === 0 ? 'None' : `${String(n)} ${n === 1 ? 'column' : 'columns'}`,
-        disabledReason: needsTable,
-      })),
-    },
-    { kind: 'separator', id: 's3' },
-    {
-      kind: 'check',
-      id: 'header',
-      label: 'Header row',
-      checked: record?.headerRows === 1,
-      disabledReason: needsTable,
-      onCheckedChange: (checked) => {
-        commands.setHeaderRows(tableId, checked ? 1 : 0);
-      },
-    },
-    {
-      kind: 'check',
-      id: 'footer',
-      label: 'Footer',
-      checked: record?.footerRows === 1,
-      disabledReason: needsTable,
-      onCheckedChange: (checked) => {
-        commands.setFooterRows(tableId, checked ? 1 : 0);
-      },
-    },
   ];
 
   return (
@@ -213,9 +139,4 @@ export function TableMenu({ gd, selection, editable, commands }: TableMenuProps)
       }
     />
   );
-}
-
-function rowIsWrapped(gd: GedeDoc, cell: CellSelection): boolean {
-  const map = tableMap(gd, cell.tableId);
-  return map !== null && rowMeta(map, cell.rowId).height === WRAPPED_ROW_HEIGHT;
 }

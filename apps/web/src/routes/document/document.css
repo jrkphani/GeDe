@@ -388,6 +388,10 @@
   position: relative;
   overflow: hidden;
   cursor: grab;
+  /* DOC-04 (#145): a drag on the plane pans or moves; it never selects text across tables
+     and into the chrome. Editable content (the cell editor, the title field) stays selectable:
+     `user-select: auto` on an editable element resolves to `contain`, not to this. */
+  user-select: none;
 }
 .gd-canvas__plane:active {
   cursor: grabbing;
@@ -529,13 +533,40 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* FX-07 / REF-01 (ADR-043, amends ADR-024): a formula's expression and a reference's path
+   render in every row. A compact row (21 px of content) cannot hold a second line above the
+   9 px floor of the type scale (#65), so there the secondary text shares the value's line —
+   after the value and its badge, at the label step, ellipsised — the way the prototype's
+   compact formula cells show the expression at reduced size. A wrapped row (`.gd-cell--wrap`)
+   gives it its own line (formula.css, ref.css). Nothing here changes a row's height. */
+.gd-cell:not(.gd-cell--wrap) .gd-formula,
+.gd-cell:not(.gd-cell--wrap) .gd-ref {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.gd-cell:not(.gd-cell--wrap) .gd-formula__line,
+.gd-cell:not(.gd-cell--wrap) .gd-ref__line {
+  flex: none;
+  max-width: 70%;
+}
+.gd-cell:not(.gd-cell--wrap) .gd-formula__expr,
+.gd-cell:not(.gd-cell--wrap) .gd-ref__path {
+  flex: 1;
+  min-width: 0;
+}
+
 /* GRID-03: inset ring in live amber; A11Y-02 focus ring also stays. */
 .gd-cell--selected {
   box-shadow: inset 0 0 0 2px var(--selection-ring);
 }
+/* A11Y-02 (#145): the focus ring is 2 px at 2 px offset, outside the cell like every other
+   focusable element's. Cells tile edge to edge, so the focused cell is lifted above its
+   neighbours for the ring to show on all four sides; nothing between it and the plane clips. */
 .gd-cell:focus-visible {
+  z-index: 1;
   outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
+  outline-offset: 2px;
 }
 .gd-cell--presence {
   box-shadow: inset 0 0 0 1px var(--gd-presence, var(--presence-1));
@@ -868,6 +899,10 @@ button.gd-cell__chevron:hover {
 
 /* ---- inspector (INSP-01..12, RESP-03, RESP-04) --------------------------- */
 .gd-inspector {
+  /* The rail is the containing block of its own out-of-flow content (the visually hidden
+     reason sentences its controls describe themselves with), so that content scrolls with
+     the rail and never extends the page below the viewport. */
+  position: relative;
   display: flex;
   flex-direction: column;
   width: var(--gd-inspector);
@@ -1253,6 +1288,7 @@ button.gd-cell__chevron:hover {
   padding: 0 var(--space-2);
   border-top: 1px solid var(--border);
   overflow-x: auto;
+  user-select: none;
 }
 .gd-doc__sheets .gd-tabs__list {
   border-bottom: 0;

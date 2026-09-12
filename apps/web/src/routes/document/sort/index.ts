@@ -25,4 +25,4 @@ export {
   type HeaderGlyph,
 } from './HeaderMenu.js';
 export { GroupBand } from './GroupBand.js';
-export { SortPanel, type SortPanelProps } from './SortPanel.js';
+export { SortPanel, type OrganizeSection, type SortPanelProps } from './SortPanel.js';

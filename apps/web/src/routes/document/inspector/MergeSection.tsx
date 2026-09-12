@@ -6,12 +6,11 @@
  * again unchanged. The cell menu offers the same as "Merge with cell to the
  * right / below" and "Unmerge cells".
  */
-import { Button, Tooltip } from '@gede/ui';
 import { mergeRoom, spanAt, spanCovering, tableRecord, type TableMap } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
 import type { CellSelection } from '../selection.js';
-import { Section, Stepper } from './controls.js';
+import { ReasonedButton, Section, Stepper } from './controls.js';
 
 export interface MergeSectionProps {
   table: TableMap;
@@ -67,29 +66,13 @@ export function MergeSection({ table, cell, disabledReason, commands }: MergeSec
             if (cell !== null) commands.mergeCells(cell, { rows: next, cols });
           }}
         />
-        <Tooltip
-          content={
-            unmergeReason === undefined ? 'Unmerge cells' : `Unmerge cells — ${unmergeReason}`
-          }
-        >
-          <Button
-            size="sm"
-            variant="secondary"
-            aria-disabled={unmergeReason !== undefined || undefined}
-            title={
-              unmergeReason === undefined ? 'Unmerge cells' : `Unmerge cells — ${unmergeReason}`
-            }
-            onClick={
-              unmergeReason === undefined && cell !== null
-                ? () => {
-                    commands.unmergeCells(cell);
-                  }
-                : undefined
-            }
-          >
-            Unmerge cells
-          </Button>
-        </Tooltip>
+        <ReasonedButton
+          label="Unmerge cells"
+          reason={unmergeReason}
+          onClick={() => {
+            if (cell !== null) commands.unmergeCells(cell);
+          }}
+        />
       </div>
     </Section>
   );

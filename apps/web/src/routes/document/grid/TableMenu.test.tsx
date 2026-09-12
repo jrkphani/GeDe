@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 describe('TableMenu (A11Y-01, MENU-02)', () => {
-  it('GRID-10 GRID-11 with a table selected, freeze, header and footer work from the menu; cell commands are disabled with the reason', async () => {
+  it('DOC-02 MENU-02 with a table selected, cell commands are disabled with the reason; the menu carries only the commands whose home it is — no Add row, header, footer, frozen or wrap (#140, ADR 41)', async () => {
     render(<TableMenu gd={gd} selection={{ tableId, cell: null }} editable commands={commands} />);
     await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
     expect(screen.getByRole('menuitem', { name: 'Delete row' })).toHaveAttribute(
@@ -45,21 +45,26 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
       'title',
       'select a cell first',
     );
-    await userEvent.click(screen.getByRole('menuitemradio', { name: '2 columns' }));
-    expect(tableById(gd, tableId)?.frozenColumns).toBe(2);
-    await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
-    expect(screen.getByRole('menuitemradio', { name: '2 columns' })).toHaveAttribute(
-      'aria-checked',
-      'true',
+    // MENU-02 (#126): the reason is reachable by assistive tech, not on hover alone.
+    expect(screen.getByRole('menuitem', { name: 'Delete row' })).toHaveAccessibleDescription(
+      'select a cell first',
     );
-    await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Header row' }));
-    expect(tableById(gd, tableId)?.headerRows).toBe(0);
-    await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
-    await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Footer' }));
-    expect(tableById(gd, tableId)?.footerRows).toBe(1);
+    const menu = screen.getByRole('menu');
+    expect(
+      Array.from(menu.querySelectorAll('.gd-menu__label')).map((el) => el.textContent),
+    ).toEqual([
+      'Insert row above',
+      'Delete row',
+      'Insert column before',
+      'Delete column',
+      'Hide column',
+      'Unhide columns',
+      'Widen column',
+      'Narrow column',
+    ]);
   });
 
-  it('GRID-02 GRID-08 GRID-09 with a cell selected, row and column commands act on it: hide, unhide, widen, narrow, wrap, delete', async () => {
+  it('GRID-02 GRID-08 with a cell selected, row and column commands act on it: hide, unhide, widen, narrow, delete', async () => {
     const rec = tableById(gd, tableId)!;
     const cell = { rowId: rec.rows[0]!, colId: rec.columns[1]!.id };
     const view = render(
@@ -76,12 +81,6 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     await open();
     await userEvent.click(screen.getByRole('menuitem', { name: 'Narrow column' }));
     expect(tableById(gd, tableId)?.columns[1]?.width).toBe(1);
-    await open();
-    await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Wrap column text' }));
-    expect(tableById(gd, tableId)?.columns[1]?.wrap).toBe(true);
-    await open();
-    await userEvent.click(screen.getByRole('menuitemcheckbox', { name: 'Wrap row' }));
-    expect(announce).toHaveBeenCalledWith('Wrapped the row');
     await open();
     await userEvent.click(screen.getByRole('menuitem', { name: 'Hide column' }));
     expect(tableById(gd, tableId)?.columns[1]?.hidden).toBe(true);
@@ -121,7 +120,7 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
       expect(item).toHaveAttribute('aria-disabled', 'true');
       expect(item).toHaveAttribute('title', 'you have view-only access');
     }
-    expect(screen.getAllByRole('menuitem').length).toBeGreaterThanOrEqual(9);
+    expect(screen.getAllByRole('menuitem').length).toBe(8);
   });
 
   it('GRID-10 frozen-column choices run to every count short of the whole table — no other cap', () => {

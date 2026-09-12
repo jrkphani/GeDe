@@ -82,6 +82,10 @@ export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderM
   // The popover anchors to the ▼'s wrapper; an element, so Radix can measure it.
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
+  // The scope the open panel edits, fixed when it opens: a filter that read every column keeps
+  // that scope for the whole edit, even through a keystroke that empties the field (live writes
+  // clear the stored filter, which would otherwise re-scope the next one to this column).
+  const [panelScope, setPanelScope] = useState<Id | null>(null);
   // Set when "Filter this column…" was chosen: the menu's close hands focus to the panel.
   const openFilterOnClose = useRef(false);
   const mode = sortModeOf(view, column.id);
@@ -150,6 +154,7 @@ export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderM
             if (!openFilterOnClose.current) return;
             openFilterOnClose.current = false;
             event.preventDefault();
+            setPanelScope(filteredHere && filter.colId === null ? null : column.id);
             setFilterOpen(true);
           }}
           trigger={
@@ -185,13 +190,10 @@ export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderM
             initial={
               filteredHere ? filter : { colId: column.id, text: '', fuzzy: true, facet: null }
             }
-            onApply={(next) => {
-              // A filter that read every column keeps that scope; a new one reads this column.
-              commands.setFilter(tableId, {
-                ...next,
-                colId: filteredHere && filter.colId === null ? null : column.id,
-              });
-              setFilterOpen(false);
+            onChange={(next, settled) => {
+              // INSP-12: live. A filter that read every column keeps that scope; a new one
+              // reads this column. Escape closes the panel; focus returns to the ▼ (MENU-05).
+              commands.setFilter(tableId, { ...next, colId: panelScope }, { announce: settled });
             }}
             onClear={() => {
               commands.setFilter(tableId, null);
@@ -208,22 +210,45 @@ export interface FilterFormProps {
   /** Names the scope in the field label; null when the filter reads every column. */
   columnLabel: string | null;
   initial: TableFilter;
-  onApply: (filter: TableFilter) => void;
+  /**
+   * INSP-12: called on every change, live. `settled` is true when the change is
+   * a whole step (a switch, a facet, Enter, or the field losing focus) and
+   * false per keystroke, so the caller can announce once rather than per key.
+   */
+  onChange: (filter: TableFilter, settled: boolean) => void;
   onClear: () => void;
 }
 
 /**
- * The contains / fuzzy / facet form (SORT-01, SORT-03, SORT-04). Draft state
- * only — nothing reaches the document until Apply, so typing never re-filters
- * the table under the person's hands.
+ * The contains / fuzzy / facet form (SORT-01, SORT-03, SORT-04). Live: every
+ * change reaches the viewer's own view at once (INSP-12 — no Apply step); a
+ * view is per user (ADR-026), so nothing here ever waits on sync.
  */
-export function FilterForm({ columnLabel, initial, onApply, onClear }: FilterFormProps) {
+export function FilterForm({ columnLabel, initial, onChange, onClear }: FilterFormProps) {
   const [text, setText] = useState(initial.text);
   const [fuzzy, setFuzzy] = useState(initial.fuzzy);
   const [facet, setFacet] = useState(initial.facet);
+  // Keystrokes since the last settle: a blur announces only what typing changed, so tabbing
+  // through an untouched field (empty or not) never announces "Filter cleared" for nothing.
+  const typed = useRef(false);
+  const emit = (
+    next: { text?: string; fuzzy?: boolean; facet?: TableFilter['facet'] },
+    settled: boolean,
+  ) => {
+    onChange(
+      {
+        colId: initial.colId,
+        text: (next.text ?? text).trim(),
+        fuzzy: next.fuzzy ?? fuzzy,
+        facet: next.facet === undefined ? facet : next.facet,
+      },
+      settled,
+    );
+  };
   const submit = (e: SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
-    onApply({ colId: initial.colId, text: text.trim(), fuzzy, facet });
+    typed.current = false;
+    emit({}, true);
   };
   return (
     <form className="gd-filter" onSubmit={submit}>
@@ -232,17 +257,33 @@ export function FilterForm({ columnLabel, initial, onApply, onClear }: FilterFor
         value={text}
         onChange={(e) => {
           setText(e.target.value);
+          typed.current = true;
+          emit({ text: e.target.value }, false);
+        }}
+        onBlur={() => {
+          if (!typed.current) return;
+          typed.current = false;
+          emit({}, true);
         }}
         autoComplete="off"
         spellCheck={false}
       />
-      <Switch label="Fuzzy match — tolerates typos" checked={fuzzy} onCheckedChange={setFuzzy} />
+      <Switch
+        label="Fuzzy match — tolerates typos"
+        checked={fuzzy}
+        onCheckedChange={(on) => {
+          setFuzzy(on);
+          emit({ fuzzy: on }, true);
+        }}
+      />
       <Select
         label="Has an entity"
         size="sm"
         value={facet ?? 'none'}
         onValueChange={(v) => {
-          setFacet(isFacetKind(v) ? v : null);
+          const next = isFacetKind(v) ? v : null;
+          setFacet(next);
+          emit({ facet: next }, true);
         }}
         options={[
           { value: 'none', label: 'Any text' },
@@ -252,9 +293,6 @@ export function FilterForm({ columnLabel, initial, onApply, onClear }: FilterFor
       <div className="gd-filter__actions">
         <Button size="sm" variant="ghost" onClick={onClear}>
           Clear filter
-        </Button>
-        <Button size="sm" variant="primary" type="submit">
-          Apply
         </Button>
       </div>
     </form>

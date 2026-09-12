@@ -25,6 +25,8 @@ export function useRoving(count: number): Roving {
   const onKeyDown = useCallback(
     (event: ReactKeyboardEvent) => {
       if (event.nativeEvent.isComposing || count === 0) return false;
+      // A modified arrow is someone else's chord (⇧⌘→ steps to the next object, ADR-042).
+      if (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) return false;
       let next: number | null = null;
       switch (event.code) {
         case 'ArrowRight':

@@ -19,6 +19,7 @@ import type { Page } from '@playwright/test';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
+import type * as Y from 'yjs';
 import {
   createSheet,
   createTable,
@@ -283,7 +284,8 @@ test.describe('inspector rail', () => {
     await firstCell(page).click();
     const rail = inspector(page);
     await expect(rail.getByRole('tab', { name: 'Table' })).toHaveAttribute('aria-selected', 'true');
-    await rail.getByRole('switch', { name: 'Header row' }).click();
+    // INSP-04 (#138): header row and footer row are counts.
+    await rail.getByRole('button', { name: 'Fewer header rows' }).click();
     await expect
       .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()))
       .toContain('"headerRows":0');
@@ -321,6 +323,96 @@ test.describe('inspector rail', () => {
     await expect(rail.getByRole('tab', { name: 'Categories' })).toBeVisible();
     await checkA11y('inspector organize 1440');
   });
+
+  for (const width of [1024, 1440] as const) {
+    test(`INSP-01 INSP-03 INSP-04 INSP-11 INSP-12 GRID-09 at ${String(width)} the final-audit fixes: Organize tabs each show their own section, the filter applies live, the head states the grouping, Wrap every row unwraps, disabled controls look disabled with a reachable reason — axe light and dark (#138, #128, #126)`, async ({
+      page,
+      checkA11y,
+      snapshot,
+    }) => {
+      await openDoc(page, width);
+      await firstCell(page).click();
+      const rail = inspector(page);
+      if ((await rail.getAttribute('data-state')) === 'collapsed') {
+        await rail.getByRole('button', { name: 'Expand inspector' }).click();
+      }
+      // INSP-04 / GRID-09 (#128): the switch reads the state it set and unwraps again.
+      const wrap = rail.getByRole('switch', { name: 'Wrap every row' });
+      const grid = page.getByRole('grid').first();
+      await expect(wrap).toHaveAttribute('aria-checked', 'false');
+      await wrap.click();
+      await expect(wrap).toHaveAttribute('aria-checked', 'true');
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '44px');
+      await wrap.click();
+      await expect(wrap).toHaveAttribute('aria-checked', 'false');
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px');
+      // The rail's hidden reason sentences scroll with the rail: the page itself never grows.
+      expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(900);
+      // INSP-11 (#126): aria-disabled controls look disabled and describe their reason.
+      await rail.getByRole('tab', { name: 'Arrange' }).click();
+      const back = rail.getByRole('button', { name: 'Back', exact: true });
+      await expect(back).toHaveAttribute('aria-disabled', 'true');
+      await expect(back).toHaveCSS('cursor', 'not-allowed');
+      await expect(back).toHaveCSS('opacity', '0.45');
+      await expect(back).toHaveAccessibleDescription('the only table on this sheet');
+      // The keyboard reaches the reason: focus opens the tooltip.
+      await back.focus();
+      await expect(page.getByRole('tooltip')).toContainText('the only table on this sheet');
+      // DOC-02 (#140): pin and DAG edges are stated here and toggled in the toolbar.
+      await expect(rail.getByRole('switch', { name: 'Pin to viewport' })).toHaveCount(0);
+      await expect(page.getByTestId('arrange-pinned')).toHaveText('not pinned');
+      await page.getByRole('button', { name: 'Pin to viewport' }).click();
+      await expect(page.getByTestId('arrange-pinned')).toHaveText('pinned');
+      await page.getByRole('button', { name: 'Pin to viewport' }).click();
+      await settled(page, '[data-testid="inspector"]');
+      await checkA11y(`inspector arrange audit ${String(width)}`);
+      await snapshot(`audit-arrange-${String(width)}`);
+      // INSP-01 (#138): the toolbar's Filter opens Organize › Filter, its own section only.
+      await page.getByRole('button', { name: 'Filter', exact: true }).click();
+      await expect(rail.getByRole('tab', { name: 'Filter' })).toHaveAttribute(
+        'aria-selected',
+        'true',
+      );
+      const filterPanel = rail.getByRole('tabpanel', { name: 'Filter' });
+      await expect(filterPanel.getByRole('combobox', { name: 'Group rows by' })).toHaveCount(0);
+      await expect(filterPanel.getByRole('button', { name: 'Apply' })).toHaveCount(0);
+      // INSP-12: live — the rows follow the keystrokes, no Apply.
+      await filterPanel.getByLabel('Any column contains').fill('Lukla');
+      await expect(grid.getByRole('row')).toHaveCount(3); // header + Lukla + the exempt empty row
+      await filterPanel.getByRole('button', { name: 'Clear filter' }).click();
+      await expect(grid.getByRole('row')).toHaveCount(5);
+      // INSP-03: grouping is stated in the head.
+      await rail.getByRole('tab', { name: 'Categories' }).click();
+      const categories = rail.getByRole('tabpanel', { name: 'Categories' });
+      await expect(categories.getByRole('combobox', { name: 'Order' })).toHaveCount(0);
+      await categories.getByRole('combobox', { name: 'Group rows by' }).click();
+      await page.getByRole('option', { name: 'Column 1' }).click();
+      await expect(rail.getByTestId('inspector-selected')).toContainText('grouped by Column 1');
+      // The list's exit motion keeps it (and its aria-hidden mark) mounted for a moment.
+      await expect(page.getByRole('listbox')).toHaveCount(0);
+      await settled(page, '[data-testid="inspector"]');
+      await checkA11y(`inspector organize audit ${String(width)}`);
+      await snapshot(`audit-organize-${String(width)}`);
+      await page.evaluate(() => {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      });
+      await settled(page, '.gd-doc');
+      await checkA11y(`inspector organize audit ${String(width)} dark`);
+      await snapshot(`audit-organize-${String(width)}-dark`);
+      await rail.getByRole('tab', { name: 'Sort' }).click();
+      const sortPanel = rail.getByRole('tabpanel', { name: 'Sort' });
+      await expect(sortPanel.getByRole('combobox', { name: 'Order' })).toBeDisabled();
+      await expect(sortPanel).toContainText('pick a column to sort by first');
+      await page.getByRole('button', { name: 'Format inspector' }).click();
+      await rail.getByRole('tab', { name: 'Arrange' }).click();
+      await settled(page, '.gd-doc');
+      await checkA11y(`inspector arrange audit ${String(width)} dark`);
+      await snapshot(`audit-arrange-${String(width)}-dark`);
+      await page.evaluate(() => {
+        document.documentElement.removeAttribute('data-theme');
+      });
+    });
+  }
 
   test('FIND-06 with the rail open the result list lives in the inspector and follows the current match', async ({
     page,
@@ -450,13 +542,16 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
       await snapshot(`appearance-text-${String(width)}-dark`);
       await theme(page, false);
 
-      // Arrange tab: pin, then DAG edges; the pinned copy sits in the non-panning layer.
+      // Arrange tab states pin and DAG edges; the toolbar toggles them (DOC-02, ADR-041). The
+      // pinned copy sits in the non-panning layer.
       await rail.getByRole('tab', { name: 'Arrange' }).click();
-      await rail.getByRole('switch', { name: 'Pin to viewport' }).click();
+      await page.getByRole('button', { name: 'Pin to viewport' }).click();
       await expect(page.getByTestId('pinned-layer').getByRole('grid')).toBeVisible();
       await expect(page.getByTestId('pinned-ghost')).toHaveAttribute('inert', '');
-      await rail.getByRole('switch', { name: 'DAG edges' }).click();
+      await expect(page.getByTestId('arrange-pinned')).toHaveText('pinned');
+      await page.getByRole('button', { name: 'DAG edges' }).click();
       await expect(page.getByTestId('dag-edges')).toHaveAttribute('data-count', '0');
+      await expect(page.getByTestId('arrange-edges')).toHaveText('shown');
       await settled(page, '[data-testid="inspector"]');
       await checkA11y(`inspector arrange tab appearance ${String(width)}`);
       await snapshot(`appearance-arrange-${String(width)}`);
@@ -464,7 +559,7 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
       await checkA11y(`inspector arrange tab appearance ${String(width)} dark`);
       await snapshot(`appearance-arrange-${String(width)}-dark`);
       await theme(page, false);
-      await rail.getByRole('switch', { name: 'Pin to viewport' }).click();
+      await page.getByRole('button', { name: 'Pin to viewport' }).click();
       await expect(page.getByTestId('pinned-layer')).toHaveCount(0);
     });
   }
@@ -679,6 +774,12 @@ test.describe('context menus', () => {
     await grid.getByRole('columnheader').nth(2).click({ button: 'right' });
     const menu = page.getByRole('menu', { name: 'Column menu' });
     await expect(menu).toBeVisible();
+    // MENU-05 (#131): Escape returns focus to the header the menu opened on.
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    await expect(grid.getByRole('columnheader').nth(2)).toBeFocused();
+    await grid.getByRole('columnheader').nth(2).click({ button: 'right' });
+    await expect(menu).toBeVisible();
     // INSP-04 / MENU-03: Fit width to content is live — it measures and snaps to whole units.
     await menu.getByRole('menuitem', { name: 'Fit width to content' }).click();
     await expect(page.getByTestId('live-region')).toHaveText(/Fitted 1 column to content/);
@@ -693,6 +794,59 @@ test.describe('context menus', () => {
     await page.getByRole('menuitem', { name: 'Hide column' }).click();
     await expect(grid.getByRole('columnheader')).toHaveCount(2);
   });
+
+  for (const width of [1024, 1440] as const) {
+    test(`MENU-03 REF-05 INSP-10 at ${String(width)} the column menu's clipboard acts on the right-clicked column, not the selected cell, and is disabled on a derived column with the reason — axe light and dark (#123)`, async ({
+      page,
+      checkA11y,
+      snapshot,
+    }) => {
+      const room = await openDoc(page, width);
+      const grid = page.getByRole('grid').first();
+      const cells = grid.getByRole('gridcell');
+      // B5 holds Kathmandu and is selected; the menu opens on column 3's header.
+      await cells.first().click();
+      await grid.getByRole('columnheader').nth(2).click({ button: 'right' });
+      const menu = page.getByRole('menu', { name: 'Column menu' });
+      await expect(menu).toBeVisible();
+      await expect(menu.getByRole('menuitem', { name: 'Clear column' })).toBeVisible();
+      await expect(menu.getByRole('menuitem', { name: /^Copy$/ })).toHaveCount(0);
+      await settled(page, '[role="menu"]');
+      await checkA11y(`column menu clipboard ${String(width)}`);
+      await snapshot(`column-menu-${String(width)}`);
+      await page.evaluate(() => {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      });
+      // The chrome's colours transition with the theme; axe must sample settled colours.
+      await settled(page, '[role="menu"]');
+      await settled(page, '.gd-doc');
+      await checkA11y(`column menu clipboard ${String(width)} dark`);
+      await snapshot(`column-menu-${String(width)}-dark`);
+      await page.evaluate(() => {
+        document.documentElement.removeAttribute('data-theme');
+      });
+      await menu.getByRole('menuitem', { name: 'Clear column' }).click();
+      await expect(page.getByTestId('live-region')).toHaveText(/Cleared column Column 3/);
+      // The selected cell in column 1 is untouched.
+      await expect(cells.first()).toHaveText('Kathmandu');
+      // A derived column refuses the writes with the reason; Copy stays. (The collaborator's
+      // replica marks the column derived — the shape REF-04 stores, without its pipeline.)
+      const gd = openDocument(room.doc);
+      const tableId = Object.keys(room.doc.getMap('tables').toJSON())[0]!;
+      const columns = gd.tables.get(tableId)!.get('columns') as Y.Array<Y.Map<unknown>>;
+      columns.get(2).set('source', 'derived');
+      await grid.getByRole('columnheader').nth(2).click({ button: 'right' });
+      await expect(menu).toBeVisible();
+      const cut = menu.getByRole('menuitem', { name: 'Cut column' });
+      await expect(cut).toHaveAttribute('aria-disabled', 'true');
+      await expect(cut).toHaveAttribute('title', 'derived columns are read-only');
+      await expect(cut).toHaveAccessibleDescription('derived columns are read-only');
+      await expect(
+        menu.getByRole('menuitem', { name: 'Copy column', exact: true }),
+      ).not.toHaveAttribute('aria-disabled', 'true');
+      await page.keyboard.press('Escape');
+    });
+  }
 
   test.describe('touch', () => {
     test.use({ hasTouch: true });
@@ -777,7 +931,81 @@ test.describe('keyboard map', () => {
       'aria-keyshortcuts',
       'Shift+/',
     );
+    // KEYS-01 (#136): `?` opens the sheet from an armed cell too; nothing starts an edit.
+    await firstCell(page).click();
+    await page.keyboard.press('Shift+Slash');
+    await expect(sheet).toBeVisible();
+    await expect(page.locator('.gd-cell__editor')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(sheet).toHaveCount(0);
+    // KEYS-08 (#136): the chords that had no other route have one — the Document menu.
+    await page.getByRole('button', { name: 'Document menu' }).click();
+    const documentMenu = page.getByRole('menu', { name: 'Document' });
+    await expect(documentMenu.getByRole('menuitem', { name: /Open the library/ })).toContainText(
+      '⌘O',
+    );
+    await expect(documentMenu.getByRole('menuitem', { name: /Undo/ })).toContainText('⌘Z');
+    await settled(page, '[role="menu"]');
+    await checkA11y('document menu 1440');
+    await page.keyboard.press('Escape');
   });
+
+  for (const width of [1024, 1440] as const) {
+    test(`A11Y-01 A11Y-02 DOC-04 at ${String(width)} ⇧⌘→ reaches a graph from a table without a pointer, the cell focus ring sits 2 px outside, and a drag over a table selects no text — axe light and dark (#131, #145)`, async ({
+      page,
+      checkA11y,
+      snapshot,
+    }) => {
+      await openDoc(page, width);
+      // A graph pair bound to a shaped table, so the sheet has objects Tab cannot reach.
+      await page.getByRole('button', { name: 'Add graph' }).click();
+      await page.getByRole('button', { name: 'Add shaped table' }).click();
+      await expect(page.locator('[data-graph-id]').first()).toBeVisible();
+      const cell = firstCell(page);
+      await cell.click();
+      await page.keyboard.press(`Shift+${mod}+ArrowRight`);
+      await page.keyboard.press(`Shift+${mod}+ArrowRight`);
+      const header = page.locator('[data-graph-id] .gd-graph__header').first();
+      await expect(header).toBeFocused();
+      // The chord reveals the object it lands on: the graph sits below the tables, and the
+      // viewport panned to it (ADR-042).
+      await expect(header).toBeInViewport();
+      await page.keyboard.press(`Shift+${mod}+ArrowLeft`);
+      await expect(page.locator('[role="gridcell"]:focus')).toHaveCount(1);
+      await expect(page.locator('[role="gridcell"]:focus')).toBeInViewport();
+      // A11Y-02 (#145): a cell focused from the keyboard shows the ring 2 px outside its edge.
+      await page.keyboard.press('ArrowRight');
+      const focused = page.locator('[role="gridcell"]:focus');
+      await expect(focused).toHaveCount(1);
+      const ring = await focused.evaluate((el) => {
+        const s = getComputedStyle(el);
+        return { width: s.outlineWidth, offset: s.outlineOffset, style: s.outlineStyle };
+      });
+      expect(ring).toEqual({ width: '2px', offset: '2px', style: 'solid' });
+      await settled(page, '[data-testid="inspector"]');
+      await checkA11y(`document objects ${String(width)}`);
+      await snapshot(`audit-objects-${String(width)}`);
+      await page.evaluate(() => {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      });
+      await settled(page, '.gd-doc');
+      await checkA11y(`document objects ${String(width)} dark`);
+      await snapshot(`audit-objects-${String(width)}-dark`);
+      await page.evaluate(() => {
+        document.documentElement.removeAttribute('data-theme');
+      });
+      // DOC-04 (#145): a drag from a cell to the plane selects no text. The focused cell: the
+      // object chords revealed each object in turn, so the first table may have panned away.
+      const box = await focused.boundingBox();
+      const plane = await page.getByTestId('plane').boundingBox();
+      if (!box || !plane) throw new Error('no box');
+      await page.mouse.move(box.x + 5, box.y + 5);
+      await page.mouse.down();
+      await page.mouse.move(plane.x + plane.width - 40, plane.y + plane.height - 40, { steps: 8 });
+      await page.mouse.up();
+      expect(await page.evaluate(() => String(getSelection()?.type))).not.toBe('Range');
+    });
+  }
 
   test.describe('clipboard, no permissions', () => {
     // ADR-028: the keyboard route is the browser's own copy / paste command and needs no

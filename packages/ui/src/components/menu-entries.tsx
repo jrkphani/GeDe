@@ -6,7 +6,7 @@
  * command carries its reason in both (MENU-02).
  */
 import clsx from 'clsx';
-import type { ElementType, ReactNode } from 'react';
+import { useId, type ElementType, type ReactNode } from 'react';
 
 export interface MenuRadioOption<V extends string = string> {
   value: V;
@@ -83,14 +83,31 @@ function Check() {
   );
 }
 
-function itemProps(disabledReason: string | undefined, danger = false) {
+/**
+ * MENU-02: a disabled item keeps its reason where a pointer (`title`) and
+ * assistive tech (`aria-describedby` to a visually hidden sentence inside the
+ * item) can each reach it; Radix skips disabled items with the arrows, so the
+ * sentence is what a screen reader's virtual cursor finds.
+ */
+function itemProps(id: string, disabledReason: string | undefined, danger = false) {
   const disabled = disabledReason !== undefined;
   return {
     className: clsx('gd-menu__item', { 'gd-menu__item--danger': danger }),
     disabled,
     title: disabledReason,
     'aria-disabled': disabled || undefined,
+    'aria-describedby': disabled ? id : undefined,
   };
+}
+
+function Reason({ id, reason }: { id: string; reason: string | undefined }) {
+  if (reason === undefined) return null;
+  return (
+    // Hidden from the item's own name (it is content), still what `aria-describedby` reads.
+    <span id={id} className="gd-menu__reason gd-visually-hidden" aria-hidden="true">
+      {reason}
+    </span>
+  );
 }
 
 export function MenuEntries({
@@ -102,6 +119,9 @@ export function MenuEntries({
 }) {
   const { Item, CheckboxItem, RadioGroup, RadioItem, ItemIndicator, Separator, Group, Label } =
     parts;
+  // One prefix per menu instance, so two menus with an entry of the same id never share a reason id.
+  const prefix = useId();
+  const reasonId = (id: string) => `${prefix}reason-${id}`;
   return (
     <>
       {entries.map((e) => {
@@ -114,13 +134,18 @@ export function MenuEntries({
                 <Label className="gd-menu__heading">{e.label}</Label>
                 <RadioGroup value={e.value} onValueChange={e.onValueChange}>
                   {e.options.map((o) => (
-                    <RadioItem key={o.value} value={o.value} {...itemProps(o.disabledReason)}>
+                    <RadioItem
+                      key={o.value}
+                      value={o.value}
+                      {...itemProps(reasonId(`${e.id}-${o.value}`), o.disabledReason)}
+                    >
                       <span className="gd-menu__lead">
                         <ItemIndicator>
                           <Check />
                         </ItemIndicator>
                       </span>
                       <span className="gd-menu__label">{o.label}</span>
+                      <Reason id={reasonId(`${e.id}-${o.value}`)} reason={o.disabledReason} />
                     </RadioItem>
                   ))}
                 </RadioGroup>
@@ -132,7 +157,7 @@ export function MenuEntries({
                 key={e.id}
                 checked={e.checked}
                 onCheckedChange={e.onCheckedChange}
-                {...itemProps(e.disabledReason)}
+                {...itemProps(reasonId(e.id), e.disabledReason)}
               >
                 <span className="gd-menu__lead">
                   <ItemIndicator>
@@ -141,6 +166,7 @@ export function MenuEntries({
                 </span>
                 <span className="gd-menu__label">{e.label}</span>
                 {e.shortcut !== undefined && <kbd className="gd-menu__shortcut">{e.shortcut}</kbd>}
+                <Reason id={reasonId(e.id)} reason={e.disabledReason} />
               </CheckboxItem>
             );
           case 'item':
@@ -148,11 +174,12 @@ export function MenuEntries({
               <Item
                 key={e.id}
                 onSelect={e.onSelect}
-                {...itemProps(e.disabledReason, e.danger === true)}
+                {...itemProps(reasonId(e.id), e.disabledReason, e.danger === true)}
               >
                 <span className="gd-menu__lead" />
                 <span className="gd-menu__label">{e.label}</span>
                 {e.shortcut !== undefined && <kbd className="gd-menu__shortcut">{e.shortcut}</kbd>}
+                <Reason id={reasonId(e.id)} reason={e.disabledReason} />
               </Item>
             );
         }

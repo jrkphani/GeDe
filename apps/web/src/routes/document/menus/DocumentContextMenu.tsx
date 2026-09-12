@@ -58,6 +58,16 @@ export function resolveMenuTarget(gd: GedeDoc, node: EventTarget | null): MenuTa
   return null;
 }
 
+function selectedCellElement(): HTMLElement | null {
+  return document.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]');
+}
+
+function selectedKey(cell: HTMLElement | null): string | null {
+  if (cell === null) return null;
+  const table = cell.closest<HTMLElement>('[data-table-id]');
+  return `${table?.dataset.tableId ?? ''}:${cell.dataset.rowId ?? ''}:${cell.dataset.colId ?? ''}`;
+}
+
 /**
  * MENU-01..05: one Radix ContextMenu over the whole document body. A
  * right-click, long-press (RESP-03) or Shift+F10 / ContextMenu key resolves
@@ -93,6 +103,9 @@ export function DocumentContextMenu({
     event.preventDefault();
     event.stopPropagation();
   };
+  // The cell selected as the menu opened (the right-click selects first), so the close can
+  // tell whether a command moved the selection.
+  const selectionAtOpen = useRef<string | null>(null);
   const entries = target === null ? [] : menuEntriesFor(context, target);
   return (
     <ContextMenu
@@ -103,11 +116,17 @@ export function DocumentContextMenu({
         if (!open) setTarget(null);
         onOpenChange?.(open);
       }}
-      // MENU-05: back to the cell that had focus — or to the cell a command just selected
-      // (an inserted row, the neighbour of a deleted one), which is where the keyboard should be.
-      returnFocus={(opener) =>
-        document.querySelector<HTMLElement>('[role="gridcell"][aria-selected="true"]') ?? opener
-      }
+      // MENU-05: back to the trigger — the header a column menu opened on, or the cell that had
+      // focus — unless a command moved the selection (an inserted row, the neighbour of a deleted
+      // one), in which case the new cell is where the keyboard should be.
+      returnFocus={(opener) => {
+        const selected = selectedCellElement();
+        const moved = selectedKey(selected) !== selectionAtOpen.current;
+        if (!moved && opener?.isConnected === true && opener.matches('[role="columnheader"]')) {
+          return opener;
+        }
+        return selected ?? opener;
+      }}
       trigger={
         <div
           className="gd-doc__menu-scope"
@@ -166,8 +185,20 @@ export function DocumentContextMenu({
             // A right-click selects like a left-click does (desktop parity, MENU-01).
             if (next.kind === 'cell') {
               actions.selectCell({ tableId: next.tableId, rowId: next.rowId, colId: next.colId });
-            } else if (next.kind === 'column' || next.kind === 'table') {
-              if (context.selectedCell?.tableId !== next.tableId) actions.selectTable(next.tableId);
+              selectionAtOpen.current = `${next.tableId}:${next.rowId}:${next.colId}`;
+            } else {
+              if (next.kind === 'column' || next.kind === 'table') {
+                if (context.selectedCell?.tableId !== next.tableId)
+                  actions.selectTable(next.tableId);
+              }
+              selectionAtOpen.current = selectedKey(selectedCellElement());
+              // MENU-05: the header is the trigger of a column menu, so focus can come back to it
+              // (headers take focus only this way — they are not in the tab order).
+              if (next.kind === 'column' && event.target instanceof Element) {
+                event.target
+                  .closest<HTMLElement>('[role="columnheader"]')
+                  ?.focus({ preventScroll: true });
+              }
             }
           }}
         >

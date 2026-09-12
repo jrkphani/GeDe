@@ -1,14 +1,15 @@
 import { useMemo } from 'react';
-import { Button, SegmentedControl, Select, Switch, TextField, Tooltip } from '@gede/ui';
+import { SegmentedControl, Select, Switch, TextField } from '@gede/ui';
 import {
   GRIDLINE_DENSITIES,
   GRIDLINE_LABELS,
   OUTLINE_WEIGHTS,
+  rowHeights,
   setTableLook,
   TABLE_STYLE_LABELS,
   TABLE_STYLES,
   tableRecord,
-  tableWraps,
+  WRAPPED_ROW_HEIGHT,
   type GedeDoc,
   type OutlineWeight,
   type TableMap,
@@ -23,7 +24,7 @@ import type { GridCommands } from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
 import type { Selection } from '../selection.js';
 import { canvasMeasure, fitColumnsToContent, fitRowsToContent } from '../style/index.js';
-import { Section, Stepper } from './controls.js';
+import { ReasonedButton, Section, Stepper } from './controls.js';
 
 export interface TableTabProps {
   gd: GedeDoc;
@@ -55,7 +56,10 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
   const rows = record.rows.length;
   const columns = record.columns.length;
   const visibleWidth = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);
-  const wrapped = tableWraps(record);
+  // GRID-09 / #128: the switch reads what the rows are — every drawn row at two units, whether
+  // from its own height or from a wrapping column — so its state answers the click that set it.
+  const drawn = rowHeights(table, record).filter((h) => h > 0);
+  const wrapped = drawn.length > 0 && drawn.every((h) => h === WRAPPED_ROW_HEIGHT);
   const lastRow = record.rows[rows - 1];
   const lastColumn = record.columns[columns - 1];
   const { look } = record;
@@ -144,14 +148,22 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           )}
         </div>
       </Section>
-      <Section label="headers and footer">
+      {/* INSP-04 / GRID-11: header row, header column and footer row *counts* — 0 or 1 for the
+          rows (the lattice has one header strip and one footer strip), any count short of every
+          column for the frozen columns. This tab is their one home (DOC-02, ADR-041). */}
+      <Section label="headers and footer" hint="0 hides the strip, 1 shows it.">
         <div className="gd-insp__stack">
-          <Switch
-            label="Header row"
-            checked={record.headerRows === 1}
-            disabled={!editable}
-            onCheckedChange={(on) => {
-              commands.setHeaderRows(record.id, on ? 1 : 0);
+          <Stepper
+            label="Header rows"
+            unit={record.headerRows === 1 ? 'row' : 'rows'}
+            name="header rows"
+            value={record.headerRows}
+            min={0}
+            max={1}
+            disabledReason={viewOnly}
+            decrementReason="the header row is hidden"
+            onChange={(next) => {
+              commands.setHeaderRows(record.id, next === 0 ? 0 : 1);
             }}
           />
           <Select
@@ -167,12 +179,17 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
               label: n === 0 ? 'None' : `${String(n)} ${n === 1 ? 'column' : 'columns'}`,
             }))}
           />
-          <Switch
-            label="Footer row"
-            checked={record.footerRows === 1}
-            disabled={!editable}
-            onCheckedChange={(on) => {
-              commands.setFooterRows(record.id, on ? 1 : 0);
+          <Stepper
+            label="Footer rows"
+            unit={record.footerRows === 1 ? 'row' : 'rows'}
+            name="footer rows"
+            value={record.footerRows}
+            min={0}
+            max={1}
+            disabledReason={viewOnly}
+            decrementReason="the footer is hidden"
+            onChange={(next) => {
+              commands.setFooterRows(record.id, next === 0 ? 0 : 1);
             }}
           />
         </div>
@@ -257,11 +274,11 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             checked={wrapped}
             disabled={!editable}
             onCheckedChange={(on) => {
-              commands.scaleTable(record.id, { wrapped: on });
+              commands.setTableWrapped(record.id, on);
             }}
           />
           <div className="gd-insp__row">
-            <FitButton
+            <ReasonedButton
               label="Fit rows to content"
               reason={fitReason}
               onClick={() => {
@@ -270,7 +287,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
                   commands.fitRows(record.id, fitRowsToContent(table, record, options));
               }}
             />
-            <FitButton
+            <ReasonedButton
               label="Fit columns to content"
               reason={fitReason}
               onClick={() => {
@@ -287,30 +304,5 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
         <HierarchyPanel gd={gd} selection={selection} commands={commands} editable={editable} />
       </Section>
     </>
-  );
-}
-
-function FitButton({
-  label,
-  reason,
-  onClick,
-}: {
-  label: string;
-  reason: string | undefined;
-  onClick: () => void;
-}) {
-  const title = reason === undefined ? label : `${label} — ${reason}`;
-  return (
-    <Tooltip content={title}>
-      <Button
-        size="sm"
-        variant="secondary"
-        aria-disabled={reason !== undefined || undefined}
-        title={title}
-        onClick={reason === undefined ? onClick : undefined}
-      >
-        {label}
-      </Button>
-    </Tooltip>
   );
 }

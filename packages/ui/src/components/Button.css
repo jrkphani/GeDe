@@ -72,21 +72,21 @@
   --gd-btn-fg: var(--action-primary-fg);
   --gd-btn-border: var(--action-primary-bg);
 }
-.gd-btn--primary:hover:not(:disabled) {
+.gd-btn--primary:hover:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: color-mix(in srgb, var(--action-primary-bg) 88%, var(--forest-900));
   --gd-btn-border: var(--gd-btn-bg);
 }
-.gd-btn--primary:active:not(:disabled) {
+.gd-btn--primary:active:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: var(--forest-900);
   --gd-btn-border: var(--forest-900);
 }
 
-.gd-btn--secondary:hover:not(:disabled) {
+.gd-btn--secondary:hover:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: var(--surface-sunken);
 }
 /* Pressed and ghost tints derive from the semantic tokens so they read on both themes:
    a light primitive (slate-200, forest-50) would sit as a pale slab on the dark surface. */
-.gd-btn--secondary:active:not(:disabled) {
+.gd-btn--secondary:active:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: color-mix(in srgb, var(--ink) 12%, var(--surface));
 }
 
@@ -95,10 +95,10 @@
   --gd-btn-fg: var(--link);
   --gd-btn-border: transparent;
 }
-.gd-btn--ghost:hover:not(:disabled) {
+.gd-btn--ghost:hover:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: color-mix(in srgb, var(--link) 8%, var(--surface));
 }
-.gd-btn--ghost:active:not(:disabled) {
+.gd-btn--ghost:active:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: color-mix(in srgb, var(--link) 16%, var(--surface));
 }
 
@@ -109,15 +109,15 @@
   --gd-btn-fg: var(--surface);
   --gd-btn-border: var(--danger);
 }
-.gd-btn--danger:hover:not(:disabled) {
+.gd-btn--danger:hover:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: color-mix(in srgb, var(--danger) 88%, var(--slate-900));
   --gd-btn-border: var(--gd-btn-bg);
 }
-.gd-btn--danger:active:not(:disabled) {
+.gd-btn--danger:active:not(:disabled, [aria-disabled='true']) {
   --gd-btn-bg: color-mix(in srgb, var(--danger) 76%, var(--slate-900));
 }
 
-.gd-btn:active:not(:disabled) {
+.gd-btn:active:not(:disabled, [aria-disabled='true']) {
   transform: translateY(1px);
 }
 
@@ -125,7 +125,10 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 35%, transparent);
 }
 
-.gd-btn:disabled {
+/* INSP-11 / MENU-02: a button that says it is unavailable (`aria-disabled`, kept focusable so
+   its reason can be reached from the keyboard) looks exactly as a native disabled one does. */
+.gd-btn:disabled,
+.gd-btn[aria-disabled='true'] {
   opacity: 0.45;
   cursor: not-allowed;
 }

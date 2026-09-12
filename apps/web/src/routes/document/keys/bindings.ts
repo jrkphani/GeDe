@@ -54,12 +54,17 @@ export interface KeyHandlers {
     toggleInspector: () => void;
     showInspector: (mode: InspectorMode) => void;
     toggleShortcutSheet: () => void;
+    /** ADR-042 ⇧⌘→ / ⇧⌘←: focus the next or previous object on the sheet (A11Y-01). */
+    nextObject: () => void;
+    previousObject: () => void;
   };
   edit: {
     undo: () => void;
     redo: () => void;
     selectAll: () => void;
     clear: () => void;
+    /** ⌫ with a table selected and no cell armed: say what it would need (ADR-042). */
+    clearNeedsCell?: (() => void) | undefined;
     clearSelection: () => void;
     toggleMark: (mark: ToggleMark) => void;
   };
@@ -150,6 +155,22 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
     { id: 'fit', chord: CHORDS.fit, label: LABELS.fit, run: h.view.fit },
     // ⌃⇥ / ⌃⇧⇥ (KEYS-07) are the browser's tab switch everywhere: reserved on the
     // sheet, not bound; the sheet strip is the route (KEYS-08).
+    // ⇧⌘→ / ⇧⌘← (ADR-042): the next or previous object on the sheet, from anywhere
+    // in the document — a cell, a graph node, the toolbar.
+    {
+      id: 'nextObject',
+      chord: CHORDS.nextObject,
+      label: LABELS.nextObject,
+      run: h.view.nextObject,
+      disabled: h.editing,
+    },
+    {
+      id: 'previousObject',
+      chord: CHORDS.previousObject,
+      label: LABELS.previousObject,
+      run: h.view.previousObject,
+      disabled: h.editing,
+    },
     {
       id: 'inspector',
       chord: CHORDS.inspector,
@@ -251,11 +272,17 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
       disabled: !h.hasSelection || h.editing,
     },
     {
+      // ⌫ clears the armed cell. With the table selected and no cell armed (after ⌘A, or a
+      // press on the title) it says what it would need rather than clearing the table
+      // (ADR-042): the selection model has no range, and a whole table is not one keystroke.
       id: 'clear',
       chord: CHORDS.clear,
       label: LABELS.clear,
-      run: h.edit.clear,
-      disabled: cellEdit,
+      run: () => {
+        if (h.cell === null) h.edit.clearNeedsCell?.();
+        else h.edit.clear();
+      },
+      disabled: !h.editable || h.editing || !h.hasSelection,
     },
     // Format (KEYS-05): on a selected cell the mark covers the whole cell; while
     // editing, the editor binds the same physical keys to the selection.
