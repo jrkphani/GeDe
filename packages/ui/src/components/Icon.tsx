@@ -65,6 +65,8 @@ export const ICON_NAMES = [
   'rule',
   // help control in the library header (ONB-08): a `?` in a ring
   'help',
+  // the + control (LIB-06): a plain plus, as the PRD names it and the prototype draws it
+  'plus',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -180,6 +182,7 @@ const GLYPHS: Record<IconName, Glyph> = {
     d: 'M9 2.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM6.9 7.2a2.1 2.1 0 1 1 3 1.9c-.6.3-.9.8-.9 1.4v.3',
     extra: [{ kind: 'node', cx: 9, cy: 13, r: 0.7 }],
   },
+  plus: { d: 'M9 3v12M3 9h12' },
   apple: {
     d: '',
     extra: [

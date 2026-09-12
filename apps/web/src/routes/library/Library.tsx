@@ -785,14 +785,18 @@ export function Library() {
           autoComplete="off"
         />
         <HelpMenu />
-        <Button
-          icon={<Icon name="add-row" size={15} />}
-          aria-label="New workscape"
-          title="New workscape"
-          onClick={create}
-          loading={creating}
-          loadingLabel="Creating…"
-        />
+        {/* LIB-06: the + control. RESP-02 / non-negotiable 5: creating is an edit
+            affordance, so nothing renders below 768 px (#134). */}
+        {canManage && (
+          <Button
+            icon={<Icon name="plus" size={15} />}
+            aria-label="New workscape"
+            title="New workscape"
+            onClick={create}
+            loading={creating}
+            loadingLabel="Creating…"
+          />
+        )}
         {user && <AccountMenu user={user} onSignOut={signOut} />}
       </header>
 
@@ -866,6 +870,7 @@ export function Library() {
               query={query}
               onCreate={create}
               creating={creating}
+              canCreate={canManage}
             />
           ) : (
             <LibraryTable
@@ -923,12 +928,15 @@ function LibraryEmpty({
   query,
   onCreate,
   creating,
+  canCreate,
 }: {
   view: LibraryView;
   total: number;
   query: string;
   onCreate: () => void;
   creating: boolean;
+  /** RESP-02: no create affordance below 768 px (#134). */
+  canCreate: boolean;
 }) {
   // LIB-04: a search with no matches never shows a blank page.
   if (query.trim() !== '' && total > 0) {
@@ -969,7 +977,16 @@ function LibraryEmpty({
       />
     );
   }
-  // AUTH-10 / LIB-01: first run — one primary action.
+  // AUTH-10 / LIB-01: first run — one primary action; on phone, the read-only note instead.
+  if (!canCreate) {
+    return (
+      <EmptyState
+        label={VIEW_META[view].label.toLowerCase()}
+        title="No workscapes yet"
+        description={`Tables, formulas and context graphs on one shared sheet. ${COPY.phone}: create one from a larger screen.`}
+      />
+    );
+  }
   return (
     <EmptyState
       label={VIEW_META[view].label.toLowerCase()}

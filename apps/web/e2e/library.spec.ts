@@ -370,6 +370,8 @@ test('RESP-02 at 480 the library is read-only: no delete, archive, recover or pu
   await page.getByText('Shared trek').click();
   await expect(page.getByRole('button', { name: /^(Delete|Archive)$/ })).toHaveCount(0);
   await expect(page.getByText('View only on phone')).toBeVisible();
+  // LIB-06 / RESP-02 (#134): no create affordance on phone.
+  await expect(page.getByRole('button', { name: 'New workscape' })).toHaveCount(0);
   await checkA11y('library-phone-read-only');
   await page.getByRole('button', { name: 'Recents', expanded: false }).click();
   await page.getByRole('button', { name: 'Recently Deleted' }).click();

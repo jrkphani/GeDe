@@ -916,6 +916,9 @@ describe('Library', () => {
     await u.click(row);
     expect(screen.queryByRole('button', { name: /^(Delete|Archive)$/ })).not.toBeInTheDocument();
     expect(screen.getByText('View only on phone')).toBeInTheDocument();
+    // LIB-06 / RESP-02 (#134): creating is an edit affordance; the + control is absent.
+    expect(screen.queryByRole('button', { name: 'New workscape' })).not.toBeInTheDocument();
+    expect(docs.createDocument).not.toHaveBeenCalled();
     await u.click(screen.getByRole('button', { name: 'More actions for Everest trek' }));
     const menu = await screen.findByRole('menu');
     expect(
