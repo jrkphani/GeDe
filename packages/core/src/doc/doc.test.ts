@@ -16,7 +16,9 @@ import {
   dedupeSeededSheets,
   deleteTable,
   documentMeta,
+  encodeSeededDocument,
   ensureFirstSheet,
+  FIRST_SHEET_LABEL,
   initials,
   isDocEmpty,
   listSheets,
@@ -24,6 +26,7 @@ import {
   openDocument,
   resizeColumn,
   seedMeta,
+  seedNewDocument,
   setCellText,
   setRowWrapped,
   setTablePosition,
@@ -125,6 +128,54 @@ describe('document schema', () => {
     expect(ensureFirstSheet(gd)).toBe(id);
     expect(listSheets(gd)).toHaveLength(1);
     expect(undo.canUndo()).toBe(false);
+  });
+
+  test('DOC-03 seedNewDocument writes meta and one seeded Sheet 1 in the same shape ensureFirstSheet does, once, never as an undo step', () => {
+    const server = new Y.Doc();
+    const undo = createUndoManager(openDocument(server));
+    const first = seedNewDocument(server, {
+      title: 'Everest trek',
+      createdAt: '2026-09-12T00:00:00Z',
+    });
+    expect(first.seeded).toBe(true);
+    expect(isId(first.sheetId)).toBe(true);
+    expect(undo.canUndo()).toBe(false);
+    // Idempotent: a second call writes nothing and returns the existing sheet.
+    let writes = 0;
+    server.on('update', () => {
+      writes += 1;
+    });
+    expect(seedNewDocument(server, { title: 'Other' })).toEqual({
+      sheetId: first.sheetId,
+      seeded: false,
+    });
+    expect(writes).toBe(0);
+    expect(documentMeta(openDocument(server))).toEqual({
+      title: 'Everest trek',
+      createdAt: '2026-09-12T00:00:00Z',
+    });
+
+    // The client-side fallback produces the same sheet shape (ids differ by construction).
+    const client = fresh();
+    ensureFirstSheet(client);
+    seedMeta(client, { title: 'Everest trek', createdAt: '2026-09-12T00:00:00Z' });
+    const strip = (gd: GedeDoc) => ({
+      meta: gd.meta.toJSON(),
+      sheets: listSheets(gd).map(({ id: _id, ...rest }) => rest),
+    });
+    expect(strip(openDocument(server))).toEqual(strip(client));
+    expect(strip(client).sheets).toEqual([
+      { label: FIRST_SHEET_LABEL, ordinal: 1, seeded: true, parentContext: null },
+    ]);
+
+    // A replica that syncs the server's state is not empty, so the client never seeds again.
+    const replica = fresh();
+    Y.applyUpdate(replica.doc, encodeSeededDocument({ title: 'Everest trek' }));
+    expect(isDocEmpty(replica.doc)).toBe(false);
+    const before = listSheets(replica);
+    expect(ensureFirstSheet(replica)).toBe(before[0]?.id);
+    expect(listSheets(replica)).toEqual(before);
+    expect(dedupeSeededSheets(replica)).toEqual([]);
   });
 
   test('DOC-03 object count per sheet counts tables and graphs on that sheet', () => {

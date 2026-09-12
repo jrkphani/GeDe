@@ -99,6 +99,8 @@ export class FakeRepo implements Repo {
   }
   /** Set to make `purgeDeleted` fail before anything changes. */
   failNextPurge = false;
+  /** Set to make the next `create` fail as a rolled-back transaction would (nothing written). */
+  failNextCreate = false;
 
   ping(): Promise<void> {
     return this.down ? Promise.reject(new Error('connection refused')) : Promise.resolve();
@@ -127,9 +129,14 @@ export class FakeRepo implements Repo {
     return undefined;
   }
 
-  seedDocument(ownerId: string, title = 'Untitled', at = new Date()): DocumentRecord {
+  seedDocument(
+    ownerId: string,
+    title = 'Untitled',
+    at = new Date(),
+    id: string = randomUUID(),
+  ): DocumentRecord {
     const doc: MutableDocument = {
-      id: randomUUID(),
+      id,
       ownerId,
       title,
       linkAccess: 'none',
@@ -235,9 +242,31 @@ export class FakeRepo implements Repo {
       const doc = this.docs.get(id);
       return Promise.resolve(doc ? this.summarise(doc, userId) : undefined);
     },
-    create: ({ ownerId, title }) => {
+    create: ({ id, ownerId, title, snapshot }) => {
       assertText(title);
-      return Promise.resolve(this.seedDocument(ownerId, title));
+      if (this.failNextCreate) {
+        this.failNextCreate = false;
+        return Promise.reject(new Error('simulated insert failure'));
+      }
+      if (this.docs.has(id))
+        return Promise.reject(new Error('duplicate key value (documents_pkey)'));
+      const doc = this.seedDocument(ownerId, title, new Date(), id);
+      // Same transaction as pg.ts: the row points at its seed snapshot and the create is audited.
+      const stored = this.docs.get(doc.id);
+      if (stored) {
+        stored.snapshotKey = snapshot.s3Key;
+        stored.snapshotSeq = snapshot.seq;
+      }
+      this.snapshotsByDoc.set(doc.id, [
+        { seq: snapshot.seq, s3Key: snapshot.s3Key, sizeBytes: snapshot.sizeBytes },
+      ]);
+      this.auditLog.push({
+        documentId: doc.id,
+        userId: ownerId,
+        action: 'document.create',
+        target: null,
+      });
+      return Promise.resolve({ ...doc, snapshotKey: snapshot.s3Key, snapshotSeq: snapshot.seq });
     },
     rename: (id, title) => {
       assertText(title);

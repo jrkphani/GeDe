@@ -7,8 +7,12 @@
  * are Wave 3; only the participant read model exists here. Link access is
  * not granted yet — see the TODO in `permissions.ts`.
  */
+import { randomUUID } from 'node:crypto';
+
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+
+import { encodeSeededDocument } from '@gede/core';
 
 import { currentUser, requireUser, toAuthUser, type AuthUser, type UserResolver } from '../auth.js';
 import type { Deps } from '../deps.js';
@@ -22,7 +26,7 @@ import type {
   ParticipantList,
   ProfilePatch,
 } from '../repo/types.js';
-import { documentPrefix } from '../s3.js';
+import { documentPrefix, snapshotKey } from '../s3.js';
 import type { RoomManager } from '../ws/room-manager.js';
 import { CLOSE_NOT_FOUND } from '../ws/route.js';
 
@@ -79,6 +83,9 @@ function parseId(params: unknown): string {
 }
 
 const NOT_FOUND = () => new AppError(404, 'not_found', 'Nothing at this address');
+
+/** The seed snapshot's sequence number; the first client update is seq 2. */
+export const INITIAL_SNAPSHOT_SEQ = 1;
 
 /** A document as the API returns it. Only `workscape` exists as a kind today. */
 export interface DocumentView {
@@ -225,16 +232,31 @@ export function registerApi(
       api.post('/documents', async (request, reply) => {
         const user = currentUser(request);
         const body = parse(createBody, request.body ?? {}, 'request');
-        const doc = await repo.documents.create({
-          ownerId: user.id,
-          title: body.title ?? 'Untitled',
-        });
-        await repo.audit.record({
-          documentId: doc.id,
-          userId: user.id,
-          action: 'document.create',
-          target: null,
-        });
+        const title = body.title ?? 'Untitled';
+        // DOC-03: the room's initial state is written here, as snapshot seq 1,
+        // so a new document never opens empty and no client ever seeds one.
+        // The S3 object goes first (the row must never point at a missing
+        // snapshot); a failed insert leaves one orphan object, logged with its
+        // key for the operator (README, Runbook).
+        const id = randomUUID();
+        const bytes = encodeSeededDocument({ title });
+        const key = snapshotKey(deps.config.DOCS_PREFIX, id, INITIAL_SNAPSHOT_SEQ);
+        await deps.s3.put(key, bytes);
+        let doc: DocumentRecord;
+        try {
+          doc = await repo.documents.create({
+            id,
+            ownerId: user.id,
+            title,
+            snapshot: { seq: INITIAL_SNAPSHOT_SEQ, s3Key: key, sizeBytes: bytes.byteLength },
+          });
+        } catch (error) {
+          request.log.error(
+            { err: error, documentId: id, key, ref: request.id },
+            'document insert failed after its seed snapshot was written; the object is orphaned',
+          );
+          throw error;
+        }
         return reply.status(201).send({ document: view(doc, 'owner') });
       });
 

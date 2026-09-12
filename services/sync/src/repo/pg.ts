@@ -228,10 +228,27 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         return row ? toSummary(row, userId) : undefined;
       },
 
-      async create({ ownerId, title }) {
-        const [row] = await db.insert(documents).values({ ownerId, title }).returning();
-        if (!row) throw new Error('documents insert returned no row');
-        return toDocument(row);
+      create({ id, ownerId, title, snapshot }) {
+        return db.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(documents)
+            .values({ id, ownerId, title, snapshotKey: snapshot.s3Key, snapshotSeq: snapshot.seq })
+            .returning();
+          if (!row) throw new Error('documents insert returned no row');
+          await tx.insert(snapshots).values({
+            documentId: id,
+            seq: snapshot.seq,
+            s3Key: snapshot.s3Key,
+            sizeBytes: snapshot.sizeBytes,
+          });
+          await tx.insert(auditLog).values({
+            documentId: id,
+            userId: ownerId,
+            action: 'document.create',
+            target: null,
+          });
+          return toDocument(row);
+        });
       },
 
       async rename(id, title) {

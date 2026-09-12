@@ -1,7 +1,17 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import * as Y from 'yjs';
+
+import {
+  documentMeta,
+  ensureFirstSheet,
+  FIRST_SHEET_LABEL,
+  isDocEmpty,
+  listSheets,
+  openDocument,
+} from '@gede/core';
 
 import { json, startServer, type TestServer } from '../test/fakes.js';
-import type { DocumentView } from './api.js';
+import { INITIAL_SNAPSHOT_SEQ, type DocumentView } from './api.js';
 
 interface ErrorBody {
   error: { code: string; message: string; ref: string };
@@ -99,6 +109,55 @@ describe('documents', () => {
     expect(server.repo.auditLog).toEqual([
       expect.objectContaining({ documentId: res.body.document.id, action: 'document.create' }),
     ]);
+  });
+
+  test('DOC-03 POST seeds the room state as snapshot seq 1 in S3, snapshots and the row, in one step', async () => {
+    const res = await json<{ document: DocumentView }>(server, 'POST', '/api/documents', {
+      token: alice,
+      body: { title: 'Everest trek' },
+    });
+    expect(res.status).toBe(201);
+    const id = res.body.document.id;
+    const key = `docs/${id}/${String(INITIAL_SNAPSHOT_SEQ)}.yjs`;
+    const stored = server.repo.docs.get(id);
+    expect(stored).toMatchObject({ snapshotKey: key, snapshotSeq: INITIAL_SNAPSHOT_SEQ });
+    const bytes = server.s3.objects.get(key);
+    expect(bytes).toBeDefined();
+    expect(server.repo.snapshotsByDoc.get(id)).toEqual([
+      { seq: INITIAL_SNAPSHOT_SEQ, s3Key: key, sizeBytes: bytes?.byteLength },
+    ]);
+
+    // What the client will see once it syncs: the same shape ensureFirstSheet
+    // would have produced — meta.title from the record and one seeded Sheet 1.
+    const replica = new Y.Doc();
+    Y.applyUpdate(replica, bytes ?? new Uint8Array());
+    const gd = openDocument(replica);
+    expect(isDocEmpty(replica)).toBe(false);
+    expect(documentMeta(gd).title).toBe('Everest trek');
+    expect(documentMeta(gd).createdAt).not.toBeNull();
+    const sheets = listSheets(gd);
+    expect(sheets.map(({ id: _id, ...rest }) => rest)).toEqual([
+      { label: FIRST_SHEET_LABEL, ordinal: 1, seeded: true, parentContext: null },
+    ]);
+    const local = openDocument(new Y.Doc());
+    ensureFirstSheet(local);
+    expect(listSheets(local).map(({ id: _id, ...rest }) => rest)).toEqual(
+      sheets.map(({ id: _id, ...rest }) => rest),
+    );
+    // The client-side fallback is a no-op on the seeded replica.
+    expect(ensureFirstSheet(gd)).toBe(sheets[0]?.id);
+    expect(listSheets(gd)).toHaveLength(1);
+  });
+
+  test('DOC-03 a failed insert after the seed snapshot answers 500 and leaves no row', async () => {
+    server.repo.failNextCreate = true;
+    const res = await json<ErrorBody>(server, 'POST', '/api/documents', { token: alice });
+    expect(res.status).toBe(500);
+    expect(res.body.error.code).toBe('server_error');
+    expect(server.repo.docs.size).toBe(0);
+    expect(server.repo.auditLog).toEqual([]);
+    // The orphaned seed object is the operator's to remove (it is logged with its key).
+    expect(server.s3.objects.size).toBe(1);
   });
 
   test('LOAD-05 POST accepts a title and rejects an invalid body', async () => {

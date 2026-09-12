@@ -128,7 +128,18 @@ export interface DocumentsRepo {
   get(id: string): Promise<DocumentRecord | undefined>;
   /** The library row for one document as `userId` sees it. Does not check access; callers do. */
   summarise(id: string, userId: string): Promise<DocumentSummary | undefined>;
-  create(input: { ownerId: string; title: string }): Promise<DocumentRecord>;
+  /**
+   * Insert the row already pointing at its initial snapshot (DOC-03: the
+   * seeded Y.Doc the caller has put in S3 as `snapshot.s3Key`), the
+   * `snapshots` row and the `document.create` audit row, in one transaction.
+   * The id is chosen by the caller because the S3 key needs it first.
+   */
+  create(input: {
+    id: string;
+    ownerId: string;
+    title: string;
+    snapshot: { seq: number; s3Key: string; sizeBytes: number };
+  }): Promise<DocumentRecord>;
   rename(id: string, title: string): Promise<DocumentRecord | undefined>;
   softDelete(id: string): Promise<DocumentRecord | undefined>;
   /**

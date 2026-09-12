@@ -7,3 +7,4 @@ export * from './geometry.js';
 export * from './mutations.js';
 export * from './presence.js';
 export * from './undo.js';
+export * from './seed.js';
