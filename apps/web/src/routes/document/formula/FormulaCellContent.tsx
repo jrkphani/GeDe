@@ -16,16 +16,18 @@ export interface FormulaCellContentProps {
 
 /**
  * The inside of a formula cell (FX-07, A11Y-04): value, reference badge and
- * the expression beneath. Errors carry the warning icon and their label; the
- * message is the tooltip. Pure presentation — the grid's Cell mounts it with
- * `useCellDisplay`, and `FormulaLayer` mounts it in the interim overlay.
+ * the expression beneath. A numeric value sits right, as a typed number does
+ * (FMT-02, FMT-03); the cell's own `data-halign` (INSP-06) still wins in CSS.
+ * Errors carry the warning icon and their label; the message is the tooltip.
+ * Pure presentation — the grid's Cell mounts it with `useCellDisplay`, and
+ * `FormulaLayer` mounts it in the interim overlay.
  */
 export function FormulaCellContent({
   display,
   expression = true,
   className,
 }: FormulaCellContentProps) {
-  const { value, formula, error, badge, pending, operands, positional } = display;
+  const { value, align, formula, error, badge, pending, operands, positional } = display;
   const positionalNote =
     positional === 0
       ? ''
@@ -44,7 +46,12 @@ export function FormulaCellContent({
             <span className="gd-formula__error-text">{error.label.replace(/^⚠\s*/u, '')}</span>
           </span>
         ) : (
-          <span className={clsx('gd-formula__value', { 'gd-formula__value--pending': pending })}>
+          <span
+            className={clsx('gd-formula__value', `gd-formula__value--${align}`, {
+              'gd-formula__value--pending': pending,
+            })}
+            data-align={align}
+          >
             {value}
           </span>
         )}

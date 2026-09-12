@@ -22,6 +22,8 @@ import {
   tableMap,
   type GedeDoc,
 } from '../doc/index.js';
+import { effectiveCellFormat } from '../format/column.js';
+import { setCellFormat, setColumnFormat } from '../format/mutations.js';
 import { nestRow, setRowCollapsed } from '../hier/mutations.js';
 import { commitCellText, workbookIndexOf } from './commit.js';
 import { FormulaEngine } from './engine.js';
@@ -608,5 +610,219 @@ describe('FormulaEngine over a Y.Doc', () => {
     undo.undo();
     undo.undo();
     expect(numberOf(h.results.get(g.id(1, 2)))).toBe(9);
+  });
+});
+
+/**
+ * Issue #122: the column's `CellFormat` never reached the engine, which
+ * inferred a kind from each cell's text. Every case below routes a value
+ * through a column format or a cell override, the path the audit found open.
+ */
+describe('formats reach the engine (FMT-02, FMT-03, FMT-05, FX-02)', () => {
+  const sum = (g: Grid, ...cells: [number, number][]) =>
+    `=Sum(${cells.map(([r, c]) => g.addr(r, c)).join(', ')})`;
+
+  test('FMT-03 "Summing mixed currencies is an error, never a conversion": a cell overridden to INR in an SGD column', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 4, 1);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'currency', { currency: 'SGD', decimals: 2 });
+    g.set(0, 0, '100');
+    g.set(1, 0, '-45.5');
+    g.set(2, 0, '2500');
+    g.set(3, 0, `=Sum(${g.addr(0, 0)}:${g.addr(2, 0)})`);
+    // Same code throughout: an amount in the column's code, never a plain number.
+    expect(h.results.get(g.id(3, 0))?.value).toEqual({
+      kind: 'currency',
+      value: 2554.5,
+      code: 'SGD',
+    });
+    // The audit's step 2: C7 alone becomes INR. The Sum must flip to the error, naming C7.
+    setCellFormat(h.gd, g.tableId, g.rowId(2), g.colId(0), 'currency', { currency: 'INR' });
+    const result = h.results.get(g.id(3, 0));
+    expect(result?.value).toBeNull();
+    expect(result?.error).toEqual({
+      kind: 'mixed-currency',
+      address: g.addr(2, 0),
+      codes: ['SGD', 'INR'],
+    });
+    expect(cellErrorLabel(result!.error!)).toBe('⚠ mixed currencies');
+    // Clearing the override restores the total without re-typing (FMT-02).
+    setCellFormat(h.gd, g.tableId, g.rowId(2), g.colId(0), null);
+    expect(h.results.get(g.id(3, 0))?.value).toEqual({
+      kind: 'currency',
+      value: 2554.5,
+      code: 'SGD',
+    });
+  });
+
+  test('FMT-03 mixed currencies across two columns: an SGD column plus a USD column is an error', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 2, 2);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'currency', { currency: 'SGD' });
+    setColumnFormat(h.gd, g.tableId, g.colId(1), 'currency', { currency: 'USD' });
+    g.set(0, 0, '100');
+    g.set(0, 1, '10');
+    g.set(1, 1, sum(g, [0, 0], [0, 1]));
+    expect(h.results.get(g.id(1, 1))?.error).toEqual({
+      kind: 'mixed-currency',
+      address: g.addr(0, 1),
+      codes: ['SGD', 'USD'],
+    });
+    // Both columns USD: the same text now sums, with no re-typing.
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'currency', { currency: 'USD' });
+    expect(h.results.get(g.id(1, 1))?.error).toBeNull();
+    expect(h.results.get(g.id(1, 1))?.value).toEqual({ kind: 'currency', value: 110, code: 'USD' });
+  });
+
+  test('FMT-05 "excluded from aggregation; never silently coerced to zero": an invalid cell under Number is skipped, S$12 is not 12', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 6, 1);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'number', { decimals: 6 });
+    g.set(0, 0, '1,234.50');
+    g.set(1, 0, '12/9/2026');
+    g.set(2, 0, 'S$12');
+    g.set(3, 0, '-45');
+    g.set(4, 0, `=Sum(${g.addr(0, 0)}:${g.addr(3, 0)})`);
+    // The date and the amount are invalid under Number: not `⚠ text in range`, not 12, not 0.
+    const result = h.results.get(g.id(4, 0));
+    expect(result?.error).toBeNull();
+    expect(result?.value).toEqual({ kind: 'number', value: 1189.5 });
+    // A list of addresses with a blank counts the blank as zero (FX-02) and still skips the invalid.
+    g.set(5, 0, sum(g, [0, 0], [3, 0], [2, 0]));
+    expect(h.results.get(g.id(5, 0))?.value).toEqual({ kind: 'number', value: 1189.5 });
+    // Under Automatic the same text is text in range, naming the offender (FX-02): the format decides.
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'auto');
+    expect(h.results.get(g.id(4, 0))?.error).toEqual({
+      kind: 'text-in-range',
+      address: g.addr(1, 0),
+    });
+  });
+
+  test('FMT-05 a Text column is text to a Sum even when it holds digits; a Date column is text in range', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 2, 2);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'text');
+    g.set(0, 0, '1');
+    g.set(1, 0, `=Sum(${g.addr(0, 0)})`);
+    expect(h.results.get(g.id(1, 0))?.error).toEqual({
+      kind: 'text-in-range',
+      address: g.addr(0, 0),
+    });
+    setColumnFormat(h.gd, g.tableId, g.colId(1), 'date');
+    g.set(0, 1, '12/9/2026');
+    g.set(1, 1, `=Sum(${g.addr(0, 1)})`);
+    expect(h.results.get(g.id(1, 1))?.error).toEqual({
+      kind: 'text-in-range',
+      address: g.addr(0, 1),
+    });
+  });
+
+  test('FMT-02 a format change re-evaluates only the formulas that read the changed cells; a rename still evaluates nothing', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 3, 2);
+    g.set(0, 0, '10');
+    g.set(0, 1, 'unrelated');
+    g.set(1, 0, `=Sum(${g.addr(0, 0)})`);
+    g.set(1, 1, `=Concat(${g.addr(0, 1)})`);
+    const before = h.reported.length;
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'currency', { currency: 'MYR' });
+    // Column 0's dependent re-evaluated (10 is now MYR 10); column 1's did not.
+    expect(h.reported.slice(before).flat()).toEqual([g.id(1, 0)]);
+    expect(h.results.get(g.id(1, 0))?.value).toEqual({ kind: 'currency', value: 10, code: 'MYR' });
+    const after = h.reported.length;
+    setTableTitle(h.gd, g.tableId, 'Renamed');
+    expect(h.reported.slice(after).flat()).toEqual([]);
+    // An override on the read cell re-evaluates its dependent; one on an unread cell does not.
+    setCellFormat(h.gd, g.tableId, g.rowId(2), g.colId(0), 'number');
+    expect(h.reported.slice(after).flat()).toEqual([]);
+    setCellFormat(h.gd, g.tableId, g.rowId(0), g.colId(0), 'number');
+    expect(h.reported.slice(after).flat()).toEqual([g.id(1, 0)]);
+    expect(h.results.get(g.id(1, 0))?.value).toEqual({ kind: 'number', value: 10 });
+  });
+
+  test('FMT-02 FX-01 a formatted cell reads as the text it shows: Concat echoes SGD 1,234.50 (Intl’s no-break space), and follows the locale', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 2, 1);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'currency', { currency: 'SGD', decimals: 2 });
+    g.set(0, 0, '1234.5');
+    g.set(1, 0, `=Concat(${g.addr(0, 0)}, " total")`);
+    expect(h.results.get(g.id(1, 0))?.value).toEqual({
+      kind: 'text',
+      text: 'SGD\u00a01,234.50 total',
+    });
+    // The locale reaches formatted cells too (I18N-04): a lakh-grouping locale regroups the amount.
+    g.set(0, 0, '1234567.5');
+    expect(h.results.get(g.id(1, 0))?.value).toEqual({
+      kind: 'text',
+      text: 'SGD\u00a01,234,567.50 total',
+    });
+    for (const r of h.engine.setLocale('en-IN').results) h.results.set(r.cellId, r);
+    expect(h.results.get(g.id(1, 0))?.value).toEqual({
+      kind: 'text',
+      text: 'SGD\u00a012,34,567.50 total',
+    });
+  });
+
+  test('FMT-01 an Automatic column keeps the inference from the typed text', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 3, 1);
+    g.set(0, 0, 'S$12');
+    g.set(1, 0, '5%');
+    g.set(2, 0, sum(g, [0, 0], [1, 0]));
+    // `S$12` infers SGD and `5%` a number: as before this change, the amount takes the code.
+    expect(h.results.get(g.id(2, 0))?.value).toEqual({
+      kind: 'currency',
+      value: 12.05,
+      code: 'SGD',
+    });
+  });
+
+  test('FMT-03 two replicas that format and edit apart converge on the same result', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 3, 1);
+    g.set(0, 0, '100');
+    g.set(1, 0, '200');
+    g.set(2, 0, `=Sum(${g.addr(0, 0)}:${g.addr(1, 0)})`);
+    const other = new Y.Doc();
+    Y.applyUpdate(other, Y.encodeStateAsUpdate(h.doc));
+    const ogd = openDocument(other);
+    const otherEngine = new FormulaEngine();
+    const otherResults = new Map<string, CellResult>();
+    observeWorkbook(ogd, (changes) => {
+      for (const r of otherEngine.apply(changes).results) otherResults.set(r.cellId, r);
+    });
+    // Offline, A formats the column SGD; B overrides one cell to INR.
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'currency', { currency: 'SGD' });
+    setCellFormat(ogd, g.tableId, g.rowId(1), g.colId(0), 'currency', { currency: 'INR' });
+    Y.applyUpdate(other, Y.encodeStateAsUpdate(h.doc, Y.encodeStateVector(other)), 'remote');
+    Y.applyUpdate(h.doc, Y.encodeStateAsUpdate(other, Y.encodeStateVector(h.doc)), 'remote');
+    const id = g.id(2, 0);
+    expect(h.results.get(id)?.error).toEqual(otherResults.get(id)?.error);
+    expect(h.results.get(id)?.error).toEqual({
+      kind: 'mixed-currency',
+      address: g.addr(1, 0),
+      codes: ['SGD', 'INR'],
+    });
+    // The formats crossed the boundary as plain data, with the table's structure.
+    const last = h.batches[h.batches.length - 1]?.[0];
+    expect(last?.type).toBe('table');
+    expect(JSON.parse(JSON.stringify(last))).toEqual(last);
+  });
+
+  test('FX-02 the engine reads the format the app resolves: formatOf is effectiveCellFormat', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 2, 1);
+    g.set(0, 0, '1');
+    g.set(1, 0, '2');
+    expect(h.engine.formatOf(g.id(0, 0))).toEqual({ kind: 'auto', opts: {} });
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'number', { decimals: 3 });
+    expect(h.engine.formatOf(g.id(0, 0))).toEqual(
+      effectiveCellFormat(tableMap(h.gd, g.tableId)!, g.rowId(0), g.colId(0)),
+    );
+    setCellFormat(h.gd, g.tableId, g.rowId(1), g.colId(0), 'date', { datePattern: 'YYYY-MM-DD' });
+    expect(h.engine.formatOf(g.id(1, 0))).toEqual(
+      effectiveCellFormat(tableMap(h.gd, g.tableId)!, g.rowId(1), g.colId(0)),
+    );
+    expect(h.engine.formatOf(g.id(1, 0)).kind).toBe('date');
   });
 });

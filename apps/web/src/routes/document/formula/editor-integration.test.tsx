@@ -14,6 +14,7 @@ import {
   createTable,
   insertRowBefore,
   openDocument,
+  setColumnFormat,
   setColumnHidden,
   setTableTitle,
   tableById,
@@ -133,7 +134,9 @@ function press(code: string, init: KeyboardEventInit = {}): void {
 }
 
 describe('formula entry in the grid editor', () => {
-  it('FX-02 typing = opens the forms menu; Sum is offered on a number column, and the pick leaves the editor open', async () => {
+  it('FX-02 typing = opens the forms menu; Sum is offered on a Number column, and the pick leaves the editor open', async () => {
+    // FX-02 "offered only when the column is Number or Currency": the format, not the contents.
+    setColumnFormat(gd, tableId, cols[0]!, 'number');
     render(<Harness gd={gd} tableId={tableId} />);
     await type(cellAt(0, 0), '1200');
     press('Enter');

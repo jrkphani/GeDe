@@ -35,8 +35,10 @@ export function resolveValue(text: string, format: CellFormat): FormattedValue {
     case 'text':
       return { kind: 'text', text };
     case 'number': {
+      // A Number column holds numbers, not amounts: `S$12` does not parse as 12 (FMT-05 "never
+      // silently coerced"); it is invalid, tinted, and excluded from aggregation.
       const n = parseNumber(trimmed);
-      return n === null
+      return n === null || n.monetary
         ? { kind: 'invalid', text, expected: 'number' }
         : { kind: 'number', value: n.value };
     }
@@ -69,6 +71,30 @@ export function resolveValue(text: string, format: CellFormat): FormattedValue {
 /** The formula engine's view: invalid cells are blank (excluded, FMT-05), everything else as is. */
 export function toCellValue(value: FormattedValue): CellValue {
   return value.kind === 'invalid' ? { kind: 'blank' } : value;
+}
+
+/**
+ * What a formula reads from a cell under an explicit format (FMT-02, FMT-03,
+ * FMT-05): the value the format parses — a Currency cell is an amount in the
+ * column's code, so `Sum` sees the code and refuses to mix two — carrying the
+ * text the cell shows for that locale, so `Concat` and lists echo `SGD 100.00`,
+ * not `100`. Text that does not parse is blank: excluded, never coerced.
+ * Automatic is not decided here; the engine infers it from the typed text.
+ */
+export function cellValueOf(
+  text: string,
+  format: CellFormat,
+  locale: FormatLocale = DEFAULT_FORMAT_LOCALE,
+): CellValue {
+  const value = resolveValue(text, format);
+  switch (value.kind) {
+    case 'number':
+    case 'currency':
+    case 'date':
+      return { ...value, text: renderValue(value, format, locale).text };
+    default:
+      return toCellValue(value);
+  }
 }
 
 /**
