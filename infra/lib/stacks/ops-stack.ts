@@ -308,9 +308,14 @@ export class OpsStack extends cdk.Stack {
       });
     purgeNeverRan.addAlarmAction(notify);
 
+    // `NotificationsWithSubscribers` is create-only on AWS::Budgets::Budget, so any change
+    // replaces the resource — and a replacement under the same BudgetName fails ("same name
+    // but a different internalId already exists", execution 3ea4807b). The name therefore
+    // carries a revision: bump it whenever the notifications change, so CloudFormation
+    // creates the new budget before deleting the old one.
     new budgets.CfnBudget(this, 'Budget', {
       budget: {
-        budgetName: `gede-${config.envName}-monthly`,
+        budgetName: `gede-${config.envName}-monthly-r2`,
         budgetType: 'COST',
         timeUnit: 'MONTHLY',
         budgetLimit: { amount: config.budgetUsd, unit: 'USD' },
