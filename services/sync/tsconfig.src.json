@@ -16,6 +16,9 @@
     },
     {
       "path": "../../packages/db/tsconfig.src.json"
+    },
+    {
+      "path": "../../packages/mail/tsconfig.src.json"
     }
   ]
 }

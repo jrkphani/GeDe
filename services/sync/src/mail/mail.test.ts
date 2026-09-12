@@ -15,6 +15,7 @@ const base = {
   actorEmail: 'meena@example.com',
   documentTitle: '1Cloudhub - Workscape',
   link: 'https://gede.work/d/6f1b2c3d-0000-4000-8000-00000000e2e0?invite=abc',
+  locale: null,
 };
 
 describe('share mail templates', () => {
@@ -31,12 +32,34 @@ describe('share mail templates', () => {
     expect(mail.text).toContain('valid for 14 days');
     expect(mail.text).toContain('passkey');
     expect(mail.text).toContain(`Accept invitation: ${base.link}`);
-    expect(mail.html).toContain(`<a href="${base.link}">Accept invitation</a>`);
+    expect(mail.html).toContain(`href="${base.link}"`);
+    expect(mail.html).toContain('>Accept invitation</a>');
     expect(mail.html.match(/<a /g)).toHaveLength(1);
     // The title is HTML-escaped in the HTML part, verbatim in the text part.
     const scripted = shareInviteMail({ ...base, documentTitle: '<b>bold</b> & co' });
     expect(scripted.html).toContain('&lt;b&gt;bold&lt;/b&gt; &amp; co');
+    expect(scripted.html).not.toContain('<b>bold</b>');
     expect(scripted.text).toContain('<b>bold</b> & co');
+    // So is the link: a quote in it cannot close the attribute.
+    const quoted = shareInviteMail({ ...base, link: 'https://gede.work/d/x?invite=a"b' });
+    expect(quoted.html).toContain('href="https://gede.work/d/x?invite=a&quot;b"');
+  });
+
+  test('I18N-05 SHARE-02 the mail is rendered in the recipient’s locale, branded, and falls back to en-US for an unknown tag', () => {
+    const ta = shareInviteMail({ ...base, locale: 'ta-IN' });
+    expect(ta.subject).toBe('Meenarapan D உங்களை ஒரு GeDe workscape-க்கு அழைத்துள்ளார்');
+    expect(ta.html).toContain('<html lang="ta-IN"');
+    expect(ta.text).toContain(`அழைப்பை ஏற்கவும்: ${base.link}`);
+    const hi = shareMemberMail({ ...base, locale: 'hi-IN' });
+    expect(hi.subject).toBe('Meenarapan D ने “1Cloudhub - Workscape” आपके साथ साझा किया');
+    expect(shareMemberMail({ ...base, locale: 'fr-FR' }).subject).toBe(
+      'Meenarapan D shared “1Cloudhub - Workscape” with you',
+    );
+    // The branded layout: the mark, the dark-mode meta, the 600 px column, the footer.
+    expect(ta.html).toContain('https://gede.work/icon-192.png');
+    expect(ta.html).toContain('<meta name="color-scheme" content="light dark" />');
+    expect(ta.html).toContain('width="600"');
+    expect(ta.html).toContain('sembian@example.com');
   });
 
   test('SHARE-02 share.member names the actor and the workscape within 60 characters, falling back to the address and then to "Someone"', () => {
