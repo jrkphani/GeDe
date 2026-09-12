@@ -295,11 +295,15 @@ describe('GeDe CDK app', () => {
 
   it('LOAD-05 the sync image is built with GEDE_VERSION from the CodeBuild source sha (local otherwise)', () => {
     expect(serviceImages).toHaveLength(1);
+    // The synthesized value depends on the environment the tests run in: `local` on a
+    // laptop, the short sha on CodeBuild (which sets CODEBUILD_RESOLVED_SOURCE_VERSION
+    // for the Synth step, where `npm run verify` also runs).
     expect(serviceImages[0]).toMatchObject({
       dockerFile: 'services/sync/Dockerfile',
       platform: 'linux/arm64',
-      dockerBuildArgs: { GEDE_VERSION: 'local' },
+      dockerBuildArgs: { GEDE_VERSION: gedeVersion() },
     });
+    expect(serviceImages[0]!.dockerBuildArgs?.GEDE_VERSION).toMatch(/^(local|[0-9a-f]{7})$/);
     expect(gedeVersion({})).toBe('local');
     expect(gedeVersion({ CODEBUILD_RESOLVED_SOURCE_VERSION: '' })).toBe('local');
     expect(gedeVersion({ CODEBUILD_RESOLVED_SOURCE_VERSION: 'ba70477deadbeef0123456789' })).toBe(
