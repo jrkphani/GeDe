@@ -27,6 +27,7 @@ packages/core/    Framework-free domain: lattice index, A1 addressing, dependenc
 packages/tokens/  tokens.css + theme.ts (verbatim from handover) + lint check.
 packages/ui/      Design-system components on Radix. Icon sprite.
 packages/db/      Drizzle schema, SQL migrations, migration runner.
+packages/mail/    Every email GeDe sends: one token-derived layout, five kinds, six locales. Used by sync and the Cognito trigger.
 infra/            One CDK app: PipelineStack + GedeStage (Network, Data, Auth, Edge, Service, Web, Dns, Ops).
 docs/             Requirements, digests, the handover package.
 ```

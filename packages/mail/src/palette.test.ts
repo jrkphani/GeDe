@@ -17,8 +17,8 @@ const GENERATED = path.resolve(here, 'generated/palette.ts');
 const GENERATOR = pathToFileURL(path.resolve(here, '../scripts/palette-source.mjs')).href;
 
 interface Generator {
-  derivePalette(css: string): unknown;
-  renderPaletteModule(palette: unknown): string;
+  derivePalette: (css: string) => unknown;
+  renderPaletteModule: (palette: unknown) => string;
 }
 
 /** WCAG 2.1 relative luminance and contrast ratio for `#rrggbb`. */
