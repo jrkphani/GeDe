@@ -16,13 +16,15 @@ import {
   type GedeDoc,
 } from '../doc/index.js';
 import { commitCellText } from '../engine/commit.js';
+import { createGraphPair, setGraphDimensions } from '../graph/mutations.js';
+import { addDerivedColumn } from '../ref/derive.js';
 import { approximateFind, editDistance, exactFind } from './distance.js';
 import { createSearchEngine, replaceInText } from './engine.js';
 import { inferFormat, resolveFormat } from './format.js';
 import { foldGraphemes, graphemes } from './graphemes.js';
 import { fuzzyBudget, indexEntry, search, type IndexedEntry, type SearchMatch } from './matcher.js';
 import { parseQuery } from './query.js';
-import { buildSearchSnapshot, cellTexts, tableEntries } from './snapshot.js';
+import { buildSearchSnapshot, cellTexts, graphEntriesOf, tableEntries } from './snapshot.js';
 
 /** A minimal entry for matcher tests; only what the matcher reads. */
 function cell(
@@ -369,8 +371,8 @@ describe('snapshot', () => {
     ).toBe(false);
   });
 
-  test('FIND-03 the whole snapshot carries tables, graph dimension values (even when the map is empty) and document names', () => {
-    const { gd, sheetId } = fixture();
+  test('FIND-03 the whole snapshot carries tables, graph parameter values and document names; a graph indexes its dimension titles and distinct values, never column ids (#125)', () => {
+    const { gd, tableId, sheetId } = fixture();
     const empty = buildSearchSnapshot(gd, [{ id: 'd1', title: 'Everest trek' }]);
     expect(empty.tables).toHaveLength(1);
     expect(empty.graphs).toEqual([]);
@@ -382,37 +384,102 @@ describe('snapshot', () => {
         readOnly: true,
       }),
     ]);
-    // A graph, in the shape the graph work stores: dims as a string list.
-    const graph = new Y.Map<unknown>();
-    graph.set('sheetId', sheetId);
-    graph.set('title', 'Coverage');
-    const dims = new Y.Array<string>();
-    dims.push(['Region', 'Quarter']);
-    graph.set('dims', dims);
-    gd.doc.transact(() => {
-      gd.graphs.set('g1', graph);
-    });
+    // A bound pair (GRAPH-01) with the table's two columns as dimensions; the
+    // second column reads "S$ 1,200" in row 1 and nothing below it.
+    const record = tableById(gd, tableId)!;
+    const [c1, c2] = record.columns.map((c) => c.id);
+    const [, r2] = record.rows;
+    setCellText(gd, tableId, r2!, c2!, 'Nepal');
+    const pair = createGraphPair(gd, { sheetId, tableId });
+    setGraphDimensions(gd, pair.pairId, [c1!, c2!]);
     const withGraph = buildSearchSnapshot(gd);
-    expect(withGraph.graphs).toEqual([
-      expect.objectContaining({
-        kind: 'graph',
-        graphId: 'g1',
-        sheetId,
-        readOnly: true,
-        texts: [
-          expect.objectContaining({ field: 'dimension', text: 'Coverage' }),
-          expect.objectContaining({ field: 'dimension', text: 'Region' }),
-          expect.objectContaining({ field: 'dimension', text: 'Quarter' }),
-        ],
-      }),
-    ]);
+    // One entry per pair, not one per half; titled by the table and kind.
+    expect(withGraph.graphs).toHaveLength(1);
+    expect(withGraph.graphs[0]).toMatchObject({
+      kind: 'graph',
+      id: `graph/${pair.pairId}`,
+      graphId: pair.ringId,
+      sheetId,
+      title: 'Table 1 ring',
+      readOnly: true,
+    });
+    const texts = withGraph.graphs[0]!.texts.map((t) => `${t.field}:${t.text}`);
+    expect(texts).toContain('dimension:Column 1');
+    expect(texts).toContain('dimension:Base camp');
+    expect(texts).toContain('dimension:Column 2');
+    expect(texts).toContain('dimension:S$ 1,200');
+    expect(texts).toContain('dimension:Nepal');
+    // Formula cells are not parameters; column ids never are.
+    expect(texts.some((t) => t.includes('=Sum'))).toBe(false);
+    expect(texts.some((t) => t.includes(c1!.slice(0, 12)))).toBe(false);
     const matches = search(
       [...withGraph.tables[0]!.entries, ...withGraph.graphs].map(indexEntry),
-      'Quarter',
+      'Nepal',
     );
-    expect(matches).toHaveLength(1);
-    expect(matches[0]?.target.kind).toBe('graph');
-    expect(matches[0]?.readOnly).toBe(true);
+    expect(matches.map((m) => m.target.kind)).toEqual(['cell', 'graph']);
+    expect(matches[1]?.readOnly).toBe(true);
+    // An unbound pair has nothing to find.
+    createGraphPair(gd, { sheetId, tableId: null });
+    expect(graphEntriesOf(gd)).toHaveLength(1);
+  });
+
+  test('FIND-03 FIND-08 with a value reader, formula cells index their evaluated result and derived columns index one result per row, read-only (#125)', () => {
+    const { gd, tableId } = fixture();
+    const record = tableById(gd, tableId)!;
+    const [c1, c2] = record.columns.map((c) => c.id);
+    const [r1, r2, r3] = record.rows;
+    const derived = addDerivedColumn(gd, tableId, {
+      sourceColId: c1!,
+      method: 'Concat',
+      args: [' desk'],
+    })!;
+    // The reader stands in for the engine host: what each computed cell shows.
+    const results = new Map<string, string>([
+      [`${r2!}:${c1!}`, '3,600'],
+      [`${r3!}:${c1!}`, 'Camp to Nepal'],
+      [`${r1!}:${derived}`, 'Base camp desk'],
+      [`${r2!}:${derived}`, ' desk'],
+    ]);
+    const valueOf = (_table: string, rowId: string, colId: string) =>
+      results.get(`${rowId}:${colId}`);
+    const t = tableEntries(gd, tableId, valueOf)!;
+    const byId = new Map(t.entries.map((e) => [e.id, e] as const));
+    expect(byId.get(`${tableId}/${r2!}:${c1!}`)?.texts.map((x) => `${x.field}:${x.text}`)).toEqual([
+      'formula:=Sum(B5:B7)',
+      'reference:B5:B7',
+      'result:3,600',
+    ]);
+    const derivedEntry = byId.get(`${tableId}/${r1!}:${derived}`);
+    expect(derivedEntry).toMatchObject({
+      kind: 'cell',
+      colId: derived,
+      readOnly: true,
+      texts: [{ field: 'result', text: 'Base camp desk' }],
+    });
+    // A row with no result yet is simply absent; nothing is invented.
+    expect(byId.has(`${tableId}/${r3!}:${derived}`)).toBe(false);
+    expect(byId.has(`${tableId}/${r1!}:${c2!}`)).toBe(true);
+    // Without a reader the index is as before: expressions only, no derived cells.
+    const plain = tableEntries(gd, tableId)!;
+    expect(plain.entries.some((e) => e.kind === 'cell' && e.colId === derived)).toBe(false);
+    expect(plain.entries.every((e) => e.texts.every((x) => x.field !== 'result'))).toBe(true);
+
+    const indexed = t.entries.map(indexEntry);
+    // The evaluated value finds the cell; the match is read-only (FIND-08).
+    const desk = search(indexed, 'desk').filter((m) => m.target.kind === 'cell');
+    expect(desk.map((m) => [m.field, m.readOnly])).toEqual([
+      ['result', true],
+      ['result', true],
+    ]);
+    const sum = search(indexed, '3,600', { fuzzy: false, formulas: true, documents: true });
+    expect(sum).toHaveLength(1);
+    expect(sum[0]).toMatchObject({ field: 'result', readOnly: true });
+    // When the expression matches too, it wins: the expression is what a person can edit.
+    const camp = search(indexed, 'Camp', { fuzzy: false, formulas: true, documents: true });
+    expect(camp.find((m) => m.target.kind === 'cell' && m.target.rowId === r3!)).toMatchObject({
+      field: 'formula',
+      readOnly: false,
+    });
   });
 
   test('FIND-08 GRID-04 read-only comes from cellReadOnlyReason: derived, linked and pulled columns and category-band rows', () => {

@@ -22,7 +22,9 @@ export type MetricName =
   /** A connection closed because its permission changed or ended between checks (#104). */
   | 'WsRevocations'
   /** An account erasure that could not delete the Cognito identity (#111). */
-  | 'UserErasureIdentityFailures';
+  | 'UserErasureIdentityFailures'
+  /** A share mail SES refused; the row it announced stands (#121). `Reason` is the template. */
+  | 'InviteMailFailures';
 
 export type RefusalReason =
   | 'message_too_big'
@@ -39,7 +41,9 @@ export type RefusalReason =
   | 'permission_ended'
   | 'token_expired'
   | 'document_gone'
-  | 'identity_delete_failed';
+  | 'identity_delete_failed'
+  | 'share.invite'
+  | 'share.member';
 
 export interface EmfEnvelope {
   Timestamp: number;

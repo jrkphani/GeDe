@@ -17,6 +17,8 @@ export interface UserRecord {
   readonly locale: string | null;
   /** ONB-03: when the account completed or skipped the guided tour; null until then, and after Replay. */
   readonly tourDoneAt: Date | null;
+  /** LIB-05 (#133): the Browse / Shared sort the account chose, or null until chosen. */
+  readonly librarySort: LibrarySort | null;
   /**
    * ONB-01: the account's guided sample workscape, or null while none exists
    * yet (the resolver seeds it on first sight, `SampleSeeder`).
@@ -28,6 +30,9 @@ export interface UserRecord {
    */
   readonly deletedAt: Date | null;
 }
+
+/** LIB-05: the two library sorts; Recents ignores it. */
+export type LibrarySort = 'name' | 'date';
 
 export interface DocumentRecord {
   readonly id: string;
@@ -89,7 +94,13 @@ export interface DocumentSummary extends DocumentRecord {
   readonly sizeBytes: number;
   /** Who shared it with the caller; null for the owner. */
   readonly sharedBy: PersonRef | null;
-  /** True when at least one participant besides the owner has a share. */
+  /**
+   * The one definition of "shared" (#139): a participant exists (a share row)
+   * or the link is on — the live form of `everShared` (LIB-D1/D4), so the
+   * title pill (SHARE-05), the library row (LIB-02), the Shared view (LIB-01)
+   * and the delete/archive slot agree. A pending invitation is not a
+   * participant and does not count.
+   */
   readonly sharedWithOthers: boolean;
 }
 
@@ -135,6 +146,8 @@ export interface PendingInvite {
   readonly permission: Permission;
   readonly invitedBy: string | null;
   readonly expiresAt: Date;
+  /** #121: when SES last accepted the mail; null while it never did ("email not sent", Resend). */
+  readonly mailSentAt: Date | null;
 }
 
 export interface ParticipantList {
@@ -162,6 +175,8 @@ export interface InviteRecord {
   readonly expiresAt: Date;
   readonly acceptedAt: Date | null;
   readonly createdAt: Date;
+  /** #121: when SES last accepted the invitation's mail; null while it never did. */
+  readonly mailSentAt: Date | null;
 }
 
 /** A share an invitation converted into (SHARE-02), for the caller's log line. */
@@ -228,6 +243,8 @@ export interface ProfilePatch {
   readonly locale?: string;
   /** ONB-03: `true` stamps `tour_done_at` now; `false` clears it (Replay, ONB-08). */
   readonly tourDone?: boolean;
+  /** LIB-05 (#133): the library sort, per account. */
+  readonly librarySort?: LibrarySort;
 }
 
 export interface UsersRepo {
@@ -399,6 +416,16 @@ export interface InvitesRepo {
   }): Promise<{ invite: InviteRecord; created: boolean }>;
   /** Withdraw a pending invitation; `false` when it does not exist on this document. Audit `share.invite_remove`. */
   remove(input: { documentId: string; inviteId: string; actorId: string }): Promise<boolean>;
+  /**
+   * A pending, unexpired invitation of this document by id (#121: Resend
+   * builds the mail from its token); `undefined` when there is none.
+   */
+  pending(input: { documentId: string; inviteId: string }): Promise<InviteRecord | undefined>;
+  /**
+   * Record that SES accepted the invitation's mail (#121): `mail_sent_at = now()`.
+   * Not a share change — no audit row. `false` when no such invitation exists.
+   */
+  markMailSent(input: { inviteId: string }): Promise<boolean>;
   /** The invitation carrying `token`, accepted or not, expired or not; the caller decides. */
   byToken(token: string): Promise<InviteRecord | undefined>;
   /**

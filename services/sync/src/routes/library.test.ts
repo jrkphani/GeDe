@@ -135,6 +135,60 @@ describe('GET /api/documents views (LIB-01)', () => {
     });
   });
 
+  test('SHARE-05 LIB-01 LIB-02 LIB-D2 LIB-D4 one definition of shared: a link-only workscape is sharedWithOthers and listed under Shared; an invitation-only one is not — a pending invitation is not a participant and the workscape stays deletable (#139)', async () => {
+    const linkOnly = server.repo.seedDocument(aliceId, 'link only');
+    const inviteOnly = server.repo.seedDocument(aliceId, 'invitation only');
+    const nothing = server.repo.seedDocument(aliceId, 'nothing');
+    await json(server, 'PATCH', `/api/documents/${linkOnly.id}/link`, {
+      token: alice,
+      body: { access: 'view' },
+    });
+    await json(server, 'POST', `/api/documents/${inviteOnly.id}/invites`, {
+      token: alice,
+      body: { email: 'new@example.com', permission: 'view' },
+    });
+    const one = async (id: string) =>
+      (
+        await json<{ document: DocumentSummaryView }>(server, 'GET', `/api/documents/${id}`, {
+          token: alice,
+        })
+      ).body.document;
+    // The title pill, the library row and the delete/archive slot read the same facts: a
+    // share or the link on. A sent invitation is neither (LIB-D4: accepted, not sent), so
+    // the workscape is not "Shared" while it can still be deleted.
+    expect(await one(linkOnly.id)).toMatchObject({ sharedWithOthers: true, everShared: true });
+    expect(await one(inviteOnly.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
+    expect(await one(nothing.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
+    const shared = await list(alice, 'shared');
+    expect(shared.body.documents.map((d) => d.id)).toEqual([linkOnly.id]);
+    const browse = await list(alice, 'browse');
+    expect(browse.body.documents.find((d) => d.id === inviteOnly.id)).toMatchObject({
+      sharedWithOthers: false,
+    });
+    // Revoking restores the link-only one; withdrawing the invitation changes nothing.
+    await json(server, 'PATCH', `/api/documents/${linkOnly.id}/link`, {
+      token: alice,
+      body: { access: 'none' },
+    });
+    const sheet = await json<{ invites: { id: string }[] }>(
+      server,
+      'GET',
+      `/api/documents/${inviteOnly.id}/shares`,
+      { token: alice },
+    );
+    await json(
+      server,
+      'DELETE',
+      `/api/documents/${inviteOnly.id}/invites/${sheet.body.invites[0]!.id}`,
+      {
+        token: alice,
+      },
+    );
+    expect(await one(linkOnly.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
+    expect(await one(inviteOnly.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
+    expect((await list(alice, 'shared')).body.documents).toEqual([]);
+  });
+
   test('LIB-08 deleted lists my own documents deleted within 30 days only', async () => {
     const recent = server.repo.seedDocument(aliceId, 'recent');
     await server.repo.documents.softDelete(recent.id);
@@ -914,6 +968,7 @@ describe('profile (AUTH-09, I18N-05)', () => {
       displayName: null,
       locale: null,
       tourDoneAt: null,
+      librarySort: null,
       sampleDocumentId: server.repo.sampleOf(aliceId),
     });
     expect(res.body.sampleDocumentId).toMatch(/^[0-9a-f-]{36}$/);
@@ -950,6 +1005,36 @@ describe('profile (AUTH-09, I18N-05)', () => {
     });
     expect(res.status).toBe(400);
     expect(res.body.error.details).toEqual([expect.objectContaining({ path: 'tourDone' })]);
+  });
+
+  test('LIB-05 PATCH /api/me { librarySort } persists the library sort per account: a second client reads it; only name or date is accepted (#133)', async () => {
+    expect((await me(alice)).librarySort).toBeNull();
+    const res = await json<ProfileView>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { librarySort: 'date' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: aliceId, librarySort: 'date', locale: null });
+    expect(server.repo.usersBySub.get('sub-alice')?.librarySort).toBe('date');
+    // Per account, not per device.
+    const second = server.verifier.issue('tok-alice-2', 'sub-alice', 'alice@example.com');
+    expect((await me(second)).librarySort).toBe('date');
+    expect(
+      (
+        await json<ProfileView>(server, 'PATCH', '/api/me', {
+          token: second,
+          body: { librarySort: 'name' },
+        })
+      ).body.librarySort,
+    ).toBe('name');
+    expect((await me(alice)).librarySort).toBe('name');
+    const bad = await json<ErrorBody>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { librarySort: 'size' },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error.details).toEqual([expect.objectContaining({ path: 'librarySort' })]);
+    expect((await me(alice)).librarySort).toBe('name');
   });
 
   test('I18N-05 PATCH /api/me persists the locale and the next GET reflects it', async () => {

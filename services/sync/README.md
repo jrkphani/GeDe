@@ -28,6 +28,7 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 | `RATE_LIMIT_PER_MINUTE`                              |                  | `300`      | `/api` requests per verified user per minute → 429                                                                      |
 | `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`     | requests per address per minute, every route → 429                                                                      |
 | `RATE_LIMIT_INVITES_PER_HOUR`                        |                  | `30`       | invitations per verified user per hour (each is an outbound mail) → 429                                                 |
+| `RATE_LIMIT_RESEND_COOLDOWN_SECONDS`                 |                  | `600`      | one Resend of a given invitation per window, whoever asks (0 disables) → 429                                            |
 | `WS_MAX_UPDATE_BYTES`                                |                  | `2 MiB`    | largest client → server frame; `ws` closes 1009 on the declared length (#99)                                            |
 | `WS_MAX_BUFFERED_BYTES`                              |                  | `2 MiB`    | unread bytes a socket may hold (plus its join step 2 while it is being written) before it is closed 1013 and terminated |
 | `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400`  | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429                              |
@@ -72,13 +73,15 @@ and the per-user limit is the precise one.
 - `GET /healthz`, `GET /api/health` — `{ ok }`; 503 when `SELECT 1` fails. No auth, and no
   version: an unauthenticated caller learns only that the service is up (#42).
 - `GET /api/version` → `{ version }` (the short git sha baked into the image).
-- `GET /api/me` → `{ id, sub, email, displayName, locale, tourDoneAt, sampleDocumentId }`.
+- `GET /api/me` → `{ id, sub, email, displayName, locale, tourDoneAt, librarySort, sampleDocumentId }`.
   `tourDoneAt` (ONB-03) is the ISO time the account completed or skipped the guided tour, null
-  while the tour is due; `sampleDocumentId` (ONB-01) is the account's guided sample workscape,
-  seeded by the account's first request (see below).
-  `PATCH /api/me { displayName?, locale?, idToken?, tourDone? }` — display name 1–80 characters
-  after trimming; locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`; `tourDone: true` stamps
-  `tourDoneAt` now and `false` clears it (Replay, ONB-08); at least one field (I18N-05, AUTH-09).
+  while the tour is due; `librarySort` (LIB-05, #133) is the Browse / Shared sort the account
+  chose, `name` | `date` | null; `sampleDocumentId` (ONB-01) is the account's guided sample
+  workscape, seeded by the account's first request (see below).
+  `PATCH /api/me { displayName?, locale?, idToken?, tourDone?, librarySort? }` — display name
+  1–80 characters after trimming; locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`;
+  `tourDone: true` stamps `tourDoneAt` now and `false` clears it (Replay, ONB-08);
+  `librarySort` is `name` or `date`; at least one field (I18N-05, AUTH-09).
   `idToken` is the caller's Cognito **ID** token (SHARE-02): the service verifies it (`tokenUse:
 'id'`, same pool and client), requires its `sub` to be the caller's and `email_verified`, binds
   the address to `users.email` and converts every pending, unexpired invitation for it into a
@@ -106,7 +109,7 @@ archivedAt, everShared, sample }] }`.
   The caller's own guided sample (`sample: true`) is pinned above every other row in every view it
   appears in (ONB-01); someone else's sample shared with the caller lists as an ordinary shared row
   with `sample: false`. After it, `recents` = owned + shared with me, live, newest `updatedAt` first; `browse` = owned, live;
-  `shared` = shared with me plus my own documents that have shares (`sharedWithOthers: true`);
+  `shared` = shared with me plus my own documents that are shared (`sharedWithOthers: true`: a share row or the link on — a pending invitation is not a participant, #139);
   `deleted` = owned, deleted within 30 days; `archived` = owned, live, `archivedAt` set (LIB-D6,
   no expiry). The owner's archived documents are absent from `recents`, `browse` and `shared`; a
   participant still sees them there (LIB-D3). `sizeBytes` is the latest snapshot plus every update
@@ -159,7 +162,7 @@ archivedAt, everShared, sample }] }`.
   are deleted best-effort afterwards (a failure is logged with the document id).
 - `GET /api/documents/:id/shares` (any participant) →
   `{ owner: { id, name, email }, participants: [{ userId, name, email, permission, invitedBy,
-source }], invites: [{ id, email, permission, invitedBy, expiresAt }], linkAccess, linkToken,
+source }], invites: [{ id, email, permission, invitedBy, expiresAt, mailSentAt }], linkAccess, linkToken,
 permission, callerId }`. Emails, pending invitations and the link token are for the owner and
   `edit` participants; a `view` participant receives `null` emails, `invites: []` and
   `linkToken: null`. `permission` is the caller's, `callerId` their `users.id` (for "(you)").
@@ -168,16 +171,29 @@ permission, callerId }`. Emails, pending invitations and the link token are for 
 - Sharing writes (`src/routes/share.ts`, SHARE-01..03). Every one is checked server-side;
   each writes its `audit_log` row (`share.*`) in the same transaction as the change.
   - `POST /api/documents/:id/invites { email, permission: view|edit }` (owner or editor) → 201
-    `{ kind: 'share' | 'invite', created: true, shares }`. An address with an account gets a
-    share now and a `share.member` mail; one without gets an `invites` row valid 14 days and a
-    `share.invite` mail whose link is `/d/:id?invite=<token>`. Idempotent per (document,
+    `{ kind: 'share' | 'invite', created: true, delivery: 'sent' | 'failed', shares }`. An
+    address with an account gets a share now and a `share.member` mail; one without gets an
+    `invites` row valid 14 days and a `share.invite` mail whose link is
+    `/d/:id?invite=<token>`. The row is the grant and the mail its notification (#121): the
+    row is written first and stands whatever the send did — a refused send (SES in the
+    sandbox: unverified recipient; a throttle; an outage) answers `delivery: 'failed'` on the
+    201, is logged with the failure class (never the address) and counted on the
+    `GeDe/Sync InviteMailFailures` metric (EMF, dimension `Reason` = template). An accepted
+    send is recorded as `invites.mail_sent_at` (migration 0011) and answered as the
+    invitation's `mailSentAt`; null means never mailed, and the SPA shows "Invitation saved —
+    the email could not be sent" with Resend, after a reload as well. Idempotent per (document,
     address): while a pending invitation stands, a repeated POST answers 200
-    `{ kind: 'invite', created: false, shares }` — no row, no mail (`invites_pending_key`,
-    migration 0007, decides a race). A refused send (SES sandbox: unverified recipient)
-    withdraws the row it just made — never an earlier one — and answers 502 `unavailable`; the
-    SPA does not retry it (`apiFetch` retries GET only unless asked). 409 when the address
-    already has access or is the owner's. Its own budget: `RATE_LIMIT_INVITES_PER_HOUR` per
-    user, counted after validation and the permission check.
+    `{ kind: 'invite', created: false, delivery: 'skipped', shares }` — no row, no mail
+    (`invites_pending_key`, migration 0007, decides a race). 409 when the address already has
+    access or is the owner's. Its own budget: `RATE_LIMIT_INVITES_PER_HOUR` per user, counted
+    after validation and the permission check.
+  - `POST /api/documents/:id/invites/:inviteId/resend` (owner or editor) → 200
+    `{ delivery: 'sent' | 'failed', shares }`. Sends the pending invitation's mail again — same
+    token, same expiry, only `mail_sent_at` moves on an accepted send, no audit row — and
+    spends the same per-user budget;
+    one resend of a given invitation per `RATE_LIMIT_RESEND_COOLDOWN_SECONDS` (429 with the wait
+    inside it, whoever asks, so an address is never mailed the same invitation repeatedly);
+    404 when the invitation is not pending on this document.
   - `DELETE /api/documents/:id/invites/:inviteId` (owner) → 204; 404 when not pending here.
   - `POST /api/documents/:id/invites/accept { token }` (signed in) → `{ permission }`. Converts
     only for the account holding the invitation's address (409 `Finish signing in` while none is

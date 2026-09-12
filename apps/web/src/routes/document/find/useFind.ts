@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import {
   buildSearchSnapshot,
+  cellKey,
   cellText,
   DEFAULT_SEARCH_OPTIONS,
   documentEntriesOf,
@@ -19,19 +20,24 @@ import {
   graphemes,
   replaceInCell,
   replaceInText,
+  splitWorkbookCellId,
   tableEntries,
   tableMap,
+  workbookCellId,
   type DocumentName,
   type GedeDoc,
   type SearchMatch,
   type SearchOptions,
+  type SearchValueReader,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
 import { listDocuments } from '../../../api/documents.js';
+import { engineFor, peekEngine } from '../../../doc/engine.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import { setTourFindQuery } from '../../tour/store.js';
+import { formatCellValue } from '../formula/use-cell-display.js';
 import { describeMatch } from './match-geometry.js';
 import { createSearchClient, type SearchClient, type SearchClientEvent } from './search-client.js';
 
@@ -67,8 +73,10 @@ export interface FindState {
   readonly pending: boolean;
   /**
    * FIND-08: what the last Replace / All left alone, once one has run —
-   * `readOnly` (derived, linked, pulled, header and graph matches) and `near`
-   * (fuzzy near misses: Replace only ever rewrites exact matches).
+   * `readOnly` (derived, linked, pulled, header and graph matches, and the
+   * shown value of any formula) and `near` (fuzzy near misses: Replace only
+   * ever rewrites exact matches) — and `formulas`, the matches it rewrote
+   * inside formula text, which are called out so their results get checked.
    */
   readonly skipped: Skipped | null;
   /** A transient notice for the toast (the worker restarted or stopped); null when there is none. */
@@ -79,11 +87,20 @@ export interface FindState {
 export interface Skipped {
   readonly readOnly: number;
   readonly near: number;
+  /**
+   * Not skipped: matches rewritten inside formula text (an expression or a
+   * reference path). Formula expressions are in Find's scope (FIND-03) and
+   * outside FIND-08's exclusions, so Replace and All both rewrite them —
+   * with notice, since a rewritten literal changes what the formula computes.
+   */
+  readonly formulas: number;
 }
+
+const NOTHING_SKIPPED: Skipped = { readOnly: 0, near: 0, formulas: 0 };
 
 /** The "n skipped" sentence beneath the replace row; '' when nothing was skipped. */
 export function skippedText(skipped: Skipped | null): string {
-  if (skipped === null || skipped.readOnly + skipped.near === 0) return '';
+  if (skipped === null || skipped.readOnly + skipped.near + skipped.formulas === 0) return '';
   const locale = activeLocale();
   const parts: string[] = [];
   if (skipped.near > 0) {
@@ -94,7 +111,29 @@ export function skippedText(skipped: Skipped | null): string {
   if (skipped.readOnly > 0) {
     parts.push(`${formatNumber(locale, skipped.readOnly)} not editable`);
   }
+  if (skipped.formulas > 0) {
+    parts.push(
+      `${formatNumber(locale, skipped.formulas)} inside ${skipped.formulas === 1 ? 'a formula' : 'formulas'} — check ${skipped.formulas === 1 ? 'its result' : 'their results'}`,
+    );
+  }
   return parts.join(', ');
+}
+
+/**
+ * FIND-03: what a computed cell shows, read from the engine host's results
+ * (formula, derived and pulled cells hold expressions in the document, never
+ * values). Locale-formatted, as the grid renders it, so what is found is what
+ * is seen. `undefined` while the engine has no result for the cell.
+ */
+export function engineValueReader(gd: GedeDoc): SearchValueReader {
+  const host = peekEngine(gd.doc);
+  if (host === undefined) return () => undefined;
+  const locale = activeLocale();
+  return (tableId, rowId, colId) => {
+    const result = host.result(workbookCellId(tableId, cellKey(rowId, colId)));
+    if (result?.value == null || result.error !== null) return undefined;
+    return formatCellValue(locale, result.value);
+  };
 }
 
 export interface FindActions {
@@ -271,7 +310,11 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
           if (latest.current.open) {
             client.current?.post({
               type: 'reset',
-              snapshot: buildSearchSnapshot(gdRef.current, documentsRef.current),
+              snapshot: buildSearchSnapshot(
+                gdRef.current,
+                documentsRef.current,
+                engineValueReader(gdRef.current),
+              ),
             });
             runQuery();
           }
@@ -329,7 +372,10 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
     if (!open) return undefined;
     const c = client.current;
     if (c === null) return undefined;
-    c.post({ type: 'reset', snapshot: buildSearchSnapshot(gd, documentsRef.current) });
+    // The engine host is created here if nothing has yet: Find reads its results (FIND-03).
+    const host = engineFor(gd.doc);
+    const valueOf = () => engineValueReader(gd);
+    c.post({ type: 'reset', snapshot: buildSearchSnapshot(gd, documentsRef.current, valueOf()) });
     runQuery();
 
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -341,17 +387,21 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       timer = null;
       if (sheetsDirty) {
         // Sheet order feeds every entry's ordinal: rebuild.
-        c.post({ type: 'reset', snapshot: buildSearchSnapshot(gd, documentsRef.current) });
+        c.post({
+          type: 'reset',
+          snapshot: buildSearchSnapshot(gd, documentsRef.current, valueOf()),
+        });
       } else {
         const tables = [];
+        const read = valueOf();
         for (const id of changed) {
-          const t = tableEntries(gd, id);
+          const t = tableEntries(gd, id, read);
           if (t === null) removed.add(id);
           else tables.push(t);
         }
         if (tables.length > 0) c.post({ type: 'upsertTables', tables });
         if (removed.size > 0) c.post({ type: 'removeTables', tableIds: [...removed] });
-        if (graphsDirty) c.post({ type: 'setGraphs', graphs: graphEntriesOf(gd) });
+        if (graphsDirty) c.post({ type: 'setGraphs', graphs: graphEntriesOf(gd, read) });
       }
       changed.clear();
       removed.clear();
@@ -377,11 +427,26 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       sheetsDirty = true;
       schedule();
     };
+    // A result batch changes what computed cells show (FIND-03): their tables
+    // re-index, and a graph reading one of them re-derives its parameters.
+    const onResults = (touched: readonly string[]) => {
+      if (touched.length === 0) return;
+      const tables = new Set<string>();
+      for (const id of touched) tables.add(splitWorkbookCellId(id).tableId);
+      tables.forEach((id) => changed.add(id));
+      gd.graphs.forEach((graph) => {
+        const tableId = graph.get('tableId');
+        if (typeof tableId === 'string' && tables.has(tableId)) graphsDirty = true;
+      });
+      schedule();
+    };
     gd.tables.observeDeep(onTables);
     gd.graphs.observeDeep(onGraphs);
     gd.sheets.observeDeep(onSheets);
+    const stopResults = host.subscribeAll(onResults);
     return () => {
       if (timer !== null) clearTimeout(timer);
+      stopResults();
       gd.tables.unobserveDeep(onTables);
       gd.graphs.unobserveDeep(onGraphs);
       gd.sheets.unobserveDeep(onSheets);
@@ -517,7 +582,15 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   // counted and left alone, like read-only matches.
   // The write goes through `replaceInCell`, the text algebra's mark-preserving
   // span replacement: bold on the untouched part of a cell stays bold.
+  // A match inside a formula's text (its expression or a reference path) is
+  // rewritten like any other (FIND-03 puts expressions in scope; FIND-08's
+  // exclusions are derived, linked, pulled and graph matches, and nothing
+  // else): `replaceInCell` re-binds the result through `commitCellText`. It
+  // is counted apart and announced, since a rewritten literal changes what
+  // the formula computes (#125).
   type Outcome = 'replaced' | 'readOnly' | 'near' | 'stale';
+  const inFormula = (match: SearchMatch) =>
+    match.field === 'formula' || match.field === 'reference';
   const replaceOne = useCallback(
     (match: SearchMatch, text: string): Outcome => {
       if (match.readOnly || match.target.kind !== 'cell') return 'readOnly';
@@ -546,10 +619,17 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
     // The re-index drops a rewritten match, so its index steps onto the next one by itself;
     // a skipped match stays, so step past it (before recording what was skipped: a step clears it).
     if ((outcome === 'readOnly' || outcome === 'near') && list.length > 1) step(index + 1);
-    setSkipped({ readOnly: outcome === 'readOnly' ? 1 : 0, near: outcome === 'near' ? 1 : 0 });
+    setSkipped({
+      ...NOTHING_SKIPPED,
+      readOnly: outcome === 'readOnly' ? 1 : 0,
+      near: outcome === 'near' ? 1 : 0,
+      formulas: outcome === 'replaced' && inFormula(match) ? 1 : 0,
+    });
     announce(
       outcome === 'replaced'
-        ? `Replaced ${describeMatch(gd, match)}`
+        ? inFormula(match)
+          ? `Replaced inside the formula in ${describeMatch(gd, match)}; check its result`
+          : `Replaced ${describeMatch(gd, match)}`
         : outcome === 'readOnly'
           ? `Skipped ${describeMatch(gd, match)}: it is not editable`
           : outcome === 'near'
@@ -562,21 +642,27 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
     const list = latest.current.matches;
     if (list.length === 0) return;
     let replaced = 0;
-    const left = { readOnly: 0, near: 0 };
+    const left = { ...NOTHING_SKIPPED };
     // One transaction: one undo step, one sync message.
     gd.doc.transact(() => {
       for (const match of list) {
         const outcome = replaceOne(match, replacement);
-        if (outcome === 'replaced') replaced += 1;
-        else if (outcome === 'readOnly') left.readOnly += 1;
+        if (outcome === 'replaced') {
+          replaced += 1;
+          if (inFormula(match)) left.formulas += 1;
+        } else if (outcome === 'readOnly') left.readOnly += 1;
         else if (outcome === 'near') left.near += 1;
       }
     }, gd.origin);
     setSkipped(left);
-    const detail = skippedText(left);
-    announce(
-      `Replaced ${formatNumber(activeLocale(), replaced)}${detail === '' ? '' : `, ${detail}`}`,
-    );
+    const locale = activeLocale();
+    const parts = [`${formatNumber(locale, replaced)} replaced`];
+    if (left.formulas > 0) {
+      parts.push(`${formatNumber(locale, left.formulas)} inside formulas — check their results`);
+    }
+    const skipped = skippedText({ ...left, formulas: 0 });
+    if (skipped !== '') parts.push(skipped);
+    announce(parts.join(', '));
   }, [editable, gd, replacement, replaceOne]);
   const dismissNotice = useCallback(() => {
     setNotice(null);

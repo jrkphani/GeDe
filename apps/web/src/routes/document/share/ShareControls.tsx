@@ -28,10 +28,12 @@ export function ShareControls({ doc, participants, phone }: ShareControlsProps) 
   const sharedFlag =
     doc.sharedBy !== undefined || (sharedWithOthers ?? doc.sharedWithOthers === true);
 
+  // After a change the sheet re-reads the same facts the service folds into
+  // `sharedWithOthers` (#139): a participant or the link on — one definition,
+  // so the pill never disagrees with the library row or the delete/archive
+  // slot. A pending invitation is not a participant (SHARE-05, LIB-D4).
   const onChanged = (sheet: SheetModel) => {
-    setSharedWithOthers(
-      sheet.participants.length > 0 || sheet.invites.length > 0 || sheet.linkAccess !== 'none',
-    );
+    setSharedWithOthers(sheet.participants.length > 0 || sheet.linkAccess !== 'none');
   };
 
   return (

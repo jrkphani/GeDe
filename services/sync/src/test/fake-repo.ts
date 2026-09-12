@@ -37,6 +37,7 @@ import {
   type DocumentRecord,
   type DocumentSummary,
   type InviteRecord,
+  type LibrarySort,
   type LibraryView,
   type Repo,
   type StoredUpdate,
@@ -58,6 +59,7 @@ interface MutableDocument extends DocumentRecord {
 
 interface MutableInvite extends InviteRecord {
   acceptedAt: Date | null;
+  mailSentAt: Date | null;
 }
 
 interface MutableUser extends Omit<UserRecord, 'sampleDocumentId'> {
@@ -65,6 +67,7 @@ interface MutableUser extends Omit<UserRecord, 'sampleDocumentId'> {
   displayName: string | null;
   locale: string | null;
   tourDoneAt: Date | null;
+  librarySort: LibrarySort | null;
   deletedAt: Date | null;
 }
 
@@ -151,6 +154,7 @@ export class FakeRepo implements Repo {
       displayName,
       locale: null,
       tourDoneAt: null,
+      librarySort: null,
       deletedAt: null,
     };
     this.usersBySub.set(sub, user);
@@ -315,6 +319,11 @@ export class FakeRepo implements Repo {
     return (snapshot?.sizeBytes ?? 0) + tail;
   }
 
+  /** As `sharedWithOthers` in `pg.ts` (#139): a share or the link on; a pending invitation is not a participant. */
+  private sharedWithOthers(doc: MutableDocument): boolean {
+    return (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0 || doc.linkAccess !== 'none';
+  }
+
   private summarise(doc: MutableDocument, userId: string): DocumentSummary {
     const share = doc.ownerId === userId ? undefined : this.sharesByDoc.get(doc.id)?.get(userId);
     const owner = this.userById(doc.ownerId);
@@ -332,7 +341,7 @@ export class FakeRepo implements Repo {
             email: inviter?.email ?? null,
           }
         : null,
-      sharedWithOthers: (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0,
+      sharedWithOthers: this.sharedWithOthers(doc),
     };
   }
 
@@ -402,6 +411,7 @@ export class FakeRepo implements Repo {
       if (patch.displayName !== undefined) user.displayName = patch.displayName;
       if (patch.locale !== undefined) user.locale = patch.locale;
       if (patch.tourDone !== undefined) user.tourDoneAt = patch.tourDone ? new Date() : null;
+      if (patch.librarySort !== undefined) user.librarySort = patch.librarySort;
       return Promise.resolve(this.userRecord(user));
     },
     erase: (id) => {
@@ -520,6 +530,7 @@ export class FakeRepo implements Repo {
       user.displayName = ERASED_DISPLAY_NAME;
       user.locale = null;
       user.tourDoneAt = null;
+      user.librarySort = null;
       user.deletedAt = now;
       return Promise.resolve({
         cognitoSub,
@@ -549,7 +560,7 @@ export class FakeRepo implements Repo {
             : view === 'browse'
               ? live && owned && shown
               : view === 'shared'
-                ? live && shown && (!owned || (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0)
+                ? live && shown && (!owned || this.sharedWithOthers(doc))
                 : view === 'archived'
                   ? live && owned && doc.archivedAt !== null
                   : owned && this.withinRetention(doc, now);
@@ -820,6 +831,7 @@ export class FakeRepo implements Repo {
         permission: i.permission,
         invitedBy: i.invitedBy,
         expiresAt: i.expiresAt,
+        mailSentAt: i.mailSentAt,
       }));
       return Promise.resolve({
         owner: {
@@ -972,10 +984,17 @@ export class FakeRepo implements Repo {
         expiresAt,
         acceptedAt: null,
         createdAt: new Date(),
+        mailSentAt: null,
       };
       this.invitesById.set(invite.id, invite);
       this.auditLog.push({ documentId, userId: invitedBy, action: 'share.invite', target: email });
       return Promise.resolve({ invite: { ...invite }, created: true });
+    },
+    markMailSent: ({ inviteId }) => {
+      const invite = this.invitesById.get(inviteId);
+      if (!invite) return Promise.resolve(false);
+      invite.mailSentAt = new Date();
+      return Promise.resolve(true);
     },
     remove: ({ documentId, inviteId, actorId }) => {
       const invite = this.pendingInvites(
@@ -996,6 +1015,12 @@ export class FakeRepo implements Repo {
         if (invite.token === token) return Promise.resolve({ ...invite });
       }
       return Promise.resolve(undefined);
+    },
+    pending: ({ documentId, inviteId }) => {
+      const invite = this.pendingInvites(
+        (i) => i.id === inviteId && i.documentId === documentId,
+      )[0];
+      return Promise.resolve(invite ? { ...invite } : undefined);
     },
     accept: ({ inviteId, userId }) => {
       const invite = this.pendingInvites((i) => i.id === inviteId)[0];

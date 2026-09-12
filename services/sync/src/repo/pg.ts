@@ -19,6 +19,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  ne,
   not,
   notInArray,
   or,
@@ -58,6 +59,7 @@ import {
   type DocumentSummary,
   type ErasureAuditAction,
   type InviteRecord,
+  type LibrarySort,
   type LibraryView,
   type Repo,
   type ShareAuditAction,
@@ -163,9 +165,15 @@ function toUser(row: UserRow): UserRecord {
     displayName: row.displayName,
     locale: row.locale,
     tourDoneAt: row.tourDoneAt,
+    librarySort: toLibrarySort(row.librarySort),
     sampleDocumentId: row.sampleDocumentId,
     deletedAt: row.deletedAt,
   };
+}
+
+/** The CHECK (migration 0011) keeps the column to these; anything else reads as unset. */
+function toLibrarySort(value: string | null): LibrarySort | null {
+  return value === 'name' || value === 'date' ? value : null;
 }
 
 function toInvite(row: typeof invites.$inferSelect): InviteRecord {
@@ -179,6 +187,7 @@ function toInvite(row: typeof invites.$inferSelect): InviteRecord {
     expiresAt: row.expiresAt,
     acceptedAt: row.acceptedAt,
     createdAt: row.createdAt,
+    mailSentAt: row.mailSentAt,
   };
 }
 
@@ -444,14 +453,24 @@ const inviter = alias(users, 'inviter');
 const withinRetention = sql`${documents.deletedAt} > now() - (${RECENTLY_DELETED_DAYS}::int * interval '1 day')`;
 
 export function createPgRepo(db: Db, logger: Logger): Repo {
-  /** `EXISTS (SELECT 1 FROM shares WHERE document_id = documents.id)` for the current row. */
-  const hasShares = () =>
-    exists(
+  /**
+   * One definition of "shared" for the current `documents` row (#139, SHARE-05,
+   * LIB-01/02): a participant exists (a share row) or the link is on — the
+   * same facts that make the workscape non-deletable (`ever_shared`, LIB-D1/D4),
+   * so the title pill, the library row, the Shared view and the delete/archive
+   * slot never disagree. A pending invitation is not a participant (SHARE-01
+   * lists it apart; LIB-D4: sent is not accepted) and leaves the workscape
+   * deletable, so it does not count — the sheet still lists it, with Resend.
+   */
+  const sharedWithOthers = (): SQL<boolean> => {
+    const anyShareExists = exists(
       db
         .select({ one: sql`1` })
         .from(anyShare)
         .where(eq(anyShare.documentId, documents.id)),
     );
+    return sql<boolean>`(${anyShareExists} or ${ne(documents.linkAccess, 'none')})`;
+  };
 
   /**
    * The library projection of `documents` for one caller: the row, the owner's
@@ -470,7 +489,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         invitedBy: shares.invitedBy,
         inviterName: inviter.displayName,
         inviterEmail: inviter.email,
-        sharedWithOthers: hasShares(),
+        sharedWithOthers: sharedWithOthers(),
         // bigint aggregates arrive from pg as strings; converted below.
         sizeBytes: sql<string | number>`
           coalesce(${snapshots.sizeBytes}, 0)::bigint
@@ -505,7 +524,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       ownerEmail: row.ownerEmail,
       sizeBytes: Number(row.sizeBytes),
       sharedBy,
-      sharedWithOthers: Boolean(row.sharedWithOthers),
+      sharedWithOthers: row.sharedWithOthers,
     };
   }
 
@@ -522,7 +541,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       case 'browse':
         return and(live, ownedAndShown);
       case 'shared':
-        return and(live, or(sharedWithMe, and(ownedAndShown, hasShares())));
+        return and(live, or(sharedWithMe, and(ownedAndShown, sharedWithOthers())));
       case 'deleted':
         return and(owned, isNotNull(documents.deletedAt), withinRetention);
       case 'archived':
@@ -628,6 +647,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         if (patch.locale !== undefined) set.locale = patch.locale;
         // ONB-03: the flag is a timestamp so support can see when; `false` is Replay (ONB-08).
         if (patch.tourDone !== undefined) set.tourDoneAt = patch.tourDone ? new Date() : null;
+        if (patch.librarySort !== undefined) set.librarySort = patch.librarySort;
         if (Object.keys(set).length === 0) {
           const [row] = await db.select(userColumns).from(users).where(eq(users.id, id)).limit(1);
           return row ? toUser(row) : undefined;
@@ -859,6 +879,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               displayName: ERASED_DISPLAY_NAME,
               locale: null,
               tourDoneAt: null,
+              librarySort: null,
               lastSeenAt: null,
               deletedAt: now,
             })
@@ -1241,6 +1262,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             permission: invites.permission,
             invitedBy: invites.invitedBy,
             expiresAt: invites.expiresAt,
+            mailSentAt: invites.mailSentAt,
           })
           .from(invites)
           .where(and(eq(invites.documentId, documentId), invitePending))
@@ -1531,6 +1553,24 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       async byToken(token) {
         const [row] = await db.select().from(invites).where(eq(invites.token, token)).limit(1);
+        return row ? toInvite(row) : undefined;
+      },
+
+      async markMailSent({ inviteId }) {
+        const rows = await db
+          .update(invites)
+          .set({ mailSentAt: new Date() })
+          .where(eq(invites.id, inviteId))
+          .returning({ id: invites.id });
+        return rows.length > 0;
+      },
+
+      async pending({ documentId, inviteId }) {
+        const [row] = await db
+          .select()
+          .from(invites)
+          .where(and(eq(invites.id, inviteId), eq(invites.documentId, documentId), invitePending))
+          .limit(1);
         return row ? toInvite(row) : undefined;
       },
 

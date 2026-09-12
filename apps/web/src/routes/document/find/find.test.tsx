@@ -7,9 +7,11 @@ import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addDerivedColumn,
   addRow,
   cellRich,
   cellText,
+  createGraphPair,
   createSheet,
   createTable,
   docNode,
@@ -17,6 +19,7 @@ import {
   paragraphNode,
   setCellRich,
   setCellText,
+  setGraphDimensions,
   tableById,
   textNode,
   type GedeDoc,
@@ -25,6 +28,7 @@ import {
 
 import { LiveRegion } from '../../../announce.js';
 import type * as DocumentsApi from '../../../api/documents.js';
+import { engineFor } from '../../../doc/engine.js';
 import { withConfig } from '../../../test/helpers.js';
 import { ToastProvider, TooltipProvider } from '@gede/ui';
 import { FindBar } from './FindBar.js';
@@ -152,6 +156,21 @@ async function openAndType(query: string) {
 }
 
 const count = () => screen.getByTestId('find-count').textContent;
+
+/**
+ * Clear the field and let the empty query settle before typing the next one:
+ * a match that survives a re-query stays current (FIND-07), so a query typed
+ * over a live one may keep its current index rather than start at the first.
+ */
+async function retype(field: HTMLElement, query: string) {
+  await userEvent.clear(field);
+  // The empty query has run once its (empty) results have cleared the highlights.
+  await waitFor(() => {
+    expect(count()).toBe('');
+    expect(highlights()).toHaveLength(0);
+  });
+  await userEvent.type(field, query);
+}
 const highlights = () =>
   screen.queryAllByTestId('find-highlights').flatMap((h) => Array.from(h.children));
 
@@ -296,6 +315,79 @@ describe('Find', () => {
     });
   });
 
+  it('FIND-03 FIND-08 derived cells, formula results and graph parameter values are found; derived and result matches are not editable; graph entries carry the table and kind, never column ids (#125)', async () => {
+    const { gd, sheet1, table1, ids } = fixture();
+    // A derived column over Column 1 (REF-04): "Singapore desk", "Sngapore office desk", …
+    const derived = addDerivedColumn(gd, table1, {
+      sourceColId: ids.cols[0]!,
+      method: 'Concat',
+      args: [' desk'],
+    })!;
+    // A bound pair (GRAPH-01) whose only dimension is Column 1.
+    const pair = createGraphPair(gd, { sheetId: sheet1, tableId: table1 });
+    setGraphDimensions(gd, pair.pairId, [ids.cols[0]!]);
+    // A formula whose result, "Singapore hub", is text that appears nowhere else.
+    setCellText(gd, table1, ids.rows[2]!, ids.cols[1]!, '=Concat(B5, " hub")');
+    await act(() => engineFor(gd.doc).settled());
+    render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Find and replace' }));
+    const field = screen.getByRole('textbox', { name: 'Find' });
+    await userEvent.clear(field);
+    // "desk" is nowhere in the document's text: only the derived column shows it — three
+    // rows (the formula row's source does not evaluate here, so that row has no result) plus
+    // the derived column's own header.
+    await userEvent.type(field, 'desk');
+    await waitFor(() => {
+      expect(count()).toBe('1 of 4');
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^Results/ }));
+    const list = screen.getByTestId('find-results');
+    const cells = within(within(list).getByRole('region', { name: 'Cells' })).getAllByRole(
+      'button',
+    );
+    expect(cells.some((b) => b.textContent?.includes('Singapore desk'))).toBe(true);
+    // FIND-08: none of them is editable — All leaves every one alone with a count.
+    await userEvent.type(screen.getByRole('textbox', { name: 'Replace with' }), 'chair');
+    await userEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByTestId('find-skipped')).toHaveTextContent('4 not editable');
+    expect(cellText(gd.tables.get(table1)!, ids.rows[0]!, derived)).toBe('');
+
+    // A formula's evaluated value is found. The match is on the result, so it is not
+    // editable; searching "hub" instead matches the expression (which also carries it),
+    // the editable text.
+    await retype(field, 'Singapore hub');
+    await waitFor(() => {
+      // The result (exact) and, two edits away, the other formula's `Singapore, " hub`.
+      expect(count()).toBe('1 of 2');
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(screen.getByTestId('find-skipped')).toHaveTextContent(
+      '1 near match left alone, 1 not editable',
+    );
+    expect(cellText(gd.tables.get(table1)!, ids.rows[2]!, ids.cols[1]!)).toBe(
+      '=Concat(B5, " hub")',
+    );
+    await retype(field, 'hub');
+    await waitFor(() => {
+      expect(count()).toBe('1 of 2'); // both formulas, by their text
+    });
+
+    // Graph parameter values: the distinct values of Column 1 and its title, once per pair.
+    await retype(field, 'Mumbai');
+    await waitFor(() => {
+      expect(count()).toBe('1 of 3'); // the cell, its derived cell, the graph
+    });
+    const graphs = within(
+      within(screen.getByTestId('find-results')).getByRole('region', { name: 'Graphs' }),
+    ).getAllByRole('button');
+    expect(graphs.map((b) => b.textContent)).toEqual(['Table 1 ring graphMumbai']);
+    // A column id finds nothing.
+    await retype(field, ids.cols[0]!.slice(0, 12));
+    await waitFor(() => {
+      expect(count()).toBe('No matches');
+    });
+  });
+
   it('FIND-04 col: restricts to a column and is: to the resolved format; bare terms match anywhere', async () => {
     const { gd, sheet1 } = fixture();
     render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
@@ -303,18 +395,15 @@ describe('Find', () => {
     await waitFor(() => {
       expect(count()).toBe('1 of 1');
     });
-    await userEvent.clear(field);
-    await userEvent.type(field, 'is:date');
+    await retype(field, 'is:date');
     await waitFor(() => {
       expect(count()).toBe('1 of 1');
     });
-    await userEvent.clear(field);
-    await userEvent.type(field, 'is:currency|date');
+    await retype(field, 'is:currency|date');
     await waitFor(() => {
       expect(count()).toBe('1 of 2');
     });
-    await userEvent.clear(field);
-    await userEvent.type(field, 'office');
+    await retype(field, 'office');
     await waitFor(() => {
       expect(count()).toBe('1 of 1');
     });
@@ -399,7 +488,7 @@ describe('Find', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent(/4 of 4, B6 in Table 1/);
   });
 
-  it('FIND-08 Replace rewrites the current match, All rewrites every exact match in scope; read-only matches and fuzzy near misses are left alone with a count', async () => {
+  it('FIND-08 FIND-03 Replace rewrites the current match, All rewrites every exact match in scope, formula text included and called out; read-only matches and fuzzy near misses are left alone with a count (#125)', async () => {
     const { gd, sheet1, table1, ids } = fixture();
     // Column 2 becomes derived: its cells are read-only (cellReadOnlyReason, GRID-04).
     const columns = gd.tables.get(table1)!.get('columns') as Y.Array<Y.Map<unknown>>;
@@ -426,21 +515,28 @@ describe('Find', () => {
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
     await waitFor(() => {
       expect(screen.getByTestId('find-skipped')).toHaveTextContent(
-        '1 near match left alone, 1 not editable',
+        '1 near match left alone, 1 not editable, 1 inside a formula — check its result',
       );
     });
+    // FIND-03 puts formula expressions in scope and FIND-08 excludes only derived, linked,
+    // pulled and graph matches: the literal inside the formula is rewritten (re-bound through
+    // commitCellText) and called out so its result is checked (#125).
     expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Mumbai, " hub")');
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      '2 replaced, 1 inside formulas — check their results, 1 near match left alone, 1 not editable',
+    );
     // A fuzzy near miss ("Sngapore") is not what was asked for: untouched (FIND-05 × FIND-08).
     expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
     // Derived: untouched.
     expect(cellText(t1, ids.rows[2]!, ids.cols[1]!)).toBe('Singapore fund');
     await waitFor(() => {
-      expect(count()).toBe('1 of 2'); // the near miss and the read-only match remain
+      expect(count()).toBe('1 of 2'); // the read-only match and the near miss remain
     });
-    // Replace on a read-only match, then on a near miss: each is left alone and stepped past.
+    // Replace on a read-only match: left alone and stepped past.
     await userEvent.click(screen.getByRole('button', { name: 'Replace' }));
     expect(screen.getByTestId('find-skipped')).toHaveTextContent('1 not editable');
     expect(count()).toBe('2 of 2');
+    // Replace on a near miss: left alone and stepped past.
     await userEvent.click(screen.getByRole('button', { name: 'Replace' }));
     expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
     expect(screen.getByTestId('find-skipped')).toHaveTextContent('1 near match left alone');
@@ -608,7 +704,8 @@ describe('Find', () => {
     });
     await userEvent.type(screen.getByRole('textbox', { name: 'Replace with' }), 'Chennai');
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
-    // Exact hits in both tables are rewritten in one transaction; the near miss is left alone.
+    // Exact hits in both tables are rewritten in one transaction, the formula's reference
+    // path included (FIND-03); the near miss is left alone (FIND-08).
     expect(cellText(t1, ids.rows[0]!, ids.cols[0]!)).toBe('Chennai');
     expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Chennai, " hub")');
     expect(
@@ -789,9 +886,12 @@ describe('Find', () => {
         this.onerror?.({ message: 'boom', preventDefault: () => undefined });
       }
     }
+    const { gd, sheet1 } = fixture();
+    // The engine host is created first, inline (no Worker under jsdom): only the
+    // search Worker is counted below.
+    engineFor(gd.doc);
     vi.stubGlobal('Worker', FakeIndexWorker);
     try {
-      const { gd, sheet1 } = fixture();
       render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
       await openAndType('Canned');
       await waitFor(() => {

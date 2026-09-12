@@ -79,6 +79,25 @@
   color: var(--danger);
   overflow-wrap: anywhere;
 }
+/* #121: the invitation stands, its mail did not go — a notice with a way forward, in warning
+   (icon + text carry the state, never hue alone). */
+.gd-share__notice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin: 0;
+  font-size: 0.78125rem;
+  color: var(--ink);
+  overflow-wrap: anywhere;
+}
+.gd-share__notice > svg {
+  flex: none;
+  color: var(--warning);
+}
+.gd-share__notice > span {
+  flex: 1 1 12rem;
+}
 
 /* The sheet's action row holds three verbs; let them wrap rather than clip (RESP-04). */
 .gd-share .gd-dialog__actions {

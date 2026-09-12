@@ -1,7 +1,6 @@
 import {
   addDerivedColumn,
   deleteColumn,
-  derivedColumnsOf,
   deriveSignature,
   FORMAT_PRESETS,
   EXTRACT_STYLES,
@@ -14,11 +13,12 @@ import {
   type MethodName,
 } from '@gede/core';
 import { Button, Select, TextField } from '@gede/ui';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type * as Y from 'yjs';
 
 import { announce } from '../../../announce.js';
 import { useYVersion } from '../../../doc/use-y.js';
+import { PipelineAudit } from './PipelineAudit.js';
 
 export interface DerivedColumnPanelProps {
   gd: GedeDoc;
@@ -80,6 +80,11 @@ export function DerivedColumnPanel({
   const record = tableById(gd, tableId);
   const [editing, setEditing] = useState<Id | null>(null);
   const [source, setSource] = useState<Id>(sourceColId ?? '');
+  // INSP-09 (#127): the compose form follows the selection — a selected cell's
+  // column becomes the source — unless a step is being edited.
+  useEffect(() => {
+    if (sourceColId !== undefined && editing === null) setSource(sourceColId);
+  }, [sourceColId, editing]);
   const [method, setMethod] = useState<MethodName>('Extract');
   const [args, setArgs] = useState<string[]>(defaultsFor('Extract'));
   /** Extract only: `Style="…"` instead of a pattern (PRD §3 format-aware extraction). */
@@ -99,7 +104,6 @@ export function DerivedColumnPanel({
     method,
     args: method === 'Extract' && style !== '' ? [{ name: 'Style', value: style }] : args,
   };
-  const pipeline = derivedColumnsOf(record);
   const isSplit = method === 'Split';
 
   const changeMethod = (next: string) => {
@@ -242,44 +246,14 @@ export function DerivedColumnPanel({
           {status.text}
         </p>
       )}
-      {pipeline.length > 0 && (
-        <>
-          <h3 className="gd-derive__title">Pipeline</h3>
-          <ul className="gd-derive__list" aria-label="Derived pipeline">
-            {pipeline.map((step) => (
-              <li key={step.column.id} className="gd-derive__item">
-                <span className="gd-derive__item-label" title={step.signature}>
-                  {step.signature}
-                </span>
-                <span className="gd-derive__actions">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!editable}
-                    onClick={() => {
-                      edit(step.column.id, step.spec);
-                    }}
-                    aria-label={`Edit ${step.signature}`}
-                  >
-                    Edit
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    disabled={!editable}
-                    onClick={() => {
-                      remove(step.column.id);
-                    }}
-                    aria-label={`Remove ${step.signature}`}
-                  >
-                    Remove
-                  </Button>
-                </span>
-              </li>
-            ))}
-          </ul>
-        </>
-      )}
+      <PipelineAudit
+        gd={gd}
+        tableId={tableId}
+        selectedColId={sourceColId}
+        editable={editable}
+        onEdit={edit}
+        onRemove={remove}
+      />
     </section>
   );
 }

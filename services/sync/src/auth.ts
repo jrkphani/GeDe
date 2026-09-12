@@ -27,7 +27,7 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { Config } from './config.js';
 import type { TokenVerifier } from './deps.js';
 import { AppError } from './errors.js';
-import type { Repo, TokenIdentity, UserRecord } from './repo/types.js';
+import type { LibrarySort, Repo, TokenIdentity, UserRecord } from './repo/types.js';
 
 export interface AuthUser {
   readonly id: string;
@@ -38,6 +38,8 @@ export interface AuthUser {
   readonly locale: string | null;
   /** ONB-03: when the tour was completed or skipped; null until then and after Replay. */
   readonly tourDoneAt: Date | null;
+  /** LIB-05 (#133): the library sort the account chose, or null. */
+  readonly librarySort: LibrarySort | null;
   /**
    * ONB-01: the account's guided sample, seeded on first sight; null when seeding is
    * off or the seed failed (logged; retried on the account's next request).
@@ -195,6 +197,7 @@ export function toAuthUser(user: UserRecord, tokenExpiresAt: number | null = nul
     displayName: user.displayName,
     locale: user.locale,
     tourDoneAt: user.tourDoneAt,
+    librarySort: user.librarySort,
     sampleDocumentId: user.sampleDocumentId,
     tokenExpiresAt,
   };

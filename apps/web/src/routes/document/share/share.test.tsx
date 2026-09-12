@@ -10,6 +10,7 @@ import { useEffect } from 'react';
 import { Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { ApiError } from '../../../api/client.js';
 import type * as SharesApi from '../../../api/shares.js';
 import { LiveRegion } from '../../../announce.js';
 import { RequireAuth, SessionProvider, takeReturnTo, useSession } from '../../../auth/session.js';
@@ -25,6 +26,7 @@ vi.mock('../../../api/shares.js', async (importOriginal) => {
     ...actual,
     getShareSheet: vi.fn(),
     inviteToDocument: vi.fn(),
+    resendInvite: vi.fn(),
     withdrawInvite: vi.fn(),
     acceptInvite: vi.fn(),
     setParticipantPermission: vi.fn(),
@@ -65,6 +67,7 @@ const PENDING = {
   permission: 'view' as const,
   invitedBy: 'u-owner',
   expiresAt: '2026-09-26T00:00:00.000Z',
+  mailSentAt: '2026-09-12T00:00:00.000Z',
 };
 
 function sheet(overrides: Partial<SharesApi.ShareSheet> = {}): SharesApi.ShareSheet {
@@ -145,6 +148,7 @@ describe('ShareSheet', () => {
     vi.mocked(shares.inviteToDocument).mockResolvedValue({
       kind: 'invite',
       created: true,
+      delivery: 'sent',
       shares: sheet({
         invites: [PENDING, { ...PENDING, id: 'inv-2', email: 'vijay@example.com' }],
       }),
@@ -313,6 +317,7 @@ describe('ShareSheet', () => {
     vi.mocked(shares.inviteToDocument).mockResolvedValue({
       kind: 'invite',
       created: false,
+      delivery: 'skipped',
       shares: sheet(),
     });
     render(<Harness />);
@@ -324,6 +329,131 @@ describe('ShareSheet', () => {
         'akshaya@example.com already has a pending invitation',
       );
     });
+  });
+
+  it('SHARE-02 ONB-05 an invitation whose mail was refused is saved: the sheet says so with Resend, the row reads "email not sent", the tour is told, and Resend reports the new delivery (#121)', async () => {
+    const u = userEvent.setup();
+    const created = { ...PENDING, id: 'inv-9', email: 'nobody@example.invalid', mailSentAt: null };
+    vi.mocked(shares.inviteToDocument).mockResolvedValue({
+      kind: 'invite',
+      created: true,
+      delivery: 'failed',
+      shares: sheet({ invites: [PENDING, created] }),
+    });
+    const tourStore = await import('../../tour/store.js');
+    const reported = vi.spyOn(tourStore, 'reportTourInvite');
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const field = await within(dialog).findByRole('textbox', { name: 'Add people by email' });
+    await u.type(field, 'nobody@example.invalid{Enter}');
+    const notice = await within(dialog).findByTestId('share-mail-failed');
+    expect(notice).toHaveAttribute('role', 'status');
+    expect(notice).toHaveTextContent(
+      'Invitation saved — the email could not be sent; share the link or try again (nobody@example.invalid)',
+    );
+    // Not an error on the field: the invitation exists.
+    expect(field).not.toHaveAttribute('aria-invalid');
+    expect(field).toHaveValue('');
+    expect(within(dialog).getByText('Invited · email not sent')).toBeInTheDocument();
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Invitation saved');
+    // ONB-05 step 5: the action is the invitation, not the mail.
+    expect(reported).toHaveBeenCalledTimes(1);
+
+    // Resend: the same invitation, sent again; a second refusal is reported the same way.
+    vi.mocked(shares.resendInvite).mockResolvedValueOnce({
+      delivery: 'failed',
+      shares: sheet({ invites: [PENDING, created] }),
+    });
+    await u.click(within(notice).getByRole('button', { name: 'Resend' }));
+    await waitFor(() => {
+      expect(shares.resendInvite).toHaveBeenCalledWith(ID, 'inv-9');
+    });
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'The email to nobody@example.invalid could not be sent again; share the link instead',
+    );
+    // The service records the accepted send on the row; the sheet reads it back.
+    vi.mocked(shares.resendInvite).mockResolvedValueOnce({
+      delivery: 'sent',
+      shares: sheet({
+        invites: [PENDING, { ...created, mailSentAt: '2026-09-13T00:00:00.000Z' }],
+      }),
+    });
+    await u.click(
+      within(dialog).getByRole('button', { name: 'Resend invitation to nobody@example.invalid' }),
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'Invitation sent again to nobody@example.invalid',
+      );
+    });
+    expect(within(dialog).queryByTestId('share-mail-failed')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Invited · email not sent')).not.toBeInTheDocument();
+    reported.mockRestore();
+  });
+
+  it('SHARE-02 an invitation the service never mailed is shown as "email not sent" with Resend on a fresh open of the sheet, from the row itself (#121)', async () => {
+    const never = { ...PENDING, id: 'inv-7', email: 'later@example.invalid', mailSentAt: null };
+    vi.mocked(shares.getShareSheet).mockResolvedValue(sheet({ invites: [PENDING, never] }));
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const notice = await within(dialog).findByTestId('share-mail-failed');
+    expect(notice).toHaveTextContent(
+      'Invitation saved — the email could not be sent; share the link or try again (later@example.invalid)',
+    );
+    expect(within(notice).getByRole('button', { name: 'Resend' })).toBeEnabled();
+    const rows = within(dialog).getAllByRole('listitem');
+    expect(rows.find((r) => r.textContent?.includes('akshaya@example.com'))).toHaveTextContent(
+      /Invited · expires/,
+    );
+    expect(rows.find((r) => r.textContent?.includes('later@example.invalid'))).toHaveTextContent(
+      'Invited · email not sent',
+    );
+  });
+
+  it('SHARE-02 a share whose mail was refused says the person has access, never "Invitation saved", and offers no Resend (#121 review)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(shares.inviteToDocument).mockResolvedValue({
+      kind: 'share',
+      created: true,
+      delivery: 'failed',
+      shares: sheet(),
+    });
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const field = await within(dialog).findByRole('textbox', { name: 'Add people by email' });
+    await u.type(field, 'known@example.com{Enter}');
+    const notice = await within(dialog).findByTestId('share-mail-failed');
+    expect(notice).toHaveTextContent(
+      'Access given — the email could not be sent; share the link with them (known@example.com)',
+    );
+    expect(notice).not.toHaveTextContent('Invitation saved');
+    expect(within(notice).queryByRole('button', { name: 'Resend' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Access given');
+  });
+
+  it('SHARE-02 a failed invitation request is shown on the field (aria-invalid, described by the message) with the ref, and the tour is not told (#121)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(shares.inviteToDocument).mockRejectedValue(
+      new ApiError(429, '429 Too Many Requests', 'req-1234567', {
+        error: {
+          code: 'too_many_requests',
+          message: 'Too many invitations; try again in 60 seconds',
+        },
+      }),
+    );
+    const tourStore = await import('../../tour/store.js');
+    const reported = vi.spyOn(tourStore, 'reportTourInvite');
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const field = await within(dialog).findByRole('textbox', { name: 'Add people by email' });
+    await u.type(field, 'late@example.com{Enter}');
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('Too many invitations; try again in 60 seconds (ref req-12).');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field.getAttribute('aria-describedby')).toContain(alert.id);
+    expect(field).toHaveValue('late@example.com');
+    expect(reported).not.toHaveBeenCalled();
+    reported.mockRestore();
   });
 
   it('RESP-02 on phone the sheet is read-only: who has access and Copy link, no invite field, no permission control, no remove, no stop sharing', async () => {
@@ -411,6 +541,7 @@ describe('LinkRedeem', () => {
       displayName: null,
       locale: null,
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(shares.acceptInvite).mockRejectedValue(new Error('404'));
@@ -431,6 +562,7 @@ describe('LinkRedeem', () => {
       displayName: null,
       locale: null,
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(meApi.bindVerifiedEmail).mockImplementation(() => {
@@ -442,6 +574,7 @@ describe('LinkRedeem', () => {
         displayName: null,
         locale: null,
         tourDoneAt: '2026-09-01T00:00:00.000Z',
+        librarySort: null,
         sampleDocumentId: null,
       });
     });
@@ -483,6 +616,7 @@ describe('LinkRedeem', () => {
       displayName: 'Dana',
       locale: null,
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(shares.redeemLink).mockResolvedValue(undefined);

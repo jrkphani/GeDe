@@ -247,10 +247,17 @@ export function Library() {
     enabled: load.status === 'ready' && busy === null,
   });
 
-  // LIB-05: the sort choice follows the signed-in user.
+  // LIB-05: the sort choice follows the signed-in user — the device's copy first,
+  // then the account's (`users.library_sort`, #133) as soon as the profile answers.
   useEffect(() => {
     setSort(readSortPreference(sub));
   }, [sub]);
+  const accountSort = session.profile?.librarySort ?? null;
+  useEffect(() => {
+    if (accountSort === null || sub === '') return;
+    setSort(accountSort);
+    writeSortPreference(sub, accountSort);
+  }, [accountSort, sub]);
 
   // Route errors render the catalogue page; the boundary is the router's.
   if (load.status === 'error') throw load.error;
@@ -282,6 +289,11 @@ export function Library() {
     setSort(next);
     if (sub !== '') writeSortPreference(sub, next);
     announce(`Sorted by ${next}`);
+    // LIB-05: per account. The row is sorted already; only the saving can fail, and then
+    // the device keeps the choice until the next sign-in from a device that has it.
+    session.updateProfile({ librarySort: next }).catch(() => {
+      announce('Sort saved on this device only; the account could not be updated');
+    });
   };
 
   const select = (doc: DocumentSummary) => {
@@ -773,14 +785,18 @@ export function Library() {
           autoComplete="off"
         />
         <HelpMenu />
-        <Button
-          icon={<Icon name="add-row" size={15} />}
-          aria-label="New workscape"
-          title="New workscape"
-          onClick={create}
-          loading={creating}
-          loadingLabel="Creating…"
-        />
+        {/* LIB-06: the + control. RESP-02 / non-negotiable 5: creating is an edit
+            affordance, so nothing renders below 768 px (#134). */}
+        {canManage && (
+          <Button
+            icon={<Icon name="plus" size={15} />}
+            aria-label="New workscape"
+            title="New workscape"
+            onClick={create}
+            loading={creating}
+            loadingLabel="Creating…"
+          />
+        )}
         {user && <AccountMenu user={user} onSignOut={signOut} />}
       </header>
 
@@ -854,6 +870,7 @@ export function Library() {
               query={query}
               onCreate={create}
               creating={creating}
+              canCreate={canManage}
             />
           ) : (
             <LibraryTable
@@ -911,12 +928,15 @@ function LibraryEmpty({
   query,
   onCreate,
   creating,
+  canCreate,
 }: {
   view: LibraryView;
   total: number;
   query: string;
   onCreate: () => void;
   creating: boolean;
+  /** RESP-02: no create affordance below 768 px (#134). */
+  canCreate: boolean;
 }) {
   // LIB-04: a search with no matches never shows a blank page.
   if (query.trim() !== '' && total > 0) {
@@ -957,7 +977,16 @@ function LibraryEmpty({
       />
     );
   }
-  // AUTH-10 / LIB-01: first run — one primary action.
+  // AUTH-10 / LIB-01: first run — one primary action; on phone, the read-only note instead.
+  if (!canCreate) {
+    return (
+      <EmptyState
+        label={VIEW_META[view].label.toLowerCase()}
+        title="No workscapes yet"
+        description={`Tables, formulas and context graphs on one shared sheet. ${COPY.phone}: create one from a larger screen.`}
+      />
+    );
+  }
   return (
     <EmptyState
       label={VIEW_META[view].label.toLowerCase()}

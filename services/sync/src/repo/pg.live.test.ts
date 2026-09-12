@@ -416,8 +416,9 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
         slice: { rowAxis: null, colAxis: null, pins: {} },
       },
     ]);
+    // A formula cell carries what it shows, then its expression (FIND-03, #125).
     expect(stored.rows.find((r: { formula: string | null }) => r.formula !== null)).toMatchObject({
-      text_plain: '=Sum(B2:B3)',
+      text_plain: '0\n=Sum(B2:B3)',
       rich: null,
     });
 
@@ -426,7 +427,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       { sheetId, tableId, rowId: r1, columnId: c1, textPlain: 'Down jacket, summit push' },
     ]);
     expect(await repo.projection.search(doc.id, 'sum', 50)).toEqual([
-      { sheetId, tableId, rowId: r1, columnId: c2, textPlain: '=Sum(B2:B3)' },
+      { sheetId, tableId, rowId: r1, columnId: c2, textPlain: '0\n=Sum(B2:B3)' },
     ]);
     expect(await repo.projection.search(doc.id, 'jackets', 50)).toEqual([]);
     expect(await repo.projection.search(crypto.randomUUID(), 'jacket', 50)).toEqual([]);
@@ -785,9 +786,36 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(
       await repo.invites.remove({ documentId: other.id, inviteId: tok5.invite.id, actorId: owner }),
     ).toBe(false);
+    // Resend (#121) reads a pending invitation of this document by id — with its token — and
+    // nothing else: another document's, an accepted one, a withdrawn one all answer nothing.
+    expect(
+      await repo.invites.pending({ documentId: doc.id, inviteId: tok5.invite.id }),
+    ).toMatchObject({
+      id: tok5.invite.id,
+      email: 'late@example.com',
+      token: 'tok-5',
+      mailSentAt: null,
+    });
+    // An accepted send is recorded on the row (#121); the sheet reads it back; no audit row.
+    expect(await repo.invites.markMailSent({ inviteId: tok5.invite.id })).toBe(true);
+    expect(await repo.invites.markMailSent({ inviteId: crypto.randomUUID() })).toBe(false);
+    expect(
+      (await repo.invites.pending({ documentId: doc.id, inviteId: tok5.invite.id }))?.mailSentAt,
+    ).toBeInstanceOf(Date);
+    expect(
+      (await repo.documents.participants(doc.id))?.invites.find((i) => i.id === tok5.invite.id)
+        ?.mailSentAt,
+    ).toBeInstanceOf(Date);
+    expect(
+      await repo.invites.pending({ documentId: other.id, inviteId: tok5.invite.id }),
+    ).toBeUndefined();
+    expect(await repo.invites.pending({ documentId: doc.id, inviteId: tok4!.id })).toBeUndefined();
     expect(
       await repo.invites.remove({ documentId: doc.id, inviteId: tok5.invite.id, actorId: owner }),
     ).toBe(true);
+    expect(
+      await repo.invites.pending({ documentId: doc.id, inviteId: tok5.invite.id }),
+    ).toBeUndefined();
     const audit = await pool.query<{ action: string; target: string | null }>(
       "select action, target from audit_log where document_id = $1 and action like 'share.invite%' order by id",
       [doc.id],
@@ -903,8 +931,15 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
         )
       ).rows[0]?.ever_shared;
     expect(await flag()).toBe(false);
+    /** The one "shared" the pill, the row and the Shared view read (#139). */
+    const shared = async () => (await repo.documents.summarise(doc.id, owner))?.sharedWithOthers;
+    const inSharedView = async () =>
+      (await repo.documents.listForUser(owner, 'shared')).some((d) => d.id === doc.id);
+    expect(await shared()).toBe(false);
+    expect(await inSharedView()).toBe(false);
 
-    // An invitation sent sets nothing.
+    // An invitation sent sets nothing: not deletability, and not "shared" — a pending
+    // invitee is not a participant (SHARE-05, LIB-D4), so the pill and the slot agree.
     const invite = await repo.invites.create({
       documentId: doc.id,
       email: 'dana@example.com',
@@ -914,6 +949,8 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       invitedBy: owner,
     });
     expect(await flag()).toBe(false);
+    expect(await shared()).toBe(false);
+    expect(await inSharedView()).toBe(false);
     // Accepted: set. Dana binds the address first (the accept checks it in SQL).
     const danaRow = await repo.users.upsertFromToken({ sub: 'sub-es-dana', email: null });
     await repo.users.bindEmail(danaRow.id, 'dana@example.com');
@@ -923,11 +960,13 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       await repo.invites.accept({ inviteId: invite.invite.id, userId: danaRow.id }),
     ).toBeUndefined();
 
-    // Removing the last participant, with the link off, clears it.
+    // Removing the last participant, with the link off, clears it — and nothing is shared.
     expect(
       await repo.shares.remove({ documentId: doc.id, userId: danaRow.id, actorId: owner }),
     ).toBe(true);
     expect(await flag()).toBe(false);
+    expect(await shared()).toBe(false);
+    expect(await inSharedView()).toBe(false);
 
     // A person with an account named in the sheet: set on the spot.
     await repo.shares.add({
@@ -947,7 +986,9 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     });
     await repo.shares.remove({ documentId: doc.id, userId: bob, actorId: owner });
     expect(await flag()).toBe(true);
-    // Link off with nobody left: deletable again.
+    expect(await shared()).toBe(true); // link only: shared (#139)
+    expect(await inSharedView()).toBe(true);
+    // Link off with nobody left: deletable again, and not shared.
     await repo.shares.setLinkAccess({
       documentId: doc.id,
       access: 'none',
@@ -955,6 +996,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       mintToken: () => 'unused',
     });
     expect(await flag()).toBe(false);
+    expect(await shared()).toBe(false);
 
     // Link switched on alone counts as shared (LIB-D1: "no active share link").
     const change = await repo.shares.setLinkAccess({
@@ -1217,6 +1259,24 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(
       (await repo.users.updateProfile(first.id, { locale: 'ta-IN' }))?.tourDoneAt,
     ).toBeInstanceOf(Date);
+  });
+
+  test('LIB-05 library_sort round-trips as the app role, null until chosen, and the CHECK refuses any other spelling (#133)', async () => {
+    const first = await repo.users.upsertFromToken({ sub: 'sub-sort', email: null });
+    expect(first.librarySort).toBeNull();
+    expect((await repo.users.updateProfile(first.id, { librarySort: 'date' }))?.librarySort).toBe(
+      'date',
+    );
+    expect((await repo.users.upsertFromToken({ sub: 'sub-sort', email: null })).librarySort).toBe(
+      'date',
+    );
+    // A patch without the field leaves it alone.
+    expect((await repo.users.updateProfile(first.id, { locale: 'ta-IN' }))?.librarySort).toBe(
+      'date',
+    );
+    await expect(
+      pool.query("update users set library_sort = 'size' where id = $1", [first.id]),
+    ).rejects.toThrow(/users_library_sort_check/);
   });
 
   test('ONB-01 createSample is idempotent per owner through documents_owner_sample_key; the upsert reports the sample id', async () => {

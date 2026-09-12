@@ -56,10 +56,19 @@ export interface EngineHost {
   /** Start a fresh Worker after `status.failed`. */
   retry(): void;
   result(cellId: WorkbookCellId): CellResult | undefined;
+  /**
+   * When the cell's current result arrived (`Date.now()` at the batch), or
+   * `undefined` with no result. The Derive tab's pipeline audit list shows it
+   * as the step's last recompute (INSP-09, #127); nothing else times a result.
+   */
+  computedAt(cellId: WorkbookCellId): number | undefined;
   /** Re-render signal for one cell; the callback fires when that cell's result changes. */
   subscribe(cellId: WorkbookCellId, onChange: () => void): () => void;
-  /** Fires after every batch of results, for whole-sheet consumers. */
-  subscribeAll(onChange: () => void): () => void;
+  /**
+   * Fires after every batch of results, for whole-sheet consumers, with the
+   * ids of the cells whose result changed or went (Find re-indexes their tables, #125).
+   */
+  subscribeAll(onChange: (touched: readonly WorkbookCellId[]) => void): () => void;
   /** Monotonic counter across all result changes. */
   readonly version: number;
   /** Resolves once every change posted so far has been answered. */
@@ -151,8 +160,9 @@ export function createEngineHost(
   makeTransport: () => EngineTransport = defaultTransport,
 ): EngineHost {
   const results = new Map<WorkbookCellId, CellResult>();
+  const arrivedAt = new Map<WorkbookCellId, number>();
   const cellListeners = new Map<WorkbookCellId, Set<() => void>>();
-  const allListeners = new Set<() => void>();
+  const allListeners = new Set<(touched: readonly WorkbookCellId[]) => void>();
   const statusListeners = new Set<() => void>();
   const pending = new Set<number>();
   const settleWaiters: (() => void)[] = [];
@@ -190,17 +200,20 @@ export function createEngineHost(
     }
     lastElapsedMs = response.elapsedMs;
     const touched: WorkbookCellId[] = [];
+    const now = Date.now();
     for (const id of response.removed) {
+      arrivedAt.delete(id);
       if (results.delete(id)) touched.push(id);
     }
     for (const r of response.results) {
       results.set(r.cellId, r);
+      arrivedAt.set(r.cellId, now);
       touched.push(r.cellId);
     }
     if (touched.length > 0) {
       version += 1;
       for (const id of touched) notify(id);
-      for (const cb of allListeners) cb();
+      for (const cb of allListeners) cb(touched);
     }
     pending.delete(response.seq);
     if (pending.size === 0) for (const resolve of settleWaiters.splice(0)) resolve();
@@ -298,6 +311,7 @@ export function createEngineHost(
       post([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
     },
     result: (cellId) => results.get(cellId),
+    computedAt: (cellId) => arrivedAt.get(cellId),
     subscribe: (cellId, onChange) => {
       let set = cellListeners.get(cellId);
       if (set === undefined) {

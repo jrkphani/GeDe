@@ -21,6 +21,7 @@ export {
   cellTexts,
   documentEntriesOf,
   graphEntriesOf,
+  graphTitle,
   tableEntries,
   type CellEntry,
   type DocumentEntry,
@@ -31,12 +32,14 @@ export {
   type SearchField,
   type SearchSnapshot,
   type SearchText,
+  type SearchValueReader,
   type TableEntries,
 } from './snapshot.js';
 export {
   DEFAULT_SEARCH_OPTIONS,
   fuzzyBudget,
   indexEntry,
+  matchReadOnly,
   MAX_EDIT_DISTANCE,
   search,
   type IndexedEntry,
