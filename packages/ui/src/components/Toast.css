@@ -1,9 +1,12 @@
+/* DS §4 Toast: "bottom-centred 22 px up" — one lattice row above the bottom edge (#143). */
 .gd-toast__viewport {
   position: fixed;
-  bottom: var(--space-4);
-  left: var(--space-4);
+  bottom: var(--lattice-row);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
   flex-direction: column;
+  align-items: stretch;
   gap: var(--space-2);
   width: min(22rem, calc(100vw - var(--space-6)));
   margin: 0;

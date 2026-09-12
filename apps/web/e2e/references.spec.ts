@@ -20,7 +20,7 @@ import {
   type GedeDoc,
   type Id,
 } from '@gede/core';
-import { expect, test } from './fixtures/test.js';
+import { asPhone, expect, test } from './fixtures/test.js';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
@@ -307,7 +307,7 @@ test('RESP-02 REF-03 on a phone a mapping cell shows its value and offers no pic
   const t = tableTitled(gd, 'Table 1');
   addMappingColumn(gd, t.id, { tableId: t.id, colId: t.cols[0] ?? '' });
   await expect(page.getByRole('columnheader', { name: /↔ Table 1/ })).toBeVisible();
-  await page.setViewportSize({ width: 480, height: 900 });
+  await asPhone(page, 480, 900);
   const mapping = page.getByTestId('mapping-cell').first();
   await expect(mapping).toBeVisible();
   await expect(page.getByTestId('mapping-cell').getByRole('combobox')).toHaveCount(0);

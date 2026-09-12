@@ -87,17 +87,15 @@
   padding: 0 0.1875rem;
   border-bottom-left-radius: var(--radius-sm);
   background: var(--gd-outline, var(--reference-1));
-  color: var(--slate-0);
+  color: var(
+    --presence-ink
+  ); /* the outline colours are presence hues; the token flips with the theme */
   font-size: 0.5625rem;
   font-weight: 500;
   line-height: 1.5;
   text-align: center;
   transform: scale(calc(1 / var(--gd-zoom, 1)));
   transform-origin: top right;
-}
-/* Dark theme lifts the outline colours; the badge text flips to the surface colour to stay ≥ 4.5:1. */
-[data-theme='dark'] .gd-outline__index {
-  color: var(--surface);
 }
 /* PRD §20: an operand that follows the address, not a cell — muted ramp, dashed, labelled. */
 .gd-outline--positional {

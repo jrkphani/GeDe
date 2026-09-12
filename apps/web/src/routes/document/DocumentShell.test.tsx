@@ -11,7 +11,7 @@ import type * as DocumentsApi from '../../api/documents.js';
 import { setDocumentSeamsForTests } from '../../doc/use-document.js';
 import { TIER_MESO_MIN } from '../../doc/viewport.js';
 import { FakeRoom, until } from '../../test/fake-websocket.js';
-import { installMatchMedia } from '../../test/match-media.js';
+import { installMatchMedia, phoneMedia } from '../../test/match-media.js';
 import { renderRoutes, withConfig } from '../../test/helpers.js';
 import { routes } from '../../routes.js';
 
@@ -711,8 +711,8 @@ describe('DocumentShell', () => {
     expect(skeleton.querySelectorAll('.gd-skeleton__bar')).toHaveLength(8);
   });
 
-  it('RESP-02 below 768 px the document is read-only: no toolbar, no inspector, no edit affordance, bottom sheet bar, "View only on phone"', async () => {
-    installMatchMedia((q) => q.includes('767.98') || q.includes('899.98'));
+  it('RESP-02 on a phone (below 768 px, coarse pointer) the document is read-only: no toolbar, no inspector, no edit affordance, bottom sheet bar, "View only on phone"', async () => {
+    installMatchMedia(phoneMedia);
     await openShell();
     expect(screen.getByText('View only on phone')).toBeInTheDocument();
     expect(screen.queryByRole('toolbar')).not.toBeInTheDocument();
@@ -727,6 +727,20 @@ describe('DocumentShell', () => {
     expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
   });
 
+  it('A11Y-06 RESP-03 a fine-pointer window under 768 px (a desktop at 200 % zoom) keeps the tablet chrome and stays editable', async () => {
+    // 1440 px at 200 % browser zoom is 720 CSS px with a mouse: not a phone (ADR-039).
+    installMatchMedia((q) => q.includes('767.98') || q.includes('899.98') || q.includes('1023.98'));
+    await openShell();
+    expect(screen.queryByText('View only on phone')).not.toBeInTheDocument();
+    expect(screen.getByRole('toolbar', { name: 'Document tools' })).toBeInTheDocument();
+    expect(screen.getByLabelText('Workscape title')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add sheet' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Sheet 1/ }).closest('.gd-doc__sheets')).not.toHaveClass(
+      'gd-doc__sheets--bottom',
+    );
+    expect(document.querySelector('.gd-doc')).not.toHaveClass('gd-doc--phone');
+  });
+
   it('RESP-01 RESP-02 real content on phone keeps its lattice geometry and offers no editor, no strips', async () => {
     // Author a table at desktop width, then reopen the same replica on a phone.
     const first = await openShell();
@@ -738,7 +752,7 @@ describe('DocumentShell', () => {
       expect(document.querySelector('.gd-doc')).toHaveAttribute('data-replica', 'ready');
     });
     first.unmount();
-    installMatchMedia((q) => q.includes('767.98') || q.includes('899.98'));
+    installMatchMedia(phoneMedia);
     await openShell();
     await waitFor(() => {
       expect(screen.getByRole('grid')).toBeInTheDocument();

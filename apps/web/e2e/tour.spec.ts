@@ -12,7 +12,7 @@ import { seedSampleWorkscape } from '@gede/core';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
-import { computedTokenColor, expect, test } from './fixtures/test.js';
+import { asPhone, computedTokenColor, expect, test } from './fixtures/test.js';
 
 const SAMPLE_ID = '7a2b3c4d-0000-4000-8000-0000000000b1';
 const OTHER_ID = '7a2b3c4d-0000-4000-8000-0000000000b2';
@@ -430,7 +430,7 @@ test('ONB-13 RESP-02 RESP-05 below 768 px (480) the tour does not run and the fl
   page,
 }) => {
   const fakes = await installFakes(page, null);
-  await page.setViewportSize({ width: 480, height: 900 });
+  await asPhone(page, 480, 900);
   await signIn(page);
   await expect(page.getByRole('row').filter({ hasText: 'Guided sample' })).toBeVisible();
   await page.waitForTimeout(500);

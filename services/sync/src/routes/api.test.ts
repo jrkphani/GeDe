@@ -44,6 +44,22 @@ describe('GET /healthz', () => {
     expect(version.body).toEqual({ version: 'test' });
   });
 
+  test('A11Y-01 (security headers, #144) every response carries nosniff, HSTS and a referrer policy, errors included', async () => {
+    for (const [path, token] of [
+      ['/healthz', undefined],
+      ['/api/version', alice],
+      ['/api/me', undefined], // 401 through the error handler
+      ['/no/such/route', alice], // 404
+    ] as const) {
+      const res = await json(server, 'GET', path, token === undefined ? {} : { token });
+      expect(res.headers.get('x-content-type-options'), path).toBe('nosniff');
+      expect(res.headers.get('strict-transport-security'), path).toBe(
+        'max-age=31536000; includeSubDomains; preload',
+      );
+      expect(res.headers.get('referrer-policy'), path).toBe('strict-origin-when-cross-origin');
+    }
+  });
+
   test('LOAD-05 answers 503 when SELECT 1 fails so ECS restarts the task', async () => {
     server.repo.down = true;
     const res = await json<{ ok: boolean }>(server, 'GET', '/healthz');

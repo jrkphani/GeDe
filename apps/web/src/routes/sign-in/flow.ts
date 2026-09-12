@@ -102,9 +102,11 @@ export function flowReducer(state: FlowState, action: FlowAction): FlowState {
       return { ...state, busy: action.busy, error: null };
     case 'idle':
       return { ...state, busy: null };
+    // An error and a notice never show together: "A new code is on its way" must not stay
+    // under "That code does not match" (#144), nor an error under a fresh notice.
     case 'error':
-      return { ...state, busy: null, error: action.message };
+      return { ...state, busy: null, error: action.message, notice: null };
     case 'notice':
-      return { ...state, busy: null, notice: action.message };
+      return { ...state, busy: null, notice: action.message, error: null };
   }
 }

@@ -22,7 +22,7 @@ import {
   type PresenceState,
   type ToggleMark,
 } from '@gede/core';
-import { atLeast, below, theme } from '@gede/tokens';
+import { atLeast, theme } from '@gede/tokens';
 import { Banner, Button, Skeleton, useLoadingTiers, type LoadingTiers } from '@gede/ui';
 
 import { announce } from '../../announce.js';
@@ -59,6 +59,7 @@ import {
   type Viewport,
 } from '../../doc/viewport.js';
 import { useLocale } from '../../locale.js';
+import { usePhone } from '../../breakpoint.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { Canvas } from './Canvas.js';
 import { toFormatLocale } from './cell/index.js';
@@ -114,7 +115,7 @@ const NO_PRESENCE: readonly PresenceState[] = [];
 export function DocumentShell() {
   const { id = '' } = useParams();
   const [params] = useSearchParams();
-  const phone = useMediaQuery(below('md'));
+  const phone = usePhone(); // RESP-02 with the fine-pointer exception (ADR-039)
   const { state: sessionState } = useSession();
   const userSub = sessionState.status === 'signed-in' ? sessionState.user.sub : null;
   const [load, setLoad] = useState<LoadState>({ status: 'loading' });

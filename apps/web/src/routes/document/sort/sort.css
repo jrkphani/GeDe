@@ -42,19 +42,40 @@
   outline: 2px solid var(--focus-ring);
   outline-offset: -1px;
 }
-/* RESP-05: between 768 and 1023 px the ▼ needs a 44 px target; the header row is one lattice
-   unit (22 px) by contract, so the hit area extends beyond the glyph without moving it. */
-@media (min-width: 768px) and (max-width: 1023.98px) {
-  .gd-hmenu__trigger.gd-btn--icon-only.gd-btn--sm::after {
-    content: '';
-    position: absolute;
-    inset: 50% auto auto 50%;
-    width: var(--hit-target);
-    height: var(--hit-target);
-    transform: translate(-50%, -50%);
-  }
+/* RESP-05: below lg the ▼ is a 44 px target (#135). The header row is one lattice unit
+   (22 px) by contract and the glyph stays where it is, so the button's own box grows to
+   44 × 44 while negative top and left margins keep its footprint in the header's flow at
+   18 × 18. The box grows upward into the table's two-row title bar and leftward over the
+   column letter — never down into the first data row, and never under the divider's own
+   44 px box (document.css), which starts where this one ends. The glyph sits bottom-right
+   of the box, i.e. exactly where it was. (An `::after` hit area would not do: the header
+   clips overflow, and a bounding-box audit measures the button itself.) */
+@media (max-width: 1023.98px) {
   .gd-hmenu__trigger.gd-btn--icon-only.gd-btn--sm {
+    --gd-hmenu-box: 1.125rem; /* the 18 px footprint in the header's flow */
+    --gd-hmenu-glyph: 0.8125rem; /* the 13 px glyph */
+    --gd-hmenu-grow: calc(var(--hit-target) - var(--gd-hmenu-box));
     position: relative;
+    z-index: 2;
+    box-sizing: border-box;
+    width: var(--hit-target);
+    min-width: var(--hit-target);
+    height: var(--hit-target);
+    min-height: var(--hit-target);
+    margin: calc(-1 * var(--gd-hmenu-grow)) 0 0 calc(-1 * var(--gd-hmenu-grow));
+    /* Bottom-right aligned, padded so the glyph's centre is where the 18 px box's was. */
+    padding: 0 calc((var(--gd-hmenu-box) - var(--gd-hmenu-glyph)) / 2)
+      calc((var(--gd-hmenu-box) - var(--gd-hmenu-glyph)) / 2) 0;
+    align-items: flex-end;
+    justify-content: flex-end;
+  }
+  /* The tinted open/active state paints only the glyph's 18 px square, not the hit box. */
+  .gd-hmenu__trigger[data-state='open'] {
+    background: transparent;
+  }
+  .gd-hmenu__trigger[data-state='open'] .gd-icon {
+    border-radius: var(--radius-sm);
+    background: color-mix(in srgb, var(--action-primary-bg) 14%, var(--surface));
   }
 }
 

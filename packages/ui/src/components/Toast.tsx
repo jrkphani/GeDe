@@ -8,8 +8,11 @@ export interface ToastProviderProps {
   duration?: number | undefined;
 }
 
-/** Mount once near the app root; hosts the viewport in the bottom-left corner. */
-export function ToastProvider({ children, duration = 6000 }: ToastProviderProps) {
+/** DS §4: a toast dwells about seven seconds — long enough to read and press Undo. */
+export const TOAST_DURATION_MS = 7000;
+
+/** Mount once near the app root; hosts the viewport bottom-centred, one lattice row up (DS §4). */
+export function ToastProvider({ children, duration = TOAST_DURATION_MS }: ToastProviderProps) {
   return (
     <RadixToast.Provider duration={duration} swipeDirection="down" label="Notification">
       {children}

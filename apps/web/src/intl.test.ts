@@ -31,7 +31,12 @@ describe('intl', () => {
   it('I18N-04 sizes go through Intl units', () => {
     expect(formatBytes('en-US', 956000)).toBe('956 kB');
     expect(formatBytes('en-US', 93_700_000)).toBe('93.7 MB');
-    expect(formatBytes('en-US', 12)).toBe('12 byte');
+    // LIB-02 (#143): bytes inflect; kB and MB keep their symbols.
+    expect(formatBytes('en-US', 12)).toBe('12 bytes');
+    expect(formatBytes('en-US', 215)).toBe('215 bytes');
+    expect(formatBytes('en-US', 1)).toBe('1 byte');
+    expect(formatBytes('en-GB', 215)).toBe('215 bytes');
+    expect(formatBytes('en-IN', 1)).toBe('1 byte');
   });
 
   it('I18N-05 collation is case-insensitive and numeric-aware', () => {

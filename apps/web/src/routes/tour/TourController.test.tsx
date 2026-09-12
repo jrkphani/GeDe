@@ -8,7 +8,7 @@ import type * as DocumentsApi from '../../api/documents.js';
 import type { DocumentSummary } from '../../api/documents.js';
 import type * as MeApi from '../../api/me.js';
 import { resetLocaleForTests, setLocale } from '../../locale.js';
-import { installMatchMedia } from '../../test/match-media.js';
+import { installMatchMedia, phoneMedia } from '../../test/match-media.js';
 import { renderRoutes, withConfig } from '../../test/helpers.js';
 import { routes } from '../../routes.js';
 import * as core from '@gede/core';
@@ -184,8 +184,8 @@ describe('TourController', () => {
     expect(tourState()).toEqual({ phase: 'idle' });
   });
 
-  it('ONB-13 below 768 px the tour does not run and the flag stays unset', async () => {
-    installMatchMedia((q) => q.includes('767.98'));
+  it('ONB-13 on a phone the tour does not run and the flag stays unset', async () => {
+    installMatchMedia(phoneMedia);
     arrive(null);
     await screen.findByText('Everest trek');
     expect(screen.queryByRole('dialog')).toBeNull();

@@ -1,5 +1,5 @@
 import { type Locator, type Page } from '@playwright/test';
-import { installFakeCognito } from './fakes/cognito.js';
+import { UNKNOWN, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { computedTokenColor, expect, test } from './fixtures/test.js';
 
@@ -203,6 +203,31 @@ test.describe('method step', () => {
     await expect(s.heading).toHaveText('Create account');
     await expect(s.email).toHaveValue('audit-nobody@example.invalid');
 
+    // The pool's second shape for an unknown address, PasswordResetRequiredException, reads
+    // the same — never the "set to use a password" copy the final audit found (#46).
+    await s.signInMode.click();
+    await s.email.fill(UNKNOWN.passwordReset);
+    await s.email.press('Enter');
+    await s.emailCode.click();
+    await expect(alert).toHaveText(
+      'No account uses this email. Switch to Create account to start one.',
+    );
+    await expect(alert).not.toContainText('password');
+
+    // The third shape, a simulated code challenge, cannot be told from a real one (ADR-040):
+    // the code step opens, and says what to do when no code arrives.
+    await page.getByRole('button', { name: 'Change' }).click();
+    await s.email.fill(UNKNOWN.simulatedCode);
+    await s.email.press('Enter');
+    await s.emailCode.click();
+    await expect(page.getByLabel('Six-digit code')).toBeVisible();
+    await expect(
+      page.getByText(/If no code arrives, this email may not have an account yet/),
+    ).toBeVisible();
+    await checkA11y('sign-in code step simulated challenge 1440');
+    await s.signUpMode.click();
+    await expect(s.email).toHaveValue(UNKNOWN.simulatedCode);
+
     // A known address still gets its code.
     await s.signInMode.click();
     await s.email.fill(KNOWN.email);
@@ -326,23 +351,32 @@ test.describe('keyboard', () => {
     await expect(s.email).toBeFocused();
     await expect(s.email).toHaveValue(VALID_EMAIL);
 
-    // Radix ToggleGroup: arrows move between segments, Space selects (AUTH-02 by keyboard).
+    // ARIA radio pattern (Radix RadioGroup, #144): an arrow moves the selection and keeps
+    // focus on the group; the mode switches at once (AUTH-02 by keyboard) and focus does
+    // not jump to the field, so the next arrow works too.
+    // Radix checks the segment that receives focus while the arrow is still down (the focus
+    // move is deferred a tick); a press-and-release in one call can beat it, a finger cannot.
+    const arrow = async (key: 'ArrowLeft' | 'ArrowRight', target: Locator) => {
+      await page.keyboard.down(key);
+      await expect(target).toHaveAttribute('aria-checked', 'true');
+      await page.keyboard.up(key);
+    };
     await page.keyboard.press('Shift+Tab');
     await expect(s.signInMode).toBeFocused();
-    await page.keyboard.press('ArrowRight');
+    await arrow('ArrowRight', s.signUpMode);
     await expect(s.signUpMode).toBeFocused();
-    await page.keyboard.press('Space');
     await expect(s.heading).toHaveText('Create account');
     await expect(s.email).toHaveValue(VALID_EMAIL);
-    // A mode switch returns focus to the email field; the group is one Shift+Tab away.
-    await expect(s.email).toBeFocused();
-    await page.keyboard.press('Shift+Tab');
-    await expect(s.signUpMode).toBeFocused();
-    await page.keyboard.press('ArrowLeft');
+    await expect(s.email).not.toBeFocused();
+    await arrow('ArrowLeft', s.signInMode);
     await expect(s.signInMode).toBeFocused();
-    await page.keyboard.press('Space');
     await expect(s.heading).toHaveText('Sign in');
     await expect(s.email).toHaveValue(VALID_EMAIL);
+    // Space on the focused, checked segment is a no-op; Tab leaves the group in one stop.
+    await page.keyboard.press('Space');
+    await expect(s.heading).toHaveText('Sign in');
+    await page.keyboard.press('Tab');
+    await expect(s.email).toBeFocused();
   });
 
   test('A11Y-02 every focusable control shows the 2 px amber focus ring at 2 px offset', async ({

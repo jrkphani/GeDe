@@ -53,9 +53,8 @@ function failureMessage(f: AuthFailure, mode: Mode): string | null {
     case 'expired-code':
       return 'That code has expired. Resend to get a fresh one.';
     case 'other':
-      return mode === 'sign-up'
-        ? `Could not create the account: ${f.message}`
-        : `Could not sign in: ${f.message}`;
+      // `message` is already plain copy (cognito.ts describeOtherFailure), never SDK text.
+      return mode === 'sign-up' ? `Could not create the account. ${f.message}` : f.message;
   }
 }
 
@@ -90,9 +89,15 @@ export function SignIn() {
     announce('Signed in');
   }, [session]);
 
+  // Arriving at the email step from Change or Back places the caret in the field. A mode
+  // switch also lands on the email step (AUTH-02) but focus stays on the segmented control
+  // the user is operating — the arrow keys must keep working there (#144).
+  const previousStep = useRef<typeof state.step | null>(null); // null: first render, focus once
   useEffect(() => {
-    if (state.step === 'email') emailRef.current?.focus();
-  }, [state.step, state.mode]);
+    const arrived = state.step === 'email' && previousStep.current !== 'email';
+    previousStep.current = state.step;
+    if (arrived) emailRef.current?.focus();
+  }, [state.step]);
 
   const fail = (err: unknown) => {
     const message = failureMessage(classifyError(err), state.mode);
@@ -386,6 +391,14 @@ export function SignIn() {
                 {state.notice}
               </p>
             )}
+            {state.codePurpose === 'sign-in' && (
+              // ADR-040 (#46): the pool answers an unknown address with a simulated code
+              // challenge the app cannot tell from a real one, so the way out is said here.
+              <p className="gd-signin__note">
+                If no code arrives, this email may not have an account yet: switch to Create account
+                to start one.
+              </p>
+            )}
             <Button
               type="submit"
               variant="primary"
@@ -432,12 +445,15 @@ export function SignIn() {
         title="Add a passkey to this device?"
         description="Next time, sign in with Face ID, Touch ID or your device PIN instead of a code."
         actions={
+          // RESP-05 / ARCHITECTURE §2 "44 px targets": the lg size, as the rest of the
+          // sign-in stack (#129).
           <>
-            <Button onClick={declinePasskey} disabled={registering}>
+            <Button size="lg" onClick={declinePasskey} disabled={registering}>
               Not now
             </Button>
             <Button
               variant="primary"
+              size="lg"
               onClick={addPasskey}
               loading={registering}
               loadingLabel="Adding…"

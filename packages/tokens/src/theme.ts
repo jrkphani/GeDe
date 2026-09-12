@@ -8,6 +8,10 @@ export const theme = {
     ink:      { base: '#14201a', muted: '#5b6b63', onBrand: '#ffffff' },
     status:   { success: '#166534', warning: '#b45309', danger: '#b42318', info: '#155e75' },
     presence: ['#14201a', '#155e75', '#6d28d9', '#b45309', '#0f766e', '#9d174d'],
+    /** The same six under the dark token swap (#132): every one ≥ 3:1 on the dark surfaces. */
+    presenceDark: ['#b8c4be', '#6fc7e0', '#b794f4', '#e0a04a', '#4fc1b0', '#ee7fa7'],
+    /** Text on a presence fill (name tag, avatar initials): light / dark. */
+    presenceInk: { light: '#ffffff', dark: '#0f1a15' },
     /** Formula operand outlines (FX-08), index 0 = --reference-1; cycles past six. */
     reference: ['#b45309', '#155e75', '#6d28d9', '#0f766e', '#9d174d', '#14201a'],
   },

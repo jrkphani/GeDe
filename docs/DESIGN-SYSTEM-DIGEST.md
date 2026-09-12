@@ -146,8 +146,12 @@ Rules: Forest 700 on white 10.6:1 safe for body text. Amber 700 4.8:1 safe for t
 ### Focus ring
 `:focus-visible { outline: 2px solid #b45309; outline-offset: 2px; border-radius: 3px; }` — "2 px amber outline at 2 px offset on every focusable element, never removed." Focus is amber, not forest, because focus is live state. Inputs on focus: border amber + `box-shadow 0 0 0 3px rgba(180,83,9,0.18)`; primary button focus specimen adds `0 0 0 3px rgba(180,83,9,0.35)` glow plus the outline.
 
+**Recorded 2026-09-13 (#143).** The ring is drawn at −2 px (inset) on exactly the controls that tile edge to edge inside a clipping container, where an outward ring would fall under a neighbour or be cut by the container: grid cells and the cell editor (one lattice unit each, GRID-03's selection ring is inset by the same rule), sheet tabs, menu items and select options. Everything else — buttons, links, fields, library rows (`library.css`, formerly inset), the column-header ▼ — takes the global +2 px ring. A new inset ring needs a clipping reason stated in the stylesheet.
+
 ### Contrast requirements
 Body text ≥ 4.5:1; large text and UI boundaries ≥ 3:1; borders, focus rings, selection rings and graph strokes ≥ 3:1 against background. Token table records every ratio; CI fails on a new pair below threshold; contrast recorded in each PR.
+
+**Recorded 2026-09-13 (#132).** The six presence colours are UI boundaries (the collaborator outline, SHARE-04) and had no dark values; `--presence-1` (`#14201a`) measured 1.06:1 on the dark surface. The dark block now swaps them — `#b8c4be`, `#6fc7e0`, `#b794f4`, `#e0a04a`, `#4fc1b0`, `#ee7fa7` — at 9.91 / 9.26 / 7.26 / 7.89 / 8.13 / 6.98:1 on `--surface` (`#0f1a15`) and 10.56 / 9.88 / 7.74 / 8.41 / 8.67 / 7.44:1 on `--surface-sunken`; light stays 16.78 / 7.27 / 7.10 / 5.02 / 5.47 / 7.88:1 on white. Text on a presence fill (the name tag, avatar initials, operand badges) is `--presence-ink` — white in light, the surface colour in dark — at the same ratios, all ≥ 4.5:1. The formula operand outlines `--reference-2..6` reference the presence tokens, so the dark swap carries them. `packages/tokens/src/tokens.test.ts` pins every ratio and the light/dark parity.
 
 **Recorded 2026-09-13 (#81).** `--border` (slate-200 `#e3e8e5`) is 1.24:1 on `--surface` and 1.17:1 on `--surface-sunken` in light, `#24352c` 1.37:1 / 1.47:1 in dark: a decorative hairline (section separators, rulers, menu separators), exempt under WCAG 1.4.11, never a control's only boundary. The boundary of a text field, a select trigger and list, and a menu is `--border-strong` — light `#6f7f77` (4.22:1 / 3.99:1), dark `#5f7268` (3.47:1 / 3.70:1); hover and open states darken it to `--ink-muted` (5.63:1 light, 7.84:1 dark). The `#d3dcd7` (1.40:1) and `#b8c4be` (1.80:1) field borders in the table below are the handover's values and do not meet the floor; the shipped components use the token. `packages/tokens/src/tokens.test.ts` computes and pins these ratios.
 
@@ -203,7 +207,7 @@ Brand mark: single lattice cell (36×36 frame rx 4, stroke 2.5, gridlines `M2 13
 | Help control (library) | atom | **Added 2026-09-12** (ONB-08). A `?` icon button in the library header, 30 × 30, ghost, tooltip "Guided tour"; replays the tour (clears the flag, restarts at step 1). Distinct from the document shortcut sheet, which `?` still opens inside a document. | native button |
 | Sample badge (library row) | atom | **Added 2026-09-12** (ONB-01). The sample workscape shows `Sample` in the shared column where other rows show "By Me" / "By <name>". Same pill style as the existing Shared badge (forest-50 / forest-700). | — |
 
-Toast additions 2026-09-12 (LIB-D9, ONB-14): library toasts keep the existing dark Toast (slate-900, white text, Undo button outlined white at 35 % alpha, radius 8–9 px, bottom-centred 22 px up, ~7 s auto-dismiss). The tour-completion toast is a forest-700 variant with a Replay action (~8 s). Neither introduces a token; both remain Radix Toast.
+Toast additions 2026-09-12 (LIB-D9, ONB-14): library toasts keep the existing dark Toast (slate-900, white text, Undo button outlined white at 35 % alpha, radius 8–9 px, bottom-centred 22 px up, ~7 s auto-dismiss). Recorded 2026-09-13 (#143): the shipped viewport is bottom-centred one lattice row (22 px) up and the provider default is 7 000 ms (`TOAST_DURATION_MS`); the earlier bottom-left, 6 s viewport was the deviation. The tour-completion toast is a forest-700 variant with a Replay action (~8 s). Neither introduces a token; both remain Radix Toast.
 
 Menu item labels shown: Freeze header columns, Sort ascending/descending, Group rows by this column, Add column before/after, Delete column, Magic fill (disabled), Copy ⌘C.
 
@@ -220,6 +224,8 @@ Menu item labels shown: Freeze header columns, Sort ascending/descending, Group 
 | md | 768–1023px | Toolbar returns and wraps; inspector opens as overlay sheet | Full editing; context menus on long-press |
 | lg | 1024–1439px | Inspector docks at 322px, collapsible; chrome clusters icon-only | Full editing, keyboard traversal |
 | xl | ≥ 1440px | Inspector docked, toolbar on one row, canvas takes remainder | Full editing; multiple graphs side by side |
+
+Recorded 2026-09-13 (#137, ADR-039): "read-only below 768 px" is applied as *narrow and coarse-pointered*. A fine-pointer window under 768 CSS px — a 1440 px display at 200 % browser zoom — gets the `md` chrome and stays editable, so the 200 % rule below holds for functionality too. Below `md` the title row is two lines for every device (#124).
 
 Do: query the container, not the window, inside the canvas; collapse inspector to a 38px strip before shrinking contents; let toolbars wrap to a second row rather than clip/scroll; raise hit targets to 44px below `md`. Don't: reflow a table's columns at a breakpoint (addresses would change); hide a command with no other home; **ship an edit affordance below `md` — phone is read-only by contract**; scale type with `vw`.
 

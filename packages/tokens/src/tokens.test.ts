@@ -69,6 +69,85 @@ describe('presence palette', () => {
     expect(presence).not.toContain(root['--forest-700']);
     expect(presence).not.toContain(root['--forest-500']);
   });
+
+  const light = Object.fromEntries(declarations(/:root/));
+  const dark = { ...light, ...Object.fromEntries(declarations(/\[data-theme="dark"\]/)) };
+  const names = [1, 2, 3, 4, 5, 6].map((n) => `--presence-${String(n)}`);
+
+  it('SHARE-04 A11Y-03 the dark theme overrides every presence colour (#132), the same six in theme.ts, none the brand colour', () => {
+    const darkOnly = Object.fromEntries(declarations(/\[data-theme="dark"\]/));
+    const swapped = names.map((n) => darkOnly[n]);
+    expect(swapped.every((c) => typeof c === 'string' && /^#[0-9a-f]{6}$/.test(c))).toBe(true);
+    expect(new Set(swapped).size).toBe(6);
+    expect(swapped).toEqual([...theme.color.presenceDark]);
+    for (const colour of swapped) {
+      expect(colour).not.toBe(dark['--action-primary-bg']);
+      expect(colour).not.toBe(light['--forest-700']);
+      expect(colour).not.toBe(light['--forest-300']);
+    }
+    expect(resolved(light, '--presence-ink')).toBe(theme.color.presenceInk.light);
+    expect(resolved(dark, '--presence-ink')).toBe(theme.color.presenceInk.dark);
+  });
+
+  const surfaces = ['--surface', '--surface-sunken'] as const;
+  /** Every presence colour on both surfaces, and --presence-ink on the colour, to 2 dp. */
+  const ratio = (block: Record<string, string>, a: string, b: string) =>
+    Number(contrast(resolved(block, a), resolved(block, b)).toFixed(2));
+  const table = (
+    block: Record<string, string>,
+  ): Record<string, Record<(typeof surfaces)[number] | 'ink', number>> =>
+    Object.fromEntries(
+      names.map((n) => [
+        n,
+        {
+          '--surface': ratio(block, n, '--surface'),
+          '--surface-sunken': ratio(block, n, '--surface-sunken'),
+          ink: ratio(block, n, '--presence-ink'),
+        },
+      ]),
+    );
+
+  it('A11Y-03 every presence colour is at least 3:1 on --surface and --surface-sunken in both themes; --presence-ink reads at 4.5:1 on each (#132)', () => {
+    const l = table(light);
+    const d = table(dark);
+    // Recorded ratios (DESIGN-SYSTEM §2: "token table records every ratio").
+    expect(l).toEqual({
+      '--presence-1': { '--surface': 16.78, '--surface-sunken': 15.87, ink: 16.78 },
+      '--presence-2': { '--surface': 7.27, '--surface-sunken': 6.87, ink: 7.27 },
+      '--presence-3': { '--surface': 7.1, '--surface-sunken': 6.72, ink: 7.1 },
+      '--presence-4': { '--surface': 5.02, '--surface-sunken': 4.75, ink: 5.02 },
+      '--presence-5': { '--surface': 5.47, '--surface-sunken': 5.18, ink: 5.47 },
+      '--presence-6': { '--surface': 7.88, '--surface-sunken': 7.46, ink: 7.88 },
+    });
+    expect(d).toEqual({
+      '--presence-1': { '--surface': 9.91, '--surface-sunken': 10.56, ink: 9.91 },
+      '--presence-2': { '--surface': 9.26, '--surface-sunken': 9.88, ink: 9.26 },
+      '--presence-3': { '--surface': 7.26, '--surface-sunken': 7.74, ink: 7.26 },
+      '--presence-4': { '--surface': 7.89, '--surface-sunken': 8.41, ink: 7.89 },
+      '--presence-5': { '--surface': 8.13, '--surface-sunken': 8.67, ink: 8.13 },
+      '--presence-6': { '--surface': 6.98, '--surface-sunken': 7.44, ink: 6.98 },
+    });
+    for (const block of [l, d])
+      for (const n of names) {
+        for (const s of surfaces) expect(block[n]![s]).toBeGreaterThanOrEqual(3);
+        expect(block[n]!.ink).toBeGreaterThanOrEqual(4.5);
+      }
+  });
+
+  it('FX-08 the operand outlines 2–6 follow the presence tokens by reference, so the dark swap carries them', () => {
+    for (const [ref, presence] of [
+      [2, 2],
+      [3, 3],
+      [4, 5],
+      [5, 6],
+      [6, 1],
+    ] as const) {
+      expect(light[`--reference-${String(ref)}`]).toBe(`var(--presence-${String(presence)})`);
+      expect(Object.fromEntries(declarations(/\[data-theme="dark"\]/))).not.toHaveProperty(
+        `--reference-${String(ref)}`,
+      );
+    }
+  });
 });
 
 /** WCAG 2.1 relative luminance of a `#rrggbb` colour. */

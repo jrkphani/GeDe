@@ -33,6 +33,7 @@ export { Tooltip, TooltipProvider, type TooltipProps } from './components/Toolti
 export {
   Toast,
   ToastProvider,
+  TOAST_DURATION_MS,
   type ToastProps,
   type ToastProviderProps,
 } from './components/Toast.js';

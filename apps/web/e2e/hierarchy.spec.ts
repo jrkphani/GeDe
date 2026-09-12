@@ -12,7 +12,7 @@ import type * as Y from 'yjs';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
-import { expect, test } from './fixtures/test.js';
+import { asPhone, expect, test } from './fixtures/test.js';
 import {
   createSheet,
   createTable,
@@ -283,7 +283,7 @@ test.describe('row hierarchy', () => {
     nestRow(gd, tableId, rows[2]!);
     nestRow(gd, tableId, rows[4]!);
     setRowCollapsed(gd, tableId, rows[3]!, true);
-    await page.setViewportSize({ width: 480, height: 800 });
+    await asPhone(page, 480, 800);
     await signInTo(page, `/d/${DOC_ID}`);
     await expect(page.getByText('View only on phone')).toBeVisible();
     const grid = anyGrid(page);

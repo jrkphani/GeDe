@@ -6,7 +6,7 @@
  * below) and the y-websocket room (`fakes/room`). The SPA — the shell, the
  * Radix menu and popover, the sort Worker — runs for real.
  */
-import { expect, test } from './fixtures/test.js';
+import { asPhone, expect, test } from './fixtures/test.js';
 import type { Page } from '@playwright/test';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
@@ -279,7 +279,7 @@ test('RESP-02 SORT-05 at 480 px the table is read-only: no ▼ renders, the view
       }),
     },
   );
-  await page.setViewportSize({ width: 480, height: 800 });
+  await asPhone(page, 480, 800);
   await signInTo(page, `/d/${DOC_ID}`);
   await expect(page.getByText('View only on phone')).toBeVisible();
   const grid = page.getByRole('grid').first();
