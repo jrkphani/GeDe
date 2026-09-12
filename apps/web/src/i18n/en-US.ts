@@ -4,12 +4,16 @@
  * `{name}` and are substituted by `format()`.
  *
  * Tour copy (ONB-10, ONB-12) is the prototype's, verbatim
- * (`docs/PROTOTYPE-CHANGES-2026-09-12.md` §1.4), with two departures where
+ * (`docs/PROTOTYPE-CHANGES-2026-09-12.md` §1.4), with three departures where
  * the PRD wins: step 1's "— it resets" is held back (it names a Reset control
  * no PRD row specifies, and the handover says not to ship the sentence without
- * the control), and step 4's operator example is `is:date`, not the
- * prototype's `is:blocked` — FIND-04 defines `is:` over resolved formats
- * (`currency | date | number | text`), so `is:blocked` would match nothing.
+ * the control); step 4's operator example is `is:date`, not the prototype's
+ * `is:blocked` — FIND-04 defines `is:` over resolved formats
+ * (`currency | date | number | text`), so `is:blocked` would match nothing;
+ * and step 5's difference is "a permission you set per person" — SHARE-01 is
+ * a permission per participant, and no PRD row gives a table its own, so the
+ * prototype's "per table" named a feature that does not exist (ONB-10 asks
+ * for the real difference).
  */
 export const messages = {
   'tour.counter': 'STEP {step} OF {total}',
@@ -42,7 +46,7 @@ export const messages = {
 
   'tour.step5.title': 'Invite someone by email',
   'tour.step5.body': 'People you invite get this same pass the first time they open a workscape.',
-  'tour.step5.note': 'Like iCloud sharing, with permissions you can set per table.',
+  'tour.step5.note': 'Like iCloud sharing, with a permission you set per person.',
   'tour.step5.action': 'Open Share and invite an email',
 
   'tour.done.message': 'All five done. Replay any time from the ? in your library.',

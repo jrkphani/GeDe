@@ -49,7 +49,13 @@ describe('message catalogue', () => {
     const en = CATALOGUE['en-US'];
     expect(en['tour.step2.note']).toMatch(/^Numbers: People::B2/);
     expect(en['tour.step4.note']).toMatch(/^Numbers searches one sheet/);
-    expect(en['tour.step5.note']).toMatch(/^Like iCloud sharing/);
+    // SHARE-01: the permission is per person; nothing in the product is per table.
+    expect(en['tour.step5.note']).toBe(
+      'Like iCloud sharing, with a permission you set per person.',
+    );
+    for (const locale of ['ta-IN', 'hi-IN', 'te-IN'] as const) {
+      expect(CATALOGUE[locale]['tour.step5.note']).toContain('iCloud');
+    }
     expect(en['tour.step3.note']).toMatch(/^No Numbers equivalent/);
     // Step 1 teaches nothing Numbers already does and has no comparison note.
     expect(MESSAGE_KEYS).not.toContain('tour.step1.note');

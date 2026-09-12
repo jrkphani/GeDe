@@ -104,12 +104,19 @@ archivedAt, everShared, sample }] }`.
   first, then row + `snapshots` + audit (`document.create`, target `sample`) in one transaction —
   by `SampleSeeder` from the auth hook, the first time an account is seen, whatever its first
   request is (a shared link counts, ONB-02). `sample = true`, at most one per owner
-  (`documents_owner_sample_key`, migration 0009): a race on first sight leaves one row and one
-  logged orphan object. Content is `seedSampleWorkscape` in `@gede/core`: `Deliverables`
+  (`documents_owner_sample_key`, migration 0009). The transaction holds a per-owner advisory
+  lock (`pg_advisory_xact_lock(hashtext('gede_sample:<owner>'))`) and writes the object only
+  when no sample exists, so seeders racing across tasks write one object and adopt one row —
+  nothing is orphaned. A seed that fails (S3 down) never fails the request: `/api/me` answers
+  `sampleDocumentId: null`, the line `guided sample seed failed` is logged (alarm
+  `gede-<env>-sample-seed-failed`), the answer is not cached and the next request retries. It is
+  named by ONB-01, so `PATCH /api/documents/:id { title }` answers 409 `sample` for it, as
+  Delete and Archive do. Content is `seedSampleWorkscape` in `@gede/core`: `Deliverables`
   (Owner, Status, Due dates, Days) and `Team`, an id-bound `=Sum` and a cross-table
   `=@Team.Priya.Role` reference — what the five tour steps refer to.
 - `GET /api/documents/:id` → `{ document }` with the same fields as a library row.
-  `PATCH /api/documents/:id { title }` (owner or editor). `DELETE /api/documents/:id` (owner) →
+  `PATCH /api/documents/:id { title }` (owner or editor; 409 `sample` for the guided sample).
+  `DELETE /api/documents/:id` (owner) →
   204; moves the document to Recently Deleted (clearing `archivedAt`) and closes its room with 4404. 409 `shared` while `everShared` is true — a workscape someone was given access to is
   archived, never deleted (LIB-D2); 409 `sample` for the guided sample (LIB-D10).
 - `POST /api/documents/:id/archive` (owner) → `{ document }`; sets `archivedAt` and nothing else:

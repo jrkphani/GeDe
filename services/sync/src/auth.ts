@@ -38,7 +38,10 @@ export interface AuthUser {
   readonly locale: string | null;
   /** ONB-03: when the tour was completed or skipped; null until then and after Replay. */
   readonly tourDoneAt: Date | null;
-  /** ONB-01: the account's guided sample, seeded on first sight; null only if seeding is off. */
+  /**
+   * ONB-01: the account's guided sample, seeded on first sight; null when seeding is
+   * off or the seed failed (logged; retried on the account's next request).
+   */
   readonly sampleDocumentId: string | null;
 }
 
@@ -147,9 +150,13 @@ export class UserResolver {
     }
     const upserted = await this.repo.users.upsertFromToken(identity);
     // ONB-01: the first request an account ever makes — whatever it is —
-    // leaves the guided sample in its library; the seed is idempotent.
+    // leaves the guided sample in its library; the seed is idempotent. A seed
+    // that failed answers null (never an error) and is not cached, so the
+    // account's next request tries again.
     const user = this.samples === null ? upserted : await this.samples.ensure(upserted);
-    this.cache.set(identity.sub, { user, at: now });
+    if (this.samples === null || user.sampleDocumentId !== null) {
+      this.cache.set(identity.sub, { user, at: now });
+    }
     return toAuthUser(user);
   }
 

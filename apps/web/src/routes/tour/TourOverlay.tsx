@@ -9,6 +9,11 @@
  * operable and a cell edit is never blocked. Skip is the card's only control
  * and is reachable by Tab like any button; Escape is left to the page (it
  * cancels an edit or closes Find), so it never ends the tour by accident.
+ *
+ * Only the pending-action line is live (A11Y-05): a step change announces
+ * "Pending action: <what to do next>", not the whole card; the counter and
+ * title are read when the person moves to the dialog. Completion is
+ * announced once, by the toast's own region.
  */
 import { Button } from '@gede/ui';
 import clsx from 'clsx';
@@ -74,7 +79,6 @@ export function TourOverlay({ step, onSkip }: TourOverlayProps) {
         aria-modal="false"
         aria-labelledby={titleId}
         aria-describedby={bodyId}
-        aria-live="polite"
         className="gd-tour__card"
         style={{ left: position.left, top: position.top, width: CARD_WIDTH }}
         data-testid="tour-card"
@@ -102,7 +106,7 @@ export function TourOverlay({ step, onSkip }: TourOverlayProps) {
         </p>
         {definition.note !== null && <p className="gd-tour__note">{t(definition.note)}</p>}
         <div className="gd-tour__footer">
-          <p className="gd-tour__action">
+          <p className="gd-tour__action" aria-live="polite" aria-atomic="true">
             <span className="gd-visually-hidden">{t('tour.pending')}: </span>
             {t(definition.action)}
           </p>

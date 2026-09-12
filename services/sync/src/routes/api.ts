@@ -144,7 +144,10 @@ function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView
 }
 
 /** LIB-D10: the guided sample is exempt from Delete and Archive; say which. */
-function refuseSample(doc: Pick<DocumentRecord, 'sample'>, verb: 'deleted' | 'archived'): void {
+function refuseSample(
+  doc: Pick<DocumentRecord, 'sample'>,
+  verb: 'deleted' | 'archived' | 'renamed',
+): void {
   if (doc.sample) {
     throw new AppError(409, 'sample', `The guided sample cannot be ${verb}`);
   }
@@ -396,6 +399,8 @@ export function registerApi(
         const body = parse(patchBody, request.body, 'request');
         const { permission, document } = await requirePermission(repo, user.id, id, 'edit');
         if (document.deletedAt !== null) throw NOT_FOUND();
+        // ONB-01: the sample is *named* `Q3 Delivery — Guided sample`; the tour's step 1 names it too.
+        refuseSample(document, 'renamed');
         const renamed = await repo.documents.rename(id, body.title);
         if (!renamed) throw NOT_FOUND();
         await repo.audit.record({

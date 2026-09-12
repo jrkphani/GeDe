@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { defineConfig, devices } from '@playwright/test';
+import { portFromHash } from './src/test/e2e-port.js';
 
 /**
  * Playwright journeys against a built web app, no backend.
@@ -21,7 +22,8 @@ import { defineConfig, devices } from '@playwright/test';
 const CI = Boolean(process.env.CI);
 function localPort(): number {
   const hash = createHash('sha256').update(process.cwd()).digest();
-  return 4200 + (hash.readUInt16BE(0) % 1000);
+  // Skips Chromium's restricted ports (5060, 5061, 4045): `src/test/e2e-port.ts`.
+  return portFromHash(hash.readUInt16BE(0));
 }
 const PORT = Number(process.env.E2E_PORT ?? (CI ? 4173 : localPort()));
 const baseURL = process.env.E2E_BASE_URL ?? `http://localhost:${String(PORT)}`;

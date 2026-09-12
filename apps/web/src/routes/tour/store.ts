@@ -8,9 +8,14 @@
  * action happened (ONB-05); there is no Next. The inputs are:
  *
  *   - the route (`setTourRoute`), for step 1 (the sample is open);
- *   - the open Y.Doc (`setTourDocument`), for steps 2 and 3 — counts of
- *     cross-table formulas and graph objects, compared with the counts taken
- *     when the step began, so what the sample ships with never advances it;
+ *   - the open Y.Doc (`setTourDocument`), for steps 2 and 3 — the set of
+ *     cells holding a cross-table formula, and the count of graph objects,
+ *     compared with what was there when the step began, so what the sample
+ *     ships with never advances it. Every transaction is observed, remote
+ *     ones included: a collaborator writing a reference into the sample
+ *     while the person is on step 2 advances it — the action happened in the
+ *     document the card points at, and attributing transactions would put
+ *     origin tracking in the tour for no product gain;
  *   - Find's query (`setTourFindQuery`) for step 4 and the Share sheet's
  *     invitation (`reportTourInvite`) for step 5.
  *
@@ -18,7 +23,7 @@
  * (`PATCH /api/me { tourDone }`) when the phase becomes `ending` and moves
  * it on with `tourEnded()`.
  */
-import { crossTableReferenceCount, type GedeDoc } from '@gede/core';
+import { crossTableReferenceKeys, newCrossTableReference, type GedeDoc } from '@gede/core';
 
 import { TOUR_STEP_COUNT, tourStep } from './steps.js';
 
@@ -30,9 +35,11 @@ export type TourState =
       readonly phase: 'running';
       /** 1-based. */
       readonly step: number;
-      /** Counts taken when the step began, once the document was available; null until then. */
+      /** What was there when the step began, once the document was available; null until then. */
       readonly baseline: {
-        readonly crossReferences: number | null;
+        /** Workbook cell ids holding a cross-table formula (step 2). */
+        readonly crossReferences: ReadonlySet<string> | null;
+        /** Graph objects (step 3). */
         readonly graphs: number | null;
       };
     }
@@ -108,7 +115,7 @@ function settleBaseline(): void {
   if (advance.kind === 'cross-table-reference' && baseline.crossReferences === null) {
     set({
       ...state,
-      baseline: { ...baseline, crossReferences: crossTableReferenceCount(inputs.doc) },
+      baseline: { ...baseline, crossReferences: crossTableReferenceKeys(inputs.doc) },
     });
   } else if (advance.kind === 'graph-added' && baseline.graphs === null) {
     set({ ...state, baseline: { ...baseline, graphs: graphCount(inputs.doc) } });
@@ -127,7 +134,8 @@ function stepSatisfied(): boolean {
       return (
         inputs.doc !== null &&
         baseline.crossReferences !== null &&
-        crossTableReferenceCount(inputs.doc) > baseline.crossReferences
+        newCrossTableReference(baseline.crossReferences, crossTableReferenceKeys(inputs.doc)) !==
+          null
       );
     case 'graph-added':
       return (

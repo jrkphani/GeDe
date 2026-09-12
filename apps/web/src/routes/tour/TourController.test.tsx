@@ -14,6 +14,7 @@ import { routes } from '../../routes.js';
 import * as core from '@gede/core';
 import * as Y from 'yjs';
 
+import { tourFlag } from './flag-queue.js';
 import {
   reportTourInvite,
   resetTourForTests,
@@ -21,6 +22,7 @@ import {
   setTourFindQuery,
   setTourRoute,
   setTourSampleDocumentId,
+  startTour,
   tourState,
 } from './store.js';
 
@@ -86,13 +88,38 @@ const everest: DocumentSummary = {
   sample: false,
 };
 
-function arrive(tourDoneAt: string | null) {
+function arrive(tourDoneAt: string | null, at = '/') {
   vi.mocked(me.getMe).mockResolvedValue(profile(tourDoneAt));
   vi.mocked(me.updateMe).mockImplementation((patch) =>
     Promise.resolve(profile(patch.tourDone === true ? '2026-09-13T01:00:00.000Z' : null)),
   );
   vi.mocked(docs.listDocuments).mockResolvedValue([everest, sample]);
-  return renderRoutes(routes, ['/']);
+  return renderRoutes(routes, [at]);
+}
+
+/**
+ * Drive the store from step 1 to completion the way the document and its
+ * features would; `back` is the route the page is really on afterwards.
+ */
+function completeFromStepOne(back = '/'): void {
+  const doc = new Y.Doc();
+  core.seedSampleWorkscape(doc);
+  const gd = core.openDocument(doc);
+  act(() => {
+    setTourSampleDocumentId(SAMPLE_ID);
+    setTourDocument(gd);
+    setTourRoute(`/d/${SAMPLE_ID}`);
+  });
+  const [deliverables] = core.tablesOnSheet(gd, core.listSheets(gd)[0]!.id);
+  const table = core.tableById(gd, deliverables!.id)!;
+  act(() => {
+    core.commitCellText(gd, table.id, table.rows[1]!, table.columns[5]!.id, '=@Team.Marcus.Role');
+    core.createGraphPair(gd, { sheetId: core.listSheets(gd)[0]!.id, tableId: table.id });
+    setTourFindQuery(true, 'Blocked');
+    reportTourInvite();
+    setTourDocument(null);
+    setTourRoute(back);
+  });
 }
 
 const card = () => screen.getByRole('dialog', { name: 'Open the sample workscape' });
@@ -104,6 +131,7 @@ describe('TourController', () => {
     installMatchMedia(false);
     resetLocaleForTests();
     resetTourForTests();
+    tourFlag.reset();
   });
   afterEach(() => {
     resetTourForTests();
@@ -241,7 +269,6 @@ describe('TourController', () => {
     await waitFor(() => {
       expect(me.updateMe).toHaveBeenCalledWith({ tourDone: true });
     });
-    // The text is in the toast and, once, in the live region (A11Y-05).
     const messages = await screen.findAllByText(
       'All five done. Replay any time from the ? in your library.',
     );
@@ -252,10 +279,77 @@ describe('TourController', () => {
       within(toast as HTMLElement).getByRole('button', { name: 'Replay' }),
     ).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
-    expect(screen.getByTestId('live-region')).toHaveTextContent(/All five done/);
+    // Announced once, by the toast's own region — never also through the app's (A11Y-05).
+    expect(screen.getByTestId('live-region')).not.toHaveTextContent(/All five done/);
     act(() => {
       setTourDocument(null);
     });
+  });
+
+  it('A11Y-05 ONB-09 only the pending-action line is live: a step change announces the next action, not the whole card', async () => {
+    arrive(null);
+    const dialog = await screen.findByRole('dialog', { name: 'Open the sample workscape' });
+    expect(dialog).not.toHaveAttribute('aria-live');
+    const live = dialog.querySelector('[aria-live="polite"]');
+    expect(live).toHaveClass('gd-tour__action');
+    expect(live).toHaveAttribute('aria-atomic', 'true');
+    expect(live).toHaveTextContent('Pending action: Double-click “Q3 Delivery — Guided sample”');
+    expect(dialog.querySelectorAll('[aria-live]')).toHaveLength(1);
+  });
+
+  it('ONB-08 Replay from the completion toast outside the library goes to the library first, then starts at step 1', async () => {
+    const { router } = arrive(null, '/nowhere');
+    await screen.findByRole('heading', { level: 1 });
+    act(() => {
+      startTour();
+    });
+    completeFromStepOne('/nowhere');
+    const replay = await screen.findByRole('button', { name: 'Replay' });
+    expect(router.state.location.pathname).toBe('/nowhere');
+    await userEvent.click(replay);
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/');
+    });
+    expect(
+      await screen.findByRole('dialog', { name: 'Open the sample workscape' }),
+    ).toHaveAttribute('data-step', '1');
+    await waitFor(() => {
+      expect(me.updateMe).toHaveBeenLastCalledWith({ tourDone: false });
+    });
+  });
+
+  it('ONB-08 ONB-03 Replay then Skip write the flag in order: false, then true, never overlapping', async () => {
+    arrive('2026-09-01T00:00:00.000Z');
+    await screen.findByText('Everest trek');
+    const answers: (() => void)[] = [];
+    const seen: boolean[] = [];
+    vi.mocked(me.updateMe).mockImplementation(
+      (patch) =>
+        new Promise((resolve) => {
+          seen.push(patch.tourDone === true);
+          answers.push(() => {
+            resolve(profile(patch.tourDone === true ? '2026-09-13T01:00:00.000Z' : null));
+          });
+        }),
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Help' }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Replay guided tour' }));
+    await userEvent.click(within(card()).getByRole('button', { name: 'Skip' }));
+    // Only the Replay write is in flight; Skip waits for its answer.
+    expect(seen).toEqual([false]);
+    act(() => {
+      answers[0]!();
+    });
+    await waitFor(() => {
+      expect(seen).toEqual([false, true]);
+    });
+    act(() => {
+      answers[1]!();
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).toBeNull();
+    });
+    expect(tourState()).toEqual({ phase: 'idle' });
   });
 
   it('ONB-12 the card renders in the active locale from the catalogue', async () => {

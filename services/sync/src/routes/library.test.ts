@@ -787,8 +787,22 @@ describe('delete vs archive (LIB-D1..D11)', () => {
       code: 'sample',
       message: 'The guided sample cannot be archived',
     });
-    expect(server.repo.docs.get(sample.id)).toMatchObject({ deletedAt: null, archivedAt: null });
-    // Only its seeding is audited; the refused delete and archive wrote nothing.
+    // ONB-01: it is *named* `Q3 Delivery — Guided sample`; a rename is refused the same way.
+    const renamed = await json<ErrorBody>(server, 'PATCH', `/api/documents/${sample.id}`, {
+      token: alice,
+      body: { title: 'Mine now' },
+    });
+    expect(renamed.status).toBe(409);
+    expect(renamed.body.error).toMatchObject({
+      code: 'sample',
+      message: 'The guided sample cannot be renamed',
+    });
+    expect(server.repo.docs.get(sample.id)).toMatchObject({
+      deletedAt: null,
+      archivedAt: null,
+      title: 'Q3 Delivery — Guided sample',
+    });
+    // Only its seeding is audited; the refused delete, archive and rename wrote nothing.
     expect(actions(sample.id)).toEqual(['document.create']);
   });
 
@@ -1022,6 +1036,34 @@ describe('guided sample (ONB-01)', () => {
       'Deliverables',
       'Team',
     ]);
+  });
+
+  test('ONB-01 a failed seed never fails the request: the profile answers sampleDocumentId null, the failure is logged and counted, nothing is written, and the next request seeds', async () => {
+    await server.close();
+    server = await startServer({}, { captureLogs: true });
+    const dave = server.verifier.issue('tok-dave', 'sub-dave', 'dave@example.com');
+    server.s3.failPuts = true;
+    const first = await json<ProfileView>(server, 'GET', '/api/me', { token: dave });
+    expect(first.status).toBe(200);
+    expect(first.body.sampleDocumentId).toBeNull();
+    const daveId = first.body.id;
+    expect(server.repo.sampleOf(daveId)).toBeNull();
+    expect(server.app.samples.stats).toEqual({ seeded: 0, adopted: 0, failures: 1 });
+    expect(server.logs.some((l) => l.msg === 'guided sample seed failed')).toBe(true);
+    // Other requests of the account work meanwhile: the library lists, without a sample.
+    expect((await listAll(dave, 'recents')).status).toBe(200);
+    // Still failing: still degraded, still counted, never cached as "done".
+    expect(
+      (await json<ProfileView>(server, 'GET', '/api/me', { token: dave })).body.sampleDocumentId,
+    ).toBeNull();
+    expect(server.app.samples.stats.failures).toBe(3);
+    // S3 back: the next request seeds and the answer carries the id.
+    server.s3.failPuts = false;
+    const later = await json<ProfileView>(server, 'GET', '/api/me', { token: dave });
+    expect(later.body.sampleDocumentId).toBe(server.repo.sampleOf(daveId));
+    expect(later.body.sampleDocumentId).not.toBeNull();
+    expect(server.app.samples.stats).toEqual({ seeded: 1, adopted: 0, failures: 3 });
+    expect(server.s3.objects.has(`docs/${String(later.body.sampleDocumentId)}/1.yjs`)).toBe(true);
   });
 
   test('ONB-02 an account whose first request is a shared link still gets its sample: seeding is not tied to the library', async () => {

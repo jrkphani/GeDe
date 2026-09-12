@@ -168,6 +168,59 @@ describe('DocumentShell', () => {
     });
   });
 
+  it('ONB-01 LIB-D10 the guided sample keeps its name: the title field is read-only with the reason, nothing PATCHes; an editor’s refused rename (409 sample) reverts and says why', async () => {
+    vi.mocked(docs.getDocument).mockResolvedValue({
+      ...record,
+      title: 'Q3 Delivery — Guided sample',
+      sample: true,
+    });
+    await openShell();
+    const title = screen.getByLabelText('Workscape title');
+    await waitFor(() => {
+      expect(title).toHaveValue('Q3 Delivery — Guided sample');
+    });
+    expect(title).toHaveAttribute('readonly');
+    expect(title).toHaveAttribute('aria-readonly', 'true');
+    expect(title).toHaveAttribute('title', 'The guided sample keeps its name');
+    await userEvent.type(title, 'x');
+    expect(title).toHaveValue('Q3 Delivery — Guided sample');
+    expect(roomDoc().getMap('meta').get('title')).toBe('Q3 Delivery — Guided sample');
+    expect(docs.renameDocument).not.toHaveBeenCalled();
+  });
+
+  it('ONB-01 an editor of someone else’s sample sees no lock (it is not their sample) but a refused rename reverts with the reason', async () => {
+    vi.mocked(docs.getDocument).mockResolvedValue({
+      ...record,
+      title: 'Q3 Delivery — Guided sample',
+      permission: 'edit',
+      ownerId: 'sub-owner',
+    });
+    const { ApiError } = await import('../../api/client.js');
+    vi.mocked(docs.renameDocument).mockRejectedValue(
+      new ApiError(409, 'The guided sample cannot be renamed', 'ref-1', {
+        error: { code: 'sample', message: 'The guided sample cannot be renamed', ref: 'ref-1' },
+      }),
+    );
+    await openShell();
+    const title = screen.getByLabelText('Workscape title');
+    await waitFor(() => {
+      expect(title).toHaveValue('Q3 Delivery — Guided sample');
+    });
+    expect(title).not.toHaveAttribute('readonly');
+    await userEvent.clear(title);
+    await userEvent.type(title, 'Mine now');
+    await waitFor(
+      () => {
+        expect(docs.renameDocument).toHaveBeenCalledWith(ID, 'Mine now');
+      },
+      { timeout: 2000 },
+    );
+    await waitFor(() => {
+      expect(title).toHaveValue('Q3 Delivery — Guided sample');
+    });
+    expect(screen.getByText('The guided sample keeps its name')).toBeInTheDocument();
+  });
+
   it('SHARE-05 SHARE-04 another participant in the room shows as an avatar in the Shared badge', async () => {
     room.awareness.setLocalState({
       userId: 'u-2',

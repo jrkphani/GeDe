@@ -88,7 +88,7 @@ import type { MenuContext } from './menus/entries.js';
 import { SheetTabs } from './SheetTabs.js';
 import { TableView } from './TableView.js';
 import { DagEdges, useTableFlags } from './style/index.js'; // wave4/inspector-controls
-import { TitleBar } from './TitleBar.js';
+import { SAMPLE_RENAME_REASON, TitleBar } from './TitleBar.js';
 import { ShareControls } from './share/ShareControls.js';
 import { Toolbar, type InspectorMode } from './Toolbar.js';
 
@@ -667,6 +667,7 @@ function OpenDocument({
         editable={editable}
         focusTitle={focusTitle}
         onRenameError={setRenameError}
+        renameLocked={doc.sample === true ? SAMPLE_RENAME_REASON : undefined}
       />
 
       {!phone && (

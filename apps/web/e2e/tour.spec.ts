@@ -267,6 +267,11 @@ for (const width of [1024, 1440] as const) {
     ).toBeVisible();
     await expectCardPlaced(page, null);
     await expect(page.getByRole('grid').first()).toBeVisible();
+    // ONB-01: the sample keeps its name — the title field is read-only with the reason.
+    const title = page.getByLabel('Workscape title');
+    await expect(title).toHaveValue('Q3 Delivery — Guided sample');
+    await expect(title).toHaveAttribute('readonly', '');
+    await expect(title).toHaveAttribute('title', 'The guided sample keeps its name');
     await checkCardBothThemes(page, checkA11y, `tour step 2 ${String(width)}`);
     // The worked reference the sample ships with does not count; typing a new one does.
     // Deliverables at B2: header row 4, data rows 5–12; Owner role is column G.
@@ -324,7 +329,7 @@ for (const width of [1024, 1440] as const) {
     const step5 = page.getByRole('dialog', { name: 'Invite someone by email' });
     await expect(step5).toBeVisible();
     await expect(
-      step5.getByText('Like iCloud sharing, with permissions you can set per table.'),
+      step5.getByText('Like iCloud sharing, with a permission you set per person.'),
     ).toBeVisible();
     await expect(step5.getByText('STEP 5 OF 5', { exact: true })).toBeVisible();
     await expect(step5.locator('.gd-tour__dot--done')).toHaveCount(5);

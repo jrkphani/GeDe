@@ -122,6 +122,7 @@ export class GedeStage extends cdk.Stage {
       cluster: service.cluster,
       jobsTaskDefinition: service.jobsTaskDefinition,
       jobsLogGroup: service.jobsLogGroup,
+      serviceLogGroup: service.logGroup,
       serviceSecurityGroup: service.serviceSecurityGroup,
     });
 

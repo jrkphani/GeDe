@@ -378,16 +378,22 @@ export interface DocumentsRepo {
   }): Promise<DocumentRecord>;
   /**
    * The guided sample (ONB-01), like `create` but `sample = true` and at most
-   * one per owner: the insert is `ON CONFLICT DO NOTHING` on
-   * `documents_owner_sample_key` (migration 0009), so a race on first sight
-   * yields the row the other request created, with `created: false` so the
-   * caller can log its now-orphaned snapshot object.
+   * one per owner. The transaction takes a per-owner advisory lock, reads
+   * the owner's sample, and only when there is none calls `writeSnapshot`
+   * (the caller's S3 put of the seed object) before inserting the row, its
+   * `snapshots` row and the audit row — so racing seeders across tasks
+   * write exactly one object and the losers adopt the winner's row
+   * (`created: false`). A `writeSnapshot` failure rolls the transaction
+   * back and rethrows: no row ever points at a missing object. The partial
+   * unique index `documents_owner_sample_key` (migration 0009) stays as the
+   * invariant the lock protects.
    */
   createSample(input: {
     id: string;
     ownerId: string;
     title: string;
     snapshot: { seq: number; s3Key: string; sizeBytes: number };
+    writeSnapshot: () => Promise<void>;
   }): Promise<{ document: DocumentRecord; created: boolean }>;
   rename(id: string, title: string): Promise<DocumentRecord | undefined>;
   /**

@@ -1227,20 +1227,39 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     const owner = await repo.users.upsertFromToken({ sub: 'sub-sample-seed', email: null });
     expect(owner.sampleDocumentId).toBeNull();
     const bytes = encodeSampleWorkscape();
-    const seed = (id: string) =>
+    const puts: string[] = [];
+    const seed = (id: string, put: () => Promise<void> = () => Promise.resolve()) =>
       repo.documents.createSample({
         id,
         ownerId: owner.id,
         title: SAMPLE_TITLE,
         snapshot: { seq: 1, s3Key: `docs/${id}/1.yjs`, sizeBytes: bytes.byteLength },
+        writeSnapshot: async () => {
+          puts.push(id);
+          await put();
+        },
       });
-    const firstId = crypto.randomUUID();
-    const first = await seed(firstId);
-    expect(first).toMatchObject({ created: true, document: { id: firstId, sample: true } });
-    // A racing second insert writes nothing and adopts the first row.
+    // A failed object write leaves no row: the transaction rolled back under the lock.
+    await expect(
+      seed(crypto.randomUUID(), () => Promise.reject(new Error('simulated S3 outage'))),
+    ).rejects.toThrow('simulated S3 outage');
+    expect(
+      (await pool.query('select 1 from documents where owner_id = $1 and sample', [owner.id]))
+        .rowCount,
+    ).toBe(0);
+    // Three seeders racing (three tasks): one object written, one row, all adopt it.
+    const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    puts.length = 0;
+    const outcomes = await Promise.all(ids.map((id) => seed(id)));
+    expect(outcomes.filter((o) => o.created)).toHaveLength(1);
+    const firstId = outcomes.find((o) => o.created)!.document.id;
+    expect(outcomes.map((o) => o.document.id)).toEqual([firstId, firstId, firstId]);
+    expect(puts).toEqual([firstId]);
+    // A later seeder adopts without writing either.
     const second = await seed(crypto.randomUUID());
     expect(second.created).toBe(false);
     expect(second.document.id).toBe(firstId);
+    expect(puts).toEqual([firstId]);
     const rows = await pool.query<{ n: number }>(
       'select count(*)::int as n from documents where owner_id = $1 and sample',
       [owner.id],
@@ -1280,6 +1299,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       ownerId: guest,
       title: SAMPLE_TITLE,
       snapshot: { seq: 1, s3Key: `docs/${guestSample}/1.yjs`, sizeBytes: bytes.byteLength },
+      writeSnapshot: () => Promise.resolve(),
     });
     await pool.query(
       "update documents set updated_at = now() + interval '1 minute' where id = $1",

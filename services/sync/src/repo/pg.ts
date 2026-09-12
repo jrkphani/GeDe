@@ -586,12 +586,25 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         });
       },
 
-      createSample({ id, ownerId, title, snapshot }) {
+      createSample({ id, ownerId, title, snapshot, writeSnapshot }) {
         return db.transaction(async (tx) => {
-          // ONB-01: at most one per owner. The partial unique index
-          // (`documents_owner_sample_key`, migration 0009) is the guard; a
-          // conflict means another request seeded it first, and this
-          // insert — with its snapshot and audit rows — writes nothing.
+          // ONB-01: one seeder per owner across every task. The lock is
+          // transaction-scoped and keyed on a namespaced string, so it can never
+          // be the migration runner's (`hashtext('gede_migrations')`). Whoever
+          // holds it first reads no sample, writes the object, inserts; the
+          // others wait, read the committed row and adopt it — one S3 put,
+          // nothing orphaned. The partial unique index remains the invariant.
+          await tx.execute(
+            sql`select pg_advisory_xact_lock(hashtext(${`gede_sample:${ownerId}`}))`,
+          );
+          const [existing] = await tx
+            .select()
+            .from(documents)
+            .where(and(eq(documents.ownerId, ownerId), eq(documents.sample, true)))
+            .limit(1);
+          if (existing) return { document: toDocument(existing), created: false };
+          // The object first, inside the lock: a failure here rolls back with no row written.
+          await writeSnapshot();
           const [row] = await tx
             .insert(documents)
             .values({
@@ -602,17 +615,8 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               snapshotKey: snapshot.s3Key,
               snapshotSeq: snapshot.seq,
             })
-            .onConflictDoNothing({ target: documents.ownerId, where: sql`sample` })
             .returning();
-          if (!row) {
-            const [existing] = await tx
-              .select()
-              .from(documents)
-              .where(and(eq(documents.ownerId, ownerId), eq(documents.sample, true)))
-              .limit(1);
-            if (!existing) throw new Error('sample insert conflicted but no sample row exists');
-            return { document: toDocument(existing), created: false };
-          }
+          if (!row) throw new Error('sample insert returned no row');
           await tx.insert(snapshots).values({
             documentId: id,
             seq: snapshot.seq,

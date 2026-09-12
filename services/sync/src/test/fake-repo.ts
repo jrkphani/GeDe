@@ -445,16 +445,17 @@ export class FakeRepo implements Repo {
       });
       return Promise.resolve({ ...doc, snapshotKey: snapshot.s3Key, snapshotSeq: snapshot.seq });
     },
-    createSample: ({ id, ownerId, title, snapshot }) => {
-      // `documents_owner_sample_key`: a second sample for the owner writes nothing.
+    createSample: async ({ id, ownerId, title, snapshot, writeSnapshot }) => {
+      // As pg.ts under its per-owner lock: an existing sample is adopted and the
+      // object is not written; otherwise the object goes first (a failure leaves no row).
       const existing = this.sampleOf(ownerId);
       if (existing !== null) {
         const doc = this.docs.get(existing);
         if (!doc) throw new Error('unreachable: sample id without a row');
-        return Promise.resolve({ document: { ...doc }, created: false });
+        return { document: { ...doc }, created: false };
       }
-      if (this.docs.has(id))
-        return Promise.reject(new Error('duplicate key value (documents_pkey)'));
+      if (this.docs.has(id)) throw new Error('duplicate key value (documents_pkey)');
+      await writeSnapshot();
       const doc = this.seedDocument(ownerId, title, new Date(), id, { sample: true });
       const stored = this.docs.get(doc.id);
       if (stored) {
@@ -470,10 +471,10 @@ export class FakeRepo implements Repo {
         action: 'document.create',
         target: 'sample',
       });
-      return Promise.resolve({
+      return {
         document: { ...doc, snapshotKey: snapshot.s3Key, snapshotSeq: snapshot.seq },
         created: true,
-      });
+      };
     },
     rename: (id, title) => {
       assertText(title);

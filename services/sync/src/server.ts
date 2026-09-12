@@ -35,6 +35,8 @@ export function perUserKey(request: Pick<FastifyRequest, 'user' | 'ip'>): string
 export type SyncServer = FastifyInstance & {
   readonly rooms: RoomManager;
   readonly projection: ProjectionWorker;
+  /** The guided-sample seeder (ONB-01); tests read its counters. */
+  readonly samples: SampleSeeder;
 };
 
 export async function buildServer(deps: Deps): Promise<SyncServer> {
@@ -120,5 +122,5 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
   // (legacy `await fastify()` support); strip that so the async return is not
   // treated as a thenable.
   const instance: FastifyInstance = app;
-  return Object.assign(instance, { rooms, projection });
+  return Object.assign(instance, { rooms, projection, samples });
 }

@@ -6,7 +6,13 @@ import { createSheet, createTable, setCellText } from '../doc/mutations.js';
 import { cellText, openDocument, tableById, tableMap, type GedeDoc } from '../doc/schema.js';
 import { commitCellText } from '../engine/commit.js';
 import { setReferenceCell } from './reference.js';
-import { boundTableIds, crossTableReferenceCount, isCrossTableFormula } from './cross-table.js';
+import {
+  boundTableIds,
+  crossTableReferenceCount,
+  crossTableReferenceKeys,
+  isCrossTableFormula,
+  newCrossTableReference,
+} from './cross-table.js';
 
 function twoTables(): {
   gd: GedeDoc;
@@ -55,6 +61,23 @@ describe('cross-table reference detection (tour step 2)', () => {
     // A second cell referencing the same table counts too; the count is per cell.
     commitCellText(gd, a.id, a.rows[1]!, a.cols[0]!, '=Sum(@B.Other, B5)');
     expect(crossTableReferenceCount(gd)).toBe(2);
+  });
+
+  test('ONB-05 the keys are a set: overwriting one reference with another, or moving it, is a new key; the count stays level', () => {
+    const { gd, a, b } = twoTables();
+    commitCellText(gd, a.id, a.rows[2]!, a.cols[0]!, '=@B.Other');
+    const baseline = crossTableReferenceKeys(gd);
+    expect(baseline).toEqual(new Set([`${a.id}/${a.rows[2]!}:${a.cols[0]!}`]));
+    // Overwrite in place: same key, no new reference.
+    commitCellText(gd, a.id, a.rows[2]!, a.cols[0]!, '=Sum(@B.Other, @B.Other)');
+    expect(newCrossTableReference(baseline, crossTableReferenceKeys(gd))).toBeNull();
+    // Clear it and write one elsewhere: the count is unchanged, the set is not.
+    setCellText(gd, a.id, a.rows[2]!, a.cols[0]!, '');
+    commitCellText(gd, b.id, b.rows[1]!, b.cols[1]!, '=@A.One');
+    expect(crossTableReferenceCount(gd)).toBe(baseline.size);
+    expect(newCrossTableReference(baseline, crossTableReferenceKeys(gd))).toBe(
+      `${b.id}/${b.rows[1]!}:${b.cols[1]!}`,
+    );
   });
 
   test('ONB-05 REF-01 a reference cell set without a formula counts', () => {

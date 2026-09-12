@@ -109,7 +109,9 @@ describe('tour store', () => {
     const gd = openSampleAt(2);
     const c = cells(gd);
     // The seeded =@Team.Priya.Role is the baseline: opening the sample does not advance.
-    expect(tourState()).toMatchObject({ step: 2, baseline: { crossReferences: 1 } });
+    expect(tourState()).toMatchObject({ step: 2 });
+    const state = tourState();
+    expect(state.phase === 'running' && state.baseline.crossReferences?.size).toBe(1);
     setCellText(gd, c.deliverables.id, c.deliverables.row, c.deliverables.roleCol, 'plain text');
     // A formula over the table's own cells (Days of two deliverables) stays inside it.
     const map = tableMap(gd, c.deliverables.id)!;
@@ -134,6 +136,44 @@ describe('tour store', () => {
     expect(tourState()).toMatchObject({ step: 3, baseline: { graphs: 0 } });
   });
 
+  test('ONB-05 step 2 advances when the seeded reference is overwritten with another, or cleared and written elsewhere — the set changed, not the count', () => {
+    let gd = openSampleAt(2);
+    let c = cells(gd);
+    const d = tableById(gd, c.deliverables.id)!;
+    // Overwrite the sample's own =@Team.Priya.Role (row 1) with a different reference.
+    commitCellText(
+      gd,
+      c.deliverables.id,
+      d.rows[0]!,
+      c.deliverables.roleCol,
+      '=@Team.Priya.Capacity',
+    );
+    expect(tourState()).toMatchObject({ step: 2 });
+    // Same cell again is not a new key; moving it is.
+    setCellText(gd, c.deliverables.id, d.rows[0]!, c.deliverables.roleCol, '');
+    expect(tourState()).toMatchObject({ step: 2 });
+    commitCellText(gd, c.deliverables.id, d.rows[1]!, c.deliverables.roleCol, '=@Team.Priya.Role');
+    expect(tourState()).toMatchObject({ step: 3 });
+
+    resetTourForTests();
+    gd = openSampleAt(2);
+    c = cells(gd);
+    // A remote transaction counts too: the document the card points at gained a reference.
+    const remote = new Y.Doc();
+    Y.applyUpdate(remote, Y.encodeStateAsUpdate(gd.doc));
+    const rgd = openDocument(remote);
+    const rc = cells(rgd);
+    commitCellText(
+      rgd,
+      rc.deliverables.id,
+      rc.deliverables.row,
+      rc.deliverables.roleCol,
+      '=@Team.Marcus.Role',
+    );
+    Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(remote), 'remote');
+    expect(tourState()).toMatchObject({ step: 3 });
+  });
+
   test('ONB-05 step 2 takes its baseline when the document arrives, so the tour can start before the room loads', () => {
     startTour();
     setTourSampleDocumentId(SAMPLE_ID);
@@ -141,7 +181,8 @@ describe('tour store', () => {
     expect(tourState()).toMatchObject({ step: 2, baseline: { crossReferences: null } });
     const gd = sample();
     setTourDocument(gd);
-    expect(tourState()).toMatchObject({ step: 2, baseline: { crossReferences: 1 } });
+    const state = tourState();
+    expect(state.phase === 'running' && state.baseline.crossReferences?.size).toBe(1);
     setTourDocument(null);
     expect(tourState()).toMatchObject({ step: 2 });
   });

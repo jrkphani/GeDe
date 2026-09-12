@@ -49,7 +49,7 @@ afterEach(() => {
 });
 
 describe('useSpotlight', () => {
-  it('ONB-04 measures the anchor by bounding box and re-measures on scroll, resize, zoom and layout change — never on a timer', async () => {
+  it('ONB-04 measures the anchor by bounding box and re-measures on scroll, resize, zoom, layout change and a settled transition — never on a timer', async () => {
     const el = anchor({ left: 10.4, top: 20, width: 100, height: 30 });
     render(<Probe target="graph" />);
     expect(screen.getByTestId('rect')).toHaveTextContent('10,20,100,30');
@@ -102,6 +102,36 @@ describe('useSpotlight', () => {
     await frame();
     await frame();
     expect(screen.getByTestId('rect')).toHaveTextContent('10,60,140,30');
+
+    // A CSS transition or animation on an ancestor moved it: re-measured when it ends.
+    el.getBoundingClientRect = () => ({
+      left: 40,
+      top: 60,
+      width: 140,
+      height: 30,
+      right: 180,
+      bottom: 90,
+      x: 40,
+      y: 60,
+      toJSON: () => ({}),
+    });
+    document.body.dispatchEvent(new Event('transitionend'));
+    await frame();
+    expect(screen.getByTestId('rect')).toHaveTextContent('40,60,140,30');
+    el.getBoundingClientRect = () => ({
+      left: 50,
+      top: 60,
+      width: 140,
+      height: 30,
+      right: 190,
+      bottom: 90,
+      x: 50,
+      y: 60,
+      toJSON: () => ({}),
+    });
+    document.body.dispatchEvent(new Event('animationend'));
+    await frame();
+    expect(screen.getByTestId('rect')).toHaveTextContent('50,60,140,30');
 
     // The prototype polled every 350 ms; the build never does (ONB-04).
     const source = readFileSync(join(__dirname, 'use-spotlight.ts'), 'utf8');

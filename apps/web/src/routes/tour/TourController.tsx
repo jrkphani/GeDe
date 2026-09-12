@@ -14,12 +14,12 @@
 import { Toast } from '@gede/ui';
 import { below } from '@gede/tokens';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
-import { useLocation } from 'react-router';
+import { useLocation, useNavigate } from 'react-router';
 
-import { announce } from '../../announce.js';
 import { useSession } from '../../auth/session.js';
 import { useMessages } from '../../i18n/index.js';
 import { useMediaQuery } from '../../use-media-query.js';
+import { tourFlag } from './flag-queue.js';
 import {
   autoStartTour,
   dismissTourDone,
@@ -49,16 +49,19 @@ export function useTourAllowed(): boolean {
 /**
  * ONB-08: Replay from the library's help control — and from the completion
  * toast. Clears the flag and restarts at step 1; works whether or not a tour
- * is already running.
+ * is already running. Step 1 targets the library row, so a Replay from
+ * anywhere else (the toast inside a document) goes to the library first.
  */
 export function useReplayTour(): () => void {
   const { updateProfile } = useSession();
+  const navigate = useNavigate();
+  const location = useLocation();
   return useCallback(() => {
+    if (location.pathname !== '/') void navigate('/');
     startTour();
-    updateProfile({ tourDone: false }).catch(() => {
-      /* the run is already on; the flag is cleared again when it ends */
-    });
-  }, [updateProfile]);
+    // The run is already on; the write is queued behind any Skip still in flight.
+    void tourFlag.persist(false, updateProfile);
+  }, [updateProfile, navigate, location.pathname]);
 }
 
 /**
@@ -90,24 +93,19 @@ export function TourController() {
     setTourSampleDocumentId(profile?.sampleDocumentId ?? null);
   }, [profile?.sampleDocumentId]);
 
-  // ONB-03, ONB-07: persist the end of a run, then let the store move on.
+  // ONB-03, ONB-07: persist the end of a run — serialised with any Replay
+  // write, so the profile never lags a later answer — then let the store move on.
   useEffect(() => {
     if (state.phase !== 'ending') return;
     const reason: TourEndReason = state.reason;
     let live = true;
-    void updateProfile({ tourDone: true })
-      .catch(() => undefined)
-      .then(() => {
-        if (live) tourEnded(reason);
-      });
+    void tourFlag.persist(true, updateProfile).then(() => {
+      if (live) tourEnded(reason);
+    });
     return () => {
       live = false;
     };
   }, [state, updateProfile]);
-
-  useEffect(() => {
-    if (state.phase === 'done') announce(t('tour.done.message'));
-  }, [state.phase, t]);
 
   if (!allowed) return null;
 

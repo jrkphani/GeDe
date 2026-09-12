@@ -38,13 +38,35 @@ export function isCrossTableFormula(source: string, ownTableId: Id): boolean {
   return false;
 }
 
-/** Formula cells in the document that reference another table. */
-export function crossTableReferenceCount(gd: GedeDoc): number {
-  let count = 0;
+/**
+ * The cells holding a cross-table formula, keyed `${tableId}/${rowId}:${colId}`
+ * (the workbook cell id). The tour baselines this set when step 2 begins and
+ * advances on a key outside it: overwriting the sample's own reference with
+ * another, or clearing it and writing one elsewhere, counts as the person
+ * writing one — a plain count would stay level in both cases.
+ */
+export function crossTableReferenceKeys(gd: GedeDoc): Set<string> {
+  const keys = new Set<string>();
   gd.tables.forEach((table, tableId) => {
-    cellsMap(table).forEach((content) => {
-      if (isFormula(content) && isCrossTableFormula(content, tableId)) count += 1;
+    cellsMap(table).forEach((content, key) => {
+      if (isFormula(content) && isCrossTableFormula(content, tableId)) {
+        keys.add(`${tableId}/${key}`);
+      }
     });
   });
-  return count;
+  return keys;
+}
+
+/** Formula cells in the document that reference another table. */
+export function crossTableReferenceCount(gd: GedeDoc): number {
+  return crossTableReferenceKeys(gd).size;
+}
+
+/** A key in `current` that was not in `baseline`: a reference written since the baseline was taken. */
+export function newCrossTableReference(
+  baseline: ReadonlySet<string>,
+  current: ReadonlySet<string>,
+): string | null {
+  for (const key of current) if (!baseline.has(key)) return key;
+  return null;
 }

@@ -740,8 +740,25 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('ONB-01 Ops turns the sync service’s `guided sample seed failed` line into a metric with an alarm', () => {
+    stacks.Ops!.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '{ $.msg = "guided sample seed failed" }',
+      MetricTransformations: [
+        Match.objectLike({ MetricNamespace: 'GeDe/Sync', MetricName: 'SampleSeedFailures' }),
+      ],
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-sample-seed-failed',
+      Namespace: 'GeDe/Sync',
+      MetricName: 'SampleSeedFailures',
+      Threshold: 0,
+      ComparisonOperator: 'GreaterThanThreshold',
+      TreatMissingData: 'notBreaching',
+    });
+  });
+
   it('Ops wires alarms and the budget to the alerts email', () => {
-    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 10);
+    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 11);
     stacks.Ops!.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'email',
       Endpoint: 'jrkphani@icloud.com',
