@@ -97,6 +97,33 @@ export interface GridCommandDeps {
   state: () => GridState;
   dispatch: (event: GridEvent) => void;
   announce: (text: string) => void;
+  /**
+   * Called after every command (KEYS-03): the shell passes the undo manager's
+   * `stopCapturing`, so one command is one undo step however quickly the next
+   * follows — the manager's capture timeout would otherwise merge a commit with
+   * the row it appended, or two divider presses.
+   */
+  settle?: (() => void) | undefined;
+}
+
+/** Wrap every command so `settle` runs after it, whatever it returned. */
+function settled(commands: GridCommands, settle: (() => void) | undefined): GridCommands {
+  if (settle === undefined) return commands;
+  const source = commands as unknown as Record<string, (...args: unknown[]) => unknown>;
+  const out: Record<string, unknown> = { ...source };
+  for (const key of Object.keys(source)) {
+    if (key === 'readOnlyReason') continue; // a read, not an action
+    const fn = source[key];
+    if (fn === undefined) continue;
+    out[key] = (...args: unknown[]) => {
+      try {
+        return fn(...args);
+      } finally {
+        settle();
+      }
+    };
+  }
+  return out as unknown as GridCommands;
 }
 
 /** Sentence for a read-only reason (A11Y-04: the reason is text, not a tint). */
@@ -167,7 +194,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     else select({ tableId, rowId: sel.rowId, colId: next.id });
   };
 
-  return {
+  const commands: GridCommands = {
     insertRowBelow(tableId, rowId, colId) {
       if (!editable() || record(tableId) === null) return null;
       const id = addRow(gd, tableId, rowId);
@@ -307,14 +334,15 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     },
     clearCell(cell) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
-      clearCellText(gd, cell.tableId, cell.rowId, cell.colId);
-      return true;
+      return clearCellText(gd, cell.tableId, cell.rowId, cell.colId);
     },
     commitCell(cell, text) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
-      setCellText(gd, cell.tableId, cell.rowId, cell.colId, text);
-      return true;
+      // False when the row or column went while the editor was open: the draft is dropped
+      // rather than written as a cell keyed to nothing (GRID-02).
+      return setCellText(gd, cell.tableId, cell.rowId, cell.colId, text);
     },
     readOnlyReason,
   };
+  return settled(commands, deps.settle);
 }

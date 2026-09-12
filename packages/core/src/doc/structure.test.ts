@@ -22,6 +22,7 @@ import {
   hideColumn,
   insertRowBefore,
   openDocument,
+  orphanCellKeys,
   rowHeights,
   scaleTable,
   setCellText,
@@ -31,6 +32,7 @@ import {
   setFrozenColumns,
   setHeaderRows,
   setRowWrapped,
+  sweepOrphanCells,
   TABLE_TITLE_ROWS,
   tableAddresses,
   tableById,
@@ -420,5 +422,65 @@ describe('two replicas converge on structure', () => {
       cols[2],
     ]);
     expect(a.tables.toJSON()).toEqual(b.tables.toJSON());
+  });
+});
+
+describe('addresses agree across projections', () => {
+  test('GRID-02 tableAddresses and cellAddress give the same answer for a hidden column: null, and the successor takes the letter', () => {
+    const { gd, id, rows, cols } = fixture();
+    const t = table(gd, id);
+    hideColumn(gd, id, cols[1] ?? '');
+    const grid = tableAddresses(t);
+    expect(grid[0]).toEqual(['A4', null, 'B4']);
+    expect(grid[2]).toEqual(['A6', null, 'B6']);
+    rows.forEach((rowId, ri) => {
+      cols.forEach((colId, ci) => {
+        expect(cellAddress(t, rowId, colId)).toBe(grid[ri]?.[ci] ?? null);
+      });
+    });
+    unhideColumn(gd, id, cols[1] ?? '');
+    expect(tableAddresses(t)[0]).toEqual(['A4', 'B4', 'C4']);
+  });
+});
+
+describe('orphan cells', () => {
+  test('GRID-02 LOAD-06 a row deleted on one replica while another wrote into it leaves an orphan the sweep removes; a write into a vanished row is refused', () => {
+    const { a, b, merge } = offlinePair((gd) => {
+      fixture(gd);
+    });
+    const id = Object.keys(a.tables.toJSON())[0] ?? '';
+    const rec = tableById(a, id);
+    const r2 = rec?.rows[1] ?? '';
+    const c1 = rec?.columns[0]?.id ?? '';
+    // The reviewer's probe: deleteRow ‖ setCellText, then merge.
+    expect(deleteRow(a, id, r2)).toBe(true);
+    expect(setCellText(b, id, r2, c1, 'written offline')).toBe(true);
+    merge();
+    expect(a.tables.toJSON()).toEqual(b.tables.toJSON());
+    expect(tableById(a, id)?.rows).not.toContain(r2);
+    expect(orphanCellKeys(table(a, id))).toEqual([`${r2}:${c1}`]);
+    // Addresses never saw it; the sweep takes it out on both sides and is not an undo step.
+    const undoA = createUndoManager(a, { captureTimeout: 0 });
+    expect(sweepOrphanCells(a, id)).toBe(1);
+    expect(orphanCellKeys(table(a, id))).toEqual([]);
+    expect(undoA.undoStack).toHaveLength(0);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc)));
+    expect(orphanCellKeys(table(b, id))).toEqual([]);
+    expect(sweepOrphanCells(b, id)).toBe(0);
+    expect(a.tables.toJSON()).toEqual(b.tables.toJSON());
+    // Once the row is known to be gone, a late commit (the editor's unmount) writes nothing.
+    let writes = 0;
+    a.doc.on('update', () => {
+      writes += 1;
+    });
+    expect(setCellText(a, id, r2, c1, 'late draft')).toBe(false);
+    expect(setCellText(a, id, rec?.rows[0] ?? '', 'no-such-column', 'x')).toBe(false);
+    expect(writes).toBe(0);
+    expect(orphanCellKeys(table(a, id))).toEqual([]);
+    // A deleted column behaves the same.
+    const c3 = rec?.columns[2]?.id ?? '';
+    deleteColumn(a, id, c3);
+    expect(setCellText(a, id, rec?.rows[0] ?? '', c3, 'x')).toBe(false);
+    expect(sweepOrphanCells(a, 'no-such-table')).toBe(0);
   });
 });

@@ -32,4 +32,27 @@ describe('Tabs', () => {
     expect(screen.getByRole('tab', { name: 'Cell' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Cell pane')).toBeVisible();
   });
+
+  it('DOC-03 a tab without content still controls a real, hidden panel, so aria-controls resolves (WCAG 4.1.2)', () => {
+    render(
+      <Tabs<Pane>
+        label="Sheets"
+        value="table"
+        onChange={() => undefined}
+        items={[
+          { value: 'table', label: '1° Sheet 1' },
+          { value: 'cell', label: '2° Sheet 2' },
+        ]}
+      />,
+    );
+    const active = screen.getByRole('tab', { name: '1° Sheet 1' });
+    const panelId = active.getAttribute('aria-controls');
+    expect(panelId).toBeTruthy();
+    const panel = document.getElementById(panelId ?? '');
+    expect(panel).not.toBeNull();
+    expect(panel).toHaveAttribute('role', 'tabpanel');
+    expect(panel).toHaveClass('gd-tabs__panel--empty');
+    expect(panel?.tabIndex).toBe(-1); // not a tab stop: there is nothing in it
+    expect(panel).toBeEmptyDOMElement();
+  });
 });

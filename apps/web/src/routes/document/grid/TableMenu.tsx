@@ -13,10 +13,13 @@ export interface TableMenuProps {
   commands: GridCommands;
 }
 
-/** Frozen-column choices offered: none, or one to three (never every column). */
+/**
+ * Frozen-column choices (GRID-10): none, or any count short of every column —
+ * freezing them all would leave nothing to scroll. No other cap; the PRD sets none.
+ */
 export function frozenOptions(columnCount: number): number[] {
   const out = [0];
-  for (let n = 1; n <= Math.min(3, Math.max(0, columnCount - 1)); n += 1) out.push(n);
+  for (let n = 1; n <= Math.max(0, columnCount - 1); n += 1) out.push(n);
   return out;
 }
 

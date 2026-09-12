@@ -5,7 +5,7 @@
  */
 import * as Y from 'yjs';
 
-import { cellKey, newId, type Id } from '../ids.js';
+import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
 import { snapPoint, snapSizeToUnits, type LatticeUnits, type Pixels } from '../lattice.js';
 import {
   cellsMap,
@@ -551,27 +551,77 @@ export function setRowDepth(gd: GedeDoc, tableId: Id, rowId: Id, depth: number):
  * fragment is replaced whole — character-level merging is the ProseMirror
  * binding's job in Wave 2.
  */
-export function setCellText(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, text: string): void {
-  transact(gd, () => {
-    const cells = cellsMap(requireTable(gd, tableId));
+export function setCellText(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, text: string): boolean {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    // The row or column may have gone since the editor opened (a collaborator deleted it,
+    // GRID-02); writing then would leave a cell keyed to nothing. Checked in the same
+    // transaction as the write so nothing can slip between.
+    if (!rowsArray(table).toArray().includes(rowId)) return false;
+    if (columnIndexOf(columnsArray(table), colId) < 0) return false;
+    const cells = cellsMap(table);
     const key = cellKey(rowId, colId);
     if (text === '') {
       cells.delete(key);
-      return;
+      return true;
     }
     const current = cells.get(key);
     if (text.startsWith('=')) {
       if (current !== text) cells.set(key, text);
-      return;
+      return true;
     }
     // An unchanged commit must not churn the CRDT (or drop marks the text already carries).
-    if (current !== undefined && !isFormula(current) && fragmentText(current) === text) return;
+    if (current !== undefined && !isFormula(current) && fragmentText(current) === text) return true;
     cells.set(key, textFragment(text));
+    return true;
   });
 }
 
-export function clearCell(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): void {
-  setCellText(gd, tableId, rowId, colId, '');
+export function clearCell(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): boolean {
+  return setCellText(gd, tableId, rowId, colId, '');
+}
+
+/** Transaction origin for garbage collection; never tracked by undo — nothing a person did. */
+export const SWEEP_ORIGIN = 'sweep';
+
+/**
+ * Cell keys whose row or column is no longer in the table. They arise only from a
+ * merge: one replica deleted a row while another, offline, wrote into it
+ * (`deleteRow` removes the cells it can see; the write merges in afterwards).
+ * Addresses never see them (they are computed from `rows` and `columns`), but
+ * the document would carry them forever.
+ */
+export function orphanCellKeys(table: TableMap): string[] {
+  const rows = new Set(rowsArray(table).toArray());
+  const columns = new Set(
+    columnsArray(table)
+      .toArray()
+      .map((c) => readString(c, 'id')),
+  );
+  const orphans: string[] = [];
+  cellsMap(table).forEach((_value, key) => {
+    const { rowId, colId } = splitCellKey(key);
+    if (!rows.has(rowId) || !columns.has(colId)) orphans.push(key);
+  });
+  return orphans;
+}
+
+/**
+ * Remove orphan cells. Call it when a row or column deletion is observed
+ * arriving from another replica (that is the only moment orphans can appear);
+ * it runs under `SWEEP_ORIGIN`, so it is not an undo step, and two replicas
+ * sweeping the same keys converge. Returns the number removed.
+ */
+export function sweepOrphanCells(gd: GedeDoc, tableId: Id): number {
+  const table = tableMap(gd, tableId);
+  if (table === null) return 0;
+  const orphans = orphanCellKeys(table);
+  if (orphans.length === 0) return 0;
+  gd.doc.transact(() => {
+    const cells = cellsMap(table);
+    for (const key of orphans) cells.delete(key);
+  }, SWEEP_ORIGIN);
+  return orphans.length;
 }
 
 export function deleteTable(gd: GedeDoc, tableId: Id): void {

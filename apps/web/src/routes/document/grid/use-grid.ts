@@ -4,8 +4,16 @@
  * shell holds one of these; `TableView`, the toolbar menu, the inspector and
  * context menus all act through `actions` and `commands`.
  */
-import { useCallback, useMemo, useRef, useState } from 'react';
-import { cellAddress, tableById, tableMap, type GedeDoc, type Id } from '@gede/core';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import * as Y from 'yjs';
+import {
+  cellAddress,
+  sweepOrphanCells,
+  tableById,
+  tableMap,
+  type GedeDoc,
+  type Id,
+} from '@gede/core';
 
 import { announce } from '../../../announce.js';
 import {
@@ -39,12 +47,35 @@ export interface Grid {
   commands: GridCommands;
 }
 
-export function useGrid(gd: GedeDoc, editable: boolean): Grid {
+export interface GridOptions {
+  /**
+   * The document's undo manager (KEYS-03). Every grid command ends by
+   * `stopCapturing()` on it, so one user action is one undo step whatever the
+   * manager's capture timeout merges for typing elsewhere.
+   */
+  undo?: Pick<Y.UndoManager, 'stopCapturing'> | undefined;
+}
+
+/** True when the event is a deletion from a table's `rows` or `columns` array. */
+function isStructuralDelete(event: unknown): boolean {
+  if (!(event instanceof Y.YArrayEvent)) return false;
+  if (event.changes.deleted.size === 0) return false;
+  const parent = event.target.parent;
+  if (!(parent instanceof Y.Map)) return false;
+  return parent.get('rows') === event.target || parent.get('columns') === event.target;
+}
+
+export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {}): Grid {
   const [state, setState] = useState<GridState>(IDLE);
   // Handlers read the latest state synchronously (commit then move in one keystroke).
   const stateRef = useRef(state);
   const editableRef = useRef(editable);
   editableRef.current = editable;
+  const undoRef = useRef(options.undo);
+  undoRef.current = options.undo;
+  // The selected table as last seen, so a vanished row or column can hand the
+  // selection to the neighbour that took its place.
+  const snapshotRef = useRef<{ tableId: Id; table: TraversalTable } | null>(null);
 
   const lookup = useCallback(
     (tableId: Id): TraversalTable | null => {
@@ -68,6 +99,9 @@ export function useGrid(gd: GedeDoc, editable: boolean): Grid {
         stateRef.current = next;
         setState(next);
         announceSelection(gd, before, next);
+        const tableId = next.selection?.tableId;
+        const table = tableId === undefined ? null : lookup(tableId);
+        snapshotRef.current = tableId === undefined || table === null ? null : { tableId, table };
       }
       if (effect?.kind === 'append-row' && editableRef.current) {
         // GRID-05: past the final row a new row appears and the cursor lands in it —
@@ -90,10 +124,31 @@ export function useGrid(gd: GedeDoc, editable: boolean): Grid {
         state: () => stateRef.current,
         dispatch,
         announce,
+        settle: () => undoRef.current?.stopCapturing(),
       }),
     [gd, dispatch],
   );
   commandsRef.current = commands;
+
+  // Structure can change under the selection — a collaborator deletes or hides the
+  // selected row or column, or the table itself (GRID-02, SHARE-04). Keep the
+  // selection on something that renders, and sweep the orphan cells a merge can
+  // leave behind a remote delete.
+  useEffect(() => {
+    const onChange = (events: Y.YEvent<Y.AbstractType<unknown>>[]) => {
+      for (const event of events) {
+        if (!isStructuralDelete(event)) continue;
+        const table = event.target.parent as Y.Map<unknown>;
+        const tableId = table.get('id');
+        if (typeof tableId === 'string') sweepOrphanCells(gd, tableId);
+      }
+      reconcileSelection(stateRef.current, lookup, snapshotRef.current, dispatch);
+    };
+    gd.tables.observeDeep(onChange);
+    return () => {
+      gd.tables.unobserveDeep(onChange);
+    };
+  }, [gd, lookup, dispatch]);
 
   const actions = useMemo<GridActions>(
     () => ({
@@ -122,6 +177,51 @@ export function useGrid(gd: GedeDoc, editable: boolean): Grid {
   );
 
   return { state, cell: selectedCell(state.selection), actions, commands };
+}
+
+/**
+ * After the document changed, move the selection off anything that no longer
+ * renders: table gone → cleared; row gone → the row now at its index; column
+ * gone or hidden → the visible column now at its place; nothing left → the table.
+ */
+function reconcileSelection(
+  state: GridState,
+  lookup: (tableId: Id) => TraversalTable | null,
+  snapshot: { tableId: Id; table: TraversalTable } | null,
+  dispatch: (event: GridEvent) => void,
+): void {
+  const selection = state.selection;
+  if (selection === null) return;
+  const now = lookup(selection.tableId);
+  if (now === null) {
+    dispatch({ type: 'tableGone', tableId: selection.tableId });
+    return;
+  }
+  const cell = selection.cell;
+  if (cell === null) return;
+  const rowOk = now.rows.includes(cell.rowId);
+  const column = now.columns.find((c) => c.id === cell.colId);
+  const colOk = column !== undefined && !column.hidden;
+  if (rowOk && colOk) return;
+  const prev = snapshot?.tableId === selection.tableId ? snapshot.table : null;
+  let rowId: Id | undefined = cell.rowId;
+  if (!rowOk) {
+    const was = prev?.rows.indexOf(cell.rowId) ?? -1;
+    rowId = now.rows[Math.min(Math.max(was, 0), now.rows.length - 1)];
+  }
+  let colId: Id | undefined = cell.colId;
+  if (!colOk) {
+    const visible = now.columns.filter((c) => !c.hidden);
+    const wasAt = prev?.columns.findIndex((c) => c.id === cell.colId) ?? -1;
+    const before =
+      prev === null || wasAt < 0 ? 0 : prev.columns.filter((c, i) => !c.hidden && i < wasAt).length;
+    colId = visible[Math.min(before, visible.length - 1)]?.id;
+  }
+  if (rowId === undefined || colId === undefined) {
+    dispatch({ type: 'selectTable', tableId: selection.tableId });
+  } else {
+    dispatch({ type: 'select', cell: { tableId: selection.tableId, rowId, colId } });
+  }
 }
 
 /** A11Y-05: say what got selected, once per change. */

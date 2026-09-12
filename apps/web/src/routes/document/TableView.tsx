@@ -157,7 +157,11 @@ export const TableView = memo(function TableView({
   const columnReadOnly = new Map<Id, ReadOnlyReason | null>(
     record.columns.map((c) => [c.id, c.source === 'entered' ? null : c.source]),
   );
-  const rowIsGroup = (rowId: Id): boolean => rowMeta(table, rowId).group;
+  // One rowMeta read per row: the group band (GRID-04) and the row's own wrap (GRID-09).
+  const rowFacts = (rowId: Id): { group: boolean; wrapped: boolean } => {
+    const meta = rowMeta(table, rowId);
+    return { group: meta.group, wrapped: meta.height === WRAPPED_ROW_HEIGHT };
+  };
 
   // M8: with nothing selected in this table, its first cell is the tab stop (roving tabindex).
   const tableHasSelection = selectedCell !== null && selectedCell.tableId === record.id;
@@ -272,7 +276,7 @@ export const TableView = memo(function TableView({
             )}
             {record.rows.map((rowId, ri) => {
               const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
-              const groupRow = rowIsGroup(rowId);
+              const { group: groupRow, wrapped: rowWrapped } = rowFacts(rowId);
               return (
                 <div
                   key={rowId}
@@ -293,7 +297,7 @@ export const TableView = memo(function TableView({
                       editing.cell.rowId === rowId &&
                       editing.cell.colId === col.id;
                     const other = presenceByCell.get(`${rowId}:${col.id}`);
-                    const address = addresses?.[ri]?.[columnOrdinal.get(col.id) ?? -1];
+                    const address = addresses?.[ri]?.[columnOrdinal.get(col.id) ?? -1] ?? undefined;
                     const cell = { tableId: record.id, rowId, colId: col.id };
                     // Column source wins over the row band, as `cellReadOnlyReason` in core.
                     const readOnly: ReadOnlyReason | null =
@@ -313,7 +317,9 @@ export const TableView = memo(function TableView({
                         readOnly={readOnly}
                         frozen={frozenIds.has(col.id)}
                         freezeEdge={col.id === freezeEdgeId}
-                        wrap={col.wrap || (rowHeights[ri] ?? 1) === WRAPPED_ROW_HEIGHT}
+                        // Per-column wrap clamps that column's cells only; a row wrapped on its
+                        // own wraps all of its cells. Other cells in a two-unit row stay one line.
+                        wrap={col.wrap || rowWrapped}
                         other={other}
                         traversal={traversal}
                         actions={actions}
@@ -484,7 +490,7 @@ function PinnedPanel({
                 key={col.id}
                 className={clsx('gd-cell', 'gd-cell--frozen', {
                   'gd-cell--selected': isSelected,
-                  'gd-cell--wrap': col.wrap || (rowHeights[ri] ?? 1) === WRAPPED_ROW_HEIGHT,
+                  'gd-cell--wrap': col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
                 })}
                 style={{ width: `${String(col.width * LATTICE.col)}px` }}
                 onPointerDown={() => {

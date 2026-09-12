@@ -575,6 +575,10 @@ describe('wrap, freeze, header and footer (GRID-09..11)', () => {
     expect(within(grid()).getAllByRole('row')[2]!.style.height).toBe(`${String(LATTICE.row)}px`);
     expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B7');
     expect(cellAt(2, 0)).toHaveAttribute('data-address', 'B8');
+    // A row wrapped on its own wraps every cell in it, and only that row.
+    expect(cellAt(0, 0)).toHaveClass('gd-cell--wrap');
+    expect(cellAt(0, 2)).toHaveClass('gd-cell--wrap');
+    expect(cellAt(1, 0)).not.toHaveClass('gd-cell--wrap');
   });
 
   it('GRID-10 frozen columns are shaded with a heavier rule at the boundary, and the pinned panel carries them', () => {

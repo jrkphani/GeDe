@@ -165,6 +165,9 @@ export function reduce(
     case 'cancel':
       return pure({ selection: state.selection, editing: null });
     case 'committed': {
+      // A late commit from an editor that already closed (its unmount, after the
+      // selection moved) changes nothing.
+      if (state.editing === null && event.then === null) return pure(state);
       const after = { selection: state.selection, editing: null };
       if (event.then === null || current === null) return pure(after);
       return move(after, current, event.then, lookup);

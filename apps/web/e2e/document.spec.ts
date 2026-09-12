@@ -92,8 +92,9 @@ async function signInTo(page: Page, path: string): Promise<void> {
 }
 
 test.describe('document shell', () => {
-  test('DOC-01 DOC-03 DOC-06 signs in, opens the workscape, seeds Sheet 1 and shows rulers on the lattice', async ({
+  test('DOC-01 DOC-03 DOC-06 signs in, opens the workscape, seeds Sheet 1 and shows rulers on the lattice; the shell passes axe', async ({
     page,
+    checkA11y,
   }) => {
     const room = await installFakes(page);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -111,10 +112,17 @@ test.describe('document shell', () => {
       'height',
       '22px',
     );
+    // The sheet strip's tabs must control a real panel (DOC-03, WCAG 4.1.2).
+    const tab = page.getByRole('tab', { name: /1°.*Sheet 1/ });
+    const panelId = await tab.getAttribute('aria-controls');
+    expect(panelId).toBeTruthy();
+    await expect(page.locator(`#${panelId ?? ''}`)).toHaveAttribute('role', 'tabpanel');
+    await checkA11y('document shell 1440');
   });
 
   test('DOC-02 GRID-01 GRID-03 GRID-07 adds a table on the lattice, selects a cell, edits it, and the room receives it', async ({
     page,
+    checkA11y,
   }) => {
     const room = await installFakes(page);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -142,10 +150,12 @@ test.describe('document shell', () => {
     // Escape clears the selection.
     await page.keyboard.press('Escape');
     await expect(cell).not.toHaveAttribute('aria-selected', 'true');
+    await checkA11y('document table 1440');
   });
 
   test('DOC-04 DOC-05 DOC-07 pans by dragging, zooms with ⌥scroll into the macro tier, and Fit frames the table', async ({
     page,
+    checkA11y,
   }) => {
     await installFakes(page);
     await page.setViewportSize({ width: 1024, height: 768 });
@@ -176,11 +186,13 @@ test.describe('document shell', () => {
     await page.getByRole('button', { name: 'Fit to canvas' }).click();
     await expect(page.locator('.gd-canvas')).toHaveAttribute('data-zoom-tier', 'micro');
     await expect(page.getByRole('grid')).toHaveCount(1);
+    await checkA11y('document table 1024');
   });
 
   for (const width of [480, 768] as const) {
     test(`RESP-02 RESP-01 at ${String(width)} px the document is read-only with no edit affordance and the geometry unchanged`, async ({
       page,
+      checkA11y,
     }) => {
       const room = await installFakes(page);
       // Author a table from the room side, as a desktop collaborator would.
@@ -211,6 +223,7 @@ test.describe('document shell', () => {
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
       expect(overflow).toBeLessThanOrEqual(0);
+      await checkA11y(`document ${phone ? 'phone' : 'tablet'} ${String(width)}`);
     });
   }
 
@@ -228,6 +241,7 @@ test.describe('document shell', () => {
 
       test(`A11Y-06 the ${zoomed.chrome} layout holds at 200 % zoom with no loss of content`, async ({
         page,
+        checkA11y,
       }) => {
         const room = await installFakes(page);
         // A collaborator has already placed a table.
@@ -250,12 +264,14 @@ test.describe('document shell', () => {
         expect(overflow).toBeLessThanOrEqual(0);
         // The lattice is absolute: the table keeps its 160 px column at any zoom (RESP-01).
         await expect(page.locator('.gd-table').first()).toHaveCSS('width', '480px');
+        await checkA11y(`document ${zoomed.chrome} 200 zoom`);
       });
     });
   }
 
   test('SHARE-03 the service’s read-only notice takes the edit affordances away and says why', async ({
     page,
+    checkA11y,
   }) => {
     // The record still says the caller may edit; the room disagrees (permission changed since).
     const room = await installFakes(page, true);
@@ -269,6 +285,7 @@ test.describe('document shell', () => {
       'true',
     );
     await expect(page.getByLabel('Workscape title')).toHaveCount(0);
+    await checkA11y('document view-only 1440');
   });
 
   test('A11Y-05 selection and sync status announce through the polite live region', async ({
@@ -472,6 +489,7 @@ test.describe('grid editing', () => {
   test('RESP-02 A11Y-04 at 480 px none of the grid editing renders: no editor, strip, stub, divider, corner or table menu; a locked cell still says why', async ({
     page,
     snapshot,
+    checkA11y,
   }) => {
     const room = await installFakes(page);
     const gd = openDocument(room.doc);
@@ -502,5 +520,6 @@ test.describe('grid editing', () => {
     await expect(locked.locator('.gd-cell__lock svg')).toHaveCount(1);
     await expect(locked).toHaveAttribute('aria-label', /Read-only: derived column/);
     await snapshot('document grid 480 read-only');
+    await checkA11y('document grid read-only 480');
   });
 });

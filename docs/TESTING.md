@@ -29,7 +29,7 @@ The suite needs no backend. It builds the web app with `apps/web/e2e/vite.config
 `apps/web/e2e/dist/` (never `dist/`, which is what the pipeline deploys), emits
 `/config.json` from `apps/web/e2e/fixtures/config.json` — the real, public production client
 ids (`ap-southeast-1_1Zp23zP4h`, `1s3mm417d2rp61illc1bsg69bg`, `https://gede.work/api`) —
-and serves the result with `vite preview` on port 4173. Nothing in the suite signs in: OTP
+and serves the result with `vite preview` (port: see Running locally). Nothing in the suite signs in: OTP
 needs a mailbox and passkeys only work on the production RP id.
 
 | Spec                 | Journeys                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
@@ -65,7 +65,13 @@ npm run e2e             # build e2e/dist, serve it, run every journey, print the
 npm run e2e:ui          # the same in Playwright's UI mode
 npm run e2e -- e2e/errors.spec.ts                     # one spec
 E2E_BASE_URL=http://localhost:4173 npm run e2e        # against something already serving e2e/dist
+E2E_PORT=4300 npm run e2e                             # pick the preview port yourself
 ```
+
+The preview port is 4173 in CI and, locally, one derived from the checkout's path
+(`4200 + hash(cwd) % 1000`), so two worktrees never share a port; a server already on it fails
+the run rather than being reused — `vite preview` caches its file list at start, so a preview
+left running would serve a stale build (or another worktree's) without saying so.
 
 Outputs, all under `apps/web/test-results/` (gitignored):
 
@@ -83,7 +89,7 @@ Outputs, all under `apps/web/test-results/` (gitignored):
    that needs a CSS class to find something is usually reporting a missing name.
 4. Call `await checkA11y('<screen> <breakpoint>')` on every screen state the journey reaches.
    The screen name becomes the JSON file name; keep it unique across specs.
-5. Network: the app may only reach `localhost:4173`. Stub anything external with
+5. Network: the app may only reach the preview on `localhost`. Stub anything external with
    `page.route(url, …)`; never stub the app's own modules, never fake a session.
 6. Breakpoints and zoom: use `test.use({ viewport: { width, height: 900 } })` for 480, 768,
    1024, 1440 and `test.use(zoomed200(width))` for 200 % zoom (see below). Do not invent

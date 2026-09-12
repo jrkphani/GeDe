@@ -196,7 +196,7 @@ function OpenDocument({
       ? chosenSheetId
       : (sheets[0]?.id ?? null);
   // Selection, editing and traversal (GRID-03..06) live in the grid state machine.
-  const grid = useGrid(gd, editable);
+  const grid = useGrid(gd, editable, { undo: session.undo });
   const { selection, editing } = grid.state;
   const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
   const [size, setSize] = useState<Size>({ width: 0, height: 0 });

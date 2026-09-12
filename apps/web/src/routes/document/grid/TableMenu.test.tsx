@@ -124,11 +124,11 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     expect(screen.getAllByRole('menuitem').length).toBeGreaterThanOrEqual(9);
   });
 
-  it('GRID-10 frozen-column choices never include every column', () => {
+  it('GRID-10 frozen-column choices run to every count short of the whole table — no other cap', () => {
     expect(frozenOptions(0)).toEqual([0]);
     expect(frozenOptions(1)).toEqual([0]);
     expect(frozenOptions(2)).toEqual([0, 1]);
     expect(frozenOptions(3)).toEqual([0, 1, 2]);
-    expect(frozenOptions(9)).toEqual([0, 1, 2, 3]);
+    expect(frozenOptions(9)).toEqual([0, 1, 2, 3, 4, 5, 6, 7, 8]);
   });
 });

@@ -98,9 +98,17 @@ export function cellAddress(table: TableMap, rowId: Id, colId: Id): string | nul
   return formatAddress(cellRefInTable(dataGeometry(table, record), colOrdinal, rowOrdinal));
 }
 
-/** Every data-cell address, `[rowOrdinal][columnOrdinal]` (GRID-02). */
-export function tableAddresses(table: TableMap): string[][] {
-  return addressGrid(dataGeometry(table));
+/**
+ * Every data-cell address, `[rowOrdinal][columnOrdinal]` (GRID-02). A hidden
+ * column has no address (`null`) and the column after it takes its letter —
+ * the same answer `cellAddress` gives one cell at a time.
+ */
+export function tableAddresses(table: TableMap): (string | null)[][] {
+  const record = tableRecord(table);
+  const grid = addressGrid(dataGeometry(table, record));
+  const hidden = record.columns.map((c) => c.hidden);
+  if (!hidden.some(Boolean)) return grid;
+  return grid.map((row) => row.map((address, ci) => (hidden[ci] === true ? null : address)));
 }
 
 /** Sum of the visible column widths in units; never below one so a table always has a footprint. */
