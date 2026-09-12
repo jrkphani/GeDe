@@ -1,8 +1,11 @@
 import { apiFetch, type RequestOptions } from './client.js';
 
 /**
- * `GET /api/me` → `{ id, sub, email, displayName, locale }`. The locale is
- * the user's persisted choice (I18N-05); absent until the sync API carries it.
+ * `GET /api/me` → `{ id, sub, email, displayName, locale, tourDoneAt, sampleDocumentId }`.
+ * The locale is the user's persisted choice (I18N-05). `tourDoneAt` is the
+ * per-account guided-tour flag (ONB-03): null while the tour is due.
+ * `sampleDocumentId` is the account's guided sample workscape (ONB-01),
+ * seeded by the service; null only on a service that predates it.
  */
 export interface Me {
   id: string;
@@ -10,6 +13,8 @@ export interface Me {
   email: string | null;
   displayName: string | null;
   locale: string | null;
+  tourDoneAt: string | null;
+  sampleDocumentId: string | null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -26,6 +31,8 @@ export function toMe(v: unknown): Me | null {
     email: strOrNull(v.email),
     displayName: strOrNull(v.displayName),
     locale: strOrNull(v.locale),
+    tourDoneAt: strOrNull(v.tourDoneAt),
+    sampleDocumentId: strOrNull(v.sampleDocumentId),
   };
 }
 
@@ -38,11 +45,17 @@ export async function getMe(options?: RequestOptions): Promise<Me> {
 export interface MePatch {
   displayName?: string | undefined;
   locale?: string | undefined;
+  /** ONB-03: `true` when the tour ends (completed or skipped); `false` on Replay (ONB-08). */
+  tourDone?: boolean | undefined;
 }
 
-/** `PATCH /api/me { displayName?, locale? }`. */
-export async function updateMe(patch: MePatch, options?: RequestOptions): Promise<void> {
-  await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: patch, retry: true });
+/** `PATCH /api/me { displayName?, locale?, tourDone? }`. Resolves the profile as stored. */
+export async function updateMe(patch: MePatch, options?: RequestOptions): Promise<Me> {
+  const me = toMe(
+    await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: patch, retry: true }),
+  );
+  if (!me) throw new Error('The profile response was not in the expected shape');
+  return me;
 }
 
 /**

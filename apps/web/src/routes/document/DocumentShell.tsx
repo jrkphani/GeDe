@@ -81,6 +81,7 @@ import { Inspector } from './Inspector.js';
 import { documentBindings } from './keys/bindings.js';
 import type { CellSelection } from './selection.js';
 import { useCellClipboard } from './keys/clipboard.js';
+import { setTourDocument } from '../tour/store.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
 import type { MenuContext } from './menus/entries.js';
@@ -230,6 +231,13 @@ function OpenDocument({
   useTableFlags(gd); // INSP-07: `pinned` and `z` decide the layers below; nothing else inside a table
   useYVersion(gd.graphs, { depth: 'shallow' });
   const awarenessVersion = useAwarenessVersion(session.sync.awareness);
+  // ONB-05: the guided tour reads this document for its step-2 and step-3 checks.
+  useEffect(() => {
+    setTourDocument(gd);
+    return () => {
+      setTourDocument(null);
+    };
+  }, [gd]);
 
   // Viewer state (never document state): active sheet, selection, viewport, chrome toggles.
   const sheets = listSheets(gd);

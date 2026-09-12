@@ -28,6 +28,8 @@ describe('me api', () => {
       email: null,
       displayName: 'M',
       locale: null,
+      tourDoneAt: null,
+      sampleDocumentId: null,
     });
     expect(toMe({ sub: 's' })).toBeNull();
     const fetchImpl = vi.fn(() =>
@@ -40,9 +42,10 @@ describe('me api', () => {
     expect(me.locale).toBe('en-IN');
   });
 
-  it('I18N-05 PATCH /me sends only the fields given', async () => {
-    const fetchImpl = vi.fn(() => Promise.resolve(new Response(null, { status: 204 })));
-    await updateMe(
+  it('I18N-05 PATCH /me sends only the fields given and resolves the stored profile', async () => {
+    const stored = { id: 'u1', sub: 's', email: null, displayName: null, locale: 'ta-IN' };
+    const fetchImpl = vi.fn(() => Promise.resolve(json(200, stored)));
+    const me = await updateMe(
       { locale: 'ta-IN' },
       { fetchImpl: fetchImpl as unknown as typeof fetch, getToken: () => Promise.resolve('t') },
     );
@@ -50,5 +53,28 @@ describe('me api', () => {
     expect(url).toBe('https://api.test/me');
     expect(init.method).toBe('PATCH');
     expect(JSON.parse(init.body as string)).toEqual({ locale: 'ta-IN' });
+    expect(me.locale).toBe('ta-IN');
+  });
+
+  it('ONB-03 GET /me carries the account tour flag and the sample id; PATCH /me { tourDone } sends the boolean', async () => {
+    expect(
+      toMe({
+        id: 'u1',
+        sub: 's',
+        tourDoneAt: '2026-09-13T01:02:03.000Z',
+        sampleDocumentId: 'd-sample',
+      }),
+    ).toMatchObject({ tourDoneAt: '2026-09-13T01:02:03.000Z', sampleDocumentId: 'd-sample' });
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(json(200, { id: 'u1', sub: 's', tourDoneAt: null, sampleDocumentId: 'd' })),
+    );
+    const me = await updateMe(
+      { tourDone: false },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, getToken: () => Promise.resolve('t') },
+    );
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ tourDone: false });
+    expect(me.tourDoneAt).toBeNull();
+    expect(me.sampleDocumentId).toBe('d');
   });
 });

@@ -127,6 +127,8 @@ describe('RequireAuth', () => {
       email: 'meena@1cloudhub.com',
       displayName: 'Meena',
       locale: 'te-IN',
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     vi.mocked(cognito.currentUser).mockResolvedValue({
       sub: 'sub-9',
@@ -147,6 +149,8 @@ describe('RequireAuth', () => {
       email: null,
       displayName: null,
       locale: null,
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     vi.mocked(cognito.currentUser).mockResolvedValue({
       sub: 'sub-9',
@@ -168,6 +172,8 @@ describe('RequireAuth', () => {
       email: 'meena@1cloudhub.com',
       displayName: 'Meena',
       locale: 'hi-IN',
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     vi.mocked(cognito.currentUser).mockResolvedValue({
       sub: 'sub-9',

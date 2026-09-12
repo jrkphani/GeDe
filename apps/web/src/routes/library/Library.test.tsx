@@ -56,6 +56,8 @@ vi.mock('../../api/me.js', async (importOriginal) => {
         email: user.email,
         displayName: 'Meena',
         locale: null,
+        tourDoneAt: '2026-09-01T00:00:00.000Z',
+        sampleDocumentId: null,
       }),
     ),
     updateMe: vi.fn(() => Promise.resolve()),
@@ -970,6 +972,8 @@ describe('Library', () => {
       email: user.email,
       displayName: 'Meena',
       locale: 'ta-IN',
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     serve(live);
     renderRoutes(routes, ['/']);

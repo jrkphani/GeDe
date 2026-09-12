@@ -410,6 +410,8 @@ describe('LinkRedeem', () => {
       email: 'akshaya@example.com',
       displayName: null,
       locale: null,
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     vi.mocked(shares.acceptInvite).mockRejectedValue(new Error('404'));
     const { router } = app(`/d/${ID}?invite=tok_abcdefghijklmnop`);
@@ -428,6 +430,8 @@ describe('LinkRedeem', () => {
       email: null,
       displayName: null,
       locale: null,
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     vi.mocked(meApi.bindVerifiedEmail).mockImplementation(() => {
       order.push('bind');
@@ -437,6 +441,8 @@ describe('LinkRedeem', () => {
         email: 'akshaya@example.com',
         displayName: null,
         locale: null,
+        tourDoneAt: '2026-09-01T00:00:00.000Z',
+        sampleDocumentId: null,
       });
     });
     vi.mocked(shares.acceptInvite).mockImplementation(() => {
@@ -476,6 +482,8 @@ describe('LinkRedeem', () => {
       email: 'dana@example.com',
       displayName: 'Dana',
       locale: null,
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     vi.mocked(shares.redeemLink).mockResolvedValue(undefined);
     // What SignIn does once the session is signed in: go where the visitor was headed.

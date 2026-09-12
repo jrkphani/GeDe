@@ -44,6 +44,7 @@ export function ShareControls({ doc, participants, phone }: ShareControlsProps) 
         icon={<Icon name="share" size={13} />}
         aria-haspopup="dialog"
         aria-expanded={open}
+        data-tour="share"
         onClick={() => {
           setOpen(true);
         }}

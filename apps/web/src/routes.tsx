@@ -9,8 +9,12 @@ import { NotFound, RouteError } from './routes/errors/RouteError.js';
 import { Library } from './routes/library/Library.js';
 import { SignIn } from './routes/sign-in/SignIn.js';
 import { SignedOut } from './routes/signed-out/SignedOut.js';
+import { TourController } from './routes/tour/TourController.js';
 
-/** App shell: session, live region (A11Y-05), locale on the root, providers. */
+/**
+ * App shell: session, live region (A11Y-05), locale on the root, providers,
+ * and the guided tour, which spans the library and the document (ONB-05).
+ */
 export function AppShell() {
   useLocale();
   return (
@@ -19,6 +23,7 @@ export function AppShell() {
         <ToastProvider>
           <LiveRegion />
           <Outlet />
+          <TourController />
         </ToastProvider>
       </TooltipProvider>
     </SessionProvider>

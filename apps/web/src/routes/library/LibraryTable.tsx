@@ -193,6 +193,7 @@ export function LibraryTable({
                 className={clsx('gd-lib__row', { 'gd-lib__row--selected': selected })}
                 aria-selected={selected}
                 tabIndex={selected || (selectedId === null && d.id === firstId) ? 0 : -1}
+                data-tour={d.sample === true ? 'sample' : undefined}
                 onClick={() => {
                   onSelect(d);
                 }}
