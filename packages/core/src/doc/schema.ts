@@ -3,14 +3,21 @@
  *
  * One `Y.Doc` per workscape. Its share map carries four top-level types:
  *
- *   sheets  Y.Array<Y.Map>   id, label, parentContext, seeded (ordinal is array order)
+ *   sheets  Y.Array<Y.Map>   id, label, parentContext, seeded (ordinal is array order),
+ *                            edgesShown (the sheet's DAG edges, INSP-07)
  *   tables  Y.Map<Y.Map>     by id: sheetId, title, gridCol, gridRow,
  *                            columns Y.Array<Y.Map{id,label,width}>,
  *                            rows Y.Array<rowId>,
  *                            cells Y.Map keyed `rowId:colId` → Y.XmlFragment | formula string,
  *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height}>,
  *                            cellFormat Y.Map keyed `rowId:colId` → {format, formatOpts}
- *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01)
+ *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01),
+ *                            style · titleShown · caption · captionShown · outline · gridlines ·
+ *                            alternating (the table look, INSP-04), z (stacking, INSP-07),
+ *                            pinned (INSP-07 / PRD §10), cellAppearance Y.Map keyed like `cells`
+ *                            → Appearance override (INSP-05/06), spans Y.Map keyed by anchor →
+ *                            {rows, cols} (MENU-04); a column map may carry `appearance` and
+ *                            `rules` (INSP-05/06). None of these moves an address.
  *   graphs  Y.Map<Y.Map>     by id: sheetId, pairId, kind ring|coverage, tableId ('' when
  *                            unbound), dimensions (JSON array of column ids), slice (JSON
  *                            {rowAxis, colAxis, pins}), gridCol, gridRow, widthUnits,

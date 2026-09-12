@@ -11,7 +11,15 @@ import type { Page } from '@playwright/test';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
-import { createSheet, createTable, openDocument, setCellText, tableById } from '@gede/core';
+import {
+  createSheet,
+  createTable,
+  openDocument,
+  setCellText,
+  setColumnAppearance,
+  setTableLook,
+  tableById,
+} from '@gede/core';
 
 const DOC_ID = '6f1b2c3d-0000-4000-8000-00000000wav2';
 const SESSION: FakeSession = {
@@ -258,7 +266,7 @@ test.describe('inspector rail', () => {
     await snapshot('document-480');
   });
 
-  test('INSP-01 INSP-04 (partial) INSP-05 (partial) INSP-06 (partial) INSP-12 FMT-06 the tabs write through at once: header row off, a column format with its scope sentence, a whole-cell mark', async ({
+  test('INSP-01 INSP-12 FMT-06 the tabs write through at once: header row off, a column format with its scope sentence, a whole-cell mark, a stacking move', async ({
     page,
     checkA11y,
   }) => {
@@ -293,11 +301,12 @@ test.describe('inspector rail', () => {
       'true',
     );
     await checkA11y('inspector text tab 1440');
-    // INSP-11: an unimplemented control is disabled with its reason.
+    // INSP-07 / INSP-11: with one table on the sheet the stacking moves say so — a live
+    // reason, never an issue number now that the Arrange controls have shipped.
     await rail.getByRole('tab', { name: 'Arrange' }).click();
     const front = rail.getByRole('button', { name: 'Front' });
     await expect(front).toHaveAttribute('aria-disabled', 'true');
-    await expect(front).toHaveAttribute('title', /arrives with #85/);
+    await expect(front).toHaveAttribute('title', 'Front — the only table on this sheet');
     await checkA11y('inspector arrange tab 1440');
     await page.getByRole('button', { name: 'Organize inspector' }).click();
     await expect(rail.getByRole('tab', { name: 'Categories' })).toBeVisible();
@@ -320,6 +329,187 @@ test.describe('inspector rail', () => {
   });
 });
 
+test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
+  const theme = async (page: Page, dark: boolean) => {
+    await page.evaluate((on) => {
+      if (on) document.documentElement.setAttribute('data-theme', 'dark');
+      else document.documentElement.removeAttribute('data-theme');
+    }, dark);
+    await settled(page, '[data-testid="inspector"]');
+  };
+
+  for (const width of [1024, 1440] as const) {
+    test(`INSP-04 INSP-05 INSP-06 INSP-07 A11Y-03 at ${String(width)} every appearance tab writes live and passes axe in light and dark`, async ({
+      page,
+      checkA11y,
+      snapshot,
+    }) => {
+      const room = await openDoc(page, width);
+      const rail = inspector(page);
+      if (width < 1200) await page.getByRole('button', { name: 'Format inspector' }).click();
+      await firstCell(page).click();
+      const tables = () => JSON.stringify(room.doc.getMap('tables').toJSON());
+      const table = page.locator('.gd-table').first();
+
+      // Table tab: style, caption, outline, gridlines, banding.
+      await rail.getByRole('tab', { name: 'Table' }).click();
+      await rail.getByRole('radio', { name: 'Forest' }).click();
+      await expect(table).toHaveAttribute('data-style', 'forest');
+      await rail.getByRole('switch', { name: 'Alternating row colour' }).click();
+      await expect(table).toHaveAttribute('data-alternating', 'true');
+      await rail.getByRole('switch', { name: 'Caption' }).click();
+      await rail.getByRole('textbox', { name: 'Caption text' }).fill('Trek stops');
+      await expect(page.getByTestId('table-caption')).toHaveText('Trek stops');
+      await rail.getByRole('combobox', { name: 'Table outline' }).click();
+      await page.getByRole('option', { name: 'Accent' }).click();
+      await expect(table).toHaveAttribute('data-outline', 'accent');
+      await expect.poll(tables).toContain('"style":"forest"');
+      // Fit columns to content measures with the real canvas here.
+      await rail.getByRole('button', { name: 'Fit columns to content' }).click();
+      await expect(page.getByTestId('live-region')).toContainText('Fitted 3 columns to content');
+      await settled(page, '[data-testid="inspector"]');
+      await checkA11y(`inspector table tab ${String(width)}`);
+      await snapshot(`appearance-table-${String(width)}`);
+      await theme(page, true);
+      await checkA11y(`inspector table tab ${String(width)} dark`);
+      await snapshot(`appearance-table-${String(width)}-dark`);
+      await theme(page, false);
+
+      // Cell tab: fill, a border, a rule with its flag.
+      await rail.getByRole('tab', { name: 'Cell' }).click();
+      const fill = rail.getByRole('region', { name: 'fill and border' });
+      await expect(fill).toContainText('applies to Column 1 for all 4 rows');
+      await fill.getByRole('radio', { name: 'Amber' }).click();
+      await expect(firstCell(page)).toHaveAttribute('data-fill', 'amber');
+      await fill.getByRole('radio', { name: /Outline only/ }).click();
+      await expect(firstCell(page)).toHaveClass(/gd-cell--bordered/);
+      const rules = rail.getByRole('region', { name: 'conditional highlighting' });
+      await rules.getByRole('textbox', { name: 'Text' }).fill('Lukla');
+      await rules.getByRole('combobox', { name: 'Fill' }).click();
+      await page.getByRole('option', { name: 'Slate' }).click();
+      await rules.getByRole('button', { name: 'Add a rule' }).click();
+      const lukla = page.getByRole('grid').first().getByRole('gridcell').nth(3);
+      await expect(lukla).toHaveAttribute('data-rule', /.+/);
+      await expect(lukla).toHaveAttribute('data-fill', 'slate');
+      await expect(lukla.locator('.gd-cell__rule')).toHaveAttribute(
+        'title',
+        'Rule: contains “Lukla”',
+      );
+      await settled(page, '[data-testid="inspector"]');
+      await checkA11y(`inspector cell tab appearance ${String(width)}`);
+      await snapshot(`appearance-cell-${String(width)}`);
+      await theme(page, true);
+      await checkA11y(`inspector cell tab appearance ${String(width)} dark`);
+      await snapshot(`appearance-cell-${String(width)}-dark`);
+      await theme(page, false);
+
+      // Text tab: a character style, a colour, an alignment.
+      await rail.getByRole('tab', { name: 'Text' }).click();
+      await rail.getByRole('button', { name: 'Heading' }).click();
+      await expect(firstCell(page)).toHaveAttribute('data-size', 'h3');
+      await expect(firstCell(page)).toHaveAttribute('data-weight', '600');
+      await rail.getByRole('combobox', { name: 'Text colour' }).click();
+      await page.getByRole('option', { name: 'Brand' }).click();
+      await expect(firstCell(page)).toHaveAttribute('data-ink', 'brand');
+      await rail.getByRole('radio', { name: 'Right' }).click();
+      await expect(firstCell(page)).toHaveAttribute('data-halign', 'right');
+      await settled(page, '[data-testid="inspector"]');
+      await checkA11y(`inspector text tab appearance ${String(width)}`);
+      await snapshot(`appearance-text-${String(width)}`);
+      await theme(page, true);
+      await checkA11y(`inspector text tab appearance ${String(width)} dark`);
+      await snapshot(`appearance-text-${String(width)}-dark`);
+      await theme(page, false);
+
+      // Arrange tab: pin, then DAG edges; the pinned copy sits in the non-panning layer.
+      await rail.getByRole('tab', { name: 'Arrange' }).click();
+      await rail.getByRole('switch', { name: 'Pin to viewport' }).click();
+      await expect(page.getByTestId('pinned-layer').getByRole('grid')).toBeVisible();
+      await expect(page.getByTestId('pinned-ghost')).toHaveAttribute('inert', '');
+      await rail.getByRole('switch', { name: 'DAG edges' }).click();
+      await expect(page.getByTestId('dag-edges')).toHaveAttribute('data-count', '0');
+      await settled(page, '[data-testid="inspector"]');
+      await checkA11y(`inspector arrange tab appearance ${String(width)}`);
+      await snapshot(`appearance-arrange-${String(width)}`);
+      await theme(page, true);
+      await checkA11y(`inspector arrange tab appearance ${String(width)} dark`);
+      await snapshot(`appearance-arrange-${String(width)}-dark`);
+      await theme(page, false);
+      await rail.getByRole('switch', { name: 'Pin to viewport' }).click();
+      await expect(page.getByTestId('pinned-layer')).toHaveCount(0);
+    });
+  }
+
+  test('MENU-04 GRID-01 merge with the cell to the right spans the anchor over the covered cell, addresses stay, unmerge restores; the styled table renders at 480 and 768 read-only', async ({
+    page,
+    snapshot,
+  }) => {
+    const room = await openDoc(page, 1440);
+    const cell = firstCell(page);
+    await cell.click();
+    await cell.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Merge with cell to the right' }).click();
+    await expect(cell).toHaveClass(/gd-cell--span/);
+    await expect(cell).toHaveCSS('width', '320px');
+    await expect(page.locator('[data-covered="true"]')).toHaveCount(1);
+    await expect
+      .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()))
+      .toContain('"spans"');
+    // The address behind the span is unchanged: the inspector head still names C5's neighbour D5.
+    await page.keyboard.press('ArrowRight');
+    await expect(inspector(page).getByLabel('Address D5')).toBeVisible();
+    await snapshot('merge-1440');
+    await cell.click();
+    await cell.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Unmerge cells' }).click();
+    await expect(page.locator('[data-covered="true"]')).toHaveCount(0);
+    // Style the table, then read it on the two narrower breakpoints (RESP-01: same geometry).
+    const rail = inspector(page);
+    await rail.getByRole('tab', { name: 'Table' }).click();
+    await rail.getByRole('radio', { name: 'Amber' }).click();
+    await rail.getByRole('switch', { name: 'Alternating row colour' }).click();
+    for (const width of [768, 480] as const) {
+      await page.setViewportSize({ width, height: 900 });
+      await expect(page.locator('.gd-table').first()).toHaveAttribute('data-style', 'amber');
+      await expect(page.locator('.gd-table').first()).toHaveCSS('width', '480px');
+      await snapshot(`appearance-${String(width)}`);
+    }
+  });
+
+  test.describe('200 % zoom', () => {
+    test.use(zoomed200(1440));
+    test('A11Y-06 a styled, banded table with a fill and a border renders at 200 % without horizontal overflow', async ({
+      page,
+      checkA11y,
+      snapshot,
+    }) => {
+      const room = await installFakes(page);
+      const gd = openDocument(room.doc);
+      const tableId = Array.from(gd.tables.keys())[0]!;
+      const record = tableById(gd, tableId)!;
+      setTableLook(gd, tableId, { style: 'slate', alternating: true, outline: 'strong' });
+      setColumnAppearance(gd, tableId, record.columns[0]!.id, {
+        fill: 'amber',
+        border: { edges: 'all', weight: 'accent' },
+        weight: 600,
+      });
+      await signInTo(page, `/d/${DOC_ID}`);
+      await expect(page.getByRole('tab', { name: /Trek/ })).toBeVisible();
+      await expect(page.locator('.gd-table').first()).toHaveAttribute('data-style', 'slate');
+      await expect(page.getByRole('grid').first().getByRole('gridcell').first()).toHaveAttribute(
+        'data-fill',
+        'amber',
+      );
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      );
+      expect(overflow).toBe(false);
+      await checkA11y('appearance zoom200 1440');
+      await snapshot('appearance-1440-zoom200');
+    });
+  });
+});
+
 test.describe('context menus', () => {
   test('MENU-01 MENU-02 MENU-04 MENU-05 right-click on a cell opens its menu in order; a disabled command keeps its reason; Escape returns focus; the menu passes axe', async ({
     page,
@@ -333,16 +523,22 @@ test.describe('context menus', () => {
     const menu = page.getByRole('menu', { name: 'Cell menu' });
     await expect(menu).toBeVisible();
     await expect(menu.getByRole('menuitem', { name: /^Add row below/ })).toContainText('⌥⌘↓');
-    const merge = menu.getByRole('menuitem', { name: 'Merge cells', exact: true });
-    await expect(merge).toHaveAttribute('aria-disabled', 'true');
-    await expect(merge).toHaveAttribute('title', 'arrives with #87 (merge controls)');
+    // MENU-04: the merge controls are live; unmerge on a plain cell says why it cannot act.
+    const unmerge = menu.getByRole('menuitem', { name: 'Unmerge cells', exact: true });
+    await expect(unmerge).toHaveAttribute('aria-disabled', 'true');
+    await expect(unmerge).toHaveAttribute('title', 'the cell is not merged');
+    await expect(
+      menu.getByRole('menuitem', { name: 'Merge with cell to the right', exact: true }),
+    ).not.toHaveAttribute('aria-disabled', 'true');
     await settled(page, '[role="menu"]');
     await checkA11y('cell context menu 1440');
     await snapshot('cell-menu-1440');
     await page.evaluate(() => {
       document.documentElement.setAttribute('data-theme', 'dark');
     });
+    // The rail's live controls fade with the theme too; axe must sample settled colours.
     await settled(page, '[role="menu"]');
+    await settled(page, '[data-testid="inspector"]');
     await checkA11y('cell context menu 1440 dark');
     await snapshot('cell-menu-1440-dark');
     await page.evaluate(() => {
@@ -374,11 +570,11 @@ test.describe('context menus', () => {
     await grid.getByRole('columnheader').nth(2).click({ button: 'right' });
     const menu = page.getByRole('menu', { name: 'Column menu' });
     await expect(menu).toBeVisible();
-    // MENU-02: what no release has yet stays present, disabled, with its reason.
-    await expect(menu.getByRole('menuitem', { name: 'Fit width to content' })).toHaveAttribute(
-      'title',
-      'arrives with #82 (table appearance)',
-    );
+    // INSP-04 / MENU-03: Fit width to content is live — it measures and snaps to whole units.
+    await menu.getByRole('menuitem', { name: 'Fit width to content' }).click();
+    await expect(page.getByTestId('live-region')).toHaveText(/Fitted 1 column to content/);
+    await grid.getByRole('columnheader').nth(2).click({ button: 'right' });
+    await expect(menu).toBeVisible();
     await settled(page, '[role="menu"]');
     await checkA11y('column context menu 1440');
     // SORT-01 (#74) through the column menu: Sort descending reorders the viewer's rows.

@@ -855,12 +855,14 @@ function PinnedPanel({
                     selectedCell.rowId === rowId &&
                     selectedCell.colId === col.id;
                   const onOutline = outline !== null && col.id === outline.column;
-                  if (spans.covered.has(cellKey(rowId, col.id))) {
+                  const coveredBy = spans.covered.get(cellKey(rowId, col.id));
+                  if (coveredBy !== undefined) {
+                    const inAnchorRow = coveredBy.startsWith(`${rowId}:`);
                     return (
                       <div
                         key={col.id}
                         className="gd-cell gd-cell--frozen gd-cell--covered"
-                        style={{ width: `${String(col.width * LATTICE.col)}px` }}
+                        style={{ width: `${String(inAnchorRow ? 0 : col.width * LATTICE.col)}px` }}
                       />
                     );
                   }
@@ -1404,7 +1406,7 @@ const Cell = memo(function Cell({
     return (
       <div
         className="gd-cell gd-cell--covered"
-        style={{ width: `${String(widthPx)}px` }}
+        style={{ width: `${String(look.coveredInAnchorRow ? 0 : widthPx)}px` }}
         aria-hidden="true"
         data-address={address}
         data-row-id={cell.rowId}

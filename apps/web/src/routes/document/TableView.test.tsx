@@ -1325,19 +1325,26 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
     expect(cellAt(0, 0)).toHaveAttribute('data-address', 'B5');
   });
 
-  it('MENU-04 GRID-01 a merged span draws its anchor over the covered cells, which keep their width and address but neither content nor a tab stop; arrows skip them', async () => {
+  it('MENU-04 GRID-01 a merged span draws its anchor over the covered cells, which keep their address but neither content nor a tab stop — no width in the anchor row, their column width below it; arrows skip them', async () => {
     setCellText(gd, tableId, rows[0]!, cols[1]!, 'hidden under the span');
-    mergeCells(gd, tableId, rows[0]!, cols[0]!, { rows: 1, cols: 2 });
+    mergeCells(gd, tableId, rows[0]!, cols[0]!, { rows: 2, cols: 2 });
     mount();
     const anchor = cellAt(0, 0);
     expect(anchor).toHaveClass('gd-cell--span');
     expect(anchor.style.width).toBe(`${String(2 * LATTICE.col)}px`);
-    expect(anchor.style.height).toBe(`${String(LATTICE.row)}px`);
-    const covered = document.querySelector<HTMLElement>('[data-covered="true"]')!;
-    expect(covered).toHaveAttribute('data-address', 'C5');
-    expect(covered).toHaveAttribute('aria-hidden', 'true');
-    expect(covered.style.width).toBe(`${String(LATTICE.col)}px`);
-    expect(covered).toHaveTextContent('');
+    expect(anchor.style.height).toBe(`${String(2 * LATTICE.row)}px`);
+    const placeholders = Array.from(
+      document.querySelectorAll<HTMLElement>('[data-covered="true"]'),
+    );
+    expect(placeholders.map((p) => p.getAttribute('data-address'))).toEqual(['C5', 'B6', 'C6']);
+    for (const p of placeholders) {
+      expect(p).toHaveAttribute('aria-hidden', 'true');
+      expect(p).toHaveTextContent('');
+    }
+    // The anchor's box has taken C5's room; B6 and C6 keep theirs so D6 stays under D5.
+    expect(placeholders[0]!.style.width).toBe('0px');
+    expect(placeholders[1]!.style.width).toBe(`${String(LATTICE.col)}px`);
+    expect(placeholders[2]!.style.width).toBe(`${String(LATTICE.col)}px`);
     expect(cells().map((c) => c.getAttribute('data-address'))).not.toContain('C5');
     // The data under the span is intact: unmerging shows it again.
     await userEvent.click(anchor);

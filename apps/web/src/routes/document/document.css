@@ -1482,7 +1482,8 @@ button.gd-cell__chevron:hover {
 }
 .gd-cell--covered {
   visibility: hidden;
-  border-color: transparent;
+  padding: 0;
+  border-width: 0;
 }
 
 /* ---- inspector appearance controls (INSP-04..07): swatches carry a label beside the colour,

@@ -38,6 +38,12 @@ export interface CellLook {
   /** True when another cell's span hides this one: it renders as an empty placeholder. */
   readonly covered: boolean;
   /**
+   * A covered cell in the anchor's own row takes no width — the anchor's box
+   * has taken it; one in a later row keeps its column width so the cells
+   * after it stay in place under the anchor's overhang.
+   */
+  readonly coveredInAnchorRow: boolean;
+  /**
    * The anchor box of a span in lattice units — the widths of the columns
    * and heights of the rows it covers, as the table renders them now (a
    * column drag previews a width before it commits). Null off a span.
@@ -50,6 +56,7 @@ export const PLAIN_LOOK: CellLook = {
   rule: null,
   span: null,
   covered: false,
+  coveredInAnchorRow: false,
   spanUnits: null,
 };
 
@@ -70,18 +77,26 @@ export function styleOf(
   const key = cellKey(rowId, column.id);
   const appearance = cellAppearanceFor(table, column, rowId);
   const span = spans.byAnchor.get(key) ?? null;
-  const covered = spans.covered.has(key);
+  const anchorKey = spans.covered.get(key);
+  const covered = anchorKey !== undefined;
   // The common case — nothing set anywhere — shares one object, so the memoised cell's
   // props comparison is a reference check and a 10,000-cell table pays nothing for it.
   if (rule === null && span === null && !covered && isEmptyAppearance(appearance)) {
     return PLAIN_LOOK;
   }
-  return { appearance, rule, span, covered, spanUnits: span === null ? null : spanUnits(span) };
+  return {
+    appearance,
+    rule,
+    span,
+    covered,
+    coveredInAnchorRow: anchorKey?.startsWith(`${rowId}:`) ?? false,
+    spanUnits: span === null ? null : spanUnits(span),
+  };
 }
 
 export function looksEqual(a: CellLook, b: CellLook): boolean {
   if (a === b) return true;
-  if (a.covered !== b.covered) return false;
+  if (a.covered !== b.covered || a.coveredInAnchorRow !== b.coveredInAnchorRow) return false;
   if ((a.span === null) !== (b.span === null)) return false;
   if (a.span !== null && b.span !== null) {
     if (a.span.rows !== b.span.rows || a.span.cols !== b.span.cols) return false;
