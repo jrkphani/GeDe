@@ -183,7 +183,10 @@ export { expect };
  * Answer the SPA's `InitiateAuth` with the minted tokens; every other Cognito call
  * (`GetUser`, `RevokeToken`, …) goes through to the real endpoint.
  */
+const installed = new WeakSet<Page>();
 async function installSignIn(page: Page, session: LiveSession): Promise<void> {
+  if (installed.has(page)) return; // one handler per page, however many sign-ins
+  installed.add(page);
   const endpoint = `https://cognito-idp.${session.region}.amazonaws.com/`;
   await page.route(endpoint, async (route) => {
     const target = route.request().headers()['x-amz-target'];
