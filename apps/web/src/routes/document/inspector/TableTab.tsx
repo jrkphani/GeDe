@@ -1,11 +1,27 @@
-import { Select, Switch } from '@gede/ui';
-import { tableRecord, tableWraps, type GedeDoc, type TableMap } from '@gede/core';
+import { useMemo } from 'react';
+import { Button, SegmentedControl, Select, Switch, TextField, Tooltip } from '@gede/ui';
+import {
+  GRIDLINE_DENSITIES,
+  GRIDLINE_LABELS,
+  OUTLINE_WEIGHTS,
+  TABLE_STYLE_LABELS,
+  TABLE_STYLES,
+  tableRecord,
+  tableWraps,
+  type GedeDoc,
+  type OutlineWeight,
+  type TableMap,
+} from '@gede/core';
 
+import { peekEngine } from '../../../doc/engine.js';
+import { useLocale } from '../../../locale.js';
+import { toFormatLocale } from '../cell/index.js';
 import { frozenOptions } from '../grid/TableMenu.js';
 import type { GridCommands } from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
 import type { Selection } from '../selection.js';
-import { Section, Stepper, TRACKED, Unavailable } from './controls.js';
+import { canvasMeasure, fitColumnsToContent, fitRowsToContent } from '../style/index.js';
+import { Section, Stepper } from './controls.js';
 
 export interface TableTabProps {
   gd: GedeDoc;
@@ -15,15 +31,24 @@ export interface TableTabProps {
   commands: GridCommands;
 }
 
+const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
+  none: 'None',
+  hairline: 'Hairline',
+  strong: 'Strong',
+  accent: 'Accent',
+};
+
 /**
- * INSP-04: the Table tab. Header row, footer, header (frozen) columns, row
- * and column counts that insert or delete structure, width and wrap — each
- * a `GridCommands` call, live on the canvas (INSP-12). Table styles, title
- * and caption visibility, outline, gridline density, alternating colour and
- * fit-to-content are not implemented yet and say so (INSP-11).
+ * INSP-04: the Table tab. Table style, title and caption, header row, footer,
+ * header (frozen) columns, row and column counts that insert or delete
+ * structure, outline, gridline density, alternating row colour, width, wrap
+ * and fit-to-content — each a `GridCommands` call, live on the canvas
+ * (INSP-12). Nothing here moves an address: the style is paint, the caption
+ * is a strip at the foot, fit snaps to whole units (GRID-01).
  */
 export function TableTab({ gd, table, selection, editable, commands }: TableTabProps) {
   const record = tableRecord(table);
+  const [activeLocale] = useLocale();
   const viewOnly = editable ? undefined : 'you have view-only access';
   const rows = record.rows.length;
   const columns = record.columns.length;
@@ -31,26 +56,80 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
   const wrapped = tableWraps(record);
   const lastRow = record.rows[rows - 1];
   const lastColumn = record.columns[columns - 1];
+  const { look } = record;
+  // Fit-to-content measures with canvas `measureText`; where no 2D context exists the
+  // buttons say so rather than guessing a width (no invented data).
+  const measure = useMemo(() => (typeof document === 'undefined' ? null : canvasMeasure()), []);
+  const fitReason =
+    viewOnly ?? (measure === null ? 'text cannot be measured in this browser' : undefined);
+  const fitOptions = () => {
+    if (measure === null) return null;
+    const engine = peekEngine(gd.doc);
+    return {
+      locale: toFormatLocale(activeLocale),
+      measure,
+      cellValue: (cellId: string) => engine?.result(cellId)?.value ?? undefined,
+    };
+  };
 
   return (
     <>
-      <Section label="table style">
-        <Select
+      <Section
+        label="table style"
+        hint="A header band and an alternating band from one ramp (the prototype's swatches)."
+      >
+        <SegmentedControl
           label="Style"
-          value="plain"
-          disabledReason={TRACKED.tableAppearance}
-          onValueChange={() => undefined}
-          options={[{ value: 'plain', label: 'Plain' }]}
+          className="gd-insp__styles"
+          value={look.style}
+          disabled={viewOnly !== undefined}
+          onChange={(style) => {
+            commands.setTableLook(record.id, { style });
+          }}
+          options={TABLE_STYLES.map((style) => ({
+            value: style,
+            label: (
+              <span className="gd-insp__style-swatch" data-style={style}>
+                <span className="gd-insp__style-head" aria-hidden="true" />
+                <span className="gd-insp__style-band" aria-hidden="true" />
+                {TABLE_STYLE_LABELS[style]}
+              </span>
+            ),
+          }))}
         />
       </Section>
-      <Section label="title and caption">
+      <Section
+        label="title and caption"
+        hint="The title bar keeps its two lattice rows; the caption is one row at the foot. No address moves."
+      >
         <div className="gd-insp__stack">
-          <Switch label="Title" checked disabled onCheckedChange={() => undefined} />
-          <p className="gd-insp__reason">
-            Title — always shown; hiding it {TRACKED.tableAppearance}
-          </p>
-          <Switch label="Caption" checked={false} disabled onCheckedChange={() => undefined} />
-          <p className="gd-insp__reason">Caption — {TRACKED.tableAppearance}</p>
+          <Switch
+            label="Title"
+            checked={look.titleShown}
+            disabled={!editable}
+            onCheckedChange={(on) => {
+              commands.setTableLook(record.id, { titleShown: on });
+            }}
+          />
+          <Switch
+            label="Caption"
+            checked={look.captionShown}
+            disabled={!editable}
+            onCheckedChange={(on) => {
+              commands.setTableLook(record.id, { captionShown: on });
+            }}
+          />
+          {look.captionShown && (
+            <TextField
+              label="Caption text"
+              value={look.caption}
+              disabled={!editable}
+              placeholder="What this table holds"
+              onChange={(e) => {
+                commands.setTableLook(record.id, { caption: e.currentTarget.value });
+              }}
+            />
+          )}
         </div>
       </Section>
       <Section label="headers and footer">
@@ -118,34 +197,31 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
         <div className="gd-insp__stack">
           <Select
             label="Table outline"
-            value="none"
-            disabledReason={TRACKED.tableAppearance}
-            onValueChange={() => undefined}
-            options={[
-              { value: 'none', label: 'None' },
-              { value: 'hairline', label: 'Hairline' },
-              { value: 'strong', label: 'Strong' },
-              { value: 'accent', label: 'Accent' },
-            ]}
+            value={look.outline}
+            disabledReason={viewOnly}
+            onValueChange={(outline) => {
+              commands.setTableLook(record.id, { outline });
+            }}
+            options={OUTLINE_WEIGHTS.map((w) => ({ value: w, label: OUTLINE_LABELS[w] }))}
           />
           <Select
             label="Gridline density"
-            value="light"
-            disabledReason={TRACKED.tableAppearance}
-            onValueChange={() => undefined}
-            options={[
-              { value: 'none', label: 'None' },
-              { value: 'light', label: 'Light' },
-              { value: 'high', label: 'High contrast' },
-            ]}
+            hint="this table"
+            value={look.gridlines}
+            disabledReason={viewOnly}
+            onValueChange={(gridlines) => {
+              commands.setTableLook(record.id, { gridlines });
+            }}
+            options={GRIDLINE_DENSITIES.map((d) => ({ value: d, label: GRIDLINE_LABELS[d] }))}
           />
           <Switch
             label="Alternating row colour"
-            checked={false}
-            disabled
-            onCheckedChange={() => undefined}
+            checked={look.alternating}
+            disabled={!editable}
+            onCheckedChange={(on) => {
+              commands.setTableLook(record.id, { alternating: on });
+            }}
           />
-          <p className="gd-insp__reason">Alternating row colour — {TRACKED.tableAppearance}</p>
         </div>
       </Section>
       <Section
@@ -173,8 +249,24 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             }}
           />
           <div className="gd-insp__row">
-            <Unavailable label="Fit rows to content" reason={TRACKED.tableAppearance} />
-            <Unavailable label="Fit columns to content" reason={TRACKED.tableAppearance} />
+            <FitButton
+              label="Fit rows to content"
+              reason={fitReason}
+              onClick={() => {
+                const options = fitOptions();
+                if (options !== null)
+                  commands.fitRows(record.id, fitRowsToContent(table, record, options));
+              }}
+            />
+            <FitButton
+              label="Fit columns to content"
+              reason={fitReason}
+              onClick={() => {
+                const options = fitOptions();
+                if (options !== null)
+                  commands.fitColumns(record.id, fitColumnsToContent(table, record, options));
+              }}
+            />
           </div>
         </div>
       </Section>
@@ -183,5 +275,30 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
         <HierarchyPanel gd={gd} selection={selection} commands={commands} editable={editable} />
       </Section>
     </>
+  );
+}
+
+function FitButton({
+  label,
+  reason,
+  onClick,
+}: {
+  label: string;
+  reason: string | undefined;
+  onClick: () => void;
+}) {
+  const title = reason === undefined ? label : `${label} — ${reason}`;
+  return (
+    <Tooltip content={title}>
+      <Button
+        size="sm"
+        variant="secondary"
+        aria-disabled={reason !== undefined || undefined}
+        title={title}
+        onClick={reason === undefined ? onClick : undefined}
+      >
+        {label}
+      </Button>
+    </Tooltip>
   );
 }

@@ -11,7 +11,10 @@
  */
 import {
   cellAddress,
+  mergeRoom,
   rowMeta,
+  spanAt,
+  spanCovering,
   tableById,
   tableMap,
   WRAPPED_ROW_HEIGHT,
@@ -20,10 +23,14 @@ import {
 } from '@gede/core';
 import type { MenuEntry } from '@gede/ui';
 
+import { peekEngine } from '../../../doc/engine.js';
 import { LABELS } from '../../../doc/shortcuts.js';
+import { activeLocale } from '../../../locale.js';
+import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GridCommands } from '../grid/commands.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { TRACKED } from '../inspector/controls.js';
+import { canvasMeasure, fitColumnsToContent } from '../style/index.js';
 
 export type MenuTarget =
   | { kind: 'cell'; tableId: Id; rowId: Id; colId: Id }
@@ -281,6 +288,9 @@ export function cellMenuEntries(
   const canFreeze = visibleBefore < record.columns.filter((c) => !c.hidden).length;
   const address = cellAddress(table, rowId, colId) ?? 'the cell';
   const rowWrapped = rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT;
+  const span = spanAt(table, rowId, colId);
+  const covered = spanCovering(table, rowId, colId);
+  const room = mergeRoom(record, rowId, colId);
   return [
     graphEntry(ctx, tableId),
     sep('s-freeze'),
@@ -372,19 +382,47 @@ export function cellMenuEntries(
     sep('s-category'),
     ...categoryEntries(ctx, tableId, null, column?.label ?? ''),
     sep('s-merge'),
+    // MENU-04: merge controls. A merge is a visual span from this cell (the covered cells keep
+    // their addresses and data); with one cell selected the span grows a column or a row at a time.
     {
       kind: 'item',
-      id: 'merge',
-      label: 'Merge cells',
-      disabledReason: TRACKED.merge,
-      onSelect: () => undefined,
+      id: 'merge-right',
+      label: 'Merge with cell to the right',
+      disabledReason:
+        viewOnly ??
+        (covered !== null
+          ? 'this cell is inside a merged cell'
+          : room !== null && (span?.cols ?? 1) >= room.cols
+            ? 'no column to the right'
+            : undefined),
+      onSelect: () => {
+        commands.mergeRight({ tableId, rowId, colId });
+      },
+    },
+    {
+      kind: 'item',
+      id: 'merge-down',
+      label: 'Merge with cell below',
+      disabledReason:
+        viewOnly ??
+        (covered !== null
+          ? 'this cell is inside a merged cell'
+          : room !== null && (span?.rows ?? 1) >= room.rows
+            ? 'no row below'
+            : undefined),
+      onSelect: () => {
+        commands.mergeDown({ tableId, rowId, colId });
+      },
     },
     {
       kind: 'item',
       id: 'unmerge',
       label: 'Unmerge cells',
-      disabledReason: TRACKED.merge,
-      onSelect: () => undefined,
+      disabledReason:
+        viewOnly ?? (span === null && covered === null ? 'the cell is not merged' : undefined),
+      onSelect: () => {
+        commands.unmergeCells({ tableId, rowId, colId });
+      },
     },
     sep('s-clipboard'),
     ...clipboardEntries(ctx, target),
@@ -495,8 +533,20 @@ export function columnMenuEntries(
       kind: 'item',
       id: 'col-fit',
       label: 'Fit width to content',
-      disabledReason: TRACKED.tableAppearance,
-      onSelect: () => undefined,
+      disabledReason: viewOnly,
+      onSelect: () => {
+        // INSP-04 / MENU-03: measure this column's widest cell and snap to whole units.
+        const measure = canvasMeasure();
+        const table = tableMap(gd, tableId);
+        if (measure === null || table === null) return;
+        const engine = peekEngine(gd.doc);
+        const widths = fitColumnsToContent(table, record, {
+          locale: toFormatLocale(activeLocale()),
+          measure,
+          cellValue: (cellId) => engine?.result(cellId)?.value ?? undefined,
+        }).filter((w) => w.colId === colId);
+        commands.fitColumns(tableId, widths);
+      },
     },
     sep('s-clipboard'),
     ...(cellHere === null

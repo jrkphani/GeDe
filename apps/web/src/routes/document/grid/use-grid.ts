@@ -11,6 +11,7 @@ import {
   hiddenRowIds,
   sweepOrphanCells,
   tableById,
+  spanIndex,
   tableMap,
   tableRecord,
   type GedeDoc,
@@ -106,9 +107,13 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
         const hidden = hiddenRowIds(table, record);
         rows = hidden.size === 0 ? record.rows : record.rows.filter((id) => !hidden.has(id));
       }
+      // MENU-04: the cells a merged span covers are skipped, and a move into them lands on
+      // the anchor; the index is cheap (no spans → an empty map) and read per move only.
+      const covered = spanIndex(table, record).covered;
       return {
         rows,
         columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
+        ...(covered.size === 0 ? {} : { covered }),
       };
     },
     [gd],

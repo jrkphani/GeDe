@@ -138,7 +138,7 @@ export function paintLook(look: CellLook, format: CellFormat): LookPaint {
   const resolved = resolveLook(look.appearance, look.rule, format);
   const a = look.appearance;
   const classes: string[] = [];
-  const style: Record<string, string> = {};
+  const style: Record<string, string> & CSSProperties = {};
   if (a.border !== undefined) {
     const sides = borderSides(a.border.edges);
     classes.push('gd-cell--bordered');
@@ -159,7 +159,7 @@ export function paintLook(look: CellLook, format: CellFormat): LookPaint {
   const mark = look.rule?.mark;
   return {
     className: classes.join(' '),
-    style: style as CSSProperties,
+    style,
     data: {
       'data-fill': resolved.fill,
       'data-ink': resolved.textColour,

@@ -13,6 +13,8 @@ export {
   type LookPaint,
 } from './cell-look.js';
 export { paintTable, type TablePaint } from './table-look.js';
+export { DagEdges, type DagEdgesProps } from './DagEdges.js';
+export { useTableFlags } from './useTableFlags.js';
 export {
   createRuleEvaluator,
   DEFAULT_RULES_TIMEOUT_MS,

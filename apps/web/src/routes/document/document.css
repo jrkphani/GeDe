@@ -1216,6 +1216,11 @@ button.gd-cell__chevron:hover {
 .gd-table[data-style] .gd-table__row--header .gd-table__header--frozen {
   background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
+/* On a header band the muted letter and glyphs take ink: ink-muted on the forest tint is 4.46:1. */
+.gd-table[data-style] .gd-table__letter,
+.gd-table[data-style] .gd-table__header-glyph {
+  color: var(--ink);
+}
 /* Alternating rows (INSP-04): every second data row takes the style's soft band. */
 .gd-table[data-alternating] {
   --gd-band-tone: var(--surface-sunken);
@@ -1319,22 +1324,6 @@ button.gd-cell__chevron:hover {
 }
 .gd-canvas__pinned-layer .gd-table {
   box-shadow: var(--elev-overlay);
-}
-.gd-table--ghost {
-  opacity: 0.32;
-  border-style: dashed;
-  pointer-events: none;
-}
-.gd-table--ghost::after {
-  content: 'pinned to viewport';
-  position: absolute;
-  top: calc(var(--lattice-row) * 2 + var(--space-1));
-  left: var(--space-2);
-  font-family: var(--font-mono);
-  font-size: 0.5625rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--ink);
 }
 
 /* ---- DAG edges (INSP-07, PRD §7): table-to-table lineage in the layer, above tables */
@@ -1494,4 +1483,188 @@ button.gd-cell__chevron:hover {
 .gd-cell--covered {
   visibility: hidden;
   border-color: transparent;
+}
+
+/* ---- inspector appearance controls (INSP-04..07): swatches carry a label beside the colour,
+   so nothing is chosen by hue alone (A11Y-04); every control is a Radix primitive. */
+.gd-insp__styles,
+.gd-insp__fills {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(2, 1fr);
+}
+.gd-insp__styles .gd-segmented__item,
+.gd-insp__fills .gd-segmented__item {
+  padding: 0.375rem 0.5rem;
+  font-size: 0.71875rem;
+}
+.gd-insp__style-swatch {
+  display: grid;
+  grid-template-columns: 1.5rem 1fr;
+  grid-template-rows: auto auto;
+  column-gap: var(--space-2);
+  align-items: center;
+  text-align: left;
+}
+.gd-insp__style-head,
+.gd-insp__style-band {
+  display: block;
+  height: 0.3125rem;
+  border: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+.gd-insp__style-head {
+  grid-row: 1;
+}
+.gd-insp__style-band {
+  grid-row: 2;
+  border-top: 0;
+  background: var(--surface);
+}
+.gd-insp__style-swatch > :not(.gd-insp__style-head):not(.gd-insp__style-band) {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+.gd-insp__style-swatch[data-style='slate'] .gd-insp__style-head {
+  background: var(--tint-slate);
+}
+.gd-insp__style-swatch[data-style='slate'] .gd-insp__style-band {
+  background: var(--tint-slate-soft);
+}
+.gd-insp__style-swatch[data-style='forest'] .gd-insp__style-head {
+  background: var(--tint-forest);
+}
+.gd-insp__style-swatch[data-style='forest'] .gd-insp__style-band {
+  background: var(--tint-forest-soft);
+}
+.gd-insp__style-swatch[data-style='amber'] .gd-insp__style-head {
+  background: var(--tint-amber);
+}
+.gd-insp__style-swatch[data-style='amber'] .gd-insp__style-band {
+  background: var(--tint-amber-soft);
+}
+.gd-insp__fill,
+.gd-insp__ink {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.gd-insp__fill-swatch,
+.gd-insp__ink-swatch {
+  display: inline-block;
+  width: 0.875rem;
+  height: 0.875rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.gd-insp__fill[data-fill='none'] .gd-insp__fill-swatch {
+  background: repeating-linear-gradient(
+    45deg,
+    var(--surface) 0,
+    var(--surface) 2px,
+    var(--border) 2px,
+    var(--border) 4px
+  );
+}
+.gd-insp__fill[data-fill='amber'] .gd-insp__fill-swatch {
+  background: var(--tint-amber);
+}
+.gd-insp__fill[data-fill='forest'] .gd-insp__fill-swatch {
+  background: var(--tint-forest);
+}
+.gd-insp__fill[data-fill='slate'] .gd-insp__fill-swatch {
+  background: var(--tint-slate);
+}
+.gd-insp__ink-swatch {
+  border-radius: var(--radius-pill);
+  background: currentColor;
+}
+/* The border matrix is the segmented control laid out three across (prototype `borderCells`). */
+.gd-segmented.gd-insp__matrix {
+  grid-auto-flow: row;
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--space-1);
+}
+.gd-segmented.gd-insp__matrix .gd-segmented__item {
+  padding: 0.25rem;
+  min-height: 2.75rem;
+}
+.gd-insp__edge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+}
+.gd-insp__edge-glyph {
+  font-size: 0.9375rem;
+  line-height: 1;
+}
+.gd-insp__edge-label {
+  font-size: 0.5625rem;
+  line-height: 1.2;
+  white-space: normal;
+  text-align: center;
+}
+.gd-insp__rules {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.gd-insp__rule {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  font-size: 0.71875rem;
+}
+.gd-insp__rule-index {
+  font-size: 0.625rem;
+  color: var(--ink-muted);
+}
+.gd-insp__rule-style {
+  color: var(--ink-muted);
+}
+.gd-insp__preset[aria-pressed='true'] {
+  outline: 1px solid var(--selection-ring);
+  outline-offset: 1px;
+}
+.gd-insp__preset--title {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.gd-insp__preset--heading {
+  font-size: 0.78125rem;
+  font-weight: 600;
+}
+/* The ghost wrapper and the pinned wrapper are transparent boxes at the layer's origin. */
+.gd-ghost,
+.gd-pinned {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+}
+.gd-ghost .gd-table {
+  opacity: 0.32;
+  border-style: dashed;
+  pointer-events: none;
+}
+.gd-ghost .gd-table::after {
+  content: 'pinned to viewport';
+  position: absolute;
+  top: calc(var(--lattice-row) * 2 + var(--space-1));
+  left: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
 }

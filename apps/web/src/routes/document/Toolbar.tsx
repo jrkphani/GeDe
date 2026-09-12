@@ -34,6 +34,12 @@ export interface ToolbarProps {
   onShortcuts: () => void;
   /** SORT-01..06: Sort and Filter open the Organize inspector, where the viewer's options live. */
   onOrganize: () => void;
+  /** INSP-07 / DOC-02: the selected table's pinned state (null without a table) and its toggle. */
+  pinned?: boolean | null | undefined;
+  onPin?: ((pinned: boolean) => void) | undefined;
+  /** INSP-07 / DOC-02: the sheet's DAG edges and their toggle. */
+  edgesShown?: boolean | undefined;
+  onEdges?: ((shown: boolean) => void) | undefined;
 }
 
 interface ToolProps {
@@ -165,11 +171,14 @@ export function Toolbar({
   onFind,
   onShortcuts,
   onOrganize,
+  pinned = null,
+  onPin,
+  edgesShown = false,
+  onEdges,
 }: ToolbarProps) {
   const viewOnly = editable ? undefined : 'you have view-only access';
   const needsTable = viewOnly ?? (hasTable ? undefined : 'select a table first');
   const graphSoon = 'arrives with the context graph release';
-  const arrangeSoon = 'arrives with a later release (pin and DAG edges)';
   const zoomEntries: MenuEntry[] = [
     ...ZOOM_PRESETS.map<MenuEntry>((z) => ({
       kind: 'item',
@@ -212,8 +221,24 @@ export function Toolbar({
       </Cluster>
       {tableMenu !== undefined && <Cluster label="Table">{tableMenu}</Cluster>}
       <Cluster label="Arrange">
-        <Tool icon="pin" label="Pin to viewport" disabledReason={arrangeSoon} />
-        <Tool icon="edges" label="DAG edges" disabledReason={arrangeSoon} />
+        <Tool
+          icon="pin"
+          label="Pin to viewport"
+          pressed={pinned === true}
+          disabledReason={viewOnly ?? (pinned === null ? needsTable : undefined)}
+          onClick={() => {
+            onPin?.(pinned !== true);
+          }}
+        />
+        <Tool
+          icon="edges"
+          label="DAG edges"
+          pressed={edgesShown}
+          disabledReason={viewOnly}
+          onClick={() => {
+            onEdges?.(!edgesShown);
+          }}
+        />
       </Cluster>
       <Cluster label="Data">
         <Tool

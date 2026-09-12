@@ -10,6 +10,7 @@ import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addColumnRule,
   addRow,
   cellRich,
   createSheet,
@@ -19,19 +20,25 @@ import {
   hideColumn,
   LATTICE,
   markSplitChildren,
+  mergeCells,
   nestRow,
   openDocument,
   paragraphNode,
   rowMeta,
+  setCellAppearance,
   setCellFormat,
   setCellRich,
   setCellText,
+  setColumnAppearance,
   setColumnFormat,
+  setColumnRules,
   setOutlineColumn,
   setRowCollapsed,
+  setTableLook,
   tableById,
   tableMap,
   textNode,
+  unmergeCells,
   type GedeDoc,
   type Id,
   type PresenceState,
@@ -42,6 +49,7 @@ import { useYVersion } from '../../doc/use-y.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import { useGrid, type Grid } from './grid/use-grid.js';
 import { openViewStore, ViewStoreProvider, type ViewStore } from '../../doc/view-state.js';
+import { createRuleEvaluator, setSharedRuleEvaluatorForTests } from './style/index.js';
 import { TableView } from './TableView.js';
 
 interface HarnessProps {
@@ -1193,5 +1201,153 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
     expect(pinned().querySelectorAll('.gd-cell__branch')).toHaveLength(0);
     expect(selected()).toBe('C5'); // the collapsed parent, same column
     expect(gridRef.current?.cell?.rowId).toBe(rows[0]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// wave4/inspector-controls: the look painted on the grid (INSP-04..07, MENU-04)
+// ---------------------------------------------------------------------------
+describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
+  afterEach(() => {
+    setSharedRuleEvaluatorForTests(null);
+  });
+
+  it('INSP-05 INSP-06 INSP-10 a column appearance paints every cell as data attributes and custom properties; a cell override wins; the lattice box is untouched', () => {
+    setColumnAppearance(gd, tableId, cols[0]!, {
+      fill: 'amber',
+      border: { edges: 'top-bottom', weight: 'strong' },
+      font: 'mono',
+      weight: 600,
+      size: 'body',
+      textColour: 'danger',
+      hAlign: 'center',
+      vAlign: 'bottom',
+    });
+    setCellAppearance(gd, tableId, rows[1]!, cols[0]!, { fill: 'slate', textColour: 'ink' });
+    mount();
+    const b5 = cellAt(0, 0);
+    expect(b5).toHaveAttribute('data-fill', 'amber');
+    expect(b5).toHaveAttribute('data-ink', 'danger');
+    expect(b5).toHaveAttribute('data-font', 'mono');
+    expect(b5).toHaveAttribute('data-weight', '600');
+    expect(b5).toHaveAttribute('data-size', 'body');
+    expect(b5).toHaveAttribute('data-halign', 'center');
+    expect(b5).toHaveAttribute('data-valign', 'bottom');
+    expect(b5).toHaveClass('gd-cell--bordered');
+    expect(b5.style.getPropertyValue('--gd-bt')).toBe('1');
+    expect(b5.style.getPropertyValue('--gd-bb')).toBe('1');
+    expect(b5.style.getPropertyValue('--gd-br')).toBe('0');
+    expect(b5.style.getPropertyValue('--gd-border-colour')).toBe('var(--rule-strong)');
+    expect(b5.style.getPropertyValue('--gd-border-width')).toBe('2px');
+    // GRID-01: the cell keeps its one-unit width; the border is paint on a pseudo-element.
+    expect(b5.style.width).toBe(`${String(LATTICE.col)}px`);
+    // The override on B6 wins field by field; the rest inherits.
+    const b6 = cellAt(1, 0);
+    expect(b6).toHaveAttribute('data-fill', 'slate');
+    expect(b6).toHaveAttribute('data-ink', 'ink');
+    expect(b6).toHaveAttribute('data-font', 'mono');
+    // A column with nothing set paints nothing.
+    expect(cellAt(0, 1)).not.toHaveAttribute('data-fill');
+    expect(cellAt(0, 1)).not.toHaveAttribute('data-halign');
+  });
+
+  it('A11Y-03 FMT-02 a text colour under 4.5:1 on its fill is replaced by ink and flagged; Automatic alignment keeps numbers right', () => {
+    setColumnAppearance(gd, tableId, cols[0]!, { fill: 'forest', textColour: 'warning' });
+    setColumnFormat(gd, tableId, cols[1]!, 'number', {});
+    setCellText(gd, tableId, rows[0]!, cols[1]!, '42');
+    mount();
+    expect(cellAt(0, 0)).toHaveAttribute('data-ink', 'ink');
+    expect(cellAt(0, 0)).toHaveAttribute('data-ink-adjusted', 'true');
+    expect(cellAt(0, 1)).toHaveAttribute('data-halign', 'right');
+  });
+
+  it('INSP-05 A11Y-04 a conditional rule, evaluated by the rules service, paints its fill and mark and adds a flag naming the rule; first match wins', async () => {
+    setSharedRuleEvaluatorForTests(createRuleEvaluator({ worker: false }));
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'overdue invoice');
+    setCellText(gd, tableId, rows[1]!, cols[0]!, 'paid');
+    setCellText(
+      gd,
+      tableId,
+      rows[2]!,
+      cols[0]!,
+      'a very long entry that runs past forty characters',
+    );
+    addColumnRule(gd, tableId, cols[0]!, {
+      when: { trigger: 'contains', text: 'overdue' },
+      style: { fill: 'amber', mark: 'bold' },
+    });
+    addColumnRule(gd, tableId, cols[0]!, {
+      when: { trigger: 'charsOver', count: 40 },
+      style: { textColour: 'ink-muted', mark: 'strikethrough' },
+    });
+    mount();
+    await waitFor(() => {
+      expect(cellAt(0, 0)).toHaveAttribute('data-fill', 'amber');
+    });
+    expect(cellAt(0, 0)).toHaveAttribute('data-mark', 'bold');
+    expect(cellAt(0, 0)).toHaveClass('gd-cell--rule');
+    expect(within(cellAt(0, 0)).getByTitle('Rule: contains “overdue”')).toBeInTheDocument();
+    expect(cellAt(1, 0)).not.toHaveAttribute('data-rule');
+    expect(cellAt(2, 0)).toHaveAttribute('data-ink', 'ink-muted');
+    expect(cellAt(2, 0)).toHaveAttribute('data-mark', 'strikethrough');
+    // Removing the rules clears the paint on the next answer.
+    act(() => {
+      setColumnRules(gd, tableId, cols[0]!, []);
+    });
+    await waitFor(() => {
+      expect(cellAt(0, 0)).not.toHaveAttribute('data-fill');
+    });
+  });
+
+  it('INSP-04 the table look paints as attributes on the table: style, outline, gridlines, banding, a hidden title keeps its bar, the caption is a strip at the foot', () => {
+    setTableLook(gd, tableId, {
+      style: 'forest',
+      outline: 'accent',
+      gridlines: 'contrast',
+      alternating: true,
+      titleShown: false,
+      captionShown: true,
+      caption: 'Q3 sites',
+    });
+    mount();
+    const table = screen.getByRole('grid').closest('.gd-table')!;
+    expect(table).toHaveAttribute('data-style', 'forest');
+    expect(table).toHaveAttribute('data-outline', 'accent');
+    expect(table).toHaveAttribute('data-gridlines', 'contrast');
+    expect(table).toHaveAttribute('data-alternating', 'true');
+    expect(table).toHaveAttribute('aria-label', 'Table 1');
+    expect(table.querySelector('.gd-table__title-text')).toBeNull();
+    expect(table.querySelector<HTMLElement>('.gd-table__title')!.style.height).toBe('44px');
+    const caption = screen.getByTestId('table-caption');
+    expect(caption).toHaveTextContent('Q3 sites');
+    expect(caption.style.height).toBe(`${String(LATTICE.row)}px`);
+    // Addresses are the same as without any of it.
+    expect(cellAt(0, 0)).toHaveAttribute('data-address', 'B5');
+  });
+
+  it('MENU-04 GRID-01 a merged span draws its anchor over the covered cells, which keep their width and address but neither content nor a tab stop; arrows skip them', async () => {
+    setCellText(gd, tableId, rows[0]!, cols[1]!, 'hidden under the span');
+    mergeCells(gd, tableId, rows[0]!, cols[0]!, { rows: 1, cols: 2 });
+    mount();
+    const anchor = cellAt(0, 0);
+    expect(anchor).toHaveClass('gd-cell--span');
+    expect(anchor.style.width).toBe(`${String(2 * LATTICE.col)}px`);
+    expect(anchor.style.height).toBe(`${String(LATTICE.row)}px`);
+    const covered = document.querySelector<HTMLElement>('[data-covered="true"]')!;
+    expect(covered).toHaveAttribute('data-address', 'C5');
+    expect(covered).toHaveAttribute('aria-hidden', 'true');
+    expect(covered.style.width).toBe(`${String(LATTICE.col)}px`);
+    expect(covered).toHaveTextContent('');
+    expect(cells().map((c) => c.getAttribute('data-address'))).not.toContain('C5');
+    // The data under the span is intact: unmerging shows it again.
+    await userEvent.click(anchor);
+    fireEvent.keyDown(anchor, { code: 'ArrowRight', key: 'ArrowRight' });
+    expect(selected()).toBe('D5');
+    act(() => {
+      unmergeCells(gd, tableId, rows[0]!, cols[0]!);
+    });
+    expect(
+      screen.getByRole('gridcell', { name: /^C5, hidden under the span/ }),
+    ).toBeInTheDocument();
   });
 });

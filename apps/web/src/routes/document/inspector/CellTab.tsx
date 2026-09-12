@@ -1,6 +1,9 @@
 import { useState } from 'react';
 import { Button, SegmentedControl, Select, Switch } from '@gede/ui';
 import {
+  BORDER_EDGE_LABELS,
+  BORDER_EDGES,
+  BORDER_WEIGHTS,
   cellAddress,
   cellFormatOverride,
   columnFormat,
@@ -17,20 +20,27 @@ import {
   setCellFormat,
   setColumnFormat,
   tableRecord,
+  type BorderEdges,
+  type BorderWeight,
   type CellFormat,
   type CurrencyCode,
   type DatePattern,
   type FormatKind,
   type FormatOpts,
   type GedeDoc,
+  type HighlightToken,
   type TableMap,
   type TextPreset,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import type { GridCommands } from '../grid/commands.js';
 import type { CellSelection } from '../selection.js';
-import { Section, TRACKED, Unavailable } from './controls.js';
+import { useAppearanceScope } from './appearance-scope.js';
+import { Section } from './controls.js';
 import { FormulaSection } from './FormulaSection.js';
+import { MergeSection } from './MergeSection.js';
+import { RulesSection } from './RulesSection.js';
 
 export interface CellTabProps {
   gd: GedeDoc;
@@ -38,7 +48,34 @@ export interface CellTabProps {
   /** The selected cell in this table, or null when the table itself is selected. */
   cell: CellSelection | null;
   editable: boolean;
+  commands: GridCommands;
 }
+
+const FILLS: readonly { value: HighlightToken | 'none'; label: string }[] = [
+  { value: 'none', label: 'None' },
+  { value: 'amber', label: 'Amber' },
+  { value: 'forest', label: 'Forest' },
+  { value: 'slate', label: 'Slate' },
+];
+
+const WEIGHT_LABELS: Readonly<Record<BorderWeight, string>> = {
+  hairline: 'Hairline',
+  strong: 'Strong',
+  accent: 'Accent',
+};
+
+/** The matrix's glyphs (prototype `borderCells`), decorative beside each label. */
+const EDGE_GLYPHS: Readonly<Record<BorderEdges, string>> = {
+  all: '⊞',
+  top: '▔',
+  right: '▕',
+  bottom: '▁',
+  left: '▏',
+  outline: '▢',
+  'top-bottom': '═',
+  'left-right': '║',
+  none: '×',
+};
 
 type Scope = 'column' | 'cell';
 
@@ -59,15 +96,17 @@ const DECIMALS = [
 ] as const;
 
 /**
- * INSP-05, INSP-10, FMT-06: data format with its options, scoped to the
- * column by default with a cell override. The sentence above the control
+ * INSP-05, INSP-10, FMT-06: data format with its options, fill, the
+ * positional border matrix with its weight, conditional highlighting rules
+ * and the merge controls (MENU-04). Format and appearance are scoped to the
+ * column by default with a cell override; the sentence above each control
  * states the scope before anything is applied; every change writes at once
- * (INSP-12). Fill, borders and conditional highlighting are not implemented
- * yet and render disabled with that reason (INSP-11).
+ * (INSP-12), one undo step each.
  */
-export function CellTab({ gd, table, cell, editable }: CellTabProps) {
+export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
   const record = tableRecord(table);
   const [scope, setScope] = useState<Scope>('column');
+  const look = useAppearanceScope(table, record, cell, editable, commands, 'the fill and border');
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
   const viewOnly = editable ? undefined : 'you have view-only access';
   const needsCell = column === null ? 'select a cell first' : undefined;
@@ -225,40 +264,95 @@ export function CellTab({ gd, table, cell, editable }: CellTabProps) {
       </Section>
       {/* FX-07 / FX-08: the formula behind the cell (filled from the formula release). */}
       {cell !== null && <FormulaSection table={table} cell={cell} />}
-      <Section label="fill">
-        <Unavailable label="Fill" reason={TRACKED.cellAppearance} />
-      </Section>
-      <Section label="border">
-        <div className="gd-insp__matrix" role="group" aria-label="Border edges">
-          {[
-            'All edges',
-            'Top edge',
-            'Right edge',
-            'Bottom edge',
-            'Left edge',
-            'Outline only',
-            'Top and bottom',
-            'Left and right',
-            'No border',
-          ].map((edge) => (
-            <Unavailable key={edge} label={edge} reason={TRACKED.cellAppearance} />
-          ))}
+      <Section label="fill and border" hint={look.sentence}>
+        <div className="gd-insp__stack">
+          {look.control}
+          <SegmentedControl
+            label="Fill"
+            className="gd-insp__fills"
+            value={look.effective.fill ?? 'none'}
+            disabled={look.disabledReason !== undefined}
+            onChange={(fill) => {
+              look.write({ fill: fill === 'none' ? null : fill });
+            }}
+            options={FILLS.map((f) => ({
+              value: f.value,
+              label: (
+                <span className="gd-insp__fill" data-fill={f.value}>
+                  <span className="gd-insp__fill-swatch" aria-hidden="true" />
+                  {f.label}
+                </span>
+              ),
+            }))}
+          />
+          <SegmentedControl
+            label="Border edges"
+            className="gd-insp__matrix"
+            value={look.effective.border?.edges ?? 'none'}
+            disabled={look.disabledReason !== undefined}
+            onChange={(edges) => {
+              look.write({
+                border:
+                  edges === 'none'
+                    ? null
+                    : { edges, weight: look.effective.border?.weight ?? 'hairline' },
+              });
+            }}
+            options={BORDER_EDGES.map((edges) => ({
+              value: edges,
+              label: (
+                <span className="gd-insp__edge" title={BORDER_EDGE_LABELS[edges]}>
+                  <span className="gd-insp__edge-glyph" aria-hidden="true">
+                    {EDGE_GLYPHS[edges]}
+                  </span>
+                  <span className="gd-insp__edge-label">{BORDER_EDGE_LABELS[edges]}</span>
+                </span>
+              ),
+            }))}
+          />
+          <Select
+            label="Weight"
+            value={look.effective.border?.weight ?? 'hairline'}
+            disabledReason={
+              look.disabledReason ??
+              (look.effective.border === undefined ? 'choose an edge first' : undefined)
+            }
+            onValueChange={(weight) => {
+              const border = look.effective.border;
+              if (border !== undefined) look.write({ border: { edges: border.edges, weight } });
+            }}
+            options={BORDER_WEIGHTS.map((w) => ({ value: w, label: WEIGHT_LABELS[w] }))}
+          />
+          {look.scope === 'cell' && look.override !== null && (
+            <Button
+              size="sm"
+              variant="secondary"
+              aria-disabled={viewOnly !== undefined || undefined}
+              title={
+                viewOnly === undefined
+                  ? 'Drop this cell’s own appearance so it follows the column'
+                  : `Use column appearance — ${viewOnly}`
+              }
+              onClick={
+                viewOnly === undefined
+                  ? () => {
+                      look.clearOverride();
+                    }
+                  : undefined
+              }
+            >
+              Use column appearance
+            </Button>
+          )}
         </div>
-        <Select
-          label="Weight"
-          value="hairline"
-          disabledReason={TRACKED.cellAppearance}
-          onValueChange={() => undefined}
-          options={[
-            { value: 'hairline', label: 'Hairline' },
-            { value: 'strong', label: 'Strong' },
-            { value: 'accent', label: 'Accent' },
-          ]}
-        />
       </Section>
-      <Section label="conditional highlighting">
-        <Unavailable label="Add a rule" reason={TRACKED.cellAppearance} />
-      </Section>
+      <RulesSection
+        tableId={record.id}
+        column={column}
+        disabledReason={disabledReason}
+        commands={commands}
+      />
+      <MergeSection table={table} cell={cell} disabledReason={disabledReason} commands={commands} />
     </>
   );
 }
