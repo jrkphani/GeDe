@@ -30,8 +30,16 @@ export class FakeRoom {
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
   readonly sockets = new Set<FakeWebSocket>();
   private readonly notified = new Set<FakeWebSocket>();
-  /** Every URL a socket connected with, in order — for token assertions. */
+  /** Every URL a socket connected with, in order. */
   readonly urls: string[] = [];
+  /** The subprotocol list each socket offered, in order (`['gede.v1', 'bearer.<token>']`). */
+  readonly protocols: string[][] = [];
+  /**
+   * The access token each connection carried, in order — read from the
+   * `bearer.` subprotocol (what the SPA sends) or, as the service still
+   * accepts for one release, a `?token=` query parameter. `null` when neither.
+   */
+  readonly tokens: (string | null)[] = [];
   droppedUpdates = 0;
   refusals = 0;
   options: FakeRoomOptions;
@@ -55,6 +63,8 @@ export class FakeRoom {
   /** Called by the socket after construction; runs the open/refuse handshake asynchronously. */
   admit(socket: FakeWebSocket): void {
     this.urls.push(socket.url);
+    this.protocols.push(socket.protocols);
+    this.tokens.push(tokenOf(socket.url, socket.protocols));
     queueMicrotask(() => {
       if (socket.readyState !== FakeWebSocket.CONNECTING) return;
       const refuse =
@@ -136,10 +146,19 @@ export class FakeRoom {
   }
 }
 
+/** The token a connection carried, by either transport; the bearer subprotocol wins. */
+export function tokenOf(url: string, protocols: readonly string[]): string | null {
+  const bearer = protocols.find((p) => p.startsWith('bearer.'));
+  if (bearer !== undefined) return bearer.slice('bearer.'.length);
+  const query = url.indexOf('?');
+  if (query < 0) return null;
+  return new URLSearchParams(url.slice(query + 1)).get('token');
+}
+
 function socketClassFor(room: FakeRoom): typeof WebSocket {
   const Klass = class extends FakeWebSocket {
-    constructor(url: string) {
-      super(url, room);
+    constructor(url: string, protocols?: string | string[]) {
+      super(url, room, protocols);
     }
   };
   return Klass as unknown as typeof WebSocket;
@@ -162,11 +181,18 @@ export class FakeWebSocket {
   onmessage: ((ev: MessageEvent<ArrayBuffer>) => void) | null = null;
   onerror: ((ev: Event) => void) | null = null;
   readonly sent: Uint8Array[] = [];
+  /** The subprotocols offered, normalised to a list. */
+  readonly protocols: string[];
+  /** As a browser reports it once open: the first offered protocol (Playwright's mock does the same). */
+  protocol = '';
 
   constructor(
     readonly url: string,
     private readonly room: FakeRoom,
+    protocols?: string | string[],
   ) {
+    this.protocols =
+      protocols === undefined ? [] : Array.isArray(protocols) ? protocols : [protocols];
     room.admit(this);
   }
 
@@ -190,6 +216,7 @@ export class FakeWebSocket {
   }
 
   serverOpen(): void {
+    this.protocol = this.protocols[0] ?? '';
     this.readyState = FakeWebSocket.OPEN;
     this.onopen?.(new Event('open'));
   }

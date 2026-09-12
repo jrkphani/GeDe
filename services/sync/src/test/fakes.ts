@@ -4,11 +4,13 @@
  * on an ephemeral port with all of them injected.
  */
 import type { AddressInfo } from 'node:net';
+import { Writable } from 'node:stream';
 
 import pino from 'pino';
 
 import { type Config, configSchema } from '../config.js';
 import type { Deps, SnapshotStore, TokenVerifier } from '../deps.js';
+import { REDACTED_PATHS, requestSerializer } from '../logger.js';
 import type { TokenIdentity } from '../repo/types.js';
 import { buildServer, type SyncServer } from '../server.js';
 import { FakeRepo } from './fake-repo.js';
@@ -87,6 +89,9 @@ export class FakeSnapshotStore implements SnapshotStore {
   }
 }
 
+/** One parsed pino line, as the production logger would emit it. */
+export type LogLine = Record<string, unknown> & { level: number; msg?: string };
+
 export interface TestServer {
   app: SyncServer;
   repo: FakeRepo;
@@ -95,17 +100,48 @@ export interface TestServer {
   config: Config;
   baseUrl: string;
   wsUrl: string;
+  /** Every log line at `info` and above, when `startServer` was given `{ captureLogs: true }`. */
+  logs: LogLine[];
   close(): Promise<void>;
 }
 
-export async function startServer(overrides: Partial<Config> = {}): Promise<TestServer> {
+export interface StartOptions {
+  /** Record log lines (with the production serializers and redaction) instead of discarding them. */
+  captureLogs?: boolean | undefined;
+}
+
+/** The production logger's shape — same serializers and redaction as `main.ts` — into an array. */
+function capturingLogger(lines: LogLine[]) {
+  const sink = new Writable({
+    write(chunk: Buffer, _encoding, callback) {
+      for (const line of chunk.toString('utf8').split('\n')) {
+        if (line.trim() !== '') lines.push(JSON.parse(line) as LogLine);
+      }
+      callback();
+    },
+  });
+  return pino(
+    {
+      level: 'info',
+      serializers: { req: requestSerializer },
+      redact: { paths: REDACTED_PATHS, censor: '[redacted]' },
+    },
+    sink,
+  );
+}
+
+export async function startServer(
+  overrides: Partial<Config> = {},
+  options: StartOptions = {},
+): Promise<TestServer> {
   const config = testConfig(overrides);
   const repo = new FakeRepo();
   const verifier = new FakeVerifier();
   const s3 = new FakeSnapshotStore();
+  const logs: LogLine[] = [];
   const deps: Deps = {
     config,
-    logger: pino({ level: 'silent' }),
+    logger: options.captureLogs === true ? capturingLogger(logs) : pino({ level: 'silent' }),
     verifier,
     db: repo,
     s3,
@@ -122,6 +158,7 @@ export async function startServer(overrides: Partial<Config> = {}): Promise<Test
     config,
     baseUrl: `http://127.0.0.1:${String(port)}`,
     wsUrl: `ws://127.0.0.1:${String(port)}`,
+    logs,
     close: () => app.close(),
   };
 }

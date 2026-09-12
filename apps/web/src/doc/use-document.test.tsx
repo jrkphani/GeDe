@@ -190,6 +190,6 @@ describe('useDocument', () => {
     await waitFor(() => {
       expect(screen.getByTestId('status')).toHaveTextContent('synced');
     });
-    expect(room.urls[0]).toContain('token=first');
+    expect(room.tokens[0]).toBe('first');
   });
 });

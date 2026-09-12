@@ -100,7 +100,10 @@ test.describe('document shell', () => {
     await expect(page.getByRole('tab', { name: /1°.*Sheet 1/ })).toBeVisible();
     await expect(page.getByTestId('sync-status')).toHaveText(/Synced/);
     await expect.poll(() => room.doc.getArray('sheets').length).toBe(1);
-    expect(room.urls[0]).toMatch(/\/ws\/6f1b2c3d-0000-4000-8000-00000000e2e0\?token=/);
+    // Issue #32: the token rides in the subprotocol list, never in the URL.
+    expect(room.urls[0]).toMatch(/\/ws\/6f1b2c3d-0000-4000-8000-00000000e2e0$/);
+    expect(room.protocols[0]?.[0]).toBe('gede.v1');
+    expect(room.tokens[0]).toBeTruthy();
     const cols = page.getByTestId('ruler-columns');
     await expect(cols.getByText('A', { exact: true })).toBeVisible();
     const a = cols.getByText('A', { exact: true });

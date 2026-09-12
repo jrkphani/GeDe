@@ -6,6 +6,7 @@ import {
   CLOSE_UNAUTHENTICATED,
   OFFLINE_AFTER_ATTEMPTS,
   SyncClient,
+  WS_SUBPROTOCOL,
   type SyncSnapshot,
 } from './sync-client.js';
 
@@ -43,12 +44,14 @@ describe('SyncClient', () => {
     vi.useRealTimers();
   });
 
-  it('LOAD-05 connects with the access token in the query and reaches synced; edits flow both ways', async () => {
+  it('LOAD-05 connects with the access token as the bearer subprotocol, never in the URL, and reaches synced; edits flow both ways', async () => {
     const { c, doc } = client(room);
     clients.push(c);
     c.connect();
     await until(() => c.getSnapshot().status === 'synced');
-    expect(room.urls[0]).toBe(`${WS_URL}/${DOC_ID}?token=tok-1`);
+    expect(room.urls[0]).toBe(`${WS_URL}/${DOC_ID}`);
+    expect(room.protocols[0]).toEqual([WS_SUBPROTOCOL, 'bearer.tok-1']);
+    expect(room.tokens[0]).toBe('tok-1');
     // Local edit renders immediately (the doc is the state) and reaches the room.
     doc.getMap('meta').set('title', 'Everest trek');
     expect(doc.getMap('meta').get('title')).toBe('Everest trek');
@@ -79,7 +82,8 @@ describe('SyncClient', () => {
     expect(room.urls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(60);
     expect(room.urls).toHaveLength(2);
-    expect(room.urls[1]).toBe(`${WS_URL}/${DOC_ID}?token=tok-2`);
+    expect(room.urls[1]).toBe(`${WS_URL}/${DOC_ID}`);
+    expect(room.tokens[1]).toBe('tok-2');
     await vi.advanceTimersByTimeAsync(10);
     expect(c.getSnapshot()).toMatchObject({ status: 'synced', attempts: 0 });
     expect(history.map((h) => h.status)).toEqual([
@@ -109,7 +113,8 @@ describe('SyncClient', () => {
     await vi.advanceTimersByTimeAsync(2400); // 400 × 4 × 1.5
     expect(room.urls).toHaveLength(4);
     // Every attempt carried a fresh token.
-    expect(new Set(room.urls.map((u) => u.split('token=')[1])).size).toBe(4);
+    expect(new Set(room.tokens).size).toBe(4);
+    expect(room.urls.every((u) => !u.includes('token'))).toBe(true);
     // The service comes back: the next attempt syncs and the counter resets.
     room.options = {};
     await vi.advanceTimersByTimeAsync(10_000);
@@ -130,10 +135,7 @@ describe('SyncClient', () => {
     c.connect();
     await vi.advanceTimersByTimeAsync(10);
     // The retry used the forced refresh, not the cached token.
-    expect(room.urls).toEqual([
-      `${WS_URL}/${DOC_ID}?token=tok-1`,
-      `${WS_URL}/${DOC_ID}?token=fresh-1`,
-    ]);
+    expect(room.tokens).toEqual(['tok-1', 'fresh-1']);
     expect(refreshes).toBe(1);
     expect(c.getSnapshot().status).toBe('synced');
     // The window closed on sync: a later 4401 gets its own single retry.

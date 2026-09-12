@@ -18,6 +18,16 @@ export interface CloseEvent {
   reason: string;
 }
 
+export interface YClientOptions {
+  /** `Sec-WebSocket-Protocol` entries, e.g. `['gede.v1', 'bearer.<token>']`. */
+  protocols?: string[] | undefined;
+}
+
+/** The subprotocol list the SPA sends (issue #32). */
+export function bearerProtocols(token: string): string[] {
+  return ['gede.v1', `bearer.${token}`];
+}
+
 export class YClient {
   readonly doc = new Y.Doc();
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
@@ -29,8 +39,13 @@ export class YClient {
   readonly synced: Promise<void>;
   private isSynced = false;
 
-  constructor(url: string, origin: string | undefined) {
-    this.ws = new WebSocket(url, origin === undefined ? {} : { headers: { origin } });
+  /** The subprotocol the server selected, once open (`''` when none). */
+  protocol = '';
+
+  constructor(url: string, origin: string | undefined, options: YClientOptions = {}) {
+    this.ws = new WebSocket(url, options.protocols ?? [], {
+      ...(origin === undefined ? {} : { headers: { origin } }),
+    });
     this.ws.binaryType = 'nodebuffer';
     this.synced = new Promise<void>((resolve) => {
       this.syncedResolve = resolve;
@@ -41,6 +56,7 @@ export class YClient {
       });
     });
     this.ws.on('open', () => {
+      this.protocol = this.ws.protocol;
       const encoder = encoding.createEncoder();
       encoding.writeVarUint(encoder, MESSAGE_SYNC);
       syncProtocol.writeSyncStep1(encoder, this.doc);
@@ -73,8 +89,12 @@ export class YClient {
     );
   }
 
-  static async connect(url: string, origin: string | undefined): Promise<YClient> {
-    const client = new YClient(url, origin);
+  static async connect(
+    url: string,
+    origin: string | undefined,
+    options: YClientOptions = {},
+  ): Promise<YClient> {
+    const client = new YClient(url, origin, options);
     await new Promise<void>((resolve, reject) => {
       client.ws.once('open', resolve);
       client.ws.once('error', reject);

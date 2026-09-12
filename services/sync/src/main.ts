@@ -13,6 +13,7 @@ import { applyMigrations, createDb, createPool } from '@gede/db';
 
 import { createCognitoVerifier } from './auth.js';
 import { ConfigError, loadConfig } from './config.js';
+import { REDACTED_PATHS, requestSerializer } from './logger.js';
 import { createPgRepo } from './repo/pg.js';
 import { createS3SnapshotStore } from './s3.js';
 import { buildServer } from './server.js';
@@ -52,7 +53,13 @@ async function main(): Promise<void> {
     throw error;
   }
 
-  const logger = pino({ level: config.LOG_LEVEL, base: { service: 'gede-sync' } });
+  const logger = pino({
+    level: config.LOG_LEVEL,
+    base: { service: 'gede-sync' },
+    // Fastify adopts these: no access token from the deprecated `?token=` or a header reaches a log line.
+    serializers: { req: requestSerializer },
+    redact: { paths: REDACTED_PATHS, censor: '[redacted]' },
+  });
   const version = resolveVersion();
   logger.info({ version, node: process.version }, 'starting');
 

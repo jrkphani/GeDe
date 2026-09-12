@@ -4,9 +4,14 @@ import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
 import { json, startServer, WEB_ORIGIN, type TestServer } from '../test/fakes.js';
-import { sleep, waitFor, YClient } from '../test/y-client.js';
+import { bearerProtocols, sleep, waitFor, YClient } from '../test/y-client.js';
 import { decodeNotice, MESSAGE_NOTICE, MESSAGE_SYNC } from './protocol.js';
-import { CLOSE_FORBIDDEN, CLOSE_NOT_FOUND, CLOSE_UNAUTHENTICATED } from './route.js';
+import {
+  CLOSE_FORBIDDEN,
+  CLOSE_NOT_FOUND,
+  CLOSE_UNAUTHENTICATED,
+  WS_SUBPROTOCOL,
+} from './route.js';
 
 let server: TestServer;
 let ownerToken: string;
@@ -20,12 +25,15 @@ async function userId(token: string): Promise<string> {
   return res.body.id;
 }
 
+/** Connect the way the SPA does: the token as the `bearer.` subprotocol, never in the URL. */
 async function connect(
   token: string,
   id = docId,
   origin: string | undefined = WEB_ORIGIN,
 ): Promise<YClient> {
-  const client = await YClient.connect(`${server.wsUrl}/ws/${id}?token=${token}`, origin);
+  const client = await YClient.connect(`${server.wsUrl}/ws/${id}`, origin, {
+    protocols: bearerProtocols(token),
+  });
   clients.push(client);
   return client;
 }
@@ -48,40 +56,86 @@ afterEach(async () => {
 
 describe('upgrade authorisation', () => {
   test('AUTH-01 a missing or invalid token closes with 4401 before any document data', async () => {
-    const noToken = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN);
+    const noToken = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: [WS_SUBPROTOCOL],
+    });
     expect((await noToken.closed).code).toBe(CLOSE_UNAUTHENTICATED);
     expect(noToken.received).toEqual([]);
 
-    const bad = new YClient(`${server.wsUrl}/ws/${docId}?token=forged`, WEB_ORIGIN);
+    const bad = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols('forged'),
+    });
     expect((await bad.closed).code).toBe(CLOSE_UNAUTHENTICATED);
     expect(bad.received).toEqual([]);
+
+    const badQuery = new YClient(`${server.wsUrl}/ws/${docId}?token=forged`, WEB_ORIGIN);
+    expect((await badQuery.closed).code).toBe(CLOSE_UNAUTHENTICATED);
+    expect(badQuery.received).toEqual([]);
+  });
+
+  test('AUTH-01 the token travels as the bearer.<token> subprotocol; the server selects gede.v1 and never echoes it', async () => {
+    const client = await connect(ownerToken);
+    await client.synced;
+    expect(client.protocol).toBe(WS_SUBPROTOCOL);
+    expect(client.ws.protocol).not.toContain(ownerToken);
+    expect(server.app.rooms.get(docId)?.size).toBe(1);
+  });
+
+  test('AUTH-01 ?token= is still accepted for one release, with a deprecation warning; no log line carries the token', async () => {
+    await server.close();
+    server = await startServer({}, { captureLogs: true });
+    const legacyToken = server.verifier.issue('tok-legacy', 'sub-owner');
+    const legacy = await YClient.connect(
+      `${server.wsUrl}/ws/${docId}?token=${legacyToken}`,
+      WEB_ORIGIN,
+    );
+    clients.push(legacy);
+    expect((await legacy.closed).code).toBe(CLOSE_NOT_FOUND); // a fresh fake repo: the point is the log
+    const deprecation = server.logs.find((l) => l.msg?.includes('query string is deprecated'));
+    expect(deprecation).toMatchObject({ level: 40, documentId: docId });
+    const incoming = server.logs.find((l) => l.msg === 'incoming request');
+    expect((incoming?.req as { url: string }).url).toBe(`/ws/${docId}?token=[redacted]`);
+    expect(JSON.stringify(server.logs)).not.toContain(legacyToken);
+
+    // With the subprotocol nothing is deprecated and the URL is clean.
+    server.logs.length = 0;
+    const modern = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(legacyToken),
+    });
+    await modern.closed;
+    expect(server.logs.some((l) => l.msg?.includes('deprecated'))).toBe(false);
+    expect(JSON.stringify(server.logs)).not.toContain(legacyToken);
   });
 
   test('SHARE-03 a signed-in non-participant closes with 4403; an unknown document with 4404', async () => {
     const stranger = server.verifier.issue('tok-stranger', 'sub-stranger');
-    const forbidden = new YClient(`${server.wsUrl}/ws/${docId}?token=${stranger}`, WEB_ORIGIN);
+    const forbidden = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(stranger),
+    });
     expect((await forbidden.closed).code).toBe(CLOSE_FORBIDDEN);
 
-    const missing = new YClient(
-      `${server.wsUrl}/ws/${crypto.randomUUID()}?token=${ownerToken}`,
-      WEB_ORIGIN,
-    );
+    const missing = new YClient(`${server.wsUrl}/ws/${crypto.randomUUID()}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(ownerToken),
+    });
     expect((await missing.closed).code).toBe(CLOSE_NOT_FOUND);
   });
 
   test('AUTH-01 a wrong or missing Origin is refused', async () => {
-    const wrong = new YClient(
-      `${server.wsUrl}/ws/${docId}?token=${ownerToken}`,
-      'https://evil.example',
-    );
+    const wrong = new YClient(`${server.wsUrl}/ws/${docId}`, 'https://evil.example', {
+      protocols: bearerProtocols(ownerToken),
+    });
     expect((await wrong.closed).code).toBe(CLOSE_FORBIDDEN);
-    const none = new YClient(`${server.wsUrl}/ws/${docId}?token=${ownerToken}`, undefined);
+    const none = new YClient(`${server.wsUrl}/ws/${docId}`, undefined, {
+      protocols: bearerProtocols(ownerToken),
+    });
     expect((await none.closed).code).toBe(CLOSE_FORBIDDEN);
   });
 
   test('SHARE-03 a deleted document is not served, even to its owner', async () => {
     await server.repo.documents.softDelete(docId);
-    const gone = new YClient(`${server.wsUrl}/ws/${docId}?token=${ownerToken}`, WEB_ORIGIN);
+    const gone = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(ownerToken),
+    });
     expect((await gone.closed).code).toBe(CLOSE_NOT_FOUND);
   });
 });
@@ -431,7 +485,9 @@ describe('load failures', () => {
     doc.snapshotKey = 'docs/missing.yjs';
     doc.snapshotSeq = 5;
 
-    const a = new YClient(`${server.wsUrl}/ws/${docId}?token=${ownerToken}`, WEB_ORIGIN);
+    const a = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(ownerToken),
+    });
     expect((await a.closed).code).toBe(1011);
     await waitFor(() => server.app.rooms.get(docId) === undefined);
 

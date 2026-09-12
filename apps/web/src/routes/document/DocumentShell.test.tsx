@@ -492,7 +492,7 @@ describe('DocumentShell', () => {
     expect(await screen.findByRole('heading', { name: 'Your session ended' })).toBeInTheDocument();
     // One retry with a refreshed token happened before it became terminal.
     expect(room.urls).toHaveLength(2);
-    expect(room.urls[1]).toContain('token=fresh');
+    expect(room.tokens[1]).toBe('fresh');
     // The path is remembered synchronously on the click; the sign-in screen then takes it.
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(sessionStorage.getItem('gede.returnTo')).toBe(`/d/${ID}?cell=B5`);

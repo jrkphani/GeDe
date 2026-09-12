@@ -12,7 +12,7 @@ import { newRequestId, registerErrorHandling } from './errors.js';
 import { registerApi } from './routes/api.js';
 import { registerHealth } from './routes/health.js';
 import { RoomManager } from './ws/room-manager.js';
-import { registerWs } from './ws/route.js';
+import { registerWs, selectSubprotocol } from './ws/route.js';
 
 /** The Fastify instance plus the room manager, exposed for shutdown and tests. */
 export type SyncServer = FastifyInstance & { readonly rooms: RoomManager };
@@ -40,7 +40,11 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
   });
 
   await app.register(websocket, {
-    options: { maxPayload: deps.config.WS_MAX_PAYLOAD_BYTES },
+    options: {
+      maxPayload: deps.config.WS_MAX_PAYLOAD_BYTES,
+      // Select `gede.v1`; never echo the `bearer.<token>` entry (issue #32).
+      handleProtocols: selectSubprotocol,
+    },
     // On shutdown tell every provider we are going away (1001) so it reconnects
     // with backoff to the replacement task; the plugin default sends no code.
     preClose(done) {

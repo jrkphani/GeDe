@@ -1,10 +1,13 @@
 /**
  * Sync Client (ARCHITECTURE §1.3): y-websocket against
- * `wss://ws.gede.work/ws/:docId?token=<access JWT>`.
+ * `wss://ws.gede.work/ws/:docId`, the access token offered as the
+ * `bearer.<token>` subprotocol next to `gede.v1` (issue #32: a browser socket
+ * cannot set headers, but a subprotocol list stays out of URLs, access logs
+ * and history; the server selects `gede.v1` and never echoes the token).
  *
  * The provider is driven by hand rather than left to reconnect on its own:
  *   - every connect re-reads the access token from the session (AUTH-09 silent
- *     refresh; the query string is the only place a browser socket can carry it);
+ *     refresh) and offers it in a fresh subprotocol list;
  *   - reconnects back off exponentially with jitter (the provider's own backoff
  *     is deterministic and capped at 2.5 s);
  *   - the server's close codes are read: 4401 retries once with a token forced
@@ -53,6 +56,14 @@ export interface SyncSnapshot {
 export const MESSAGE_NOTICE = 4;
 
 export const CLOSE_BAD_REQUEST = 4400;
+
+/** The subprotocol the server selects; `bearer.<token>` rides beside it. */
+export const WS_SUBPROTOCOL = 'gede.v1';
+
+/** `Sec-WebSocket-Protocol` entries for one connect attempt (issue #32). */
+export function wsProtocols(token: string): string[] {
+  return [WS_SUBPROTOCOL, `bearer.${token}`];
+}
 export const CLOSE_UNAUTHENTICATED = 4401;
 export const CLOSE_FORBIDDEN = 4403;
 export const CLOSE_NOT_FOUND = 4404;
@@ -289,7 +300,8 @@ export class SyncClient {
       });
       return;
     }
-    this.provider.params = { token };
+    // y-websocket 3.x passes `protocols` to every `new WebSocket(url, protocols)`.
+    this.provider.protocols = wsProtocols(token);
     this.provider.connect();
   }
 
@@ -326,7 +338,7 @@ export class SyncClient {
       code === CLOSE_UNAUTHENTICATED &&
       this.unauthenticatedRetries < MAX_UNAUTHENTICATED_RETRIES
     ) {
-      // The token in the URL was stale. Force a refresh and try immediately, once per window.
+      // The token we offered was stale. Force a refresh and try immediately, once per window.
       this.unauthenticatedRetries += 1;
       this.forceRefresh = true;
       this.set({ status: this.snapshot.everSynced ? 'reconnecting' : 'connecting' });
