@@ -10,11 +10,15 @@
  *     refresh) and offers it in a fresh subprotocol list;
  *   - reconnects back off exponentially with jitter (the provider's own backoff
  *     is deterministic and capped at 2.5 s);
- *   - the server's close codes are read: 4401 retries once with a token forced
- *     through Cognito's refresh; a second 4401 in the same sync-less window is
- *     terminal (the session is gone, not the token stale); 4403 / 4404 / 4400
- *     are terminal at once. Terminal closes surface as a failure the chrome
- *     shows (LOAD-05: only a failed sync surfaces anything);
+ *   - the server's close codes are read: a 4401 first retries the same token
+ *     through the legacy `?token=` transport (a task from before #32 does not
+ *     read the subprotocol, and a rolling deploy runs both for a minute; the
+ *     old task still selects `gede.v1`, so the echo cannot tell them apart —
+ *     the fallback is unconditional and goes with #63), then once more with a
+ *     token forced through Cognito's refresh, on both transports; a 4401 after
+ *     all four is terminal (the session is gone, not the token stale);
+ *     4403 / 4404 / 4400 are terminal at once. Terminal closes surface as a
+ *     failure the chrome shows (LOAD-05: only a failed sync surfaces anything);
  *   - the server's type-4 notice `{ code: 'read-only' }` (SHARE-03) flips
  *     `readOnly`, so a permission downgraded mid-session is shown, not
  *     discovered by edits that never echo;
@@ -71,8 +75,26 @@ export function wsProtocols(token: string): string[] {
 /** After this many consecutive failures the status reads 'offline' (the banner appears). */
 export const OFFLINE_AFTER_ATTEMPTS = 3;
 export const MAX_BACKOFF_MS = 30_000;
-/** A second 4401 in a row means the session is gone, not the token stale. */
-const MAX_UNAUTHENTICATED_RETRIES = 1;
+
+/** How the access token is offered on one connect attempt. */
+export type TokenTransport = 'subprotocol' | 'query';
+
+/**
+ * The transports tried on consecutive 4401s within one sync-less window, in
+ * order: the current token on both transports, then a token forced through
+ * refresh on both. Beyond the last, a 4401 means the session is gone.
+ * TODO(#63): drop the `query` entries when the server stops accepting `?token=`.
+ */
+export const UNAUTHENTICATED_RETRY_PLAN: readonly {
+  transport: TokenTransport;
+  /** Fetch the token through the forced refresh (`refresh`), or offer the previous attempt's token again (`reuse`). */
+  token: 'session' | 'refresh' | 'reuse';
+}[] = [
+  { transport: 'subprotocol', token: 'session' },
+  { transport: 'query', token: 'reuse' },
+  { transport: 'subprotocol', token: 'refresh' },
+  { transport: 'query', token: 'reuse' },
+];
 
 export interface SyncClientOptions {
   docId: string;
@@ -106,9 +128,12 @@ export class SyncClient {
   private wanted = false;
   private paused = false;
   private destroyed = false;
-  private unauthenticatedRetries = 0;
+  /** Index into `UNAUTHENTICATED_RETRY_PLAN` for the next attempt; 0 outside a 4401 window. */
+  private authAttempt = 0;
   /** The next attempt must fetch a forced-refresh token (after a 4401). */
   private forceRefresh = false;
+  /** The token the last attempt offered, for a retry of the same token on the other transport. */
+  private lastToken: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private connectSeq = 0;
   private readonly random: () => number;
@@ -205,7 +230,7 @@ export class SyncClient {
   /** The user pressed Retry: forget the failure and the backoff, connect now. */
   retry(): void {
     if (this.destroyed) return;
-    this.unauthenticatedRetries = 0;
+    this.authAttempt = 0;
     this.set({
       failure: null,
       attempts: 0,
@@ -285,10 +310,12 @@ export class SyncClient {
       return;
     }
     let token: string | null;
+    const step = UNAUTHENTICATED_RETRY_PLAN[this.authAttempt];
     const fetchToken = this.forceRefresh ? this.refreshToken : this.getToken;
     this.forceRefresh = false;
     try {
-      token = await fetchToken();
+      token =
+        step?.token === 'reuse' && this.lastToken !== null ? this.lastToken : await fetchToken();
     } catch {
       token = null;
     }
@@ -300,15 +327,25 @@ export class SyncClient {
       });
       return;
     }
-    // y-websocket 3.x passes `protocols` to every `new WebSocket(url, protocols)`.
-    this.provider.protocols = wsProtocols(token);
+    this.lastToken = token;
+    const transport = step?.transport ?? 'subprotocol';
+    if (transport === 'query') {
+      // Legacy transport (#63): the token in the URL, `gede.v1` still offered so
+      // either generation of server selects it.
+      this.provider.params = { token };
+      this.provider.protocols = [WS_SUBPROTOCOL];
+    } else {
+      // y-websocket 3.x passes `protocols` to every `new WebSocket(url, protocols)`.
+      this.provider.params = {};
+      this.provider.protocols = wsProtocols(token);
+    }
     this.provider.connect();
   }
 
   private readonly onSync = (synced: boolean): void => {
     if (!synced) return;
-    // A sync closes the 4401 window: the refreshed token was accepted.
-    this.unauthenticatedRetries = 0;
+    // A sync closes the 4401 window: whatever we offered was accepted.
+    this.authAttempt = 0;
     this.set({ status: 'synced', failure: null, attempts: 0, everSynced: true });
   };
 
@@ -334,16 +371,17 @@ export class SyncClient {
     this.provider.shouldConnect = false;
 
     const code = event?.code ?? 0;
-    if (
-      code === CLOSE_UNAUTHENTICATED &&
-      this.unauthenticatedRetries < MAX_UNAUTHENTICATED_RETRIES
-    ) {
-      // The token we offered was stale. Force a refresh and try immediately, once per window.
-      this.unauthenticatedRetries += 1;
-      this.forceRefresh = true;
-      this.set({ status: this.snapshot.everSynced ? 'reconnecting' : 'connecting' });
-      this.schedule(0);
-      return;
+    if (code === CLOSE_UNAUTHENTICATED) {
+      const next = UNAUTHENTICATED_RETRY_PLAN[this.authAttempt + 1];
+      if (next !== undefined) {
+        // Not accepted as offered: try the next step of the plan at once —
+        // the other transport (an older task), then a refreshed token.
+        this.authAttempt += 1;
+        this.forceRefresh = next.token === 'refresh';
+        this.set({ status: this.snapshot.everSynced ? 'reconnecting' : 'connecting' });
+        this.schedule(0);
+        return;
+      }
     }
     if (code >= 4400 && code < 4500) {
       this.set({

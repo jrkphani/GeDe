@@ -23,6 +23,11 @@ export interface FakeRoomOptions {
   refuseWith?: { code: number; reason: string } | undefined;
   /** Refuse only the first N connections, then accept. */
   refuseCount?: number | undefined;
+  /**
+   * Behave as a task from before #32: only `?token=` is read, a connection
+   * carrying the token as a subprotocol is closed 4401 (rolling-deploy window).
+   */
+  legacyOnly?: boolean | undefined;
 }
 
 export class FakeRoom {
@@ -73,6 +78,11 @@ export class FakeRoom {
       if (refuse && this.options.refuseWith !== undefined) {
         this.refusals += 1;
         socket.serverClose(this.options.refuseWith.code, this.options.refuseWith.reason);
+        return;
+      }
+      if (this.options.legacyOnly === true && !socket.url.includes('token=')) {
+        this.refusals += 1;
+        socket.serverClose(4401, 'missing token');
         return;
       }
       this.sockets.add(socket);

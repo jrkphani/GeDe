@@ -490,9 +490,9 @@ describe('DocumentShell', () => {
     room.options = { refuseWith: { code: 4401, reason: 'expired' } };
     renderRoutes(routes, [`/d/${ID}?cell=B5`]);
     expect(await screen.findByRole('heading', { name: 'Your session ended' })).toBeInTheDocument();
-    // One retry with a refreshed token happened before it became terminal.
-    expect(room.urls).toHaveLength(2);
-    expect(room.tokens[1]).toBe('fresh');
+    // Both transports with the stale token, then both with a refreshed one, before it became terminal.
+    expect(room.urls).toHaveLength(4);
+    expect(room.tokens[2]).toBe('fresh');
     // The path is remembered synchronously on the click; the sign-in screen then takes it.
     fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
     expect(sessionStorage.getItem('gede.returnTo')).toBe(`/d/${ID}?cell=B5`);
