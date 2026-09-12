@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, test } from 'vitest';
 
-import { POOL_TIMEOUTS, poolConfigFromEnv } from './client.js';
+import { appRoleFromEnv, POOL_TIMEOUTS, poolConfigFromEnv } from './client.js';
 
 const base = {
   PGHOST: 'db.internal',
@@ -60,5 +60,39 @@ describe('poolConfigFromEnv', () => {
       lock_timeout: POOL_TIMEOUTS.lockTimeoutMs,
       idle_in_transaction_session_timeout: POOL_TIMEOUTS.idleInTransactionSessionTimeoutMs,
     });
+  });
+
+  test('SHARE-03 `as` connects the pool as the app role while PG* keeps the master credentials (#36)', () => {
+    const config = poolConfigFromEnv(base, { as: { user: 'gede_app', password: 'app-pw' } });
+    expect(config).toMatchObject({ user: 'gede_app', password: 'app-pw', database: 'gede' });
+    expect(poolConfigFromEnv(base)).toMatchObject({ user: 'gede', password: 'secret' });
+  });
+});
+
+describe('appRoleFromEnv (#36)', () => {
+  test('SHARE-03 reads PGAPPUSER/PGAPPPASSWORD and is undefined for a local database', () => {
+    expect(appRoleFromEnv({ ...base, PGAPPUSER: 'gede_app', PGAPPPASSWORD: 'pw' })).toEqual({
+      user: 'gede_app',
+      password: 'pw',
+    });
+    expect(appRoleFromEnv(base)).toBeUndefined();
+    expect(appRoleFromEnv({ ...base, NODE_ENV: 'development' })).toBeUndefined();
+  });
+
+  test('SHARE-03 production refuses to boot without the app role; it never falls back to the master user', () => {
+    expect(() => appRoleFromEnv({ ...base, NODE_ENV: 'production' })).toThrow(
+      /PGAPPUSER and PGAPPPASSWORD are required when NODE_ENV=production/,
+    );
+    expect(() => appRoleFromEnv({ ...base, NODE_ENV: 'production', PGAPPUSER: '' })).toThrow(
+      /required when NODE_ENV=production/,
+    );
+  });
+
+  test('SHARE-03 half a credential is an error in every environment', () => {
+    expect(() => appRoleFromEnv({ ...base, PGAPPUSER: 'gede_app' })).toThrow(/set together/);
+    expect(() => appRoleFromEnv({ ...base, PGAPPPASSWORD: 'pw' })).toThrow(/set together/);
+    expect(() => appRoleFromEnv({ ...base, PGAPPUSER: 'gede_app', PGAPPPASSWORD: '' })).toThrow(
+      /set together/,
+    );
   });
 });

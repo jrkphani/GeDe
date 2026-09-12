@@ -1,5 +1,6 @@
 /**
- * Process entry point. Boot order: config → pool → migrations (fail fast) →
+ * Process entry point. Boot order: config → migrations as the master user
+ * (fail fast; bootstraps the app role, #36) → runtime pool as the app role →
  * server → listen. SIGTERM starts a graceful shutdown that must finish inside
  * the ECS stop timeout (30 s): stop accepting, flush rooms, close the pool.
  *
@@ -15,7 +16,7 @@ import { S3Client } from '@aws-sdk/client-s3';
 import pino from 'pino';
 import type pg from 'pg';
 
-import { applyMigrations, createDb, createPool } from '@gede/db';
+import { applyMigrations, appRoleFromEnv, createDb, createPool, type AppRole } from '@gede/db';
 
 import { createCognitoVerifier } from './auth.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
@@ -83,13 +84,23 @@ async function boot(role: string): Promise<Runtime> {
   const version = resolveVersion();
   logger.info({ version, node: process.version }, 'starting');
 
-  const pool = createPool(process.env);
-  pool.on('error', (error) => {
-    logger.error({ err: error }, 'idle pool client error');
-  });
-
+  // Two identities (#36). The master user (`PG*`, owner of every object) runs
+  // the migrations and the app role bootstrap on one short-lived connection
+  // that is closed before the server listens. The runtime pool connects as
+  // the least-privilege role (`PGAPPUSER`/`PGAPPPASSWORD`): DML only, no DDL.
+  // In production the role is required; `appRoleFromEnv` refuses to fall
+  // back to the master user when the secret injection did not happen.
+  let appRole: AppRole | undefined;
   try {
-    const result = await applyMigrations(pool, resolveMigrationsDir(), {
+    appRole = appRoleFromEnv(process.env);
+  } catch (error) {
+    logger.fatal({ err: error }, 'database app role misconfigured; exiting');
+    process.exit(1);
+  }
+
+  const adminPool = createPool(process.env, { max: 1 });
+  try {
+    const result = await applyMigrations(adminPool, resolveMigrationsDir(), {
       logger: {
         info: (m, meta) => {
           logger.info(meta ?? {}, m);
@@ -101,13 +112,27 @@ async function boot(role: string): Promise<Runtime> {
           logger.error(meta ?? {}, m);
         },
       },
+      ...(appRole === undefined ? {} : { appRole }),
     });
     logger.info(result, 'migrations applied');
   } catch (error) {
     logger.fatal({ err: error }, 'migrations failed; exiting');
-    await pool.end().catch(() => undefined);
+    await adminPool.end().catch(() => undefined);
     process.exit(1);
   }
+  // No master-user connection outlives the boot.
+  await adminPool.end().catch((error: unknown) => {
+    logger.warn({ err: error }, 'admin pool did not close cleanly');
+  });
+
+  const pool = createPool(process.env, appRole === undefined ? {} : { as: appRole });
+  pool.on('error', (error) => {
+    logger.error({ err: error }, 'idle pool client error');
+  });
+  logger.info(
+    { user: pool.options.user, role: appRole === undefined ? 'master (local)' : 'app' },
+    'database pool',
+  );
 
   const s3 = new S3Client({ region: config.COGNITO_REGION });
   return { config, logger, version, pool, repo: createPgRepo(createDb(pool), logger), s3 };

@@ -1,10 +1,21 @@
 import * as cdk from 'aws-cdk-lib';
-import { aws_ec2 as ec2, aws_rds as rds, aws_s3 as s3 } from 'aws-cdk-lib';
+import {
+  aws_ec2 as ec2,
+  aws_rds as rds,
+  aws_s3 as s3,
+  aws_secretsmanager as secretsmanager,
+} from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
 
+import { type EnvConfig } from '../config.js';
+
 export interface DataStackProps extends cdk.StackProps {
+  readonly config: EnvConfig;
   readonly vpc: ec2.IVpc;
 }
+
+/** The least-privilege PostgreSQL login the running service uses (#36); the master user runs migrations only. */
+export const DB_APP_USERNAME = 'gede_app';
 
 /**
  * Stateful resources: the Postgres instance and the versioned documents bucket.
@@ -15,6 +26,13 @@ export class DataStack extends cdk.Stack {
   readonly database: rds.DatabaseInstance;
   readonly dbSecurityGroup: ec2.SecurityGroup;
   readonly docsBucket: s3.Bucket;
+  /**
+   * `gede/<env>/db-app`: `{ username, password }` for the runtime role. Nothing in AWS
+   * creates the role — the migration runner does, as the master user on every boot,
+   * reading this secret's password from `PGAPPPASSWORD` (packages/db/src/migrate.ts).
+   * Rotation is therefore "put a new password, force a new deployment" (runbook §3).
+   */
+  readonly appSecret: secretsmanager.Secret;
 
   constructor(scope: Construct, id: string, props: DataStackProps) {
     super(scope, id, props);
@@ -47,6 +65,21 @@ export class DataStack extends cdk.Stack {
       databaseName: 'gede',
       credentials: rds.Credentials.fromGeneratedSecret('gede_admin'),
       caCertificate: rds.CaCertificate.RDS_CA_RSA2048_G1,
+    });
+
+    // Named so the runbook can address it; a deleted secret name is unavailable for the
+    // recovery window, which is fine because the stack itself is never torn down casually.
+    this.appSecret = new secretsmanager.Secret(this, 'AppUser', {
+      secretName: `gede/${props.config.envName}/db-app`,
+      description:
+        'GeDe least-privilege Postgres role for the running service (not the RDS master)',
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ username: DB_APP_USERNAME }),
+        generateStringKey: 'password',
+        passwordLength: 48,
+        // libpq-safe: no quoting or URI-reserved characters in the password.
+        excludePunctuation: true,
+      },
     });
 
     this.docsBucket = new s3.Bucket(this, 'Docs', {

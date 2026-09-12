@@ -10,7 +10,8 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 | ---------------------------------------------------- | ---------------- | --------- | ------------------------------------------------------------------------------------------ |
 | `PORT`                                               |                  | `3000`    |                                                                                            |
 | `LOG_LEVEL`                                          |                  | `info`    | pino level                                                                                 |
-| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |           | libpq names; injected from Secrets Manager in ECS                                          |
+| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |           | libpq names; the master user, injected from Secrets Manager in ECS; boot (migrations) only |
+| `PGAPPUSER` `PGAPPPASSWORD`                          | in production    |           | least-privilege role the runtime pool uses (#36); created by the boot; unset = master user |
 | `PGSSLMODE`                                          |                  | `disable` | `verify-full` in production                                                                |
 | `PGSSLROOTCERT`                                      | with verify-full |           | `/app/rds-global-bundle.pem` in the image                                                  |
 | `COGNITO_USER_POOL_ID`                               | yes              |           |                                                                                            |

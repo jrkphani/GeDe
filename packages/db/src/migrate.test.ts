@@ -1,6 +1,9 @@
 import { describe, expect, test } from 'vitest';
 
 import {
+  APP_ROLE_BOOTSTRAP_SQL,
+  APP_ROLE_SETTING_PASSWORD,
+  APP_ROLE_SETTING_USER,
   applyMigrations,
   LOCK_TIMEOUT_MS,
   migrationChecksum,
@@ -22,12 +25,14 @@ function fakePool(
     (options.ledger ?? []).map((name) => [name, options.checksums?.[name] ?? null]),
   );
   const statements: string[] = [];
+  const calls: { text: string; values: unknown[] | undefined }[] = [];
   let released = 0;
   let inTransaction = false;
 
   const client: MigrationClient = {
     query(text, values) {
       statements.push(text);
+      calls.push({ text, values });
       if (text === 'BEGIN') inTransaction = true;
       if (text === 'COMMIT' || text === 'ROLLBACK') inTransaction = false;
       if (text === 'SELECT name, checksum FROM __migrations') {
@@ -55,6 +60,7 @@ function fakePool(
   return {
     pool,
     statements,
+    calls,
     ledger,
     get released() {
       return released;
@@ -178,6 +184,102 @@ describe('applyMigrations', () => {
     expect(db.statements.some((s) => s.includes('pg_advisory_unlock'))).toBe(false);
     expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
     expect(db.released).toBe(1);
+  });
+
+  describe('app role bootstrap (#36)', () => {
+    const appRole = { user: 'gede_app', password: "s3cret'--pw" };
+
+    test('SHARE-03 runs under the lock, after the ledger exists and before the first file, in its own transaction', async () => {
+      const db = fakePool();
+      const result = await applyMigrations(db.pool, '/ignored', { readFiles, appRole });
+      expect(result.applied).toHaveLength(3);
+
+      const lock = db.statements.findIndex((s) => s.includes('pg_advisory_lock'));
+      const ledger = db.statements.findIndex((s) =>
+        s.includes('ADD COLUMN IF NOT EXISTS checksum'),
+      );
+      const bootstrap = db.statements.indexOf(APP_ROLE_BOOTSTRAP_SQL);
+      const firstFile = db.statements.indexOf('CREATE TABLE a ()');
+      expect(lock).toBeLessThan(ledger);
+      expect(ledger).toBeLessThan(bootstrap);
+      expect(bootstrap).toBeLessThan(firstFile);
+      // BEGIN, set_config ×2, DO block, COMMIT — then the ledger read and the files.
+      expect(db.statements.slice(bootstrap - 3, bootstrap + 2)).toEqual([
+        'BEGIN',
+        'SELECT set_config($1, $2, true)',
+        'SELECT set_config($1, $2, true)',
+        APP_ROLE_BOOTSTRAP_SQL,
+        'COMMIT',
+      ]);
+      expect(db.inTransaction).toBe(false);
+    });
+
+    test('SHARE-03 the password travels only as a bind value; no statement text carries it', async () => {
+      const db = fakePool();
+      await applyMigrations(db.pool, '/ignored', { readFiles, appRole });
+      expect(db.statements.some((s) => s.includes(appRole.password))).toBe(false);
+      expect(db.calls.map((c) => c.values)).toContainEqual([
+        APP_ROLE_SETTING_PASSWORD,
+        appRole.password,
+      ]);
+      expect(db.calls.map((c) => c.values)).toContainEqual([APP_ROLE_SETTING_USER, 'gede_app']);
+    });
+
+    test('SHARE-03 the role is DML-only: no CREATE, TRUNCATE, ownership or ledger writes', () => {
+      const sql = APP_ROLE_BOOTSTRAP_SQL;
+      expect(sql).toContain(
+        'NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION NOBYPASSRLS',
+      );
+      expect(sql).toContain('GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public');
+      expect(sql).toContain('GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public');
+      expect(sql).toContain(
+        'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES',
+      );
+      expect(sql).toContain('REVOKE INSERT, UPDATE, DELETE, TRUNCATE ON __migrations');
+      expect(sql).toContain('REVOKE CREATE ON SCHEMA public FROM PUBLIC');
+      expect(sql).not.toMatch(/GRANT (ALL|CREATE|TRUNCATE|OWNER)/);
+      // A non-superuser master (RDS) may not mention these in ALTER ROLE, even negated.
+      expect(sql).not.toMatch(/ALTER ROLE[^']*(SUPERUSER|REPLICATION|BYPASSRLS)/);
+    });
+
+    test('SHARE-03 without an app role nothing about roles is sent (local database)', async () => {
+      const db = fakePool();
+      await applyMigrations(db.pool, '/ignored', { readFiles });
+      expect(db.statements.some((s) => s.includes('set_config') || s.includes('ROLE'))).toBe(false);
+    });
+
+    test('SHARE-03 a malformed role name or empty password is refused before any statement reaches the role', async () => {
+      const bad = fakePool();
+      await expect(
+        applyMigrations(bad.pool, '/ignored', {
+          readFiles,
+          appRole: { user: 'gede_app; DROP ROLE x', password: 'x' },
+        }),
+      ).rejects.toThrow(/not a plain identifier/);
+      expect(bad.statements.some((s) => s.includes('set_config'))).toBe(false);
+      expect(bad.statements.at(-4)).toContain('pg_advisory_unlock');
+      expect(bad.released).toBe(1);
+
+      const empty = fakePool();
+      await expect(
+        applyMigrations(empty.pool, '/ignored', {
+          readFiles,
+          appRole: { user: 'ok', password: '' },
+        }),
+      ).rejects.toThrow(/password is empty/);
+    });
+
+    test('SHARE-03 a failed bootstrap rolls back, applies no file, names itself, and still unlocks', async () => {
+      const db = fakePool({ failOn: 'DO $bootstrap$' });
+      await expect(applyMigrations(db.pool, '/ignored', { readFiles, appRole })).rejects.toThrow(
+        /app role bootstrap failed/,
+      );
+      expect(db.statements).toContain('ROLLBACK');
+      expect(db.statements.filter((s) => /^CREATE TABLE [abc] /.test(s))).toEqual([]);
+      expect(db.statements.at(-4)).toContain('pg_advisory_unlock');
+      expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
+      expect(db.released).toBe(1);
+    });
   });
 
   test('LOAD-06 reads real files from a directory and sorts them by name', async () => {

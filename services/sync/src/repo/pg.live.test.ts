@@ -1,10 +1,14 @@
 /**
  * The Postgres repository against a real PostgreSQL. Needs `DATABASE_URL`
- * (a superuser or CREATEDB role on any database, e.g.
+ * (a superuser or CREATEDB+CREATEROLE role on any database, e.g.
  * `postgres://gede:gede@127.0.0.1:5432/postgres`); each run creates a
  * throwaway database, applies every migration to it and drops it afterwards.
  * Without `DATABASE_URL` the suite is skipped — the fakes cover the logic,
  * this covers the SQL.
+ *
+ * As in production (#36), the migrations run as the admin and bootstrap a
+ * least-privilege role; `repo` and every query below then run as that role,
+ * so a query that needs more than DML fails here before it fails in a task.
  */
 import { randomBytes } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
@@ -35,6 +39,7 @@ let admin: pg.Client;
 let pool: pg.Pool;
 let repo: Repo;
 let dbName: string;
+let appRole: { user: string; password: string };
 
 describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_URL)', () => {
   beforeAll(async () => {
@@ -45,16 +50,51 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     await admin.query(`CREATE DATABASE ${dbName}`);
     const url = new URL(adminUrl);
     url.pathname = `/${dbName}`;
+    appRole = { user: `${dbName}_app`, password: randomBytes(12).toString('hex') };
+    const migrator = new pg.Pool({ connectionString: url.toString(), max: 1 });
+    await applyMigrations(migrator, MIGRATIONS, { appRole });
+    await migrator.end();
+    url.username = appRole.user;
+    url.password = appRole.password;
     pool = new pg.Pool({ connectionString: url.toString(), max: 4 });
-    await applyMigrations(pool, MIGRATIONS);
     repo = createPgRepo(createDb(pool), pino({ level: 'silent' }));
   });
 
   afterAll(async () => {
     if (adminUrl === undefined) return;
     await pool.end();
+    // The role's default privileges live in the database; drop that first.
     await admin.query(`DROP DATABASE IF EXISTS ${dbName} WITH (FORCE)`);
+    await admin.query(`DROP ROLE IF EXISTS ${appRole.user}`);
     await admin.end();
+  });
+
+  test('SHARE-03 the runtime role is DML-only: no DDL, no TRUNCATE, no ledger writes, no superuser attributes (#36)', async () => {
+    const attrs = await pool.query<Record<string, boolean>>(
+      'select rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolreplication, rolbypassrls from pg_roles where rolname = current_user',
+    );
+    expect(attrs.rows[0]).toEqual({
+      rolsuper: false,
+      rolinherit: false,
+      rolcreaterole: false,
+      rolcreatedb: false,
+      rolreplication: false,
+      rolbypassrls: false,
+    });
+    for (const statement of [
+      'create table live_probe (id int)',
+      'alter table users add column live_probe int',
+      'truncate audit_log',
+      "insert into __migrations (name) values ('live_probe')",
+      'drop table doc_updates',
+    ]) {
+      await expect(pool.query(statement), statement).rejects.toThrow(
+        /permission denied|must be owner/,
+      );
+    }
+    // Read-only on the ledger is still readable.
+    const ledger = await pool.query<{ n: number }>('select count(*)::int as n from __migrations');
+    expect(ledger.rows[0]?.n).toBeGreaterThanOrEqual(6);
   });
 
   async function user(sub: string): Promise<string> {
