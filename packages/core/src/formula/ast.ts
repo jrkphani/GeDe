@@ -1,9 +1,17 @@
 /**
  * Formula grammar (PRD §13, §22; FX-01..FX-03).
  *
- *   formula   := '=' (call | list)
+ *   formula   := '=' (call | method | list)
  *   call      := name '(' [arg (',' arg)*] ')'          name ∈ { Concat, Sum }
- *   arg       := string | number | call | reference
+ *   method    := reference '.' method-name [ '.' chip ] '(' [marg (',' marg)*] ')'
+ *                                                      method-name ∈ { Extract, Split, Replace,
+ *                                                      Format, Concat } — the text algebra on one
+ *                                                      cell (PRD §2–§4, §20; REF-04)
+ *   chip      := identifier                             `@Row.Extract.Date()` (§9): a Smart Chip
+ *                                                      named property-style, same as Extract("date")
+ *   marg      := [identifier '='] literal               a named argument: `Extract(Style="Highlight")`
+ *   literal   := string | number
+ *   arg       := string | number | call | method | reference
  *   list      := (reference | separator)+               at least one reference
  *   reference := address | range | column | entity | bound
  *   bound     := '{' … '}'                             id-bound token, see bound.ts
@@ -99,7 +107,31 @@ export interface CallExpr {
   readonly span: Span;
 }
 
-export type Expr = Reference | StringLiteral | NumberLiteral | CallExpr;
+/**
+ * The text-algebra methods a reference can carry — the PRD's set (§2 Replace,
+ * §3 Extract, §4 Split, §20 "Split, Replace, Extract, Concat", §22 Format
+ * presets; REF-04, HIER-07). `Split` yields a list that renders as child rows.
+ */
+export const METHOD_NAMES = ['Extract', 'Split', 'Replace', 'Format', 'Concat'] as const;
+export type MethodName = (typeof METHOD_NAMES)[number];
+
+export function isMethodName(value: string): value is MethodName {
+  return (METHOD_NAMES as readonly string[]).includes(value);
+}
+
+/** A method argument: a literal, optionally named (`Style="Highlight"`). */
+export type MethodArg = (StringLiteral | NumberLiteral) & { readonly name?: string | undefined };
+
+/** `@Notes.Extract("x")`, `B5.Split(", ")` — one reference, one method, literal arguments. */
+export interface MethodCall {
+  readonly kind: 'method';
+  readonly target: Reference;
+  readonly name: MethodName;
+  readonly args: readonly MethodArg[];
+  readonly span: Span;
+}
+
+export type Expr = Reference | StringLiteral | NumberLiteral | CallExpr | MethodCall;
 
 export interface Separator {
   readonly kind: 'separator';
@@ -113,7 +145,7 @@ export interface ListExpr {
   readonly span: Span;
 }
 
-export type Ast = CallExpr | ListExpr;
+export type Ast = CallExpr | MethodCall | ListExpr;
 
 export interface ParseError {
   readonly message: string;
@@ -143,12 +175,14 @@ export function references(ast: Ast): Reference[] {
       out.push(node);
     } else if (node.kind === 'call') {
       for (const arg of node.args) visit(arg);
+    } else if (node.kind === 'method') {
+      out.push(node.target);
     }
   };
-  if (ast.kind === 'call') {
-    for (const arg of ast.args) visit(arg);
-  } else {
+  if (ast.kind === 'list') {
     for (const item of ast.items) visit(item);
+  } else {
+    visit(ast);
   }
   return out;
 }

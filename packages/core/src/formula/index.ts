@@ -17,7 +17,26 @@ export type {
   Span,
   StringLiteral,
 } from './ast.js';
-export { isReference, references } from './ast.js';
+export {
+  isMethodName,
+  isReference,
+  METHOD_NAMES,
+  references,
+  type MethodArg,
+  type MethodCall,
+  type MethodName,
+} from './ast.js';
+export {
+  applyMethod,
+  formatMethodCall,
+  EXTRACT_STYLES,
+  extractByStyle,
+  FORMAT_PRESETS,
+  METHOD_SIGNATURES,
+  patternOf,
+  type MethodArgValue,
+  type MethodSignature,
+} from './methods.js';
 export { parse } from './parser.js';
 export {
   BOUND_RE,

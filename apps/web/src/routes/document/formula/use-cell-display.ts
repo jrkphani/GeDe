@@ -76,6 +76,8 @@ export function formatCellValue(locale: Locale, value: CellValue): string {
       return formatDate(locale, value.iso);
     case 'blank':
       return '';
+    case 'list':
+      return value.items.map((item) => formatCellValue(locale, item)).join(', ');
     case 'error':
       return cellErrorLabel(value.error);
   }

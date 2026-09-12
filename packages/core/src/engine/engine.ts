@@ -23,11 +23,13 @@
  * - Errors are values. Nothing here throws for user input.
  */
 import { DependencyGraph } from '../graph.js';
+import { deriveArgValues, type DeriveSpec } from '../doc/schema.js';
 import { references, type Ast, type ParseError, type Reference } from '../formula/ast.js';
-import type { BoundReference } from '../formula/bound.js';
+import { encodeBound, type BoundReference } from '../formula/bound.js';
 import { evaluate, type BoundOperand, type CellValue, type Resolver } from '../formula/evaluate.js';
+import { formatMethodCall } from '../formula/methods.js';
 import { parse } from '../formula/parser.js';
-import type { CellKey, Id } from '../ids.js';
+import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { cellsInColumnOn, entityKey, positionKey, type SheetIndex } from './sheet-index.js';
 import {
   workbookCellId,
@@ -67,11 +69,31 @@ interface CellState {
   /** Lazily inferred for text cells; null until read. */
   value: CellValue | null;
   formula: FormulaState | null;
+  /** A derived column's cell (REF-04): synthesised from the column, never from the document. */
+  readonly synthetic: boolean;
 }
 
 interface TableState {
   structure: TableStructure;
   readonly cells: Map<CellKey, CellState>;
+  /** Columns whose cells the engine synthesises (REF-04). */
+  derivedColumns: ReadonlySet<Id>;
+}
+
+/**
+ * The formula a derived column's cell evaluates (REF-04): the row's source
+ * cell, bound by id, carrying the method. `Split` on it yields the child rows
+ * (HIER-07). Public so the app can show the same expression in the inspector.
+ */
+export function derivedCellSource(tableId: Id, rowId: Id, derive: DeriveSpec): string {
+  const target = encodeBound({
+    kind: 'cell',
+    tableId,
+    rowId,
+    colId: derive.sourceColId,
+    spelling: 'address',
+  });
+  return `=${target}.${formatMethodCall(derive.method, deriveArgValues(derive))}`;
 }
 
 interface ParsedFormula {
@@ -138,6 +160,7 @@ export class FormulaEngine {
   private readonly boundInto = new Map<Id, Set<WorkbookCellId>>();
   readonly index: WorkbookIndex;
   private version = 0;
+  private locale: string | undefined;
 
   constructor() {
     this.index = new WorkbookIndex([], (tableId, key) => {
@@ -150,7 +173,8 @@ export class FormulaEngine {
   handle(request: EngineRequest): EngineResponse {
     if (request.type === 'ping') return { type: 'pong', seq: request.seq };
     const started = now();
-    const outcome = this.apply(request.changes);
+    const outcome =
+      request.type === 'locale' ? this.setLocale(request.locale) : this.apply(request.changes);
     return {
       type: 'results',
       seq: request.seq,
@@ -168,12 +192,12 @@ export class FormulaEngine {
         case 'reset':
           this.reset(removed);
           for (const table of change.snapshot.tables) {
-            this.upsertTable(table);
+            this.upsertTable(table, removed);
             this.setCells(table.id, table.cells, removed);
           }
           break;
         case 'table':
-          this.upsertTable(change.table);
+          this.upsertTable(change.table, removed);
           break;
         case 'table-removed':
           this.removeTable(change.tableId, removed);
@@ -184,6 +208,16 @@ export class FormulaEngine {
       }
     }
     return { results: this.evaluate(), removed };
+  }
+
+  /** Change the locale `Format` cases for; every formula re-evaluates (their text may change). */
+  setLocale(locale: string): ApplyOutcome {
+    if (locale === this.locale) return { results: [], removed: [] };
+    this.locale = locale;
+    for (const cell of this.cells.values()) {
+      if (cell.formula !== null && this.graph.hasNode(cell.id)) this.graph.markDirty(cell.id);
+    }
+    return { results: this.evaluate(), removed: [] };
   }
 
   result(cellId: WorkbookCellId): CellResult | undefined {
@@ -218,7 +252,12 @@ export class FormulaEngine {
       }
       return result.value ?? { kind: 'blank' };
     }
-    cell.value ??= inferCellValue(cell.snapshot.kind === 'text' ? cell.snapshot.text : '');
+    if (cell.value === null) {
+      const inferred = inferCellValue(cell.snapshot.kind === 'text' ? cell.snapshot.text : '');
+      const rich = cell.snapshot.kind === 'text' ? cell.snapshot.rich : undefined;
+      cell.value =
+        inferred.kind === 'text' && rich !== undefined ? { ...inferred, rich } : inferred;
+    }
     return cell.value;
   }
 
@@ -235,18 +274,69 @@ export class FormulaEngine {
     this.boundInto.clear();
   }
 
-  private upsertTable(structure: TableStructure): void {
+  private upsertTable(structure: TableStructure, removed: WorkbookCellId[]): void {
     const existing = this.tables.get(structure.id);
-    if (existing === undefined) {
-      this.tables.set(structure.id, { structure, cells: new Map() });
+    let table = existing;
+    if (table === undefined) {
+      table = { structure, cells: new Map(), derivedColumns: new Set() };
+      this.tables.set(structure.id, table);
     } else {
       // Cells of a row or column that vanished stay in the state: their content is
       // still in the document (a delete removes it separately, an undo brings the
       // row back and the binding with it). They are simply not addressable.
-      existing.structure = structure;
+      table.structure = structure;
     }
     this.index.setTable(structure);
     this.touchStructure(structure.id, structure.sheetId, existing?.structure.sheetId);
+    this.syncDerived(table, removed);
+  }
+
+  /**
+   * Derived columns own their cells (REF-04): one synthetic formula per row,
+   * re-synthesised when the column's spec or the row set changes and dropped
+   * when the column stops being derived or the row goes.
+   */
+  private syncDerived(table: TableState, removed: WorkbookCellId[]): void {
+    const { structure } = table;
+    const wanted = new Map<CellKey, string>();
+    const derivedColumns = new Set<Id>();
+    for (const column of structure.columns) {
+      if (column.derive === undefined) continue;
+      derivedColumns.add(column.id);
+      for (const rowId of structure.rows) {
+        wanted.set(
+          cellKey(rowId, column.id),
+          derivedCellSource(structure.id, rowId, column.derive),
+        );
+      }
+    }
+    table.derivedColumns = derivedColumns;
+    for (const cell of [...table.cells.values()]) {
+      if (cell.synthetic && !wanted.has(cell.key)) {
+        this.dropCell(cell, removed);
+        table.cells.delete(cell.key);
+      }
+    }
+    if (wanted.size === 0) return;
+    const changes: Record<CellKey, CellSnapshot> = {};
+    for (const [key, source] of wanted) {
+      const existing = table.cells.get(key);
+      // The document's own cell (a `Split()` child's piece) keeps precedence.
+      if (existing !== undefined && (!existing.synthetic || existing.formula?.source === source)) {
+        continue;
+      }
+      changes[key] = { kind: 'formula', source };
+    }
+    this.setCells(structure.id, changes, removed, true);
+  }
+
+  /** Put the synthesised formula back for one derived cell whose document cell was cleared. */
+  private resynthesise(table: TableState, key: CellKey, removed: WorkbookCellId[]): void {
+    const { rowId, colId } = splitCellKey(key);
+    const column = table.structure.columns.find((c) => c.id === colId);
+    if (column?.derive === undefined || !table.structure.rows.includes(rowId)) return;
+    const source = derivedCellSource(table.structure.id, rowId, column.derive);
+    this.setCells(table.structure.id, { [key]: { kind: 'formula', source } }, removed, true);
   }
 
   private removeTable(tableId: Id, removed: WorkbookCellId[]): void {
@@ -280,6 +370,7 @@ export class FormulaEngine {
     tableId: Id,
     cells: Readonly<Record<string, CellSnapshot | null>>,
     removed: WorkbookCellId[],
+    synthetic = false,
   ): void {
     const table = this.tables.get(tableId);
     if (table === undefined) return;
@@ -287,11 +378,22 @@ export class FormulaEngine {
     for (const [rawKey, snapshot] of Object.entries(cells)) {
       const key = rawKey as CellKey;
       const id = workbookCellId(tableId, key);
-      const existing = table.cells.get(key);
+      let existing = table.cells.get(key);
+      // In a derived column the document's own cell wins over the synthesised one: a
+      // `Split()` child holds its piece as text (HIER-07); nothing else writes there.
+      const derivedColumn =
+        table.derivedColumns.size > 0 && table.derivedColumns.has(splitCellKey(key).colId);
+      if (!synthetic && derivedColumn && existing?.synthetic === true && snapshot !== null) {
+        this.dropCell(existing, removed, true);
+        table.cells.delete(key);
+        existing = undefined;
+      }
       if (snapshot === null) {
-        if (existing !== undefined) {
+        if (existing?.synthetic === synthetic) {
           this.dropCell(existing, removed, true);
           table.cells.delete(key);
+          // The document's cell went: the column's synthesised value returns.
+          if (!synthetic && derivedColumn) this.resynthesise(table, key, removed);
         }
         if (firstCol !== undefined && key.endsWith(`:${firstCol}`)) this.labelsChanged();
         continue;
@@ -303,6 +405,7 @@ export class FormulaEngine {
         snapshot,
         value: null,
         formula: null,
+        synthetic,
       };
       cell.snapshot = snapshot;
       cell.value = null;
@@ -528,6 +631,7 @@ export class FormulaEngine {
       const outcome = evaluate(
         formula.ast,
         new EngineResolver(this, this.index.sheetIndex(sheetId), blocked),
+        { locale: this.locale },
       );
       if (outcome.ok) value = outcome.value;
       else error = outcome.error;
@@ -582,6 +686,12 @@ function sameValue(a: CellValue | null, b: CellValue | null): boolean {
       return b.kind === 'date' && a.iso === b.iso;
     case 'blank':
       return true;
+    case 'list':
+      return (
+        b.kind === 'list' &&
+        a.items.length === b.items.length &&
+        a.items.every((item, i) => sameValue(item, b.items[i] ?? null))
+      );
     case 'error':
       return b.kind === 'error' && sameError(a.error, b.error);
   }

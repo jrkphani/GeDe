@@ -176,7 +176,7 @@ function snapUnits(at: LatticeUnits): LatticeUnits {
 }
 
 /** A prelim column map cannot be read back until integrated, so the id is returned alongside it. */
-function newColumn(label: string): { id: Id; map: ColumnMap } {
+export function newColumn(label: string): { id: Id; map: ColumnMap } {
   const id = newId();
   const map: ColumnMap = new Y.Map<unknown>();
   map.set('id', id);

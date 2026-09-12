@@ -32,6 +32,7 @@ import {
   type FormatKind,
   type FormatOpts,
 } from '../format/types.js';
+import { isMethodName, type MethodName } from '../formula/ast.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
 
 /** Lattice rows a table's title bar occupies (DS: title bar 44 px = 2 × 22). */
@@ -90,6 +91,56 @@ export interface SheetRecord {
  */
 export type ColumnSource = 'entered' | 'derived' | 'linked' | 'pulled';
 
+/**
+ * A derived column (REF-04): `@Source.Method(args)` applied to every row's
+ * cell in `sourceColId`. Stored on the column map under `derive` as plain
+ * JSON; the engine synthesises one bound formula per row from it.
+ */
+/** A method argument: positional text, or named (`Style="Highlight"`). */
+export type DeriveArg = string | { readonly name: string; readonly value: string };
+
+export interface DeriveSpec {
+  readonly sourceColId: Id;
+  readonly method: MethodName;
+  readonly args: readonly DeriveArg[];
+}
+
+/** A spec's arguments as the evaluator and the signature take them. */
+export function deriveArgValues(spec: DeriveSpec): { name?: string; value: string }[] {
+  return spec.args.map((a) =>
+    typeof a === 'string' ? { value: a } : { name: a.name, value: a.value },
+  );
+}
+
+/** A mapping column (REF-03): cells pick from the distinct values of `colId` in `tableId`. */
+export interface LinkSpec {
+  readonly tableId: Id;
+  readonly colId: Id;
+}
+
+/**
+ * A pull (REF-02): the table mirrors the rows of `tableId` whose cells
+ * contain `filter` (any column, case-insensitive; empty matches every
+ * row with a value in `colId`), writing `colId`'s value into this column.
+ */
+export interface PullSpec {
+  readonly tableId: Id;
+  readonly colId: Id;
+  readonly filter: string;
+}
+
+/** Where a pulled row came from (REF-02 provenance); the row is read-only. */
+export interface PulledFrom {
+  readonly tableId: Id;
+  readonly rowId: Id;
+}
+
+/** A `Split()` child (HIER-07): piece `index` of its parent row's split column. */
+export interface SplitOf {
+  readonly rowId: Id;
+  readonly index: number;
+}
+
 export interface ColumnRecord {
   readonly id: Id;
   readonly label: string;
@@ -100,6 +151,12 @@ export interface ColumnRecord {
   /** Every cell in the column wraps, so each row is two lattice units (GRID-09). */
   readonly wrap: boolean;
   readonly source: ColumnSource;
+  /** Set when `source` is `derived` (REF-04). */
+  readonly derive: DeriveSpec | null;
+  /** Set when `source` is `linked` (REF-03). */
+  readonly link: LinkSpec | null;
+  /** Set when `source` is `pulled` (REF-02). */
+  readonly pull: PullSpec | null;
   /** Data format every cell in the column inherits (FMT-01, FMT-06). Missing key → `auto`. */
   readonly format: FormatKind;
   /** Options for `format` (decimals, currency, date pattern, text case). */
@@ -125,6 +182,10 @@ export interface RowMeta {
    * when it materialises the split; nothing else writes it.
    */
   readonly splitChild: boolean;
+  /** Mirrored from another table (REF-02): read-only, with its provenance. */
+  readonly pulledFrom: PulledFrom | null;
+  /** Which parent and piece a `Split()` child came from (HIER-07 provenance); null otherwise. */
+  readonly splitOf: SplitOf | null;
 }
 
 /** Header and footer counts are 0 or 1 (GRID-11). */
@@ -271,15 +332,79 @@ function readStripCount(map: Y.Map<unknown>, key: string, fallback: StripCount):
   return fallback;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readDeriveArg(value: unknown): DeriveArg {
+  if (typeof value === 'string') return value;
+  if (isRecord(value) && typeof value.name === 'string' && typeof value.value === 'string') {
+    return { name: value.name, value: value.value };
+  }
+  return '';
+}
+
+/** The `derive` spec on a column map, or null when absent or malformed (a newer client's shape). */
+export function readDeriveSpec(value: unknown): DeriveSpec | null {
+  if (!isRecord(value)) return null;
+  const { sourceColId, method, args } = value;
+  if (typeof sourceColId !== 'string' || sourceColId === '') return null;
+  if (typeof method !== 'string' || !isMethodName(method)) return null;
+  return {
+    sourceColId,
+    method,
+    args: Array.isArray(args) ? args.map(readDeriveArg) : [],
+  };
+}
+
+function readTarget(value: unknown): { tableId: Id; colId: Id } | null {
+  if (!isRecord(value)) return null;
+  const { tableId, colId } = value;
+  if (typeof tableId !== 'string' || typeof colId !== 'string') return null;
+  if (tableId === '' || colId === '') return null;
+  return { tableId, colId };
+}
+
+export function readLinkSpec(value: unknown): LinkSpec | null {
+  return readTarget(value);
+}
+
+export function readPullSpec(value: unknown): PullSpec | null {
+  const target = readTarget(value);
+  if (target === null || !isRecord(value)) return null;
+  const { filter } = value;
+  return { ...target, filter: typeof filter === 'string' ? filter : '' };
+}
+
+export function readPulledFrom(value: unknown): PulledFrom | null {
+  if (!isRecord(value)) return null;
+  const { tableId, rowId } = value;
+  if (typeof tableId !== 'string' || typeof rowId !== 'string') return null;
+  if (tableId === '' || rowId === '') return null;
+  return { tableId, rowId };
+}
+
+export function readSplitOf(value: unknown): SplitOf | null {
+  if (!isRecord(value)) return null;
+  const { rowId, index } = value;
+  if (typeof rowId !== 'string' || rowId === '') return null;
+  if (typeof index !== 'number' || !Number.isInteger(index) || index < 0) return null;
+  return { rowId, index };
+}
+
 export function columnRecord(map: ColumnMap): ColumnRecord {
   const format = map.get('format');
+  const source = readColumnSource(map);
   return {
     id: readString(map, 'id'),
     label: readString(map, 'label'),
     width: Math.max(1, Math.round(readNumber(map, 'width', DEFAULT_COLUMN_WIDTH))),
     hidden: readBoolean(map, 'hidden', false),
     wrap: readBoolean(map, 'wrap', false),
-    source: readColumnSource(map),
+    source,
+    derive: source === 'derived' ? readDeriveSpec(map.get('derive')) : null,
+    link: source === 'linked' ? readLinkSpec(map.get('link')) : null,
+    pull: source === 'pulled' ? readPullSpec(map.get('pull')) : null,
     format: isFormatKind(format) ? format : 'auto',
     formatOpts: readFormatOpts(map.get('formatOpts')),
   };
@@ -389,6 +514,8 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
       height: DEFAULT_ROW_HEIGHT,
       group: false,
       splitChild: false,
+      pulledFrom: null,
+      splitOf: null,
     };
   }
   return {
@@ -401,21 +528,25 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
         : DEFAULT_ROW_HEIGHT,
     group: readBoolean(meta, 'group', false),
     splitChild: readBoolean(meta, 'splitChild', false),
+    pulledFrom: readPulledFrom(meta.get('pulledFrom')),
+    splitOf: readSplitOf(meta.get('splitOf')),
   };
 }
 
 /**
  * Whether a cell takes typing (GRID-04). Derived, linked and pulled columns,
- * category-band rows and `Split()` child rows (HIER-07) are read-only; the
- * reason names which, so the grid can say so rather than merely tint the
- * cell (A11Y-04).
+ * pulled rows (REF-02), category-band rows and `Split()` child rows (HIER-07)
+ * are read-only; the reason names which, so the grid can say so rather than
+ * merely tint the cell (A11Y-04). Every write path — grid commit, find and
+ * replace, paste — consults this (REF-05).
  */
 export type ReadOnlyReason = Exclude<ColumnSource, 'entered'> | 'group' | 'splitChild';
 
-/** The row-level read-only reason, or null: a category band, else a split child. */
+/** The row-level read-only reason, or null: a pulled row, else a category band, else a split child. */
 export function rowReadOnlyReason(
   meta: RowMeta,
-): Extract<ReadOnlyReason, 'group' | 'splitChild'> | null {
+): Extract<ReadOnlyReason, 'pulled' | 'group' | 'splitChild'> | null {
+  if (meta.pulledFrom !== null) return 'pulled';
   if (meta.group) return 'group';
   if (meta.splitChild) return 'splitChild';
   return null;

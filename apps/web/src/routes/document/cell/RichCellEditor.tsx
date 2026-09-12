@@ -164,7 +164,7 @@ export function RichCellEditor({
     selectionStart: draft.start,
     selectionEnd: draft.end,
     anchor,
-    onReplace: ({ text, caret }) => {
+    onReplace: ({ text, caret, commit }) => {
       const view = viewRef.current;
       if (view === null) return;
       // One paragraph: the whole text is replaced and the caret lands after the insertion.
@@ -173,9 +173,13 @@ export function RichCellEditor({
       tr.setSelection(TextSelection.create(tr.doc, Math.min(caret + 1, tr.doc.content.size - 1)));
       view.dispatch(tr);
       view.focus();
+      // REF-01: an entity picked in a plain cell is the whole value; it commits at once.
+      if (commit === true) finishRef.current?.(null);
     },
   });
   const adornKeyDown: (e: KeyLike) => boolean = adornments.onKeyDown;
+  /** The mounted editor's commit, for a pick that commits (REF-01). */
+  const finishRef = useRef<((then: Direction | null) => void) | null>(null);
   const latest = useRef({
     onCommit,
     onCancel,
@@ -291,6 +295,8 @@ export function RichCellEditor({
       release();
       latest.current.onCancel();
     };
+
+    finishRef.current = finish;
 
     const undoCommand: Command = (state, dispatch) => {
       if (shared !== null) {

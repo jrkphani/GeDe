@@ -20,12 +20,20 @@ import {
   type TableMap,
 } from '../doc/schema.js';
 import { isCellKey, type CellKey, type Id } from '../ids.js';
+import { plainText } from '../text/types.js';
+import { fragmentToRich } from '../text/yjs.js';
 import type { CellSnapshot, TableSnapshot, TableStructure, WorkbookChange } from './types.js';
 
 export function cellSnapshot(content: CellContent | undefined): CellSnapshot | null {
   if (content === undefined) return null;
   if (isFormula(content)) return { kind: 'formula', source: content };
-  return { kind: 'text', text: fragmentText(content) };
+  const rich = fragmentToRich(content);
+  const marked = rich.content.some((p) =>
+    (p.content ?? []).some((n) => (n.marks?.length ?? 0) > 0),
+  );
+  return marked
+    ? { kind: 'text', text: plainText(rich), rich }
+    : { kind: 'text', text: fragmentText(content) };
 }
 
 export function tableStructure(table: TableMap): TableStructure {
@@ -41,6 +49,7 @@ export function tableStructure(table: TableMap): TableStructure {
       id: c.id,
       label: c.label,
       width: c.hidden ? 0 : c.width,
+      ...(c.derive === null ? {} : { derive: c.derive }),
     })),
     rows: record.rows,
     rowHeights: rowHeights(table, record),

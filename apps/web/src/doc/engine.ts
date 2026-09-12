@@ -28,6 +28,8 @@ import {
   type WorkbookChange,
 } from '@gede/core';
 
+import { activeLocale, subscribeLocale } from '../locale.js';
+
 /** Where evaluation happens. Both speak the core protocol; only `worker` leaves the thread. */
 export interface EngineTransport {
   readonly mode: 'worker' | 'inline';
@@ -211,6 +213,15 @@ export function createEngineHost(
     pending.add(seq);
     transport.post(request);
   };
+  // I18N: `Format` presets case through `Intl` for the active locale; the engine hears
+  // every change and re-evaluates (the Worker has no window to read it from).
+  const postLocale = () => {
+    if (status.failed) return;
+    seq += 1;
+    pending.add(seq);
+    transport.post({ type: 'locale', seq, locale: activeLocale() });
+  };
+  const stopLocale = subscribeLocale(postLocale);
 
   const stopHeartbeat = () => {
     if (heartbeat !== null) clearInterval(heartbeat);
@@ -250,6 +261,7 @@ export function createEngineHost(
     }
     setStatus({ restarts: status.restarts + 1, lastError: message });
     start();
+    postLocale();
     post([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
   };
   const start = () => {
@@ -262,6 +274,7 @@ export function createEngineHost(
   transport.onResponse(onResponse);
   transport.onError?.(restart);
   startHeartbeat();
+  postLocale();
   const stopObserving = observeWorkbook(gd, post);
 
   return {
@@ -281,6 +294,7 @@ export function createEngineHost(
       if (!status.failed) return;
       setStatus({ failed: false, restarts: 0, lastError: null });
       start();
+      postLocale();
       post([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
     },
     result: (cellId) => results.get(cellId),
@@ -316,6 +330,7 @@ export function createEngineHost(
           }),
     dispose: () => {
       stopObserving();
+      stopLocale();
       stopHeartbeat();
       transport.terminate();
       cellListeners.clear();

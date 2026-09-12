@@ -31,6 +31,7 @@ export {
   insertReferenceRefAt,
   isBareEquals,
   isFormulaInput,
+  isReferenceDraft,
   replaceRange,
   separatorBefore,
   type Replacement,

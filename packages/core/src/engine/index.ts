@@ -17,6 +17,7 @@ export type {
   IndexedCell,
   OperandKind,
   OperandOutline,
+  LocaleRequest,
   PingRequest,
   PongResponse,
   ResolvedOperand,
@@ -28,7 +29,7 @@ export type {
   WorkbookSnapshot,
 } from './types.js';
 export { splitWorkbookCellId, workbookCellId } from './types.js';
-export { FormulaEngine, type ApplyOutcome } from './engine.js';
+export { derivedCellSource, FormulaEngine, type ApplyOutcome } from './engine.js';
 export { inferCellValue, inferColumnFormat, isSummable, type InferredFormat } from './values.js';
 export {
   buildSheetIndex,

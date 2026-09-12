@@ -23,16 +23,27 @@ export function entityQueryAt(
   text: string,
   caret: number,
 ): { readonly start: number; readonly query: string } | null {
-  if (!isFormulaInput(text)) return null;
+  if (!isFormulaInput(text) && !isReferenceDraft(text)) return null;
   const before = text.slice(0, caret);
   const m = /@((?:"[^"]*"?|[^\s,()@"])*)$/u.exec(before);
   if (m === null) return null;
   return { start: caret - m[0].length, query: m[1] ?? '' };
 }
 
+/**
+ * REF-01: a plain cell whose draft is an `@` path names an entity to
+ * reference. Picking one turns the cell into a live reference — the draft
+ * becomes `=@Path` and commits — so there is no formula to write.
+ */
+export function isReferenceDraft(text: string): boolean {
+  return text.startsWith('@');
+}
+
 export interface Replacement {
   readonly text: string;
   readonly caret: number;
+  /** Commit the replaced draft at once (a reference pick in a plain cell, REF-01). */
+  readonly commit?: boolean | undefined;
 }
 
 /** Replace `[start, end)` with `insert`, leaving the caret after it. */

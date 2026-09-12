@@ -4,20 +4,24 @@
  */
 import { columnIndex, normaliseRange, type CellRef } from '../address.js';
 import { err, ok, type Result } from '../result.js';
-import type {
-  Ast,
-  BoundRef,
-  CallExpr,
-  PlaceholderRef,
-  EntityRef,
-  Expr,
-  FunctionName,
-  ListExpr,
-  ParseError,
-  Reference,
-  Separator,
-  Span,
+import {
+  isMethodName,
+  type Ast,
+  type BoundRef,
+  type CallExpr,
+  type PlaceholderRef,
+  type EntityRef,
+  type Expr,
+  type FunctionName,
+  type ListExpr,
+  type MethodArg,
+  type MethodCall,
+  type ParseError,
+  type Reference,
+  type Separator,
+  type Span,
 } from './ast.js';
+import { chipOf } from './methods.js';
 import { tokenize, type Token } from './tokenizer.js';
 
 const ADDRESS_RE = /^([A-Za-z]{1,3})([1-9][0-9]{0,6})$/;
@@ -101,7 +105,136 @@ class Parser {
         end: this.text.length,
       });
     }
+    // `=@Notes.Extract("x")` / `=B5.Split(", ")`: one reference carrying a method (REF-04).
+    const save = this.pos;
+    if (this.startsReference()) {
+      const ref = this.parseReferenceHead();
+      if (this.atMethod()) {
+        const method = this.parseMethod(ref);
+        this.skipSpace();
+        const tail = this.peek();
+        if (tail.kind !== 'eof') {
+          fail('unexpected text after the closing )', {
+            start: tail.span.start,
+            end: this.text.length,
+          });
+        }
+        return method;
+      }
+    }
+    this.pos = save;
     return this.parseList();
+  }
+
+  /** A reference at the current token (the caller checked `startsReference`). */
+  private parseReferenceHead(): Reference {
+    const head = this.peek().kind;
+    return head === 'at'
+      ? this.parseEntity()
+      : head === 'bound'
+        ? this.parseBound()
+        : head === 'placeholder'
+          ? this.parsePlaceholder()
+          : this.parseCellReference();
+  }
+
+  /** `.Method(` follows: the reference carries a text-algebra method. */
+  private atMethod(): boolean {
+    if (this.peek().kind !== 'dot' || this.peek(1).kind !== 'ident') return false;
+    if (!isMethodName(this.peek(1).text)) return false;
+    if (this.peekPastSpace(2).kind === 'lparen') return true;
+    // `Extract.Date()` — a chip named property-style (PRD §9).
+    return (
+      this.peek(2).kind === 'dot' &&
+      this.peek(3).kind === 'ident' &&
+      this.peekPastSpace(4).kind === 'lparen'
+    );
+  }
+
+  private parseMethod(target: Reference): MethodCall {
+    this.next(); // dot
+    const nameToken = this.next();
+    const name = nameToken.text;
+    if (!isMethodName(name)) fail(`unknown method ${name}`, nameToken.span);
+    const args: MethodArg[] = [];
+    if (this.peek().kind === 'dot') {
+      // `Extract.Date()`: the chip is the method's first argument.
+      this.next();
+      const chip = this.next();
+      if (name !== 'Extract')
+        fail(`${name} takes no property; only Extract.Chip() does`, chip.span);
+      const id = chipOf(chip.text);
+      if (id === null) fail(`unknown chip ${chip.text}`, chip.span);
+      args.push({ kind: 'string', value: id, span: chip.span });
+    }
+    this.skipSpace();
+    const open = this.next();
+    if (open.kind !== 'lparen') fail('expected (', open.span);
+    this.skipSpace();
+    if (this.peek().kind === 'rparen') {
+      const close = this.next();
+      return {
+        kind: 'method',
+        target,
+        name,
+        args,
+        span: { start: target.span.start, end: close.span.end },
+      };
+    }
+    for (;;) {
+      this.skipSpace();
+      // A named argument: `Style="Highlight:Yellow"`.
+      let argName: string | undefined;
+      if (this.peek().kind === 'ident' && this.peekPastSpace(1).kind === 'equals') {
+        argName = this.next().text;
+        this.skipSpace();
+        this.next(); // =
+        this.skipSpace();
+      }
+      const t = this.peek();
+      const start = argName === undefined ? t.span.start : t.span.start;
+      if (t.kind === 'string') {
+        this.next();
+        args.push({
+          kind: 'string',
+          value: typeof t.value === 'string' ? t.value : '',
+          span: { start, end: t.span.end },
+          ...(argName === undefined ? {} : { name: argName }),
+        });
+      } else if (t.kind === 'number') {
+        this.next();
+        args.push({
+          kind: 'number',
+          value: Number(t.value ?? 0),
+          span: { start, end: t.span.end },
+          ...(argName === undefined ? {} : { name: argName }),
+        });
+      } else {
+        fail(`${name} takes quoted text or a number`, t.span);
+      }
+      this.skipSpace();
+      const sep = this.next();
+      if (sep.kind === 'comma') continue;
+      if (sep.kind === 'rparen') {
+        return {
+          kind: 'method',
+          target,
+          name,
+          args,
+          span: { start: target.span.start, end: sep.span.end },
+        };
+      }
+      if (sep.kind === 'eof') {
+        fail('missing closing )', { start: open.span.start, end: this.text.length });
+      }
+      fail('expected , or )', sep.span);
+    }
+  }
+
+  /** A reference argument, with its method when one follows. */
+  private parseReferenceArg(): Expr {
+    const ref = this.parseReferenceHead();
+    return this.atMethod() ? this.parseMethod(ref) : ref;
   }
 
   private parseCall(): CallExpr {
@@ -149,14 +282,12 @@ class Parser {
         this.next();
         return { kind: 'number', value: Number(t.value ?? 0), span: t.span };
       case 'at':
-        return this.parseEntity();
       case 'bound':
-        return this.parseBound();
       case 'placeholder':
-        return this.parsePlaceholder();
+        return this.parseReferenceArg();
       case 'ident':
         if (this.peekPastSpace(1).kind === 'lparen') return this.parseCall();
-        return this.parseCellReference();
+        return this.parseReferenceArg();
       case 'other':
         if (t.text === '-' && this.peek(1).kind === 'number') {
           this.next();
@@ -235,7 +366,7 @@ class Parser {
       }
       this.next();
       end = seg.span.end;
-      if (this.peek().kind === 'dot') {
+      if (this.peek().kind === 'dot' && !this.atMethod()) {
         this.next();
         continue;
       }
@@ -288,16 +419,7 @@ class Parser {
     while (this.peek().kind !== 'eof') {
       if (this.startsReference()) {
         flushSeparator(this.peek().span.start);
-        const head = this.peek().kind;
-        const ref =
-          head === 'at'
-            ? this.parseEntity()
-            : head === 'bound'
-              ? this.parseBound()
-              : head === 'placeholder'
-                ? this.parsePlaceholder()
-                : this.parseCellReference();
-        items.push(ref);
+        items.push(this.parseReferenceHead());
         referenceCount += 1;
         continue;
       }

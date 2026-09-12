@@ -24,7 +24,7 @@ import {
 export type InvalidKind = 'number' | 'currency' | 'date';
 
 export type FormattedValue =
-  | Exclude<CellValue, { kind: 'error' }>
+  | Exclude<CellValue, { kind: 'error' } | { kind: 'list' }>
   | { readonly kind: 'invalid'; readonly text: string; readonly expected: InvalidKind };
 
 /** Parse text under a format. Automatic infers and never fails; explicit formats can (FMT-05). */
