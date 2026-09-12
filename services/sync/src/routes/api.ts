@@ -247,6 +247,11 @@ export function registerApi(
       // before the 401 for a missing token is thrown (#37).
       api.addHook('preValidation', requireUser(resolver));
 
+      // --- service -----------------------------------------------------------
+
+      /** The deployed build (short git sha); signed-in callers only (#42). */
+      api.get('/version', () => ({ version: deps.version }));
+
       // --- profile ----------------------------------------------------------
 
       api.get('/me', (request) => profileView(currentUser(request)));

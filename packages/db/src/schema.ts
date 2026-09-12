@@ -77,9 +77,13 @@ export const users = pgTable('users', {
   id: uuid('id')
     .primaryKey()
     .default(sql`gen_random_uuid()`),
-  cognitoSub: text('cognito_sub').notNull().unique(),
-  /** Nullable: a Cognito *access* token carries no email claim; filled in when one is seen. */
-  email: citext('email').unique(),
+  cognitoSub: text('cognito_sub').notNull().unique('users_cognito_sub_key'),
+  /**
+   * Nullable: a Cognito *access* token carries no email claim; filled in when one is seen.
+   * The constraint name is PostgreSQL's default for the inline UNIQUE in 0000 and is what
+   * `services/sync/src/repo/pg.ts` matches on a collision (#42) — keep it explicit here.
+   */
+  email: citext('email').unique('users_email_key'),
   displayName: text('display_name'),
   /** I18N-05 (migration 0001): BCP 47 tag from the supported set; null until the user chooses. */
   locale: text('locale'),
@@ -133,19 +137,24 @@ export const shares = pgTable(
 );
 
 /** For emails without an account yet; converts to a share on first sign-in (SHARE-02). */
-export const invites = pgTable('invites', {
-  id: uuid('id')
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
-  documentId: uuid('document_id')
-    .notNull()
-    .references(() => documents.id, { onDelete: 'cascade' }),
-  email: citext('email').notNull(),
-  permission: permission('permission').notNull(),
-  token: text('token').notNull().unique(),
-  expiresAt: timestamptz('expires_at').notNull(),
-  acceptedAt: timestamptz('accepted_at'),
-});
+export const invites = pgTable(
+  'invites',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    email: citext('email').notNull(),
+    permission: permission('permission').notNull(),
+    token: text('token').notNull().unique(),
+    expiresAt: timestamptz('expires_at').notNull(),
+    acceptedAt: timestamptz('accepted_at'),
+  },
+  /** Migration 0004: the cascade from `documents` walks this index, not the table. */
+  (t) => [index('invites_document_id_idx').on(t.documentId)],
+);
 
 /** Yjs update log since the last snapshot. Pruned after compaction. */
 export const docUpdates = pgTable(
@@ -182,55 +191,72 @@ export const snapshots = pgTable(
 // ---------------------------------------------------------------------------
 
 /** Child sheets record the graph context they were opened from. */
-export const sheets = pgTable('sheets', {
-  /** CRDT id (ULID). */
-  id: text('id').primaryKey(),
-  documentId: uuid('document_id')
-    .notNull()
-    .references(() => documents.id, { onDelete: 'cascade' }),
-  ordinal: integer('ordinal').notNull(),
-  label: text('label').notNull(),
-  parentContext: text('parent_context'),
-});
+export const sheets = pgTable(
+  'sheets',
+  {
+    /** CRDT id (ULID). */
+    id: text('id').primaryKey(),
+    documentId: uuid('document_id')
+      .notNull()
+      .references(() => documents.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    label: text('label').notNull(),
+    parentContext: text('parent_context'),
+  },
+  /** Migration 0004: the projection is replaced per document, and search filters by it. */
+  (t) => [index('sheets_document_id_idx').on(t.documentId)],
+);
 
 /** Lattice origin, so A1 addresses can be reconstructed server-side. */
-export const tables = pgTable('tables', {
-  id: text('id').primaryKey(),
-  sheetId: text('sheet_id')
-    .notNull()
-    .references(() => sheets.id, { onDelete: 'cascade' }),
-  title: text('title').notNull(),
-  gridCol: integer('grid_col').notNull(),
-  gridRow: integer('grid_row').notNull(),
-  outline: text('outline'),
-  options: jsonb('options').notNull().default({}),
-});
+export const tables = pgTable(
+  'tables',
+  {
+    id: text('id').primaryKey(),
+    sheetId: text('sheet_id')
+      .notNull()
+      .references(() => sheets.id, { onDelete: 'cascade' }),
+    title: text('title').notNull(),
+    gridCol: integer('grid_col').notNull(),
+    gridRow: integer('grid_row').notNull(),
+    outline: text('outline'),
+    options: jsonb('options').notNull().default({}),
+  },
+  (t) => [index('tables_sheet_id_idx').on(t.sheetId)],
+);
 
 /** `derived` holds the method and arguments of a pipeline step. */
-export const columns = pgTable('columns', {
-  id: text('id').primaryKey(),
-  tableId: text('table_id')
-    .notNull()
-    .references(() => tables.id, { onDelete: 'cascade' }),
-  ordinal: integer('ordinal').notNull(),
-  label: text('label').notNull(),
-  widthUnits: integer('width_units').notNull(),
-  format: columnFormat('format').notNull().default('auto'),
-  formatOpts: jsonb('format_opts').notNull().default({}),
-  derived: jsonb('derived'),
-  hidden: boolean('hidden').notNull().default(false),
-});
+export const columns = pgTable(
+  'columns',
+  {
+    id: text('id').primaryKey(),
+    tableId: text('table_id')
+      .notNull()
+      .references(() => tables.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    label: text('label').notNull(),
+    widthUnits: integer('width_units').notNull(),
+    format: columnFormat('format').notNull().default('auto'),
+    formatOpts: jsonb('format_opts').notNull().default({}),
+    derived: jsonb('derived'),
+    hidden: boolean('hidden').notNull().default(false),
+  },
+  (t) => [index('columns_table_id_idx').on(t.tableId)],
+);
 
 /** Hierarchy depth per PRD §4. */
-export const rows = pgTable('rows', {
-  id: text('id').primaryKey(),
-  tableId: text('table_id')
-    .notNull()
-    .references(() => tables.id, { onDelete: 'cascade' }),
-  ordinal: integer('ordinal').notNull(),
-  depth: smallint('depth').notNull().default(0),
-  collapsed: boolean('collapsed').notNull().default(false),
-});
+export const rows = pgTable(
+  'rows',
+  {
+    id: text('id').primaryKey(),
+    tableId: text('table_id')
+      .notNull()
+      .references(() => tables.id, { onDelete: 'cascade' }),
+    ordinal: integer('ordinal').notNull(),
+    depth: smallint('depth').notNull().default(0),
+    collapsed: boolean('collapsed').notNull().default(false),
+  },
+  (t) => [index('rows_table_id_idx').on(t.tableId)],
+);
 
 /**
  * Search and audit only; the CRDT remains the source of truth. The GIN index on
@@ -252,27 +278,35 @@ export const cells = pgTable(
     refTarget: text('ref_target'),
     style: jsonb('style'),
   },
-  (t) => [primaryKey({ columns: [t.rowId, t.columnId] })],
+  (t) => [
+    primaryKey({ columns: [t.rowId, t.columnId] }),
+    /** Migration 0004: `row_id` leads the primary key; the column cascade needs its own index. */
+    index('cells_column_id_idx').on(t.columnId),
+  ],
 );
 
 /** One row per half of a pair; `slice` stores row/column axes and pins. */
-export const graphs = pgTable('graphs', {
-  id: text('id').primaryKey(),
-  sheetId: text('sheet_id')
-    .notNull()
-    .references(() => sheets.id, { onDelete: 'cascade' }),
-  pairId: text('pair_id').notNull(),
-  kind: graphKind('kind').notNull(),
-  tableId: text('table_id')
-    .notNull()
-    .references(() => tables.id, { onDelete: 'cascade' }),
-  dimensionColumns: text('dimension_columns').array().notNull().default([]),
-  gridCol: integer('grid_col').notNull(),
-  gridRow: integer('grid_row').notNull(),
-  widthUnits: integer('width_units').notNull(),
-  heightUnits: integer('height_units').notNull(),
-  slice: jsonb('slice'),
-});
+export const graphs = pgTable(
+  'graphs',
+  {
+    id: text('id').primaryKey(),
+    sheetId: text('sheet_id')
+      .notNull()
+      .references(() => sheets.id, { onDelete: 'cascade' }),
+    pairId: text('pair_id').notNull(),
+    kind: graphKind('kind').notNull(),
+    tableId: text('table_id')
+      .notNull()
+      .references(() => tables.id, { onDelete: 'cascade' }),
+    dimensionColumns: text('dimension_columns').array().notNull().default([]),
+    gridCol: integer('grid_col').notNull(),
+    gridRow: integer('grid_row').notNull(),
+    widthUnits: integer('width_units').notNull(),
+    heightUnits: integer('height_units').notNull(),
+    slice: jsonb('slice'),
+  },
+  (t) => [index('graphs_sheet_id_idx').on(t.sheetId), index('graphs_table_id_idx').on(t.tableId)],
+);
 
 /**
  * Share changes, deletes, restores, purges. Partitioned monthly once volume warrants.

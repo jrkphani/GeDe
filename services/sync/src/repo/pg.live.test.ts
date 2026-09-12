@@ -136,6 +136,40 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(tail.updates.map((u) => u.seq)).toEqual([4, 5]);
   });
 
+  test('LIB-08 recover honours the 30-day window; recover-all audits every document it recovers (#42)', async () => {
+    const owner = await user('sub-recover');
+    const fresh = await createDoc(owner, 'fresh');
+    const stale = await createDoc(owner, 'stale');
+    const other = await createDoc(owner, 'other');
+    await pool.query(`update documents set deleted_at = now() - interval '2 days' where id = $1`, [
+      fresh.id,
+    ]);
+    await pool.query(`update documents set deleted_at = now() - interval '31 days' where id = $1`, [
+      stale.id,
+    ]);
+    await pool.query(`update documents set deleted_at = now() - interval '3 days' where id = $1`, [
+      other.id,
+    ]);
+    expect(await repo.documents.recover(stale.id)).toBeUndefined();
+    expect((await repo.documents.recover(fresh.id))?.deletedAt).toBeNull();
+
+    const recovered = await repo.documents.recoverAllDeleted(owner, owner);
+    expect(recovered.map((d) => d.id)).toEqual([other.id]);
+    const audit = await pool.query(
+      `select document_id, user_id from audit_log where action = 'document.recover' and document_id = any($1) order by id`,
+      [[fresh.id, stale.id, other.id]],
+    );
+    // recover() leaves the audit row to the route; recover-all writes its own in the transaction.
+    expect(audit.rows).toEqual([{ document_id: other.id, user_id: owner }]);
+    const still = await pool.query<{ deleted_at: Date | null }>(
+      'select deleted_at from documents where id = $1',
+      [stale.id],
+    );
+    expect(still.rows[0]?.deleted_at).not.toBeNull();
+    // Leave nothing past retention behind for the purge test below.
+    await pool.query('delete from documents where id = $1', [stale.id]);
+  });
+
   test('LIB-08 purgeExpired deletes only documents past retention, any owner, cascading and auditing with the system actor', async () => {
     const alice = await user('sub-alice');
     const bob = await user('sub-bob');

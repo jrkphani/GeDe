@@ -39,8 +39,22 @@ declare module 'fastify' {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function emailFromClaims(claims: { email?: unknown; username?: unknown }): string | null {
-  if (typeof claims.email === 'string' && EMAIL_RE.test(claims.email)) return claims.email;
+/**
+ * The email an identity may be bound to, or null. An `email` claim counts
+ * only with `email_verified: true` beside it (#42: an identity provider that
+ * hands out unverified emails must never bind one to a `users` row);
+ * `username` counts when it is an email, because Cognito's email-code
+ * sign-in verifies that alias before the token exists.
+ */
+export function emailFromClaims(claims: {
+  email?: unknown;
+  email_verified?: unknown;
+  username?: unknown;
+}): string | null {
+  const verified = claims.email_verified === true || claims.email_verified === 'true';
+  if (verified && typeof claims.email === 'string' && EMAIL_RE.test(claims.email)) {
+    return claims.email;
+  }
   if (typeof claims.username === 'string' && EMAIL_RE.test(claims.username)) return claims.username;
   return null;
 }

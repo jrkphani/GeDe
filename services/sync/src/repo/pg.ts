@@ -299,23 +299,36 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       },
 
       async recover(id) {
+        // Only from Recently Deleted (LIB-08): past the window the row waits for the purge.
         const [row] = await db
           .update(documents)
           .set({ deletedAt: null, updatedAt: new Date() })
-          .where(and(eq(documents.id, id), isNotNull(documents.deletedAt)))
+          .where(and(eq(documents.id, id), isNotNull(documents.deletedAt), withinRetention))
           .returning();
         return row ? toDocument(row) : undefined;
       },
 
-      async recoverAllDeleted(ownerId) {
-        const rows = await db
-          .update(documents)
-          .set({ deletedAt: null, updatedAt: new Date() })
-          .where(
-            and(eq(documents.ownerId, ownerId), isNotNull(documents.deletedAt), withinRetention),
-          )
-          .returning();
-        return rows.map(toDocument);
+      recoverAllDeleted(ownerId, actorId) {
+        return db.transaction(async (tx) => {
+          const rows = await tx
+            .update(documents)
+            .set({ deletedAt: null, updatedAt: new Date() })
+            .where(
+              and(eq(documents.ownerId, ownerId), isNotNull(documents.deletedAt), withinRetention),
+            )
+            .returning();
+          if (rows.length > 0) {
+            await tx.insert(auditLog).values(
+              rows.map((row) => ({
+                documentId: row.id,
+                userId: actorId,
+                action: 'document.recover',
+                target: null,
+              })),
+            );
+          }
+          return rows.map(toDocument);
+        });
       },
 
       purgeDeleted(ownerId, actorId) {
