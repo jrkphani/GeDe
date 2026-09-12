@@ -1,0 +1,13 @@
+Subject: Your GeDe sign-up code
+
+Confirm your email address
+
+Enter this code in GeDe to finish creating your account.
+
+Your code: {####}
+
+The code works once and expires in 24 hours.
+
+You received this email because this address was used to create a GeDe account. If that was not you, ignore this email; nothing changes without the code.
+This email was sent to sembian@example.com.
+GeDe, the text-oriented spreadsheet.

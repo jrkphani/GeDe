@@ -1,0 +1,13 @@
+Subject: Your GeDe sign-in code
+
+Sign in to GeDe
+
+Enter this code to sign in.
+
+Your code: {####}
+
+The code works once and expires in 10 minutes.
+
+You received this email because someone asked to sign in to GeDe with this address. If that was not you, ignore this email; nothing changes without the code.
+This email was sent to sembian@example.com.
+GeDe, the text-oriented spreadsheet.

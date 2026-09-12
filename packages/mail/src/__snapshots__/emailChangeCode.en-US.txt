@@ -1,0 +1,13 @@
+Subject: Confirm your new GeDe email address
+
+Confirm your new email address
+
+Enter this code in GeDe to confirm the change. Your previous address keeps working until you do.
+
+Your code: {####}
+
+The code works once and expires in 24 hours.
+
+You received this email because a GeDe account asked to switch to this address. If that was not you, ignore this email; nothing changes without the code.
+This email was sent to sembian@example.com.
+GeDe, the text-oriented spreadsheet.
