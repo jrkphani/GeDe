@@ -44,6 +44,16 @@ export const configSchema = z.object({
   AWARENESS_MAX_BYTES: positiveInt.default(4096),
   /** Largest WebSocket frame accepted, in bytes (a sync step 2 of a large document). */
   WS_MAX_PAYLOAD_BYTES: positiveInt.default(16 * 1024 * 1024),
+  /** Bytes a socket may leave unread before it is closed as a slow consumer (#37). */
+  WS_MAX_BUFFERED_BYTES: positiveInt.default(16 * 1024 * 1024),
+  /** Sync updates a connection may send per second, sustained; over the burst it is closed (4429). */
+  WS_UPDATES_PER_SEC: positiveInt.default(200),
+  WS_UPDATES_BURST: positiveInt.default(400),
+  /** Awareness updates a connection may send per second, sustained; excess is dropped. */
+  WS_AWARENESS_PER_SEC: positiveInt.default(20),
+  WS_AWARENESS_BURST: positiveInt.default(40),
+  /** REST requests per minute per caller (bearer token, else client IP) before 429 (#37). */
+  RATE_LIMIT_PER_MINUTE: positiveInt.default(300),
   /** Graceful shutdown budget; ECS sends SIGKILL 30 s after SIGTERM. */
   SHUTDOWN_TIMEOUT_MS: positiveInt.default(25_000),
 });

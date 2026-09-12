@@ -32,6 +32,10 @@ export const CLOSE_UNAUTHENTICATED = 4401;
 export const CLOSE_FORBIDDEN = 4403;
 export const CLOSE_NOT_FOUND = 4404;
 export const CLOSE_BAD_REQUEST = 4400;
+/** The connection sent updates faster than the per-connection limit (#37); the client must not retry blindly. */
+export const CLOSE_TOO_MANY_REQUESTS = 4429;
+/** Standard "try again later": the socket stopped reading and its buffer filled (#37). */
+export const CLOSE_TRY_AGAIN_LATER = 1013;
 
 /** The subprotocol the server selects; the client must offer it alongside `bearer.<token>`. */
 export const WS_SUBPROTOCOL = 'gede.v1';

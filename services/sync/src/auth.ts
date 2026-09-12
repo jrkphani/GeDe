@@ -110,7 +110,7 @@ export function toAuthUser(user: UserRecord): AuthUser {
   };
 }
 
-export function bearerToken(request: FastifyRequest): string | null {
+export function bearerToken(request: Pick<FastifyRequest, 'headers'>): string | null {
   const header = request.headers.authorization;
   if (typeof header !== 'string') return null;
   const [scheme, token, ...rest] = header.trim().split(/\s+/);
@@ -118,7 +118,7 @@ export function bearerToken(request: FastifyRequest): string | null {
   return token;
 }
 
-/** `onRequest` hook for `/api/*`: 401 without a valid bearer token. */
+/** `preValidation` hook for `/api/*` (after the rate limiter): 401 without a valid bearer token. */
 export function requireUser(resolver: UserResolver) {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     const token = bearerToken(request);
