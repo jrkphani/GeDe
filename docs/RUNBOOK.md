@@ -7,7 +7,7 @@ Operations for the production environment. Commands assume the AWS CLI with a pr
 Merging to `main` is the deploy. There is no other path.
 
 1. GitHub notifies CodePipeline `GeDe` through the CodeConnections connection (`triggerOnPush`).
-2. Synth runs `npm ci`, `npm run verify`, `npm run db:parity -w packages/db`, `npm run e2e`, `npm run build --workspace apps/web`, `npm run synth --workspace infra` on CodeBuild ARM (`AMAZON_LINUX_2023_STANDARD_3_0`, SMALL, `node_modules` and the Playwright cache kept locally). Every CodeBuild project logs to one group with 30-day retention.
+2. Synth runs `npm ci`, `npm run verify`, `npm run audit` (production dependencies, high+ advisories fail), `npm run db:parity -w packages/db`, `npm run e2e`, `npm run build --workspace apps/web`, `npm run synth --workspace infra` on CodeBuild ARM (`AMAZON_LINUX_2023_STANDARD_3_0`, SMALL, `node_modules` and the Playwright cache kept locally). Every CodeBuild project logs to one group with 30-day retention.
 3. SelfMutate updates the pipeline if `infra/lib/pipeline-stack.ts` changed the pipeline itself, then restarts the execution.
 4. Assets builds the `linux/arm64` sync image from the repo root with `services/sync/Dockerfile` and publishes assets to both regions.
 5. Prod deploys the eight stacks (Edge in `us-east-1`, the rest in `ap-southeast-1`; Web before Service, see ADR-018). ECS performs a rolling replacement of the sync task with the deployment circuit breaker on.
@@ -49,7 +49,7 @@ Forced:
 
 1. Fastest and preferred: revert the merge commit on `main` (`git revert <sha>`, PR, merge). The pipeline redeploys the previous code with a new execution and `main` stays truthful.
 2. Re-run a previous execution: console → Pipelines → GeDe → the last green execution → Retry, or `aws codepipeline start-pipeline-execution --name GeDe --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha>`. This deploys that commit but leaves `main` ahead of production; follow with a revert.
-3. Database: migrations are forward-only. If a migration must be undone, write the reverse migration and deploy it. Use RDS point-in-time restore only for data loss, never for schema.
+3. Database: migrations are forward-only. If a migration must be undone, write the reverse migration and deploy it. Use RDS point-in-time restore only for data loss, never for schema. The ledger stores a checksum per applied file: a task that boots with an edited shipped migration exits with `migration <file> failed: file text differs`, the circuit breaker keeps the previous task set, and the fix is to restore the file's text and add the change as a new migration.
 
 ## 3. Secrets
 

@@ -437,9 +437,17 @@ export class FakeRepo implements Repo {
       doc.updatedAt = new Date();
       return { firstSeq: base + 1, lastSeq: base + updates.length };
     },
-    commitSnapshot: ({ documentId, seq, s3Key, sizeBytes }) => {
+    commitSnapshot: ({ documentId, seq, s3Key, sizeBytes, coversFrom, appended }) => {
       const doc = this.docs.get(documentId);
       if (!doc) return Promise.reject(new Error(`document ${documentId} does not exist`));
+      // Monotonic, as pg.ts under the row lock (#39): a stale commit changes nothing.
+      if (seq <= doc.snapshotSeq) return Promise.resolve(false);
+      // …and the snapshot must contain everything it would supersede (#39 residual).
+      if (doc.snapshotSeq > coversFrom) return Promise.resolve(false);
+      const loggedRows = (this.updatesByDoc.get(documentId) ?? []).filter(
+        (u) => u.seq > coversFrom && u.seq <= seq,
+      ).length;
+      if (loggedRows !== appended) return Promise.resolve(false);
       const list = this.snapshotsByDoc.get(documentId) ?? [];
       list.push({ seq, s3Key, sizeBytes });
       this.snapshotsByDoc.set(documentId, list);
@@ -449,7 +457,7 @@ export class FakeRepo implements Repo {
         documentId,
         (this.updatesByDoc.get(documentId) ?? []).filter((u) => u.seq > seq),
       );
-      return Promise.resolve();
+      return Promise.resolve(true);
     },
   };
 

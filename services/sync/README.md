@@ -6,24 +6,29 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 
 ## Environment
 
-| Variable                                             | Required         | Default   | Notes                                                   |
-| ---------------------------------------------------- | ---------------- | --------- | ------------------------------------------------------- |
-| `PORT`                                               |                  | `3000`    |                                                         |
-| `LOG_LEVEL`                                          |                  | `info`    | pino level                                              |
-| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |           | libpq names; injected from Secrets Manager in ECS       |
-| `PGSSLMODE`                                          |                  | `disable` | `verify-full` in production                             |
-| `PGSSLROOTCERT`                                      | with verify-full |           | `/app/rds-global-bundle.pem` in the image               |
-| `COGNITO_USER_POOL_ID`                               | yes              |           |                                                         |
-| `COGNITO_CLIENT_ID`                                  | yes              |           | access tokens are verified with `tokenUse: 'access'`    |
-| `COGNITO_REGION`                                     | yes              |           | also the S3 client region                               |
-| `DOCS_BUCKET`                                        | yes              |           | S3 bucket for snapshots                                 |
-| `DOCS_PREFIX`                                        |                  | ``        | key prefix, e.g. `docs/`                                |
-| `WEB_ORIGIN`                                         | yes              |           | exact SPA origin; CORS and the WebSocket `Origin` check |
-| `SNAPSHOT_EVERY_UPDATES`                             |                  | `500`     | compact after this many persisted updates               |
-| `SNAPSHOT_IDLE_MS`                                   |                  | `300000`  | …or after this long idle                                |
-| `ROOM_IDLE_MS`                                       |                  | `600000`  | evict a room this long after its last socket leaves     |
-| `PROJECTION_DEBOUNCE_MS`                             |                  | `1000`    | wait after a compaction before writing the projection   |
-| `GEDE_VERSION`                                       |                  | build     | reported by `/healthz`; the short git sha in the image  |
+| Variable                                             | Required         | Default   | Notes                                                                                      |
+| ---------------------------------------------------- | ---------------- | --------- | ------------------------------------------------------------------------------------------ |
+| `PORT`                                               |                  | `3000`    |                                                                                            |
+| `LOG_LEVEL`                                          |                  | `info`    | pino level                                                                                 |
+| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |           | libpq names; injected from Secrets Manager in ECS                                          |
+| `PGSSLMODE`                                          |                  | `disable` | `verify-full` in production                                                                |
+| `PGSSLROOTCERT`                                      | with verify-full |           | `/app/rds-global-bundle.pem` in the image                                                  |
+| `COGNITO_USER_POOL_ID`                               | yes              |           |                                                                                            |
+| `COGNITO_CLIENT_ID`                                  | yes              |           | access tokens are verified with `tokenUse: 'access'`                                       |
+| `COGNITO_REGION`                                     | yes              |           | also the S3 client region                                                                  |
+| `DOCS_BUCKET`                                        | yes              |           | S3 bucket for snapshots                                                                    |
+| `DOCS_PREFIX`                                        |                  | ``        | key prefix, e.g. `docs/`                                                                   |
+| `WEB_ORIGIN`                                         | yes              |           | exact SPA origin; CORS and the WebSocket `Origin` check                                    |
+| `SNAPSHOT_EVERY_UPDATES`                             |                  | `500`     | compact after this many persisted updates                                                  |
+| `SNAPSHOT_IDLE_MS`                                   |                  | `300000`  | …or after this long idle                                                                   |
+| `ROOM_IDLE_MS`                                       |                  | `600000`  | evict a room this long after its last socket leaves                                        |
+| `PROJECTION_DEBOUNCE_MS`                             |                  | `1000`    | wait after a compaction before writing the projection                                      |
+| `RATE_LIMIT_PER_MINUTE`                              |                  | `300`     | `/api` requests per verified user per minute → 429                                         |
+| `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`    | requests per address per minute, every route → 429                                         |
+| `WS_MAX_BUFFERED_BYTES`                              |                  | `16 MiB`  | unread bytes a socket may hold before it is closed 1013                                    |
+| `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400` | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429 |
+| `WS_AWARENESS_PER_SEC` `WS_AWARENESS_BURST`          |                  | `20/40`   | awareness per connection; excess dropped                                                   |
+| `GEDE_VERSION`                                       |                  | build     | reported by `GET /api/version`; the short git sha                                          |
 
 There is no auth bypass in any environment. Tests inject a fake verifier through `buildServer` deps.
 
@@ -44,8 +49,19 @@ curl -i localhost:3000/healthz
 ## Endpoints
 
 Every `/api` route except `/api/health` needs `Authorization: Bearer <Cognito access token>`.
+Two rate limits, both in memory per task, health checks exempt (#37): every route counts against
+the client address (`RATE_LIMIT_PER_IP_PER_MINUTE`, 3000) — that includes WebSocket upgrades, which
+are address-keyed only since their token travels in a subprotocol — and every `/api` route also
+counts against the verified user (`RATE_LIMIT_PER_MINUTE`, 300, keyed by the user id: a rotating
+token is the same user, an invalid one never reaches it). Over either budget the answer is 429
+`{ error: { code: 'too_many_requests', … } }` (`retry-after` on the per-user one). The address is
+one hop of `X-Forwarded-For` (the ALB's entry): the real client on the direct `/ws` path, the
+**CloudFront edge** on `/api/*` — every user behind one POP shares that bucket, so it is generous
+and the per-user limit is the precise one.
 
-- `GET /healthz`, `GET /api/health` — `{ ok, version }`; 503 when `SELECT 1` fails. No auth.
+- `GET /healthz`, `GET /api/health` — `{ ok }`; 503 when `SELECT 1` fails. No auth, and no
+  version: an unauthenticated caller learns only that the service is up (#42).
+- `GET /api/version` → `{ version }` (the short git sha baked into the image).
 - `GET /api/me` → `{ id, sub, email, displayName, locale }`.
   `PATCH /api/me { displayName?, locale? }` — display name 1–80 characters after trimming;
   locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`; at least one field (I18N-05, AUTH-09).
@@ -68,8 +84,10 @@ sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', li
   `PATCH /api/documents/:id { title }` (owner or editor). `DELETE /api/documents/:id` (owner) →
   204; moves the document to Recently Deleted and closes its room with 4404.
 - `POST /api/documents/:id/recover` (owner) → `{ document }`; 409 when it is not deleted, 404 when
-  its deletion is older than 30 days (it is no longer in Recently Deleted).
-- `POST /api/documents/recover-all` (caller's documents deleted within 30 days) → `{ recovered }`.
+  its deletion is older than 30 days (it is no longer in Recently Deleted; the database enforces
+  the window, not only the route).
+- `POST /api/documents/recover-all` (caller's documents deleted within 30 days) → `{ recovered }`,
+  one `document.recover` audit row per document in the same transaction.
 - `POST /api/documents/delete-all` (every soft-deleted document the caller owns, retention or not)
   → `{ deleted }`. Rows in `documents`, `doc_updates`, `snapshots`, `shares`, `invites` go in one
   transaction with a `document.purge` audit row each; the S3 objects under `${DOCS_PREFIX}${docId}/`
@@ -91,7 +109,11 @@ gede.v1, bearer.<access JWT>` (`new WebSocket(url, ['gede.v1', 'bearer.' + token
   selects `gede.v1` and never echoes the bearer entry. `?token=<access JWT>` is still accepted for
   one release and logs a deprecation warning (never the token; the request log redacts the
   parameter) — it goes in the release after this one. Close codes: 4401 unauthenticated, 4403 not
-  a participant / wrong origin, 4404 unknown or deleted document, 1001 on shutdown.
+  a participant / wrong origin, 4404 unknown or deleted document, 4429 more sync messages per
+  second than `WS_UPDATES_BURST` allows — step 1 and awareness queries count too, since each makes
+  the server encode and send (the client treats it as terminal), 1013 the socket stopped
+  reading and `WS_MAX_BUFFERED_BYTES` piled up (the client reconnects with backoff), 1001 on
+  shutdown. Awareness over `WS_AWARENESS_BURST` is dropped, not fanned out (#37).
 
 Errors are `{ error: { code, message, ref } }`; `ref` is also sent as `x-request-id`. A
 non-participant gets 403 (never the title); a participant of a deleted document gets 404, the

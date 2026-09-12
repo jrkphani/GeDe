@@ -4,15 +4,19 @@
  * `users` row.
  *
  * Which claims a Cognito token carries:
- *   - An *access* token (what the SPA sends) has `sub`, `username`, `client_id`,
- *     `scope` — and no `email` unless the pool is configured to add it as a
- *     custom claim. `username` is the sign-in alias, which for email-code
- *     sign-in is the email address and for Apple federation is an opaque id.
- *   - An *id* token has `email`.
- * We store an email only when the token gives us one we can trust (an `email`
- * claim, or a `username` that is an email). Otherwise `users.email` stays
- * null until a later request carries it; the SPA can also PATCH a profile
- * later. Nothing is fetched from Cognito at request time.
+ *   - An *access* token (what the SPA sends, and the only kind the verifier
+ *     accepts) has `sub`, `username`, `client_id`, `scope` — and no `email`.
+ *     This pool signs in by email as a *username attribute*
+ *     (`signInAliases: { email: true }` in `AuthStack`), so Cognito generates
+ *     the username: `username` is a UUID, never the address.
+ *   - An *id* token has `email` and `email_verified`.
+ * So in production `users.email` is **never bound from a token**: every
+ * access token yields `null` here, and the row keeps its email null until the
+ * SPA `PATCH`es it (`/api/me`). `emailFromClaims` remains the single place a
+ * token's claims could ever bind an address — guarded (`email_verified`, an
+ * email-shaped `username`) for a pool configured otherwise — and #42 tracks
+ * the real binding path (`fetchUserAttributes()` → `PATCH /api/me`, or an
+ * ID-token side channel). Nothing is fetched from Cognito at request time.
  */
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -39,8 +43,24 @@ declare module 'fastify' {
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-export function emailFromClaims(claims: { email?: unknown; username?: unknown }): string | null {
-  if (typeof claims.email === 'string' && EMAIL_RE.test(claims.email)) return claims.email;
+/**
+ * The email an identity may be bound to, or null. An `email` claim counts
+ * only with `email_verified: true` beside it (#42: an identity provider that
+ * hands out unverified emails must never bind one to a `users` row); an
+ * email-shaped `username` counts because a pool that uses the address as the
+ * username (alias sign-in) verifies it before any token exists. In *this*
+ * pool neither is present on an access token (see the header), so the result
+ * is `null` for every production request.
+ */
+export function emailFromClaims(claims: {
+  email?: unknown;
+  email_verified?: unknown;
+  username?: unknown;
+}): string | null {
+  const verified = claims.email_verified === true || claims.email_verified === 'true';
+  if (verified && typeof claims.email === 'string' && EMAIL_RE.test(claims.email)) {
+    return claims.email;
+  }
   if (typeof claims.username === 'string' && EMAIL_RE.test(claims.username)) return claims.username;
   return null;
 }
@@ -110,7 +130,7 @@ export function toAuthUser(user: UserRecord): AuthUser {
   };
 }
 
-export function bearerToken(request: FastifyRequest): string | null {
+export function bearerToken(request: Pick<FastifyRequest, 'headers'>): string | null {
   const header = request.headers.authorization;
   if (typeof header !== 'string') return null;
   const [scheme, token, ...rest] = header.trim().split(/\s+/);
@@ -118,7 +138,7 @@ export function bearerToken(request: FastifyRequest): string | null {
   return token;
 }
 
-/** `onRequest` hook for `/api/*`: 401 without a valid bearer token. */
+/** `preValidation` hook for `/api/*` (after the rate limiter): 401 without a valid bearer token. */
 export function requireUser(resolver: UserResolver) {
   return async (request: FastifyRequest, _reply: FastifyReply): Promise<void> => {
     const token = bearerToken(request);

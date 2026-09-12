@@ -242,7 +242,18 @@ export function registerApi(
 
   app.register(
     (api, _opts, done) => {
-      api.addHook('onRequest', requireUser(resolver));
+      // preValidation, not onRequest: the per-address limiter (`ip-limit.ts`) is an
+      // onRequest hook and must count a caller before the 401 for a missing token
+      // is thrown; the body (≤ bodyLimit) is parsed before that 401, which is
+      // accepted. The per-user limiter then runs at preHandler, keyed by the
+      // verified user the auth hook attached (#37).
+      api.addHook('preValidation', requireUser(resolver));
+      api.addHook('preHandler', api.rateLimit());
+
+      // --- service -----------------------------------------------------------
+
+      /** The deployed build (short git sha); signed-in callers only (#42). */
+      api.get('/version', () => ({ version: deps.version }));
 
       // --- profile ----------------------------------------------------------
 

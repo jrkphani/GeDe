@@ -124,7 +124,12 @@ function elementNode(element: Y.XmlElement): ProseMirrorNode {
   };
 }
 
-/** The ProseMirror `doc` JSON for a cell's fragment (a list of `paragraph` nodes in Wave 1). */
+/**
+ * The ProseMirror `doc` JSON for a cell's fragment (a list of `paragraph` nodes in Wave 1).
+ * TODO(wave2/richtext-formats, PR #57): replace this and `textNodes`/`elementNode` with
+ * `fragmentToRich` from `@gede/core` once it is on main, so the projection and the
+ * editor share one Yjs → ProseMirror mapping.
+ */
 export function fragmentToProseMirror(fragment: Y.XmlFragment): ProseMirrorNode {
   const content = fragment.toArray().flatMap((node) => {
     if (node instanceof Y.XmlElement) return [elementNode(node)];

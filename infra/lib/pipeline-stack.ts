@@ -101,6 +101,8 @@ export class PipelineStack extends cdk.Stack {
       ],
       commands: [
         'npm run verify',
+        // Production dependencies with a high or critical advisory fail the build (#41).
+        'npm run audit',
         // Applies every migration to a throwaway postgres:17 (Docker, hence
         // `dockerEnabledForSynth`) before anything reaches production. With
         // CI=true the script fails rather than skips when Docker is missing.

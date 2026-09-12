@@ -32,11 +32,16 @@ afterEach(async () => {
 });
 
 describe('GET /healthz', () => {
-  test('LOAD-05 answers ok with the version and no auth', async () => {
-    const res = await json<{ ok: boolean; version: string }>(server, 'GET', '/healthz');
+  test('LOAD-05 answers ok with no auth and no version (#42); /api/version needs a token', async () => {
+    const res = await json<{ ok: boolean }>(server, 'GET', '/healthz');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, version: 'test' });
+    expect(res.body).toEqual({ ok: true });
     expect(res.headers.get('x-request-id')).toMatch(/^[0-9a-f]{8}$/);
+    expect((await json(server, 'GET', '/api/version')).status).toBe(401);
+    const version = await json<{ version: string }>(server, 'GET', '/api/version', {
+      token: alice,
+    });
+    expect(version.body).toEqual({ version: 'test' });
   });
 
   test('LOAD-05 answers 503 when SELECT 1 fails so ECS restarts the task', async () => {
@@ -47,9 +52,9 @@ describe('GET /healthz', () => {
   });
 
   test('503 page polls /api/health through CloudFront without a bearer token', async () => {
-    const res = await json<{ ok: boolean; version: string }>(server, 'GET', '/api/health');
+    const res = await json<{ ok: boolean }>(server, 'GET', '/api/health');
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ ok: true, version: 'test' });
+    expect(res.body).toEqual({ ok: true });
   });
 });
 
