@@ -4,9 +4,11 @@
  * 2. Compares every table and column in `src/schema.ts` with information_schema.
  * 3. Checks the constraints later migrations change (0003: no foreign key on
  *    `audit_log.document_id`, so a purge's audit row outlives the document).
+ * 4. Requires every index `schema.ts` declares to exist (0004) and the ledger
+ *    to carry a checksum for every applied file (0005).
  */
 import { getTableColumns, getTableName } from 'drizzle-orm';
-import type { PgTable } from 'drizzle-orm/pg-core';
+import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 
 import { applyMigrations, createPool } from '../src/index.js';
 import * as schema from '../src/schema.js';
@@ -83,6 +85,24 @@ try {
   );
   if (fks.some((c) => c.conname === 'audit_log_document_id_fkey')) {
     problems.push('audit_log.document_id still has its foreign key (migration 0003 did not apply)');
+  }
+  const { rows: indexes } = await pool.query<{ indexname: string }>(
+    "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",
+  );
+  const liveIndexes = new Set(indexes.map((i) => i.indexname));
+  for (const table of tables) {
+    for (const idx of getTableConfig(table).indexes) {
+      const name = idx.config.name;
+      if (name !== undefined && !liveIndexes.has(name)) {
+        problems.push(`index ${name} on ${getTableName(table)} missing (migration 0004)`);
+      }
+    }
+  }
+  const { rows: ledger } = await pool.query<{ name: string; checksum: string | null }>(
+    'SELECT name, checksum FROM __migrations',
+  );
+  for (const row of ledger) {
+    if (row.checksum === null) problems.push(`__migrations.${row.name} has no checksum (0005)`);
   }
   if (problems.length > 0) {
     throw new Error(`schema parity failed:\n  ${problems.join('\n  ')}`);

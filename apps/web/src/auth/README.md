@@ -22,4 +22,4 @@ SDK verified: `aws-amplify@6.20.0` / `@aws-amplify/auth@6.20.0`.
 - Sign-in options `USER_AUTH` with `EMAIL_OTP` and `WEB_AUTHN` enabled; passkey relying-party id = the web origin host.
 - `email` as the sign-in alias; `name` as a mutable standard attribute; self sign-up allowed; verification by code (not link).
 - Apple registered as an OIDC provider on the pool and the hosted-UI domain exposed as `appleSignIn.domain`.
-- `PreventUserExistenceErrors` off, or the unknown-email hint on the method step will not show (the flow still works; the code step simply fails).
+- `PreventUserExistenceErrors` is **on** in production, so an unknown email never raises `UserNotFoundException`. Cognito answers `InitiateAuth` with `SELECT_CHALLENGE` and the pool's generic factors (`PASSWORD_SRP`, `PASSWORD`, `WEB_AUTHN`) — never `EMAIL_OTP`, which a known account with a verified address always lists. `toStep` maps that shape to `AuthFailureError({ kind: 'unknown-email' })` so the method step reads "No account uses this email. Switch to Create account to start one." (AUTH-04, #46). `classifyError` still maps `UserNotFoundException` for a pool with the flag off.

@@ -22,6 +22,18 @@ const ARM_SMALL: codebuild.BuildEnvironment = {
 };
 
 /**
+ * Synth only: `eslint . --quiet` type-checks the whole monorepo in one process and ran out
+ * of V8's default heap on SMALL (3 GB host → ~1.6 GB heap) once Wave 2 landed (execution
+ * 5eb15a75, exit 134). MEDIUM is 4 vCPU / 7 GB; `NODE_OPTIONS` raises the heap to match.
+ * Self-mutate, asset publishing and smoke stay on SMALL.
+ */
+const ARM_MEDIUM: codebuild.BuildEnvironment = {
+  buildImage: codebuild.LinuxArmBuildImage.AMAZON_LINUX_2023_STANDARD_3_0,
+  computeType: codebuild.ComputeType.MEDIUM,
+};
+const SYNTH_NODE_OPTIONS = '--max-old-space-size=4096';
+
+/**
  * Shared libraries Chromium needs on Amazon Linux 2023, one dnf package per Debian
  * package in Playwright's own `ubuntu24.04-arm64` chromium list (`playwright-core`
  * `deps` table). Playwright's `install-deps` only knows `apt-get`, so on AL2023 this
@@ -79,7 +91,7 @@ export class PipelineStack extends cdk.Stack {
       input: source,
       // Playwright reads CI to pick workers, retries and reporters (apps/web/playwright.config.ts);
       // `db:parity` reads it to fail rather than skip when Docker is missing.
-      env: { CI: 'true' },
+      env: { CI: 'true', NODE_OPTIONS: SYNTH_NODE_OPTIONS },
       installCommands: [
         `dnf install -y -q ${CHROMIUM_DNF_PACKAGES.join(' ')}`,
         'npm ci',
@@ -89,6 +101,8 @@ export class PipelineStack extends cdk.Stack {
       ],
       commands: [
         'npm run verify',
+        // Production dependencies with a high or critical advisory fail the build (#41).
+        'npm run audit',
         // Applies every migration to a throwaway postgres:17 (Docker, hence
         // `dockerEnabledForSynth`) before anything reaches production. With
         // CI=true the script fails rather than skips when Docker is missing.
@@ -98,7 +112,7 @@ export class PipelineStack extends cdk.Stack {
         'npm run synth --workspace infra',
       ],
       primaryOutputDirectory: 'infra/cdk.out',
-      buildEnvironment: ARM_SMALL,
+      buildEnvironment: ARM_MEDIUM,
       // LOCAL_CUSTOM_CACHE takes its paths from the buildspec; `Cache.local()` only flags the mode.
       cache: codebuild.Cache.local(codebuild.LocalCacheMode.CUSTOM),
       partialBuildSpec: codebuild.BuildSpec.fromObject({

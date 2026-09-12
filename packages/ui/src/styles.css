@@ -51,11 +51,16 @@ body {
   border-radius: var(--radius-sm);
 }
 
-/* I18N-03: Indic scripts need 1.7 line-height or matras clip. */
-[lang^='ta'],
-[lang^='hi'],
-[lang^='te'] {
-  line-height: 1.7;
+/* I18N-03: Indic scripts need 1.7 line-height or matras clip. The floor has to
+   survive `body` (1.6) and every component that sets its own line-height
+   (buttons 1.2, headings 1.15), so it is stated on every element that inherits
+   the language — `:lang()` matches descendants, `[lang]` only the root — and
+   made `!important`. Grid rows keep their 22 px lattice height: `.gd-cell` is
+   sized by the row, not by its line box, so the taller line only re-centres. */
+:lang(ta),
+:lang(hi),
+:lang(te) {
+  line-height: 1.7 !important;
 }
 
 a {

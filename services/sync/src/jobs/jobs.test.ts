@@ -147,6 +147,8 @@ describe('reproject job', () => {
     const seed = encodeSeededDocument({ title: 'A' });
     await s3.put(snapshotKey('docs/', a, 1), seed);
     await repo.updates.commitSnapshot({
+      coversFrom: 0,
+      appended: 0,
       documentId: a,
       seq: 1,
       s3Key: snapshotKey('docs/', a, 1),
@@ -169,6 +171,8 @@ describe('reproject job', () => {
     // A document whose snapshot object is missing, and a deleted one that must be skipped by `all`.
     const b = repo.seedDocument(alice, 'B').id;
     await repo.updates.commitSnapshot({
+      coversFrom: 0,
+      appended: 0,
       documentId: b,
       seq: 1,
       s3Key: 'docs/missing.yjs',

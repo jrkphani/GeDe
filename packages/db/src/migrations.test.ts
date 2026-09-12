@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { getTableColumns, getTableName } from 'drizzle-orm';
-import type { PgTable } from 'drizzle-orm/pg-core';
+import { getTableConfig, type PgTable } from 'drizzle-orm/pg-core';
 import { describe, expect, test } from 'vitest';
 
 import * as schema from './schema.js';
@@ -105,6 +105,51 @@ describe('migrations', () => {
         expect(inBody || added.includes(column.name), `${name}.${column.name}`).toBe(true);
       }
     }
+  });
+
+  test('LOAD-06 0004 indexes every cascading foreign key and 0005 adds the ledger checksum (#42)', () => {
+    expect(files.slice(4, 6)).toEqual(['0004_fk_indexes.sql', '0005_migrations_checksum.sql']);
+    const fk = stripComments(readFileSync(join(dir, '0004_fk_indexes.sql'), 'utf8'));
+    for (const [idx, table, column] of [
+      ['invites_document_id_idx', 'invites', 'document_id'],
+      ['sheets_document_id_idx', 'sheets', 'document_id'],
+      ['tables_sheet_id_idx', 'tables', 'sheet_id'],
+      ['columns_table_id_idx', 'columns', 'table_id'],
+      ['rows_table_id_idx', 'rows', 'table_id'],
+      ['cells_column_id_idx', 'cells', 'column_id'],
+      ['graphs_sheet_id_idx', 'graphs', 'sheet_id'],
+      ['graphs_table_id_idx', 'graphs', 'table_id'],
+    ]) {
+      expect(fk).toContain(`CREATE INDEX IF NOT EXISTS ${idx} ON ${table} (${column})`);
+    }
+    const checksum = stripComments(readFileSync(join(dir, '0005_migrations_checksum.sql'), 'utf8'));
+    expect(checksum).toMatch(/ALTER TABLE __migrations ADD COLUMN IF NOT EXISTS checksum text/);
+  });
+
+  test('LOAD-06 every index declared in schema.ts exists in the migrations', () => {
+    const sql = stripComments(allSql);
+    const declared = [...sql.matchAll(/CREATE INDEX IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
+    for (const table of [
+      schema.documents,
+      schema.shares,
+      schema.invites,
+      schema.sheets,
+      schema.tables,
+      schema.columns,
+      schema.rows,
+      schema.cells,
+      schema.graphs,
+      schema.auditLog,
+    ]) {
+      const config = getTableConfig(table);
+      for (const idx of config.indexes) {
+        expect(declared, `${config.name}.${idx.config.name ?? '?'}`).toContain(idx.config.name);
+      }
+    }
+    // The unique constraints pg.ts relies on by name (#42).
+    const users = getTableColumns(schema.users);
+    expect(users.email.uniqueName).toBe('users_email_key');
+    expect(users.cognitoSub.uniqueName).toBe('users_cognito_sub_key');
   });
 
   test('LOAD-06 the required indexes are declared', () => {

@@ -299,23 +299,36 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       },
 
       async recover(id) {
+        // Only from Recently Deleted (LIB-08): past the window the row waits for the purge.
         const [row] = await db
           .update(documents)
           .set({ deletedAt: null, updatedAt: new Date() })
-          .where(and(eq(documents.id, id), isNotNull(documents.deletedAt)))
+          .where(and(eq(documents.id, id), isNotNull(documents.deletedAt), withinRetention))
           .returning();
         return row ? toDocument(row) : undefined;
       },
 
-      async recoverAllDeleted(ownerId) {
-        const rows = await db
-          .update(documents)
-          .set({ deletedAt: null, updatedAt: new Date() })
-          .where(
-            and(eq(documents.ownerId, ownerId), isNotNull(documents.deletedAt), withinRetention),
-          )
-          .returning();
-        return rows.map(toDocument);
+      recoverAllDeleted(ownerId, actorId) {
+        return db.transaction(async (tx) => {
+          const rows = await tx
+            .update(documents)
+            .set({ deletedAt: null, updatedAt: new Date() })
+            .where(
+              and(eq(documents.ownerId, ownerId), isNotNull(documents.deletedAt), withinRetention),
+            )
+            .returning();
+          if (rows.length > 0) {
+            await tx.insert(auditLog).values(
+              rows.map((row) => ({
+                documentId: row.id,
+                userId: actorId,
+                action: 'document.recover',
+                target: null,
+              })),
+            );
+          }
+          return rows.map(toDocument);
+        });
       },
 
       purgeDeleted(ownerId, actorId) {
@@ -485,16 +498,66 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         });
       },
 
-      async commitSnapshot({ documentId, seq, s3Key, sizeBytes }) {
-        await db.transaction(async (tx) => {
+      commitSnapshot({ documentId, seq, s3Key, sizeBytes, coversFrom, appended }) {
+        return db.transaction(async (tx) => {
+          // The same row lock `append` takes: no sequence number is assigned
+          // while the pointer moves, and two compactions serialise here.
+          const [doc] = await tx
+            .select({ snapshotSeq: documents.snapshotSeq })
+            .from(documents)
+            .where(eq(documents.id, documentId))
+            .for('update');
+          if (!doc) throw new Error(`document ${documentId} does not exist`);
+          // Monotonic (#39): a task whose in-memory state is behind another
+          // task's snapshot must never move the pointer back or prune what
+          // its snapshot does not contain.
+          if (seq <= doc.snapshotSeq) {
+            logger.warn(
+              { documentId, seq, committedSeq: doc.snapshotSeq },
+              'stale snapshot commit ignored',
+            );
+            return false;
+          }
+          // The snapshot must contain everything it would supersede. Another
+          // task's commit since this writer loaded (or last committed) may have
+          // pruned rows this snapshot never saw; and rows in (coversFrom, seq]
+          // the writer did not append belong to another task. Either refuses.
+          if (doc.snapshotSeq > coversFrom) {
+            logger.warn(
+              { documentId, seq, coversFrom, committedSeq: doc.snapshotSeq },
+              'another task compacted this document since it was loaded; not committed',
+            );
+            return false;
+          }
+          const [logged] = await tx
+            .select({ n: sql<string | number>`count(*)::int` })
+            .from(docUpdates)
+            .where(
+              and(
+                eq(docUpdates.documentId, documentId),
+                gt(docUpdates.seq, coversFrom),
+                sql`${docUpdates.seq} <= ${seq}`,
+              ),
+            );
+          const loggedRows = Number(logged?.n ?? 0);
+          if (loggedRows !== appended) {
+            logger.warn(
+              { documentId, seq, coversFrom, appended, loggedRows },
+              'snapshot does not cover every logged update; not committed',
+            );
+            return false;
+          }
           await tx.insert(snapshots).values({ documentId, seq, s3Key, sizeBytes });
-          await tx
+          const moved = await tx
             .update(documents)
             .set({ snapshotKey: s3Key, snapshotSeq: seq })
-            .where(eq(documents.id, documentId));
+            .where(and(eq(documents.id, documentId), sql`${documents.snapshotSeq} < ${seq}`))
+            .returning({ id: documents.id });
+          if (moved.length === 0) throw new Error('snapshot pointer did not advance under lock');
           await tx
             .delete(docUpdates)
             .where(and(eq(docUpdates.documentId, documentId), sql`${docUpdates.seq} <= ${seq}`));
+          return true;
         });
       },
     },

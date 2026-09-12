@@ -630,6 +630,29 @@ describe('GeDe CDK app', () => {
     pipelineTemplate.allResourcesProperties('AWS::CodeBuild::Project', {
       Environment: Match.objectLike({ Type: 'ARM_CONTAINER' }),
     });
+    // Only Synth is MEDIUM (typed eslint over the whole monorepo OOMed on SMALL, exit 134);
+    // it also pins Node's heap to match. Everything else stays SMALL.
+    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project')) as {
+      Properties: {
+        Environment: {
+          ComputeType: string;
+          EnvironmentVariables?: { Name: string; Value: string }[];
+        };
+      };
+    }[];
+    const medium = projects.filter(
+      (p) => p.Properties.Environment.ComputeType === 'BUILD_GENERAL1_MEDIUM',
+    );
+    expect(medium).toHaveLength(1);
+    expect(medium[0]!.Properties.Environment.EnvironmentVariables).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ Name: 'CI', Value: 'true' }),
+        expect.objectContaining({ Name: 'NODE_OPTIONS', Value: '--max-old-space-size=4096' }),
+      ]),
+    );
+    expect(
+      projects.filter((p) => p.Properties.Environment.ComputeType === 'BUILD_GENERAL1_SMALL'),
+    ).toHaveLength(projects.length - 1);
   });
 
   it('every CodeBuild project logs to one group that expires after 30 days (#40, #42)', () => {
@@ -692,11 +715,13 @@ describe('GeDe CDK app', () => {
     expect(install[1]).toBe('npm ci');
     expect(install[2]).toBe('npx playwright install --only-shell chromium');
 
-    // Build: verify → migrations parity on a throwaway Postgres (Docker) → Playwright
+    // Build: verify → production-dependency audit → migrations parity on a throwaway
+    // Postgres (Docker) → Playwright
     // journeys → web build → cdk synth. Exact lines: nothing may swallow a failure
     // (no `|| true`, no `--ignore`), so a red journey stops the pipeline before publishing.
     expect(spec.phases.build.commands).toEqual([
       'npm run verify',
+      'npm run audit',
       'npm run db:parity -w packages/db',
       'npm run e2e',
       'npm run build --workspace apps/web',

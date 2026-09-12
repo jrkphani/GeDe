@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { describe, expect, test } from 'vitest';
 
-import { poolConfigFromEnv } from './client.js';
+import { POOL_TIMEOUTS, poolConfigFromEnv } from './client.js';
 
 const base = {
   PGHOST: 'db.internal',
@@ -43,5 +43,22 @@ describe('poolConfigFromEnv', () => {
     expect(() => poolConfigFromEnv({ ...base, PGSSLMODE: 'prefer' })).toThrow(/PGSSLMODE/);
     expect(() => poolConfigFromEnv({ ...base, PGHOST: '' })).toThrow(/PGHOST/);
     expect(() => poolConfigFromEnv({ ...base, PGPORT: 'x' })).toThrow(/PGPORT/);
+  });
+
+  test('LOAD-06 production refuses any mode but verify-full (#42)', () => {
+    const prod = { ...base, NODE_ENV: 'production' };
+    expect(() => poolConfigFromEnv(prod)).toThrow(/verify-full when NODE_ENV=production/);
+    expect(() => poolConfigFromEnv({ ...prod, PGSSLMODE: 'disable' })).toThrow(/verify-full/);
+    expect(() => poolConfigFromEnv({ ...prod, PGSSLMODE: 'require' })).toThrow(/verify-full/);
+    // Anything but production keeps the local defaults.
+    expect(poolConfigFromEnv({ ...base, NODE_ENV: 'development' }).ssl).toBeUndefined();
+  });
+
+  test('LOAD-06 every pooled session carries statement, lock and idle-in-transaction timeouts (#42)', () => {
+    expect(poolConfigFromEnv(base)).toMatchObject({
+      statement_timeout: POOL_TIMEOUTS.statementTimeoutMs,
+      lock_timeout: POOL_TIMEOUTS.lockTimeoutMs,
+      idle_in_transaction_session_timeout: POOL_TIMEOUTS.idleInTransactionSessionTimeoutMs,
+    });
   });
 });

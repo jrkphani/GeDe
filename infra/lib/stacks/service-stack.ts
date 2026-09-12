@@ -39,7 +39,7 @@ const DB_PORT = 5432;
 const DOCS_PREFIX = 'docs/';
 
 /**
- * Short git sha baked into the image as `GEDE_VERSION` (reported by `/healthz`).
+ * Short git sha baked into the image as `GEDE_VERSION` (reported by the signed-in `/api/version`).
  * CodeBuild sets `CODEBUILD_RESOLVED_SOURCE_VERSION` on the Synth step; a laptop
  * synth gets `local`. Because it is a Docker build arg, the image asset hash
  * changes on every commit and every deploy builds a fresh image — accepted, so

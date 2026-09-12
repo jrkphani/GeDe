@@ -28,11 +28,16 @@ import {
   encodeSyncStep1,
   encodeSyncStep2,
   encodeUpdate,
+  MESSAGE_AWARENESS,
   SYNC_STEP1,
   SYNC_STEP2,
 } from './protocol.js';
-
+import { CLOSE_TOO_MANY_REQUESTS, CLOSE_TRY_AGAIN_LATER } from './route.js';
 import { LOAD_ORIGIN, loadStoredState } from './state.js';
+import { TokenBucket } from './throttle.js';
+
+/** Bytes the type-1 envelope adds around an awareness payload (varUint type + varUint length). */
+const AWARENESS_ENVELOPE_BYTES = 8;
 
 export interface Member {
   readonly userId: string;
@@ -46,11 +51,23 @@ export class Conn {
   readOnlyNotified = false;
   /** Serialises message handling per socket so order is preserved across the async load. */
   queue: Promise<void> = Promise.resolve();
+  /** Per-connection limits (#37): sync updates and awareness each have a bucket. */
+  readonly updateBucket: TokenBucket;
+  readonly awarenessBucket: TokenBucket;
+  /** Set once the room closed this socket for exceeding a limit; later frames are ignored. */
+  limited = false;
 
   constructor(
     readonly socket: WebSocket,
     readonly member: Member,
-  ) {}
+    limits: Pick<
+      Config,
+      'WS_UPDATES_PER_SEC' | 'WS_UPDATES_BURST' | 'WS_AWARENESS_PER_SEC' | 'WS_AWARENESS_BURST'
+    >,
+  ) {
+    this.updateBucket = new TokenBucket(limits.WS_UPDATES_PER_SEC, limits.WS_UPDATES_BURST);
+    this.awarenessBucket = new TokenBucket(limits.WS_AWARENESS_PER_SEC, limits.WS_AWARENESS_BURST);
+  }
 
   get canEdit(): boolean {
     return canEdit(this.member.permission);
@@ -66,6 +83,12 @@ export interface RoomStats {
   droppedAwareness: number;
   /** Messages that were not valid protocol. */
   malformed: number;
+  /** Sockets closed for not reading (buffered bytes over the limit, #37). */
+  slowConsumers: number;
+  /** Connections closed for sending updates faster than the limit (#37). */
+  rateLimited: number;
+  /** Awareness updates dropped for exceeding the per-connection rate (#37). */
+  throttledAwareness: number;
 }
 
 export type RoomConfig = Pick<
@@ -75,6 +98,11 @@ export type RoomConfig = Pick<
   | 'PERSIST_COALESCE_MS'
   | 'DOCS_PREFIX'
   | 'AWARENESS_MAX_BYTES'
+  | 'WS_MAX_BUFFERED_BYTES'
+  | 'WS_UPDATES_PER_SEC'
+  | 'WS_UPDATES_BURST'
+  | 'WS_AWARENESS_PER_SEC'
+  | 'WS_AWARENESS_BURST'
 >;
 
 export class Room {
@@ -86,6 +114,9 @@ export class Room {
     refusedClosing: 0,
     droppedAwareness: 0,
     malformed: 0,
+    slowConsumers: 0,
+    rateLimited: 0,
+    throttledAwareness: 0,
   };
   /** Resolves once the snapshot and log have been applied; rejects if loading failed. */
   readonly ready: Promise<void>;
@@ -132,6 +163,13 @@ export class Room {
         : (bytes) => {
             this.projection?.schedule(this.documentId, bytes);
           },
+      () => {
+        // Another task wrote to this document behind this room (#39): its
+        // in-memory state is no longer the whole truth. The manager drops the
+        // room; sockets get 1001, reconnect with backoff, and the fresh room
+        // loads snapshot + log — the clients' replicas re-send what it lacks.
+        this.onSuperseded?.(this);
+      },
     );
     this.logger.info(
       { documentId: this.documentId, snapshotSeq: state.snapshotSeq, replayed: state.replayed },
@@ -141,7 +179,7 @@ export class Room {
 
   /** Attach a socket. Sends the initial sync step 1 and current awareness once the room is loaded. */
   join(socket: WebSocket, member: Member): Conn {
-    const conn = new Conn(socket, member);
+    const conn = new Conn(socket, member, this.config);
     this.conns.add(conn);
 
     socket.on('message', (data, isBinary) => {
@@ -150,6 +188,15 @@ export class Room {
         return;
       }
       const bytes = toUint8Array(data);
+      // An oversized awareness frame is refused on its length alone, before
+      // anything is decoded or queued (#37). The envelope is one varUint byte.
+      if (
+        bytes[0] === MESSAGE_AWARENESS &&
+        bytes.byteLength > this.config.AWARENESS_MAX_BYTES + AWARENESS_ENVELOPE_BYTES
+      ) {
+        this.stats.droppedAwareness += 1;
+        return;
+      }
       conn.queue = conn.queue
         .then(() => this.ready)
         .then(() => {
@@ -190,8 +237,14 @@ export class Room {
 
   /** Set by the RoomManager to schedule eviction. */
   onEmpty: ((room: Room) => void) | null = null;
+  /** Set by the RoomManager: this room's state was superseded by another task's write (#39). */
+  onSuperseded: ((room: Room) => void) | null = null;
 
   private handle(conn: Conn, bytes: Uint8Array): void {
+    // Frames still queued after the room closed this socket for a limit are ignored;
+    // a frame received before an orderly close (shutdown, 1001) is still applied
+    // and persisted (LOAD-05: nothing accepted is lost).
+    if (conn.limited) return;
     if (this.writer?.sealed === true) {
       // The writer has drained and sealed: anything applied now could never
       // be persisted, so it is refused outright rather than accepted in
@@ -202,6 +255,11 @@ export class Room {
     const message = decodeMessage(bytes);
     switch (message.kind) {
       case 'sync': {
+        // Every sync message costs a token, reads included (#37, review of #66): a
+        // step 1 makes the server encode and send whatever the client is missing —
+        // the whole document for an empty state vector — from view-only sockets
+        // too, so it is the cheapest amplifier a connection has.
+        if (!this.takeUpdateToken(conn, 'too many sync messages')) return;
         if (message.subtype === SYNC_STEP1) {
           // A read: reply with what the client is missing.
           const stateVector = decoding.readVarUint8Array(message.decoder);
@@ -235,10 +293,17 @@ export class Room {
           this.stats.droppedAwareness += 1;
           return;
         }
+        if (!conn.awarenessBucket.take()) {
+          // Presence is best-effort: over the rate, drop rather than fan out (#37).
+          this.stats.throttledAwareness += 1;
+          return;
+        }
         awarenessProtocol.applyAwarenessUpdate(this.awareness, message.update, conn);
         return;
       }
       case 'queryAwareness': {
+        // A read that fans every presence state back to one socket: same bucket as sync.
+        if (!this.takeUpdateToken(conn, 'too many awareness queries')) return;
         const states = this.awareness.getStates();
         this.send(conn, encodeAwareness(this.awareness, [...states.keys()]));
         return;
@@ -248,6 +313,23 @@ export class Room {
       case 'unknown':
         this.stats.malformed += 1;
     }
+  }
+
+  /**
+   * Take one token from the connection's sync bucket. Over the burst — more
+   * messages per second than any editor or provider produces (#37) — the
+   * connection is closed with a code the client treats as terminal.
+   */
+  private takeUpdateToken(conn: Conn, reason: string): boolean {
+    if (conn.updateBucket.take()) return true;
+    this.stats.rateLimited += 1;
+    conn.limited = true;
+    this.logger.warn(
+      { documentId: this.documentId, userId: conn.member.userId, reason },
+      'sync rate limit exceeded; closing',
+    );
+    conn.socket.close(CLOSE_TOO_MANY_REQUESTS, reason);
+    return false;
   }
 
   private readonly onDocUpdate = (update: Uint8Array, origin: unknown): void => {
@@ -277,6 +359,23 @@ export class Room {
   private send(conn: Conn, message: Uint8Array): void {
     const { socket } = conn;
     if (socket.readyState !== socket.OPEN) return;
+    if (socket.bufferedAmount > this.config.WS_MAX_BUFFERED_BYTES) {
+      // Back-pressure (#37): a socket that has stopped reading would otherwise
+      // hold every further update in this process's memory. It is closed with
+      // 1013 so the provider reconnects with backoff and resyncs from scratch.
+      this.stats.slowConsumers += 1;
+      conn.limited = true;
+      this.logger.warn(
+        {
+          documentId: this.documentId,
+          userId: conn.member.userId,
+          buffered: socket.bufferedAmount,
+        },
+        'slow consumer; closing',
+      );
+      socket.close(CLOSE_TRY_AGAIN_LATER, 'slow consumer');
+      return;
+    }
     socket.send(message, { binary: true }, (error) => {
       if (error) {
         this.logger.warn({ err: error, documentId: this.documentId }, 'send failed; closing');

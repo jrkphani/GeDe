@@ -2,7 +2,10 @@ import { describe, expect, test } from 'vitest';
 
 import {
   applyMigrations,
+  LOCK_TIMEOUT_MS,
+  migrationChecksum,
   MigrationError,
+  SESSION_RESET_SQL,
   type MigrationClient,
   type MigrationPool,
 } from './migrate.js';
@@ -11,8 +14,13 @@ import {
  * A labelled fake of the `pg` pool surface the runner uses. It records every
  * statement and simulates the `__migrations` ledger; it is not a database.
  */
-function fakePool(options: { ledger?: string[]; failOn?: string } = {}) {
-  const ledger = new Set(options.ledger ?? []);
+function fakePool(
+  options: { ledger?: string[]; checksums?: Record<string, string | null>; failOn?: string } = {},
+) {
+  /** name → checksum (null for a row applied before migration 0005). */
+  const ledger = new Map<string, string | null>(
+    (options.ledger ?? []).map((name) => [name, options.checksums?.[name] ?? null]),
+  );
   const statements: string[] = [];
   let released = 0;
   let inTransaction = false;
@@ -22,11 +30,16 @@ function fakePool(options: { ledger?: string[]; failOn?: string } = {}) {
       statements.push(text);
       if (text === 'BEGIN') inTransaction = true;
       if (text === 'COMMIT' || text === 'ROLLBACK') inTransaction = false;
-      if (text === 'SELECT name FROM __migrations') {
-        return Promise.resolve({ rows: [...ledger].map((name) => ({ name })) });
+      if (text === 'SELECT name, checksum FROM __migrations') {
+        return Promise.resolve({
+          rows: [...ledger].map(([name, checksum]) => ({ name, checksum })),
+        });
       }
       if (text.startsWith('INSERT INTO __migrations')) {
-        ledger.add(String(values?.[0]));
+        ledger.set(String(values?.[0]), String(values?.[1]));
+      }
+      if (text.startsWith('UPDATE __migrations SET checksum')) {
+        ledger.set(String(values?.[0]), String(values?.[1]));
       }
       if (options.failOn !== undefined && text.includes(options.failOn)) {
         return Promise.reject(new Error(`boom: ${options.failOn}`));
@@ -71,30 +84,56 @@ describe('applyMigrations', () => {
       applied: ['0000_init.sql', '0001_second.sql', '0002_third.sql'],
       skipped: 0,
     });
-    expect(db.statements[0]).toContain('pg_advisory_lock');
-    expect(db.statements[1]).toContain('CREATE TABLE IF NOT EXISTS __migrations');
-    expect(db.statements.at(-1)).toContain('pg_advisory_unlock');
+    // Session limits first (bounded lock wait, no statement timeout for DDL), then the lock.
+    expect(db.statements.slice(0, 3)).toEqual([
+      `SET lock_timeout = '${String(LOCK_TIMEOUT_MS)}ms'`,
+      "SET idle_in_transaction_session_timeout = '60s'",
+      "SET statement_timeout = '0'",
+    ]);
+    expect(db.statements[3]).toContain('pg_advisory_lock');
+    expect(db.statements[4]).toContain('CREATE TABLE IF NOT EXISTS __migrations');
+    expect(db.statements[5]).toContain('ADD COLUMN IF NOT EXISTS checksum');
+    // The lock goes first, then the session hands the pool's own limits back (#42).
+    expect(db.statements.at(-4)).toContain('pg_advisory_unlock');
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
     expect(db.released).toBe(1);
     expect(db.inTransaction).toBe(false);
 
-    const perFile = db.statements.slice(3, 8);
+    const perFile = db.statements.slice(7, 12);
     expect(perFile).toEqual([
       'BEGIN',
       'CREATE TABLE a ()',
-      'INSERT INTO __migrations (name) VALUES ($1)',
+      'INSERT INTO __migrations (name, checksum) VALUES ($1, $2)',
       'COMMIT',
       'BEGIN',
     ]);
-    expect([...db.ledger]).toEqual(['0000_init.sql', '0001_second.sql', '0002_third.sql']);
+    expect([...db.ledger.keys()]).toEqual(['0000_init.sql', '0001_second.sql', '0002_third.sql']);
+    expect(db.ledger.get('0000_init.sql')).toBe(migrationChecksum('CREATE TABLE a ()'));
   });
 
-  test('LOAD-06 skips files already in the ledger and reports the count', async () => {
+  test('LOAD-06 skips files already in the ledger and reports the count; rows without a checksum are pinned', async () => {
     const db = fakePool({ ledger: ['0000_init.sql', '0001_second.sql'] });
     const result = await applyMigrations(db.pool, '/ignored', { readFiles });
     expect(result).toEqual({ applied: ['0002_third.sql'], skipped: 2 });
     expect(db.statements.filter((s) => /^CREATE TABLE [abc] /.test(s))).toEqual([
       'CREATE TABLE c ()',
     ]);
+    expect(db.ledger.get('0000_init.sql')).toBe(migrationChecksum('CREATE TABLE a ()'));
+    expect(db.ledger.get('0001_second.sql')).toBe(migrationChecksum('CREATE TABLE b ()'));
+  });
+
+  test('LOAD-06 an edited shipped migration fails the boot with the file named (#42)', async () => {
+    const db = fakePool({
+      ledger: ['0000_init.sql'],
+      checksums: { '0000_init.sql': migrationChecksum('CREATE TABLE a (was different)') },
+    });
+    await expect(applyMigrations(db.pool, '/ignored', { readFiles })).rejects.toThrow(
+      /0000_init\.sql failed: file text differs/,
+    );
+    expect(db.statements.filter((s) => /^CREATE TABLE [abc] /.test(s))).toEqual([]);
+    expect(db.statements.at(-4)).toContain('pg_advisory_unlock');
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
+    expect(db.released).toBe(1);
   });
 
   test('LOAD-06 a second run is a no-op', async () => {
@@ -120,12 +159,25 @@ describe('applyMigrations', () => {
       /0001_second\.sql/,
     );
 
-    expect([...db.ledger]).toEqual(['0000_init.sql']);
+    expect([...db.ledger.keys()]).toEqual(['0000_init.sql']);
     expect(db.statements).toContain('ROLLBACK');
     expect(db.statements.filter((s) => s.includes('pg_advisory_unlock')).length).toBe(2);
+    // The session limits are reset on the failure path too, before the connection is released.
+    expect(db.statements.filter((s) => s === 'RESET statement_timeout').length).toBe(2);
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
     expect(db.statements.filter((s) => s === 'CREATE TABLE c ()')).toEqual([]);
     expect(db.released).toBe(2);
     expect(logs).toContain('info applying migration');
+  });
+
+  test('LOAD-06 a lock wait that times out releases the connection with its limits reset (#42)', async () => {
+    const db = fakePool({ failOn: 'pg_advisory_lock(' });
+    await expect(applyMigrations(db.pool, '/ignored', { readFiles })).rejects.toThrow(
+      /pg_advisory_lock/,
+    );
+    expect(db.statements.some((s) => s.includes('pg_advisory_unlock'))).toBe(false);
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
+    expect(db.released).toBe(1);
   });
 
   test('LOAD-06 reads real files from a directory and sorts them by name', async () => {

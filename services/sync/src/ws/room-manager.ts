@@ -51,6 +51,13 @@ export class RoomManager {
       room.onEmpty = (r) => {
         this.scheduleEviction(r);
       };
+      room.onSuperseded = (r) => {
+        // Drop it without compacting (the commit was just refused); the next
+        // join loads from storage. Sockets get 1001 and reconnect.
+        if (this.rooms.get(r.documentId) === r) this.rooms.delete(r.documentId);
+        this.logger.warn({ documentId: r.documentId }, 'room superseded; reloading on next join');
+        void r.dispose({ compact: false });
+      };
       this.rooms.set(documentId, room);
       this.logger.info({ documentId }, 'room opened');
       // A room that failed to load (S3 or database error) must not be reused:

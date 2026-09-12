@@ -231,6 +231,28 @@ describe('ProjectionWorker', () => {
     await sleep(40);
     expect(repo.projections.get(DOC_ID)?.sheets).toHaveLength(2);
   });
+
+  test('FIND-03 projectNow cancels an older projection still waiting in the debounce window', async () => {
+    const repo = new FakeRepo();
+    const worker = new ProjectionWorker(
+      repo.projection,
+      { PROJECTION_DEBOUNCE_MS: 20 },
+      pino({ level: 'silent' }),
+    );
+    const { gd } = sample();
+    const older = Y.encodeStateAsUpdate(gd.doc);
+    createSheet(gd, { label: 'Later' });
+    const newer = Y.encodeStateAsUpdate(gd.doc);
+    // The seed projection is pending when a job projects the newer state immediately.
+    worker.schedule(DOC_ID, older);
+    await worker.projectNow(DOC_ID, newer);
+    expect(worker.pendingCount).toBe(0);
+    expect(worker.stats.coalesced).toBe(1);
+    // Past the debounce window the older bytes must not have overwritten the newer rows.
+    await sleep(40);
+    expect(worker.stats.runs).toBe(1);
+    expect(repo.projections.get(DOC_ID)?.sheets.map((s) => s.label)).toEqual(['Sheet 1', 'Later']);
+  });
 });
 
 describe('projection through the room and GET /api/documents/:id/search', () => {

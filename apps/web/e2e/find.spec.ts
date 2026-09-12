@@ -91,7 +91,7 @@ async function signInTo(page: Page, path: string): Promise<void> {
   await expect(page).toHaveURL(/\/sign-in$/);
   await page.getByLabel('Email').fill(SESSION.email);
   await page.getByLabel('Email').press('Enter');
-  await page.getByRole('button', { name: 'Email me a code' }).click();
+  await page.getByRole('button', { name: 'Email me a one-time code' }).click();
   await page.getByLabel('Six-digit code').fill(FAKE_CODE);
   await page.getByRole('button', { name: 'Verify and sign in' }).click();
   const notNow = page.getByRole('button', { name: 'Not now' });
