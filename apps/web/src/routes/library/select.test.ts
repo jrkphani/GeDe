@@ -97,4 +97,41 @@ describe('library selection', () => {
     expect(filterByQuery([today, yesterday], '  ').map((d) => d.id)).toEqual(['a', 'b']);
     expect(filterByQuery([today, yesterday], 'zzz')).toEqual([]);
   });
+
+  it('ONB-01 the guided sample is pinned above every other row in Recents, Browse and Shared, whatever the sort, in its own group', () => {
+    const sample = doc({
+      id: 's',
+      title: 'Q3 Delivery — Guided sample',
+      updatedAt: '2026-06-01T09:00:00',
+      sample: true,
+    });
+    const rows = [old, today, sample, week];
+    for (const sort of ['name', 'date'] as const) {
+      expect(orderDocuments(rows, 'browse', sort, en)[0]?.id).toBe('s');
+      expect(orderDocuments(rows, 'recents', sort, en)[0]?.id).toBe('s');
+    }
+    const recents = groupDocuments(orderDocuments(rows, 'recents', 'date', en), 'recents', en, NOW);
+    expect(recents.map((g) => [g.label, g.rows.map((d) => d.id)])).toEqual([
+      ['Sample', ['s']],
+      ['Today', ['a']],
+      ['This week', ['c']],
+      ['Earlier', ['e']],
+    ]);
+    const shared = groupDocuments(
+      orderDocuments(
+        [sample, doc({ id: 'x', title: 'X', sharedBy: { id: 'o', name: 'Om' } })],
+        'shared',
+        'name',
+        en,
+      ),
+      'shared',
+      en,
+      NOW,
+    );
+    expect(shared.map((g) => g.label)).toEqual(['Sample', 'Om']);
+    // Flat views keep it first without a heading.
+    const browse = groupDocuments(orderDocuments(rows, 'browse', 'name', en), 'browse', en, NOW);
+    expect(browse.map((g) => [g.id, g.label])).toEqual([['all', '']]);
+    expect(flattenGroups(browse)[0]?.id).toBe('s');
+  });
 });

@@ -67,7 +67,15 @@ describe('REST rate limits', () => {
     expect(perUserKey({ ip: '1.1.1.1' })).toBe('ip:1.1.1.1');
     expect(
       perUserKey({
-        user: { id: 'u1', sub: 's', email: null, displayName: null, locale: null },
+        user: {
+          id: 'u1',
+          sub: 's',
+          email: null,
+          displayName: null,
+          locale: null,
+          tourDoneAt: null,
+          sampleDocumentId: null,
+        },
         ip: '1.1.1.1',
       }),
     ).toBe('user:u1');

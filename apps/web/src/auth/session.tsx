@@ -10,7 +10,7 @@ import {
 } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { Skeleton } from '@gede/ui';
-import { bindVerifiedEmail, getMe } from '../api/me.js';
+import { bindVerifiedEmail, getMe, updateMe, type Me, type MePatch } from '../api/me.js';
 import { bindUserLocale, unbindUserLocale } from '../locale.js';
 import { currentUser, idToken, onAuthEvent, signOutLocal, type SessionUser } from './cognito.js';
 
@@ -19,6 +19,14 @@ export type SessionState =
 
 export interface Session {
   state: SessionState;
+  /**
+   * The server profile (`GET /api/me`) once it has arrived for the signed-in
+   * user; null while loading, signed out, or when the request failed. Carries
+   * the per-account tour flag and the sample id (ONB-01, ONB-03).
+   */
+  profile: Me | null;
+  /** `PATCH /api/me`; the stored profile replaces `profile` when it answers. */
+  updateProfile: (patch: MePatch) => Promise<Me>;
   /** Re-read the Cognito session (after a sign-in completes). */
   refresh: () => Promise<void>;
   /** AUTH-09: local sign-out; clears memory and revokes the refresh token. */
@@ -78,6 +86,7 @@ export { rememberLastDocument, type LastDocument } from '../last-document.js';
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SessionState>({ status: 'loading' });
+  const [profile, setProfile] = useState<Me | null>(null);
   // Which sign-in the in-flight profile fetch belongs to; a later sign-out or
   // a different user makes an older answer irrelevant.
   const epoch = useRef(0);
@@ -87,6 +96,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const mine = ++epoch.current;
     if (!user) {
       unbindUserLocale();
+      setProfile(null);
       setState({ status: 'signed-out' });
       return;
     }
@@ -98,17 +108,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       .then(async (me) => {
         if (epoch.current !== mine) return;
         bindUserLocale(user.sub, me.locale);
+        setProfile(me);
         // SHARE-02: the service knows this account by `sub` only until the ID
         // token binds its verified address; that binding is what converts a
         // pending invitation into a share on first sign-in.
         if (me.email === null) {
           const token = await idToken();
-          if (token !== null && epoch.current === mine) await bindVerifiedEmail(token);
+          if (token !== null && epoch.current === mine) {
+            const bound = await bindVerifiedEmail(token);
+            if (epoch.current === mine) setProfile(bound);
+          }
         }
       })
       .catch(() => {
         /* the profile is a nicety; the local choice already applies */
       });
+  }, []);
+
+  const updateProfile = useCallback(async (patch: MePatch) => {
+    const mine = epoch.current;
+    const me = await updateMe(patch);
+    if (epoch.current === mine) setProfile(me);
+    return me;
   }, []);
 
   const signOut = useCallback(async () => {
@@ -117,6 +138,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       await signOutLocal();
     } finally {
       unbindUserLocale();
+      setProfile(null);
       setState({ status: 'signed-out' });
     }
   }, []);
@@ -127,6 +149,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       if (event === 'signedOut' || event === 'tokenRefresh_failure') {
         epoch.current += 1;
         unbindUserLocale();
+        setProfile(null);
         setState({ status: 'signed-out' });
       } else if (event === 'signedIn' || event === 'signInWithRedirect') {
         void refresh();
@@ -134,7 +157,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     });
   }, [refresh]);
 
-  const value = useMemo<Session>(() => ({ state, refresh, signOut }), [state, refresh, signOut]);
+  const value = useMemo<Session>(
+    () => ({ state, profile, updateProfile, refresh, signOut }),
+    [state, profile, updateProfile, refresh, signOut],
+  );
   return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
 

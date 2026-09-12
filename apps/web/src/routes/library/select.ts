@@ -38,7 +38,17 @@ const byDateDesc =
   (key: (d: DocumentSummary) => string) => (a: DocumentSummary, b: DocumentSummary) =>
     key(b).localeCompare(key(a));
 
-/** LIB-05: Browse and Shared sort by name or date; Recents is always reverse-chronological. */
+/** ONB-01: the guided sample is pinned above every other row, whatever the sort. */
+const isSample = (d: DocumentSummary): boolean => d.sample === true;
+
+function pinSample(rows: DocumentSummary[]): DocumentSummary[] {
+  return [...rows.filter(isSample), ...rows.filter((d) => !isSample(d))];
+}
+
+/**
+ * LIB-05: Browse and Shared sort by name or date; Recents is always
+ * reverse-chronological. The guided sample comes first in every view (ONB-01).
+ */
 export function orderDocuments(
   rows: readonly DocumentSummary[],
   view: DocumentsView,
@@ -48,7 +58,7 @@ export function orderDocuments(
   const out = [...rows];
   switch (view) {
     case 'recents':
-      return out.sort(byDateDesc((d) => d.updatedAt));
+      return pinSample(out.sort(byDateDesc((d) => d.updatedAt)));
     case 'deleted':
       return out.sort(byDateDesc((d) => d.deletedAt ?? d.updatedAt));
     case 'archived':
@@ -56,11 +66,16 @@ export function orderDocuments(
       return out.sort(byDateDesc((d) => d.archivedAt ?? d.updatedAt));
     case 'browse':
     case 'shared':
-      return sort === 'name'
-        ? out.sort((a, b) => collate.compare(a.title, b.title))
-        : out.sort(byDateDesc((d) => d.updatedAt));
+      return pinSample(
+        sort === 'name'
+          ? out.sort((a, b) => collate.compare(a.title, b.title))
+          : out.sort(byDateDesc((d) => d.updatedAt)),
+      );
   }
 }
+
+/** Heading of the group the guided sample sits in, above every other group (ONB-01). */
+export const SAMPLE_GROUP = 'Sample';
 
 /**
  * LIB-01: Recents grouped by recency; Shared grouped by who shared it, then
@@ -72,24 +87,35 @@ export function groupDocuments(
   collate: Intl.Collator,
   now: number = Date.now(),
 ): DocumentGroup[] {
+  // ONB-01: the sample leads its own group, so a recency or sharer heading never claims it.
+  const samples = ordered.filter(isSample);
+  const lead: DocumentGroup[] =
+    samples.length > 0 && (view === 'recents' || view === 'shared')
+      ? [{ id: 'sample', label: SAMPLE_GROUP, rows: samples }]
+      : [];
   if (view === 'recents') {
     const buckets = new Map<RecencyBucket, DocumentSummary[]>();
     for (const d of ordered) {
+      if (isSample(d)) continue;
       const b = recencyBucket(d.updatedAt, now);
       const list = buckets.get(b) ?? [];
       list.push(d);
       buckets.set(b, list);
     }
-    return BUCKET_ORDER.filter((b) => buckets.has(b)).map((b) => ({
-      id: b,
-      label: RECENCY_LABELS[b],
-      rows: buckets.get(b) ?? [],
-    }));
+    return [
+      ...lead,
+      ...BUCKET_ORDER.filter((b) => buckets.has(b)).map((b) => ({
+        id: b,
+        label: RECENCY_LABELS[b],
+        rows: buckets.get(b) ?? [],
+      })),
+    ];
   }
   if (view === 'shared') {
     const byOwner = new Map<string, DocumentGroup>();
     const mine: DocumentSummary[] = [];
     for (const d of ordered) {
+      if (isSample(d)) continue;
       if (d.sharedBy === undefined) {
         mine.push(d);
         continue;
@@ -104,7 +130,7 @@ export function groupDocuments(
     }
     const groups = [...byOwner.values()].sort((a, b) => collate.compare(a.label, b.label));
     if (mine.length > 0) groups.push({ id: 'mine', label: SHARED_BY_ME, rows: mine });
-    return groups;
+    return [...lead, ...groups];
   }
   return ordered.length === 0 ? [] : [{ id: 'all', label: '', rows: [...ordered] }];
 }

@@ -3,6 +3,7 @@ import { Link } from 'react-router';
 import { documentMeta, setTitle, type GedeDoc, type PresenceState } from '@gede/core';
 import { BrandMark, Icon } from '@gede/ui';
 
+import { ApiError } from '../../api/client.js';
 import { renameDocument } from '../../api/documents.js';
 import { rememberLastDocument } from '../../last-document.js';
 import { useYVersion } from '../../doc/use-y.js';
@@ -31,6 +32,24 @@ export interface TitleBarProps {
   editable: boolean;
   focusTitle: boolean;
   onRenameError: (message: string | null) => void;
+  /**
+   * ONB-01 / LIB-D10: the guided sample keeps its name. When set, the title
+   * field is read-only and the reason is its tooltip; the service refuses a
+   * rename of a sample with 409 `sample` regardless.
+   */
+  renameLocked?: string | undefined;
+}
+
+/** What the field says when the service refuses a rename for the sample (409 `sample`). */
+export const SAMPLE_RENAME_REASON = 'The guided sample keeps its name';
+
+function errorCode(error: ApiError): string | null {
+  const body = error.body;
+  if (typeof body !== 'object' || body === null || !('error' in body)) return null;
+  const inner = (body as { error?: unknown }).error;
+  if (typeof inner !== 'object' || inner === null || !('code' in inner)) return null;
+  const code = (inner as { code?: unknown }).code;
+  return typeof code === 'string' ? code : null;
 }
 
 /** Milliseconds of quiet after the last keystroke before the title PATCHes. */
@@ -62,6 +81,7 @@ export function TitleBar({
   editable,
   focusTitle,
   onRenameError,
+  renameLocked,
 }: TitleBarProps) {
   useYVersion(gd.meta);
   const title = documentMeta(gd).title;
@@ -92,7 +112,13 @@ export function TitleBar({
         rememberLastDocument({ id: docId, title: trimmed });
         onRenameError(null);
       })
-      .catch(() => {
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 409 && errorCode(error) === 'sample') {
+          // An editor of someone's sample: the name goes back and the reason is said once.
+          setTitle(gd, lastSaved.current);
+          onRenameError(SAMPLE_RENAME_REASON);
+          return;
+        }
         onRenameError('The new name did not save. Retry when you are back online.');
       })
       .finally(() => {
@@ -115,6 +141,7 @@ export function TitleBar({
   );
 
   const onChange = (next: string) => {
+    if (renameLocked !== undefined) return;
     setTitle(gd, next); // the document is the state; every keystroke is a (merged) undo step
     scheduleSave(next);
   };
@@ -159,6 +186,10 @@ export function TitleBar({
             // The record is the source of truth until the document reconciles with it (M6).
             value={ready ? title : serverTitle}
             disabled={!ready}
+            readOnly={renameLocked !== undefined}
+            aria-readonly={renameLocked !== undefined || undefined}
+            title={renameLocked}
+            data-testid={renameLocked === undefined ? undefined : 'title-locked'}
             onChange={(e) => {
               onChange(e.target.value);
             }}

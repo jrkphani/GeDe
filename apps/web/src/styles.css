@@ -9,6 +9,7 @@
 @import './routes/document/ref/ref.css';
 @import './routes/document/graph/graph.css';
 @import './routes/errors/errors.css';
+@import './routes/tour/tour.css';
 
 #root {
   min-height: 100vh;

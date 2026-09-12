@@ -310,12 +310,14 @@ describe('persistence', () => {
   test('LOAD-06 compaction after N=3 updates writes a snapshot to S3, records it, and prunes the log', async () => {
     const a = await connect(ownerToken);
     await a.synced;
+    // The account's first request seeded its guided sample (one put, ONB-01); count from here.
+    const puts = server.s3.puts;
     a.setCell('r1:c1', '1');
     await waitFor(() => (server.repo.updatesByDoc.get(docId)?.length ?? 0) === 1);
     a.setCell('r1:c2', '2');
     await waitFor(() => (server.repo.updatesByDoc.get(docId)?.length ?? 0) === 2);
     a.setCell('r1:c3', '3');
-    await waitFor(() => server.s3.puts === 1);
+    await waitFor(() => server.s3.puts === puts + 1);
     await waitFor(() => server.repo.snapshotsByDoc.get(docId)?.length === 1);
 
     const snapshot = server.repo.snapshotsByDoc.get(docId)?.[0];
@@ -500,6 +502,7 @@ describe('deletion', () => {
   test('LIB-08 delete-all frees an idling room without a compaction', async () => {
     const a = await connect(ownerToken);
     await a.synced;
+    const puts = server.s3.puts; // the guided sample's seed object (ONB-01), nothing else
     a.setCell('r1:c1', 'x');
     await waitFor(() => (server.repo.updatesByDoc.get(docId)?.length ?? 0) === 1);
     await server.repo.documents.softDelete(docId);
@@ -512,7 +515,7 @@ describe('deletion', () => {
     expect(res.body).toEqual({ deleted: 1 });
     expect(server.app.rooms.get(docId)).toBeUndefined();
     expect(server.repo.docs.has(docId)).toBe(false);
-    expect(server.s3.puts).toBe(0);
+    expect(server.s3.puts).toBe(puts);
     expect(server.repo.snapshotsByDoc.has(docId)).toBe(false);
   });
 });

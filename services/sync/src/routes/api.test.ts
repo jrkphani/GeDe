@@ -111,7 +111,9 @@ describe('documents', () => {
       permission: 'owner',
       deletedAt: null,
     });
+    // The account's first request seeded its guided sample (ONB-01), audited as a create too.
     expect(server.repo.auditLog).toEqual([
+      expect.objectContaining({ action: 'document.create', target: 'sample' }),
       expect.objectContaining({ documentId: res.body.document.id, action: 'document.create' }),
     ]);
   });
@@ -159,10 +161,13 @@ describe('documents', () => {
     const res = await json<ErrorBody>(server, 'POST', '/api/documents', { token: alice });
     expect(res.status).toBe(500);
     expect(res.body.error.code).toBe('server_error');
-    expect(server.repo.docs.size).toBe(0);
-    expect(server.repo.auditLog).toEqual([]);
+    // Only the guided sample (seeded on first sight, ONB-01) exists; the failed create left nothing.
+    expect([...server.repo.docs.values()].map((d) => d.sample)).toEqual([true]);
+    expect(server.repo.auditLog).toEqual([
+      expect.objectContaining({ action: 'document.create', target: 'sample' }),
+    ]);
     // The orphaned seed object is the operator's to remove (it is logged with its key).
-    expect(server.s3.objects.size).toBe(1);
+    expect(server.s3.objects.size).toBe(2);
   });
 
   test('LOAD-05 POST accepts a title and rejects an invalid body', async () => {
@@ -206,7 +211,9 @@ describe('documents', () => {
     });
     expect(res.status).toBe(200);
     const ids = res.body.documents.map((d) => d.id);
-    expect(ids[0]).toBe(newer.body.document.id);
+    // ONB-01: the guided sample is pinned above everything; the newest row follows it.
+    expect(res.body.documents[0]?.sample).toBe(true);
+    expect(ids[1]).toBe(newer.body.document.id);
     expect(ids).toContain(older.id);
     expect(ids).toContain(shared.id);
     expect(ids).not.toContain(notShared.id);

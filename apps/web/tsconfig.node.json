@@ -9,6 +9,7 @@
     "vite.config.ts",
     "playwright.config.ts",
     "playwright.live.config.ts",
+    "src/test/e2e-port.ts",
     "e2e",
     "e2e-live"
   ]

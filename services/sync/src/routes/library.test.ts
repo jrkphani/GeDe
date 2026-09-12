@@ -5,6 +5,9 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
+import { documentMeta, listSheets, openDocument, tablesOnSheet } from '@gede/core';
+import * as Y from 'yjs';
+
 import { json, startServer, type TestServer } from '../test/fakes.js';
 import type { DocumentSummaryView, DocumentView, ProfileView } from './api.js';
 import type { SharesView as ParticipantsView } from './share.js';
@@ -29,9 +32,20 @@ async function me(token: string): Promise<ProfileView> {
   return res.body;
 }
 
-function list(token: string, view?: string) {
+/** The raw listing, guided sample included (ONB-01 pins it first in every view it is in). */
+function listAll(token: string, view?: string) {
   const path = view === undefined ? '/api/documents' : `/api/documents?view=${view}`;
   return json<{ documents: DocumentSummaryView[] }>(server, 'GET', path, { token });
+}
+
+/**
+ * The listing without the guided sample every account owns from its first
+ * request (ONB-01), so the library tests below can reason about the rows
+ * they seeded. The sample itself is covered under "guided sample (ONB-01)".
+ */
+async function list(token: string, view?: string) {
+  const res = await listAll(token, view);
+  return { ...res, body: { documents: res.body.documents.filter((d) => !d.sample) } };
 }
 
 beforeEach(async () => {
@@ -384,7 +398,12 @@ describe('recover-all and delete-all (LIB-08)', () => {
       expect(server.repo.snapshotsByDoc.has(id)).toBe(false);
       expect(server.repo.sharesByDoc.has(id)).toBe(false);
     }
-    expect([...server.s3.objects.keys()]).toEqual([`docs/${live.id}/1.yjs`]);
+    const sampleKeys = [...server.repo.docs.values()]
+      .filter((d) => d.sample)
+      .map((d) => `docs/${d.id}/1.yjs`);
+    expect([...server.s3.objects.keys()].filter((k) => !sampleKeys.includes(k))).toEqual([
+      `docs/${live.id}/1.yjs`,
+    ]);
     expect(server.repo.docs.has(live.id)).toBe(true);
     expect(server.repo.docs.has(bobs.id)).toBe(true);
 
@@ -752,15 +771,10 @@ describe('delete vs archive (LIB-D1..D11)', () => {
   });
 
   test('LIB-D10 the guided sample is exempt from delete and archive: 409 sample, with the reason', async () => {
-    const sample = server.repo.seedDocument(
-      aliceId,
-      'Q3 Delivery — Guided sample',
-      new Date(),
-      undefined,
-      { sample: true },
-    );
-    const listed = (await list(alice, 'browse')).body.documents[0]!;
-    expect(listed.sample).toBe(true);
+    // The sample every account owns from its first request (ONB-01), not a fixture.
+    const listed = (await listAll(alice, 'browse')).body.documents[0]!;
+    expect(listed).toMatchObject({ sample: true, title: 'Q3 Delivery — Guided sample' });
+    const sample = { id: listed.id };
     const deleted = await del(alice, sample.id);
     expect(deleted.status).toBe(409);
     expect(deleted.body.error).toMatchObject({
@@ -773,8 +787,23 @@ describe('delete vs archive (LIB-D1..D11)', () => {
       code: 'sample',
       message: 'The guided sample cannot be archived',
     });
-    expect(server.repo.docs.get(sample.id)).toMatchObject({ deletedAt: null, archivedAt: null });
-    expect(actions(sample.id)).toEqual([]);
+    // ONB-01: it is *named* `Q3 Delivery — Guided sample`; a rename is refused the same way.
+    const renamed = await json<ErrorBody>(server, 'PATCH', `/api/documents/${sample.id}`, {
+      token: alice,
+      body: { title: 'Mine now' },
+    });
+    expect(renamed.status).toBe(409);
+    expect(renamed.body.error).toMatchObject({
+      code: 'sample',
+      message: 'The guided sample cannot be renamed',
+    });
+    expect(server.repo.docs.get(sample.id)).toMatchObject({
+      deletedAt: null,
+      archivedAt: null,
+      title: 'Q3 Delivery — Guided sample',
+    });
+    // Only its seeding is audited; the refused delete, archive and rename wrote nothing.
+    expect(actions(sample.id)).toEqual(['document.create']);
   });
 
   test('LIB-D11 archive is a document state: a second client of the same account reads it from the list at once, and the view is served by name', async () => {
@@ -784,7 +813,7 @@ describe('delete vs archive (LIB-D1..D11)', () => {
     await archive(alice, doc.id);
     expect((await list(second, 'browse')).body.documents).toEqual([]);
     expect((await list(second, 'archived')).body.documents.map((d) => d.id)).toEqual([doc.id]);
-    expect((await list(alice, 'archive')).status).toBe(400);
+    expect((await listAll(alice, 'archive')).status).toBe(400);
   });
 
   test('LIB-D6 archive and unarchive need a token, a well-formed id and an existing document', async () => {
@@ -815,7 +844,43 @@ describe('profile (AUTH-09, I18N-05)', () => {
       email: 'alice@example.com',
       displayName: null,
       locale: null,
+      tourDoneAt: null,
+      sampleDocumentId: server.repo.sampleOf(aliceId),
     });
+    expect(res.body.sampleDocumentId).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  test('ONB-03 PATCH /api/me { tourDone: true } stamps the account flag; false clears it (ONB-08); GET reflects both', async () => {
+    const done = await json<ProfileView>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { tourDone: true },
+    });
+    expect(done.status).toBe(200);
+    expect(done.body.tourDoneAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(server.repo.usersBySub.get('sub-alice')?.tourDoneAt).toBeInstanceOf(Date);
+    expect((await me(alice)).tourDoneAt).toBe(done.body.tourDoneAt);
+    // Per account, not per device: a second client of the same account reads it at once.
+    const second = server.verifier.issue('tok-alice-2', 'sub-alice', 'alice@example.com');
+    expect((await me(second)).tourDoneAt).toBe(done.body.tourDoneAt);
+
+    const replay = await json<ProfileView>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { tourDone: false },
+    });
+    expect(replay.status).toBe(200);
+    expect(replay.body.tourDoneAt).toBeNull();
+    expect((await me(second)).tourDoneAt).toBeNull();
+    // Nothing else on the profile moved.
+    expect(replay.body).toMatchObject({ locale: null, displayName: null });
+  });
+
+  test('ONB-03 tourDone must be a boolean and cannot be the only unknown field', async () => {
+    const res = await json<ErrorBody>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { tourDone: 'yes' },
+    });
+    expect(res.status).toBe(400);
+    expect(res.body.error.details).toEqual([expect.objectContaining({ path: 'tourDone' })]);
   });
 
   test('I18N-05 PATCH /api/me persists the locale and the next GET reflects it', async () => {
@@ -904,5 +969,146 @@ describe('profile (AUTH-09, I18N-05)', () => {
   test('AUTH-09 PATCH /api/me needs a token', async () => {
     const res = await json<ErrorBody>(server, 'PATCH', '/api/me', { body: { locale: 'en-GB' } });
     expect(res.status).toBe(401);
+  });
+});
+
+describe('guided sample (ONB-01)', () => {
+  test('ONB-01 every account owns one sample from its first request, pinned first in Recents and Browse and flagged', async () => {
+    for (const [token, id] of [
+      [alice, aliceId],
+      [bob, bobId],
+      [carol, carolId],
+    ] as const) {
+      const sampleId = server.repo.sampleOf(id);
+      expect(sampleId).not.toBeNull();
+      for (const view of ['recents', 'browse'] as const) {
+        const rows = (await listAll(token, view)).body.documents;
+        expect(rows[0]).toMatchObject({
+          id: sampleId,
+          title: 'Q3 Delivery — Guided sample',
+          sample: true,
+          permission: 'owner',
+          ownerId: id,
+        });
+      }
+    }
+    // It stays pinned above rows that are newer than it.
+    server.repo.seedDocument(aliceId, 'newer', new Date(Date.now() + 60_000));
+    const rows = (await listAll(alice, 'browse')).body.documents;
+    expect(rows.map((d) => d.sample)).toEqual([true, false]);
+  });
+
+  test('ONB-01 the sample is seeded once: later requests, a second client and a profile change never add another', async () => {
+    const first = server.repo.sampleOf(aliceId);
+    const second = server.verifier.issue('tok-alice-2', 'sub-alice', 'alice@example.com');
+    await me(second);
+    await json(server, 'PATCH', '/api/me', { token: alice, body: { locale: 'en-GB' } });
+    await listAll(alice);
+    const samples = [...server.repo.docs.values()].filter((d) => d.ownerId === aliceId && d.sample);
+    expect(samples.map((d) => d.id)).toEqual([first]);
+    expect((await me(second)).sampleDocumentId).toBe(first);
+  });
+
+  test('ONB-01 DOC-03 the sample is seeded server-side as snapshot seq 1 with the tables the tour refers to, audited and projected', async () => {
+    const sampleId = server.repo.sampleOf(aliceId)!;
+    const stored = server.repo.docs.get(sampleId);
+    expect(stored).toMatchObject({ snapshotKey: `docs/${sampleId}/1.yjs`, snapshotSeq: 1 });
+    expect(server.repo.snapshotsByDoc.get(sampleId)).toEqual([
+      expect.objectContaining({ seq: 1, s3Key: `docs/${sampleId}/1.yjs` }),
+    ]);
+    const bytes = server.s3.objects.get(`docs/${sampleId}/1.yjs`);
+    expect(bytes).toBeDefined();
+    const doc = new Y.Doc();
+    Y.applyUpdate(doc, bytes!);
+    const gd = openDocument(doc);
+    expect(documentMeta(gd).title).toBe('Q3 Delivery — Guided sample');
+    const [sheet] = listSheets(gd);
+    expect(tablesOnSheet(gd, sheet!.id).map((t) => t.title)).toEqual(['Deliverables', 'Team']);
+    expect(server.repo.auditLog).toContainEqual(
+      expect.objectContaining({
+        documentId: sampleId,
+        action: 'document.create',
+        target: 'sample',
+      }),
+    );
+    await server.app.projection.close();
+    expect(server.repo.projections.get(sampleId)?.tables.map((t) => t.title)).toEqual([
+      'Deliverables',
+      'Team',
+    ]);
+  });
+
+  test('ONB-01 a failed seed never fails the request: the profile answers sampleDocumentId null, the failure is logged and counted, nothing is written, and the next request seeds', async () => {
+    await server.close();
+    server = await startServer({}, { captureLogs: true });
+    const dave = server.verifier.issue('tok-dave', 'sub-dave', 'dave@example.com');
+    server.s3.failPuts = true;
+    const first = await json<ProfileView>(server, 'GET', '/api/me', { token: dave });
+    expect(first.status).toBe(200);
+    expect(first.body.sampleDocumentId).toBeNull();
+    const daveId = first.body.id;
+    expect(server.repo.sampleOf(daveId)).toBeNull();
+    expect(server.app.samples.stats).toEqual({ seeded: 0, adopted: 0, failures: 1 });
+    expect(server.logs.some((l) => l.msg === 'guided sample seed failed')).toBe(true);
+    // Other requests of the account work meanwhile: the library lists, without a sample.
+    expect((await listAll(dave, 'recents')).status).toBe(200);
+    // Still failing: still degraded, still counted, never cached as "done".
+    expect(
+      (await json<ProfileView>(server, 'GET', '/api/me', { token: dave })).body.sampleDocumentId,
+    ).toBeNull();
+    expect(server.app.samples.stats.failures).toBe(3);
+    // S3 back: the next request seeds and the answer carries the id.
+    server.s3.failPuts = false;
+    const later = await json<ProfileView>(server, 'GET', '/api/me', { token: dave });
+    expect(later.body.sampleDocumentId).toBe(server.repo.sampleOf(daveId));
+    expect(later.body.sampleDocumentId).not.toBeNull();
+    expect(server.app.samples.stats).toEqual({ seeded: 1, adopted: 0, failures: 3 });
+    expect(server.s3.objects.has(`docs/${String(later.body.sampleDocumentId)}/1.yjs`)).toBe(true);
+  });
+
+  test('ONB-02 an account whose first request is a shared link still gets its sample: seeding is not tied to the library', async () => {
+    const doc = server.repo.seedDocument(bobId, 'from bob');
+    server.repo.share(doc.id, aliceId, 'view');
+    const dave = server.verifier.issue('tok-dave', 'sub-dave', 'dave@example.com');
+    // Dave's first request ever is a document read, not the library.
+    const res = await json(server, 'GET', `/api/documents/${doc.id}`, { token: dave });
+    expect(res.status).toBe(403);
+    const daveId = server.repo.usersBySub.get('sub-dave')!.id;
+    expect(server.repo.sampleOf(daveId)).not.toBeNull();
+    expect((await listAll(dave, 'recents')).body.documents.map((d) => d.sample)).toEqual([true]);
+  });
+
+  test('ONB-01 someone else’s sample shared with me is an ordinary shared row: not flagged, not pinned, my own sample stays first', async () => {
+    // The tour's last step invites a person to the sample, so this is the common case.
+    const alicesSample = server.repo.sampleOf(aliceId)!;
+    const bobsSample = server.repo.sampleOf(bobId)!;
+    server.repo.docs.get(alicesSample)!.updatedAt = new Date(Date.now() + 60_000);
+    server.repo.share(alicesSample, bobId, 'edit');
+    for (const view of ['recents', 'shared'] as const) {
+      const rows = (await listAll(bob, view)).body.documents;
+      const theirs = rows.find((d) => d.id === alicesSample);
+      expect(theirs).toMatchObject({
+        sample: false,
+        permission: 'edit',
+        ownerId: aliceId,
+        sharedBy: { id: aliceId },
+      });
+      if (view === 'recents') {
+        expect(rows[0]).toMatchObject({ id: bobsSample, sample: true, permission: 'owner' });
+      }
+    }
+    // Alice still sees it as her sample, pinned and flagged.
+    expect((await listAll(alice, 'recents')).body.documents[0]).toMatchObject({
+      id: alicesSample,
+      sample: true,
+    });
+    const direct = await json<{ document: DocumentView }>(
+      server,
+      'GET',
+      `/api/documents/${alicesSample}`,
+      { token: bob },
+    );
+    expect(direct.status).toBe(200);
+    expect(direct.body.document.sample).toBe(false);
   });
 });

@@ -63,6 +63,8 @@ export const ICON_NAMES = [
   'keyboard',
   // appearance (INSP-05): a conditional rule matched this cell
   'rule',
+  // help control in the library header (ONB-08): a `?` in a ring
+  'help',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -174,6 +176,10 @@ const GLYPHS: Record<IconName, Glyph> = {
   },
   // A flag: the cue a matched rule adds beside the fill (A11Y-04, never hue alone).
   rule: { d: 'M4.5 16V2.5M4.5 3h9l-2.2 3.5 2.2 3.5h-9' },
+  help: {
+    d: 'M9 2.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13zM6.9 7.2a2.1 2.1 0 1 1 3 1.9c-.6.3-.9.8-.9 1.4v.3',
+    extra: [{ kind: 'node', cx: 9, cy: 13, r: 0.7 }],
+  },
   apple: {
     d: '',
     extra: [

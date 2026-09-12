@@ -64,11 +64,18 @@ const profileBody = z
       .max(8192)
       .regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u, 'Not a token')
       .optional(),
+    /** ONB-03 / ONB-07 / ONB-08: `true` when the tour ends (done or skipped), `false` on Replay. */
+    tourDone: z.boolean().optional(),
   })
   .strict()
-  .refine((b) => b.displayName !== undefined || b.locale !== undefined || b.idToken !== undefined, {
-    message: 'Nothing to change',
-  });
+  .refine(
+    (b) =>
+      b.displayName !== undefined ||
+      b.locale !== undefined ||
+      b.idToken !== undefined ||
+      b.tourDone !== undefined,
+    { message: 'Nothing to change' },
+  );
 
 /** The seed snapshot's sequence number; the first client update is seq 2. */
 export const INITIAL_SNAPSHOT_SEQ = 1;
@@ -88,7 +95,12 @@ export interface DocumentView {
   archivedAt: string | null;
   /** LIB-D2/D4: true while the document has been shared and access remains; Delete is refused. */
   everShared: boolean;
-  /** LIB-D10: the guided sample; Delete and Archive are refused. */
+  /**
+   * ONB-01 / LIB-D10: the caller's own guided sample — pinned, flagged
+   * `Sample`, the tour's step-1 target; Delete and Archive are refused.
+   * Someone else's sample shared with the caller is an ordinary shared row,
+   * so this is false for it.
+   */
   sample: boolean;
 }
 
@@ -106,6 +118,10 @@ export interface ProfileView {
   email: string | null;
   displayName: string | null;
   locale: string | null;
+  /** ONB-03: ISO time the tour was completed or skipped; null means the tour is due. */
+  tourDoneAt: string | null;
+  /** ONB-01: the account's guided sample workscape. */
+  sampleDocumentId: string | null;
 }
 
 function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView {
@@ -121,12 +137,17 @@ function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView
     deletedAt: doc.deletedAt?.toISOString() ?? null,
     archivedAt: doc.archivedAt?.toISOString() ?? null,
     everShared: doc.everShared,
-    sample: doc.sample,
+    // ONB-01: "the sample" in a library is the caller's own; a participant on
+    // someone else's sample sees a shared workscape like any other.
+    sample: doc.sample && permission === 'owner',
   };
 }
 
 /** LIB-D10: the guided sample is exempt from Delete and Archive; say which. */
-function refuseSample(doc: Pick<DocumentRecord, 'sample'>, verb: 'deleted' | 'archived'): void {
+function refuseSample(
+  doc: Pick<DocumentRecord, 'sample'>,
+  verb: 'deleted' | 'archived' | 'renamed',
+): void {
   if (doc.sample) {
     throw new AppError(409, 'sample', `The guided sample cannot be ${verb}`);
   }
@@ -154,6 +175,8 @@ function profileView(user: AuthUser): ProfileView {
     email: user.email,
     displayName: user.displayName,
     locale: user.locale,
+    tourDoneAt: user.tourDoneAt === null ? null : user.tourDoneAt.toISOString(),
+    sampleDocumentId: user.sampleDocumentId,
   };
 }
 
@@ -225,6 +248,7 @@ export function registerApi(
         const patch: ProfilePatch = {
           ...(body.displayName !== undefined && { displayName: body.displayName }),
           ...(body.locale !== undefined && { locale: body.locale }),
+          ...(body.tourDone !== undefined && { tourDone: body.tourDone }),
         };
         let updated = await repo.users.updateProfile(user.id, patch);
         if (!updated) throw new Error('user row missing after the auth hook resolved it');
@@ -375,6 +399,8 @@ export function registerApi(
         const body = parse(patchBody, request.body, 'request');
         const { permission, document } = await requirePermission(repo, user.id, id, 'edit');
         if (document.deletedAt !== null) throw NOT_FOUND();
+        // ONB-01: the sample is *named* `Q3 Delivery — Guided sample`; the tour's step 1 names it too.
+        refuseSample(document, 'renamed');
         const renamed = await repo.documents.rename(id, body.title);
         if (!renamed) throw NOT_FOUND();
         await repo.audit.record({

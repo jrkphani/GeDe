@@ -60,10 +60,11 @@ interface MutableInvite extends InviteRecord {
   acceptedAt: Date | null;
 }
 
-interface MutableUser extends UserRecord {
+interface MutableUser extends Omit<UserRecord, 'sampleDocumentId'> {
   email: string | null;
   displayName: string | null;
   locale: string | null;
+  tourDoneAt: Date | null;
 }
 
 export interface FakeShare {
@@ -138,14 +139,25 @@ export class FakeRepo implements Repo {
       email,
       displayName,
       locale: null,
+      tourDoneAt: null,
     };
     this.usersBySub.set(sub, user);
-    return user;
+    return this.userRecord(user);
   }
 
   userById(id: string): MutableUser | undefined {
     for (const user of this.usersBySub.values()) if (user.id === id) return user;
     return undefined;
+  }
+
+  /** The owner's guided sample, if seeded (ONB-01) — what pg.ts reads with its scalar subquery. */
+  sampleOf(ownerId: string): string | null {
+    for (const doc of this.docs.values()) if (doc.ownerId === ownerId && doc.sample) return doc.id;
+    return null;
+  }
+
+  private userRecord(user: MutableUser): UserRecord {
+    return { ...user, sampleDocumentId: this.sampleOf(user.id) };
   }
 
   seedDocument(
@@ -327,7 +339,7 @@ export class FakeRepo implements Repo {
       if (user.email !== null && identity.email !== null) {
         this.convertInvites(user.id, user.email);
       }
-      return Promise.resolve({ ...user });
+      return Promise.resolve(this.userRecord(user));
     },
     bindEmail: (id, email) => {
       const user = this.userById(id);
@@ -341,13 +353,16 @@ export class FakeRepo implements Repo {
         user.email = email;
       }
       if (!this.sameEmail(user.email, email)) {
-        return Promise.resolve({ user: { ...user }, converted: [] });
+        return Promise.resolve({ user: this.userRecord(user), converted: [] });
       }
-      return Promise.resolve({ user: { ...user }, converted: this.convertInvites(id, email) });
+      return Promise.resolve({
+        user: this.userRecord(user),
+        converted: this.convertInvites(id, email),
+      });
     },
     findByEmail: (email) => {
       for (const user of this.usersBySub.values()) {
-        if (this.sameEmail(user.email, email)) return Promise.resolve({ ...user });
+        if (this.sameEmail(user.email, email)) return Promise.resolve(this.userRecord(user));
       }
       return Promise.resolve(undefined);
     },
@@ -357,7 +372,8 @@ export class FakeRepo implements Repo {
       if (patch.displayName !== undefined) assertText(patch.displayName);
       if (patch.displayName !== undefined) user.displayName = patch.displayName;
       if (patch.locale !== undefined) user.locale = patch.locale;
-      return Promise.resolve({ ...user });
+      if (patch.tourDone !== undefined) user.tourDoneAt = patch.tourDone ? new Date() : null;
+      return Promise.resolve(this.userRecord(user));
     },
   };
 
@@ -385,7 +401,14 @@ export class FakeRepo implements Repo {
                   : owned && this.withinRetention(doc, now);
         if (include) out.push({ ...this.summarise(doc, userId), permission });
       }
-      out.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || (a.id < b.id ? 1 : -1));
+      // ONB-01: the caller's own guided sample is pinned first, as pg.ts orders it.
+      const own = (d: DocumentListing): number => Number(d.sample && d.ownerId === userId);
+      out.sort(
+        (a, b) =>
+          own(b) - own(a) ||
+          b.updatedAt.getTime() - a.updatedAt.getTime() ||
+          (a.id < b.id ? 1 : -1),
+      );
       return Promise.resolve(out);
     },
     get: (id) => {
@@ -421,6 +444,37 @@ export class FakeRepo implements Repo {
         target: null,
       });
       return Promise.resolve({ ...doc, snapshotKey: snapshot.s3Key, snapshotSeq: snapshot.seq });
+    },
+    createSample: async ({ id, ownerId, title, snapshot, writeSnapshot }) => {
+      // As pg.ts under its per-owner lock: an existing sample is adopted and the
+      // object is not written; otherwise the object goes first (a failure leaves no row).
+      const existing = this.sampleOf(ownerId);
+      if (existing !== null) {
+        const doc = this.docs.get(existing);
+        if (!doc) throw new Error('unreachable: sample id without a row');
+        return { document: { ...doc }, created: false };
+      }
+      if (this.docs.has(id)) throw new Error('duplicate key value (documents_pkey)');
+      await writeSnapshot();
+      const doc = this.seedDocument(ownerId, title, new Date(), id, { sample: true });
+      const stored = this.docs.get(doc.id);
+      if (stored) {
+        stored.snapshotKey = snapshot.s3Key;
+        stored.snapshotSeq = snapshot.seq;
+      }
+      this.snapshotsByDoc.set(doc.id, [
+        { seq: snapshot.seq, s3Key: snapshot.s3Key, sizeBytes: snapshot.sizeBytes },
+      ]);
+      this.auditLog.push({
+        documentId: doc.id,
+        userId: ownerId,
+        action: 'document.create',
+        target: 'sample',
+      });
+      return {
+        document: { ...doc, snapshotKey: snapshot.s3Key, snapshotSeq: snapshot.seq },
+        created: true,
+      };
     },
     rename: (id, title) => {
       assertText(title);

@@ -23,18 +23,34 @@ export interface ToastProps {
   onOpenChange: (open: boolean) => void;
   title: ReactNode;
   description?: ReactNode | undefined;
-  /** Reversible actions expose Undo; the label is the verb, in amber. */
-  undo?: { label?: string | undefined; onUndo: () => void } | undefined;
+  /**
+   * Reversible actions expose Undo; the label is the verb, in amber. `altText`
+   * is what assistive tech hears for the action when the label alone is not a
+   * sentence (Radix requires one; defaults to "<label> the last change").
+   */
+  undo?:
+    { label?: string | undefined; altText?: string | undefined; onUndo: () => void } | undefined;
+  /** Override the provider's auto-dismiss for this toast (ms). */
+  duration?: number | undefined;
   className?: string | undefined;
 }
 
 /** Reversible and transient. Dark ink surface, white text, Undo in amber-100. */
-export function Toast({ open, onOpenChange, title, description, undo, className }: ToastProps) {
+export function Toast({
+  open,
+  onOpenChange,
+  title,
+  description,
+  undo,
+  duration,
+  className,
+}: ToastProps) {
   return (
     <RadixToast.Root
       className={clsx('gd-toast', className)}
       open={open}
       onOpenChange={onOpenChange}
+      {...(duration !== undefined && { duration })}
     >
       <div className="gd-toast__text">
         <RadixToast.Title className="gd-toast__title">{title}</RadixToast.Title>
@@ -45,7 +61,10 @@ export function Toast({ open, onOpenChange, title, description, undo, className 
         )}
       </div>
       {undo !== undefined && (
-        <RadixToast.Action asChild altText={`${undo.label ?? 'Undo'} the last change`}>
+        <RadixToast.Action
+          asChild
+          altText={undo.altText ?? `${undo.label ?? 'Undo'} the last change`}
+        >
           <button type="button" className="gd-toast__undo" onClick={undo.onUndo}>
             {undo.label ?? 'Undo'}
           </button>

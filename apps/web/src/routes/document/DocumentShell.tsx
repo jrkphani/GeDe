@@ -81,13 +81,14 @@ import { Inspector } from './Inspector.js';
 import { documentBindings } from './keys/bindings.js';
 import type { CellSelection } from './selection.js';
 import { useCellClipboard } from './keys/clipboard.js';
+import { setTourDocument } from '../tour/store.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
 import type { MenuContext } from './menus/entries.js';
 import { SheetTabs } from './SheetTabs.js';
 import { TableView } from './TableView.js';
 import { DagEdges, useTableFlags } from './style/index.js'; // wave4/inspector-controls
-import { TitleBar } from './TitleBar.js';
+import { SAMPLE_RENAME_REASON, TitleBar } from './TitleBar.js';
 import { ShareControls } from './share/ShareControls.js';
 import { Toolbar, type InspectorMode } from './Toolbar.js';
 
@@ -230,6 +231,16 @@ function OpenDocument({
   useTableFlags(gd); // INSP-07: `pinned` and `z` decide the layers below; nothing else inside a table
   useYVersion(gd.graphs, { depth: 'shallow' });
   const awarenessVersion = useAwarenessVersion(session.sync.awareness);
+  // ONB-05: the guided tour reads this document for its step-2 and step-3 checks —
+  // once it has loaded, so the counts it takes as its baseline are the document's, not
+  // an empty replica's.
+  useEffect(() => {
+    if (!ready) return;
+    setTourDocument(gd);
+    return () => {
+      setTourDocument(null);
+    };
+  }, [gd, ready]);
 
   // Viewer state (never document state): active sheet, selection, viewport, chrome toggles.
   const sheets = listSheets(gd);
@@ -656,6 +667,7 @@ function OpenDocument({
         editable={editable}
         focusTitle={focusTitle}
         onRenameError={setRenameError}
+        renameLocked={doc.sample === true ? SAMPLE_RENAME_REASON : undefined}
       />
 
       {!phone && (

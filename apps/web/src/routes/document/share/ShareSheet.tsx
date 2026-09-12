@@ -26,6 +26,7 @@ import {
 } from '../../../api/shares.js';
 import { formatDate } from '../../../intl.js';
 import { useLocale } from '../../../locale.js';
+import { reportTourInvite } from '../../tour/store.js';
 
 export interface ShareSheetProps {
   docId: string;
@@ -207,6 +208,8 @@ export function ShareSheet({
             ? `Invitation sent to ${address}; it is valid for 14 days`
             : `${address} already has a pending invitation`,
       );
+      // ONB-05, step 5: an invitation went out (or the address was added on the spot).
+      reportTourInvite();
       return outcome.shares;
     });
     if (ok) {

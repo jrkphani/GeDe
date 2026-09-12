@@ -37,7 +37,9 @@ import { useSession } from '../../auth/session.js';
 import { collator } from '../../intl.js';
 import { useLocale } from '../../locale.js';
 import { useMediaQuery } from '../../use-media-query.js';
+import { useTourAutoStart } from '../tour/TourController.js';
 import { AccountMenu } from './AccountMenu.js';
+import { HelpMenu } from './HelpMenu.js';
 import { LibraryTable } from './LibraryTable.js';
 import { ParticipantsSheet } from './ParticipantsSheet.js';
 import { LIBRARY_REFRESH_MS, useLibraryRefresh } from './refresh.js';
@@ -192,6 +194,8 @@ export function Library() {
   const rowElement = (id: string): HTMLElement | null =>
     document.querySelector<HTMLElement>(`.gd-lib__row[data-id="${id}"]`);
   const [notice, setNotice] = useState<Notice | null>(null);
+  // ONB-02: the first arrival at the library after sign-in starts the tour.
+  useTourAutoStart();
   const narrow = useMediaQuery('(max-width: 899.98px)');
   // RESP-02 / non-negotiable 5: below 768 px the product is read-only — no
   // delete, archive, recover or purge affordance renders in the library either.
@@ -766,6 +770,7 @@ export function Library() {
           className="gd-lib__search"
           autoComplete="off"
         />
+        <HelpMenu />
         <Button
           icon={<Icon name="add-row" size={15} />}
           aria-label="New workscape"

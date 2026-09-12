@@ -31,6 +31,7 @@ import { announce } from '../../../announce.js';
 import { listDocuments } from '../../../api/documents.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
+import { setTourFindQuery } from '../../tour/store.js';
 import { describeMatch } from './match-geometry.js';
 import { createSearchClient, type SearchClient, type SearchClientEvent } from './search-client.js';
 
@@ -206,6 +207,14 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   const [listOpen, setListOpen] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // ONB-05, step 4: the tour advances once Find is open with a query.
+  useEffect(() => {
+    setTourFindQuery(open, query);
+    return () => {
+      setTourFindQuery(false, '');
+    };
+  }, [open, query]);
 
   const client = useRef<SearchClient | null>(null);
   const disconnect = useRef<(() => void) | null>(null);

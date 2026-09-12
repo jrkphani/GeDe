@@ -29,6 +29,8 @@ export interface OpsStackProps extends cdk.StackProps {
   readonly cluster: ecs.ICluster;
   readonly jobsTaskDefinition: ecs.FargateTaskDefinition;
   readonly jobsLogGroup: logs.ILogGroup;
+  /** The sync service's log group: the guided-sample seeder reports failures there (ONB-01). */
+  readonly serviceLogGroup: logs.ILogGroup;
   readonly serviceSecurityGroup: ec2.ISecurityGroup;
 }
 
@@ -307,6 +309,32 @@ export class OpsStack extends cdk.Stack {
         treatMissingData: cloudwatch.TreatMissingData.BREACHING,
       });
     purgeNeverRan.addAlarmAction(notify);
+
+    // ONB-01: a guided-sample seed that fails never fails the account's request — the
+    // service answers `sampleDocumentId: null`, logs `guided sample seed failed` and retries
+    // on the next request (`services/sync/src/sample.ts`). That line is the metric, so a
+    // degraded S3 or a refused insert is seen rather than silently leaving new accounts
+    // without the tour's sample.
+    const sampleSeedFailures = new logs.MetricFilter(this, 'SampleSeedFailures', {
+      logGroup: props.serviceLogGroup,
+      metricNamespace: 'GeDe/Sync',
+      metricName: 'SampleSeedFailures',
+      filterPattern: logs.FilterPattern.stringValue('$.msg', '=', 'guided sample seed failed'),
+      metricValue: '1',
+      defaultValue: 0,
+    });
+    const sampleSeedAlarm = sampleSeedFailures
+      .metric({ period: cdk.Duration.minutes(5), statistic: 'Sum' })
+      .createAlarm(this, 'SampleSeedFailed', {
+        alarmName: `gede-${config.envName}-sample-seed-failed`,
+        alarmDescription:
+          'The sync service could not seed a guided sample workscape for a new account (S3 put or insert failed); the account is served without it and retries on its next request',
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    sampleSeedAlarm.addAlarmAction(notify);
 
     // `NotificationsWithSubscribers` is create-only on AWS::Budgets::Budget, so any change
     // replaces the resource — and a replacement under the same BudgetName fails ("same name

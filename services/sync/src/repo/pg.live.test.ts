@@ -23,9 +23,11 @@ import * as Y from 'yjs';
 import {
   createGraphPair,
   createTable,
+  encodeSampleWorkscape,
   encodeSeededDocument,
   listSheets,
   openDocument,
+  SAMPLE_TITLE,
   setCellText,
   tableById,
 } from '@gede/core';
@@ -736,6 +738,12 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     const kept = await repo.users.bindEmail(sembian.id, 'else@example.com');
     expect(kept?.user.email).toBe('SEMBIAN@example.com');
     expect(await repo.users.bindEmail(crypto.randomUUID(), 'x@example.com')).toBeUndefined();
+    // The email lookup (the invite route's "already an account?") reads the same
+    // columns, sample id included (ONB-01), case-insensitively.
+    expect(await repo.users.findByEmail('sembian@EXAMPLE.com')).toMatchObject({
+      id: sembian.id,
+      sampleDocumentId: null,
+    });
     // `users_email_key`: the address cannot be bound to a second account.
     const rival = await repo.users.upsertFromToken({ sub: 'sub-rival', email: null });
     await expect(repo.users.bindEmail(rival.id, 'sembian@example.com')).rejects.toThrow(
@@ -1191,5 +1199,121 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       { id: linked.id, ever_shared: true },
       { id: shared.id, ever_shared: true },
     ]);
+  });
+
+  test('ONB-03 tour_done_at round-trips as the app role: null on first sight, stamped by tourDone true, cleared by false, read back by the upsert', async () => {
+    const first = await repo.users.upsertFromToken({ sub: 'sub-tour', email: null });
+    expect(first.tourDoneAt).toBeNull();
+    const before = Date.now();
+    const done = await repo.users.updateProfile(first.id, { tourDone: true });
+    expect(done?.tourDoneAt).toBeInstanceOf(Date);
+    expect(done!.tourDoneAt!.getTime()).toBeGreaterThanOrEqual(before - 1000);
+    // Per account: the next sight of the same sub (another device) reads the stamp.
+    const again = await repo.users.upsertFromToken({ sub: 'sub-tour', email: null });
+    expect(again.tourDoneAt?.getTime()).toBe(done!.tourDoneAt!.getTime());
+    const replay = await repo.users.updateProfile(first.id, { tourDone: false });
+    expect(replay?.tourDoneAt).toBeNull();
+    expect(
+      (await repo.users.upsertFromToken({ sub: 'sub-tour', email: null })).tourDoneAt,
+    ).toBeNull();
+    // A patch without the field leaves it alone.
+    await repo.users.updateProfile(first.id, { tourDone: true });
+    expect(
+      (await repo.users.updateProfile(first.id, { locale: 'ta-IN' }))?.tourDoneAt,
+    ).toBeInstanceOf(Date);
+  });
+
+  test('ONB-01 createSample is idempotent per owner through documents_owner_sample_key; the upsert reports the sample id', async () => {
+    const owner = await repo.users.upsertFromToken({ sub: 'sub-sample-seed', email: null });
+    expect(owner.sampleDocumentId).toBeNull();
+    const bytes = encodeSampleWorkscape();
+    const puts: string[] = [];
+    const seed = (id: string, put: () => Promise<void> = () => Promise.resolve()) =>
+      repo.documents.createSample({
+        id,
+        ownerId: owner.id,
+        title: SAMPLE_TITLE,
+        snapshot: { seq: 1, s3Key: `docs/${id}/1.yjs`, sizeBytes: bytes.byteLength },
+        writeSnapshot: async () => {
+          puts.push(id);
+          await put();
+        },
+      });
+    // A failed object write leaves no row: the transaction rolled back under the lock.
+    await expect(
+      seed(crypto.randomUUID(), () => Promise.reject(new Error('simulated S3 outage'))),
+    ).rejects.toThrow('simulated S3 outage');
+    expect(
+      (await pool.query('select 1 from documents where owner_id = $1 and sample', [owner.id]))
+        .rowCount,
+    ).toBe(0);
+    // Three seeders racing (three tasks): one object written, one row, all adopt it.
+    const ids = [crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID()];
+    puts.length = 0;
+    const outcomes = await Promise.all(ids.map((id) => seed(id)));
+    expect(outcomes.filter((o) => o.created)).toHaveLength(1);
+    const firstId = outcomes.find((o) => o.created)!.document.id;
+    expect(outcomes.map((o) => o.document.id)).toEqual([firstId, firstId, firstId]);
+    expect(puts).toEqual([firstId]);
+    // A later seeder adopts without writing either.
+    const second = await seed(crypto.randomUUID());
+    expect(second.created).toBe(false);
+    expect(second.document.id).toBe(firstId);
+    expect(puts).toEqual([firstId]);
+    const rows = await pool.query<{ n: number }>(
+      'select count(*)::int as n from documents where owner_id = $1 and sample',
+      [owner.id],
+    );
+    expect(rows.rows[0]?.n).toBe(1);
+    const snapshots = await pool.query<{ n: number }>(
+      'select count(*)::int as n from snapshots where document_id = $1',
+      [firstId],
+    );
+    expect(snapshots.rows[0]?.n).toBe(1);
+    const audit = await pool.query<{ target: string | null }>(
+      "select target from audit_log where document_id = $1 and action = 'document.create'",
+      [firstId],
+    );
+    expect(audit.rows).toEqual([{ target: 'sample' }]);
+    // Every users read carries the id: the upsert, the profile update, the email lookup.
+    expect(
+      (await repo.users.upsertFromToken({ sub: 'sub-sample-seed', email: null })).sampleDocumentId,
+    ).toBe(firstId);
+    expect((await repo.users.updateProfile(owner.id, { locale: 'en-GB' }))?.sampleDocumentId).toBe(
+      firstId,
+    );
+    // Pinned first in Recents and Browse, above a newer document.
+    await createDoc(owner.id, 'newer');
+    for (const view of ['recents', 'browse'] as const) {
+      const listing = await repo.documents.listForUser(owner.id, view);
+      expect(listing[0]).toMatchObject({ id: firstId, sample: true });
+    }
+    // The guard: the sample cannot be deleted (LIB-D10).
+    expect(await repo.documents.tryDelete(firstId)).toEqual({ status: 'sample' });
+    // Shared with a participant (the tour's last step), it is an ordinary row in
+    // their library: their own sample stays first, the owner's sorts by date.
+    const guest = await user('sub-sample-guest');
+    const guestSample = crypto.randomUUID();
+    await repo.documents.createSample({
+      id: guestSample,
+      ownerId: guest,
+      title: SAMPLE_TITLE,
+      snapshot: { seq: 1, s3Key: `docs/${guestSample}/1.yjs`, sizeBytes: bytes.byteLength },
+      writeSnapshot: () => Promise.resolve(),
+    });
+    await pool.query(
+      "update documents set updated_at = now() + interval '1 minute' where id = $1",
+      [firstId],
+    );
+    await repo.shares.add({
+      documentId: firstId,
+      userId: guest,
+      permission: 'edit',
+      invitedBy: owner.id,
+      actorId: owner.id,
+    });
+    const guestRecents = await repo.documents.listForUser(guest, 'recents');
+    expect(guestRecents.map((d) => d.id)).toEqual([guestSample, firstId]);
+    expect(guestRecents[1]).toMatchObject({ sample: true, permission: 'edit', ownerId: owner.id });
   });
 });

@@ -11,15 +11,43 @@ const CELL_TEXT = 'Base camp';
 
 const firstCell = (page: Page) => page.getByRole('grid').first().getByRole('gridcell').first();
 
-test('AUTH-01 LIB-01 DOC-01 GRID-04 LOAD-05 FIND-01 SHARE-01 LIB-D1 LIB-D8 AUTH-09 live: sign in, create a workscape, type in a cell, see it after a reload and from a fresh browser, find it, open Share, delete it for good, sign out', async ({
+test('AUTH-01 LIB-01 ONB-01 ONB-08 ONB-07 DOC-01 GRID-04 LOAD-05 FIND-01 SHARE-01 LIB-D1 LIB-D8 AUTH-09 live: sign in, replay and skip the guided tour, create a workscape, type in a cell, see it after a reload and from a fresh browser, find it, open Share, delete it for good, sign out', async ({
   page,
   browser,
   signIn,
+  session,
 }) => {
-  await test.step('the library loads for the signed-in account', async () => {
+  await test.step('the library loads for the signed-in account, with the guided sample pinned first', async () => {
     await signIn(page, '/');
     await expect(page.getByRole('heading', { level: 1 })).toHaveText('Recents');
     await expect(page.getByRole('button', { name: 'New workscape' })).toBeVisible();
+    // ONB-01: the service seeded the sample for this account; it leads the list and cannot be deleted.
+    const sample = page.getByRole('row').filter({ hasText: 'Q3 Delivery — Guided sample' });
+    await expect(sample).toContainText('Sample');
+    await expect(page.locator('tr[data-id]').first()).toHaveAttribute('data-tour', 'sample');
+  });
+
+  await test.step('Replay guided tour starts the tour at step 1 whatever the account flag says; Skip ends it and sets the flag', async () => {
+    // The account may or may not have the tour due (the flag persists across runs), so the
+    // journey takes the path that is deterministic: replay, then skip.
+    await page.getByRole('button', { name: 'Help' }).click();
+    await page.getByRole('menuitem', { name: 'Replay guided tour' }).click();
+    const card = page.getByRole('dialog', { name: 'Open the sample workscape' });
+    await expect(card).toBeVisible();
+    await expect(card).toHaveAttribute('data-step', '1');
+    await card.getByRole('button', { name: 'Skip' }).click();
+    await expect(card).toBeHidden();
+    // ONB-03: the flag is on the account, not the device — the API reads it back.
+    await expect
+      .poll(async () => {
+        const res = await session.api('/me');
+        const me = (await res.json()) as {
+          tourDoneAt: string | null;
+          sampleDocumentId: string | null;
+        };
+        return me.tourDoneAt !== null && me.sampleDocumentId !== null;
+      })
+      .toBe(true);
   });
 
   let docPath = '';

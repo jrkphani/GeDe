@@ -56,6 +56,8 @@ vi.mock('../../api/me.js', async (importOriginal) => {
         email: user.email,
         displayName: 'Meena',
         locale: null,
+        tourDoneAt: '2026-09-01T00:00:00.000Z',
+        sampleDocumentId: null,
       }),
     ),
     updateMe: vi.fn(() => Promise.resolve()),
@@ -763,8 +765,12 @@ describe('Library', () => {
     await waitFor(() => {
       expect(docs.deleteAllDocuments).toHaveBeenCalled();
     });
-    const toast = await screen.findByRole('status');
-    expect(toast).toHaveTextContent('Deleted 2 workscapes permanently — this cannot be undone');
+    // The toast itself, not one of the two live regions (the app's and Radix's) that repeat it.
+    const toast = await screen.findByText(
+      'Deleted 2 workscapes permanently — this cannot be undone',
+      { selector: '.gd-toast__title' },
+    );
+    expect(toast.closest('.gd-toast')).not.toBeNull();
     expect(screen.queryByRole('button', { name: 'Undo' })).not.toBeInTheDocument();
   });
 
@@ -970,6 +976,8 @@ describe('Library', () => {
       email: user.email,
       displayName: 'Meena',
       locale: 'ta-IN',
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      sampleDocumentId: null,
     });
     serve(live);
     renderRoutes(routes, ['/']);

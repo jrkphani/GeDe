@@ -64,9 +64,13 @@ and the per-user limit is the precise one.
 - `GET /healthz`, `GET /api/health` — `{ ok }`; 503 when `SELECT 1` fails. No auth, and no
   version: an unauthenticated caller learns only that the service is up (#42).
 - `GET /api/version` → `{ version }` (the short git sha baked into the image).
-- `GET /api/me` → `{ id, sub, email, displayName, locale }`.
-  `PATCH /api/me { displayName?, locale?, idToken? }` — display name 1–80 characters after trimming;
-  locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`; at least one field (I18N-05, AUTH-09).
+- `GET /api/me` → `{ id, sub, email, displayName, locale, tourDoneAt, sampleDocumentId }`.
+  `tourDoneAt` (ONB-03) is the ISO time the account completed or skipped the guided tour, null
+  while the tour is due; `sampleDocumentId` (ONB-01) is the account's guided sample workscape,
+  seeded by the account's first request (see below).
+  `PATCH /api/me { displayName?, locale?, idToken?, tourDone? }` — display name 1–80 characters
+  after trimming; locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`; `tourDone: true` stamps
+  `tourDoneAt` now and `false` clears it (Replay, ONB-08); at least one field (I18N-05, AUTH-09).
   `idToken` is the caller's Cognito **ID** token (SHARE-02): the service verifies it (`tokenUse:
 'id'`, same pool and client), requires its `sub` to be the caller's and `email_verified`, binds
   the address to `users.email` and converts every pending, unexpired invitation for it into a
@@ -78,7 +82,9 @@ and the per-user limit is the precise one.
   `{ documents: [{ id, title, kind: 'workscape', sizeBytes, createdAt, updatedAt, ownerId, ownerName,
 sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', linkAccess, deletedAt,
 archivedAt, everShared, sample }] }`.
-  `recents` = owned + shared with me, live, newest `updatedAt` first; `browse` = owned, live;
+  The caller's own guided sample (`sample: true`) is pinned above every other row in every view it
+  appears in (ONB-01); someone else's sample shared with the caller lists as an ordinary shared row
+  with `sample: false`. After it, `recents` = owned + shared with me, live, newest `updatedAt` first; `browse` = owned, live;
   `shared` = shared with me plus my own documents that have shares (`sharedWithOthers: true`);
   `deleted` = owned, deleted within 30 days; `archived` = owned, live, `archivedAt` set (LIB-D6,
   no expiry). The owner's archived documents are absent from `recents`, `browse` and `shared`; a
@@ -94,8 +100,23 @@ archivedAt, everShared, sample }] }`.
   inserted in one transaction. A new document therefore never opens empty and no client seeds
   one; the first client update is seq 2. If the insert fails after the object was written, the
   request answers 500 and the log names the orphaned key.
+- The guided sample (ONB-01, `Q3 Delivery — Guided sample`) is created the same way — S3 object
+  first, then row + `snapshots` + audit (`document.create`, target `sample`) in one transaction —
+  by `SampleSeeder` from the auth hook, the first time an account is seen, whatever its first
+  request is (a shared link counts, ONB-02). `sample = true`, at most one per owner
+  (`documents_owner_sample_key`, migration 0009). The transaction holds a per-owner advisory
+  lock (`pg_advisory_xact_lock(hashtext('gede_sample:<owner>'))`) and writes the object only
+  when no sample exists, so seeders racing across tasks write one object and adopt one row —
+  nothing is orphaned. A seed that fails (S3 down) never fails the request: `/api/me` answers
+  `sampleDocumentId: null`, the line `guided sample seed failed` is logged (alarm
+  `gede-<env>-sample-seed-failed`), the answer is not cached and the next request retries. It is
+  named by ONB-01, so `PATCH /api/documents/:id { title }` answers 409 `sample` for it, as
+  Delete and Archive do. Content is `seedSampleWorkscape` in `@gede/core`: `Deliverables`
+  (Owner, Status, Due dates, Days) and `Team`, an id-bound `=Sum` and a cross-table
+  `=@Team.Priya.Role` reference — what the five tour steps refer to.
 - `GET /api/documents/:id` → `{ document }` with the same fields as a library row.
-  `PATCH /api/documents/:id { title }` (owner or editor). `DELETE /api/documents/:id` (owner) →
+  `PATCH /api/documents/:id { title }` (owner or editor; 409 `sample` for the guided sample).
+  `DELETE /api/documents/:id` (owner) →
   204; moves the document to Recently Deleted (clearing `archivedAt`) and closes its room with 4404. 409 `shared` while `everShared` is true — a workscape someone was given access to is
   archived, never deleted (LIB-D2); 409 `sample` for the guided sample (LIB-D10).
 - `POST /api/documents/:id/archive` (owner) → `{ document }`; sets `archivedAt` and nothing else:

@@ -46,7 +46,11 @@ export interface DocumentSummary {
    * which is read as not shared (Delete stays offered; the server has the last word).
    */
   everShared?: boolean | undefined;
-  /** LIB-D10: the guided sample; Delete and Archive are disabled for it. */
+  /**
+   * ONB-01 / LIB-D10: the caller's own guided sample — pinned first, badged
+   * `Sample`, the tour's step-1 anchor; Delete and Archive are disabled for it.
+   * The service answers false for someone else's sample shared with the caller.
+   */
   sample?: boolean | undefined;
   linkAccess?: LinkAccess | undefined;
 }

@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest';
 import { ICON_NAMES, Icon } from './Icon.js';
 
 describe('Icon', () => {
-  it('defines the 30 catalogue glyphs plus more, passkey, apple, the find set, the sort arrows, the keyboard glyph, archive and the rule flag', () => {
-    expect(ICON_NAMES).toHaveLength(45);
+  it('defines the 30 catalogue glyphs plus more, passkey, apple, the find set, the sort arrows, the keyboard glyph, archive, the rule flag and help', () => {
+    expect(ICON_NAMES).toHaveLength(46);
     expect(ICON_NAMES).toContain('archive');
     expect(ICON_NAMES).toContain('rule'); // INSP-05: the cue beside a matched rule's fill (A11Y-04)
     expect(ICON_NAMES).toContain('chevron-down');

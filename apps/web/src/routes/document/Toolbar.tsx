@@ -53,6 +53,8 @@ interface ToolProps {
   /** MENU-02 / INSP-11: unavailable commands render disabled with their reason, never hidden. */
   disabledReason?: string | undefined;
   pressed?: boolean | undefined;
+  /** ONB-04: the guided tour measures this command by its `data-tour` anchor. */
+  tourKey?: 'graph' | 'find' | undefined;
 }
 
 /** One toolbar command: icon button, tooltip with its shortcut (KEYS-08), disabled-with-reason. */
@@ -64,6 +66,7 @@ export function Tool({
   onClick,
   disabledReason,
   pressed,
+  tourKey,
 }: ToolProps) {
   const disabled = disabledReason !== undefined;
   const tip = disabled
@@ -90,6 +93,7 @@ export function Tool({
         aria-pressed={pressed}
         aria-disabled={disabled || undefined}
         title={tip}
+        data-tour={tourKey}
         onClick={disabled ? undefined : onClick}
       />
     </Tooltip>
@@ -217,6 +221,7 @@ export function Toolbar({
           label="Add graph"
           onClick={onAddGraph}
           disabledReason={viewOnly ?? (onAddGraph === undefined ? graphSoon : undefined)}
+          tourKey="graph"
         />
       </Cluster>
       {tableMenu !== undefined && <Cluster label="Table">{tableMenu}</Cluster>}
@@ -271,6 +276,7 @@ export function Toolbar({
         <Tool
           icon="search"
           label="Find"
+          tourKey="find"
           shortcut={LABELS.find}
           ariaKeys={ARIA_KEYS.find}
           onClick={onFind}
