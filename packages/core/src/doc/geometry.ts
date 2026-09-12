@@ -9,13 +9,14 @@ import { addressGrid, cellRefInTable, formatAddress, type TableGeometry } from '
 import type { Id } from '../ids.js';
 import { LATTICE, pointToPx, type Pixels } from '../lattice.js';
 import {
+  DEFAULT_ROW_HEIGHT,
   graphsOnSheet,
   rowMeta,
-  TABLE_HEADER_ROWS,
   TABLE_TITLE_ROWS,
   tableMap,
   tableRecord,
   tablesOnSheet,
+  WRAPPED_ROW_HEIGHT,
   type GedeDoc,
   type TableMap,
   type TableRecord,
@@ -37,9 +38,28 @@ export interface PixelBounds {
   readonly height: number;
 }
 
-/** Heights of each data row in units, in row order (2 for a wrapped row, GRID-09). */
+/** True when any visible column wraps: every row of the table is then two units (GRID-09). */
+export function tableWraps(record: TableRecord): boolean {
+  return record.columns.some((c) => c.wrap && !c.hidden);
+}
+
+/**
+ * Heights of each data row in units, in row order (GRID-09): two when the row
+ * itself is wrapped or any visible column wraps, else one. Never anything else,
+ * so the row after a wrapped row is exactly two addresses down.
+ */
 export function rowHeights(table: TableMap, record: TableRecord = tableRecord(table)): number[] {
-  return record.rows.map((rowId) => rowMeta(table, rowId).height);
+  const wrapAll = tableWraps(record);
+  return record.rows.map((rowId) =>
+    wrapAll || rowMeta(table, rowId).height >= WRAPPED_ROW_HEIGHT
+      ? WRAPPED_ROW_HEIGHT
+      : DEFAULT_ROW_HEIGHT,
+  );
+}
+
+/** Widths of each column in units, in column order; a hidden column is 0 (GRID-02). */
+export function columnWidths(record: TableRecord): number[] {
+  return record.columns.map((c) => (c.hidden ? 0 : c.width));
 }
 
 /**
@@ -53,41 +73,63 @@ export function dataGeometry(
   return {
     origin: {
       col: record.gridCol,
-      row: record.gridRow + TABLE_TITLE_ROWS + TABLE_HEADER_ROWS,
+      row: record.gridRow + TABLE_TITLE_ROWS + record.headerRows,
     },
-    columnWidths: record.columns.map((c) => c.width),
+    columnWidths: columnWidths(record),
     rowHeights: rowHeights(table, record),
   };
 }
 
-/** Lattice row of the column-header row (its cells carry addresses too, DOC-06). */
-export function headerRow(record: TableRecord): number {
-  return record.gridRow + TABLE_TITLE_ROWS;
+/** Lattice row of the column-header row (its cells carry addresses too, DOC-06); null when hidden (GRID-11). */
+export function headerRow(record: TableRecord): number | null {
+  return record.headerRows === 0 ? null : record.gridRow + TABLE_TITLE_ROWS;
 }
 
-/** The A1 address of the data cell at (rowId, colId), or null when either id is unknown. */
+/**
+ * The A1 address of the data cell at (rowId, colId), or null when either id is
+ * unknown or the column is hidden (a hidden column has no lattice presence).
+ */
 export function cellAddress(table: TableMap, rowId: Id, colId: Id): string | null {
   const record = tableRecord(table);
   const rowOrdinal = record.rows.indexOf(rowId);
   const colOrdinal = record.columns.findIndex((c) => c.id === colId);
   if (rowOrdinal < 0 || colOrdinal < 0) return null;
+  if (record.columns[colOrdinal]?.hidden === true) return null;
   return formatAddress(cellRefInTable(dataGeometry(table, record), colOrdinal, rowOrdinal));
 }
 
-/** Every data-cell address, `[rowOrdinal][columnOrdinal]` (GRID-02). */
-export function tableAddresses(table: TableMap): string[][] {
-  return addressGrid(dataGeometry(table));
+/**
+ * Every data-cell address, `[rowOrdinal][columnOrdinal]` (GRID-02). A hidden
+ * column has no address (`null`) and the column after it takes its letter —
+ * the same answer `cellAddress` gives one cell at a time.
+ */
+export function tableAddresses(table: TableMap): (string | null)[][] {
+  const record = tableRecord(table);
+  const grid = addressGrid(dataGeometry(table, record));
+  const hidden = record.columns.map((c) => c.hidden);
+  if (!hidden.some(Boolean)) return grid;
+  return grid.map((row) => row.map((address, ci) => (hidden[ci] === true ? null : address)));
 }
 
-/** Lattice footprint of the whole table: title bar + header + rows. */
+/** Sum of the visible column widths in units; never below one so a table always has a footprint. */
+export function tableWidthUnits(record: TableRecord): number {
+  return Math.max(
+    1,
+    columnWidths(record).reduce((acc, w) => acc + w, 0),
+  );
+}
+
+/** Lattice footprint of the whole table: title bar + header + rows + footer strip. */
 export function tableUnitBounds(
   table: TableMap,
   record: TableRecord = tableRecord(table),
 ): UnitBounds {
-  const cols = record.columns.reduce((acc, c) => acc + c.width, 0);
   const rows =
-    TABLE_TITLE_ROWS + TABLE_HEADER_ROWS + rowHeights(table, record).reduce((a, b) => a + b, 0);
-  return { col: record.gridCol, row: record.gridRow, cols, rows };
+    TABLE_TITLE_ROWS +
+    record.headerRows +
+    rowHeights(table, record).reduce((a, b) => a + b, 0) +
+    record.footerRows;
+  return { col: record.gridCol, row: record.gridRow, cols: tableWidthUnits(record), rows };
 }
 
 export function unitBoundsToPx(b: UnitBounds): PixelBounds {

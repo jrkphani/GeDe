@@ -361,7 +361,10 @@
 /* ---- table (GRID-01, GRID-03, GRID-07) --------------------------------- */
 .gd-table {
   position: absolute;
-  box-sizing: border-box;
+  /* Content-box: the hairline border sits outside the lattice footprint, so every
+     column and row inside keeps its exact unit width (GRID-01) and nothing shrinks. */
+  box-sizing: content-box;
+  margin: -1px 0 0 -1px;
   border: 1px solid var(--border);
   background: var(--surface);
   cursor: default;
@@ -406,6 +409,7 @@
 }
 .gd-table__header {
   display: flex;
+  flex: none;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-1);
@@ -429,6 +433,7 @@
 .gd-cell {
   position: relative;
   display: flex;
+  flex: none;
   align-items: center;
   box-sizing: border-box;
   height: 100%;
@@ -514,6 +519,151 @@
 .gd-table__add-row:hover,
 .gd-table__add-column:hover {
   background: color-mix(in srgb, var(--action-primary-bg) 22%, var(--surface));
+}
+
+/* ---- read-only cells (GRID-04, A11Y-04): a lock and a hatch, never a tint alone */
+.gd-cell--locked {
+  color: var(--ink-muted);
+  background-image: repeating-linear-gradient(
+    135deg,
+    transparent 0,
+    transparent 6px,
+    color-mix(in srgb, var(--ink-muted) 14%, transparent) 6px,
+    color-mix(in srgb, var(--ink-muted) 14%, transparent) 7px
+  );
+  cursor: not-allowed;
+}
+.gd-cell__lock {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--space-1);
+  color: var(--ink-muted);
+}
+
+/* ---- wrapped rows (GRID-09): two lattice units, text on two lines */
+.gd-cell--wrap {
+  align-items: flex-start;
+  padding-top: 0.125rem;
+  white-space: normal;
+}
+.gd-cell--wrap .gd-cell__text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.gd-cell--wrap .gd-cell__editor {
+  white-space: pre-wrap;
+}
+
+/* ---- frozen columns (GRID-10): shaded, and a heavier rule at the boundary */
+.gd-cell--frozen,
+.gd-table__header--frozen {
+  background: var(--surface-sunken);
+}
+.gd-table__row--header .gd-table__header--frozen {
+  background: color-mix(in srgb, var(--ink) 6%, var(--surface-sunken));
+}
+.gd-cell--freeze-edge,
+.gd-table__header--freeze-edge {
+  border-right: 2px solid var(--ink);
+}
+.gd-table__pinned {
+  position: absolute;
+  top: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  border-right: 2px solid var(--ink);
+  background: var(--surface);
+  box-shadow: var(--elev-overlay);
+  pointer-events: auto;
+}
+.gd-table__pinned-title {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---- footer count strip (GRID-11): one lattice unit, mono counts */
+.gd-table__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border-top: 1.5px solid var(--ink);
+  background: var(--surface-sunken);
+  color: var(--ink-muted);
+  font-size: 0.625rem;
+  letter-spacing: 0.01em;
+}
+
+/* ---- resize handles (GRID-08): a divider per column header, a corner on the table */
+.gd-table__header {
+  position: relative;
+}
+.gd-table__divider {
+  /* Inside the header's box (the header clips overflow), flush with its right edge. */
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  width: 7px;
+  cursor: col-resize;
+  touch-action: none;
+}
+.gd-table__divider::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 0;
+  width: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.gd-table__divider:hover::after,
+.gd-table__divider:focus-visible::after {
+  background: var(--selection-ring);
+}
+.gd-table__divider:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+}
+.gd-table__corner {
+  position: absolute;
+  right: -7px;
+  bottom: -7px;
+  z-index: 3;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--selection-ring);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.gd-table__corner:hover {
+  background: var(--selection-ring);
+}
+.gd-table__corner:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.gd-table--resizing {
+  transition: none;
+}
+.gd-table--resizing .gd-cell,
+.gd-table--resizing .gd-table__header {
+  user-select: none;
 }
 /* Meso: structure without text. Macro: the block only. */
 .gd-table--meso .gd-cell,

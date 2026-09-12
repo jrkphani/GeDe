@@ -1,27 +1,23 @@
 /**
- * Selection is viewer state, not document state: it lives in React and is
- * mirrored into awareness so collaborators see it (SHARE-04).
+ * Selection types for the document route. The state machine itself lives in
+ * `apps/web/src/doc/selection.ts`; this module re-exports it so the shell,
+ * inspector and menus share one definition.
  */
-import type { Id } from '@gede/core';
-
-export interface CellSelection {
-  readonly tableId: Id;
-  readonly rowId: Id;
-  readonly colId: Id;
-}
-
-export interface Selection {
-  readonly tableId: Id;
-  readonly cell: Omit<CellSelection, 'tableId'> | null;
-}
-
-export function sameCell(a: CellSelection | null, b: CellSelection | null): boolean {
-  if (a === null || b === null) return a === b;
-  return a.tableId === b.tableId && a.rowId === b.rowId && a.colId === b.colId;
-}
-
-export function selectedCell(selection: Selection | null): CellSelection | null {
-  const cell = selection?.cell;
-  if (selection === null || cell === null || cell === undefined) return null;
-  return { tableId: selection.tableId, ...cell };
-}
+export {
+  IDLE,
+  nextCell,
+  reduce,
+  sameCell,
+  selectedCell,
+  type CellSelection,
+  type Direction,
+  type EditSeed,
+  type Editing,
+  type GridEffect,
+  type GridEvent,
+  type GridState,
+  type MoveResult,
+  type Selection,
+  type Transition,
+  type TraversalTable,
+} from '../../doc/selection.js';

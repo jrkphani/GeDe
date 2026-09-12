@@ -5,10 +5,12 @@
  * (`fakes/room`). The SPA itself — sign-in, Amplify, the Yjs provider, the
  * replica in IndexedDB — runs for real.
  */
-import { expect, test, type Page } from '@playwright/test';
+import type { Page } from '@playwright/test';
+import type * as Y from 'yjs';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
+import { computedTokenColor, expect, test } from './fixtures/test.js';
 import { createSheet, createTable, openDocument } from '@gede/core';
 
 const DOC_ID = '6f1b2c3d-0000-4000-8000-00000000e2e0';
@@ -90,8 +92,9 @@ async function signInTo(page: Page, path: string): Promise<void> {
 }
 
 test.describe('document shell', () => {
-  test('DOC-01 DOC-03 DOC-06 signs in, opens the workscape, seeds Sheet 1 and shows rulers on the lattice', async ({
+  test('DOC-01 DOC-03 DOC-06 signs in, opens the workscape, seeds Sheet 1 and shows rulers on the lattice; the shell passes axe', async ({
     page,
+    checkA11y,
   }) => {
     const room = await installFakes(page);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -112,10 +115,17 @@ test.describe('document shell', () => {
       'height',
       '22px',
     );
+    // The sheet strip's tabs must control a real panel (DOC-03, WCAG 4.1.2).
+    const tab = page.getByRole('tab', { name: /1°.*Sheet 1/ });
+    const panelId = await tab.getAttribute('aria-controls');
+    expect(panelId).toBeTruthy();
+    await expect(page.locator(`#${panelId ?? ''}`)).toHaveAttribute('role', 'tabpanel');
+    await checkA11y('document shell 1440');
   });
 
   test('DOC-02 GRID-01 GRID-03 GRID-07 adds a table on the lattice, selects a cell, edits it, and the room receives it', async ({
     page,
+    checkA11y,
   }) => {
     const room = await installFakes(page);
     await page.setViewportSize({ width: 1440, height: 900 });
@@ -143,10 +153,12 @@ test.describe('document shell', () => {
     // Escape clears the selection.
     await page.keyboard.press('Escape');
     await expect(cell).not.toHaveAttribute('aria-selected', 'true');
+    await checkA11y('document table 1440');
   });
 
   test('DOC-04 DOC-05 DOC-07 pans by dragging, zooms with ⌥scroll into the macro tier, and Fit frames the table', async ({
     page,
+    checkA11y,
   }) => {
     await installFakes(page);
     await page.setViewportSize({ width: 1024, height: 768 });
@@ -177,11 +189,13 @@ test.describe('document shell', () => {
     await page.getByRole('button', { name: 'Fit to canvas' }).click();
     await expect(page.locator('.gd-canvas')).toHaveAttribute('data-zoom-tier', 'micro');
     await expect(page.getByRole('grid')).toHaveCount(1);
+    await checkA11y('document table 1024');
   });
 
   for (const width of [480, 768] as const) {
     test(`RESP-02 RESP-01 at ${String(width)} px the document is read-only with no edit affordance and the geometry unchanged`, async ({
       page,
+      checkA11y,
     }) => {
       const room = await installFakes(page);
       // Author a table from the room side, as a desktop collaborator would.
@@ -212,6 +226,7 @@ test.describe('document shell', () => {
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );
       expect(overflow).toBeLessThanOrEqual(0);
+      await checkA11y(`document ${phone ? 'phone' : 'tablet'} ${String(width)}`);
     });
   }
 
@@ -229,6 +244,7 @@ test.describe('document shell', () => {
 
       test(`A11Y-06 the ${zoomed.chrome} layout holds at 200 % zoom with no loss of content`, async ({
         page,
+        checkA11y,
       }) => {
         const room = await installFakes(page);
         // A collaborator has already placed a table.
@@ -251,12 +267,14 @@ test.describe('document shell', () => {
         expect(overflow).toBeLessThanOrEqual(0);
         // The lattice is absolute: the table keeps its 160 px column at any zoom (RESP-01).
         await expect(page.locator('.gd-table').first()).toHaveCSS('width', '480px');
+        await checkA11y(`document ${zoomed.chrome} 200 zoom`);
       });
     });
   }
 
   test('SHARE-03 the service’s read-only notice takes the edit affordances away and says why', async ({
     page,
+    checkA11y,
   }) => {
     // The record still says the caller may edit; the room disagrees (permission changed since).
     const room = await installFakes(page, true);
@@ -270,6 +288,7 @@ test.describe('document shell', () => {
       'true',
     );
     await expect(page.getByLabel('Workscape title')).toHaveCount(0);
+    await checkA11y('document view-only 1440');
   });
 
   test('A11Y-05 selection and sync status announce through the polite live region', async ({
@@ -282,5 +301,228 @@ test.describe('document shell', () => {
     await page.getByRole('button', { name: 'Add table' }).click();
     await page.getByRole('grid').first().getByRole('gridcell').first().click();
     await expect(page.getByTestId('live-region')).toHaveText(/Selected B5 in Table 1/);
+  });
+});
+
+/** The armed cell's computed A1 address, from the roving selection. */
+async function selectedAddress(page: Page): Promise<string | null> {
+  const armed = page.locator('[role="gridcell"][aria-selected="true"]');
+  if ((await armed.count()) === 0) return null;
+  return armed.getAttribute('data-address');
+}
+
+/** Drag on the plane at a point that holds no table, panning the viewport. */
+async function panBy(page: Page, dx: number, dy: number): Promise<void> {
+  const plane = page.getByTestId('plane');
+  const box = await plane.boundingBox();
+  if (!box) throw new Error('plane has no box');
+  const startX = box.x + box.width - 40;
+  const startY = box.y + box.height - 40;
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await page.mouse.move(startX + dx, startY + dy, { steps: 6 });
+  await page.mouse.up();
+}
+
+test.describe('grid editing', () => {
+  for (const width of [1024, 1440] as const) {
+    test(`GRID-03 GRID-04 GRID-05 GRID-06 GRID-07 KEYS-06 (partial: ⌘] and ⌘[ ship with the hierarchy work) I18N-02 A11Y-01 at ${String(width)} px: arm, type to overwrite, commit down and right, traverse with wrap, append past the last row, add a row by chord — mouse unplugged`, async ({
+      page,
+      checkA11y,
+    }) => {
+      const room = await installFakes(page);
+      await page.setViewportSize({ width, height: 800 });
+      await signInTo(page, `/d/${DOC_ID}`);
+      await page.getByRole('button', { name: 'Add table' }).click();
+      const grid = page.getByRole('grid').first();
+      const b5 = grid.getByRole('gridcell').first();
+      await b5.click();
+      // GRID-03: the inset ring is the amber selection token, not a hue of its own.
+      const amber = await computedTokenColor(page, '--selection-ring');
+      const shadow = await b5.evaluate((el) => getComputedStyle(el).boxShadow);
+      expect(shadow).toContain('inset');
+      expect(shadow).toContain(amber);
+      // GRID-04: typing overwrites; GRID-06: Enter commits and moves down.
+      await page.keyboard.type('Base camp');
+      await expect(page.getByLabel('Edit B5')).toHaveValue('Base camp');
+      await page.keyboard.press('Enter');
+      await expect(b5).toHaveText('Base camp');
+      expect(await selectedAddress(page)).toBe('B6');
+      // Tab commits and moves right; Shift+Tab back; the arrows move and wrap at row ends.
+      await page.keyboard.type('Lobuche');
+      await page.keyboard.press('Tab');
+      expect(await selectedAddress(page)).toBe('C6');
+      await page.keyboard.press('Shift+Tab');
+      expect(await selectedAddress(page)).toBe('B6');
+      await page.keyboard.press('ArrowRight');
+      await page.keyboard.press('ArrowRight');
+      expect(await selectedAddress(page)).toBe('D6');
+      await page.keyboard.press('ArrowRight');
+      expect(await selectedAddress(page)).toBe('B7');
+      await page.keyboard.press('ArrowUp');
+      expect(await selectedAddress(page)).toBe('B6');
+      // Enter on a cell opens it on its text; Escape cancels; Delete clears.
+      await page.keyboard.press('Enter');
+      await expect(page.getByLabel('Edit B6')).toHaveValue('Lobuche');
+      await page.keyboard.type(' (4,940 m)');
+      await page.keyboard.press('Escape');
+      await expect(grid.getByRole('gridcell').nth(3)).toHaveText('Lobuche');
+      await page.keyboard.press('Delete');
+      await expect(grid.getByRole('gridcell').nth(3)).toHaveText('');
+      // GRID-05: past the final row (D9, the last cell of five rows) a row appears with the cursor in it.
+      await grid.getByRole('gridcell').nth(14).click();
+      expect(await selectedAddress(page)).toBe('D9');
+      await page.keyboard.press('Tab');
+      await expect(grid.getByRole('row')).toHaveCount(7);
+      expect(await selectedAddress(page)).toBe('B10');
+      await page.keyboard.press('ArrowDown');
+      await expect(grid.getByRole('row')).toHaveCount(8);
+      expect(await selectedAddress(page)).toBe('B11');
+      // KEYS-06 / I18N-02: ⌥⌘↓ and ⌥⌘→ by physical key. The suite's Desktop Chrome descriptor
+      // reports a Windows UA, so the app's modifier is Control here (⌥⌃↓), on every host.
+      await page.keyboard.press('Alt+Control+ArrowDown');
+      await expect(grid.getByRole('row')).toHaveCount(9);
+      await page.keyboard.press('Alt+Control+ArrowRight');
+      await expect(grid.getByRole('columnheader')).toHaveCount(4);
+      // The room received the edit behind the typing (LOAD-05).
+      await expect
+        .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()).includes('Base camp'))
+        .toBe(true);
+      // Escape clears the selection.
+      await page.keyboard.press('Escape');
+      expect(await selectedAddress(page)).toBeNull();
+      await checkA11y(`document grid editing ${String(width)}`);
+    });
+
+    test(`GRID-01 GRID-08 GRID-09 GRID-10 GRID-11 at ${String(width)} px: resize by keyboard and pointer snaps and keeps the ruler true, wrap doubles the row, freeze shades and pins, header and footer toggle`, async ({
+      page,
+      snapshot,
+    }) => {
+      await installFakes(page);
+      await page.setViewportSize({ width, height: 800 });
+      await signInTo(page, `/d/${DOC_ID}`);
+      await page.getByRole('button', { name: 'Add table' }).click();
+      const grid = page.getByRole('grid').first();
+      const table = page.locator('.gd-table').first();
+      await grid.getByRole('gridcell').first().click();
+      // GRID-08 keyboard: Shift+Tab from the first cell leaves the grid onto its column's divider.
+      await page.keyboard.press('Shift+Tab');
+      const divider = page.getByRole('separator', { name: 'Resize column Column 1' });
+      await expect(divider).toBeFocused();
+      await page.keyboard.press('ArrowRight');
+      await expect(divider).toHaveAttribute('aria-valuenow', '2');
+      await expect(grid.getByRole('columnheader').first()).toHaveCSS('width', '320px');
+      await expect(table).toHaveCSS('width', '640px');
+      // GRID-01: the ruler and the data agree — the second column now sits under ruler letter D.
+      await expect(grid.getByRole('gridcell').nth(1)).toHaveAttribute('data-address', 'D5');
+      await expect(
+        grid
+          .getByRole('columnheader')
+          .nth(1)
+          .getByLabel(/^Column/),
+      ).toHaveText('D');
+      await expect(page.getByTestId('ruler-columns').locator('[data-col="3"]')).toHaveText('D');
+      // GRID-08 pointer: a drag on the divider snaps to whole units.
+      const box = await divider.boundingBox();
+      if (!box) throw new Error('divider has no box');
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width / 2 + 150, box.y + box.height / 2, { steps: 5 });
+      await page.mouse.up();
+      await expect(divider).toHaveAttribute('aria-valuenow', '3');
+      await expect(table).toHaveCSS('width', '800px');
+      // GRID-08 the corner handle scales the whole table: right adds a unit, down wraps every row.
+      const corner = page.getByRole('separator', { name: 'Resize Table 1' });
+      const cbox = await corner.boundingBox();
+      if (!cbox) throw new Error('corner has no box');
+      await page.mouse.move(cbox.x + cbox.width / 2, cbox.y + cbox.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(cbox.x + cbox.width / 2 + 165, cbox.y + cbox.height / 2 + 80, {
+        steps: 5,
+      });
+      await page.mouse.up();
+      await expect(table).toHaveCSS('width', '960px');
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '44px');
+      await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B7');
+      await corner.focus();
+      await page.keyboard.press('ArrowUp');
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px');
+      await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B6');
+      // GRID-09 via the Table menu: wrap the selected column; rows are two lattice units, addresses exact.
+      await grid.getByRole('gridcell').first().click();
+      await page.getByRole('button', { name: 'Table menu' }).click();
+      await page.getByRole('menuitemcheckbox', { name: 'Wrap column text' }).click();
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '44px');
+      await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B7');
+      await expect(page.getByTestId('ruler-rows').locator('[data-row="6"]')).toHaveText('7');
+      // GRID-10: freeze one column — shaded, a heavier rule at the boundary, and a pinned panel once scrolled under.
+      await page.getByRole('button', { name: 'Table menu' }).click();
+      await page.getByRole('menuitemradio', { name: '1 column' }).click();
+      const frozen = grid.getByRole('gridcell').first();
+      await expect(frozen).toHaveClass(/gd-cell--frozen/);
+      await expect(frozen).toHaveCSS('border-right-width', '2px');
+      await expect(page.getByTestId('pinned-panel')).toHaveCount(0);
+      // Pan 400 px: the table (160 px in, 960 wide, first column 640) is then under the edge with unfrozen columns still on screen.
+      await panBy(page, -400, 0);
+      await expect(page.getByTestId('pinned-panel')).toBeVisible();
+      await expect(page.getByTestId('pinned-panel')).toHaveCSS('width', '640px');
+      await page.getByRole('button', { name: 'Fit to canvas' }).click();
+      await expect(page.getByTestId('pinned-panel')).toHaveCount(0);
+      // GRID-11: header 0 hides the column-header row; footer 1 adds a one-unit count strip.
+      await page.getByRole('button', { name: 'Table menu' }).click();
+      await page.getByRole('menuitemcheckbox', { name: 'Header row' }).click();
+      await expect(grid.getByRole('columnheader')).toHaveCount(0);
+      await expect(grid.getByRole('gridcell').first()).toHaveAttribute('data-address', 'B4');
+      await page.getByRole('button', { name: 'Table menu' }).click();
+      await page.getByRole('menuitemcheckbox', { name: 'Footer' }).click();
+      const footer = page.getByTestId('table-footer');
+      await expect(footer).toHaveCSS('height', '22px');
+      await expect(footer).toHaveText(/5 rows/);
+      await expect(footer).toHaveText(/3 columns/);
+      // For the PR: the grid with a frozen column, wrapped rows and the footer, light and dark.
+      await grid.getByRole('gridcell').nth(1).click();
+      await snapshot(`document grid ${String(width)} light`);
+      await page.evaluate(() => {
+        document.documentElement.setAttribute('data-theme', 'dark');
+      });
+      await snapshot(`document grid ${String(width)} dark`);
+    });
+  }
+
+  test('RESP-02 A11Y-04 at 480 px none of the grid editing renders: no editor, strip, stub, divider, corner or table menu; a locked cell still says why', async ({
+    page,
+    snapshot,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    const gd = openDocument(room.doc);
+    const sheetId = createSheet(gd);
+    const tableId = createTable(gd, { sheetId, at: { col: 0, row: 0 }, columns: 2, rows: 2 });
+    const tableMap = room.doc.getMap('tables').get(tableId) as Y.Map<unknown>;
+    (tableMap.get('columns') as Y.Array<Y.Map<unknown>>).get(1).set('source', 'derived');
+    await page.setViewportSize({ width: 480, height: 800 });
+    await signInTo(page, `/d/${DOC_ID}`);
+    await expect(page.getByText('View only on phone')).toBeVisible();
+    const grid = page.getByRole('grid').first();
+    await expect(grid).toBeVisible();
+    const cell = grid.getByRole('gridcell').first();
+    await cell.click();
+    await expect(cell).toHaveAttribute('aria-selected', 'true'); // selecting is reading, and allowed
+    await page.keyboard.press('Enter');
+    await page.keyboard.type('x');
+    await cell.dblclick();
+    await expect(page.getByRole('textbox')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Add row to/ })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /Add column to/ })).toHaveCount(0);
+    await expect(page.getByRole('separator')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Table menu' })).toHaveCount(0);
+    await expect(grid.getByRole('row')).toHaveCount(3);
+    // A11Y-04: the read-only cell carries a lock glyph and a text reason, not a tint alone.
+    const locked = grid.getByRole('gridcell').nth(1);
+    await expect(locked).toHaveAttribute('aria-readonly', 'true');
+    await expect(locked.locator('.gd-cell__lock svg')).toHaveCount(1);
+    await expect(locked).toHaveAttribute('aria-label', /Read-only: derived column/);
+    await snapshot('document grid 480 read-only');
+    await checkA11y('document grid read-only 480');
   });
 });

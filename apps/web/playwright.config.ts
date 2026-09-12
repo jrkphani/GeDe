@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { defineConfig, devices } from '@playwright/test';
 
 /**
@@ -10,10 +11,20 @@ import { defineConfig, devices } from '@playwright/test';
  *
  * Breakpoints and 200 % zoom are chosen per test (see `e2e/fixtures/test.ts`);
  * the single project is desktop Chromium at 1440 × 900.
+ *
+ * Port: 4173 in CI. Locally, a port derived from this checkout's path, so two
+ * worktrees never share one — and the preview is never reused: `vite preview`
+ * caches its file list at start, so a server left running would serve a stale
+ * build (or another checkout's) without a word. A busy port fails the run
+ * loudly instead. `E2E_PORT` overrides the derivation.
  */
-const PORT = 4173;
-const baseURL = process.env.E2E_BASE_URL ?? `http://localhost:${PORT}`;
 const CI = Boolean(process.env.CI);
+function localPort(): number {
+  const hash = createHash('sha256').update(process.cwd()).digest();
+  return 4200 + (hash.readUInt16BE(0) % 1000);
+}
+const PORT = Number(process.env.E2E_PORT ?? (CI ? 4173 : localPort()));
+const baseURL = process.env.E2E_BASE_URL ?? `http://localhost:${String(PORT)}`;
 
 export default defineConfig({
   testDir: './e2e',
@@ -40,9 +51,9 @@ export default defineConfig({
     ? {}
     : {
         webServer: {
-          command: `npm run e2e:build && npm run e2e:preview -- --port ${PORT}`,
+          command: `npm run e2e:build && npm run e2e:preview -- --port ${String(PORT)}`,
           url: baseURL,
-          reuseExistingServer: !CI,
+          reuseExistingServer: false,
           timeout: 180_000,
           stdout: 'ignore',
           stderr: 'pipe',

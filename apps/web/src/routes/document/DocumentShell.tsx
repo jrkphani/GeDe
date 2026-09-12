@@ -2,15 +2,10 @@ import clsx from 'clsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
-  addColumn,
-  addRow,
-  cellAddress,
-  clearCell,
   createSheet,
   createTable,
   LATTICE,
   listSheets,
-  setCellText,
   sheetBounds,
   tableById,
   tableMap,
@@ -56,8 +51,10 @@ import {
 } from '../../doc/viewport.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { Canvas } from './Canvas.js';
+import { pinnedPanelOffset } from './grid/pinned.js';
+import { TableMenu } from './grid/TableMenu.js';
+import { useGrid } from './grid/use-grid.js';
 import { Inspector } from './Inspector.js';
-import { selectedCell, type CellSelection, type Selection } from './selection.js';
 import { SheetTabs } from './SheetTabs.js';
 import { TableView } from './TableView.js';
 import { TitleBar } from './TitleBar.js';
@@ -198,8 +195,9 @@ function OpenDocument({
     chosenSheetId !== null && sheets.some((s) => s.id === chosenSheetId)
       ? chosenSheetId
       : (sheets[0]?.id ?? null);
-  const [selection, setSelection] = useState<Selection | null>(null);
-  const [editing, setEditing] = useState<CellSelection | null>(null);
+  // Selection, editing and traversal (GRID-03..06) live in the grid state machine.
+  const grid = useGrid(gd, editable, { undo: session.undo });
+  const { selection, editing } = grid.state;
   const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
   const [size, setSize] = useState<Size>({ width: 0, height: 0 });
   const [gridlines, setGridlines] = useState(true);
@@ -208,7 +206,7 @@ function OpenDocument({
 
   const tables = activeSheetId === null ? [] : tablesOnSheet(gd, activeSheetId);
   const selectedTable = selection === null ? null : tableById(gd, selection.tableId);
-  const cell = useMemo(() => selectedCell(selection), [selection]);
+  const cell = grid.cell;
   const tier = zoomTier(viewport.zoom);
 
   // -- presence ---------------------------------------------------------------
@@ -242,48 +240,18 @@ function OpenDocument({
   );
 
   // -- selection --------------------------------------------------------------
-  const selectCell = useCallback(
-    (next: CellSelection) => {
-      setEditing((e) =>
-        e !== null && (e.rowId !== next.rowId || e.colId !== next.colId) ? null : e,
-      );
-      setSelection({ tableId: next.tableId, cell: { rowId: next.rowId, colId: next.colId } });
-      const table = tableMap(gd, next.tableId);
-      const address = table === null ? null : cellAddress(table, next.rowId, next.colId);
-      const title = table === null ? '' : (tableById(gd, next.tableId)?.title ?? '');
-      announce(
-        address === null ? `Selected a cell in ${title}` : `Selected ${address} in ${title}`,
-      );
-    },
-    [gd],
-  );
-  const selectTable = useCallback(
-    (tableId: Id) => {
-      setEditing(null);
-      setSelection({ tableId, cell: null });
-      announce(`Selected ${tableById(gd, tableId)?.title ?? 'table'}`);
-    },
-    [gd],
-  );
-  const clearSelection = useCallback(() => {
-    setEditing(null);
-    setSelection((s) => {
-      if (s !== null) announce('Selection cleared');
-      return null;
-    });
-  }, []);
+  const { selectTable, clear: clearSelection } = grid.actions;
 
   // -- sheets (DOC-03) --------------------------------------------------------
   const selectSheet = useCallback(
     (sheetId: Id) => {
       setChosenSheetId(sheetId);
-      setSelection(null);
-      setEditing(null);
+      clearSelection();
       setViewport((v) => ({ x: 0, y: 0, zoom: v.zoom }));
       const sheet = listSheets(gd).find((s) => s.id === sheetId);
       if (sheet !== undefined) announce(`Sheet ${String(sheet.ordinal)}, ${sheet.label}`);
     },
-    [gd],
+    [gd, clearSelection],
   );
   const appendSheet = useCallback(() => {
     const id = createSheet(gd);
@@ -365,42 +333,15 @@ function OpenDocument({
     [gd, activeSheetId, editable, reveal, selectTable],
   );
   const addRowToSelected = useCallback(() => {
-    if (selection === null || !editable) return;
-    const rowId = addRow(gd, selection.tableId);
-    const record = tableById(gd, selection.tableId);
-    const firstCol = record?.columns[0]?.id;
-    if (firstCol !== undefined) selectCell({ tableId: selection.tableId, rowId, colId: firstCol });
-  }, [gd, selection, editable, selectCell]);
+    if (selection === null) return;
+    grid.commands.insertRowBelow(selection.tableId, selection.cell?.rowId);
+  }, [grid, selection]);
   const addColumnToSelected = useCallback(() => {
-    if (selection === null || !editable) return;
-    const colId = addColumn(gd, selection.tableId);
-    const record = tableById(gd, selection.tableId);
-    const firstRow = record?.rows[0];
-    if (firstRow !== undefined) selectCell({ tableId: selection.tableId, rowId: firstRow, colId });
-  }, [gd, selection, editable, selectCell]);
-  const commitCell = useCallback(
-    (target: CellSelection, text: string) => {
-      if (!editable) return;
-      setCellText(gd, target.tableId, target.rowId, target.colId, text);
-    },
-    [gd, editable],
-  );
-  const clearSelectedCell = useCallback(
-    (target: CellSelection) => {
-      if (!editable) return;
-      clearCell(gd, target.tableId, target.rowId, target.colId);
-    },
-    [gd, editable],
-  );
-  const editCell = useCallback(
-    (target: CellSelection | null) => {
-      if (!editable) return;
-      setEditing(target);
-    },
-    [editable],
-  );
+    if (selection === null) return;
+    grid.commands.insertColumnAfter(selection.tableId, selection.cell?.colId);
+  }, [grid, selection]);
 
-  // -- keyboard (KEYS-07, KEYS-06 subset) ------------------------------------
+  // -- keyboard (KEYS-07, KEYS-06) --------------------------------------------
   const bindings: ShortcutBinding[] = [
     {
       id: 'zoomIn',
@@ -567,6 +508,9 @@ function OpenDocument({
           }}
           onAddRow={addRowToSelected}
           onAddColumn={addColumnToSelected}
+          tableMenu={
+            <TableMenu gd={gd} selection={selection} editable={editable} commands={grid.commands} />
+          }
           onGridlines={setGridlines}
           onZoomIn={() => {
             zoomStep(ZOOM_STEP);
@@ -692,16 +636,12 @@ function OpenDocument({
                   tier={tier}
                   selected={selection?.tableId === t.id}
                   selectedCell={cell !== null && cell.tableId === t.id ? cell : null}
-                  editingCell={editing !== null && editing.tableId === t.id ? editing : null}
+                  editing={editing !== null && editing.cell.tableId === t.id ? editing : null}
                   editable={editable}
                   presence={onSheet}
-                  onSelectCell={selectCell}
-                  onSelectTable={selectTable}
-                  onEditCell={editCell}
-                  onCommitCell={commitCell}
-                  onClearCell={clearSelectedCell}
-                  onAddRow={addRowToSelected}
-                  onAddColumn={addColumnToSelected}
+                  pinnedLeft={pinnedPanelOffset(t, viewport.x / viewport.zoom)}
+                  actions={grid.actions}
+                  commands={grid.commands}
                 />
               );
             })}

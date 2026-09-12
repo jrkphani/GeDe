@@ -5,7 +5,7 @@
  */
 import * as Y from 'yjs';
 
-import { cellKey, newId, type Id } from '../ids.js';
+import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
 import { snapPoint, snapSizeToUnits, type LatticeUnits, type Pixels } from '../lattice.js';
 import {
   cellsMap,
@@ -16,16 +16,20 @@ import {
   isFormula,
   listSheets,
   objectCount,
+  readNumber,
   readString,
   rowMetaMap,
   rowsArray,
   tableMap,
+  tableRecord,
   tablesOnSheet,
   textFragment,
+  WRAPPED_ROW_HEIGHT,
   type ColumnMap,
   type GedeDoc,
   type RowMetaMap,
   type SheetMap,
+  type StripCount,
   type TableMap,
 } from './schema.js';
 import { firstSheetMap, SEED_ORIGIN } from './seed.js';
@@ -237,35 +241,270 @@ export function addRow(gd: GedeDoc, tableId: Id, afterRowId?: Id): Id {
   });
 }
 
-/** Append a column (or insert after `afterColId`). Returns the new column id (GRID-07). */
-export function addColumn(
-  gd: GedeDoc,
-  tableId: Id,
-  options: { label?: string | undefined; afterColId?: Id | undefined } = {},
-): Id {
+/** Insert a row above `beforeRowId` (PRD §17 "Add row above"). Returns the new row id. */
+export function insertRowBefore(gd: GedeDoc, tableId: Id, beforeRowId: Id): Id {
   return transact(gd, () => {
-    const columns = columnsArray(requireTable(gd, tableId));
-    const { id, map: column } = newColumn(options.label ?? `Column ${String(columns.length + 1)}`);
-    const after =
-      options.afterColId === undefined
-        ? -1
-        : columns.toArray().findIndex((c) => readString(c, 'id') === options.afterColId);
-    columns.insert(after < 0 ? columns.length : after + 1, [column]);
+    const rows = rowsArray(requireTable(gd, tableId));
+    const id = newId();
+    const before = rows.toArray().indexOf(beforeRowId);
+    rows.insert(before < 0 ? 0 : before, [id]);
     return id;
   });
 }
 
+function columnIndexOf(columns: Y.Array<ColumnMap>, colId: Id): number {
+  return columns.toArray().findIndex((c) => readString(c, 'id') === colId);
+}
+
+function requireColumn(table: TableMap, tableId: Id, colId: Id): ColumnMap {
+  const column = columnsArray(table)
+    .toArray()
+    .find((c) => readString(c, 'id') === colId);
+  if (column === undefined) throw new RangeError(`no column ${colId} in ${tableId}`);
+  return column;
+}
+
+/**
+ * Append a column, or insert after `afterColId` / before `beforeColId`
+ * (`beforeColId` wins when both are given). Returns the new column id (GRID-07).
+ */
+export function addColumn(
+  gd: GedeDoc,
+  tableId: Id,
+  options: {
+    label?: string | undefined;
+    afterColId?: Id | undefined;
+    beforeColId?: Id | undefined;
+  } = {},
+): Id {
+  return transact(gd, () => {
+    const columns = columnsArray(requireTable(gd, tableId));
+    const { id, map: column } = newColumn(options.label ?? `Column ${String(columns.length + 1)}`);
+    let index = columns.length;
+    if (options.beforeColId !== undefined) {
+      const before = columnIndexOf(columns, options.beforeColId);
+      index = before < 0 ? 0 : before;
+    } else if (options.afterColId !== undefined) {
+      const after = columnIndexOf(columns, options.afterColId);
+      index = after < 0 ? columns.length : after + 1;
+    }
+    columns.insert(index, [column]);
+    return id;
+  });
+}
+
+/** Delete every cell matching `predicate`; called inside a transaction. */
+function deleteCells(table: TableMap, predicate: (key: string) => boolean): void {
+  const cells = cellsMap(table);
+  const doomed: string[] = [];
+  cells.forEach((_value, key) => {
+    if (predicate(key)) doomed.push(key);
+  });
+  for (const key of doomed) cells.delete(key);
+}
+
+/**
+ * Delete a row with its cells and meta; the rows below recompute their
+ * addresses (GRID-02). Returns false when the row is not in the table — a
+ * concurrent delete already removed it, which is not an error.
+ */
+export function deleteRow(gd: GedeDoc, tableId: Id, rowId: Id): boolean {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    const rows = rowsArray(table);
+    const index = rows.toArray().indexOf(rowId);
+    if (index < 0) return false;
+    rows.delete(index, 1);
+    rowMetaMap(table).delete(rowId);
+    deleteCells(table, (key) => key.startsWith(`${rowId}:`));
+    return true;
+  });
+}
+
+/**
+ * Delete a column with its cells (GRID-02). The frozen count shrinks with the
+ * table so it never exceeds the columns that remain. Returns false when the
+ * column is already gone.
+ */
+export function deleteColumn(gd: GedeDoc, tableId: Id, colId: Id): boolean {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    const columns = columnsArray(table);
+    const index = columnIndexOf(columns, colId);
+    if (index < 0) return false;
+    columns.delete(index, 1);
+    deleteCells(table, (key) => key.endsWith(`:${colId}`));
+    if (tableRecord(table).frozenColumns > columns.length) {
+      table.set('frozenColumns', columns.length);
+    }
+    return true;
+  });
+}
+
+/** Hide or show a column. Hidden keeps its data and width but has no lattice presence (GRID-02). */
+export function setColumnHidden(gd: GedeDoc, tableId: Id, colId: Id, hidden: boolean): void {
+  transact(gd, () => {
+    requireColumn(requireTable(gd, tableId), tableId, colId).set('hidden', hidden);
+  });
+}
+
+export function hideColumn(gd: GedeDoc, tableId: Id, colId: Id): void {
+  setColumnHidden(gd, tableId, colId, true);
+}
+
+export function unhideColumn(gd: GedeDoc, tableId: Id, colId: Id): void {
+  setColumnHidden(gd, tableId, colId, false);
+}
+
+/** Show every hidden column of a table in one undo step. Returns the ids revealed. */
+export function unhideAllColumns(gd: GedeDoc, tableId: Id): Id[] {
+  return transact(gd, () => {
+    const revealed: Id[] = [];
+    for (const column of columnsArray(requireTable(gd, tableId)).toArray()) {
+      if (column.get('hidden') === true) {
+        column.set('hidden', false);
+        revealed.push(readString(column, 'id'));
+      }
+    }
+    return revealed;
+  });
+}
+
+/** Wrap every cell of a column; the table's rows become two lattice units (GRID-09). */
+export function setColumnWrap(gd: GedeDoc, tableId: Id, colId: Id, wrap: boolean): void {
+  transact(gd, () => {
+    requireColumn(requireTable(gd, tableId), tableId, colId).set('wrap', wrap);
+  });
+}
+
+/** Whole, finite, at least one lattice unit (GRID-01, GRID-08). */
+function snapWidthUnits(units: number): number {
+  if (!Number.isFinite(units)) {
+    throw new RangeError(`width must be a finite number of units, got ${String(units)}`);
+  }
+  return Math.max(1, Math.round(units));
+}
+
+/** Column width in whole lattice units, never below one — the keyboard route to resize (GRID-08). */
+export function setColumnWidth(gd: GedeDoc, tableId: Id, colId: Id, units: number): number {
+  const width = snapWidthUnits(units);
+  transact(gd, () => {
+    const column = requireColumn(requireTable(gd, tableId), tableId, colId);
+    if (column.get('width') !== width) column.set('width', width);
+  });
+  return width;
+}
+
 /** Column width from pixels, snapped to whole units and never below one (GRID-01, GRID-08). */
 export function resizeColumn(gd: GedeDoc, tableId: Id, colId: Id, widthPx: number): number {
-  const units = snapSizeToUnits(widthPx, 'col');
-  transact(gd, () => {
-    const column = columnsArray(requireTable(gd, tableId))
+  return setColumnWidth(gd, tableId, colId, snapSizeToUnits(widthPx, 'col'));
+}
+
+/**
+ * Share `total` whole units across `sizes` in proportion: every share at least
+ * one unit, the sum exactly `max(total, sizes.length)`, remainders to the
+ * largest fractions first. The corner handle uses it so scaling a table keeps
+ * every column on the lattice (GRID-08).
+ */
+export function distributeUnits(sizes: readonly number[], total: number): number[] {
+  const n = sizes.length;
+  if (n === 0) return [];
+  const target = Math.max(n, Math.round(total));
+  const current = sizes.reduce((a, b) => a + b, 0);
+  const exact = sizes.map((w) => (current > 0 ? (w / current) * target : target / n));
+  const shares = exact.map((x) => Math.max(1, Math.floor(x)));
+  let remaining = target - shares.reduce((a, b) => a + b, 0);
+  // Floors of one can overshoot: take from the widest until the sum fits.
+  while (remaining < 0) {
+    const widest = shares.indexOf(Math.max(...shares));
+    if ((shares[widest] ?? 1) <= 1) break;
+    shares[widest] = (shares[widest] ?? 1) - 1;
+    remaining += 1;
+  }
+  const order = exact
+    .map((x, i) => ({ i, frac: x - Math.floor(x) }))
+    .sort((a, b) => b.frac - a.frac || a.i - b.i);
+  for (let k = 0; remaining > 0; k += 1, remaining -= 1) {
+    const slot = order[k % n];
+    if (slot === undefined) break;
+    shares[slot.i] = (shares[slot.i] ?? 1) + 1;
+  }
+  return shares;
+}
+
+export interface ScaleTableOptions {
+  /** New total width of the visible columns in units, shared out proportionally. */
+  widthUnits?: number | undefined;
+  /** Every row wrapped (two units) or compact (one) — the only heights the lattice allows (GRID-09). */
+  wrapped?: boolean | undefined;
+}
+
+/**
+ * The corner handle (GRID-08): scale the whole table on the lattice. Width is
+ * distributed across the visible columns, each a whole unit and at least one;
+ * height snaps to the two row heights the lattice allows. One undo step.
+ * Returns the visible columns' widths after the call, in column order.
+ */
+export function scaleTable(gd: GedeDoc, tableId: Id, options: ScaleTableOptions): number[] {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    const visible = columnsArray(table)
       .toArray()
-      .find((c) => readString(c, 'id') === colId);
-    if (column === undefined) throw new RangeError(`no column ${colId} in ${tableId}`);
-    column.set('width', units);
+      .filter((c) => c.get('hidden') !== true);
+    let widths = visible.map((c) => Math.max(1, Math.round(readNumber(c, 'width', 1))));
+    if (options.widthUnits !== undefined) {
+      widths = distributeUnits(widths, snapWidthUnits(options.widthUnits));
+      visible.forEach((column, i) => {
+        const width = widths[i] ?? 1;
+        if (column.get('width') !== width) column.set('width', width);
+      });
+    }
+    if (options.wrapped !== undefined) {
+      const height = options.wrapped ? WRAPPED_ROW_HEIGHT : DEFAULT_ROW_HEIGHT;
+      for (const rowId of rowsArray(table).toArray()) setRowHeight(table, rowId, height);
+    }
+    return widths;
   });
-  return units;
+}
+
+/** Leading frozen columns, clamped to the table (GRID-10). Returns the count stored. */
+export function setFrozenColumns(gd: GedeDoc, tableId: Id, count: number): number {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    const max = columnsArray(table).length;
+    const frozen = Math.min(max, Math.max(0, Math.round(Number.isFinite(count) ? count : 0)));
+    if (tableRecord(table).frozenColumns !== frozen) table.set('frozenColumns', frozen);
+    return frozen;
+  });
+}
+
+/** Show or hide the column-header row (GRID-11). Data addresses move with it. */
+export function setHeaderRows(gd: GedeDoc, tableId: Id, count: StripCount): void {
+  transact(gd, () => {
+    requireTable(gd, tableId).set('headerRows', count);
+  });
+}
+
+/** Show or hide the footer count strip beneath the last row (GRID-11). */
+export function setFooterRows(gd: GedeDoc, tableId: Id, count: StripCount): void {
+  transact(gd, () => {
+    requireTable(gd, tableId).set('footerRows', count);
+  });
+}
+
+/**
+ * Store a row height, writing nothing when it already reads that way — a row
+ * with no meta is one unit, so setting one unit there is not a write and not
+ * an undo step.
+ */
+function setRowHeight(table: TableMap, rowId: Id, height: number): void {
+  const existing = rowMetaMap(table).get(rowId);
+  if (existing === undefined) {
+    if (height === DEFAULT_ROW_HEIGHT) return;
+    metaFor(table, rowId).set('height', height);
+    return;
+  }
+  if (existing.get('height') !== height) existing.set('height', height);
 }
 
 function metaFor(table: TableMap, rowId: Id): RowMetaMap {
@@ -284,7 +523,11 @@ function metaFor(table: TableMap, rowId: Id): RowMetaMap {
 /** A wrapped row occupies two lattice rows so addressing stays exact (GRID-09). */
 export function setRowWrapped(gd: GedeDoc, tableId: Id, rowId: Id, wrapped: boolean): void {
   transact(gd, () => {
-    metaFor(requireTable(gd, tableId), rowId).set('height', wrapped ? 2 : DEFAULT_ROW_HEIGHT);
+    setRowHeight(
+      requireTable(gd, tableId),
+      rowId,
+      wrapped ? WRAPPED_ROW_HEIGHT : DEFAULT_ROW_HEIGHT,
+    );
   });
 }
 
@@ -300,27 +543,77 @@ export function setRowDepth(gd: GedeDoc, tableId: Id, rowId: Id, depth: number):
  * fragment is replaced whole — character-level merging is the ProseMirror
  * binding's job in Wave 2.
  */
-export function setCellText(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, text: string): void {
-  transact(gd, () => {
-    const cells = cellsMap(requireTable(gd, tableId));
+export function setCellText(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, text: string): boolean {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    // The row or column may have gone since the editor opened (a collaborator deleted it,
+    // GRID-02); writing then would leave a cell keyed to nothing. Checked in the same
+    // transaction as the write so nothing can slip between.
+    if (!rowsArray(table).toArray().includes(rowId)) return false;
+    if (columnIndexOf(columnsArray(table), colId) < 0) return false;
+    const cells = cellsMap(table);
     const key = cellKey(rowId, colId);
     if (text === '') {
       cells.delete(key);
-      return;
+      return true;
     }
     const current = cells.get(key);
     if (text.startsWith('=')) {
       if (current !== text) cells.set(key, text);
-      return;
+      return true;
     }
     // An unchanged commit must not churn the CRDT (or drop marks the text already carries).
-    if (current !== undefined && !isFormula(current) && fragmentText(current) === text) return;
+    if (current !== undefined && !isFormula(current) && fragmentText(current) === text) return true;
     cells.set(key, textFragment(text));
+    return true;
   });
 }
 
-export function clearCell(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): void {
-  setCellText(gd, tableId, rowId, colId, '');
+export function clearCell(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): boolean {
+  return setCellText(gd, tableId, rowId, colId, '');
+}
+
+/** Transaction origin for garbage collection; never tracked by undo — nothing a person did. */
+export const SWEEP_ORIGIN = 'sweep';
+
+/**
+ * Cell keys whose row or column is no longer in the table. They arise only from a
+ * merge: one replica deleted a row while another, offline, wrote into it
+ * (`deleteRow` removes the cells it can see; the write merges in afterwards).
+ * Addresses never see them (they are computed from `rows` and `columns`), but
+ * the document would carry them forever.
+ */
+export function orphanCellKeys(table: TableMap): string[] {
+  const rows = new Set(rowsArray(table).toArray());
+  const columns = new Set(
+    columnsArray(table)
+      .toArray()
+      .map((c) => readString(c, 'id')),
+  );
+  const orphans: string[] = [];
+  cellsMap(table).forEach((_value, key) => {
+    const { rowId, colId } = splitCellKey(key);
+    if (!rows.has(rowId) || !columns.has(colId)) orphans.push(key);
+  });
+  return orphans;
+}
+
+/**
+ * Remove orphan cells. Call it when a row or column deletion is observed
+ * arriving from another replica (that is the only moment orphans can appear);
+ * it runs under `SWEEP_ORIGIN`, so it is not an undo step, and two replicas
+ * sweeping the same keys converge. Returns the number removed.
+ */
+export function sweepOrphanCells(gd: GedeDoc, tableId: Id): number {
+  const table = tableMap(gd, tableId);
+  if (table === null) return 0;
+  const orphans = orphanCellKeys(table);
+  if (orphans.length === 0) return 0;
+  gd.doc.transact(() => {
+    const cells = cellsMap(table);
+    for (const key of orphans) cells.delete(key);
+  }, SWEEP_ORIGIN);
+  return orphans.length;
 }
 
 export function deleteTable(gd: GedeDoc, tableId: Id): void {
