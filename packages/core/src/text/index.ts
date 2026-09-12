@@ -10,3 +10,4 @@ export * from './yjs.js';
 export * from './chips.js';
 export * from './script.js';
 export * from './mutations.js';
+export * from './marks.js';

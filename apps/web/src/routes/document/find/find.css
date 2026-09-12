@@ -24,7 +24,13 @@
   left: calc((100% - var(--gd-inspector)) / 2);
   width: min(44rem, calc(100% - var(--gd-inspector) - var(--space-5) * 2));
 }
+/* The collapsed strip (INSP-02) still takes its 38 px from the canvas. */
+.gd-doc--inspector-strip .gd-find {
+  left: calc((100% - var(--gd-inspector-strip)) / 2);
+  width: min(44rem, calc(100% - var(--gd-inspector-strip) - var(--space-5) * 2));
+}
 @media (max-width: 1023.98px) {
+  .gd-doc--inspector-strip .gd-find,
   .gd-doc--inspector .gd-find {
     left: 50%;
     width: min(44rem, calc(100% - var(--space-5) * 2));

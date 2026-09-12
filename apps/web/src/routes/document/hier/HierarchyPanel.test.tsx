@@ -1,7 +1,7 @@
 /**
  * The hierarchy panel over a real document and a real `useGrid` (HIER-01,
  * HIER-02, HIER-03, HIER-06, HIER-08, RESP-02). Not mounted in the inspector
- * here — the integrator does that — so HIER-01's inspector half stays partial.
+ * here; `inspector/Inspector.test.tsx` covers the mounted Table tab.
  */
 import { act, render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -71,7 +71,7 @@ beforeEach(() => {
 });
 
 describe('HierarchyPanel', () => {
-  it('HIER-01 (partial: not yet mounted in the inspector) HIER-03 with a cell selected it shows the row, "↳ under <parent>" or "top level — no parent", and the depth', () => {
+  it('HIER-01 HIER-03 with a cell selected it shows the row, "↳ under <parent>" or "top level — no parent", and the depth', () => {
     render(<Harness />);
     expect(screen.getByText('Select a cell to see its row.')).toBeInTheDocument();
     select(rows[1]!);
@@ -86,7 +86,7 @@ describe('HierarchyPanel', () => {
     expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('B7');
   });
 
-  it('HIER-01 (partial: not yet mounted in the inspector) HIER-02 Promote and Nest act on the row and render disabled exactly when the document would refuse, with the reason', async () => {
+  it('HIER-01 HIER-02 Promote and Nest act on the row and render disabled exactly when the document would refuse, with the reason', async () => {
     render(<Harness />);
     select(rows[0]!);
     expect(button('⇤ Promote')).toBeDisabled();

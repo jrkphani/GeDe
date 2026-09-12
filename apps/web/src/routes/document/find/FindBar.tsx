@@ -15,6 +15,12 @@ export interface FindBarProps {
   /** SHARE-03 / RESP-02: Replace is disabled with the reason when false; absent on phone. */
   editable: boolean;
   phone: boolean;
+  /**
+   * FIND-06: when the inspector is open the result list lives there, in sync
+   * with the bar; the Results button then only shows or hides it. When the
+   * rail is collapsed or absent the list drops down from the bar instead.
+   */
+  resultsInInspector?: boolean | undefined;
 }
 
 /**
@@ -23,7 +29,7 @@ export interface FindBarProps {
  * displacing content. Enter and ⇧Enter in the field step through matches;
  * ⌘G / ⇧⌘G do the same from anywhere (bound in the shell's shortcut map).
  */
-export function FindBar({ gd, find, editable, phone }: FindBarProps) {
+export function FindBar({ gd, find, editable, phone, resultsInInspector = false }: FindBarProps) {
   const { state, actions, inputRef, focusTick } = find;
   const fieldId = useId();
   const replaceId = useId();
@@ -170,31 +176,48 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
             />
           </Tooltip>
         </div>
-        <Collapsible
-          open={state.listOpen && !none}
-          onOpenChange={actions.setListOpen}
-          className="gd-find__results"
-          contentClassName="gd-find__panel"
-          trigger={
-            <Button
-              size="sm"
-              variant="ghost"
-              className="gd-find__list-toggle"
-              aria-label={`Results${none ? '' : ` (${formatNumber(activeLocale(), total)})`}`}
-              title="Show the result list"
-              disabled={none}
-            >
-              Results
-            </Button>
-          }
-        >
-          <ResultList
-            gd={gd}
-            matches={state.matches}
-            current={state.current}
-            onPick={actions.goTo}
-          />
-        </Collapsible>
+        {resultsInInspector ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="gd-find__list-toggle"
+            aria-label={`Results${none ? '' : ` (${formatNumber(activeLocale(), total)})`}`}
+            aria-pressed={state.listOpen && !none}
+            title="Show the result list in the inspector"
+            disabled={none}
+            onClick={() => {
+              actions.setListOpen(!state.listOpen);
+            }}
+          >
+            Results
+          </Button>
+        ) : (
+          <Collapsible
+            open={state.listOpen && !none}
+            onOpenChange={actions.setListOpen}
+            className="gd-find__results"
+            contentClassName="gd-find__panel"
+            trigger={
+              <Button
+                size="sm"
+                variant="ghost"
+                className="gd-find__list-toggle"
+                aria-label={`Results${none ? '' : ` (${formatNumber(activeLocale(), total)})`}`}
+                title="Show the result list"
+                disabled={none}
+              >
+                Results
+              </Button>
+            }
+          >
+            <ResultList
+              gd={gd}
+              matches={state.matches}
+              current={state.current}
+              onPick={actions.goTo}
+            />
+          </Collapsible>
+        )}
         <Button size="sm" variant="secondary" className="gd-find__done" onClick={actions.close}>
           Done
         </Button>
@@ -276,7 +299,7 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
   );
 }
 
-interface ResultListProps {
+export interface ResultListProps {
   gd: GedeDoc;
   matches: readonly SearchMatch[];
   current: number;
@@ -295,7 +318,7 @@ function groupOf(match: SearchMatch): GroupKind {
  * graphs, workscape names — the last navigates). Each row is a button so it
  * is reachable with Tab and arrows; the current row carries `aria-current`.
  */
-function ResultList({ gd, matches, current, onPick }: ResultListProps) {
+export function ResultList({ gd, matches, current, onPick }: ResultListProps) {
   const groups: {
     kind: GroupKind;
     items: { match: SearchMatch; index: number }[];

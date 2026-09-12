@@ -58,6 +58,8 @@ export const ICON_NAMES = [
   'check',
   'arrow-up',
   'arrow-down',
+  // keys (KEYS-01, KEYS-08)
+  'keyboard',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -163,6 +165,9 @@ const GLYPHS: Record<IconName, Glyph> = {
   check: { d: 'M3.5 9.5l3.5 3.5 7.5-8' },
   'arrow-up': { d: 'M9 15.5v-13M4.5 7.5 9 2.5l4.5 5' },
   'arrow-down': { d: 'M9 2.5v13M4.5 10.5 9 15.5l4.5-5' },
+  keyboard: {
+    d: 'M2 5h14v8H2zM4.5 7.5h1M7.5 7.5h1M10.5 7.5h1M13.5 7.5h1M4.5 10.5h1M7 10.5h4M13.5 10.5h1',
+  },
   apple: {
     d: '',
     extra: [
