@@ -45,6 +45,17 @@ export type AuthFailure =
   | { kind: 'expired-code' }
   | { kind: 'other'; message: string };
 
+/**
+ * A pool answer that is a failure in GeDe's terms even though the SDK returned
+ * it as a next step. `classifyError` hands the failure through unchanged.
+ */
+export class AuthFailureError extends Error {
+  override name = 'AuthFailureError';
+  constructor(readonly failure: AuthFailure) {
+    super(failure.kind);
+  }
+}
+
 export function configureAuth(config: AppConfig): void {
   const origin = window.location.origin;
   Amplify.configure({
@@ -78,7 +89,7 @@ export function configureAuth(config: AppConfig): void {
 export function describeUnsupportedStep(step: string): string {
   switch (step) {
     case 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION':
-      return 'This account has no passkey yet. Email me a code instead.';
+      return 'This account has no passkey yet. Email me a one-time code instead.';
     case 'CONFIRM_SIGN_IN_WITH_SMS_CODE':
       return 'This account is set to receive codes by SMS, which GeDe does not send. Contact support.';
     case 'CONFIRM_SIGN_IN_WITH_TOTP_CODE':
@@ -104,12 +115,22 @@ function toStep(out: SignInOutput): SignInStep {
       return { kind: 'done' };
     case 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE':
       return { kind: 'code', destination: step.codeDeliveryDetails?.destination };
+    case 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION':
+      // AUTH-04: the pool has `preventUserExistenceErrors` on, so an unknown email never
+      // raises UserNotFoundException. It answers SELECT_CHALLENGE with the pool's generic
+      // factors (PASSWORD, PASSWORD_SRP, WEB_AUTHN) and no EMAIL_OTP — a known account
+      // with a verified address always lists EMAIL_OTP. That absence is the "no account" signal.
+      if (!(step.availableChallenges ?? []).includes('EMAIL_OTP')) {
+        throw new AuthFailureError({ kind: 'unknown-email' });
+      }
+      return { kind: 'unsupported', reason: describeUnsupportedStep(step.signInStep) };
     default:
       return { kind: 'unsupported', reason: describeUnsupportedStep(step.signInStep) };
   }
 }
 
 export function classifyError(err: unknown): AuthFailure {
+  if (err instanceof AuthFailureError) return err.failure;
   const name = err instanceof Error ? err.name : '';
   const message = err instanceof Error ? err.message : 'Something went wrong';
   switch (name) {

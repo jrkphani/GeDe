@@ -48,7 +48,7 @@ async function assertSignInLayout(page: Page, label: string) {
   await email.fill(VALID_EMAIL);
   await email.press('Enter');
   const passkey = page.getByRole('button', { name: 'Passkey' });
-  const code = page.getByRole('button', { name: 'Email me a code' });
+  const code = page.getByRole('button', { name: 'Email me a one-time code' });
   await expect(passkey).toBeVisible();
   await expect(code).toBeVisible();
   const passkeyBox = (await passkey.boundingBox())!;
@@ -94,7 +94,7 @@ for (const width of BREAKPOINTS) {
         await measure('Email', email);
         await measure('Continue', page.getByRole('button', { name: 'Continue' }));
         await email.press('Enter');
-        for (const name of ['Change', 'Passkey', 'Email me a code']) {
+        for (const name of ['Change', 'Passkey', 'Email me a one-time code']) {
           await measure(name, page.getByRole('button', { name }));
         }
         expect(short, `targets under 44 × 44 px at ${width}px`).toEqual([]);

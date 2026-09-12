@@ -24,30 +24,50 @@ export function AppShell() {
   );
 }
 
+/**
+ * The shell itself could not render (providers, locale): nothing above it
+ * carries a live region, so this last-resort boundary brings its own.
+ */
+function ShellError() {
+  return (
+    <>
+      <LiveRegion />
+      <RouteError />
+    </>
+  );
+}
+
 export const routes: RouteObject[] = [
   {
     element: <AppShell />,
-    errorElement: <RouteError />,
+    errorElement: <ShellError />,
     children: [
-      { path: '/sign-in', element: <SignIn /> },
-      { path: '/signed-out', element: <SignedOut /> },
       {
-        path: '/',
-        element: (
-          <RequireAuth>
-            <Library />
-          </RequireAuth>
-        ),
+        // A11Y-05: the catalogue pages are the shell's `Outlet`, not a replacement for it,
+        // so "Reference copied" reaches the same live region as every other announcement.
+        errorElement: <RouteError />,
+        children: [
+          { path: '/sign-in', element: <SignIn /> },
+          { path: '/signed-out', element: <SignedOut /> },
+          {
+            path: '/',
+            element: (
+              <RequireAuth>
+                <Library />
+              </RequireAuth>
+            ),
+          },
+          {
+            path: '/d/:id',
+            element: (
+              <RequireAuth>
+                <DocumentShell />
+              </RequireAuth>
+            ),
+          },
+          { path: '*', element: <NotFound /> },
+        ],
       },
-      {
-        path: '/d/:id',
-        element: (
-          <RequireAuth>
-            <DocumentShell />
-          </RequireAuth>
-        ),
-      },
-      { path: '*', element: <NotFound /> },
     ],
   },
 ];

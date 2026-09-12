@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
@@ -80,6 +82,46 @@ describe('ErrorCell', () => {
     expect(
       await screen.findByRole('heading', { name: 'Nothing at this address' }),
     ).toBeInTheDocument();
+  });
+
+  it('A11Y-05 a router error page renders inside the shell: the live region exists and "Reference copied" is announced', async () => {
+    const u = userEvent.setup();
+    // jsdom has no clipboard; a fake that records the write, labelled as such.
+    const writeText = vi.fn((_text: string) => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: (text: string) => writeText(text) },
+    });
+    try {
+      const { routes } = await import('../../routes.js');
+      renderRoutes(routes, ['/no/such/place']);
+      await screen.findByRole('heading', { name: 'Nothing at this address' });
+      // Exactly one polite region, present before anything is announced.
+      const live = screen.getByTestId('live-region');
+      expect(live).toHaveAttribute('aria-live', 'polite');
+      expect(screen.getAllByRole('status')).toHaveLength(1);
+      // The document language is applied by the shell on this page too (I18N-03).
+      expect(document.documentElement.lang).toBe('en-US');
+      await u.click(screen.getByRole('button', { name: 'ref 404·nf' }));
+      expect(writeText).toHaveBeenCalledWith('ref 404·nf');
+      await waitFor(() => {
+        expect(live).toHaveTextContent('Reference copied');
+      });
+    } finally {
+      // eslint-disable-next-line @typescript-eslint/no-dynamic-delete
+      delete (navigator as { clipboard?: unknown }).clipboard;
+    }
+  });
+
+  it('RESP-05 the reference button and every card target take the 44 px token below 1024 px', () => {
+    const css = readFileSync(resolve(__dirname, 'errors.css'), 'utf8');
+    const narrow = /@media \(max-width: 1023\.98px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(narrow).toMatch(
+      /\.gd-error \.gd-btn,\s*\.gd-error__ref,\s*\.gd-error \.gd-field__input\s*\{\s*min-height:\s*var\(--hit-target\)/,
+    );
+    expect(narrow).toMatch(/\.gd-error__ref\s*\{[^}]*min-width:\s*var\(--hit-target\)/);
+    // At desktop the reference is still a 32 px target, not a 22 px chip.
+    expect(css).toMatch(/\.gd-error__ref\s*\{[^}]*min-height:\s*2rem/);
   });
 
   it('a thrown 401 renders the session page, and Sign in remembers the document path', async () => {
