@@ -217,7 +217,7 @@ describe('formula entry in the grid editor', () => {
     });
   });
 
-  it('KEYS-06 Escape closes an open list first; the next Escape cancels the edit', async () => {
+  it('KEYS-06 (partial: Escape ordering only; nest and promote are hierarchy work) Escape closes an open list first; the next Escape cancels the edit', async () => {
     render(<Harness gd={gd} tableId={tableId} />);
     const editor = await type(cellAt(0, 0), '=');
     await screen.findByRole('listbox');
