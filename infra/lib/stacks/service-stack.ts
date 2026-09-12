@@ -177,7 +177,18 @@ export class ServiceStack extends cdk.Stack {
           resources: [props.docsBucket.arnForObjects('*')],
         }),
       );
-      props.emailIdentity.grantSendEmail(taskRole);
+      // Share mail (SHARE-02): `SendEmail` only — the service never sends raw
+      // MIME — on the domain identity, and only as the product's sender. The
+      // sender is `no-reply@<WEB_ORIGIN host>` in `services/sync/src/mail`;
+      // the condition pins it here so a bug there cannot spoof another address.
+      taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'ShareMail',
+          actions: ['ses:SendEmail'],
+          resources: [props.emailIdentity.emailIdentityArn],
+          conditions: { StringEquals: { 'ses:FromAddress': `no-reply@${config.domain}` } },
+        }),
+      );
     };
 
     // ---- The service task ----------------------------------------------------------
