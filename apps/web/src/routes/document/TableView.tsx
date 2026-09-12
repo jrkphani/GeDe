@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import {
   memo,
+  useCallback,
   useEffect,
   useRef,
   useState,
@@ -10,86 +11,157 @@ import {
 import {
   cellText,
   columnLetter,
+  distributeUnits,
   LATTICE,
+  rowHeights as effectiveRowHeights,
   rowMeta,
-  TABLE_HEADER_ROWS,
   TABLE_TITLE_ROWS,
   tableAddresses,
   tableRecord,
+  tableWraps,
+  WRAPPED_ROW_HEIGHT,
   type Id,
   type PresenceState,
+  type ReadOnlyReason,
   type TableMap,
+  type TableRecord,
 } from '@gede/core';
 import { Icon } from '@gede/ui';
 
+import { announce } from '../../announce.js';
 import { ARIA_KEYS } from '../../doc/shortcuts.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import { useYVersion } from '../../doc/use-y.js';
-import type { CellSelection } from './selection.js';
+import {
+  nextCell,
+  type CellSelection,
+  type Direction,
+  type Editing,
+  type TraversalTable,
+} from '../../doc/selection.js';
+import { CellEditor } from './CellEditor.js';
+import { readOnlyLabel, type GridCommands } from './grid/commands.js';
+import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
+import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
+import type { GridActions } from './grid/use-grid.js';
 
 export interface TableViewProps {
   table: TableMap;
   tier: ZoomTier;
   selected: boolean;
   selectedCell: CellSelection | null;
-  editingCell: CellSelection | null;
+  editing: Editing | null;
   /** RESP-02 / SHARE-03: no edit affordance renders when false. */
   editable: boolean;
   /** Other participants' selections on this table (SHARE-04). */
   presence: readonly PresenceState[];
-  onSelectCell: (cell: CellSelection) => void;
-  onSelectTable: (tableId: Id) => void;
-  onEditCell: (cell: CellSelection | null) => void;
-  onCommitCell: (cell: CellSelection, text: string) => void;
-  onClearCell: (cell: CellSelection) => void;
-  onAddRow: (tableId: Id) => void;
-  onAddColumn: (tableId: Id) => void;
+  /**
+   * GRID-10: canvas-pixel offset from the table's left edge at which the pinned
+   * panel carrying the frozen columns sits, or null when none is due
+   * (`grid/pinned.ts`).
+   */
+  pinnedLeft: number | null;
+  actions: GridActions;
+  commands: GridCommands;
 }
 
 const TITLE_PX = TABLE_TITLE_ROWS * LATTICE.row;
-const HEADER_PX = TABLE_HEADER_ROWS * LATTICE.row;
+const HEADER_PX = LATTICE.row;
+const FOOTER_PX = LATTICE.row;
+
+interface ColumnPreview {
+  colId: Id;
+  units: number;
+}
+interface TablePreview {
+  widthUnits: number;
+  wrapped: boolean;
+}
 
 /**
  * One table on the lattice (DOM-first). Geometry is absolute: the title bar is
- * two lattice rows, the header one, every data row one (two when wrapped) and
- * every column `width` units wide. Nothing here reflows at a breakpoint
- * (RESP-01) — the viewport pans over it.
+ * two lattice rows, the header one (or none, GRID-11), every data row one (two
+ * when wrapped, GRID-09), the footer strip one, and every visible column
+ * `width` units wide; a hidden column is not drawn (GRID-02). Nothing here
+ * reflows at a breakpoint (RESP-01) — the viewport pans over it.
  */
 export const TableView = memo(function TableView({
   table,
   tier,
   selected,
   selectedCell,
-  editingCell,
+  editing,
   editable,
   presence,
-  onSelectCell,
-  onSelectTable,
-  onEditCell,
-  onCommitCell,
-  onClearCell,
-  onAddRow,
-  onAddColumn,
+  pinnedLeft,
+  actions,
+  commands,
 }: TableViewProps) {
   useYVersion(table);
   const record = tableRecord(table);
-  const widthPx = record.columns.reduce((acc, c) => acc + c.width, 0) * LATTICE.col;
-  const rowHeights = record.rows.map((rowId) => rowMeta(table, rowId).height);
+  const ref = useRef<HTMLElement>(null);
+  const [columnPreview, setColumnPreview] = useState<ColumnPreview | null>(null);
+  const [tablePreview, setTablePreview] = useState<TablePreview | null>(null);
+
+  // Visible columns with the width each renders at (a drag previews before it commits).
+  const visible = record.columns.filter((c) => !c.hidden);
+  const storedWidths = visible.map((c) => c.width);
+  const previewWidths =
+    tablePreview === null ? storedWidths : distributeUnits(storedWidths, tablePreview.widthUnits);
+  const widthUnitsOf = (colId: Id, i: number): number =>
+    columnPreview?.colId === colId ? columnPreview.units : (previewWidths[i] ?? 1);
+  const columnUnits = visible.map((c, i) => widthUnitsOf(c.id, i));
+  const widthPx =
+    Math.max(
+      1,
+      columnUnits.reduce((a, b) => a + b, 0),
+    ) * LATTICE.col;
+  const storedHeights = effectiveRowHeights(table, record);
+  const rowHeights =
+    tablePreview === null
+      ? storedHeights
+      : storedHeights.map((h) =>
+          tablePreview.wrapped || tableWraps(record) ? WRAPPED_ROW_HEIGHT : Math.min(h, 1),
+        );
   const bodyPx = rowHeights.reduce((a, b) => a + b, 0) * LATTICE.row;
+  const allWrapped =
+    storedHeights.length > 0 && storedHeights.every((h) => h === WRAPPED_ROW_HEIGHT);
   const addresses = tier === 'micro' ? tableAddresses(table) : null;
+  const headerPx = record.headerRows === 1 ? HEADER_PX : 0;
+  const footerPx = record.footerRows === 1 ? FOOTER_PX : 0;
   const style: CSSProperties = {
     left: `${String(record.gridCol * LATTICE.col)}px`,
     top: `${String(record.gridRow * LATTICE.row)}px`,
     width: `${String(widthPx)}px`,
   };
-  const showAffordances = editable && selected;
+  const showAffordances = editable && selected && tier !== 'macro';
 
   let colOffset = 0;
-  const columnStarts = record.columns.map((c) => {
+  const columnStarts = visible.map((_c, i) => {
     const start = colOffset;
-    colOffset += c.width;
+    colOffset += columnUnits[i] ?? 1;
     return start;
   });
+  const frozenIds = new Set(frozenColumnsOf(record).map((c) => c.id));
+  const freezeEdgeId =
+    record.frozenColumns > 0
+      ? (visible.filter((c) => frozenIds.has(c.id)).at(-1)?.id ?? null)
+      : null;
+  const traversal: TraversalTable = {
+    rows: record.rows,
+    columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
+  };
+  // GRID-04: the read-only reason is a column fact (source) or a row fact (group band);
+  // resolve each once per render rather than re-reading the Yjs column array per cell.
+  const columnOrdinal = new Map<Id, number>(record.columns.map((c, i) => [c.id, i]));
+  const columnReadOnly = new Map<Id, ReadOnlyReason | null>(
+    record.columns.map((c) => [c.id, c.source === 'entered' ? null : c.source]),
+  );
+  // One rowMeta read per row: the group band (GRID-04) and the row's own wrap (GRID-09).
+  const rowFacts = (rowId: Id): { group: boolean; wrapped: boolean } => {
+    const meta = rowMeta(table, rowId);
+    return { group: meta.group, wrapped: meta.height === WRAPPED_ROW_HEIGHT };
+  };
 
   // M8: with nothing selected in this table, its first cell is the tab stop (roving tabindex).
   const tableHasSelection = selectedCell !== null && selectedCell.tableId === record.id;
@@ -98,19 +170,35 @@ export const TableView = memo(function TableView({
     if (p.cell?.tableId === record.id) presenceByCell.set(`${p.cell.rowId}:${p.cell.colId}`, p);
   }
 
+  /** Screen px per canvas px right now: the layer's zoom, read off the element itself. */
+  const scale = useCallback(() => {
+    const el = ref.current;
+    if (el === null || el.offsetWidth === 0) return 1;
+    const width = el.getBoundingClientRect().width;
+    return width === 0 ? 1 : width / el.offsetWidth;
+  }, []);
+
+  const rowCount = record.rows.length;
+  const columnCount = visible.length;
+
   return (
     <section
-      className={clsx('gd-table', `gd-table--${tier}`, { 'gd-table--selected': selected })}
+      ref={ref}
+      className={clsx('gd-table', `gd-table--${tier}`, {
+        'gd-table--selected': selected,
+        'gd-table--resizing': columnPreview !== null || tablePreview !== null,
+      })}
       style={style}
       aria-label={record.title}
       data-table-id={record.id}
+      data-frozen-columns={record.frozenColumns}
     >
       <header
         className="gd-table__title"
         style={{ height: `${String(TITLE_PX)}px` }}
         onPointerDown={(e) => {
           e.stopPropagation();
-          onSelectTable(record.id);
+          actions.selectTable(record.id);
         }}
       >
         <span className="gd-table__title-text">{record.title}</span>
@@ -123,101 +211,163 @@ export const TableView = memo(function TableView({
       {tier === 'macro' ? (
         <div
           className="gd-table__block"
-          style={{ height: `${String(HEADER_PX + bodyPx)}px` }}
+          style={{ height: `${String(headerPx + bodyPx + footerPx)}px` }}
           aria-hidden="true"
         />
       ) : (
-        <div
-          className="gd-table__grid"
-          role="grid"
-          aria-label={record.title}
-          aria-rowcount={record.rows.length + 1}
-          aria-colcount={record.columns.length}
-          onPointerDown={(e) => {
-            e.stopPropagation();
-          }}
-        >
+        <>
           <div
-            className="gd-table__row gd-table__row--header"
-            role="row"
-            style={{ height: `${String(HEADER_PX)}px` }}
+            className="gd-table__grid"
+            role="grid"
+            aria-label={record.title}
+            aria-rowcount={rowCount + record.headerRows}
+            aria-colcount={columnCount}
+            onPointerDown={(e) => {
+              e.stopPropagation();
+            }}
           >
-            {record.columns.map((col, ci) => (
+            {record.headerRows === 1 && (
               <div
-                key={col.id}
-                role="columnheader"
-                className="gd-table__header"
-                style={{ width: `${String(col.width * LATTICE.col)}px` }}
-                title={col.label}
-              >
-                <span className="gd-table__header-label">{col.label}</span>
-                <span
-                  className="gd-mono gd-table__letter"
-                  aria-label={`Column ${columnLetter(record.gridCol + (columnStarts[ci] ?? 0))}`}
-                >
-                  {columnLetter(record.gridCol + (columnStarts[ci] ?? 0))}
-                </span>
-              </div>
-            ))}
-          </div>
-          {record.rows.map((rowId, ri) => {
-            const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
-            return (
-              <div
-                key={rowId}
-                className="gd-table__row"
+                className="gd-table__row gd-table__row--header"
                 role="row"
-                style={{ height: `${String(heightPx)}px` }}
+                style={{ height: `${String(HEADER_PX)}px` }}
               >
-                {record.columns.map((col, ci) => {
-                  const isSelected =
-                    selectedCell !== null &&
-                    selectedCell.tableId === record.id &&
-                    selectedCell.rowId === rowId &&
-                    selectedCell.colId === col.id;
-                  const isEditing =
-                    editingCell !== null &&
-                    editingCell.tableId === record.id &&
-                    editingCell.rowId === rowId &&
-                    editingCell.colId === col.id;
-                  const other = presenceByCell.get(`${rowId}:${col.id}`);
-                  const address = addresses?.[ri]?.[ci];
-                  const cell = { tableId: record.id, rowId, colId: col.id };
+                {visible.map((col, ci) => {
+                  const units = columnUnits[ci] ?? 1;
+                  const letter = columnLetter(record.gridCol + (columnStarts[ci] ?? 0));
                   return (
-                    <Cell
+                    <div
                       key={col.id}
-                      table={table}
-                      cell={cell}
-                      widthPx={col.width * LATTICE.col}
-                      tier={tier}
-                      address={address}
-                      selected={isSelected}
-                      tabStop={isSelected || (!tableHasSelection && ri === 0 && ci === 0)}
-                      editing={isEditing}
-                      editable={editable}
-                      other={other}
-                      onSelect={onSelectCell}
-                      onEdit={onEditCell}
-                      onCommit={onCommitCell}
-                      onClear={onClearCell}
-                    />
+                      role="columnheader"
+                      className={clsx('gd-table__header', {
+                        'gd-table__header--frozen': frozenIds.has(col.id),
+                        'gd-table__header--freeze-edge': col.id === freezeEdgeId,
+                      })}
+                      style={{ width: `${String(units * LATTICE.col)}px` }}
+                      title={col.label}
+                      data-col-id={col.id}
+                    >
+                      <span className="gd-table__header-label">{col.label}</span>
+                      <span className="gd-mono gd-table__letter" aria-label={`Column ${letter}`}>
+                        {letter}
+                      </span>
+                      {editable && (
+                        <ColumnDivider
+                          label={col.label}
+                          units={col.width}
+                          tabStop={
+                            selectedCell?.tableId === record.id && selectedCell.colId === col.id
+                          }
+                          scale={scale}
+                          onPreview={(preview) => {
+                            setColumnPreview(
+                              preview === null ? null : { colId: col.id, units: preview },
+                            );
+                          }}
+                          onCommit={(next) => {
+                            commands.setColumnWidth(record.id, col.id, next);
+                          }}
+                        />
+                      )}
+                    </div>
                   );
                 })}
               </div>
-            );
-          })}
-        </div>
+            )}
+            {record.rows.map((rowId, ri) => {
+              const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
+              const { group: groupRow, wrapped: rowWrapped } = rowFacts(rowId);
+              return (
+                <div
+                  key={rowId}
+                  className="gd-table__row"
+                  role="row"
+                  aria-rowindex={ri + 1 + record.headerRows}
+                  style={{ height: `${String(heightPx)}px` }}
+                >
+                  {visible.map((col, ci) => {
+                    const isSelected =
+                      selectedCell !== null &&
+                      selectedCell.tableId === record.id &&
+                      selectedCell.rowId === rowId &&
+                      selectedCell.colId === col.id;
+                    const isEditing =
+                      editing !== null &&
+                      editing.cell.tableId === record.id &&
+                      editing.cell.rowId === rowId &&
+                      editing.cell.colId === col.id;
+                    const other = presenceByCell.get(`${rowId}:${col.id}`);
+                    const address = addresses?.[ri]?.[columnOrdinal.get(col.id) ?? -1] ?? undefined;
+                    const cell = { tableId: record.id, rowId, colId: col.id };
+                    // Column source wins over the row band, as `cellReadOnlyReason` in core.
+                    const readOnly: ReadOnlyReason | null =
+                      columnReadOnly.get(col.id) ?? (groupRow ? 'group' : null);
+                    return (
+                      <Cell
+                        key={col.id}
+                        table={table}
+                        cell={cell}
+                        widthPx={(columnUnits[ci] ?? 1) * LATTICE.col}
+                        tier={tier}
+                        address={address}
+                        selected={isSelected}
+                        tabStop={isSelected || (!tableHasSelection && ri === 0 && ci === 0)}
+                        editing={isEditing ? editing : null}
+                        editable={editable}
+                        readOnly={readOnly}
+                        frozen={frozenIds.has(col.id)}
+                        freezeEdge={col.id === freezeEdgeId}
+                        // Per-column wrap clamps that column's cells only; a row wrapped on its
+                        // own wraps all of its cells. Other cells in a two-unit row stay one line.
+                        wrap={col.wrap || rowWrapped}
+                        other={other}
+                        traversal={traversal}
+                        actions={actions}
+                        commands={commands}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+          {record.footerRows === 1 && (
+            <div
+              className="gd-mono gd-table__footer"
+              style={{ height: `${String(FOOTER_PX)}px` }}
+              aria-label={`${record.title} footer`}
+              data-testid="table-footer"
+            >
+              <span>
+                {rowCount} {rowCount === 1 ? 'row' : 'rows'}
+              </span>
+              <span>
+                {columnCount} {columnCount === 1 ? 'column' : 'columns'}
+              </span>
+            </div>
+          )}
+          {pinnedLeft !== null && record.frozenColumns > 0 && (
+            <PinnedPanel
+              table={table}
+              record={record}
+              left={pinnedLeft}
+              rowHeights={rowHeights}
+              selectedCell={selectedCell}
+              onSelect={actions.selectCell}
+            />
+          )}
+        </>
       )}
 
-      {showAffordances && tier !== 'macro' && (
+      {showAffordances && (
         <>
-          {/* GRID-07: one lattice unit beneath the last row. */}
+          {/* GRID-07: one lattice unit beneath the last row (and the footer, when shown). */}
           <button
             type="button"
             className="gd-table__add-row"
             style={{ height: `${String(LATTICE.row)}px` }}
             onClick={() => {
-              onAddRow(record.id);
+              commands.insertRowBelow(record.id);
             }}
             onPointerDown={(e) => {
               e.stopPropagation();
@@ -239,7 +389,7 @@ export const TableView = memo(function TableView({
               height: `${String(LATTICE.row)}px`,
             }}
             onClick={() => {
-              onAddColumn(record.id);
+              commands.insertColumnAfter(record.id);
             }}
             onPointerDown={(e) => {
               e.stopPropagation();
@@ -250,11 +400,112 @@ export const TableView = memo(function TableView({
           >
             <Icon name="add-column" size={13} /> Add column
           </button>
+          {/* GRID-08: the corner handle scales the whole table on the lattice. */}
+          <CornerHandle
+            title={record.title}
+            widthUnits={storedWidths.reduce((a, b) => a + b, 0)}
+            rows={rowCount}
+            wrapped={allWrapped}
+            tabStop={selected}
+            scale={scale}
+            onPreview={setTablePreview}
+            onCommit={(change) => {
+              commands.scaleTable(record.id, change);
+            }}
+          />
         </>
       )}
     </section>
   );
 });
+
+interface PinnedPanelProps {
+  table: TableMap;
+  record: TableRecord;
+  left: number;
+  rowHeights: readonly number[];
+  selectedCell: CellSelection | null;
+  onSelect: (cell: CellSelection) => void;
+}
+
+/**
+ * GRID-10: the frozen columns, carried along the viewport's left edge while the
+ * table is scrolled under it. A mirror of cells already in the grid, so it is
+ * hidden from assistive tech and holds no tab stops; pointing at a mirrored
+ * cell selects the real one.
+ */
+function PinnedPanel({
+  table,
+  record,
+  left,
+  rowHeights,
+  selectedCell,
+  onSelect,
+}: PinnedPanelProps) {
+  const columns = frozenColumnsOf(record);
+  const width = columns.reduce((acc, c) => acc + c.width, 0) * LATTICE.col;
+  return (
+    <div
+      className="gd-table__pinned"
+      aria-hidden="true"
+      data-testid="pinned-panel"
+      style={{ left: `${String(left)}px`, width: `${String(width)}px` }}
+      onPointerDown={(e) => {
+        e.stopPropagation();
+      }}
+    >
+      <div className="gd-table__pinned-title" style={{ height: `${String(TITLE_PX)}px` }}>
+        <span className="gd-table__title-text">{record.title}</span>
+      </div>
+      {record.headerRows === 1 && (
+        <div
+          className="gd-table__row gd-table__row--header"
+          style={{ height: `${String(HEADER_PX)}px` }}
+        >
+          {columns.map((col) => (
+            <div
+              key={col.id}
+              className="gd-table__header gd-table__header--frozen"
+              style={{ width: `${String(col.width * LATTICE.col)}px` }}
+            >
+              <span className="gd-table__header-label">{col.label}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {record.rows.map((rowId, ri) => (
+        <div
+          key={rowId}
+          className="gd-table__row"
+          style={{ height: `${String((rowHeights[ri] ?? 1) * LATTICE.row)}px` }}
+        >
+          {columns.map((col) => {
+            const isSelected =
+              selectedCell !== null &&
+              selectedCell.tableId === record.id &&
+              selectedCell.rowId === rowId &&
+              selectedCell.colId === col.id;
+            return (
+              <div
+                key={col.id}
+                className={clsx('gd-cell', 'gd-cell--frozen', {
+                  'gd-cell--selected': isSelected,
+                  'gd-cell--wrap': col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
+                })}
+                style={{ width: `${String(col.width * LATTICE.col)}px` }}
+                onPointerDown={() => {
+                  onSelect({ tableId: record.id, rowId, colId: col.id });
+                }}
+              >
+                <span className="gd-cell__text">{cellText(table, rowId, col.id)}</span>
+              </div>
+            );
+          })}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 interface CellProps {
   table: TableMap;
@@ -265,13 +516,32 @@ interface CellProps {
   selected: boolean;
   /** Reachable with Tab: the selected cell, or the table's first cell when none is. */
   tabStop: boolean;
-  editing: boolean;
+  editing: Editing | null;
   editable: boolean;
+  /** GRID-04: derived, linked, pulled and group cells are not editable. */
+  readOnly: ReadOnlyReason | null;
+  frozen: boolean;
+  freezeEdge: boolean;
+  wrap: boolean;
   other: PresenceState | undefined;
-  onSelect: (cell: CellSelection) => void;
-  onEdit: (cell: CellSelection | null) => void;
-  onCommit: (cell: CellSelection, text: string) => void;
-  onClear: (cell: CellSelection) => void;
+  traversal: TraversalTable;
+  actions: GridActions;
+  commands: GridCommands;
+}
+
+function arrowDirection(code: string): Direction | null {
+  switch (code) {
+    case 'ArrowUp':
+      return 'up';
+    case 'ArrowDown':
+      return 'down';
+    case 'ArrowLeft':
+      return 'left';
+    case 'ArrowRight':
+      return 'right';
+    default:
+      return null;
+  }
 }
 
 function Cell({
@@ -284,33 +554,109 @@ function Cell({
   tabStop,
   editing,
   editable,
+  readOnly,
+  frozen,
+  freezeEdge,
+  wrap,
   other,
-  onSelect,
-  onEdit,
-  onCommit,
-  onClear,
+  traversal,
+  actions,
+  commands,
 }: CellProps) {
   const text = tier === 'micro' ? cellText(table, cell.rowId, cell.colId) : '';
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (selected && !editing) ref.current?.focus({ preventScroll: true });
+    if (selected && editing === null) ref.current?.focus({ preventScroll: true });
   }, [selected, editing]);
+  const canEdit = editable && readOnly === null;
+
+  const refuse = () => {
+    if (readOnly !== null) {
+      announce(`${address ?? 'The cell'} is read-only: ${readOnlyLabel(readOnly)}`);
+    }
+  };
 
   const onKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
-    if (e.nativeEvent.isComposing) return; // I18N-01
-    if (e.code === 'Enter' && editable) {
-      e.preventDefault();
-      onEdit(cell);
-    } else if ((e.code === 'Delete' || e.code === 'Backspace') && editable) {
-      e.preventDefault();
-      onClear(cell);
+    // eslint-disable-next-line @typescript-eslint/no-deprecated -- required by the IME contract
+    if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) {
+      // I18N-01: an IME began composing on an armed cell — hand it the editor so the
+      // conjunct forms there; nothing commits until the composition ends.
+      if (canEdit) {
+        e.stopPropagation();
+        actions.dispatch({ type: 'edit', seed: { kind: 'overwrite', text: '' }, cell });
+      }
+      return;
     }
+    const mod = e.metaKey || e.ctrlKey;
+    // Escape clears the selection but leaves focus on this cell (GRID-03); a move
+    // from here re-arms it first, so Tab and the arrows are never dead keys
+    // (GRID-05, A11Y-01). `dispatch` updates the machine synchronously, so the
+    // move that follows sees the new selection.
+    const rearm = () => {
+      if (!selected) actions.selectCell(cell);
+    };
+    const arrow = arrowDirection(e.code);
+    if (arrow !== null) {
+      if (mod || e.altKey) return; // ⌥⌘↓ / ⌥⌘→ add a row or column (the shell binds them)
+      e.preventDefault();
+      e.stopPropagation();
+      rearm();
+      actions.move(arrow);
+      return;
+    }
+    switch (e.code) {
+      case 'Enter':
+      case 'NumpadEnter':
+        if (mod) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (!editable) return;
+        if (readOnly !== null) {
+          refuse();
+          return;
+        }
+        actions.dispatch({ type: 'edit', seed: { kind: 'existing' }, cell });
+        return;
+      case 'Delete':
+      case 'Backspace':
+        if (mod) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (editable) commands.clearCell(cell);
+        return;
+      case 'Tab': {
+        if (mod || e.altKey) return; // ⌃⇥ switches sheets (the shell binds it)
+        const direction: Direction = e.shiftKey ? 'left' : 'right';
+        const result = nextCell(traversal, cell, direction);
+        // Nowhere to go inside the grid: let focus leave it (A11Y-01).
+        if (result.kind === 'stay' || (result.kind === 'append-row' && !editable)) return;
+        e.preventDefault();
+        e.stopPropagation();
+        rearm();
+        actions.move(direction);
+        return;
+      }
+      case 'Escape':
+        return; // the shell clears the selection (GRID-03)
+      default:
+        break;
+    }
+    // GRID-04: any printable character overwrites and opens the editor.
+    if (mod || e.key.length !== 1 || !editable) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (readOnly !== null) {
+      refuse();
+      return;
+    }
+    actions.dispatch({ type: 'edit', seed: { kind: 'overwrite', text: e.key }, cell });
   };
 
   const presenceStyle =
     other === undefined
       ? undefined
       : ({ '--gd-presence': `var(--presence-${String(other.colour)})` } as CSSProperties);
+  const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
 
   return (
     <div
@@ -318,42 +664,66 @@ function Cell({
       role="gridcell"
       tabIndex={tabStop ? 0 : -1}
       aria-selected={selected || undefined}
-      aria-label={address === undefined ? undefined : `${address}${text === '' ? '' : `, ${text}`}`}
+      aria-readonly={readOnly === null ? undefined : true}
+      aria-label={
+        address === undefined
+          ? undefined
+          : `${address}${text === '' ? '' : `, ${text}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
+      }
       className={clsx('gd-cell', {
         'gd-cell--selected': selected,
-        'gd-cell--editing': editing,
+        'gd-cell--editing': editing !== null,
         'gd-cell--presence': other !== undefined,
+        'gd-cell--locked': readOnly !== null,
+        'gd-cell--frozen': frozen,
+        'gd-cell--freeze-edge': freezeEdge,
+        'gd-cell--wrap': wrap,
       })}
       style={{ width: `${String(widthPx)}px`, ...presenceStyle }}
-      title={tier === 'micro' && !editing ? text : undefined}
+      title={
+        tier === 'micro' && editing === null
+          ? lockLabel === undefined
+            ? text
+            : `${text}${text === '' ? '' : ' — '}${lockLabel}`
+          : undefined
+      }
       onPointerDown={(e) => {
         e.stopPropagation();
-        onSelect(cell);
+        actions.selectCell(cell);
       }}
       onFocus={() => {
         // Tabbing onto a cell arms it (A11Y-01), so Enter can open the editor.
-        if (!selected) onSelect(cell);
+        if (!selected) actions.selectCell(cell);
       }}
       onDoubleClick={() => {
-        if (editable) onEdit(cell);
+        if (!editable) return;
+        if (readOnly !== null) {
+          refuse();
+          return;
+        }
+        actions.dispatch({ type: 'edit', seed: { kind: 'existing' }, cell });
       }}
       onKeyDown={onKeyDown}
       data-address={address}
+      data-read-only={readOnly ?? undefined}
     >
-      {editing && editable ? (
+      {editing !== null && canEdit ? (
         <CellEditor
           initial={text}
+          seed={editing.seed}
           address={address}
-          onCommit={(value) => {
-            onCommit(cell, value);
-            onEdit(null);
+          onCommit={(value, then) => {
+            actions.commit(cell, value, then);
           }}
-          onCancel={() => {
-            onEdit(null);
-          }}
+          onCancel={actions.cancel}
         />
       ) : (
         tier === 'micro' && <span className="gd-cell__text">{text}</span>
+      )}
+      {readOnly !== null && (
+        <span className="gd-cell__lock" aria-hidden="true">
+          <Icon name="locked" size={13} />
+        </span>
       )}
       {other !== undefined && (
         <span className="gd-cell__presence-tag" aria-label={`${other.name} is here`}>
@@ -361,87 +731,5 @@ function Cell({
         </span>
       )}
     </div>
-  );
-}
-
-interface CellEditorProps {
-  initial: string;
-  address: string | undefined;
-  onCommit: (value: string) => void;
-  onCancel: () => void;
-}
-
-/**
- * Wave 1 editor: plain text. Enter commits, Escape cancels, blur commits; none
- * of them fire mid-composition (GRID-06, I18N-01). Rich text arrives in Wave 2.
- */
-function CellEditor({ initial, address, onCommit, onCancel }: CellEditorProps) {
-  const [value, setValue] = useState(initial);
-  const ref = useRef<HTMLTextAreaElement>(null);
-  const done = useRef(false);
-  const latest = useRef({ value, onCommit });
-  latest.current = { value, onCommit };
-  const mounted = useRef(false);
-  useEffect(() => {
-    mounted.current = true;
-    ref.current?.focus();
-    ref.current?.select();
-    // GRID-06: blur commits. Selecting another cell (or switching sheet) unmounts the
-    // editor before the browser blurs it, so the draft commits here unless already
-    // finished. Deferred one microtask so StrictMode's mount → unmount → mount rehearsal
-    // (which remounts synchronously) does not commit.
-    return () => {
-      mounted.current = false;
-      queueMicrotask(() => {
-        if (mounted.current || done.current) return;
-        done.current = true;
-        latest.current.onCommit(latest.current.value);
-      });
-    };
-  }, []);
-  const finish = (commit: boolean) => {
-    if (done.current) return;
-    done.current = true;
-    if (commit) onCommit(value);
-    else onCancel();
-  };
-  return (
-    // A textarea sized as the cell: multi-line text survives a round trip (⇧⏎ adds a line).
-    <textarea
-      ref={ref}
-      rows={1}
-      className="gd-cell__editor"
-      aria-label={address === undefined ? 'Cell' : `Edit ${address}`}
-      value={value}
-      onChange={(e) => {
-        setValue(e.target.value);
-      }}
-      onKeyDown={(e) => {
-        // The editor owns its keys; the cell beneath must not see them (⇧⏎ is a newline here).
-        e.stopPropagation();
-        // I18N-01: `keyCode === 229` is the legacy IME signal some engines still send.
-        // eslint-disable-next-line @typescript-eslint/no-deprecated -- required by the IME contract
-        if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
-        if (e.code === 'Enter' && !e.shiftKey) {
-          e.preventDefault();
-          e.stopPropagation();
-          finish(true);
-        } else if (e.code === 'Escape') {
-          e.preventDefault();
-          e.stopPropagation();
-          finish(false);
-        } else if (e.code === 'Tab') {
-          e.preventDefault();
-          finish(true);
-        }
-      }}
-      onBlur={() => {
-        finish(true);
-      }}
-      onPointerDown={(e) => {
-        e.stopPropagation();
-      }}
-      spellCheck={false}
-    />
   );
 }

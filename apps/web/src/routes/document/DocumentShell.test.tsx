@@ -319,7 +319,7 @@ describe('DocumentShell', () => {
     const grid = await addTable();
     const headers = within(grid).getAllByRole('columnheader');
     // The table was placed at column B (index 1): its headers carry B, C, D.
-    expect(headers.map((h) => within(h).getByLabelText(/Column/).textContent)).toEqual([
+    expect(headers.map((h) => within(h).getByLabelText(/^Column [A-Z]+$/).textContent)).toEqual([
       'B',
       'C',
       'D',
