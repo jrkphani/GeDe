@@ -28,6 +28,21 @@
 .gd-formula__value--pending {
   color: var(--ink-muted);
 }
+/* A numeric result sits right with tabular figures, as a typed number does (FMT-02, FMT-03). */
+.gd-formula__value--right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+/* The cell's own alignment (INSP-06) applies to a formula's value as it does to text. */
+.gd-cell[data-halign='left'] .gd-formula__value {
+  text-align: left;
+}
+.gd-cell[data-halign='center'] .gd-formula__value {
+  text-align: center;
+}
+.gd-cell[data-halign='right'] .gd-formula__value {
+  text-align: right;
+}
 /* The badge is the reference signal (A11Y-04): mono, ink on live tint, never hue alone. */
 .gd-formula__badge {
   flex: none;

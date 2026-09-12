@@ -13,6 +13,7 @@
 import type { CellRange, CellRef } from '../address.js';
 import type { UnitBounds } from '../doc/geometry.js';
 import type { DeriveSpec } from '../doc/schema.js';
+import type { CellFormat } from '../format/types.js';
 import type { CellKey, Id } from '../ids.js';
 import type { ParseError, Span } from '../formula/ast.js';
 import type { CellValue, FormulaError } from '../formula/evaluate.js';
@@ -43,9 +44,16 @@ export interface ColumnStructure {
    * `={c:T:R:SRC}.Method(args)` for every row; nothing is stored for them.
    */
   readonly derive?: DeriveSpec | undefined;
+  /**
+   * The column's data format (FMT-01, FMT-06). The engine resolves every text
+   * cell through it — a Currency column's `100` is an amount in its code, an
+   * unparsable cell is excluded (FMT-05) — so the format is part of the
+   * projection and a change to it re-evaluates dependents. Absent: Automatic.
+   */
+  readonly format?: CellFormat | undefined;
 }
 
-/** A table's geometry and labels — everything but its cell contents. */
+/** A table's geometry, labels and formats — everything but its cell contents. */
 export interface TableStructure {
   readonly id: Id;
   readonly sheetId: Id;
@@ -61,6 +69,8 @@ export interface TableStructure {
   readonly rowHeights: readonly number[];
   /** Effective outline depth per row (HIER-02 applied); `@` paths are qualified by parent row. */
   readonly rowDepths: readonly number[];
+  /** Per-cell format overrides (FMT-01), keyed by cell; a cell absent here inherits its column's. */
+  readonly cellFormats?: Readonly<Record<CellKey, CellFormat>> | undefined;
 }
 
 export type CellSnapshot =

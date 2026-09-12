@@ -2,9 +2,10 @@
  * Automatic format inference (PRD §22 "Automatic: infers Number, Currency,
  * Date or Text; never rewrites stored text, only picks the numeric parse").
  *
- * TODO(wave2/formats): once `packages/core/src/format` lands with explicit
- * per-column formats and `sumCurrency`, read the column format first and fall
- * back to this inference only for `Automatic` columns.
+ * Only an Automatic column is read this way. An explicit Number, Currency or
+ * Date format reaches the engine with the table structure and is resolved by
+ * `format/value.ts` (`cellValueOf`), so a formatted cell yields the value its
+ * format parses and an unparsable one is excluded (FMT-02, FMT-03, FMT-05).
  */
 import type { CellValue } from '../formula/evaluate.js';
 
@@ -65,27 +66,4 @@ export function inferCellValue(raw: string): CellValue {
   }
   if (ISO_DATE_RE.test(text)) return { kind: 'date', iso: text, text: raw };
   return { kind: 'text', text: raw };
-}
-
-export type InferredFormat = 'number' | 'currency' | 'date' | 'text' | 'empty';
-
-/**
- * A column's Automatic format from its cells: the kind every non-blank cell
- * agrees on, `text` when they disagree, `empty` when there is nothing to infer
- * from. Sum is offered for `number`, `currency` and — pending an explicit
- * format — `empty` (FX-02).
- */
-export function inferColumnFormat(values: readonly CellValue[]): InferredFormat {
-  let seen: InferredFormat | null = null;
-  for (const v of values) {
-    if (v.kind === 'blank' || v.kind === 'error') continue;
-    const kind: InferredFormat = v.kind === 'list' ? 'text' : v.kind;
-    if (seen === null) seen = kind;
-    else if (seen !== kind) return 'text';
-  }
-  return seen ?? 'empty';
-}
-
-export function isSummable(format: InferredFormat): boolean {
-  return format === 'number' || format === 'currency' || format === 'empty';
 }

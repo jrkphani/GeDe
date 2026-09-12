@@ -1,12 +1,5 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import {
-  isSummable,
-  readString,
-  searchEntities,
-  type EntityEntry,
-  type Id,
-  type TableMap,
-} from '@gede/core';
+import { readString, searchEntities, type EntityEntry, type Id, type TableMap } from '@gede/core';
 import { Icon, Popover } from '@gede/ui';
 
 import { useYVersion } from '../../../doc/use-y.js';
@@ -20,7 +13,7 @@ import {
   replaceRange,
   type Replacement,
 } from './input.js';
-import { columnFormatOf } from './workbook.js';
+import { columnFormatOf, isSummable } from './workbook.js';
 
 export interface FormulaAdornmentsOptions {
   /**
@@ -109,7 +102,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   const { table, colId, text, selectionStart, selectionEnd, anchor, onReplace } = options;
   const doc = table?.doc ?? null;
   const enabled = (options.enabled ?? true) && table !== null && doc !== null;
-  // The column's cells decide whether Sum is offered; the workbook's labels feed the @ index.
+  // The column's format decides whether Sum is offered (FX-02); the workbook's labels feed the @ index.
   const version = useYVersion(table);
   const indexVersion = useWorkbookIndexVersion(doc);
   const listboxId = useId();
@@ -121,7 +114,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
 
   const summable = useMemo(
     () => table !== null && isSummable(columnFormatOf(table, colId)),
-    // version: the column's cells changed.
+    // version: the column's format changed.
     [table, colId, version],
   );
   const entityQuery = enabled ? entityQueryAt(text, selectionStart) : null;

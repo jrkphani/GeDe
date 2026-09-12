@@ -1560,7 +1560,7 @@ const Cell = memo(function Cell({
           onPick={(value, locale) => commands.pickMappingValue(cell, value, locale)}
         />
       ) : formula && tier === 'micro' ? (
-        <FormulaCell table={table} cell={cell} expression={wrap} />
+        <FormulaCell table={table} cell={cell} expression={wrap} format={format} />
       ) : (
         tier === 'micro' && (
           <CellContent content={rich} layout={layout} format={format} locale={locale} />

@@ -9,6 +9,8 @@ import * as Y from 'yjs';
 import { rowHeights } from '../doc/geometry.js';
 import { effectiveDepths } from '../hier/outline.js';
 import {
+  cellFormatMap,
+  cellFormatOverride,
   cellsMap,
   fragmentText,
   isFormula,
@@ -19,7 +21,9 @@ import {
   type GedeDoc,
   type TableMap,
 } from '../doc/schema.js';
-import { isCellKey, type CellKey, type Id } from '../ids.js';
+import { columnFormat } from '../format/column.js';
+import type { CellFormat } from '../format/types.js';
+import { isCellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { plainText } from '../text/types.js';
 import { fragmentToRich } from '../text/yjs.js';
 import type { CellSnapshot, TableSnapshot, TableStructure, WorkbookChange } from './types.js';
@@ -36,8 +40,26 @@ export function cellSnapshot(content: CellContent | undefined): CellSnapshot | n
     : { kind: 'text', text: fragmentText(content) };
 }
 
+/** Every cell-level format override in the table (FMT-01), or undefined when there is none. */
+function cellFormats(table: TableMap): Record<CellKey, CellFormat> | undefined {
+  const map = cellFormatMap(table);
+  if (map === null || map.size === 0) return undefined;
+  const out: Record<CellKey, CellFormat> = {};
+  let count = 0;
+  map.forEach((_entry, key) => {
+    if (!isCellKey(key)) return;
+    const { rowId, colId } = splitCellKey(key);
+    const override = cellFormatOverride(table, rowId, colId);
+    if (override === null) return;
+    out[key] = override;
+    count += 1;
+  });
+  return count === 0 ? undefined : out;
+}
+
 export function tableStructure(table: TableMap): TableStructure {
   const record = tableRecord(table);
+  const overrides = cellFormats(table);
   return {
     id: record.id,
     sheetId: record.sheetId,
@@ -45,17 +67,20 @@ export function tableStructure(table: TableMap): TableStructure {
     gridCol: record.gridCol,
     gridRow: record.gridRow,
     // A hidden column has no lattice presence (GRID-02): width 0, so nothing after it moves.
+    // The format rides along (FMT-01..06): the engine reads every cell through it.
     columns: record.columns.map((c) => ({
       id: c.id,
       label: c.label,
       width: c.hidden ? 0 : c.width,
       ...(c.derive === null ? {} : { derive: c.derive }),
+      format: columnFormat(c),
     })),
     rows: record.rows,
     rowHeights: rowHeights(table, record),
     // Effective depths (HIER-02): a merge can leave a stored depth deeper than the
     // row above allows, and an `@` path must be qualified by the parent the reader sees.
     rowDepths: effectiveDepths(record.rows.map((rowId) => rowMeta(table, rowId).depth)),
+    ...(overrides === undefined ? {} : { cellFormats: overrides }),
   };
 }
 

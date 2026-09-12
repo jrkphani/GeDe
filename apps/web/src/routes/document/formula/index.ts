@@ -74,4 +74,11 @@ export {
   type FormulaEditorAdornmentsHandle,
   type FormulaEditorAdornmentsProps,
 } from './FormulaEditorAdornments.js';
-export { columnFormatOf, docOf, operandsOf, projectSource, sheetOfTable } from './workbook.js';
+export {
+  columnFormatOf,
+  docOf,
+  isSummable,
+  operandsOf,
+  projectSource,
+  sheetOfTable,
+} from './workbook.js';
