@@ -37,6 +37,15 @@ export interface RequestOptions {
   method?: 'GET' | 'POST' | 'PATCH' | 'PUT' | 'DELETE' | undefined;
   body?: unknown;
   signal?: AbortSignal | undefined;
+  /**
+   * Retry 5xx / 429 / network failures with backoff. Opt-in: on by default
+   * for GET only, which is safe to repeat; a write that the service may have
+   * applied before answering (or that answers 5xx by design, such as an
+   * invitation whose mail was refused) must ask for it explicitly. Review of
+   * #76: an unretried `POST /invites` used to become four rows, four mails
+   * and four units of the invitation budget.
+   */
+  retry?: boolean | undefined;
   /** Test seams. */
   fetchImpl?: typeof fetch | undefined;
   sleep?: ((ms: number) => Promise<void>) | undefined;
@@ -64,9 +73,12 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   const sleep = options.sleep ?? defaultSleep;
   const getToken = options.getToken ?? accessToken;
   const url = `${getConfig().apiUrl}${path}`;
+  const method = options.method ?? 'GET';
+  const retry = options.retry ?? method === 'GET';
+  const maxAttempts = retry ? MAX_ATTEMPTS : 1;
 
   let lastError: ApiError | null = null;
-  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     const token = await getToken();
     const headers: Record<string, string> = { accept: 'application/json' };
     if (token !== null) headers.authorization = `Bearer ${token}`;
@@ -74,7 +86,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
 
     let res: Response;
     try {
-      const init: RequestInit = { method: options.method ?? 'GET', headers, credentials: 'omit' };
+      const init: RequestInit = { method, headers, credentials: 'omit' };
       if (options.body !== undefined) init.body = JSON.stringify(options.body);
       if (options.signal !== undefined) init.signal = options.signal;
       res = await fetchImpl(url, init);
@@ -82,7 +94,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
       if (options.signal?.aborted) throw err;
       // Network failure: treat like a 503 and retry with backoff.
       lastError = new ApiError(503, 'Network request failed', undefined, undefined, attempt);
-      if (attempt < MAX_ATTEMPTS) await sleep(backoffDelay(attempt));
+      if (attempt < maxAttempts) await sleep(backoffDelay(attempt));
       continue;
     }
 
@@ -105,7 +117,7 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
       body,
       attempt,
     );
-    if (!isRetryable(res.status) || attempt === MAX_ATTEMPTS) throw lastError;
+    if (!isRetryable(res.status) || attempt === maxAttempts) throw lastError;
     await sleep(retryAfterMs(res) ?? backoffDelay(attempt));
   }
   // Unreachable in practice; the loop either returns or throws.

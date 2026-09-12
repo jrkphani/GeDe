@@ -4,7 +4,6 @@ import { Button, Icon } from '@gede/ui';
 
 import type { DocumentSummary } from '../../../api/documents.js';
 import type { ShareSheet as SheetModel } from '../../../api/shares.js';
-import { useSession } from '../../../auth/session.js';
 import { SharedIndicator } from './SharedIndicator.js';
 import { ShareSheet } from './ShareSheet.js';
 
@@ -23,11 +22,9 @@ export interface ShareControlsProps {
  * so stopping sharing or the first invitation is reflected without a reload.
  */
 export function ShareControls({ doc, participants, phone }: ShareControlsProps) {
-  const { state } = useSession();
   const [open, setOpen] = useState(false);
   const [trigger, setTrigger] = useState<HTMLButtonElement | null>(null);
   const [sharedWithOthers, setSharedWithOthers] = useState<boolean | null>(null);
-  const user = state.status === 'signed-in' ? state.user : null;
   const sharedFlag =
     doc.sharedBy !== undefined || (sharedWithOthers ?? doc.sharedWithOthers === true);
 
@@ -60,7 +57,6 @@ export function ShareControls({ doc, participants, phone }: ShareControlsProps) 
         onOpenChange={setOpen}
         returnFocusTo={trigger}
         readOnly={phone}
-        viewer={{ id: user?.sub, email: user?.email }}
         onChanged={onChanged}
       />
     </>

@@ -42,7 +42,7 @@ export interface MePatch {
 
 /** `PATCH /api/me { displayName?, locale? }`. */
 export async function updateMe(patch: MePatch, options?: RequestOptions): Promise<void> {
-  await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: patch });
+  await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: patch, retry: true });
 }
 
 /**
@@ -53,7 +53,7 @@ export async function updateMe(patch: MePatch, options?: RequestOptions): Promis
  */
 export async function bindVerifiedEmail(idToken: string, options?: RequestOptions): Promise<Me> {
   const me = toMe(
-    await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: { idToken } }),
+    await apiFetch<unknown>('/me', { ...options, method: 'PATCH', body: { idToken }, retry: true }),
   );
   if (!me) throw new Error('The profile response was not in the expected shape');
   return me;

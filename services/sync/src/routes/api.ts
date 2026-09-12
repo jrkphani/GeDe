@@ -239,6 +239,15 @@ export function registerApi(
             throw error;
           }
           if (!bound) throw new Error('user row missing after the auth hook resolved it');
+          if (bound.user.email?.toLowerCase() !== attested.email.toLowerCase()) {
+            // The row already carries another address (review of #76): say so
+            // rather than answer 200 with a profile the SPA would misread as bound.
+            throw new AppError(
+              409,
+              'email_bound',
+              'This account is already registered to a different email',
+            );
+          }
           if (bound.converted.length > 0) {
             request.log.info(
               { userId: user.id, documents: bound.converted.length },

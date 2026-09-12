@@ -49,7 +49,8 @@ function actor(input: Pick<ShareMailInput, 'actorName' | 'actorEmail'>): string 
 function subjectWithin(prefix: string, title: string, suffix: string): string {
   const room = SUBJECT_MAX - prefix.length - suffix.length;
   const shown = title.length > room ? `${title.slice(0, Math.max(0, room - 1))}…` : title;
-  return `${prefix}${shown}${suffix}`;
+  // A long actor name alone can pass 60; the cap holds whatever is in it.
+  return `${prefix}${shown}${suffix}`.slice(0, SUBJECT_MAX);
 }
 
 function escapeHtml(text: string): string {

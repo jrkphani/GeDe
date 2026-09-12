@@ -57,6 +57,7 @@ const SEMBIAN = {
   email: 'sembian@1cloudhub.com',
   permission: 'edit' as const,
   invitedBy: 'u-owner',
+  source: 'invite' as const,
 };
 const PENDING = {
   id: 'inv-1',
@@ -74,17 +75,12 @@ function sheet(overrides: Partial<SharesApi.ShareSheet> = {}): SharesApi.ShareSh
     linkAccess: 'none',
     linkToken: null,
     permission: 'owner',
+    callerId: OWNER.id,
     ...overrides,
   };
 }
 
-function Harness({
-  readOnly = false,
-  viewerEmail = OWNER.email,
-}: {
-  readOnly?: boolean;
-  viewerEmail?: string;
-}) {
+function Harness({ readOnly = false }: { readOnly?: boolean }) {
   return (
     <>
       <LiveRegion />
@@ -94,7 +90,6 @@ function Harness({
         open
         onOpenChange={() => undefined}
         readOnly={readOnly}
-        viewer={{ id: undefined, email: viewerEmail }}
       />
     </>
   );
@@ -149,6 +144,7 @@ describe('ShareSheet', () => {
     const u = userEvent.setup();
     vi.mocked(shares.inviteToDocument).mockResolvedValue({
       kind: 'invite',
+      created: true,
       shares: sheet({
         invites: [PENDING, { ...PENDING, id: 'inv-2', email: 'vijay@example.com' }],
       }),
@@ -264,8 +260,10 @@ describe('ShareSheet', () => {
   });
 
   it('SHARE-03 an editor may invite but not change permissions, remove, set the link or stop sharing; a viewer sees names only', async () => {
-    vi.mocked(shares.getShareSheet).mockResolvedValueOnce(sheet({ permission: 'edit' }));
-    const { unmount } = render(<Harness viewerEmail={SEMBIAN.email} />);
+    vi.mocked(shares.getShareSheet).mockResolvedValueOnce(
+      sheet({ permission: 'edit', callerId: SEMBIAN.userId }),
+    );
+    const { unmount } = render(<Harness />);
     let dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
     expect(
       await within(dialog).findByRole('textbox', { name: 'Add people by email' }),
@@ -279,15 +277,53 @@ describe('ShareSheet', () => {
     expect(within(dialog).getByText('Sembian V (you)')).toBeInTheDocument();
     unmount();
 
+    // A viewer receives no emails; "(you)" still matches through callerId (review of #76).
     vi.mocked(shares.getShareSheet).mockResolvedValueOnce(
-      sheet({ permission: 'view', invites: [], linkToken: null }),
+      sheet({
+        permission: 'view',
+        invites: [],
+        linkToken: null,
+        callerId: 'u-viewer',
+        owner: { ...OWNER, email: null },
+        participants: [
+          { ...SEMBIAN, email: null },
+          {
+            userId: 'u-viewer',
+            name: 'Vijay',
+            email: null,
+            permission: 'view',
+            invitedBy: 'u-owner',
+            source: 'link',
+          },
+        ],
+      }),
     );
-    render(<Harness viewerEmail="someone@else.example" />);
+    render(<Harness />);
     dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
     await within(dialog).findByRole('list', { name: 'People with access' });
     expect(within(dialog).queryByRole('textbox')).not.toBeInTheDocument();
     expect(within(dialog).queryByRole('combobox')).not.toBeInTheDocument();
     expect(within(dialog).getByRole('button', { name: 'Copy link' })).toBeVisible();
+    expect(within(dialog).getByText('Vijay (you)')).toBeInTheDocument();
+    expect(within(dialog).getByText('Via link')).toBeInTheDocument();
+  });
+
+  it('SHARE-02 a repeated invitation is announced as already pending, not as sent (review of #76)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(shares.inviteToDocument).mockResolvedValue({
+      kind: 'invite',
+      created: false,
+      shares: sheet(),
+    });
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const field = await within(dialog).findByRole('textbox', { name: 'Add people by email' });
+    await u.type(field, 'akshaya@example.com{Enter}');
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'akshaya@example.com already has a pending invitation',
+      );
+    });
   });
 
   it('RESP-02 on phone the sheet is read-only: who has access and Copy link, no invite field, no permission control, no remove, no stop sharing', async () => {

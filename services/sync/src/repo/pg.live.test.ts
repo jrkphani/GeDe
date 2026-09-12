@@ -425,6 +425,17 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
 
   const inDays = (days: number) => new Date(Date.now() + days * 24 * 60 * 60 * 1000);
 
+  async function inviteRow(input: {
+    documentId: string;
+    email: string;
+    permission: 'view' | 'edit';
+    token: string;
+    invitedBy: string;
+    expiresAt?: Date;
+  }) {
+    return repo.invites.create({ expiresAt: inDays(14), ...input });
+  }
+
   test('SHARE-01 SHARE-03 shares: add once, change permission, remove, stop sharing — each with its audit row, as the app role', async () => {
     const owner = await user('sub-share-owner');
     const editor = await user('sub-share-editor');
@@ -483,16 +494,15 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     );
 
     const list = await repo.documents.participants(doc.id);
-    expect(list?.participants.map((p) => [p.userId, p.permission, p.invitedBy])).toEqual([
-      [editor, 'edit', owner],
+    expect(list?.participants.map((p) => [p.userId, p.permission, p.invitedBy, p.source])).toEqual([
+      [editor, 'edit', owner, 'invite'],
     ]);
 
-    await repo.invites.create({
+    await inviteRow({
       documentId: doc.id,
       email: 'pending@example.com',
       permission: 'view',
       token: 'tok-stop',
-      expiresAt: inDays(14),
       invitedBy: owner,
     });
     expect(await repo.shares.stop({ documentId: doc.id, actorId: owner })).toEqual([editor]);
@@ -515,30 +525,26 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       'share.stop',
     ]);
     expect(audit.rows[3]).toEqual({ action: 'share.permission', target: `${viewer}:edit` });
+    // The stop row names who lost access (review of #76).
+    expect(JSON.parse(audit.rows[6]?.target ?? '{}')).toEqual({
+      users: [editor],
+      invites: ['pending@example.com'],
+    });
   });
 
-  test('SHARE-01 link access mints a token only when turned on, keeps it across view/edit, and redeems into a share that never lowers an explicit one', async () => {
+  test('SHARE-01 link access: a fresh token on every level the link is switched to, link shares labelled and revoked with the link, an explicit share never lowered (review of #76)', async () => {
     const owner = await user('sub-link-owner');
     const guest = await user('sub-link-guest');
     const editor = await user('sub-link-editor');
     const doc = await createDoc(owner, 'Linked trek');
     let minted = 0;
     const mintToken = () => `link-${String(++minted)}`;
+    const setLink = (access: 'none' | 'view' | 'edit') =>
+      repo.shares.setLinkAccess({ documentId: doc.id, access, actorId: owner, mintToken });
 
-    const on = await repo.shares.setLinkAccess({
-      documentId: doc.id,
-      access: 'view',
-      actorId: owner,
-      mintToken,
-    });
-    expect(on).toMatchObject({ linkAccess: 'view', linkToken: 'link-1' });
-    const toEdit = await repo.shares.setLinkAccess({
-      documentId: doc.id,
-      access: 'edit',
-      actorId: owner,
-      mintToken,
-    });
-    expect(toEdit).toMatchObject({ linkAccess: 'edit', linkToken: 'link-1' });
+    const on = await setLink('view');
+    expect(on?.document).toMatchObject({ linkAccess: 'view', linkToken: 'link-1' });
+    expect(on?.revoked).toEqual([]);
     expect(
       await repo.shares.setLinkAccess({
         documentId: crypto.randomUUID(),
@@ -548,20 +554,24 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       }),
     ).toBeUndefined();
 
-    // A wrong token grants nothing; the right one grants the link's level once.
+    // A wrong token grants nothing; the right one grants the link's level once, as a `link` share.
     expect(
       await repo.shares.redeemLink({ documentId: doc.id, userId: guest, token: 'link-9' }),
     ).toBeUndefined();
     expect(
       await repo.shares.redeemLink({ documentId: doc.id, userId: guest, token: 'link-1' }),
-    ).toBe('edit');
-    expect(await repo.documents.sharePermission(doc.id, guest)).toBe('edit');
+    ).toBe('view');
+    expect(await repo.documents.sharePermission(doc.id, guest)).toBe('view');
+    expect(
+      (await repo.documents.participants(doc.id))?.participants.map((p) => [p.userId, p.source]),
+    ).toEqual([[guest, 'link']]);
     expect(
       await repo.shares.redeemLink({ documentId: doc.id, userId: owner, token: 'link-1' }),
-    ).toBe('edit');
+    ).toBe('view');
     expect(await repo.documents.sharePermission(doc.id, owner)).toBeUndefined();
 
-    // The link at `view` never lowers an explicit editor.
+    // view → edit re-mints: the distributed view link never becomes an edit
+    // link, and whoever came in through it is no longer a participant.
     await repo.shares.add({
       documentId: doc.id,
       userId: editor,
@@ -569,45 +579,60 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       invitedBy: owner,
       actorId: owner,
     });
-    await repo.shares.setLinkAccess({
-      documentId: doc.id,
-      access: 'view',
-      actorId: owner,
-      mintToken,
-    });
-    expect(
-      await repo.shares.redeemLink({ documentId: doc.id, userId: editor, token: 'link-1' }),
-    ).toBe('edit');
-
-    // Off, then on again: the old link is dead and a fresh token is minted.
-    await repo.shares.setLinkAccess({
-      documentId: doc.id,
-      access: 'none',
-      actorId: owner,
-      mintToken,
-    });
+    const raised = await setLink('edit');
+    expect(raised?.document.linkToken).toBe('link-2');
+    expect(raised?.revoked).toEqual([guest]);
+    expect(await repo.documents.sharePermission(doc.id, guest)).toBeUndefined();
+    expect(await repo.documents.sharePermission(doc.id, editor)).toBe('edit');
     expect(
       await repo.shares.redeemLink({ documentId: doc.id, userId: guest, token: 'link-1' }),
     ).toBeUndefined();
-    const again = await repo.shares.setLinkAccess({
-      documentId: doc.id,
-      access: 'view',
-      actorId: owner,
-      mintToken,
-    });
-    expect(again?.linkToken).toBe('link-2');
+    expect(
+      await repo.shares.redeemLink({ documentId: doc.id, userId: guest, token: 'link-2' }),
+    ).toBe('edit');
+    // Setting the same level again changes nothing and revokes nobody.
+    const same = await setLink('edit');
+    expect(same?.document.linkToken).toBe('link-2');
+    expect(same?.revoked).toEqual([]);
+    expect(await repo.documents.sharePermission(doc.id, guest)).toBe('edit');
+
+    // The link at `view` never lowers an explicit editor.
+    const lowered = await setLink('view');
+    expect(lowered?.document.linkToken).toBe('link-3');
+    expect(lowered?.revoked).toEqual([guest]);
+    expect(
+      await repo.shares.redeemLink({ documentId: doc.id, userId: editor, token: 'link-3' }),
+    ).toBe('edit');
+    await repo.shares.redeemLink({ documentId: doc.id, userId: guest, token: 'link-3' });
+
+    // Off: link shares go, invited ones stay, the old token is dead.
+    const off = await setLink('none');
+    expect(off?.revoked).toEqual([guest]);
+    expect(await repo.documents.sharePermission(doc.id, guest)).toBeUndefined();
+    expect(await repo.documents.sharePermission(doc.id, editor)).toBe('edit');
+    expect(
+      await repo.shares.redeemLink({ documentId: doc.id, userId: guest, token: 'link-3' }),
+    ).toBeUndefined();
+    const again = await setLink('view');
+    expect(again?.document.linkToken).toBe('link-4');
     const list = await repo.documents.participants(doc.id);
-    expect(list).toMatchObject({ linkAccess: 'view', linkToken: 'link-2' });
+    expect(list).toMatchObject({ linkAccess: 'view', linkToken: 'link-4' });
     const audit = await pool.query<{ action: string; target: string | null; user_id: string }>(
       "select action, target, user_id from audit_log where document_id = $1 and action like 'share.link%' order by id",
       [doc.id],
     );
     expect(audit.rows).toEqual([
       { action: 'share.link', target: 'view', user_id: owner },
+      { action: 'share.link_redeem', target: 'view', user_id: guest },
       { action: 'share.link', target: 'edit', user_id: owner },
+      { action: 'share.link_revoke', target: guest, user_id: owner },
       { action: 'share.link_redeem', target: 'edit', user_id: guest },
+      { action: 'share.link', target: 'edit', user_id: owner },
       { action: 'share.link', target: 'view', user_id: owner },
+      { action: 'share.link_revoke', target: guest, user_id: owner },
+      { action: 'share.link_redeem', target: 'view', user_id: guest },
       { action: 'share.link', target: 'none', user_id: owner },
+      { action: 'share.link_revoke', target: guest, user_id: owner },
       { action: 'share.link', target: 'view', user_id: owner },
     ]);
   });
@@ -617,32 +642,41 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     const doc = await createDoc(owner, 'Invited trek');
     const other = await createDoc(owner, 'Second trek');
 
-    const invite = await repo.invites.create({
+    const first = await inviteRow({
       documentId: doc.id,
       email: 'Sembian@Example.com',
       permission: 'edit',
       token: 'tok-1',
-      expiresAt: inDays(14),
       invitedBy: owner,
     });
-    expect(invite).toMatchObject({ email: 'Sembian@Example.com', permission: 'edit' });
-    // A re-invite replaces the pending one: one row, the later permission and token.
-    const replaced = await repo.invites.create({
+    expect(first.created).toBe(true);
+    expect(first.invite).toMatchObject({ email: 'Sembian@Example.com', permission: 'edit' });
+    // Idempotent per (document, address), case-insensitively (review of #76):
+    // a repeated invite returns the one that stands — same row, same token,
+    // the first permission — and writes nothing.
+    const again = await inviteRow({
       documentId: doc.id,
       email: 'sembian@example.com',
       permission: 'view',
       token: 'tok-2',
-      expiresAt: inDays(14),
       invitedBy: owner,
     });
-    expect(await repo.invites.byToken('tok-1')).toBeUndefined();
-    expect(await repo.invites.byToken('tok-2')).toMatchObject({ id: replaced.id });
+    expect(again.created).toBe(false);
+    expect(again.invite).toMatchObject({ id: first.invite.id, token: 'tok-1', permission: 'edit' });
+    expect(await repo.invites.byToken('tok-2')).toBeUndefined();
     const pending = await repo.documents.participants(doc.id);
     expect(pending?.invites.map((i) => [i.email, i.permission, i.invitedBy])).toEqual([
-      ['sembian@example.com', 'view', owner],
+      ['Sembian@Example.com', 'edit', owner],
     ]);
-    // An expired invitation is neither listed nor converted.
-    await repo.invites.create({
+    // `invites_pending_key` refuses a second pending row for the pair outright.
+    await expect(
+      pool.query(
+        "insert into invites (document_id, email, permission, token, expires_at, invited_by) values ($1, 'SEMBIAN@example.com', 'view', 'tok-dup', now() + interval '1 day', $2)",
+        [doc.id, owner],
+      ),
+    ).rejects.toThrow(/invites_pending_key/);
+    // An expired invitation is neither listed nor converted, and a fresh one replaces it.
+    const stale = await inviteRow({
       documentId: other.id,
       email: 'sembian@example.com',
       permission: 'edit',
@@ -650,6 +684,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       expiresAt: new Date(Date.now() - 1000),
       invitedBy: owner,
     });
+    expect(stale.created).toBe(true);
     expect((await repo.documents.participants(other.id))?.invites).toEqual([]);
 
     // First sign-in: the access token carries no email (this pool), the row is
@@ -659,16 +694,16 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(await repo.documents.sharePermission(doc.id, sembian.id)).toBeUndefined();
     const bound = await repo.users.bindEmail(sembian.id, 'SEMBIAN@example.com');
     expect(bound?.user.email).toBe('SEMBIAN@example.com');
-    expect(bound?.converted).toEqual([{ documentId: doc.id, permission: 'view' }]);
-    expect(await repo.documents.sharePermission(doc.id, sembian.id)).toBe('view');
+    expect(bound?.converted).toEqual([{ documentId: doc.id, permission: 'edit' }]);
+    expect(await repo.documents.sharePermission(doc.id, sembian.id)).toBe('edit');
     expect(await repo.documents.sharePermission(other.id, sembian.id)).toBeUndefined();
-    const share = await pool.query<{ invited_by: string }>(
-      'select invited_by from shares where document_id = $1 and user_id = $2',
+    const share = await pool.query<{ invited_by: string; source: string }>(
+      'select invited_by, source from shares where document_id = $1 and user_id = $2',
       [doc.id, sembian.id],
     );
-    expect(share.rows[0]).toEqual({ invited_by: owner });
-    expect((await repo.invites.byToken('tok-2'))?.acceptedAt).toBeInstanceOf(Date);
-    // Binding again is a no-op that converts nothing new; a different address is refused silently.
+    expect(share.rows[0]).toEqual({ invited_by: owner, source: 'invite' });
+    expect((await repo.invites.byToken('tok-1'))?.acceptedAt).toBeInstanceOf(Date);
+    // Binding again is a no-op that converts nothing new; a different address is left as is.
     expect((await repo.users.bindEmail(sembian.id, 'sembian@example.com'))?.converted).toEqual([]);
     const kept = await repo.users.bindEmail(sembian.id, 'else@example.com');
     expect(kept?.user.email).toBe('SEMBIAN@example.com');
@@ -680,27 +715,27 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     );
     expect((await repo.users.findByEmail('sembian@EXAMPLE.com'))?.id).toBe(sembian.id);
 
-    // The other path: a token that carries the verified address converts on upsert.
-    await repo.invites.create({
+    // The other path: a token that carries the verified address converts on upsert
+    // (the expired row for this address went when the fresh one was inserted).
+    const fresh = await inviteRow({
       documentId: other.id,
       email: 'meena@example.com',
       permission: 'edit',
       token: 'tok-3',
-      expiresAt: inDays(14),
       invitedBy: owner,
     });
+    expect(fresh.created).toBe(true);
     const meena = await repo.users.upsertFromToken({
       sub: 'sub-meena',
       email: 'meena@example.com',
     });
     expect(await repo.documents.sharePermission(other.id, meena.id)).toBe('edit');
     // And the explicit accept-by-token path, for the invitation link, refuses another account.
-    await repo.invites.create({
+    await inviteRow({
       documentId: doc.id,
       email: 'meena@example.com',
       permission: 'view',
       token: 'tok-4',
-      expiresAt: inDays(14),
       invitedBy: owner,
     });
     const tok4 = await repo.invites.byToken('tok-4');
@@ -709,19 +744,18 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(await repo.invites.accept({ inviteId: tok4!.id, userId: meena.id })).toBeUndefined();
     expect(await repo.documents.sharePermission(doc.id, meena.id)).toBe('view');
     // Withdrawing: only a pending invitation on this document.
-    const tok5 = await repo.invites.create({
+    const tok5 = await inviteRow({
       documentId: doc.id,
       email: 'late@example.com',
       permission: 'view',
       token: 'tok-5',
-      expiresAt: inDays(14),
       invitedBy: owner,
     });
     expect(
-      await repo.invites.remove({ documentId: other.id, inviteId: tok5.id, actorId: owner }),
+      await repo.invites.remove({ documentId: other.id, inviteId: tok5.invite.id, actorId: owner }),
     ).toBe(false);
     expect(
-      await repo.invites.remove({ documentId: doc.id, inviteId: tok5.id, actorId: owner }),
+      await repo.invites.remove({ documentId: doc.id, inviteId: tok5.invite.id, actorId: owner }),
     ).toBe(true);
     const audit = await pool.query<{ action: string; target: string | null }>(
       "select action, target from audit_log where document_id = $1 and action like 'share.invite%' order by id",
@@ -729,12 +763,98 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     );
     expect(audit.rows).toEqual([
       { action: 'share.invite', target: 'Sembian@Example.com' },
-      { action: 'share.invite', target: 'sembian@example.com' },
       { action: 'share.invite_accept', target: 'SEMBIAN@example.com' },
       { action: 'share.invite', target: 'meena@example.com' },
       { action: 'share.invite_accept', target: 'meena@example.com' },
       { action: 'share.invite', target: 'late@example.com' },
       { action: 'share.invite_remove', target: 'late@example.com' },
+    ]);
+  });
+
+  test('SHARE-02 SHARE-03 an invitation is only as good as its inviter: a removed or demoted editor’s invitations are withdrawn at conversion, not converted (review of #76)', async () => {
+    const owner = await user('sub-stale-owner');
+    const editor = await user('sub-stale-editor');
+    const doc = await createDoc(owner, 'Stale trek');
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: editor,
+      permission: 'edit',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    // Four invitations by the editor: two to convert on sign-in, two through the mail link.
+    for (const [email, token, permission] of [
+      ['a@example.com', 'tok-a', 'edit'],
+      ['b@example.com', 'tok-b', 'view'],
+      ['c@example.com', 'tok-c', 'edit'],
+      ['d@example.com', 'tok-d', 'view'],
+    ] as const) {
+      await inviteRow({ documentId: doc.id, email, permission, token, invitedBy: editor });
+    }
+    // And one by the owner, which always stands.
+    await inviteRow({
+      documentId: doc.id,
+      email: 'a@example.com',
+      permission: 'view',
+      token: 'tok-a-owner',
+      invitedBy: owner,
+    }).then((r) => {
+      expect(r.created).toBe(false); // a@ already has a pending invitation on this document
+    });
+    const otherDoc = await createDoc(owner, 'Owner trek');
+    await inviteRow({
+      documentId: otherDoc.id,
+      email: 'a@example.com',
+      permission: 'edit',
+      token: 'tok-a-other',
+      invitedBy: owner,
+    });
+
+    // The editor is demoted to view: their `edit` invitations are no longer
+    // theirs to give; their `view` ones still are.
+    await repo.shares.setPermission({
+      documentId: doc.id,
+      userId: editor,
+      permission: 'view',
+      actorId: owner,
+    });
+    const a = await repo.users.upsertFromToken({ sub: 'sub-a', email: 'a@example.com' });
+    expect(await repo.documents.sharePermission(doc.id, a.id)).toBeUndefined();
+    expect(await repo.documents.sharePermission(otherDoc.id, a.id)).toBe('edit');
+    const b = await repo.users.upsertFromToken({ sub: 'sub-b', email: 'b@example.com' });
+    expect(await repo.documents.sharePermission(doc.id, b.id)).toBe('view');
+    const bShare = await pool.query<{ invited_by: string }>(
+      'select invited_by from shares where document_id = $1 and user_id = $2',
+      [doc.id, b.id],
+    );
+    expect(bShare.rows[0]).toEqual({ invited_by: editor });
+
+    // The editor is removed: even a `view` invitation of theirs is withdrawn, on the link path too.
+    await repo.shares.remove({ documentId: doc.id, userId: editor, actorId: owner });
+    const c = await repo.users.upsertFromToken({ sub: 'sub-c', email: null });
+    await repo.users.bindEmail(c.id, 'c@example.com');
+    expect(await repo.documents.sharePermission(doc.id, c.id)).toBeUndefined();
+    const d = await repo.users.upsertFromToken({ sub: 'sub-d', email: null });
+    await pool.query('update users set email = $2 where id = $1', [d.id, 'd@example.com']);
+    const tokD = await repo.invites.byToken('tok-d');
+    expect(await repo.invites.accept({ inviteId: tokD!.id, userId: d.id })).toBeUndefined();
+    expect(await repo.documents.sharePermission(doc.id, d.id)).toBeUndefined();
+    expect(await repo.invites.byToken('tok-d')).toBeUndefined();
+    expect((await repo.documents.participants(doc.id))?.invites).toEqual([]);
+
+    const audit = await pool.query<{
+      action: string;
+      target: string | null;
+      user_id: string | null;
+    }>(
+      "select action, target, user_id from audit_log where document_id = $1 and action in ('share.invite_withdraw', 'share.invite_accept') order by id",
+      [doc.id],
+    );
+    expect(audit.rows).toEqual([
+      { action: 'share.invite_withdraw', target: `a@example.com:${editor}`, user_id: null },
+      { action: 'share.invite_accept', target: 'b@example.com', user_id: b.id },
+      { action: 'share.invite_withdraw', target: `c@example.com:${editor}`, user_id: null },
+      { action: 'share.invite_withdraw', target: `d@example.com:${editor}`, user_id: d.id },
     ]);
   });
 });

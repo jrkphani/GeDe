@@ -44,6 +44,8 @@ export interface Participant {
   email: string | null;
   permission: 'edit' | 'view';
   invitedBy: string | undefined;
+  /** `link`: came in through "anyone with the link"; the share goes with the link. */
+  source: 'invite' | 'link';
 }
 
 export interface DocumentShares {
@@ -147,17 +149,26 @@ export async function renameDocument(
     ...options,
     method: 'PATCH',
     body: { title },
+    retry: true,
   });
 }
 
 /** Soft delete: the workscape moves to Recently Deleted for 30 days (LIB-08). */
 export async function deleteDocument(id: string, options?: RequestOptions): Promise<void> {
-  await apiFetch<unknown>(`/documents/${encode(id)}`, { ...options, method: 'DELETE' });
+  await apiFetch<unknown>(`/documents/${encode(id)}`, {
+    ...options,
+    method: 'DELETE',
+    retry: true,
+  });
 }
 
 /** Owner only; a workscape that is not in Recently Deleted answers 409 `conflict`. */
 export async function recoverDocument(id: string, options?: RequestOptions): Promise<void> {
-  await apiFetch<unknown>(`/documents/${encode(id)}/recover`, { ...options, method: 'POST' });
+  await apiFetch<unknown>(`/documents/${encode(id)}/recover`, {
+    ...options,
+    method: 'POST',
+    retry: true,
+  });
 }
 
 function countOf(raw: unknown, key: string): number {
@@ -166,13 +177,21 @@ function countOf(raw: unknown, key: string): number {
 
 /** Recovers everything deleted within the 30-day window; resolves with how many. */
 export async function recoverAllDocuments(options?: RequestOptions): Promise<number> {
-  const raw = await apiFetch<unknown>('/documents/recover-all', { ...options, method: 'POST' });
+  const raw = await apiFetch<unknown>('/documents/recover-all', {
+    ...options,
+    method: 'POST',
+    retry: true,
+  });
   return countOf(raw, 'recovered');
 }
 
 /** Permanent: purges everything in Recently Deleted; resolves with how many. */
 export async function deleteAllDocuments(options?: RequestOptions): Promise<number> {
-  const raw = await apiFetch<unknown>('/documents/delete-all', { ...options, method: 'POST' });
+  const raw = await apiFetch<unknown>('/documents/delete-all', {
+    ...options,
+    method: 'POST',
+    retry: true,
+  });
   return countOf(raw, 'deleted');
 }
 
@@ -186,6 +205,7 @@ function toParticipant(v: unknown): Participant | null {
     email: strOrNull(v.email),
     permission: v.permission === 'edit' ? 'edit' : 'view',
     invitedBy: str(v.invitedBy),
+    source: v.source === 'link' ? 'link' : 'invite',
   };
 }
 

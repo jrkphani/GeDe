@@ -467,13 +467,22 @@ describe('GET /api/documents/:id/shares (LIB-07)', () => {
           email: 'bob@example.com',
           permission: 'edit',
           invitedBy: aliceId,
+          source: 'invite',
         },
-        { userId: carolId, name: null, email: null, permission: 'view', invitedBy: bobId },
+        {
+          userId: carolId,
+          name: null,
+          email: null,
+          permission: 'view',
+          invitedBy: bobId,
+          source: 'invite',
+        },
       ],
       invites: [],
       linkAccess: 'none',
       linkToken: null,
       permission: 'owner',
+      callerId: aliceId,
     });
     expect(res.body.participants.some((p) => p.userId === aliceId)).toBe(false);
   });

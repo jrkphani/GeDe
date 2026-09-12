@@ -22,6 +22,7 @@ import {
   notInArray,
   or,
   sql,
+  type SQL,
 } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 import { timingSafeEqual } from 'node:crypto';
@@ -40,6 +41,7 @@ import {
   tables,
   users,
   type Db,
+  type Permission,
 } from '@gede/db';
 
 import type { Logger } from '../logger.js';
@@ -129,32 +131,96 @@ type Executor = Pick<Db, 'select' | 'insert' | 'update' | 'delete'>;
 /** Pending and unexpired, on the database's clock. */
 const invitePending = and(isNull(invites.acceptedAt), gt(invites.expiresAt, sql`now()`));
 
+/** A pending invitation with what its inviter holds now, as `pendingInvitesQuery` selects it. */
+interface PendingRow {
+  id: string;
+  documentId: string;
+  email: string;
+  permission: Permission;
+  invitedBy: string;
+  ownerId: string;
+  inviterPermission: Permission | null;
+}
+
+/** The inviter's own share, joined to see what they still hold. */
+const inviterShare = alias(shares, 'inviter_share');
+
+/**
+ * Pending, unexpired invitations with the inviter's standing: the owner
+ * (`invitedBy === ownerId`, which legacy rows with a null inviter coalesce
+ * to) or the inviter's current share permission, null once they are gone.
+ * `where` narrows by address or by id.
+ */
+function pendingInvitesQuery(tx: Executor, where: SQL) {
+  return tx
+    .select({
+      id: invites.id,
+      documentId: invites.documentId,
+      email: invites.email,
+      permission: invites.permission,
+      invitedBy: sql<string>`coalesce(${invites.invitedBy}, ${documents.ownerId})`,
+      ownerId: documents.ownerId,
+      inviterPermission: inviterShare.permission,
+    })
+    .from(invites)
+    .innerJoin(documents, eq(documents.id, invites.documentId))
+    .leftJoin(
+      inviterShare,
+      and(
+        eq(inviterShare.documentId, invites.documentId),
+        eq(inviterShare.userId, sql`coalesce(${invites.invitedBy}, ${documents.ownerId})`),
+      ),
+    )
+    .where(and(where, invitePending))
+    .orderBy(asc(invites.createdAt), asc(invites.id));
+}
+
+/**
+ * Review of #76: an invitation is only as good as its inviter. It converts
+ * while the inviter is the owner or still holds at least what it grants
+ * (`edit` for an edit invitation, any share for a view one); a removed or
+ * demoted editor's invitations must not outlive their standing.
+ */
+export function inviterStillMay(
+  row: Pick<PendingRow, 'invitedBy' | 'ownerId' | 'permission' | 'inviterPermission'>,
+): boolean {
+  if (row.invitedBy === row.ownerId) return true;
+  if (row.inviterPermission === null) return false;
+  return row.permission === 'view' || row.inviterPermission === 'edit';
+}
+
+/** Withdraw an invitation whose inviter no longer holds what it grants, with its audit row. */
+async function withdrawStale(tx: Executor, row: PendingRow, actorId: string | null): Promise<void> {
+  await tx.delete(invites).where(eq(invites.id, row.id));
+  await tx.insert(auditLog).values({
+    documentId: row.documentId,
+    userId: actorId,
+    action: 'share.invite_withdraw' satisfies ShareAuditAction,
+    target: `${row.email}:${row.invitedBy}`,
+  });
+}
+
 /**
  * SHARE-02, the conversion: every pending, unexpired invitation for `email`
- * becomes a share for `userId` — with the invitation's inviter, else the
- * document's owner — unless a share exists already, and is marked accepted
- * either way. One `share.invite_accept` audit row per invitation converted.
- * Idempotent: a second run finds nothing pending.
+ * whose inviter still stands (`inviterStillMay`) becomes a share for
+ * `userId` — with the invitation's inviter, else the document's owner —
+ * unless a share exists already, and is marked accepted either way; one
+ * `share.invite_accept` audit row each. A stale one is withdrawn instead
+ * (`share.invite_withdraw`, system actor). Idempotent: a second run finds
+ * nothing pending.
  */
 async function convertInvites(
   tx: Executor,
   userId: string,
   email: string,
 ): Promise<ConvertedInvite[]> {
-  const pending = await tx
-    .select({
-      id: invites.id,
-      documentId: invites.documentId,
-      permission: invites.permission,
-      invitedBy: sql<string>`coalesce(${invites.invitedBy}, ${documents.ownerId})`,
-      ownerId: documents.ownerId,
-    })
-    .from(invites)
-    .innerJoin(documents, eq(documents.id, invites.documentId))
-    .where(and(eq(invites.email, email), invitePending))
-    .orderBy(asc(invites.createdAt), asc(invites.id));
+  const pending = await pendingInvitesQuery(tx, eq(invites.email, email));
   const converted: ConvertedInvite[] = [];
   for (const invite of pending) {
+    if (!inviterStillMay(invite)) {
+      await withdrawStale(tx, invite, null);
+      continue;
+    }
     if (invite.ownerId !== userId) {
       await tx
         .insert(shares)
@@ -163,6 +229,7 @@ async function convertInvites(
           userId,
           permission: invite.permission,
           invitedBy: invite.invitedBy,
+          source: 'invite',
         })
         .onConflictDoNothing();
     }
@@ -554,6 +621,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             email: users.email,
             permission: shares.permission,
             invitedBy: shares.invitedBy,
+            source: shares.source,
           })
           .from(shares)
           .innerJoin(users, eq(users.id, shares.userId))
@@ -585,7 +653,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         return db.transaction(async (tx) => {
           const inserted = await tx
             .insert(shares)
-            .values({ documentId, userId, permission, invitedBy })
+            .values({ documentId, userId, permission, invitedBy, source: 'invite' })
             .onConflictDoNothing()
             .returning({ userId: shares.userId });
           if (inserted.length === 0) return false;
@@ -640,20 +708,25 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             .delete(shares)
             .where(eq(shares.documentId, documentId))
             .returning({ userId: shares.userId });
-          await tx
+          const withdrawn = await tx
             .delete(invites)
-            .where(and(eq(invites.documentId, documentId), isNull(invites.acceptedAt)));
+            .where(and(eq(invites.documentId, documentId), isNull(invites.acceptedAt)))
+            .returning({ email: invites.email });
           await tx
             .update(documents)
             .set({ linkAccess: 'none' })
             .where(eq(documents.id, documentId));
+          // The one row records who lost access: user ids, then withdrawn addresses.
           await tx.insert(auditLog).values({
             documentId,
             userId: actorId,
             action: 'share.stop' satisfies ShareAuditAction,
-            target: null,
+            target: JSON.stringify({
+              users: gone.map((g) => g.userId),
+              invites: withdrawn.map((w) => w.email),
+            }),
           });
-          return gone.map((s) => s.userId);
+          return gone.map((g) => g.userId);
         });
       },
 
@@ -665,10 +738,13 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             .where(eq(documents.id, documentId))
             .for('update');
           if (!current) return undefined;
-          const turningOn = current.linkAccess === 'none' && access !== 'none';
+          // A fresh token for any level the link is switched to: a link handed
+          // out as "view" never becomes "edit", and one switched off stays dead.
+          const remint = access !== 'none' && access !== current.linkAccess;
+          const turningOff = access === 'none' && current.linkAccess !== 'none';
           const [row] = await tx
             .update(documents)
-            .set({ linkAccess: access, ...(turningOn && { linkToken: mintToken() }) })
+            .set({ linkAccess: access, ...(remint && { linkToken: mintToken() }) })
             .where(eq(documents.id, documentId))
             .returning();
           if (!row) return undefined;
@@ -678,7 +754,24 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             action: 'share.link' satisfies ShareAuditAction,
             target: access,
           });
-          return toDocument(row);
+          // The link that admitted `link` shares is gone with the token: so are they.
+          let revoked: string[] = [];
+          if (remint || turningOff) {
+            const gone = await tx
+              .delete(shares)
+              .where(and(eq(shares.documentId, documentId), eq(shares.source, 'link')))
+              .returning({ userId: shares.userId });
+            revoked = gone.map((g) => g.userId);
+            if (revoked.length > 0) {
+              await tx.insert(auditLog).values({
+                documentId,
+                userId: actorId,
+                action: 'share.link_revoke' satisfies ShareAuditAction,
+                target: revoked.join(','),
+              });
+            }
+          }
+          return { document: toDocument(row), revoked };
         });
       },
 
@@ -700,7 +793,13 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           if (doc.ownerId === userId) return granted;
           const inserted = await tx
             .insert(shares)
-            .values({ documentId, userId, permission: granted, invitedBy: doc.ownerId })
+            .values({
+              documentId,
+              userId,
+              permission: granted,
+              invitedBy: doc.ownerId,
+              source: 'link',
+            })
             .onConflictDoNothing()
             .returning({ permission: shares.permission });
           if (inserted.length === 0) {
@@ -725,25 +824,44 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
     invites: {
       create({ documentId, email, permission, token, expiresAt, invitedBy }) {
         return db.transaction(async (tx) => {
-          // One pending invitation per address per document: a re-invite
-          // replaces the earlier one (new permission, new expiry, new token).
-          await tx
-            .delete(invites)
-            .where(
-              and(eq(invites.documentId, documentId), eq(invites.email, email), invitePending),
-            );
-          const [row] = await tx
+          const pair = and(eq(invites.documentId, documentId), eq(invites.email, email));
+          // Idempotent per (document, address): a pending, unexpired invitation
+          // stands; a retried or repeated POST gets it back and writes nothing.
+          const [pending] = await tx
+            .select()
+            .from(invites)
+            .where(and(pair, invitePending))
+            .for('update');
+          if (pending) return { invite: toInvite(pending), created: false };
+          // An expired one for the pair would collide with `invites_pending_key`;
+          // it is dead, so it goes before the fresh row.
+          await tx.delete(invites).where(and(pair, isNull(invites.acceptedAt)));
+          const inserted = await tx
             .insert(invites)
             .values({ documentId, email, permission, token, expiresAt, invitedBy })
+            .onConflictDoNothing({
+              target: [invites.documentId, invites.email],
+              where: isNull(invites.acceptedAt),
+            })
             .returning();
-          if (!row) throw new Error('invites insert returned no row');
+          const row = inserted[0];
+          if (!row) {
+            // Lost a race with a concurrent invite for the same pair: theirs stands.
+            const [raced] = await tx
+              .select()
+              .from(invites)
+              .where(and(pair, invitePending))
+              .limit(1);
+            if (!raced) throw new Error('invites insert returned no row and none is pending');
+            return { invite: toInvite(raced), created: false };
+          }
           await tx.insert(auditLog).values({
             documentId,
             userId: invitedBy,
             action: 'share.invite' satisfies ShareAuditAction,
             target: email,
           });
-          return toInvite(row);
+          return { invite: toInvite(row), created: true };
         });
       },
 
@@ -774,21 +892,21 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         return db.transaction(async (tx) => {
           // The address check is in SQL: the invitation converts only for the
           // account that holds its (citext-equal) email.
-          const [match] = await tx
-            .select({
-              id: invites.id,
-              documentId: invites.documentId,
-              email: invites.email,
-              permission: invites.permission,
-              invitedBy: sql<string>`coalesce(${invites.invitedBy}, ${documents.ownerId})`,
-              ownerId: documents.ownerId,
-            })
-            .from(invites)
-            .innerJoin(documents, eq(documents.id, invites.documentId))
-            .innerJoin(users, and(eq(users.id, userId), eq(users.email, invites.email)))
-            .where(and(eq(invites.id, inviteId), invitePending))
-            .for('update', { of: invites });
+          const holdsAddress = exists(
+            tx
+              .select({ one: sql`1` })
+              .from(users)
+              .where(and(eq(users.id, userId), eq(users.email, invites.email))),
+          );
+          const [match] = await pendingInvitesQuery(
+            tx,
+            sql`${invites.id} = ${inviteId} and ${holdsAddress}`,
+          ).for('update', { of: invites });
           if (!match) return undefined;
+          if (!inviterStillMay(match)) {
+            await withdrawStale(tx, match, userId);
+            return undefined;
+          }
           if (match.ownerId !== userId) {
             await tx
               .insert(shares)
@@ -797,6 +915,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
                 userId,
                 permission: match.permission,
                 invitedBy: match.invitedBy,
+                source: 'invite',
               })
               .onConflictDoNothing();
           }

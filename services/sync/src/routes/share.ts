@@ -76,6 +76,8 @@ export interface SharesView {
     email: string | null;
     permission: 'view' | 'edit';
     invitedBy: string;
+    /** `link`: arrived through "anyone with the link"; goes with the link. */
+    source: 'invite' | 'link';
   }[];
   invites: {
     id: string;
@@ -89,9 +91,15 @@ export interface SharesView {
   linkToken: string | null;
   /** What the caller may do with this sheet. */
   permission: DocumentPermission;
+  /** The caller's `users.id`, so the sheet can mark "(you)" (review of #76). */
+  callerId: string;
 }
 
-export function sharesView(list: ParticipantList, permission: DocumentPermission): SharesView {
+export function sharesView(
+  list: ParticipantList,
+  caller: { id: string; permission: DocumentPermission },
+): SharesView {
+  const { permission } = caller;
   const manage = canEdit(permission);
   const email = (value: string | null) => (manage ? value : null);
   return {
@@ -102,6 +110,7 @@ export function sharesView(list: ParticipantList, permission: DocumentPermission
       email: email(p.email),
       permission: p.permission,
       invitedBy: p.invitedBy,
+      source: p.source,
     })),
     invites: manage
       ? list.invites.map((i) => ({
@@ -115,6 +124,7 @@ export function sharesView(list: ParticipantList, permission: DocumentPermission
     linkAccess: list.linkAccess,
     linkToken: manage && list.linkAccess !== 'none' ? list.linkToken : null,
     permission,
+    callerId: caller.id,
   };
 }
 
@@ -131,11 +141,23 @@ export function registerShareRoutes(
   const repo = deps.db;
   const from = senderFor(deps.config.WEB_ORIGIN);
 
-  async function participantsOrThrow(id: string, permission: DocumentPermission) {
+  async function participantsOrThrow(
+    id: string,
+    caller: { id: string; permission: DocumentPermission },
+  ) {
     const list = await repo.documents.participants(id);
     if (!list) throw NOT_FOUND();
-    return sharesView(list, permission);
+    return sharesView(list, caller);
   }
+
+  /** SES error messages name the recipient; the log line carries the class of failure only. */
+  const mailFailure = (error: unknown) => ({
+    errName: error instanceof Error ? error.name : typeof error,
+    errCode:
+      typeof error === 'object' && error !== null && 'Code' in error
+        ? String(error.Code)
+        : undefined,
+  });
 
   // --- the sheet ------------------------------------------------------------
 
@@ -143,7 +165,7 @@ export function registerShareRoutes(
     const user = currentUser(request);
     const id = parseId(request.params);
     const { permission } = await requirePermission(repo, user.id, id, 'view');
-    return participantsOrThrow(id, permission);
+    return participantsOrThrow(id, { id: user.id, permission });
   });
 
   // --- invitations (SHARE-02) ---------------------------------------------------
@@ -203,19 +225,19 @@ export function registerShareRoutes(
           }),
         );
       } catch (error) {
-        // The share stands — it works without the mail — but the sender is told.
+        // The share stands — it works without the mail — but the operator is told.
         request.log.warn(
-          { err: error, documentId: id, ref: request.id },
+          { ...mailFailure(error), template: 'share.member', documentId: id, ref: request.id },
           'share mail not sent; the share was created',
         );
       }
       return reply.status(201).send({
         kind: 'share',
-        shares: await participantsOrThrow(id, permission),
+        shares: await participantsOrThrow(id, { id: user.id, permission }),
       });
     }
 
-    const invite = await repo.invites.create({
+    const { invite, created } = await repo.invites.create({
       documentId: id,
       email: body.email,
       permission: body.permission,
@@ -223,6 +245,16 @@ export function registerShareRoutes(
       expiresAt: new Date(Date.now() + INVITE_VALID_DAYS * 24 * 60 * 60 * 1000),
       invitedBy: user.id,
     });
+    if (!created) {
+      // Idempotent (review of #76): a pending invitation for this address
+      // already stands — a retried or repeated POST — so nothing is written
+      // and no second mail goes out; the caller gets the sheet as it is.
+      return reply.status(200).send({
+        kind: 'invite',
+        created: false,
+        shares: await participantsOrThrow(id, { id: user.id, permission }),
+      });
+    }
     try {
       await deps.mail.send(
         shareInviteMail({
@@ -235,9 +267,11 @@ export function registerShareRoutes(
       );
     } catch (error) {
       // Nothing pending may exist that the recipient cannot act on: the row
-      // goes, and the sender learns the mail did not go out.
+      // goes, and the sender learns the mail did not go out. Only this row:
+      // `create` wrote nothing else (an earlier valid invitation would have
+      // been returned above instead).
       request.log.warn(
-        { err: error, documentId: id, ref: request.id },
+        { ...mailFailure(error), template: 'share.invite', documentId: id, ref: request.id },
         'invitation mail not sent; the invitation was withdrawn',
       );
       await repo.invites.remove({ documentId: id, inviteId: invite.id, actorId: user.id });
@@ -249,7 +283,8 @@ export function registerShareRoutes(
     }
     return reply.status(201).send({
       kind: 'invite',
-      shares: await participantsOrThrow(id, permission),
+      created: true,
+      shares: await participantsOrThrow(id, { id: user.id, permission }),
     });
   });
 
@@ -279,7 +314,7 @@ export function registerShareRoutes(
       throw new AppError(409, 'conflict', 'This invitation has already been used');
     }
     if (invite.expiresAt.getTime() <= Date.now()) {
-      throw new AppError(410, 'not_found', 'This invitation has expired');
+      throw new AppError(410, 'expired', 'This invitation has expired');
     }
     if (user.email === null) {
       throw new AppError(409, 'conflict', 'Finish signing in, then open the invitation again');
@@ -288,6 +323,8 @@ export function registerShareRoutes(
       throw new AppError(403, 'forbidden', 'This invitation was sent to a different address');
     }
     const granted = await repo.invites.accept({ inviteId: invite.id, userId: user.id });
+    // Also `undefined` when the inviter no longer holds what it granted: the
+    // invitation was withdrawn just now and is as gone as a wrong token.
     if (granted === undefined) throw NOT_FOUND();
     return { permission: granted };
   });
@@ -310,7 +347,7 @@ export function registerShareRoutes(
     });
     if (!changed) throw NOT_FOUND();
     rooms.closeUser(id, userId, CLOSE_RECONNECT, 'permission changed');
-    return participantsOrThrow(id, 'owner');
+    return participantsOrThrow(id, { id: user.id, permission: 'owner' });
   });
 
   api.delete('/documents/:id/shares/:userId', async (request, reply) => {
@@ -332,7 +369,7 @@ export function registerShareRoutes(
     await requirePermission(repo, user.id, id, 'owner');
     const removed = await repo.shares.stop({ documentId: id, actorId: user.id });
     for (const userId of removed) rooms.closeUser(id, userId, CLOSE_FORBIDDEN, 'sharing stopped');
-    return participantsOrThrow(id, 'owner');
+    return participantsOrThrow(id, { id: user.id, permission: 'owner' });
   });
 
   // --- link access (SHARE-01 "anyone with the link") --------------------------
@@ -342,14 +379,17 @@ export function registerShareRoutes(
     const id = parseId(request.params);
     const { access } = parse(linkBody, request.body, 'request');
     await requirePermission(repo, user.id, id, 'owner');
-    const updated = await repo.shares.setLinkAccess({
+    const change = await repo.shares.setLinkAccess({
       documentId: id,
       access,
       actorId: user.id,
       mintToken,
     });
-    if (!updated) throw NOT_FOUND();
-    return participantsOrThrow(id, 'owner');
+    if (!change) throw NOT_FOUND();
+    // Whoever came in through the old link is no longer a participant.
+    for (const userId of change.revoked)
+      rooms.closeUser(id, userId, CLOSE_FORBIDDEN, 'link revoked');
+    return participantsOrThrow(id, { id: user.id, permission: 'owner' });
   });
 
   /**

@@ -163,6 +163,90 @@ describe('invitations (SHARE-02)', () => {
     expect(auditActions()).toEqual(['share.invite', 'share.invite_remove']);
   });
 
+  test('SHARE-02 the log line for a refused send names the failure class and template, never the recipient (review of #76)', async () => {
+    await server.close();
+    server = await startServer({}, { captureLogs: true });
+    alice = server.verifier.issue('tok-alice', 'sub-alice', 'alice@example.com');
+    aliceId = (await me(alice)).id;
+    docId = server.repo.seedDocument(aliceId, SECRET_TITLE).id;
+    server.mail.failNextSend = true;
+    await json(server, 'POST', `/api/documents/${docId}/invites`, {
+      token: alice,
+      body: { email: 'private.person@example.com', permission: 'view' },
+    });
+    const lines = server.logs.filter((l) => l.msg?.includes('invitation mail not sent'));
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toMatchObject({ errName: 'Error', template: 'share.invite' });
+    expect(JSON.stringify(server.logs)).not.toContain('private.person');
+  });
+
+  test('SHARE-02 a repeated invitation for a pending address is idempotent: 200, the same invitation, no second row, no second mail (review of #76)', async () => {
+    const first = await invite(alice, 'twice@example.com', 'edit');
+    expect(first.status).toBe(201);
+    const [pending] = first.body.shares.invites;
+    const again = await invite(alice, 'TWICE@example.com', 'view');
+    expect(again.status).toBe(200);
+    expect(again.body).toMatchObject({ kind: 'invite', created: false });
+    expect(again.body.shares.invites).toEqual([pending]);
+    expect(server.repo.invitesById.size).toBe(1);
+    expect(server.mail.sent).toHaveLength(1);
+    expect(auditActions()).toEqual(['share.invite']);
+    // A refused send on a later, different address never touches the standing one.
+    server.mail.failNextSend = true;
+    await invite(alice, 'other@example.com');
+    expect((await shares(alice)).body.invites).toEqual([pending]);
+    // The budget counts the repeat (it was a valid, permitted request), the row count does not.
+    expect(server.repo.invitesById.size).toBe(1);
+  });
+
+  test('SHARE-02 SHARE-03 an invitation by an editor who has since been removed or demoted is withdrawn at conversion rather than converted (review of #76)', async () => {
+    await invite(bob, 'viaeditor@example.com', 'edit');
+    await invite(bob, 'viewer.viaeditor@example.com', 'view');
+    await invite(bob, 'late.viaeditor@example.com', 'view');
+    const late = [...server.repo.invitesById.values()].find(
+      (i) => i.email === 'late.viaeditor@example.com',
+    )!;
+    // Demoted: the edit invitation lapses on first sign-in; the view ones still stand.
+    await json(server, 'PATCH', `/api/documents/${docId}/shares/${bobId}`, {
+      token: alice,
+      body: { permission: 'view' },
+    });
+    const viaEditor = server.verifier.issue('tok-via', 'sub-via', 'viaeditor@example.com');
+    const viaEditorId = (await me(viaEditor)).id;
+    expect(await repoPermission(viaEditorId)).toBeUndefined();
+    expect(
+      (await json(server, 'GET', `/api/documents/${docId}`, { token: viaEditor })).status,
+    ).toBe(403);
+    const viewer = server.verifier.issue('tok-vv', 'sub-vv', 'viewer.viaeditor@example.com');
+    const viewerId = (await me(viewer)).id;
+    expect(await repoPermission(viewerId)).toBe('view');
+    expect((await shares(alice)).body.invites.map((i) => i.email)).toEqual([
+      'late.viaeditor@example.com',
+    ]);
+    expect(auditActions()).toEqual([
+      'share.invite',
+      'share.invite',
+      'share.invite',
+      'share.permission',
+      'share.invite_withdraw',
+      'share.invite_accept',
+    ]);
+    // Removed: even the mail link cannot convert what a departed editor offered.
+    await json(server, 'DELETE', `/api/documents/${docId}/shares/${bobId}`, { token: alice });
+    const lateUser = server.verifier.issue('tok-late', 'sub-late');
+    await me(lateUser);
+    server.verifier.issueId('id.late.tok', 'sub-late', 'late.viaeditor@example.com');
+    await json(server, 'PATCH', '/api/me', { token: lateUser, body: { idToken: 'id.late.tok' } });
+    const accept = await json<ErrorBody>(server, 'POST', `/api/documents/${docId}/invites/accept`, {
+      token: lateUser,
+      body: { token: late.token },
+    });
+    expect(accept.status).toBe(404);
+    expect(await repoPermission((await me(lateUser)).id)).toBeUndefined();
+    expect(auditActions().slice(-2)).toEqual(['share.remove', 'share.invite_withdraw']);
+    expect((await shares(alice)).body.invites).toEqual([]);
+  });
+
   test('SHARE-03 only the owner and editors may invite; a viewer or a stranger gets 403, and the body is validated', async () => {
     expect((await invite(carol, 'x@example.com')).status).toBe(403);
     const stranger = server.verifier.issue('tok-stranger', 'sub-stranger');
@@ -288,6 +372,16 @@ describe('invitations (SHARE-02)', () => {
       body: { idToken: 'id.rival.tok' },
     });
     expect(taken.status).toBe(409);
+    expect(taken.body.error.code).toBe('conflict');
+    // A token for a different verified address than the one bound is refused, never a silent 200.
+    server.verifier.issueId('id.sembian2.tok', 'sub-sembian', 'sembian.second@example.com');
+    const rebound = await json<ErrorBody>(server, 'PATCH', '/api/me', {
+      token: sembian,
+      body: { idToken: 'id.sembian2.tok' },
+    });
+    expect(rebound.status).toBe(409);
+    expect(rebound.body.error.code).toBe('email_bound');
+    expect((await me(sembian)).email).toBe('Sembian@example.com');
   });
 
   test('SHARE-02 the invitation link accepts for the invited address only; a spent or expired one says so', async () => {
@@ -318,7 +412,9 @@ describe('invitations (SHARE-02)', () => {
     const late = [...server.repo.invitesById.values()].find((i) => i.email === 'late@example.com')!;
     server.repo.invitesById.set(late.id, { ...late, expiresAt: new Date(Date.now() - 1000) });
     const lateUser = server.verifier.issue('tok-late', 'sub-late', 'late@example.com');
-    expect((await accept(lateUser, late.token)).status).toBe(410);
+    const gone = await accept(lateUser, late.token);
+    expect(gone.status).toBe(410);
+    expect(gone.body.error.code).toBe('expired');
   });
 });
 
@@ -502,7 +598,7 @@ describe('link access (SHARE-01)', () => {
     expect(await repoPermission(danaId)).toBe('view');
     // Now a participant: the sheet lists them with the owner as inviter.
     const listed = (await shares(alice)).body.participants.find((p) => p.userId === danaId);
-    expect(listed).toMatchObject({ permission: 'view', invitedBy: aliceId });
+    expect(listed).toMatchObject({ permission: 'view', invitedBy: aliceId, source: 'link' });
     // The owner redeeming their own link stays the owner.
     const owner = await json<{ permission: string }>(
       server,
@@ -517,6 +613,11 @@ describe('link access (SHARE-01)', () => {
       body: { access: 'none' },
     });
     expect(off.body.linkToken).toBeNull();
+    // Off takes the link's shares with it (review of #76): dana is no longer listed or admitted.
+    expect(off.body.participants.some((p) => p.userId === danaId)).toBe(false);
+    expect((await json(server, 'GET', `/api/documents/${docId}`, { token: dana })).status).toBe(
+      403,
+    );
     const eve = server.verifier.issue('tok-eve', 'sub-eve');
     expect(
       (
@@ -526,7 +627,74 @@ describe('link access (SHARE-01)', () => {
         })
       ).status,
     ).toBe(404);
-    expect(auditActions()).toEqual(['share.link', 'share.link_redeem', 'share.link']);
+    expect(auditActions()).toEqual([
+      'share.link',
+      'share.link_redeem',
+      'share.link',
+      'share.link_revoke',
+    ]);
+  });
+
+  test('SHARE-01 raising the link from view to edit re-mints the token and closes the sockets of whoever came in through the old link; invited people stay (review of #76)', async () => {
+    const on = await json<SharesView>(server, 'PATCH', `/api/documents/${docId}/link`, {
+      token: alice,
+      body: { access: 'view' },
+    });
+    const first = on.body.linkToken!;
+    const dana = server.verifier.issue('tok-dana', 'sub-dana', 'dana@example.com');
+    await me(dana);
+    await json(server, 'POST', `/api/documents/${docId}/link/redeem`, {
+      token: dana,
+      body: { token: first },
+    });
+    const danaSocket = await YClient.connect(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(dana),
+    });
+    await danaSocket.synced;
+    const bobSocket = await YClient.connect(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(bob),
+    });
+    await bobSocket.synced;
+
+    const raised = await json<SharesView>(server, 'PATCH', `/api/documents/${docId}/link`, {
+      token: alice,
+      body: { access: 'edit' },
+    });
+    expect(raised.body.linkToken).not.toBe(first);
+    expect(raised.body.participants.map((p) => p.userId)).toEqual([bobId, carolId]);
+    expect((await danaSocket.closed).code).toBe(CLOSE_FORBIDDEN);
+    // The old link is dead; the new one admits at the new level.
+    expect(
+      (
+        await json(server, 'POST', `/api/documents/${docId}/link/redeem`, {
+          token: dana,
+          body: { token: first },
+        })
+      ).status,
+    ).toBe(404);
+    const again = await json<{ permission: string }>(
+      server,
+      'POST',
+      `/api/documents/${docId}/link/redeem`,
+      { token: dana, body: { token: raised.body.linkToken! } },
+    );
+    expect(again.body).toEqual({ permission: 'edit' });
+    expect(auditActions()).toEqual([
+      'share.link',
+      'share.link_redeem',
+      'share.link',
+      'share.link_revoke',
+      'share.link_redeem',
+    ]);
+    expect(server.app.rooms.get(docId)!.conns.size).toBe(1);
+    bobSocket.close();
+  });
+});
+
+describe('sheet identity (review of #76)', () => {
+  test('SHARE-01 the sheet names the caller by users.id so "(you)" can match a viewer who receives no emails', async () => {
+    expect((await shares(alice)).body.callerId).toBe(aliceId);
+    expect((await shares(carol)).body.callerId).toBe(carolId);
   });
 });
 

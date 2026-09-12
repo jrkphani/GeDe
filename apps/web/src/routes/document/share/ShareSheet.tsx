@@ -40,8 +40,6 @@ export interface ShareSheetProps {
    * no remove, no stop sharing — whatever the caller's permission.
    */
   readOnly: boolean;
-  /** Who is looking, to mark "(you)". Matched on the service id, else the verified email. */
-  viewer: { id: string | undefined; email: string | undefined };
   /** The sheet after any change, so the chrome can update its Shared pill. */
   onChanged?: ((sheet: SheetModel) => void) | undefined;
 }
@@ -113,7 +111,6 @@ export function ShareSheet({
   onOpenChange,
   returnFocusTo,
   readOnly,
-  viewer,
   onChanged,
 }: ShareSheetProps) {
   const [locale] = useLocale();
@@ -187,9 +184,9 @@ export function ShareSheet({
   const canInvite = !readOnly && sheet !== null && sheet.permission !== 'view';
   const canManage = !readOnly && isOwner;
   const access: Access = sheet !== null && sheet.linkAccess !== 'none' ? 'link' : 'invited';
-  const isViewer = (p: { id: string; email: string | null }) =>
-    p.id === viewer.id ||
-    (p.email !== null && viewer.email !== undefined && p.email === viewer.email);
+  // "(you)" matches on the service's user id, which the sheet names as `callerId`
+  // (review of #76: a viewer receives no emails, and the session holds only the Cognito sub).
+  const isViewer = (p: { id: string }) => sheet !== null && p.id === sheet.callerId;
 
   const onInvite = async (event: SyntheticEvent) => {
     event.preventDefault();
@@ -206,7 +203,9 @@ export function ShareSheet({
       announce(
         outcome.kind === 'share'
           ? `${address} now has access`
-          : `Invitation sent to ${address}; it is valid for 14 days`,
+          : outcome.created
+            ? `Invitation sent to ${address}; it is valid for 14 days`
+            : `${address} already has a pending invitation`,
       );
       return outcome.shares;
     });
@@ -411,7 +410,7 @@ export function ShareSheet({
                     <ParticipantRow
                       key={p.userId}
                       participant={p}
-                      you={isViewer({ id: p.userId, email: p.email })}
+                      you={isViewer({ id: p.userId })}
                       manage={canManage}
                       busy={busy !== null}
                       onPermission={(next) =>
@@ -543,6 +542,8 @@ function ParticipantRow({
   onRemove: () => Promise<boolean>;
 }) {
   const who = displayNameOf(participant) ?? 'this person';
+  // A link share is labelled: it goes when the link is switched off or re-minted.
+  const via = participant.source === 'link' ? <Badge tone="neutral">Via link</Badge> : null;
   return (
     <Person
       person={participant}
@@ -550,6 +551,7 @@ function ParticipantRow({
       trailing={
         manage ? (
           <>
+            {via}
             <Select
               label={`Permission for ${who}`}
               hideLabel
@@ -571,9 +573,12 @@ function ParticipantRow({
             />
           </>
         ) : (
-          <span className="gd-participants__permission">
-            {PERMISSION_LABEL[participant.permission]}
-          </span>
+          <>
+            {via}
+            <span className="gd-participants__permission">
+              {PERMISSION_LABEL[participant.permission]}
+            </span>
+          </>
         )
       }
     />

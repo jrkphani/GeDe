@@ -53,6 +53,7 @@ interface FakeSheet {
     email: string;
     permission: 'view' | 'edit';
     invitedBy: string;
+    source: 'invite' | 'link';
   }[];
   invites: {
     id: string;
@@ -64,6 +65,7 @@ interface FakeSheet {
   linkAccess: 'none' | 'view' | 'edit';
   linkToken: string | null;
   permission: 'owner';
+  callerId: string;
 }
 
 /** FAKE sharing routes: the shapes of `routes/share.ts`, mutated in memory. */
@@ -77,12 +79,14 @@ async function installFakes(page: Page): Promise<{ sheet: FakeSheet; calls: stri
         email: 'sembian@1cloudhub.com',
         permission: 'edit',
         invitedBy: SESSION.sub,
+        source: 'invite',
       },
     ],
     invites: [],
     linkAccess: 'none',
     linkToken: null,
     permission: 'owner',
+    callerId: SESSION.sub,
   };
   const calls: string[] = [];
   await page.route('**/config.json', (route) => route.fulfill({ json: CONFIG }));
@@ -117,7 +121,7 @@ async function installFakes(page: Page): Promise<{ sheet: FakeSheet; calls: stri
         invitedBy: SESSION.sub,
         expiresAt: '2026-09-26T00:00:00.000Z',
       });
-      return route.fulfill({ status: 201, json: { kind: 'invite', shares: sheet } });
+      return route.fulfill({ status: 201, json: { kind: 'invite', created: true, shares: sheet } });
     }
     if (method === 'PATCH' && path === '/link') {
       const body = route.request().postDataJSON() as { access: FakeSheet['linkAccess'] };

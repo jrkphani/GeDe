@@ -80,6 +80,34 @@ describe('api client', () => {
     expect(sleep).not.toHaveBeenCalled();
   });
 
+  it('SHARE-02 a write is not retried unless it asks: one POST, one answer, whatever the status', async () => {
+    const fetchImpl = vi.fn(() => Promise.resolve(json(502, { error: { code: 'unavailable' } })));
+    const sleep = vi.fn(() => Promise.resolve());
+    await expect(
+      apiFetch('/documents/x/invites', {
+        method: 'POST',
+        body: { email: 'a@example.com' },
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        sleep,
+        getToken: () => Promise.resolve(null),
+      }),
+    ).rejects.toMatchObject({ status: 502, attempts: 1 });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+    // Opting in restores the policy for a write that is safe to repeat.
+    const again = vi.fn(() => Promise.resolve(json(503, {})));
+    await expect(
+      apiFetch('/documents/recover-all', {
+        method: 'POST',
+        retry: true,
+        fetchImpl: again as unknown as typeof fetch,
+        sleep,
+        getToken: () => Promise.resolve(null),
+      }),
+    ).rejects.toMatchObject({ status: 503, attempts: 4 });
+    expect(again).toHaveBeenCalledTimes(4);
+  });
+
   it('treats a network failure as retryable', async () => {
     const fetchImpl = vi
       .fn()

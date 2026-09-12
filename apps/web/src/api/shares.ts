@@ -29,6 +29,8 @@ export interface ShareSheet extends DocumentShares {
   linkToken: string | null;
   /** What the caller may do with this sheet; absent in a wave-1 response, read as view. */
   permission: DocumentPermission;
+  /** The caller's service user id, for "(you)"; absent in a wave-1 response. */
+  callerId: string | null;
 }
 
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
@@ -60,7 +62,13 @@ export function toShareSheet(v: unknown): ShareSheet | null {
     v.permission === 'owner' || v.permission === 'edit' || v.permission === 'view'
       ? v.permission
       : 'view';
-  return { ...base, invites, linkToken: str(v.linkToken) ?? null, permission };
+  return {
+    ...base,
+    invites,
+    linkToken: str(v.linkToken) ?? null,
+    permission,
+    callerId: str(v.callerId) ?? null,
+  };
 }
 
 function sheetOf(raw: unknown): ShareSheet {
@@ -81,10 +89,16 @@ export async function getShareSheet(id: string, options?: RequestOptions): Promi
 export interface InviteOutcome {
   /** `share` when the address already had an account (they have access now), `invite` when a mail went out. */
   kind: 'share' | 'invite';
+  /** False when an invitation for the address already stood: nothing was written, no mail went out. */
+  created: boolean;
   shares: ShareSheet;
 }
 
-/** `POST /api/documents/:id/invites` — owner or editor. */
+/**
+ * `POST /api/documents/:id/invites` — owner or editor. Never retried by the
+ * client (review of #76): the service answers 502 by design when the mail
+ * is refused, and the call is idempotent per address on the service anyway.
+ */
 export async function inviteToDocument(
   id: string,
   email: string,
@@ -95,9 +109,11 @@ export async function inviteToDocument(
     ...options,
     method: 'POST',
     body: { email, permission },
+    retry: false,
   });
   const kind = isRecord(raw) && raw.kind === 'share' ? 'share' : 'invite';
-  return { kind, shares: sheetOf(isRecord(raw) ? raw.shares : raw) };
+  const created = !(isRecord(raw) && raw.created === false);
+  return { kind, created, shares: sheetOf(isRecord(raw) ? raw.shares : raw) };
 }
 
 /** `DELETE /api/documents/:id/invites/:inviteId` — owner only. */

@@ -22,7 +22,7 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { LinkAccess, Permission } from '@gede/db';
+import type { LinkAccess, Permission, ShareSource } from '@gede/db';
 
 import type { Projection } from '../projection/project.js';
 import {
@@ -63,6 +63,7 @@ export interface FakeShare {
   permission: Permission;
   invitedBy: string;
   createdAt: Date;
+  source: ShareSource;
 }
 
 export interface AuditEntry {
@@ -190,6 +191,10 @@ export class FakeRepo implements Repo {
     for (const invite of this.pendingInvites((i) => this.sameEmail(i.email, email))) {
       const doc = this.docs.get(invite.documentId);
       if (!doc) continue;
+      if (!this.inviterStillMay(invite, doc)) {
+        this.withdrawStale(invite, doc, null);
+        continue;
+      }
       if (doc.ownerId !== userId) {
         const map = this.sharesByDoc.get(doc.id) ?? new Map<string, FakeShare>();
         if (!map.has(userId)) {
@@ -197,6 +202,7 @@ export class FakeRepo implements Repo {
             permission: invite.permission,
             invitedBy: invite.invitedBy ?? doc.ownerId,
             createdAt: new Date(),
+            source: 'invite',
           });
           this.sharesByDoc.set(doc.id, map);
         }
@@ -221,8 +227,28 @@ export class FakeRepo implements Repo {
       permission,
       invitedBy: invitedBy ?? owner ?? userId,
       createdAt: new Date(),
+      source: 'invite',
     });
     this.sharesByDoc.set(documentId, map);
+  }
+
+  /** As `inviterStillMay` in `pg.ts`: the owner always; an editor while they hold ≥ the invited permission. */
+  private inviterStillMay(invite: MutableInvite, doc: MutableDocument): boolean {
+    const inviter = invite.invitedBy ?? doc.ownerId;
+    if (inviter === doc.ownerId) return true;
+    const held = this.sharesByDoc.get(doc.id)?.get(inviter)?.permission;
+    if (held === undefined) return false;
+    return invite.permission === 'view' || held === 'edit';
+  }
+
+  private withdrawStale(invite: MutableInvite, doc: MutableDocument, actorId: string | null): void {
+    this.invitesById.delete(invite.id);
+    this.auditLog.push({
+      documentId: doc.id,
+      userId: actorId,
+      action: 'share.invite_withdraw',
+      target: `${invite.email}:${invite.invitedBy ?? doc.ownerId}`,
+    });
   }
 
   private sizeBytes(doc: MutableDocument): number {
@@ -489,6 +515,7 @@ export class FakeRepo implements Repo {
             email: user?.email ?? null,
             permission: share.permission,
             invitedBy: share.invitedBy,
+            source: share.source,
           };
         });
       const pending = this.pendingInvites((i) => i.documentId === documentId).map((i) => ({
@@ -516,7 +543,7 @@ export class FakeRepo implements Repo {
     add: ({ documentId, userId, permission, invitedBy, actorId }) => {
       const map = this.sharesByDoc.get(documentId) ?? new Map<string, FakeShare>();
       if (map.has(userId)) return Promise.resolve(false);
-      map.set(userId, { permission, invitedBy, createdAt: new Date() });
+      map.set(userId, { permission, invitedBy, createdAt: new Date(), source: 'invite' });
       this.sharesByDoc.set(documentId, map);
       this.auditLog.push({ documentId, userId: actorId, action: 'share.add', target: userId });
       return Promise.resolve(true);
@@ -542,23 +569,50 @@ export class FakeRepo implements Repo {
     stop: ({ documentId, actorId }) => {
       const gone = [...(this.sharesByDoc.get(documentId)?.keys() ?? [])];
       this.sharesByDoc.delete(documentId);
+      const withdrawn: string[] = [];
       for (const [id, invite] of this.invitesById) {
         if (invite.documentId === documentId && invite.acceptedAt === null) {
           this.invitesById.delete(id);
+          withdrawn.push(invite.email);
         }
       }
       const doc = this.docs.get(documentId);
       if (doc) doc.linkAccess = 'none';
-      this.auditLog.push({ documentId, userId: actorId, action: 'share.stop', target: null });
+      this.auditLog.push({
+        documentId,
+        userId: actorId,
+        action: 'share.stop',
+        target: JSON.stringify({ users: gone, invites: withdrawn }),
+      });
       return Promise.resolve(gone);
     },
     setLinkAccess: ({ documentId, access, actorId, mintToken }) => {
       const doc = this.docs.get(documentId);
       if (!doc) return Promise.resolve(undefined);
-      if (doc.linkAccess === 'none' && access !== 'none') doc.linkToken = mintToken();
+      const remint = access !== 'none' && access !== doc.linkAccess;
+      const turningOff = access === 'none' && doc.linkAccess !== 'none';
+      if (remint) doc.linkToken = mintToken();
       doc.linkAccess = access;
       this.auditLog.push({ documentId, userId: actorId, action: 'share.link', target: access });
-      return Promise.resolve({ ...doc });
+      const revoked: string[] = [];
+      if (remint || turningOff) {
+        const map = this.sharesByDoc.get(documentId);
+        for (const [userId, share] of map ?? []) {
+          if (share.source === 'link') {
+            map?.delete(userId);
+            revoked.push(userId);
+          }
+        }
+        if (revoked.length > 0) {
+          this.auditLog.push({
+            documentId,
+            userId: actorId,
+            action: 'share.link_revoke',
+            target: revoked.join(','),
+          });
+        }
+      }
+      return Promise.resolve({ document: { ...doc }, revoked });
     },
     redeemLink: ({ documentId, userId, token }) => {
       const doc = this.docs.get(documentId);
@@ -570,7 +624,12 @@ export class FakeRepo implements Repo {
       const map = this.sharesByDoc.get(documentId) ?? new Map<string, FakeShare>();
       const existing = map.get(userId);
       if (existing) return Promise.resolve(existing.permission);
-      map.set(userId, { permission: granted, invitedBy: doc.ownerId, createdAt: new Date() });
+      map.set(userId, {
+        permission: granted,
+        invitedBy: doc.ownerId,
+        createdAt: new Date(),
+        source: 'link',
+      });
       this.sharesByDoc.set(documentId, map);
       this.auditLog.push({ documentId, userId, action: 'share.link_redeem', target: granted });
       return Promise.resolve(granted);
@@ -580,10 +639,19 @@ export class FakeRepo implements Repo {
   readonly invites: Repo['invites'] = {
     create: ({ documentId, email, permission, token, expiresAt, invitedBy }) => {
       assertText(email);
-      for (const earlier of this.pendingInvites(
+      const standing = this.pendingInvites(
         (i) => i.documentId === documentId && this.sameEmail(i.email, email),
-      )) {
-        this.invitesById.delete(earlier.id);
+      )[0];
+      if (standing) return Promise.resolve({ invite: { ...standing }, created: false });
+      // An expired unaccepted row for the pair goes (invites_pending_key).
+      for (const [id, i] of this.invitesById) {
+        if (
+          i.documentId === documentId &&
+          this.sameEmail(i.email, email) &&
+          i.acceptedAt === null
+        ) {
+          this.invitesById.delete(id);
+        }
       }
       const invite: MutableInvite = {
         id: randomUUID(),
@@ -598,7 +666,7 @@ export class FakeRepo implements Repo {
       };
       this.invitesById.set(invite.id, invite);
       this.auditLog.push({ documentId, userId: invitedBy, action: 'share.invite', target: email });
-      return Promise.resolve({ ...invite });
+      return Promise.resolve({ invite: { ...invite }, created: true });
     },
     remove: ({ documentId, inviteId, actorId }) => {
       const invite = this.pendingInvites(
@@ -628,6 +696,10 @@ export class FakeRepo implements Repo {
       }
       const doc = this.docs.get(invite.documentId);
       if (!doc) return Promise.resolve(undefined);
+      if (!this.inviterStillMay(invite, doc)) {
+        this.withdrawStale(invite, doc, userId);
+        return Promise.resolve(undefined);
+      }
       if (doc.ownerId !== userId) {
         const map = this.sharesByDoc.get(doc.id) ?? new Map<string, FakeShare>();
         if (!map.has(userId)) {
@@ -635,6 +707,7 @@ export class FakeRepo implements Repo {
             permission: invite.permission,
             invitedBy: invite.invitedBy ?? doc.ownerId,
             createdAt: new Date(),
+            source: 'invite',
           });
           this.sharesByDoc.set(doc.id, map);
         }

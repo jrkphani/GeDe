@@ -17,6 +17,7 @@ import {
   boolean,
   customType,
   index,
+  uniqueIndex,
   integer,
   jsonb,
   pgEnum,
@@ -60,11 +61,14 @@ export const linkAccess = pgEnum('link_access', ['none', 'view', 'edit']);
 export const permission = pgEnum('permission', ['view', 'edit']);
 export const columnFormat = pgEnum('column_format', ['auto', 'text', 'number', 'currency', 'date']);
 export const graphKind = pgEnum('graph_kind', ['ring', 'coverage']);
+/** Migration 0007: how a share came to be (SHARE-01 link access). */
+export const shareSource = pgEnum('share_source', ['invite', 'link']);
 
 export type LinkAccess = (typeof linkAccess.enumValues)[number];
 export type Permission = (typeof permission.enumValues)[number];
 export type ColumnFormat = (typeof columnFormat.enumValues)[number];
 export type GraphKind = (typeof graphKind.enumValues)[number];
+export type ShareSource = (typeof shareSource.enumValues)[number];
 
 const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode: 'date' });
 
@@ -129,6 +133,8 @@ export const shares = pgTable(
       .notNull()
       .references(() => users.id),
     createdAt: timestamptz('created_at').notNull().defaultNow(),
+    /** Migration 0007: `link` shares go when the link is switched off or re-minted. */
+    source: shareSource('source').notNull().default('invite'),
   },
   (t) => [
     primaryKey({ columns: [t.documentId, t.userId] }),
@@ -161,6 +167,10 @@ export const invites = pgTable(
     index('invites_document_id_idx').on(t.documentId),
     /** Migration 0006: the conversion on first sign-in looks invitations up by address. */
     index('invites_email_idx').on(t.email),
+    /** Migration 0007: one pending invitation per address per document (idempotent POST). */
+    uniqueIndex('invites_pending_key')
+      .on(t.documentId, t.email)
+      .where(sql`accepted_at IS NULL`),
   ],
 );
 
