@@ -14,6 +14,7 @@ import { displayNameOf, type Participant } from '../../../api/documents.js';
 import {
   getShareSheet,
   inviteToDocument,
+  resendInvite,
   removeParticipant,
   setLinkAccess,
   setParticipantPermission,
@@ -27,6 +28,10 @@ import {
 import { formatDate } from '../../../intl.js';
 import { useLocale } from '../../../locale.js';
 import { reportTourInvite } from '../../tour/store.js';
+
+/** #121: the invitation exists; only its mail did not go out. */
+export const MAIL_FAILED_NOTICE =
+  'Invitation saved — the email could not be sent; share the link or try again';
 
 export interface ShareSheetProps {
   docId: string;
@@ -120,6 +125,14 @@ export function ShareSheet({
   const [permission, setPermission] = useState<SharePermission>('edit');
   const [email, setEmail] = useState('');
   const [inviteError, setInviteError] = useState<string | null>(null);
+  /**
+   * #121: the last invitation whose mail was refused (SES in the sandbox, an
+   * outage). The invitation stands — it converts when the person signs in —
+   * so this is a notice with a way forward, not an error on the field.
+   */
+  const [mailFailed, setMailFailed] = useState<{ inviteId: string | null; email: string } | null>(
+    null,
+  );
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -199,24 +212,57 @@ export function ShareSheet({
       return;
     }
     setInviteError(null);
-    const ok = await run('invite', async () => {
+    setMailFailed(null);
+    setBusy('invite');
+    setFailure(null);
+    try {
       const outcome = await inviteToDocument(docId, address, permission);
-      announce(
-        outcome.kind === 'share'
-          ? `${address} now has access`
-          : outcome.created
-            ? `Invitation sent to ${address}; it is valid for 14 days`
-            : `${address} already has a pending invitation`,
-      );
-      // ONB-05, step 5: an invitation went out (or the address was added on the spot).
+      adopt(outcome.shares);
+      if (outcome.delivery === 'failed') {
+        // The invitation (or share) exists; only its mail did not go out.
+        const pending = outcome.shares.invites.find(
+          (i) => i.email.toLowerCase() === address.toLowerCase(),
+        );
+        setMailFailed({ inviteId: pending?.id ?? null, email: address });
+        announce(`${MAIL_FAILED_NOTICE} (${address})`);
+      } else {
+        announce(
+          outcome.kind === 'share'
+            ? `${address} now has access`
+            : outcome.created
+              ? `Invitation sent to ${address}; it is valid for 14 days`
+              : `${address} already has a pending invitation`,
+        );
+      }
+      // ONB-05, step 5: the action is the invitation, which now exists (or the address was
+      // added on the spot) — whether or not its mail could be delivered (#121).
       reportTourInvite();
-      return outcome.shares;
-    });
-    if (ok) {
       setEmail('');
       emailRef.current?.focus();
+    } catch (err) {
+      // On the field (aria-invalid, aria-describedby), since it is the field's request that failed.
+      setInviteError(
+        describeFailure(err, 'The invitation did not save. Retry when you are back online.'),
+      );
+      emailRef.current?.focus();
+    } finally {
+      setBusy(null);
     }
   };
+
+  /** #121: send an invitation's mail again; the row and its token stay as they are. */
+  const onResend = (invite: { id: string; email: string }) =>
+    run(`invite-resend:${invite.id}`, async () => {
+      const outcome = await resendInvite(docId, invite.id);
+      if (outcome.delivery === 'failed') {
+        setMailFailed({ inviteId: invite.id, email: invite.email });
+        announce(`The email to ${invite.email} could not be sent again; share the link instead`);
+      } else {
+        setMailFailed((current) => (current?.inviteId === invite.id ? null : current));
+        announce(`Invitation sent again to ${invite.email}`);
+      }
+      return outcome.shares;
+    });
 
   const onAccess = (next: Access) => {
     if (sheet === null || next === access) return;
@@ -398,6 +444,28 @@ export function ShareSheet({
                   </Button>
                 </form>
               )}
+              {mailFailed !== null && (
+                <p className="gd-share__notice" role="status" data-testid="share-mail-failed">
+                  <Icon name="warning" size={13} />
+                  <span>
+                    {MAIL_FAILED_NOTICE} ({mailFailed.email})
+                  </span>
+                  {mailFailed.inviteId !== null && canInvite && (
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      loading={busy === `invite-resend:${mailFailed.inviteId}`}
+                      loadingLabel="Sending…"
+                      disabled={busy !== null && busy !== `invite-resend:${mailFailed.inviteId}`}
+                      onClick={() =>
+                        void onResend({ id: mailFailed.inviteId ?? '', email: mailFailed.email })
+                      }
+                    >
+                      Resend
+                    </Button>
+                  )}
+                </p>
+              )}
 
               <section className="gd-share__section" aria-labelledby="gd-share-people-heading">
                 <h3 id="gd-share-people-heading" className="gd-share__heading">
@@ -436,7 +504,10 @@ export function ShareSheet({
                       invite={invite}
                       expires={formatDate(locale, invite.expiresAt)}
                       manage={canManage}
+                      resend={canInvite}
+                      mailFailed={mailFailed?.inviteId === invite.id}
                       busy={busy !== null}
+                      onResend={() => onResend(invite)}
                       onRemove={() =>
                         run(`invite-remove:${invite.id}`, async () => {
                           await withdrawInvite(docId, invite.id);
@@ -592,13 +663,21 @@ function InviteRow({
   invite,
   expires,
   manage,
+  resend,
+  mailFailed,
   busy,
+  onResend,
   onRemove,
 }: {
   invite: PendingInvite;
   expires: string;
   manage: boolean;
+  /** Owner and editors may send the mail again (#121). */
+  resend: boolean;
+  /** This session saw the invitation's mail refused. */
+  mailFailed: boolean;
   busy: boolean;
+  onResend: () => Promise<boolean>;
   onRemove: () => Promise<boolean>;
 }) {
   return (
@@ -606,9 +685,23 @@ function InviteRow({
       <Avatar name={invite.email} size={30} decorative />
       <span className="gd-participants__who">
         <span className="gd-participants__name">{invite.email}</span>
-        <span className="gd-participants__email">Invited · expires {expires}</span>
+        <span className="gd-participants__email">
+          {mailFailed ? 'Invited · email not sent' : `Invited · expires ${expires}`}
+        </span>
       </span>
       <span className="gd-participants__permission">{PERMISSION_LABEL[invite.permission]}</span>
+      {resend && (
+        <Button
+          variant="ghost"
+          size="sm"
+          aria-label={`Resend invitation to ${invite.email}`}
+          title="Resend the invitation email"
+          onClick={() => void onResend()}
+          disabled={busy}
+        >
+          Resend
+        </Button>
+      )}
       {manage && (
         <Button
           variant="ghost"

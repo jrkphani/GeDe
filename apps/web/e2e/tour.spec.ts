@@ -129,7 +129,12 @@ async function installFakes(page: Page, tourDoneAt: string | null): Promise<Fake
         invitedBy: SESSION.sub,
         expiresAt: '2026-09-27T00:00:00.000Z',
       });
-      return route.fulfill({ status: 201, json: { kind: 'invite', created: true, shares: sheet } });
+      // As production answers while SES is in the sandbox (#121): the invitation is
+      // created, its mail was refused. The tour's action is the invitation.
+      return route.fulfill({
+        status: 201,
+        json: { kind: 'invite', created: true, delivery: 'failed', shares: sheet },
+      });
     }
     return route.fulfill({
       status: 404,
@@ -346,6 +351,12 @@ for (const width of [1024, 1440] as const) {
       'akshaya@example.com',
     );
     await expect.poll(() => fakes.invites).toEqual(['akshaya@example.com']);
+    // #121: the mail could not be sent; the invitation is saved and the sheet says so.
+    await expect(sheet.getByTestId('share-mail-failed')).toContainText(
+      'Invitation saved — the email could not be sent; share the link or try again',
+    );
+    await expect(sheet.getByRole('button', { name: 'Resend' }).first()).toBeVisible();
+    await checkA11y(`share sheet mail failed ${String(width)}`);
 
     // ONB-14: completion names where to replay; ONB-03: the account flag is set once.
     await sheet.getByRole('button', { name: 'Done' }).click();

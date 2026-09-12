@@ -86,18 +86,34 @@ export async function getShareSheet(id: string, options?: RequestOptions): Promi
   return sheetOf(await apiFetch<unknown>(`/documents/${encode(id)}/shares`, options));
 }
 
+/** What became of the mail a share or an invitation sends (#121). */
+export type MailDelivery = 'sent' | 'failed' | 'skipped';
+
 export interface InviteOutcome {
-  /** `share` when the address already had an account (they have access now), `invite` when a mail went out. */
+  /** `share` when the address already had an account (they have access now), `invite` when a row was made. */
   kind: 'share' | 'invite';
   /** False when an invitation for the address already stood: nothing was written, no mail went out. */
   created: boolean;
+  /**
+   * `failed`: the share or invitation stands but its mail was refused (SES in
+   * the sandbox, an outage) — share the link, or Resend. `skipped`: nothing
+   * was sent because nothing was created.
+   */
+  delivery: MailDelivery;
   shares: ShareSheet;
+}
+
+function deliveryOf(raw: unknown, created: boolean): MailDelivery {
+  const value = isRecord(raw) ? raw.delivery : undefined;
+  if (value === 'sent' || value === 'failed' || value === 'skipped') return value;
+  return created ? 'sent' : 'skipped';
 }
 
 /**
  * `POST /api/documents/:id/invites` — owner or editor. Never retried by the
- * client (review of #76): the service answers 502 by design when the mail
- * is refused, and the call is idempotent per address on the service anyway.
+ * client (review of #76): the call writes a row, and is idempotent per
+ * address on the service anyway. A refused mail is not an error (#121): the
+ * row stands and `delivery` says so.
  */
 export async function inviteToDocument(
   id: string,
@@ -113,7 +129,29 @@ export async function inviteToDocument(
   });
   const kind = isRecord(raw) && raw.kind === 'share' ? 'share' : 'invite';
   const created = !(isRecord(raw) && raw.created === false);
-  return { kind, created, shares: sheetOf(isRecord(raw) ? raw.shares : raw) };
+  return {
+    kind,
+    created,
+    delivery: deliveryOf(raw, created),
+    shares: sheetOf(isRecord(raw) ? raw.shares : raw),
+  };
+}
+
+/**
+ * `POST /api/documents/:id/invites/:inviteId/resend` — owner or editor. Sends
+ * the same invitation again (same token, same expiry); rate-limited with
+ * invitations, never retried by the client.
+ */
+export async function resendInvite(
+  id: string,
+  inviteId: string,
+  options?: RequestOptions,
+): Promise<{ delivery: MailDelivery; shares: ShareSheet }> {
+  const raw = await apiFetch<unknown>(
+    `/documents/${encode(id)}/invites/${encode(inviteId)}/resend`,
+    { ...options, method: 'POST', retry: false },
+  );
+  return { delivery: deliveryOf(raw, true), shares: sheetOf(isRecord(raw) ? raw.shares : raw) };
 }
 
 /** `DELETE /api/documents/:id/invites/:inviteId` — owner only. */
