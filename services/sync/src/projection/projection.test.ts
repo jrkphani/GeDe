@@ -326,6 +326,27 @@ describe('projection through the room and GET /api/documents/:id/search', () => 
     ).toBe(404);
   });
 
+  test('LIB-08 SHARE-03 a soft-deleted document is not searchable, by its owner or a participant, until it is recovered', async () => {
+    const id = await create();
+    await waitFor(() => server.repo.projections.get(id) !== undefined);
+    const search = (token: string) =>
+      json<{ results: unknown[] }>(server, 'GET', `/api/documents/${id}/search?q=sheet`, {
+        token,
+      });
+    expect((await json(server, 'DELETE', `/api/documents/${id}`, { token: owner })).status).toBe(
+      204,
+    );
+    // The projection rows are still there (the nightly purge removes them); the route must not serve them.
+    expect(server.repo.projections.get(id)).toBeDefined();
+    expect((await search(owner)).status).toBe(404);
+    expect((await search(viewer)).status).toBe(404);
+    expect((await search(stranger)).status).toBe(403);
+    expect(
+      (await json(server, 'POST', `/api/documents/${id}/recover`, { token: owner })).status,
+    ).toBe(200);
+    expect((await search(owner)).status).toBe(200);
+  });
+
   test('FIND-03 results are capped at 50 and snippets window around the first match', async () => {
     const id = await create();
     const doc = new Y.Doc();

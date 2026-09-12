@@ -27,14 +27,16 @@ export interface SerializedRequest {
 }
 
 export function requestSerializer(
-  request: Pick<FastifyRequest, 'method' | 'url' | 'host' | 'ip' | 'socket'>,
+  request: Partial<Pick<FastifyRequest, 'method' | 'url' | 'host' | 'ip' | 'socket'>>,
 ): SerializedRequest {
+  // A serializer must never throw: pino calls it for anything logged under
+  // `req`, including a partial object from a careless call site.
   return {
     method: request.method,
-    url: redactTokenParam(request.url),
+    url: typeof request.url === 'string' ? redactTokenParam(request.url) : '',
     host: request.host,
     remoteAddress: request.ip,
-    remotePort: request.socket.remotePort,
+    remotePort: request.socket?.remotePort,
   };
 }
 

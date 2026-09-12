@@ -413,7 +413,13 @@ export function registerApi(
         const id = parseId(request.params);
         const { q } = parse(searchQuery, request.query, 'query');
         // Participants only: a stranger learns nothing, not even that the document exists (403).
-        await requirePermission(repo, user.id, id, 'view');
+        const { document } = await requirePermission(repo, user.id, id, 'view');
+        // A deleted document's content is served to nobody, its owner included — the
+        // same rule as the WebSocket upgrade. The owner still sees it listed in
+        // Recently Deleted; its cells stay projected until the nightly purge, so
+        // without this the projection would answer for a document the user was
+        // told is gone (issue #42).
+        if (document.deletedAt !== null) throw NOT_FOUND();
         const hits = await repo.projection.search(id, q, SEARCH_LIMIT);
         const results: SearchHitView[] = hits.map((hit) => ({
           sheetId: hit.sheetId,

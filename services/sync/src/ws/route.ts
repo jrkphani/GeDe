@@ -7,7 +7,9 @@
  * never echoes the token. The older `?token=` query parameter is still
  * accepted for one release — with a deprecation warning in the log, never
  * the token itself — because URLs reach access logs and browser history in
- * ways headers do not.
+ * ways headers do not. Cutoff: the first release after #49 has been live for
+ * a week (every pre-#49 SPA bundle has left the caches by then); issue #63
+ * lists what to delete.
  *
  * Verification happens in a `preValidation` hook, i.e. before the HTTP
  * upgrade completes; nothing about the document is sent to an unverified
@@ -93,6 +95,8 @@ export function extractToken(
 ): { token: string; transport: TokenTransport } | undefined {
   const fromHeader = tokenFromSubprotocols(request.headers['sec-websocket-protocol']);
   if (fromHeader !== undefined) return { token: fromHeader, transport: 'subprotocol' };
+  // Deprecated transport (issue #63 removes it): accepted only so SPA bundles
+  // built before #49 survive the rolling deploy that ships this.
   const q = query.safeParse(request.query);
   if (q.success) return { token: q.data.token, transport: 'query' };
   return undefined;
