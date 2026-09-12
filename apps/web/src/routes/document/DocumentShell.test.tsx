@@ -63,6 +63,26 @@ async function openShell(path = `/d/${ID}`) {
   return view;
 }
 
+/** Type into the rich editor by mutating the contenteditable; ProseMirror reads it on a microtask. */
+async function typeInto(editor: HTMLElement, text: string): Promise<void> {
+  const paragraphs = editor.querySelectorAll('p');
+  const p = paragraphs[paragraphs.length - 1] ?? editor;
+  const last = p.lastChild;
+  let node: Node;
+  if (last !== null && last.nodeType === Node.TEXT_NODE) {
+    last.textContent = `${last.textContent ?? ''}${text}`;
+    node = last;
+  } else {
+    if (last !== null && last.nodeName === 'BR') last.remove();
+    node = p.appendChild(document.createTextNode(text));
+  }
+  // The caret follows the typed text, as it does in a browser.
+  document.getSelection()?.collapse(node, node.textContent?.length ?? 0);
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
+
 function layerTransform(): string {
   return screen.getByTestId('layer').style.transform;
 }
@@ -579,8 +599,12 @@ describe('DocumentShell', () => {
     expect(first).toHaveAttribute('aria-selected', 'true');
     fireEvent.keyDown(first, { code: 'Enter' });
     const editor = screen.getByLabelText('Edit B5');
-    expect(editor.tagName).toBe('TEXTAREA');
-    await userEvent.type(editor, 'Line one{Shift>}{Enter}{/Shift}Line two');
+    // The rich editor is a ProseMirror contenteditable drawn as the cell, not a textarea.
+    expect(editor.getAttribute('contenteditable')).toBe('true');
+    expect(editor).toHaveAttribute('role', 'textbox');
+    await typeInto(editor, 'Line one');
+    fireEvent.keyDown(editor, { code: 'Enter', key: 'Enter', shiftKey: true });
+    await typeInto(editor, 'Line two');
     fireEvent.keyDown(editor, { code: 'Enter' });
     expect(first).toHaveTextContent('Line one');
     expect(first.getAttribute('aria-label')).toBe('B5, Line one\nLine two');

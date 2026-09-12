@@ -8,7 +8,13 @@ import './cell.css';
 
 export { CellContent, type CellContentProps } from './CellContent.js';
 export { RichCellEditor, type RichCellEditorProps } from './RichCellEditor.js';
-export { useCellFormat, toFormatLocale, type CellFormatContext } from './useCellFormat.js';
+export {
+  useCellFormat,
+  cellFormatAt,
+  columnsOf,
+  toFormatLocale,
+  type CellFormatContext,
+} from './useCellFormat.js';
 export { layoutCell, INVALID_LABELS, type CellLayout, type Run } from './layout.js';
 export { MARK_CHORDS, activeMarks, markForKey, toggleCellMark, type MarkChord } from './marks.js';
 export { editorSchema, type EditorSchema } from './schema.js';

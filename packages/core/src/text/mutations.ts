@@ -5,7 +5,16 @@
  */
 import * as Y from 'yjs';
 
-import { cellsMap, isFormula, tableMap, type GedeDoc, type TableMap } from '../doc/schema.js';
+import {
+  cellsMap,
+  columnsArray,
+  isFormula,
+  readString,
+  rowsArray,
+  tableMap,
+  type GedeDoc,
+  type TableMap,
+} from '../doc/schema.js';
 import { cellKey, type Id } from '../ids.js';
 import {
   EMPTY_DOC,
@@ -36,12 +45,23 @@ export function cellFragment(table: TableMap, rowId: Id, colId: Id): Y.XmlFragme
  * `=` on its first line is a formula and is stored as its source; an empty
  * document clears the cell; an existing fragment is rewritten in place so
  * remote observers see one change, and an unchanged document is a no-op.
+ * False when the row or column went while the editor was open — the draft
+ * is dropped rather than written as a cell keyed to nothing (GRID-02).
  */
-export function setCellRich(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, doc: RichDoc): void {
+export function setCellRich(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, doc: RichDoc): boolean {
   const table = tableMap(gd, tableId);
   if (table === null) throw new RangeError(`no table ${tableId}`);
   const next = normalise(doc);
+  let written = false;
   gd.doc.transact(() => {
+    if (!rowsArray(table).toArray().includes(rowId)) return;
+    if (
+      !columnsArray(table)
+        .toArray()
+        .some((c) => readString(c, 'id') === colId)
+    )
+      return;
+    written = true;
     const cells = cellsMap(table);
     const key = cellKey(rowId, colId);
     if (isEmptyDoc(next)) {
@@ -61,4 +81,5 @@ export function setCellRich(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, doc:
     }
     cells.set(key, richToFragment(next));
   }, gd.origin);
+  return written;
 }

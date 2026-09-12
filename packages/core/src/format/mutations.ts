@@ -9,8 +9,6 @@ import * as Y from 'yjs';
 import {
   cellsMap,
   columnsArray,
-  fragmentText,
-  isFormula,
   readString,
   tableMap,
   textFragment,
@@ -20,6 +18,9 @@ import {
 import { cellKey, type Id } from '../ids.js';
 import { effectiveCellFormat } from './column.js';
 import { readFormatOpts, type FormatKind, type FormatOpts } from './types.js';
+import { marksAt } from '../text/algebra.js';
+import { docNode, paragraphNode, plainText, textNode } from '../text/types.js';
+import { fragmentToRich, writeRich } from '../text/yjs.js';
 import { canonicalText } from './value.js';
 
 function transact<T>(gd: GedeDoc, fn: () => T): T {
@@ -115,8 +116,15 @@ export function commitFormattedText(
     }
     const stored = canonicalText(text, effectiveCellFormat(table, rowId, colId));
     const current = cells.get(key);
-    if (current !== undefined && !isFormula(current) && fragmentText(current) === stored)
+    if (current instanceof Y.XmlFragment) {
+      const rich = fragmentToRich(current);
+      if (plainText(rich) === stored) return stored;
+      // The typed text was canonicalised: the cell keeps the marks its text began with,
+      // as the renderer does for a formatted value.
+      const marks = plainText(rich) === text ? marksAt(rich, 0) : [];
+      writeRich(current, docNode([paragraphNode([textNode(stored, marks)])]));
       return stored;
+    }
     cells.set(key, textFragment(stored));
     return stored;
   });

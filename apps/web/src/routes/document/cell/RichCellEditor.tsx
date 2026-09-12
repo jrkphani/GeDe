@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react';
 import { baseKeymap, splitBlock } from 'prosemirror-commands';
 import { history, redo as historyRedo, undo as historyUndo } from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
-import { AllSelection, EditorState, Plugin, type Command } from 'prosemirror-state';
+import { AllSelection, EditorState, Plugin, TextSelection, type Command } from 'prosemirror-state';
 import { EditorView } from 'prosemirror-view';
 import {
   detectIndicLang,
@@ -21,32 +21,44 @@ import {
   yUndoPlugin,
   yUndoPluginKey,
   ySyncPlugin,
+  ySyncPluginKey,
 } from 'y-prosemirror';
 import type * as Y from 'yjs';
 
+import type { Direction, EditSeed } from '../../../doc/selection.js';
 import { isApplePlatform, matchesChord } from '../../../doc/shortcuts.js';
 import { activeMarks, markForKey, toggleCellMark } from './marks.js';
 import { editorSchema } from './schema.js';
 
 export interface RichCellEditorProps {
-  /** The cell's text as the grid shows it — formula source or plain text (Wave 1 contract). */
+  /** The cell's text as the grid shows it — formula source or plain text; the seed decides whether the editor starts from it. */
   initial: string;
+  /** GRID-04: `existing` edits the text in place; `overwrite` starts from the typed character. */
+  seed: EditSeed;
   address: string | undefined;
-  /** Plain-text result; the grid's `setCellText` path. Called once, on commit. */
-  onCommit: (value: string) => void;
+  /** Plain-text result and where the selection goes next (Enter down, Tab right, blur nowhere). Called once. */
+  onCommit: (value: string, then: Direction | null) => void;
   onCancel: () => void;
   /**
    * The cell's live `Y.XmlFragment`. When given, the editor binds to it through
    * y-prosemirror: keystrokes and marks merge at character level as they happen
-   * (optimistic, never blocked by sync), and Escape undoes this editor's own
-   * edits. Without it the editor works on `initial` alone and hands the rich
-   * result to `onCommitRich`.
+   * (optimistic, never blocked by sync). Without it the editor works on `initial`
+   * alone and hands the rich result to `onCommitRich`.
    */
   fragment?: Y.XmlFragment | null | undefined;
+  /**
+   * The document's undo manager (KEYS-03). With it, everything this editor writes
+   * to the fragment is one step on the document-level stack: ⌘Z inside the editor
+   * and ⌘Z after commit agree, and Escape undoes back to the depth at open. Without
+   * it the editor keeps a private stack for the life of the edit.
+   */
+  undoManager?: Y.UndoManager | null | undefined;
   /** Rich result of a detached edit (no `fragment`), alongside `onCommit`. */
   onCommitRich?: ((doc: RichDoc) => void) | undefined;
   /** Marks at the selection, for the Text tab (INSP-06). */
   onSelectionMarks?: ((marks: ReadonlySet<MarkName>) => void) | undefined;
+  /** The active locale's language tag, the editor's `lang` unless the text is Indic (I18N-03). */
+  locale?: string | undefined;
 }
 
 function docFromText(text: string) {
@@ -61,30 +73,53 @@ function richOf(state: EditorState): RichDoc {
 const UNDO: Command = (state, dispatch) => historyUndo(state, dispatch);
 const REDO: Command = (state, dispatch) => historyRedo(state, dispatch);
 
+function arrowDirection(code: string): Direction | null {
+  switch (code) {
+    case 'ArrowUp':
+      return 'up';
+    case 'ArrowDown':
+      return 'down';
+    case 'ArrowLeft':
+      return 'left';
+    case 'ArrowRight':
+      return 'right';
+    default:
+      return null;
+  }
+}
+
+/** `lang` for the editable: the script the text is in, else the locale's language. */
+function langFor(text: string, locale: string | undefined): string | null {
+  return detectIndicLang(text) ?? (locale === undefined ? null : (locale.split('-')[0] ?? null));
+}
+
 /**
  * The rich cell editor: a ProseMirror view drawn as the cell, same contract
- * as the Wave 1 `CellEditor` — Enter commits, Escape cancels, Tab commits,
- * blur commits, ⇧⏎ adds a line, none of it mid-composition (GRID-06,
- * I18N-01) — plus inline marks on ⌘B ⌘I ⌘U ⇧⌘X ⌃⌘+ ⌃⌘− by physical key
- * (KEYS-05) and, given the cell's fragment, character-level merging through
- * y-prosemirror.
+ * as the grid's `CellEditor` — Enter commits and moves down, Tab right, ⇧Tab
+ * left, Escape cancels, blur commits in place, ⇧⏎ adds a line, arrows commit
+ * when the edit began by typing, none of it mid-composition (GRID-04,
+ * GRID-06, I18N-01) — plus inline marks on ⌘B ⌘I ⌘U ⇧⌘X ⌃⌘+ ⌃⌘− by physical
+ * key (KEYS-05) and, given the cell's fragment, character-level merging
+ * through y-prosemirror.
  */
 export function RichCellEditor({
   initial,
+  seed,
   address,
   onCommit,
   onCancel,
   fragment,
+  undoManager,
   onCommitRich,
   onSelectionMarks,
+  locale,
 }: RichCellEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const done = useRef(false);
   const mounted = useRef(false);
-  const latest = useRef({ onCommit, onCancel, onCommitRich, onSelectionMarks });
-  latest.current = { onCommit, onCancel, onCommitRich, onSelectionMarks };
-  const lang = detectIndicLang(initial);
+  const latest = useRef({ onCommit, onCancel, onCommitRich, onSelectionMarks, locale });
+  latest.current = { onCommit, onCancel, onCommitRich, onSelectionMarks, locale };
 
   useEffect(() => {
     const el = host.current;
@@ -93,30 +128,68 @@ export function RichCellEditor({
     done.current = false;
     const apple = isApplePlatform();
     const bound = fragment !== null && fragment !== undefined && fragment.doc !== null;
+    const shared = bound && undoManager !== null && undoManager !== undefined ? undoManager : null;
+    // KEYS-03: with the document's manager, this edit session is one undo step —
+    // a new item at open (stopCapturing), then every keystroke merges into it.
+    const depth = shared === null ? 0 : shared.undoStack.length;
+    const captureTimeout = shared?.captureTimeout ?? 0;
+    if (shared !== null) {
+      shared.stopCapturing();
+      shared.addTrackedOrigin(ySyncPluginKey);
+      shared.captureTimeout = Number.MAX_SAFE_INTEGER;
+    }
+    const release = (): void => {
+      if (shared === null) return;
+      shared.captureTimeout = captureTimeout;
+      shared.removeTrackedOrigin(ySyncPluginKey);
+      shared.stopCapturing();
+    };
 
-    const finish = (commit: boolean): void => {
+    const finish = (then: Direction | null | 'cancel'): void => {
       if (done.current) return;
       done.current = true;
       const view = viewRef.current;
       if (view === null) return;
-      if (commit) {
+      if (then !== 'cancel') {
         const rich = bound ? fragmentToRich(fragment) : richOf(view.state);
+        release();
         if (!bound) latest.current.onCommitRich?.(rich);
-        latest.current.onCommit(plainText(rich));
-      } else {
-        if (bound) {
-          // Escape undoes what this editor did to the fragment; a collaborator's
-          // concurrent edits to the same cell are theirs and stay.
-          const manager = (
-            yUndoPluginKey.getState(view.state) as { undoManager: Y.UndoManager } | undefined
-          )?.undoManager;
-          if (manager !== undefined) {
-            manager.stopCapturing();
-            while (manager.undoStack.length > 0) manager.undo();
-          }
-        }
-        latest.current.onCancel();
+        latest.current.onCommit(plainText(rich), then);
+        return;
       }
+      if (shared !== null) {
+        // Escape undoes what this editor did, back to the depth at open; a
+        // collaborator's concurrent edits to the same cell are theirs and stay.
+        while (shared.undoStack.length > depth) shared.undo();
+        shared.clear(false, true);
+      } else if (bound) {
+        const manager = (
+          yUndoPluginKey.getState(view.state) as { undoManager: Y.UndoManager } | undefined
+        )?.undoManager;
+        if (manager !== undefined) {
+          manager.stopCapturing();
+          while (manager.undoStack.length > 0) manager.undo();
+        }
+      }
+      release();
+      latest.current.onCancel();
+    };
+
+    const undoCommand: Command = (state, dispatch) => {
+      if (shared !== null) {
+        if (shared.undoStack.length <= depth) return false;
+        shared.undo();
+        return true;
+      }
+      return (bound ? yUndo : UNDO)(state, dispatch);
+    };
+    const redoCommand: Command = (state, dispatch) => {
+      if (shared !== null) {
+        if (shared.redoStack.length === 0) return false;
+        shared.redo();
+        return true;
+      }
+      return (bound ? yRedo : REDO)(state, dispatch);
     };
 
     const keys = new Plugin({
@@ -130,22 +203,29 @@ export function RichCellEditor({
           // carries no `isComposing`. While the view is composing, swallow it so
           // nothing commits or splits mid-composition (GRID-06, I18N-01).
           if (view.composing) return event.code === 'Enter';
-          if (event.code === 'Enter' && !event.shiftKey && !event.altKey) {
+          const mod = event.metaKey || event.ctrlKey;
+          if ((event.code === 'Enter' || event.code === 'NumpadEnter') && !mod && !event.altKey) {
+            if (event.shiftKey) return splitBlock(view.state, view.dispatch);
             event.preventDefault();
-            finish(true);
+            finish('down');
             return true;
-          }
-          if (event.code === 'Enter' && event.shiftKey) {
-            return splitBlock(view.state, view.dispatch);
           }
           if (event.code === 'Escape') {
             event.preventDefault();
-            finish(false);
+            finish('cancel');
             return true;
           }
           if (event.code === 'Tab') {
             event.preventDefault();
-            finish(true);
+            finish(event.shiftKey ? 'left' : 'right');
+            return true;
+          }
+          const arrow = arrowDirection(event.code);
+          if (arrow !== null) {
+            // Caret movement inside an existing edit; a typed-over cell commits and moves, as in Numbers.
+            if (seed.kind !== 'overwrite' || mod || event.altKey || event.shiftKey) return false;
+            event.preventDefault();
+            finish(arrow);
             return true;
           }
           const mark = markForKey(event, apple);
@@ -156,20 +236,20 @@ export function RichCellEditor({
           }
           if (matchesChord(event, { code: 'KeyZ', mod: true }, apple)) {
             event.preventDefault();
-            return (bound ? yUndo : UNDO)(view.state, view.dispatch);
+            return undoCommand(view.state, view.dispatch);
           }
           if (
             matchesChord(event, { code: 'KeyZ', mod: true, shift: true }, apple) ||
             matchesChord(event, { code: 'KeyY', mod: true }, apple)
           ) {
             event.preventDefault();
-            return (bound ? yRedo : REDO)(view.state, view.dispatch);
+            return redoCommand(view.state, view.dispatch);
           }
           return false;
         },
         handleDOMEvents: {
           blur: () => {
-            finish(true);
+            finish(null);
             return false;
           },
         },
@@ -181,17 +261,21 @@ export function RichCellEditor({
       const { doc, mapping } = initProseMirrorDoc(fragment, editorSchema);
       state = EditorState.create({
         doc,
-        plugins: [ySyncPlugin(fragment, { mapping }), yUndoPlugin(), keys, keymap(baseKeymap)],
+        plugins: [
+          ySyncPlugin(fragment, { mapping }),
+          ...(shared === null ? [yUndoPlugin()] : []),
+          keys,
+          keymap(baseKeymap),
+        ],
       });
     } else {
       state = EditorState.create({
-        doc: docFromText(initial),
+        doc: docFromText(seed.kind === 'overwrite' ? seed.text : initial),
         plugins: [history(), keys, keymap(baseKeymap)],
       });
     }
-    // Like the Wave 1 textarea's `select()`: typing replaces the whole cell.
-    state = state.apply(state.tr.setSelection(new AllSelection(state.doc)));
 
+    const initialLang = langFor(seed.kind === 'overwrite' ? seed.text : initial, locale);
     const view = new EditorView(el, {
       state,
       attributes: {
@@ -200,11 +284,17 @@ export function RichCellEditor({
         'aria-multiline': 'true',
         'aria-label': address === undefined ? 'Cell' : `Edit ${address}`,
         spellcheck: 'false',
-        ...(lang === null ? {} : { lang }),
+        ...(initialLang === null ? {} : { lang: initialLang }),
       },
       dispatchTransaction(tr) {
         const next = view.state.apply(tr);
         view.updateState(next);
+        if (tr.docChanged) {
+          // I18N-03: the line-height rule follows the script as it is typed, not as it was opened.
+          const lang = langFor(next.doc.textContent, latest.current.locale);
+          if (lang === null) view.dom.removeAttribute('lang');
+          else if (view.dom.getAttribute('lang') !== lang) view.dom.setAttribute('lang', lang);
+        }
         if (tr.selectionSet || tr.docChanged || tr.storedMarksSet) {
           latest.current.onSelectionMarks?.(activeMarks(next));
         }
@@ -212,6 +302,15 @@ export function RichCellEditor({
     });
     viewRef.current = view;
     view.focus();
+    if (bound && seed.kind === 'overwrite') {
+      // GRID-04: typing replaces the cell — the typed character overwrites the whole text.
+      view.dispatch(
+        view.state.tr.setSelection(new AllSelection(view.state.doc)).insertText(seed.text),
+      );
+    } else {
+      // Caret at the end: an edit appends to the text, an overwrite continues the word.
+      view.dispatch(view.state.tr.setSelection(TextSelection.atEnd(view.state.doc)));
+    }
     latest.current.onSelectionMarks?.(activeMarks(view.state));
 
     // GRID-06: blur commits. Selecting another cell (or switching sheet) unmounts the
@@ -229,11 +328,12 @@ export function RichCellEditor({
           : null;
       current?.destroy();
       viewRef.current = null;
+      if (!done.current) release();
       queueMicrotask(() => {
         if (mounted.current || done.current || pending === null) return;
         done.current = true;
         if (!bound) latest.current.onCommitRich?.(pending);
-        latest.current.onCommit(plainText(pending));
+        latest.current.onCommit(plainText(pending), null);
       });
     };
     // The editor is created once per mount; props that change mid-edit are read through `latest`.

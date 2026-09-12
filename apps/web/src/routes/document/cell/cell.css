@@ -21,6 +21,19 @@
   text-overflow: ellipsis;
 }
 
+/* GRID-09: a wrapped cell shows two lines, clipped, like the plain text did. */
+.gd-cell--wrap .gd-rich {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.gd-cell--wrap .gd-rich__p {
+  white-space: normal;
+}
+
 /* I18N-03: Noto fallbacks are in --font-ui; Indic scripts need 1.7 or matras clip. */
 .gd-rich--indic,
 .gd-rich-editor[lang='ta'],

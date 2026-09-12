@@ -3,11 +3,13 @@ import { memo, type ReactNode } from 'react';
 import type { CellFormat, FormatLocale, Mark, RichDoc } from '@gede/core';
 import { Icon } from '@gede/ui';
 
-import { INVALID_LABELS, layoutCell, type Run } from './layout.js';
+import { INVALID_LABELS, layoutCell, type CellLayout, type Run } from './layout.js';
 
 export interface CellContentProps {
   /** The cell's rich text, or its plain text (a formula's result, a Wave 1 string). */
   content: RichDoc | string;
+  /** A layout the caller already computed (for its `aria-label` and `title`); skips computing it again. */
+  layout?: CellLayout | undefined;
   /** Effective format of the cell (column, or its override). */
   format: CellFormat;
   locale: FormatLocale;
@@ -89,8 +91,9 @@ export const CellContent = memo(function CellContent({
   locale,
   className,
   describedById,
+  layout: precomputed,
 }: CellContentProps) {
-  const layout = layoutCell(content, format, locale);
+  const layout = precomputed ?? layoutCell(content, format, locale);
   return (
     <span
       className={clsx(

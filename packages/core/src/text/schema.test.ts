@@ -1,7 +1,15 @@
 import { describe, expect, test } from 'vitest';
 
 import { checkDoc, isValidDoc, richSchema } from './schema.js';
-import { docNode, normalise, paragraphNode, textNode, toMark, type RichDoc } from './types.js';
+import {
+  docNode,
+  isSafeHref,
+  normalise,
+  paragraphNode,
+  textNode,
+  toMark,
+  type RichDoc,
+} from './types.js';
 
 describe('rich text schema (PRD §3, §20)', () => {
   test('INSP-06 (partial) the schema carries the six inline marks, link, text colour and highlight', () => {
@@ -60,6 +68,21 @@ describe('rich text schema (PRD §3, §20)', () => {
     // `toMark` drops it, so `normalise` never lets it reach the fragment.
     expect(toMark({ type: 'highlight', attrs: { token: 'yellow' } })).toBeNull();
     expect(normalise(hex).content[0]?.content?.[0]?.marks).toBeUndefined();
+  });
+
+  test('a link may point at http, https or mailto only; other schemes are dropped in core', () => {
+    expect(isSafeHref('https://gede.work')).toBe(true);
+    expect(isSafeHref('http://gede.work/a?b=c')).toBe(true);
+    expect(isSafeHref('mailto:meena@1cloudhub.com')).toBe(true);
+    expect(isSafeHref('javascript:alert(1)')).toBe(false);
+    expect(isSafeHref('JavaScript:alert(1)')).toBe(false);
+    expect(isSafeHref('data:text/html,hi')).toBe(false);
+    expect(isSafeHref('/relative')).toBe(false);
+    expect(toMark({ type: 'link', attrs: { href: 'javascript:alert(1)' } })).toBeNull();
+    const doc = docNode([
+      paragraphNode([textNode('x', [{ type: 'link', attrs: { href: 'javascript:alert(1)' } }])]),
+    ]);
+    expect(normalise(doc).content[0]?.content?.[0]?.marks).toBeUndefined();
   });
 
   test('toDOM specs are the array form and never touch the DOM', () => {

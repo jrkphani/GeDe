@@ -133,11 +133,18 @@ describe('CellContent (DOM-first renderer)', () => {
     expect(root.textContent).not.toContain('0');
   });
 
-  test('FMT-01 Automatic infers from the text and leaves what it cannot parse alone', () => {
+  test('FMT-01 Automatic shows text as typed, right-aligned when numeric, and never marks it invalid', () => {
     const { container, rerender } = render(
-      <CellContent content="1234" format={cellFormat('auto')} locale="en-IN" />,
+      <CellContent content="2026" format={cellFormat('auto')} locale="en-IN" />,
     );
-    expect(container.querySelector('.gd-rich')?.textContent).toBe('1,234');
+    expect(container.querySelector('.gd-rich')?.textContent).toBe('2026');
+    expect(container.querySelector('.gd-rich')).toHaveClass('gd-rich--right');
+    rerender(<CellContent content="007" format={cellFormat('auto')} locale="en-IN" />);
+    expect(container.querySelector('.gd-rich')?.textContent).toBe('007');
+    rerender(<CellContent content="1234.50" format={cellFormat('auto')} locale="en-US" />);
+    expect(container.querySelector('.gd-rich')?.textContent).toBe('1234.50');
+    rerender(<CellContent content="2026" format={cellFormat('number')} locale="en-US" />);
+    expect(container.querySelector('.gd-rich')?.textContent).toBe('2,026');
     rerender(<CellContent content="Meena" format={cellFormat('auto')} locale="en-IN" />);
     expect(container.querySelector('.gd-rich')?.textContent).toBe('Meena');
     expect(container.querySelector('.gd-rich--invalid')).toBeNull();

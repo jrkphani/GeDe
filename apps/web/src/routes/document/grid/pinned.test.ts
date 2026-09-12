@@ -10,6 +10,8 @@ const col = (id: string, width = 1, hidden = false) => ({
   hidden,
   wrap: false,
   source: 'entered' as const,
+  format: 'auto' as const,
+  formatOpts: {},
 });
 
 /** A table at column 2 (x = 320 px) with columns of 1, 2 and 1 units: 640 px wide. */

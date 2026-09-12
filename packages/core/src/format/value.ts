@@ -72,6 +72,18 @@ export function toCellValue(value: FormattedValue): CellValue {
 }
 
 /**
+ * A number as plain decimal digits — never `1e+21`, which `parseNumber` would
+ * refuse on the next render and flip a committed cell to invalid.
+ */
+export function canonicalNumber(value: number): string {
+  const plain = String(value);
+  if (!/e/i.test(plain)) return plain;
+  if (Number.isInteger(value)) return BigInt(value).toString();
+  // A fractional value with an exponent is tiny (|v| < 1e-6): spell it out and trim the zeros.
+  return value.toFixed(20).replace(/\.?0+$/, '');
+}
+
+/**
  * The text to store for a commit under a format (FMT-02 "the stored value is
  * the parsed number"): a canonical decimal for numbers and currencies, ISO
  * for dates, so a later format or locale change re-renders without
@@ -83,11 +95,11 @@ export function canonicalText(text: string, format: CellFormat): string {
   const value = resolveValue(text, format);
   switch (value.kind) {
     case 'number':
-      return String(value.value);
+      return canonicalNumber(value.value);
     case 'currency':
       return value.code === (format.opts.currency ?? DEFAULT_CURRENCY)
-        ? String(value.value)
-        : `${String(value.value)} ${value.code}`;
+        ? canonicalNumber(value.value)
+        : `${canonicalNumber(value.value)} ${value.code}`;
     case 'date':
       return value.iso;
     default:
@@ -217,20 +229,31 @@ export function formatCurrency(
   } else {
     text = currency.format(magnitude);
   }
-  return value < 0 ? `(${text})` : text;
+  // `(₹0.00)` is not a negative amount: wrap only when the rounded magnitude is non-zero.
+  const negative = value < 0 && /[1-9]/.test(text);
+  return negative ? `(${text})` : text;
 }
 
 const DATE_OPTIONS: Readonly<
-  Record<Exclude<DatePattern, 'YYYY-MM-DD'>, Intl.DateTimeFormatOptions>
+  Record<Exclude<DatePattern, 'YYYY-MM-DD' | 'DD/MM/YYYY'>, Intl.DateTimeFormatOptions>
 > = {
   'D MMM YYYY': { day: 'numeric', month: 'short', year: 'numeric' },
-  'DD/MM/YYYY': { day: '2-digit', month: '2-digit', year: 'numeric' },
   'MMM YYYY': { month: 'short', year: 'numeric' },
 };
+
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
 
 /** Dates through `Intl.DateTimeFormat` in the locale's own order and month names (FMT-04, I18N-04). */
 export function formatDate(date: CivilDate, pattern: DatePattern, locale: FormatLocale): string {
   if (pattern === 'YYYY-MM-DD') return isoDate(date);
+  // The two numeric patterns render as their names promise in every locale (PRD §22 names
+  // them); the month-name patterns go through Intl for the locale's order and month names.
+  // PRD §23's en-US short date (M/D/Y) is not one of the §22 patterns — filed as a spec gap.
+  if (pattern === 'DD/MM/YYYY') {
+    return `${pad2(date.day)}/${pad2(date.month)}/${String(date.year).padStart(4, '0')}`;
+  }
   const at = new Date(Date.UTC(date.year, date.month - 1, date.day));
   return dateFormatter(locale, DATE_OPTIONS[pattern]).format(at);
 }
@@ -273,7 +296,17 @@ export function renderValue(
   }
 }
 
-/** One call for the renderer: text in, display out. */
+/**
+ * One call for the renderer: text in, display out. Under Automatic the text
+ * shows as typed — `2026` stays `2026`, `007` stays `007` — and only aligns
+ * right when it parses as a number or an amount; grouping and decimals are
+ * what an explicit Number or Currency format is for (FMT-01, FMT-02).
+ */
 export function renderText(text: string, format: CellFormat, locale?: FormatLocale): Rendered {
-  return renderValue(resolveValue(text, format), format, locale);
+  const value = resolveValue(text, format);
+  if (format.kind === 'auto') {
+    const numeric = value.kind === 'number' || value.kind === 'currency';
+    return { text, align: numeric ? 'right' : 'left', invalid: false };
+  }
+  return renderValue(value, format, locale);
 }

@@ -75,6 +75,18 @@ export function layoutCell(
   }
 
   const value = resolveValue(plain, format);
+  if (format.kind === 'auto') {
+    // FMT-01: Automatic shows the text as typed — `2026` is not `2,026`, `007` is not `7` —
+    // and only aligns right when it parses; grouping and decimals are an explicit format's.
+    const numeric = value.kind === 'number' || value.kind === 'currency';
+    return {
+      paragraphs: runsOf(doc),
+      align: numeric ? 'right' : 'left',
+      invalid: null,
+      lang: detectIndicLang(plain),
+      text: plain,
+    };
+  }
   const rendered = renderValue(value, format, locale);
   switch (value.kind) {
     case 'number':

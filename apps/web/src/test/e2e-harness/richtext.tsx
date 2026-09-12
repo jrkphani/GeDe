@@ -16,8 +16,10 @@ import {
   cellFragment,
   cellRich,
   cellText,
+  commitFormattedText,
   createSheet,
   createTable,
+  createUndoManager,
   CURRENCY_CODES,
   effectiveCellFormat,
   FORMAT_KINDS,
@@ -35,9 +37,11 @@ import {
 import '@gede/ui/styles.css';
 import '../../styles.css';
 import { useYVersion } from '../../doc/use-y.js';
+import type { EditSeed } from '../../doc/selection.js';
 import { CellContent, RichCellEditor } from '../../routes/document/cell/index.js';
 
 const gd = openDocument(new Y.Doc());
+const undo = createUndoManager(gd);
 const sheetId = createSheet(gd);
 const tableId = createTable(gd, {
   sheetId,
@@ -53,12 +57,14 @@ const rows = record.rows;
 setCellText(gd, tableId, rows[0] ?? '', colId, 'Everest trek');
 setCellText(gd, tableId, rows[1] ?? '', colId, '1234.5');
 setCellText(gd, tableId, rows[2] ?? '', colId, 'வணக்கம்');
+undo.stopCapturing();
+undo.clear();
 
 function Harness() {
   const table = tableMap(gd, tableId);
   if (table === null) throw new Error('harness table missing');
   const version = useYVersion(table);
-  const [editing, setEditing] = useState<string | null>(null);
+  const [editing, setEditing] = useState<{ rowId: string; seed: EditSeed } | null>(null);
   const [locale, setLocale] = useState<FormatLocale>('en-US');
   const [kind, setKind] = useState<FormatKind>('auto');
   const [currency, setCurrency] = useState<(typeof CURRENCY_CODES)[number]>('SGD');
@@ -129,7 +135,8 @@ function Harness() {
         {rows.map((rowId, i) => {
           const address = `A${String(i + 1)}`;
           const format = effectiveCellFormat(table, rowId, colId);
-          const isEditing = editing === rowId;
+          const edit = editing !== null && editing.rowId === rowId ? editing : null;
+          const isEditing = edit !== null;
           return (
             <div
               role="row"
@@ -145,23 +152,39 @@ function Harness() {
                 data-address={address}
                 data-version={version}
                 onDoubleClick={() => {
-                  setEditing(rowId);
+                  setEditing({ rowId, seed: { kind: 'existing' } });
                 }}
                 onKeyDown={(e) => {
-                  if (e.nativeEvent.isComposing) return;
+                  if (e.nativeEvent.isComposing || isEditing) return;
                   if (e.code === 'Enter') {
                     e.preventDefault();
-                    setEditing(rowId);
+                    setEditing({ rowId, seed: { kind: 'existing' } });
+                  } else if (e.code === 'Delete' || e.code === 'Backspace') {
+                    e.preventDefault();
+                    setCellText(gd, tableId, rowId, colId, '');
+                  } else if (!e.metaKey && !e.ctrlKey && !e.altKey && e.key.length === 1) {
+                    // GRID-04: typing overwrites, as the grid does.
+                    e.preventDefault();
+                    setEditing({ rowId, seed: { kind: 'overwrite', text: e.key } });
+                  } else if (e.code === 'KeyZ' && (e.metaKey || e.ctrlKey)) {
+                    e.preventDefault();
+                    if (e.shiftKey) undo.redo();
+                    else undo.undo();
                   }
                 }}
               >
-                {isEditing ? (
+                {edit !== null ? (
                   <RichCellEditor
                     initial={cellText(table, rowId, colId)}
+                    seed={edit.seed}
                     address={address}
                     fragment={cellFragment(table, rowId, colId)}
+                    undoManager={undo}
+                    locale={locale}
                     onCommit={(text) => {
-                      setCellText(gd, tableId, rowId, colId, text);
+                      // FMT-02: the stored value is the parsed number under an explicit format.
+                      commitFormattedText(gd, tableId, rowId, colId, text);
+                      undo.stopCapturing();
                       setEditing(null);
                     }}
                     onCommitRich={(doc: RichDoc) => {
@@ -186,6 +209,10 @@ function Harness() {
       <pre data-testid="fragment-json" style={{ fontSize: '0.75rem' }}>
         {JSON.stringify(cellRich(table, rows[0] ?? '', colId))}
       </pre>
+      <pre data-testid="stored-text" style={{ fontSize: '0.75rem' }}>
+        {JSON.stringify(rows.map((rowId) => cellText(table, rowId, colId)))}
+      </pre>
+      <p data-testid="undo-depth">{String(undo.undoStack.length)}</p>
     </main>
   );
 }

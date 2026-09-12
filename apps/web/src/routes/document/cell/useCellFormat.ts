@@ -1,14 +1,20 @@
 /**
  * The format in force for one cell, for the grid to hand to `CellContent`
  * and `RichCellEditor`. Reads the Yjs table directly (React never owns a
- * copy); the caller's `useYVersion(table)` is what triggers a re-render when
- * a column format or a cell override changes.
+ * copy); the caller's `useYVersion(table)` counter is what invalidates.
+ *
+ * Column records are resolved once per table per version and cached, so a
+ * 10,000-cell table costs one `columnsArray` walk per change plus a map
+ * lookup per cell — not an array copy per cell (PRD §20 16 ms budget).
  */
 import { useMemo } from 'react';
 import {
-  effectiveCellFormat,
+  cellFormatFor,
+  columnsArray,
+  columnRecord,
   isFormatLocale,
   type CellFormat,
+  type ColumnRecord,
   type FormatLocale,
   type Id,
   type TableMap,
@@ -26,6 +32,31 @@ export function toFormatLocale(locale: Locale): FormatLocale {
   return isFormatLocale(locale) ? locale : 'en-US';
 }
 
+interface ColumnCache {
+  version: number;
+  columns: ReadonlyMap<Id, ColumnRecord>;
+}
+
+const cache = new WeakMap<TableMap, ColumnCache>();
+
+/** The table's columns by id, resolved once per `version`. */
+export function columnsOf(table: TableMap, version: number): ReadonlyMap<Id, ColumnRecord> {
+  const hit = cache.get(table);
+  if (hit?.version === version) return hit.columns;
+  const columns = new Map<Id, ColumnRecord>();
+  for (const map of columnsArray(table).toArray()) {
+    const record = columnRecord(map);
+    columns.set(record.id, record);
+  }
+  cache.set(table, { version, columns });
+  return columns;
+}
+
+/** The effective format of one cell from the cached column record and its own override, if any. */
+export function cellFormatAt(table: TableMap, rowId: Id, colId: Id, version: number): CellFormat {
+  return cellFormatFor(table, columnsOf(table, version).get(colId) ?? null, rowId);
+}
+
 /**
  * @param version the table's `useYVersion` counter, so the memo refreshes with the document.
  */
@@ -37,8 +68,7 @@ export function useCellFormat(
 ): CellFormatContext {
   const [locale] = useLocale();
   return useMemo(
-    () => ({ format: effectiveCellFormat(table, rowId, colId), locale: toFormatLocale(locale) }),
-    // `version` is the change signal; it is not read.
+    () => ({ format: cellFormatAt(table, rowId, colId, version), locale: toFormatLocale(locale) }),
     [table, rowId, colId, locale, version],
   );
 }

@@ -112,6 +112,17 @@ export function markSetsEqual(a: readonly Mark[], b: readonly Mark[]): boolean {
   return a.every((m) => b.some((n) => marksEqual(m, n)));
 }
 
+const SAFE_HREF = /^(?:https?:\/\/|mailto:)/i;
+
+/**
+ * A link may point at `http`, `https` or `mailto` only. The same JSON is read
+ * by the projection worker and the chip Worker, so the scheme is checked here,
+ * once, rather than trusted to a renderer's neutralisation of `javascript:`.
+ */
+export function isSafeHref(value: unknown): value is string {
+  return typeof value === 'string' && SAFE_HREF.test(value);
+}
+
 /** Runtime guard for a mark coming from JSON or a Yjs attribute. */
 export function toMark(value: unknown): Mark | null {
   if (typeof value !== 'object' || value === null || !('type' in value)) return null;
@@ -122,7 +133,7 @@ export function toMark(value: unknown): Mark | null {
   if (typeof attrs !== 'object' || attrs === null) return null;
   if (type === 'link') {
     const href = 'href' in attrs ? attrs.href : undefined;
-    return typeof href === 'string' ? { type, attrs: { href } } : null;
+    return isSafeHref(href) ? { type, attrs: { href } } : null;
   }
   if (type === 'textColour') {
     const token = 'token' in attrs ? attrs.token : undefined;

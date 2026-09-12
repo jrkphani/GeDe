@@ -730,6 +730,7 @@ function OpenDocument({
                   editable={editable}
                   presence={onSheet}
                   pinnedLeft={pinnedPanelOffset(t, viewport.x / viewport.zoom)}
+                  undo={session.undo}
                   actions={grid.actions}
                   commands={grid.commands}
                 />

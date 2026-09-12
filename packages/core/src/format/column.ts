@@ -34,10 +34,19 @@ export function columnById(table: TableMap, colId: Id): ColumnRecord | null {
  * override, so it inherits (FMT-06) by construction.
  */
 export function effectiveCellFormat(table: TableMap, rowId: Id, colId: Id): CellFormat {
-  const override = cellFormatOverride(table, rowId, colId);
-  if (override !== null) return override;
   const column = columnById(table, colId);
-  return column === null ? AUTO_FORMAT : columnFormat(column);
+  return cellFormatFor(table, column, rowId);
+}
+
+/**
+ * The same, with the column already resolved. The grid resolves each column
+ * once per render (`tableRecord`) and calls this per cell, so a 10,000-cell
+ * table costs 10,000 map lookups per change, not 10,000 array copies.
+ */
+export function cellFormatFor(table: TableMap, column: ColumnRecord | null, rowId: Id): CellFormat {
+  if (column === null) return AUTO_FORMAT;
+  const override = cellFormatOverride(table, rowId, column.id);
+  return override ?? columnFormat(column);
 }
 
 /** How many cells of a column carry their own override (the inspector names them). */

@@ -7,17 +7,24 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useRef } from 'react';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  cellRich,
   createSheet,
   createTable,
   createUndoManager,
+  docNode,
   LATTICE,
   openDocument,
+  paragraphNode,
+  setCellFormat,
+  setCellRich,
   setCellText,
+  setColumnFormat,
   tableById,
   tableMap,
+  textNode,
   type GedeDoc,
   type Id,
 } from '@gede/core';
@@ -34,6 +41,7 @@ interface HarnessProps {
   editable?: boolean;
   pinnedLeft?: number | null;
   tier?: ZoomTier;
+  undo?: Y.UndoManager | undefined;
   grid: { current: Grid | null };
 }
 
@@ -43,9 +51,10 @@ function Harness({
   editable = true,
   pinnedLeft = null,
   tier = 'micro',
+  undo,
   grid,
 }: HarnessProps) {
-  const g = useGrid(gd, editable);
+  const g = useGrid(gd, editable, { undo });
   grid.current = g;
   useYVersion(gd.tables, { depth: 'shallow' });
   const map = tableMap(gd, tableId);
@@ -61,6 +70,7 @@ function Harness({
         editable={editable}
         presence={[]}
         pinnedLeft={pinnedLeft}
+        undo={undo}
         actions={g.actions}
         commands={g.commands}
       />
@@ -82,6 +92,29 @@ let tableId: Id;
 let rows: readonly Id[];
 let cols: readonly Id[];
 const gridRef: { current: Grid | null } = { current: null };
+
+/**
+ * Type into the rich editor the way a browser does: mutate the contenteditable
+ * and let ProseMirror's DOM observer read the change (a microtask). Selection
+ * sits at the end of the text when the editor opens, which is where this appends.
+ */
+async function typeText(editor: HTMLElement, text: string): Promise<void> {
+  const p = editor.querySelector('p') ?? editor;
+  const last = p.lastChild;
+  let node: Node;
+  if (last !== null && last.nodeType === Node.TEXT_NODE) {
+    last.textContent = `${last.textContent ?? ''}${text}`;
+    node = last;
+  } else {
+    if (last !== null && last.nodeName === 'BR') last.remove();
+    node = p.appendChild(document.createTextNode(text));
+  }
+  // The caret follows the typed text, as it does in a browser.
+  document.getSelection()?.collapse(node, node.textContent?.length ?? 0);
+  await act(async () => {
+    await Promise.resolve();
+  });
+}
 
 function mount(props: Partial<Omit<HarnessProps, 'grid' | 'gd' | 'tableId'>> = {}) {
   let holder: { current: Grid | null } = { current: null };
@@ -149,9 +182,10 @@ describe('editing (GRID-04, GRID-06)', () => {
     await userEvent.click(cellAt(0, 0));
     fireEvent.keyDown(cellAt(0, 0), { code: 'Enter', key: 'Enter' });
     const editor = screen.getByLabelText('Edit B5');
-    expect(editor).toHaveValue('Kathmandu');
+    expect(editor).toHaveTextContent('Kathmandu');
     expect(editor).toHaveFocus();
-    await userEvent.type(editor, ' changed');
+    await typeText(editor, ' changed');
+    expect(editor).toHaveTextContent('Kathmandu changed');
     fireEvent.keyDown(editor, { code: 'Escape', key: 'Escape' });
     expect(screen.queryByLabelText('Edit B5')).not.toBeInTheDocument();
     expect(cellAt(0, 0)).toHaveTextContent('Kathmandu');
@@ -166,8 +200,8 @@ describe('editing (GRID-04, GRID-06)', () => {
     await userEvent.click(cellAt(0, 0));
     fireEvent.keyDown(cellAt(0, 0), { code: 'KeyK', key: 'K' });
     const editor = screen.getByLabelText('Edit B5');
-    expect(editor).toHaveValue('K');
-    await userEvent.type(editor, 'ath');
+    expect(editor).toHaveTextContent('K');
+    await typeText(editor, 'ath');
     fireEvent.keyDown(editor, { code: 'Enter', key: 'Enter' });
     expect(cellAt(0, 0)).toHaveTextContent('Kath');
     expect(cellAt(0, 0)).not.toHaveTextContent('old');
@@ -177,7 +211,7 @@ describe('editing (GRID-04, GRID-06)', () => {
     mount();
     await userEvent.click(cellAt(0, 0));
     fireEvent.keyDown(cellAt(0, 0), { code: 'KeyA', key: 'அ' });
-    expect(screen.getByLabelText('Edit B5')).toHaveValue('அ');
+    expect(screen.getByLabelText('Edit B5')).toHaveTextContent('அ');
     fireEvent.keyDown(screen.getByLabelText('Edit B5'), { code: 'Escape', key: 'Escape' });
     fireEvent.keyDown(cellAt(0, 0), { code: 'KeyC', key: 'c', metaKey: true });
     expect(screen.queryByLabelText('Edit B5')).not.toBeInTheDocument();
@@ -222,7 +256,7 @@ describe('editing (GRID-04, GRID-06)', () => {
     await userEvent.click(cellAt(0, 0));
     fireEvent.keyDown(cellAt(0, 0), { code: 'Enter', key: 'Enter' });
     const editor = screen.getByLabelText('Edit B5');
-    fireEvent.change(editor, { target: { value: 'தமிழ்' } });
+    await typeText(editor, 'தமிழ்');
     fireEvent.keyDown(editor, { code: 'Enter', key: 'Enter', isComposing: true });
     fireEvent.keyDown(editor, { code: 'Tab', key: 'Tab', isComposing: true });
     fireEvent.keyDown(editor, { code: 'Escape', key: 'Escape', isComposing: true });
@@ -235,7 +269,7 @@ describe('editing (GRID-04, GRID-06)', () => {
     expect(selected()).toBe('B6');
     // An armed cell hands a starting composition to the editor, so the conjunct forms there.
     fireEvent.keyDown(cellAt(1, 0), { code: 'KeyK', key: 'Process', keyCode: 229 });
-    expect(screen.getByLabelText('Edit B6')).toHaveValue('');
+    expect(screen.getByLabelText('Edit B6')).toHaveTextContent('');
     // The arrows stay inside the grid while composing on an armed cell too.
     fireEvent.keyDown(screen.getByLabelText('Edit B6'), { code: 'Escape', key: 'Escape' });
     fireEvent.keyDown(cellAt(1, 0), { code: 'ArrowDown', key: 'ArrowDown', isComposing: true });
@@ -690,5 +724,109 @@ describe('read-only viewers (RESP-02, SHARE-03)', () => {
     expect(within(grid()).getAllByRole('row')).toHaveLength(4);
     expect(gridRef.current?.commands.insertRowBelow(tableId)).toBeNull();
     expect(gridRef.current?.commands.setFrozenColumns(tableId, 1)).toBeNull();
+  });
+});
+
+describe('rich text in the grid (KEYS-05, FMT-01..05, KEYS-03)', () => {
+  const bold = { type: 'bold' } as const;
+
+  it('INSP-06 (partial) a marked cell renders its marks at rest, without ProseMirror', () => {
+    setCellRich(
+      gd,
+      tableId,
+      rows[0]!,
+      cols[0]!,
+      docNode([paragraphNode([textNode('Base ', [bold]), textNode('camp')])]),
+    );
+    mount();
+    const cell = cellAt(0, 0);
+    expect(cell.querySelector('.gd-rich strong')).toHaveTextContent('Base');
+    expect(cell).toHaveTextContent('Base camp');
+    expect(cell.querySelector('.ProseMirror')).toBeNull();
+    expect(cell.getAttribute('aria-label')).toBe('B5, Base camp');
+  });
+
+  it('KEYS-05 (partial) ⌘B inside the editor marks the text; the mark survives commit and re-render', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh)');
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'Everest');
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    fireEvent.keyDown(cellAt(0, 0), { code: 'Enter', key: 'Enter' });
+    const editor = screen.getByLabelText('Edit B5');
+    fireEvent.keyDown(editor, { code: 'KeyA', key: 'a', ctrlKey: true }); // ProseMirror's select-all
+    fireEvent.keyDown(editor, { code: 'KeyB', key: 'b', metaKey: true });
+    fireEvent.keyDown(editor, { code: 'Enter', key: 'Enter' });
+    expect(cellAt(0, 0).querySelector('.gd-rich strong')).toHaveTextContent('Everest');
+    expect(cellRich(tableMap(gd, tableId)!, rows[0]!, cols[0]!)).toEqual(
+      docNode([paragraphNode([textNode('Everest', [bold])])]),
+    );
+    expect(selected()).toBe('B6');
+    vi.restoreAllMocks();
+  });
+
+  it('KEYS-03 with the document undo manager, a committed rich edit is one step: undo reverts it', async () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh)');
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'Everest');
+    undo.stopCapturing();
+    const before = undo.undoStack.length;
+    mount({ undo });
+    await userEvent.click(cellAt(0, 0));
+    fireEvent.keyDown(cellAt(0, 0), { code: 'Enter', key: 'Enter' });
+    const editor = screen.getByLabelText('Edit B5');
+    fireEvent.keyDown(editor, { code: 'KeyA', key: 'a', ctrlKey: true });
+    fireEvent.keyDown(editor, { code: 'KeyB', key: 'b', metaKey: true });
+    fireEvent.keyDown(editor, { code: 'KeyI', key: 'i', metaKey: true });
+    fireEvent.keyDown(editor, { code: 'Enter', key: 'Enter' });
+    expect(undo.undoStack.length).toBe(before + 1);
+    act(() => {
+      undo.undo();
+    });
+    expect(cellAt(0, 0).querySelector('.gd-rich strong')).toBeNull();
+    expect(cellAt(0, 0)).toHaveTextContent('Everest');
+    vi.restoreAllMocks();
+  });
+
+  it('FMT-02 FMT-05 a Number column right-aligns and groups; text under it is tinted with a glyph, never zero', () => {
+    setCellText(gd, tableId, rows[0]!, cols[0]!, '1234.5');
+    setCellText(gd, tableId, rows[1]!, cols[0]!, 'n/a');
+    setColumnFormat(gd, tableId, cols[0]!, 'number', { decimals: 2 });
+    mount();
+    expect(cellAt(0, 0).querySelector('.gd-rich')).toHaveClass('gd-rich--right');
+    expect(cellAt(0, 0)).toHaveTextContent('1,234.50');
+    expect(cellAt(0, 0).getAttribute('aria-label')).toBe('B5, 1,234.50');
+    const invalid = cellAt(1, 0).querySelector('.gd-rich')!;
+    expect(invalid).toHaveClass('gd-rich--invalid');
+    expect(invalid.querySelector('svg[data-name="warning"]')).not.toBeNull();
+    expect(cellAt(1, 0)).toHaveTextContent('n/a');
+  });
+
+  it('FMT-01 a cell override beats the column format; Automatic shows text as typed', () => {
+    setCellText(gd, tableId, rows[0]!, cols[0]!, '2026');
+    setCellText(gd, tableId, rows[1]!, cols[0]!, '2026');
+    setColumnFormat(gd, tableId, cols[0]!, 'number');
+    setCellFormat(gd, tableId, rows[1]!, cols[0]!, 'auto');
+    mount();
+    expect(cellAt(0, 0)).toHaveTextContent('2,026');
+    expect(cellAt(1, 0)).toHaveTextContent('2026');
+    expect(cellAt(1, 0).querySelector('.gd-rich')).toHaveClass('gd-rich--right');
+  });
+
+  it('GRID-10 the pinned panel mirrors marks and formats too', () => {
+    setCellRich(
+      gd,
+      tableId,
+      rows[0]!,
+      cols[0]!,
+      docNode([paragraphNode([textNode('Pinned', [bold])])]),
+    );
+    gd.doc.transact(() => {
+      tableMap(gd, tableId)!.set('frozenColumns', 1);
+    });
+    mount({ pinnedLeft: 0 });
+    const strongs = screen
+      .getByRole('grid')
+      .parentElement!.querySelectorAll('.gd-cell--frozen .gd-rich strong');
+    expect(strongs.length).toBeGreaterThanOrEqual(1);
   });
 });

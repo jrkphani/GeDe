@@ -22,7 +22,7 @@ async function open(page: Page): Promise<void> {
 }
 
 test.describe('rich cell (harness)', () => {
-  test('KEYS-05 ⌘B bolds the selection by physical key; the mark survives commit and re-render', async ({
+  test('KEYS-05 (partial) ⌘B bolds the selection by physical key; the mark survives commit and re-render', async ({
     page,
     checkA11y,
     snapshot,
@@ -33,7 +33,8 @@ test.describe('rich cell (harness)', () => {
     await cell.dblclick();
     const editor = page.getByRole('textbox', { name: 'Edit A1' });
     await expect(editor).toBeFocused();
-    // The whole text is selected on open; ⌘B marks all of it.
+    // The caret opens at the end; select all, then ⌘B marks all of it.
+    await page.keyboard.press(`${m}+a`);
     await page.keyboard.press(`${m}+b`);
     await expect(editor.locator('strong')).toHaveText('Everest trek');
     await page.keyboard.press('Enter');
@@ -44,12 +45,13 @@ test.describe('rich cell (harness)', () => {
     await snapshot('rich cell bold');
   });
 
-  test('KEYS-05 ⌘I ⌘U ⇧⌘X ⌃⌘+ ⌃⌘− each apply their mark', async ({ page }) => {
+  test('KEYS-05 (partial) ⌘I ⌘U ⇧⌘X ⌃⌘+ ⌃⌘− each apply their mark', async ({ page }) => {
     await open(page);
     const m = await mod(page);
     const cell = page.locator('[data-address="A1"]');
     await cell.dblclick();
     const editor = page.getByRole('textbox', { name: 'Edit A1' });
+    await page.keyboard.press(`${m}+a`);
     await page.keyboard.press(`${m}+i`);
     await page.keyboard.press(`${m}+u`);
     await page.keyboard.press(`${m}+Shift+x`);
@@ -68,20 +70,29 @@ test.describe('rich cell (harness)', () => {
     await expect(cell.locator('.gd-rich')).toHaveText('Everest trek');
   });
 
-  test('GRID-04 (partial) GRID-06 typing replaces the text; Enter commits; Escape discards', async ({
+  test('GRID-04 (partial) GRID-06 (partial) KEYS-03 typing on an armed cell overwrites; Enter opens on the text; Escape discards; ⌘Z is one step', async ({
     page,
   }) => {
     await open(page);
+    const m = await mod(page);
     const cell = page.locator('[data-address="A1"]');
     await cell.focus();
-    await page.keyboard.press('Enter');
     await page.keyboard.type('Annapurna');
+    await expect(page.getByRole('textbox', { name: 'Edit A1' })).toHaveText('Annapurna');
     await page.keyboard.press('Enter');
     await expect(cell.locator('.gd-rich')).toHaveText('Annapurna');
-    await cell.dblclick();
-    await page.keyboard.type('discarded');
+    await expect(page.getByTestId('undo-depth')).toHaveText('1');
+    await cell.focus();
+    await page.keyboard.press('Enter');
+    await page.keyboard.type(' II');
+    await expect(page.getByRole('textbox', { name: 'Edit A1' })).toHaveText('Annapurna II');
     await page.keyboard.press('Escape');
     await expect(cell.locator('.gd-rich')).toHaveText('Annapurna');
+    await expect(page.getByTestId('undo-depth')).toHaveText('1');
+    // KEYS-03: the overwrite was one step; ⌘Z brings the original text back.
+    await cell.focus();
+    await page.keyboard.press(`${m}+z`);
+    await expect(cell.locator('.gd-rich')).toHaveText('Everest trek');
   });
 
   test('I18N-01 GRID-06 (partial) Enter does not commit while an IME is composing; it commits once composition ends', async ({
@@ -113,8 +124,11 @@ test.describe('rich cell (harness)', () => {
   }) => {
     await open(page);
     const a2 = page.locator('[data-address="A2"] .gd-rich');
-    await expect(a2).toHaveText('1,234.5');
+    // FMT-01: Automatic shows the text as typed, right-aligned because it is a number.
+    await expect(a2).toHaveText('1234.5');
+    await expect(a2).toHaveClass(/gd-rich--right/);
     await page.getByLabel('Column format').selectOption('number');
+    await expect(a2).toHaveText('1,234.5');
     await expect(a2).toHaveClass(/gd-rich--right/);
     await page.getByLabel('Locale').selectOption('en-IN');
     await expect(a2).toHaveText('1,234.5');
@@ -122,11 +136,13 @@ test.describe('rich cell (harness)', () => {
     await page.getByLabel('Currency').selectOption('INR');
     await expect(a2).toHaveText(/₹1,234\.50/);
     // Type a negative amount into A2: accounting parentheses, still right-aligned.
-    await page.locator('[data-address="A2"]').dblclick();
-    await page.keyboard.type('-99');
+    await page.locator('[data-address="A2"]').focus();
+    await page.keyboard.type('(1,099.5)');
     await page.keyboard.press('Enter');
-    await expect(a2).toHaveText(/\(₹99\.00\)/);
+    await expect(a2).toHaveText(/\(₹1,099\.50\)/);
     await expect(a2).toHaveClass(/gd-rich--right/);
+    // FMT-02: the stored value is the parsed number, not the typed text.
+    await expect(page.getByTestId('stored-text')).toContainText('"-1099.5"');
   });
 
   test('FMT-05 A11Y-04 text under a Number format is tinted, carries a warning glyph with text, and keeps its text', async ({

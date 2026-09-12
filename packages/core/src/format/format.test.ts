@@ -20,6 +20,7 @@ import {
   type FormatLocale,
 } from './types.js';
 import {
+  canonicalNumber,
   canonicalText,
   formatCurrency,
   formatDate,
@@ -153,6 +154,34 @@ describe('resolveValue (FMT-01, FMT-05)', () => {
     expect(resolveValue('  ', auto)).toEqual({ kind: 'blank' });
   });
 
+  test('FMT-01 Automatic renders as typed: 2026 stays 2026, 007 stays 007, right-aligned when numeric', () => {
+    const auto = cellFormat('auto');
+    expect(renderText('2026', auto, 'en-US')).toEqual({
+      text: '2026',
+      align: 'right',
+      invalid: false,
+    });
+    expect(renderText('007', auto, 'en-IN')).toEqual({
+      text: '007',
+      align: 'right',
+      invalid: false,
+    });
+    expect(renderText('1234.50', auto, 'en-US').text).toBe('1234.50');
+    expect(renderText('S$1,250', auto, 'en-US')).toEqual({
+      text: 'S$1,250',
+      align: 'right',
+      invalid: false,
+    });
+    expect(renderText('12/9/2026', auto, 'en-US')).toEqual({
+      text: '12/9/2026',
+      align: 'left',
+      invalid: false,
+    });
+    expect(renderText('Meena', auto, 'en-US').align).toBe('left');
+    // An explicit Number format is what reformats.
+    expect(renderText('2026', cellFormat('number'), 'en-US').text).toBe('2,026');
+  });
+
   test('FMT-01 Automatic never rewrites the stored text', () => {
     fc.assert(
       fc.property(fc.string(), (text) => {
@@ -199,6 +228,22 @@ describe('resolveValue (FMT-01, FMT-05)', () => {
       value: 12,
       code: 'SGD',
     });
+  });
+
+  test('FMT-02 a stored number never takes exponent form, so it re-parses after commit', () => {
+    expect(canonicalText('1000000000000000000000', cellFormat('number'))).toBe(
+      '1000000000000000000000',
+    );
+    expect(canonicalNumber(1e21)).toBe('1000000000000000000000');
+    expect(canonicalNumber(-1e22)).toBe('-10000000000000000000000');
+    expect(canonicalNumber(1e-7)).toBe('0.0000001');
+    expect(canonicalNumber(1234.5)).toBe('1234.5');
+    expect(
+      resolveValue(
+        canonicalText('1000000000000000000000', cellFormat('number')),
+        cellFormat('number'),
+      ).kind,
+    ).toBe('number');
   });
 
   test('FMT-02 the stored value is the parsed number; FMT-04 dates store as ISO', () => {
@@ -271,6 +316,12 @@ describe('rendering through Intl (FMT-02..04, I18N-04)', () => {
     expect(formatCurrency(1234567.891, 'USD', { decimals: 0 }, 'en-US')).toBe('$1,234,568');
   });
 
+  test('FMT-03 a value that rounds to zero is not parenthesised', () => {
+    expect(formatCurrency(-0.004, 'INR', { decimals: 2 }, 'en-IN')).toBe('₹0.00');
+    expect(formatCurrency(-0.004, 'INR', { decimals: 3 }, 'en-IN')).toBe('(₹0.004)');
+    expect(formatCurrency(-0, 'SGD', {}, 'en-US')).toBe('SGD\u00a00.00');
+  });
+
   test('FMT-03 all six currencies render', () => {
     const codes = ['SGD', 'MYR', 'PHP', 'IDR', 'USD', 'INR'];
     for (const code of codes) {
@@ -284,7 +335,9 @@ describe('rendering through Intl (FMT-02..04, I18N-04)', () => {
     expect(formatDate(d, 'D MMM YYYY', 'en-US')).toBe('Sep 12, 2026');
     expect(formatDate(d, 'D MMM YYYY', 'en-GB')).toBe('12 Sept 2026');
     expect(formatDate(d, 'D MMM YYYY', 'en-IN')).toBe('12 Sept 2026');
-    expect(formatDate(d, 'DD/MM/YYYY', 'en-US')).toBe('09/12/2026');
+    // PRD §22 names the pattern; it renders as named in every locale (spec gap vs §23 filed).
+    expect(formatDate(d, 'DD/MM/YYYY', 'en-US')).toBe('12/09/2026');
+    expect(formatDate(d, 'DD/MM/YYYY', 'ta-IN')).toBe('12/09/2026');
     expect(formatDate(d, 'DD/MM/YYYY', 'en-GB')).toBe('12/09/2026');
     expect(formatDate(d, 'YYYY-MM-DD', 'ta-IN')).toBe('2026-09-12');
     expect(formatDate(d, 'MMM YYYY', 'en-GB')).toBe('Sept 2026');
