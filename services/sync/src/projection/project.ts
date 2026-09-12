@@ -5,9 +5,16 @@
  *
  * The projection is rebuildable and is never read to reconstruct a document
  * (packages/db/CLAUDE.md). Per cell: `text_plain` is the text the editor
- * shows (formula source or flattened rich text — the GIN index searches it,
- * FIND-03), `rich` is the ProseMirror JSON of the cell's `Y.XmlFragment`,
- * `formula` is the source of a formula cell. Graphs (GRAPH-01..11) project one
+ * shows — flattened rich text, or for a computed cell what it evaluates to,
+ * followed on a second line by the expression as the person reads it (the
+ * GIN index searches both, FIND-03 "cell values, formula expressions") —
+ * `rich` is the ProseMirror JSON of the cell's `Y.XmlFragment`, `formula` is
+ * the stored source of a formula cell. Derived columns (REF-04) own their
+ * cells and store nothing per row: the engine evaluates one synthetic formula
+ * per row, and each is projected as a row of its own (`text_plain` the
+ * value, `formula` the synthesised source), mirroring what Find indexes in
+ * the SPA (#125). Evaluation is the same `FormulaEngine` the browser runs, in
+ * this process, over the snapshot's bytes. Graphs (GRAPH-01..11) project one
  * row per half of a pair — pair id, kind, source table, dimension columns,
  * geometry and the slice — only while bound to a table that is itself
  * projected (`graphs.table_id` is NOT NULL and a foreign key); an unbound
@@ -17,7 +24,11 @@
 import * as Y from 'yjs';
 
 import {
+  cellKey,
   cellsMap,
+  derivedCellSource,
+  evaluatedText,
+  FormulaEngine,
   fragmentText,
   graphsOnSheet,
   isFormula,
@@ -26,10 +37,15 @@ import {
   rowMeta,
   splitCellKey,
   tablesOnSheet,
+  workbookCellId,
   workbookIndexOf,
+  workbookSnapshot,
+  type CellKey,
+  type CellResult,
   type GraphKind,
   type GraphSlice,
   type TableMap,
+  type TableRecord,
 } from '@gede/core';
 
 export interface ProjectedSheet {
@@ -163,14 +179,40 @@ export function fragmentToProseMirror(fragment: Y.XmlFragment): ProseMirrorNode 
   return content.length === 0 ? { type: 'doc' } : { type: 'doc', content };
 }
 
+/**
+ * Evaluate every formula in the document once, as the browser's engine would
+ * (derived columns included: the engine synthesises their cells). Results are
+ * keyed by `workbookCellId`; an error or a blank has no text.
+ */
+function evaluateAll(gd: ReturnType<typeof openDocument>): Map<string, CellResult> {
+  const engine = new FormulaEngine();
+  const outcome = engine.apply([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
+  return new Map(outcome.results.map((r) => [r.cellId, r]));
+}
+
+/** What a computed cell shows: its value's plain text, '' for an error, a blank or no result. */
+function shownText(results: ReadonlyMap<string, CellResult>, tableId: string, key: CellKey) {
+  const result = results.get(workbookCellId(tableId, key));
+  if (result === undefined || result.error !== null) return '';
+  return evaluatedText(result.value);
+}
+
+/** FIND-03: the value first, then the expression, so both are searched and the value reads first. */
+function computedTextPlain(shown: string, expression: string): string {
+  return shown === '' ? expression : `${shown}\n${expression}`;
+}
+
 function projectCells(
-  table: TableMap,
+  table: TableRecord,
+  map: TableMap,
   rowIds: Set<string>,
   columnIds: Set<string>,
   project: (source: string) => string,
+  results: ReadonlyMap<string, CellResult>,
 ): ProjectedCell[] {
   const out: ProjectedCell[] = [];
-  cellsMap(table).forEach((value, key) => {
+  const cells = cellsMap(map);
+  cells.forEach((value, key) => {
     let rowId: string;
     let columnId: string;
     try {
@@ -182,8 +224,15 @@ function projectCells(
     if (!rowIds.has(rowId) || !columnIds.has(columnId)) return;
     if (isFormula(value)) {
       // The stored source holds id tokens (PRD §20); what is searched and audited is the
-      // expression as the person reads it today (FIND-03). `formula` keeps the stored form.
-      out.push({ rowId, columnId, textPlain: project(value), rich: null, formula: value });
+      // value shown and the expression as the person reads it today (FIND-03). `formula`
+      // keeps the stored form.
+      out.push({
+        rowId,
+        columnId,
+        textPlain: computedTextPlain(shownText(results, table.id, key as CellKey), project(value)),
+        rich: null,
+        formula: value,
+      });
       return;
     }
     if (!(value instanceof Y.XmlFragment)) return;
@@ -195,6 +244,25 @@ function projectCells(
       formula: null,
     });
   });
+  // Derived columns (REF-04): one projected row per table row that has no document cell
+  // of its own (a Split child's piece is a document cell and was projected above).
+  for (const column of table.columns) {
+    if (column.derive === null || !columnIds.has(column.id)) continue;
+    for (const rowId of rowIds) {
+      const key = cellKey(rowId, column.id);
+      if (cells.has(key)) continue;
+      const shown = shownText(results, table.id, key);
+      if (shown === '') continue; // no result (unevaluated, blank or an error): nothing to search
+      const source = derivedCellSource(table.id, rowId, column.derive);
+      out.push({
+        rowId,
+        columnId: column.id,
+        textPlain: computedTextPlain(shown, project(source)),
+        rich: null,
+        formula: source,
+      });
+    }
+  }
   return out;
 }
 
@@ -202,6 +270,7 @@ function projectCells(
 export function projectDocument(doc: Y.Doc, documentId: string): Projection {
   const gd = openDocument(doc);
   const index = workbookIndexOf(gd);
+  const results = evaluateAll(gd);
   const project = (source: string): string =>
     source.includes('{') ? index.project(source) : source;
   const sheets: ProjectedSheet[] = [];
@@ -264,7 +333,7 @@ export function projectDocument(doc: Y.Doc, documentId: string): Projection {
           collapsed: meta.collapsed,
         });
       });
-      cells.push(...projectCells(map, rowIds, columnIds, project));
+      cells.push(...projectCells(table, map, rowIds, columnIds, project, results));
     }
   }
   // Graphs after every table: `table_id` must reference a projected table.

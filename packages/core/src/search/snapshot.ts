@@ -6,32 +6,52 @@
  * it to the search Worker, which folds and segments the text (`engine.ts`);
  * nothing here is a Yjs type or a class instance, and nothing here segments.
  */
-import * as Y from 'yjs';
+import type * as Y from 'yjs';
 
-import { splitCellKey, type CellKey, type Id } from '../ids.js';
+import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { parse } from '../formula/parser.js';
 import { references } from '../formula/ast.js';
 import { workbookIndexOf } from '../engine/commit.js';
 import {
   cellReadOnlyReason,
   cellsMap,
+  cellText,
   columnsArray,
   fragmentText,
+  graphRecord,
   isFormula,
   listSheets,
   readString,
   rowsArray,
   tableMap,
+  tableRecord,
   type GedeDoc,
   type GraphMap,
   type TableMap,
 } from '../doc/schema.js';
+import { deriveGraph } from '../graph/derive.js';
+import { graphInputOf } from '../graph/input.js';
 import { spanIndex } from '../style/spans.js';
 import { resolveFormat } from './format.js';
 import type { FormatKind } from './query.js';
 
-/** Which text of an entry matched. */
-export type SearchField = 'value' | 'formula' | 'reference' | 'header' | 'dimension' | 'name';
+/**
+ * Which text of an entry matched. `value` is typed text; `result` is what a
+ * computed cell — a formula, a derived or a pulled cell — shows once
+ * evaluated (FIND-03 "cell values"): found like any value, never rewritten
+ * (FIND-08), since the expression or the source column is what changes it.
+ */
+export type SearchField =
+  'value' | 'result' | 'formula' | 'reference' | 'header' | 'dimension' | 'name';
+
+/**
+ * The evaluated text of a computed cell, as the person sees it, or `undefined`
+ * when the caller has no result for it (no engine, not evaluated yet). The
+ * snapshot is built on the main thread from the Yjs document, which holds
+ * expressions and not results: results live in the engine host, and the app
+ * passes a reader over them.
+ */
+export type SearchValueReader = (tableId: Id, rowId: Id, colId: Id) => string | undefined;
 
 export interface SearchText {
   readonly field: SearchField;
@@ -131,6 +151,7 @@ function text(field: SearchField, value: string): SearchText {
 export function cellTexts(
   content: Y.XmlFragment | string,
   project: (source: string) => string = (s) => s,
+  evaluated?: string,
 ): SearchText[] {
   if (!isFormula(content)) {
     const value = fragmentText(content);
@@ -148,6 +169,9 @@ export function cellTexts(
       out.push(text('reference', source));
     }
   }
+  // The result last: at equal distance the expression wins the match, since
+  // that is what a person can edit; the value still finds the cell.
+  if (evaluated !== undefined && evaluated !== '') out.push(text('result', evaluated));
   return out;
 }
 
@@ -168,6 +192,7 @@ function tableEntriesOf(
   table: TableMap,
   ordinals: ReadonlyMap<Id, number>,
   project: (source: string) => string,
+  valueOf: SearchValueReader | undefined,
 ): TableEntries {
   const sheetId = readString(table, 'sheetId');
   const sheetOrdinal = ordinals.get(sheetId) ?? Number.MAX_SAFE_INTEGER;
@@ -207,14 +232,13 @@ function tableEntriesOf(
   // MENU-04 / ADR-033: a cell a merged span covers is off the grid the way a hidden column's
   // cells are — it keeps its data, but nothing in it can be found or highlighted.
   const covered = spanIndex(table).covered;
-  cellsMap(table).forEach((content, key) => {
-    const { rowId, colId } = splitCellKey(key);
+  const cells = cellsMap(table);
+  const push = (key: CellKey, rowId: Id, colId: Id, texts: SearchText[]) => {
     const ci = colIndex.get(colId);
     const ri = rowIndex.get(rowId);
     if (ci === undefined || ri === undefined) return; // orphaned cell: not addressable
     const column = columns[ci];
-    if (column === undefined || hidden.has(colId) || covered.has(key as CellKey)) return;
-    const texts = cellTexts(content, project);
+    if (column === undefined || hidden.has(colId) || covered.has(key)) return;
     if (texts.length === 0) return;
     const value = texts[0]?.text ?? '';
     entries.push({
@@ -234,45 +258,102 @@ function tableEntriesOf(
       readOnly: cellReadOnlyReason(table, rowId, colId) !== null,
       texts,
     });
+  };
+  cells.forEach((content, key) => {
+    const { rowId, colId } = splitCellKey(key);
+    const evaluated = isFormula(content) ? valueOf?.(tableId, rowId, colId) : undefined;
+    push(key as CellKey, rowId, colId, cellTexts(content, project, evaluated));
   });
+  // Derived columns own their cells (REF-04): nothing is stored for a row, the
+  // engine evaluates one synthetic formula per row. What the person sees there
+  // is a cell value (FIND-03), indexed as a `result` and never rewritten.
+  if (valueOf !== undefined) {
+    for (const column of columns) {
+      if (column.get('derive') === undefined || column.get('derive') === null) continue;
+      const colId = readString(column, 'id');
+      for (const rowId of rowIndex.keys()) {
+        const key = cellKey(rowId, colId);
+        if (cells.has(key)) continue; // the document's own cell (a Split child's piece) was indexed above
+        const evaluated = valueOf(tableId, rowId, colId);
+        if (evaluated === undefined || evaluated === '') continue;
+        push(key, rowId, colId, [text('result', evaluated)]);
+      }
+    }
+  }
   entries.sort((a, b) => a.rowIndex - b.rowIndex || a.colIndex - b.colIndex);
   return { tableId, sheetId, entries: [...headers, ...entries] };
 }
 
 /** Index one table; null when it no longer exists. */
-export function tableEntries(gd: GedeDoc, tableId: Id): TableEntries | null {
+export function tableEntries(
+  gd: GedeDoc,
+  tableId: Id,
+  valueOf?: SearchValueReader,
+): TableEntries | null {
   const table = tableMap(gd, tableId);
   if (table === null) return null;
-  return tableEntriesOf(tableId, table, sheetOrdinals(gd), projectorFor(gd));
+  return tableEntriesOf(tableId, table, sheetOrdinals(gd), projectorFor(gd), valueOf);
 }
 
-function stringsOf(value: unknown): string[] {
-  const list = value instanceof Y.Array ? value.toArray() : Array.isArray(value) ? value : [];
-  return list.filter((v): v is string => typeof v === 'string' && v !== '');
+/** What Find calls a graph pair: the table it reads and its kind, "Offices ring". */
+export function graphTitle(tableTitle: string, kind: string): string {
+  return tableTitle === '' ? kind : `${tableTitle} ${kind}`;
 }
 
 /**
- * Graph dimension values. The graphs map is empty until the graph work lands;
- * this reads the shape it will store (`dims` / `dimensions` as string lists,
- * a `title`) tolerantly, so the index covers graphs the day they appear.
+ * Graph dimension values (FIND-03, GRAPH-03..05): a context graph's
+ * parameters are the distinct values of its dimension columns, and its
+ * dimensions are those columns' titles — what the graph draws, not the
+ * column ids the map stores (#125). One entry per pair: the ring and the
+ * coverage half read the same table and dimensions, so a value matches the
+ * graph once, at the half that comes first in the document. A pair with no
+ * table, or bound to a table that is gone, has no values to find.
  */
-export function graphEntriesOf(gd: GedeDoc): GraphEntry[] {
+export function graphEntriesOf(gd: GedeDoc, valueOf?: SearchValueReader): GraphEntry[] {
   const ordinals = sheetOrdinals(gd);
   const out: GraphEntry[] = [];
+  const seenPairs = new Set<string>();
   gd.graphs.forEach((graph: GraphMap, graphId) => {
-    const sheetId = readString(graph, 'sheetId');
-    const title = readString(graph, 'title');
-    const dims = [...stringsOf(graph.get('dims')), ...stringsOf(graph.get('dimensions'))];
-    const texts = dims.map((d) => text('dimension', d));
-    if (title !== '') texts.unshift(text('dimension', title));
+    const record = graphRecord(graph);
+    const pairKey = record.pairId === '' ? graphId : record.pairId;
+    if (seenPairs.has(pairKey)) return;
+    if (record.tableId === null) return;
+    const tableId = record.tableId;
+    const table = tableMap(gd, tableId);
+    if (table === null) return;
+    seenPairs.add(pairKey);
+    const tableRec = tableRecord(table);
+    const cells = cellsMap(table);
+    const input = graphInputOf(
+      table,
+      record.dimensions,
+      (rowId, colId) => {
+        // A formula cell's parameter is what it shows, never its expression.
+        if (isFormula(cells.get(cellKey(rowId, colId))))
+          return valueOf?.(tableId, rowId, colId) ?? '';
+        return cellText(table, rowId, colId);
+      },
+      tableRec,
+    );
+    const texts: SearchText[] = [];
+    const seen = new Set<string>();
+    const add = (value: string) => {
+      if (value === '' || seen.has(value)) return;
+      seen.add(value);
+      texts.push(text('dimension', value));
+    };
+    for (const dimension of deriveGraph(input).dimensions) {
+      add(dimension.label);
+      for (const parameter of dimension.parameters) add(parameter.value);
+    }
     if (texts.length === 0) return;
     out.push({
       kind: 'graph',
-      id: `graph/${graphId}`,
-      sheetId,
-      sheetOrdinal: ordinals.get(sheetId) ?? Number.MAX_SAFE_INTEGER,
+      id: `graph/${pairKey}`,
+      sheetId: record.sheetId,
+      sheetOrdinal: ordinals.get(record.sheetId) ?? Number.MAX_SAFE_INTEGER,
       graphId,
-      title,
+      title: graphTitle(tableRec.title, record.kind),
       readOnly: true,
       texts,
     });
@@ -293,16 +374,25 @@ export function documentEntriesOf(documents: readonly DocumentName[]): DocumentE
     }));
 }
 
-/** Everything Find can see, as plain data. */
+/**
+ * Everything Find can see, as plain data. `valueOf` supplies the evaluated
+ * text of computed cells (formula, derived, pulled); without it those cells
+ * are found by their expressions only.
+ */
 export function buildSearchSnapshot(
   gd: GedeDoc,
   documents: readonly DocumentName[] = [],
+  valueOf?: SearchValueReader,
 ): SearchSnapshot {
   const ordinals = sheetOrdinals(gd);
   const project = projectorFor(gd);
   const tables: TableEntries[] = [];
   gd.tables.forEach((table, tableId) => {
-    tables.push(tableEntriesOf(tableId, table, ordinals, project));
+    tables.push(tableEntriesOf(tableId, table, ordinals, project, valueOf));
   });
-  return { tables, graphs: graphEntriesOf(gd), documents: documentEntriesOf(documents) };
+  return {
+    tables,
+    graphs: graphEntriesOf(gd, valueOf),
+    documents: documentEntriesOf(documents),
+  };
 }

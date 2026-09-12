@@ -36,7 +36,15 @@ async function isHealthy(url: string): Promise<boolean> {
   }
 }
 
-const ULID_PATH = /^\/d\/[0-9A-HJKMNP-TV-Z]{26}(?:[/?#].*)?$/i;
+/**
+ * A workscape path: `/d/<id>` where the id is what the service issues — a UUID
+ * (`POST /api/documents` uses `randomUUID()`, `documents.id` is `uuid`) — or a
+ * 26-character Crockford ULID (the client-side id form used elsewhere), with
+ * any query or fragment after it (#130).
+ */
+const UUID = '[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}';
+const ULID = '[0-9A-HJKMNP-TV-Z]{26}';
+const WORKSCAPE_PATH = new RegExp(`^/d/(?:${UUID}|${ULID})(?:[/?#].*)?$`, 'i');
 
 /** Accept a full URL or a path; returns the app path or null when it is not a workscape link. */
 export function parseWorkscapeLink(raw: string, origin: string): string | null {
@@ -52,7 +60,7 @@ export function parseWorkscapeLink(raw: string, origin: string): string | null {
       return null;
     }
   }
-  return ULID_PATH.test(path) ? path : null;
+  return WORKSCAPE_PATH.test(path) ? path : null;
 }
 
 function refFor(page: ErrorPage, requestId: string | undefined): string {
@@ -287,7 +295,7 @@ export function ErrorCell({
               autoFocus
               inputMode="url"
               autoComplete="off"
-              placeholder="https://gede.1cloudhub.com/d/…"
+              placeholder="https://gede.work/d/…"
             />
             <Button type="submit" variant="primary" disabled={pasted.trim() === ''}>
               Open

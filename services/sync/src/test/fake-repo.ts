@@ -997,6 +997,12 @@ export class FakeRepo implements Repo {
       }
       return Promise.resolve(undefined);
     },
+    pending: ({ documentId, inviteId }) => {
+      const invite = this.pendingInvites(
+        (i) => i.id === inviteId && i.documentId === documentId,
+      )[0];
+      return Promise.resolve(invite ? { ...invite } : undefined);
+    },
     accept: ({ inviteId, userId }) => {
       const invite = this.pendingInvites((i) => i.id === inviteId)[0];
       const user = this.userById(userId);

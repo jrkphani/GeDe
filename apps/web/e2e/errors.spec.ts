@@ -296,4 +296,9 @@ test('ARCHITECTURE §3 400 Paste the link again validates before it navigates', 
   await open.click();
   await expect(page.getByText('That is not a GeDe workscape link')).toBeVisible();
   await expect(page).toHaveURL(/\/e2e\/harness\//);
+  // #130: a same-origin link to a real (UUID) workscape id is accepted and opened.
+  const origin = new URL(page.url()).origin;
+  await link.fill(`${origin}/d/9b98ad31-2509-4327-89fa-43f39a3340d7?cell=B2`);
+  await open.click();
+  await expect(page).toHaveURL(/\/d\/9b98ad31-2509-4327-89fa-43f39a3340d7\?cell=B2$/);
 });

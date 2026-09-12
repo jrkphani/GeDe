@@ -122,10 +122,17 @@ const FIELD_ORDER: Record<SearchField, number> = {
   value: 0,
   formula: 1,
   reference: 2,
-  header: 3,
-  dimension: 4,
-  name: 5,
+  // A computed cell's shown value: after its expression, which is what a person edits.
+  result: 3,
+  header: 4,
+  dimension: 5,
+  name: 6,
 };
+
+/** FIND-08: a computed value is found but never rewritten; only its expression or source is. */
+export function matchReadOnly(entry: Pick<IndexedEntry, 'readOnly'>, field: SearchField): boolean {
+  return entry.readOnly || field === 'result';
+}
 /** Headers sit in the cells group: a table's header row reads before its rows. */
 const KIND_ORDER = { cell: 0, header: 0, graph: 1, document: 2 } as const;
 
@@ -277,7 +284,7 @@ export function search(
         distance: 0,
         start: 0,
         end: 0,
-        readOnly: entry.readOnly,
+        readOnly: matchReadOnly(entry, first.field),
         target: targetOf(entry),
       });
       continue;
@@ -292,7 +299,7 @@ export function search(
       distance: best.found.distance,
       start: best.found.start,
       end: best.found.end,
-      readOnly: entry.readOnly,
+      readOnly: matchReadOnly(entry, best.text.field),
       target: targetOf(entry),
     });
   }

@@ -58,8 +58,11 @@ export interface EngineHost {
   result(cellId: WorkbookCellId): CellResult | undefined;
   /** Re-render signal for one cell; the callback fires when that cell's result changes. */
   subscribe(cellId: WorkbookCellId, onChange: () => void): () => void;
-  /** Fires after every batch of results, for whole-sheet consumers. */
-  subscribeAll(onChange: () => void): () => void;
+  /**
+   * Fires after every batch of results, for whole-sheet consumers, with the
+   * ids of the cells whose result changed or went (Find re-indexes their tables, #125).
+   */
+  subscribeAll(onChange: (touched: readonly WorkbookCellId[]) => void): () => void;
   /** Monotonic counter across all result changes. */
   readonly version: number;
   /** Resolves once every change posted so far has been answered. */
@@ -152,7 +155,7 @@ export function createEngineHost(
 ): EngineHost {
   const results = new Map<WorkbookCellId, CellResult>();
   const cellListeners = new Map<WorkbookCellId, Set<() => void>>();
-  const allListeners = new Set<() => void>();
+  const allListeners = new Set<(touched: readonly WorkbookCellId[]) => void>();
   const statusListeners = new Set<() => void>();
   const pending = new Set<number>();
   const settleWaiters: (() => void)[] = [];
@@ -200,7 +203,7 @@ export function createEngineHost(
     if (touched.length > 0) {
       version += 1;
       for (const id of touched) notify(id);
-      for (const cb of allListeners) cb();
+      for (const cb of allListeners) cb(touched);
     }
     pending.delete(response.seq);
     if (pending.size === 0) for (const resolve of settleWaiters.splice(0)) resolve();

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 
 import {
+  addDerivedColumn,
   addRow,
   cellKey,
   cellsMap,
@@ -111,9 +112,11 @@ describe('projectDocument', () => {
         content: [{ type: 'paragraph', content: [{ type: 'text', text: 'Down jacket' }] }],
       },
     });
-    // A formula cell: the source is what is searched (FIND-03 "formula expressions") and stored as formula.
+    // A formula cell: what it shows (FIND-03 "cell values") then its expression ("formula
+    // expressions") are searched; the source is stored as formula. B2:B3 lies above the
+    // table, so the sum is 0.
     expect(cell(0, 1)).toMatchObject({
-      textPlain: '=Sum(B2:B3)',
+      textPlain: '0\n=Sum(B2:B3)',
       formula: '=Sum(B2:B3)',
       rich: null,
     });
@@ -125,6 +128,7 @@ describe('projectDocument', () => {
       (x) => x.rowId === rows[1] && x.columnId === cols[1],
     );
     expect(bound?.formula).toMatch(/^=Sum\(\{r:[0-9A-Z]{26}:/);
+    // C7:C8 are text cells: the sum is an error, which has no text, so the expression stands alone.
     expect(bound?.textPlain).toBe('=Sum(C7:C8)');
     // Two paragraphs flatten to two lines.
     expect(cell(1, 0)?.textPlain).toBe('Sleeping bag\nminus twenty');
@@ -149,6 +153,34 @@ describe('projectDocument', () => {
       },
     });
     expect(projection.cells).toHaveLength(4);
+  });
+
+  test('FIND-03 FIND-08 a derived column projects one row per table row with its evaluated value; a formula cell carries its value before its expression (#125)', () => {
+    const { gd, tableId, rows, cols } = sample();
+    const derived = addDerivedColumn(gd, tableId, {
+      sourceColId: cols[0]!,
+      method: 'Concat',
+      args: [' desk'],
+    })!;
+    // Nothing is stored for the derived column: the rows below are projected, not read.
+    expect([...cellsMap(tableMap(gd, tableId)!).keys()].some((k) => k.endsWith(derived))).toBe(
+      false,
+    );
+    const projection = projectDocument(gd.doc, DOC_ID);
+    const derivedCells = projection.cells.filter((c) => c.columnId === derived);
+    expect(derivedCells.map((c) => c.rowId)).toEqual(rows);
+    expect(derivedCells[0]).toMatchObject({ rowId: rows[0], rich: null });
+    // The value the person sees, then the expression as they would read it; the stored
+    // form is the synthesised, id-bound source the engine evaluates.
+    expect(derivedCells[0]?.textPlain).toMatch(/^Down jacket desk\n=C7\.Concat\(" desk"\)$/);
+    expect(derivedCells[0]?.formula).toMatch(
+      /^=\{c:[0-9A-Z]{26}:[0-9A-Z]{26}:[0-9A-Z]{26}\}\.Concat\(" desk"\)$/,
+    );
+    expect(derivedCells[1]?.textPlain.startsWith('Sleeping bag\nminus twenty desk\n')).toBe(true);
+    // Every projected cell still names a projected row and column (the foreign keys).
+    const rowIds = new Set(projection.rows.map((r) => r.id));
+    const colIds = new Set(projection.columns.map((c) => c.id));
+    expect(projection.cells.every((c) => rowIds.has(c.rowId) && colIds.has(c.columnId))).toBe(true);
   });
 
   test('FIND-03 cells whose row or column is gone are left out so the foreign keys hold; empty docs project nothing', () => {

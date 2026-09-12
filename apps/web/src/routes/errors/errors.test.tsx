@@ -210,6 +210,17 @@ describe('ErrorCell', () => {
     expect(parseWorkscapeLink('/d/01ARZ3NDEKTSV4RRFFQ69G5FAV', 'http://localhost')).toBe(
       '/d/01ARZ3NDEKTSV4RRFFQ69G5FAV',
     );
+    // #130: every id the service issues is a UUID; the bare path, a cell query and the fragment all open.
+    const uuid = '9b98ad31-2509-4327-89fa-43f39a3340d7';
+    expect(parseWorkscapeLink(`/d/${uuid}`, 'http://localhost')).toBe(`/d/${uuid}`);
+    expect(parseWorkscapeLink(`http://localhost/d/${uuid}?cell=B2`, 'http://localhost')).toBe(
+      `/d/${uuid}?cell=B2`,
+    );
+    expect(
+      parseWorkscapeLink(`http://localhost/d/${uuid.toUpperCase()}#x`, 'http://localhost'),
+    ).toBe(`/d/${uuid.toUpperCase()}#x`);
+    expect(parseWorkscapeLink(`http://other/d/${uuid}`, 'http://localhost')).toBeNull();
+    expect(parseWorkscapeLink('/d/9b98ad31-2509-4327-89fa', 'http://localhost')).toBeNull();
     expect(
       parseWorkscapeLink('http://localhost/d/01ARZ3NDEKTSV4RRFFQ69G5FAV?x=1', 'http://localhost'),
     ).toBe('/d/01ARZ3NDEKTSV4RRFFQ69G5FAV?x=1');

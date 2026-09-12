@@ -1534,6 +1534,15 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         return row ? toInvite(row) : undefined;
       },
 
+      async pending({ documentId, inviteId }) {
+        const [row] = await db
+          .select()
+          .from(invites)
+          .where(and(eq(invites.id, inviteId), eq(invites.documentId, documentId), invitePending))
+          .limit(1);
+        return row ? toInvite(row) : undefined;
+      },
+
       accept({ inviteId, userId }) {
         return db.transaction(async (tx) => {
           // The address check is in SQL: the invitation converts only for the

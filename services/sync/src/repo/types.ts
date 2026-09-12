@@ -399,6 +399,11 @@ export interface InvitesRepo {
   }): Promise<{ invite: InviteRecord; created: boolean }>;
   /** Withdraw a pending invitation; `false` when it does not exist on this document. Audit `share.invite_remove`. */
   remove(input: { documentId: string; inviteId: string; actorId: string }): Promise<boolean>;
+  /**
+   * A pending, unexpired invitation of this document by id (#121: Resend
+   * builds the mail from its token); `undefined` when there is none.
+   */
+  pending(input: { documentId: string; inviteId: string }): Promise<InviteRecord | undefined>;
   /** The invitation carrying `token`, accepted or not, expired or not; the caller decides. */
   byToken(token: string): Promise<InviteRecord | undefined>;
   /**
