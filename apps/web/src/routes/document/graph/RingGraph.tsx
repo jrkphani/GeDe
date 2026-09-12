@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useMemo, type CSSProperties } from 'react';
+import { memo, useMemo, type CSSProperties } from 'react';
 import {
   adjacencyOf,
   describeTuple,
@@ -50,7 +50,7 @@ const DOT_HIT_RADIUS = 16;
  * hollow and dashed (GRAPH-06, A11Y-04). Hovering mutes what is not adjacent
  * across the pair. The SVG scales to its box (GRAPH-11).
  */
-export function RingGraph({
+export const RingGraph = memo(function RingGraph({
   graph,
   derivation,
   layout,
@@ -176,6 +176,13 @@ export function RingGraph({
             }}
           >
             <circle className="gd-ring__dot-hit" cx={dot.at.x} cy={dot.at.y} r={DOT_HIT_RADIUS} />
+            {/* A11Y-02: the focus ring, 2 units outside the dot at a 2-unit offset. */}
+            <circle
+              className="gd-graph-focus"
+              cx={dot.at.x}
+              cy={dot.at.y}
+              r={(lit ? DOT_RADIUS_EMPHASISED : DOT_RADIUS) + 3}
+            />
             <circle
               className="gd-ring__dot-mark"
               cx={dot.at.x}
@@ -255,6 +262,7 @@ export function RingGraph({
               }
             }}
           >
+            <circle className="gd-graph-focus" r={node.radius + 3} />
             <circle className="gd-ring__node-mark" r={node.radius} />
             <text
               className="gd-mono gd-ring__symbol"
@@ -273,4 +281,4 @@ export function RingGraph({
       )}
     </svg>
   );
-}
+});

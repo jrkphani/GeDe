@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useMemo } from 'react';
+import { memo, useMemo } from 'react';
 import {
   adjacencyOf,
   cellWriteBack,
@@ -46,7 +46,7 @@ function shortLabel(text: string, max: number): string {
  * editable, appends a pre-filled row on click (GRAPH-10). Hover mutes what
  * is not adjacent across the pair (GRAPH-09).
  */
-export function CoverageGraph({
+export const CoverageGraph = memo(function CoverageGraph({
   graph,
   derivation,
   sourceTitle,
@@ -230,6 +230,13 @@ export function CoverageGraph({
                   }}
                 >
                   <rect
+                    className="gd-graph-focus"
+                    x={x - 2}
+                    y={y - 2}
+                    width={COVERAGE_CELL + 4}
+                    height={COVERAGE_CELL + 4}
+                  />
+                  <rect
                     className="gd-coverage__cell-box"
                     x={x}
                     y={y}
@@ -255,4 +262,4 @@ export function CoverageGraph({
       )}
     </div>
   );
-}
+});

@@ -383,10 +383,6 @@ function OpenDocument({
     selectGraph(null);
   }, [clearSelection, selectGraph]);
   const selectTable = tableActions.selectTable;
-  const litRow =
-    graphs.state.hover?.emphasis.role === 'context'
-      ? { tableId: graphs.state.hover.tableId, rowId: graphs.state.hover.emphasis.id }
-      : null;
 
   // -- structure --------------------------------------------------------------
   const addTable = useCallback(
@@ -851,7 +847,6 @@ function OpenDocument({
                     actions={tableActions}
                     commands={grid.commands}
                     sort={phone ? undefined : sort}
-                    litRowId={litRow !== null && litRow.tableId === t.id ? litRow.rowId : null}
                   />
                 );
               })}

@@ -5,6 +5,7 @@
 // inline formula engine run for real; table content is written through
 // `@gede/core` on the room's replica and arrives over the fake socket.
 import 'fake-indexeddb/auto';
+import { createElement } from 'react';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +21,8 @@ import {
   type Id,
 } from '@gede/core';
 import type * as DocumentsApi from '../../../api/documents.js';
+import type * as CoverageGraphModule from './CoverageGraph.js';
+import type * as RingGraphModule from './RingGraph.js';
 import { setDocumentSeamsForTests } from '../../../doc/use-document.js';
 import { FakeRoom, until } from '../../../test/fake-websocket.js';
 import { installMatchMedia } from '../../../test/match-media.js';
@@ -41,6 +44,26 @@ vi.mock('../../../auth/cognito.js', () => ({
 vi.mock('../../../api/documents.js', async (importOriginal) => {
   const actual = await importOriginal<typeof DocumentsApi>();
   return { ...actual, getDocument: vi.fn(), renameDocument: vi.fn(() => Promise.resolve()) };
+});
+
+// Render counters (review of #90, finding 6): the SVG halves are wrapped with a labelled
+// test seam; the components themselves are real.
+const renders = vi.hoisted(() => ({ ring: 0, coverage: 0 }));
+vi.mock('./RingGraph.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof RingGraphModule>();
+  const Counted = (props: Parameters<typeof actual.RingGraph>[0]) => {
+    renders.ring += 1;
+    return createElement(actual.RingGraph, props);
+  };
+  return { ...actual, RingGraph: Counted };
+});
+vi.mock('./CoverageGraph.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof CoverageGraphModule>();
+  const Counted = (props: Parameters<typeof actual.CoverageGraph>[0]) => {
+    renders.coverage += 1;
+    return createElement(actual.CoverageGraph, props);
+  };
+  return { ...actual, CoverageGraph: Counted };
 });
 
 const docs = await import('../../../api/documents.js');
@@ -115,6 +138,25 @@ async function graphThisTable() {
   await userEvent.click(screen.getByRole('button', { name: /Bind the graph to Table 1/ }));
   await waitFor(() => {
     expect(screen.getByTestId('ring-graph')).toBeInTheDocument();
+  });
+}
+
+/** Type into the rich editor by mutating the contenteditable; ProseMirror reads it on a microtask. */
+async function typeInto(editor: HTMLElement, text: string): Promise<void> {
+  const paragraphs = editor.querySelectorAll('p');
+  const p = paragraphs[paragraphs.length - 1] ?? editor;
+  const last = p.lastChild;
+  let node: Node;
+  if (last !== null && last.nodeType === Node.TEXT_NODE) {
+    last.textContent = `${last.textContent ?? ''}${text}`;
+    node = last;
+  } else {
+    if (last !== null && last.nodeName === 'BR') last.remove();
+    node = p.appendChild(document.createTextNode(text));
+  }
+  document.getSelection()?.collapse(node, node.textContent?.length ?? 0);
+  await act(async () => {
+    await Promise.resolve();
   });
 }
 
@@ -586,5 +628,61 @@ describe('context graphs', () => {
     expect(room.doc.getMap('graphs').size).toBe(2);
     expect(room.doc.getArray('sheets').length).toBe(1);
     expect(room.doc.getMap('tables').size).toBe(rowsBefore);
+  });
+
+  it('GRAPH-06 GRAPH-09 render scope: a keystroke in a cell that is not a dimension renders neither half; a committed edit in a dimension column renders each half once; a hover renders the pair, not the shell', async () => {
+    await openShell();
+    await addTable();
+    await fillContexts();
+    await graphThisTable();
+    const { gd, tableId, rows, cols } = roomTable();
+    // Two dimensions (Column 1 · Column 2) so Column 3 is unrelated to the derivation.
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
+    await userEvent.click(
+      within(screen.getByTestId('dimension-checklist')).getByLabelText(/Column 3/),
+    );
+    await waitFor(() => {
+      expect(within(ring()).getByTestId('graph-dimensions')).toHaveTextContent(
+        'Column 1 · Column 2',
+      );
+    });
+    // Select D5 first (a selection change is a legitimate render), then type into it.
+    const d5 = screen.getByRole('gridcell', { name: /^D5/ });
+    await userEvent.click(d5);
+    fireEvent.keyDown(d5, { code: 'Enter' });
+    const editor = screen.getByLabelText('Edit D5');
+    renders.ring = 0;
+    renders.coverage = 0;
+    await typeInto(editor, 'note');
+    await typeInto(editor, 's');
+    expect(renders).toEqual({ ring: 0, coverage: 0 });
+    // Committing it in place (blur) writes the document; Column 3 is not a dimension, so
+    // the derivation is structurally the same and neither half renders.
+    fireEvent.blur(editor);
+    await until(() => JSON.stringify(room.doc.getMap('tables').toJSON()).includes('notes'));
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(renders).toEqual({ ring: 0, coverage: 0 });
+    // …and a committed edit in a dimension column re-derives once: one render per half.
+    renders.ring = 0;
+    renders.coverage = 0;
+    setCellText(gd, tableId, rows[1] ?? '', cols[1] ?? '', 'Autumn');
+    await waitFor(() => {
+      expect(within(ring()).getByTestId('graph-stat')).toHaveTextContent('2 / 4');
+    });
+    expect(renders).toEqual({ ring: 1, coverage: 1 });
+    // A hover renders the pair once each and nothing above it (the shell's selection stays).
+    renders.ring = 0;
+    renders.coverage = 0;
+    const node = within(screen.getByTestId('ring-graph')).getAllByRole('button', {
+      name: /^Context/,
+    })[0]!;
+    fireEvent.pointerEnter(node);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('ring-spoke').length).toBeGreaterThan(0);
+    });
+    expect(renders).toEqual({ ring: 1, coverage: 1 });
+    expect(document.querySelector('.gd-table__row--lit')).not.toBeNull();
   });
 });

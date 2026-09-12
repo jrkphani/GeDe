@@ -79,6 +79,7 @@ import {
   useReferenceReconciler,
   type MappingCellHandle,
 } from './ref/index.js'; // wave3/references
+import { useGraphLitRow } from './graph/store.js'; // wave4/graphs: GRAPH-09 lit row
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
@@ -127,8 +128,6 @@ export interface TableViewProps {
    * Not tied to `editable`: the view is the viewer's own (ADR-025).
    */
   sort?: SortCommands | undefined;
-  /** GRAPH-09: the row a hovered graph node, dot or cell lights, or null. */
-  litRowId?: Id | null | undefined;
 }
 
 const TITLE_PX = TABLE_TITLE_ROWS * LATTICE.row;
@@ -173,7 +172,6 @@ export const TableView = memo(function TableView({
   actions,
   commands,
   sort,
-  litRowId = null,
 }: TableViewProps) {
   // Per-cell counters (not just the table's): a keystroke re-renders its own cell only.
   const versions = useCellVersions(table);
@@ -322,6 +320,9 @@ export const TableView = memo(function TableView({
   };
   // REF-02 / HIER-07: pulls and Split children stay materialised while this replica can write.
   useReferenceReconciler(table.doc, editable);
+  // GRAPH-09: the row a hovered graph node, dot or cell lights; subscribed here so a hover
+  // re-renders this table and nothing above it.
+  const litRowId = useGraphLitRow(table.doc, record.id);
   // HIER-04..08: while the viewer groups the table the bands own the outline column,
   // and while the viewer sorts or filters it a child could draw above its parent:
   // in both the outline shows no depth, though the data keeps it (HIER-08, ADR-026).

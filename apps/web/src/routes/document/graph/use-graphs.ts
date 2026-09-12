@@ -2,7 +2,7 @@
  * Viewer state and commands for context graphs (GRAPH-01..11, INSP-08).
  *
  * Viewer state — never document state — is the selected graph, pointing
- * mode and the hover emphasis shared by a pair. Every command writes through
+ * mode (the hover emphasis a pair shares lives in `store.ts`). Every command writes through
  * one `@gede/core` mutation (one transaction, one undo step), keeps the
  * selection sane, and announces what it did. Read-only documents (the phone,
  * a view-only participant) get the commands as no-ops so the objects still
@@ -27,12 +27,12 @@ import {
   toggleGraphDimension,
   type GedeDoc,
   type GraphContext,
-  type GraphEmphasis,
   type GraphSlice,
   type Id,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { graphStoreFor, type GraphHover } from './store.js';
 import type { LatticeUnits, Pixels } from '@gede/core';
 import type { GridActions } from '../grid/use-grid.js';
 import type { GridCommands } from '../grid/commands.js';
@@ -43,16 +43,9 @@ export type Pointing =
   /** Re-point (GRAPH-05): the click re-binds an existing pair. */
   | { readonly mode: 'rebind'; readonly pairId: Id };
 
-export interface GraphHover {
-  readonly pairId: Id;
-  readonly tableId: Id | null;
-  readonly emphasis: GraphEmphasis;
-}
-
 export interface GraphsState {
   readonly selectedGraphId: Id | null;
   readonly pointing: Pointing | null;
-  readonly hover: GraphHover | null;
 }
 
 export interface GraphsActions {
@@ -117,7 +110,6 @@ export function useGraphs({
 }: UseGraphsOptions): Graphs {
   const [selectedGraphId, setSelectedGraphId] = useState<Id | null>(null);
   const [pointing, setPointing] = useState<Pointing | null>(null);
-  const [hover, setHover] = useState<GraphHover | null>(null);
   const latest = useRef({ gd, activeSheetId, editable, grid, selectSheet, reveal, settle });
   latest.current = { gd, activeSheetId, editable, grid, selectSheet, reveal, settle };
 
@@ -125,8 +117,8 @@ export function useGraphs({
   useEffect(() => {
     setSelectedGraphId(null);
     setPointing(null);
-    setHover(null);
-  }, [activeSheetId]);
+    graphStoreFor(gd.doc).setHover(null);
+  }, [activeSheetId, gd]);
   useEffect(() => {
     if (!editable) setPointing(null);
   }, [editable]);
@@ -162,8 +154,12 @@ export function useGraphs({
       if (!can() || sheetId === null || table === null) return;
       const current = pointing;
       if (current?.mode === 'rebind') {
-        bindGraphPair(doc, current.pairId, tableId);
-        announce(`Graph re-pointed at ${table.title}`);
+        // The pair may have been removed by another replica while pointing.
+        announce(
+          bindGraphPair(doc, current.pairId, tableId)
+            ? `Graph re-pointed at ${table.title}`
+            : 'The graph is gone; nothing was re-pointed',
+        );
       } else {
         const pair = createGraphPair(doc, { sheetId, tableId });
         selectPair(pair.ringId);
@@ -278,9 +274,12 @@ export function useGraphs({
         go(made.sheetId);
         announce(`Opened sheet ${context.symbol} with a shaped child table`);
       },
-      setHover,
+      // GRAPH-09: hover lives in the graph store, so a hover re-renders the pair, not the shell.
+      setHover(hover) {
+        graphStoreFor(latest.current.gd.doc).setHover(hover);
+      },
     };
   }, [pointing]);
 
-  return { state: { selectedGraphId, pointing, hover }, actions };
+  return { state: { selectedGraphId, pointing }, actions };
 }

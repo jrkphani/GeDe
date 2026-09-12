@@ -12,7 +12,8 @@ import type { ToggleMark } from '@gede/core';
 import { ARIA_KEYS, CHORDS, LABELS, type Chord, type ChordId } from '../../../doc/shortcuts.js';
 import { MARK_CHORDS } from '../cell/index.js';
 
-export type ShortcutGroup = 'Document' | 'Edit' | 'Find' | 'Format' | 'Table and cells' | 'View';
+export type ShortcutGroup =
+  'Document' | 'Edit' | 'Find' | 'Format' | 'Table and cells' | 'Graphs' | 'View';
 
 export interface ShortcutRow {
   readonly action: string;
@@ -95,6 +96,21 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
       { action: 'Add column after', ids: ['addColumn'] },
       { action: 'Nest / promote row', ids: ['nest', 'promote'] },
       { action: 'Collapse / expand row', ids: ['collapse', 'expand'], extra: 'ADR-025, ADR-030' },
+    ],
+  },
+  {
+    // GRAPH-09 / GRAPH-10: keys the graph itself handles on a focused node, dot or
+    // coverage cell (ADR-033); not in the handover reference, which predates graphs.
+    group: 'Graphs',
+    rows: [
+      {
+        action: 'Move between nodes, dots and cells',
+        keys: ['arrows', 'Home', 'End'],
+        extra: 'ADR-033',
+      },
+      { action: 'Select the node’s row', keys: ['⏎', 'click'], extra: 'ADR-033' },
+      { action: 'Open a child sheet for the node', keys: ['⇧⏎', 'double-click'], extra: 'ADR-033' },
+      { action: 'Cancel pointing', ids: ['escape'], extra: 'ADR-033' },
     ],
   },
   {

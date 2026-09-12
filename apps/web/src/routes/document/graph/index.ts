@@ -13,11 +13,11 @@ export { RingGraph, dimensionColourVar, type RingGraphProps } from './RingGraph.
 export { CoverageGraph, type CoverageGraphProps } from './CoverageGraph.js';
 export { GraphObject, UnboundBody, GRAPH_HEADER_PX, type GraphObjectProps } from './GraphObject.js';
 export { useGraphModel, type GraphModel } from './use-graph-model.js';
+export { graphStoreFor, useGraphHover, useGraphLitRow, type GraphHover } from './store.js';
 export {
   useGraphs,
   type Graphs,
   type GraphsActions,
   type GraphsState,
-  type GraphHover,
   type Pointing,
 } from './use-graphs.js';

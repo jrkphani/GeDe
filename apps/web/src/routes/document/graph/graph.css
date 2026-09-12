@@ -182,9 +182,19 @@
   font-size: 11px;
   fill: var(--ink);
 }
-.gd-ring__dot:focus-visible .gd-ring__dot-mark {
+/* A11Y-02: focus is its own ring — 2 units wide, 2 units outside the mark — drawn by a
+   dedicated element so it never competes with the mark's own selection stroke. */
+.gd-graph-focus {
+  fill: none;
   stroke: var(--focus-ring);
-  stroke-width: 3;
+  stroke-width: 2;
+  opacity: 0;
+  pointer-events: none;
+}
+.gd-ring__dot:focus-visible .gd-graph-focus,
+.gd-ring__node:focus-visible .gd-graph-focus,
+.gd-coverage__cell:focus-visible .gd-graph-focus {
+  opacity: 1;
 }
 .gd-ring__node {
   cursor: pointer;
@@ -210,13 +220,14 @@
 .gd-ring__node--draft .gd-ring__symbol {
   fill: var(--ink);
 }
+/* Selection (aria-pressed): a thicker amber stroke and an underlined symbol, so it reads
+   apart from focus and from a hovered node without relying on hue (A11Y-04). */
 .gd-ring__node--selected .gd-ring__node-mark {
   stroke: var(--selection-ring);
-  stroke-width: 2.5;
-}
-.gd-ring__node:focus-visible .gd-ring__node-mark {
-  stroke: var(--focus-ring);
   stroke-width: 3;
+}
+.gd-ring__node--selected .gd-ring__symbol {
+  text-decoration: underline;
 }
 .gd-ring__symbol {
   font-size: 12px;
@@ -294,14 +305,16 @@
   fill: var(--surface);
   pointer-events: none;
 }
-.gd-coverage__cell--lit .gd-coverage__cell-box,
-.gd-coverage__cell--selected .gd-coverage__cell-box {
+.gd-coverage__cell--lit .gd-coverage__cell-box {
   stroke: var(--selection-ring);
   stroke-width: 2;
 }
-.gd-coverage__cell:focus-visible .gd-coverage__cell-box {
-  stroke: var(--focus-ring);
-  stroke-width: 2;
+.gd-coverage__cell--selected .gd-coverage__cell-box {
+  stroke: var(--selection-ring);
+  stroke-width: 3;
+}
+.gd-coverage__cell--selected .gd-coverage__symbol {
+  text-decoration: underline;
 }
 .gd-coverage--hover .gd-coverage__cell--muted {
   opacity: 0.2;

@@ -1,4 +1,4 @@
-import { useCallback, useRef } from 'react';
+import { memo, useCallback, useMemo, useRef } from 'react';
 import {
   graphsOnSheet,
   tableMap,
@@ -6,9 +6,11 @@ import {
   tableUnitBounds,
   unitBoundsToPx,
   type GedeDoc,
+  type GraphDerivation,
   type GraphEmphasis,
   type GraphRecord,
   type Id,
+  type RingLayout,
 } from '@gede/core';
 
 import { useYVersion } from '../../../doc/use-y.js';
@@ -16,8 +18,9 @@ import type { CellSelection } from '../selection.js';
 import { CoverageGraph } from './CoverageGraph.js';
 import { GraphObject, UnboundBody } from './GraphObject.js';
 import { RingGraph } from './RingGraph.js';
+import { useGraphHover } from './store.js';
 import { useGraphModel } from './use-graph-model.js';
-import type { Graphs } from './use-graphs.js';
+import type { Graphs, GraphsActions } from './use-graphs.js';
 
 export interface GraphLayerProps {
   gd: GedeDoc;
@@ -36,16 +39,21 @@ export interface GraphLayerProps {
  * One model per pair: both halves read the same derivation.
  */
 export function GraphLayer({ gd, sheetId, graphs, selectedCell, editable, zoom }: GraphLayerProps) {
-  useYVersion(gd.graphs);
+  const graphsVersion = useYVersion(gd.graphs);
   useYVersion(gd.tables, { depth: 'shallow' });
-  const all = sheetId === null ? [] : graphsOnSheet(gd, sheetId);
-  const byPair = new Map<Id, GraphRecord[]>();
-  for (const g of all) {
-    const list = byPair.get(g.pairId) ?? [];
-    list.push(g);
-    byPair.set(g.pairId, list);
-  }
-  const pairs = [...byPair.entries()];
+  // Records are rebuilt only when the graphs map changes, so the memoised halves see
+  // the same objects across the shell's other renders.
+  const pairs = useMemo(() => {
+    const all = sheetId === null ? [] : graphsOnSheet(gd, sheetId);
+    const byPair = new Map<Id, GraphRecord[]>();
+    for (const g of all) {
+      const list = byPair.get(g.pairId) ?? [];
+      list.push(g);
+      byPair.set(g.pairId, list);
+    }
+    return [...byPair.entries()];
+    // graphsVersion is the change signal for the map read above.
+  }, [gd, sheetId, graphsVersion]);
   const zoomRef = useRef(zoom);
   zoomRef.current = zoom;
   const scale = useCallback(() => zoomRef.current, []);
@@ -92,57 +100,111 @@ function GraphPairView({
   const sourceTitle = model.record?.title ?? null;
   const selectedRowId =
     selectedCell !== null && selectedCell.tableId === lead.tableId ? selectedCell.rowId : null;
-  const hover = state.hover?.pairId === lead.pairId ? state.hover.emphasis : null;
-  // GRAPH-09: the hover wins; otherwise the selected row dims softly (PRD §19 "selection dims softly").
-  const emphasis: GraphEmphasis | null =
-    hover ??
-    (selectedRowId !== null && model.derivation.contexts.some((c) => c.id === selectedRowId)
-      ? { role: 'context', id: selectedRowId }
-      : null);
+  const hover = useGraphHover(gd.doc, lead.pairId);
+  // GRAPH-09: the hover wins; otherwise the selected row dims softly (PRD §19 "selection dims
+  // softly"). Memoised so the halves see one object per state.
+  const { derivation } = model;
+  const selection = useMemo<GraphEmphasis | null>(
+    () =>
+      selectedRowId !== null && derivation.contexts.some((c) => c.id === selectedRowId)
+        ? { role: 'context', id: selectedRowId }
+        : null,
+    [selectedRowId, derivation],
+  );
+  const emphasis = hover ?? selection;
   return (
     <>
       {halves.map((graph) => (
-        <GraphObject
+        <GraphHalf
           key={graph.id}
           graph={graph}
-          derivation={model.derivation}
+          derivation={derivation}
+          layout={model.ring}
           sourceTitle={sourceTitle}
           selected={state.selectedGraphId === graph.id}
           editable={editable}
           actions={actions}
           scale={scale}
-        >
-          {sourceTitle === null ? (
-            <UnboundBody pairId={graph.pairId} editable={editable} actions={actions} />
-          ) : graph.kind === 'ring' ? (
-            <RingGraph
-              graph={graph}
-              derivation={model.derivation}
-              layout={model.ring}
-              sourceTitle={sourceTitle}
-              emphasis={emphasis}
-              hovering={hover !== null}
-              selectedRowId={selectedRowId}
-              editable={editable}
-              actions={actions}
-            />
-          ) : (
-            <CoverageGraph
-              graph={graph}
-              derivation={model.derivation}
-              sourceTitle={sourceTitle}
-              emphasis={emphasis}
-              hovering={hover !== null}
-              selectedRowId={selectedRowId}
-              editable={editable}
-              actions={actions}
-            />
-          )}
-        </GraphObject>
+          emphasis={emphasis}
+          hovering={hover !== null}
+          selectedRowId={selectedRowId}
+        />
       ))}
     </>
   );
 }
+
+interface GraphHalfProps {
+  graph: GraphRecord;
+  derivation: GraphDerivation;
+  layout: RingLayout;
+  sourceTitle: string | null;
+  selected: boolean;
+  editable: boolean;
+  actions: GraphsActions;
+  scale: () => number;
+  emphasis: GraphEmphasis | null;
+  hovering: boolean;
+  selectedRowId: Id | null;
+}
+
+/**
+ * One half, memoised on the derived model: a change elsewhere in the
+ * document that leaves the derivation structurally equal renders nothing
+ * here (review of #90, finding 6; PRD §20 keystroke budget).
+ */
+const GraphHalf = memo(function GraphHalf({
+  graph,
+  derivation,
+  layout,
+  sourceTitle,
+  selected,
+  editable,
+  actions,
+  scale,
+  emphasis,
+  hovering,
+  selectedRowId,
+}: GraphHalfProps) {
+  return (
+    <GraphObject
+      graph={graph}
+      derivation={derivation}
+      sourceTitle={sourceTitle}
+      selected={selected}
+      editable={editable}
+      actions={actions}
+      scale={scale}
+    >
+      {sourceTitle === null ? (
+        <UnboundBody pairId={graph.pairId} editable={editable} actions={actions} />
+      ) : graph.kind === 'ring' ? (
+        <RingGraph
+          graph={graph}
+          derivation={derivation}
+          layout={layout}
+          sourceTitle={sourceTitle}
+          emphasis={emphasis}
+          hovering={hovering}
+          selectedRowId={selectedRowId}
+          editable={editable}
+          actions={actions}
+        />
+      ) : (
+        <CoverageGraph
+          graph={graph}
+          derivation={derivation}
+          sourceTitle={sourceTitle}
+          emphasis={emphasis}
+          hovering={hovering}
+          selectedRowId={selectedRowId}
+          editable={editable}
+          actions={actions}
+        />
+      )}
+    </GraphObject>
+  );
+});
 
 /**
  * GRAPH-03 pointing mode: every table on the sheet takes a dashed accent

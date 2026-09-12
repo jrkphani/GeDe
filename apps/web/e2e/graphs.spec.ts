@@ -173,7 +173,7 @@ for (const width of [1024, 1440] as const) {
     await expect(nodes).toHaveText(['α', 'β', 'γ', 'δ']);
     const draft = page.getByTestId('ring-graph').getByRole('button', { name: /^Context δ/ });
     await expect(draft).toHaveAttribute('data-complete', 'false');
-    await expect(draft.locator('circle')).toHaveCSS('stroke-dasharray', /3/);
+    await expect(draft.locator('.gd-ring__node-mark')).toHaveCSS('stroke-dasharray', /3/);
     await expect(page.getByTestId('ring-graph').locator('.gd-ring__arc')).toHaveCount(3);
 
     // ── INSP-08 / GRAPH-05: the Graph tab with the checklist, counts, axes, pins and counts.
@@ -362,7 +362,8 @@ test('RESP-02 GRAPH-01 at 480 the pair renders read-only: no drag, no corner, no
   await expect(empty).toHaveAttribute('aria-disabled', 'true');
   const rowsBefore = room.doc.getMap('tables').toJSON() as Record<string, { rows: string[] }>;
   const count = Object.values(rowsBefore)[0]?.rows.length ?? 0;
-  await empty.click({ force: true });
+  // The cell may sit off-screen on a phone; the event is what matters, not the pointer.
+  await empty.dispatchEvent('click');
   await page.waitForTimeout(200);
   const rowsAfter = room.doc.getMap('tables').toJSON() as Record<string, { rows: string[] }>;
   expect(Object.values(rowsAfter)[0]?.rows.length).toBe(count);
