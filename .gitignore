@@ -9,7 +9,9 @@ cdk.out/
 !.env.example
 .DS_Store
 test-results/
+test-results-live/
 playwright-report/
+playwright-report-live/
 .vite/
 *.log
 .claude/worktrees/

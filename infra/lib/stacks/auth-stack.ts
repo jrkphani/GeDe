@@ -1,8 +1,17 @@
 import * as cdk from 'aws-cdk-lib';
-import { aws_cognito as cognito, aws_route53 as route53, aws_ses as ses } from 'aws-cdk-lib';
+import {
+  aws_cognito as cognito,
+  aws_iam as iam,
+  aws_lambda as lambda,
+  aws_logs as logs,
+  aws_route53 as route53,
+  aws_secretsmanager as secretsmanager,
+  aws_ses as ses,
+} from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
 
-import { type EnvConfig } from '../config.js';
+import { type EnvConfig, PLAYWRIGHT_LIVE_ROLE_NAME, e2eUsername } from '../config.js';
+import { E2E_USER_HANDLER_DIR } from '../paths.js';
 
 export interface AuthStackProps extends cdk.StackProps {
   readonly config: EnvConfig;
@@ -14,14 +23,32 @@ export interface AuthStackProps extends cdk.StackProps {
 /** Secrets Manager secret holding the Apple developer credentials, JSON with these fields. */
 const APPLE_SECRET_ID = 'gede/prod/apple-signin';
 
+/** Client name of the pipeline's live-suite app client (`ADMIN_USER_PASSWORD_AUTH` only). */
+export const E2E_CLIENT_NAME = 'gede-e2e';
+
 /**
  * Cognito user pool (passwordless: email OTP + passkeys), its SPA client, the SES sending
  * identity for the domain, and — behind a context switch — Sign in with Apple.
+ *
+ * Plus what the pipeline's post-deploy `Playwright-Live` step needs to sign in without a
+ * mailbox or a passkey (docs/TESTING.md "Live suite"): a second app client `gede-e2e` whose
+ * only flow is `ADMIN_USER_PASSWORD_AUTH` (usable with IAM credentials alone — the SPA
+ * client stays `USER_AUTH`-only, ADR-011), one account `e2e@<domain>` whose permanent
+ * password lives in Secrets Manager, and the grant that lets the step's role call
+ * `AdminInitiateAuth` on this pool and read that secret.
  */
 export class AuthStack extends cdk.Stack {
   readonly userPool: cognito.UserPool;
   readonly userPoolClient: cognito.UserPoolClient;
+  /** The live suite's client; `services/sync` accepts its tokens beside the SPA's (`COGNITO_CLIENT_IDS`). */
+  readonly e2eClient: cognito.UserPoolClient;
+  /** `{ username, password }` of the live suite's account. */
+  readonly e2eUserSecret: secretsmanager.Secret;
   readonly emailIdentity: ses.EmailIdentity;
+  /** Stage outputs the pipeline's Playwright-Live step reads (`envFromCfnOutputs`). */
+  readonly userPoolIdOutput: cdk.CfnOutput;
+  readonly e2eClientIdOutput: cdk.CfnOutput;
+  readonly e2eUserSecretArnOutput: cdk.CfnOutput;
   /**
    * Host of the Cognito hosted UI Apple redirects through (`gede-<env>.auth.<region>.amazoncognito.com`),
    * or `undefined` when Apple is off. `WebStack` writes it into `config.json` as
@@ -182,7 +209,106 @@ export class AuthStack extends cdk.Stack {
       this.userPoolClient.node.addDependency(apple);
     }
 
-    new cdk.CfnOutput(this, 'UserPoolId', { value: this.userPool.userPoolId });
+    // ---- The live suite's way in (Playwright-Live) ---------------------------------------
+    // A client of its own so the SPA client never gains a password flow. ADMIN_USER_PASSWORD_AUTH
+    // needs IAM (`AdminInitiateAuth`), so the password alone opens nothing; the step's role is
+    // the only principal granted it (below). Refresh tokens live a day: a run needs minutes.
+    this.e2eClient = new cognito.UserPoolClient(this, 'E2e', {
+      userPool: this.userPool,
+      userPoolClientName: E2E_CLIENT_NAME,
+      generateSecret: false,
+      authFlows: { adminUserPassword: true },
+      preventUserExistenceErrors: true,
+      accessTokenValidity: cdk.Duration.hours(1),
+      idTokenValidity: cdk.Duration.hours(1),
+      refreshTokenValidity: cdk.Duration.days(1),
+      enableTokenRevocation: true,
+      readAttributes,
+      writeAttributes,
+      supportedIdentityProviders: [cognito.UserPoolClientIdentityProvider.COGNITO],
+      disableOAuth: true,
+    });
+
+    const username = e2eUsername(config);
+    // The pool's password policy wants ≥ 8 characters with every class; 32 with each class
+    // required satisfies it. Quotes and backslashes are excluded so the JSON the handler
+    // and the suite parse can never be broken by the value.
+    this.e2eUserSecret = new secretsmanager.Secret(this, 'E2eUser', {
+      secretName: `gede/${config.envName}/e2e-user`,
+      description: `GeDe ${config.envName}: the live suite's Cognito account (${username})`,
+      generateSecretString: {
+        secretStringTemplate: JSON.stringify({ username }),
+        generateStringKey: 'password',
+        passwordLength: 32,
+        requireEachIncludedType: true,
+        excludeCharacters: '"\'\\`',
+      },
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
+    // Not `AwsCustomResource`: its handler logs the whole event, so the password would land in
+    // CloudWatch. This handler receives the secret's ARN, reads it at run time and logs only
+    // the outcome (infra/assets/e2e-user/index.mjs).
+    const e2eUserHandler = new lambda.Function(this, 'E2eUserHandler', {
+      description: `GeDe ${config.envName}: creates the live suite's Cognito user (custom resource)`,
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(E2E_USER_HANDLER_DIR),
+      timeout: cdk.Duration.minutes(1),
+      logGroup: new logs.LogGroup(this, 'E2eUserHandlerLogs', {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+    this.userPool.grant(
+      e2eUserHandler,
+      'cognito-idp:AdminCreateUser',
+      'cognito-idp:AdminSetUserPassword',
+      'cognito-idp:AdminDeleteUser',
+    );
+    this.e2eUserSecret.grantRead(e2eUserHandler);
+    const e2eUser = new cdk.CustomResource(this, 'E2eUserAccount', {
+      resourceType: 'Custom::GedeE2eUser',
+      serviceToken: e2eUserHandler.functionArn,
+      properties: {
+        UserPoolId: this.userPool.userPoolId,
+        SecretArn: this.e2eUserSecret.secretArn,
+        Username: username,
+        DisplayName: 'GeDe live suite',
+      },
+    });
+    // The function's role policy (the grants above) must exist before the first invoke.
+    e2eUser.node.addDependency(e2eUserHandler);
+
+    // What the Playwright-Live CodeBuild role may do, attached here because only this stack
+    // knows the exact pool and secret ARNs (PipelineStack creates the role by its fixed name).
+    new iam.Policy(this, 'PlaywrightLive', {
+      policyName: `gede-${config.envName}-playwright-live`,
+      roles: [iam.Role.fromRoleName(this, 'PlaywrightLiveRole', PLAYWRIGHT_LIVE_ROLE_NAME)],
+      statements: [
+        new iam.PolicyStatement({
+          sid: 'SignInAsE2eUser',
+          actions: ['cognito-idp:AdminInitiateAuth'],
+          resources: [this.userPool.userPoolArn],
+        }),
+        new iam.PolicyStatement({
+          sid: 'ReadE2eUserSecret',
+          actions: ['secretsmanager:GetSecretValue'],
+          resources: [this.e2eUserSecret.secretArn],
+        }),
+      ],
+    });
+
+    this.userPoolIdOutput = new cdk.CfnOutput(this, 'UserPoolId', {
+      value: this.userPool.userPoolId,
+    });
     new cdk.CfnOutput(this, 'UserPoolClientId', { value: this.userPoolClient.userPoolClientId });
+    this.e2eClientIdOutput = new cdk.CfnOutput(this, 'E2eClientId', {
+      value: this.e2eClient.userPoolClientId,
+    });
+    this.e2eUserSecretArnOutput = new cdk.CfnOutput(this, 'E2eUserSecretArn', {
+      value: this.e2eUserSecret.secretArn,
+    });
   }
 }

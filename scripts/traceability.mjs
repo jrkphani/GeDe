@@ -31,7 +31,15 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const requirementsPath = join(root, 'docs', 'REQUIREMENTS.md');
 const outputPath = join(root, 'docs', 'TRACEABILITY.md');
 const scanRoots = ['apps', 'packages', 'services'];
-const skipDirs = new Set(['node_modules', 'dist', 'cdk.out', 'coverage', '.vite', 'test-results']);
+const skipDirs = new Set([
+  'node_modules',
+  'dist',
+  'cdk.out',
+  'coverage',
+  '.vite',
+  'test-results',
+  'test-results-live',
+]);
 const testFilePattern = /\.(test\.tsx?|spec\.ts)$/;
 // `AUTH-01`, `GRID-11`, `ONB-14` (two or three digits) or `LIB-D1`, `LIB-D11` (letter sub-area,
 // one to three digits — the PRD does not zero-pad these).

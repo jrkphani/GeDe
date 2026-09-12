@@ -49,8 +49,8 @@ npm run synth             # cdk synth (infra)
 ## Delivery model
 
 - `main` **is production**. Every merge to `main` runs CodePipeline `GeDe` (ap-southeast-1):
-  Synth (verify + audit + db:parity + e2e + build) → self-mutate → assets (arm64 image) → Prod stage → smoke test.
-  Failures roll back (ECS circuit breaker + CloudFormation). Nobody runs `cdk deploy` from a laptop.
+  Synth (verify + audit + db:parity + e2e + build) → self-mutate → assets (arm64 image) → Prod stage → smoke test → live journey (`apps/web/e2e-live`, signed in as `e2e@gede.work`).
+  Deploy failures roll back (ECS circuit breaker + CloudFormation); a red Smoke or live journey fails the execution after the deploy and rolls nothing back. Nobody runs `cdk deploy` from a laptop.
 - Work on branches, open a PR using the template, get it reviewed, squash-merge.
 - Every PR names the requirement IDs it closes and adds tests tagged with those IDs
   (`test('GRID-03 single click arms a cell', …)`). `docs/TRACEABILITY.md` is regenerated from those tags.

@@ -2,12 +2,13 @@ import * as cdk from 'aws-cdk-lib';
 import {
   aws_codebuild as codebuild,
   aws_codepipeline as codepipeline,
+  aws_iam as iam,
   aws_logs as logs,
   pipelines,
 } from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
 
-import { type AppContext, type EnvConfig } from './config.js';
+import { type AppContext, type EnvConfig, PLAYWRIGHT_LIVE_ROLE_NAME } from './config.js';
 import { GedeStage } from './gede-stage.js';
 
 export interface PipelineStackProps extends cdk.StackProps {
@@ -65,13 +66,35 @@ export const CHROMIUM_DNF_PACKAGES: readonly string[] = [
   'dejavu-sans-fonts',
 ];
 
+/** Chromium's libraries, Node 22, the browser cache: shared by Synth and Playwright-Live. */
+const PLAYWRIGHT_INSTALL_COMMANDS: readonly string[] = [
+  `dnf install -y -q ${CHROMIUM_DNF_PACKAGES.join(' ')}`,
+  'npm ci',
+  // Chrome Headless Shell only (linux-arm64 build from cdn.playwright.dev, ~95 MB);
+  // it lands in ~/.cache/ms-playwright, which the local cache keeps between builds.
+  'npx playwright install --only-shell chromium',
+];
+const PLAYWRIGHT_BUILD_SPEC = codebuild.BuildSpec.fromObject({
+  version: '0.2',
+  phases: { install: { 'runtime-versions': { nodejs: 22 } } },
+  cache: { paths: ['node_modules/**/*', '/root/.cache/ms-playwright/**/*'] },
+});
+
 /**
  * `main` is production. Push → Synth (verify + db:parity + e2e + build web + cdk synth) →
- * self-mutate → publish assets (arm64 image, web bundle) → Prod stage → smoke test.
+ * self-mutate → publish assets (arm64 image, web bundle) → Prod stage → smoke test →
+ * Playwright-Live.
  *
  * The Playwright journeys (`npm run e2e`) run inside Synth, after `npm run verify` and the
  * migrations parity check and before the web build: a red journey stops the pipeline before
  * anything is published. See infra/CLAUDE.md, "Playwright on CodeBuild".
+ *
+ * Playwright-Live (`npm run e2e:live`) runs after Smoke against the deployed
+ * `https://gede.work` as the pool's `e2e@gede.work` account. It is a post-deploy check:
+ * a red run fails the execution but rolls nothing back — production is already updated
+ * (docs/RUNBOOK.md §2). It signs in through the `gede-e2e` app client with
+ * `AdminInitiateAuth`, so its CodeBuild role is the one principal allowed that call on the
+ * pool; the role is created here by a fixed name and granted from the stage's AuthStack.
  */
 export class PipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: PipelineStackProps) {
@@ -92,13 +115,7 @@ export class PipelineStack extends cdk.Stack {
       // Playwright reads CI to pick workers, retries and reporters (apps/web/playwright.config.ts);
       // `db:parity` reads it to fail rather than skip when Docker is missing.
       env: { CI: 'true', NODE_OPTIONS: SYNTH_NODE_OPTIONS },
-      installCommands: [
-        `dnf install -y -q ${CHROMIUM_DNF_PACKAGES.join(' ')}`,
-        'npm ci',
-        // Chrome Headless Shell only (linux-arm64 build from cdn.playwright.dev, ~95 MB);
-        // it lands in ~/.cache/ms-playwright, which the local cache keeps between builds.
-        'npx playwright install --only-shell chromium',
-      ],
+      installCommands: [...PLAYWRIGHT_INSTALL_COMMANDS],
       commands: [
         'npm run verify',
         // Production dependencies with a high or critical advisory fail the build (#41).
@@ -115,15 +132,12 @@ export class PipelineStack extends cdk.Stack {
       buildEnvironment: ARM_MEDIUM,
       // LOCAL_CUSTOM_CACHE takes its paths from the buildspec; `Cache.local()` only flags the mode.
       cache: codebuild.Cache.local(codebuild.LocalCacheMode.CUSTOM),
-      partialBuildSpec: codebuild.BuildSpec.fromObject({
-        version: '0.2',
-        phases: { install: { 'runtime-versions': { nodejs: 22 } } },
-        cache: { paths: ['node_modules/**/*', '/root/.cache/ms-playwright/**/*'] },
-      }),
+      partialBuildSpec: PLAYWRIGHT_BUILD_SPEC,
     });
 
     // One log group for every CodeBuild project in the pipeline (Synth, SelfMutate, Assets,
-    // Smoke); without it CodeBuild creates never-expiring groups per project (issue #42).
+    // Smoke, Playwright-Live); without it CodeBuild creates never-expiring groups per project
+    // (issue #42).
     const buildLogs = new logs.LogGroup(this, 'BuildLogs', {
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -166,12 +180,40 @@ export class PipelineStack extends cdk.Stack {
       ],
     });
 
+    // The role the live suite runs as. Named, because AuthStack in the stage attaches the
+    // pool/secret grants to it by name (config.ts, PLAYWRIGHT_LIVE_ROLE_NAME); the pipeline
+    // itself adds the artifact and log permissions every step gets.
+    const liveRole = new iam.Role(this, 'PlaywrightLiveRole', {
+      roleName: PLAYWRIGHT_LIVE_ROLE_NAME,
+      assumedBy: new iam.ServicePrincipal('codebuild.amazonaws.com'),
+      description:
+        'GeDe pipeline: Playwright-Live step. AdminInitiateAuth on the pool and the e2e secret are granted by GeDe-Prod-Auth.',
+    });
+    const live = new pipelines.CodeBuildStep('Playwright-Live', {
+      input: source,
+      role: liveRole,
+      env: { CI: 'true' },
+      envFromCfnOutputs: {
+        E2E_BASE_URL: prod.appUrl,
+        E2E_USER_POOL_ID: prod.userPoolId,
+        E2E_CLIENT_ID: prod.e2eClientId,
+        E2E_SECRET_ARN: prod.e2eUserSecretArn,
+      },
+      installCommands: [...PLAYWRIGHT_INSTALL_COMMANDS],
+      commands: ['npm run e2e:live'],
+      buildEnvironment: ARM_SMALL,
+      cache: codebuild.Cache.local(codebuild.LocalCacheMode.CUSTOM),
+      partialBuildSpec: PLAYWRIGHT_BUILD_SPEC,
+    });
+    // After Smoke: there is no point signing in to a deployment whose health probe failed.
+    live.addStepDependency(smoke);
+
     pipeline.addStage(prod, {
       // Deliberately absent: with a single Prod environment there is nothing to promote from,
       // and a gate that a merger approves themselves adds latency, not review. Enable it once
       // a Staging stage precedes Prod (see infra/CLAUDE.md and ADR-021):
       // pre: [new pipelines.ManualApprovalStep('PromoteToProd')],
-      post: [smoke],
+      post: [smoke, live],
     });
   }
 }

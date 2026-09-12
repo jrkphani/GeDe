@@ -10,6 +10,7 @@
     "test": "vitest run",
     "e2e": "playwright test",
     "e2e:ui": "playwright test --ui",
+    "e2e:live": "playwright test --config playwright.live.config.ts",
     "e2e:build": "tsc -b && vite build --config e2e/vite.config.ts",
     "e2e:preview": "vite preview --outDir e2e/dist --strictPort"
   },
@@ -36,6 +37,8 @@
     "yjs": "^13.6.27"
   },
   "devDependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.850.0",
+    "@aws-sdk/client-secrets-manager": "^3.850.0",
     "@axe-core/playwright": "^4.13.0",
     "@playwright/test": "^1.54.0",
     "@testing-library/jest-dom": "^6.6.0",

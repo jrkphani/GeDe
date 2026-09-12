@@ -7,8 +7,9 @@ import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../lib/app.js';
-import { PROD } from '../lib/config.js';
+import { PLAYWRIGHT_LIVE_ROLE_NAME, PROD } from '../lib/config.js';
 import { type GedeStage } from '../lib/gede-stage.js';
+import { E2E_CLIENT_NAME } from '../lib/stacks/auth-stack.js';
 import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
 import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
 import { PURGE_SCHEDULE } from '../lib/stacks/ops-stack.js';
@@ -795,7 +796,8 @@ describe('GeDe CDK app', () => {
     pipelineTemplate.resourceCountIs('AWS::Logs::LogGroup', 1);
     pipelineTemplate.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
     const [logGroupId] = Object.keys(pipelineTemplate.findResources('AWS::Logs::LogGroup'));
-    pipelineTemplate.resourceCountIs('AWS::CodeBuild::Project', 5);
+    // Synth, SelfMutate, two asset publishers, Smoke, Playwright-Live.
+    pipelineTemplate.resourceCountIs('AWS::CodeBuild::Project', 6);
     pipelineTemplate.allResourcesProperties('AWS::CodeBuild::Project', {
       LogsConfig: { CloudWatchLogs: { GroupName: { Ref: logGroupId }, Status: 'ENABLED' } },
     });
@@ -820,6 +822,202 @@ describe('GeDe CDK app', () => {
     );
     // Nothing curls the ALB hostname expecting success any more.
     expect(commands.some((c) => c.includes('$API_URL/healthz'))).toBe(false);
+  });
+
+  it('AUTH-01 Playwright-Live runs the live suite after Smoke, as a named role the Auth stack grants AdminInitiateAuth on the pool and the e2e secret to', () => {
+    interface Project {
+      Properties: {
+        Source: { BuildSpec?: string };
+        ServiceRole: unknown;
+        Environment: {
+          ComputeType: string;
+          EnvironmentVariables?: { Name: string; Value: string }[];
+        };
+      };
+    }
+    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project'));
+    const live = (projects as Project[]).filter((p) =>
+      p.Properties.Source.BuildSpec?.includes('npm run e2e:live'),
+    );
+    expect(live).toHaveLength(1);
+    const spec = JSON.parse(live[0]!.Properties.Source.BuildSpec!) as {
+      phases: { install: { commands: string[] }; build: { commands: string[] } };
+      cache: { paths: string[] };
+    };
+    // The same Chromium install as Synth, then only the live suite; nothing swallows a failure.
+    expect(spec.phases.install.commands).toHaveLength(3);
+    expect(spec.phases.install.commands[0]).toMatch(/^dnf install -y -q .*\bnss\b/);
+    expect(spec.phases.install.commands.slice(1)).toEqual([
+      'npm ci',
+      'npx playwright install --only-shell chromium',
+    ]);
+    expect(spec.phases.build.commands).toEqual(['npm run e2e:live']);
+    expect(spec.cache.paths).toEqual(
+      expect.arrayContaining(['node_modules/**/*', '/root/.cache/ms-playwright/**/*']),
+    );
+    expect(live[0]!.Properties.Environment.ComputeType).toBe('BUILD_GENERAL1_SMALL');
+    expect(live[0]!.Properties.Environment.EnvironmentVariables).toEqual(
+      expect.arrayContaining([expect.objectContaining({ Name: 'CI', Value: 'true' })]),
+    );
+
+    // The project runs as the fixed-name role; the pipeline stack creates it with nothing but
+    // what every step gets, and GeDe-Prod-Auth attaches the pool and secret grants by name.
+    const [roleId] = Object.entries(pipelineTemplate.findResources('AWS::IAM::Role')).find(
+      ([, r]) =>
+        (r as { Properties: { RoleName?: string } }).Properties.RoleName ===
+        PLAYWRIGHT_LIVE_ROLE_NAME,
+    )!;
+    expect(live[0]!.Properties.ServiceRole).toEqual({ 'Fn::GetAtt': [roleId, 'Arn'] });
+    const pipelinePolicies = Object.values(pipelineTemplate.findResources('AWS::IAM::Policy'));
+    expect(JSON.stringify(pipelinePolicies)).not.toContain('cognito-idp:');
+    stacks.Auth!.hasResourceProperties('AWS::IAM::Policy', {
+      Roles: [PLAYWRIGHT_LIVE_ROLE_NAME],
+      PolicyDocument: {
+        Statement: [
+          {
+            Sid: 'SignInAsE2eUser',
+            Effect: 'Allow',
+            Action: 'cognito-idp:AdminInitiateAuth',
+            Resource: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+          },
+          {
+            Sid: 'ReadE2eUserSecret',
+            Effect: 'Allow',
+            Action: 'secretsmanager:GetSecretValue',
+            Resource: { Ref: Match.stringLikeRegexp('^E2eUser') },
+          },
+        ],
+        Version: '2012-10-17',
+      },
+    });
+
+    // In the pipeline: after Smoke, with the stage outputs the suite needs and the source as input.
+    interface Pipeline {
+      Properties: {
+        Stages: {
+          Name: string;
+          Actions: {
+            Name: string;
+            RunOrder: number;
+            InputArtifacts?: { Name: string }[];
+            Configuration: { EnvironmentVariables?: string };
+          }[];
+        }[];
+      };
+    }
+    const [pipeline] = Object.values(
+      pipelineTemplate.findResources('AWS::CodePipeline::Pipeline'),
+    ) as Pipeline[];
+    const prodStage = pipeline!.Properties.Stages.find((s) => s.Name === 'Prod')!;
+    const smoke = prodStage.Actions.find((a) => a.Name === 'Smoke')!;
+    const liveAction = prodStage.Actions.find((a) => a.Name === 'Playwright-Live')!;
+    expect(liveAction.RunOrder).toBeGreaterThan(smoke.RunOrder);
+    expect(liveAction.InputArtifacts?.map((a) => a.Name)).toEqual(
+      smoke.InputArtifacts?.map((a) => a.Name),
+    );
+    const env = JSON.parse(liveAction.Configuration.EnvironmentVariables!) as {
+      name: string;
+      value: string;
+    }[];
+    const byName = Object.fromEntries(env.map((e) => [e.name, e.value]));
+    expect(Object.keys(byName).sort()).toEqual([
+      'E2E_BASE_URL',
+      'E2E_CLIENT_ID',
+      'E2E_SECRET_ARN',
+      'E2E_USER_POOL_ID',
+    ]);
+    expect(byName.E2E_BASE_URL).toMatch(/Web.*\.AppUrl\}$/);
+    expect(byName.E2E_USER_POOL_ID).toMatch(/Auth.*\.UserPoolId\}$/);
+    expect(byName.E2E_CLIENT_ID).toMatch(/Auth.*\.E2eClientId\}$/);
+    expect(byName.E2E_SECRET_ARN).toMatch(/Auth.*\.E2eUserSecretArn\}$/);
+  });
+
+  it('AUTH-01 Auth provisions the gede-e2e client (admin password flow only), the e2e user secret and the account through a handler that never sees the password in its event', () => {
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ClientName: E2E_CLIENT_NAME,
+      GenerateSecret: false,
+      ExplicitAuthFlows: ['ALLOW_ADMIN_USER_PASSWORD_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
+      AllowedOAuthFlowsUserPoolClient: false,
+      SupportedIdentityProviders: ['COGNITO'],
+      PreventUserExistenceErrors: 'ENABLED',
+      EnableTokenRevocation: true,
+      RefreshTokenValidity: 1440,
+    });
+    // The SPA client is untouched: still USER_AUTH only (ADR-011).
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ExplicitAuthFlows: ['ALLOW_USER_AUTH'],
+    });
+    stacks.Auth!.resourceCountIs('AWS::Cognito::UserPoolClient', 2);
+    stacks.Auth!.hasResourceProperties('AWS::SecretsManager::Secret', {
+      Name: 'gede/prod/e2e-user',
+      GenerateSecretString: {
+        SecretStringTemplate: JSON.stringify({ username: 'e2e@gede.work' }),
+        GenerateStringKey: 'password',
+        PasswordLength: 32,
+        RequireEachIncludedType: true,
+        ExcludeCharacters: '"\'\\`',
+      },
+    });
+    // The custom resource carries the secret's ARN, never its value.
+    stacks.Auth!.hasResourceProperties('Custom::GedeE2eUser', {
+      ServiceToken: { 'Fn::GetAtt': [Match.stringLikeRegexp('^E2eUserHandler'), 'Arn'] },
+      UserPoolId: { Ref: Match.stringLikeRegexp('^UserPool') },
+      SecretArn: { Ref: Match.stringLikeRegexp('^E2eUser') },
+      Username: 'e2e@gede.work',
+    });
+    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 1);
+    stacks.Auth!.hasResourceProperties('AWS::Lambda::Function', {
+      Runtime: 'nodejs22.x',
+      Architectures: ['arm64'],
+      Handler: 'index.handler',
+    });
+    stacks.Auth!.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: [
+              'cognito-idp:AdminCreateUser',
+              'cognito-idp:AdminDeleteUser',
+              'cognito-idp:AdminSetUserPassword',
+            ],
+            Resource: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+          }),
+        ]),
+      }),
+    });
+    // The service accepts tokens from both clients.
+    stacks.Service!.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({
+          Environment: Match.arrayWith([
+            {
+              Name: 'COGNITO_CLIENT_IDS',
+              Value: {
+                // Weak cross-stack references (cdk.json): the SPA client, a comma, the e2e client.
+                'Fn::Join': [
+                  '',
+                  [
+                    {
+                      'Fn::GetStackOutput': Match.objectLike({
+                        StackName: 'GeDe-Prod-Auth',
+                        OutputName: Match.stringLikeRegexp('Spa'),
+                      }),
+                    },
+                    ',',
+                    {
+                      'Fn::GetStackOutput': Match.objectLike({
+                        StackName: 'GeDe-Prod-Auth',
+                        OutputName: Match.stringLikeRegexp('E2e'),
+                      }),
+                    },
+                  ],
+                ],
+              },
+            },
+          ]),
+        }),
+      ]),
+    });
   });
 
   it('LOAD-06 Synth installs Chromium, then runs verify, db:parity, e2e, the web build and cdk synth in that order', () => {

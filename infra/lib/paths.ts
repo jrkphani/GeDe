@@ -14,6 +14,9 @@ export const INFRA_ROOT = path.resolve(here, '..');
 export const PLACEHOLDER_WEB_DIR = path.join(INFRA_ROOT, 'assets', 'placeholder', 'web');
 export const PLACEHOLDER_SYNC_DIR = path.join(INFRA_ROOT, 'assets', 'placeholder', 'sync');
 
+/** Lambda source of the custom resource that creates the live suite's Cognito user (`AuthStack`). */
+export const E2E_USER_HANDLER_DIR = path.join(INFRA_ROOT, 'assets', 'e2e-user');
+
 export const SYNC_DOCKERFILE = 'services/sync/Dockerfile';
 export const WEB_DIST = path.join(REPO_ROOT, 'apps', 'web', 'dist');
 
