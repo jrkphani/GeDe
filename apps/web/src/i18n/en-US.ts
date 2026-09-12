@@ -4,9 +4,12 @@
  * `{name}` and are substituted by `format()`.
  *
  * Tour copy (ONB-10, ONB-12) is the prototype's, verbatim
- * (`docs/PROTOTYPE-CHANGES-2026-09-12.md` §1.4), with one sentence held back:
- * step 1's "— it resets" names a Reset control no PRD row specifies, and the
- * handover says not to ship the sentence without the control.
+ * (`docs/PROTOTYPE-CHANGES-2026-09-12.md` §1.4), with two departures where
+ * the PRD wins: step 1's "— it resets" is held back (it names a Reset control
+ * no PRD row specifies, and the handover says not to ship the sentence without
+ * the control), and step 4's operator example is `is:date`, not the
+ * prototype's `is:blocked` — FIND-04 defines `is:` over resolved formats
+ * (`currency | date | number | text`), so `is:blocked` would match nothing.
  */
 export const messages = {
   'tour.counter': 'STEP {step} OF {total}',
@@ -33,7 +36,7 @@ export const messages = {
 
   'tour.step4.title': 'Find across every table',
   'tour.step4.body':
-    'One search covers the whole workscape. Operators narrow it: col:Owner, is:blocked.',
+    'One search covers the whole workscape. Operators narrow it: col:Owner, is:date.',
   'tour.step4.note': 'Numbers searches one sheet at a time. ⌘F here spans every table and graph.',
   'tour.step4.action': 'Open Find and type anything',
 

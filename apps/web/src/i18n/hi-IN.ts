@@ -28,7 +28,7 @@ export const messages: Messages = {
 
   'tour.step4.title': 'हर तालिका में खोजें',
   'tour.step4.body':
-    'एक खोज पूरे workscape को कवर करती है। Operator इसे सीमित करते हैं: col:Owner, is:blocked.',
+    'एक खोज पूरे workscape को कवर करती है। Operator इसे सीमित करते हैं: col:Owner, is:date.',
   'tour.step4.note':
     'Numbers एक समय में एक ही शीट खोजता है। यहाँ ⌘F हर तालिका और graph में खोजता है।',
   'tour.step4.action': 'Find खोलें और कुछ भी टाइप करें',

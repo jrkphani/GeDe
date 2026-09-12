@@ -27,7 +27,7 @@ export const messages: Messages = {
 
   'tour.step4.title': 'ప్రతి పట్టికలో వెతకండి',
   'tour.step4.body':
-    'ఒకే శోధన మొత్తం workscape ను కవర్ చేస్తుంది. Operator లు దాన్ని కుదిస్తాయి: col:Owner, is:blocked.',
+    'ఒకే శోధన మొత్తం workscape ను కవర్ చేస్తుంది. Operator లు దాన్ని కుదిస్తాయి: col:Owner, is:date.',
   'tour.step4.note':
     'Numbers ఒకసారి ఒక షీట్‌లో మాత్రమే వెతుకుతుంది. ఇక్కడ ⌘F ప్రతి పట్టికలో, graph లో వెతుకుతుంది.',
   'tour.step4.action': 'Find తెరిచి ఏదైనా టైప్ చేయండి',

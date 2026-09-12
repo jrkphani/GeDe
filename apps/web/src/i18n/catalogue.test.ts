@@ -1,3 +1,4 @@
+import { isEmptyQuery, parseQuery } from '@gede/core';
 import { describe, expect, test } from 'vitest';
 
 import { LOCALES } from '../locale.js';
@@ -52,6 +53,17 @@ describe('message catalogue', () => {
     expect(en['tour.step3.note']).toMatch(/^No Numbers equivalent/);
     // Step 1 teaches nothing Numbers already does and has no comparison note.
     expect(MESSAGE_KEYS).not.toContain('tour.step1.note');
+  });
+
+  test('ONB-10 FIND-04 the operators step 4 names are ones Find understands, in every locale', () => {
+    for (const locale of LOCALES) {
+      const body = CATALOGUE[locale]['tour.step4.body'];
+      const named = [...body.matchAll(/\b(col|is):[\w|]+/g)].map((m) => m[0]);
+      expect(named, `${locale}: ${body}`).toEqual(['col:Owner', 'is:date']);
+      for (const operator of named) {
+        expect(isEmptyQuery(parseQuery(operator)), `${locale} ${operator}`).toBe(false);
+      }
+    }
   });
 
   test('ONB-12 format substitutes placeholders and leaves unknown ones as written', () => {

@@ -28,7 +28,7 @@ export const messages: Messages = {
 
   'tour.step4.title': 'எல்லா அட்டவணைகளிலும் தேடவும்',
   'tour.step4.body':
-    'ஒரே தேடல் முழு workscape-ஐயும் உள்ளடக்கும். Operator-கள் அதைச் சுருக்கும்: col:Owner, is:blocked.',
+    'ஒரே தேடல் முழு workscape-ஐயும் உள்ளடக்கும். Operator-கள் அதைச் சுருக்கும்: col:Owner, is:date.',
   'tour.step4.note':
     'Numbers ஒரு நேரத்தில் ஒரு தாளில் மட்டுமே தேடும். இங்கே ⌘F ஒவ்வொரு அட்டவணையையும் graph-ஐயும் உள்ளடக்கும்.',
   'tour.step4.action': 'Find-ஐத் திறந்து எதையாவது தட்டச்சு செய்யவும்',

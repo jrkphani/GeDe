@@ -6,7 +6,7 @@
  *   - two tables, `Deliverables` and `Team`, so a cross-table reference
  *     (`=@Team.Priya.Role`, step 2) has somewhere to point;
  *   - an `Owner` column and `Blocked` statuses, so the Find step's operator
- *     examples (`col:Owner`, `is:blocked`) match rows;
+ *     examples match rows (`col:Owner`; `Due` is a date column for `is:date`);
  *   - a `Due` column formatted as dates and a `Days` column formatted as
  *     numbers, with an id-bound `=Sum(…)` over it (FX, FMT);
  *   - at least two entered columns on `Deliverables`, so a context graph the

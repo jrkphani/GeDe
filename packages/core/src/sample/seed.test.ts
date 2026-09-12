@@ -71,7 +71,7 @@ describe('seedSampleWorkscape', () => {
     expect(team!.gridCol).toBeGreaterThan(deliverables!.gridCol + deliverables!.columns.length);
   });
 
-  test('ONB-01 an Owner column and Blocked statuses exist for the Find step (col:Owner, is:blocked)', () => {
+  test('ONB-01 an Owner column, Blocked statuses and a date column exist for the Find step (col:Owner, is:date)', () => {
     const gd = openDocument(decoded());
     const table = tablesOnSheet(gd, listSheets(gd)[0]!.id)[0]!;
     const map = tableMap(gd, table.id)!;
