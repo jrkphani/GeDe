@@ -7,6 +7,7 @@
 @import './routes/document/share/share.css';
 @import './routes/document/sort/sort.css';
 @import './routes/document/ref/ref.css';
+@import './routes/document/graph/graph.css';
 @import './routes/errors/errors.css';
 
 #root {

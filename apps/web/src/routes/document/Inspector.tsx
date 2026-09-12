@@ -236,7 +236,11 @@ export function Inspector({
           }}
         />
       </div>
-      <InspectorHead table={table} selection={selection} />
+      <InspectorHead
+        table={table}
+        selection={selection}
+        object={slots?.graph === undefined ? undefined : 'Graph'}
+      />
       <div className="gd-inspector__body">
         {mode === 'format' ? (
           <Tabs

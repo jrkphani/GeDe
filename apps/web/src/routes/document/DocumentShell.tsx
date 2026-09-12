@@ -6,6 +6,7 @@ import {
   cellRich,
   createSheet,
   createTable,
+  graphsOnSheet,
   LATTICE,
   listSheets,
   sheetBounds,
@@ -67,6 +68,7 @@ import { pinnedPanelOffset } from './grid/pinned.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
 import { DerivePanel } from './ref/index.js'; // wave3/references
+import { GraphLayer, GraphTab, useGraphs } from './graph/index.js'; // wave4/graphs
 import { SortPanel, useSortCommands } from './sort/index.js';
 import {
   NULL_VIEW_STORE,
@@ -76,6 +78,7 @@ import {
 } from '../../doc/view-state.js';
 import { Inspector } from './Inspector.js';
 import { documentBindings } from './keys/bindings.js';
+import type { CellSelection } from './selection.js';
 import { useCellClipboard } from './keys/clipboard.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
@@ -284,7 +287,7 @@ function OpenDocument({
   );
 
   // -- selection --------------------------------------------------------------
-  const { selectTable, clear: clearSelection } = grid.actions;
+  const { clear: clearSelection } = grid.actions;
 
   // -- sheets (DOC-03) --------------------------------------------------------
   const selectSheet = useCallback(
@@ -344,6 +347,42 @@ function OpenDocument({
       });
     });
   }, []);
+
+  // -- context graphs (GRAPH-01..11) --------------------------------------------
+  const graphs = useGraphs({
+    gd,
+    activeSheetId,
+    editable,
+    grid: { actions: grid.actions, commands: grid.commands },
+    selectSheet,
+    reveal,
+    settle: () => {
+      session.undo.stopCapturing();
+    },
+  });
+  const { select: selectGraph } = graphs.actions;
+  const selectedGraphId = graphs.state.selectedGraphId;
+  // A grid selection made in a table (not by a graph's write-back) drops the graph selection,
+  // and clearing the selection clears both.
+  const tableActions = useMemo(
+    () => ({
+      ...grid.actions,
+      selectCell: (c: CellSelection) => {
+        selectGraph(null);
+        grid.actions.selectCell(c);
+      },
+      selectTable: (tableId: Id) => {
+        selectGraph(null);
+        grid.actions.selectTable(tableId);
+      },
+    }),
+    [grid.actions, selectGraph],
+  );
+  const clearAll = useCallback(() => {
+    clearSelection();
+    selectGraph(null);
+  }, [clearSelection, selectGraph]);
+  const selectTable = tableActions.selectTable;
 
   // -- structure --------------------------------------------------------------
   const addTable = useCallback(
@@ -495,7 +534,7 @@ function OpenDocument({
         clear: () => {
           if (cell !== null) grid.commands.clearCell(cell);
         },
-        clearSelection,
+        clearSelection: clearAll,
         toggleMark,
       },
       table: { addRow: addRowToSelected, addColumn: addColumnToSelected },
@@ -519,6 +558,10 @@ function OpenDocument({
     canvas: {
       addTable: () => {
         addTable();
+      },
+      addGraph: graphs.actions.startPointing,
+      addShapedTable: () => {
+        graphs.actions.addShapedTable();
       },
       fit,
       actualSize: () => {
@@ -558,8 +601,8 @@ function OpenDocument({
           showInspector('organize');
         },
       },
-      // slot: graph — "Graph this table" waits for the context graph release.
-      graph: undefined,
+      // GRAPH-01: "Graph this table" creates a pair bound to that table.
+      graph: editable ? { graphTable: graphs.actions.graphTable } : undefined,
     },
   };
 
@@ -617,6 +660,7 @@ function OpenDocument({
           onAddTable={() => {
             addTable();
           }}
+          onAddGraph={graphs.actions.startPointing}
           onAddRow={addRowToSelected}
           onAddColumn={addColumnToSelected}
           tableMenu={
@@ -650,6 +694,32 @@ function OpenDocument({
       <div className="gd-doc__banners">
         {/* wave2/formulas mount point */}
         <FormulaEngineBanner doc={gd.doc} />
+        {graphs.state.pointing !== null && (
+          <Banner
+            className="gd-doc__pointing"
+            cause={
+              graphs.state.pointing.mode === 'rebind'
+                ? 'Click a table to re-point the graph.'
+                : 'Click a table to bind the graph.'
+            }
+            remedy="Press Escape to cancel, or add a shaped table and bind it in one step."
+            action={
+              <>
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    graphs.actions.addShapedTable();
+                  }}
+                >
+                  Add shaped table
+                </Button>
+                <Button size="sm" onClick={graphs.actions.cancelPointing}>
+                  Cancel
+                </Button>
+              </>
+            }
+          />
+        )}
         {renameError !== null && (
           <Banner
             cause="Rename not saved."
@@ -750,7 +820,7 @@ function OpenDocument({
               onViewportChange={setViewport}
               onSizeChange={onSizeChange}
               gridlines={gridlines}
-              onClearSelection={clearSelection}
+              onClearSelection={clearAll}
               onPlaceTable={
                 editable
                   ? (at) => {
@@ -774,7 +844,7 @@ function OpenDocument({
                     presence={onSheet}
                     pinnedLeft={pinnedPanelOffset(t, viewport.x / viewport.zoom)}
                     undo={session.undo}
-                    actions={grid.actions}
+                    actions={tableActions}
                     commands={grid.commands}
                     sort={phone ? undefined : sort}
                   />
@@ -796,27 +866,61 @@ function OpenDocument({
                 selected={cell}
                 editing={editing?.cell ?? null}
               />
-              {ready && tables.length === 0 && (
-                <div className="gd-canvas__empty" style={emptyStyle()}>
-                  <span className="gd-mono gd-canvas__empty-label">empty sheet</span>
-                  {editable ? (
-                    <Button
-                      size="sm"
-                      variant="primary"
-                      onPointerDown={(e) => {
-                        e.stopPropagation();
-                      }}
-                      onClick={() => {
-                        addTable();
-                      }}
-                    >
-                      Place first table
-                    </Button>
-                  ) : (
-                    <span className="gd-canvas__empty-text">Nothing on this sheet yet</span>
-                  )}
-                </div>
-              )}
+              {/* wave4/graphs: ring and coverage pairs, pointing overlay (GRAPH-01..11) */}
+              <GraphLayer
+                gd={gd}
+                sheetId={activeSheetId}
+                graphs={graphs}
+                selectedCell={cell}
+                editable={editable}
+                zoom={viewport.zoom}
+              />
+              {ready &&
+                tables.length === 0 &&
+                graphsOnSheet(gd, activeSheetId ?? '').length === 0 && (
+                  <div className="gd-canvas__empty" style={emptyStyle()}>
+                    <span className="gd-mono gd-canvas__empty-label">empty sheet</span>
+                    {editable ? (
+                      <div className="gd-canvas__empty-actions">
+                        <Button
+                          size="sm"
+                          variant="primary"
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                          }}
+                          onClick={() => {
+                            addTable();
+                          }}
+                        >
+                          Place first table
+                        </Button>
+                        {/* PRD §19: the empty-sheet menu is Table / Shaped table / Graph. */}
+                        <Button
+                          size="sm"
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                          }}
+                          onClick={() => {
+                            graphs.actions.addShapedTable();
+                          }}
+                        >
+                          Add shaped table here
+                        </Button>
+                        <Button
+                          size="sm"
+                          onPointerDown={(e) => {
+                            e.stopPropagation();
+                          }}
+                          onClick={graphs.actions.startPointing}
+                        >
+                          Add graph here
+                        </Button>
+                      </div>
+                    ) : (
+                      <span className="gd-canvas__empty-text">Nothing on this sheet yet</span>
+                    )}
+                  </div>
+                )}
             </Canvas>
           </Skeleton>
           {/* FIND-02: the Find bar floats at the foot of the canvas and never displaces content. */}
@@ -859,8 +963,17 @@ function OpenDocument({
                       editable={editable}
                     />
                   ),
-                // slot: graph (context graph release).
-                graph: undefined,
+                // INSP-08 / GRAPH-05: the Graph tab, only while a graph is selected.
+                graph:
+                  selectedGraphId === null ? undefined : (
+                    <GraphTab
+                      gd={gd}
+                      graphId={selectedGraphId}
+                      graphs={graphs}
+                      selectedCell={cell}
+                      editable={editable}
+                    />
+                  ),
               }}
             />
           )}

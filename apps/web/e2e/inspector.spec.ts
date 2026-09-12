@@ -434,7 +434,17 @@ test.describe('keyboard map', () => {
     const groups = await sheet
       .getByRole('region')
       .evaluateAll((els) => els.map((el) => el.getAttribute('aria-label')));
-    expect(groups).toEqual(['Document', 'Edit', 'Find', 'Format', 'Table and cells', 'View']);
+    // The reference groups plus Graphs (ADR-033), between the table keys and View.
+    expect(groups).toEqual([
+      'Document',
+      'Edit',
+      'Find',
+      'Format',
+      'Table and cells',
+      'Graphs',
+      'View',
+    ]);
+    await expect(sheet.getByRole('region', { name: 'Graphs' })).toContainText('⇧⏎');
     await expect(sheet.getByRole('region', { name: 'View' })).toContainText('⌥⌘I');
     // KEYS-02 / KEYS-07: the browser's own chords are listed and say so (ADR-030).
     await expect(sheet.getByRole('region', { name: 'Document' })).toContainText(

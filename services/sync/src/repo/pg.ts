@@ -33,6 +33,7 @@ import {
   columns,
   docUpdates,
   documents,
+  graphs,
   invites,
   rows as rowsTable,
   shares,
@@ -1245,6 +1246,24 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
                 textPlain: c.textPlain,
                 rich: c.rich,
                 formula: c.formula,
+              })),
+            );
+          }
+          // GRAPH-01..11: one row per half; sheets → graphs cascade on delete.
+          for (const batch of chunk(projection.graphs, INSERT_CHUNK)) {
+            await tx.insert(graphs).values(
+              batch.map((g) => ({
+                id: g.id,
+                sheetId: g.sheetId,
+                pairId: g.pairId,
+                kind: g.kind,
+                tableId: g.tableId,
+                dimensionColumns: [...g.dimensionColumns],
+                gridCol: g.gridCol,
+                gridRow: g.gridRow,
+                widthUnits: g.widthUnits,
+                heightUnits: g.heightUnits,
+                slice: g.slice,
               })),
             );
           }

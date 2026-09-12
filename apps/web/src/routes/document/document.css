@@ -360,6 +360,11 @@
   background: var(--surface-sunken);
   width: calc(var(--lattice-col) * 2);
 }
+.gd-canvas__empty-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
 .gd-canvas__empty-label {
   font-size: 0.5625rem;
   text-transform: uppercase;

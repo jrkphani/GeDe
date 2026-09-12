@@ -12,14 +12,21 @@ import type { Selection } from '../selection.js';
 export function InspectorHead({
   table,
   selection,
+  object,
 }: {
   table: TableMap | null;
   selection: Selection | null;
+  /** A selected object that is not a table (INSP-08: a graph), stated in place of "Nothing selected". */
+  object?: string | undefined;
 }) {
   if (table === null || selection === null) {
     return (
       <div className="gd-inspector__selected" data-testid="inspector-selected">
-        <p className="gd-inspector__none">Nothing selected</p>
+        {object === undefined ? (
+          <p className="gd-inspector__none">Nothing selected</p>
+        ) : (
+          <p className="gd-inspector__object">{object}</p>
+        )}
       </div>
     );
   }

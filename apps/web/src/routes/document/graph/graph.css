@@ -1,0 +1,392 @@
+/* Context graphs (GRAPH-01..11, INSP-08). Every colour is a token. The
+   dimension palette is the reference palette (--reference-1..6), fixed by
+   dimension index; live state (selection, pointing) is amber; states are
+   never hue alone — a draft is hollow and dashed, emphasis draws spokes and
+   grows the dot, muting is opacity (A11Y-04). */
+
+/* ---- object frame (GRAPH-11) --------------------------------------------- */
+.gd-graph {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  box-sizing: content-box;
+  margin: -1px 0 0 -1px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: default;
+}
+.gd-graph--selected {
+  outline: 1px solid var(--selection-ring);
+}
+.gd-graph--dragging {
+  transition: none;
+  user-select: none;
+}
+.gd-graph__header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+.gd-graph--dragging .gd-graph__header {
+  cursor: grabbing;
+}
+.gd-graph__header:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.gd-graph__glyph {
+  flex: none;
+  color: var(--link);
+}
+.gd-graph__titles {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.2;
+}
+.gd-graph__title {
+  overflow: hidden;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.gd-graph__sub {
+  overflow: hidden;
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--ink-muted);
+}
+.gd-graph__stat {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--ink-muted);
+}
+.gd-graph__kind {
+  flex: none;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  font-size: 0.5625rem;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.gd-graph__body {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  padding: var(--space-2);
+  box-sizing: border-box;
+}
+.gd-graph__corner {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
+  box-sizing: border-box;
+  width: 12px;
+  height: 12px;
+  border: 1px solid var(--selection-ring);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  cursor: nwse-resize;
+  touch-action: none;
+}
+.gd-graph__corner:hover {
+  background: var(--selection-ring);
+}
+.gd-graph__corner:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.gd-graph__note,
+.gd-graph__empty-text {
+  margin: auto;
+  max-width: 28ch;
+  font-size: 0.8125rem;
+  text-align: center;
+  color: var(--ink-muted);
+}
+.gd-graph__empty {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-3);
+}
+.gd-graph__empty-actions {
+  display: flex;
+  gap: var(--space-2);
+}
+
+/* ---- ring (GRAPH-07, GRAPH-09) --------------------------------------------- */
+.gd-ring {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: visible;
+  font-family: var(--font-ui);
+}
+.gd-ring__arc {
+  fill: none;
+  stroke: var(--gd-dim, var(--reference-1));
+  stroke-width: 2.5;
+  stroke-linecap: round;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.gd-ring--hover .gd-ring__arc {
+  opacity: 0.55;
+}
+.gd-ring__arc-label {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  fill: var(--ink-muted);
+}
+.gd-ring__spoke {
+  fill: none;
+  stroke: var(--gd-dim, var(--reference-1));
+  stroke-width: 1.8;
+  pointer-events: none;
+}
+.gd-ring__dot {
+  cursor: pointer;
+  outline: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.gd-ring__dot-hit {
+  fill: transparent;
+}
+.gd-ring__dot-mark {
+  fill: var(--gd-dim, var(--reference-1));
+  stroke: var(--surface);
+  stroke-width: 2;
+}
+.gd-ring__dot-label {
+  font-size: 11px;
+  fill: var(--ink);
+}
+/* A11Y-02: focus is its own ring — 2 units wide, 2 units outside the mark — drawn by a
+   dedicated element so it never competes with the mark's own selection stroke. */
+.gd-graph-focus {
+  fill: none;
+  stroke: var(--focus-ring);
+  stroke-width: 2;
+  opacity: 0;
+  pointer-events: none;
+}
+.gd-ring__dot:focus-visible .gd-graph-focus,
+.gd-ring__node:focus-visible .gd-graph-focus,
+.gd-coverage__cell:focus-visible .gd-graph-focus {
+  opacity: 1;
+}
+.gd-ring__node {
+  cursor: pointer;
+  outline: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.gd-ring__node-mark {
+  stroke-width: 1.5;
+}
+.gd-ring__node--complete .gd-ring__node-mark {
+  fill: var(--ink);
+  stroke: var(--ink);
+}
+.gd-ring__node--complete .gd-ring__symbol {
+  fill: var(--surface);
+}
+/* GRAPH-06 / A11Y-04: a draft is hollow and dashed, not a paler hue. */
+.gd-ring__node--draft .gd-ring__node-mark {
+  fill: var(--surface);
+  stroke: var(--ink-muted);
+  stroke-dasharray: 3 2;
+}
+.gd-ring__node--draft .gd-ring__symbol {
+  fill: var(--ink);
+}
+/* Selection (aria-pressed): a thicker amber stroke and an underlined symbol, so it reads
+   apart from focus and from a hovered node without relying on hue (A11Y-04). */
+.gd-ring__node--selected .gd-ring__node-mark {
+  stroke: var(--selection-ring);
+  stroke-width: 3;
+}
+.gd-ring__node--selected .gd-ring__symbol {
+  text-decoration: underline;
+}
+.gd-ring__symbol {
+  font-size: 12px;
+  pointer-events: none;
+}
+.gd-ring__node--dense .gd-ring__symbol {
+  font-size: 9.5px;
+}
+.gd-ring__empty {
+  font-size: 12px;
+  fill: var(--ink-muted);
+}
+.gd-ring--hover .gd-ring__node--muted,
+.gd-ring--hover .gd-ring__dot--muted {
+  opacity: 0.2;
+}
+.gd-ring--soft .gd-ring__node--muted,
+.gd-ring--soft .gd-ring__dot--muted {
+  opacity: 0.4;
+}
+
+/* ---- coverage (GRAPH-08, GRAPH-10) ---------------------------------------- */
+.gd-coverage {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  gap: var(--space-1);
+}
+.gd-coverage__axes {
+  margin: 0;
+  font-size: 0.5625rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+.gd-coverage__grid {
+  flex: 1;
+  width: 100%;
+  min-height: 0;
+  overflow: visible;
+}
+.gd-coverage__col-label,
+.gd-coverage__row-label {
+  font-size: 9px;
+  fill: var(--ink);
+}
+.gd-coverage__axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.gd-coverage__cell {
+  cursor: pointer;
+  outline: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.gd-coverage__cell--static {
+  cursor: default;
+}
+.gd-coverage__cell-box {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+.gd-coverage__cell--empty .gd-coverage__cell-box {
+  fill: var(--surface);
+}
+.gd-coverage__cell--empty:hover .gd-coverage__cell-box {
+  fill: var(--surface-sunken);
+}
+.gd-coverage__cell--filled .gd-coverage__cell-box {
+  fill: var(--ink);
+}
+.gd-coverage__symbol {
+  font-size: 9.5px;
+  fill: var(--surface);
+  pointer-events: none;
+}
+.gd-coverage__cell--lit .gd-coverage__cell-box {
+  stroke: var(--selection-ring);
+  stroke-width: 2;
+}
+.gd-coverage__cell--selected .gd-coverage__cell-box {
+  stroke: var(--selection-ring);
+  stroke-width: 3;
+}
+.gd-coverage__cell--selected .gd-coverage__symbol {
+  text-decoration: underline;
+}
+.gd-coverage--hover .gd-coverage__cell--muted {
+  opacity: 0.2;
+}
+.gd-coverage--soft .gd-coverage__cell--muted {
+  opacity: 0.4;
+}
+
+/* ---- pointing mode (GRAPH-03) --------------------------------------------- */
+.gd-pointing__target {
+  position: absolute;
+  z-index: 4;
+  display: flex;
+  align-items: flex-start;
+  box-sizing: border-box;
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  border: 2px dashed var(--selection-ring);
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--selection-ring) 10%, transparent);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.gd-pointing__target:hover {
+  background: color-mix(in srgb, var(--selection-ring) 18%, transparent);
+}
+.gd-pointing__target:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.gd-pointing__label {
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  font-size: 0.6875rem;
+}
+
+/* GRAPH-09: the source row lit in the table while a node, dot or cell is hovered. */
+.gd-table__row--lit {
+  box-shadow: inset 0 0 0 2px var(--selection-ring);
+}
+
+/* ---- inspector Graph tab (INSP-08) ---------------------------------------- */
+.gd-graph-tab__list {
+  margin: 0 0 var(--space-2);
+  padding: 0;
+  list-style: none;
+}
+.gd-graph-tab__item + .gd-graph-tab__item {
+  margin-top: var(--space-1);
+}
+.gd-graph-tab__check {
+  display: flex;
+  flex: 1;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.gd-graph-tab__check-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.gd-graph-tab__count {
+  flex: none;
+  font-size: 0.6875rem;
+  color: var(--ink-muted);
+}
+
+/* Phone (RESP-02): the objects render; nothing edits. */
+.gd-doc--phone .gd-graph__header {
+  cursor: default;
+}

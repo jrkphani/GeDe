@@ -72,6 +72,30 @@ function describeViolations(record: AxeRecord): string {
     .join('\n');
 }
 
+/**
+ * Every journey fails on an unhandled error: a `pageerror` (uncaught exception,
+ * unhandled rejection) or a `console.error` from the page. The gate the PR
+ * template calls "0 unhandled errors" is enforced here, for every suite.
+ * Errors the page emits after the test body finishes (during teardown) are
+ * reported too. Automatic — no test opts in.
+ */
+export interface ErrorGateFixtures {
+  /** The errors seen so far; a test that expects one can inspect and clear it. */
+  pageErrors: string[];
+}
+
+/**
+ * Console lines that are not unhandled errors: the browser's own note for a
+ * failed resource (the app handles the 4xx/5xx — that is what the error pages
+ * are), and React Router's log of a thrown `Response` on its way to the
+ * error element (ARCHITECTURE §3: the error pages are thrown Responses).
+ */
+const HANDLED_CONSOLE_ERRORS: readonly RegExp[] = [
+  /^Failed to load resource: the server responded with a status of \d{3}/,
+  /^React Router caught the following error during render Response/,
+  /^Response$/,
+];
+
 export interface A11yFixtures {
   /**
    * Run axe on the current page, save `test-results/axe/<screen>.json` and fail
@@ -83,7 +107,27 @@ export interface A11yFixtures {
   snapshot: (name: string) => Promise<void>;
 }
 
-export const test = base.extend<A11yFixtures>({
+export const test = base.extend<A11yFixtures & ErrorGateFixtures>({
+  pageErrors: [
+    async ({ page }, use, testInfo) => {
+      const errors: string[] = [];
+      page.on('pageerror', (error) => {
+        errors.push(`pageerror: ${error.message}`);
+      });
+      page.on('console', (message) => {
+        if (message.type() !== 'error') return;
+        const text = message.text();
+        if (HANDLED_CONSOLE_ERRORS.some((re) => re.test(text))) return;
+        errors.push(`console.error: ${text}`);
+      });
+      await use(errors);
+      // Report every error, but let a test that failed for its own reason keep its message.
+      if (testInfo.status === testInfo.expectedStatus) {
+        expect(errors, `unhandled errors on the page during "${testInfo.title}"`).toEqual([]);
+      }
+    },
+    { auto: true },
+  ],
   checkA11y: async ({ page, deviceScaleFactor }, use) => {
     mkdirSync(AXE_DIR, { recursive: true });
     await use(async (screen) => {

@@ -22,6 +22,7 @@ import {
   addColumn,
   addRow,
   ancestorIds,
+  appendRowWithValues,
   cellAddress,
   cellReadOnlyReason,
   clearCell as clearCellText,
@@ -76,6 +77,12 @@ export interface GridCommands {
   insertRowBelow(tableId: Id, rowId?: Id, colId?: Id): Id | null;
   /** Insert a row above `rowId`; selects its first visible cell. */
   insertRowAbove(tableId: Id, rowId: Id): Id | null;
+  /**
+   * GRAPH-10: append a row pre-filled with `values` (column id → text) in one
+   * undo step; selects its first pre-filled cell. Only entered columns are
+   * written (REF-05); the rest of the tuple is dropped, not refused.
+   */
+  appendRowWith(tableId: Id, values: Readonly<Record<Id, string>>): Id | null;
   /** Delete a row; the selection moves to the row below, else above, else the table. */
   deleteRow(tableId: Id, rowId: Id): boolean;
   /** Append a column, or insert one after `colId`; selects its cell in the current row. */
@@ -268,6 +275,22 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
         rec === null ? null : firstVisibleColumn(rec, colId ?? selectedIn(tableId)?.colId);
       if (target !== null) select({ tableId, rowId: id, colId: target });
       announce(rowId === undefined ? 'Added a row' : 'Inserted a row below');
+      return id;
+    },
+    appendRowWith(tableId, values) {
+      const rec = record(tableId);
+      if (!editable() || rec === null) return null;
+      const entered = new Set(rec.columns.filter((c) => c.source === 'entered').map((c) => c.id));
+      const allowed = Object.fromEntries(
+        Object.entries(values).filter(([colId]) => entered.has(colId)),
+      );
+      const id = appendRowWithValues(gd, tableId, allowed);
+      if (id === null) return null;
+      const first = rec.columns.find((c) => !c.hidden && allowed[c.id] !== undefined)?.id;
+      const colId = firstVisibleColumn(rec, first);
+      if (colId !== null) select({ tableId, rowId: id, colId });
+      const count = Object.keys(allowed).length;
+      announce(`Added a row with ${String(count)} ${count === 1 ? 'value' : 'values'}`);
       return id;
     },
     insertRowAbove(tableId, rowId) {
