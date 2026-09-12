@@ -69,6 +69,8 @@ export const PURGE_COMMAND = ['node', 'main.js', '--job', 'purge'];
  */
 export class ServiceStack extends cdk.Stack {
   readonly alb: elbv2.ApplicationLoadBalancer;
+  /** The sync service's target group (OpsStack alarms on its healthy host count). */
+  readonly targetGroup: elbv2.ApplicationTargetGroup;
   readonly service: ecs.FargateService;
   readonly cluster: ecs.Cluster;
   readonly serviceSecurityGroup: ec2.SecurityGroup;
@@ -324,6 +326,8 @@ export class ServiceStack extends cdk.Stack {
         ),
       ],
     });
+
+    this.targetGroup = syncTargets;
 
     // The WebSocket goes straight to the ALB (ADR-010); JWT + permission checks happen on the
     // upgrade in services/sync/src/ws/route.ts.

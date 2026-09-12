@@ -117,6 +117,7 @@ export class GedeStage extends cdk.Stage {
       config,
       service: service.service,
       alb: service.alb,
+      targetGroup: service.targetGroup,
       database: data.database,
       cluster: service.cluster,
       jobsTaskDefinition: service.jobsTaskDefinition,

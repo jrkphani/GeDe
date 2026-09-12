@@ -12,7 +12,7 @@ import { type GedeStage } from '../lib/gede-stage.js';
 import { E2E_CLIENT_NAME } from '../lib/stacks/auth-stack.js';
 import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
 import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
-import { PURGE_SCHEDULE } from '../lib/stacks/ops-stack.js';
+import { PURGE_SCHEDULE, PURGE_SILENCE_HOURS } from '../lib/stacks/ops-stack.js';
 import { PURGE_COMMAND, gedeVersion } from '../lib/stacks/service-stack.js';
 import {
   ORIGIN_VERIFY_GENERATIONS,
@@ -741,13 +741,126 @@ describe('GeDe CDK app', () => {
   });
 
   it('Ops wires alarms and the budget to the alerts email', () => {
-    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 4);
+    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 10);
     stacks.Ops!.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'email',
       Endpoint: 'jrkphani@icloud.com',
     });
+    // Every alarm notifies the topic.
+    stacks.Ops!.allResourcesProperties('AWS::CloudWatch::Alarm', {
+      AlarmActions: [{ Ref: Match.stringLikeRegexp('^Alerts') }],
+    });
+    // Actual at 80 % and, since the ops review, the forecast at 100 % (it read US$128 on
+    // US$100 while the actual notification sat quiet at 53 %).
     stacks.Ops!.hasResourceProperties('AWS::Budgets::Budget', {
       Budget: Match.objectLike({ BudgetLimit: { Amount: 100, Unit: 'USD' }, TimeUnit: 'MONTHLY' }),
+      NotificationsWithSubscribers: [
+        Match.objectLike({
+          Notification: {
+            NotificationType: 'ACTUAL',
+            ComparisonOperator: 'GREATER_THAN',
+            Threshold: 80,
+            ThresholdType: 'PERCENTAGE',
+          },
+        }),
+        Match.objectLike({
+          Notification: {
+            NotificationType: 'FORECASTED',
+            ComparisonOperator: 'GREATER_THAN',
+            Threshold: 100,
+            ThresholdType: 'PERCENTAGE',
+          },
+          Subscribers: [{ SubscriptionType: 'EMAIL', Address: 'jrkphani@icloud.com' }],
+        }),
+      ],
+    });
+  });
+
+  it('Ops review 2026-09-13: one task and one db.t4g.micro are watched for memory, a missing healthy target, latency, burst credits and database memory', () => {
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-service-memory',
+      Namespace: 'AWS/ECS',
+      MetricName: 'MemoryUtilization',
+      Threshold: 80,
+      EvaluationPeriods: 2,
+      DatapointsToAlarm: 2,
+      ComparisonOperator: 'GreaterThanThreshold',
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-no-healthy-target',
+      Namespace: 'AWS/ApplicationELB',
+      MetricName: 'HealthyHostCount',
+      Statistic: 'Minimum',
+      Period: 60,
+      Threshold: 1,
+      EvaluationPeriods: 3,
+      ComparisonOperator: 'LessThanThreshold',
+      // A silent metric is the outage, not a gap.
+      TreatMissingData: 'breaching',
+      Dimensions: Match.arrayWith([
+        Match.objectLike({ Name: 'LoadBalancer' }),
+        Match.objectLike({ Name: 'TargetGroup' }),
+      ]),
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-alb-latency',
+      Namespace: 'AWS/ApplicationELB',
+      MetricName: 'TargetResponseTime',
+      ExtendedStatistic: 'p90',
+      Threshold: 2,
+      EvaluationPeriods: 3,
+      ComparisonOperator: 'GreaterThanThreshold',
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-db-cpu-credits',
+      Namespace: 'AWS/RDS',
+      MetricName: 'CPUCreditBalance',
+      Statistic: 'Minimum',
+      Threshold: 20,
+      EvaluationPeriods: 3,
+      ComparisonOperator: 'LessThanThreshold',
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-db-freeable-memory',
+      Namespace: 'AWS/RDS',
+      MetricName: 'FreeableMemory',
+      Threshold: 100 * 1024 ** 2,
+      ComparisonOperator: 'LessThanThreshold',
+    });
+    // The 5xx ratio alarm is unchanged: more than 1 % of requests in a 5-minute period.
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-alb-5xx',
+      Threshold: 1,
+      ComparisonOperator: 'GreaterThanThreshold',
+      Metrics: Match.arrayWith([
+        Match.objectLike({ Expression: '100 * (elb5xx + target5xx) / requests' }),
+      ]),
+    });
+  });
+
+  it('LIB-08 a purge that never runs is an alarm: no `job finished` line for the purge in 26 hours', () => {
+    stacks.Ops!.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '{ ($.msg = "job finished") && ($.job = "purge") }',
+      MetricTransformations: [
+        Match.objectLike({
+          MetricNamespace: 'GeDe/Jobs',
+          MetricName: 'PurgeRuns',
+          MetricValue: '1',
+        }),
+      ],
+    });
+    expect(PURGE_SILENCE_HOURS).toBe(26);
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-purge-never-ran',
+      Namespace: 'GeDe/Jobs',
+      MetricName: 'PurgeRuns',
+      Statistic: 'Sum',
+      Period: 3600,
+      Threshold: 1,
+      EvaluationPeriods: 26,
+      DatapointsToAlarm: 26,
+      ComparisonOperator: 'LessThanThreshold',
+      TreatMissingData: 'breaching',
     });
   });
 
