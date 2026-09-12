@@ -17,3 +17,4 @@ export * from './engine/index.js';
 export * from './sort/index.js';
 export * from './ref/index.js';
 export * from './graph/index.js';
+export * from './style/index.js';
