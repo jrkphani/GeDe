@@ -128,7 +128,7 @@ export const CHIP_PATTERNS: Readonly<Record<ChipId, ChipPattern>> = {
   country: {
     id: 'country',
     label: 'Country',
-    source: `\\b(${COUNTRIES.join('|')})\\b`,
+    source: `\\b(?:${COUNTRIES.join('|')})\\b`,
     flags: 'u',
   },
   parenthetical: {

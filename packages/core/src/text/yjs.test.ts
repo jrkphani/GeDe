@@ -59,7 +59,7 @@ function integrate(fragment: Y.XmlFragment): Y.XmlFragment {
 }
 
 describe('rich text ↔ Y.XmlFragment (ARCHITECTURE §1.5.3)', () => {
-  test('DOC-05 a document round-trips through a fragment with every mark intact', () => {
+  test('a document round-trips through a fragment with every mark intact', () => {
     fc.assert(
       fc.property(arbDoc, (d) => {
         const back = fragmentToRich(integrate(richToFragment(d)));

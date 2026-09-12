@@ -16,8 +16,8 @@ function found(chip: (typeof CHIP_IDS)[number], text: string): string[] {
   return extract(richFromText(text), chipRegExp(chip)).map(plainText);
 }
 
-describe('Smart Chips (PRD §5, SORT-04)', () => {
-  test('SORT-04 the eight chips exist with labels and compile', () => {
+describe('Smart Chips (PRD §5)', () => {
+  test('SORT-04 (partial) the eight chips exist with labels and compile', () => {
     expect(CHIP_IDS).toEqual([
       'email',
       'date',
@@ -35,7 +35,7 @@ describe('Smart Chips (PRD §5, SORT-04)', () => {
     }
   });
 
-  test('SORT-04 Email', () => {
+  test('SORT-04 (partial) Email', () => {
     expect(found('email', 'Reach meena@1cloudhub.com or shankar.r@example.co.uk today')).toEqual([
       'meena@1cloudhub.com',
       'shankar.r@example.co.uk',
@@ -43,7 +43,7 @@ describe('Smart Chips (PRD §5, SORT-04)', () => {
     expect(found('email', 'no address here')).toEqual([]);
   });
 
-  test('SORT-04 Date', () => {
+  test('SORT-04 (partial) Date', () => {
     expect(found('date', 'Due 12/09/2026, signed 2026-09-01, kickoff 9 Sept 2026.')).toEqual([
       '12/09/2026',
       '2026-09-01',
@@ -51,7 +51,7 @@ describe('Smart Chips (PRD §5, SORT-04)', () => {
     ]);
   });
 
-  test('SORT-04 Currency', () => {
+  test('SORT-04 (partial) Currency', () => {
     expect(found('currency', 'Paid S$1,250.00 then USD 300 and ₹12,34,567; 45 INR left')).toEqual([
       'S$1,250.00',
       'USD 300',
@@ -60,13 +60,13 @@ describe('Smart Chips (PRD §5, SORT-04)', () => {
     ]);
   });
 
-  test('SORT-04 Company', () => {
+  test('SORT-04 (partial) Company', () => {
     expect(
       found('company', 'Vendor: 1Cloudhub Pte. Ltd. and Acme Widgets Sdn Bhd, plus Globex Corp'),
     ).toEqual(['1Cloudhub Pte. Ltd.', 'Acme Widgets Sdn Bhd', 'Globex Corp']);
   });
 
-  test('SORT-04 Country', () => {
+  test('SORT-04 (partial) Country', () => {
     expect(found('country', 'Offices in Singapore, India and the United Kingdom')).toEqual([
       'Singapore',
       'India',

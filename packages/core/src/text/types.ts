@@ -173,16 +173,20 @@ export function isEmptyDoc(d: RichDoc): boolean {
 
 /**
  * Canonical form: drop empty text nodes, merge neighbours with the same marks,
- * drop marks outside the vocabulary, keep at least one paragraph. Two
- * documents that render the same normalise the same; the algebra's tests
- * compare normalised values.
+ * drop marks outside the vocabulary, order marks as the schema does (so a
+ * document read back through ProseMirror compares equal), keep at least one
+ * paragraph. Two documents that render the same normalise the same; the
+ * algebra's tests compare normalised values.
  */
 export function normalise(d: RichDoc): RichDoc {
   const paragraphs = d.content.map((p) => {
     const out: TextNode[] = [];
     for (const node of p.content ?? []) {
       if (node.text === '') continue;
-      const marks = (node.marks ?? []).map(toMark).filter((m): m is Mark => m !== null);
+      const marks = (node.marks ?? [])
+        .map(toMark)
+        .filter((m): m is Mark => m !== null)
+        .sort((a, b) => MARK_NAMES.indexOf(a.type) - MARK_NAMES.indexOf(b.type));
       const last = out[out.length - 1];
       if (last !== undefined && markSetsEqual(last.marks ?? [], marks)) {
         out[out.length - 1] = textNode(last.text + node.text, last.marks ?? []);

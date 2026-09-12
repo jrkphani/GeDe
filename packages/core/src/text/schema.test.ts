@@ -4,7 +4,7 @@ import { checkDoc, isValidDoc, richSchema } from './schema.js';
 import { docNode, normalise, paragraphNode, textNode, toMark, type RichDoc } from './types.js';
 
 describe('rich text schema (PRD §3, §20)', () => {
-  test('INSP-06 the schema carries the six inline marks, link, text colour and highlight', () => {
+  test('INSP-06 (partial) the schema carries the six inline marks, link, text colour and highlight', () => {
     expect(Object.keys(richSchema.marks).sort()).toEqual(
       [
         'bold',
