@@ -8,6 +8,8 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
+  cellText,
+  commitCellText,
   createSheet,
   createTable,
   nestRow,
@@ -19,6 +21,8 @@ import {
   type GedeDoc,
   type Id,
 } from '@gede/core';
+
+import { TooltipProvider } from '@gede/ui';
 
 import { LiveRegion } from '../../../announce.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
@@ -36,16 +40,18 @@ function Harness({ editable = true, viewSorted }: { editable?: boolean; viewSort
   const grid = useGrid(gd, editable);
   gridRef.current = grid;
   return (
-    <ViewStoreProvider value={store}>
-      <HierarchyPanel
-        gd={gd}
-        selection={grid.state.selection}
-        commands={grid.commands}
-        editable={editable}
-        viewSorted={viewSorted}
-      />
-      <LiveRegion />
-    </ViewStoreProvider>
+    <TooltipProvider>
+      <ViewStoreProvider value={store}>
+        <HierarchyPanel
+          gd={gd}
+          selection={grid.state.selection}
+          commands={grid.commands}
+          editable={editable}
+          viewSorted={viewSorted}
+        />
+        <LiveRegion />
+      </ViewStoreProvider>
+    </TooltipProvider>
   );
 }
 
@@ -55,6 +61,18 @@ const select = (rowId: Id) => {
   });
 };
 const button = (name: string) => screen.getByRole('button', { name });
+/**
+ * INSP-11 / #126: an unavailable control is `aria-disabled` (still focusable, so its reason
+ * can be reached from the keyboard), looks disabled, and describes itself with the reason.
+ */
+function expectUnavailable(el: HTMLElement, reason: string) {
+  expect(el).toHaveAttribute('aria-disabled', 'true');
+  expect(el.title.endsWith(`— ${reason}`)).toBe(true);
+  expect(el).toHaveAccessibleDescription(reason);
+}
+function expectAvailable(el: HTMLElement) {
+  expect(el).not.toHaveAttribute('aria-disabled');
+}
 
 beforeEach(() => {
   localStorage.clear();
@@ -86,14 +104,32 @@ describe('HierarchyPanel', () => {
     expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('B7');
   });
 
+  it('HIER-01 FX-07 a formula or reference in the outline column names the row by its projected expression, never by its stored id tokens (#142)', () => {
+    render(<Harness />);
+    commitCellText(gd, tableId, rows[2]!, cols[0]!, '=Sum(B5:B6)');
+    expect(cellText(tableMap(gd, tableId)!, rows[2]!, cols[0]!)).toMatch(/\{r:/);
+    select(rows[2]!);
+    expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('=Sum(B5:B6)');
+    expect(screen.getByTestId('hierarchy-row')).not.toHaveTextContent('{');
+    nestRow(gd, tableId, rows[3]!);
+    select(rows[3]!);
+    expect(screen.getByTestId('hierarchy-parent')).toHaveTextContent('↳ under =Sum(B5:B6)');
+  });
+
   it('HIER-01 HIER-02 Promote and Nest act on the row and render disabled exactly when the document would refuse, with the reason', async () => {
     render(<Harness />);
     select(rows[0]!);
-    expect(button('⇤ Promote')).toBeDisabled();
-    expect(button('⇤ Promote')).toHaveAttribute('title', 'Already at the top level');
-    expect(button('Nest ⇥')).toBeDisabled(); // the first row never nests
+    expectUnavailable(button('⇤ Promote'), 'already at the top level');
+    // KEYS-08 (#136): the chord stays beside the command whether or not it can run now.
+    expect(button('⇤ Promote').title).toBe('Promote (⌘[) — already at the top level');
+    // The first row never nests.
+    expectUnavailable(
+      button('Nest ⇥'),
+      'a row nests at most one level deeper than the row above it',
+    );
     select(rows[2]!); // depth 0, under a depth-1 row: may nest once, then twice
-    expect(button('Nest ⇥')).toBeEnabled();
+    expectAvailable(button('Nest ⇥'));
+    expect(button('Nest ⇥').title).toBe('Nest under the row above (⌘])');
     expect(button('Nest ⇥')).toHaveAttribute('aria-keyshortcuts', 'Meta+BracketRight');
     await userEvent.click(button('Nest ⇥'));
     expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
@@ -101,10 +137,9 @@ describe('HierarchyPanel', () => {
     await userEvent.click(button('Nest ⇥'));
     expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 2');
     expect(screen.getByTestId('hierarchy-parent')).toHaveTextContent('↳ under Lobuche');
-    expect(button('Nest ⇥')).toBeDisabled();
-    expect(button('Nest ⇥')).toHaveAttribute(
-      'title',
-      'A row nests at most one level deeper than the row above it',
+    expectUnavailable(
+      button('Nest ⇥'),
+      'a row nests at most one level deeper than the row above it',
     );
     await userEvent.click(button('⇤ Promote'));
     expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
@@ -115,12 +150,15 @@ describe('HierarchyPanel', () => {
     render(<Harness />);
     select(rows[0]!);
     expect(button('Collapse row')).toHaveAttribute('aria-expanded', 'true');
-    expect(button('Expand all')).toBeDisabled();
+    // KEYS-08 (#136): ⌥← / ⌥→ have their pointer route here, chord beside the command.
+    expect(button('Collapse row').title).toBe('Collapse row (⌥←)');
+    expectUnavailable(button('Expand all'), 'no row is collapsed');
     await userEvent.click(button('Collapse row'));
     expect(tableById(gd, tableId)).not.toBeNull();
     expect(button('Expand row')).toHaveAttribute('aria-expanded', 'false');
-    expect(button('Collapse all')).toBeDisabled();
-    expect(button('Expand all')).toBeEnabled();
+    expect(button('Expand row').title).toBe('Expand row (⌥→)');
+    expectUnavailable(button('Collapse all'), 'no row has children to hide');
+    expectAvailable(button('Expand all'));
     await userEvent.click(button('Expand all'));
     expect(button('Collapse row')).toBeInTheDocument();
     await userEvent.click(button('Collapse all'));
@@ -138,21 +176,20 @@ describe('HierarchyPanel', () => {
     select(rows[1]!);
     expect(screen.getByTestId('hierarchy-grouped')).toHaveTextContent('Grouped by Column 2');
     expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
-    expect(button('⇤ Promote')).toBeDisabled();
-    expect(button('⇤ Promote')).toHaveAttribute('title', 'Unavailable while the table is grouped');
+    expectUnavailable(button('⇤ Promote'), 'Unavailable while the table is grouped');
     // The document never carried it (ADR-026).
     expect(JSON.stringify(tableMap(gd, tableId)!.toJSON())).not.toContain('groupBy');
     act(() => {
       store.clear(tableId);
     });
     expect(screen.queryByTestId('hierarchy-grouped')).toBeNull();
-    expect(button('⇤ Promote')).toBeEnabled();
+    expectAvailable(button('⇤ Promote'));
     // The viewer's own sort locks depth the same way, without the prop.
     act(() => {
       store.set(tableId, { sortBy: { colId: cols[0]!, mode: 'az' }, filter: null, groupBy: null });
     });
     expect(screen.getByTestId('hierarchy-sorted')).toHaveTextContent('sorted or filtered');
-    expect(button('Nest ⇥')).toBeDisabled();
+    expectUnavailable(button('Nest ⇥'), 'Unavailable while the view is sorted or filtered');
   });
 
   it('HIER-08 while the viewer’s sort or filter is active the panel says so and every depth and collapse control is disabled with the reason; the data keeps its depth', () => {
@@ -161,14 +198,10 @@ describe('HierarchyPanel', () => {
     expect(screen.getByTestId('hierarchy-sorted')).toHaveTextContent('sorted or filtered');
     expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
     for (const name of ['⇤ Promote', 'Nest ⇥', 'Collapse all']) {
-      expect(button(name)).toBeDisabled();
-      expect(button(name)).toHaveAttribute(
-        'title',
-        'Unavailable while the view is sorted or filtered',
-      );
+      expectUnavailable(button(name), 'Unavailable while the view is sorted or filtered');
     }
     select(rows[0]!);
-    expect(button('Collapse row')).toBeDisabled();
+    expectUnavailable(button('Collapse row'), 'Unavailable while the view is sorted or filtered');
   });
 
   it('RESP-02 SHARE-03 for a read-only viewer every control is disabled and says "View only"; nothing writes', async () => {
@@ -176,8 +209,7 @@ describe('HierarchyPanel', () => {
     render(<Harness editable={false} />);
     select(rows[0]!);
     for (const name of ['⇤ Promote', 'Nest ⇥', 'Expand row', 'Collapse all', 'Expand all']) {
-      expect(button(name)).toBeDisabled();
-      expect(button(name)).toHaveAttribute('title', 'View only');
+      expectUnavailable(button(name), 'View only');
     }
     await userEvent.click(button('Expand all'));
     expect(tableById(gd, tableId)).not.toBeNull();

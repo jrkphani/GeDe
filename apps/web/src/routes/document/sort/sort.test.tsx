@@ -325,7 +325,7 @@ describe('header menu (SORT-01, MENU-03)', () => {
     const field = within(panel).getByLabelText('Any column contains');
     await userEvent.clear(field);
     await userEvent.type(field, 'Tampines');
-    await userEvent.click(within(panel).getByRole('button', { name: 'Apply' }));
+    // INSP-12 (#138): live — no Apply step; the view follows the keystrokes.
     await waitFor(() => {
       expect(viewNow().filter).toEqual({
         colId: null,
@@ -351,14 +351,17 @@ describe('filter (SORT-01, SORT-03, SORT-04)', () => {
       within(panel).getByRole('switch', { name: 'Fuzzy match — tolerates typos' }),
     ).toHaveAttribute('aria-checked', 'true');
     await userEvent.type(field, 'Sngapore');
-    await userEvent.click(within(panel).getByRole('button', { name: 'Apply' }));
+    // INSP-12 (#138): the filter applies as it is typed — no Apply step; the panel stays open
+    // for more changes and Escape closes it.
+    await waitFor(() => {
+      expect(columnTexts()).toEqual(['Singapore', 'Singapore', '']);
+    });
+    expect(within(panel).queryByRole('button', { name: 'Apply' })).toBeNull();
+    await userEvent.keyboard('{Escape}');
     await waitFor(() => {
       expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     });
     // Two Singapore rows survive; the empty row is exempt and stays at the end.
-    await waitFor(() => {
-      expect(columnTexts()).toEqual(['Singapore', 'Singapore', '']);
-    });
     expect(header('Column 1').querySelector('[data-glyph="search"]')).not.toBeNull();
     expect(screen.getByTestId('table-footer')).toHaveTextContent('3 of 5 rows');
     expect(viewNow().filter).toEqual({
@@ -375,9 +378,7 @@ describe('filter (SORT-01, SORT-03, SORT-04)', () => {
     const panel2 = await screen.findByRole('dialog', { name: 'Filter Column 1' });
     expect(within(panel2).getByLabelText('Column 1 contains')).toHaveValue('Sngapore');
     await userEvent.click(within(panel2).getByRole('switch'));
-    // Enter in the field submits the form (Apply), as in any form.
-    within(panel2).getByLabelText('Column 1 contains').focus();
-    await userEvent.keyboard('{Enter}');
+    // The switch is a whole step: it applies at once.
     await waitFor(() => {
       expect(columnTexts()).toEqual(['']);
     });
@@ -390,7 +391,6 @@ describe('filter (SORT-01, SORT-03, SORT-04)', () => {
     await userEvent.click(within(menu).getByRole('menuitem', { name: 'Filter this column…' }));
     const panel = await screen.findByRole('dialog', { name: 'Filter Column 1' });
     await choose(within(panel).getByRole('combobox', { name: 'Has an entity' }), 'Country');
-    await userEvent.click(within(panel).getByRole('button', { name: 'Apply' }));
     await waitFor(() => {
       expect(columnTexts()).toEqual(['Singapore', 'Malaysia', 'Singapore', 'India', '']);
     });
@@ -918,7 +918,8 @@ describe('SortPanel (PRD §18)', () => {
     await choose(screen.getByRole('combobox', { name: 'Group rows by' }), 'Column 1');
     expect(stored().groupBy).toBe(cols[0]);
     await userEvent.type(screen.getByLabelText('Any column contains'), 'India');
-    await userEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    // INSP-12: live, per keystroke; the field keeps focus and its caret while it writes.
+    expect(screen.getByLabelText('Any column contains')).toHaveFocus();
     expect(stored().filter).toEqual({
       colId: null,
       text: 'India',

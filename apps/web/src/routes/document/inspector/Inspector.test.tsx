@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { act, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
@@ -22,8 +22,9 @@ import {
   hasMarkThroughout,
   LATTICE,
   openDocument,
+  rowHeights,
   setCellText,
-  sheetEdgesShown,
+  setColumnWrap,
   spanAt,
   tableAddresses,
   tableById,
@@ -40,6 +41,7 @@ import { TooltipProvider } from '@gede/ui';
 import { LiveRegion } from '../../../announce.js';
 import { installMatchMedia } from '../../../test/match-media.js';
 import { useYVersion } from '../../../doc/use-y.js';
+import { openViewStore, ViewStoreProvider, type ViewStore } from '../../../doc/view-state.js';
 import type { Find } from '../find/useFind.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
 import { Inspector, type InspectorProps } from '../Inspector.js';
@@ -48,6 +50,7 @@ import type { InspectorMode } from '../Toolbar.js';
 let gd: GedeDoc;
 let sheetId: Id;
 let tableId: Id;
+let store: ViewStore;
 const grid: { current: Grid | null } = { current: null };
 
 function fakeFind(matches: readonly SearchMatch[] = [], listOpen = true): Find {
@@ -95,6 +98,9 @@ interface HarnessProps {
   slots?: InspectorProps['slots'];
   /** KEYS-03: the document's undo manager, so a command settles one undo step as the shell does. */
   undo?: Y.UndoManager;
+  organizeTab?: InspectorProps['organizeTab'];
+  onOrganizeTabChange?: InspectorProps['onOrganizeTabChange'];
+  object?: InspectorProps['object'];
 }
 
 function Harness({
@@ -106,6 +112,9 @@ function Harness({
   find = fakeFind(),
   slots,
   undo,
+  organizeTab,
+  onOrganizeTabChange,
+  object,
 }: HarnessProps) {
   const g = useGrid(gd, editable, { undo });
   grid.current = g;
@@ -134,20 +143,25 @@ function Harness({
   };
   return (
     <TooltipProvider>
-      <Inspector
-        gd={gd}
-        mode={mode}
-        open={open}
-        onOpenChange={onOpenChange}
-        selection={g.state.selection}
-        editing={g.state.editing !== null}
-        editable={editable}
-        commands={g.commands}
-        find={find}
-        onToggleMark={toggleMark}
-        slots={slots}
-      />
-      <LiveRegion />
+      <ViewStoreProvider value={store}>
+        <Inspector
+          gd={gd}
+          mode={mode}
+          open={open}
+          onOpenChange={onOpenChange}
+          organizeTab={organizeTab}
+          onOrganizeTabChange={onOrganizeTabChange}
+          object={object}
+          selection={g.state.selection}
+          editing={g.state.editing !== null}
+          editable={editable}
+          commands={g.commands}
+          find={find}
+          onToggleMark={toggleMark}
+          slots={slots}
+        />
+        <LiveRegion />
+      </ViewStoreProvider>
     </TooltipProvider>
   );
 }
@@ -166,6 +180,8 @@ const section = (label: string) => screen.getByRole('region', { name: label });
 
 describe('Inspector', () => {
   beforeEach(() => {
+    localStorage.clear();
+    store = openViewStore('user-1', 'doc-inspector');
     gd = openDocument(new Y.Doc());
     sheetId = createSheet(gd);
     tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 3, rows: 4 });
@@ -306,11 +322,19 @@ describe('Inspector', () => {
       within(section('row and column size')).getByRole('button', { name: 'Fit columns to content' })
         .title,
     ).toBe('Fit columns to content — text cannot be measured in this browser');
+    // INSP-04 / GRID-11 (#138): header row and footer row are counts (0 or 1), like the
+    // header columns.
     const headers = section('headers and footer');
-    await userEvent.click(within(headers).getByRole('switch', { name: 'Header row' }));
+    await userEvent.click(within(headers).getByRole('button', { name: 'Fewer header rows' }));
     expect(tableById(gd, tableId)?.headerRows).toBe(0);
-    await userEvent.click(within(headers).getByRole('switch', { name: 'Footer row' }));
+    expect(within(headers).getByRole('button', { name: 'Fewer header rows' }).title).toBe(
+      'Fewer — the header row is hidden',
+    );
+    await userEvent.click(within(headers).getByRole('button', { name: 'More footer rows' }));
     expect(tableById(gd, tableId)?.footerRows).toBe(1);
+    expect(within(headers).getByRole('button', { name: 'More footer rows' }).title).toBe(
+      'More — at the maximum',
+    );
     await userEvent.click(within(headers).getByRole('combobox', { name: 'Header columns' }));
     await userEvent.click(await screen.findByRole('option', { name: '1 column' }));
     expect(tableById(gd, tableId)?.frozenColumns).toBe(1);
@@ -329,14 +353,40 @@ describe('Inspector', () => {
     await userEvent.click(within(size).getByRole('button', { name: 'More units' }));
     expect(tableById(gd, tableId)?.columns.reduce((a, c) => a + c.width, 0)).toBe(4);
     await userEvent.click(within(size).getByRole('switch', { name: 'Wrap every row' }));
-    expect(screen.getByTestId('live-region')).toHaveTextContent('rows wrapped');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('every row wrapped');
+  });
+
+  it('INSP-04 GRID-09 "Wrap every row" reads the rows it set and unwraps them again — clearing a column\'s own wrap, which would otherwise hold every row at two units (#128)', async () => {
+    await mount();
+    await userEvent.click(tab('Table'));
+    const size = section('row and column size');
+    const wrap = () => within(size).getByRole('switch', { name: 'Wrap every row' });
+    const table = tableMap(gd, tableId)!;
+    expect(wrap()).toHaveAttribute('aria-checked', 'false');
+    await userEvent.click(wrap());
+    expect(wrap()).toHaveAttribute('aria-checked', 'true');
+    expect(rowHeights(table)).toEqual([2, 2, 2, 2]);
+    await userEvent.click(wrap());
+    expect(wrap()).toHaveAttribute('aria-checked', 'false');
+    expect(rowHeights(table)).toEqual([1, 1, 1, 1]);
+    // A wrapping column reads as "every row wrapped" too, and unwrapping clears it.
+    setColumnWrap(gd, tableId, tableById(gd, tableId)!.columns[0]!.id, true);
+    await waitFor(() => {
+      expect(wrap()).toHaveAttribute('aria-checked', 'true');
+    });
+    await userEvent.click(wrap());
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false);
+    expect(rowHeights(table)).toEqual([1, 1, 1, 1]);
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'every row compact; column wrap cleared on 1 column',
+    );
   });
 
   it('HIER-01 HIER-02 the Table tab mounts the hierarchy panel: the selected row, its parent, and Nest / Promote acting through the grid commands', async () => {
     await mount();
     await userEvent.click(tab('Table'));
     const row = within(section('row'));
-    expect(row.getByText(/top level/)).toBeInTheDocument();
+    expect(row.getByTestId('hierarchy-parent')).toHaveTextContent(/top level/);
     const promote = row.getByRole('button', { name: /Promote/ });
     expect(promote).toHaveAttribute('aria-disabled', 'true'); // the first row has nothing above it
     // Select the second row and nest it under the first.
@@ -653,11 +703,17 @@ describe('Inspector', () => {
     expect(tableById(gd, tableId)?.gridCol).toBe(1);
     expect(tableById(gd, tableId)?.gridRow).toBeGreaterThan(tableById(gd, other)!.gridRow);
     expect(screen.getByTestId('live-region')).toHaveTextContent('Stacked: 2 tables placed');
+    // DOC-02 / ADR-037 (#140): pin and DAG edges toggle in the toolbar; the tab states them.
     const viewport = section('viewport');
-    await userEvent.click(within(viewport).getByRole('switch', { name: 'Pin to viewport' }));
-    expect(tableById(gd, tableId)?.pinned).toBe(true);
-    await userEvent.click(within(viewport).getByRole('switch', { name: 'DAG edges' }));
-    expect(sheetEdgesShown(gd, sheetId)).toBe(true);
+    expect(within(viewport).queryByRole('switch')).toBeNull();
+    expect(screen.getByTestId('arrange-pinned')).toHaveTextContent('not pinned');
+    expect(screen.getByTestId('arrange-edges')).toHaveTextContent('hidden');
+    act(() => {
+      grid.current!.commands.setTablePinned(tableId, true);
+      grid.current!.commands.setSheetEdgesShown(sheetId, true);
+    });
+    expect(screen.getByTestId('arrange-pinned')).toHaveTextContent('pinned');
+    expect(screen.getByTestId('arrange-edges')).toHaveTextContent('shown');
     expect(viewport).toHaveTextContent(/Reads from\s*0 tables/);
     // Lanes: left to right on one row; Table 1 (at the front) lands after the other.
     await userEvent.click(within(layout).getByRole('button', { name: 'Pipeline lanes' }));
@@ -688,7 +744,7 @@ describe('Inspector', () => {
     // HIER-01 / INSP-09: the hierarchy controls are the real panel, not a stub — the
     // hierarchy release has shipped, so no control may name it as still to come.
     const hierarchy = within(screen.getByTestId('hierarchy-panel'));
-    expect(hierarchy.getByText(/top level/)).toBeInTheDocument();
+    expect(hierarchy.getByTestId('hierarchy-parent')).toHaveTextContent(/top level/);
     expect(hierarchy.getByRole('button', { name: /Nest/ }).title).not.toMatch(/release/);
     expect(screen.getByRole('button', { name: 'Add a derived column' }).title).toBe(
       'Add a derived column — arrives with the references release (#77)',
@@ -735,6 +791,76 @@ describe('Inspector', () => {
     expect(screen.getByRole('button', { name: 'More rows' }).title).toBe(
       'More — you have view-only access',
     );
+  });
+
+  it('INSP-11 MENU-02 an aria-disabled control looks disabled and its reason is reachable by pointer, keyboard and assistive tech (#126)', async () => {
+    await mount();
+    await userEvent.click(tab('Arrange'));
+    const back = within(section('stacking order')).getByRole('button', { name: 'Back' });
+    expect(back).toHaveAttribute('aria-disabled', 'true');
+    expect(back.title).toBe('Back — the only table on this sheet');
+    expect(back).toHaveAccessibleDescription('the only table on this sheet');
+    // Focusable, so the keyboard reaches the tooltip; the DS treats it as disabled (Button.css).
+    back.focus();
+    expect(back).toHaveFocus();
+    await userEvent.click(tab('Cell'));
+    const unmerge = within(section('merge')).getByRole('button', { name: 'Unmerge cells' });
+    expect(unmerge).toHaveAttribute('aria-disabled', 'true');
+    expect(unmerge).toHaveAccessibleDescription('the cell is not merged');
+    const add = within(section('conditional highlighting')).getByRole('button', {
+      name: 'Add a rule',
+    });
+    expect(add).toHaveAttribute('aria-disabled', 'true');
+    expect(add).toHaveAccessibleDescription(/./);
+  });
+
+  it('INSP-03 the head states the grouping in force, and a selected graph by kind, source and dimensions (#138)', async () => {
+    const { rerender } = await mount();
+    const head = () => screen.getByTestId('inspector-selected');
+    expect(head()).not.toHaveTextContent('grouped by');
+    act(() => {
+      store.set(tableId, {
+        sortBy: null,
+        filter: null,
+        groupBy: tableById(gd, tableId)!.columns[1]!.id,
+      });
+    });
+    expect(head()).toHaveTextContent('grouped by Column 2');
+    rerender(
+      <Harness
+        select={null}
+        object={{ label: 'Ring graph of Table 1', facts: ['4 source rows', '2 dimensions'] }}
+        slots={{ graph: <p>Graph tab</p> }}
+      />,
+    );
+    act(() => {
+      grid.current!.actions.clear();
+    });
+    expect(head()).toHaveTextContent('Ring graph of Table 1');
+    expect(head()).toHaveTextContent('4 source rows · 2 dimensions');
+  });
+
+  it('INSP-01 each Organize tab shows its own section, and the shell can open a tab directly (#138)', async () => {
+    const onOrganizeTabChange = vi.fn();
+    const panels = {
+      hierarchy: <p data-testid="categories-body">Categories body</p>,
+      sort: <p data-testid="sort-body">Sort body</p>,
+      filter: <p data-testid="filter-body">Filter body</p>,
+    };
+    const { rerender } = await mount({
+      mode: 'organize',
+      slots: panels,
+      organizeTab: 'filter',
+      onOrganizeTabChange,
+    });
+    expect(screen.getByRole('tab', { name: 'Filter' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByTestId('filter-body')).toBeVisible();
+    expect(screen.queryByTestId('sort-body')).toBeNull();
+    await userEvent.click(tab('Sort'));
+    expect(onOrganizeTabChange).toHaveBeenCalledWith('sort');
+    rerender(<Harness mode="organize" slots={panels} organizeTab="sort" />);
+    expect(screen.getByTestId('sort-body')).toBeVisible();
+    expect(screen.queryByTestId('filter-body')).toBeNull();
   });
 
   it('FIND-06 the result list renders in the rail while the bar is open and the list is shown, in sync with the current match', async () => {

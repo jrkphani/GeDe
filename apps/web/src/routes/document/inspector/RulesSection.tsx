@@ -8,7 +8,7 @@
  * carries a glyph with the rule's words beside any colour (A11Y-04).
  */
 import { useState } from 'react';
-import { Button, Select, TextField } from '@gede/ui';
+import { Select, TextField } from '@gede/ui';
 import {
   BORDER_EDGE_LABELS,
   BORDER_EDGES,
@@ -34,7 +34,7 @@ import {
 } from '@gede/core';
 
 import type { GridCommands } from '../grid/commands.js';
-import { Section } from './controls.js';
+import { ReasonedButton, Section } from './controls.js';
 
 export interface RulesSectionProps {
   tableId: string;
@@ -195,24 +195,17 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
                     ↓
                   </MoveRule>
                 </span>
-                <Button
-                  size="sm"
+                <ReasonedButton
                   variant="ghost"
+                  label="Remove rule"
                   aria-label={`Remove rule ${String(i + 1)}: ${describeRule(rule)}`}
-                  aria-disabled={disabledReason !== undefined || undefined}
-                  title={
-                    disabledReason === undefined ? 'Remove rule' : `Remove rule — ${disabledReason}`
-                  }
-                  onClick={
-                    disabledReason === undefined && column !== null
-                      ? () => {
-                          commands.removeRule(tableId, column.id, rule.id);
-                        }
-                      : undefined
-                  }
+                  reason={disabledReason}
+                  onClick={() => {
+                    if (column !== null) commands.removeRule(tableId, column.id, rule.id);
+                  }}
                 >
                   Remove
-                </Button>
+                </ReasonedButton>
               </li>
             ))}
           </ol>
@@ -315,32 +308,25 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
             options={BORDER_WEIGHTS.map((w) => ({ value: w, label: WEIGHT_LABELS[w] }))}
           />
         )}
-        <Button
-          size="sm"
-          variant="secondary"
-          aria-disabled={addReason !== undefined || undefined}
-          title={addReason === undefined ? 'Add a rule' : `Add a rule — ${addReason}`}
-          onClick={
-            addReason === undefined && column !== null && condition !== null
-              ? () => {
-                  const created = commands.addRule(tableId, column.id, {
-                    when: condition,
-                    style: {
-                      ...(draft.fill === '' ? {} : { fill: draft.fill }),
-                      ...(draft.textColour === '' ? {} : { textColour: draft.textColour }),
-                      ...(draft.mark === '' ? {} : { mark: draft.mark }),
-                      ...(draft.border === ''
-                        ? {}
-                        : { border: { edges: draft.border, weight: draft.weight } }),
-                    },
-                  });
-                  if (created !== null) setDraft({ ...EMPTY_DRAFT, trigger: draft.trigger });
-                }
-              : undefined
-          }
-        >
-          Add a rule
-        </Button>
+        <ReasonedButton
+          label="Add a rule"
+          reason={addReason}
+          onClick={() => {
+            if (column === null || condition === null) return;
+            const created = commands.addRule(tableId, column.id, {
+              when: condition,
+              style: {
+                ...(draft.fill === '' ? {} : { fill: draft.fill }),
+                ...(draft.textColour === '' ? {} : { textColour: draft.textColour }),
+                ...(draft.mark === '' ? {} : { mark: draft.mark }),
+                ...(draft.border === ''
+                  ? {}
+                  : { border: { edges: draft.border, weight: draft.weight } }),
+              },
+            });
+            if (created !== null) setDraft({ ...EMPTY_DRAFT, trigger: draft.trigger });
+          }}
+        />
       </div>
     </Section>
   );
@@ -358,15 +344,14 @@ function MoveRule({
   children: string;
 }) {
   return (
-    <Button
-      size="sm"
+    <ReasonedButton
       variant="ghost"
+      label={label}
       aria-label={label}
-      aria-disabled={reason !== undefined || undefined}
-      title={reason === undefined ? label : `${label} — ${reason}`}
-      onClick={reason === undefined ? onClick : undefined}
+      reason={reason}
+      onClick={onClick}
     >
       {children}
-    </Button>
+    </ReasonedButton>
   );
 }

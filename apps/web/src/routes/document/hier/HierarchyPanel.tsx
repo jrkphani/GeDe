@@ -13,6 +13,7 @@ import {
   cellAddress,
   cellText,
   normaliseTableView,
+  projectCellText,
   rowOutline,
   tableMap,
   tableOutline,
@@ -22,12 +23,13 @@ import {
   type TableMap,
   type TableOutline,
 } from '@gede/core';
-import { Button } from '@gede/ui';
 
 import { useYVersion } from '../../../doc/use-y.js';
 import { useTableView } from '../../../doc/view-state.js';
+import { workbookIndexFor } from '../../../doc/workbook-index.js';
 import type { GridCommands } from '../grid/commands.js';
 import { HIER_ARIA_KEYS, HIER_LABELS } from '../grid/hier-keys.js';
+import { ReasonedButton } from '../inspector/controls.js';
 import type { Selection } from '../selection.js';
 
 export interface HierarchyPanelProps {
@@ -45,10 +47,18 @@ export interface HierarchyPanelProps {
   viewSorted?: boolean | undefined;
 }
 
-/** How a row is named in the panel: its outline-column text, else its address, else "(blank row)". */
-export function rowLabel(table: TableMap, outline: TableOutline, rowId: Id): string {
+/**
+ * How a row is named in the panel: its outline-column text, else its address,
+ * else "(blank row)". A formula or reference cell names the row by its
+ * projected expression (`=Sum(B5:B6)`, `@Offices.City`), never by the stored
+ * id tokens (PRD §20, #142).
+ */
+export function rowLabel(table: TableMap, outline: TableOutline, rowId: Id, gd?: GedeDoc): string {
   const column = outline.column;
-  const text = column === null ? '' : cellText(table, rowId, column).split('\n')[0]?.trim();
+  const stored = column === null ? '' : cellText(table, rowId, column);
+  const projected =
+    gd === undefined ? stored : projectCellText(gd, stored, workbookIndexFor(gd.doc));
+  const text = projected.split('\n')[0]?.trim();
   if (text !== undefined && text !== '') return text;
   const address = column === null ? null : cellAddress(table, rowId, column);
   return address ?? '(blank row)';
@@ -91,7 +101,9 @@ export function HierarchyPanel({
   const anyCollapsible = outline.rows.some((r) => r.hasChildren && !r.collapsed);
   const anyCollapsed = outline.rows.some((r) => r.collapsed);
   const parentLabel =
-    row?.parent === null || row?.parent === undefined ? null : rowLabel(table, outline, row.parent);
+    row?.parent === null || row?.parent === undefined
+      ? null
+      : rowLabel(table, outline, row.parent, gd);
   // Depth is edited only when the drawn order is document order (HIER-08).
   const depthLocked = groupedBy
     ? 'Unavailable while the table is grouped'
@@ -123,7 +135,7 @@ export function HierarchyPanel({
       ) : (
         <>
           <p className="gd-hier__row" data-testid="hierarchy-row">
-            {rowLabel(table, outline, rowId)}
+            {rowLabel(table, outline, rowId, gd)}
           </p>
           <p className="gd-hier__parent" data-testid="hierarchy-parent">
             {parentLabel === null ? 'top level — no parent' : `↳ under ${parentLabel}`}
@@ -131,31 +143,27 @@ export function HierarchyPanel({
           <p className="gd-inspector__counts" data-testid="hierarchy-depth">
             depth {row.depth}
           </p>
+          {/* KEYS-08: the chord stays beside each command whether or not it can run now (#136). */}
           <div className="gd-hier__actions" role="group" aria-label="Row depth">
-            <Button
-              size="sm"
-              disabled={disabledReason !== null || !row.canPromote}
-              title={
-                disabledReason ??
-                (row.canPromote
-                  ? `Promote one level (${HIER_LABELS.promote})`
-                  : 'Already at the top level')
-              }
+            <ReasonedButton
+              label={`Promote (${HIER_LABELS.promote})`}
+              available={`Promote one level (${HIER_LABELS.promote})`}
+              reason={disabledReason ?? (row.canPromote ? undefined : 'already at the top level')}
               aria-keyshortcuts={HIER_ARIA_KEYS.promote}
               onClick={() => {
                 commands.promoteRow(tableId, rowId);
               }}
             >
               ⇤ Promote
-            </Button>
-            <Button
-              size="sm"
-              disabled={disabledReason !== null || !row.canNest}
-              title={
+            </ReasonedButton>
+            <ReasonedButton
+              label={`Nest (${HIER_LABELS.nest})`}
+              available={`Nest under the row above (${HIER_LABELS.nest})`}
+              reason={
                 disabledReason ??
                 (row.canNest
-                  ? `Nest under the row above (${HIER_LABELS.nest})`
-                  : 'A row nests at most one level deeper than the row above it')
+                  ? undefined
+                  : 'a row nests at most one level deeper than the row above it')
               }
               aria-keyshortcuts={HIER_ARIA_KEYS.nest}
               onClick={() => {
@@ -163,17 +171,18 @@ export function HierarchyPanel({
               }}
             >
               Nest ⇥
-            </Button>
+            </ReasonedButton>
           </div>
           {row.hasChildren && (
             <div className="gd-hier__actions">
-              <Button
-                size="sm"
+              <ReasonedButton
                 variant="ghost"
-                disabled={disabledReason !== null}
-                title={
-                  disabledReason ?? (row.collapsed ? HIER_LABELS.expand : HIER_LABELS.collapse)
+                label={
+                  row.collapsed
+                    ? `Expand row (${HIER_LABELS.expand})`
+                    : `Collapse row (${HIER_LABELS.collapse})`
                 }
+                reason={disabledReason ?? undefined}
                 aria-expanded={!row.collapsed}
                 aria-keyshortcuts={row.collapsed ? HIER_ARIA_KEYS.expand : HIER_ARIA_KEYS.collapse}
                 onClick={() => {
@@ -181,34 +190,30 @@ export function HierarchyPanel({
                 }}
               >
                 {row.collapsed ? 'Expand row' : 'Collapse row'}
-              </Button>
+              </ReasonedButton>
             </div>
           )}
         </>
       )}
       <div className="gd-hier__actions" role="group" aria-label="Whole table">
-        <Button
-          size="sm"
+        <ReasonedButton
           variant="ghost"
-          disabled={disabledReason !== null || !anyCollapsible}
-          title={disabledReason ?? 'Collapse every row that has children'}
+          label="Collapse all"
+          available="Collapse every row that has children"
+          reason={disabledReason ?? (anyCollapsible ? undefined : 'no row has children to hide')}
           onClick={() => {
             commands.collapseAll(tableId);
           }}
-        >
-          Collapse all
-        </Button>
-        <Button
-          size="sm"
+        />
+        <ReasonedButton
           variant="ghost"
-          disabled={disabledReason !== null || !anyCollapsed}
-          title={disabledReason ?? 'Expand every collapsed row'}
+          label="Expand all"
+          available="Expand every collapsed row"
+          reason={disabledReason ?? (anyCollapsed ? undefined : 'no row is collapsed')}
           onClick={() => {
             commands.expandAll(tableId);
           }}
-        >
-          Expand all
-        </Button>
+        />
       </div>
       <p className="gd-inspector__note gd-hier__hint">
         Nesting sets the parent to the nearest row above at a shallower level. Parents get a

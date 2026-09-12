@@ -31,6 +31,8 @@ export interface StepperProps {
   value: number;
   /** Displayed unit, e.g. "rows". */
   unit?: string | undefined;
+  /** What the − and + buttons name ("Fewer …", "More …"); defaults to the unit, else the label. */
+  name?: string | undefined;
   min?: number | undefined;
   max?: number | undefined;
   onChange: (next: number) => void;
@@ -49,6 +51,7 @@ export function Stepper({
   label,
   value,
   unit,
+  name,
   min = 0,
   max = Number.POSITIVE_INFINITY,
   onChange,
@@ -70,8 +73,10 @@ export function Stepper({
         <Button
           size="sm"
           variant="ghost"
-          aria-label={`Fewer ${unit ?? label}`}
-          title={downReason === undefined ? `Fewer ${unit ?? label}` : `Fewer — ${downReason}`}
+          aria-label={`Fewer ${name ?? unit ?? label}`}
+          title={
+            downReason === undefined ? `Fewer ${name ?? unit ?? label}` : `Fewer — ${downReason}`
+          }
           aria-disabled={downReason !== undefined || undefined}
           aria-describedby={downReason === undefined ? undefined : `${reasonId}-down`}
           onClick={
@@ -87,8 +92,8 @@ export function Stepper({
         <Button
           size="sm"
           variant="ghost"
-          aria-label={`More ${unit ?? label}`}
-          title={upReason === undefined ? `More ${unit ?? label}` : `More — ${upReason}`}
+          aria-label={`More ${name ?? unit ?? label}`}
+          title={upReason === undefined ? `More ${name ?? unit ?? label}` : `More — ${upReason}`}
           aria-disabled={upReason !== undefined || undefined}
           aria-describedby={upReason === undefined ? undefined : `${reasonId}-up`}
           onClick={

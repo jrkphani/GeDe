@@ -1,11 +1,18 @@
 import clsx from 'clsx';
 import { useEffect, useRef, useState, type ReactNode } from 'react';
-import { tableMap, type GedeDoc, type ToggleMark } from '@gede/core';
+import {
+  normaliseTableView,
+  tableMap,
+  tableRecord,
+  type GedeDoc,
+  type ToggleMark,
+} from '@gede/core';
 import { below } from '@gede/tokens';
 import { Button, Icon, Tabs, type TabItem } from '@gede/ui';
 
 import { ARIA_KEYS, LABELS } from '../../doc/shortcuts.js';
 import { useYVersion } from '../../doc/use-y.js';
+import { useTableView } from '../../doc/view-state.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { ResultList } from './find/FindBar.js';
 import type { Find } from './find/useFind.js';
@@ -13,7 +20,7 @@ import type { GridCommands } from './grid/commands.js';
 import { ArrangeTab } from './inspector/ArrangeTab.js';
 import { CellTab } from './inspector/CellTab.js';
 import { HierarchyPanel } from './hier/HierarchyPanel.js';
-import { InspectorHead } from './inspector/InspectorHead.js';
+import { InspectorHead, type HeadObject } from './inspector/InspectorHead.js';
 import { Section } from './inspector/controls.js';
 import {
   CategoriesTab,
@@ -36,6 +43,15 @@ export interface InspectorProps {
   /** Expanded (322 px) or the 38 px strip (INSP-02, RESP-04). */
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /**
+   * INSP-01 / DOC-02: the Organize tab, owned by the shell so the toolbar's
+   * Filter and Sort tools can open their own tab (ADR-037). Defaults to
+   * Categories when absent.
+   */
+  organizeTab?: OrganizeTab | undefined;
+  onOrganizeTabChange?: ((tab: OrganizeTab) => void) | undefined;
+  /** INSP-03: what the head says when the selection is not a table (a graph). */
+  object?: HeadObject | undefined;
   selection: Selection | null;
   editing: boolean;
   editable: boolean;
@@ -62,6 +78,9 @@ export function Inspector({
   mode,
   open,
   onOpenChange,
+  organizeTab: organizeTabProp,
+  onOrganizeTabChange,
+  object,
   selection,
   editing,
   editable,
@@ -113,7 +132,22 @@ export function Inspector({
   const cell: CellSelection | null =
     selection?.cell && table !== null ? { tableId: selection.tableId, ...selection.cell } : null;
   const [formatTab, setFormatTab] = useState<FormatTab>('table');
-  const [organizeTab, setOrganizeTab] = useState<OrganizeTab>('categories');
+  const [ownOrganizeTab, setOwnOrganizeTab] = useState<OrganizeTab>('categories');
+  const organizeTab = organizeTabProp ?? ownOrganizeTab;
+  const setOrganizeTab = (tab: OrganizeTab) => {
+    setOwnOrganizeTab(tab);
+    onOrganizeTabChange?.(tab);
+  };
+  // INSP-03: the grouping in force is the viewer's own view (ADR-026), read from the store.
+  const storedView = useTableView(selection?.tableId ?? '');
+  const groupedBy =
+    table === null
+      ? null
+      : (() => {
+          const record = tableRecord(table);
+          const view = normaliseTableView(storedView, new Set(record.columns.map((c) => c.id)));
+          return record.columns.find((c) => c.id === view.groupBy)?.label ?? null;
+        })();
   const modeLabel = mode === 'format' ? 'Format' : 'Organize';
   const name = `${modeLabel} inspector`;
 
@@ -243,7 +277,8 @@ export function Inspector({
       <InspectorHead
         table={table}
         selection={selection}
-        object={slots?.graph === undefined ? undefined : 'Graph'}
+        object={object ?? (slots?.graph === undefined ? undefined : { label: 'Graph' })}
+        groupedBy={groupedBy}
       />
       <div className="gd-inspector__body">
         {mode === 'format' ? (

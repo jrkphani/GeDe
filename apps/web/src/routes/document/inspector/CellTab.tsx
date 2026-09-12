@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Button, SegmentedControl, Select, Switch } from '@gede/ui';
+import { SegmentedControl, Select, Switch } from '@gede/ui';
 import {
   BORDER_EDGE_LABELS,
   BORDER_EDGES,
@@ -37,7 +37,7 @@ import { announce } from '../../../announce.js';
 import type { GridCommands } from '../grid/commands.js';
 import type { CellSelection } from '../selection.js';
 import { useAppearanceScope } from './appearance-scope.js';
-import { Section } from './controls.js';
+import { ReasonedButton, Section } from './controls.js';
 import { FormulaSection } from './FormulaSection.js';
 import { MergeSection } from './MergeSection.js';
 import { RulesSection } from './RulesSection.js';
@@ -239,26 +239,15 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
             />
           )}
           {override !== null && cell !== null && (
-            <Button
-              size="sm"
-              variant="secondary"
-              aria-disabled={viewOnly !== undefined || undefined}
-              title={
-                viewOnly === undefined
-                  ? 'Drop this cell’s own format so it follows the column'
-                  : `Use column format — ${viewOnly}`
-              }
-              onClick={
-                viewOnly === undefined
-                  ? () => {
-                      setCellFormat(gd, record.id, cell.rowId, cell.colId, null);
-                      announce(`${address ?? 'The cell'} follows the column format again`);
-                    }
-                  : undefined
-              }
-            >
-              Use column format
-            </Button>
+            <ReasonedButton
+              label="Use column format"
+              available="Drop this cell’s own format so it follows the column"
+              reason={viewOnly}
+              onClick={() => {
+                setCellFormat(gd, record.id, cell.rowId, cell.colId, null);
+                announce(`${address ?? 'The cell'} follows the column format again`);
+              }}
+            />
           )}
         </div>
       </Section>
@@ -331,25 +320,14 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
             options={BORDER_WEIGHTS.map((w) => ({ value: w, label: WEIGHT_LABELS[w] }))}
           />
           {look.scope === 'cell' && look.override !== null && (
-            <Button
-              size="sm"
-              variant="secondary"
-              aria-disabled={viewOnly !== undefined || undefined}
-              title={
-                viewOnly === undefined
-                  ? 'Drop this cell’s own appearance so it follows the column'
-                  : `Use column appearance — ${viewOnly}`
-              }
-              onClick={
-                viewOnly === undefined
-                  ? () => {
-                      look.clearOverride();
-                    }
-                  : undefined
-              }
-            >
-              Use column appearance
-            </Button>
+            <ReasonedButton
+              label="Use column appearance"
+              available="Drop this cell’s own appearance so it follows the column"
+              reason={viewOnly}
+              onClick={() => {
+                look.clearOverride();
+              }}
+            />
           )}
         </div>
       </Section>

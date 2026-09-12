@@ -144,6 +144,13 @@ export interface GridCommands {
   setColumnWidth(tableId: Id, colId: Id, units: number): number | null;
   /** GRID-08: the corner handle. Returns the visible columns' widths after the call. */
   scaleTable(tableId: Id, options: ScaleTableOptions): number[] | null;
+  /**
+   * INSP-04 / GRID-09: every row wrapped (two units) or compact (one), in one
+   * transaction. Unwrapping also clears every column's own wrap — a column
+   * that wraps keeps every row at two units, so the switch could never read
+   * or set "compact" otherwise (#128). Returns how many columns lost their wrap.
+   */
+  setTableWrapped(tableId: Id, wrapped: boolean): number | null;
   /** GRID-10: leading frozen columns, clamped to the table. Returns the count stored. */
   setFrozenColumns(tableId: Id, count: number): number | null;
   /** GRID-11: 0 hides the column-header row, 1 shows it. */
@@ -565,6 +572,22 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
         }`,
       );
       return widths;
+    },
+    setTableWrapped(tableId, wrapped) {
+      const rec = record(tableId);
+      if (!editable() || rec === null) return null;
+      const wrappingColumns = wrapped ? [] : rec.columns.filter((c) => c.wrap);
+      gd.doc.transact(() => {
+        scaleTableMutation(gd, tableId, { wrapped });
+        for (const c of wrappingColumns) setColumnWrapMutation(gd, tableId, c.id, false);
+      }, gd.origin);
+      const n = wrappingColumns.length;
+      announce(
+        wrapped
+          ? `${rec.title}: every row wrapped`
+          : `${rec.title}: every row compact${n === 0 ? '' : `; column wrap cleared on ${String(n)} ${n === 1 ? 'column' : 'columns'}`}`,
+      );
+      return n;
     },
     setFrozenColumns(tableId, count) {
       const rec = record(tableId);

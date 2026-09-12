@@ -9,7 +9,9 @@ import {
   type GedeDoc,
   type Id,
 } from '@gede/core';
-import { Button, Select, TextField } from '@gede/ui';
+import { Select, TextField } from '@gede/ui';
+
+import { ReasonedButton } from '../inspector/controls.js';
 import { useState } from 'react';
 import type * as Y from 'yjs';
 
@@ -70,6 +72,19 @@ export function PullPanel({ gd, tableId, undo, editable = true }: RelationPanelP
     .filter((c) => c.source === 'entered' || c.source === 'pulled')
     .map((c) => ({ value: c.id, label: c.label || 'Untitled column' }));
   const ready = receiving !== '' && sourceTable !== '' && sourceCol !== '';
+  // INSP-11 / #126: every unavailable control says why, in the control itself.
+  const viewOnly = editable ? undefined : 'you have view-only access';
+  const sourceColumnReason =
+    viewOnly ?? (sourceTable === '' ? 'pick a source table first' : undefined);
+  const pullReason =
+    viewOnly ??
+    (receiving === ''
+      ? 'pick a receiving column first'
+      : sourceTable === ''
+        ? 'pick a source table first'
+        : sourceCol === ''
+          ? 'pick a source column first'
+          : undefined);
   const bind = () => {
     if (!editable || !ready) return;
     undo?.stopCapturing();
@@ -112,11 +127,12 @@ export function PullPanel({ gd, tableId, undo, editable = true }: RelationPanelP
       />
       <Select
         label="Source column"
+        hint={sourceColumnReason}
         value={sourceCol}
         onValueChange={setSourceCol}
         options={columnOptions(gd, sourceTable)}
         placeholder="Pick a column"
-        disabled={!editable || sourceTable === ''}
+        disabledReason={sourceColumnReason}
       />
       <TextField
         label="Only rows containing"
@@ -128,13 +144,21 @@ export function PullPanel({ gd, tableId, undo, editable = true }: RelationPanelP
         }}
       />
       <div className="gd-derive__actions">
-        <Button variant="primary" onClick={bind} disabled={!editable || !ready}>
-          {current === null ? 'Pull rows' : 'Update pull'}
-        </Button>
+        <ReasonedButton
+          variant="primary"
+          size="md"
+          label={current === null ? 'Pull rows' : 'Update pull'}
+          reason={pullReason}
+          onClick={bind}
+        />
         {current !== null && (
-          <Button variant="ghost" onClick={unbind} disabled={!editable}>
-            Remove pull
-          </Button>
+          <ReasonedButton
+            variant="ghost"
+            size="md"
+            label="Remove pull"
+            reason={viewOnly}
+            onClick={unbind}
+          />
         )}
       </div>
       {status !== null && (
@@ -161,6 +185,16 @@ export function MappingColumnPanel({ gd, tableId, undo, editable = true }: Relat
   const [status, setStatus] = useState<string | null>(null);
   if (record === null) return null;
   const ready = targetTable !== '' && targetCol !== '';
+  const viewOnly = editable ? undefined : 'you have view-only access';
+  const targetColumnReason =
+    viewOnly ?? (targetTable === '' ? 'pick a target table first' : undefined);
+  const addReason =
+    viewOnly ??
+    (targetTable === ''
+      ? 'pick a target table first'
+      : targetCol === ''
+        ? 'pick a target column first'
+        : undefined);
   const add = () => {
     if (!editable || !ready) return;
     undo?.stopCapturing();
@@ -186,16 +220,21 @@ export function MappingColumnPanel({ gd, tableId, undo, editable = true }: Relat
       />
       <Select
         label="Target column"
+        hint={targetColumnReason}
         value={targetCol}
         onValueChange={setTargetCol}
         options={columnOptions(gd, targetTable, { pickable: true })}
         placeholder="Pick a column"
-        disabled={!editable || targetTable === ''}
+        disabledReason={targetColumnReason}
       />
       <div className="gd-derive__actions">
-        <Button variant="primary" onClick={add} disabled={!editable || !ready}>
-          Add mapping column
-        </Button>
+        <ReasonedButton
+          variant="primary"
+          size="md"
+          label="Add mapping column"
+          reason={addReason}
+          onClick={add}
+        />
       </div>
       {status !== null && (
         <p className="gd-derive__status" role="status">

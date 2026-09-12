@@ -6,6 +6,8 @@ import { ARIA_KEYS, LABELS } from '../../doc/shortcuts.js';
 import { formatZoom, ZOOM_PRESETS } from '../../doc/viewport.js';
 
 export type InspectorMode = 'format' | 'organize';
+/** The Organize tab a toolbar tool opens (INSP-01); mirrors `OrganizeTab` in `Inspector.tsx`. */
+export type OrganizeTarget = 'categories' | 'sort' | 'filter';
 
 export interface ToolbarProps {
   zoom: number;
@@ -26,14 +28,19 @@ export interface ToolbarProps {
   onZoomTo: (zoom: number) => void;
   onFit: () => void;
   onInspector: (mode: InspectorMode | null) => void;
-  /** The Table menu (grid/TableMenu): row, column, freeze, header and footer commands. */
+  /** The Document menu (grid/DocumentMenu): open, print, undo, redo (KEYS-08). */
+  documentMenu?: ReactNode | undefined;
+  /** The Table menu (grid/TableMenu): the structure commands whose home is the menu. */
   tableMenu?: ReactNode | undefined;
   /** FIND-01: the magnifier opens the Find bar. */
   onFind: () => void;
   /** KEYS-01 / KEYS-08: the `?` sheet's other route. */
   onShortcuts: () => void;
-  /** SORT-01..06: Sort and Filter open the Organize inspector, where the viewer's options live. */
-  onOrganize: () => void;
+  /**
+   * SORT-01..06 / DOC-02: Filter opens Organize › Filter and Sort opens Organize › Sort —
+   * two commands, so neither is the Organize toggle (ADR-037).
+   */
+  onOrganize: (tab: OrganizeTarget) => void;
   /** INSP-07 / DOC-02: the selected table's pinned state (null without a table) and its toggle. */
   pinned?: boolean | null | undefined;
   onPin?: ((pinned: boolean) => void) | undefined;
@@ -151,9 +158,10 @@ function Cluster({ label, children }: { label: string; children: ReactNode }) {
 }
 
 /**
- * DOC-02: grouped tool clusters with tooltips. A command appears in exactly
- * one place; commands not yet implemented are present but disabled with a
- * reason (MENU-02), never hidden.
+ * DOC-02: grouped tool clusters with tooltips. A command has exactly one home
+ * — here, in a toolbar menu, or in an inspector tab (ADR-037); context menus
+ * and chords are routes to it. Commands not yet implemented are present but
+ * disabled with a reason (MENU-02), never hidden.
  */
 export function Toolbar({
   zoom,
@@ -171,6 +179,7 @@ export function Toolbar({
   onZoomTo,
   onFit,
   onInspector,
+  documentMenu,
   tableMenu,
   onFind,
   onShortcuts,
@@ -224,7 +233,12 @@ export function Toolbar({
           tourKey="graph"
         />
       </Cluster>
-      {tableMenu !== undefined && <Cluster label="Table">{tableMenu}</Cluster>}
+      {(documentMenu !== undefined || tableMenu !== undefined) && (
+        <Cluster label="Menus">
+          {documentMenu}
+          {tableMenu}
+        </Cluster>
+      )}
       <Cluster label="Arrange">
         <Tool
           icon="pin"
@@ -257,17 +271,17 @@ export function Toolbar({
         <Tool
           icon="filter"
           label="Filter"
-          shortcut={LABELS.organizeInspector}
-          ariaKeys={ARIA_KEYS.organizeInspector}
-          onClick={onOrganize}
+          onClick={() => {
+            onOrganize('filter');
+          }}
           disabledReason={hasTable ? undefined : 'select a table first'}
         />
         <Tool
           icon="sort"
           label="Sort"
-          shortcut={LABELS.organizeInspector}
-          ariaKeys={ARIA_KEYS.organizeInspector}
-          onClick={onOrganize}
+          onClick={() => {
+            onOrganize('sort');
+          }}
           disabledReason={hasTable ? undefined : 'select a table first'}
         />
       </Cluster>

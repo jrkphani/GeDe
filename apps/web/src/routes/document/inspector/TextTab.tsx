@@ -1,3 +1,4 @@
+import { useId } from 'react';
 import { Button, SegmentedControl, Select, Switch, Tooltip } from '@gede/ui';
 import {
   cellRich,
@@ -33,7 +34,7 @@ import type { GridCommands } from '../grid/commands.js';
 import { markAriaKeys, markLabel } from '../keys/shortcut-map.js';
 import type { CellSelection } from '../selection.js';
 import { useAppearanceScope } from './appearance-scope.js';
-import { Section } from './controls.js';
+import { ReasonedButton, Section } from './controls.js';
 import { TEXT_COLOUR_LABELS } from './RulesSection.js';
 
 export interface TextTabProps {
@@ -92,6 +93,7 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
   const needsCell = cell === null ? 'select a cell first' : undefined;
   const marksReason =
     viewOnly ?? needsCell ?? (editing ? 'finish editing to format the whole cell' : undefined);
+  const marksReasonId = useId();
   const rich = cell === null ? null : cellRich(table, cell.rowId, cell.colId);
   const rowWrapped = cell !== null && rowMeta(table, cell.rowId).height === WRAPPED_ROW_HEIGHT;
   const look = useAppearanceScope(table, record, cell, editable, commands, 'the typography');
@@ -155,7 +157,15 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
       </Section>
       <Section
         label="marks"
-        hint={marksReason === undefined ? 'Applies to the whole cell.' : undefined}
+        // INSP-11 / #126: the reason is visible under the label and is what each mark's
+        // `aria-describedby` reads, so it reaches pointer, keyboard and assistive tech.
+        hint={
+          marksReason === undefined ? (
+            'Applies to the whole cell.'
+          ) : (
+            <span id={marksReasonId}>{marksReason}</span>
+          )
+        }
       >
         <div className="gd-insp__row" role="group" aria-label="Inline marks">
           {TOGGLE_MARKS.map((mark) => {
@@ -181,6 +191,7 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
                   aria-pressed={on}
                   aria-keyshortcuts={markAriaKeys(mark)}
                   aria-disabled={marksReason !== undefined || undefined}
+                  aria-describedby={marksReason === undefined ? undefined : marksReasonId}
                   title={
                     marksReason === undefined
                       ? `${label} (${markLabel(mark)})`
@@ -211,24 +222,18 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
             const bundle = CHARACTER_STYLE_BUNDLES[style];
             const reason = look.disabledReason;
             return (
-              <Button
+              <ReasonedButton
                 key={style}
-                size="sm"
-                variant="secondary"
                 className={`gd-insp__preset gd-insp__preset--${style}`}
                 aria-pressed={activeStyle === style}
-                aria-disabled={reason !== undefined || undefined}
-                title={reason === undefined ? `${label} style` : `${label} style — ${reason}`}
-                onClick={
-                  reason === undefined
-                    ? () => {
-                        look.write({ size: bundle.size ?? null, weight: bundle.weight ?? null });
-                      }
-                    : undefined
-                }
+                label={`${label} style`}
+                reason={reason}
+                onClick={() => {
+                  look.write({ size: bundle.size ?? null, weight: bundle.weight ?? null });
+                }}
               >
                 {label}
-              </Button>
+              </ReasonedButton>
             );
           })}
         </div>

@@ -6,6 +6,7 @@ import {
   cellRich,
   createSheet,
   createTable,
+  graphById,
   graphsOnSheet,
   LATTICE,
   listSheets,
@@ -18,6 +19,7 @@ import {
   toggleMarkThroughout,
   toPresenceState,
   unitBoundsToPx,
+  type GedeDoc,
   type Id,
   type PresenceState,
   type ToggleMark,
@@ -69,6 +71,7 @@ import { matchBounds } from './find/match-geometry.js';
 import { useFind, type FindNavigation } from './find/useFind.js';
 import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2/formulas mount points
 import { pinnedPanelOffset } from './grid/pinned.js';
+import { DocumentMenu } from './grid/DocumentMenu.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
 import { DerivePanel } from './ref/index.js'; // wave3/references
@@ -80,7 +83,8 @@ import {
   useViewStore,
   ViewStoreProvider,
 } from '../../doc/view-state.js';
-import { Inspector } from './Inspector.js';
+import { Inspector, type OrganizeTab } from './Inspector.js';
+import type { HeadObject } from './inspector/InspectorHead.js';
 import { documentBindings } from './keys/bindings.js';
 import type { CellSelection } from './selection.js';
 import { useCellClipboard } from './keys/clipboard.js';
@@ -264,6 +268,7 @@ function OpenDocument({
   // INSP-02 / RESP-04: the rail is always present above phone width — docked at 322 px or
   // collapsed to a 38 px strip. It starts open from 1200 px and collapsed below.
   const [inspectorMode, setInspectorMode] = useState<InspectorMode>('format');
+  const [organizeTab, setOrganizeTab] = useState<OrganizeTab>('categories');
   const [inspectorOpen, setInspectorOpen] = useState(() => wide);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -499,8 +504,9 @@ function OpenDocument({
   );
 
   // -- keyboard (KEYS-01..07): one map, listed by the shortcut sheet --------------
-  const showInspector = useCallback((mode: InspectorMode) => {
+  const showInspector = useCallback((mode: InspectorMode, tab?: OrganizeTab) => {
     setInspectorMode(mode);
+    if (tab !== undefined) setOrganizeTab(tab);
     setInspectorOpen(true);
   }, []);
   useShortcuts(
@@ -600,13 +606,13 @@ function OpenDocument({
           sort.setSort(tableId, colId, 'za');
         },
         showSortOptions: () => {
-          showInspector('organize');
+          showInspector('organize', 'sort');
         },
         quickFilter: () => {
-          showInspector('organize');
+          showInspector('organize', 'filter');
         },
         showFilterOptions: () => {
-          showInspector('organize');
+          showInspector('organize', 'filter');
         },
       },
       hierarchy: {
@@ -618,7 +624,7 @@ function OpenDocument({
           sort.setGroupBy(tableId, null);
         },
         showCategoryOptions: () => {
-          showInspector('organize');
+          showInspector('organize', 'categories');
         },
       },
       // GRAPH-01: "Graph this table" creates a pair bound to that table.
@@ -716,9 +722,21 @@ function OpenDocument({
           onShortcuts={() => {
             setShortcutsOpen(true);
           }}
-          onOrganize={() => {
-            showInspector('organize');
+          onOrganize={(tab) => {
+            showInspector('organize', tab);
           }}
+          documentMenu={
+            <DocumentMenu
+              editable={editable}
+              undo={session.undo}
+              onOpen={() => {
+                void navigate('/');
+              }}
+              onPrint={() => {
+                window.print();
+              }}
+            />
+          }
         />
       )}
 
@@ -1026,6 +1044,9 @@ function OpenDocument({
               mode={inspectorMode}
               open={inspectorOpen}
               onOpenChange={setInspectorOpen}
+              organizeTab={organizeTab}
+              onOrganizeTabChange={setOrganizeTab}
+              object={selectedGraphId === null ? undefined : describeGraph(gd, selectedGraphId)}
               selection={selection}
               editing={editing !== null}
               editable={editable}
@@ -1033,13 +1054,32 @@ function OpenDocument({
               find={find}
               onToggleMark={toggleMark}
               slots={{
-                // SORT-01..06 (#74): one panel carries Categories, Sort and Filter; the three
-                // Organize tabs all open it.
+                // SORT-01..06 (#74) / INSP-01: one panel carries Categories, Sort and Filter;
+                // each Organize tab shows its own section of it (#138).
                 hierarchy: (
-                  <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />
+                  <SortPanel
+                    gd={gd}
+                    tableId={selection?.tableId ?? null}
+                    commands={sort}
+                    section="categories"
+                  />
                 ),
-                sort: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
-                filter: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
+                sort: (
+                  <SortPanel
+                    gd={gd}
+                    tableId={selection?.tableId ?? null}
+                    commands={sort}
+                    section="sort"
+                  />
+                ),
+                filter: (
+                  <SortPanel
+                    gd={gd}
+                    tableId={selection?.tableId ?? null}
+                    commands={sort}
+                    section="filter"
+                  />
+                ),
                 // REF-02..04 (#77): cross-table relation, derived-column composition and the
                 // pipeline audit list, for the selected table.
                 derive:
@@ -1084,6 +1124,22 @@ function OpenDocument({
       )}
     </div>
   );
+}
+
+/** INSP-03 / INSP-08: what the head says of a selected graph — its kind, source and dimensions. */
+function describeGraph(gd: GedeDoc, graphId: Id): HeadObject | undefined {
+  const graph = graphById(gd, graphId);
+  if (graph === null) return undefined;
+  const source = graph.tableId === null ? null : tableById(gd, graph.tableId);
+  const kind = graph.kind === 'ring' ? 'Ring graph' : 'Coverage graph';
+  const n = graph.dimensions.length;
+  return {
+    label: source === null ? kind : `${kind} of ${source.title}`,
+    facts: [
+      source === null ? 'not pointed at a table' : `${String(source.rows.length)} source rows`,
+      `${String(n)} ${n === 1 ? 'dimension' : 'dimensions'}`,
+    ],
+  };
 }
 
 /** The empty-sheet affordance sits one unit in from A1, on the lattice. */

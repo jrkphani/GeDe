@@ -790,6 +790,46 @@ describe('DocumentShell', () => {
     ).toBeInTheDocument();
   });
 
+  it('DOC-02 INSP-01 KEYS-08 Filter opens Organize › Filter and Sort opens Organize › Sort; only the Organize toggle carries ⌥⌘2; the Document menu is the pointer route for ⌘O ⌘P ⌘Z ⇧⌘Z (#140, #138, #136)', async () => {
+    await openShell();
+    await addTable();
+    const toolbar = screen.getByRole('toolbar', { name: 'Document tools' });
+    const filter = within(toolbar).getByRole('button', { name: 'Filter' });
+    const sort = within(toolbar).getByRole('button', { name: 'Sort' });
+    expect(filter).not.toHaveAttribute('aria-keyshortcuts');
+    expect(sort).not.toHaveAttribute('aria-keyshortcuts');
+    expect(within(toolbar).getByRole('button', { name: 'Organize inspector' })).toHaveAttribute(
+      'aria-keyshortcuts',
+      'Alt+Meta+2',
+    );
+    await userEvent.click(filter);
+    expect(screen.getByRole('complementary', { name: 'Organize inspector' })).toHaveAttribute(
+      'data-state',
+      'open',
+    );
+    expect(screen.getByRole('tab', { name: 'Filter' })).toHaveAttribute('aria-selected', 'true');
+    const panel = () => screen.getByRole('tabpanel', { name: 'Filter' });
+    expect(panel()).toHaveTextContent(/contains/);
+    expect(panel()).not.toHaveTextContent(/Group rows by/);
+    await userEvent.click(sort);
+    expect(screen.getByRole('tab', { name: 'Sort' })).toHaveAttribute('aria-selected', 'true');
+    expect(
+      within(screen.getByRole('tabpanel', { name: 'Sort' })).getByRole('combobox', {
+        name: 'Order',
+      }),
+    ).toBeInTheDocument();
+    // The Document menu (ADR-038): every Document and Edit chord has a pointer route.
+    await userEvent.click(within(toolbar).getByRole('button', { name: 'Document menu' }));
+    expect(screen.getByRole('menuitem', { name: /Open the library/ })).toHaveTextContent('⌘O');
+    expect(screen.getByRole('menuitem', { name: /Undo/ })).toHaveTextContent('⌘Z');
+    await userEvent.keyboard('{Escape}');
+    // The Table menu no longer repeats the toolbar's Add row / Add column (DOC-02, ADR-037).
+    await userEvent.click(within(toolbar).getByRole('button', { name: 'Table menu' }));
+    expect(screen.queryByRole('menuitem', { name: /Insert row below/ })).toBeNull();
+    expect(screen.queryByRole('menuitemcheckbox', { name: /Header row/ })).toBeNull();
+    expect(screen.getByRole('menuitem', { name: /Insert row above/ })).toBeInTheDocument();
+  });
+
   it('KEYS-07 INSP-02 ⌥⌘I toggles the inspector between the rail and the 38 px strip; ⌥⌘1 and ⌥⌘2 pick Format and Organize', async () => {
     await openShell();
     const rail = () => screen.getByRole('complementary', { name: /inspector$/ });
