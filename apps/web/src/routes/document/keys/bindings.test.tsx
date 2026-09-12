@@ -215,7 +215,7 @@ describe('document key bindings', () => {
     expect(h.view.previousObject).toHaveBeenCalledTimes(1);
   });
 
-  it('KEYS-05 KEYS-07 off Apple platforms Ctrl+= zooms and Ctrl+Alt+= is superscript — the two never fire together (#136, ADR 40)', () => {
+  it('KEYS-05 KEYS-07 off Apple platforms Ctrl+= zooms and Ctrl+Alt+= is superscript — the two never fire together (#136, ADR 42)', () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0) jsdom');
     const h = handlers();
     render(<Host h={h} />);

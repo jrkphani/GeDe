@@ -6,7 +6,15 @@ import { act, fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Y from 'yjs';
-import { createSheet, LATTICE, openDocument, tableById, type GedeDoc } from '@gede/core';
+import {
+  createSheet,
+  createTable,
+  LATTICE,
+  listSheets,
+  openDocument,
+  tableById,
+  type GedeDoc,
+} from '@gede/core';
 import type * as DocumentsApi from '../../api/documents.js';
 import { setDocumentSeamsForTests } from '../../doc/use-document.js';
 import { TIER_MESO_MIN } from '../../doc/viewport.js';
@@ -695,7 +703,7 @@ describe('DocumentShell', () => {
     expect(first.getAttribute('aria-label')).toBe('B5, Line one\nLine two');
   });
 
-  it('KEYS-01 `?` opens the shortcut sheet from an armed cell instead of starting an edit; Enter then `?` types it (#136, ADR 40)', async () => {
+  it('KEYS-01 `?` opens the shortcut sheet from an armed cell instead of starting an edit; Enter then `?` types it (#136, ADR 42)', async () => {
     await openShell();
     const grid = await addTable();
     const first = within(grid).getAllByRole('gridcell')[0]!;
@@ -715,7 +723,7 @@ describe('DocumentShell', () => {
     expect(screen.getByLabelText('Edit B5')).toBeInTheDocument();
   });
 
-  it('A11Y-01 ⇧⌘→ and ⇧⌘← move focus to the next and previous object on the sheet — a graph a keyboard user could not reach by Tab (#131, ADR 40)', async () => {
+  it('A11Y-01 ⇧⌘→ and ⇧⌘← move focus to the next and previous object on the sheet — a graph a keyboard user could not reach by Tab (#131, ADR 42)', async () => {
     await openShell();
     const grid = await addTable();
     // GRAPH-01 / GRAPH-04: + Graph, then "Add shaped table" binds a pair to a new table.
@@ -743,7 +751,37 @@ describe('DocumentShell', () => {
     expect(document.activeElement).toHaveAttribute('role', 'gridcell');
   });
 
-  it('KEYS-03 ⌘A selects the table; ⌫ then says a cell is needed rather than clearing the table (#145, ADR 40)', async () => {
+  it('A11Y-01 DOC-04 ⇧⌘→ reaches a table the canvas has culled — off screen, not rendered — by revealing it first (#131, ADR 42)', async () => {
+    await openShell();
+    const grid = await addTable();
+    // Another participant places a table far below the viewport: the canvas does not render it.
+    const other = openDocument(roomDoc());
+    const sheetId = listSheets(other)[0]!.id;
+    room.edit(() => {
+      createTable(other, { sheetId, at: { col: 1, row: 400 }, columns: 2, rows: 2 });
+    });
+    // The client's replica has it (the sheet tab counts two objects) yet renders one grid.
+    await waitFor(() => {
+      expect(screen.getByLabelText('2 objects')).toBeInTheDocument();
+    });
+    expect(screen.getAllByRole('grid')).toHaveLength(1);
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    fireEvent.keyDown(window, { code: 'ArrowRight', metaKey: true, shiftKey: true });
+    // The viewport panned to the far table (the first is culled in its turn) and its first
+    // cell holds focus.
+    expect(layerTransform()).not.toBe('translate(0px, 0px) scale(1)');
+    const landed = document.activeElement?.closest('[data-table-id]');
+    expect(landed).not.toBeNull();
+    expect(landed).not.toBe(grid.closest('[data-table-id]'));
+    expect(document.activeElement).toHaveAttribute('role', 'gridcell');
+    expect(document.activeElement).toHaveAttribute('aria-label', 'B404');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Table 2');
+  });
+
+  it('KEYS-03 ⌘A selects the table; ⌫ then says a cell is needed rather than clearing the table (#145, ADR 42)', async () => {
     await openShell();
     const grid = await addTable();
     const first = within(grid).getAllByRole('gridcell')[0]!;

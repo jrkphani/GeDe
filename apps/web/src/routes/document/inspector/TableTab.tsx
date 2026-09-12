@@ -155,7 +155,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
         <div className="gd-insp__stack">
           <Stepper
             label="Header rows"
-            unit="rows"
+            unit={record.headerRows === 1 ? 'row' : 'rows'}
             name="header rows"
             value={record.headerRows}
             min={0}
@@ -181,7 +181,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           />
           <Stepper
             label="Footer rows"
-            unit="rows"
+            unit={record.footerRows === 1 ? 'row' : 'rows'}
             name="footer rows"
             value={record.footerRows}
             min={0}

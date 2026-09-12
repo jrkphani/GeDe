@@ -228,6 +228,9 @@ export function FilterForm({ columnLabel, initial, onChange, onClear }: FilterFo
   const [text, setText] = useState(initial.text);
   const [fuzzy, setFuzzy] = useState(initial.fuzzy);
   const [facet, setFacet] = useState(initial.facet);
+  // Keystrokes since the last settle: a blur announces only what typing changed, so tabbing
+  // through an untouched field (empty or not) never announces "Filter cleared" for nothing.
+  const typed = useRef(false);
   const emit = (
     next: { text?: string; fuzzy?: boolean; facet?: TableFilter['facet'] },
     settled: boolean,
@@ -244,6 +247,7 @@ export function FilterForm({ columnLabel, initial, onChange, onClear }: FilterFo
   };
   const submit = (e: SyntheticEvent<HTMLFormElement>) => {
     e.preventDefault();
+    typed.current = false;
     emit({}, true);
   };
   return (
@@ -253,9 +257,12 @@ export function FilterForm({ columnLabel, initial, onChange, onClear }: FilterFo
         value={text}
         onChange={(e) => {
           setText(e.target.value);
+          typed.current = true;
           emit({ text: e.target.value }, false);
         }}
         onBlur={() => {
+          if (!typed.current) return;
+          typed.current = false;
           emit({}, true);
         }}
         autoComplete="off"

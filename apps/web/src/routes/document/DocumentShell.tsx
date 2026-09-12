@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
   cellAddress,
@@ -88,7 +89,15 @@ import type { HeadObject } from './inspector/InspectorHead.js';
 import { documentBindings } from './keys/bindings.js';
 import type { CellSelection } from './selection.js';
 import { useCellClipboard } from './keys/clipboard.js';
-import { currentObject, objectEntry, sheetObjects, stepObject } from './keys/objects.js';
+import {
+  currentObject,
+  objectBounds,
+  objectElement,
+  objectEntry,
+  sheetObjects,
+  stepObject,
+  tableEntry,
+} from './keys/objects.js';
 import { setTourDocument } from '../tour/store.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
@@ -516,17 +525,45 @@ function OpenDocument({
   }, []);
   // ADR-042 ⇧⌘→ / ⇧⌘←: the next or previous object on the sheet takes focus at its own
   // entry — a cell (which arms it), a graph's header. Tab cannot do this forward (GRID-05).
-  const moveObject = useCallback((direction: 1 | -1) => {
-    const objects = sheetObjects(document.querySelector('.gd-canvas') ?? document);
-    const next = stepObject(objects, currentObject(document.activeElement), direction);
-    const entry = next === null ? null : objectEntry(next);
-    if (next === null || entry === null) {
-      announce(objects.length === 0 ? 'Nothing on this sheet' : 'No other object on this sheet');
-      return;
-    }
-    entry.focus({ preventScroll: true });
-    announce(next.getAttribute('aria-label') ?? 'Object');
-  }, []);
+  // The objects are the document's, not the DOM's: a table outside the viewport is culled
+  // (`visibleTables`), so the object is revealed first and focused once it has rendered.
+  const moveObject = useCallback(
+    (direction: 1 | -1) => {
+      if (activeSheetId === null) return;
+      const objects = sheetObjects(gd, activeSheetId);
+      const next = stepObject(objects, currentObject(document.activeElement), direction);
+      if (next === null) {
+        announce('Nothing on this sheet');
+        return;
+      }
+      const bounds = objectBounds(gd, next);
+      const entryCell = next.kind === 'table' ? tableEntry(gd, next.id, cell) : null;
+      // Synchronous, so the revealed table is in the DOM before its entry is looked up.
+      flushSync(() => {
+        if (bounds !== null) {
+          // The same fallback size the culling uses before the canvas is measured.
+          setViewport((v) =>
+            revealBounds(
+              v,
+              measured ?? { width: theme.breakpoint.lg, height: theme.breakpoint.md },
+              bounds,
+              FIT_PADDING,
+            ),
+          );
+        }
+        if (entryCell !== null) grid.actions.selectCell(entryCell);
+      });
+      const section = objectElement(next);
+      const entry = section === null ? null : objectEntry(section);
+      if (section === null || entry === null) {
+        announce('No other object on this sheet');
+        return;
+      }
+      entry.focus({ preventScroll: true });
+      announce(section.getAttribute('aria-label') ?? 'Object');
+    },
+    [gd, activeSheetId, cell, measured, grid.actions],
+  );
   useShortcuts(
     documentBindings({
       phone,

@@ -1364,7 +1364,7 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
     ).toBeInTheDocument();
   });
 
-  it('FX-07 GRID-09 a formula in a compact row shows its expression beside the value without changing the row height; a wrapped row keeps it on its own line (#142, ADR 41)', () => {
+  it('FX-07 GRID-09 a formula in a compact row shows its expression beside the value without changing the row height; a wrapped row keeps it on its own line (#142, ADR 43)', () => {
     commitCellText(gd, tableId, rows[2]!, cols[0]!, '=Sum(B5:B6)');
     mount();
     const cell = cellAt(2, 0);
