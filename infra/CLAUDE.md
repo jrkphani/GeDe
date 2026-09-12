@@ -78,12 +78,13 @@ so same-region cross-stack references render as `Fn::GetStackOutput` rather than
 - **Cognito sends its own mail** until SES leaves the sandbox; the `withSES` block in
   `AuthStack` is ready to swap in (the SES identity and DKIM records already exist).
 - **CloudFront `/api/*` reaches the ALB by hostname** (`api.<domain>`) and must carry the
-  `X-Origin-Verify` header (ADR-018). WebStack generates the header secret(s) and presents
-  the newest; ServiceStack's HTTPS listener is deny-by-default and forwards `/api/*` and
-  `/healthz` only with a matching value, `/ws/*` unconditionally. Hence Service depends on Web
-  (not the other way round: the origin hostname is a string, so there is no cycle) and Web
-  deploys first — on a rotation CloudFront sends the new value before the ALB drops the old.
-  Rotate by editing `ORIGIN_VERIFY_GENERATIONS` in `web-stack.ts` (runbook §12).
+  `X-Origin-Verify` header (ADR-018). WebStack generates one secret per generation in
+  `ORIGIN_VERIFY_GENERATIONS` and presents `ORIGIN_VERIFY_PRESENTED`; ServiceStack's HTTPS
+  listener is deny-by-default and forwards `/api/*` and `/healthz` only with a value from any
+  listed generation, `/ws/*` unconditionally. Hence Service depends on Web (not the other way
+  round: the origin hostname is a string, so there is no cycle) and Web deploys first. Because
+  of that order, never present a generation in the merge that adds it: rotation is three
+  merges — add, present, drop (runbook §12).
 - **SPA fallback is a CloudFront Function**, not `errorResponses`: distribution-wide error
   responses rewrote `/api/*` 403/404 into `200 index.html` (#38, ADR-020). Extension-less paths on
   the shell behaviour are rewritten to `/index.html` at viewer-request; real files pass through.

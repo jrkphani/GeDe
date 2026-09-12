@@ -26,13 +26,22 @@ export interface WebStackProps extends cdk.StackProps {
 export const ORIGIN_VERIFY_HEADER = 'X-Origin-Verify';
 
 /**
- * Generations of the origin-verify secret. The last one is what CloudFront presents; the ALB
- * accepts every one listed. Zero-downtime rotation is two merges: append a generation
- * (`[1, 2]`: CloudFront moves to 2, the ALB still accepts 1), then drop the old one (`[2]`).
- * Each generation is its own Secrets Manager secret with a fresh random value, so rotating
- * never edits a secret value by hand. See ADR-018.
+ * Generations of the origin-verify secret the ALB accepts. Each generation is its own Secrets
+ * Manager secret with a fresh random value, so rotating never edits a secret value by hand.
+ * See ADR-018 and runbook §12.
  */
 export const ORIGIN_VERIFY_GENERATIONS: readonly number[] = [1];
+
+/**
+ * The generation CloudFront presents. Must be listed in `ORIGIN_VERIFY_GENERATIONS`.
+ *
+ * Kept separate from the accepted list because Web deploys before Service: if CloudFront
+ * switched to a generation in the same merge that adds it, it would present a value the
+ * ALB does not accept yet for the whole Service deploy. Zero-downtime rotation is therefore
+ * three merges: add the generation (`[1, 2]`, still presenting 1), present it (`2`), then
+ * drop the old one (`[2]`). At every step the ALB accepts what CloudFront presents.
+ */
+export const ORIGIN_VERIFY_PRESENTED = 1;
 
 /**
  * viewer-request function for the SPA behaviours only. A path whose last segment has no
@@ -89,9 +98,12 @@ export class WebStack extends cdk.Stack {
           removalPolicy: cdk.RemovalPolicy.DESTROY,
         }),
     );
-    const presented = this.originVerifySecrets.at(-1);
+    const presented =
+      this.originVerifySecrets[ORIGIN_VERIFY_GENERATIONS.indexOf(ORIGIN_VERIFY_PRESENTED)];
     if (!presented) {
-      throw new Error('ORIGIN_VERIFY_GENERATIONS must list at least one generation');
+      throw new Error(
+        `ORIGIN_VERIFY_PRESENTED (${String(ORIGIN_VERIFY_PRESENTED)}) must be one of ORIGIN_VERIFY_GENERATIONS [${ORIGIN_VERIFY_GENERATIONS.join(', ')}]`,
+      );
     }
 
     const bucket = new s3.Bucket(this, 'Web', {

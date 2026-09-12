@@ -9,7 +9,11 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../lib/app.js';
 import { type GedeStage } from '../lib/gede-stage.js';
 import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
-import { ORIGIN_VERIFY_GENERATIONS, ORIGIN_VERIFY_HEADER } from '../lib/stacks/web-stack.js';
+import {
+  ORIGIN_VERIFY_GENERATIONS,
+  ORIGIN_VERIFY_HEADER,
+  ORIGIN_VERIFY_PRESENTED,
+} from '../lib/stacks/web-stack.js';
 
 const TEST_ZONE_ID = 'Z0000000000000000TEST';
 const INFRA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -296,7 +300,9 @@ describe('GeDe CDK app', () => {
         },
       ],
     });
-    // One generated, punctuation-free secret per generation, all in the Web stack.
+    // One generated, punctuation-free secret per generation, all in the Web stack. CloudFront
+    // presents a generation the ALB accepts (rotation is add → present → drop, runbook §12).
+    expect(ORIGIN_VERIFY_GENERATIONS).toContain(ORIGIN_VERIFY_PRESENTED);
     stacks.Web!.resourceCountIs('AWS::SecretsManager::Secret', ORIGIN_VERIFY_GENERATIONS.length);
     stacks.Web!.hasResourceProperties('AWS::SecretsManager::Secret', {
       GenerateSecretString: { ExcludePunctuation: true, PasswordLength: 64 },
