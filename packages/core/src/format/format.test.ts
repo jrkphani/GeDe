@@ -46,6 +46,15 @@ describe('parseNumber', () => {
     }
   });
 
+  test('FMT-05 a doubled negation is not a number, never a positive', () => {
+    for (const s of ['--5', '−−5', '(-5)', '-(5)', '-$-5', '($-5)']) {
+      expect(parseNumber(s)).toBeNull();
+    }
+    expect(parseNumber('-$5')?.value).toBe(-5);
+    expect(parseNumber('$-5')?.value).toBe(-5);
+    expect(parseNumber('(5)')?.value).toBe(-5);
+  });
+
   test('FMT-03 currency symbols and codes are recognised, bare $ is ambiguous', () => {
     expect(parseNumber('S$1,250.00')).toEqual({
       value: 1250,

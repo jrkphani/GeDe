@@ -49,6 +49,8 @@ const SIGN = /^[-−]/;
 export function parseNumber(raw: string): ParsedNumber | null {
   let s = raw.trim().replace(/[\u00a0\u202f]/g, ' ');
   if (s === '') return null;
+  // One negation only: parentheses, a leading sign, or a sign after the symbol
+  // (`$-12`). Two of them (`--5`, `(-5)`, `-$-5`) are not a number.
   let negative = false;
   const parens = /^\((.*)\)$/.exec(s);
   if (parens !== null) {
@@ -56,7 +58,8 @@ export function parseNumber(raw: string): ParsedNumber | null {
     s = (parens[1] ?? '').trim();
   }
   if (SIGN.test(s)) {
-    negative = !negative;
+    if (negative) return null;
+    negative = true;
     s = s.slice(1).trim();
   }
   let symbol: string | null = null;
@@ -71,9 +74,9 @@ export function parseNumber(raw: string): ParsedNumber | null {
       s = s.slice(0, trail.index);
     }
   }
-  // `$-12`: the sign may follow the symbol.
   if (SIGN.test(s)) {
-    negative = !negative;
+    if (negative) return null;
+    negative = true;
     s = s.slice(1).trim();
   }
   if (!MAGNITUDE.test(s)) return null;

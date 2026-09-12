@@ -84,6 +84,30 @@ test.describe('rich cell (harness)', () => {
     await expect(cell.locator('.gd-rich')).toHaveText('Annapurna');
   });
 
+  test('I18N-01 GRID-06 (partial) Enter does not commit while an IME is composing; it commits once composition ends', async ({
+    page,
+  }) => {
+    await open(page);
+    const cell = page.locator('[data-address="A1"]');
+    await cell.dblclick();
+    const editor = page.getByRole('textbox', { name: 'Edit A1' });
+    await expect(editor).toBeFocused();
+    // A real IME raises compositionstart before its keydowns; ProseMirror then
+    // treats every keydown as part of the composition until compositionend.
+    await editor.evaluate((el) => {
+      el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    });
+    await page.keyboard.press('Enter');
+    await expect(editor).toBeVisible();
+    await expect(editor).toBeFocused();
+    await editor.evaluate((el) => {
+      el.dispatchEvent(new CompositionEvent('compositionend', { bubbles: true, data: '' }));
+    });
+    await page.keyboard.press('Escape');
+    await expect(editor).toBeHidden();
+    await expect(cell.locator('.gd-rich')).toHaveText('Everest trek');
+  });
+
   test('FMT-02 FMT-03 I18N-04 a Number column right-aligns and groups; Currency renders per locale with accounting negatives', async ({
     page,
   }) => {

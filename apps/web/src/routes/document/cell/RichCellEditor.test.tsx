@@ -159,6 +159,27 @@ describe('RichCellEditor', () => {
     h.unmount();
   });
 
+  test('I18N-01 GRID-06 (partial) a paragraph the browser inserts mid-composition does not commit (ProseMirror synthesises an Enter for it)', async () => {
+    const h = mount(richFromText('hello'));
+    const el = h.editable();
+    el.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    // What a contenteditable does with an Enter the editor did not prevent: a new block.
+    const p = document.createElement('p');
+    p.appendChild(document.createElement('br'));
+    el.appendChild(p);
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(h.onCommit).not.toHaveBeenCalled();
+    expect(h.onCancel).not.toHaveBeenCalled();
+    expect(plainText(fragmentToRich(h.fragment))).toBe('hello');
+    // The block the browser added was discarded, not turned into a paragraph.
+    expect(el.querySelectorAll('p')).toHaveLength(1);
+    // (What follows compositionend is the e2e's: jsdom reports Safari's vendor, so
+    // ProseMirror swallows the first keydown after a composition ends.)
+    h.unmount();
+  });
+
   test('GRID-06 (partial) Tab and blur commit', () => {
     const a = mount(richFromText('a'));
     fireEvent.keyDown(a.editable(), { code: 'Tab', key: 'Tab' });

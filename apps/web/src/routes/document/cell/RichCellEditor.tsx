@@ -125,6 +125,11 @@ export function RichCellEditor({
           // I18N-01: `keyCode === 229` is the legacy IME signal some engines still send.
           // eslint-disable-next-line @typescript-eslint/no-deprecated -- required by the IME contract
           if (event.isComposing || event.keyCode === 229) return false;
+          // ProseMirror also synthesises an Enter keydown from a DOM change that
+          // looks like one (`readDOMChange`), composition or not, and that event
+          // carries no `isComposing`. While the view is composing, swallow it so
+          // nothing commits or splits mid-composition (GRID-06, I18N-01).
+          if (view.composing) return event.code === 'Enter';
           if (event.code === 'Enter' && !event.shiftKey && !event.altKey) {
             event.preventDefault();
             finish(true);
