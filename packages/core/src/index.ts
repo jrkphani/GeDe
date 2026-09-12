@@ -9,3 +9,4 @@ export * from './ids.js';
 export * from './graph.js';
 export * from './formula/index.js';
 export * from './doc/index.js';
+export * from './search/index.js';
