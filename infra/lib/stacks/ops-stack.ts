@@ -23,6 +23,7 @@ export interface OpsStackProps extends cdk.StackProps {
   readonly config: EnvConfig;
   readonly service: ecs.FargateService;
   readonly alb: elbv2.ApplicationLoadBalancer;
+  readonly targetGroup: elbv2.ApplicationTargetGroup;
   readonly database: rds.DatabaseInstance;
   /** The jobs task (`--job purge`) and where to run it: the service's cluster, subnets and security group. */
   readonly cluster: ecs.ICluster;
@@ -32,14 +33,23 @@ export interface OpsStackProps extends cdk.StackProps {
 }
 
 const GIB = 1024 ** 3;
+const MIB = 1024 ** 2;
 
 /** Local time of the nightly purge (LIB-08); the retention window is measured on the database clock. */
 export const PURGE_SCHEDULE = { hour: '2', minute: '30', timeZone: cdk.TimeZone.ASIA_SINGAPORE };
 
 /**
- * Day-one guardrails (architecture digest §1.7.3): CPU, 5xx ratio, free storage, and a
- * monthly budget, all fanning out to one email subscription. Plus the nightly purge
- * schedule and the alert that fires when its task exits non-zero.
+ * Hours without a `job finished` line from the purge before `gede-<env>-purge-never-ran`
+ * fires: the schedule is daily, so 26 leaves two hours for a late or retried run.
+ */
+export const PURGE_SILENCE_HOURS = 26;
+
+/**
+ * Day-one guardrails (architecture digest §1.7.3, reviewed 2026-09-13 — runbook "Ops
+ * review"): CPU and memory of the one task, healthy targets, ALB 5xx ratio and p90 latency,
+ * RDS free storage, burst credits and memory, a monthly budget on actual and forecast spend
+ * — all fanning out to one email subscription. Plus the nightly purge schedule, the alert
+ * that fires when its task exits non-zero, and the one that fires when it has not run at all.
  */
 export class OpsStack extends cdk.Stack {
   readonly alertsTopic: sns.Topic;
@@ -69,6 +79,37 @@ export class OpsStack extends cdk.Stack {
       });
     cpuAlarm.addAlarmAction(notify);
 
+    // One task of 1 GiB holds every open room in memory; past 80 % the next document opened
+    // can OOM it, and the circuit breaker only helps a *deployment*, not a running task.
+    const memoryAlarm = props.service
+      .metricMemoryUtilization({ period })
+      .createAlarm(this, 'ServiceMemory', {
+        alarmName: `gede-${config.envName}-service-memory`,
+        alarmDescription:
+          'Sync service memory above 80% for 10 minutes (rooms held in memory; OOM risk)',
+        threshold: 80,
+        evaluationPeriods: 2,
+        datapointsToAlarm: 2,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    memoryAlarm.addAlarmAction(notify);
+
+    // With one task, "no healthy target" is the outage. The 5xx ratio needs requests to
+    // fire; this one does not.
+    const healthyAlarm = props.targetGroup.metrics
+      .healthyHostCount({ period: cdk.Duration.minutes(1), statistic: 'Minimum' })
+      .createAlarm(this, 'NoHealthyTarget', {
+        alarmName: `gede-${config.envName}-no-healthy-target`,
+        alarmDescription: 'No healthy sync task behind the ALB for 3 minutes',
+        threshold: 1,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+      });
+    healthyAlarm.addAlarmAction(notify);
+
     const errorRatio = new cloudwatch.MathExpression({
       label: 'ALB 5xx ratio (%)',
       expression: '100 * (elb5xx + target5xx) / requests',
@@ -89,6 +130,22 @@ export class OpsStack extends cdk.Stack {
     });
     errorAlarm.addAlarmAction(notify);
 
+    // p90 of what the task answers in (REST and the upgrade handshake; open sockets do not
+    // count). The API's own budget is well under a second; 2 s for 15 minutes is a task or
+    // database in trouble, not a slow request.
+    const latencyAlarm = props.alb.metrics
+      .targetResponseTime({ period, statistic: 'p90' })
+      .createAlarm(this, 'AlbLatency', {
+        alarmName: `gede-${config.envName}-alb-latency`,
+        alarmDescription: 'ALB target response time p90 above 2 s for 15 minutes',
+        threshold: 2,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    latencyAlarm.addAlarmAction(notify);
+
     const storageAlarm = props.database
       .metricFreeStorageSpace({ period })
       .createAlarm(this, 'DbFreeStorage', {
@@ -100,6 +157,36 @@ export class OpsStack extends cdk.Stack {
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       });
     storageAlarm.addAlarmAction(notify);
+
+    // db.t4g.micro is burstable: with the credit balance gone it runs at baseline (10 % of
+    // one vCPU) and every query slows without an error anywhere. A full balance is 144.
+    const creditAlarm = props.database
+      .metric('CPUCreditBalance', { period, statistic: 'Minimum' })
+      .createAlarm(this, 'DbCpuCredits', {
+        alarmName: `gede-${config.envName}-db-cpu-credits`,
+        alarmDescription:
+          'RDS CPU credit balance below 20 for 15 minutes (db.t4g.micro about to be throttled to baseline)',
+        threshold: 20,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    creditAlarm.addAlarmAction(notify);
+
+    const dbMemoryAlarm = props.database
+      .metricFreeableMemory({ period, statistic: 'Minimum' })
+      .createAlarm(this, 'DbFreeableMemory', {
+        alarmName: `gede-${config.envName}-db-freeable-memory`,
+        alarmDescription:
+          'RDS freeable memory below 100 MiB for 15 minutes (db.t4g.micro has 1 GiB)',
+        threshold: 100 * MIB,
+        evaluationPeriods: 3,
+        datapointsToAlarm: 3,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    dbMemoryAlarm.addAlarmAction(notify);
 
     // ---- Nightly purge (LIB-08) ------------------------------------------------------
     // EventBridge Scheduler runs the jobs task definition once a night on the
@@ -193,6 +280,34 @@ export class OpsStack extends cdk.Stack {
       });
     purgeAlarm.addAlarmAction(notify);
 
+    // The job's last line (`main.ts`: `job finished` with `job: 'purge'` and the exit code)
+    // as a run counter, so a scheduler that stops invoking, a task that never starts, or a
+    // job that hangs is noticed: no run in PURGE_SILENCE_HOURS is an alarm. Missing data is
+    // breaching on purpose — a silent log group is exactly the condition. Expect this alarm
+    // to sit in ALARM from a fresh deploy until the first nightly run.
+    const purgeRuns = new logs.MetricFilter(this, 'PurgeRuns', {
+      logGroup: props.jobsLogGroup,
+      metricNamespace: 'GeDe/Jobs',
+      metricName: 'PurgeRuns',
+      filterPattern: logs.FilterPattern.all(
+        logs.FilterPattern.stringValue('$.msg', '=', 'job finished'),
+        logs.FilterPattern.stringValue('$.job', '=', 'purge'),
+      ),
+      metricValue: '1',
+    });
+    const purgeNeverRan = purgeRuns
+      .metric({ period: cdk.Duration.hours(1), statistic: 'Sum' })
+      .createAlarm(this, 'PurgeNeverRan', {
+        alarmName: `gede-${config.envName}-purge-never-ran`,
+        alarmDescription: `The nightly purge has not logged a finished run in ${String(PURGE_SILENCE_HOURS)} hours (scheduler, task start or a hung job)`,
+        threshold: 1,
+        evaluationPeriods: PURGE_SILENCE_HOURS,
+        datapointsToAlarm: PURGE_SILENCE_HOURS,
+        comparisonOperator: cloudwatch.ComparisonOperator.LESS_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.BREACHING,
+      });
+    purgeNeverRan.addAlarmAction(notify);
+
     new budgets.CfnBudget(this, 'Budget', {
       budget: {
         budgetName: `gede-${config.envName}-monthly`,
@@ -206,6 +321,17 @@ export class OpsStack extends cdk.Stack {
             notificationType: 'ACTUAL',
             comparisonOperator: 'GREATER_THAN',
             threshold: 80,
+            thresholdType: 'PERCENTAGE',
+          },
+          subscribers: [{ subscriptionType: 'EMAIL', address: config.alertsEmail }],
+        },
+        // The forecast says it before the bill does (2026-09-13: US$128 forecast on a US$100
+        // budget while the actual was at 53 %, and nothing had said so).
+        {
+          notification: {
+            notificationType: 'FORECASTED',
+            comparisonOperator: 'GREATER_THAN',
+            threshold: 100,
             thresholdType: 'PERCENTAGE',
           },
           subscribers: [{ subscriptionType: 'EMAIL', address: config.alertsEmail }],

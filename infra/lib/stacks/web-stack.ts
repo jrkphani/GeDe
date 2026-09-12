@@ -19,7 +19,12 @@ export interface WebStackProps extends cdk.StackProps {
   readonly webAcl: wafv2.CfnWebACL;
   readonly userPoolId: string;
   readonly userPoolClientId: string;
-  readonly appleSignIn: boolean;
+  /**
+   * Off, or on with the Cognito hosted-UI host Apple redirects through
+   * (`AuthStack.hostedUiDomain`). The SPA's `parseConfig` accepts exactly
+   * `false | { domain: string }` and throws at boot on anything else (issue #61).
+   */
+  readonly appleSignIn: false | { readonly domain: string };
 }
 
 /** Header CloudFront adds to every `/api/*` origin request; the ALB forwards nothing without it. */
@@ -60,14 +65,33 @@ const SPA_ROUTER_FUNCTION = `function handler(event) {
 }
 `;
 
-/** Shape of `/config.json`, read by apps/web at boot. Keep in sync with apps/web. */
-interface WebRuntimeConfig {
+/**
+ * Shape of `/config.json`, read by apps/web at boot. Mirrors `AppConfig` in
+ * `apps/web/src/config.ts`; `infra/test/stage.test.ts` parses the rendered file with the
+ * SPA's own `parseConfig` so the two cannot drift silently (#61).
+ */
+export interface WebRuntimeConfig {
   readonly region: string;
   readonly userPoolId: string;
   readonly userPoolClientId: string;
   readonly apiUrl: string;
   readonly wsUrl: string;
-  readonly appleSignIn: boolean;
+  readonly appleSignIn: false | { readonly domain: string };
+}
+
+/** The `/config.json` document for one environment; pure, so the shape is testable without a synth. */
+export function webRuntimeConfig(
+  config: EnvConfig,
+  props: Pick<WebStackProps, 'userPoolId' | 'userPoolClientId' | 'appleSignIn'>,
+): WebRuntimeConfig {
+  return {
+    region: config.region,
+    userPoolId: props.userPoolId,
+    userPoolClientId: props.userPoolClientId,
+    apiUrl: `https://${config.domain}/api`,
+    wsUrl: `wss://ws.${config.domain}/ws`,
+    appleSignIn: props.appleSignIn === false ? false : { domain: props.appleSignIn.domain },
+  };
 }
 
 /**
@@ -136,8 +160,8 @@ export class WebStack extends cdk.Stack {
       "'self'",
       `https://cognito-idp.${config.region}.amazonaws.com`,
       `wss://ws.${config.domain}`,
-      // AuthStack's hosted-UI `domainPrefix` is the same `gede-<env>` prefix.
-      ...(props.appleSignIn ? [`https://${prefix}.auth.${config.region}.amazoncognito.com`] : []),
+      // The hosted-UI host AuthStack created for Apple (token endpoint, redirects).
+      ...(props.appleSignIn === false ? [] : [`https://${props.appleSignIn.domain}`]),
     ];
     const contentSecurityPolicy = [
       "default-src 'self'",
@@ -244,14 +268,7 @@ export class WebStack extends cdk.Stack {
       // No distribution-wide `errorResponses`: they would rewrite `/api/*` 403/404 to 200.
     });
 
-    const runtimeConfig: WebRuntimeConfig = {
-      region: config.region,
-      userPoolId: props.userPoolId,
-      userPoolClientId: props.userPoolClientId,
-      apiUrl: `https://${config.domain}/api`,
-      wsUrl: `wss://ws.${config.domain}/ws`,
-      appleSignIn: props.appleSignIn,
-    };
+    const runtimeConfig = webRuntimeConfig(config, props);
 
     new s3deploy.BucketDeployment(this, 'Deploy', {
       destinationBucket: bucket,

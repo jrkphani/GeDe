@@ -3,7 +3,9 @@
   max-height: 82vh;
   overflow: auto;
   padding: 0.3125rem;
-  border: 1px solid var(--border);
+  /* The menu's edge against the page is a component boundary (WCAG 1.4.11), so
+     --border-strong; the separators inside stay the decorative --border (#81). */
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);

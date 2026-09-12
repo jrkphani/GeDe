@@ -40,6 +40,20 @@ export interface AppContext {
 export const HOSTED_ZONE_PLACEHOLDER = 'REPLACE_AFTER_DOMAIN_REGISTRATION';
 
 /**
+ * Name of the IAM role the pipeline's `Playwright-Live` CodeBuild step runs as. It is fixed
+ * because two stacks meet on it: `PipelineStack` creates the role (the pipeline stack cannot
+ * know a stage's pool or secret ARN at synth time), and each stage's `AuthStack` attaches an
+ * `AWS::IAM::Policy` to it by name that allows `cognito-idp:AdminInitiateAuth` on exactly
+ * that pool and `secretsmanager:GetSecretValue` on exactly the e2e user's secret.
+ */
+export const PLAYWRIGHT_LIVE_ROLE_NAME = 'gede-pipeline-playwright-live';
+
+/** Sign-in name of the live suite's account in a stage's pool (`e2e@<domain>`). */
+export function e2eUsername(config: EnvConfig): string {
+  return `e2e@${config.domain}`;
+}
+
+/**
  * Tags applied to every resource. CDK aspects do not cross `Stage` boundaries, so these are
  * applied to the App (pipeline stack) and again to each `GedeStage`.
  */

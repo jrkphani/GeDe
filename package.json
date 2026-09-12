@@ -26,6 +26,7 @@
     "build": "npm run build --workspaces --if-present",
     "e2e": "npm run e2e --workspace apps/web",
     "e2e:ui": "npm run e2e:ui --workspace apps/web",
+    "e2e:live": "npm run e2e:live --workspace apps/web",
     "e2e:install": "playwright install --only-shell chromium",
     "dev": "npm run dev --workspace apps/web",
     "synth": "npm run synth --workspace infra",

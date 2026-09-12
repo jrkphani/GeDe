@@ -86,7 +86,11 @@ export function verifiedEmailFromIdClaims(claims: {
 }
 
 export function createCognitoVerifier(config: Config): TokenVerifier {
-  const pool = { userPoolId: config.COGNITO_USER_POOL_ID, clientId: config.COGNITO_CLIENT_ID };
+  // `clientId` may be a list: a token from any listed app client verifies (the SPA's and gede-e2e's).
+  const pool = {
+    userPoolId: config.COGNITO_USER_POOL_ID,
+    clientId: [...config.COGNITO_CLIENT_IDS],
+  };
   const access = CognitoJwtVerifier.create({ ...pool, tokenUse: 'access' });
   const id = CognitoJwtVerifier.create({ ...pool, tokenUse: 'id' });
   return {

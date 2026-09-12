@@ -15,13 +15,10 @@ const MESSAGE_AWARENESS = 1;
 /** GeDe's server → client notice (`services/sync/src/ws/protocol.ts`). */
 const MESSAGE_NOTICE = 4;
 
-/** The token a connection carried, by either transport; the bearer subprotocol wins. */
-export function tokenOf(url: string, protocols: readonly string[]): string | null {
+/** The token a connection carried as the `bearer.` subprotocol — the only transport the service reads (#63). */
+export function tokenOf(protocols: readonly string[]): string | null {
   const bearer = protocols.find((p) => p.startsWith('bearer.'));
-  if (bearer !== undefined) return bearer.slice('bearer.'.length);
-  const query = url.indexOf('?');
-  if (query < 0) return null;
-  return new URLSearchParams(url.slice(query + 1)).get('token');
+  return bearer === undefined ? null : bearer.slice('bearer.'.length);
 }
 
 export interface FakeRoomOptions {
@@ -38,11 +35,7 @@ export class FakeRoom {
   readonly urls: string[] = [];
   /** The subprotocol list each socket offered (`['gede.v1', 'bearer.<token>']`), in order. */
   readonly protocols: string[][] = [];
-  /**
-   * The access token each connection carried — from the `bearer.` subprotocol
-   * (what the SPA sends, issue #32) or, as the service still accepts for one
-   * release, a `?token=` query parameter. `null` when neither was present.
-   */
+  /** The access token each connection carried as the `bearer.` subprotocol (issue #32); `null` when absent. */
   readonly tokens: (string | null)[] = [];
 
   constructor(options: FakeRoomOptions = {}) {
@@ -78,7 +71,7 @@ export class FakeRoom {
     await page.routeWebSocket(/\/ws\//, (ws) => {
       this.urls.push(ws.url());
       this.protocols.push(ws.protocols());
-      this.tokens.push(tokenOf(ws.url(), ws.protocols()));
+      this.tokens.push(tokenOf(ws.protocols()));
       this.sockets.add(ws);
       ws.onMessage((message) => {
         this.receive(ws, typeof message === 'string' ? Buffer.from(message) : message);

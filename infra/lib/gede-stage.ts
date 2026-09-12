@@ -33,6 +33,10 @@ export interface GedeStageProps extends cdk.StageProps {
 export class GedeStage extends cdk.Stage {
   readonly apiUrl: cdk.CfnOutput;
   readonly appUrl: cdk.CfnOutput;
+  /** For the pipeline's Playwright-Live step: where and as whom the live suite signs in. */
+  readonly userPoolId: cdk.CfnOutput;
+  readonly e2eClientId: cdk.CfnOutput;
+  readonly e2eUserSecretArn: cdk.CfnOutput;
 
   constructor(scope: Construct, id: string, props: GedeStageProps) {
     super(scope, id, props);
@@ -77,7 +81,8 @@ export class GedeStage extends cdk.Stage {
       webAcl: edge.webAcl,
       userPoolId: auth.userPool.userPoolId,
       userPoolClientId: auth.userPoolClient.userPoolClientId,
-      appleSignIn,
+      // `false | { domain }`, the shape apps/web's parseConfig accepts (#61).
+      appleSignIn: auth.hostedUiDomain === undefined ? false : { domain: auth.hostedUiDomain },
     });
 
     const service = new ServiceStack(this, 'Service', {
@@ -92,7 +97,8 @@ export class GedeStage extends cdk.Stage {
       docsBucket: data.docsBucket,
       emailIdentity: auth.emailIdentity,
       userPoolId: auth.userPool.userPoolId,
-      userPoolClientId: auth.userPoolClient.userPoolClientId,
+      // The SPA's tokens and the live suite's (`gede-e2e`) both verify.
+      userPoolClientIds: [auth.userPoolClient.userPoolClientId, auth.e2eClient.userPoolClientId],
       originVerifySecrets: web.originVerifySecrets,
     });
 
@@ -111,6 +117,7 @@ export class GedeStage extends cdk.Stage {
       config,
       service: service.service,
       alb: service.alb,
+      targetGroup: service.targetGroup,
       database: data.database,
       cluster: service.cluster,
       jobsTaskDefinition: service.jobsTaskDefinition,
@@ -120,6 +127,9 @@ export class GedeStage extends cdk.Stage {
 
     this.apiUrl = service.apiUrl;
     this.appUrl = web.appUrl;
+    this.userPoolId = auth.userPoolIdOutput;
+    this.e2eClientId = auth.e2eClientIdOutput;
+    this.e2eUserSecretArn = auth.e2eUserSecretArnOutput;
   }
 }
 

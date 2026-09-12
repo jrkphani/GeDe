@@ -11,7 +11,7 @@ Read the root `CLAUDE.md` first; everything there applies here.
 
 ## Runtime config
 
-- The app reads `/config.json` at startup. Keys, as written by `infra/lib/stacks/web-stack.ts`: `region`, `userPoolId`, `userPoolClientId`, `apiUrl` (`https://gede.work/api`), `wsUrl` (`wss://ws.gede.work/ws`), `appleSignIn`. Change both sides in one PR. Nothing environment-specific is baked into the bundle; `import.meta.env` carries no Cognito ids.
+- The app reads `/config.json` at startup. Keys, as written by `infra/lib/stacks/web-stack.ts`: `region`, `userPoolId`, `userPoolClientId`, `apiUrl` (`https://gede.work/api`), `wsUrl` (`wss://ws.gede.work/ws`), `appleSignIn` (`false`, or `{ domain }` with the Cognito hosted-UI host — `parseConfig` rejects anything else, #61). Change both sides in one PR; `infra/test/stage.test.ts` parses the rendered file with `parseConfig`. Nothing environment-specific is baked into the bundle; `import.meta.env` carries no Cognito ids.
 - CDK writes the production `config.json` next to the bundle. Locally, copy `public/config.example.json` to `public/config.json`.
 
 ## Auth

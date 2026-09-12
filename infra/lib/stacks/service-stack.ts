@@ -30,7 +30,8 @@ export interface ServiceStackProps extends cdk.StackProps {
   readonly docsBucket: s3.IBucket;
   readonly emailIdentity: ses.IEmailIdentity;
   readonly userPoolId: string;
-  readonly userPoolClientId: string;
+  /** App clients whose tokens the service accepts: the SPA's and the pipeline's `gede-e2e` client. */
+  readonly userPoolClientIds: readonly string[];
   /** Accepted `X-Origin-Verify` values, from WebStack (all generations). */
   readonly originVerifySecrets: readonly secretsmanager.ISecret[];
 }
@@ -68,6 +69,8 @@ export const PURGE_COMMAND = ['node', 'main.js', '--job', 'purge'];
  */
 export class ServiceStack extends cdk.Stack {
   readonly alb: elbv2.ApplicationLoadBalancer;
+  /** The sync service's target group (OpsStack alarms on its healthy host count). */
+  readonly targetGroup: elbv2.ApplicationTargetGroup;
   readonly service: ecs.FargateService;
   readonly cluster: ecs.Cluster;
   readonly serviceSecurityGroup: ec2.SecurityGroup;
@@ -112,7 +115,7 @@ export class ServiceStack extends cdk.Stack {
       PGSSLMODE: 'verify-full',
       PGSSLROOTCERT: '/app/rds-global-bundle.pem',
       COGNITO_USER_POOL_ID: props.userPoolId,
-      COGNITO_CLIENT_ID: props.userPoolClientId,
+      COGNITO_CLIENT_IDS: props.userPoolClientIds.join(','),
       COGNITO_REGION: config.region,
       DOCS_BUCKET: props.docsBucket.bucketName,
       DOCS_PREFIX,
@@ -323,6 +326,8 @@ export class ServiceStack extends cdk.Stack {
         ),
       ],
     });
+
+    this.targetGroup = syncTargets;
 
     // The WebSocket goes straight to the ALB (ADR-010); JWT + permission checks happen on the
     // upgrade in services/sync/src/ws/route.ts.

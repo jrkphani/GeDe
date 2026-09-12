@@ -80,7 +80,7 @@ async function boot(role: string): Promise<Runtime> {
   const logger = pino({
     level: config.LOG_LEVEL,
     base: { service: 'gede-sync', role },
-    // Fastify adopts these: no access token from the deprecated `?token=` or a header reaches a log line.
+    // Fastify adopts these: no access token from a `?token=` URL (unread since #63) or a header reaches a log line.
     serializers: { req: requestSerializer },
     redact: { paths: REDACTED_PATHS, censor: '[redacted]' },
   });

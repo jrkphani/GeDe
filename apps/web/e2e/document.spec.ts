@@ -544,6 +544,101 @@ test.describe('grid editing', () => {
     });
   }
 
+  test('A11Y-03 RESP-04 the dark theme by OS preference at 1024 px, inspector open, a text tool pressed and Bold on: the sheet name and the pressed tool read at ≥ 4.5:1 and the page passes axe (#80)', async ({
+    page,
+    checkA11y,
+    snapshot,
+  }) => {
+    await installFakes(page);
+    await page.setViewportSize({ width: 1024, height: 800 });
+    // The other dark passes pin `data-theme="dark"`; this one takes the other trigger,
+    // `prefers-color-scheme: dark`, so both selectors in tokens.css are exercised.
+    await page.emulateMedia({ colorScheme: 'dark' });
+    await signInTo(page, `/d/${DOC_ID}`);
+    await page.getByRole('button', { name: 'Add table' }).click();
+    const grid = page.getByRole('grid').first();
+    await grid.getByRole('gridcell').first().click();
+    await page.keyboard.type('Base camp');
+    await page.keyboard.press('Enter');
+    // A text tool pressed in the toolbar (the inspector toggle is `.gd-tool--text`) and
+    // a pressed control inside the rail.
+    const formatToggle = page.getByRole('button', { name: 'Format inspector' });
+    await formatToggle.click();
+    await expect(formatToggle).toHaveAttribute('aria-pressed', 'true');
+    const rail = page.getByTestId('inspector');
+    await expect(rail).toHaveAttribute('data-state', 'open');
+    await grid.getByRole('gridcell').first().click();
+    await rail.getByRole('tab', { name: 'Text' }).click();
+    await rail.getByRole('button', { name: 'Bold' }).click();
+    await expect(rail.getByRole('button', { name: 'Bold' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+
+    // The two elements #80 named, measured the way axe measures them: the computed
+    // text colour against the first painted background behind the element.
+    const ink = await computedTokenColor(page, '--ink');
+    const pressed = page.locator('.gd-tool--pressed').first();
+    await expect(pressed).toHaveCSS('color', ink);
+    const sheetName = page.locator('.gd-doc__sheet-name').first();
+    await expect(sheetName).toHaveCSS('color', ink);
+    const ratios = await page.evaluate(() => {
+      const channel = (v: number) => {
+        const c = v / 255;
+        return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+      };
+      const parse = (css: string): [number, number, number, number] => {
+        const rgb = /rgba?\(([\d.]+),\s*([\d.]+),\s*([\d.]+)(?:,\s*([\d.]+))?\)/.exec(css);
+        if (rgb) {
+          return [
+            Number(rgb[1]),
+            Number(rgb[2]),
+            Number(rgb[3]),
+            rgb[4] === undefined ? 1 : Number(rgb[4]),
+          ];
+        }
+        // `color-mix()` computes to `color(srgb r g b [/ a])` with channels in 0..1.
+        const srgb = /color\(srgb ([\d.]+) ([\d.]+) ([\d.]+)(?: \/ ([\d.]+))?\)/.exec(css);
+        if (!srgb) throw new Error(`unparsed colour ${css}`);
+        return [
+          Number(srgb[1]) * 255,
+          Number(srgb[2]) * 255,
+          Number(srgb[3]) * 255,
+          srgb[4] === undefined ? 1 : Number(srgb[4]),
+        ];
+      };
+      const luminance = ([r, g, b]: [number, number, number, number]) =>
+        0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+      const background = (el: Element): [number, number, number, number] => {
+        for (let node: Element | null = el; node; node = node.parentElement) {
+          const bg = parse(getComputedStyle(node).backgroundColor);
+          if (bg[3] > 0) return bg;
+        }
+        return [255, 255, 255, 1];
+      };
+      const ratio = (selector: string) => {
+        const el = document.querySelector(selector);
+        if (!el) throw new Error(`no ${selector}`);
+        const fg = luminance(parse(getComputedStyle(el).color));
+        const bg = luminance(background(el));
+        const [hi, lo] = fg > bg ? [fg, bg] : [bg, fg];
+        return Number(((hi + 0.05) / (lo + 0.05)).toFixed(2));
+      };
+      return {
+        sheetName: ratio('.gd-doc__sheet-name'),
+        pressedTool: ratio('.gd-tool--pressed'),
+        pressedText: ratio('.gd-tool--text.gd-tool--pressed'),
+      };
+    });
+    console.log('#80 dark 1024 ratios', JSON.stringify(ratios));
+    expect(ratios.sheetName).toBeGreaterThanOrEqual(4.5);
+    expect(ratios.pressedTool).toBeGreaterThanOrEqual(4.5);
+    expect(ratios.pressedText).toBeGreaterThanOrEqual(4.5);
+    await checkA11y('document grid inspector 1024 dark');
+    await snapshot('document grid inspector 1024 dark');
+  });
+
   test('RESP-02 A11Y-04 at 480 px none of the grid editing renders: no editor, strip, stub, divider, corner or table menu; a locked cell still says why', async ({
     page,
     snapshot,

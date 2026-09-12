@@ -1,14 +1,15 @@
 # Testing
 
-Three layers, one rule for all of them: a test's name starts with the requirement id it
+Four layers, one rule for all of them: a test's name starts with the requirement id it
 proves (`GRID-03 single click arms a cell`). `docs/TRACEABILITY.md` is generated from those
 names by `npm run traceability`; regenerate it in every PR that adds or renames a test.
 
-| Layer                    | Tool                                                   | Where                            | Runs in CI as                            |
-| ------------------------ | ------------------------------------------------------ | -------------------------------- | ---------------------------------------- |
-| Unit and component       | Vitest (+ React Testing Library, jsdom for `apps/web`) | `**/*.test.ts(x)` next to source | `npm run verify`                         |
-| Infrastructure           | Vitest on synthesized CloudFormation templates         | `infra/test/`                    | `npm run verify`                         |
-| Journeys + accessibility | Playwright (Chromium) + `@axe-core/playwright`         | `apps/web/e2e/`                  | `npm run e2e` (Synth step, after verify) |
+| Layer                    | Tool                                                   | Where                            | Runs in CI as                                          |
+| ------------------------ | ------------------------------------------------------ | -------------------------------- | ------------------------------------------------------ |
+| Unit and component       | Vitest (+ React Testing Library, jsdom for `apps/web`) | `**/*.test.ts(x)` next to source | `npm run verify`                                       |
+| Infrastructure           | Vitest on synthesized CloudFormation templates         | `infra/test/`                    | `npm run verify`                                       |
+| Journeys + accessibility | Playwright (Chromium) + `@axe-core/playwright`         | `apps/web/e2e/`                  | `npm run e2e` (Synth step, after verify)               |
+| Live journey             | Playwright (Chromium) against `https://gede.work`      | `apps/web/e2e-live/`             | `npm run e2e:live` (Playwright-Live step, after Smoke) |
 
 ## Unit tests
 
@@ -157,6 +158,74 @@ Reading `apps/web/test-results/axe/summary.json`:
 The same table is printed at the end of every run (locally and in the CodeBuild log), so
 the CI record of the scan is the Synth build log; the JSON files live only on the runner.
 
+## Live suite (`apps/web/e2e-live/`)
+
+One journey against the deployed product, nothing faked: real Cognito, real sync service,
+real CloudFront. It runs in the pipeline's `Playwright-Live` CodeBuild step after Smoke, and
+it is a **post-deploy** check: a red run fails the execution but rolls nothing back —
+production is already updated (RUNBOOK §2). Locally it runs against production too; there is
+no other environment.
+
+`journey.spec.ts`: sign in → the library loads → New workscape, named after the run → type
+in B5, Enter → reload (the session is memory-only, so this is a second sign-in that returns
+to the document) shows the text → a fresh browser context (no IndexedDB replica) shows it
+too, which is the proof the service persisted it → ⌘F finds it → Share opens the sheet →
+Delete, Recently Deleted, Delete All (the permanent confirm) → Sign out lands on
+`/signed-out` and `/` is a sign-in again. Requirement ids in the test name as everywhere.
+
+### How it signs in
+
+The pool is passwordless for people and the SPA client has only the `USER_AUTH` flow; the
+SPA keeps its tokens in memory (AUTH-09), so there is nothing to seed. The suite therefore
+has an account and a client of its own, both created by CDK (`infra/lib/stacks/auth-stack.ts`):
+
+- `gede-e2e`, a second app client whose only flow is `ADMIN_USER_PASSWORD_AUTH` — usable
+  with IAM credentials alone, never from a browser; the SPA client is untouched (ADR-011).
+- `e2e@gede.work`, created by a small custom-resource Lambda (`infra/assets/e2e-user/`)
+  with a permanent password generated into Secrets Manager `gede/prod/e2e-user`. The
+  handler receives the secret's ARN, never the value, and logs only the outcome.
+- `services/sync` accepts tokens from both clients (`COGNITO_CLIENT_IDS`).
+- The pool's pre-authentication trigger (`infra/assets/pre-auth/`) lets `e2e@gede.work` sign
+  in through `gede-e2e` only and lets nobody else use that client, so the password never works
+  from a browser. What a leak of the secret would expose is one test account and its own
+  throwaway documents: the suite never shares, links or invites, and nothing is shared with it.
+  Keep the account that way — no step of the live journey may share, or accept an invitation.
+
+Per worker, `fixtures/live.ts` reads the secret and mints real tokens with
+`AdminInitiateAuth`. Each sign-in then drives the real screen — email, "Email me a one-time
+code" — and answers the SPA's own `InitiateAuth` request at the network edge with those tokens
+as an `AuthenticationResult`, exactly the shape Cognito returns when no challenge is needed;
+Amplify stores them and raises `signedIn` as after a code. This is the one stub the live
+suite has, and it stands at the network boundary: the tokens are Cognito's, minted seconds
+earlier, and everything after — `GetUser`, `/api/*`, the WebSocket — is real. The SPA
+bundle is the deployed one, byte for byte.
+
+The worker's teardown soft-deletes every document the account owns and calls
+`delete-all`, so a red run leaves nothing for the next.
+
+### Running it locally
+
+```bash
+export AWS_PROFILE=phani-quadnomics AWS_REGION=ap-southeast-1
+export E2E_BASE_URL=https://gede.work
+export E2E_USER_POOL_ID=$(aws cloudformation describe-stacks --stack-name GeDe-Prod-Auth \
+  --query "Stacks[0].Outputs[?OutputKey=='UserPoolId'].OutputValue" --output text)
+export E2E_CLIENT_ID=$(aws cloudformation describe-stacks --stack-name GeDe-Prod-Auth \
+  --query "Stacks[0].Outputs[?OutputKey=='E2eClientId'].OutputValue" --output text)
+export E2E_SECRET_ARN=$(aws cloudformation describe-stacks --stack-name GeDe-Prod-Auth \
+  --query "Stacks[0].Outputs[?OutputKey=='E2eUserSecretArn'].OutputValue" --output text)
+npm run e2e:install                       # once
+npm run e2e:live                          # one worker, serial, 60 s per test
+npm run e2e:live -- --ui                  # Playwright's UI mode
+```
+
+Your profile needs `cognito-idp:AdminInitiateAuth` on the pool and `GetSecretValue` on the
+secret (an administrator has both). The pipeline's step runs as `gede-pipeline-playwright-live`,
+which has exactly those two grants (`GeDe-Prod-Auth` attaches them by role name). Outputs
+land in `apps/web/test-results-live/` and `apps/web/playwright-report-live/` (gitignored).
+The suite runs against production: keep it to what it is — one account, one document,
+deleted before sign-out.
+
 ## CI
 
 CodeBuild runs `npm ci` → `npx playwright install --only-shell chromium` (after installing
@@ -164,4 +233,6 @@ Chromium's shared libraries with dnf) → `npm run verify` → `npm run db:parit
 (every migration against a throwaway postgres:17 in Docker) → `npm run e2e` → web build →
 synth. Any red step stops the pipeline before assets are published. Why the suite runs on the AL2023
 arm64 image rather than a Playwright container is in `infra/CLAUDE.md`, "Playwright on
-CodeBuild"; `infra/test/stage.test.ts` pins the command order.
+CodeBuild"; `infra/test/stage.test.ts` pins the command order. After the Prod stage and Smoke,
+the `Playwright-Live` project (same image and Chromium install, its own role) runs
+`npm run e2e:live` against the deployment.

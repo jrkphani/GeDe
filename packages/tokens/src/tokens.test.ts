@@ -38,6 +38,7 @@ describe('dark theme', () => {
       '--surface',
       '--surface-sunken',
       '--border',
+      '--border-strong',
       '--ink',
       '--ink-muted',
       '--action-primary-bg',
@@ -67,5 +68,65 @@ describe('presence palette', () => {
     for (const colour of presence) expect(brand).not.toContain(colour);
     expect(presence).not.toContain(root['--forest-700']);
     expect(presence).not.toContain(root['--forest-500']);
+  });
+});
+
+/** WCAG 2.1 relative luminance of a `#rrggbb` colour. */
+function luminance(hex: string): number {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex);
+  if (m === null) throw new Error(`not a 6-digit hex colour: ${hex}`);
+  const [r, g, b] = [0, 2, 4].map((i) => {
+    const v = parseInt(m[1]!.slice(i, i + 2), 16) / 255;
+    return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4;
+  }) as [number, number, number];
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/** WCAG contrast ratio, 1..21. */
+export function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number];
+  return (hi + 0.05) / (lo + 0.05);
+}
+
+/** Resolve `var(--x)` one level (the primitives are literal in the same block). */
+function resolved(block: Record<string, string>, name: string): string {
+  const value = block[name];
+  if (value === undefined) throw new Error(`no ${name}`);
+  const ref = /^var\((--[a-z0-9-]+)\)$/.exec(value);
+  return ref === null ? value : resolved(block, ref[1]!);
+}
+
+describe('A11Y-03 boundary contrast (#81)', () => {
+  const light = Object.fromEntries(declarations(/:root/));
+  const dark = { ...light, ...Object.fromEntries(declarations(/\[data-theme="dark"\]/)) };
+  const surfaces = ['--surface', '--surface-sunken'] as const;
+
+  /** Every `--border*` pair, recorded; only `--border-strong` carries the non-text floor. */
+  const table = (block: Record<string, string>) =>
+    Object.fromEntries(
+      ['--border', '--border-strong'].map((token) => [
+        token,
+        Object.fromEntries(
+          surfaces.map((s) => [
+            s,
+            Number(contrast(resolved(block, token), resolved(block, s)).toFixed(2)),
+          ]),
+        ),
+      ]),
+    );
+
+  it('A11Y-03 --border-strong is at least 3:1 on --surface and --surface-sunken in both themes; theme.ts carries the same value', () => {
+    const l = table(light);
+    const d = table(dark);
+    // Recorded ratios (DESIGN-SYSTEM §5: "token table records every ratio").
+    expect(l['--border-strong']).toEqual({ '--surface': 4.22, '--surface-sunken': 3.99 });
+    expect(d['--border-strong']).toEqual({ '--surface': 3.47, '--surface-sunken': 3.7 });
+    for (const block of [l, d])
+      for (const s of surfaces) expect(block['--border-strong']![s]).toBeGreaterThanOrEqual(3);
+    // --border stays the decorative hairline: below the floor by design, so nothing may use
+    // it as a control's only boundary (#81).
+    expect(l['--border']!['--surface']).toBeLessThan(3);
+    expect(d['--border']!['--surface']).toBeLessThan(3);
+    expect(theme.color.surface.borderStrong).toBe(resolved(light, '--border-strong'));
   });
 });

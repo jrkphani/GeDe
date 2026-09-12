@@ -184,13 +184,16 @@
   color: var(--ink);
 }
 .gd-tool--pressed {
-  /* Active state: brand tint plus the brand colour on the glyph (non-text, ≥ 3:1 in both themes). */
+  /* Active state: the brand tint carries the state; whatever the tool contains
+     stays ink, so a text label is 4.5:1 in both themes (#80). Only the glyph
+     below takes the brand colour (non-text, ≥ 3:1 on the tint in both themes). */
   background: color-mix(in srgb, var(--action-primary-bg) 12%, var(--surface));
+  color: var(--ink);
+}
+.gd-tool--pressed .gd-icon {
   color: var(--action-primary-bg);
 }
 .gd-tool--text.gd-tool--pressed {
-  /* A text toggle needs 4.5:1: ink at 600 weight, the tint carries the state. */
-  color: var(--ink);
   font-weight: 600;
 }
 .gd-tool[aria-disabled='true'] {

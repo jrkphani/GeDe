@@ -16,7 +16,20 @@ export const configSchema = z.object({
   LOG_LEVEL: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent']).default('info'),
 
   COGNITO_USER_POOL_ID: z.string().min(1),
-  COGNITO_CLIENT_ID: z.string().min(1),
+  /**
+   * App clients whose tokens are accepted, comma-separated: the SPA client and the
+   * pipeline's `gede-e2e` client (the live suite signs in through it). `aws-jwt-verify`
+   * checks the access token's `client_id` / the ID token's `aud` against the list.
+   */
+  COGNITO_CLIENT_IDS: z
+    .string()
+    .transform((raw) =>
+      raw
+        .split(',')
+        .map((id) => id.trim())
+        .filter((id) => id !== ''),
+    )
+    .pipe(z.array(z.string().min(1)).nonempty()),
   COGNITO_REGION: z.string().min(1),
 
   /** S3 bucket for compacted Yjs snapshots (`docs`). */

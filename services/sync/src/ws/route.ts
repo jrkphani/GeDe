@@ -4,12 +4,10 @@
  * Browsers cannot set headers on a WebSocket, but they can offer subprotocols,
  * so the access token travels in `Sec-WebSocket-Protocol` as
  * `gede.v1, bearer.<token>` (issue #32); the server selects `gede.v1` and
- * never echoes the token. The older `?token=` query parameter is still
- * accepted for one release — with a deprecation warning in the log, never
- * the token itself — because URLs reach access logs and browser history in
- * ways headers do not. Cutoff: the first release after #49 has been live for
- * a week (every pre-#49 SPA bundle has left the caches by then); issue #63
- * lists what to delete.
+ * never echoes the token. That is the only transport: a `?token=` query
+ * parameter is ignored (#63 removed the one-release fallback #49 kept for the
+ * rolling deploy), so a URL can never carry a credential the server would
+ * honour — URLs reach access logs and browser history in ways headers do not.
  *
  * Verification happens in a `preValidation` hook, i.e. before the HTTP
  * upgrade completes; nothing about the document is sent to an unverified
@@ -53,7 +51,6 @@ declare module 'fastify' {
 }
 
 const params = z.object({ docId: z.string().uuid() });
-const query = z.object({ token: z.string().min(1) });
 
 /** Split a `Sec-WebSocket-Protocol` value (one header, or several joined) into its entries. */
 export function parseSubprotocols(header: string | string[] | undefined): string[] {
@@ -85,25 +82,15 @@ export function tokenFromSubprotocols(header: string | string[] | undefined): st
  * a `bearer.<token>` entry must never be selected, or the token would be sent
  * back in the response headers. A browser that offered protocols and gets
  * none selected fails the handshake itself, which is the right outcome for a
- * client that speaks neither `gede.v1` nor the query fallback.
+ * client that does not speak `gede.v1`.
  */
 export function selectSubprotocol(offered: Set<string>): string | false {
   return offered.has(WS_SUBPROTOCOL) ? WS_SUBPROTOCOL : false;
 }
 
-/** Where the token came from, for the deprecation log line. Never the token. */
-export type TokenTransport = 'subprotocol' | 'query';
-
-export function extractToken(
-  request: Pick<FastifyRequest, 'headers' | 'query'>,
-): { token: string; transport: TokenTransport } | undefined {
-  const fromHeader = tokenFromSubprotocols(request.headers['sec-websocket-protocol']);
-  if (fromHeader !== undefined) return { token: fromHeader, transport: 'subprotocol' };
-  // Deprecated transport (issue #63 removes it): accepted only so SPA bundles
-  // built before #49 survive the rolling deploy that ships this.
-  const q = query.safeParse(request.query);
-  if (q.success) return { token: q.data.token, transport: 'query' };
-  return undefined;
+/** The access token offered on the upgrade, or `undefined`. The subprotocol is the only place it is read from. */
+export function extractToken(request: Pick<FastifyRequest, 'headers'>): string | undefined {
+  return tokenFromSubprotocols(request.headers['sec-websocket-protocol']);
 }
 
 export async function authoriseUpgrade(
@@ -116,20 +103,14 @@ export async function authoriseUpgrade(
   }
   const p = params.safeParse(request.params);
   if (!p.success) return { ok: false, code: CLOSE_BAD_REQUEST, reason: 'bad document id' };
-  const credential = extractToken(request);
-  if (credential === undefined) {
+  const token = extractToken(request);
+  if (token === undefined) {
     return { ok: false, code: CLOSE_UNAUTHENTICATED, reason: 'missing token' };
-  }
-  if (credential.transport === 'query') {
-    request.log.warn(
-      { documentId: p.data.docId, ref: request.id },
-      'websocket token in the query string is deprecated; offer it as the bearer.<token> subprotocol',
-    );
   }
 
   let user: AuthUser;
   try {
-    user = await deps.resolver.fromToken(credential.token);
+    user = await deps.resolver.fromToken(token);
   } catch (error) {
     if (error instanceof AppError && error.status === 401) {
       return { ok: false, code: CLOSE_UNAUTHENTICATED, reason: 'invalid token' };

@@ -15,7 +15,7 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 | `PGSSLMODE`                                          |                  | `disable` | `verify-full` in production                                                                |
 | `PGSSLROOTCERT`                                      | with verify-full |           | `/app/rds-global-bundle.pem` in the image                                                  |
 | `COGNITO_USER_POOL_ID`                               | yes              |           |                                                                                            |
-| `COGNITO_CLIENT_ID`                                  | yes              |           | access tokens are verified with `tokenUse: 'access'`                                       |
+| `COGNITO_CLIENT_IDS`                                 | yes              |           | comma-separated app client ids a token may carry (the SPA's, the pipeline's `gede-e2e`)    |
 | `COGNITO_REGION`                                     | yes              |           | also the S3 client region                                                                  |
 | `DOCS_BUCKET`                                        | yes              |           | S3 bucket for snapshots                                                                    |
 | `DOCS_PREFIX`                                        |                  | ``        | key prefix, e.g. `docs/`                                                                   |
@@ -40,7 +40,7 @@ Start a Postgres (any 16+; `createdb gede`), then:
 
 ```bash
 export PGHOST=127.0.0.1 PGPORT=5432 PGUSER=gede PGPASSWORD=gede PGDATABASE=gede PGSSLMODE=disable
-export COGNITO_USER_POOL_ID=… COGNITO_CLIENT_ID=… COGNITO_REGION=ap-southeast-1
+export COGNITO_USER_POOL_ID=… COGNITO_CLIENT_IDS=… COGNITO_REGION=ap-southeast-1
 export DOCS_BUCKET=… WEB_ORIGIN=http://localhost:5173
 npm run dev -w services/sync        # tsx watch src/main.ts; migrations apply on boot
 curl -i localhost:3000/healthz
@@ -172,9 +172,8 @@ rowId, columnId, snippet }] }`, at most 50, in sheet / table / row / column orde
   `{ "code": "read-only" }`, sent once per view-only connection on its first rejected write (see
   `src/ws/protocol.ts`). The access token is offered as a subprotocol: `Sec-WebSocket-Protocol:
 gede.v1, bearer.<access JWT>` (`new WebSocket(url, ['gede.v1', 'bearer.' + token])`); the server
-  selects `gede.v1` and never echoes the bearer entry. `?token=<access JWT>` is still accepted for
-  one release and logs a deprecation warning (never the token; the request log redacts the
-  parameter) — it goes in the release after this one. Close codes: 4401 unauthenticated, 4403 not
+  selects `gede.v1` and never echoes the bearer entry. A `?token=` query parameter is not read
+  (#63; the request log still redacts it). Close codes: 4401 unauthenticated, 4403 not
   a participant / wrong origin, 4404 unknown or deleted document, 4429 more sync messages per
   second than `WS_UPDATES_BURST` allows — step 1 and awareness queries count too, since each makes
   the server encode and send (the client treats it as terminal), 1013 the socket stopped

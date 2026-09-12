@@ -1,25 +1,67 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../lib/app.js';
+import { PLAYWRIGHT_LIVE_ROLE_NAME, PROD } from '../lib/config.js';
 import { type GedeStage } from '../lib/gede-stage.js';
+import { E2E_CLIENT_NAME } from '../lib/stacks/auth-stack.js';
 import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
 import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
-import { PURGE_SCHEDULE } from '../lib/stacks/ops-stack.js';
+import { PURGE_SCHEDULE, PURGE_SILENCE_HOURS } from '../lib/stacks/ops-stack.js';
 import { PURGE_COMMAND, gedeVersion } from '../lib/stacks/service-stack.js';
 import {
   ORIGIN_VERIFY_GENERATIONS,
   ORIGIN_VERIFY_HEADER,
   ORIGIN_VERIFY_PRESENTED,
+  webRuntimeConfig,
 } from '../lib/stacks/web-stack.js';
 
 const TEST_ZONE_ID = 'Z0000000000000000TEST';
 const INFRA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = path.resolve(INFRA_ROOT, '..');
+
+/**
+ * The SPA's own `parseConfig` (apps/web/src/config.ts), the one authority on what
+ * `/config.json` may contain (#61). Loaded at run time through a computed specifier:
+ * a literal import would pull the web app into infra's TypeScript program (`rootDir`),
+ * while vitest resolves and transforms the file like any other.
+ */
+async function webParseConfig(): Promise<(raw: unknown) => unknown> {
+  const specifier = pathToFileURL(path.join(REPO_ROOT, 'apps/web/src/config.ts')).href;
+  const mod = (await import(specifier)) as { parseConfig: (raw: unknown) => unknown };
+  return mod.parseConfig;
+}
+
+/**
+ * The `config.json` the Web stack deploys, as staged in the assembly. `Source.jsonData`
+ * writes CloudFormation tokens as `<<marker:0xbaba:N>>` (unquoted; the deployment Lambda
+ * substitutes the resolved value, JSON-encoded), so each marker stands in for a string here.
+ */
+function renderedWebConfig(assembly: cdk.cx_api.CloudAssembly): unknown {
+  const roots = [
+    assembly.directory,
+    ...assembly.nestedAssemblies.map((n) => n.nestedAssembly.directory),
+  ];
+  for (const root of roots) {
+    for (const entry of readdirSync(root)) {
+      if (!entry.startsWith('asset.')) continue;
+      const file = path.join(root, entry, 'config.json');
+      let text: string;
+      try {
+        text = readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      return JSON.parse(text.replace(/<<marker:0xbaba:(\d+)>>/g, '"marker-$1"')) as unknown;
+    }
+  }
+  throw new Error('no config.json asset in the assembly');
+}
 
 /** Feature flags and defaults exactly as the CLI reads them, so tests synthesize what the pipeline does. */
 function cdkJsonContext(): Record<string, unknown> {
@@ -50,6 +92,7 @@ interface DockerImageSource {
 
 describe('GeDe CDK app', () => {
   let pipelineTemplate: Template;
+  let assembly: cdk.cx_api.CloudAssembly;
   const stacks: Record<string, Template> = {};
   let stackNames: string[] = [];
   let serviceImages: DockerImageSource[] = [];
@@ -60,7 +103,7 @@ describe('GeDe CDK app', () => {
     });
     const pipelineStack = buildApp(app);
     const stage = pipelineStack.node.findChild('Prod') as GedeStage;
-    const assembly = app.synth();
+    assembly = app.synth();
     const nested = assembly.getNestedAssembly(stage.artifactId);
     const manifest = nested.artifacts.find(
       (a): a is cdk.cx_api.AssetManifestArtifact =>
@@ -562,6 +605,29 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it("AUTH-08 the deployed config.json parses with the SPA's own parseConfig and says appleSignIn: false while the flag is off (#61)", async () => {
+    const raw = renderedWebConfig(assembly);
+    expect(raw).toMatchObject({
+      region: 'ap-southeast-1',
+      apiUrl: 'https://gede.work/api',
+      wsUrl: 'wss://ws.gede.work/ws',
+      appleSignIn: false,
+    });
+    const parseConfig = await webParseConfig();
+    expect(parseConfig(raw)).toMatchObject({ appleSignIn: false, statusUrl: null });
+    // The pure renderer agrees with the staged file, so a unit assertion on it is meaningful.
+    expect(
+      webRuntimeConfig(PROD, { userPoolId: 'p', userPoolClientId: 'c', appleSignIn: false }),
+    ).toEqual({
+      region: 'ap-southeast-1',
+      userPoolId: 'p',
+      userPoolClientId: 'c',
+      apiUrl: 'https://gede.work/api',
+      wsUrl: 'wss://ws.gede.work/ws',
+      appleSignIn: false,
+    });
+  });
+
   it('WAF blocks floods per IP before three AWS managed rule groups inspect the request (#42)', () => {
     stacks.Edge!.hasResourceProperties('AWS::WAFv2::WebACL', {
       Scope: 'CLOUDFRONT',
@@ -675,13 +741,126 @@ describe('GeDe CDK app', () => {
   });
 
   it('Ops wires alarms and the budget to the alerts email', () => {
-    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 4);
+    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 10);
     stacks.Ops!.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'email',
       Endpoint: 'jrkphani@icloud.com',
     });
+    // Every alarm notifies the topic.
+    stacks.Ops!.allResourcesProperties('AWS::CloudWatch::Alarm', {
+      AlarmActions: [{ Ref: Match.stringLikeRegexp('^Alerts') }],
+    });
+    // Actual at 80 % and, since the ops review, the forecast at 100 % (it read US$128 on
+    // US$100 while the actual notification sat quiet at 53 %).
     stacks.Ops!.hasResourceProperties('AWS::Budgets::Budget', {
       Budget: Match.objectLike({ BudgetLimit: { Amount: 100, Unit: 'USD' }, TimeUnit: 'MONTHLY' }),
+      NotificationsWithSubscribers: [
+        Match.objectLike({
+          Notification: {
+            NotificationType: 'ACTUAL',
+            ComparisonOperator: 'GREATER_THAN',
+            Threshold: 80,
+            ThresholdType: 'PERCENTAGE',
+          },
+        }),
+        Match.objectLike({
+          Notification: {
+            NotificationType: 'FORECASTED',
+            ComparisonOperator: 'GREATER_THAN',
+            Threshold: 100,
+            ThresholdType: 'PERCENTAGE',
+          },
+          Subscribers: [{ SubscriptionType: 'EMAIL', Address: 'jrkphani@icloud.com' }],
+        }),
+      ],
+    });
+  });
+
+  it('Ops review 2026-09-13: one task and one db.t4g.micro are watched for memory, a missing healthy target, latency, burst credits and database memory', () => {
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-service-memory',
+      Namespace: 'AWS/ECS',
+      MetricName: 'MemoryUtilization',
+      Threshold: 80,
+      EvaluationPeriods: 2,
+      DatapointsToAlarm: 2,
+      ComparisonOperator: 'GreaterThanThreshold',
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-no-healthy-target',
+      Namespace: 'AWS/ApplicationELB',
+      MetricName: 'HealthyHostCount',
+      Statistic: 'Minimum',
+      Period: 60,
+      Threshold: 1,
+      EvaluationPeriods: 3,
+      ComparisonOperator: 'LessThanThreshold',
+      // A silent metric is the outage, not a gap.
+      TreatMissingData: 'breaching',
+      Dimensions: Match.arrayWith([
+        Match.objectLike({ Name: 'LoadBalancer' }),
+        Match.objectLike({ Name: 'TargetGroup' }),
+      ]),
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-alb-latency',
+      Namespace: 'AWS/ApplicationELB',
+      MetricName: 'TargetResponseTime',
+      ExtendedStatistic: 'p90',
+      Threshold: 2,
+      EvaluationPeriods: 3,
+      ComparisonOperator: 'GreaterThanThreshold',
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-db-cpu-credits',
+      Namespace: 'AWS/RDS',
+      MetricName: 'CPUCreditBalance',
+      Statistic: 'Minimum',
+      Threshold: 20,
+      EvaluationPeriods: 3,
+      ComparisonOperator: 'LessThanThreshold',
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-db-freeable-memory',
+      Namespace: 'AWS/RDS',
+      MetricName: 'FreeableMemory',
+      Threshold: 100 * 1024 ** 2,
+      ComparisonOperator: 'LessThanThreshold',
+    });
+    // The 5xx ratio alarm is unchanged: more than 1 % of requests in a 5-minute period.
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-alb-5xx',
+      Threshold: 1,
+      ComparisonOperator: 'GreaterThanThreshold',
+      Metrics: Match.arrayWith([
+        Match.objectLike({ Expression: '100 * (elb5xx + target5xx) / requests' }),
+      ]),
+    });
+  });
+
+  it('LIB-08 a purge that never runs is an alarm: no `job finished` line for the purge in 26 hours', () => {
+    stacks.Ops!.hasResourceProperties('AWS::Logs::MetricFilter', {
+      FilterPattern: '{ ($.msg = "job finished") && ($.job = "purge") }',
+      MetricTransformations: [
+        Match.objectLike({
+          MetricNamespace: 'GeDe/Jobs',
+          MetricName: 'PurgeRuns',
+          MetricValue: '1',
+        }),
+      ],
+    });
+    expect(PURGE_SILENCE_HOURS).toBe(26);
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-purge-never-ran',
+      Namespace: 'GeDe/Jobs',
+      MetricName: 'PurgeRuns',
+      Statistic: 'Sum',
+      Period: 3600,
+      Threshold: 1,
+      EvaluationPeriods: 26,
+      DatapointsToAlarm: 26,
+      ComparisonOperator: 'LessThanThreshold',
+      TreatMissingData: 'breaching',
     });
   });
 
@@ -730,7 +909,8 @@ describe('GeDe CDK app', () => {
     pipelineTemplate.resourceCountIs('AWS::Logs::LogGroup', 1);
     pipelineTemplate.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
     const [logGroupId] = Object.keys(pipelineTemplate.findResources('AWS::Logs::LogGroup'));
-    pipelineTemplate.resourceCountIs('AWS::CodeBuild::Project', 5);
+    // Synth, SelfMutate, two asset publishers, Smoke, Playwright-Live.
+    pipelineTemplate.resourceCountIs('AWS::CodeBuild::Project', 6);
     pipelineTemplate.allResourcesProperties('AWS::CodeBuild::Project', {
       LogsConfig: { CloudWatchLogs: { GroupName: { Ref: logGroupId }, Status: 'ENABLED' } },
     });
@@ -755,6 +935,244 @@ describe('GeDe CDK app', () => {
     );
     // Nothing curls the ALB hostname expecting success any more.
     expect(commands.some((c) => c.includes('$API_URL/healthz'))).toBe(false);
+  });
+
+  it('AUTH-01 Playwright-Live runs the live suite after Smoke, as a named role the Auth stack grants AdminInitiateAuth on the pool and the e2e secret to', () => {
+    interface Project {
+      Properties: {
+        Source: { BuildSpec?: string };
+        ServiceRole: unknown;
+        TimeoutInMinutes?: number;
+        Environment: {
+          ComputeType: string;
+          EnvironmentVariables?: { Name: string; Value: string }[];
+        };
+      };
+    }
+    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project'));
+    const live = (projects as Project[]).filter((p) =>
+      p.Properties.Source.BuildSpec?.includes('npm run e2e:live'),
+    );
+    expect(live).toHaveLength(1);
+    const spec = JSON.parse(live[0]!.Properties.Source.BuildSpec!) as {
+      phases: { install: { commands: string[] }; build: { commands: string[] } };
+      cache: { paths: string[] };
+    };
+    // The same Chromium install as Synth, then only the live suite; nothing swallows a failure.
+    expect(spec.phases.install.commands).toHaveLength(3);
+    expect(spec.phases.install.commands[0]).toMatch(/^dnf install -y -q .*\bnss\b/);
+    expect(spec.phases.install.commands.slice(1)).toEqual([
+      'npm ci',
+      'npx playwright install --only-shell chromium',
+    ]);
+    expect(spec.phases.build.commands).toEqual(['npm run e2e:live']);
+    expect(spec.cache.paths).toEqual(
+      expect.arrayContaining(['node_modules/**/*', '/root/.cache/ms-playwright/**/*']),
+    );
+    expect(live[0]!.Properties.Environment.ComputeType).toBe('BUILD_GENERAL1_SMALL');
+    // A hung suite cannot hold the execution for CodeBuild's default hour.
+    expect(live[0]!.Properties.TimeoutInMinutes).toBe(20);
+    expect(live[0]!.Properties.Environment.EnvironmentVariables).toEqual(
+      expect.arrayContaining([expect.objectContaining({ Name: 'CI', Value: 'true' })]),
+    );
+
+    // The project runs as the fixed-name role; the pipeline stack creates it with nothing but
+    // what every step gets, and GeDe-Prod-Auth attaches the pool and secret grants by name.
+    const [roleId] = Object.entries(pipelineTemplate.findResources('AWS::IAM::Role')).find(
+      ([, r]) =>
+        (r as { Properties: { RoleName?: string } }).Properties.RoleName ===
+        PLAYWRIGHT_LIVE_ROLE_NAME,
+    )!;
+    expect(live[0]!.Properties.ServiceRole).toEqual({ 'Fn::GetAtt': [roleId, 'Arn'] });
+    const pipelinePolicies = Object.values(pipelineTemplate.findResources('AWS::IAM::Policy'));
+    expect(JSON.stringify(pipelinePolicies)).not.toContain('cognito-idp:');
+    stacks.Auth!.hasResourceProperties('AWS::IAM::Policy', {
+      Roles: [PLAYWRIGHT_LIVE_ROLE_NAME],
+      PolicyDocument: {
+        Statement: [
+          {
+            Sid: 'SignInAsE2eUser',
+            Effect: 'Allow',
+            Action: 'cognito-idp:AdminInitiateAuth',
+            Resource: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+          },
+          {
+            Sid: 'ReadE2eUserSecret',
+            Effect: 'Allow',
+            Action: 'secretsmanager:GetSecretValue',
+            Resource: { Ref: Match.stringLikeRegexp('^E2eUser') },
+          },
+        ],
+        Version: '2012-10-17',
+      },
+    });
+
+    // In the pipeline: after Smoke, with the stage outputs the suite needs and the source as input.
+    interface Pipeline {
+      Properties: {
+        Stages: {
+          Name: string;
+          Actions: {
+            Name: string;
+            RunOrder: number;
+            InputArtifacts?: { Name: string }[];
+            Configuration: { EnvironmentVariables?: string };
+          }[];
+        }[];
+      };
+    }
+    const [pipeline] = Object.values(
+      pipelineTemplate.findResources('AWS::CodePipeline::Pipeline'),
+    ) as Pipeline[];
+    const prodStage = pipeline!.Properties.Stages.find((s) => s.Name === 'Prod')!;
+    const smoke = prodStage.Actions.find((a) => a.Name === 'Smoke')!;
+    const liveAction = prodStage.Actions.find((a) => a.Name === 'Playwright-Live')!;
+    expect(liveAction.RunOrder).toBeGreaterThan(smoke.RunOrder);
+    expect(liveAction.InputArtifacts?.map((a) => a.Name)).toEqual(
+      smoke.InputArtifacts?.map((a) => a.Name),
+    );
+    const env = JSON.parse(liveAction.Configuration.EnvironmentVariables!) as {
+      name: string;
+      value: string;
+    }[];
+    const byName = Object.fromEntries(env.map((e) => [e.name, e.value]));
+    expect(Object.keys(byName).sort()).toEqual([
+      'E2E_BASE_URL',
+      'E2E_CLIENT_ID',
+      'E2E_SECRET_ARN',
+      'E2E_USER_POOL_ID',
+    ]);
+    expect(byName.E2E_BASE_URL).toMatch(/Web.*\.AppUrl\}$/);
+    expect(byName.E2E_USER_POOL_ID).toMatch(/Auth.*\.UserPoolId\}$/);
+    expect(byName.E2E_CLIENT_ID).toMatch(/Auth.*\.E2eClientId\}$/);
+    expect(byName.E2E_SECRET_ARN).toMatch(/Auth.*\.E2eUserSecretArn\}$/);
+  });
+
+  it('AUTH-01 Auth provisions the gede-e2e client (admin password flow only), the e2e user secret and the account through a handler that never sees the password in its event', () => {
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ClientName: E2E_CLIENT_NAME,
+      GenerateSecret: false,
+      ExplicitAuthFlows: ['ALLOW_ADMIN_USER_PASSWORD_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
+      AllowedOAuthFlowsUserPoolClient: false,
+      SupportedIdentityProviders: ['COGNITO'],
+      PreventUserExistenceErrors: 'ENABLED',
+      EnableTokenRevocation: true,
+      RefreshTokenValidity: 1440,
+    });
+    // The SPA client is untouched: still USER_AUTH only (ADR-011).
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ExplicitAuthFlows: ['ALLOW_USER_AUTH'],
+    });
+    stacks.Auth!.resourceCountIs('AWS::Cognito::UserPoolClient', 2);
+    stacks.Auth!.hasResourceProperties('AWS::SecretsManager::Secret', {
+      Name: 'gede/prod/e2e-user',
+      GenerateSecretString: {
+        SecretStringTemplate: JSON.stringify({ username: 'e2e@gede.work' }),
+        GenerateStringKey: 'password',
+        PasswordLength: 32,
+        RequireEachIncludedType: true,
+        ExcludeCharacters: '"\'\\`',
+      },
+    });
+    // The custom resource carries the secret's ARN, never its value.
+    stacks.Auth!.hasResourceProperties('Custom::GedeE2eUser', {
+      ServiceToken: { 'Fn::GetAtt': [Match.stringLikeRegexp('^E2eUserHandler'), 'Arn'] },
+      UserPoolId: { Ref: Match.stringLikeRegexp('^UserPool') },
+      SecretArn: { Ref: Match.stringLikeRegexp('^E2eUser') },
+      Username: 'e2e@gede.work',
+    });
+    // Two functions: the user's custom resource and the pre-authentication trigger.
+    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 2);
+    stacks.Auth!.allResourcesProperties('AWS::Lambda::Function', {
+      Runtime: 'nodejs22.x',
+      Architectures: ['arm64'],
+      Handler: 'index.handler',
+    });
+    stacks.Auth!.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({
+            Action: [
+              'cognito-idp:AdminCreateUser',
+              'cognito-idp:AdminDeleteUser',
+              'cognito-idp:AdminSetUserPassword',
+            ],
+            Resource: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+          }),
+        ]),
+      }),
+    });
+    // The service accepts tokens from both clients.
+    stacks.Service!.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: Match.arrayWith([
+        Match.objectLike({
+          Environment: Match.arrayWith([
+            {
+              Name: 'COGNITO_CLIENT_IDS',
+              Value: {
+                // Weak cross-stack references (cdk.json): the SPA client, a comma, the e2e client.
+                'Fn::Join': [
+                  '',
+                  [
+                    {
+                      'Fn::GetStackOutput': Match.objectLike({
+                        StackName: 'GeDe-Prod-Auth',
+                        OutputName: Match.stringLikeRegexp('Spa'),
+                      }),
+                    },
+                    ',',
+                    {
+                      'Fn::GetStackOutput': Match.objectLike({
+                        StackName: 'GeDe-Prod-Auth',
+                        OutputName: Match.stringLikeRegexp('E2e'),
+                      }),
+                    },
+                  ],
+                ],
+              },
+            },
+          ]),
+        }),
+      ]),
+    });
+  });
+
+  it('AUTH-04 a pre-authentication trigger binds e2e@gede.work to the gede-e2e client, so the password is not a browser credential (#35 residual)', () => {
+    const [preAuthId] = Object.entries(stacks.Auth!.findResources('AWS::Lambda::Function')).find(
+      ([, fn]) =>
+        (fn as { Properties: { Description?: string } }).Properties.Description?.includes(
+          'pre-authentication',
+        ),
+    )!;
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPool', {
+      LambdaConfig: { PreAuthentication: { 'Fn::GetAtt': [preAuthId, 'Arn'] } },
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      Principal: 'cognito-idp.amazonaws.com',
+      FunctionName: { 'Fn::GetAtt': [preAuthId, 'Arn'] },
+      SourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Lambda::Function', {
+      Description: Match.stringLikeRegexp('pre-authentication'),
+      Environment: {
+        Variables: { E2E_USERNAME: 'e2e@gede.work', E2E_CLIENT_NAME: E2E_CLIENT_NAME },
+      },
+      Timeout: 5,
+    });
+    // It finds the client by name (the id would be a pool → trigger → client → pool cycle).
+    stacks.Auth!.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: [
+          {
+            Sid: 'FindE2eClient',
+            Effect: 'Allow',
+            Action: 'cognito-idp:ListUserPoolClients',
+            Resource: 'arn:aws:cognito-idp:ap-southeast-1:975049998516:userpool/*',
+          },
+        ],
+      }),
+    });
   });
 
   it('LOAD-06 Synth installs Chromium, then runs verify, db:parity, e2e, the web build and cdk synth in that order', () => {
@@ -820,6 +1238,58 @@ describe('GeDe CDK app', () => {
         { Key: 'ManagedBy', Value: 'CDK' },
         { Key: 'Organization', Value: 'quadnomics' },
       ]),
+    });
+  });
+});
+
+describe('GeDe CDK app with -c appleSignIn=true (the switch stays off in cdk.json)', () => {
+  let auth: Template;
+  let web: Template;
+  let raw: unknown;
+
+  beforeAll(() => {
+    const app = new cdk.App({
+      context: { ...cdkJsonContext(), hostedZoneId: TEST_ZONE_ID, appleSignIn: true },
+    });
+    const pipelineStack = buildApp(app);
+    const stage = pipelineStack.node.findChild('Prod') as GedeStage;
+    const assembly = app.synth();
+    auth = Template.fromStack(stageStack(stage, 'GeDe-Prod-Auth'));
+    web = Template.fromStack(stageStack(stage, 'GeDe-Prod-Web'));
+    raw = renderedWebConfig(assembly);
+  });
+
+  it('AUTH-08 Auth adds the Apple provider, the gede-prod hosted-UI domain and the code grant on the SPA client', () => {
+    auth.hasResourceProperties('AWS::Cognito::UserPoolIdentityProvider', {
+      ProviderType: 'SignInWithApple',
+      AttributeMapping: { email: 'email', given_name: 'firstName', family_name: 'lastName' },
+    });
+    auth.hasResourceProperties('AWS::Cognito::UserPoolDomain', { Domain: 'gede-prod' });
+    auth.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ExplicitAuthFlows: ['ALLOW_USER_AUTH'],
+      SupportedIdentityProviders: ['COGNITO', 'SignInWithApple'],
+      AllowedOAuthFlows: ['code'],
+      CallbackURLs: ['https://gede.work/auth/callback'],
+    });
+  });
+
+  it("AUTH-08 config.json says appleSignIn: { domain } with the hosted-UI host, and the SPA's parseConfig accepts it (#61)", async () => {
+    const domain = 'gede-prod.auth.ap-southeast-1.amazoncognito.com';
+    expect(raw).toMatchObject({ appleSignIn: { domain } });
+    const parseConfig = await webParseConfig();
+    expect(parseConfig(raw)).toMatchObject({ appleSignIn: { domain } });
+    // The same host is what the CSP lets the SPA connect to.
+    web.allResourcesProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        SecurityHeadersConfig: Match.objectLike({
+          ContentSecurityPolicy: {
+            ContentSecurityPolicy: Match.stringLikeRegexp(
+              String.raw`connect-src 'self' https://cognito-idp\.ap-southeast-1\.amazonaws\.com wss://ws\.gede\.work https://gede-prod\.auth\.ap-southeast-1\.amazoncognito\.com; `,
+            ),
+            Override: true,
+          },
+        }),
+      }),
     });
   });
 });
