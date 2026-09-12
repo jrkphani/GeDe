@@ -2,7 +2,7 @@
  * Moving focus between the objects on a sheet — tables and graphs — without a
  * pointer (A11Y-01, ADR-038, #131). Tab never leaves a table forward: past
  * its last cell it appends a row (GRID-05), so a graph below a table cannot
- * be reached by Tab. ⌃⌥→ / ⌃⌥← step through the sheet's objects in the order
+ * be reached by Tab. ⇧⌘→ / ⇧⌘← step through the sheet's objects in the order
  * they render, landing on each object's own entry: a table's tab stop (its
  * selected cell, else its first), a graph's header.
  *

@@ -154,9 +154,10 @@ export const CHORDS = {
   previousSheet: { code: 'Tab', ctrl: true, shift: true } satisfies Chord,
   // Not in the handover map (ADR-038): Tab never leaves a table forward (past the last
   // cell it appends a row, GRID-05), so these move focus to the sheet's next or previous
-  // object — a table, a graph — without a pointer (A11Y-01, #131).
-  nextObject: { code: 'ArrowRight', ctrl: true, alt: true } satisfies Chord,
-  previousObject: { code: 'ArrowLeft', ctrl: true, alt: true } satisfies Chord,
+  // object — a table, a graph — without a pointer (A11Y-01, #131). ⇧⌘, not ⌃⌥: off Apple
+  // platforms ⌃⌥→ is the same keys as ⌥⌘→ (add column), since `mod` is Ctrl there.
+  nextObject: { code: 'ArrowRight', mod: true, shift: true } satisfies Chord,
+  previousObject: { code: 'ArrowLeft', mod: true, shift: true } satisfies Chord,
 } as const;
 
 export type ChordId = keyof typeof CHORDS;
@@ -199,8 +200,8 @@ export const ARIA_KEYS = {
   inspector: 'Alt+Meta+I',
   nextSheet: 'Control+Tab',
   previousSheet: 'Control+Shift+Tab',
-  nextObject: 'Control+Alt+ArrowRight',
-  previousObject: 'Control+Alt+ArrowLeft',
+  nextObject: 'Shift+Meta+ArrowRight',
+  previousObject: 'Shift+Meta+ArrowLeft',
 } as const satisfies Record<ChordId, string>;
 
 export const LABELS = {
@@ -237,6 +238,6 @@ export const LABELS = {
   inspector: '⌥⌘I',
   nextSheet: '⌃⇥',
   previousSheet: '⌃⇧⇥',
-  nextObject: '⌃⌥→',
-  previousObject: '⌃⌥←',
+  nextObject: '⇧⌘→',
+  previousObject: '⇧⌘←',
 } as const satisfies Record<ChordId, string>;

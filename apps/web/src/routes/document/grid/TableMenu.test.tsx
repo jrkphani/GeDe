@@ -34,7 +34,7 @@ beforeEach(() => {
 });
 
 describe('TableMenu (A11Y-01, MENU-02)', () => {
-  it('DOC-02 MENU-02 with a table selected, cell commands are disabled with the reason; the menu carries only the commands whose home it is — no Add row, header, footer, frozen or wrap (ADR-037)', async () => {
+  it('DOC-02 MENU-02 with a table selected, cell commands are disabled with the reason; the menu carries only the commands whose home it is — no Add row, header, footer, frozen or wrap (#140, ADR 37)', async () => {
     render(<TableMenu gd={gd} selection={{ tableId, cell: null }} editable commands={commands} />);
     await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
     expect(screen.getByRole('menuitem', { name: 'Delete row' })).toHaveAttribute(

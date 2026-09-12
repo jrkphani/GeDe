@@ -202,12 +202,14 @@ for (const width of [1024, 1440] as const) {
       const field = panel.getByLabel('Column 1 contains');
       await expect(field).toBeFocused();
       await field.fill('Sngapore');
+      // INSP-12 (#138): the filter is live — the rows follow the field; no Apply step.
+      await expect.poll(() => columnTexts(page)).toEqual(['Singapore', 'Singapore', '']);
+      await expect(panel.getByRole('button', { name: 'Apply' })).toHaveCount(0);
       // The panel fades in; axe reads colours once the enter motion has settled.
       await expect(panel).toHaveCSS('opacity', '1');
       await checkA11y(`filter panel ${String(width)}`);
-      await panel.getByRole('button', { name: 'Apply' }).click();
+      await page.keyboard.press('Escape');
       await expect(panel).toBeHidden();
-      await expect.poll(() => columnTexts(page)).toEqual(['Singapore', 'Singapore', '']);
       await expect(page.getByTestId('table-footer')).toContainText('3 of 5 rows');
       await expect(header(page, 'Column 1').locator('[data-glyph="arrow-up"]')).toBeVisible();
       // MENU-05: focus came back to the ▼.

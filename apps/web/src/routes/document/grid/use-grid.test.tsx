@@ -208,8 +208,8 @@ describe('undo granularity (KEYS-03)', () => {
   });
 });
 
-describe('the formula expression line (FX-07, REF-01, ADR-039)', () => {
-  it('FX-07 GRID-09 committing a formula into a compact row wraps the row in the same undo step; a text commit leaves the height alone and never unwraps (#142)', () => {
+describe('the formula expression line (FX-07, REF-01; ADR 39)', () => {
+  it('FX-07 GRID-09 committing a formula into a compact row wraps the row in the same undo step; a text commit leaves the height alone and never unwraps (#142, ADR 39)', () => {
     const undo = createUndoManager(a, { captureTimeout: 0 });
     const { result } = renderHook(() => useGrid(a, true, { undo }));
     const table = tableMap(a, tableId)!;

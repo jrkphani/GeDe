@@ -208,14 +208,14 @@ describe('document key bindings', () => {
     expect(h.view.actualSize).toHaveBeenCalledTimes(1);
     expect(h.view.fit).toHaveBeenCalledTimes(1);
     expect(h.view.toggleInspector).toHaveBeenCalledTimes(1);
-    // ADR-038 (#131): ⌃⌥→ / ⌃⌥← move to the next or previous object on the sheet.
-    press({ code: 'ArrowRight', ctrlKey: true, altKey: true });
-    press({ code: 'ArrowLeft', ctrlKey: true, altKey: true });
+    // ADR-038 (#131): ⇧⌘→ / ⇧⌘← move to the next or previous object on the sheet.
+    press({ code: 'ArrowRight', metaKey: true, shiftKey: true });
+    press({ code: 'ArrowLeft', metaKey: true, shiftKey: true });
     expect(h.view.nextObject).toHaveBeenCalledTimes(1);
     expect(h.view.previousObject).toHaveBeenCalledTimes(1);
   });
 
-  it('KEYS-05 KEYS-07 off Apple platforms Ctrl+= zooms and Ctrl+Alt+= is superscript — the two never fire together (ADR-038, #136)', () => {
+  it('KEYS-05 KEYS-07 off Apple platforms Ctrl+= zooms and Ctrl+Alt+= is superscript — the two never fire together (#136, ADR 38)', () => {
     vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0) jsdom');
     const h = handlers();
     render(<Host h={h} />);

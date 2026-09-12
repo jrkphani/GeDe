@@ -54,7 +54,7 @@ export interface KeyHandlers {
     toggleInspector: () => void;
     showInspector: (mode: InspectorMode) => void;
     toggleShortcutSheet: () => void;
-    /** ADR-038 ⌃⌥→ / ⌃⌥←: focus the next or previous object on the sheet (A11Y-01). */
+    /** ADR-038 ⇧⌘→ / ⇧⌘←: focus the next or previous object on the sheet (A11Y-01). */
     nextObject: () => void;
     previousObject: () => void;
   };
@@ -155,7 +155,7 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
     { id: 'fit', chord: CHORDS.fit, label: LABELS.fit, run: h.view.fit },
     // ⌃⇥ / ⌃⇧⇥ (KEYS-07) are the browser's tab switch everywhere: reserved on the
     // sheet, not bound; the sheet strip is the route (KEYS-08).
-    // ⌃⌥→ / ⌃⌥← (ADR-038): the next or previous object on the sheet, from anywhere
+    // ⇧⌘→ / ⇧⌘← (ADR-038): the next or previous object on the sheet, from anywhere
     // in the document — a cell, a graph node, the toolbar.
     {
       id: 'nextObject',

@@ -514,7 +514,7 @@ function OpenDocument({
     if (tab !== undefined) setOrganizeTab(tab);
     setInspectorOpen(true);
   }, []);
-  // ADR-038 ⌃⌥→ / ⌃⌥←: the next or previous object on the sheet takes focus at its own
+  // ADR-038 ⇧⌘→ / ⇧⌘←: the next or previous object on the sheet takes focus at its own
   // entry — a cell (which arms it), a graph's header. Tab cannot do this forward (GRID-05).
   const moveObject = useCallback((direction: 1 | -1) => {
     const objects = sheetObjects(document.querySelector('.gd-canvas') ?? document);
