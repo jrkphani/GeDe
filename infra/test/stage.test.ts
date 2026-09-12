@@ -9,6 +9,8 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../lib/app.js';
 import { type GedeStage } from '../lib/gede-stage.js';
 import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
+import { PURGE_SCHEDULE } from '../lib/stacks/ops-stack.js';
+import { PURGE_COMMAND, gedeVersion } from '../lib/stacks/service-stack.js';
 import {
   ORIGIN_VERIFY_GENERATIONS,
   ORIGIN_VERIFY_HEADER,
@@ -38,10 +40,18 @@ function stageStack(stage: cdk.Stage, name: string): cdk.Stack {
   return stack;
 }
 
+/** Docker image assets of one stage stack, from the assembly's asset manifest. */
+interface DockerImageSource {
+  dockerBuildArgs?: Record<string, string>;
+  dockerFile?: string;
+  platform?: string;
+}
+
 describe('GeDe CDK app', () => {
   let pipelineTemplate: Template;
   const stacks: Record<string, Template> = {};
   let stackNames: string[] = [];
+  let serviceImages: DockerImageSource[] = [];
 
   beforeAll(() => {
     const app = new cdk.App({
@@ -49,7 +59,17 @@ describe('GeDe CDK app', () => {
     });
     const pipelineStack = buildApp(app);
     const stage = pipelineStack.node.findChild('Prod') as GedeStage;
-    app.synth();
+    const assembly = app.synth();
+    const nested = assembly.getNestedAssembly(stage.artifactId);
+    const manifest = nested.artifacts.find(
+      (a): a is cdk.cx_api.AssetManifestArtifact =>
+        a instanceof cdk.cx_api.AssetManifestArtifact && a.id.includes('Service'),
+    );
+    if (!manifest) throw new Error('no asset manifest for GeDe-Prod-Service');
+    const assets = JSON.parse(readFileSync(manifest.file, 'utf8')) as {
+      dockerImages?: Record<string, { source: DockerImageSource }>;
+    };
+    serviceImages = Object.values(assets.dockerImages ?? {}).map((i) => i.source);
 
     pipelineTemplate = Template.fromStack(pipelineStack);
     stackNames = stage.node.children.filter(cdk.Stack.isStack).map((s) => s.stackName);
@@ -132,6 +152,23 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('LIB-08 the docs bucket is versioned and expires noncurrent versions (purged snapshots) after 90 days', () => {
+    stacks.Data!.hasResourceProperties('AWS::S3::Bucket', {
+      VersioningConfiguration: { Status: 'Enabled' },
+      LifecycleConfiguration: {
+        Rules: [
+          Match.objectLike({
+            Id: 'noncurrent-expire-90d',
+            Status: 'Enabled',
+            NoncurrentVersionExpiration: { NoncurrentDays: 90 },
+            ExpiredObjectDeleteMarker: true,
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 },
+          }),
+        ],
+      },
+    });
+  });
+
   it('VPC has two AZs, no NAT gateway, and an S3 gateway endpoint', () => {
     stacks.Network!.resourceCountIs('AWS::EC2::NatGateway', 0);
     stacks.Network!.resourceCountIs('AWS::EC2::Subnet', 4);
@@ -174,7 +211,7 @@ describe('GeDe CDK app', () => {
     });
   });
 
-  it('task role is limited to docs/* objects, prefix-scoped listing, and can never delete a version (#42)', () => {
+  it('both task roles are limited to docs/* objects, prefix-scoped listing, and can never delete a version (#42)', () => {
     interface Policy {
       Properties: {
         PolicyDocument: {
@@ -191,32 +228,82 @@ describe('GeDe CDK app', () => {
       string,
       Policy,
     ][];
-    const taskPolicy = policies.find(([id]) => id.startsWith('TaskTaskRole'))?.[1];
-    expect(taskPolicy).toBeDefined();
-    const statements = taskPolicy!.Properties.PolicyDocument.Statement;
     const actions = (s: { Action: string | string[] }): string[] =>
       Array.isArray(s.Action) ? s.Action : [s.Action];
+    // The service task and the jobs task (nightly purge, which lists and deletes a
+    // purged document's prefix) get the same statements through one grant helper.
+    for (const prefix of ['TaskTaskRole', 'JobsTaskTaskRole']) {
+      const taskPolicy = policies.find(([id]) => id.startsWith(prefix))?.[1];
+      expect(taskPolicy, prefix).toBeDefined();
+      const statements = taskPolicy!.Properties.PolicyDocument.Statement;
 
-    const objects = statements.find((s) => s.Sid === 'DocsObjects')!;
-    expect(objects.Effect).toBe('Allow');
-    expect(actions(objects).sort()).toEqual(['s3:DeleteObject', 's3:GetObject', 's3:PutObject']);
+      const objects = statements.find((s) => s.Sid === 'DocsObjects')!;
+      expect(objects.Effect).toBe('Allow');
+      expect(actions(objects).sort()).toEqual(['s3:DeleteObject', 's3:GetObject', 's3:PutObject']);
 
-    const list = statements.find((s) => s.Sid === 'ListDocsPrefixOnly')!;
-    expect(actions(list)).toEqual(['s3:ListBucket']);
-    expect(list.Condition).toEqual({ StringLike: { 's3:prefix': ['docs/*'] } });
+      const list = statements.find((s) => s.Sid === 'ListDocsPrefixOnly')!;
+      expect(actions(list)).toEqual(['s3:ListBucket']);
+      expect(list.Condition).toEqual({ StringLike: { 's3:prefix': ['docs/*'] } });
 
-    const deny = statements.find((s) => s.Sid === 'NeverDeleteVersions')!;
-    expect(deny.Effect).toBe('Deny');
-    expect(actions(deny)).toEqual(['s3:DeleteObjectVersion']);
+      const deny = statements.find((s) => s.Sid === 'NeverDeleteVersions')!;
+      expect(deny.Effect).toBe('Deny');
+      expect(actions(deny)).toEqual(['s3:DeleteObjectVersion']);
 
-    // No wildcard S3 actions anywhere, and no Secrets Manager access: the execution role
-    // injects PG*; the service never calls Secrets Manager.
-    const allowed = statements.filter((s) => s.Effect === 'Allow').flatMap(actions);
-    expect(allowed.filter((a) => a.startsWith('s3:') && a.includes('*'))).toEqual([]);
-    expect(allowed.filter((a) => a.startsWith('secretsmanager:'))).toEqual([]);
-    const executionPolicy = policies.find(([id]) => id.startsWith('TaskExecutionRole'))?.[1];
-    expect(executionPolicy!.Properties.PolicyDocument.Statement.flatMap(actions)).toContain(
-      'secretsmanager:GetSecretValue',
+      // No wildcard S3 actions anywhere, and no Secrets Manager access: the execution role
+      // injects PG*; the service never calls Secrets Manager.
+      const allowed = statements.filter((s) => s.Effect === 'Allow').flatMap(actions);
+      expect(allowed.filter((a) => a.startsWith('s3:') && a.includes('*'))).toEqual([]);
+      expect(allowed.filter((a) => a.startsWith('secretsmanager:'))).toEqual([]);
+    }
+    for (const prefix of ['TaskExecutionRole', 'JobsTaskExecutionRole']) {
+      const executionPolicy = policies.find(([id]) => id.startsWith(prefix))?.[1];
+      expect(executionPolicy!.Properties.PolicyDocument.Statement.flatMap(actions)).toContain(
+        'secretsmanager:GetSecretValue',
+      );
+    }
+  });
+
+  it('LIB-08 a jobs task definition runs the purge command on the same image, with its own one-month log group', () => {
+    stacks.Service!.resourceCountIs('AWS::ECS::TaskDefinition', 2);
+    stacks.Service!.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      Family: 'gede-prod-jobs',
+      Cpu: '512',
+      Memory: '1024',
+      RuntimePlatform: { CpuArchitecture: 'ARM64', OperatingSystemFamily: 'LINUX' },
+      ContainerDefinitions: [
+        Match.objectLike({
+          Name: 'purge',
+          Command: PURGE_COMMAND,
+          PortMappings: Match.absent(),
+          Environment: Match.arrayWith([
+            { Name: 'PGSSLMODE', Value: 'verify-full' },
+            { Name: 'DOCS_PREFIX', Value: 'docs/' },
+          ]),
+          Secrets: Match.arrayWith([Match.objectLike({ Name: 'PGPASSWORD' })]),
+        }),
+      ],
+    });
+    // Both log groups keep a month, and both task definitions share one image asset.
+    stacks.Service!.resourceCountIs('AWS::Logs::LogGroup', 2);
+    stacks.Service!.allResourcesProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+    const taskDefs = Object.values(stacks.Service!.findResources('AWS::ECS::TaskDefinition')) as {
+      Properties: { ContainerDefinitions: { Image: unknown }[] };
+    }[];
+    const images = taskDefs.map((t) => JSON.stringify(t.Properties.ContainerDefinitions[0]?.Image));
+    expect(new Set(images).size).toBe(1);
+  });
+
+  it('LOAD-05 the sync image is built with GEDE_VERSION from the CodeBuild source sha (local otherwise)', () => {
+    expect(serviceImages).toHaveLength(1);
+    expect(serviceImages[0]).toMatchObject({
+      dockerFile: 'services/sync/Dockerfile',
+      platform: 'linux/arm64',
+      dockerBuildArgs: { GEDE_VERSION: 'local' },
+    });
+    expect(gedeVersion({})).toBe('local');
+    expect(gedeVersion({ CODEBUILD_RESOLVED_SOURCE_VERSION: '' })).toBe('local');
+    expect(gedeVersion({ CODEBUILD_RESOLVED_SOURCE_VERSION: 'ba70477deadbeef0123456789' })).toBe(
+      'ba70477',
     );
   });
 
@@ -442,8 +529,78 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('LIB-08 Ops schedules the nightly purge as a Fargate task and alerts when it exits non-zero', () => {
+    stacks.Ops!.hasResourceProperties('AWS::Scheduler::Schedule', {
+      Name: 'gede-prod-nightly-purge',
+      ScheduleExpression: `cron(${PURGE_SCHEDULE.minute} ${PURGE_SCHEDULE.hour} * * ? *)`,
+      ScheduleExpressionTimezone: 'Asia/Singapore',
+      State: 'ENABLED',
+      FlexibleTimeWindow: { Mode: 'OFF' },
+      Target: Match.objectLike({
+        EcsParameters: Match.objectLike({
+          LaunchType: 'FARGATE',
+          TaskDefinitionArn: Match.anyValue(),
+          NetworkConfiguration: {
+            AwsvpcConfiguration: Match.objectLike({
+              AssignPublicIp: 'ENABLED',
+              SecurityGroups: [Match.anyValue()],
+              Subnets: [Match.anyValue(), Match.anyValue()],
+            }),
+          },
+        }),
+        RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 1 },
+      }),
+    });
+    // The scheduler role may run exactly that task definition and pass its roles.
+    stacks.Ops!.hasResourceProperties('AWS::IAM::Role', {
+      AssumeRolePolicyDocument: Match.objectLike({
+        Statement: [Match.objectLike({ Principal: { Service: 'scheduler.amazonaws.com' } })],
+      }),
+    });
+    stacks.Ops!.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: Match.arrayWith([
+          Match.objectLike({ Action: 'iam:PassRole', Effect: 'Allow' }),
+          Match.objectLike({ Action: 'ecs:RunTask', Effect: 'Allow' }),
+        ]),
+      }),
+    });
+    // Exit code ≠ 0 (or a task that never started) → SNS, matched on the jobs family only.
+    stacks.Ops!.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'gede-prod-purge-task-failed',
+      EventPattern: {
+        source: ['aws.ecs'],
+        'detail-type': ['ECS Task State Change'],
+        detail: Match.objectLike({
+          lastStatus: ['STOPPED'],
+          taskDefinitionArn: [
+            { prefix: 'arn:aws:ecs:ap-southeast-1:975049998516:task-definition/gede-prod-jobs:' },
+          ],
+          $or: [
+            { containers: { exitCode: [{ 'anything-but': 0 }] } },
+            { stopCode: ['TaskFailedToStart'] },
+          ],
+        }),
+      },
+      Targets: [Match.objectLike({ Arn: { Ref: Match.stringLikeRegexp('^Alerts') } })],
+    });
+    // …and the job's own failure log lines as a metric with an alarm on it.
+    stacks.Ops!.hasResourceProperties('AWS::Logs::MetricFilter', {
+      MetricTransformations: [
+        Match.objectLike({ MetricNamespace: 'GeDe/Jobs', MetricName: 'PurgeFailures' }),
+      ],
+    });
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-purge-failed',
+      Namespace: 'GeDe/Jobs',
+      MetricName: 'PurgeFailures',
+      Threshold: 0,
+      ComparisonOperator: 'GreaterThanThreshold',
+    });
+  });
+
   it('Ops wires alarms and the budget to the alerts email', () => {
-    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 3);
+    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 4);
     stacks.Ops!.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'email',
       Endpoint: 'jrkphani@icloud.com',

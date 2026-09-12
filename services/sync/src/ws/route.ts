@@ -1,13 +1,22 @@
 /**
  * `GET /ws/:docId` — the document room endpoint.
  *
- * Browsers cannot set headers on a WebSocket, so the access token travels as
- * `?token=`. Verification happens in a `preValidation` hook, i.e. before the
- * HTTP upgrade completes; nothing about the document is sent to an
- * unverified caller. The outcome is delivered as a close code the provider
- * can read — 4401 unauthenticated, 4403 no access, 4404 unknown document —
- * which needs the upgrade to have happened (an HTTP 401 would surface in the
- * browser only as an opaque 1006).
+ * Browsers cannot set headers on a WebSocket, but they can offer subprotocols,
+ * so the access token travels in `Sec-WebSocket-Protocol` as
+ * `gede.v1, bearer.<token>` (issue #32); the server selects `gede.v1` and
+ * never echoes the token. The older `?token=` query parameter is still
+ * accepted for one release — with a deprecation warning in the log, never
+ * the token itself — because URLs reach access logs and browser history in
+ * ways headers do not. Cutoff: the first release after #49 has been live for
+ * a week (every pre-#49 SPA bundle has left the caches by then); issue #63
+ * lists what to delete.
+ *
+ * Verification happens in a `preValidation` hook, i.e. before the HTTP
+ * upgrade completes; nothing about the document is sent to an unverified
+ * caller. The outcome is delivered as a close code the provider can read —
+ * 4401 unauthenticated, 4403 no access, 4404 unknown document — which needs
+ * the upgrade to have happened (an HTTP 401 would surface in the browser
+ * only as an opaque 1006).
  */
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { z } from 'zod';
@@ -24,6 +33,11 @@ export const CLOSE_FORBIDDEN = 4403;
 export const CLOSE_NOT_FOUND = 4404;
 export const CLOSE_BAD_REQUEST = 4400;
 
+/** The subprotocol the server selects; the client must offer it alongside `bearer.<token>`. */
+export const WS_SUBPROTOCOL = 'gede.v1';
+/** Prefix of the subprotocol entry that carries the access token. */
+export const WS_BEARER_PREFIX = 'bearer.';
+
 export type WsAuthOutcome =
   | { ok: true; user: AuthUser; documentId: string; permission: DocumentPermission }
   | { ok: false; code: number; reason: string };
@@ -37,6 +51,57 @@ declare module 'fastify' {
 const params = z.object({ docId: z.string().uuid() });
 const query = z.object({ token: z.string().min(1) });
 
+/** Split a `Sec-WebSocket-Protocol` value (one header, or several joined) into its entries. */
+export function parseSubprotocols(header: string | string[] | undefined): string[] {
+  if (header === undefined) return [];
+  const raw = Array.isArray(header) ? header.join(',') : header;
+  return raw
+    .split(',')
+    .map((p) => p.trim())
+    .filter((p) => p !== '');
+}
+
+/**
+ * The access token a client offered as a subprotocol, or `undefined`. A
+ * `bearer.` entry without `gede.v1` beside it is still read (the client is
+ * telling us who it is); what the server selects is decided in
+ * `selectSubprotocol`, which `ws` calls after this hook.
+ */
+export function tokenFromSubprotocols(header: string | string[] | undefined): string | undefined {
+  for (const entry of parseSubprotocols(header)) {
+    if (entry.startsWith(WS_BEARER_PREFIX) && entry.length > WS_BEARER_PREFIX.length) {
+      return entry.slice(WS_BEARER_PREFIX.length);
+    }
+  }
+  return undefined;
+}
+
+/**
+ * `ws`'s `handleProtocols`: select `gede.v1` when offered, otherwise nothing —
+ * a `bearer.<token>` entry must never be selected, or the token would be sent
+ * back in the response headers. A browser that offered protocols and gets
+ * none selected fails the handshake itself, which is the right outcome for a
+ * client that speaks neither `gede.v1` nor the query fallback.
+ */
+export function selectSubprotocol(offered: Set<string>): string | false {
+  return offered.has(WS_SUBPROTOCOL) ? WS_SUBPROTOCOL : false;
+}
+
+/** Where the token came from, for the deprecation log line. Never the token. */
+export type TokenTransport = 'subprotocol' | 'query';
+
+export function extractToken(
+  request: Pick<FastifyRequest, 'headers' | 'query'>,
+): { token: string; transport: TokenTransport } | undefined {
+  const fromHeader = tokenFromSubprotocols(request.headers['sec-websocket-protocol']);
+  if (fromHeader !== undefined) return { token: fromHeader, transport: 'subprotocol' };
+  // Deprecated transport (issue #63 removes it): accepted only so SPA bundles
+  // built before #49 survive the rolling deploy that ships this.
+  const q = query.safeParse(request.query);
+  if (q.success) return { token: q.data.token, transport: 'query' };
+  return undefined;
+}
+
 export async function authoriseUpgrade(
   request: FastifyRequest,
   deps: { config: Config; repo: Repo; resolver: UserResolver },
@@ -47,12 +112,20 @@ export async function authoriseUpgrade(
   }
   const p = params.safeParse(request.params);
   if (!p.success) return { ok: false, code: CLOSE_BAD_REQUEST, reason: 'bad document id' };
-  const q = query.safeParse(request.query);
-  if (!q.success) return { ok: false, code: CLOSE_UNAUTHENTICATED, reason: 'missing token' };
+  const credential = extractToken(request);
+  if (credential === undefined) {
+    return { ok: false, code: CLOSE_UNAUTHENTICATED, reason: 'missing token' };
+  }
+  if (credential.transport === 'query') {
+    request.log.warn(
+      { documentId: p.data.docId, ref: request.id },
+      'websocket token in the query string is deprecated; offer it as the bearer.<token> subprotocol',
+    );
+  }
 
   let user: AuthUser;
   try {
-    user = await deps.resolver.fromToken(q.data.token);
+    user = await deps.resolver.fromToken(credential.token);
   } catch (error) {
     if (error instanceof AppError && error.status === 401) {
       return { ok: false, code: CLOSE_UNAUTHENTICATED, reason: 'invalid token' };

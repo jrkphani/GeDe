@@ -32,7 +32,11 @@ cd infra && npx cdk diff GeDe-Pipeline --profile phani-quadnomics   # read-only,
 ```
 
 Docker is not needed for synth: `ContainerImage.fromAsset` only hashes the build context locally;
-the image is built by the pipeline's ARM asset-publishing step.
+the image is built by the pipeline's ARM asset-publishing step. The asset carries the build arg
+`GEDE_VERSION` = the short `CODEBUILD_RESOLVED_SOURCE_VERSION` (`local` on a laptop), which
+`/healthz` reports. A build arg is part of the asset hash, so **every commit produces a new image
+asset and a task definition revision** even when `services/sync` did not change; that is the
+accepted price of an attributable running version.
 
 ## Where values come from
 
@@ -68,6 +72,14 @@ so same-region cross-stack references render as `Fn::GetStackOutput` rather than
   through the gateway endpoint. Adding NAT is ≈ US$35/mo per AZ for nothing at this scale.
 - **DB ingress lives in ServiceStack** (`addIngressRule(..., remoteRule = true)`), so DataStack
   never depends on ServiceStack and stateful stacks deploy first.
+- **One image, two task definitions.** `ServiceStack` builds the sync image once and defines the
+  service task and a `gede-<env>-jobs` task (command `node main.js --job purge`, own one-month log
+  group, same secrets, environment and grants). `OpsStack` owns the EventBridge Scheduler that
+  runs the jobs task nightly (02:30 Asia/Singapore, public subnets + public IP, the service
+  security group so it reaches RDS) and the alerting: an EventBridge rule on `ECS Task State
+Change` for that family with a non-zero exit code or `TaskFailedToStart` → SNS, plus a metric
+  filter on the job log (`GeDe/Jobs PurgeFailures`) with an alarm. The scheduler and the rule
+  live in Ops, not Service, so the alerts topic needs no cross-stack cycle.
 - **Passwordless Cognito.** Cognito requires PASSWORD in `AllowedFirstAuthFactors` of a
   choice-based pool (CloudFormation rejected the override on 2026-09-12), so the pool policy is
   `[PASSWORD, EMAIL_OTP, WEB_AUTHN]`. Passwordless is enforced at the client: the SPA app client

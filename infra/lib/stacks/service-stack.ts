@@ -39,6 +39,21 @@ const DB_PORT = 5432;
 const DOCS_PREFIX = 'docs/';
 
 /**
+ * Short git sha baked into the image as `GEDE_VERSION` (reported by `/healthz`).
+ * CodeBuild sets `CODEBUILD_RESOLVED_SOURCE_VERSION` on the Synth step; a laptop
+ * synth gets `local`. Because it is a Docker build arg, the image asset hash
+ * changes on every commit and every deploy builds a fresh image — accepted, so
+ * the running version is always attributable (infra/CLAUDE.md).
+ */
+export function gedeVersion(env: NodeJS.ProcessEnv = process.env): string {
+  const sha = env.CODEBUILD_RESOLVED_SOURCE_VERSION;
+  return sha === undefined || sha === '' ? 'local' : sha.slice(0, 7);
+}
+
+/** The nightly purge (LIB-08): `node main.js --job purge` on the same image (services/sync/src/main.ts). */
+export const PURGE_COMMAND = ['node', 'main.js', '--job', 'purge'];
+
+/**
  * The sync/API service: one ARM64 Fargate task behind an internet-facing ALB that
  * terminates TLS for api.<domain> and ws.<domain>.
  *
@@ -52,6 +67,12 @@ const DOCS_PREFIX = 'docs/';
 export class ServiceStack extends cdk.Stack {
   readonly alb: elbv2.ApplicationLoadBalancer;
   readonly service: ecs.FargateService;
+  readonly cluster: ecs.Cluster;
+  readonly serviceSecurityGroup: ec2.SecurityGroup;
+  readonly logGroup: logs.LogGroup;
+  /** Same image, `--job purge` as its command; run by the EventBridge Scheduler in OpsStack. */
+  readonly jobsTaskDefinition: ecs.FargateTaskDefinition;
+  readonly jobsLogGroup: logs.LogGroup;
   readonly apiUrl: cdk.CfnOutput;
 
   constructor(scope: Construct, id: string, props: ServiceStackProps) {
@@ -71,94 +92,127 @@ export class ServiceStack extends cdk.Stack {
 
     // ---- Compute -------------------------------------------------------------------
 
-    const cluster = new ecs.Cluster(this, 'Cluster', {
+    this.cluster = new ecs.Cluster(this, 'Cluster', {
       vpc,
       containerInsightsV2: ecs.ContainerInsights.DISABLED,
     });
-
-    const taskDefinition = new ecs.FargateTaskDefinition(this, 'Task', {
-      cpu: 512,
-      memoryLimitMiB: 1024,
-      runtimePlatform: {
-        cpuArchitecture: ecs.CpuArchitecture.ARM64,
-        operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
-      },
-    });
-
-    const logGroup = new logs.LogGroup(this, 'Logs', {
-      retention: logs.RetentionDays.ONE_MONTH,
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
+    const cluster = this.cluster;
 
     if (!database.secret) {
       throw new Error('DataStack must create the database with a generated secret');
     }
     const dbSecret = database.secret;
+    const image = this.syncImage();
 
-    taskDefinition.addContainer('sync', {
-      image: this.syncImage(),
-      portMappings: [{ containerPort: CONTAINER_PORT }],
-      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'sync', logGroup }),
-      secrets: {
-        PGHOST: ecs.Secret.fromSecretsManager(dbSecret, 'host'),
-        PGPORT: ecs.Secret.fromSecretsManager(dbSecret, 'port'),
-        PGUSER: ecs.Secret.fromSecretsManager(dbSecret, 'username'),
-        PGPASSWORD: ecs.Secret.fromSecretsManager(dbSecret, 'password'),
-        PGDATABASE: ecs.Secret.fromSecretsManager(dbSecret, 'dbname'),
-      },
-      environment: {
-        NODE_ENV: 'production',
-        PORT: String(CONTAINER_PORT),
-        PGSSLMODE: 'verify-full',
-        PGSSLROOTCERT: '/app/rds-global-bundle.pem',
-        COGNITO_USER_POOL_ID: props.userPoolId,
-        COGNITO_CLIENT_ID: props.userPoolClientId,
-        COGNITO_REGION: config.region,
-        DOCS_BUCKET: props.docsBucket.bucketName,
-        DOCS_PREFIX,
-        WEB_ORIGIN: `https://${config.domain}`,
-      },
+    const environment = {
+      NODE_ENV: 'production',
+      PORT: String(CONTAINER_PORT),
+      PGSSLMODE: 'verify-full',
+      PGSSLROOTCERT: '/app/rds-global-bundle.pem',
+      COGNITO_USER_POOL_ID: props.userPoolId,
+      COGNITO_CLIENT_ID: props.userPoolClientId,
+      COGNITO_REGION: config.region,
+      DOCS_BUCKET: props.docsBucket.bucketName,
+      DOCS_PREFIX,
+      WEB_ORIGIN: `https://${config.domain}`,
+    };
+    const secrets = () => ({
+      PGHOST: ecs.Secret.fromSecretsManager(dbSecret, 'host'),
+      PGPORT: ecs.Secret.fromSecretsManager(dbSecret, 'port'),
+      PGUSER: ecs.Secret.fromSecretsManager(dbSecret, 'username'),
+      PGPASSWORD: ecs.Secret.fromSecretsManager(dbSecret, 'password'),
+      PGDATABASE: ecs.Secret.fromSecretsManager(dbSecret, 'dbname'),
     });
-
-    // Least privilege for the task role (issue #42), written as explicit statements because
+    // The service task keeps its generated family (a new family would replace the
+    // deployed resource for nothing); the jobs family is named so alarms can match it.
+    const newTaskDefinition = (id: string, family?: string) =>
+      new ecs.FargateTaskDefinition(this, id, {
+        ...(family === undefined ? {} : { family }),
+        cpu: 512,
+        memoryLimitMiB: 1024,
+        runtimePlatform: {
+          cpuArchitecture: ecs.CpuArchitecture.ARM64,
+          operatingSystemFamily: ecs.OperatingSystemFamily.LINUX,
+        },
+      });
+    // Least privilege for both task roles (issue #42), written as explicit statements because
     // `grantRead`/`grantReadWrite` render unconditioned `s3:List*`/`s3:GetBucket*` and
     // `s3:DeleteObject*`. What services/sync/src/s3.ts calls: GetObject, PutObject,
     // ListObjectsV2 under a document prefix, and DeleteObjects for a purge — on a versioned
     // bucket that writes delete markers (s3:DeleteObject), never removes a version
     // (s3:DeleteObjectVersion, denied explicitly). The DB secret is read by the *execution*
-    // role to inject `PG*`; the service never calls Secrets Manager, so the task role gets
-    // no grant on it.
-    const taskRole = taskDefinition.taskRole;
-    taskRole.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        sid: 'DocsObjects',
-        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
-        resources: [props.docsBucket.arnForObjects(`${DOCS_PREFIX}*`)],
-      }),
-    );
-    taskRole.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        sid: 'ListDocsPrefixOnly',
-        actions: ['s3:ListBucket'],
-        resources: [props.docsBucket.bucketArn],
-        conditions: { StringLike: { 's3:prefix': [`${DOCS_PREFIX}*`] } },
-      }),
-    );
-    taskRole.addToPrincipalPolicy(
-      new iam.PolicyStatement({
-        sid: 'NeverDeleteVersions',
-        effect: iam.Effect.DENY,
-        actions: ['s3:DeleteObjectVersion'],
-        resources: [props.docsBucket.arnForObjects('*')],
-      }),
-    );
-    props.emailIdentity.grantSendEmail(taskRole);
+    // role to inject `PG*`; neither process calls Secrets Manager, so the task roles get no
+    // grant on it. The jobs task (nightly purge) needs exactly the same set: it lists and
+    // deletes a purged document's prefix.
+    const grant = (taskDefinition: ecs.TaskDefinition) => {
+      const taskRole = taskDefinition.taskRole;
+      taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'DocsObjects',
+          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          resources: [props.docsBucket.arnForObjects(`${DOCS_PREFIX}*`)],
+        }),
+      );
+      taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'ListDocsPrefixOnly',
+          actions: ['s3:ListBucket'],
+          resources: [props.docsBucket.bucketArn],
+          conditions: { StringLike: { 's3:prefix': [`${DOCS_PREFIX}*`] } },
+        }),
+      );
+      taskRole.addToPrincipalPolicy(
+        new iam.PolicyStatement({
+          sid: 'NeverDeleteVersions',
+          effect: iam.Effect.DENY,
+          actions: ['s3:DeleteObjectVersion'],
+          resources: [props.docsBucket.arnForObjects('*')],
+        }),
+      );
+      props.emailIdentity.grantSendEmail(taskRole);
+    };
+
+    // ---- The service task ----------------------------------------------------------
+
+    const taskDefinition = newTaskDefinition('Task');
+    this.logGroup = new logs.LogGroup(this, 'Logs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    taskDefinition.addContainer('sync', {
+      image,
+      portMappings: [{ containerPort: CONTAINER_PORT }],
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'sync', logGroup: this.logGroup }),
+      secrets: secrets(),
+      environment,
+    });
+    grant(taskDefinition);
+
+    // ---- The jobs task (nightly purge, LIB-08) ---------------------------------------
+    // Same image, config and permissions; the command selects the job and the
+    // process exits when it is done. Its own log group keeps job output apart
+    // from the service's, with the same one-month retention.
+
+    this.jobsTaskDefinition = newTaskDefinition('JobsTask', `gede-${config.envName}-jobs`);
+    this.jobsLogGroup = new logs.LogGroup(this, 'JobsLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    this.jobsTaskDefinition.addContainer('purge', {
+      image,
+      command: PURGE_COMMAND,
+      logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'purge', logGroup: this.jobsLogGroup }),
+      secrets: secrets(),
+      environment,
+    });
+    grant(this.jobsTaskDefinition);
 
     const serviceSg = new ec2.SecurityGroup(this, 'ServiceSecurityGroup', {
       vpc,
       description: 'GeDe sync service - admits only the ALB',
       allowAllOutbound: true,
     });
+    this.serviceSecurityGroup = serviceSg;
 
     // Public subnets + public IP because the VPC has no NAT (see NetworkStack).
     this.service = new ecs.FargateService(this, 'Service', {
@@ -284,6 +338,7 @@ export class ServiceStack extends cdk.Stack {
     return ecs.ContainerImage.fromAsset(REPO_ROOT, {
       file: SYNC_DOCKERFILE,
       platform: ecr_assets.Platform.LINUX_ARM64,
+      buildArgs: { GEDE_VERSION: gedeVersion() },
       // Mirrors the root .dockerignore (which the asset fingerprint also honours) plus tests.
       exclude: [
         '**/node_modules',

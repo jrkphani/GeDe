@@ -38,6 +38,8 @@ export const configSchema = z.object({
   ROOM_IDLE_MS: positiveInt.default(600_000),
   /** Coalescing window for the persistence writer. */
   PERSIST_COALESCE_MS: positiveInt.default(50),
+  /** Debounce between a compaction and the projection write that follows it. */
+  PROJECTION_DEBOUNCE_MS: positiveInt.default(1_000),
   /** Largest awareness update accepted from a client, in bytes. */
   AWARENESS_MAX_BYTES: positiveInt.default(4096),
   /** Largest WebSocket frame accepted, in bytes (a sync step 2 of a large document). */

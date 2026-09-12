@@ -32,6 +32,7 @@ import {
   type StripCount,
   type TableMap,
 } from './schema.js';
+import { firstSheetMap, SEED_ORIGIN } from './seed.js';
 
 function transact<T>(gd: GedeDoc, fn: () => T): T {
   let out!: T;
@@ -100,38 +101,29 @@ export function renameSheet(gd: GedeDoc, sheetId: Id, label: string): void {
   });
 }
 
-/** Transaction origin for client-side seeding; never tracked by undo. */
-export const SEED_ORIGIN = 'seed';
-
 /** True when nobody has ever written to this document: no client in the struct store. */
 export function isDocEmpty(doc: Y.Doc): boolean {
   return doc.store.clients.size === 0;
 }
 
 /**
- * A document must always have a sheet. Call this only once the replica has
- * synced and the store is still empty (`isDocEmpty`); the sheet is tagged
- * `seeded` so `dedupeSeededSheets` can collapse the duplicates two clients
- * produce when they both open an empty document offline. Returns the first
+ * A document must always have a sheet. Since Wave 2 the server seeds every
+ * new document (`seedNewDocument` in `seed.ts`, written as snapshot seq 1 by
+ * `POST /api/documents`), so a synced replica is never empty and this is a
+ * no-op. It remains for documents created before that change and for a
+ * replica that synced against an empty room: the sheet is the same shape
+ * the server writes, tagged `seeded` so `dedupeSeededSheets` can collapse
+ * the duplicates two offline first-openers produce. Returns the first
  * sheet's id. Seeding is not an undo step.
- *
- * TODO(Wave 2, services/sync): `POST /api/documents` should seed the initial
- * room state server-side so the client never has to.
  */
 export function ensureFirstSheet(gd: GedeDoc): Id {
   const existing = listSheets(gd)[0];
   if (existing !== undefined) return existing.id;
-  let id = '';
+  const sheet = firstSheetMap();
   gd.doc.transact(() => {
-    id = newId();
-    const map: SheetMap = new Y.Map<unknown>();
-    map.set('id', id);
-    map.set('label', 'Sheet 1');
-    map.set('parentContext', null);
-    map.set('seeded', true);
-    gd.sheets.push([map]);
+    gd.sheets.push([sheet.map]);
   }, SEED_ORIGIN);
-  return id;
+  return sheet.id;
 }
 
 /**

@@ -15,6 +15,15 @@ const MESSAGE_AWARENESS = 1;
 /** GeDe's server → client notice (`services/sync/src/ws/protocol.ts`). */
 const MESSAGE_NOTICE = 4;
 
+/** The token a connection carried, by either transport; the bearer subprotocol wins. */
+export function tokenOf(url: string, protocols: readonly string[]): string | null {
+  const bearer = protocols.find((p) => p.startsWith('bearer.'));
+  if (bearer !== undefined) return bearer.slice('bearer.'.length);
+  const query = url.indexOf('?');
+  if (query < 0) return null;
+  return new URLSearchParams(url.slice(query + 1)).get('token');
+}
+
 export interface FakeRoomOptions {
   /** Drop every write and send the read-only notice once, as the service does for `view` (SHARE-03). */
   viewOnly?: boolean | undefined;
@@ -27,6 +36,14 @@ export class FakeRoom {
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
   readonly sockets = new Set<WebSocketRoute>();
   readonly urls: string[] = [];
+  /** The subprotocol list each socket offered (`['gede.v1', 'bearer.<token>']`), in order. */
+  readonly protocols: string[][] = [];
+  /**
+   * The access token each connection carried — from the `bearer.` subprotocol
+   * (what the SPA sends, issue #32) or, as the service still accepts for one
+   * release, a `?token=` query parameter. `null` when neither was present.
+   */
+  readonly tokens: (string | null)[] = [];
 
   constructor(options: FakeRoomOptions = {}) {
     this.options = options;
@@ -43,6 +60,8 @@ export class FakeRoom {
   async install(page: Page): Promise<void> {
     await page.routeWebSocket(/\/ws\//, (ws) => {
       this.urls.push(ws.url());
+      this.protocols.push(ws.protocols());
+      this.tokens.push(tokenOf(ws.url(), ws.protocols()));
       this.sockets.add(ws);
       ws.onMessage((message) => {
         this.receive(ws, typeof message === 'string' ? Buffer.from(message) : message);

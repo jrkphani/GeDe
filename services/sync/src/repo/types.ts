@@ -6,6 +6,8 @@
  */
 import type { LinkAccess, Permission } from '@gede/db';
 
+import type { Projection } from '../projection/project.js';
+
 export interface UserRecord {
   readonly id: string;
   readonly cognitoSub: string;
@@ -128,7 +130,18 @@ export interface DocumentsRepo {
   get(id: string): Promise<DocumentRecord | undefined>;
   /** The library row for one document as `userId` sees it. Does not check access; callers do. */
   summarise(id: string, userId: string): Promise<DocumentSummary | undefined>;
-  create(input: { ownerId: string; title: string }): Promise<DocumentRecord>;
+  /**
+   * Insert the row already pointing at its initial snapshot (DOC-03: the
+   * seeded Y.Doc the caller has put in S3 as `snapshot.s3Key`), the
+   * `snapshots` row and the `document.create` audit row, in one transaction.
+   * The id is chosen by the caller because the S3 key needs it first.
+   */
+  create(input: {
+    id: string;
+    ownerId: string;
+    title: string;
+    snapshot: { seq: number; s3Key: string; sizeBytes: number };
+  }): Promise<DocumentRecord>;
   rename(id: string, title: string): Promise<DocumentRecord | undefined>;
   softDelete(id: string): Promise<DocumentRecord | undefined>;
   /**
@@ -149,6 +162,23 @@ export interface DocumentsRepo {
    * transaction. S3 objects are the caller's job once this has committed.
    */
   purgeDeleted(ownerId: string, actorId: string): Promise<PurgedDocument[]>;
+  /**
+   * The nightly job's half of LIB-08: permanently delete up to `limit`
+   * documents, any owner, whose soft-deletion is older than the retention
+   * window, with the same cascade and one `document.purge` audit row each
+   * written by the system actor (`user_id` null). The rows are claimed
+   * (locked) first, `removeObjects` runs for each while the claim is held,
+   * and only the documents whose objects are gone are deleted when the
+   * transaction commits — an S3 failure leaves that document's rows in
+   * place for the next run, never an orphaned object (review finding 3).
+   * `exclude` skips documents that already failed in this run. Call again
+   * until `purged.length + failed.length < limit`.
+   */
+  purgeExpired(input: {
+    limit: number;
+    exclude: readonly string[];
+    removeObjects: (doc: PurgedDocument) => Promise<boolean>;
+  }): Promise<{ purged: PurgedDocument[]; failed: PurgedDocument[] }>;
   /** Explicit share permission for a user, if any. Ownership is checked separately. */
   sharePermission(documentId: string, userId: string): Promise<Permission | undefined>;
   /** Owner, every share with the inviter, and the link mode (LIB-07). */
@@ -184,6 +214,33 @@ export interface AuditRepo {
   }): Promise<void>;
 }
 
+/** One full-text hit in a document's projected cells (FIND-03). */
+export interface SearchHit {
+  readonly sheetId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly columnId: string;
+  /** The cell's `text_plain`; the route trims it to a snippet. */
+  readonly textPlain: string;
+}
+
+export interface ProjectionRepo {
+  /**
+   * Replace the document's whole projection (sheets, tables, columns, rows,
+   * cells) in one transaction. The projection is rebuildable: deleting the
+   * sheets cascades through the rest, then everything is inserted afresh.
+   */
+  replace(projection: Projection): Promise<void>;
+  /**
+   * Cells of one document matching every word of `query`
+   * (`to_tsvector('simple', text_plain) @@ plainto_tsquery('simple', $q)`),
+   * in sheet, table, row, column order, at most `limit`.
+   */
+  search(documentId: string, query: string, limit: number): Promise<SearchHit[]>;
+  /** Ids of every live (not soft-deleted) document, for a full rebuild. */
+  liveDocumentIds(): Promise<string[]>;
+}
+
 export interface Repo {
   /** `SELECT 1` — throws when the database is unreachable. */
   ping(): Promise<void>;
@@ -191,4 +248,5 @@ export interface Repo {
   readonly documents: DocumentsRepo;
   readonly updates: UpdatesRepo;
   readonly audit: AuditRepo;
+  readonly projection: ProjectionRepo;
 }

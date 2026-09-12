@@ -6,6 +6,7 @@ import {
   CLOSE_UNAUTHENTICATED,
   OFFLINE_AFTER_ATTEMPTS,
   SyncClient,
+  WS_SUBPROTOCOL,
   type SyncSnapshot,
 } from './sync-client.js';
 
@@ -43,12 +44,14 @@ describe('SyncClient', () => {
     vi.useRealTimers();
   });
 
-  it('LOAD-05 connects with the access token in the query and reaches synced; edits flow both ways', async () => {
+  it('LOAD-05 connects with the access token as the bearer subprotocol, never in the URL, and reaches synced; edits flow both ways', async () => {
     const { c, doc } = client(room);
     clients.push(c);
     c.connect();
     await until(() => c.getSnapshot().status === 'synced');
-    expect(room.urls[0]).toBe(`${WS_URL}/${DOC_ID}?token=tok-1`);
+    expect(room.urls[0]).toBe(`${WS_URL}/${DOC_ID}`);
+    expect(room.protocols[0]).toEqual([WS_SUBPROTOCOL, 'bearer.tok-1']);
+    expect(room.tokens[0]).toBe('tok-1');
     // Local edit renders immediately (the doc is the state) and reaches the room.
     doc.getMap('meta').set('title', 'Everest trek');
     expect(doc.getMap('meta').get('title')).toBe('Everest trek');
@@ -79,7 +82,8 @@ describe('SyncClient', () => {
     expect(room.urls).toHaveLength(1);
     await vi.advanceTimersByTimeAsync(60);
     expect(room.urls).toHaveLength(2);
-    expect(room.urls[1]).toBe(`${WS_URL}/${DOC_ID}?token=tok-2`);
+    expect(room.urls[1]).toBe(`${WS_URL}/${DOC_ID}`);
+    expect(room.tokens[1]).toBe('tok-2');
     await vi.advanceTimersByTimeAsync(10);
     expect(c.getSnapshot()).toMatchObject({ status: 'synced', attempts: 0 });
     expect(history.map((h) => h.status)).toEqual([
@@ -109,18 +113,20 @@ describe('SyncClient', () => {
     await vi.advanceTimersByTimeAsync(2400); // 400 × 4 × 1.5
     expect(room.urls).toHaveLength(4);
     // Every attempt carried a fresh token.
-    expect(new Set(room.urls.map((u) => u.split('token=')[1])).size).toBe(4);
+    expect(new Set(room.tokens).size).toBe(4);
+    expect(room.urls.every((u) => !u.includes('token'))).toBe(true);
     // The service comes back: the next attempt syncs and the counter resets.
     room.options = {};
     await vi.advanceTimersByTimeAsync(10_000);
     expect(c.getSnapshot()).toMatchObject({ status: 'synced', attempts: 0, failure: null });
   });
 
-  it('AUTH-09 a 4401 close retries once with a token forced through refresh, a second 4401 in the same window is terminal', async () => {
+  it('AUTH-09 a 4401 close retries the same token on the legacy transport, then a refreshed token on both; a 4401 after all four is terminal', async () => {
     vi.useFakeTimers();
+    // Two refusals: the subprotocol attempt and the legacy attempt with the stale token.
     room.options = {
       refuseWith: { code: CLOSE_UNAUTHENTICATED, reason: 'invalid token' },
-      refuseCount: 1,
+      refuseCount: 2,
     };
     let refreshes = 0;
     const { c } = client(room, {
@@ -129,17 +135,17 @@ describe('SyncClient', () => {
     clients.push(c);
     c.connect();
     await vi.advanceTimersByTimeAsync(10);
-    // The retry used the forced refresh, not the cached token.
-    expect(room.urls).toEqual([
-      `${WS_URL}/${DOC_ID}?token=tok-1`,
-      `${WS_URL}/${DOC_ID}?token=fresh-1`,
-    ]);
+    // The same token both ways first (no forced refresh), then the forced refresh on
+    // the subprotocol, which synced.
+    expect(room.tokens).toEqual(['tok-1', 'tok-1', 'fresh-1']);
+    expect(room.urls.map((u) => u.includes('token='))).toEqual([false, true, false]);
+    expect(room.protocols.map((p) => p.length)).toEqual([2, 1, 2]);
     expect(refreshes).toBe(1);
     expect(c.getSnapshot().status).toBe('synced');
-    // The window closed on sync: a later 4401 gets its own single retry.
+    // The window closed on sync: a later 4401 gets its own plan.
     room.options = {
       refuseWith: { code: CLOSE_UNAUTHENTICATED, reason: 'expired' },
-      refuseCount: 1,
+      refuseCount: 2,
     };
     room.refusals = 0;
     room.dropAll();
@@ -149,17 +155,45 @@ describe('SyncClient', () => {
     c.destroy();
 
     const again = new FakeRoom({ refuseWith: { code: CLOSE_UNAUTHENTICATED, reason: 'expired' } });
-    const second = client(again);
+    const second = client(again, { refreshToken: () => Promise.resolve('fresh') });
     clients.push(second.c);
     second.c.connect();
     await vi.advanceTimersByTimeAsync(10);
-    expect(again.urls).toHaveLength(2);
+    expect(again.tokens).toEqual(['tok-1', 'tok-1', 'fresh', 'fresh']);
+    expect(again.urls.map((u) => u.includes('token='))).toEqual([false, true, false, true]);
     expect(second.c.getSnapshot()).toMatchObject({
       status: 'offline',
       failure: { code: CLOSE_UNAUTHENTICATED, reason: 'expired' },
     });
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(again.urls).toHaveLength(2); // no further attempts without Retry
+    expect(again.urls).toHaveLength(4); // no further attempts without Retry
+  });
+
+  it('AUTH-09 LOAD-05 a task from before #32 (rolling-deploy window) is reached through the legacy ?token= transport without a refresh', async () => {
+    vi.useFakeTimers();
+    room.options = { legacyOnly: true };
+    let refreshes = 0;
+    const { c, doc } = client(room, {
+      refreshToken: () => Promise.resolve(`fresh-${String(++refreshes)}`),
+    });
+    clients.push(c);
+    c.connect();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(c.getSnapshot().status).toBe('synced');
+    expect(refreshes).toBe(0);
+    expect(room.tokens).toEqual(['tok-1', 'tok-1']); // the same token, the other way
+    expect(room.urls[1]).toBe(`${WS_URL}/${DOC_ID}?token=tok-1`);
+    // `gede.v1` is still offered so the old server selects it too.
+    expect(room.protocols[1]).toEqual([WS_SUBPROTOCOL]);
+    doc.getMap('meta').set('title', 'through the old task');
+    await vi.advanceTimersByTimeAsync(10);
+    expect(room.doc.getMap('meta').get('title')).toBe('through the old task');
+    // The next connect starts from the subprotocol again (the deploy has moved on).
+    room.options = {};
+    room.dropAll();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(c.getSnapshot().status).toBe('synced');
+    expect(room.urls.at(-1)).toBe(`${WS_URL}/${DOC_ID}`);
   });
 
   it('SHARE-03 a 4403 is terminal: no reconnect until Retry, which reconnects at once', async () => {

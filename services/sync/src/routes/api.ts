@@ -7,13 +7,18 @@
  * are Wave 3; only the participant read model exists here. Link access is
  * not granted yet — see the TODO in `permissions.ts`.
  */
+import { randomUUID } from 'node:crypto';
+
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
+
+import { encodeSeededDocument } from '@gede/core';
 
 import { currentUser, requireUser, toAuthUser, type AuthUser, type UserResolver } from '../auth.js';
 import type { Deps } from '../deps.js';
 import { AppError } from '../errors.js';
 import { canEdit, requirePermission } from '../permissions.js';
+import type { ProjectionWorker } from '../projection/worker.js';
 import type {
   DocumentListing,
   DocumentPermission,
@@ -22,7 +27,7 @@ import type {
   ParticipantList,
   ProfilePatch,
 } from '../repo/types.js';
-import { documentPrefix } from '../s3.js';
+import { documentPrefix, snapshotKey } from '../s3.js';
 import type { RoomManager } from '../ws/room-manager.js';
 import { CLOSE_NOT_FOUND } from '../ws/route.js';
 
@@ -49,6 +54,13 @@ const titleSchema = oneLine(200);
 const createBody = z.object({ title: titleSchema.optional() }).strict().default({});
 const patchBody = z.object({ title: titleSchema }).strict();
 const listQuery = z.object({ view: z.enum(LIBRARY_VIEWS).default('recents') });
+/** FIND-03: a search phrase; every word must match. Control characters are refused as for titles. */
+const searchQuery = z.object({ q: oneLine(200) });
+
+/** Most hits one search answers (the find bar pages nothing yet). */
+export const SEARCH_LIMIT = 50;
+/** Characters of context either side of the first match in a snippet. */
+const SNIPPET_CONTEXT = 40;
 const profileBody = z
   .object({
     displayName: oneLine(80).optional(),
@@ -79,6 +91,9 @@ function parseId(params: unknown): string {
 }
 
 const NOT_FOUND = () => new AppError(404, 'not_found', 'Nothing at this address');
+
+/** The seed snapshot's sequence number; the first client update is seq 2. */
+export const INITIAL_SNAPSHOT_SEQ = 1;
 
 /** A document as the API returns it. Only `workscape` exists as a kind today. */
 export interface DocumentView {
@@ -183,11 +198,45 @@ function participantsView(
   };
 }
 
+/** One hit as the API returns it (FIND-03); ids locate the cell, the snippet previews it. */
+export interface SearchHitView {
+  sheetId: string;
+  tableId: string;
+  rowId: string;
+  columnId: string;
+  snippet: string;
+}
+
+/**
+ * A short window of the cell text around the first word of the query
+ * (case-insensitive), with ellipses where it was cut. Falls back to the
+ * head of the text when the words matched only after normalisation.
+ */
+export function snippetOf(text: string, query: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const words = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w !== '');
+  const lower = flat.toLowerCase();
+  let at = -1;
+  for (const word of words) {
+    const found = lower.indexOf(word);
+    if (found >= 0 && (at < 0 || found < at)) at = found;
+  }
+  const start = Math.max(0, (at < 0 ? 0 : at) - SNIPPET_CONTEXT);
+  const end = Math.min(flat.length, (at < 0 ? 0 : at) + SNIPPET_CONTEXT * 2);
+  const head = start > 0 ? '…' : '';
+  const tail = end < flat.length ? '…' : '';
+  return `${head}${flat.slice(start, end)}${tail}`;
+}
+
 export function registerApi(
   app: FastifyInstance,
   deps: Deps,
   resolver: UserResolver,
   rooms: RoomManager,
+  projection: Pick<ProjectionWorker, 'schedule'>,
 ): void {
   const repo = deps.db;
 
@@ -225,16 +274,33 @@ export function registerApi(
       api.post('/documents', async (request, reply) => {
         const user = currentUser(request);
         const body = parse(createBody, request.body ?? {}, 'request');
-        const doc = await repo.documents.create({
-          ownerId: user.id,
-          title: body.title ?? 'Untitled',
-        });
-        await repo.audit.record({
-          documentId: doc.id,
-          userId: user.id,
-          action: 'document.create',
-          target: null,
-        });
+        const title = body.title ?? 'Untitled';
+        // DOC-03: the room's initial state is written here, as snapshot seq 1,
+        // so a new document never opens empty and no client ever seeds one.
+        // The S3 object goes first (the row must never point at a missing
+        // snapshot); a failed insert leaves one orphan object, logged with its
+        // key for the operator (README, Runbook).
+        const id = randomUUID();
+        const bytes = encodeSeededDocument({ title });
+        const key = snapshotKey(deps.config.DOCS_PREFIX, id, INITIAL_SNAPSHOT_SEQ);
+        await deps.s3.put(key, bytes);
+        let doc: DocumentRecord;
+        try {
+          doc = await repo.documents.create({
+            id,
+            ownerId: user.id,
+            title,
+            snapshot: { seq: INITIAL_SNAPSHOT_SEQ, s3Key: key, sizeBytes: bytes.byteLength },
+          });
+        } catch (error) {
+          request.log.error(
+            { err: error, documentId: id, key, ref: request.id },
+            'document insert failed after its seed snapshot was written; the object is orphaned',
+          );
+          throw error;
+        }
+        // The projection of a new document is one sheet; it makes the row searchable at once.
+        projection.schedule(id, bytes);
         return reply.status(201).send({ document: view(doc, 'owner') });
       });
 
@@ -340,6 +406,29 @@ export function registerApi(
           target: null,
         });
         return { document: view(recovered, 'owner') };
+      });
+
+      api.get('/documents/:id/search', async (request) => {
+        const user = currentUser(request);
+        const id = parseId(request.params);
+        const { q } = parse(searchQuery, request.query, 'query');
+        // Participants only: a stranger learns nothing, not even that the document exists (403).
+        const { document } = await requirePermission(repo, user.id, id, 'view');
+        // A deleted document's content is served to nobody, its owner included — the
+        // same rule as the WebSocket upgrade. The owner still sees it listed in
+        // Recently Deleted; its cells stay projected until the nightly purge, so
+        // without this the projection would answer for a document the user was
+        // told is gone (issue #42).
+        if (document.deletedAt !== null) throw NOT_FOUND();
+        const hits = await repo.projection.search(id, q, SEARCH_LIMIT);
+        const results: SearchHitView[] = hits.map((hit) => ({
+          sheetId: hit.sheetId,
+          tableId: hit.tableId,
+          rowId: hit.rowId,
+          columnId: hit.columnId,
+          snippet: snippetOf(hit.textPlain, q),
+        }));
+        return { results };
       });
 
       api.get('/documents/:id/shares', async (request) => {

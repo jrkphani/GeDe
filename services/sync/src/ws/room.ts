@@ -18,6 +18,7 @@ import type { Config } from '../config.js';
 import type { SnapshotStore } from '../deps.js';
 import type { Logger } from '../logger.js';
 import { canEdit } from '../permissions.js';
+import type { ProjectionWorker } from '../projection/worker.js';
 import type { DocumentPermission, Repo } from '../repo/types.js';
 import { PersistenceWriter } from './persistence.js';
 import {
@@ -31,8 +32,7 @@ import {
   SYNC_STEP2,
 } from './protocol.js';
 
-/** Transaction origin for updates replayed from storage; never persisted or echoed. */
-const LOAD_ORIGIN = Symbol('load');
+import { LOAD_ORIGIN, loadStoredState } from './state.js';
 
 export interface Member {
   readonly userId: string;
@@ -98,6 +98,8 @@ export class Room {
     private readonly s3: SnapshotStore,
     private readonly config: RoomConfig,
     private readonly logger: Logger,
+    /** Receives every snapshot this room writes (debounced projection, ARCHITECTURE §1.3). */
+    private readonly projection: Pick<ProjectionWorker, 'schedule'> | null = null,
   ) {
     // The server has no presence of its own.
     this.awareness.setLocalState(null);
@@ -116,21 +118,7 @@ export class Room {
   }
 
   private async load(): Promise<void> {
-    const state = await this.repo.updates.loadState(this.documentId);
-    let lastSeq = state.snapshotSeq;
-    if (state.snapshotKey !== null) {
-      const bytes = await this.s3.get(state.snapshotKey);
-      if (bytes === undefined) {
-        // The pointer exists but the object does not: refuse to serve a
-        // document with silently missing history.
-        throw new Error(`snapshot ${state.snapshotKey} is missing from the bucket`);
-      }
-      Y.applyUpdate(this.doc, bytes, LOAD_ORIGIN);
-    }
-    for (const entry of state.updates) {
-      Y.applyUpdate(this.doc, entry.update, LOAD_ORIGIN);
-      lastSeq = Math.max(lastSeq, entry.seq);
-    }
+    const state = await loadStoredState(this.doc, this.documentId, this.repo.updates, this.s3);
     this.writer = new PersistenceWriter(
       this.documentId,
       this.doc,
@@ -138,14 +126,15 @@ export class Room {
       this.s3,
       this.config,
       this.logger,
-      { snapshotSeq: state.snapshotSeq, lastSeq },
+      { snapshotSeq: state.snapshotSeq, lastSeq: state.lastSeq },
+      this.projection === null
+        ? undefined
+        : (bytes) => {
+            this.projection?.schedule(this.documentId, bytes);
+          },
     );
     this.logger.info(
-      {
-        documentId: this.documentId,
-        snapshotSeq: state.snapshotSeq,
-        replayed: state.updates.length,
-      },
+      { documentId: this.documentId, snapshotSeq: state.snapshotSeq, replayed: state.replayed },
       'room loaded',
     );
   }

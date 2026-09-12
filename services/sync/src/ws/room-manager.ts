@@ -9,6 +9,7 @@ import type { WebSocket } from 'ws';
 import type { Config } from '../config.js';
 import type { SnapshotStore } from '../deps.js';
 import type { Logger } from '../logger.js';
+import type { ProjectionWorker } from '../projection/worker.js';
 import type { Repo } from '../repo/types.js';
 import { Room, type Conn, type Member } from './room.js';
 
@@ -22,6 +23,7 @@ export class RoomManager {
     private readonly s3: SnapshotStore,
     private readonly config: Config,
     private readonly logger: Logger,
+    private readonly projection: Pick<ProjectionWorker, 'schedule'> | null = null,
   ) {}
 
   get(documentId: string): Room | undefined {
@@ -45,7 +47,7 @@ export class RoomManager {
     }
     let room = this.rooms.get(documentId);
     if (!room) {
-      room = new Room(documentId, this.repo, this.s3, this.config, this.logger);
+      room = new Room(documentId, this.repo, this.s3, this.config, this.logger, this.projection);
       room.onEmpty = (r) => {
         this.scheduleEviction(r);
       };

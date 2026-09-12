@@ -108,18 +108,20 @@ aws cloudwatch describe-alarms --alarm-name-prefix gede-prod \
 aws budgets describe-budgets --account-id 975049998516 --query 'Budgets[?BudgetName==`gede-prod-monthly`]'
 ```
 
-| Alarm                       | Threshold                                 | First action                                                                                  |
-| --------------------------- | ----------------------------------------- | --------------------------------------------------------------------------------------------- |
-| `gede-prod-service-cpu`     | > 60 % for two 5-minute periods           | Check room count and update rate in the service logs; consider growth step 1.                 |
-| `gede-prod-alb-5xx`         | > 1 % of requests (ELB + target) in 5 min | Tail the service log group; search for the `ref` shown in the error envelope.                 |
-| `gede-prod-db-free-storage` | < 5 GiB (25 % of 20 GB)                   | Increase allocated storage (online); check that snapshot pruning of `doc_updates` is running. |
-| Budget `gede-prod-monthly`  | 80 % of US$100 actual                     | Compare the bill by service; the ALB and Fargate are the fixed lines.                         |
+| Alarm                              | Threshold                                  | First action                                                                                           |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `gede-prod-service-cpu`            | > 60 % for two 5-minute periods            | Check room count and update rate in the service logs; consider growth step 1.                          |
+| `gede-prod-alb-5xx`                | > 1 % of requests (ELB + target) in 5 min  | Tail the service log group; search for the `ref` shown in the error envelope.                          |
+| `gede-prod-db-free-storage`        | < 5 GiB (25 % of 20 GB)                    | Increase allocated storage (online); check that snapshot pruning of `doc_updates` is running.          |
+| `gede-prod-purge-failed`           | ≥ 1 failure line in the purge job log      | §14 "Nightly purge": read the job's log stream for the S3 error; the documents are retried next night. |
+| Rule `gede-prod-purge-task-failed` | jobs task exit code ≠ 0 or failed to start | Same as above; the email carries the task ARN, stop code and reason.                                   |
+| Budget `gede-prod-monthly`         | 80 % of US$100 actual                      | Compare the bill by service; the ALB and Fargate are the fixed lines.                                  |
 
-Not yet implemented from the handover guardrails: snapshot lag > 15 min and WebSocket reconnect rate. Both need custom metrics emitted by the sync service.
+Not yet implemented from the handover guardrails: snapshot lag > 15 min and WebSocket reconnect rate. Both need custom metrics emitted by the sync service. Nor is there an alarm for a purge that never runs (Scheduler failed to invoke); `aws scheduler get-schedule` and the job log group are the checks for that.
 
 ## 9. Cost expectations
 
-About US$62 per month: ALB ≈ 18, Fargate ARM ≈ 15, RDS `db.t4g.micro` ≈ 15, WAF ≈ 6, CloudFront + S3 + Route 53 ≈ 3, CloudWatch ≈ 3, CodeBuild ≈ 2. Domain US$14 per year. A NAT gateway would add ≈ 33. A Staging stage roughly doubles the compute lines.
+About US$62 per month: ALB ≈ 18, Fargate ARM ≈ 15, RDS `db.t4g.micro` ≈ 15, WAF ≈ 6, CloudFront + S3 + Route 53 ≈ 3, CloudWatch ≈ 3, CodeBuild ≈ 2. Domain US$14 per year. A NAT gateway would add ≈ 33. A Staging stage roughly doubles the compute lines. The nightly purge task (0.5 vCPU / 1 GiB ARM for about a minute a night), its schedule, the EventBridge rule and the extra alarm together add well under US$1 per month. Because the image now carries the git sha as a build arg, every merge builds and publishes a new image (≈ 100 MB in ECR per deploy; the ECR lifecycle keeps the last few) — a few cents a month.
 
 ## 10. One-time bootstrap record
 
@@ -193,3 +195,31 @@ JSON
 ```
 
 `contexts` must name a status check that actually reports on pull requests. Today `npm run verify` runs only inside CodePipeline after the merge, so either add a PR-time check that posts a `verify` status (a CodeBuild project with the GitHub webhook source, `reportBuildStatus: true`) or, until then, apply the command with `"contexts": []` and rely on the review requirement. Add a `CODEOWNERS` file naming the owner for `infra/**` and `services/sync/**` so those paths require the owner's review.
+
+## 14. Nightly purge (LIB-08)
+
+Recently Deleted holds a document for 30 days. Past that, the document is no longer recoverable from the library, and the nightly job removes it for good: the `documents` row (which cascades to `doc_updates`, `snapshots`, `shares`, `invites`), a `document.purge` row in `audit_log` with `user_id` null (the system actor; Delete All writes the owner's id), then the S3 objects under `docs/<docId>/`. The projection rows cascade with the document.
+
+How it runs: EventBridge Scheduler `gede-prod-nightly-purge` (02:30 Asia/Singapore, one retry within the hour) starts the `gede-prod-jobs` Fargate task definition — the same image as the service with command `node main.js --job purge` — on the service cluster, in the public subnets with a public IP and the service security group. The task applies migrations under the advisory lock (a no-op after the service has booted), purges in batches of 100, and exits 0. It exits 1 when any S3 prefix could not be removed (the rows are already gone) or the database failed; that fires the `gede-prod-purge-task-failed` rule (email with task ARN, stop code, reason) and, from the log line, the `gede-prod-purge-failed` alarm.
+
+```bash
+# Schedule state and last run
+aws scheduler get-schedule --name gede-prod-nightly-purge --query '{state:State,expr:ScheduleExpression,tz:ScheduleExpressionTimezone}'
+JOBS_LOG=$(aws logs describe-log-groups --log-group-name-prefix GeDe-Prod-Service-JobsLogs --query 'logGroups[0].logGroupName' --output text)
+aws logs tail "$JOBS_LOG" --since 24h            # look for "purge complete" and the counts
+
+# Run it now (same task, same command), e.g. after fixing a failure
+CLUSTER=$(aws ecs list-clusters --query "clusterArns[?contains(@, 'GeDe-Prod-Service')]|[0]" --output text)
+TASKDEF=$(aws ecs list-task-definitions --family-prefix gede-prod-jobs --sort DESC --max-items 1 --query 'taskDefinitionArns[0]' --output text)
+SERVICE=$(aws ecs list-services --cluster "$CLUSTER" --query 'serviceArns[0]' --output text)
+NET=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].networkConfiguration' --output json)
+aws ecs run-task --cluster "$CLUSTER" --task-definition "$TASKDEF" --launch-type FARGATE --network-configuration "$NET"
+
+# Rebuild the search projection for one document, or all live documents
+aws ecs run-task --cluster "$CLUSTER" --task-definition "$TASKDEF" --launch-type FARGATE --network-configuration "$NET" \
+  --overrides '{"containerOverrides":[{"name":"purge","command":["node","main.js","--job","reproject","all"]}]}'
+```
+
+Order of operations, per batch of 50: the rows are claimed (`FOR UPDATE SKIP LOCKED`), each document's S3 prefix is removed while the claim is held, and only the documents whose objects went are deleted when the transaction commits. When the job reports `snapshot objects not removed; the document is kept for the next run` (and exits 1 with `purge could not remove every document`), nothing is orphaned: the document's rows and objects are both still there and the next night retries them. Fix the S3 error (permissions, throttling) and either wait for the schedule or run the task by hand. The bucket is versioned, so a removal writes delete markers; the lifecycle rule expires the noncurrent versions and the markers after 90 days.
+
+What the purge never touches: live documents, documents deleted less than 30 days ago (measured on the database clock, `deleted_at < now() - 30 days`), and `audit_log`.

@@ -8,10 +8,37 @@
  * `sql` fragments below reference columns and bind values, never interpolate
  * strings.
  */
-import { and, asc, desc, eq, exists, gt, inArray, isNotNull, isNull, or, sql } from 'drizzle-orm';
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  exists,
+  gt,
+  inArray,
+  isNotNull,
+  isNull,
+  not,
+  notInArray,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
 
-import { auditLog, docUpdates, documents, shares, snapshots, users, type Db } from '@gede/db';
+import {
+  auditLog,
+  cells,
+  columns,
+  docUpdates,
+  documents,
+  rows as rowsTable,
+  shares,
+  sheets,
+  snapshots,
+  tables,
+  users,
+  type Db,
+} from '@gede/db';
 
 import type { Logger } from '../logger.js';
 import {
@@ -21,6 +48,7 @@ import {
   type DocumentRecord,
   type DocumentSummary,
   type LibraryView,
+  type PurgedDocument,
   type Repo,
   type UserRecord,
 } from './types.js';
@@ -228,10 +256,27 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         return row ? toSummary(row, userId) : undefined;
       },
 
-      async create({ ownerId, title }) {
-        const [row] = await db.insert(documents).values({ ownerId, title }).returning();
-        if (!row) throw new Error('documents insert returned no row');
-        return toDocument(row);
+      create({ id, ownerId, title, snapshot }) {
+        return db.transaction(async (tx) => {
+          const [row] = await tx
+            .insert(documents)
+            .values({ id, ownerId, title, snapshotKey: snapshot.s3Key, snapshotSeq: snapshot.seq })
+            .returning();
+          if (!row) throw new Error('documents insert returned no row');
+          await tx.insert(snapshots).values({
+            documentId: id,
+            seq: snapshot.seq,
+            s3Key: snapshot.s3Key,
+            sizeBytes: snapshot.sizeBytes,
+          });
+          await tx.insert(auditLog).values({
+            documentId: id,
+            userId: ownerId,
+            action: 'document.create',
+            target: null,
+          });
+          return toDocument(row);
+        });
       },
 
       async rename(id, title) {
@@ -293,6 +338,50 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           // shares, invites, doc_updates and snapshots cascade from documents.
           await tx.delete(documents).where(inArray(documents.id, ids));
           return doomed;
+        });
+      },
+
+      purgeExpired({ limit, exclude, removeObjects }) {
+        return db.transaction(async (tx) => {
+          const candidates = await tx
+            .select({ id: documents.id, title: documents.title })
+            .from(documents)
+            .where(
+              and(
+                isNotNull(documents.deletedAt),
+                not(withinRetention),
+                ...(exclude.length === 0 ? [] : [notInArray(documents.id, [...exclude])]),
+              ),
+            )
+            .orderBy(asc(documents.deletedAt), asc(documents.id))
+            .limit(limit)
+            .for('update', { skipLocked: true });
+          const purged: PurgedDocument[] = [];
+          const failed: PurgedDocument[] = [];
+          // Objects first, rows after, under the claim: a document whose objects
+          // could not be removed keeps its rows and is retried next run.
+          for (const doc of candidates) {
+            if (await removeObjects(doc)) purged.push(doc);
+            else failed.push(doc);
+          }
+          if (purged.length > 0) {
+            // `user_id` null is the system actor: nobody pressed Delete All.
+            await tx.insert(auditLog).values(
+              purged.map((d) => ({
+                documentId: d.id,
+                userId: null,
+                action: 'document.purge',
+                target: d.title,
+              })),
+            );
+            await tx.delete(documents).where(
+              inArray(
+                documents.id,
+                purged.map((d) => d.id),
+              ),
+            );
+          }
+          return { purged, failed };
         });
       },
 
@@ -415,5 +504,85 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         await db.insert(auditLog).values(entry);
       },
     },
+
+    projection: {
+      replace(projection) {
+        return db.transaction(async (tx) => {
+          // sheets → tables → columns/rows → cells all cascade on delete.
+          await tx.delete(sheets).where(eq(sheets.documentId, projection.documentId));
+          for (const batch of chunk(projection.sheets, INSERT_CHUNK)) {
+            await tx.insert(sheets).values(batch.map((s) => ({ ...s })));
+          }
+          for (const batch of chunk(projection.tables, INSERT_CHUNK)) {
+            await tx.insert(tables).values(batch.map((t) => ({ ...t })));
+          }
+          for (const batch of chunk(projection.columns, INSERT_CHUNK)) {
+            await tx.insert(columns).values(batch.map((c) => ({ ...c })));
+          }
+          for (const batch of chunk(projection.rows, INSERT_CHUNK)) {
+            await tx.insert(rowsTable).values(batch.map((r) => ({ ...r })));
+          }
+          for (const batch of chunk(projection.cells, INSERT_CHUNK)) {
+            await tx.insert(cells).values(
+              batch.map((c) => ({
+                rowId: c.rowId,
+                columnId: c.columnId,
+                textPlain: c.textPlain,
+                rich: c.rich,
+                formula: c.formula,
+              })),
+            );
+          }
+        });
+      },
+
+      async search(documentId, query, limit) {
+        return db
+          .select({
+            sheetId: sheets.id,
+            tableId: tables.id,
+            rowId: rowsTable.id,
+            columnId: columns.id,
+            textPlain: cells.textPlain,
+          })
+          .from(cells)
+          .innerJoin(rowsTable, eq(rowsTable.id, cells.rowId))
+          .innerJoin(columns, eq(columns.id, cells.columnId))
+          .innerJoin(tables, eq(tables.id, rowsTable.tableId))
+          .innerJoin(sheets, eq(sheets.id, tables.sheetId))
+          .where(
+            and(
+              eq(sheets.documentId, documentId),
+              // The expression matches the GIN index in migration 0000 exactly.
+              sql`to_tsvector('simple', ${cells.textPlain}) @@ plainto_tsquery('simple', ${query})`,
+            ),
+          )
+          .orderBy(
+            asc(sheets.ordinal),
+            asc(tables.id),
+            asc(rowsTable.ordinal),
+            asc(columns.ordinal),
+          )
+          .limit(limit);
+      },
+
+      async liveDocumentIds() {
+        const found = await db
+          .select({ id: documents.id })
+          .from(documents)
+          .where(isNull(documents.deletedAt))
+          .orderBy(asc(documents.createdAt), asc(documents.id));
+        return found.map((d) => d.id);
+      },
+    },
   };
+}
+
+/** Rows per multi-row insert: well under Postgres's 65 535 bound parameters at ≤ 8 columns. */
+const INSERT_CHUNK = 2000;
+
+function chunk<T>(items: readonly T[], size: number): T[][] {
+  const out: T[][] = [];
+  for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
+  return out;
 }
