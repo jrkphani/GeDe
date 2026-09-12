@@ -57,6 +57,9 @@
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
+  /* Apple's button keeps its wording, glyph and padding at every size, so the card
+     grows to fit it (and the page scrolls sideways) rather than clipping it. */
+  min-width: min-content;
   padding: var(--space-5);
   border-radius: var(--radius-lg);
   background: var(--surface);
@@ -188,9 +191,18 @@
 @media (max-width: 479.98px) {
   .gd-signin {
     padding: var(--space-4);
+    /* The card may be wider than a 240 CSS px window (200 % zoom at 480): scroll, never clip. */
+    overflow: auto;
   }
-  .gd-signin__copy {
-    display: none;
+  .gd-signin__motif {
+    display: none; /* decorative ring; it would otherwise widen the scroll area */
+  }
+  /* A11Y-06: the brand copy reflows above the card at a smaller size; nothing is dropped. */
+  .gd-signin__headline {
+    font-size: 1.5rem;
+  }
+  .gd-signin__sub {
+    font-size: 0.9375rem;
   }
   .gd-signin__card {
     padding: var(--space-4);

@@ -72,6 +72,8 @@ type LoadState =
 interface Failure {
   cause: string;
   remedy: string;
+  /** Re-run the action that failed, when it can simply be tried again. */
+  retry?: (() => void) | undefined;
 }
 
 function describeFailure(cause: string, err: unknown): Failure {
@@ -118,6 +120,12 @@ export function Library() {
   const [failure, setFailure] = useState<Failure | null>(null);
   const [confirm, setConfirm] = useState<Confirm | null>(null);
   const [sheetDoc, setSheetDoc] = useState<DocumentSummary | null>(null);
+  // MENU-05 / A11Y-01: the sheet and the confirm dialog hand focus back to what
+  // opened them. A toolbar button is still there when they close; a row menu
+  // item is not, so the row itself is the return point in that case.
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
+  const rowElement = (id: string): HTMLElement | null =>
+    document.querySelector<HTMLElement>(`.gd-lib__row[data-id="${id}"]`);
   const [undo, setUndo] = useState<Undo | null>(null);
   const narrow = useMediaQuery('(max-width: 899.98px)');
   const [navOpen, setNavOpen] = useState(false);
@@ -179,16 +187,19 @@ export function Library() {
     void navigate(`/d/${doc.id}`);
   };
 
-  // LIB-06: + creates an untitled workscape and opens it immediately.
+  // LIB-06: + creates an untitled workscape and opens it immediately. The
+  // library still works if it fails, so the failure is a banner with Retry
+  // (§3 placement), not the full-page cell.
   const create = () => {
     setCreating(true);
+    setFailure(null);
     createDocument()
       .then((doc) => {
         void navigate(`/d/${doc.id}?new=1`);
       })
       .catch((error: unknown) => {
         setCreating(false);
-        setLoad({ status: 'error', error });
+        setFailure({ ...describeFailure('Could not create a workscape', error), retry: create });
       });
   };
 
@@ -301,6 +312,7 @@ export function Library() {
             id: 'share',
             label: 'Participants',
             onSelect: () => {
+              setOpener(rowElement(doc.id));
               setSheetDoc(doc);
             },
           },
@@ -310,6 +322,7 @@ export function Library() {
             id: 'delete',
             label: 'Delete',
             onSelect: () => {
+              setOpener(rowElement(doc.id));
               setConfirm({ kind: 'delete', doc });
             },
             disabledReason: ownerOnly(doc, 'delete'),
@@ -379,8 +392,8 @@ export function Library() {
         </>
       ) : (
         <>
+          {/* One primary per view (DS): the first-run state owns it, so the toolbar is secondary. */}
           <Button
-            variant="primary"
             onClick={() => {
               if (selected) open(selected);
             }}
@@ -391,7 +404,8 @@ export function Library() {
           </Button>
           <Button
             icon={<Icon name="people" size={15} />}
-            onClick={() => {
+            onClick={(e) => {
+              setOpener(e.currentTarget);
               setSheetDoc(selected);
             }}
             disabled={selected === null}
@@ -401,8 +415,10 @@ export function Library() {
           </Button>
           <Button
             icon={<Icon name="delete" size={15} />}
-            onClick={() => {
-              if (selected) setConfirm({ kind: 'delete', doc: selected });
+            onClick={(e) => {
+              if (!selected) return;
+              setOpener(e.currentTarget);
+              setConfirm({ kind: 'delete', doc: selected });
             }}
             disabled={
               selected === null || ownerOnly(selected, 'delete') !== undefined || busy !== null
@@ -447,7 +463,6 @@ export function Library() {
           autoComplete="off"
         />
         <Button
-          variant="primary"
           icon={<Icon name="add-row" size={15} />}
           aria-label="New workscape"
           title="New workscape"
@@ -495,14 +510,21 @@ export function Library() {
             remedy={failure.remedy}
             className="gd-lib__banner"
             action={
-              <Button
-                size="sm"
-                onClick={() => {
-                  setFailure(null);
-                }}
-              >
-                Dismiss
-              </Button>
+              <>
+                {failure.retry !== undefined && (
+                  <Button size="sm" onClick={failure.retry} disabled={creating}>
+                    Retry
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setFailure(null);
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </>
             }
           />
         )}
@@ -534,12 +556,14 @@ export function Library() {
         document={sheetDoc}
         viewerId={user?.sub}
         viewerEmail={user?.email}
+        returnFocusTo={opener}
         onClose={() => {
           setSheetDoc(null);
         }}
       />
 
       <Dialog
+        returnFocusTo={opener}
         open={confirm?.kind === 'delete'}
         onOpenChange={(o) => {
           if (!o) setConfirm(null);

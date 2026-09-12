@@ -24,7 +24,10 @@ vi.mock('../../auth/cognito.js', () => ({
   classifyError: () => ({ kind: 'other', message: 'x' }),
 }));
 
-// The HTTP boundary is the only fake; everything above it is real.
+// Fakes, labelled: the `api/documents` and `api/me` client modules are replaced
+// (their HTTP behaviour is covered by documents.test.ts and me.test.ts against a
+// fake `fetch`); the Cognito boundary is replaced. Screens, session, locale
+// store and router are real.
 vi.mock('../../api/documents.js', async (importOriginal) => {
   const actual = await importOriginal<typeof DocumentsApi>();
   return {
@@ -121,6 +124,40 @@ describe('Library', () => {
     ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Create workscape' })).toBeInTheDocument();
     expect(docs.listDocuments).toHaveBeenCalledWith('recents');
+  });
+
+  it('AUTH-10 the first-run view has exactly one primary action, and a library with rows has none above the rows', async () => {
+    serve({});
+    const { unmount } = renderRoutes(routes, ['/']);
+    await screen.findByRole('button', { name: 'Create workscape' });
+    const primaries = () =>
+      screen.getAllByRole('button').filter((b) => b.classList.contains('gd-btn--primary'));
+    expect(primaries().map((b) => b.textContent)).toEqual(['Create workscape']);
+    unmount();
+    serve(live);
+    renderRoutes(routes, ['/']);
+    await screen.findByText('Everest trek');
+    expect(primaries()).toEqual([]);
+  });
+
+  it('LIB-06 a failed create is a banner with Retry in the library, not the full-page cell', async () => {
+    const u = userEvent.setup();
+    serve(live);
+    vi.mocked(docs.createDocument)
+      .mockRejectedValueOnce(new ApiError(503, 'x', 'req-3', undefined, 4))
+      .mockResolvedValueOnce({ ...everest, title: 'Untitled' });
+    vi.mocked(docs.getDocument).mockResolvedValue({ ...everest, title: 'Untitled' });
+    const { router } = renderRoutes(routes, ['/']);
+    await screen.findByText('Everest trek');
+    await u.click(screen.getByRole('button', { name: 'New workscape' }));
+    const banner = await screen.findByRole('alert');
+    expect(banner).toHaveTextContent('Could not create a workscape');
+    expect(banner).toHaveTextContent('503 after 4 attempts (ref req-3)');
+    expect(screen.getByText('Everest trek')).toBeInTheDocument(); // the library is still there
+    await u.click(within(banner).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe(`/d/${everest.id}`);
+    });
   });
 
   it('LIB-06 + creates an untitled workscape and opens it', async () => {
@@ -331,6 +368,55 @@ describe('Library', () => {
     expect(remove).toHaveAttribute('title', 'Removing people is not available yet');
     await u.keyboard('{Escape}');
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('LIB-07 MENU-05 the sheet returns focus to the toolbar button, or to the row when opened from its menu', async () => {
+    const u = userEvent.setup();
+    serve(live);
+    vi.mocked(docs.getDocumentShares).mockResolvedValue({
+      owner: { id: 'u1', name: 'Meena', email: 'meena@1cloudhub.com' },
+      participants: [],
+      linkAccess: 'none',
+    });
+    renderRoutes(routes, ['/']);
+    const row = (await screen.findByText('Everest trek')).closest('tr')!;
+    await u.click(row);
+    const participants = screen.getByRole('button', { name: 'Participants' });
+    await u.click(participants);
+    await screen.findByRole('dialog', { name: 'Participants' });
+    await u.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(participants).toHaveFocus();
+    });
+    await u.click(screen.getByRole('button', { name: 'More actions for Everest trek' }));
+    await u.click(await screen.findByRole('menuitem', { name: 'Participants' }));
+    await screen.findByRole('dialog', { name: 'Participants' });
+    await u.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(row).toHaveFocus();
+    });
+  });
+
+  it('LIB-03 MENU-05 the Delete confirm returns focus to what opened it', async () => {
+    const u = userEvent.setup();
+    serve(live);
+    renderRoutes(routes, ['/']);
+    const row = (await screen.findByText('Everest trek')).closest('tr')!;
+    await u.click(row);
+    const del = screen.getByRole('button', { name: 'Delete' });
+    await u.click(del);
+    await screen.findByRole('dialog', { name: 'Delete Everest trek?' });
+    await u.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(del).toHaveFocus();
+    });
+    await u.click(screen.getByRole('button', { name: 'More actions for Everest trek' }));
+    await u.click(await screen.findByRole('menuitem', { name: 'Delete' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Delete Everest trek?' });
+    await u.click(within(dialog).getByRole('button', { name: 'Cancel' }));
+    await waitFor(() => {
+      expect(row).toHaveFocus();
+    });
   });
 
   it('LIB-07 a person without a display name is shown by email, never an invented name', async () => {

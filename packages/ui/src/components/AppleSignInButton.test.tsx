@@ -6,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { AppleSignInButton } from './AppleSignInButton.js';
 
 describe('AppleSignInButton', () => {
-  it('AUTH-08 uses approved wording, the Apple glyph and is keyboard reachable', async () => {
+  it('AUTH-08 (button only) uses approved wording, the Apple glyph and is keyboard reachable', async () => {
     const onClick = vi.fn();
     render(<AppleSignInButton onClick={onClick} />);
     const b = screen.getByRole('button', { name: 'Sign in with Apple' });
@@ -18,7 +18,7 @@ describe('AppleSignInButton', () => {
     expect(onClick).toHaveBeenCalled();
   });
 
-  it('AUTH-08 the height never drops below the 44 px target token, whatever the root font size', () => {
+  it('AUTH-08 (button only) the height never drops below the 44 px target token, whatever the root font size', () => {
     const css = readFileSync(resolve(__dirname, 'AppleSignInButton.css'), 'utf8');
     expect(css).toMatch(/--gd-apple-height:\s*max\(2\.75rem, var\(--hit-target\)\)/);
     expect(css).toMatch(/min-height:\s*var\(--gd-apple-height\)/);

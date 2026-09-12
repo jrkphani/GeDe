@@ -12,6 +12,8 @@ export interface ParticipantsSheetProps {
   /** The workscape whose participants to show; null closes the sheet. */
   document: DocumentSummary | null;
   onClose: () => void;
+  /** Where focus goes when the sheet closes (the toolbar button or the row). */
+  returnFocusTo?: HTMLElement | null | undefined;
   /**
    * Who is looking, to mark "(you)". The service keys people by its own user
    * id, not the Cognito sub the session holds, so the verified email is what
@@ -51,6 +53,7 @@ function describeFailure(err: unknown): string {
 export function ParticipantsSheet({
   document,
   onClose,
+  returnFocusTo,
   viewerId,
   viewerEmail,
 }: ParticipantsSheetProps) {
@@ -80,6 +83,7 @@ export function ParticipantsSheet({
   return (
     <Dialog
       variant="sheet"
+      returnFocusTo={returnFocusTo}
       open={document !== null}
       onOpenChange={(open) => {
         if (!open) onClose();
