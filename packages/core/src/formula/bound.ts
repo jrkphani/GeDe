@@ -99,3 +99,5 @@ export function decodeBound(text: string): BoundReference | null {
 
 /** Spelling of a reference whose target no longer exists. */
 export const REMOVED_REFERENCE_TEXT = '#REF';
+/** Spelling of a reference whose target exists but has no lattice address (a hidden column, GRID-02). */
+export const HIDDEN_REFERENCE_TEXT = '#hidden';

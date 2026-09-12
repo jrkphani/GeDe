@@ -35,7 +35,12 @@ export function tableStructure(table: TableMap): TableStructure {
     title: record.title,
     gridCol: record.gridCol,
     gridRow: record.gridRow,
-    columns: record.columns.map((c) => ({ id: c.id, label: c.label, width: c.width })),
+    // A hidden column has no lattice presence (GRID-02): width 0, so nothing after it moves.
+    columns: record.columns.map((c) => ({
+      id: c.id,
+      label: c.label,
+      width: c.hidden ? 0 : c.width,
+    })),
     rows: record.rows,
     rowHeights: rowHeights(table, record),
     rowDepths: record.rows.map((rowId) => rowMeta(table, rowId).depth),

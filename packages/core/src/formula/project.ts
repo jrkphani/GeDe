@@ -18,7 +18,12 @@ import {
 } from '../address.js';
 import type { Id } from '../ids.js';
 import { references, type Reference } from './ast.js';
-import { encodeBound, REMOVED_REFERENCE_TEXT, type BoundReference } from './bound.js';
+import {
+  encodeBound,
+  HIDDEN_REFERENCE_TEXT,
+  REMOVED_REFERENCE_TEXT,
+  type BoundReference,
+} from './bound.js';
 import { parse } from './parser.js';
 
 export interface BoundTarget {
@@ -37,8 +42,10 @@ export interface Binder {
 
 /** Answers "where is this id now" for the whole workbook. */
 export interface Projector {
-  /** Lattice position of a cell, or null when its row, column or table is gone. */
+  /** Lattice position of a cell, or null when it has none (gone, or in a hidden column). */
   positionOf(target: BoundTarget): CellRef | null;
+  /** Whether the cell's row, column and table still exist. */
+  exists(target: BoundTarget): boolean;
   /** Written `@` path of a cell (`@Table.Row` for a row's first cell), or null when gone. */
   entityPathOf(target: BoundTarget): string | null;
   /** Lattice column of a table column, or null when gone. */
@@ -114,21 +121,30 @@ function projectOne(ref: BoundReference, projector: Projector): string {
         return projector.entityPathOf(ref) ?? REMOVED_REFERENCE_TEXT;
       }
       const at = projector.positionOf(ref);
-      return at === null ? REMOVED_REFERENCE_TEXT : formatAddress(at);
+      if (at !== null) return formatAddress(at);
+      return projector.exists(ref) ? HIDDEN_REFERENCE_TEXT : REMOVED_REFERENCE_TEXT;
     }
     case 'range': {
-      const from = projector.positionOf({ tableId: ref.tableId, ...ref.from });
-      const to = projector.positionOf({ tableId: ref.tableId, ...ref.to });
-      if (from === null || to === null) return REMOVED_REFERENCE_TEXT;
+      const a = { tableId: ref.tableId, ...ref.from };
+      const b = { tableId: ref.tableId, ...ref.to };
+      const from = projector.positionOf(a);
+      const to = projector.positionOf(b);
+      if (from === null || to === null) {
+        return projector.exists(a) && projector.exists(b)
+          ? HIDDEN_REFERENCE_TEXT
+          : REMOVED_REFERENCE_TEXT;
+      }
       const range: CellRange = { start: from, end: to };
       return formatRange(range);
     }
     case 'column': {
+      let hidden = false;
       for (const c of ref.columns) {
         const col = projector.columnOf(c.tableId, c.colId);
         if (col !== null) return formatColumn({ col });
+        hidden ||= projector.exists({ tableId: c.tableId, rowId: '', colId: c.colId });
       }
-      return REMOVED_REFERENCE_TEXT;
+      return hidden ? HIDDEN_REFERENCE_TEXT : REMOVED_REFERENCE_TEXT;
     }
   }
 }

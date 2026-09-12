@@ -34,7 +34,7 @@ export function splitWorkbookCellId(id: WorkbookCellId): { tableId: Id; key: Cel
 export interface ColumnStructure {
   readonly id: Id;
   readonly label: string;
-  /** Lattice units (GRID-01). */
+  /** Lattice units (GRID-01); 0 for a hidden column, which has no lattice presence (GRID-02). */
   readonly width: number;
 }
 

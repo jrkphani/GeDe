@@ -113,9 +113,11 @@ export class WorkbookIndex {
     return o;
   }
 
+  /** Whether the row (when named) and column still exist in the table. */
   hasCell(target: BoundTarget): boolean {
     const o = this.ordinalsOf(target.tableId);
-    return o !== undefined && o.rows.has(target.rowId) && o.cols.has(target.colId);
+    if (o === undefined) return false;
+    return (target.rowId === '' || o.rows.has(target.rowId)) && o.cols.has(target.colId);
   }
 
   sheetIndex(sheetId: Id): SheetIndex {
@@ -255,6 +257,7 @@ export class WorkbookIndex {
   projector(): Projector {
     return {
       positionOf: (target) => this.positionOf(target),
+      exists: (target) => this.hasCell(target),
       entityPathOf: (target) => {
         if (!this.hasCell(target)) return null;
         const entry = this.entityOf(
@@ -265,16 +268,11 @@ export class WorkbookIndex {
       columnOf: (tableId, colId) => {
         const t = this.tables.get(tableId);
         if (t === undefined) return null;
-        const rowId = t.rows[0];
-        if (rowId === undefined) {
-          // A table with no rows still has the column: its lattice column is arithmetic.
-          const i = t.columns.findIndex((c) => c.id === colId);
-          if (i < 0) return null;
-          let col = t.gridCol;
-          for (let k = 0; k < i; k += 1) col += t.columns[k]?.width ?? 0;
-          return col;
-        }
-        return this.positionOf({ tableId, rowId, colId })?.col ?? null;
+        const i = t.columns.findIndex((c) => c.id === colId);
+        if (i < 0 || t.columns[i]?.width === 0) return null; // gone, or hidden (no lattice presence)
+        let col = t.gridCol;
+        for (let k = 0; k < i; k += 1) col += t.columns[k]?.width ?? 0;
+        return col;
       },
     };
   }

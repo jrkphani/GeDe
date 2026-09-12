@@ -38,6 +38,7 @@ export function indexTable(table: TableStructure): IndexedCell[] {
   const out: IndexedCell[] = [];
   table.rows.forEach((rowId, r) => {
     table.columns.forEach((column, c) => {
+      if (column.width === 0) return; // hidden: no address, no outline (GRID-02)
       const key = cellKey(rowId, column.id);
       out.push({
         cellId: workbookCellId(table.id, key),

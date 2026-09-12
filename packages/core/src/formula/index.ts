@@ -22,6 +22,7 @@ export {
   BOUND_RE,
   decodeBound,
   encodeBound,
+  HIDDEN_REFERENCE_TEXT,
   REMOVED_REFERENCE_TEXT,
   type BoundCell,
   type BoundColumn,

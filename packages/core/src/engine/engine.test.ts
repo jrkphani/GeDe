@@ -13,6 +13,7 @@ import {
   openDocument,
   setCellText,
   setRowDepth,
+  setColumnHidden,
   setRowWrapped,
   setTablePosition,
   setTableTitle,
@@ -479,5 +480,21 @@ describe('FormulaEngine over a Y.Doc', () => {
     const before = h.results.get(g.id(1, 0))?.version;
     g.set(0, 1, 'unrelated');
     expect(h.results.get(g.id(1, 0))?.version).toBe(before);
+  });
+
+  test('GRID-02 a hidden column keeps its bound references and its value; it just has no address', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 2, 3);
+    g.set(0, 1, '8');
+    g.set(1, 2, `=Sum(${g.addr(0, 1)})`);
+    expect(numberOf(h.results.get(g.id(1, 2)))).toBe(8);
+    const addressBefore = g.addr(1, 2);
+    setColumnHidden(h.gd, g.tableId, g.colId(1), true);
+    expect(numberOf(h.results.get(g.id(1, 2)))).toBe(8);
+    // The formula's own address moved left by one column; the hidden operand has no address to show.
+    expect(g.addr(1, 2)).not.toBe(addressBefore);
+    expect(g.shown(1, 2)).toBe('=Sum(#hidden)');
+    setColumnHidden(h.gd, g.tableId, g.colId(1), false);
+    expect(g.shown(1, 2)).toBe(`=Sum(${g.addr(0, 1)})`);
   });
 });

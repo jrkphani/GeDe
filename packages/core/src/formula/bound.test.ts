@@ -153,6 +153,7 @@ const projector: Projector = {
     }
     return null;
   },
+  exists: (t) => Object.values(cells).some((c) => c.rowId === t.rowId && c.colId === t.colId),
   entityPathOf: (t) => (t.rowId === R2 && t.colId === C1 ? '@Trek.Namche' : null),
   columnOf: (_tableId, colId) => (colId === C1 ? 1 : null),
 };
