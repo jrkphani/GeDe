@@ -66,7 +66,7 @@ export interface MenuContext {
   editable: boolean;
   commands: GridCommands;
   clipboard: CellClipboard;
-  /** The selected cell's address, for clipboard reasons. */
+  /** The selected cell, so a column or table menu can tell whether its table is already selected. */
   selectedCell: { tableId: Id; rowId: Id; colId: Id } | null;
   canvas: {
     addTable: () => void;
@@ -157,11 +157,84 @@ function clipboardEntries(ctx: MenuContext, cell: MenuTarget & { kind: 'cell' })
   ];
 }
 
+/**
+ * MENU-03 / REF-05 / INSP-10: the column menu's clipboard group acts on the
+ * column the menu was opened on — every cell of it, one undo step — never on
+ * the selected cell (#123). Each label says so. A derived, linked or pulled
+ * column takes no write and says why; Copy still works (it reads what the
+ * column shows).
+ */
+function columnClipboardEntries(
+  ctx: MenuContext,
+  target: MenuTarget & { kind: 'column' },
+): MenuEntry[] {
+  const column = ctx.clipboard.column;
+  const scope = { tableId: target.tableId, colId: target.colId };
+  const cut = column.reason(scope, 'cut');
+  const paste = column.reason(scope, 'paste');
+  return [
+    {
+      kind: 'item',
+      id: 'cut',
+      label: 'Cut column',
+      disabledReason: cut,
+      onSelect: () => {
+        void column.cut(scope);
+      },
+    },
+    {
+      kind: 'item',
+      id: 'copy',
+      label: 'Copy column',
+      disabledReason: column.reason(scope, 'copy'),
+      onSelect: () => {
+        void column.copy(scope);
+      },
+    },
+    {
+      kind: 'item',
+      id: 'copy-snapshot',
+      label: 'Copy column snapshot',
+      disabledReason: column.reason(scope, 'copy'),
+      onSelect: () => {
+        void column.copySnapshot(scope);
+      },
+    },
+    {
+      kind: 'item',
+      id: 'paste',
+      label: 'Paste into column',
+      disabledReason: paste,
+      onSelect: () => {
+        void column.paste(scope);
+      },
+    },
+    {
+      kind: 'item',
+      id: 'paste-match',
+      label: 'Paste into column and match style',
+      disabledReason: paste,
+      onSelect: () => {
+        void column.pasteMatchStyle(scope);
+      },
+    },
+    {
+      kind: 'item',
+      id: 'clear',
+      label: 'Clear column',
+      disabledReason: cut,
+      onSelect: () => {
+        column.clear(scope);
+      },
+    },
+  ];
+}
+
 function sortFilterEntries(ctx: MenuContext, tableId: Id, colId: Id | null): MenuEntry[] {
   const sort = ctx.slots?.sort;
   const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
   const soon = sort === undefined ? SORT_SOON : undefined;
-  const needsColumn = colId === null ? 'open the column menu to sort by it' : undefined;
+  const needsColumn = colId === null ? 'open the column menu to filter by it' : undefined;
   const out: MenuEntry[] = [];
   if (colId !== null) {
     out.push(
@@ -465,11 +538,6 @@ export function columnMenuEntries(
   const visibleCount = record.columns.filter((c) => !c.hidden).length;
   const frozenThrough = record.frozenColumns >= visibleBefore;
   const canFreeze = visibleBefore < visibleCount;
-  const selected = ctx.selectedCell;
-  const cellHere: (MenuTarget & { kind: 'cell' }) | null =
-    selected !== null && selected.tableId === tableId
-      ? { kind: 'cell', tableId, rowId: selected.rowId, colId: selected.colId }
-      : null;
   return [
     graphEntry(ctx, tableId),
     sep('s-freeze'),
@@ -554,18 +622,7 @@ export function columnMenuEntries(
       },
     },
     sep('s-clipboard'),
-    ...(cellHere === null
-      ? [
-          {
-            kind: 'item' as const,
-            id: 'copy',
-            label: 'Copy',
-            shortcut: LABELS.copy,
-            disabledReason: 'select a cell in this table first',
-            onSelect: () => undefined,
-          },
-        ]
-      : clipboardEntries(ctx, cellHere)),
+    ...columnClipboardEntries(ctx, target),
     sep('s-wrap'),
     {
       kind: 'check',

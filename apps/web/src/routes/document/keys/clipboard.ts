@@ -18,23 +18,31 @@
  */
 import { useEffect, useMemo, useRef } from 'react';
 import {
+  cellKey,
   cellRich,
   cellText,
   effectiveCellFormat,
+  isFormula,
   isRichDoc,
   plainText,
   richFromText,
   tableMap,
+  tableRecord,
+  workbookCellId,
   type FormatLocale,
   type GedeDoc,
+  type Id,
   type RichDoc,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { peekEngine } from '../../../doc/engine.js';
 import { isEditableTarget } from '../../../doc/shortcuts.js';
 import type { CellSelection } from '../../../doc/selection.js';
+import { activeLocale } from '../../../locale.js';
 import { layoutCell } from '../cell/index.js';
-import type { GridCommands } from '../grid/commands.js';
+import { formatCellValue } from '../formula/index.js';
+import type { ColumnValue, GridCommands } from '../grid/commands.js';
 
 /** Private clipboard flavour carrying the rich document beside `text/plain`. */
 export const RICH_MIME = 'application/x-gede-rich+json';
@@ -69,11 +77,117 @@ export interface CellClipboard {
   pasteMatchStyle: () => Promise<void>;
   /** Why a clipboard command is unavailable, or undefined when it can run. */
   reason: (command: 'copy' | 'cut' | 'paste') => string | undefined;
+  /**
+   * MENU-03: the column menu's clipboard group. Each acts on every cell of
+   * the column it was opened on — never on the selected cell — and each write
+   * is one transaction (one undo step). `reason` says why a write is refused:
+   * a derived, linked or pulled column is read-only (REF-05).
+   */
+  column: ColumnClipboard;
+}
+
+export interface ColumnTarget {
+  readonly tableId: Id;
+  readonly colId: Id;
+}
+
+export interface ColumnClipboard {
+  copy: (target: ColumnTarget) => Promise<void>;
+  /** The displayed text of every cell, one line per row, marks dropped. */
+  copySnapshot: (target: ColumnTarget) => Promise<void>;
+  cut: (target: ColumnTarget) => Promise<void>;
+  paste: (target: ColumnTarget) => Promise<void>;
+  pasteMatchStyle: (target: ColumnTarget) => Promise<void>;
+  clear: (target: ColumnTarget) => void;
+  /** Why a write into the column is unavailable, or undefined when it can run. */
+  reason: (target: ColumnTarget, command: 'copy' | 'cut' | 'paste') => string | undefined;
 }
 
 interface Payload {
   text: string;
   rich: RichDoc;
+}
+
+/**
+ * The rich flavour of a column: one document per row, in row order. Shaped so
+ * a single-cell paste can tell it from a `RichDoc` (an object with `cells`,
+ * never a document), and a column paste can take a single cell's document.
+ */
+interface ColumnRich {
+  readonly kind: 'column';
+  readonly cells: readonly RichDoc[];
+}
+
+function isColumnRich(value: unknown): value is ColumnRich {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    (value as { kind?: unknown }).kind === 'column' &&
+    Array.isArray((value as { cells?: unknown }).cells) &&
+    (value as { cells: unknown[] }).cells.every(isRichDoc)
+  );
+}
+
+/** Lines of a pasted text: one per row. A Windows line end is a line end. */
+function linesOf(text: string): string[] {
+  return text.replace(/\r\n?/g, '\n').split('\n');
+}
+
+/**
+ * What the column menu copies: every cell of the column, in row order. An
+ * entered cell gives its stored text (a formula keeps its tokens, so it
+ * re-binds when pasted back — ADR-023) and its marks; a derived, pulled or
+ * linked cell has no text of its own and gives what it shows.
+ */
+function columnPayload(
+  deps: ClipboardDeps,
+  target: ColumnTarget,
+  snapshot: boolean,
+): { text: string; rich: ColumnRich; label: string } | null {
+  const table = tableMap(deps.gd, target.tableId);
+  if (table === null) return null;
+  const record = tableRecord(table);
+  const column = record.columns.find((c) => c.id === target.colId);
+  if (column === undefined) return null;
+  const engine = peekEngine(deps.gd.doc);
+  const cells = record.rows.map((rowId): Payload => {
+    const rich = cellRich(table, rowId, target.colId);
+    const stored = cellText(table, rowId, target.colId);
+    const evaluated = column.source !== 'entered' || isFormula(stored);
+    if (evaluated) {
+      const value = engine?.result(workbookCellId(record.id, cellKey(rowId, target.colId)))?.value;
+      const shown =
+        value === undefined || value === null
+          ? column.source === 'linked'
+            ? stored
+            : ''
+          : formatCellValue(activeLocale(), value);
+      // Copy keeps a formula's stored text; a snapshot and every engine-owned cell give the value.
+      const text = snapshot || column.source !== 'entered' ? shown : stored;
+      return { text, rich: richFromText(text) };
+    }
+    if (!snapshot) return { text: stored, rich };
+    const format = effectiveCellFormat(table, rowId, target.colId);
+    const text = layoutCell(rich, format, deps.locale).text;
+    return { text, rich: richFromText(text) };
+  });
+  return {
+    text: cells.map((c) => c.text).join('\n'),
+    rich: { kind: 'column', cells: cells.map((c) => c.rich) },
+    label: column.label,
+  };
+}
+
+/** The values a column paste writes, from the clipboard's rich flavour or its text. */
+function columnValues(read: { text: string; rich: RichDoc | ColumnRich | null }): ColumnValue[] {
+  if (read.rich !== null && isColumnRich(read.rich)) {
+    return read.rich.cells.map((rich) => ({ text: plainText(rich), rich }));
+  }
+  if (read.rich !== null) return [{ text: read.text, rich: read.rich }];
+  const lines = linesOf(read.text);
+  // A trailing line end (a copied column ends with none, a text editor's often does) is not a row.
+  if (lines.length > 1 && lines.at(-1) === '') lines.pop();
+  return lines.map((text) => ({ text, rich: null }));
 }
 
 function payloadOf(deps: ClipboardDeps, cell: CellSelection): Payload | null {
@@ -93,13 +207,19 @@ function snapshotOf(deps: ClipboardDeps, cell: CellSelection): string | null {
   return layoutCell(rich, format, deps.locale).text;
 }
 
-function parseRich(json: string): RichDoc | null {
+/** The private flavour: one cell's document, or a column's (`ColumnRich`); null for anything else. */
+function parseRich(json: string): RichDoc | ColumnRich | null {
   try {
     const value: unknown = JSON.parse(json);
-    return isRichDoc(value) ? value : null;
+    return isRichDoc(value) || isColumnRich(value) ? value : null;
   } catch {
     return null;
   }
+}
+
+/** A single cell takes a document; a column's flavour degrades to its text. */
+function cellRichOf(rich: RichDoc | ColumnRich | null): RichDoc | null {
+  return rich !== null && isRichDoc(rich) ? rich : null;
 }
 
 /** Write the payload into the cell; false when the command refused (a read-only cell says why itself). */
@@ -134,7 +254,10 @@ function systemClipboard(): Clipboard | undefined {
  * ride along as a custom web format where the browser supports one
  * (Chromium); elsewhere, and for snapshots, plain text alone.
  */
-async function writeSystem(text: string, rich: RichDoc | null = null): Promise<boolean> {
+async function writeSystem(
+  text: string,
+  rich: RichDoc | ColumnRich | null = null,
+): Promise<boolean> {
   const clipboard = systemClipboard();
   if (clipboard === undefined) return false;
   if (rich !== null && typeof ClipboardItem === 'function') {
@@ -159,7 +282,7 @@ async function writeSystem(text: string, rich: RichDoc | null = null): Promise<b
 }
 
 /** Reads the OS clipboard: the rich flavour when present, else the text. */
-async function readSystem(): Promise<{ text: string; rich: RichDoc | null } | null> {
+async function readSystem(): Promise<{ text: string; rich: RichDoc | ColumnRich | null } | null> {
   const clipboard = systemClipboard();
   if (clipboard === undefined) return null;
   try {
@@ -171,7 +294,9 @@ async function readSystem(): Promise<{ text: string; rich: RichDoc | null } | nu
         ? await (await item.getType('text/plain')).text()
         : rich === null
           ? ''
-          : plainText(rich);
+          : isColumnRich(rich)
+            ? rich.cells.map(plainText).join('\n')
+            : plainText(rich);
       return { text, rich };
     }
   } catch {
@@ -245,7 +370,7 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
       const richJson = data.getData(RICH_MIME);
       const written = plainOnly
         ? writePlain(d, cell, text)
-        : writeInto(d, cell, text, richJson === '' ? null : parseRich(richJson));
+        : writeInto(d, cell, text, richJson === '' ? null : cellRichOf(parseRich(richJson)));
       if (written) announce(`Pasted${plainOnly ? ' plain text' : ''} into ${d.addressOf(cell)}`);
     };
     document.addEventListener('copy', onCopy);
@@ -325,11 +450,79 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
           announce(NO_CLIPBOARD);
           return;
         }
-        if (writeInto(d, d.cell, read.text, read.rich)) {
+        if (writeInto(d, d.cell, read.text, cellRichOf(read.rich))) {
           announce(`Pasted into ${d.addressOf(d.cell)}`);
         }
       },
       pasteMatchStyle: pastePlain,
+      column: {
+        reason: (target, command) => {
+          const d = ref.current;
+          const table = tableMap(d.gd, target.tableId);
+          if (table === null) return 'the column is gone';
+          if (command === 'copy') return undefined;
+          if (!d.editable) return 'you have view-only access';
+          const source = tableRecord(table).columns.find((c) => c.id === target.colId)?.source;
+          if (source === undefined) return 'the column is gone';
+          return source === 'entered' ? undefined : `${source} columns are read-only`;
+        },
+        copy: async (target) => {
+          const payload = columnPayload(ref.current, target, false);
+          if (payload === null) return;
+          announce(
+            (await writeSystem(payload.text, payload.rich))
+              ? `Copied column ${payload.label}`
+              : NO_CLIPBOARD,
+          );
+        },
+        copySnapshot: async (target) => {
+          const payload = columnPayload(ref.current, target, true);
+          if (payload === null) return;
+          announce(
+            (await writeSystem(payload.text))
+              ? `Copied a snapshot of column ${payload.label}`
+              : NO_CLIPBOARD,
+          );
+        },
+        cut: async (target) => {
+          const d = ref.current;
+          if (!d.editable) return;
+          const payload = columnPayload(d, target, false);
+          if (payload === null) return;
+          if (!(await writeSystem(payload.text, payload.rich))) {
+            announce(NO_CLIPBOARD);
+            return;
+          }
+          d.commands.clearColumn(target.tableId, target.colId);
+        },
+        paste: async (target) => {
+          const d = ref.current;
+          if (!d.editable) return;
+          const read = await readSystem();
+          if (read === null) {
+            announce(NO_CLIPBOARD);
+            return;
+          }
+          d.commands.fillColumn(target.tableId, target.colId, columnValues(read));
+        },
+        pasteMatchStyle: async (target) => {
+          const d = ref.current;
+          if (!d.editable) return;
+          const read = await readSystem();
+          if (read === null) {
+            announce(NO_CLIPBOARD);
+            return;
+          }
+          d.commands.fillColumn(target.tableId, target.colId, columnValues(read), {
+            plain: true,
+          });
+        },
+        clear: (target) => {
+          const d = ref.current;
+          if (!d.editable) return;
+          d.commands.clearColumn(target.tableId, target.colId);
+        },
+      },
     };
   }, []);
 }

@@ -17,6 +17,15 @@ function handlers(overrides: Partial<KeyHandlers> = {}): KeyHandlers {
     pasteMatchStyle: vi.fn(() => Promise.resolve()),
     armMatchStyle: vi.fn(),
     reason: () => undefined,
+    column: {
+      copy: vi.fn(() => Promise.resolve()),
+      copySnapshot: vi.fn(() => Promise.resolve()),
+      cut: vi.fn(() => Promise.resolve()),
+      paste: vi.fn(() => Promise.resolve()),
+      pasteMatchStyle: vi.fn(() => Promise.resolve()),
+      clear: vi.fn(),
+      reason: () => undefined,
+    },
   };
   return {
     phone: false,
