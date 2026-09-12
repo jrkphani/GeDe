@@ -967,8 +967,12 @@ test.describe('keyboard map', () => {
       await page.keyboard.press(`Shift+${mod}+ArrowRight`);
       const header = page.locator('[data-graph-id] .gd-graph__header').first();
       await expect(header).toBeFocused();
+      // The chord reveals the object it lands on: the graph sits below the tables, and the
+      // viewport panned to it (ADR-042).
+      await expect(header).toBeInViewport();
       await page.keyboard.press(`Shift+${mod}+ArrowLeft`);
       await expect(page.locator('[role="gridcell"]:focus')).toHaveCount(1);
+      await expect(page.locator('[role="gridcell"]:focus')).toBeInViewport();
       // A11Y-02 (#145): a cell focused from the keyboard shows the ring 2 px outside its edge.
       await page.keyboard.press('ArrowRight');
       const focused = page.locator('[role="gridcell"]:focus');
@@ -990,8 +994,9 @@ test.describe('keyboard map', () => {
       await page.evaluate(() => {
         document.documentElement.removeAttribute('data-theme');
       });
-      // DOC-04 (#145): a drag from a cell to the plane selects no text.
-      const box = await cell.boundingBox();
+      // DOC-04 (#145): a drag from a cell to the plane selects no text. The focused cell: the
+      // object chords revealed each object in turn, so the first table may have panned away.
+      const box = await focused.boundingBox();
       const plane = await page.getByTestId('plane').boundingBox();
       if (!box || !plane) throw new Error('no box');
       await page.mouse.move(box.x + 5, box.y + 5);
