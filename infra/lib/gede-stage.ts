@@ -110,6 +110,10 @@ export class GedeStage extends cdk.Stage {
       service: service.service,
       alb: service.alb,
       database: data.database,
+      cluster: service.cluster,
+      jobsTaskDefinition: service.jobsTaskDefinition,
+      jobsLogGroup: service.jobsLogGroup,
+      serviceSecurityGroup: service.serviceSecurityGroup,
     });
 
     this.apiUrl = service.apiUrl;
