@@ -19,6 +19,7 @@ import {
   createEngineHost,
   engineFor,
   inlineTransport,
+  MAX_WORKER_RESTARTS,
   setEngineTransportForTests,
   type EngineTransport,
 } from './engine.js';
@@ -88,7 +89,7 @@ describe('engine host', () => {
   it('every request crosses the boundary as structured-clone data (no Yjs types), one batch per transaction', async () => {
     const f = fixture();
     const transport = recordingTransport();
-    const host = createEngineHost(f.gd, transport);
+    const host = createEngineHost(f.gd, () => transport);
     f.set(0, 0, '1');
     await host.settled();
     expect(transport.requests.map((r) => r.type)).toEqual(['apply', 'apply']);
@@ -177,35 +178,74 @@ describe('engine host', () => {
     ]);
   });
 
-  it('FX-06 a Worker that fails hands over to the inline engine from a fresh snapshot; nothing stays pending', async () => {
+  it('FX-06 a Worker that dies is restarted from a fresh snapshot — evaluation never moves to the main thread — and after too many deaths the host reports failure until Retry', async () => {
     const f = fixture();
     let fail: ((error: unknown) => void) | null = null;
-    const terminate = vi.fn();
-    // FAKE transport standing in for a Worker whose script never loads: swallows requests, then errors.
-    const dead: EngineTransport = {
-      mode: 'worker',
-      post: () => undefined,
-      onResponse: () => undefined,
-      onError: (h) => {
-        fail = h;
-      },
-      terminate: () => {
-        terminate();
-      },
+    const made: string[] = [];
+    // FAKE transports standing in for Workers: the first swallows requests and then dies;
+    // the replacements are real inline engines labelled as workers.
+    const makeTransport = (): EngineTransport => {
+      const n = made.length;
+      made.push(`w${String(n)}`);
+      if (n === 0) {
+        return {
+          mode: 'worker',
+          post: () => undefined,
+          onResponse: () => undefined,
+          onError: (h) => {
+            fail = h;
+          },
+          terminate: () => undefined,
+        };
+      }
+      const inner = inlineTransport();
+      return {
+        mode: 'worker',
+        post: (r) => {
+          inner.post(r);
+        },
+        onResponse: (h) => {
+          inner.onResponse(h);
+        },
+        onError: (h) => {
+          fail = h;
+        },
+        terminate: () => {
+          inner.terminate();
+        },
+      };
     };
-    const host = createEngineHost(f.gd, dead);
+    const host = createEngineHost(f.gd, makeTransport);
     f.set(0, 0, '=Concat("x", "y")');
+    expect(host.status).toMatchObject({ mode: 'worker', restarts: 0, failed: false });
+    const statusChanges = vi.fn();
+    host.subscribeStatus(statusChanges);
+
+    fail!(new Error('script blocked'));
+    expect(host.status).toMatchObject({
+      mode: 'worker',
+      restarts: 1,
+      failed: false,
+      lastError: 'script blocked',
+    });
+    expect(made).toEqual(['w0', 'w1']);
+    await host.settled();
+    // The replacement was seeded from the document: the formula is there and evaluated.
+    expect(host.result(f.id(0, 0))?.value).toEqual({ kind: 'text', text: 'xy' });
     expect(host.mode).toBe('worker');
-    const silence = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    try {
-      fail!(new Error('script blocked'));
-      expect(host.mode).toBe('inline');
-      await host.settled();
-      expect(host.result(f.id(0, 0))?.value).toEqual({ kind: 'text', text: 'xy' });
-      expect(terminate).toHaveBeenCalledTimes(1);
-    } finally {
-      silence.mockRestore();
-      host.dispose();
-    }
+
+    for (let i = 0; i < MAX_WORKER_RESTARTS; i += 1) fail!(new Error(`death ${String(i)}`));
+    expect(host.status.failed).toBe(true);
+    expect(host.status.restarts).toBe(MAX_WORKER_RESTARTS);
+    expect(statusChanges).toHaveBeenCalled();
+    // Nothing is posted while failed; Retry starts over from a snapshot.
+    const before = made.length;
+    f.set(0, 1, '=Concat("a")');
+    expect(made.length).toBe(before);
+    host.retry();
+    expect(host.status).toMatchObject({ failed: false, restarts: 0 });
+    await host.settled();
+    expect(host.result(f.id(0, 1))?.value).toEqual({ kind: 'text', text: 'a' });
+    host.dispose();
   });
 });

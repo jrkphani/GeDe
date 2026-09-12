@@ -56,7 +56,7 @@ import { FindBar } from './find/FindBar.js';
 import { MatchHighlights } from './find/MatchHighlights.js';
 import { matchBounds } from './find/match-geometry.js';
 import { useFind, type FindNavigation } from './find/useFind.js';
-import { FormulaLayer } from './formula/index.js'; // wave2/formulas mount point
+import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2/formulas mount points
 import { pinnedPanelOffset } from './grid/pinned.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
@@ -616,6 +616,8 @@ function OpenDocument({
       )}
 
       <div className="gd-doc__banners">
+        {/* wave2/formulas mount point */}
+        <FormulaEngineBanner doc={gd.doc} />
         {renameError !== null && (
           <Banner
             cause="Rename not saved."
@@ -745,11 +747,10 @@ function OpenDocument({
               sheetId={activeSheetId}
               viewportLeftPx={viewport.x / viewport.zoom}
             />
-            {/* wave2/formulas mount point: FX-07 overlays + FX-08 outlines; pass `draft` once the editor shares it */}
+            {/* wave2/formulas mount point: FX-08 outlines for the selected or edited formula */}
             <FormulaLayer
               gd={gd}
               sheetId={activeSheetId}
-              tier={tier}
               zoom={viewport.zoom}
               selected={cell}
               editing={editing?.cell ?? null}

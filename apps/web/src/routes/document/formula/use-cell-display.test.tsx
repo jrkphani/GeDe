@@ -14,6 +14,8 @@ describe('useCellDisplay', () => {
     d.set(2, 0, `=Sum(${d.addr(0, 0)}:${d.addr(1, 0)})`);
     const { result } = renderHook(() => useCellDisplay(d.table, d.key(2, 0)));
     expect(result.current.isFormula).toBe(true);
+    // The stored source is id-bound; the display projects it to today's addresses (PRD §20).
+    expect(d.stored(2, 0)).toMatch(/^=Sum\(\{r:/);
     expect(result.current.formula).toBe(`=Sum(${d.addr(0, 0)}:${d.addr(1, 0)})`);
     expect(result.current.pending).toBe(true);
     await act(() => d.settled());
@@ -21,9 +23,7 @@ describe('useCellDisplay', () => {
     expect(result.current.value).toBe('1,234');
     expect(result.current.badge).toBe('ƒ1');
     expect(result.current.error).toBeNull();
-    expect(result.current.operands.map((o) => o.label)).toEqual([
-      `${d.addr(0, 0)}:${d.addr(1, 0)}`,
-    ]);
+    expect(result.current.operands.map((o) => o.kind)).toEqual(['range']);
 
     const text = renderHook(() => useCellDisplay(d.table, d.key(0, 0)));
     expect(text.result.current).toMatchObject({
@@ -32,6 +32,24 @@ describe('useCellDisplay', () => {
       formula: null,
       badge: null,
     });
+  });
+
+  it('FX-07 a newly committed expression is pending until the Worker answers for it — never a stale value', async () => {
+    const d = testDoc();
+    d.set(0, 0, '1');
+    d.set(1, 0, `=Sum(${d.addr(0, 0)})`);
+    const { result } = renderHook(() => useCellDisplay(d.table, d.key(1, 0)));
+    await act(() => d.settled());
+    expect(result.current.value).toBe('1');
+    act(() => {
+      d.set(1, 0, `=Concat("x")`);
+    });
+    // The result for the old source is still the last one the engine sent.
+    expect(result.current.pending).toBe(true);
+    expect(result.current.value).toBe('');
+    expect(result.current.formula).toBe('=Concat("x")');
+    await act(() => d.settled());
+    expect(result.current.value).toBe('x');
   });
 
   it('FX-06 editing a referenced cell updates the dependent display', async () => {

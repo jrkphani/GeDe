@@ -60,22 +60,6 @@
   white-space: nowrap;
 }
 
-/* Interim overlay: sits over the raw cell until the grid's Cell renders the
-   content itself. Inset by the selection ring's width so GRID-03 stays visible. */
-.gd-formula-overlay {
-  position: absolute;
-  box-sizing: border-box;
-  padding: 0 var(--space-2);
-  background: var(--surface);
-  font-size: 0.71875rem;
-  pointer-events: none;
-  overflow: hidden;
-}
-.gd-formula-overlay--selected {
-  /* The cell beneath draws the 2 px inset amber ring; leave it uncovered. */
-  clip-path: inset(2px 3px 3px 2px);
-}
-
 /* ---- operand outlines (FX-08) ------------------------------------------- */
 .gd-outlines {
   position: absolute;

@@ -1,12 +1,12 @@
 /**
  * Main-thread reads over the Y.Doc that the formula UI needs without a round
  * trip to the Worker: which forms a column admits (FX-02), the `@` entity
- * index for autocomplete (FX-04), and operand geometry for outlines while a
- * draft is being typed (FX-08). None of this evaluates anything.
+ * index for autocomplete (FX-04), binding at commit and projection for
+ * display (PRD §20), and operand geometry for outlines (FX-08). Everything
+ * goes through the per-document cached `WorkbookIndex`; none of it evaluates.
  */
+import type * as Y from 'yjs';
 import {
-  buildEntityIndex,
-  buildSheetIndex,
   cellKey,
   cellsMap,
   inferCellValue,
@@ -15,20 +15,14 @@ import {
   fragmentText,
   parse,
   readString,
-  resolveOperands,
   tableRecord,
-  tableStructure,
-  type CellKey,
-  type EntityIndex,
-  type GedeDoc,
   type Id,
   type InferredFormat,
   type OperandOutline,
-  type SheetIndex,
   type TableMap,
-  type TableStructure,
-  type UnitBounds,
 } from '@gede/core';
+
+import { projectFormulaFor, workbookIndexFor } from '../../../doc/workbook-index.js';
 
 /** Automatic inference over a column's text cells (formula cells are skipped). */
 export function columnFormatOf(table: TableMap, colId: Id): InferredFormat {
@@ -42,53 +36,47 @@ export function columnFormatOf(table: TableMap, colId: Id): InferredFormat {
   return inferColumnFormat(values);
 }
 
-function structures(gd: GedeDoc): TableStructure[] {
-  const out: TableStructure[] = [];
-  gd.tables.forEach((table) => {
-    out.push(tableStructure(table));
-  });
-  return out;
+/** The document a table map belongs to; a prelim map (not yet integrated) has none. */
+export function docOf(table: TableMap): Y.Doc {
+  const doc = table.doc;
+  if (doc === null) throw new Error('the table map is not integrated into a document');
+  return doc;
 }
 
-/** Plain text of a cell for row labels; formula cells have no label. */
-function textOf(gd: GedeDoc, tableId: Id, key: CellKey): string {
-  const table = gd.tables.get(tableId);
-  if (table === undefined) return '';
-  const content = cellsMap(table).get(key);
-  if (content === undefined || isFormula(content)) return '';
-  return fragmentText(content);
+export function sheetOfTable(table: TableMap): Id {
+  return readString(table, 'sheetId');
 }
 
-export function entityIndexOf(gd: GedeDoc): EntityIndex {
-  return buildEntityIndex(structures(gd), (tableId, key) => textOf(gd, tableId, key));
+/** The stored (id-bound) formula as the person should read it today. */
+export function projectSource(doc: Y.Doc, source: string): string {
+  return projectFormulaFor(doc, source);
 }
 
-export function sheetIndexOf(gd: GedeDoc, sheetId: Id): SheetIndex {
-  return buildSheetIndex(sheetId, structures(gd));
-}
-
-/** The sheet a table sits on, or null when the table is gone. */
-export function sheetOfTable(gd: GedeDoc, tableId: Id): Id | null {
-  const table = gd.tables.get(tableId);
-  return table === undefined ? null : readString(table, 'sheetId');
+/**
+ * Parse a draft as it is being typed: an unclosed call (`=Sum(B5, B6`) is
+ * read as if its parentheses were closed, so the outlines can follow the
+ * keystrokes (PRD §22 "typing or extending a range updates the outline live").
+ */
+function parseDraft(text: string) {
+  const direct = parse(text);
+  if (direct.ok) return direct;
+  let depth = 0;
+  for (const ch of text) {
+    if (ch === '(') depth += 1;
+    else if (ch === ')' && depth > 0) depth -= 1;
+  }
+  if (depth === 0) return direct;
+  const trimmed = text.replace(/[\s,]+$/u, '');
+  return parse(`${trimmed}${')'.repeat(depth)}`);
 }
 
 /**
  * Operands of a formula text as blocks on `sheetId`, resolved against the
- * current geometry (FX-08 "during editing the outline updates live"). An
- * unparseable draft yields the operands parsed so far: none.
+ * current geometry (FX-08 "during editing the outline updates live"). Takes
+ * a typed draft or a stored source. A draft that cannot be read yields none.
  */
-export function operandsOfDraft(gd: GedeDoc, sheetId: Id, text: string): OperandOutline[] {
-  const parsed = parse(text);
+export function operandsOf(doc: Y.Doc, sheetId: Id, text: string): OperandOutline[] {
+  const parsed = parseDraft(text);
   if (!parsed.ok) return [];
-  const index = sheetIndexOf(gd, sheetId);
-  const entities = text.includes('@') ? entityIndexOf(gd).byKey : null;
-  const rectOf = (cellId: string): UnitBounds | null => {
-    // An entity may live on another sheet; only same-sheet cells are outlined.
-    const cell = index.byCellId.get(cellId);
-    return cell === undefined
-      ? null
-      : { col: cell.ref.col, row: cell.ref.row, cols: cell.cols, rows: cell.rows };
-  };
-  return resolveOperands(index, parsed.value, entities, rectOf);
+  return workbookIndexFor(doc).operands(sheetId, parsed.value);
 }

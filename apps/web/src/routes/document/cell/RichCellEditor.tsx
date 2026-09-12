@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { baseKeymap, splitBlock } from 'prosemirror-commands';
 import { history, redo as historyRedo, undo as historyUndo } from 'prosemirror-history';
 import { keymap } from 'prosemirror-keymap';
@@ -13,6 +13,7 @@ import {
   richFromText,
   type MarkName,
   type RichDoc,
+  type TableMap,
 } from '@gede/core';
 import {
   initProseMirrorDoc,
@@ -25,8 +26,11 @@ import {
 } from 'y-prosemirror';
 import type * as Y from 'yjs';
 
-import type { Direction, EditSeed } from '../../../doc/selection.js';
+import type { CellSelection, Direction, EditSeed } from '../../../doc/selection.js';
 import { isApplePlatform, matchesChord } from '../../../doc/shortcuts.js';
+import { registerFormulaEditor, updateFormulaEditor } from '../formula/editing-store.js';
+import { isFormulaInput } from '../formula/input.js';
+import { useFormulaAdornments, type KeyLike } from '../formula/use-formula-adornments.js';
 import { activeMarks, markForKey, toggleCellMark } from './marks.js';
 import { editorSchema } from './schema.js';
 
@@ -59,6 +63,30 @@ export interface RichCellEditorProps {
   onSelectionMarks?: ((marks: ReadonlySet<MarkName>) => void) | undefined;
   /** The active locale's language tag, the editor's `lang` unless the text is Indic (I18N-03). */
   locale?: string | undefined;
+  /**
+   * The table and cell being edited. The formula adornments (FX-02, FX-04,
+   * FX-05) read the column's format, the workbook's `@` index and the lattice
+   * from the table; the cell identifies the draft to the outlines layer.
+   */
+  table: TableMap;
+  cell: CellSelection;
+}
+
+/** The draft as the formula adornments see it: plain text and a caret in it. */
+interface Draft {
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+}
+
+/** Offsets in the plain text (paragraphs joined by one newline each). */
+function draftOf(state: EditorState): Draft {
+  const text = state.doc.textBetween(0, state.doc.content.size, '\n');
+  return {
+    text,
+    start: state.doc.textBetween(0, state.selection.from, '\n').length,
+    end: state.doc.textBetween(0, state.selection.to, '\n').length,
+  };
 }
 
 function docFromText(text: string) {
@@ -113,13 +141,71 @@ export function RichCellEditor({
   onCommitRich,
   onSelectionMarks,
   locale,
+  table,
+  cell,
 }: RichCellEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const viewRef = useRef<EditorView | null>(null);
   const done = useRef(false);
   const mounted = useRef(false);
-  const latest = useRef({ onCommit, onCancel, onCommitRich, onSelectionMarks, locale });
-  latest.current = { onCommit, onCancel, onCommitRich, onSelectionMarks, locale };
+
+  // Formula entry (FX-02, FX-04, FX-05): the adornments follow the draft and write back
+  // through a ProseMirror transaction, so a bound fragment stays in step with y-prosemirror.
+  const [draft, setDraft] = useState<Draft>(() => {
+    const text = seed.kind === 'overwrite' ? seed.text : initial;
+    return { text, start: text.length, end: text.length };
+  });
+  const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const adornments = useFormulaAdornments({
+    table,
+    colId: cell.colId,
+    text: draft.text,
+    selectionStart: draft.start,
+    selectionEnd: draft.end,
+    anchor,
+    onReplace: ({ text, caret }) => {
+      const view = viewRef.current;
+      if (view === null) return;
+      // One paragraph: the whole text is replaced and the caret lands after the insertion.
+      const size = view.state.doc.content.size;
+      const tr = view.state.tr.insertText(text, 1, Math.max(1, size - 1));
+      tr.setSelection(TextSelection.create(tr.doc, Math.min(caret + 1, tr.doc.content.size - 1)));
+      view.dispatch(tr);
+      view.focus();
+    },
+  });
+  const adornKeyDown: (e: KeyLike) => boolean = adornments.onKeyDown;
+  const latest = useRef({ onCommit, onCancel, onCommitRich, onSelectionMarks, locale, adornKeyDown });
+  latest.current = { onCommit, onCancel, onCommitRich, onSelectionMarks, locale, adornKeyDown };
+  const insertRef = useRef(adornments.onCellClickWhileEditing);
+  insertRef.current = adornments.onCellClickWhileEditing;
+  // Publish the draft: outlines follow it (FX-08) and cell presses insert into it (FX-05).
+  const handle = useRef({
+    state: { ...cell, draft: draft.text, formula: isFormulaInput(draft.text) },
+    insert: (a: string) => {
+      insertRef.current(a);
+    },
+  });
+  useEffect(() => registerFormulaEditor(handle.current), []);
+  useEffect(() => {
+    updateFormulaEditor(handle.current, {
+      ...cell,
+      draft: draft.text,
+      formula: isFormulaInput(draft.text),
+    });
+  }, [cell, draft.text]);
+  // The listbox ARIA lives on the editable itself; EditorView attributes are static, so set them here.
+  useEffect(() => {
+    const dom = viewRef.current?.dom;
+    if (dom === undefined) return;
+    const props = adornments.inputProps;
+    dom.setAttribute('aria-autocomplete', props['aria-autocomplete']);
+    for (const name of ['aria-controls', 'aria-activedescendant'] as const) {
+      const value = props[name];
+      if (value === undefined) dom.removeAttribute(name);
+      else dom.setAttribute(name, value);
+    }
+  }, [adornments.inputProps]);
 
   useEffect(() => {
     const el = host.current;
@@ -211,6 +297,8 @@ export function RichCellEditor({
           // carries no `isComposing`. While the view is composing, swallow it so
           // nothing commits or splits mid-composition (GRID-06, I18N-01).
           if (view.composing) return event.code === 'Enter';
+          // An open forms menu or @ list takes ↑ ↓ ⏎ ⇥ ⎋ first (KEYS-06: Escape closes it, then cancels).
+          if (latest.current.adornKeyDown(event)) return true;
           const mod = event.metaKey || event.ctrlKey;
           if ((event.code === 'Enter' || event.code === 'NumpadEnter') && !mod && !event.altKey) {
             if (event.shiftKey) return splitBlock(view.state, view.dispatch);
@@ -297,6 +385,7 @@ export function RichCellEditor({
       dispatchTransaction(tr) {
         const next = view.state.apply(tr);
         view.updateState(next);
+        if (tr.docChanged || tr.selectionSet) setDraft(draftOf(next));
         if (tr.docChanged) {
           // I18N-03: the line-height rule follows the script as it is typed, not as it was opened.
           const lang = langFor(next.doc.textContent, latest.current.locale);
@@ -348,16 +437,22 @@ export function RichCellEditor({
   }, []);
 
   return (
-    <div
-      ref={host}
-      className="gd-cell__editor gd-cell__editor--rich"
-      onKeyDown={(e) => {
-        // The editor owns its keys; the cell beneath must not see them.
-        e.stopPropagation();
-      }}
-      onPointerDown={(e) => {
-        e.stopPropagation();
-      }}
-    />
+    <>
+      <div
+        ref={(el) => {
+          host.current = el;
+          setAnchor(el);
+        }}
+        className="gd-cell__editor gd-cell__editor--rich"
+        onKeyDown={(e) => {
+          // The editor owns its keys; the cell beneath must not see them.
+          e.stopPropagation();
+        }}
+        onPointerDown={(e) => {
+          e.stopPropagation();
+        }}
+      />
+      {adornments.element}
+    </>
   );
 }

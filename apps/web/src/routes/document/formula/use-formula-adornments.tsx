@@ -4,13 +4,13 @@ import {
   readString,
   searchEntities,
   type EntityEntry,
-  type GedeDoc,
   type Id,
   type TableMap,
 } from '@gede/core';
 import { Icon, Popover } from '@gede/ui';
 
 import { useYVersion } from '../../../doc/use-y.js';
+import { useWorkbookIndexVersion, workbookIndexFor } from '../../../doc/workbook-index.js';
 import {
   entityQueryAt,
   insertReferenceAt,
@@ -19,10 +19,9 @@ import {
   replaceRange,
   type Replacement,
 } from './input.js';
-import { columnFormatOf, entityIndexOf } from './workbook.js';
+import { columnFormatOf, docOf } from './workbook.js';
 
 export interface FormulaAdornmentsOptions {
-  gd: GedeDoc;
   /** The table and column of the cell being edited (FX-02: Sum is offered per column format). */
   table: TableMap;
   colId: Id;
@@ -42,6 +41,8 @@ export interface FormulaAdornmentsOptions {
 export interface KeyLike {
   readonly code: string;
   readonly isComposing?: boolean | undefined;
+  /** I18N-01: `229` is the legacy IME signal some engines still send. */
+  readonly keyCode?: number | undefined;
   preventDefault(): void;
 }
 
@@ -101,9 +102,12 @@ function forms(summable: boolean): FormOption[] {
  * the host forwards keys through `onKeyDown`.
  */
 export function useFormulaAdornments(options: FormulaAdornmentsOptions): FormulaAdornments {
-  const { gd, table, colId, text, selectionStart, selectionEnd, anchor, onReplace } = options;
+  const { table, colId, text, selectionStart, selectionEnd, anchor, onReplace } = options;
   const enabled = options.enabled ?? true;
-  const version = useYVersion(gd.tables);
+  const doc = docOf(table);
+  // The column's cells decide whether Sum is offered; the workbook's labels feed the @ index.
+  const version = useYVersion(table);
+  const indexVersion = useWorkbookIndexVersion(doc);
   const listboxId = useId();
   const [highlighted, setHighlighted] = useState(0);
   /** The draft the person dismissed with Escape; the same draft does not reopen. */
@@ -122,9 +126,10 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
 
   const formOptions = useMemo(() => forms(summable), [summable]);
   const entities = useMemo<readonly EntityEntry[]>(
-    () => (showEntities ? searchEntities(entityIndexOf(gd), entityQuery.query) : []),
-    // version: labels or tables changed.
-    [gd, showEntities, entityQuery?.query, version],
+    () =>
+      showEntities ? searchEntities(workbookIndexFor(doc).entityIndex(), entityQuery.query) : [],
+    // indexVersion: labels or tables changed; the index itself is cached per document.
+    [doc, showEntities, entityQuery?.query, indexVersion],
   );
 
   const open: 'forms' | 'entities' | null = showForms
@@ -162,7 +167,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
 
   const onKeyDown = useCallback(
     (e: KeyLike): boolean => {
-      if (open === null || e.isComposing === true) return false;
+      if (open === null || e.isComposing === true || e.keyCode === 229) return false;
       switch (e.code) {
         case 'ArrowDown':
           e.preventDefault();

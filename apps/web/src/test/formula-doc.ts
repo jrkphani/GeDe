@@ -7,10 +7,11 @@ import * as Y from 'yjs';
 import {
   cellAddress,
   cellKey,
+  cellText,
+  commitCellText,
   createSheet,
   createTable,
   openDocument,
-  setCellText,
   tableById,
   tableMap,
   type CellKey,
@@ -31,7 +32,10 @@ export interface TestDoc {
   colId(c: number): Id;
   key(r: number, c: number): CellKey;
   addr(r: number, c: number): string;
+  /** Commit as the editor does: formulas are bound to ids on the way in. */
   set(r: number, c: number, text: string): void;
+  /** The stored source (bound form). */
+  stored(r: number, c: number): string;
   /** Wait for the engine to answer everything posted so far. */
   settled(): Promise<void>;
 }
@@ -69,8 +73,9 @@ export function testDoc(rows = 4, cols = 3, at = { col: 1, row: 1 }): TestDoc {
     key: (r, c) => cellKey(rowId(r), colId(c)),
     addr: (r, c) => cellAddress(table, rowId(r), colId(c)) ?? '',
     set: (r, c, text) => {
-      setCellText(gd, tableId, rowId(r), colId(c), text);
+      commitCellText(gd, tableId, rowId(r), colId(c), text);
     },
+    stored: (r, c) => cellText(table, rowId(r), colId(c)),
     settled: () => engineFor(doc).settled(),
   };
 }

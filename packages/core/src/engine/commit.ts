@@ -5,7 +5,8 @@
  * for typed text: a formula is bound to ids once, here, against the
  * geometry and labels at this moment, and stored in its bound form. Plain
  * text passes straight through. It is one `transact` (the one inside
- * `setCellText`), so one undo step and one sync message.
+ * `setCellText`), so one undo step and one sync message; returns what
+ * `setCellText` returns (false when the row or column went away).
  */
 import {
   cellsMap,
@@ -53,12 +54,11 @@ export function commitCellText(
   colId: Id,
   text: string,
   options: CommitOptions = {},
-): void {
+): boolean {
   const table = gd.tables.get(tableId);
   if (!text.startsWith('=') || table === undefined) {
-    setCellText(gd, tableId, rowId, colId, text);
-    return;
+    return setCellText(gd, tableId, rowId, colId, text);
   }
   const index = options.index ?? workbookIndexOf(gd);
-  setCellText(gd, tableId, rowId, colId, index.bind(readString(table, 'sheetId'), text));
+  return setCellText(gd, tableId, rowId, colId, index.bind(readString(table, 'sheetId'), text));
 }

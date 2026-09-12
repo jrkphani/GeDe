@@ -32,7 +32,6 @@ function Host({
   const [anchor, setAnchor] = useState<Element | null>(null);
   const [cancelled, setCancelled] = useState(0);
   const a = useFormulaAdornments({
-    gd: d.gd,
     table: d.table,
     colId,
     text,
@@ -201,7 +200,6 @@ describe('useFormulaAdornments', () => {
           />
           <FormulaEditorAdornments
             ref={handle}
-            gd={d.gd}
             table={d.table}
             colId={d.colId(0)}
             text={text}

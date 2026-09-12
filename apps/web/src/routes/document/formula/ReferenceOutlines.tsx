@@ -1,8 +1,9 @@
 import { useMemo, type CSSProperties } from 'react';
-import { LATTICE, type GedeDoc, type Id, type OperandOutline } from '@gede/core';
+import type * as Y from 'yjs';
+import { LATTICE, type Id, type OperandOutline } from '@gede/core';
 
-import { useYVersion } from '../../../doc/use-y.js';
-import { operandsOfDraft } from './workbook.js';
+import { useWorkbookIndexVersion } from '../../../doc/workbook-index.js';
+import { operandsOf } from './workbook.js';
 
 /** Six outline colours cycle (`--reference-1..6`); the index badge disambiguates beyond that. */
 export const REFERENCE_COLOURS = 6;
@@ -53,19 +54,19 @@ export function ReferenceOutlines({ operands, zoom }: ReferenceOutlinesProps) {
 }
 
 /**
- * Operands of a formula text on a sheet, recomputed when the document's
- * structure or contents change. Use for a draft being typed; for a committed
- * formula the engine's `CellResult.operands` is equivalent.
+ * Operands of a formula text on a sheet — a typed draft or a stored source —
+ * resolved against the cached workbook index; recomputed only when the text
+ * or the workbook's shape changes, never per keystroke elsewhere.
  */
-export function useDraftOperands(
-  gd: GedeDoc,
+export function useOperandsOf(
+  doc: Y.Doc,
   sheetId: Id | null,
   formula: string | null,
 ): readonly OperandOutline[] {
-  const version = useYVersion(gd.tables);
+  const version = useWorkbookIndexVersion(doc);
   return useMemo(
-    () => (sheetId === null || formula === null ? [] : operandsOfDraft(gd, sheetId, formula)),
-    // version is the change signal for the document reads inside operandsOfDraft.
-    [gd, sheetId, formula, version],
+    () => (sheetId === null || formula === null ? [] : operandsOf(doc, sheetId, formula)),
+    // version is the change signal for the index reads inside operandsOf.
+    [doc, sheetId, formula, version],
   );
 }

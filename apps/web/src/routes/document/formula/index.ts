@@ -1,37 +1,29 @@
 /**
  * Formula UI for the document route (FX-01..FX-08, REF-01 consumer, A11Y-04).
  *
- * Contract for the grid editor (branch wave2/grid-editing). Everything the
- * editor needs is exported here; nothing in this folder touches TableView,
- * CellEditor, Inspector or Toolbar.
+ * ── Storage contract (PRD §20) ────────────────────────────────────────────
+ *   A formula cell holds a string whose references are bound to ids
+ *   (`{c:T:R:C}`, `{r:…}`, `{k:…}`, `{e:…}`; see `packages/core` bound.ts).
+ *   Every commit goes through `commitCellText` (GridCommands.commitCell does),
+ *   which binds the typed A1 / `@` text once. Everything the person sees is
+ *   projected from today's lattice: `projectSource(doc, stored)`.
  *
  * ── Cell rendering (FX-07) ────────────────────────────────────────────────
- *   const display = useCellDisplay(table, cellKey);
- *     → { isFormula, value, formula, error: {label, message} | null, badge, operands, pending }
- *   <FormulaCellContent display={display} />          value + badge + expression line
- *   The editor's initial text for a formula cell is `display.formula` (the
- *   expression, never the value). `display.value` is already locale-formatted.
+ *   <FormulaCell table cell expression />        the grid's Cell mounts this for formula cells
+ *   useCellDisplay(table, key) → { isFormula, value, formula (projected), error, badge,
+ *                                  operands, pending }   (pending until the Worker answers for this source)
+ *   The editor's initial text for a formula cell is the projected expression.
  *
- * ── Editor adornments (FX-02, FX-04, FX-05) ──────────────────────────────
- *   const a = useFormulaAdornments({ gd, table, colId, text, selectionStart,
- *                                   selectionEnd, anchor: textareaEl, onReplace, enabled });
- *   {a.element}                                        render beside the textarea
- *   onKeyDown={(e) => { if (a.onKeyDown(e.nativeEvent)) return; …KEYS-06… }}
- *   <textarea {...a.inputProps} …>                     ARIA for the listbox
- *   a.onCellClickWhileEditing(address)                 when a cell is clicked mid-edit;
- *                                                      the shell has the address via cellAddress()
- *   onReplace({ text, caret }) → set the textarea value and put the caret at `caret`; keep editing.
- *   `FormulaEditorAdornments` is the same as a component with a ref handle.
- *   `isFormulaInput(text)` says whether the draft will be stored as a formula.
+ * ── Editor adornments (FX-02, FX-04, FX-05) — mounted in RichCellEditor ────
+ *   useFormulaAdornments({ table, colId, text, selectionStart, selectionEnd, anchor, onReplace })
+ *     → { element, onKeyDown(e), onCellClickWhileEditing(address), inputProps, open }
+ *   The editing store (`editing-store.ts`) publishes the open editor's draft; a cell pressed
+ *   while a formula is being edited calls `insertClickedAddress(address)` instead of selecting.
  *
- * ── Outlines (FX-08) ─────────────────────────────────────────────────────
- *   `FormulaLayer` is mounted once in DocumentShell inside <Canvas>. Pass it
- *   `draft` (the live editor text) and it outlines the operands as they are
- *   typed. `ReferenceOutlines` + `useDraftOperands` are the pieces.
- *
- * ── Interim ──────────────────────────────────────────────────────────────
- *   Until the grid's Cell renders `FormulaCellContent`, `FormulaLayer` paints
- *   an overlay over every formula cell so FX-07 is visible end to end.
+ * ── Outlines and health (FX-08) ───────────────────────────────────────────
+ *   `FormulaLayer` (in DocumentShell, inside <Canvas>) outlines the selected or edited
+ *   formula's operands from the draft or the stored source; `FormulaEngineBanner` reports
+ *   a Worker that stayed down.
  */
 export {
   entityQueryAt,
@@ -55,9 +47,20 @@ export {
   ReferenceOutlines,
   referenceColourVar,
   REFERENCE_COLOURS,
-  useDraftOperands,
+  useOperandsOf,
   type ReferenceOutlinesProps,
 } from './ReferenceOutlines.js';
+export { FormulaCell, type FormulaCellProps } from './FormulaCell.js';
+export { FormulaEngineBanner } from './FormulaEngineBanner.js';
+export {
+  currentFormulaEditing,
+  insertClickedAddress,
+  registerFormulaEditor,
+  resetFormulaEditingForTests,
+  updateFormulaEditor,
+  useFormulaEditing,
+  type FormulaEditingState,
+} from './editing-store.js';
 export { FormulaLayer, type FormulaLayerProps } from './FormulaLayer.js';
 export {
   useFormulaAdornments,
@@ -70,10 +73,4 @@ export {
   type FormulaEditorAdornmentsHandle,
   type FormulaEditorAdornmentsProps,
 } from './FormulaEditorAdornments.js';
-export {
-  columnFormatOf,
-  entityIndexOf,
-  operandsOfDraft,
-  sheetIndexOf,
-  sheetOfTable,
-} from './workbook.js';
+export { columnFormatOf, docOf, operandsOf, projectSource, sheetOfTable } from './workbook.js';
