@@ -9,12 +9,20 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { buildApp } from '../lib/app.js';
 import { PLAYWRIGHT_LIVE_ROLE_NAME, PROD } from '../lib/config.js';
 import { type GedeStage } from '../lib/gede-stage.js';
+import { CDK_ASSETS_CLI_VERSION, CDK_CLI_VERSION } from '../lib/pipeline-stack.js';
 import { E2E_CLIENT_NAME } from '../lib/stacks/auth-stack.js';
 import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
-import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
+import { SPF_RECORD, dmarcRecord } from '../lib/stacks/dns-stack.js';
+import {
+  RATE_LIMIT_PER_IP,
+  WAF_MANAGED_RULE_GROUPS,
+  WAF_REDACTED_HEADERS,
+} from '../lib/stacks/edge-stack.js';
 import { PURGE_SCHEDULE, PURGE_SILENCE_HOURS } from '../lib/stacks/ops-stack.js';
 import { PURGE_COMMAND, gedeVersion } from '../lib/stacks/service-stack.js';
 import {
+  ACCESS_LOG_PREFIXES,
+  ACCESS_LOG_RETENTION_DAYS,
   ORIGIN_VERIFY_GENERATIONS,
   ORIGIN_VERIFY_HEADER,
   ORIGIN_VERIFY_PRESENTED,
@@ -61,6 +69,16 @@ function renderedWebConfig(assembly: cdk.cx_api.CloudAssembly): unknown {
     }
   }
   throw new Error('no config.json asset in the assembly');
+}
+
+/** The version the root lockfile resolves a package to (`npm ci` installs exactly this). */
+function lockedVersion(name: string): string {
+  const lock = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package-lock.json'), 'utf8')) as {
+    packages: Record<string, { version?: string }>;
+  };
+  const version = lock.packages[`node_modules/${name}`]?.version;
+  if (version === undefined) throw new Error(`${name} is not in package-lock.json`);
+  return version;
 }
 
 /** Feature flags and defaults exactly as the CLI reads them, so tests synthesize what the pipeline does. */
@@ -168,6 +186,15 @@ describe('GeDe CDK app', () => {
       WriteAttributes: ['email', 'family_name', 'given_name', 'locale', 'name'],
       RefreshTokenRotation: { Feature: 'ENABLED', RetryGracePeriodSeconds: 30 },
       EnableTokenRevocation: true,
+    });
+  });
+
+  it('AUTH-03 a changed email stays unverified and the original stays in force until the code is confirmed (#107)', () => {
+    // The client may write `email` (above); with no recovery path an unverified update
+    // would be a lockout and takeover primitive. Auto-verification of email stays on.
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPool', {
+      AutoVerifiedAttributes: ['email'],
+      UserAttributeUpdateSettings: { AttributesRequireVerificationBeforeUpdate: ['email'] },
     });
   });
 
@@ -425,13 +452,19 @@ describe('GeDe CDK app', () => {
     );
   });
 
-  it('ALB keeps WebSocket connections open for an hour, redirects HTTP, and cannot be deleted by accident', () => {
+  it('ALB keeps WebSocket connections open for an hour, redirects HTTP, logs to the access-logs bucket, and cannot be deleted by accident', () => {
     stacks.Service!.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
       Scheme: 'internet-facing',
       LoadBalancerAttributes: Match.arrayWith([
         { Key: 'deletion_protection.enabled', Value: 'true' },
         { Key: 'idle_timeout.timeout_seconds', Value: '3600' },
         { Key: 'routing.http.drop_invalid_header_fields.enabled', Value: 'true' },
+        { Key: 'access_logs.s3.enabled', Value: 'true' },
+        {
+          Key: 'access_logs.s3.bucket',
+          Value: { 'Fn::GetStackOutput': Match.objectLike({ StackName: 'GeDe-Prod-Web' }) },
+        },
+        { Key: 'access_logs.s3.prefix', Value: ACCESS_LOG_PREFIXES.alb },
       ]),
     });
     stacks.Service!.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
@@ -451,9 +484,10 @@ describe('GeDe CDK app', () => {
       Port: 3000,
       HealthCheckPath: '/healthz',
       HealthCheckIntervalSeconds: 30,
+      // No stickiness cookie on `/api` responses (#116).
       TargetGroupAttributes: Match.arrayWith([
         { Key: 'deregistration_delay.timeout_seconds', Value: '30' },
-        { Key: 'stickiness.enabled', Value: 'true' },
+        { Key: 'stickiness.enabled', Value: 'false' },
       ]),
     });
   });
@@ -605,6 +639,117 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('CloudFront, the ALB and the WAF all log requests: one 90-day bucket for the two entry points, a 30-day log group for the ACL (#113)', () => {
+    expect(ACCESS_LOG_RETENTION_DAYS).toBe(90);
+    // The bucket: ACL-capable for CloudFront's delivery account, otherwise locked down and
+    // short-lived. Two buckets in Web: the SPA's and this one.
+    stacks.Web!.resourceCountIs('AWS::S3::Bucket', 2);
+    stacks.Web!.hasResourceProperties('AWS::S3::Bucket', {
+      OwnershipControls: { Rules: [{ ObjectOwnership: 'ObjectWriter' }] },
+      AccessControl: 'LogDeliveryWrite',
+      PublicAccessBlockConfiguration: Match.objectLike({ BlockPublicAcls: true }),
+      BucketEncryption: {
+        ServerSideEncryptionConfiguration: [
+          { ServerSideEncryptionByDefault: { SSEAlgorithm: 'AES256' } },
+        ],
+      },
+      LifecycleConfiguration: {
+        Rules: [
+          Match.objectLike({
+            Id: 'expire-90d',
+            Status: 'Enabled',
+            ExpirationInDays: 90,
+            AbortIncompleteMultipartUpload: { DaysAfterInitiation: 7 },
+          }),
+        ],
+      },
+    });
+    const [logsBucketId] = Object.entries(stacks.Web!.findResources('AWS::S3::Bucket')).find(
+      ([, b]) =>
+        (b as { Properties: { AccessControl?: string } }).Properties.AccessControl ===
+        'LogDeliveryWrite',
+    )!;
+    stacks.Web!.hasResource('AWS::S3::Bucket', {
+      Properties: Match.objectLike({ AccessControl: 'LogDeliveryWrite' }),
+      DeletionPolicy: 'Delete',
+    });
+    // CloudFront standard logs, without cookies, under their own prefix.
+    stacks.Web!.hasResourceProperties('AWS::CloudFront::Distribution', {
+      DistributionConfig: Match.objectLike({
+        Logging: {
+          Bucket: { 'Fn::GetAtt': [logsBucketId, 'RegionalDomainName'] },
+          IncludeCookies: false,
+          Prefix: ACCESS_LOG_PREFIXES.cloudfront,
+        },
+      }),
+    });
+    // The bucket policy denies plaintext and admits the regional ELB log-delivery account
+    // (ap-southeast-1: 114774131450) and the logs delivery service under `alb/`, which
+    // `ServiceStack` adds when it enables access logs on the ALB.
+    interface BucketPolicy {
+      Properties: {
+        Bucket: { Ref: string };
+        PolicyDocument: {
+          Statement: {
+            Effect: string;
+            Principal: unknown;
+            Action: string | string[];
+            Resource: unknown;
+            Condition?: unknown;
+          }[];
+        };
+      };
+    }
+    const policy = (
+      Object.values(stacks.Web!.findResources('AWS::S3::BucketPolicy')) as BucketPolicy[]
+    ).find((p) => p.Properties.Bucket.Ref === logsBucketId)!;
+    const statements = policy.Properties.PolicyDocument.Statement;
+    expect(statements).toContainEqual(
+      expect.objectContaining({
+        Effect: 'Deny',
+        Action: 's3:*',
+        Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+      }),
+    );
+    const elbPut = statements.find(
+      (s) => JSON.stringify(s.Principal).includes('114774131450') && s.Action === 's3:PutObject',
+    );
+    expect(elbPut, 'ELB account PutObject').toBeDefined();
+    expect(JSON.stringify(elbPut!.Resource)).toContain(
+      `/${ACCESS_LOG_PREFIXES.alb}/AWSLogs/975049998516/*`,
+    );
+    expect(statements).toContainEqual(
+      expect.objectContaining({
+        Principal: { Service: 'delivery.logs.amazonaws.com' },
+        Action: 's3:GetBucketAcl',
+      }),
+    );
+
+    // WAF: every request the ACL evaluates, to an `aws-waf-logs-` group in us-east-1 kept
+    // 30 days, with bearer tokens and cookies redacted. The destination is the group ARN
+    // without `:*`.
+    stacks.Edge!.hasResourceProperties('AWS::Logs::LogGroup', {
+      LogGroupName: 'aws-waf-logs-gede-prod-web',
+      RetentionInDays: 30,
+    });
+    stacks.Edge!.hasResourceProperties('AWS::WAFv2::LoggingConfiguration', {
+      ResourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^WebAcl'), 'Arn'] },
+      LogDestinationConfigs: [
+        {
+          'Fn::Join': [
+            '',
+            [
+              'arn:aws:logs:us-east-1:975049998516:log-group:',
+              { Ref: Match.stringLikeRegexp('^WafLogs') },
+            ],
+          ],
+        },
+      ],
+      RedactedFields: WAF_REDACTED_HEADERS.map((name) => ({ SingleHeader: { Name: name } })),
+    });
+    expect(WAF_REDACTED_HEADERS).toEqual(['authorization', 'cookie']);
+  });
+
   it("AUTH-08 the deployed config.json parses with the SPA's own parseConfig and says appleSignIn: false while the flag is off (#61)", async () => {
     const raw = renderedWebConfig(assembly);
     expect(raw).toMatchObject({
@@ -658,7 +803,7 @@ describe('GeDe CDK app', () => {
   });
 
   it('DNS aliases apex/www to CloudFront and api/ws to the ALB', () => {
-    stacks.Dns!.resourceCountIs('AWS::Route53::RecordSet', 6);
+    stacks.Dns!.resourceCountIs('AWS::Route53::RecordSet', 8);
     stacks.Dns!.hasResourceProperties('AWS::Route53::RecordSet', {
       Name: 'api.gede.work.',
       Type: 'A',
@@ -667,6 +812,21 @@ describe('GeDe CDK app', () => {
     stacks.Dns!.hasResourceProperties('AWS::Route53::RecordSet', {
       Name: 'gede.work.',
       Type: 'AAAA',
+    });
+  });
+
+  it('SHARE-02 SPF at the apex names SES only and DMARC quarantines a spoofed no-reply@gede.work (#116)', () => {
+    expect(SPF_RECORD).toBe('v=spf1 include:amazonses.com -all');
+    expect(dmarcRecord(PROD)).toBe('v=DMARC1; p=quarantine; rua=mailto:jrkphani@icloud.com');
+    stacks.Dns!.hasResourceProperties('AWS::Route53::RecordSet', {
+      Name: 'gede.work.',
+      Type: 'TXT',
+      ResourceRecords: ['"v=spf1 include:amazonses.com -all"'],
+    });
+    stacks.Dns!.hasResourceProperties('AWS::Route53::RecordSet', {
+      Name: '_dmarc.gede.work.',
+      Type: 'TXT',
+      ResourceRecords: ['"v=DMARC1; p=quarantine; rua=mailto:jrkphani@icloud.com"'],
     });
   });
 
@@ -680,7 +840,9 @@ describe('GeDe CDK app', () => {
       Target: Match.objectLike({
         EcsParameters: Match.objectLike({
           LaunchType: 'FARGATE',
-          TaskDefinitionArn: Match.anyValue(),
+          // The family, not a revision (#97): a literal string, no cross-stack reference.
+          TaskDefinitionArn:
+            'arn:aws:ecs:ap-southeast-1:975049998516:task-definition/gede-prod-jobs',
           NetworkConfiguration: {
             AwsvpcConfiguration: Match.objectLike({
               AssignPublicIp: 'ENABLED',
@@ -692,19 +854,63 @@ describe('GeDe CDK app', () => {
         RetryPolicy: { MaximumEventAgeInSeconds: 3600, MaximumRetryAttempts: 1 },
       }),
     });
-    // The scheduler role may run exactly that task definition and pass its roles.
+    // The scheduler role may run any revision of that family and pass the two roles every
+    // revision uses (the L2 would have pinned both to the revision synthesized that day).
     stacks.Ops!.hasResourceProperties('AWS::IAM::Role', {
       AssumeRolePolicyDocument: Match.objectLike({
         Statement: [Match.objectLike({ Principal: { Service: 'scheduler.amazonaws.com' } })],
       }),
     });
     stacks.Ops!.hasResourceProperties('AWS::IAM::Policy', {
-      PolicyDocument: Match.objectLike({
-        Statement: Match.arrayWith([
-          Match.objectLike({ Action: 'iam:PassRole', Effect: 'Allow' }),
-          Match.objectLike({ Action: 'ecs:RunTask', Effect: 'Allow' }),
-        ]),
-      }),
+      PolicyDocument: {
+        Version: '2012-10-17',
+        Statement: [
+          {
+            Sid: 'RunAnyRevision',
+            Effect: 'Allow',
+            Action: 'ecs:RunTask',
+            Resource: 'arn:aws:ecs:ap-southeast-1:975049998516:task-definition/gede-prod-jobs:*',
+          },
+          {
+            Sid: 'PassTaskRoles',
+            Effect: 'Allow',
+            Action: 'iam:PassRole',
+            Resource: [
+              {
+                'Fn::GetStackOutput': Match.objectLike({
+                  StackName: 'GeDe-Prod-Service',
+                  OutputName: Match.stringLikeRegexp('JobsTaskExecutionRole.*Arn'),
+                }),
+              },
+              {
+                'Fn::GetStackOutput': Match.objectLike({
+                  StackName: 'GeDe-Prod-Service',
+                  OutputName: Match.stringLikeRegexp('JobsTaskTaskRole.*Arn'),
+                }),
+              },
+            ],
+            Condition: { StringLike: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+          },
+        ],
+      },
+    });
+    // Nothing in Ops names a task-definition revision, and nothing reads the task
+    // definition from Service: the family is a string and the roles keep their ARNs.
+    const ops = JSON.stringify(stacks.Ops!.toJSON());
+    expect(ops).not.toMatch(/task-definition\/gede-prod-jobs:\d/);
+    expect(ops).not.toMatch(/PublishOutputRefJobsTask/);
+    // …and the schedule is exempt from the failure that would have hidden it: a dropped
+    // invocation (RunTask refused, retry exhausted) is an alarm of its own.
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-purge-invocation-dropped',
+      Namespace: 'AWS/Scheduler',
+      MetricName: 'InvocationDroppedCount',
+      Dimensions: [{ Name: 'ScheduleGroup', Value: 'default' }],
+      Statistic: 'Sum',
+      Period: 3600,
+      Threshold: 0,
+      ComparisonOperator: 'GreaterThanThreshold',
+      TreatMissingData: 'notBreaching',
     });
     // Exit code ≠ 0 (or a task that never started) → SNS, matched on the jobs family only.
     stacks.Ops!.hasResourceProperties('AWS::Events::Rule', {
@@ -758,7 +964,8 @@ describe('GeDe CDK app', () => {
   });
 
   it('Ops wires alarms and the budget to the alerts email', () => {
-    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 11);
+    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 13);
+    stacks.Ops!.resourceCountIs('AWS::SNS::Subscription', 1);
     stacks.Ops!.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'email',
       Endpoint: 'jrkphani@icloud.com',
@@ -790,6 +997,98 @@ describe('GeDe CDK app', () => {
           Subscribers: [{ SubscriptionType: 'EMAIL', Address: 'jrkphani@icloud.com' }],
         }),
       ],
+    });
+  });
+
+  it('the alerts topic accepts CloudWatch alarms, EventBridge rules and Budgets from this account only, and keeps the owner statement (#98)', () => {
+    interface TopicPolicy {
+      Properties: {
+        Topics: { Ref: string }[];
+        PolicyDocument: {
+          Statement: {
+            Sid: string;
+            Effect: string;
+            Principal: { Service?: string; AWS?: string };
+            Action: string | string[];
+            Condition?: Record<string, Record<string, string>>;
+          }[];
+        };
+      };
+    }
+    const policies = Object.values(
+      stacks.Ops!.findResources('AWS::SNS::TopicPolicy'),
+    ) as TopicPolicy[];
+    expect(policies).toHaveLength(1);
+    const statements = policies[0]!.Properties.PolicyDocument.Statement;
+    const account = '975049998516';
+
+    // SNS's default statement, restated: attaching any policy would otherwise remove it.
+    const owner = statements.find((s) => s.Sid === 'AccountOwner')!;
+    expect(owner.Principal).toEqual({ AWS: '*' });
+    expect(owner.Action).toContain('sns:Publish');
+    expect(owner.Condition).toEqual({ StringEquals: { 'AWS:SourceOwner': account } });
+
+    // Each publishing service, conditioned on the source account and a source ARN pattern
+    // (no unconditioned service grant: the events target's own would have been one).
+    const services = statements
+      .map((s) => s.Principal.Service)
+      .filter((s): s is string => s !== undefined);
+    expect([...services].sort()).toEqual([
+      'budgets.amazonaws.com',
+      'cloudwatch.amazonaws.com',
+      'events.amazonaws.com',
+    ]);
+    const expected: readonly [string, string][] = [
+      ['cloudwatch.amazonaws.com', `arn:aws:cloudwatch:ap-southeast-1:${account}:alarm:*`],
+      ['events.amazonaws.com', `arn:aws:events:ap-southeast-1:${account}:rule/*`],
+      ['budgets.amazonaws.com', `arn:aws:budgets::${account}:budget/*`],
+    ];
+    for (const [principal, sourceArn] of expected) {
+      const statement = statements.find((s) => s.Principal.Service === principal)!;
+      expect(statement.Effect).toBe('Allow');
+      expect(statement.Action).toBe('sns:Publish');
+      expect(statement.Condition).toEqual({
+        StringEquals: { 'aws:SourceAccount': account },
+        ArnLike: { 'aws:SourceArn': sourceArn },
+      });
+    }
+    expect(statements).toHaveLength(4);
+    // The purge-failed rule still targets the topic (through a target that adds no policy).
+    stacks.Ops!.hasResourceProperties('AWS::Events::Rule', {
+      Name: 'gede-prod-purge-task-failed',
+      Targets: [
+        Match.objectLike({
+          Arn: { Ref: Match.stringLikeRegexp('^Alerts') },
+          InputTransformer: Match.objectLike({
+            InputTemplate: Match.stringLikeRegexp('nightly purge task failed'),
+          }),
+        }),
+      ],
+    });
+  });
+
+  it('AUTH-04 an error in the pre-authentication trigger is an alarm at the first occurrence (#103)', () => {
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-pre-auth-errors',
+      Namespace: 'AWS/Lambda',
+      MetricName: 'Errors',
+      Dimensions: [
+        {
+          Name: 'FunctionName',
+          Value: {
+            'Fn::GetStackOutput': Match.objectLike({
+              StackName: 'GeDe-Prod-Auth',
+              OutputName: Match.stringLikeRegexp('PreAuth'),
+            }),
+          },
+        },
+      ],
+      Statistic: 'Sum',
+      Period: 60,
+      Threshold: 0,
+      EvaluationPeriods: 1,
+      ComparisonOperator: 'GreaterThanThreshold',
+      TreatMissingData: 'notBreaching',
     });
   });
 
@@ -931,6 +1230,52 @@ describe('GeDe CDK app', () => {
     pipelineTemplate.allResourcesProperties('AWS::CodeBuild::Project', {
       LogsConfig: { CloudWatchLogs: { GroupName: { Ref: logGroupId }, Status: 'ENABLED' } },
     });
+  });
+
+  it('SelfMutate and the asset publishers install the CLI versions the lockfile pins, never a dist-tag; only Synth and the image publisher are privileged (#106)', () => {
+    interface Project {
+      Properties: { Source: { BuildSpec?: string }; Environment: { PrivilegedMode?: boolean } };
+    }
+    // The constants are the pipeline's; the lockfile is what `npm ci` installs. Bump both.
+    expect(CDK_CLI_VERSION).toBe(lockedVersion('aws-cdk'));
+    expect(CDK_ASSETS_CLI_VERSION).toBe(lockedVersion('cdk-assets'));
+    expect(CDK_CLI_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(CDK_ASSETS_CLI_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
+
+    // Synth, SelfMutate, Smoke and Playwright-Live carry their buildspec inline; the two
+    // asset publishers name a `buildspec-…-{Docker,File}Asset.yaml` file in the assembly.
+    const projects = Object.entries(pipelineTemplate.findResources('AWS::CodeBuild::Project')) as [
+      string,
+      Project,
+    ][];
+    const specOf = ([, p]: [string, Project]): string => {
+      const spec = p.Properties.Source.BuildSpec ?? '';
+      return spec.startsWith('buildspec-')
+        ? readFileSync(path.join(assembly.directory, spec), 'utf8')
+        : spec;
+    };
+    const specs = projects.map(specOf);
+    expect(specs).toHaveLength(6);
+    const selfMutate = specs.filter((s) => s.includes('npm install -g aws-cdk@'));
+    expect(selfMutate).toHaveLength(1);
+    expect(selfMutate[0]).toContain(`npm install -g aws-cdk@${CDK_CLI_VERSION}`);
+    const publishers = specs.filter((s) => s.includes('npm install -g cdk-assets@'));
+    expect(publishers).toHaveLength(2);
+    for (const spec of publishers) {
+      expect(spec).toContain(`npm install -g cdk-assets@${CDK_ASSETS_CLI_VERSION}`);
+    }
+    for (const spec of specs) {
+      expect(spec).not.toMatch(/@latest\b/);
+      expect(spec).not.toMatch(/aws-cdk@2\b(?!\.\d)/);
+    }
+    // Privileged: Synth (Docker for db:parity) and the image publisher (docker build);
+    // the file-asset publisher, SelfMutate, Smoke and Playwright-Live are not.
+    const privileged = projects
+      .filter(([, p]) => p.Properties.Environment.PrivilegedMode === true)
+      .map(([id]) => id);
+    expect(privileged).toHaveLength(2);
+    expect(privileged.some((id) => id.includes('Synth'))).toBe(true);
+    expect(privileged.some((id) => id.includes('DockerAsset'))).toBe(true);
   });
 
   it('Smoke probes the API through CloudFront and proves the bare origin answers 403 (#33)', () => {

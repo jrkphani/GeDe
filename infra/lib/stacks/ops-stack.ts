@@ -4,10 +4,11 @@ import {
   aws_cloudwatch as cloudwatch,
   aws_cloudwatch_actions as cw_actions,
   aws_ec2 as ec2,
-  type aws_ecs as ecs,
+  aws_ecs as ecs,
   aws_elasticloadbalancingv2 as elbv2,
   aws_events as events,
-  aws_events_targets as event_targets,
+  aws_iam as iam,
+  type aws_lambda as lambda,
   aws_logs as logs,
   type aws_rds as rds,
   aws_scheduler as scheduler,
@@ -27,15 +28,91 @@ export interface OpsStackProps extends cdk.StackProps {
   readonly database: rds.DatabaseInstance;
   /** The jobs task (`--job purge`) and where to run it: the service's cluster, subnets and security group. */
   readonly cluster: ecs.ICluster;
-  readonly jobsTaskDefinition: ecs.FargateTaskDefinition;
+  /**
+   * The jobs task by *family* and roles, never by task definition: its revision changes on
+   * every deploy and a weak cross-stack reference to it is resolved once and never
+   * refreshed (#97, ADR-036). The family name is a string; role ARNs are stable.
+   */
+  readonly jobsFamily: string;
+  readonly jobsTaskRole: iam.IRole;
+  readonly jobsExecutionRole: iam.IRole;
   readonly jobsLogGroup: logs.ILogGroup;
   /** The sync service's log group: the guided-sample seeder reports failures there (ONB-01). */
   readonly serviceLogGroup: logs.ILogGroup;
   readonly serviceSecurityGroup: ec2.ISecurityGroup;
+  /** The pool's pre-authentication trigger: an error there refuses a sign-in (#103). */
+  readonly preAuthFunction: lambda.IFunction;
 }
 
 const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;
+
+/** A Fargate task definition family as the scheduler needs it: the ARN without a revision and the roles every revision uses. */
+interface TaskFamily {
+  readonly arn: string;
+  readonly taskRole: iam.IRole;
+  readonly executionRole: iam.IRole;
+}
+
+interface EcsRunFamilyTaskProps extends scheduler_targets.ScheduleTargetBaseProps {
+  readonly cluster: ecs.ICluster;
+  readonly family: TaskFamily;
+  readonly vpcSubnets: ec2.SubnetSelection;
+  readonly securityGroups: readonly ec2.ISecurityGroup[];
+  readonly assignPublicIp: boolean;
+}
+
+/**
+ * `RunTask` on Fargate for a task definition named by *family*. The L2 `EcsRunFargateTask`
+ * takes a concrete `TaskDefinition` and renders its revisioned ARN into both the target and
+ * the role's `ecs:RunTask` grant — the coupling that broke the purge (#97, ADR-036). Here
+ * the target ARN is the family ARN, which `RunTask` resolves to the latest ACTIVE revision
+ * at each invocation; IAM evaluates that resolved ARN, so `ecs:RunTask` is granted on
+ * `<family>:*`, and `iam:PassRole` on the two roles for ECS only.
+ */
+class EcsRunFamilyTask extends scheduler_targets.ScheduleTargetBase {
+  constructor(private readonly props: EcsRunFamilyTaskProps) {
+    super(props, props.cluster.clusterArn);
+  }
+
+  protected addTargetActionToRole(role: iam.IRole): void {
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'RunAnyRevision',
+        actions: ['ecs:RunTask'],
+        resources: [`${this.props.family.arn}:*`],
+      }),
+    );
+    role.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'PassTaskRoles',
+        actions: ['iam:PassRole'],
+        resources: [this.props.family.taskRole.roleArn, this.props.family.executionRole.roleArn],
+        conditions: { StringLike: { 'iam:PassedToService': 'ecs-tasks.amazonaws.com' } },
+      }),
+    );
+  }
+
+  protected override bindBaseTargetConfig(
+    schedule: scheduler.ISchedule,
+  ): scheduler.ScheduleTargetConfig {
+    const { cluster, family, vpcSubnets, securityGroups, assignPublicIp } = this.props;
+    return {
+      ...super.bindBaseTargetConfig(schedule),
+      ecsParameters: {
+        taskDefinitionArn: family.arn,
+        launchType: ecs.LaunchType.FARGATE,
+        networkConfiguration: {
+          awsvpcConfiguration: {
+            assignPublicIp: assignPublicIp ? 'ENABLED' : 'DISABLED',
+            subnets: cluster.vpc.selectSubnets(vpcSubnets).subnetIds,
+            securityGroups: securityGroups.map((sg) => sg.securityGroupId),
+          },
+        },
+      },
+    };
+  }
+}
 
 /** Local time of the nightly purge (LIB-08); the retention window is measured on the database clock. */
 export const PURGE_SCHEDULE = { hour: '2', minute: '30', timeZone: cdk.TimeZone.ASIA_SINGAPORE };
@@ -65,7 +142,10 @@ export class OpsStack extends cdk.Stack {
     this.alertsTopic = new sns.Topic(this, 'Alerts', {
       displayName: `GeDe ${config.envName} alerts`,
     });
+    // The subscription is created pending; a person confirms it from the mail SNS sends
+    // (runbook §8). Nothing here re-sends that mail.
     this.alertsTopic.addSubscription(new subscriptions.EmailSubscription(config.alertsEmail));
+    this.grantPublishers(this.alertsTopic);
     const notify = new cw_actions.SnsAction(this.alertsTopic);
 
     const cpuAlarm = props.service
@@ -191,18 +271,31 @@ export class OpsStack extends cdk.Stack {
     dbMemoryAlarm.addAlarmAction(notify);
 
     // ---- Nightly purge (LIB-08) ------------------------------------------------------
-    // EventBridge Scheduler runs the jobs task definition once a night on the
-    // service's cluster, in the public subnets with a public IP (no NAT, see
-    // NetworkStack) and behind the service security group so it reaches RDS.
-    // `EcsRunFargateTask` grants the scheduler role ecs:RunTask + iam:PassRole
-    // on exactly this task definition.
+    // EventBridge Scheduler runs the jobs task family once a night on the service's
+    // cluster, in the public subnets with a public IP (no NAT, see NetworkStack) and
+    // behind the service security group so it reaches RDS. The target is the family ARN
+    // — no revision — because every deploy registers a new revision and deregisters the
+    // old one; a schedule pinned to a revision ran once against a deregistered definition
+    // and was dropped (#97). `EcsRunFamilyTask` above scopes the role's IAM the same way.
+
+    const family = props.jobsFamily;
+    const familyArn = cdk.Arn.format(
+      { service: 'ecs', resource: 'task-definition', resourceName: family },
+      this,
+    );
+    const jobsFamily: TaskFamily = {
+      arn: familyArn,
+      taskRole: props.jobsTaskRole,
+      executionRole: props.jobsExecutionRole,
+    };
 
     this.purgeSchedule = new scheduler.Schedule(this, 'NightlyPurge', {
       scheduleName: `gede-${config.envName}-nightly-purge`,
       description: 'Permanently delete documents soft-deleted more than 30 days ago (LIB-08)',
       schedule: scheduler.ScheduleExpression.cron(PURGE_SCHEDULE),
-      target: new scheduler_targets.EcsRunFargateTask(props.cluster, {
-        taskDefinition: props.jobsTaskDefinition,
+      target: new EcsRunFamilyTask({
+        cluster: props.cluster,
+        family: jobsFamily,
         vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
         assignPublicIp: true,
         securityGroups: [props.serviceSecurityGroup],
@@ -213,9 +306,29 @@ export class OpsStack extends cdk.Stack {
       }),
     });
 
+    // The failure #97 was: the scheduler could not even start the task, so no ECS event
+    // and no log line existed to alarm on, and the run was dropped after its retry.
+    // `InvocationDroppedCount` is that outcome as a metric (ScheduleGroup is the only
+    // dimension; this is the group's only schedule).
+    const purgeDropped = new cloudwatch.Metric({
+      namespace: 'AWS/Scheduler',
+      metricName: 'InvocationDroppedCount',
+      dimensionsMap: { ScheduleGroup: 'default' },
+      period: cdk.Duration.hours(1),
+      statistic: 'Sum',
+    }).createAlarm(this, 'PurgeInvocationDropped', {
+      alarmName: `gede-${config.envName}-purge-invocation-dropped`,
+      alarmDescription:
+        'EventBridge Scheduler gave up invoking the nightly purge (RunTask refused, e.g. a bad task definition or IAM); no task ran',
+      threshold: 0,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    purgeDropped.addAlarmAction(notify);
+
     // Alert on any stopped jobs task whose container exited non-zero (the job reports
     // documents it could not remove or a database failure that way) or that never started.
-    const family = props.jobsTaskDefinition.family;
     const purgeFailed = new events.Rule(this, 'PurgeTaskFailed', {
       ruleName: `gede-${config.envName}-purge-task-failed`,
       description:
@@ -241,9 +354,16 @@ export class OpsStack extends cdk.Stack {
         },
       },
     });
-    purgeFailed.addTarget(
-      new event_targets.SnsTopic(this.alertsTopic, {
-        message: events.RuleTargetInput.fromText(
+    // Not `event_targets.SnsTopic`: that target grants `events.amazonaws.com` on the topic
+    // unconditionally, and the first such statement replaced SNS's default policy — which
+    // is what let same-account CloudWatch alarms publish — so every alarm action failed
+    // (#98). The topic policy is written once, in `grantPublishers`, with conditions.
+    purgeFailed.addTarget({
+      bind: () => ({
+        id: '',
+        arn: this.alertsTopic.topicArn,
+        targetResource: this.alertsTopic,
+        input: events.RuleTargetInput.fromText(
           [
             `GeDe ${config.envName}: the nightly purge task failed.`,
             `Task: ${events.EventField.fromPath('$.detail.taskArn')}`,
@@ -253,7 +373,7 @@ export class OpsStack extends cdk.Stack {
           ].join('\n'),
         ),
       }),
-    );
+    });
 
     // The same failure as a metric, from the job's own log lines (`main.ts` logs
     // `purge could not remove every document` / `job failed` before exiting 1), so a
@@ -336,6 +456,23 @@ export class OpsStack extends cdk.Stack {
       });
     sampleSeedAlarm.addAlarmAction(notify);
 
+    // AUTH-04: the pre-authentication trigger runs on every sign-in, and an unhandled error
+    // there is a refused sign-in. It now survives a failed client lookup for everyone but
+    // the e2e account (#103); anything it still throws unexpectedly is an outage in the
+    // making and is reported at the first occurrence.
+    const preAuthErrors = props.preAuthFunction
+      .metricErrors({ period: cdk.Duration.minutes(1), statistic: 'Sum' })
+      .createAlarm(this, 'PreAuthErrors', {
+        alarmName: `gede-${config.envName}-pre-auth-errors`,
+        alarmDescription:
+          'The Cognito pre-authentication trigger threw: a refused sign-in — the e2e account or client used outside the pipeline — or a fault in the trigger; read GeDe-Prod-Auth-PreAuthLogs',
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    preAuthErrors.addAlarmAction(notify);
+
     // `NotificationsWithSubscribers` is create-only on AWS::Budgets::Budget, so any change
     // replaces the resource — and a replacement under the same BudgetName fails ("same name
     // but a different internalId already exists", execution 3ea4807b). The name therefore
@@ -371,5 +508,76 @@ export class OpsStack extends cdk.Stack {
         },
       ],
     });
+  }
+
+  /**
+   * The topic's access policy, in one place. Attaching any policy replaces SNS's default
+   * one — the statement that lets same-account principals, CloudWatch alarms among them,
+   * publish — so it is restated here (`AccountOwner`), and each service that publishes
+   * is named with `aws:SourceAccount` and `aws:SourceArn` conditions so no other
+   * account's alarm, rule or budget can post here (#98, #116). Budgets is granted for
+   * when the budget's subscribers move to the topic; today they are direct email.
+   */
+  private grantPublishers(topic: sns.Topic): void {
+    const sourceAccount = { StringEquals: { 'aws:SourceAccount': this.account } };
+    const service = (sid: string, principal: string, sourceArn: string): iam.PolicyStatement =>
+      new iam.PolicyStatement({
+        sid,
+        principals: [new iam.ServicePrincipal(principal)],
+        actions: ['sns:Publish'],
+        resources: [topic.topicArn],
+        conditions: { ...sourceAccount, ArnLike: { 'aws:SourceArn': sourceArn } },
+      });
+
+    topic.addToResourcePolicy(
+      new iam.PolicyStatement({
+        sid: 'AccountOwner',
+        principals: [new iam.AnyPrincipal()],
+        actions: [
+          'sns:GetTopicAttributes',
+          'sns:SetTopicAttributes',
+          'sns:AddPermission',
+          'sns:RemovePermission',
+          'sns:DeleteTopic',
+          'sns:Subscribe',
+          'sns:ListSubscriptionsByTopic',
+          'sns:Publish',
+        ],
+        resources: [topic.topicArn],
+        conditions: { StringEquals: { 'AWS:SourceOwner': this.account } },
+      }),
+    );
+    topic.addToResourcePolicy(
+      service(
+        'CloudWatchAlarms',
+        'cloudwatch.amazonaws.com',
+        cdk.Arn.format(
+          {
+            service: 'cloudwatch',
+            resource: 'alarm',
+            resourceName: '*',
+            arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+          },
+          this,
+        ),
+      ),
+    );
+    topic.addToResourcePolicy(
+      service(
+        'EventBridgeRules',
+        'events.amazonaws.com',
+        cdk.Arn.format({ service: 'events', resource: 'rule', resourceName: '*' }, this),
+      ),
+    );
+    topic.addToResourcePolicy(
+      service(
+        'Budgets',
+        'budgets.amazonaws.com',
+        cdk.Arn.format(
+          { service: 'budgets', region: '', resource: 'budget', resourceName: '*' },
+          this,
+        ),
+      ),
+    );
   }
 }

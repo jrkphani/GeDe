@@ -35,6 +35,18 @@ const ARM_MEDIUM: codebuild.BuildEnvironment = {
 const SYNTH_NODE_OPTIONS = '--max-old-space-size=4096';
 
 /**
+ * The CLI versions the SelfMutate and asset-publishing projects install (`npm install -g
+ * aws-cdk@…` / `cdk-assets@…`). Those steps hold the bootstrap deploy and publishing roles,
+ * so they must not install whatever npm's dist-tag points at on the day (#106). Both are
+ * exact versions and `infra/test/stage.test.ts` asserts they equal the root lockfile's
+ * (`aws-cdk` and `cdk-assets` are `infra` devDependencies for that reason); bump the
+ * dependency and this constant together. CLI first, then `aws-cdk-lib`: SelfMutate runs
+ * the *previous* CLI once more after the change (CDK Pipelines `cliVersion` docs).
+ */
+export const CDK_CLI_VERSION = '2.1141.0';
+export const CDK_ASSETS_CLI_VERSION = '4.7.3';
+
+/**
  * Shared libraries Chromium needs on Amazon Linux 2023, one dnf package per Debian
  * package in Playwright's own `ubuntu24.04-arm64` chromium list (`playwright-core`
  * `deps` table). Playwright's `install-deps` only knows `apt-get`, so on AL2023 this
@@ -150,6 +162,8 @@ export class PipelineStack extends cdk.Stack {
       selfMutation: true,
       crossAccountKeys: false,
       publishAssetsInParallel: false,
+      cliVersion: CDK_CLI_VERSION,
+      cdkAssetsCliVersion: CDK_ASSETS_CLI_VERSION,
       // The Synth project runs privileged so `db:parity` can start Postgres in Docker.
       dockerEnabledForSynth: true,
       dockerEnabledForSelfMutation: false,
@@ -157,9 +171,9 @@ export class PipelineStack extends cdk.Stack {
         buildEnvironment: ARM_SMALL,
         logging: { cloudWatch: { logGroup: buildLogs } },
       },
-      assetPublishingCodeBuildDefaults: {
-        buildEnvironment: { ...ARM_SMALL, privileged: true },
-      },
+      // No `privileged` here: CDK Pipelines already runs the Docker-image publishing project
+      // privileged and the file-asset project has no reason to be (#106).
+      assetPublishingCodeBuildDefaults: { buildEnvironment: ARM_SMALL },
     });
 
     const prod = new GedeStage(this, 'Prod', {

@@ -17,7 +17,7 @@ import { type Construct } from 'constructs';
 
 import { type EnvConfig } from '../config.js';
 import { PLACEHOLDER_SYNC_DIR, REPO_ROOT, SYNC_DOCKERFILE, repoFileExists } from '../paths.js';
-import { ORIGIN_VERIFY_HEADER } from './web-stack.js';
+import { ACCESS_LOG_PREFIXES, ORIGIN_VERIFY_HEADER } from './web-stack.js';
 
 export interface ServiceStackProps extends cdk.StackProps {
   readonly config: EnvConfig;
@@ -34,6 +34,8 @@ export interface ServiceStackProps extends cdk.StackProps {
   readonly userPoolClientIds: readonly string[];
   /** Accepted `X-Origin-Verify` values, from WebStack (all generations). */
   readonly originVerifySecrets: readonly secretsmanager.ISecret[];
+  /** WebStack's access-logs bucket; the ALB writes under `alb/` (#113). */
+  readonly logsBucket: s3.IBucket;
 }
 
 const CONTAINER_PORT = 3000;
@@ -77,6 +79,16 @@ export class ServiceStack extends cdk.Stack {
   readonly logGroup: logs.LogGroup;
   /** Same image, `--job purge` as its command; run by the EventBridge Scheduler in OpsStack. */
   readonly jobsTaskDefinition: ecs.FargateTaskDefinition;
+  /**
+   * What OpsStack needs to run the jobs task — and deliberately not the task definition
+   * itself. Its revision changes on every deploy (the image carries the git sha), and a
+   * weak cross-stack reference to a revisioned ARN is resolved once and never refreshed
+   * (#97, ADR-036). The family is a plain string; the two roles are created once and keep
+   * their ARNs across revisions.
+   */
+  readonly jobsFamily: string;
+  readonly jobsTaskRole: iam.IRole;
+  readonly jobsExecutionRole: iam.IRole;
   readonly jobsLogGroup: logs.LogGroup;
   readonly apiUrl: cdk.CfnOutput;
 
@@ -215,7 +227,8 @@ export class ServiceStack extends cdk.Stack {
     // process exits when it is done. Its own log group keeps job output apart
     // from the service's, with the same one-month retention.
 
-    this.jobsTaskDefinition = newTaskDefinition('JobsTask', `gede-${config.envName}-jobs`);
+    this.jobsFamily = `gede-${config.envName}-jobs`;
+    this.jobsTaskDefinition = newTaskDefinition('JobsTask', this.jobsFamily);
     this.jobsLogGroup = new logs.LogGroup(this, 'JobsLogs', {
       retention: logs.RetentionDays.ONE_MONTH,
       removalPolicy: cdk.RemovalPolicy.DESTROY,
@@ -228,6 +241,9 @@ export class ServiceStack extends cdk.Stack {
       environment,
     });
     grant(this.jobsTaskDefinition);
+    this.jobsTaskRole = this.jobsTaskDefinition.taskRole;
+    // Exists already (secrets and awslogs need one); `obtain` only types it as present.
+    this.jobsExecutionRole = this.jobsTaskDefinition.obtainExecutionRole();
 
     const serviceSg = new ec2.SecurityGroup(this, 'ServiceSecurityGroup', {
       vpc,
@@ -279,6 +295,9 @@ export class ServiceStack extends cdk.Stack {
       dropInvalidHeaderFields: true,
       deletionProtection: true,
     });
+    // Access logs to WebStack's bucket under `alb/` (#113). The L2 sets the attributes and
+    // adds the regional ELB account's PutObject statements to that bucket's policy.
+    this.alb.logAccessLogs(props.logsBucket, ACCESS_LOG_PREFIXES.alb);
 
     // Deny by default; the rules below open exactly two paths.
     const https = this.alb.addListener('Https', {
@@ -314,7 +333,9 @@ export class ServiceStack extends cdk.Stack {
         path: '/healthz',
         interval: cdk.Duration.seconds(30),
       },
-      stickinessCookieDuration: cdk.Duration.hours(1),
+      // No stickiness: the API is stateless per request and the WebSocket is one connection
+      // to one task by nature. A stickiness cookie only pinned users to a task and put
+      // `AWSALB`/`AWSALBCORS` on every `/api` response (#116).
       deregistrationDelay: cdk.Duration.seconds(30),
       priority: 20,
       conditions: [

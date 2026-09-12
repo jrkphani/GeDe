@@ -1,6 +1,7 @@
 import * as cdk from 'aws-cdk-lib';
 import {
   aws_certificatemanager as acm,
+  aws_logs as logs,
   aws_route53 as route53,
   aws_wafv2 as wafv2,
 } from 'aws-cdk-lib';
@@ -87,8 +88,35 @@ export class EdgeStack extends cdk.Stack {
         })),
       ],
     });
+
+    // ---- WAF logging (#113) ------------------------------------------------------------
+    // Every request the ACL evaluates, kept for 30 days in us-east-1 (the ACL's region).
+    // The group name must start with `aws-waf-logs-`, and WAF wants the group ARN without
+    // the `:*` suffix `logGroupArn` carries. WAF writes the group's resource policy itself
+    // (`logs:PutResourcePolicy` is part of `PutLoggingConfiguration`), so none is declared.
+    // Bearer tokens and cookies never reach the log.
+    const wafLogs = new logs.LogGroup(this, 'WafLogs', {
+      logGroupName: `aws-waf-logs-gede-${config.envName}-web`,
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    new wafv2.CfnLoggingConfiguration(this, 'WafLogging', {
+      resourceArn: this.webAcl.attrArn,
+      logDestinationConfigs: [
+        this.formatArn({
+          service: 'logs',
+          resource: 'log-group',
+          resourceName: wafLogs.logGroupName,
+          arnFormat: cdk.ArnFormat.COLON_RESOURCE_NAME,
+        }),
+      ],
+      redactedFields: WAF_REDACTED_HEADERS.map((name) => ({ singleHeader: { Name: name } })),
+    });
   }
 }
+
+/** Request headers WAF replaces with `REDACTED` in its log (`RedactedFields`). */
+export const WAF_REDACTED_HEADERS: readonly string[] = ['authorization', 'cookie'];
 
 /** `AWSManagedRulesCommonRuleSet` → `common-rules` (keeps the pre-existing metric name). */
 function metricSuffix(ruleGroup: string): string {
