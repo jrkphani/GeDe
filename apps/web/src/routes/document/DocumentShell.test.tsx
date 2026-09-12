@@ -190,7 +190,7 @@ describe('DocumentShell', () => {
     }
     const graph = screen.getByRole('button', { name: 'Add graph' });
     expect(graph).toHaveAttribute('aria-disabled', 'true');
-    expect(graph.title).toMatch(/Wave 2/);
+    expect(graph.title).toMatch(/arrives with the context graph release/);
     expect(graph).not.toBeDisabled(); // reachable, so the reason is available on hover and focus
     const addRow = screen.getByRole('button', { name: 'Add row' });
     expect(addRow).toHaveAttribute('aria-disabled', 'true');
@@ -223,9 +223,14 @@ describe('DocumentShell', () => {
     const format = screen.getByRole('button', { name: 'Format inspector' });
     expect(format).toHaveAttribute('aria-pressed', 'true'); // wide screens start open
     await userEvent.click(format);
-    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+    // INSP-02 / #64: collapsing leaves the 38 px strip, never removes the rail.
+    expect(screen.getByTestId('inspector')).toHaveAttribute('data-state', 'collapsed');
+    expect(format).toHaveAttribute('aria-pressed', 'false');
     await userEvent.click(screen.getByRole('button', { name: 'Organize inspector' }));
-    expect(screen.getByRole('complementary', { name: 'Organize inspector' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Organize inspector' })).toHaveAttribute(
+      'data-state',
+      'open',
+    );
   });
 
   it('DOC-03 sheet tabs carry ordinal, name and object count; + appends; selecting swaps contents, clears selection, resets to A1', async () => {
@@ -691,17 +696,27 @@ describe('DocumentShell', () => {
     ).toBeInTheDocument();
   });
 
-  it('KEYS-07 ⌥⌘I toggles the inspector; ⌥⌘1 and ⌥⌘2 pick Format and Organize', async () => {
+  it('KEYS-07 INSP-02 ⌥⌘I toggles the inspector between the rail and the 38 px strip; ⌥⌘1 and ⌥⌘2 pick Format and Organize', async () => {
     await openShell();
-    expect(screen.getByRole('complementary', { name: 'Format inspector' })).toBeInTheDocument();
+    const rail = () => screen.getByRole('complementary', { name: /inspector$/ });
+    expect(rail()).toHaveAttribute('data-state', 'open');
     fireEvent.keyDown(window, { code: 'KeyI', metaKey: true, altKey: true });
-    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+    expect(rail()).toHaveAttribute('data-state', 'collapsed');
+    expect(screen.getByRole('button', { name: 'Expand inspector' })).toBeInTheDocument();
     fireEvent.keyDown(window, { code: 'Digit2', metaKey: true, altKey: true });
-    expect(screen.getByRole('complementary', { name: 'Organize inspector' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Organize inspector' })).toHaveAttribute(
+      'data-state',
+      'open',
+    );
     fireEvent.keyDown(window, { code: 'Digit1', metaKey: true, altKey: true });
-    expect(screen.getByRole('complementary', { name: 'Format inspector' })).toBeInTheDocument();
+    expect(screen.getByRole('complementary', { name: 'Format inspector' })).toHaveAttribute(
+      'data-state',
+      'open',
+    );
     await userEvent.click(screen.getByRole('button', { name: 'Collapse inspector' }));
-    expect(screen.queryByRole('complementary')).not.toBeInTheDocument();
+    expect(rail()).toHaveAttribute('data-state', 'collapsed');
+    await userEvent.click(screen.getByRole('button', { name: 'Expand inspector' }));
+    expect(rail()).toHaveAttribute('data-state', 'open');
   });
 
   it('GRID-02 (partial: delete and hide are Wave 2) addresses recompute after a row is added above: the same cell reads one row lower', async () => {

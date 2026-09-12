@@ -289,3 +289,43 @@ Status key: **accepted** is in force; **superseded** points to the replacement.
 **Decision.** Sort, filter and grouping are viewer state, persisted per (user, document, table) on the device in `localStorage` under `gede.view.<sub>.<docId>` (`apps/web/src/doc/view-state.ts`), and wiped at sign-out together with the IndexedDB replicas ("Nothing is left on this device", AUTH-09). Band collapse stays per viewer, in memory. The document carries no view keys; the sync service never sees them. View changes are not undo steps (they are not document edits). `readGroupBy(store, tableId)` and `useTableView(tableId)` are the readers the hierarchy layer uses for HIER-08; the pure projection (`packages/core/src/sort`) is unchanged. Footer totals respect the viewer's own filter.
 
 **Consequences.** A view-only participant and a phone reader can sort and filter their own view; a collaborator's view never moves anyone else's rows; the two-replica guarantee is that the document is byte-identical whatever each viewer sorts. Views do not follow a user across devices (the locale does, through the server); if that is wanted later it is a per-user server record, never a document key. Migration: documents written by the previous build may carry the three keys; readers ignore them and nothing writes them.
+
+## ADR-027 Context menus are non-modal, open on their own long-press timer, and return focus to the selection
+
+**Status:** accepted, 2026-09-14
+
+**Context.** MENU-01..05 ask for cell, column, table, sheet and canvas menus that open from the pointer, from a long-press on tablet (RESP-03) and from the keyboard, close on Escape or a click outside, and return focus to the trigger. Radix ContextMenu is the primitive (non-negotiable 7). Three things in the way: a modal Radix menu marks the rest of the page `aria-hidden` while the focused cell stays focusable, which axe reports as `aria-hidden-focus` (serious); the grid's cells stop `pointerdown` propagating (the canvas would pan otherwise), so Radix's long-press timer, attached to the trigger region, never starts; and Radix returns focus to its trigger, which for a document-wide menu is the whole canvas rather than the cell that had it.
+
+**Decision.** One `ContextMenu` over the canvas, the tables and the sheet strip, `modal={false}`: nothing behind it is hidden, a click outside both closes the menu and lands where it was aimed (desktop parity), Escape closes. The menu resolves what it landed on from the DOM the grid renders (`data-table-id`, `data-row-id`, `data-col-id`, the header's `data-col-id`, the sheet tabs, the plane), so the menus keep no second model of the document. Long-press runs from the wrapper's capture phase with Radix's own 700 ms delay and 10 px slop, and opens the menu the way the keyboard does — a synthetic `contextmenu` at the point — so Shift+F10, the ContextMenu key, right-click and touch share one path. A scrollable menu is focusable (`tabIndex=0`) so it can be scrolled from the keyboard. On close, focus goes to the cell that is selected — the cell a command just inserted or the neighbour of one it deleted — and otherwise to the element that had it when the menu opened.
+
+**Consequences.** Every new surface passes axe with the menu open. A right-click selects the cell like a left-click does. Commands that other Wave 2 work provides (sort, filter, categories, graph) are present and disabled with the release that brings them (MENU-02), wired through `MenuSlots`.
+
+## ADR-028 Cell clipboard: async Clipboard API on the chords, native events as the second route, marks in a private flavour
+
+**Status:** accepted, 2026-09-14
+
+**Context.** KEYS-03 binds ⌘X ⌘C ⌘V ⌥⇧⌘V to a selected cell. A selected cell is a `gridcell` div, not an editable element, and Chromium raises no `paste` event for it — the editing command is disabled outside editable content — so the browser's native clipboard events cannot be the only route. The chords must also resolve by physical key (I18N-02) and stay out of the cell editor, which owns its own clipboard.
+
+**Decision.** The chords and the menu commands call the async Clipboard API: `write` with a `ClipboardItem` carrying `text/plain` and the cell's rich document under `web application/x-gede-rich+json` (Chromium's custom-format prefix), falling back to `writeText`; `read` looks for the rich flavour first, then `readText`. The native `cut` / `copy` / `paste` events are still handled for the selected cell (the browser's Edit menu and other hosts raise them) with the same two flavours on `clipboardData`. "Paste and match style" reads the text only; "Copy snapshot" writes the displayed, formatted value. Inside the editor none of the shell chords fire (`inEditors` is off), so ProseMirror's clipboard is untouched. Where the API is absent or refused the command says so through the live region rather than failing silently.
+
+**Consequences.** Marks survive copy and paste between cells in Chromium; other engines carry the text. `readText` prompts once for permission on first paste (gede.work is a secure context). The keyboard-bound copy claims ⌘C only while a cell is selected and not being edited; otherwise the browser keeps the chord.
+
+## ADR-029 Per-cell change counters make the memoised grid cell correct
+
+**Status:** accepted, 2026-09-14
+
+**Context.** The PR #57 review found that `Cell` re-rendered the whole table per keystroke: the table's deep observer bumped one counter and every cell read the document again. Memoising `Cell` alone would be wrong — a cell reads its text from the Yjs map during render, so with equal props a changed cell would never re-render.
+
+**Decision.** `grid/cell-versions.ts` keeps one deep observer per table and a counter per cell key: an event whose target sits under the `cells` or `cellFormat` map bumps that key (walking `parent` up to the map, because Yjs re-bases `event.path` on the outermost observed ancestor before deep observers run); an event that created or replaced either map bumps a bulk counter folded into every key. `Cell` takes `version` as a prop and is memoised with a by-value comparison of the two props the parent rebuilds each render (`cell`, `column`); traversal is read through a stable getter; a formula cell subscribes itself to the workbook index so a renamed label re-projects it. Structural changes (rows, columns, meta, selection) reach cells through their ordinary props.
+
+**Consequences.** A keystroke renders one cell (`cell-versions.test.tsx` counts renders); a column format change renders that column; a selection change renders the two cells whose state moved. The first cell-format override on a table renders every cell once (the map arrives), then one per change.
+
+## ADR-030 Collapse and expand keep the plain ⌥ arrows, and the shortcut sheet lists them as an addition to the handover map
+
+**Status:** accepted, 2026-09-14
+
+**Context.** ADR-025 added `⌥←` / `⌥→` for collapse and expand on the selected row — a keyboard route to the chevron that adds no tab stop per parent row (A11Y-01). They are not in `docs/handover/reference/shortcuts.md` (KEYS-01, KEYS-08), and `⌥←` / `⌥→` are the OS word-jump chords in text fields; `⌥⇧←` / `⌥⇧→` were the alternative.
+
+**Decision.** Keep `⌥←` / `⌥→`. They act only on a selected cell that is not being edited: the grid's keydown path handles them by physical key and the editor never sees them, so the word-jump convention is untouched wherever there is a caret — inside the cell editor, the title field and the Find field. The plain-⌥ arrow is also the disclosure convention outliners use (Finder's list view among them), and one modifier fewer under the finger matters on the 44 px targets below 1024 px. The shortcut sheet lists them under "Table and cells" as "Collapse / expand row" with an `extra` marker naming this decision, and `shortcut-map.test.ts` pins the sheet to the handover reference plus exactly this row, and the shell's `CHORDS` to `HIER_CHORDS`, so neither table can drift from the other.
+
+**Consequences.** `docs/handover/reference/shortcuts.md` is the handover document and is not edited; the product's map is the sheet. Any further chord beyond the reference must carry an ADR the same way.

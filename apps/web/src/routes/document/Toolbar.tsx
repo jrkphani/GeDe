@@ -28,6 +28,10 @@ export interface ToolbarProps {
   tableMenu?: ReactNode | undefined;
   /** FIND-01: the magnifier opens the Find bar. */
   onFind: () => void;
+  /** KEYS-01 / KEYS-08: the `?` sheet's other route. */
+  onShortcuts: () => void;
+  /** SORT-01..06: Sort and Filter open the Organize inspector, where the viewer's options live. */
+  onOrganize: () => void;
 }
 
 interface ToolProps {
@@ -156,10 +160,12 @@ export function Toolbar({
   onInspector,
   tableMenu,
   onFind,
+  onShortcuts,
+  onOrganize,
 }: ToolbarProps) {
   const viewOnly = editable ? undefined : 'you have view-only access';
   const needsTable = viewOnly ?? (hasTable ? undefined : 'select a table first');
-  const wave2 = 'arrives in Wave 2';
+  const graphSoon = 'arrives with the context graph release';
   const zoomEntries: MenuEntry[] = [
     ...ZOOM_PRESETS.map<MenuEntry>((z) => ({
       kind: 'item',
@@ -193,12 +199,12 @@ export function Toolbar({
           onClick={onAddColumn}
           disabledReason={needsTable}
         />
-        <Tool icon="graph" label="Add graph" disabledReason={`graphs ${wave2}`} />
+        <Tool icon="graph" label="Add graph" disabledReason={graphSoon} />
       </Cluster>
       {tableMenu !== undefined && <Cluster label="Table">{tableMenu}</Cluster>}
       <Cluster label="Arrange">
-        <Tool icon="pin" label="Pin to viewport" disabledReason={`pinning ${wave2}`} />
-        <Tool icon="edges" label="DAG edges" disabledReason={`edges ${wave2}`} />
+        <Tool icon="pin" label="Pin to viewport" disabledReason={graphSoon} />
+        <Tool icon="edges" label="DAG edges" disabledReason={graphSoon} />
       </Cluster>
       <Cluster label="Data">
         <Tool
@@ -209,8 +215,22 @@ export function Toolbar({
             onGridlines(!gridlines);
           }}
         />
-        <Tool icon="filter" label="Filter" disabledReason={`filters ${wave2}`} />
-        <Tool icon="sort" label="Sort" disabledReason={`sorting ${wave2}`} />
+        <Tool
+          icon="filter"
+          label="Filter"
+          shortcut={LABELS.organizeInspector}
+          ariaKeys={ARIA_KEYS.organizeInspector}
+          onClick={onOrganize}
+          disabledReason={hasTable ? undefined : 'select a table first'}
+        />
+        <Tool
+          icon="sort"
+          label="Sort"
+          shortcut={LABELS.organizeInspector}
+          ariaKeys={ARIA_KEYS.organizeInspector}
+          onClick={onOrganize}
+          disabledReason={hasTable ? undefined : 'select a table first'}
+        />
       </Cluster>
       <span className="gd-doc__toolgap" />
       <Cluster label="Find">
@@ -258,6 +278,15 @@ export function Toolbar({
           shortcut={LABELS.fit}
           ariaKeys={ARIA_KEYS.fit}
           onClick={onFit}
+        />
+      </Cluster>
+      <Cluster label="Help">
+        <Tool
+          icon="keyboard"
+          label="Keyboard shortcuts"
+          shortcut={LABELS.shortcutSheet}
+          ariaKeys={ARIA_KEYS.shortcutSheet}
+          onClick={onShortcuts}
         />
       </Cluster>
       <Cluster label="Inspectors">

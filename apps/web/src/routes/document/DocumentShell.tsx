@@ -2,6 +2,8 @@ import clsx from 'clsx';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
+  cellAddress,
+  cellRich,
   createSheet,
   createTable,
   LATTICE,
@@ -11,22 +13,29 @@ import {
   tableMap,
   tablesOnSheet,
   tableUnitBounds,
+  toggleMarkThroughout,
   toPresenceState,
   unitBoundsToPx,
   type Id,
   type PresenceState,
+  type ToggleMark,
 } from '@gede/core';
 import { below, theme } from '@gede/tokens';
 import { Banner, Button, Skeleton, useLoadingTiers, type LoadingTiers } from '@gede/ui';
 
 import { announce } from '../../announce.js';
-import { getDocument, permissionOf, type DocumentSummary } from '../../api/documents.js';
+import {
+  createDocument,
+  getDocument,
+  permissionOf,
+  type DocumentSummary,
+} from '../../api/documents.js';
 import { signOutLocal } from '../../auth/cognito.js';
 import { rememberReturnTo, useSession } from '../../auth/session.js';
 import { ApiError } from '../../api/client.js';
 import { usePresenceColour } from '../../doc/presence.js';
 import { rememberLastDocument } from '../../last-document.js';
-import { CHORDS, LABELS, useShortcuts, type ShortcutBinding } from '../../doc/shortcuts.js';
+import { useShortcuts } from '../../doc/shortcuts.js';
 import {
   CLOSE_FORBIDDEN,
   CLOSE_NOT_FOUND,
@@ -50,8 +59,10 @@ import {
   type Size,
   type Viewport,
 } from '../../doc/viewport.js';
+import { useLocale } from '../../locale.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { Canvas } from './Canvas.js';
+import { toFormatLocale } from './cell/index.js';
 import { FindBar } from './find/FindBar.js';
 import { MatchHighlights } from './find/MatchHighlights.js';
 import { matchBounds } from './find/match-geometry.js';
@@ -60,7 +71,7 @@ import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2
 import { pinnedPanelOffset } from './grid/pinned.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
-import { useSortCommands } from './sort/index.js';
+import { SortPanel, useSortCommands } from './sort/index.js';
 import {
   NULL_VIEW_STORE,
   openViewStore,
@@ -68,6 +79,11 @@ import {
   ViewStoreProvider,
 } from '../../doc/view-state.js';
 import { Inspector } from './Inspector.js';
+import { documentBindings } from './keys/bindings.js';
+import { useCellClipboard } from './keys/clipboard.js';
+import { ShortcutSheet } from './keys/ShortcutSheet.js';
+import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
+import type { MenuContext } from './menus/entries.js';
 import { SheetTabs } from './SheetTabs.js';
 import { TableView } from './TableView.js';
 import { TitleBar } from './TitleBar.js';
@@ -226,8 +242,14 @@ function OpenDocument({
   const [viewport, setViewport] = useState<Viewport>(INITIAL_VIEWPORT);
   const [size, setSize] = useState<Size>({ width: 0, height: 0 });
   const [gridlines, setGridlines] = useState(true);
-  const [inspector, setInspector] = useState<InspectorMode | null>(() => (wide ? 'format' : null));
+  // INSP-02 / RESP-04: the rail is always present above phone width — docked at 322 px or
+  // collapsed to a 38 px strip. It starts open from 1200 px and collapsed below.
+  const [inspectorMode, setInspectorMode] = useState<InspectorMode>('format');
+  const [inspectorOpen, setInspectorOpen] = useState(() => wide);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [renameError, setRenameError] = useState<string | null>(null);
+  const [activeLocale] = useLocale();
+  const locale = toFormatLocale(activeLocale);
 
   const tables = activeSheetId === null ? [] : tablesOnSheet(gd, activeSheetId);
   const selectedTable = selection === null ? null : tableById(gd, selection.tableId);
@@ -403,163 +425,174 @@ function OpenDocument({
   );
   const find = useFind({ gd, docId: doc.id, editable, navigation: findNavigation });
 
-  // -- keyboard (KEYS-07, KEYS-06, KEYS-04) -----------------------------------
-  const bindings: ShortcutBinding[] = [
-    // Find first: ⌘F and friends work from the Find field too (inEditors), and
-    // Esc closes the bar before it would clear the selection.
-    {
-      id: 'find',
-      chord: CHORDS.find,
-      label: LABELS.find,
-      run: () => {
-        find.actions.open();
+  // -- clipboard (KEYS-03, MENU-04) --------------------------------------------
+  const addressOf = useCallback(
+    (c: { tableId: Id; rowId: Id; colId: Id }) => {
+      const table = tableMap(gd, c.tableId);
+      return (table === null ? null : cellAddress(table, c.rowId, c.colId)) ?? 'the cell';
+    },
+    [gd],
+  );
+  const clipboard = useCellClipboard({
+    gd,
+    cell,
+    editing: editing !== null,
+    editable,
+    locale,
+    commands: grid.commands,
+    addressOf,
+  });
+
+  // -- marks on a selected cell (KEYS-05, INSP-06) -----------------------------
+  const toggleMark = useCallback(
+    (mark: ToggleMark) => {
+      if (cell === null || editing !== null || !editable) return;
+      const table = tableMap(gd, cell.tableId);
+      if (table === null) return;
+      const next = toggleMarkThroughout(cellRich(table, cell.rowId, cell.colId), mark);
+      grid.commands.commitRichCell(cell, next);
+    },
+    [gd, cell, editing, editable, grid],
+  );
+
+  // -- keyboard (KEYS-01..07): one map, listed by the shortcut sheet --------------
+  const showInspector = useCallback((mode: InspectorMode) => {
+    setInspectorMode(mode);
+    setInspectorOpen(true);
+  }, []);
+  useShortcuts(
+    documentBindings({
+      phone,
+      editable,
+      cell,
+      editing: editing !== null,
+      hasSelection: selection !== null,
+      find: {
+        open: find.state.open,
+        show: find.actions.open,
+        close: find.actions.close,
+        next: find.actions.next,
+        previous: find.actions.previous,
       },
-      inEditors: true,
-    },
-    {
-      id: 'findReplace',
-      chord: CHORDS.findReplace,
-      label: LABELS.findReplace,
-      run: () => {
-        find.actions.open({ replace: true });
+      document: {
+        newWorkscape: () => {
+          createDocument()
+            .then((created) => navigate(`/d/${created.id}?new=1`))
+            .catch(() => {
+              announce('Could not create a workscape');
+            });
+        },
+        open: () => {
+          void navigate('/');
+        },
+        print: () => {
+          window.print();
+        },
+        close: () => {
+          void navigate('/');
+        },
       },
-      inEditors: true,
-      disabled: phone,
-    },
-    {
-      id: 'findNext',
-      chord: CHORDS.findNext,
-      label: LABELS.findNext,
-      run: find.actions.next,
-      inEditors: true,
-      disabled: !find.state.open,
-    },
-    {
-      id: 'findPrevious',
-      chord: CHORDS.findPrevious,
-      label: LABELS.findPrevious,
-      run: find.actions.previous,
-      inEditors: true,
-      disabled: !find.state.open,
-    },
-    {
-      id: 'closeFind',
-      chord: CHORDS.escape,
-      label: LABELS.escape,
-      run: find.actions.close,
-      inEditors: true,
-      disabled: !find.state.open,
-    },
-    {
-      id: 'zoomIn',
-      chord: CHORDS.zoomIn,
-      label: LABELS.zoomIn,
-      run: () => {
-        zoomStep(ZOOM_STEP);
+      view: {
+        zoomIn: () => {
+          zoomStep(ZOOM_STEP);
+        },
+        zoomOut: () => {
+          zoomStep(1 / ZOOM_STEP);
+        },
+        actualSize: () => {
+          zoomPreset(1);
+        },
+        fit,
+        nextSheet: () => {
+          stepSheet(1);
+        },
+        previousSheet: () => {
+          stepSheet(-1);
+        },
+        toggleInspector: () => {
+          setInspectorOpen((o) => !o);
+        },
+        showInspector,
+        toggleShortcutSheet: () => {
+          setShortcutsOpen((o) => !o);
+        },
       },
-    },
-    // ⌘+ is ⌘⇧= on most layouts; accept both physical spellings.
-    {
-      id: 'zoomInShift',
-      chord: { ...CHORDS.zoomIn, shift: true },
-      label: LABELS.zoomIn,
-      run: () => {
-        zoomStep(ZOOM_STEP);
+      edit: {
+        undo: () => session.undo.undo(),
+        redo: () => session.undo.redo(),
+        selectAll: () => {
+          if (selection !== null) selectTable(selection.tableId);
+        },
+        clear: () => {
+          if (cell !== null) grid.commands.clearCell(cell);
+        },
+        clearSelection,
+        toggleMark,
       },
-    },
-    {
-      id: 'zoomOut',
-      chord: CHORDS.zoomOut,
-      label: LABELS.zoomOut,
-      run: () => {
-        zoomStep(1 / ZOOM_STEP);
+      table: { addRow: addRowToSelected, addColumn: addColumnToSelected },
+      clipboard,
+      hierarchy: {
+        nest: (c) => grid.commands.nestRow(c.tableId, c.rowId),
+        promote: (c) => grid.commands.promoteRow(c.tableId, c.rowId),
+        collapse: (c) => grid.commands.setCollapsed(c.tableId, c.rowId, true),
+        expand: (c) => grid.commands.setCollapsed(c.tableId, c.rowId, false),
       },
-    },
-    {
-      id: 'actualSize',
-      chord: CHORDS.actualSize,
-      label: LABELS.actualSize,
-      run: () => {
+    }),
+  );
+
+  // -- context menus (MENU-01..05) ----------------------------------------------
+  const menuContext: MenuContext = {
+    gd,
+    editable,
+    commands: grid.commands,
+    clipboard,
+    selectedCell: cell,
+    canvas: {
+      addTable: () => {
+        addTable();
+      },
+      fit,
+      actualSize: () => {
         zoomPreset(1);
       },
     },
-    { id: 'fit', chord: CHORDS.fit, label: LABELS.fit, run: fit },
-    {
-      id: 'nextSheet',
-      chord: CHORDS.nextSheet,
-      label: LABELS.nextSheet,
-      run: () => {
-        stepSheet(1);
+    sheets: { add: appendSheet },
+    slots: {
+      // SORT-01..06 (#74): the viewer's own sort, filter and grouping; the options live in
+      // the Organize inspector, so "show … options" opens it.
+      sort: {
+        sortAscending: (tableId, colId) => {
+          sort.setSort(tableId, colId, 'az');
+        },
+        sortDescending: (tableId, colId) => {
+          sort.setSort(tableId, colId, 'za');
+        },
+        showSortOptions: () => {
+          showInspector('organize');
+        },
+        quickFilter: () => {
+          showInspector('organize');
+        },
+        showFilterOptions: () => {
+          showInspector('organize');
+        },
       },
-      inEditors: true,
-    },
-    {
-      id: 'previousSheet',
-      chord: CHORDS.previousSheet,
-      label: LABELS.previousSheet,
-      run: () => {
-        stepSheet(-1);
+      hierarchy: {
+        isCategory: (tableId, colId) => sort.view(tableId)?.groupBy === colId,
+        addCategory: (tableId, colId) => {
+          sort.setGroupBy(tableId, colId);
+        },
+        removeCategory: (tableId) => {
+          sort.setGroupBy(tableId, null);
+        },
+        showCategoryOptions: () => {
+          showInspector('organize');
+        },
       },
-      inEditors: true,
+      // slot: graph — "Graph this table" waits for the context graph release.
+      graph: undefined,
     },
-    {
-      id: 'inspector',
-      chord: CHORDS.inspector,
-      label: LABELS.inspector,
-      run: () => {
-        setInspector((m) => (m === null ? 'format' : null));
-      },
-      disabled: phone,
-    },
-    {
-      id: 'formatInspector',
-      chord: CHORDS.formatInspector,
-      label: LABELS.formatInspector,
-      run: () => {
-        setInspector('format');
-      },
-      disabled: phone,
-    },
-    {
-      id: 'organizeInspector',
-      chord: CHORDS.organizeInspector,
-      label: LABELS.organizeInspector,
-      run: () => {
-        setInspector('organize');
-      },
-      disabled: phone,
-    },
-    {
-      id: 'addRow',
-      chord: CHORDS.addRow,
-      label: LABELS.addRow,
-      run: addRowToSelected,
-      disabled: !editable,
-    },
-    {
-      id: 'addColumn',
-      chord: CHORDS.addColumn,
-      label: LABELS.addColumn,
-      run: addColumnToSelected,
-      disabled: !editable,
-    },
-    {
-      id: 'undo',
-      chord: CHORDS.undo,
-      label: LABELS.undo,
-      run: () => session.undo.undo(),
-      disabled: !editable,
-    },
-    {
-      id: 'redo',
-      chord: CHORDS.redo,
-      label: LABELS.redo,
-      run: () => session.undo.redo(),
-      disabled: !editable,
-    },
-    { id: 'escape', chord: CHORDS.escape, label: LABELS.escape, run: clearSelection },
-  ];
-  useShortcuts(bindings);
+  };
 
   // -- render -----------------------------------------------------------------
   const range = visibleRange(
@@ -584,7 +617,8 @@ function OpenDocument({
     <div
       className={clsx('gd-doc', {
         'gd-doc--phone': phone,
-        'gd-doc--inspector': inspector !== null && !phone,
+        'gd-doc--inspector': inspectorOpen && !phone,
+        'gd-doc--inspector-strip': !inspectorOpen && !phone,
       })}
       data-replica={replica}
       data-sync={sync.status}
@@ -610,7 +644,7 @@ function OpenDocument({
           gridlines={gridlines}
           hasTable={selection !== null}
           editable={editable}
-          inspector={inspector}
+          inspector={inspectorOpen ? inspectorMode : null}
           onAddTable={() => {
             addTable();
           }}
@@ -628,9 +662,18 @@ function OpenDocument({
           }}
           onZoomTo={zoomPreset}
           onFit={fit}
-          onInspector={setInspector}
+          onInspector={(mode) => {
+            if (mode === null) setInspectorOpen(false);
+            else showInspector(mode);
+          }}
           onFind={() => {
             find.actions.open();
+          }}
+          onShortcuts={() => {
+            setShortcutsOpen(true);
+          }}
+          onOrganize={() => {
+            showInspector('organize');
           }}
         />
       )}
@@ -717,109 +760,135 @@ function OpenDocument({
         )}
       </div>
 
-      <div className="gd-doc__main">
-        <Skeleton
-          active={!ready}
-          tiers={tiers}
-          rows={8}
-          statusLabel={`Loading ${doc.title}`}
-          className="gd-doc__skeleton"
-        >
-          <Canvas
-            viewport={viewport}
-            onViewportChange={setViewport}
-            onSizeChange={onSizeChange}
-            gridlines={gridlines}
-            onClearSelection={clearSelection}
-            onPlaceTable={
-              editable
-                ? (at) => {
-                    addTable(at);
-                  }
-                : undefined
-            }
+      {/* MENU-01..05: one context menu over the canvas, the tables and the sheet strip. */}
+      <DocumentContextMenu gd={gd} phone={phone} context={menuContext} actions={grid.actions}>
+        <div className="gd-doc__main">
+          <Skeleton
+            active={!ready}
+            tiers={tiers}
+            rows={8}
+            statusLabel={`Loading ${doc.title}`}
+            className="gd-doc__skeleton"
           >
-            {visibleTables.map((t) => {
-              const map = tableMap(gd, t.id);
-              if (map === null) return null;
-              return (
-                <TableView
-                  key={t.id}
-                  table={map}
-                  tier={tier}
-                  selected={selection?.tableId === t.id}
-                  selectedCell={cell !== null && cell.tableId === t.id ? cell : null}
-                  editing={editing !== null && editing.cell.tableId === t.id ? editing : null}
-                  editable={editable}
-                  presence={onSheet}
-                  pinnedLeft={pinnedPanelOffset(t, viewport.x / viewport.zoom)}
-                  undo={session.undo}
-                  actions={grid.actions}
-                  commands={grid.commands}
-                  sort={phone ? undefined : sort}
-                />
-              );
-            })}
-            {/* FIND-06: amber match highlights, in the layer so they pan and zoom with the tables. */}
-            <MatchHighlights
-              gd={gd}
-              matches={find.state.matches}
-              current={find.state.current}
-              sheetId={activeSheetId}
-              viewportLeftPx={viewport.x / viewport.zoom}
-            />
-            {/* wave2/formulas mount point: FX-08 outlines for the selected or edited formula */}
-            <FormulaLayer
-              gd={gd}
-              sheetId={activeSheetId}
-              zoom={viewport.zoom}
-              selected={cell}
-              editing={editing?.cell ?? null}
-            />
-            {ready && tables.length === 0 && (
-              <div className="gd-canvas__empty" style={emptyStyle()}>
-                <span className="gd-mono gd-canvas__empty-label">empty sheet</span>
-                {editable ? (
-                  <Button
-                    size="sm"
-                    variant="primary"
-                    onPointerDown={(e) => {
-                      e.stopPropagation();
-                    }}
-                    onClick={() => {
-                      addTable();
-                    }}
-                  >
-                    Place first table
-                  </Button>
-                ) : (
-                  <span className="gd-canvas__empty-text">Nothing on this sheet yet</span>
-                )}
-              </div>
-            )}
-          </Canvas>
-        </Skeleton>
-        {/* FIND-02: the Find bar floats at the foot of the canvas and never displaces content. */}
-        <FindBar gd={gd} find={find} editable={editable} phone={phone} />
-        {inspector !== null && !phone && (
-          <Inspector
+            <Canvas
+              viewport={viewport}
+              onViewportChange={setViewport}
+              onSizeChange={onSizeChange}
+              gridlines={gridlines}
+              onClearSelection={clearSelection}
+              onPlaceTable={
+                editable
+                  ? (at) => {
+                      addTable(at);
+                    }
+                  : undefined
+              }
+            >
+              {visibleTables.map((t) => {
+                const map = tableMap(gd, t.id);
+                if (map === null) return null;
+                return (
+                  <TableView
+                    key={t.id}
+                    table={map}
+                    tier={tier}
+                    selected={selection?.tableId === t.id}
+                    selectedCell={cell !== null && cell.tableId === t.id ? cell : null}
+                    editing={editing !== null && editing.cell.tableId === t.id ? editing : null}
+                    editable={editable}
+                    presence={onSheet}
+                    pinnedLeft={pinnedPanelOffset(t, viewport.x / viewport.zoom)}
+                    undo={session.undo}
+                    actions={grid.actions}
+                    commands={grid.commands}
+                    sort={phone ? undefined : sort}
+                  />
+                );
+              })}
+              {/* FIND-06: amber match highlights, in the layer so they pan and zoom with the tables. */}
+              <MatchHighlights
+                gd={gd}
+                matches={find.state.matches}
+                current={find.state.current}
+                sheetId={activeSheetId}
+                viewportLeftPx={viewport.x / viewport.zoom}
+              />
+              {/* wave2/formulas mount point: FX-08 outlines for the selected or edited formula */}
+              <FormulaLayer
+                gd={gd}
+                sheetId={activeSheetId}
+                zoom={viewport.zoom}
+                selected={cell}
+                editing={editing?.cell ?? null}
+              />
+              {ready && tables.length === 0 && (
+                <div className="gd-canvas__empty" style={emptyStyle()}>
+                  <span className="gd-mono gd-canvas__empty-label">empty sheet</span>
+                  {editable ? (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                      }}
+                      onClick={() => {
+                        addTable();
+                      }}
+                    >
+                      Place first table
+                    </Button>
+                  ) : (
+                    <span className="gd-canvas__empty-text">Nothing on this sheet yet</span>
+                  )}
+                </div>
+              )}
+            </Canvas>
+          </Skeleton>
+          {/* FIND-02: the Find bar floats at the foot of the canvas and never displaces content. */}
+          <FindBar
             gd={gd}
-            mode={inspector}
-            selection={selection}
-            onClose={() => {
-              setInspector(null);
-            }}
+            find={find}
+            editable={editable}
+            phone={phone}
+            resultsInInspector={inspectorOpen && !phone}
           />
-        )}
-      </div>
+          {!phone && (
+            <Inspector
+              gd={gd}
+              mode={inspectorMode}
+              open={inspectorOpen}
+              onOpenChange={setInspectorOpen}
+              selection={selection}
+              editing={editing !== null}
+              editable={editable}
+              commands={grid.commands}
+              find={find}
+              onToggleMark={toggleMark}
+              slots={{
+                // SORT-01..06 (#74): one panel carries Categories, Sort and Filter; the three
+                // Organize tabs all open it.
+                hierarchy: (
+                  <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />
+                ),
+                sort: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
+                filter: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
+                // slot: derive (references #77) / graph (context graph release).
+                derive: undefined,
+                graph: undefined,
+              }}
+            />
+          )}
+        </div>
 
-      <SheetTabs
-        gd={gd}
-        activeSheetId={activeSheetId}
-        onSelect={selectSheet}
-        onAppend={editable ? appendSheet : undefined}
-        bottom={phone}
-      />
+        <SheetTabs
+          gd={gd}
+          activeSheetId={activeSheetId}
+          onSelect={selectSheet}
+          onAppend={editable ? appendSheet : undefined}
+          bottom={phone}
+        />
+      </DocumentContextMenu>
+      <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       {selectedTable !== null && (
         <span className="gd-visually-hidden" data-testid="selected-table">
           {selectedTable.title}

@@ -14,6 +14,7 @@ import {
 import {
   cellFormatFor,
   cellFragment,
+  cellKey,
   cellRich,
   columnLetter,
   distributeUnits,
@@ -47,7 +48,6 @@ import type * as Y from 'yjs';
 import { announce } from '../../announce.js';
 import { ARIA_KEYS } from '../../doc/shortcuts.js';
 import type { ZoomTier } from '../../doc/viewport.js';
-import { useYVersion } from '../../doc/use-y.js';
 import {
   nextCell,
   type CellSelection,
@@ -64,6 +64,8 @@ import {
   isFormulaInput,
   projectSource,
 } from './formula/index.js'; // wave2/formulas
+import { useWorkbookIndexVersion } from '../../doc/workbook-index.js';
+import { useCellVersions } from './grid/cell-versions.js';
 import { readOnlyLabel, type GridCommands } from './grid/commands.js';
 import { HIER_ARIA_KEYS, hierarchyKey } from './grid/hier-keys.js';
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
@@ -159,7 +161,9 @@ export const TableView = memo(function TableView({
   commands,
   sort,
 }: TableViewProps) {
-  const version = useYVersion(table);
+  // Per-cell counters (not just the table's): a keystroke re-renders its own cell only.
+  const versions = useCellVersions(table);
+  const version = versions.table;
   const [activeLocale] = useLocale();
   const locale = toFormatLocale(activeLocale);
   // One record per document change: its `rows` and `columns` keep identity between
@@ -275,13 +279,18 @@ export const TableView = memo(function TableView({
     },
     [actions, record.id],
   );
-  const traversal: TraversalTable = useMemo(
+  // The cells read the traversal through a stable getter: `record` (and so `columns`) is
+  // rebuilt on every document change, and a fresh object per render would invalidate every
+  // memoised cell on each keystroke. The getter's identity never changes.
+  const traversalRef = useRef<TraversalTable>({ rows: [], columns: [] });
+  traversalRef.current = useMemo(
     () => ({
       rows: stableVisibleRows,
       columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
     }),
     [stableVisibleRows, record.columns],
   );
+  const traversal = useMemo(() => () => traversalRef.current, []);
   // GRID-04: the read-only reason is a column fact (source) or a row fact (group band);
   // resolve each once per render rather than re-reading the Yjs column array per cell.
   const columnOrdinal = new Map<Id, number>(record.columns.map((c, i) => [c.id, i]));
@@ -553,6 +562,7 @@ export const TableView = memo(function TableView({
                               // own wraps all of its cells. Other cells in a two-unit row stay one line.
                               wrap={col.wrap || rowWrapped}
                               other={other}
+                              version={versions.of(cellKey(rowId, col.id))}
                               traversal={traversal}
                               actions={actions}
                               commands={commands}
@@ -902,9 +912,116 @@ interface CellProps {
   freezeEdge: boolean;
   wrap: boolean;
   other: PresenceState | undefined;
-  traversal: TraversalTable;
+  /**
+   * The cell's own change counter (`grid/cell-versions.ts`): the one prop
+   * that changes when this cell's text or format override changes, so the
+   * memoised cell re-reads the document exactly then.
+   */
+  version: number;
+  traversal: () => TraversalTable;
   actions: GridActions;
   commands: GridCommands;
+}
+
+/** The outline row is rebuilt per render too (HIER-04); compare what the cell draws. */
+function outlineRowsEqual(a: OutlineRow | null, b: OutlineRow | null): boolean {
+  if (a === b) return true;
+  if (a === null || b === null) return false;
+  return (
+    a.id === b.id &&
+    a.depth === b.depth &&
+    a.collapsed === b.collapsed &&
+    a.hidden === b.hidden &&
+    a.hasChildren === b.hasChildren &&
+    a.parent === b.parent &&
+    a.splitChild === b.splitChild &&
+    a.canNest === b.canNest &&
+    a.canPromote === b.canPromote
+  );
+}
+
+/**
+ * Every prop the comparison below covers. Typed against `CellProps` so that a
+ * prop added to the cell without a line here fails to compile, rather than
+ * silently never re-rendering the memoised cell.
+ */
+const COMPARED_CELL_PROPS = {
+  table: true,
+  cell: true,
+  widthPx: true,
+  tier: true,
+  address: true,
+  selected: true,
+  tabStop: true,
+  editing: true,
+  editable: true,
+  readOnly: true,
+  outline: true,
+  outlineLocked: true,
+  column: true,
+  locale: true,
+  undo: true,
+  frozen: true,
+  freezeEdge: true,
+  wrap: true,
+  other: true,
+  version: true,
+  traversal: true,
+  actions: true,
+  commands: true,
+} as const satisfies Record<keyof CellProps, true>;
+
+/**
+ * Props equality for the memoised cell. `cell`, `column` and `outline` are
+ * rebuilt by the parent every render, so they compare by value; everything
+ * else is stable by construction or is a primitive.
+ */
+function cellPropsEqual(a: CellProps, b: CellProps): boolean {
+  if (Object.keys(a).some((key) => !(key in COMPARED_CELL_PROPS))) return false;
+  if (
+    a.table !== b.table ||
+    a.cell.tableId !== b.cell.tableId ||
+    a.cell.rowId !== b.cell.rowId ||
+    a.cell.colId !== b.cell.colId ||
+    a.widthPx !== b.widthPx ||
+    a.tier !== b.tier ||
+    a.address !== b.address ||
+    a.selected !== b.selected ||
+    a.tabStop !== b.tabStop ||
+    a.editing !== b.editing ||
+    a.editable !== b.editable ||
+    a.readOnly !== b.readOnly ||
+    a.outlineLocked !== b.outlineLocked ||
+    !outlineRowsEqual(a.outline, b.outline) ||
+    a.locale !== b.locale ||
+    a.undo !== b.undo ||
+    a.frozen !== b.frozen ||
+    a.freezeEdge !== b.freezeEdge ||
+    a.wrap !== b.wrap ||
+    a.other !== b.other ||
+    a.version !== b.version ||
+    a.traversal !== b.traversal ||
+    a.actions !== b.actions ||
+    a.commands !== b.commands
+  ) {
+    return false;
+  }
+  const c = a.column;
+  const d = b.column;
+  return (
+    c.id === d.id &&
+    c.label === d.label &&
+    c.width === d.width &&
+    c.hidden === d.hidden &&
+    c.wrap === d.wrap &&
+    c.source === d.source &&
+    c.format === d.format &&
+    c.formatOpts.decimals === d.formatOpts.decimals &&
+    c.formatOpts.grouping === d.formatOpts.grouping &&
+    c.formatOpts.currency === d.formatOpts.currency &&
+    c.formatOpts.datePattern === d.formatOpts.datePattern &&
+    c.formatOpts.textCase === d.formatOpts.textCase
+  );
 }
 
 function arrowDirection(code: string): Direction | null {
@@ -922,7 +1039,7 @@ function arrowDirection(code: string): Direction | null {
   }
 }
 
-function Cell({
+const Cell = memo(function Cell({
   table,
   cell,
   widthPx,
@@ -952,6 +1069,9 @@ function Cell({
   // FX-07 / PRD §20: a formula cell's label, tooltip and editor text are the projected
   // expression (today's addresses), never the stored id tokens; at rest it shows its value.
   const formula = isFormulaInput(source);
+  // A formula cell re-projects when the workbook index changes (a label it names was
+  // renamed, a row moved); text cells never subscribe, so the memoised cell stays put.
+  useWorkbookIndexVersion(formula ? table.doc : null);
   const shown = formula && table.doc !== null ? projectSource(table.doc, source) : null;
   const format = cellFormatFor(table, column, cell.rowId);
   const layout = layoutCell(shown === null ? rich : richFromText(shown), format, locale);
@@ -1046,7 +1166,7 @@ function Cell({
       case 'Tab': {
         if (mod || e.altKey) return; // ⌃⇥ switches sheets (the shell binds it)
         const direction: Direction = e.shiftKey ? 'left' : 'right';
-        const result = nextCell(traversal, cell, direction);
+        const result = nextCell(traversal(), cell, direction);
         // Nowhere to go inside the grid: let focus leave it (A11Y-01).
         if (result.kind === 'stay' || (result.kind === 'append-row' && !editable)) return;
         e.preventDefault();
@@ -1152,6 +1272,8 @@ function Cell({
       }}
       onKeyDown={onKeyDown}
       data-address={address}
+      data-row-id={cell.rowId}
+      data-col-id={cell.colId}
       data-read-only={readOnly ?? undefined}
     >
       {outline !== null && <OutlineMarks row={outline} control={chevronControl} />}
@@ -1194,4 +1316,4 @@ function Cell({
       )}
     </div>
   );
-}
+}, cellPropsEqual);
