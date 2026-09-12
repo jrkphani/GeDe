@@ -341,6 +341,8 @@ The bucket is `DESTROY` with a lifecycle expiry: logs are evidence for an incide
 
 ## 17. Account hygiene left to a person (#116)
 
+**Done 2026-09-13** (by the orchestrator, authorised): the five log groups below were deleted (all `storedBytes` 0, no retention) and the ECR registry scanning rule was applied (`BASIC`, `SCAN_ON_PUSH`, `cdk-hnb659fds-container-assets-*`). The commands stay here for the next account.
+
 **Orphaned CodeBuild log groups.** Before #43 each CodeBuild project logged to its own never-expiring group. The pipeline now logs everything to `GeDe-Pipeline-BuildLogs…` (30 days), but the five old groups remain, empty (`storedBytes` 0 on 2026-09-13) and without retention. Not a CDK resource, so not deleted by the pipeline; delete them once by hand:
 
 ```bash
