@@ -2,10 +2,10 @@
  * REST under `/api` (ARCHITECTURE §1.3 "Documents & Sharing API"). Every route
  * here runs behind the auth hook; `request.user` is always set.
  *
- * Library (LIB-01, LIB-02, LIB-07, LIB-08), profile (AUTH-09, I18N-05) and
- * the single-document routes. Share and invite *writes* (SHARE-01, SHARE-02)
- * are Wave 3; only the participant read model exists here. Link access is
- * not granted yet — see the TODO in `permissions.ts`.
+ * Library (LIB-01, LIB-02, LIB-08), profile (AUTH-09, I18N-05) and the
+ * single-document routes. Sharing — the participant list, invitations,
+ * permission changes, link access, stop sharing (LIB-07, SHARE-01, SHARE-02)
+ * — is in `share.ts`, registered from here under the same hooks.
  */
 import { randomUUID } from 'node:crypto';
 
@@ -17,19 +17,21 @@ import { encodeSeededDocument } from '@gede/core';
 import { currentUser, requireUser, toAuthUser, type AuthUser, type UserResolver } from '../auth.js';
 import type { Deps } from '../deps.js';
 import { AppError } from '../errors.js';
-import { canEdit, requirePermission } from '../permissions.js';
+import { requirePermission } from '../permissions.js';
 import type { ProjectionWorker } from '../projection/worker.js';
-import type {
-  DocumentListing,
-  DocumentPermission,
-  DocumentRecord,
-  DocumentSummary,
-  ParticipantList,
-  ProfilePatch,
+import {
+  EmailTakenError,
+  type DocumentListing,
+  type DocumentPermission,
+  type DocumentRecord,
+  type DocumentSummary,
+  type ProfilePatch,
 } from '../repo/types.js';
 import { documentPrefix, snapshotKey } from '../s3.js';
 import type { RoomManager } from '../ws/room-manager.js';
 import { CLOSE_NOT_FOUND } from '../ws/route.js';
+import { NOT_FOUND, oneLine, parse, parseId } from './parse.js';
+import { registerShareRoutes } from './share.js';
 
 /** I18N-05: the locales the product ships (root CLAUDE.md "Numbers, dates, collation go through Intl"). */
 export const SUPPORTED_LOCALES = ['en-US', 'en-GB', 'en-IN', 'ta-IN', 'hi-IN', 'te-IN'] as const;
@@ -37,19 +39,6 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
 export const LIBRARY_VIEWS = ['recents', 'browse', 'shared', 'deleted'] as const;
 
-const documentId = z.string().uuid();
-/**
- * A one-line human label. Control characters are refused up front: Postgres
- * `text` cannot hold NUL (the insert fails and would surface as a 500), and a
- * title or name has no use for the rest of `\p{Cc}` either.
- */
-const oneLine = (max: number) =>
-  z
-    .string()
-    .trim()
-    .min(1)
-    .max(max)
-    .regex(/^\P{Cc}*$/u, 'Control characters are not allowed');
 const titleSchema = oneLine(200);
 const createBody = z.object({ title: titleSchema.optional() }).strict().default({});
 const patchBody = z.object({ title: titleSchema }).strict();
@@ -61,36 +50,25 @@ const searchQuery = z.object({ q: oneLine(200) });
 export const SEARCH_LIMIT = 50;
 /** Characters of context either side of the first match in a snippet. */
 const SNIPPET_CONTEXT = 40;
+/**
+ * `idToken` (SHARE-02, #42): the SPA's Cognito ID token, verified server-side
+ * to bind the caller's address. A JWT is three base64url segments; anything
+ * else is refused before the verifier sees it.
+ */
 const profileBody = z
   .object({
     displayName: oneLine(80).optional(),
     locale: z.enum(SUPPORTED_LOCALES).optional(),
+    idToken: z
+      .string()
+      .max(8192)
+      .regex(/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/u, 'Not a token')
+      .optional(),
   })
   .strict()
-  .refine((b) => b.displayName !== undefined || b.locale !== undefined, {
+  .refine((b) => b.displayName !== undefined || b.locale !== undefined || b.idToken !== undefined, {
     message: 'Nothing to change',
   });
-
-function parse<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, input: unknown, what: string): T {
-  const result = schema.safeParse(input);
-  if (!result.success) {
-    throw new AppError(
-      400,
-      'bad_request',
-      `That ${what} is not valid`,
-      result.error.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
-    );
-  }
-  return result.data;
-}
-
-function parseId(params: unknown): string {
-  const result = z.object({ id: documentId }).safeParse(params);
-  if (!result.success) throw new AppError(400, 'bad_request', 'That link is not a workscape');
-  return result.data.id;
-}
-
-const NOT_FOUND = () => new AppError(404, 'not_found', 'Nothing at this address');
 
 /** The seed snapshot's sequence number; the first client update is seq 2. */
 export const INITIAL_SNAPSHOT_SEQ = 1;
@@ -122,23 +100,6 @@ export interface ProfileView {
   email: string | null;
   displayName: string | null;
   locale: string | null;
-}
-
-/**
- * The participants sheet (LIB-07). `email` fields are populated for the owner
- * and for `edit` participants; a `view` participant receives `null` in every
- * email field and names only.
- */
-export interface ParticipantsView {
-  owner: { id: string; name: string | null; email: string | null };
-  participants: {
-    userId: string;
-    name: string | null;
-    email: string | null;
-    permission: 'view' | 'edit';
-    invitedBy: string;
-  }[];
-  linkAccess: DocumentRecord['linkAccess'];
 }
 
 function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView {
@@ -177,24 +138,6 @@ function profileView(user: AuthUser): ProfileView {
     email: user.email,
     displayName: user.displayName,
     locale: user.locale,
-  };
-}
-
-function participantsView(
-  list: ParticipantList,
-  { revealEmails }: { revealEmails: boolean },
-): ParticipantsView {
-  const email = (value: string | null) => (revealEmails ? value : null);
-  return {
-    owner: { id: list.owner.id, name: list.owner.name, email: email(list.owner.email) },
-    participants: list.participants.map((p) => ({
-      userId: p.userId,
-      name: p.name,
-      email: email(p.email),
-      permission: p.permission,
-      invitedBy: p.invitedBy,
-    })),
-    linkAccess: list.linkAccess,
   };
 }
 
@@ -267,8 +210,43 @@ export function registerApi(
           ...(body.displayName !== undefined && { displayName: body.displayName }),
           ...(body.locale !== undefined && { locale: body.locale }),
         };
-        const updated = await repo.users.updateProfile(user.id, patch);
+        let updated = await repo.users.updateProfile(user.id, patch);
         if (!updated) throw new Error('user row missing after the auth hook resolved it');
+        if (body.idToken !== undefined) {
+          // SHARE-02: bind the verified address and convert its invitations.
+          // The token must be the caller's own (same `sub`) and must attest
+          // the address; a token for another account or without a verified
+          // email binds nothing.
+          let attested: { sub: string; email: string | null };
+          try {
+            attested = await deps.verifier.verifyIdToken(body.idToken);
+          } catch {
+            throw new AppError(400, 'bad_request', 'That token is not valid');
+          }
+          if (attested.sub !== user.sub) {
+            throw new AppError(403, 'forbidden', 'That token belongs to another account');
+          }
+          if (attested.email === null) {
+            throw new AppError(400, 'bad_request', 'That token carries no verified email');
+          }
+          let bound;
+          try {
+            bound = await repo.users.bindEmail(user.id, attested.email);
+          } catch (error) {
+            if (error instanceof EmailTakenError) {
+              throw new AppError(409, 'conflict', 'That email belongs to another account');
+            }
+            throw error;
+          }
+          if (!bound) throw new Error('user row missing after the auth hook resolved it');
+          if (bound.converted.length > 0) {
+            request.log.info(
+              { userId: user.id, documents: bound.converted.length },
+              'invitations converted',
+            );
+          }
+          updated = bound.user;
+        }
         resolver.remember(updated);
         return profileView(toAuthUser(updated));
       });
@@ -442,16 +420,7 @@ export function registerApi(
         return { results };
       });
 
-      api.get('/documents/:id/shares', async (request) => {
-        const user = currentUser(request);
-        const id = parseId(request.params);
-        const { permission } = await requirePermission(repo, user.id, id, 'view');
-        const list = await repo.documents.participants(id);
-        if (!list) throw NOT_FOUND();
-        // Emails are for people who can manage or act on the sheet — the owner
-        // and editors. A view-only participant sees names only.
-        return participantsView(list, { revealEmails: canEdit(permission) });
-      });
+      registerShareRoutes(api, { deps, rooms });
 
       done();
     },

@@ -1,6 +1,23 @@
 import { describe, expect, test } from 'vitest';
 
-import { emailFromClaims } from './auth.js';
+import { emailFromClaims, verifiedEmailFromIdClaims } from './auth.js';
+
+describe('verifiedEmailFromIdClaims', () => {
+  test('SHARE-02 an ID token binds an address only beside email_verified; a username is never inferred', () => {
+    expect(verifiedEmailFromIdClaims({ email: 'a@example.com', email_verified: true })).toBe(
+      'a@example.com',
+    );
+    expect(verifiedEmailFromIdClaims({ email: 'a@example.com', email_verified: 'true' })).toBe(
+      'a@example.com',
+    );
+    expect(verifiedEmailFromIdClaims({ email: 'a@example.com', email_verified: false })).toBeNull();
+    expect(verifiedEmailFromIdClaims({ email: 'a@example.com' })).toBeNull();
+    expect(verifiedEmailFromIdClaims({ email: 'not-an-email', email_verified: true })).toBeNull();
+    expect(
+      verifiedEmailFromIdClaims({ username: 'b@example.com' } as { email?: unknown }),
+    ).toBeNull();
+  });
+});
 
 describe('emailFromClaims', () => {
   test('AUTH-01 prefers a verified email claim, falls back to an email-shaped username, else null', () => {

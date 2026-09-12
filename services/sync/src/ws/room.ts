@@ -385,6 +385,25 @@ export class Room {
   }
 
   /**
+   * Close every socket `userId` holds in this room (SHARE-03: a permission
+   * resolved at upgrade is frozen on the connection, so a share change must
+   * end the connection). 4403 tells the provider it is no longer a
+   * participant; 1001 tells it to reconnect, which re-resolves the permission
+   * (a downgrade to view then arrives as the read-only notice). Resolves the
+   * number of sockets closed. The sockets leave through the usual close
+   * handler, so awareness and eviction follow as for any departure.
+   */
+  closeMember(userId: string, code: number, reason: string): number {
+    let closed = 0;
+    for (const conn of this.conns) {
+      if (conn.member.userId !== userId) continue;
+      conn.socket.close(code, reason);
+      closed += 1;
+    }
+    return closed;
+  }
+
+  /**
    * Drain and seal persistence, close every socket, optionally compact, free
    * the document. Sockets stay open until the writer has sealed, so an update
    * that lands while the last append is in flight is still persisted (LOAD-05:

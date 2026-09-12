@@ -22,14 +22,17 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { Permission } from '@gede/db';
+import type { LinkAccess, Permission } from '@gede/db';
 
 import type { Projection } from '../projection/project.js';
 import {
+  EmailTakenError,
   RECENTLY_DELETED_DAYS,
+  type ConvertedInvite,
   type DocumentListing,
   type DocumentRecord,
   type DocumentSummary,
+  type InviteRecord,
   type LibraryView,
   type Repo,
   type StoredUpdate,
@@ -38,10 +41,16 @@ import {
 
 interface MutableDocument extends DocumentRecord {
   title: string;
+  linkAccess: LinkAccess;
+  linkToken: string | null;
   snapshotKey: string | null;
   snapshotSeq: number;
   updatedAt: Date;
   deletedAt: Date | null;
+}
+
+interface MutableInvite extends InviteRecord {
+  acceptedAt: Date | null;
 }
 
 interface MutableUser extends UserRecord {
@@ -76,6 +85,7 @@ export class FakeRepo implements Repo {
   readonly usersBySub = new Map<string, MutableUser>();
   readonly docs = new Map<string, MutableDocument>();
   readonly sharesByDoc = new Map<string, Map<string, FakeShare>>();
+  readonly invitesById = new Map<string, MutableInvite>();
   readonly updatesByDoc = new Map<string, StoredUpdate[]>();
   readonly snapshotsByDoc = new Map<string, { seq: number; s3Key: string; sizeBytes: number }[]>();
   readonly auditLog: AuditEntry[] = [];
@@ -141,6 +151,7 @@ export class FakeRepo implements Repo {
       ownerId,
       title,
       linkAccess: 'none',
+      linkToken: null,
       snapshotKey: null,
       snapshotSeq: 0,
       createdAt: at,
@@ -149,6 +160,57 @@ export class FakeRepo implements Repo {
     };
     this.docs.set(doc.id, doc);
     return { ...doc };
+  }
+
+  /** Pending (unaccepted, unexpired) invitations, oldest first, as `pg.ts` orders them. */
+  private pendingInvites(filter: (invite: MutableInvite) => boolean): MutableInvite[] {
+    const now = Date.now();
+    return [...this.invitesById.values()]
+      .filter((i) => i.acceptedAt === null && i.expiresAt.getTime() > now && filter(i))
+      .sort(
+        (a, b) =>
+          a.createdAt.getTime() - b.createdAt.getTime() || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+      );
+  }
+
+  /** `invites` cascade from `documents`. */
+  private dropInvites(documentId: string): void {
+    for (const [id, invite] of this.invitesById) {
+      if (invite.documentId === documentId) this.invitesById.delete(id);
+    }
+  }
+
+  private sameEmail(a: string | null, b: string): boolean {
+    return a !== null && a.toLowerCase() === b.toLowerCase();
+  }
+
+  /** SHARE-02 conversion, as `convertInvites` in `pg.ts`: pending invitations for the address become shares. */
+  private convertInvites(userId: string, email: string): ConvertedInvite[] {
+    const converted: ConvertedInvite[] = [];
+    for (const invite of this.pendingInvites((i) => this.sameEmail(i.email, email))) {
+      const doc = this.docs.get(invite.documentId);
+      if (!doc) continue;
+      if (doc.ownerId !== userId) {
+        const map = this.sharesByDoc.get(doc.id) ?? new Map<string, FakeShare>();
+        if (!map.has(userId)) {
+          map.set(userId, {
+            permission: invite.permission,
+            invitedBy: invite.invitedBy ?? doc.ownerId,
+            createdAt: new Date(),
+          });
+          this.sharesByDoc.set(doc.id, map);
+        }
+      }
+      invite.acceptedAt = new Date();
+      this.auditLog.push({
+        documentId: doc.id,
+        userId,
+        action: 'share.invite_accept',
+        target: invite.email,
+      });
+      converted.push({ documentId: doc.id, permission: invite.permission });
+    }
+    return converted;
   }
 
   /** Add a share; `invitedBy` defaults to the document's owner, as the share sheet does. */
@@ -195,12 +257,47 @@ export class FakeRepo implements Repo {
 
   readonly users: Repo['users'] = {
     upsertFromToken: (identity) => {
-      const existing = this.usersBySub.get(identity.sub);
-      if (existing) {
-        existing.email = existing.email ?? identity.email;
-        return Promise.resolve({ ...existing });
+      // `users_email_key`: an address held by another sub is not bound (pg.ts logs and stores null).
+      const taken = (email: string | null) =>
+        email !== null &&
+        [...this.usersBySub.values()].some(
+          (u) => u.cognitoSub !== identity.sub && this.sameEmail(u.email, email),
+        );
+      const email = taken(identity.email) ? null : identity.email;
+      let user = this.usersBySub.get(identity.sub);
+      if (user) {
+        user.email = user.email ?? email;
+      } else {
+        this.seedUser(identity.sub, email);
+        user = this.usersBySub.get(identity.sub);
+        if (!user) throw new Error('unreachable: user was just seeded');
       }
-      return Promise.resolve(this.seedUser(identity.sub, identity.email));
+      if (user.email !== null && identity.email !== null) {
+        this.convertInvites(user.id, user.email);
+      }
+      return Promise.resolve({ ...user });
+    },
+    bindEmail: (id, email) => {
+      const user = this.userById(id);
+      if (!user) return Promise.resolve(undefined);
+      if (user.email === null) {
+        for (const other of this.usersBySub.values()) {
+          if (other.id !== id && this.sameEmail(other.email, email)) {
+            return Promise.reject(new EmailTakenError());
+          }
+        }
+        user.email = email;
+      }
+      if (!this.sameEmail(user.email, email)) {
+        return Promise.resolve({ user: { ...user }, converted: [] });
+      }
+      return Promise.resolve({ user: { ...user }, converted: this.convertInvites(id, email) });
+    },
+    findByEmail: (email) => {
+      for (const user of this.usersBySub.values()) {
+        if (this.sameEmail(user.email, email)) return Promise.resolve({ ...user });
+      }
+      return Promise.resolve(undefined);
     },
     updateProfile: (id, patch) => {
       const user = this.userById(id);
@@ -326,6 +423,7 @@ export class FakeRepo implements Repo {
         this.updatesByDoc.delete(doc.id);
         this.snapshotsByDoc.delete(doc.id);
         this.sharesByDoc.delete(doc.id);
+        this.dropInvites(doc.id);
         purged.push({ id: doc.id, title: doc.title });
       }
       return Promise.resolve(purged);
@@ -367,6 +465,7 @@ export class FakeRepo implements Repo {
         this.updatesByDoc.delete(doc.id);
         this.snapshotsByDoc.delete(doc.id);
         this.sharesByDoc.delete(doc.id);
+        this.dropInvites(doc.id);
         purged.push(ref);
       }
       return { purged, failed };
@@ -392,6 +491,13 @@ export class FakeRepo implements Repo {
             invitedBy: share.invitedBy,
           };
         });
+      const pending = this.pendingInvites((i) => i.documentId === documentId).map((i) => ({
+        id: i.id,
+        email: i.email,
+        permission: i.permission,
+        invitedBy: i.invitedBy,
+        expiresAt: i.expiresAt,
+      }));
       return Promise.resolve({
         owner: {
           id: doc.ownerId,
@@ -399,8 +505,148 @@ export class FakeRepo implements Repo {
           email: owner?.email ?? null,
         },
         participants,
+        invites: pending,
         linkAccess: doc.linkAccess,
+        linkToken: doc.linkToken,
       });
+    },
+  };
+
+  readonly shares: Repo['shares'] = {
+    add: ({ documentId, userId, permission, invitedBy, actorId }) => {
+      const map = this.sharesByDoc.get(documentId) ?? new Map<string, FakeShare>();
+      if (map.has(userId)) return Promise.resolve(false);
+      map.set(userId, { permission, invitedBy, createdAt: new Date() });
+      this.sharesByDoc.set(documentId, map);
+      this.auditLog.push({ documentId, userId: actorId, action: 'share.add', target: userId });
+      return Promise.resolve(true);
+    },
+    setPermission: ({ documentId, userId, permission, actorId }) => {
+      const share = this.sharesByDoc.get(documentId)?.get(userId);
+      if (!share) return Promise.resolve(false);
+      share.permission = permission;
+      this.auditLog.push({
+        documentId,
+        userId: actorId,
+        action: 'share.permission',
+        target: `${userId}:${permission}`,
+      });
+      return Promise.resolve(true);
+    },
+    remove: ({ documentId, userId, actorId }) => {
+      const removed = this.sharesByDoc.get(documentId)?.delete(userId) ?? false;
+      if (!removed) return Promise.resolve(false);
+      this.auditLog.push({ documentId, userId: actorId, action: 'share.remove', target: userId });
+      return Promise.resolve(true);
+    },
+    stop: ({ documentId, actorId }) => {
+      const gone = [...(this.sharesByDoc.get(documentId)?.keys() ?? [])];
+      this.sharesByDoc.delete(documentId);
+      for (const [id, invite] of this.invitesById) {
+        if (invite.documentId === documentId && invite.acceptedAt === null) {
+          this.invitesById.delete(id);
+        }
+      }
+      const doc = this.docs.get(documentId);
+      if (doc) doc.linkAccess = 'none';
+      this.auditLog.push({ documentId, userId: actorId, action: 'share.stop', target: null });
+      return Promise.resolve(gone);
+    },
+    setLinkAccess: ({ documentId, access, actorId, mintToken }) => {
+      const doc = this.docs.get(documentId);
+      if (!doc) return Promise.resolve(undefined);
+      if (doc.linkAccess === 'none' && access !== 'none') doc.linkToken = mintToken();
+      doc.linkAccess = access;
+      this.auditLog.push({ documentId, userId: actorId, action: 'share.link', target: access });
+      return Promise.resolve({ ...doc });
+    },
+    redeemLink: ({ documentId, userId, token }) => {
+      const doc = this.docs.get(documentId);
+      if (!doc || doc.linkAccess === 'none' || doc.linkToken !== token) {
+        return Promise.resolve(undefined);
+      }
+      const granted = doc.linkAccess;
+      if (doc.ownerId === userId) return Promise.resolve(granted);
+      const map = this.sharesByDoc.get(documentId) ?? new Map<string, FakeShare>();
+      const existing = map.get(userId);
+      if (existing) return Promise.resolve(existing.permission);
+      map.set(userId, { permission: granted, invitedBy: doc.ownerId, createdAt: new Date() });
+      this.sharesByDoc.set(documentId, map);
+      this.auditLog.push({ documentId, userId, action: 'share.link_redeem', target: granted });
+      return Promise.resolve(granted);
+    },
+  };
+
+  readonly invites: Repo['invites'] = {
+    create: ({ documentId, email, permission, token, expiresAt, invitedBy }) => {
+      assertText(email);
+      for (const earlier of this.pendingInvites(
+        (i) => i.documentId === documentId && this.sameEmail(i.email, email),
+      )) {
+        this.invitesById.delete(earlier.id);
+      }
+      const invite: MutableInvite = {
+        id: randomUUID(),
+        documentId,
+        email,
+        permission,
+        token,
+        invitedBy,
+        expiresAt,
+        acceptedAt: null,
+        createdAt: new Date(),
+      };
+      this.invitesById.set(invite.id, invite);
+      this.auditLog.push({ documentId, userId: invitedBy, action: 'share.invite', target: email });
+      return Promise.resolve({ ...invite });
+    },
+    remove: ({ documentId, inviteId, actorId }) => {
+      const invite = this.pendingInvites(
+        (i) => i.id === inviteId && i.documentId === documentId,
+      )[0];
+      if (!invite) return Promise.resolve(false);
+      this.invitesById.delete(invite.id);
+      this.auditLog.push({
+        documentId,
+        userId: actorId,
+        action: 'share.invite_remove',
+        target: invite.email,
+      });
+      return Promise.resolve(true);
+    },
+    byToken: (token) => {
+      for (const invite of this.invitesById.values()) {
+        if (invite.token === token) return Promise.resolve({ ...invite });
+      }
+      return Promise.resolve(undefined);
+    },
+    accept: ({ inviteId, userId }) => {
+      const invite = this.pendingInvites((i) => i.id === inviteId)[0];
+      const user = this.userById(userId);
+      if (!invite || !user || !this.sameEmail(user.email, invite.email)) {
+        return Promise.resolve(undefined);
+      }
+      const doc = this.docs.get(invite.documentId);
+      if (!doc) return Promise.resolve(undefined);
+      if (doc.ownerId !== userId) {
+        const map = this.sharesByDoc.get(doc.id) ?? new Map<string, FakeShare>();
+        if (!map.has(userId)) {
+          map.set(userId, {
+            permission: invite.permission,
+            invitedBy: invite.invitedBy ?? doc.ownerId,
+            createdAt: new Date(),
+          });
+          this.sharesByDoc.set(doc.id, map);
+        }
+      }
+      invite.acceptedAt = new Date();
+      this.auditLog.push({
+        documentId: doc.id,
+        userId,
+        action: 'share.invite_accept',
+        target: invite.email,
+      });
+      return Promise.resolve(invite.permission);
     },
   };
 

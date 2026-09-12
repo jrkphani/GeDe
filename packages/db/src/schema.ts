@@ -151,9 +151,17 @@ export const invites = pgTable(
     token: text('token').notNull().unique(),
     expiresAt: timestamptz('expires_at').notNull(),
     acceptedAt: timestamptz('accepted_at'),
+    /** Migration 0006: who sent it; null on rows from before, converted as the owner. */
+    invitedBy: uuid('invited_by').references(() => users.id),
+    /** Migration 0006. */
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
   },
-  /** Migration 0004: the cascade from `documents` walks this index, not the table. */
-  (t) => [index('invites_document_id_idx').on(t.documentId)],
+  (t) => [
+    /** Migration 0004: the cascade from `documents` walks this index, not the table. */
+    index('invites_document_id_idx').on(t.documentId),
+    /** Migration 0006: the conversion on first sign-in looks invitations up by address. */
+    index('invites_email_idx').on(t.email),
+  ],
 );
 
 /** Yjs update log since the last snapshot. Pruned after compaction. */

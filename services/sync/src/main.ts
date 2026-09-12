@@ -13,6 +13,7 @@ import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { S3Client } from '@aws-sdk/client-s3';
+import { SESv2Client } from '@aws-sdk/client-sesv2';
 import pino from 'pino';
 import type pg from 'pg';
 
@@ -24,6 +25,7 @@ import { parseInvocation, type Invocation } from './jobs/invocation.js';
 import { purgeExpired } from './jobs/purge.js';
 import { reproject } from './jobs/reproject.js';
 import { REDACTED_PATHS, requestSerializer, type Logger } from './logger.js';
+import { createSesMailer } from './mail/ses.js';
 import { ProjectionWorker } from './projection/worker.js';
 import { createPgRepo } from './repo/pg.js';
 import type { Repo } from './repo/types.js';
@@ -60,6 +62,7 @@ interface Runtime {
   readonly pool: pg.Pool;
   readonly repo: Repo;
   readonly s3: S3Client;
+  readonly ses: SESv2Client;
 }
 
 async function boot(role: string): Promise<Runtime> {
@@ -135,7 +138,9 @@ async function boot(role: string): Promise<Runtime> {
   );
 
   const s3 = new S3Client({ region: config.COGNITO_REGION });
-  return { config, logger, version, pool, repo: createPgRepo(createDb(pool), logger), s3 };
+  // The SES identity lives in the stage's region, the same as the user pool.
+  const ses = new SESv2Client({ region: config.COGNITO_REGION });
+  return { config, logger, version, pool, repo: createPgRepo(createDb(pool), logger), s3, ses };
 }
 
 async function runServer(rt: Runtime): Promise<void> {
@@ -147,6 +152,7 @@ async function runServer(rt: Runtime): Promise<void> {
     verifier: createCognitoVerifier(config),
     db: rt.repo,
     s3: createS3SnapshotStore(rt.s3, config.DOCS_BUCKET),
+    mail: createSesMailer(rt.ses, { fromName: 'GeDe' }),
   });
 
   let stopping = false;
@@ -164,6 +170,7 @@ async function runServer(rt: Runtime): Promise<void> {
         await app.close(); // stops accepting; onClose flushes rooms and the projection
         await rt.pool.end();
         rt.s3.destroy();
+        rt.ses.destroy();
         logger.info('shutdown complete');
         process.exit(0);
       } catch (error) {
@@ -212,6 +219,7 @@ async function runJob(
   } finally {
     await rt.pool.end().catch(() => undefined);
     rt.s3.destroy();
+    rt.ses.destroy();
   }
 }
 

@@ -10,13 +10,16 @@
  *     (`signInAliases: { email: true }` in `AuthStack`), so Cognito generates
  *     the username: `username` is a UUID, never the address.
  *   - An *id* token has `email` and `email_verified`.
- * So in production `users.email` is **never bound from a token**: every
- * access token yields `null` here, and the row keeps its email null until the
- * SPA `PATCH`es it (`/api/me`). `emailFromClaims` remains the single place a
- * token's claims could ever bind an address — guarded (`email_verified`, an
- * email-shaped `username`) for a pool configured otherwise — and #42 tracks
- * the real binding path (`fetchUserAttributes()` → `PATCH /api/me`, or an
- * ID-token side channel). Nothing is fetched from Cognito at request time.
+ * So in production `users.email` is **never bound from an access token**:
+ * every one yields `null` here, and the row keeps its email null until the
+ * SPA presents its *ID token* to `PATCH /api/me { idToken }` — verified here
+ * with `tokenUse: 'id'`, its `sub` matched against the caller's, its address
+ * taken only beside `email_verified: true` (`verifiedEmailFromIdClaims`).
+ * A client-claimed address is never accepted: the binding decides which
+ * invitations convert into shares (SHARE-02), so it must be Cognito's word.
+ * `emailFromClaims` remains the place an access token's claims could bind an
+ * address — guarded (`email_verified`, an email-shaped `username`) for a pool
+ * configured otherwise. Nothing is fetched from Cognito at request time.
  */
 import { CognitoJwtVerifier } from 'aws-jwt-verify';
 import type { FastifyReply, FastifyRequest } from 'fastify';
@@ -65,16 +68,35 @@ export function emailFromClaims(claims: {
   return null;
 }
 
+/**
+ * The address an ID token attests, or null: `email` counts only beside
+ * `email_verified: true`. Unlike `emailFromClaims` an email-shaped `username`
+ * is not accepted — the ID token is the one place the pool states the
+ * address explicitly, so nothing is inferred.
+ */
+export function verifiedEmailFromIdClaims(claims: {
+  email?: unknown;
+  email_verified?: unknown;
+}): string | null {
+  const verified = claims.email_verified === true || claims.email_verified === 'true';
+  if (verified && typeof claims.email === 'string' && EMAIL_RE.test(claims.email)) {
+    return claims.email;
+  }
+  return null;
+}
+
 export function createCognitoVerifier(config: Config): TokenVerifier {
-  const verifier = CognitoJwtVerifier.create({
-    userPoolId: config.COGNITO_USER_POOL_ID,
-    clientId: config.COGNITO_CLIENT_ID,
-    tokenUse: 'access',
-  });
+  const pool = { userPoolId: config.COGNITO_USER_POOL_ID, clientId: config.COGNITO_CLIENT_ID };
+  const access = CognitoJwtVerifier.create({ ...pool, tokenUse: 'access' });
+  const id = CognitoJwtVerifier.create({ ...pool, tokenUse: 'id' });
   return {
     async verify(token) {
-      const payload = await verifier.verify(token);
+      const payload = await access.verify(token);
       return { sub: payload.sub, email: emailFromClaims(payload) };
+    },
+    async verifyIdToken(token) {
+      const payload = await id.verify(token);
+      return { sub: payload.sub, email: verifiedEmailFromIdClaims(payload) };
     },
   };
 }
