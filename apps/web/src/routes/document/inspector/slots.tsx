@@ -59,17 +59,23 @@ export function FilterTab({ slot }: { slot: ReactNode | undefined }) {
   );
 }
 
-export function DeriveTab({ slot }: { slot: ReactNode | undefined }) {
+/**
+ * INSP-09: the Derive tab. Its hierarchy controls (HIER-01) shipped with the
+ * hierarchy release and mount here through `hierarchy`; the cross-table
+ * relation, derived-column composition and pipeline audit wait for `slot`.
+ */
+export function DeriveTab({
+  slot,
+  hierarchy,
+}: {
+  slot: ReactNode | undefined;
+  hierarchy: ReactNode;
+}) {
   if (slot !== undefined) return <>{slot}</>;
   return (
     <>
-      <Section label="hierarchy">
-        {/* slot: hierarchy */}
-        <div className="gd-insp__row">
-          <Unavailable label="Promote" reason="arrives with the hierarchy release" />
-          <Unavailable label="Nest" reason="arrives with the hierarchy release" />
-        </div>
-      </Section>
+      {/* The panel is its own labelled section (`.gd-hier`), styled as one rail block. */}
+      {hierarchy}
       <Section label="relate to another table">
         <Slot name="derive" reason="Cross-table relations arrive with the references release." />
       </Section>

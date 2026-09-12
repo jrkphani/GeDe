@@ -9,7 +9,7 @@ const halfBold = docNode([
 ]);
 
 describe('whole-cell marks', () => {
-  it('KEYS-05 INSP-06 toggles a mark on when any text lacks it, off when all text has it', () => {
+  it('KEYS-05 INSP-06 (partial: inline marks only) toggles a mark on when any text lacks it, off when all text has it', () => {
     const bold = toggleMarkThroughout(plain, 'bold');
     expect(hasMarkThroughout(bold, 'bold')).toBe(true);
     expect(bold.content[0]?.content).toEqual([textNode('Base camp', [{ type: 'bold' }])]);

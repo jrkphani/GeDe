@@ -155,6 +155,35 @@ describe('cell clipboard (KEYS-03, MENU-04)', () => {
     expect(handle.current!.reason('copy')).toBeUndefined();
   });
 
+  it('GRID-04 MENU-04 a paste into a read-only cell is refused with the reason and never announced as pasted', async () => {
+    // Column 1 of the fixture becomes derived, so its cells are read-only (GRID-04).
+    const table = gd.tables.get(tableId)!;
+    const columns = table.get('columns') as Y.Array<Y.Map<unknown>>;
+    columns.get(0).set('source', 'derived');
+    render(<Harness cell={1} />);
+    const live = () => document.querySelector('[data-testid="live-region"]');
+    // Native route.
+    const data = new FakeClipboardData();
+    data.setData('text/plain', 'Nope');
+    act(() => {
+      document.dispatchEvent(clipboardEvent('paste', data));
+    });
+    expect(cellText(table, rows[1]!, cols[0]!)).toBe('');
+    expect(live()).toHaveTextContent(/is read-only: derived/);
+    expect(live()).not.toHaveTextContent('Pasted');
+    // Async route (chords and menu).
+    Object.defineProperty(navigator, 'clipboard', {
+      value: { readText: vi.fn(() => Promise.resolve('Nope')), writeText: vi.fn() },
+      configurable: true,
+    });
+    await act(async () => {
+      await handle.current!.paste();
+      await handle.current!.pasteMatchStyle();
+    });
+    expect(cellText(table, rows[1]!, cols[0]!)).toBe('');
+    expect(live()).not.toHaveTextContent('Pasted');
+  });
+
   it('MENU-04 the menu commands use the async clipboard: copy writes the source, copy snapshot the displayed value, and say when none is available', async () => {
     setColumnFormat(gd, tableId, cols[0]!, 'number', { decimals: 2 });
     setCellText(gd, tableId, rows[0]!, cols[0]!, '1234.5');

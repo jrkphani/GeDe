@@ -223,7 +223,7 @@ describe('Inspector', () => {
     expect(screen.getByTestId('inspector-selected')).toHaveTextContent('Nothing selected');
   });
 
-  it('INSP-04 INSP-12 the Table tab: header row, footer, frozen columns, row and column counts, width and wrap write through at once', async () => {
+  it('INSP-04 (partial: styles, caption, outline, gridline density, alternating colour and fit-to-content are disabled stubs) INSP-12 the Table tab: header row, footer, frozen columns, row and column counts, width and wrap write through at once', async () => {
     await mount();
     await userEvent.click(tab('Table'));
     const headers = section('headers and footer');
@@ -273,7 +273,7 @@ describe('Inspector', () => {
     expect(within(section('row')).getByText(/under/)).toBeInTheDocument();
   });
 
-  it('INSP-05 INSP-10 FMT-06 the Cell tab scopes the data format to the column by default, states the scope before applying, and the cell override beats it', async () => {
+  it('INSP-05 (partial: fill, the border matrix and conditional highlighting are disabled stubs) INSP-10 FMT-06 the Cell tab scopes the data format to the column by default, states the scope before applying, and the cell override beats it', async () => {
     await mount();
     await userEvent.click(tab('Cell'));
     const format = section('data format');
@@ -315,7 +315,7 @@ describe('Inspector', () => {
     );
   });
 
-  it('INSP-06 KEYS-05 the Text tab toggles marks over the whole selected cell, shows the chord beside each, and wraps the column or the row', async () => {
+  it('INSP-06 (partial: font, weight, size, character styles, colour and alignment are disabled stubs) KEYS-05 the Text tab toggles marks over the whole selected cell, shows the chord beside each, and wraps the column or the row', async () => {
     await mount();
     await userEvent.click(tab('Text'));
     const marks = within(section('marks'));
@@ -342,7 +342,7 @@ describe('Inspector', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent('Wrapped the row');
   });
 
-  it('INSP-07 the Arrange tab states size and position in grid address and pixels, and moves the table on the lattice', async () => {
+  it('INSP-07 (partial: stacking order, canvas layout, pin to viewport and DAG edges are disabled stubs) the Arrange tab states size and position in grid address and pixels, and moves the table on the lattice', async () => {
     await mount();
     await userEvent.click(tab('Arrange'));
     const position = section('position');
@@ -360,9 +360,14 @@ describe('Inspector', () => {
     const { rerender } = await mount();
     await userEvent.click(tab('Derive'));
     expect(screen.getByRole('tabpanel').querySelector('[data-slot="derive"]')).not.toBeNull();
-    const promote = screen.getByRole('button', { name: 'Promote' });
-    expect(promote).toHaveAttribute('aria-disabled', 'true');
-    expect(promote.title).toBe('Promote — arrives with the hierarchy release');
+    // HIER-01 / INSP-09: the hierarchy controls are the real panel, not a stub — the
+    // hierarchy release has shipped, so no control may name it as still to come.
+    const hierarchy = within(screen.getByTestId('hierarchy-panel'));
+    expect(hierarchy.getByText(/top level/)).toBeInTheDocument();
+    expect(hierarchy.getByRole('button', { name: /Nest/ }).title).not.toMatch(/release/);
+    expect(screen.getByRole('button', { name: 'Add a derived column' }).title).toBe(
+      'Add a derived column — arrives with the references release',
+    );
     rerender(<Harness mode="organize" />);
     expect(screen.getByRole('tabpanel').querySelector('[data-slot="hierarchy"]')).not.toBeNull();
     await userEvent.click(tab('Sort'));

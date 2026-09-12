@@ -89,12 +89,17 @@ function parseRich(json: string): RichDoc | null {
   }
 }
 
-function writeInto(deps: ClipboardDeps, cell: CellSelection, text: string, rich: RichDoc | null) {
+/** Write the payload into the cell; false when the command refused (a read-only cell says why itself). */
+function writeInto(
+  deps: ClipboardDeps,
+  cell: CellSelection,
+  text: string,
+  rich: RichDoc | null,
+): boolean {
   if (rich !== null && plainText(rich) === text) {
-    deps.commands.commitRichCell(cell, rich);
-  } else {
-    deps.commands.commitCell(cell, text);
+    return deps.commands.commitRichCell(cell, rich);
   }
+  return deps.commands.commitCell(cell, text);
 }
 
 function systemClipboard(): Clipboard | undefined {
@@ -208,8 +213,9 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
       event.preventDefault();
       const text = data.getData('text/plain');
       const richJson = data.getData(RICH_MIME);
-      writeInto(d, cell, text, richJson === '' ? null : parseRich(richJson));
-      announce(`Pasted into ${d.addressOf(cell)}`);
+      if (writeInto(d, cell, text, richJson === '' ? null : parseRich(richJson))) {
+        announce(`Pasted into ${d.addressOf(cell)}`);
+      }
     };
     document.addEventListener('copy', onCopy);
     document.addEventListener('cut', onCut);
@@ -265,8 +271,9 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
           announce(NO_CLIPBOARD);
           return;
         }
-        writeInto(d, d.cell, read.text, read.rich);
-        announce(`Pasted into ${d.addressOf(d.cell)}`);
+        if (writeInto(d, d.cell, read.text, read.rich)) {
+          announce(`Pasted into ${d.addressOf(d.cell)}`);
+        }
       },
       pasteMatchStyle: async () => {
         const d = ref.current;
@@ -276,8 +283,9 @@ export function useCellClipboard(deps: ClipboardDeps): CellClipboard {
           announce(NO_CLIPBOARD);
           return;
         }
-        d.commands.commitCell(d.cell, read.text);
-        announce(`Pasted plain text into ${d.addressOf(d.cell)}`);
+        if (d.commands.commitCell(d.cell, read.text)) {
+          announce(`Pasted plain text into ${d.addressOf(d.cell)}`);
+        }
       },
     };
   }, []);

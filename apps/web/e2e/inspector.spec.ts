@@ -205,7 +205,7 @@ test.describe('inspector rail', () => {
     await snapshot('document-480');
   });
 
-  test('INSP-01 INSP-04 INSP-05 INSP-06 INSP-12 FMT-06 the tabs write through at once: header row off, a column format with its scope sentence, a whole-cell mark', async ({
+  test('INSP-01 INSP-04 (partial) INSP-05 (partial) INSP-06 (partial) INSP-12 FMT-06 the tabs write through at once: header row off, a column format with its scope sentence, a whole-cell mark', async ({
     page,
     checkA11y,
   }) => {

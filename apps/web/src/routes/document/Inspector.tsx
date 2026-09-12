@@ -10,6 +10,7 @@ import type { Find } from './find/useFind.js';
 import type { GridCommands } from './grid/commands.js';
 import { ArrangeTab } from './inspector/ArrangeTab.js';
 import { CellTab } from './inspector/CellTab.js';
+import { HierarchyPanel } from './hier/HierarchyPanel.js';
 import { InspectorHead } from './inspector/InspectorHead.js';
 import { Section } from './inspector/controls.js';
 import {
@@ -146,7 +147,18 @@ export function Inspector({
     ...(slots?.graph === undefined
       ? []
       : [{ value: 'graph' as const, label: 'Graph', content: slots.graph }]),
-    { value: 'derive', label: 'Derive', content: <DeriveTab slot={slots?.derive} /> },
+    {
+      value: 'derive',
+      label: 'Derive',
+      content: (
+        <DeriveTab
+          slot={slots?.derive}
+          hierarchy={
+            <HierarchyPanel gd={gd} selection={selection} commands={commands} editable={editable} />
+          }
+        />
+      ),
+    },
   ];
   const organizeItems: TabItem<OrganizeTab>[] = [
     {
