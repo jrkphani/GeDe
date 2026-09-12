@@ -14,8 +14,10 @@
  *     forced through Cognito's refresh; a second 4401 is terminal (the session
  *     is gone, not the token stale). The subprotocol is the only transport —
  *     the `?token=` fallback for the #32 rolling deploy went with #63;
- *     4403 / 4404 / 4400 are terminal at once. Terminal closes surface as a
- *     failure the chrome shows (LOAD-05: only a failed sync surfaces anything);
+ *     4403 / 4404 / 4400 / 4413 are terminal at once, and so is 1009 — the
+ *     server refused a frame on its length (#99), and reconnecting would only
+ *     send it again. Terminal closes surface as a failure the chrome shows
+ *     (LOAD-05: only a failed sync surfaces anything);
  *   - the server's type-4 notice `{ code: 'read-only' }` (SHARE-03) flips
  *     `readOnly`, so a permission downgraded mid-session is shown, not
  *     discovered by edits that never echo;
@@ -60,6 +62,10 @@ export const CLOSE_BAD_REQUEST = 4400;
 export const CLOSE_UNAUTHENTICATED = 4401;
 export const CLOSE_FORBIDDEN = 4403;
 export const CLOSE_NOT_FOUND = 4404;
+/** An update would take the document past the server's ceiling (#99, ADR-037). */
+export const CLOSE_TOO_LARGE = 4413;
+/** Standard "message too big": a frame over the server's per-frame limit (#99). */
+export const CLOSE_MESSAGE_TOO_BIG = 1009;
 
 /** The subprotocol the server selects; `bearer.<token>` rides beside it. */
 export const WS_SUBPROTOCOL = 'gede.v1';
@@ -358,7 +364,10 @@ export class SyncClient {
         return;
       }
     }
-    if (code >= 4400 && code < 4500) {
+    if ((code >= 4400 && code < 4500) || code === CLOSE_MESSAGE_TOO_BIG) {
+      // Terminal: the server said no to this client as it is. A 1009 in
+      // particular must not reconnect — the provider would offer the same
+      // oversized update again on every attempt.
       this.set({
         status: 'offline',
         failure: { code, reason: event?.reason ?? '' },

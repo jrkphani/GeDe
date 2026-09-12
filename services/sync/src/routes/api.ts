@@ -17,7 +17,8 @@ import { encodeSeededDocument } from '@gede/core';
 import { currentUser, requireUser, toAuthUser, type AuthUser, type UserResolver } from '../auth.js';
 import type { Deps } from '../deps.js';
 import { AppError } from '../errors.js';
-import { requirePermission } from '../permissions.js';
+import { count } from '../metrics.js';
+import { canEdit, requirePermission } from '../permissions.js';
 import type { ProjectionWorker } from '../projection/worker.js';
 import {
   EmailTakenError,
@@ -26,10 +27,11 @@ import {
   type DocumentRecord,
   type DocumentSummary,
   type ProfilePatch,
+  type PurgedDocument,
 } from '../repo/types.js';
 import { documentPrefix, snapshotKey } from '../s3.js';
 import type { RoomManager } from '../ws/room-manager.js';
-import { CLOSE_NOT_FOUND } from '../ws/route.js';
+import { CLOSE_FORBIDDEN, CLOSE_NOT_FOUND } from '../ws/route.js';
 import { NOT_FOUND, oneLine, parse, parseId } from './parse.js';
 import { registerShareRoutes } from './share.js';
 
@@ -79,6 +81,18 @@ const profileBody = z
 
 /** The seed snapshot's sequence number; the first client update is seq 2. */
 export const INITIAL_SNAPSHOT_SEQ = 1;
+
+/** Documents per transaction for Delete All (#109): bounded like the nightly purge. */
+export const DELETE_ALL_BATCH_SIZE = 50;
+
+/** What `DELETE /api/me` answers (#111, ADR-038). */
+export interface ErasureView {
+  erased: true;
+  /** `deleted` when the Cognito user is gone; `skipped` when the deploy has not enabled it; `failed` when Cognito refused (logged, alarmed). */
+  identity: 'deleted' | 'skipped' | 'failed';
+  documentsTransferred: number;
+  documentsDeleted: number;
+}
 
 /** A document as the API returns it. Only `workscape` exists as a kind today. */
 export interface DocumentView {
@@ -153,14 +167,29 @@ function refuseSample(
   }
 }
 
+/**
+ * A person's name as the library shows it to `permission` (#102, the share
+ * sheet's rule): the display name; failing that the address, but only for
+ * the owner and editors — a viewer, or anyone who redeemed a view link, is
+ * never handed an email address.
+ */
+export function personName(
+  person: { name: string | null; email: string | null },
+  permission: DocumentPermission,
+): string | null {
+  return person.name ?? (canEdit(permission) ? person.email : null);
+}
+
 function summaryView(doc: DocumentSummary, permission: DocumentPermission): DocumentSummaryView {
   const out: DocumentSummaryView = {
     ...view(doc, permission),
     sizeBytes: doc.sizeBytes,
-    ownerName: doc.ownerName,
+    ownerName: personName({ name: doc.ownerName, email: doc.ownerEmail }, permission),
     sharedWithOthers: doc.sharedWithOthers,
   };
-  if (doc.sharedBy !== null) out.sharedBy = { id: doc.sharedBy.id, name: doc.sharedBy.name };
+  if (doc.sharedBy !== null) {
+    out.sharedBy = { id: doc.sharedBy.id, name: personName(doc.sharedBy, permission) };
+  }
   return out;
 }
 
@@ -300,6 +329,75 @@ export function registerApi(
         return profileView(toAuthUser(updated));
       });
 
+      /**
+       * Account erasure (#111, ADR-038; AUTH-09 partial: sign-out plus the
+       * data). The database side is one transaction in the repository; then
+       * the caller's sockets close everywhere, rooms of documents that went
+       * to the trash close, the resolver forgets the row, and the Cognito
+       * user is deleted when the deploy allows it. A second call for a
+       * tombstone is answered 403 by the auth hook before it gets here; the
+       * `null` branch below is for a request that passed the hook from the
+       * resolver's cache on another task.
+       */
+      api.delete('/me', async (request) => {
+        const user = currentUser(request);
+        const outcome = await repo.users.erase(user.id);
+        if (outcome === undefined)
+          throw new Error('user row missing after the auth hook resolved it');
+        resolver.forget(user.sub);
+        rooms.closeUserEverywhere(user.id, CLOSE_FORBIDDEN, 'account deleted');
+        if (outcome === null) {
+          return {
+            erased: true,
+            identity: 'skipped',
+            documentsTransferred: 0,
+            documentsDeleted: 0,
+          };
+        }
+        for (const documentId of outcome.deleted) {
+          await rooms.close(documentId, { compact: true, closeCode: CLOSE_NOT_FOUND });
+        }
+        for (const { documentId, toUserId } of outcome.transferred) {
+          // The new owner's sockets were admitted as an editor; they reconnect as the owner.
+          rooms.closeUser(documentId, toUserId, 1001, 'permission changed');
+        }
+        request.log.info(
+          {
+            userId: user.id,
+            transferred: outcome.transferred.length,
+            deleted: outcome.deleted.length,
+            sharesRemoved: outcome.sharesRemoved.length,
+            invitesWithdrawn: outcome.invitesWithdrawn,
+          },
+          'account erased',
+        );
+        let identity: ErasureView['identity'] = 'skipped';
+        if (deps.identity !== null) {
+          try {
+            await deps.identity.deleteUser(outcome.cognitoSub);
+            identity = 'deleted';
+          } catch (error) {
+            // The data is gone and the tombstone refuses the identity; the
+            // operator deletes the pool user by hand (runbook).
+            identity = 'failed';
+            count(
+              request.log,
+              'UserErasureIdentityFailures',
+              'identity_delete_failed',
+              { err: error, userId: user.id, ref: request.id },
+              'cognito user not deleted after account erasure',
+            );
+          }
+        }
+        const body: ErasureView = {
+          erased: true,
+          identity,
+          documentsTransferred: outcome.transferred.length,
+          documentsDeleted: outcome.deleted.length,
+        };
+        return body;
+      });
+
       // --- library ----------------------------------------------------------
 
       api.get('/documents', async (request) => {
@@ -355,7 +453,14 @@ export function registerApi(
 
       api.post('/documents/delete-all', async (request) => {
         const user = currentUser(request);
-        const purged = await repo.documents.purgeDeleted(user.id, user.id);
+        // One bounded transaction per batch (#109): a large trash can never
+        // run into the statement timeout as one delete.
+        const purged: PurgedDocument[] = [];
+        for (;;) {
+          const batch = await repo.documents.purgeDeleted(user.id, user.id, DELETE_ALL_BATCH_SIZE);
+          purged.push(...batch);
+          if (batch.length < DELETE_ALL_BATCH_SIZE) break;
+        }
         // Rooms for these documents cannot have sockets (a deleted document
         // refuses the upgrade) but one may still be idling; free it now.
         await Promise.all(
@@ -422,7 +527,7 @@ export function registerApi(
         // document row lock, so an invitation accepted in the same instant
         // cannot slip past it. The SPA reads `everShared` for the toolbar
         // wording only.
-        const outcome = await repo.documents.tryDelete(id);
+        const outcome = await repo.documents.tryDelete(id, user.id);
         if (outcome.status === 'missing') throw NOT_FOUND();
         if (outcome.status === 'sample') refuseSample({ sample: true }, 'deleted');
         if (outcome.status === 'shared') {

@@ -45,6 +45,26 @@ describe('loadConfig', () => {
     expect(config.DOCS_PREFIX).toBe('docs/');
   });
 
+  test('LOAD-05 the byte limits must agree: a burst below one frame, or a log bound above the document ceiling, is refused at boot (#99)', () => {
+    expect(loadConfig(required)).toMatchObject({
+      WS_MAX_UPDATE_BYTES: 2 * 1024 * 1024,
+      WS_BYTES_BURST: 4 * 1024 * 1024,
+      DOC_LOG_MAX_BYTES: 8 * 1024 * 1024,
+      DOC_MAX_BYTES: 64 * 1024 * 1024,
+      WS_MAX_SOCKETS_PER_USER: 16,
+      COGNITO_ERASE_IDENTITY: false,
+    });
+    expect(() => loadConfig({ ...required, WS_BYTES_BURST: '1000' })).toThrow(
+      /WS_BYTES_BURST must be at least WS_MAX_UPDATE_BYTES/,
+    );
+    expect(() =>
+      loadConfig({ ...required, DOC_LOG_MAX_BYTES: '100', DOC_MAX_BYTES: '50' }),
+    ).toThrow(/DOC_LOG_MAX_BYTES must not exceed DOC_MAX_BYTES/);
+    expect(loadConfig({ ...required, COGNITO_ERASE_IDENTITY: 'true' }).COGNITO_ERASE_IDENTITY).toBe(
+      true,
+    );
+  });
+
   test('LOAD-06 names every missing or invalid variable and has no auth bypass', () => {
     expect(() => loadConfig({})).toThrow(ConfigError);
     try {

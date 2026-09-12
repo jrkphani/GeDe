@@ -22,6 +22,11 @@ export interface UserRecord {
    * yet (the resolver seeds it on first sight, `SampleSeeder`).
    */
   readonly sampleDocumentId: string | null;
+  /**
+   * Set by account erasure (#111, ADR-038). The row is a tombstone from then
+   * on: the auth hook refuses it, nothing personal remains on it.
+   */
+  readonly deletedAt: Date | null;
 }
 
 export interface DocumentRecord {
@@ -59,10 +64,15 @@ export interface DocumentRecord {
 /** What a caller may do with a document. `owner` implies edit plus sharing and deletion. */
 export type DocumentPermission = 'owner' | Permission;
 
-/** A person as the library shows them: display name, else email, else nothing. */
+/**
+ * A person as the library shows them: the display name, and the address for
+ * callers who may see it — the route applies the share-sheet rule (#102: the
+ * owner and editors see addresses, a viewer sees names only).
+ */
 export interface PersonRef {
   readonly id: string;
   readonly name: string | null;
+  readonly email: string | null;
 }
 
 /**
@@ -71,7 +81,10 @@ export interface PersonRef {
  * all, and its size. Everything here comes from one query per list.
  */
 export interface DocumentSummary extends DocumentRecord {
+  /** The owner's display name; null until they set one. Never the address (#102). */
   readonly ownerName: string | null;
+  /** The owner's address, for the route to show the owner and editors only (#102). */
+  readonly ownerEmail: string | null;
   /** Latest snapshot `size_bytes` plus the bytes of every update logged since it. */
   readonly sizeBytes: number;
   /** Who shared it with the caller; null for the owner. */
@@ -97,7 +110,12 @@ export const RECENTLY_DELETED_DAYS = 30;
 
 /** What `DocumentsRepo.tryDelete` did, or why it did nothing. */
 export type DeleteOutcome =
-  | { readonly status: 'deleted'; readonly document: DocumentRecord }
+  | {
+      readonly status: 'deleted';
+      readonly document: DocumentRecord;
+      /** Pending invitations withdrawn with the delete (#112), by address. */
+      readonly withdrawn: readonly string[];
+    }
   | { readonly status: 'missing' | 'shared' | 'sample' };
 
 export interface Participant {
@@ -163,10 +181,29 @@ export interface PurgedDocument {
   readonly title: string;
 }
 
+/**
+ * What account erasure did (#111, ADR-038), so the route can close sockets,
+ * free rooms and delete the Cognito identity afterwards.
+ */
+export interface ErasureOutcome {
+  /** The Cognito `sub` the identity store deletes; kept on the tombstone row. */
+  readonly cognitoSub: string;
+  /** Owned documents handed to their earliest editor. */
+  readonly transferred: readonly { documentId: string; toUserId: string }[];
+  /** Owned documents soft-deleted (no editor to take them, or the sample). */
+  readonly deleted: readonly string[];
+  /** Documents the user held a share on; the share is gone. */
+  readonly sharesRemoved: readonly string[];
+  /** Pending invitations the user had sent, withdrawn. */
+  readonly invitesWithdrawn: number;
+}
+
 export interface TokenIdentity {
   readonly sub: string;
   /** Email, when the token carried one. Access tokens usually do not. */
   readonly email: string | null;
+  /** The token's `exp` as ms epoch, or null when the verifier does not report one (#104). */
+  readonly expiresAt: number | null;
 }
 
 export interface StoredUpdate {
@@ -199,7 +236,7 @@ export interface UsersRepo {
    * fill a missing email). When the token carried an address, pending
    * invitations for it convert to shares in the same transaction (SHARE-02).
    */
-  upsertFromToken(identity: TokenIdentity): Promise<UserRecord>;
+  upsertFromToken(identity: Pick<TokenIdentity, 'sub' | 'email'>): Promise<UserRecord>;
   /** Set the fields present in `patch`; `undefined` when the user does not exist. */
   updateProfile(id: string, patch: ProfilePatch): Promise<UserRecord | undefined>;
   /**
@@ -218,6 +255,22 @@ export interface UsersRepo {
   bindEmail(id: string, email: string): Promise<EmailBinding | undefined>;
   /** The user registered under `email` (case-insensitive), if any. */
   findByEmail(email: string): Promise<UserRecord | undefined>;
+  /**
+   * Erase an account (#111, ADR-038, AUTH-09 partial), in one transaction:
+   * every share the user holds goes (`share.remove`), every pending
+   * invitation they sent is withdrawn (`share.invite_withdraw`), every
+   * invitation row addressed to them is deleted, each owned live document is
+   * handed to its earliest editor (`document.transfer`) or — with no editor,
+   * or the guided sample — has its shares removed and is soft-deleted
+   * (`document.delete`; the sample flag is cleared so the CHECK allows it),
+   * `doc_updates.author_id` is nulled, their address is scrubbed from
+   * `audit_log.target`, and the `users` row becomes a tombstone: email,
+   * display name (`Deleted user`), locale, tour and last-seen cleared,
+   * `deleted_at` set, `cognito_sub` kept so the identity cannot return.
+   * Audit rows keep `user_id`. `undefined` when there is no such user;
+   * `null` when the row was already a tombstone (idempotent).
+   */
+  erase(id: string): Promise<ErasureOutcome | null | undefined>;
 }
 
 /** `users.email` is unique; the address already belongs to another Cognito identity. */
@@ -247,6 +300,9 @@ export type ShareAuditAction =
   | 'share.invite_remove'
   | 'share.invite_withdraw'
   | 'share.invite_accept';
+
+/** Document-level audit actions the erasure writes (#111). */
+export type ErasureAuditAction = 'document.transfer' | 'document.delete';
 
 /** What `setLinkAccess` did, so the route can close the sockets of anyone whose link share went. */
 export interface LinkChange {
@@ -399,19 +455,23 @@ export interface DocumentsRepo {
   /**
    * Move to Recently Deleted (LIB-D5): set `deleted_at` and clear
    * `archived_at` (a document is archived or deleted, never both).
-   * `undefined` when the document does not exist or is already deleted.
-   * Unguarded — the jobs and tests put any row in the trash with it; the
-   * owner's Delete goes through `tryDelete`.
+   * `undefined` when the document does not exist, is already deleted, or is
+   * the guided sample (#114: the CHECK forbids a sample in the trash, so this
+   * refuses it before the database would). Used by tests; the owner's Delete
+   * goes through `tryDelete`.
    */
   softDelete(id: string): Promise<DocumentRecord | undefined>;
   /**
    * The owner's Delete (LIB-D1, LIB-D2, LIB-D10): in one transaction, holding
    * the document row against a share being inserted, soft-delete it only
-   * while `ever_shared` is false, the link is off and it is not the sample.
-   * `shared` and `sample` name the refusal (the route answers 409);
-   * `missing` covers a row that does not exist or is deleted already.
+   * while `ever_shared` is false, the link is off and it is not the sample,
+   * and withdraw every pending invitation with a `share.invite_withdraw` row
+   * by `actorId` (#112: an invitation must not outlive the delete and convert
+   * on a document in the trash). `shared` and `sample` name the refusal (the
+   * route answers 409); `missing` covers a row that does not exist or is
+   * deleted already.
    */
-  tryDelete(id: string): Promise<DeleteOutcome>;
+  tryDelete(id: string, actorId: string): Promise<DeleteOutcome>;
   /**
    * Clear `deleted_at`; `undefined` when the document is not soft-deleted or
    * its deletion is past the retention window (it is no longer in Recently
@@ -433,29 +493,32 @@ export interface DocumentsRepo {
    */
   recoverAllDeleted(ownerId: string, actorId: string): Promise<DocumentRecord[]>;
   /**
-   * Permanently delete every owned soft-deleted document (including any past
-   * the retention window) with its updates, snapshots, shares and invites,
-   * and write one `document.purge` audit row per document, all in one
-   * transaction. S3 objects are the caller's job once this has committed.
+   * Permanently delete up to `limit` owned soft-deleted documents (including
+   * any past the retention window; never a sample, #114) with their updates,
+   * snapshots, shares and invites, and write one `document.purge` audit row
+   * per document, all in one transaction bounded by the batch (#109). S3
+   * objects are the caller's job once this has committed. Call again while
+   * a full batch came back.
    */
-  purgeDeleted(ownerId: string, actorId: string): Promise<PurgedDocument[]>;
+  purgeDeleted(ownerId: string, actorId: string, limit: number): Promise<PurgedDocument[]>;
   /**
-   * The nightly job's half of LIB-08: permanently delete up to `limit`
-   * documents, any owner, whose soft-deletion is older than the retention
-   * window, with the same cascade and one `document.purge` audit row each
-   * written by the system actor (`user_id` null). The rows are claimed
-   * (locked) first, `removeObjects` runs for each while the claim is held,
-   * and only the documents whose objects are gone are deleted when the
-   * transaction commits — an S3 failure leaves that document's rows in
-   * place for the next run, never an orphaned object (review finding 3).
-   * `exclude` skips documents that already failed in this run. Call again
-   * until `purged.length + failed.length < limit`.
+   * The nightly job's first half of LIB-08 (#109): up to `limit` documents,
+   * any owner, whose soft-deletion is older than the retention window and
+   * which are not in `exclude`, oldest deletion first. A read, not a claim:
+   * the job removes their objects outside any transaction, then calls
+   * `purge` for the ones that went. A document past the window can no
+   * longer be recovered (`recover` requires it within), so nothing read here
+   * comes back to life in between.
    */
-  purgeExpired(input: {
-    limit: number;
-    exclude: readonly string[];
-    removeObjects: (doc: PurgedDocument) => Promise<boolean>;
-  }): Promise<{ purged: PurgedDocument[]; failed: PurgedDocument[] }>;
+  expiredForPurge(input: { limit: number; exclude: readonly string[] }): Promise<PurgedDocument[]>;
+  /**
+   * The second half: delete the rows of the documents in `ids` that are
+   * still soft-deleted past the window (and not a sample), cascading, with
+   * one `document.purge` audit row each by the system actor (`user_id`
+   * null), in one transaction. Resolves what was deleted; an id whose row
+   * is already gone (a retried run) is simply not in the answer.
+   */
+  purge(ids: readonly string[]): Promise<PurgedDocument[]>;
   /** Explicit share permission for a user, if any. Ownership is checked separately. */
   sharePermission(documentId: string, userId: string): Promise<Permission | undefined>;
   /**

@@ -211,7 +211,7 @@ describe('sizeBytes (LIB-02)', () => {
     });
   });
 
-  test('LIB-02 a participant reading one document sees their permission and who shared it', async () => {
+  test('LIB-02 SHARE-03 a participant reading one document sees their permission and who shared it; a viewer is never handed an address (#102)', async () => {
     const doc = server.repo.seedDocument(bobId, 'shared one');
     server.repo.share(doc.id, aliceId, 'view');
     const res = await json<{ document: DocumentSummaryView }>(
@@ -220,12 +220,81 @@ describe('sizeBytes (LIB-02)', () => {
       `/api/documents/${doc.id}`,
       { token: alice },
     );
+    // Bob has no display name: a viewer gets nothing, not his email.
     expect(res.body.document).toMatchObject({
       permission: 'view',
-      ownerName: 'bob@example.com',
-      sharedBy: { id: bobId, name: 'bob@example.com' },
+      ownerName: null,
+      sharedBy: { id: bobId, name: null },
       sharedWithOthers: true,
     });
+    expect(JSON.stringify(res.body)).not.toContain('bob@example.com');
+  });
+});
+
+describe('who sees an address (#102, the share-sheet rule)', () => {
+  /** Owner Bob (no display name), inviter Carol (display name set), one document. */
+  async function seed() {
+    const doc = server.repo.seedDocument(bobId, 'addresses');
+    await server.repo.users.updateProfile(carolId, { displayName: 'Carol' });
+    server.repo.share(doc.id, carolId, 'edit');
+    return doc;
+  }
+  const one = (id: string, token: string) =>
+    json<{ document: DocumentSummaryView }>(server, 'GET', `/api/documents/${id}`, { token });
+  const listed = async (id: string, token: string) =>
+    (await list(token, 'shared')).body.documents.find((d) => d.id === id);
+
+  test('SHARE-03 a viewer and a view-link holder get display names only: a nameless owner or inviter is null, never an email', async () => {
+    const doc = await seed();
+    server.repo.share(doc.id, aliceId, 'view', carolId);
+    for (const view of [(await one(doc.id, alice)).body.document, await listed(doc.id, alice)]) {
+      expect(view).toMatchObject({
+        permission: 'view',
+        ownerName: null,
+        sharedBy: { id: carolId, name: 'Carol' },
+      });
+      expect(JSON.stringify(view)).not.toContain('@example.com');
+    }
+    // The same through a redeemed view link.
+    server.repo.sharesByDoc.get(doc.id)?.delete(aliceId);
+    const link = await json<ParticipantsView>(server, 'PATCH', `/api/documents/${doc.id}/link`, {
+      token: bob,
+      body: { access: 'view' },
+    });
+    await json(server, 'POST', `/api/documents/${doc.id}/link/redeem`, {
+      token: alice,
+      body: { token: link.body.linkToken },
+    });
+    const redeemed = (await one(doc.id, alice)).body.document;
+    expect(redeemed.ownerName).toBeNull();
+    expect(JSON.stringify(redeemed)).not.toContain('@example.com');
+  });
+
+  test('SHARE-03 an editor sees the owner’s and the inviter’s address where no display name is set, as the sheet shows them', async () => {
+    const doc = await seed();
+    server.repo.share(doc.id, aliceId, 'edit', carolId);
+    const view = (await one(doc.id, alice)).body.document;
+    expect(view).toMatchObject({
+      permission: 'edit',
+      ownerName: 'bob@example.com',
+      sharedBy: { id: carolId, name: 'Carol' },
+    });
+    // Invited by the nameless owner instead: the editor sees his address there too.
+    server.repo.share(doc.id, aliceId, 'edit', bobId);
+    expect((await one(doc.id, alice)).body.document.sharedBy).toEqual({
+      id: bobId,
+      name: 'bob@example.com',
+    });
+  });
+
+  test('SHARE-03 the owner sees their own address as ownerName and no sharedBy; a display name always wins over an address', async () => {
+    const doc = await seed();
+    const asOwner = (await one(doc.id, bob)).body.document;
+    expect(asOwner.ownerName).toBe('bob@example.com');
+    expect(asOwner.sharedBy).toBeUndefined();
+    await server.repo.users.updateProfile(bobId, { displayName: 'Bob' });
+    server.repo.share(doc.id, aliceId, 'view');
+    expect((await one(doc.id, alice)).body.document.ownerName).toBe('Bob');
   });
 });
 

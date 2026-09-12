@@ -6,17 +6,23 @@
  *   - fans out updates and awareness;
  *   - drops sync-step-2 and update messages from view-only sockets (SHARE-03)
  *     while still sending them the document stream;
+ *   - decodes every client update itself before applying it (#105): a frame
+ *     that does not decode is refused (1007) and never reaches the document,
+ *     the log or the other sockets;
+ *   - bounds what one connection and one document may cost (#99, ADR-037):
+ *     bytes per second per connection, a hard ceiling on the document's
+ *     size, a bounded send buffer that is cut immediately when exceeded;
  *   - hands every accepted update to the persistence writer.
  */
 import * as decoding from 'lib0/decoding';
 import type { WebSocket } from 'ws';
 import * as awarenessProtocol from 'y-protocols/awareness';
-import * as syncProtocol from 'y-protocols/sync';
 import * as Y from 'yjs';
 
 import type { Config } from '../config.js';
 import type { SnapshotStore } from '../deps.js';
 import type { Logger } from '../logger.js';
+import { count, type RefusalReason } from '../metrics.js';
 import { canEdit } from '../permissions.js';
 import type { ProjectionWorker } from '../projection/worker.js';
 import type { DocumentPermission, Repo } from '../repo/types.js';
@@ -30,18 +36,33 @@ import {
   encodeUpdate,
   MESSAGE_AWARENESS,
   SYNC_STEP1,
-  SYNC_STEP2,
 } from './protocol.js';
-import { CLOSE_TOO_MANY_REQUESTS, CLOSE_TRY_AGAIN_LATER } from './route.js';
+import {
+  CLOSE_MALFORMED,
+  CLOSE_MESSAGE_TOO_BIG,
+  CLOSE_TOO_LARGE,
+  CLOSE_TOO_MANY_REQUESTS,
+  CLOSE_TRY_AGAIN_LATER,
+} from './route.js';
 import { LOAD_ORIGIN, loadStoredState } from './state.js';
 import { TokenBucket } from './throttle.js';
 
 /** Bytes the type-1 envelope adds around an awareness payload (varUint type + varUint length). */
 const AWARENESS_ENVELOPE_BYTES = 8;
 
+/** `ws`'s error code for a frame over `maxPayload`; the socket is closed 1009 by `ws` itself. */
+const WS_ERR_TOO_BIG = 'WS_ERR_UNSUPPORTED_MESSAGE_LENGTH';
+
 export interface Member {
   readonly userId: string;
   readonly permission: DocumentPermission;
+  /**
+   * When the access token the socket was admitted with expires (ms epoch),
+   * or null when the verifier does not say. The periodic re-check (#104)
+   * closes the socket 1001 past it so the provider reconnects with a fresh
+   * token; the token itself is never held here.
+   */
+  readonly tokenExpiresAt: number | null;
 }
 
 export class Conn {
@@ -51,9 +72,19 @@ export class Conn {
   readOnlyNotified = false;
   /** Serialises message handling per socket so order is preserved across the async load. */
   queue: Promise<void> = Promise.resolve();
-  /** Per-connection limits (#37): sync updates and awareness each have a bucket. */
+  /** Per-connection limits (#37, #99): sync messages, sync bytes and awareness each have a bucket. */
   readonly updateBucket: TokenBucket;
+  readonly bytesBucket: TokenBucket;
   readonly awarenessBucket: TokenBucket;
+  /**
+   * Bytes the socket may hold unread on top of `WS_MAX_BUFFERED_BYTES`: the
+   * step 2 the room sent it on join, once (#99), for as long as that step 2
+   * is still in the socket's buffer. Serving a document at all means sending
+   * its whole state; that one send is not what makes a socket a slow consumer.
+   */
+  bufferAllowance = 0;
+  /** Set once the room has answered this socket's first step 1; a repeat is priced (#99). */
+  step2Sent = false;
   /** Set once the room closed this socket for exceeding a limit; later frames are ignored. */
   limited = false;
   /**
@@ -70,15 +101,37 @@ export class Conn {
     readonly member: Member,
     limits: Pick<
       Config,
-      'WS_UPDATES_PER_SEC' | 'WS_UPDATES_BURST' | 'WS_AWARENESS_PER_SEC' | 'WS_AWARENESS_BURST'
+      | 'WS_UPDATES_PER_SEC'
+      | 'WS_UPDATES_BURST'
+      | 'WS_BYTES_PER_SEC'
+      | 'WS_BYTES_BURST'
+      | 'WS_AWARENESS_PER_SEC'
+      | 'WS_AWARENESS_BURST'
     >,
   ) {
     this.updateBucket = new TokenBucket(limits.WS_UPDATES_PER_SEC, limits.WS_UPDATES_BURST);
+    this.bytesBucket = new TokenBucket(limits.WS_BYTES_PER_SEC, limits.WS_BYTES_BURST);
     this.awarenessBucket = new TokenBucket(limits.WS_AWARENESS_PER_SEC, limits.WS_AWARENESS_BURST);
   }
 
   get canEdit(): boolean {
     return canEdit(this.member.permission);
+  }
+
+  /**
+   * The first step 2 this socket receives is allowed on top of the buffer
+   * budget. True when this was the first; a repeat changes nothing.
+   */
+  allowStep2(bytes: number): boolean {
+    if (this.step2Sent) return false;
+    this.step2Sent = true;
+    this.bufferAllowance = bytes;
+    return true;
+  }
+
+  /** The step 2 has left the buffer: the socket is back on the plain budget. */
+  endStep2Allowance(): void {
+    this.bufferAllowance = 0;
   }
 }
 
@@ -91,12 +144,18 @@ export interface RoomStats {
   refusedRevoked: number;
   /** Awareness updates dropped for exceeding the size limit. */
   droppedAwareness: number;
-  /** Messages that were not valid protocol. */
+  /** Frames that were not valid protocol or did not decode as a Yjs update; the socket is closed 1007 (#105). */
   malformed: number;
+  /** Frames `ws` refused for exceeding `WS_MAX_UPDATE_BYTES`; the socket is closed 1009 (#99). */
+  oversized: number;
+  /** Updates refused because the document would exceed `DOC_MAX_BYTES`; the socket is closed 4413 (#99). */
+  tooLarge: number;
   /** Sockets closed for not reading (buffered bytes over the limit, #37). */
   slowConsumers: number;
   /** Connections closed for sending updates faster than the limit (#37). */
   rateLimited: number;
+  /** Connections closed for sending more sync bytes than the limit (#99). */
+  bytesRateLimited: number;
   /** Awareness updates dropped for exceeding the per-connection rate (#37). */
   throttledAwareness: number;
 }
@@ -107,10 +166,15 @@ export type RoomConfig = Pick<
   | 'SNAPSHOT_IDLE_MS'
   | 'PERSIST_COALESCE_MS'
   | 'DOCS_PREFIX'
+  | 'DOC_LOG_MAX_BYTES'
+  | 'DOC_MAX_BYTES'
   | 'AWARENESS_MAX_BYTES'
+  | 'WS_MAX_UPDATE_BYTES'
   | 'WS_MAX_BUFFERED_BYTES'
   | 'WS_UPDATES_PER_SEC'
   | 'WS_UPDATES_BURST'
+  | 'WS_BYTES_PER_SEC'
+  | 'WS_BYTES_BURST'
   | 'WS_AWARENESS_PER_SEC'
   | 'WS_AWARENESS_BURST'
 >;
@@ -125,12 +189,22 @@ export class Room {
     refusedRevoked: 0,
     droppedAwareness: 0,
     malformed: 0,
+    oversized: 0,
+    tooLarge: 0,
     slowConsumers: 0,
     rateLimited: 0,
+    bytesRateLimited: 0,
     throttledAwareness: 0,
   };
   /** Resolves once the snapshot and log have been applied; rejects if loading failed. */
   readonly ready: Promise<void>;
+  /**
+   * The document's size as the room estimates it (#99): what was loaded,
+   * plus every update accepted since, corrected to the encoded size at each
+   * snapshot. An upper bound between snapshots (a deletion adds bytes here
+   * and removes them from the state), which is the safe side for a ceiling.
+   */
+  stateBytes = 0;
   private writer: PersistenceWriter | null = null;
   private closing = false;
 
@@ -161,6 +235,7 @@ export class Room {
 
   private async load(): Promise<void> {
     const state = await loadStoredState(this.doc, this.documentId, this.repo.updates, this.s3);
+    this.stateBytes = state.bytes;
     this.writer = new PersistenceWriter(
       this.documentId,
       this.doc,
@@ -169,11 +244,11 @@ export class Room {
       this.config,
       this.logger,
       { snapshotSeq: state.snapshotSeq, lastSeq: state.lastSeq },
-      this.projection === null
-        ? undefined
-        : (bytes) => {
-            this.projection?.schedule(this.documentId, bytes);
-          },
+      (bytes) => {
+        // The encoded state is the truth; the running estimate starts over from it.
+        this.stateBytes = bytes.byteLength;
+        this.projection?.schedule(this.documentId, bytes);
+      },
       () => {
         // Another task wrote to this document behind this room (#39): its
         // in-memory state is no longer the whole truth. The manager drops the
@@ -183,7 +258,12 @@ export class Room {
       },
     );
     this.logger.info(
-      { documentId: this.documentId, snapshotSeq: state.snapshotSeq, replayed: state.replayed },
+      {
+        documentId: this.documentId,
+        snapshotSeq: state.snapshotSeq,
+        replayed: state.replayed,
+        bytes: state.bytes,
+      },
       'room loaded',
     );
   }
@@ -195,10 +275,28 @@ export class Room {
 
     socket.on('message', (data, isBinary) => {
       if (!isBinary) {
-        this.stats.malformed += 1;
+        // The protocol is binary; a text frame is not a client we know.
+        this.refuseMalformed(conn, 'text frame');
         return;
       }
       const bytes = toUint8Array(data);
+      if (conn.limited) return;
+      // Every frame costs its length from the bytes bucket (#99), whatever
+      // its type and before it is queued: an awareness frame up to
+      // `maxPayload` would otherwise be assembled by `ws` and dropped below
+      // for free, at any rate — ingress the sync bucket was added to bound.
+      if (!conn.bytesBucket.take(bytes.byteLength)) {
+        this.stats.bytesRateLimited += 1;
+        conn.limited = true;
+        this.refuse(
+          conn,
+          'bytes_rate_limited',
+          { bytes: bytes.byteLength },
+          'byte rate limit exceeded; closing',
+        );
+        socket.close(CLOSE_TOO_MANY_REQUESTS, 'too many bytes');
+        return;
+      }
       // An oversized awareness frame is refused on its length alone, before
       // anything is decoded or queued (#37). The envelope is one varUint byte.
       if (
@@ -220,7 +318,15 @@ export class Room {
     socket.once('close', () => {
       this.leave(conn);
     });
-    socket.on('error', (error) => {
+    socket.on('error', (error: Error & { code?: string }) => {
+      if (error.code === WS_ERR_TOO_BIG) {
+        // `ws` refused the frame on its declared length and closes 1009 itself;
+        // nothing of it was assembled. Counted here so it is visible (#99).
+        this.stats.oversized += 1;
+        conn.limited = true;
+        this.refuse(conn, 'message_too_big', {}, 'frame over WS_MAX_UPDATE_BYTES refused by ws');
+        return;
+      }
       this.logger.warn({ err: error, documentId: this.documentId }, 'socket error');
     });
 
@@ -269,7 +375,23 @@ export class Room {
       this.stats.refusedClosing += 1;
       return;
     }
-    const message = decodeMessage(bytes);
+    if (bytes.byteLength > this.config.WS_MAX_UPDATE_BYTES) {
+      // `ws` enforces this on the frame length; kept as the room's own bound
+      // in case the server is ever configured with a larger `maxPayload`.
+      this.stats.oversized += 1;
+      conn.limited = true;
+      this.refuse(conn, 'message_too_big', { bytes: bytes.byteLength }, 'frame too big; closing');
+      conn.socket.close(CLOSE_MESSAGE_TOO_BIG, 'message too big');
+      return;
+    }
+    let message;
+    try {
+      message = decodeMessage(bytes);
+    } catch {
+      // lib0 threw on the envelope: not a frame any provider sends.
+      this.refuseMalformed(conn, 'undecodable envelope');
+      return;
+    }
     switch (message.kind) {
       case 'sync': {
         // Every sync message costs a token, reads included (#37, review of #66): a
@@ -279,10 +401,62 @@ export class Room {
         if (!this.takeUpdateToken(conn, 'too many sync messages')) return;
         if (message.subtype === SYNC_STEP1) {
           // A read: reply with what the client is missing.
-          const stateVector = decoding.readVarUint8Array(message.decoder);
-          this.send(conn, encodeSyncStep2(this.doc, stateVector));
+          let stateVector: Uint8Array;
+          try {
+            stateVector = decoding.readVarUint8Array(message.decoder);
+          } catch {
+            this.refuseMalformed(conn, 'undecodable state vector');
+            return;
+          }
+          // The provider sends one step 1 per connection. A second one is
+          // a request to encode and send the document again — a message
+          // token buys a document-sized encode and reply — so it is priced
+          // at the room's size estimate from the bytes bucket, before the
+          // encode: a repeat on a document larger than the burst closes
+          // 4429, a repeat on a small one is paid for like any other bytes.
+          if (conn.step2Sent && !conn.bytesBucket.take(this.stateBytes)) {
+            this.stats.bytesRateLimited += 1;
+            conn.limited = true;
+            this.refuse(
+              conn,
+              'bytes_rate_limited',
+              { bytes: this.stateBytes, repeatedStep1: true },
+              'repeated sync step 1 over the byte budget; closing',
+            );
+            conn.socket.close(CLOSE_TOO_MANY_REQUESTS, 'too many bytes');
+            return;
+          }
+          const step2 = encodeSyncStep2(this.doc, stateVector);
+          const first = conn.allowStep2(step2.byteLength);
+          // The allowance is for that one send: it ends when `ws` has
+          // handed the step 2 to the socket, so it never adds a document's
+          // worth of slack to every later broadcast (#99).
+          this.send(
+            conn,
+            step2,
+            first
+              ? () => {
+                  conn.endStep2Allowance();
+                }
+              : undefined,
+          );
           return;
         }
+        // Step 2 and update carry the same payload: one Yjs update. It is read
+        // here, never by y-protocols, so every failure is ours to count and
+        // refuse (#105): y-protocols would catch it, print a stack trace to
+        // stderr and keep the socket open.
+        let update: Uint8Array;
+        try {
+          update = decoding.readVarUint8Array(message.decoder);
+        } catch {
+          this.refuseMalformed(conn, 'undecodable update payload');
+          return;
+        }
+        // The frame's bytes were charged on arrival (the bytes bucket covers
+        // every frame, #99): a connection that sends 200 frames per second at
+        // the frame limit is within the message budget while pushing
+        // hundreds of megabytes a second, and the byte bucket is what stops it.
         if (!conn.canEdit) {
           // SHARE-03: a view-only participant receives the stream; their edits are rejected here.
           this.stats.droppedUpdates += 1;
@@ -298,11 +472,7 @@ export class Room {
           }
           return;
         }
-        if (message.subtype === SYNC_STEP2) {
-          syncProtocol.readSyncStep2(message.decoder, this.doc, conn);
-        } else {
-          syncProtocol.readUpdate(message.decoder, this.doc, conn);
-        }
+        this.applyClientUpdate(conn, update);
         return;
       }
       case 'awareness': {
@@ -315,7 +485,11 @@ export class Room {
           this.stats.throttledAwareness += 1;
           return;
         }
-        awarenessProtocol.applyAwarenessUpdate(this.awareness, message.update, conn);
+        try {
+          awarenessProtocol.applyAwarenessUpdate(this.awareness, message.update, conn);
+        } catch {
+          this.refuseMalformed(conn, 'undecodable awareness update');
+        }
         return;
       }
       case 'queryAwareness': {
@@ -326,10 +500,58 @@ export class Room {
         return;
       }
       case 'auth':
+        // Client → server auth frames mean nothing here; they cost a token so
+        // they cannot be sent for free (#99).
+        this.takeUpdateToken(conn, 'too many sync messages');
         return;
       case 'unknown':
-        this.stats.malformed += 1;
+        this.refuseMalformed(conn, `unknown message type ${String(message.type)}`);
     }
+  }
+
+  /**
+   * One client update (a step 2 or an update frame) from an edit socket:
+   * checked against the document ceiling, decoded on its own, then applied.
+   * Nothing that fails here touches the document, the log or another socket.
+   */
+  private applyClientUpdate(conn: Conn, update: Uint8Array): void {
+    if (this.stateBytes + update.byteLength > this.config.DOC_MAX_BYTES) {
+      // ADR-037: the document would pass its ceiling. The socket is closed
+      // with a code the provider treats as terminal (4413); the client keeps
+      // its edits locally and shows the LOAD-05 banner.
+      this.stats.tooLarge += 1;
+      conn.limited = true;
+      this.refuse(
+        conn,
+        'document_too_large',
+        { bytes: update.byteLength, stateBytes: this.stateBytes },
+        'update would exceed DOC_MAX_BYTES; closing',
+      );
+      conn.socket.close(CLOSE_TOO_LARGE, 'document too large');
+      return;
+    }
+    // Decode before apply (#105): a truncated update fails here, whole, rather
+    // than half-integrating inside a failed Yjs transaction whose `update`
+    // event would still fire and persist the fragment.
+    try {
+      Y.decodeUpdate(update);
+    } catch {
+      this.refuseMalformed(conn, 'update does not decode');
+      return;
+    }
+    try {
+      Y.applyUpdate(this.doc, update, conn);
+    } catch (error) {
+      // Decoded but not integrable: refused the same way, and noted at warn
+      // because it is a case decoding should have caught.
+      this.logger.warn(
+        { err: error, documentId: this.documentId, userId: conn.member.userId },
+        'decoded update failed to apply',
+      );
+      this.refuseMalformed(conn, 'update failed to apply');
+      return;
+    }
+    this.stateBytes += update.byteLength;
   }
 
   /**
@@ -341,12 +563,34 @@ export class Room {
     if (conn.updateBucket.take()) return true;
     this.stats.rateLimited += 1;
     conn.limited = true;
-    this.logger.warn(
-      { documentId: this.documentId, userId: conn.member.userId, reason },
-      'sync rate limit exceeded; closing',
-    );
+    this.refuse(conn, 'rate_limited', { reason }, 'sync rate limit exceeded; closing');
     conn.socket.close(CLOSE_TOO_MANY_REQUESTS, reason);
     return false;
+  }
+
+  /** A frame that is not the protocol (#105): counted, reported, and the socket closed 1007. */
+  private refuseMalformed(conn: Conn, what: string): void {
+    this.stats.malformed += 1;
+    if (conn.limited) return;
+    conn.limited = true;
+    this.refuse(conn, 'malformed', { what }, 'malformed frame; closing');
+    conn.socket.close(CLOSE_MALFORMED, 'malformed message');
+  }
+
+  /** One structured line per refusal, which is also the `GeDe/Sync WsRefusals` datapoint (#99). */
+  private refuse(
+    conn: Conn,
+    reason: RefusalReason,
+    context: Record<string, unknown>,
+    msg: string,
+  ): void {
+    count(
+      this.logger,
+      'WsRefusals',
+      reason,
+      { documentId: this.documentId, userId: conn.member.userId, ...context },
+      msg,
+    );
   }
 
   private readonly onDocUpdate = (update: Uint8Array, origin: unknown): void => {
@@ -373,31 +617,36 @@ export class Room {
     for (const conn of this.conns) this.send(conn, message);
   };
 
-  private send(conn: Conn, message: Uint8Array): void {
+  /** `onFlushed` runs once `ws` has written the message out of its buffer (not on failure). */
+  private send(conn: Conn, message: Uint8Array, onFlushed?: () => void): void {
     const { socket } = conn;
     if (socket.readyState !== socket.OPEN) return;
-    if (socket.bufferedAmount > this.config.WS_MAX_BUFFERED_BYTES) {
-      // Back-pressure (#37): a socket that has stopped reading would otherwise
-      // hold every further update in this process's memory. It is closed with
-      // 1013 so the provider reconnects with backoff and resyncs from scratch.
+    if (socket.bufferedAmount > this.config.WS_MAX_BUFFERED_BYTES + conn.bufferAllowance) {
+      // Back-pressure (#37, #99): a socket that has stopped reading would
+      // otherwise hold every further update in this process's memory. It is
+      // closed with 1013 so the provider reconnects with backoff and resyncs
+      // from scratch — and terminated at once: waiting for a peer that is not
+      // reading to answer the close handshake kept the buffer allocated for
+      // `ws`'s 30 s close timeout.
       this.stats.slowConsumers += 1;
       conn.limited = true;
-      this.logger.warn(
-        {
-          documentId: this.documentId,
-          userId: conn.member.userId,
-          buffered: socket.bufferedAmount,
-        },
+      this.refuse(
+        conn,
+        'slow_consumer',
+        { buffered: socket.bufferedAmount },
         'slow consumer; closing',
       );
       socket.close(CLOSE_TRY_AGAIN_LATER, 'slow consumer');
+      socket.terminate();
       return;
     }
     socket.send(message, { binary: true }, (error) => {
       if (error) {
         this.logger.warn({ err: error, documentId: this.documentId }, 'send failed; closing');
         socket.close(1011, 'send failed');
+        return;
       }
+      onFlushed?.();
     });
   }
 
@@ -424,6 +673,17 @@ export class Room {
       closed += 1;
     }
     return closed;
+  }
+
+  /**
+   * Close one connection the same way `closeMember` does (revoked first, then
+   * the close frame): used by the periodic re-check (#104) when a token has
+   * expired or a member's standing changed.
+   */
+  closeConn(conn: Conn, code: number, reason: string): void {
+    if (!this.conns.has(conn)) return;
+    conn.revoked = true;
+    conn.socket.close(code, reason);
   }
 
   /**

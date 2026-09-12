@@ -129,16 +129,130 @@ describe('purgeExpired job', () => {
     expect(s3.objects.size).toBe(0);
   });
 
-  test('LIB-08 a failed transaction changes nothing and surfaces', async () => {
+  test('LIB-08 a failed read changes nothing and surfaces; a batch whose row delete fails after its objects went is reported, skipped, and finished by the next run (#109)', async () => {
     const repo = new FakeRepo();
     const alice = repo.seedUser('sub-alice').id;
-    deletedAgo(repo, alice, 'doomed', 100);
-    repo.failNextPurge = true;
+    const doomed = deletedAgo(repo, alice, 'doomed', 100);
+    repo.failNextPurge = true; // the first call is the read
     await expect(
       purgeExpired({ repo, s3: new FakeSnapshotStore(), docsPrefix: 'docs/', logger: silent }),
     ).rejects.toThrow('simulated purge failure');
     expect(repo.docs.size).toBe(1);
     expect(repo.auditLog).toEqual([]);
+
+    // The read succeeds, S3 goes, the row delete fails: the run goes on and reports it.
+    const s3 = new FakeSnapshotStore();
+    await s3.put(snapshotKey('docs/', doomed, 1), new Uint8Array([1]));
+    const other = deletedAgo(repo, alice, 'other', 90);
+    await s3.put(snapshotKey('docs/', other, 1), new Uint8Array([1]));
+    const original = repo.documents.purge.bind(repo.documents);
+    let calls = 0;
+    (repo.documents as { purge: typeof original }).purge = (ids) => {
+      calls += 1;
+      return calls === 1 ? Promise.reject(new Error('25P03 simulated')) : original(ids);
+    };
+    const result = await purgeExpired({
+      repo,
+      s3,
+      docsPrefix: 'docs/',
+      logger: silent,
+      batchSize: 1,
+    });
+    expect(result).toEqual({ purged: 1, objectsDeleted: 2, failed: [doomed] });
+    expect([...repo.docs.keys()]).toEqual([doomed]);
+    expect(s3.objects.size).toBe(0);
+    // Next night: nothing left to remove in S3, the rows go.
+    expect(await purgeExpired({ repo, s3, docsPrefix: 'docs/', logger: silent })).toEqual({
+      purged: 1,
+      objectsDeleted: 0,
+      failed: [],
+    });
+    expect(repo.docs.size).toBe(0);
+  });
+
+  test('LIB-08 a row the delete does not claim (locked elsewhere, SKIP LOCKED) is left for the next run and not read again tonight: a full batch cannot loop on it, and the night is not red for it (#109)', async () => {
+    const repo = new FakeRepo();
+    const alice = repo.seedUser('sub-alice').id;
+    const locked = deletedAgo(repo, alice, 'locked', 100);
+    const other = deletedAgo(repo, alice, 'other', 90);
+    const s3 = new FakeSnapshotStore();
+    await s3.put(snapshotKey('docs/', locked, 1), new Uint8Array([1]));
+    await s3.put(snapshotKey('docs/', other, 1), new Uint8Array([1]));
+    const original = repo.documents.purge.bind(repo.documents);
+    const reads: string[][] = [];
+    const expired = repo.documents.expiredForPurge.bind(repo.documents);
+    (repo.documents as { expiredForPurge: typeof expired }).expiredForPurge = async (query) => {
+      const rows = await expired(query);
+      reads.push(rows.map((r) => r.id));
+      return rows;
+    };
+    // Another transaction holds `locked`: the row delete skips it and claims nothing else.
+    (repo.documents as { purge: typeof original }).purge = (ids) =>
+      original(ids.filter((id) => id !== locked));
+    const result = await purgeExpired({
+      repo,
+      s3,
+      docsPrefix: 'docs/',
+      logger: silent,
+      batchSize: 1,
+    });
+    expect(result).toEqual({ purged: 1, objectsDeleted: 2, failed: [] });
+    // `locked` was read once, then excluded; `other` went; the loop ended.
+    expect(reads).toEqual([[locked], [other], []]);
+    expect([...repo.docs.keys()]).toEqual([locked]);
+  });
+
+  test('LIB-08 S3 runs outside any transaction (#109): a slow object store neither holds a claim nor fails the run', async () => {
+    const repo = new FakeRepo();
+    const alice = repo.seedUser('sub-alice').id;
+    const doomed = deletedAgo(repo, alice, 'doomed', 100);
+    const s3 = new FakeSnapshotStore();
+    await s3.put(snapshotKey('docs/', doomed, 1), new Uint8Array([1]));
+    let inFlight = 0;
+    const slow = {
+      put: s3.put.bind(s3),
+      get: s3.get.bind(s3),
+      deletePrefix: async (prefix: string) => {
+        inFlight += 1;
+        // The repository must not be mid-transaction while this waits: the
+        // fake records every open purge transaction as a call in progress.
+        await new Promise((resolve) => setTimeout(resolve, 40));
+        inFlight -= 1;
+        return s3.deletePrefix(prefix);
+      },
+    };
+    const purge = repo.documents.purge.bind(repo.documents);
+    (repo.documents as { purge: typeof purge }).purge = (ids) => {
+      expect(inFlight).toBe(0); // rows are deleted only after S3 has answered
+      return purge(ids);
+    };
+    const result = await purgeExpired({ repo, s3: slow, docsPrefix: 'docs/', logger: silent });
+    expect(result).toEqual({ purged: 1, objectsDeleted: 1, failed: [] });
+    expect(repo.docs.size).toBe(0);
+  });
+
+  test('LIB-D10 the purge never removes a guided sample, even one a hand-run UPDATE put in the trash (#114); Delete All skips it too; softDelete refuses it', async () => {
+    const repo = new FakeRepo();
+    const s3 = new FakeSnapshotStore();
+    const alice = repo.seedUser('sub-alice').id;
+    const sample = repo.seedDocument(alice, 'Q3 Delivery — Guided sample', new Date(), undefined, {
+      sample: true,
+    }).id;
+    // What the CHECK in migration 0010 forbids; the fake has no CHECK, so plant it by hand.
+    repo.docs.get(sample)!.deletedAt = new Date(Date.now() - 400 * DAY);
+    const old = deletedAgo(repo, alice, 'old', 100);
+    await s3.put(snapshotKey('docs/', sample, 1), new Uint8Array([1]));
+    await s3.put(snapshotKey('docs/', old, 1), new Uint8Array([1]));
+    const result = await purgeExpired({ repo, s3, docsPrefix: 'docs/', logger: silent });
+    expect(result).toEqual({ purged: 1, objectsDeleted: 1, failed: [] });
+    expect([...repo.docs.keys()]).toEqual([sample]);
+    expect(s3.objects.has(snapshotKey('docs/', sample, 1))).toBe(true);
+    expect(await repo.documents.purge([sample])).toEqual([]);
+    expect(await repo.documents.purgeDeleted(alice, alice, 50)).toEqual([]);
+    expect(repo.docs.has(sample)).toBe(true);
+    repo.docs.get(sample)!.deletedAt = null;
+    expect(await repo.documents.softDelete(sample)).toBeUndefined();
+    expect(repo.docs.get(sample)?.deletedAt).toBeNull();
   });
 });
 

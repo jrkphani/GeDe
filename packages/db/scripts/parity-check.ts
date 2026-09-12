@@ -3,7 +3,8 @@
  * 1. Applies migrations; applies them again and requires a no-op.
  * 2. Compares every table and column in `src/schema.ts` with information_schema.
  * 3. Checks the constraints later migrations change (0003: no foreign key on
- *    `audit_log.document_id`, so a purge's audit row outlives the document).
+ *    `audit_log.document_id`, so a purge's audit row outlives the document;
+ *    0008 and 0010: every CHECK `schema.ts` declares exists under its name).
  * 4. Requires every index `schema.ts` declares to exist (0004) and the ledger
  *    to carry a checksum for every applied file (0005).
  * 5. Bootstraps the app role from `PGAPPUSER`/`PGAPPPASSWORD` on both runs — as
@@ -112,6 +113,19 @@ try {
   );
   if (fks.some((c) => c.conname === 'audit_log_document_id_fkey')) {
     problems.push('audit_log.document_id still has its foreign key (migration 0003 did not apply)');
+  }
+  const { rows: checks } = await pool.query<{ conname: string; conrelid: string }>(
+    "SELECT conname, conrelid::regclass::text AS conrelid FROM pg_constraint WHERE contype = 'c' AND connamespace = 'public'::regnamespace",
+  );
+  const liveChecks = new Set(checks.map((c) => `${c.conrelid}.${c.conname}`));
+  for (const table of tables) {
+    for (const check of getTableConfig(table).checks) {
+      if (!liveChecks.has(`${getTableName(table)}.${check.name}`)) {
+        problems.push(
+          `check ${check.name} on ${getTableName(table)} missing (migration 0008/0010)`,
+        );
+      }
+    }
   }
   const { rows: indexes } = await pool.query<{ indexname: string }>(
     "SELECT indexname FROM pg_indexes WHERE schemaname = 'public'",

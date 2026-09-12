@@ -89,8 +89,8 @@ describe('commitSnapshot is monotonic across tasks (#39)', () => {
         send: () => undefined,
         close: (code: number) => closes.push(code),
       }) as never;
-    taskA.join(doc.id, socket(), { userId: owner, permission: 'owner' });
-    taskB.join(doc.id, socket(), { userId: owner, permission: 'owner' });
+    taskA.join(doc.id, socket(), { userId: owner, permission: 'owner', tokenExpiresAt: null });
+    taskB.join(doc.id, socket(), { userId: owner, permission: 'owner', tokenExpiresAt: null });
     const roomA = taskA.get(doc.id);
     const roomB = taskB.get(doc.id);
     if (!roomA || !roomB) throw new Error('rooms');

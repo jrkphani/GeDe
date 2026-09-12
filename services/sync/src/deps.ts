@@ -39,6 +39,19 @@ export interface Mailer {
   send(mail: Mail): Promise<void>;
 }
 
+/**
+ * The identity provider's side of account erasure (#111, ADR-038): delete the
+ * Cognito user so the identity cannot sign in again. Cognito
+ * (`AdminDeleteUser`) in production when `COGNITO_ERASE_IDENTITY` is on, a
+ * recording fake in tests, `null` when the deploy has not granted the task
+ * role the permission yet — the database erasure still happens and the
+ * tombstone refuses the identity meanwhile.
+ */
+export interface IdentityStore {
+  /** Delete the user `sub` identifies. Resolves when gone (or already gone); rejects on any other failure. */
+  deleteUser(sub: string): Promise<void>;
+}
+
 export interface Deps {
   readonly config: Config;
   readonly logger: Logger;
@@ -47,6 +60,8 @@ export interface Deps {
   readonly db: Repo;
   readonly s3: SnapshotStore;
   readonly mail: Mailer;
+  /** Null until the task role may delete Cognito users (`COGNITO_ERASE_IDENTITY`). */
+  readonly identity: IdentityStore | null;
   /** Reported by `/healthz`. */
   readonly version: string;
 }

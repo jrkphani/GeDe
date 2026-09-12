@@ -3,6 +3,8 @@ import * as Y from 'yjs';
 import { FakeRoom, until } from '../test/fake-websocket.js';
 import {
   CLOSE_FORBIDDEN,
+  CLOSE_MESSAGE_TOO_BIG,
+  CLOSE_TOO_LARGE,
   CLOSE_UNAUTHENTICATED,
   OFFLINE_AFTER_ATTEMPTS,
   SyncClient,
@@ -189,6 +191,23 @@ describe('SyncClient', () => {
     await vi.advanceTimersByTimeAsync(10);
     expect(room.urls).toHaveLength(2);
     expect(c.getSnapshot().status).toBe('synced');
+  });
+
+  it('LOAD-05 a 1009 (frame too big, #99) and a 4413 (document too large) are terminal: no reconnect that would send the same update again', async () => {
+    vi.useFakeTimers();
+    for (const refuseWith of [
+      { code: CLOSE_MESSAGE_TOO_BIG, reason: 'Max payload size exceeded' },
+      { code: CLOSE_TOO_LARGE, reason: 'document too large' },
+    ]) {
+      const r = new FakeRoom({ refuseWith });
+      const { c } = client(r);
+      clients.push(c);
+      c.connect();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(c.getSnapshot()).toMatchObject({ status: 'offline', failure: refuseWith });
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(r.urls).toHaveLength(1);
+    }
   });
 
   it('SHARE-03 a view-only socket still receives the stream while its updates are dropped', async () => {

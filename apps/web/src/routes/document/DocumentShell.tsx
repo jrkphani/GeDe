@@ -35,7 +35,9 @@ import { rememberLastDocument } from '../../last-document.js';
 import { useShortcuts } from '../../doc/shortcuts.js';
 import {
   CLOSE_FORBIDDEN,
+  CLOSE_MESSAGE_TOO_BIG,
   CLOSE_NOT_FOUND,
+  CLOSE_TOO_LARGE,
   CLOSE_UNAUTHENTICATED,
   type SyncFailure,
   type SyncSnapshot,
@@ -1094,6 +1096,14 @@ function failureRemedy(code: number): string {
       return 'You no longer have access to this workscape. Edits are held on this device.';
     case CLOSE_NOT_FOUND:
       return 'This workscape was deleted. Anything deleted in the last 30 days can be recovered from Recently Deleted.';
+    // #99: the server refused the edit on its size, not the connection. The
+    // oversized change sits in this device's replica and is offered again on
+    // every reconnect, so Retry cannot succeed; sign-out is what discards the
+    // replica (AUTH-09), and that is the remedy named.
+    case CLOSE_MESSAGE_TOO_BIG:
+      return 'Your last change is too large to sync and is held on this device only. Copy what you need from it, then sign out and sign in again to discard it and reopen the workscape.';
+    case CLOSE_TOO_LARGE:
+      return 'This workscape has reached its size limit, so your last change is held on this device only. Copy what you need from it, then sign out and sign in again to discard it. Remove content before editing further.';
     default:
       return 'The sync service refused the connection. Edits are held on this device.';
   }

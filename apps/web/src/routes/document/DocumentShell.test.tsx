@@ -602,6 +602,29 @@ describe('DocumentShell', () => {
     });
   });
 
+  it.each([
+    [1009, 'message too big', /too large to sync/],
+    [4413, 'document too large', /reached its size limit/],
+  ])(
+    'LOAD-05 LOAD-06 a %i close names the size as the cause and the device copy as the remedy, never the connection (#99)',
+    async (code, reason, remedy) => {
+      await openShell();
+      await addTable();
+      room.options = { refuseWith: { code, reason } };
+      act(() => {
+        room.dropAll();
+      });
+      await waitFor(() => {
+        expect(screen.getByText('Changes are not syncing.')).toBeInTheDocument();
+      });
+      expect(screen.getByText(remedy)).toBeInTheDocument();
+      expect(screen.queryByText(/refused the connection/)).not.toBeInTheDocument();
+      expect(screen.getByRole('grid')).toBeInTheDocument();
+      // Terminal: no reconnect was attempted on its own (a retry would resend the same frame).
+      expect(screen.getByTestId('sync-status')).not.toHaveTextContent('Synced');
+    },
+  );
+
   it('AUTH-09 a terminal 4401 after render shows the session banner; Sign in keeps the document path', async () => {
     const { router } = await openShell(`/d/${ID}?cell=B5`);
     room.options = { refuseWith: { code: 4401, reason: 'expired' } };

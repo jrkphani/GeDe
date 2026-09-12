@@ -65,6 +65,16 @@ interface MutableUser extends Omit<UserRecord, 'sampleDocumentId'> {
   displayName: string | null;
   locale: string | null;
   tourDoneAt: Date | null;
+  deletedAt: Date | null;
+}
+
+/** What an erased account's row is called, as `pg.ts` writes it (#111). */
+const ERASED_DISPLAY_NAME = 'Deleted user';
+
+/** The whole-address match erasure scrubs with, as `addressPattern` in `pg.ts` builds it. */
+function addressPattern(email: string): string {
+  const literal = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `(^|[^A-Za-z0-9._%+-])${literal}(?![A-Za-z0-9._%+-])`;
 }
 
 export interface FakeShare {
@@ -95,7 +105,8 @@ export class FakeRepo implements Repo {
   readonly docs = new Map<string, MutableDocument>();
   readonly sharesByDoc = new Map<string, Map<string, FakeShare>>();
   readonly invitesById = new Map<string, MutableInvite>();
-  readonly updatesByDoc = new Map<string, StoredUpdate[]>();
+  /** The log, with the author each row was appended under (what `doc_updates.author_id` holds). */
+  readonly updatesByDoc = new Map<string, (StoredUpdate & { authorId: string | null })[]>();
   readonly snapshotsByDoc = new Map<string, { seq: number; s3Key: string; sizeBytes: number }[]>();
   readonly auditLog: AuditEntry[] = [];
   /** Set to make `ping` fail. */
@@ -140,6 +151,7 @@ export class FakeRepo implements Repo {
       displayName,
       locale: null,
       tourDoneAt: null,
+      deletedAt: null,
     };
     this.usersBySub.set(sub, user);
     return this.userRecord(user);
@@ -221,12 +233,18 @@ export class FakeRepo implements Repo {
     return a !== null && a.toLowerCase() === b.toLowerCase();
   }
 
-  /** SHARE-02 conversion, as `convertInvites` in `pg.ts`: pending invitations for the address become shares. */
+  /** As `inheritedSource` in `pg.ts` (#101): a link-sourced inviter hands out link shares. */
+  private inheritedSource(documentId: string, inviterId: string): ShareSource {
+    return this.sharesByDoc.get(documentId)?.get(inviterId)?.source === 'link' ? 'link' : 'invite';
+  }
+
+  /** SHARE-02 conversion, as `convertInvites` in `pg.ts`: pending invitations for the address on live documents become shares. */
   private convertInvites(userId: string, email: string): ConvertedInvite[] {
     const converted: ConvertedInvite[] = [];
     for (const invite of this.pendingInvites((i) => this.sameEmail(i.email, email))) {
       const doc = this.docs.get(invite.documentId);
-      if (!doc) continue;
+      // #112: nothing converts on a document in the trash.
+      if (doc?.deletedAt !== null) continue;
       if (!this.inviterStillMay(invite, doc)) {
         this.withdrawStale(invite, doc, null);
         continue;
@@ -238,7 +256,7 @@ export class FakeRepo implements Repo {
             permission: invite.permission,
             invitedBy: invite.invitedBy ?? doc.ownerId,
             createdAt: new Date(),
-            source: 'invite',
+            source: this.inheritedSource(doc.id, invite.invitedBy ?? doc.ownerId),
           });
           this.sharesByDoc.set(doc.id, map);
         }
@@ -297,18 +315,23 @@ export class FakeRepo implements Repo {
     return (snapshot?.sizeBytes ?? 0) + tail;
   }
 
-  private personName(userId: string): string | null {
-    const user = this.userById(userId);
-    return user?.displayName ?? user?.email ?? null;
-  }
-
   private summarise(doc: MutableDocument, userId: string): DocumentSummary {
     const share = doc.ownerId === userId ? undefined : this.sharesByDoc.get(doc.id)?.get(userId);
+    const owner = this.userById(doc.ownerId);
+    const inviter = share ? this.userById(share.invitedBy) : undefined;
+    // Names and addresses apart (#102), as `summaryQuery` selects them.
     return {
       ...doc,
-      ownerName: this.personName(doc.ownerId),
+      ownerName: owner?.displayName ?? null,
+      ownerEmail: owner?.email ?? null,
       sizeBytes: this.sizeBytes(doc),
-      sharedBy: share ? { id: share.invitedBy, name: this.personName(share.invitedBy) } : null,
+      sharedBy: share
+        ? {
+            id: share.invitedBy,
+            name: inviter?.displayName ?? null,
+            email: inviter?.email ?? null,
+          }
+        : null,
       sharedWithOthers: (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0,
     };
   }
@@ -329,6 +352,10 @@ export class FakeRepo implements Repo {
         );
       const email = taken(identity.email) ? null : identity.email;
       let user = this.usersBySub.get(identity.sub);
+      if (user?.deletedAt !== null && user !== undefined) {
+        // A tombstone (#111) is left as it is; the resolver refuses it.
+        return Promise.resolve(this.userRecord(user));
+      }
       if (user) {
         user.email = user.email ?? email;
       } else {
@@ -344,6 +371,8 @@ export class FakeRepo implements Repo {
     bindEmail: (id, email) => {
       const user = this.userById(id);
       if (!user) return Promise.resolve(undefined);
+      if (user.deletedAt !== null)
+        return Promise.resolve({ user: this.userRecord(user), converted: [] });
       if (user.email === null) {
         for (const other of this.usersBySub.values()) {
           if (other.id !== id && this.sameEmail(other.email, email)) {
@@ -374,6 +403,131 @@ export class FakeRepo implements Repo {
       if (patch.locale !== undefined) user.locale = patch.locale;
       if (patch.tourDone !== undefined) user.tourDoneAt = patch.tourDone ? new Date() : null;
       return Promise.resolve(this.userRecord(user));
+    },
+    erase: (id) => {
+      // As `pg.ts` in one transaction (#111): shares held go, sent invitations
+      // are withdrawn, invitations to the address are deleted, owned live
+      // documents transfer to the earliest editor or are soft-deleted (shares
+      // removed, sample flag cleared), authors and audit targets scrubbed,
+      // the row becomes a tombstone that keeps its sub.
+      const user = this.userById(id);
+      if (!user) return Promise.resolve(undefined);
+      if (user.deletedAt !== null) return Promise.resolve(null);
+      const now = new Date();
+      const sharesRemoved: string[] = [];
+      for (const [documentId, map] of this.sharesByDoc) {
+        if (!map.delete(id)) continue;
+        this.clearSharedIfNone(documentId);
+        this.auditLog.push({ documentId, userId: id, action: 'share.remove', target: id });
+        sharesRemoved.push(documentId);
+      }
+      let invitesWithdrawn = 0;
+      for (const invite of this.pendingInvites((i) => i.invitedBy === id)) {
+        const doc = this.docs.get(invite.documentId);
+        if (doc?.deletedAt !== null) continue;
+        this.withdrawStale(invite, doc, id);
+        invitesWithdrawn += 1;
+      }
+      if (user.email !== null) {
+        for (const [inviteId, invite] of this.invitesById) {
+          if (this.sameEmail(invite.email, user.email)) this.invitesById.delete(inviteId);
+        }
+      }
+      const transferred: { documentId: string; toUserId: string }[] = [];
+      const deleted: string[] = [];
+      const owned = [...this.docs.values()]
+        .filter((d) => d.ownerId === id && d.deletedAt === null)
+        .sort(
+          (a, b) =>
+            a.createdAt.getTime() - b.createdAt.getTime() ||
+            (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        );
+      for (const doc of owned) {
+        const map = this.sharesByDoc.get(doc.id) ?? new Map<string, FakeShare>();
+        const editor = doc.sample
+          ? undefined
+          : [...map]
+              .filter(([, share]) => share.permission === 'edit')
+              .sort(
+                ([idA, a], [idB, b]) =>
+                  a.createdAt.getTime() - b.createdAt.getTime() ||
+                  (idA < idB ? -1 : idA > idB ? 1 : 0),
+              )[0]?.[0];
+        if (editor !== undefined) {
+          map.delete(editor);
+          for (const share of map.values()) if (share.invitedBy === id) share.invitedBy = editor;
+          for (const invite of this.invitesById.values()) {
+            if (invite.documentId === doc.id && invite.invitedBy === id) {
+              (invite as { invitedBy: string | null }).invitedBy = editor;
+            }
+          }
+          (doc as { ownerId: string }).ownerId = editor;
+          doc.updatedAt = now;
+          this.clearSharedIfNone(doc.id);
+          this.auditLog.push({
+            documentId: doc.id,
+            userId: id,
+            action: 'document.transfer',
+            target: editor,
+          });
+          transferred.push({ documentId: doc.id, toUserId: editor });
+          continue;
+        }
+        const gone = [...map.keys()];
+        const withdrawn: string[] = [];
+        for (const [inviteId, invite] of this.invitesById) {
+          if (invite.documentId === doc.id && invite.acceptedAt === null) {
+            this.invitesById.delete(inviteId);
+            withdrawn.push(invite.email);
+          }
+        }
+        this.sharesByDoc.delete(doc.id);
+        if (gone.length > 0 || withdrawn.length > 0) {
+          this.auditLog.push({
+            documentId: doc.id,
+            userId: id,
+            action: 'share.stop',
+            target: JSON.stringify({ users: gone, invites: withdrawn }),
+          });
+        }
+        doc.sample = false;
+        doc.linkAccess = 'none';
+        doc.linkToken = null;
+        doc.everShared = false;
+        doc.archivedAt = null;
+        doc.deletedAt = now;
+        doc.updatedAt = now;
+        this.auditLog.push({
+          documentId: doc.id,
+          userId: id,
+          action: 'document.delete',
+          target: null,
+        });
+        deleted.push(doc.id);
+      }
+      for (const log of this.updatesByDoc.values()) {
+        for (const entry of log) if (entry.authorId === id) entry.authorId = null;
+      }
+      if (user.email !== null) {
+        // Mirrors `addressPattern` in pg.ts: the whole address, never a substring.
+        const pattern = new RegExp(addressPattern(user.email), 'gi');
+        for (const entry of this.auditLog) {
+          if (entry.target !== null) entry.target = entry.target.replace(pattern, '$1[erased]');
+        }
+      }
+      const cognitoSub = user.cognitoSub;
+      user.email = null;
+      user.displayName = ERASED_DISPLAY_NAME;
+      user.locale = null;
+      user.tourDoneAt = null;
+      user.deletedAt = now;
+      return Promise.resolve({
+        cognitoSub,
+        transferred,
+        deleted,
+        sharesRemoved,
+        invitesWithdrawn,
+      });
     },
   };
 
@@ -486,13 +640,14 @@ export class FakeRepo implements Repo {
     },
     softDelete: (id) => {
       const doc = this.docs.get(id);
-      if (doc?.deletedAt !== null) return Promise.resolve(undefined);
+      // #114: never a sample (the CHECK forbids it).
+      if (doc?.deletedAt !== null || doc.sample) return Promise.resolve(undefined);
       doc.deletedAt = new Date();
       doc.archivedAt = null;
       doc.updatedAt = doc.deletedAt;
       return Promise.resolve({ ...doc });
     },
-    tryDelete: async (id) => {
+    tryDelete: async (id, actorId) => {
       // As `pg.ts`: the guard and the delete are one step (the fake has no
       // concurrency to serialise); `sample` wins over `shared`.
       const doc = this.docs.get(id);
@@ -500,7 +655,22 @@ export class FakeRepo implements Repo {
       if (doc.sample) return { status: 'sample' };
       if (doc.everShared || doc.linkAccess !== 'none') return { status: 'shared' };
       const deleted = await this.documents.softDelete(id);
-      return deleted ? { status: 'deleted', document: deleted } : { status: 'missing' };
+      if (!deleted) return { status: 'missing' };
+      // #112: pending invitations go with the delete, each audited.
+      const withdrawn: string[] = [];
+      for (const [inviteId, invite] of this.invitesById) {
+        if (invite.documentId === id && invite.acceptedAt === null) {
+          this.invitesById.delete(inviteId);
+          withdrawn.push(invite.email);
+          this.auditLog.push({
+            documentId: id,
+            userId: actorId,
+            action: 'share.invite_withdraw',
+            target: `${invite.email}:${invite.invitedBy ?? doc.ownerId}`,
+          });
+        }
+      }
+      return { status: 'deleted', document: deleted, withdrawn };
     },
     archive: (id) => {
       const doc = this.docs.get(id);
@@ -540,14 +710,21 @@ export class FakeRepo implements Repo {
       }
       return Promise.resolve(recovered);
     },
-    purgeDeleted: (ownerId, actorId) => {
+    purgeDeleted: (ownerId, actorId, limit) => {
       if (this.failNextPurge) {
         this.failNextPurge = false;
         return Promise.reject(new Error('simulated purge failure'));
       }
       const purged: { id: string; title: string }[] = [];
-      for (const doc of [...this.docs.values()]) {
-        if (doc.ownerId !== ownerId || doc.deletedAt === null) continue;
+      const doomed = [...this.docs.values()]
+        .filter((doc) => doc.ownerId === ownerId && doc.deletedAt !== null && !doc.sample)
+        .sort(
+          (a, b) =>
+            (a.deletedAt?.getTime() ?? 0) - (b.deletedAt?.getTime() ?? 0) ||
+            (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        )
+        .slice(0, limit);
+      for (const doc of doomed) {
         this.auditLog.push({
           documentId: doc.id,
           userId: actorId,
@@ -563,33 +740,43 @@ export class FakeRepo implements Repo {
       }
       return Promise.resolve(purged);
     },
-    purgeExpired: async ({ limit, exclude, removeObjects }) => {
+    expiredForPurge: ({ limit, exclude }) => {
       if (this.failNextPurge) {
         this.failNextPurge = false;
-        throw new Error('simulated purge failure');
+        return Promise.reject(new Error('simulated purge failure'));
       }
       const now = Date.now();
-      // Oldest deletion first, then id, as the SQL orders; at most `limit` per call.
-      const candidates = [...this.docs.values()]
-        .filter(
-          (doc) =>
-            doc.deletedAt !== null && !this.withinRetention(doc, now) && !exclude.includes(doc.id),
-        )
-        .sort(
-          (a, b) =>
-            (a.deletedAt?.getTime() ?? 0) - (b.deletedAt?.getTime() ?? 0) ||
-            (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
-        )
-        .slice(0, limit);
+      // Oldest deletion first, then id, as the SQL orders; at most `limit` per call; never a sample.
+      return Promise.resolve(
+        [...this.docs.values()]
+          .filter(
+            (doc) =>
+              doc.deletedAt !== null &&
+              !this.withinRetention(doc, now) &&
+              !doc.sample &&
+              !exclude.includes(doc.id),
+          )
+          .sort(
+            (a, b) =>
+              (a.deletedAt?.getTime() ?? 0) - (b.deletedAt?.getTime() ?? 0) ||
+              (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+          )
+          .slice(0, limit)
+          .map((doc) => ({ id: doc.id, title: doc.title })),
+      );
+    },
+    purge: (ids) => {
+      if (this.failNextPurge) {
+        this.failNextPurge = false;
+        return Promise.reject(new Error('simulated purge failure'));
+      }
+      const now = Date.now();
       const purged: { id: string; title: string }[] = [];
-      const failed: { id: string; title: string }[] = [];
-      // Objects first; only a document whose objects went loses its rows.
-      for (const doc of candidates) {
-        const ref = { id: doc.id, title: doc.title };
-        if (!(await removeObjects(ref))) {
-          failed.push(ref);
-          continue;
-        }
+      for (const id of ids) {
+        const doc = this.docs.get(id);
+        // Re-checked as the SQL does: still expired, still not a sample.
+        if (doc === undefined) continue;
+        if (doc.deletedAt === null || this.withinRetention(doc, now) || doc.sample) continue;
         this.auditLog.push({
           documentId: doc.id,
           userId: null,
@@ -601,9 +788,9 @@ export class FakeRepo implements Repo {
         this.snapshotsByDoc.delete(doc.id);
         this.sharesByDoc.delete(doc.id);
         this.dropInvites(doc.id);
-        purged.push(ref);
+        purged.push({ id: doc.id, title: doc.title });
       }
-      return { purged, failed };
+      return Promise.resolve(purged);
     },
     sharePermission: (documentId, userId) =>
       Promise.resolve(this.sharesByDoc.get(documentId)?.get(userId)?.permission),
@@ -652,7 +839,12 @@ export class FakeRepo implements Repo {
     add: ({ documentId, userId, permission, invitedBy, actorId }) => {
       const map = this.sharesByDoc.get(documentId) ?? new Map<string, FakeShare>();
       if (map.has(userId)) return Promise.resolve(false);
-      map.set(userId, { permission, invitedBy, createdAt: new Date(), source: 'invite' });
+      map.set(userId, {
+        permission,
+        invitedBy,
+        createdAt: new Date(),
+        source: this.inheritedSource(documentId, invitedBy),
+      });
       this.sharesByDoc.set(documentId, map);
       this.markShared(documentId);
       this.auditLog.push({ documentId, userId: actorId, action: 'share.add', target: userId });
@@ -702,7 +894,7 @@ export class FakeRepo implements Repo {
     },
     setLinkAccess: ({ documentId, access, actorId, mintToken }) => {
       const doc = this.docs.get(documentId);
-      if (!doc) return Promise.resolve(undefined);
+      if (doc?.deletedAt !== null) return Promise.resolve(undefined);
       const remint = access !== 'none' && access !== doc.linkAccess;
       const turningOff = access === 'none' && doc.linkAccess !== 'none';
       if (remint) doc.linkToken = mintToken();
@@ -732,7 +924,7 @@ export class FakeRepo implements Repo {
     },
     redeemLink: ({ documentId, userId, token }) => {
       const doc = this.docs.get(documentId);
-      if (!doc || doc.linkAccess === 'none' || doc.linkToken !== token) {
+      if (doc?.deletedAt !== null || doc.linkAccess === 'none' || doc.linkToken !== token) {
         return Promise.resolve(undefined);
       }
       const granted = doc.linkAccess;
@@ -812,7 +1004,7 @@ export class FakeRepo implements Repo {
         return Promise.resolve(undefined);
       }
       const doc = this.docs.get(invite.documentId);
-      if (!doc) return Promise.resolve(undefined);
+      if (doc?.deletedAt !== null) return Promise.resolve(undefined);
       if (!this.inviterStillMay(invite, doc)) {
         this.withdrawStale(invite, doc, userId);
         return Promise.resolve(undefined);
@@ -824,7 +1016,7 @@ export class FakeRepo implements Repo {
             permission: invite.permission,
             invitedBy: invite.invitedBy ?? doc.ownerId,
             createdAt: new Date(),
-            source: 'invite',
+            source: this.inheritedSource(doc.id, invite.invitedBy ?? doc.ownerId),
           });
           this.sharesByDoc.set(doc.id, map);
         }
@@ -869,7 +1061,9 @@ export class FakeRepo implements Repo {
       if (!doc) throw new Error(`document ${documentId} does not exist`);
       const log = this.updatesByDoc.get(documentId) ?? [];
       const base = Math.max(doc.snapshotSeq, log.at(-1)?.seq ?? 0);
-      updates.forEach((u, i) => log.push({ seq: base + i + 1, update: u.update }));
+      updates.forEach((u, i) =>
+        log.push({ seq: base + i + 1, update: u.update, authorId: u.authorId }),
+      );
       this.updatesByDoc.set(documentId, log);
       doc.updatedAt = new Date();
       return { firstSeq: base + 1, lastSeq: base + updates.length };

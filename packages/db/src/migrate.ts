@@ -9,7 +9,12 @@
  *     with the SHA-256 of its text (migration 0005). A file whose text no
  *     longer matches its ledger row fails the boot (#42): a shipped migration
  *     is never edited, a new one alters. Rows from before 0005 have no
- *     checksum and are pinned on the next run.
+ *     checksum and are pinned on the next run. A ledger row with no file on
+ *     disk (a removed or renamed migration) and a file that sorts before the
+ *     newest applied row fail the boot too (#110): the ledger and the
+ *     directory must agree in both directions before anything runs. The one
+ *     exception is a ledger row newer than every file — a rolled-back deploy
+ *     booting the previous image — which is logged and tolerated.
  *   - A failure aborts the boot; the file that failed is named in the error.
  *   - Waiting for the advisory lock is bounded by `LOCK_TIMEOUT_MS`; a
  *     migration statement itself is not (DDL on a big table may be slow).
@@ -246,6 +251,56 @@ export async function applyMigrations(
           typeof row.checksum === 'string' ? row.checksum : null,
         ]),
       );
+      // The ledger is checked in both directions (#110). A row whose file is
+      // gone means a shipped migration was removed or renamed; under the old
+      // name it would pass unnoticed, under the new one it would run again.
+      // A file that sorts before the newest applied row was inserted into
+      // history the database has already moved past; it too is refused rather
+      // than applied out of order. Either way the boot stops with the name.
+      // The one row without a file that is allowed is one newer than every
+      // file on disk: that is a rolled-back deploy (the previous image
+      // booting against a schema the next one already moved forward, which
+      // additive migrations permit), logged, never fatal — the rollback must
+      // be able to come up.
+      if (files.length === 0 && done.size > 0) {
+        // A directory with nothing in it beside a ledger with rows is not a
+        // rollback, it is a build that lost the migrations (#110).
+        throw new MigrationError(
+          'migrations directory',
+          new Error(`no migration files on disk but the ledger holds ${String(done.size)} rows`),
+        );
+      }
+      const onDisk = new Set(files.map((file) => file.name));
+      const newestOnDisk = files.at(-1)?.name ?? '';
+      const ahead = [...done.keys()].filter((name) => !onDisk.has(name) && name > newestOnDisk);
+      if (ahead.length > 0) {
+        log.warn('ledger is ahead of the files on disk (a rolled-back deploy?)', {
+          migrations: ahead.sort(),
+        });
+      }
+      const missing = [...done.keys()]
+        .filter((name) => !onDisk.has(name) && name <= newestOnDisk)
+        .sort();
+      if (missing.length > 0) {
+        throw new MigrationError(
+          missing[0] ?? '',
+          new Error(
+            `ledger row has no file on disk (${missing.join(', ')}); shipped migrations are never removed or renamed, write a new one`,
+          ),
+        );
+      }
+      const newest = [...done.keys()].sort().at(-1);
+      const outOfOrder = files.find(
+        (file) => !done.has(file.name) && newest !== undefined && file.name < newest,
+      );
+      if (outOfOrder !== undefined) {
+        throw new MigrationError(
+          outOfOrder.name,
+          new Error(
+            `sorts before the newest applied migration ${newest ?? ''}; migrations are forward-only, number it after`,
+          ),
+        );
+      }
 
       for (const file of files) {
         const checksum = migrationChecksum(file.sql);
