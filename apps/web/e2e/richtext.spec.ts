@@ -55,13 +55,13 @@ test.describe('rich cell (harness)', () => {
     await page.keyboard.press(`${m}+i`);
     await page.keyboard.press(`${m}+u`);
     await page.keyboard.press(`${m}+Shift+x`);
-    // ⌃⌘+ on Apple; Ctrl+= elsewhere (no ⌘ to add).
-    await page.keyboard.press(m === 'Meta' ? 'Control+Meta+Equal' : 'Control+Equal');
+    // ⌃⌘+ on Apple; Ctrl+Alt+= elsewhere, where Ctrl+= is zoom in (ADR-038).
+    await page.keyboard.press(m === 'Meta' ? 'Control+Meta+Equal' : 'Control+Alt+Equal');
     await expect(editor.locator('em')).toHaveCount(1);
     await expect(editor.locator('u')).toHaveCount(1);
     await expect(editor.locator('s')).toHaveCount(1);
     await expect(editor.locator('sup')).toHaveCount(1);
-    await page.keyboard.press(m === 'Meta' ? 'Control+Meta+Minus' : 'Control+Minus');
+    await page.keyboard.press(m === 'Meta' ? 'Control+Meta+Minus' : 'Control+Alt+Minus');
     await expect(editor.locator('sub')).toHaveCount(1);
     await expect(editor.locator('sup')).toHaveCount(0);
     await page.keyboard.press('Escape');

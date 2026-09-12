@@ -1553,8 +1553,12 @@ const Cell = memo(function Cell({
           onCancel={actions.cancel}
         />
       ) : refKind === 'reference' || refKind === 'pulled' ? (
-        <ReferenceCell table={table} cell={cell} kind={refKind} expression={wrap} />
+        // FX-07 / REF-01 (ADR-039): the path shows in every row — beside the value in a
+        // compact row (document.css), beneath it in a wrapped one.
+        <ReferenceCell table={table} cell={cell} kind={refKind} expression />
       ) : refKind === 'derived' && column.derive !== null ? (
+        // A derived cell's pipeline is the lineage header's (ADR-032); its expression takes
+        // the second line of a wrapped row only.
         <DerivedCell table={table} cell={cell} spec={column.derive} expression={wrap} />
       ) : refKind === 'mapping' && column.link !== null ? (
         <MappingCell
@@ -1568,7 +1572,7 @@ const Cell = memo(function Cell({
           onPick={(value, locale) => commands.pickMappingValue(cell, value, locale)}
         />
       ) : formula && tier === 'micro' ? (
-        <FormulaCell table={table} cell={cell} expression={wrap} format={format} />
+        <FormulaCell table={table} cell={cell} expression format={format} />
       ) : (
         tier === 'micro' && (
           <CellContent content={rich} layout={layout} format={format} locale={locale} />

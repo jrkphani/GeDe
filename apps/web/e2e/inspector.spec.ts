@@ -346,6 +346,8 @@ test.describe('inspector rail', () => {
       await wrap.click();
       await expect(wrap).toHaveAttribute('aria-checked', 'false');
       await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px');
+      // The rail's hidden reason sentences scroll with the rail: the page itself never grows.
+      expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(900);
       // INSP-11 (#126): aria-disabled controls look disabled and describe their reason.
       await rail.getByRole('tab', { name: 'Arrange' }).click();
       const back = rail.getByRole('button', { name: 'Back', exact: true });

@@ -167,12 +167,15 @@ test.describe('formulas', () => {
       .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()))
       .toMatch(/=Sum\(\{c:[0-9A-Z:]+\}, \{c:[0-9A-Z:]+\}\)/);
 
-    // FX-07: value and reference badge in the cell; in a compact row the expression is the tooltip.
+    // FX-07: value, reference badge and the expression in the cell — beside the value in the
+    // compact row (ADR-039), and still the tooltip; the row stays one lattice unit.
     const formula = b7.getByTestId('formula-cell');
     await expect(formula.locator('.gd-formula__value')).toHaveText('1,234');
     await expect(formula.getByLabel('Formula, 2 references')).toHaveText('ƒ2');
     await expect(b7).toHaveAttribute('title', '=Sum(B5, B6)');
-    await expect(formula.locator('.gd-formula__expr')).toHaveCount(0);
+    await expect(formula.locator('.gd-formula__expr')).toHaveText('=Sum(B5, B6)');
+    await expect(b7).toHaveCSS('height', '22px');
+    await expect(formula).toHaveCSS('flex-direction', 'row');
 
     // A collaborator wraps row 7 (GRID-09: two lattice rows): the expression takes the second line.
     await expect.poll(() => room.doc.getMap('tables').size).toBe(1);
@@ -181,6 +184,7 @@ test.describe('formulas', () => {
     const record = tableRecord(gd.tables.get(tableId)!);
     setRowWrapped(gd, record.id, record.rows[2] ?? '', true);
     await expect(b7).toHaveCSS('height', '44px');
+    await expect(formula).toHaveCSS('flex-direction', 'column');
     await expect(formula.locator('.gd-formula__expr')).toHaveText('=Sum(B5, B6)');
 
     // FX-08: selecting the formula cell outlines each operand with its index badge.
