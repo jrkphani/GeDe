@@ -3,7 +3,7 @@
  * position-independent ULIDs generated client-side. Every reference stores ids;
  * A1 is a projection and is never persisted.
  */
-import { ulid } from 'ulid';
+import { monotonicFactory } from 'ulid';
 
 /** A 26-character Crockford base32 ULID. */
 export type Id = string;
@@ -12,6 +12,12 @@ export type Id = string;
 export type CellKey = `${string}:${string}`;
 
 const ULID_RE = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
+
+/**
+ * Monotonic within a process: two ids minted in the same millisecond still sort
+ * in creation order, so "objects in creation order" is a plain string sort.
+ */
+const ulid = monotonicFactory();
 
 export function newId(): Id {
   return ulid();

@@ -1,4 +1,6 @@
 import '@testing-library/jest-dom/vitest';
+// FAKE: an in-memory IndexedDB so the document replica (y-indexeddb) works under jsdom.
+import 'fake-indexeddb/auto';
 import { cleanup } from '@testing-library/react';
 import { afterEach, vi } from 'vitest';
 import { setConfigForTests } from '../config.js';
@@ -51,4 +53,30 @@ if (typeof window.ResizeObserver === 'undefined') {
     }
   }
   vi.stubGlobal('ResizeObserver', ResizeObserverStub);
+}
+
+// jsdom has no PointerEvent; the canvas pans and pinches with pointer events.
+// A MouseEvent carrying the pointer fields is what fireEvent.pointer* needs.
+if (typeof window.PointerEvent === 'undefined') {
+  class PointerEventPolyfill extends MouseEvent {
+    readonly pointerId: number;
+    readonly pointerType: string;
+    readonly isPrimary: boolean;
+    constructor(type: string, init: PointerEventInit = {}) {
+      super(type, init);
+      this.pointerId = init.pointerId ?? 0;
+      this.pointerType = init.pointerType ?? 'mouse';
+      this.isPrimary = init.isPrimary ?? true;
+    }
+  }
+  vi.stubGlobal('PointerEvent', PointerEventPolyfill);
+}
+
+// jsdom has no 2D canvas; the gridlines layer skips drawing when there is no context.
+if (typeof HTMLCanvasElement !== 'undefined') {
+  Object.defineProperty(HTMLCanvasElement.prototype, 'getContext', {
+    configurable: true,
+    writable: true,
+    value: () => null,
+  });
 }

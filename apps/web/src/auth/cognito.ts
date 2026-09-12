@@ -22,6 +22,7 @@ import {
 import { cognitoUserPoolsTokenProvider } from 'aws-amplify/auth/cognito';
 import { Hub, sharedInMemoryStorage } from 'aws-amplify/utils';
 import type { AppConfig } from '../config.js';
+import { clearReplicas } from '../doc/replica.js';
 
 export type SignInStep =
   | { kind: 'done' }
@@ -203,7 +204,12 @@ export async function registerPasskey(): Promise<void> {
 
 /** AUTH-09 — local sign-out revokes the refresh token and clears memory. */
 export async function signOutLocal(): Promise<void> {
-  await signOut({ global: false });
+  try {
+    await signOut({ global: false });
+  } finally {
+    // "Nothing is left on this device": every local document replica goes with the session.
+    await clearReplicas();
+  }
 }
 
 export async function currentUser(): Promise<SessionUser | null> {
@@ -219,6 +225,19 @@ export async function currentUser(): Promise<SessionUser | null> {
       /* attributes are a nicety; the session is what matters */
     }
     return { sub: user.userId, email: email || user.username, name };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * A fresh bearer token, forced through Cognito's refresh: for a socket the
+ * server closed with 4401, the cached token is exactly what failed.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  try {
+    const session = await fetchAuthSession({ forceRefresh: true });
+    return session.tokens?.accessToken.toString() ?? null;
   } catch {
     return null;
   }

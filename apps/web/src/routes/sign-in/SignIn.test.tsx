@@ -32,6 +32,7 @@ vi.mock('../../auth/cognito.js', () => {
     signOutLocal: vi.fn(() => Promise.resolve()),
     currentUser: vi.fn(() => Promise.resolve(noUser.current)),
     accessToken: vi.fn(() => Promise.resolve(null)),
+    refreshAccessToken: vi.fn(() => Promise.resolve(null)),
     onAuthEvent: vi.fn(() => () => undefined),
   };
 });
@@ -51,10 +52,11 @@ vi.mock('../../api/documents.js', () => ({
       createdAt: '2026-09-01T00:00:00Z',
       updatedAt: '2026-09-01T00:00:00Z',
       ownerId: 'sub-1',
+      permission: 'owner',
     }),
   ),
   renameDocument: vi.fn(() => Promise.resolve()),
-  permissionOf: () => 'view',
+  permissionOf: (doc: { permission?: string | undefined }) => doc.permission ?? 'view',
 }));
 
 const cognito = (await import('../../auth/cognito.js')) as unknown as typeof Cognito & {

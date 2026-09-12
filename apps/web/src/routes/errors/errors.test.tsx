@@ -12,6 +12,7 @@ import { mapError, RouteError } from './RouteError.js';
 vi.mock('../../auth/cognito.js', () => ({
   isPasskeySupported: () => false,
   accessToken: () => Promise.resolve(null),
+  refreshAccessToken: () => Promise.resolve(null),
   currentUser: () => Promise.resolve(null),
   onAuthEvent: () => () => undefined,
   signOutLocal: vi.fn(() => Promise.resolve()),

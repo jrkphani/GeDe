@@ -8,3 +8,4 @@ export * from './address.js';
 export * from './ids.js';
 export * from './graph.js';
 export * from './formula/index.js';
+export * from './doc/index.js';

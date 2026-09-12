@@ -1,10 +1,20 @@
+/* Document shell. Chrome pads on the space scale; canvas objects sit on the
+   lattice (--lattice-col / --lattice-row) and never reflow (RESP-01). */
+
 .gd-doc {
+  --gd-ruler: 1.625rem;
+  --gd-inspector: 20.125rem; /* 322 px rail (INSP) */
   display: grid;
   grid-template-rows: auto auto auto minmax(0, 1fr) auto;
   height: 100vh;
+  height: 100dvh;
   background: var(--surface);
 }
+.gd-doc__loading {
+  padding: var(--space-4);
+}
 
+/* ---- title row (DOC-01) ------------------------------------------------- */
 .gd-doc__titlebar {
   display: flex;
   align-items: center;
@@ -17,6 +27,14 @@
   display: inline-flex;
   color: var(--link);
 }
+.gd-doc__title-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: var(--space-2);
+}
 .gd-doc__title {
   flex: 1;
   min-width: 0;
@@ -24,6 +42,7 @@
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
   background: transparent;
+  color: var(--ink);
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.01em;
@@ -36,12 +55,24 @@
 }
 .gd-doc__title-static {
   flex: 1;
+  min-width: 0;
   margin: 0;
   font-size: 1rem;
   font-weight: 600;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.gd-doc__saving {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.gd-doc__spinner {
+  animation: gd-spin calc(var(--dur-enter) * 2) linear infinite; /* keyframes from @gede/ui Button.css */
 }
 .gd-doc__shared {
   display: inline-flex;
@@ -53,10 +84,66 @@
   gap: var(--space-1);
   padding: 0.125rem 0.5rem;
   border-radius: var(--radius-pill);
-  background: var(--forest-50);
-  color: var(--forest-700);
+  /* A brand tint that survives the dark token swap (no literal, no light-only ramp step);
+     text stays ink so it reads at ≥ 4.5:1 in both themes. */
+  background: color-mix(in srgb, var(--action-primary-bg) 12%, var(--surface));
+  color: var(--ink);
   font-size: 0.71875rem;
   font-weight: 500;
+}
+.gd-doc__avatars {
+  display: inline-flex;
+  margin-left: var(--space-1);
+}
+.gd-doc__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  margin-left: -0.4375rem;
+  border: 2px solid var(--surface);
+  border-radius: var(--radius-pill);
+  background: var(--gd-presence, var(--presence-1));
+  color: var(--slate-0);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.gd-doc__avatar:first-child {
+  margin-left: 0;
+}
+.gd-doc__avatar--more {
+  background: var(--ink-muted);
+}
+.gd-doc__sync {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.gd-doc__sync-dot {
+  width: 0.5rem;
+  height: 0.5rem;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--ink-muted);
+  background: transparent;
+}
+.gd-doc__sync--synced .gd-doc__sync-dot {
+  background: var(--success);
+  border-color: var(--success);
+}
+.gd-doc__sync--reconnecting .gd-doc__sync-dot,
+.gd-doc__sync--connecting .gd-doc__sync-dot {
+  border-style: dashed;
+  border-color: var(--warning);
+}
+.gd-doc__sync--offline .gd-doc__sync-dot {
+  border-color: var(--warning);
+  background: var(--amber-100);
 }
 .gd-doc__readonly {
   display: inline-flex;
@@ -67,110 +154,447 @@
   white-space: nowrap;
 }
 
+/* ---- toolbar (DOC-02) --------------------------------------------------- */
 .gd-doc__toolbar {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: wrap; /* wraps rather than clips (RESP-04) */
   align-items: center;
   gap: var(--space-2);
   min-height: calc(var(--lattice-row) * 2);
-  padding: 0 var(--space-3);
+  padding: var(--space-1) var(--space-3);
   border-bottom: 1px solid var(--border);
   background: var(--surface-sunken);
+}
+.gd-doc__cluster {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding-right: var(--space-2);
+  border-right: 1px solid var(--border);
+}
+.gd-doc__cluster:last-child {
+  padding-right: 0;
+  border-right: 0;
 }
 .gd-doc__toolgap {
   flex: 1;
 }
-.gd-doc__zoom {
-  min-width: 3ch;
-  font-size: 0.71875rem;
-  color: var(--ink-muted);
-  text-align: center;
+.gd-tool {
+  color: var(--ink);
 }
-.gd-doc__banner {
+.gd-tool--pressed {
+  /* Active state: brand tint plus the brand colour on the glyph (non-text, ≥ 3:1 in both themes). */
+  background: color-mix(in srgb, var(--action-primary-bg) 12%, var(--surface));
+  color: var(--action-primary-bg);
+}
+.gd-tool--text.gd-tool--pressed {
+  /* A text toggle needs 4.5:1: ink at 600 weight, the tint carries the state. */
+  color: var(--ink);
+  font-weight: 600;
+}
+.gd-tool[aria-disabled='true'] {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.gd-tool--text {
+  font-weight: 500;
+}
+.gd-doc__zoom {
+  min-width: 3.5rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--ink-muted);
+  font-size: 0.71875rem;
+  text-align: center;
+  cursor: pointer;
+}
+.gd-doc__zoom:hover {
+  border-color: var(--border);
+  color: var(--ink);
+}
+.gd-doc__tip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.gd-doc__tip-key {
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  opacity: 0.8;
+}
+/* RESP-05: below lg every target is at least the hit-target token (44 px). */
+@media (max-width: 1023.98px) {
+  .gd-doc__toolbar .gd-btn,
+  .gd-doc__zoom,
+  .gd-doc__sheets .gd-tabs__tab,
+  .gd-doc__add-sheet {
+    min-width: var(--hit-target);
+    min-height: var(--hit-target);
+  }
+}
+
+.gd-doc__banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+.gd-doc__banners:not(:empty) {
   padding: var(--space-2) var(--space-3);
 }
 .gd-doc__skeleton {
+  flex: 1;
+  min-width: 0;
   padding: var(--space-4);
 }
 
-/* The canvas: rulers and lattice, absolute geometry, viewport pans. */
+/* ---- main: canvas + inspector ------------------------------------------ */
+.gd-doc__main {
+  position: relative;
+  display: flex;
+  min-height: 0;
+}
+
+/* ---- canvas (DOC-04, DOC-06) ------------------------------------------- */
 .gd-canvas {
-  --gd-zoom: 1;
-  --gd-ruler: 1.625rem;
   position: relative;
   display: grid;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
   grid-template-columns: var(--gd-ruler) minmax(0, 1fr);
   grid-template-rows: var(--gd-ruler) minmax(0, 1fr);
-  overflow: auto;
+  overflow: hidden;
   background: var(--surface);
+  touch-action: none;
 }
 .gd-canvas__corner {
-  position: sticky;
-  top: 0;
-  left: 0;
   z-index: 3;
   border-right: 1px solid var(--border);
   border-bottom: 1px solid var(--border);
   background: var(--surface-sunken);
 }
-.gd-canvas__cols {
-  position: sticky;
-  top: 0;
+.gd-canvas__cols,
+.gd-canvas__rows {
+  position: relative;
   z-index: 2;
-  display: flex;
-  height: var(--gd-ruler);
-  border-bottom: 1px solid var(--border);
+  overflow: hidden;
   background: var(--surface-sunken);
-  transform-origin: left top;
-  transform: scaleX(var(--gd-zoom));
 }
-.gd-canvas__cols span {
-  flex: none;
+.gd-canvas__cols {
+  border-bottom: 1px solid var(--border);
+}
+.gd-canvas__rows {
+  border-right: 1px solid var(--border);
+}
+.gd-canvas__ruler-cell {
+  position: absolute;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-right: 1px solid var(--border);
+  overflow: hidden;
   font-family: var(--font-mono);
+  color: var(--ink-muted);
+  user-select: none;
+}
+.gd-canvas__cols .gd-canvas__ruler-cell {
+  top: 0;
+  height: 100%;
+  border-right: 1px solid var(--border);
+  font-size: 0.625rem;
+}
+.gd-canvas__rows .gd-canvas__ruler-cell {
+  left: 0;
+  width: 100%;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.59375rem;
+}
+.gd-canvas__plane {
+  position: relative;
+  overflow: hidden;
+  cursor: grab;
+}
+.gd-canvas__plane:active {
+  cursor: grabbing;
+}
+.gd-canvas__grid {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.gd-canvas__layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  transform-origin: 0 0;
+  will-change: transform;
+}
+.gd-canvas__empty {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--surface-sunken);
+  width: calc(var(--lattice-col) * 2);
+}
+.gd-canvas__empty-label {
+  font-size: 0.5625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+.gd-canvas__empty-text {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+
+/* ---- table (GRID-01, GRID-03, GRID-07) --------------------------------- */
+.gd-table {
+  position: absolute;
+  box-sizing: border-box;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: default;
+}
+.gd-table--selected {
+  outline: 1px solid var(--selection-ring);
+}
+.gd-table__title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+  user-select: none;
+}
+.gd-table__title-text {
+  overflow: hidden;
+  font-size: 0.8125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-table__degree {
   font-size: 0.625rem;
   color: var(--ink-muted);
 }
-.gd-canvas__rows {
-  position: sticky;
-  left: 0;
-  z-index: 2;
-  display: flex;
-  flex-direction: column;
-  width: var(--gd-ruler);
-  border-right: 1px solid var(--border);
+.gd-table__block {
+  box-sizing: border-box;
   background: var(--surface-sunken);
-  transform-origin: left top;
-  transform: scaleY(var(--gd-zoom));
 }
-.gd-canvas__rows span {
-  flex: none;
+.gd-table__row {
+  display: flex;
+  box-sizing: border-box;
+}
+.gd-table__row--header {
+  background: var(--surface-sunken);
+  border-bottom: 1.5px solid var(--ink);
+}
+.gd-table__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-1);
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 var(--space-1) 0 var(--space-2);
+  border-right: 1px solid var(--border);
+  font-size: 0.71875rem;
+  font-weight: 500;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.gd-table__header-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.gd-table__letter {
+  font-size: 0.53125rem;
+  color: var(--ink-muted);
+}
+.gd-cell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  height: 100%;
+  padding: 0 var(--space-2);
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  font-size: 0.71875rem;
+  line-height: 1.35;
+  overflow: hidden;
+  white-space: nowrap;
+  outline: none;
+}
+.gd-cell__text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* GRID-03: inset ring in live amber; A11Y-02 focus ring also stays. */
+.gd-cell--selected {
+  box-shadow: inset 0 0 0 2px var(--selection-ring);
+}
+.gd-cell:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.gd-cell--presence {
+  box-shadow: inset 0 0 0 1px var(--gd-presence, var(--presence-1));
+}
+.gd-cell__presence-tag {
+  position: absolute;
+  top: 0;
+  right: 0;
+  padding: 0 var(--space-1);
+  border-bottom-left-radius: var(--radius-sm);
+  background: var(--gd-presence, var(--presence-1));
+  color: var(--slate-0);
+  font-family: var(--font-mono);
+  font-size: 0.5rem;
+  line-height: 1.4;
+  pointer-events: none;
+}
+.gd-cell__editor {
+  position: absolute;
+  inset: 0;
+  box-sizing: border-box;
+  width: 100%;
+  height: 100%;
+  padding: 0 var(--space-2);
+  border: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  line-height: inherit;
+  /* A textarea drawn as the cell: one visual line, no resize grip, wraps only on typed newlines. */
+  resize: none;
+  overflow: hidden;
+  white-space: pre;
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -2px;
+}
+.gd-table__add-row,
+.gd-table__add-column {
+  position: absolute;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-bottom: 1px solid var(--border);
-  font-family: var(--font-mono);
-  font-size: 0.59375rem;
-  color: var(--ink-muted);
+  gap: var(--space-1);
+  box-sizing: border-box;
+  border: 1px dashed var(--action-primary-bg);
+  border-radius: var(--radius-none);
+  /* A brand tint that survives the dark token swap (no literal, no light-only ramp step). */
+  background: color-mix(in srgb, var(--action-primary-bg) 12%, var(--surface));
+  color: var(--ink);
+  font-family: var(--font-ui);
+  font-size: 0.65625rem;
+  font-weight: 500;
+  cursor: pointer;
 }
-.gd-canvas__sheet {
-  width: calc(var(--lattice-col) * 26 * var(--gd-zoom));
-  height: calc(var(--lattice-row) * 60 * var(--gd-zoom));
+.gd-table__add-row {
+  left: -1px;
+  right: -1px;
+  bottom: calc(var(--lattice-row) * -1 - 1px);
 }
-.gd-canvas--gridlines .gd-canvas__sheet {
-  background-image:
-    linear-gradient(to right, var(--border) 1px, transparent 1px),
-    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
-  background-size: calc(var(--lattice-col) * var(--gd-zoom))
-    calc(var(--lattice-row) * var(--gd-zoom));
+.gd-table__add-row:hover,
+.gd-table__add-column:hover {
+  background: color-mix(in srgb, var(--action-primary-bg) 22%, var(--surface));
+}
+/* Meso: structure without text. Macro: the block only. */
+.gd-table--meso .gd-cell,
+.gd-table--meso .gd-table__header-label {
+  color: transparent;
+}
+.gd-table--macro .gd-table__title {
+  border-bottom: 0;
 }
 
+/* ---- inspector (INSP-02, INSP-03, GRID-02) ----------------------------- */
+.gd-inspector {
+  display: flex;
+  flex-direction: column;
+  width: var(--gd-inspector);
+  flex: none;
+  border-left: 1px solid var(--border);
+  background: var(--surface);
+  overflow: auto;
+}
+.gd-inspector__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.gd-inspector__label {
+  font-size: 0.5625rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-muted);
+}
+.gd-inspector__selected {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.gd-inspector__selected p {
+  margin: 0 0 var(--space-1);
+}
+.gd-inspector__object {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+.gd-inspector__address {
+  /* Live amber; --selection-ring swaps for dark (--reference-1 does not, and would fall to 3.4:1). */
+  color: var(--selection-ring);
+  font-size: 0.8125rem;
+}
+.gd-inspector__counts,
+.gd-inspector__none,
+.gd-inspector__note {
+  font-size: 0.8125rem;
+  color: var(--ink-muted);
+}
+.gd-inspector__note {
+  padding: var(--space-2) var(--space-3);
+}
+.gd-inspector__note[aria-disabled='true'] {
+  opacity: 0.45;
+}
+/* md: the inspector opens as an overlay sheet (RESP-03). */
+@media (max-width: 1023.98px) {
+  .gd-inspector {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 4;
+    box-shadow: var(--elev-overlay);
+  }
+}
+
+/* ---- sheet tabs (DOC-03) ------------------------------------------------ */
 .gd-doc__sheets {
-  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
   padding: 0 var(--space-2);
+  border-top: 1px solid var(--border);
+  overflow-x: auto;
 }
 .gd-doc__sheets .gd-tabs__list {
   border-bottom: 0;
@@ -180,12 +604,21 @@
   align-items: center;
   gap: var(--space-2);
 }
-.gd-doc__sheet .gd-mono {
+.gd-doc__sheet-ordinal,
+.gd-doc__sheet-count {
   font-size: 0.65625rem;
   color: var(--ink-muted);
 }
+.gd-doc__sheet-count {
+  padding: 0 0.375rem;
+  border-radius: var(--radius-pill);
+  background: var(--surface-sunken);
+}
+.gd-doc__add-sheet {
+  flex: none;
+}
 
-/* RESP-02: phone chrome. Two-row grid: title, canvas, bottom sheet bar. */
+/* ---- phone (RESP-02): title, canvas, bottom sheet bar; no toolbar, no inspector. */
 .gd-doc--phone {
   grid-template-rows: auto auto minmax(0, 1fr) auto;
 }
@@ -195,5 +628,8 @@
   background: var(--surface);
 }
 .gd-doc--phone .gd-doc__sheets .gd-tabs__tab {
-  min-height: 2.75rem;
+  min-height: var(--hit-target);
+}
+.gd-doc--phone .gd-doc__sync {
+  display: none;
 }

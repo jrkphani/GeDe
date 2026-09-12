@@ -18,6 +18,7 @@ const user = { sub: 'sub-1', email: 'meena@1cloudhub.com', name: 'Meena' };
 vi.mock('../../auth/cognito.js', () => ({
   isPasskeySupported: () => true,
   accessToken: () => Promise.resolve('tok'),
+  refreshAccessToken: () => Promise.resolve('tok'),
   currentUser: () => Promise.resolve(user),
   onAuthEvent: () => () => undefined,
   signOutLocal: vi.fn(() => Promise.resolve()),

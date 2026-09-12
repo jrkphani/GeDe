@@ -91,6 +91,12 @@ Audit rows (`audit_log.action`): `document.create`, `document.rename`, `document
   transaction shape as `purgeDeleted` in `src/repo/pg.ts`, then `deletePrefix` per document — is
   not built yet; it needs a scheduler (EventBridge → one-off ECS task or an in-process cron guarded
   by an advisory lock) and is tracked for a later wave.
+- **Initial room state.** TODO(Wave 2, DOC-03): `POST /api/documents` should seed the room —
+  `meta.title` from the record and one sheet — as a first Yjs update written to `doc_updates`
+  before the 201 is returned, so a new document never opens empty. Today the first client to
+  sync an empty room seeds it (`ensureFirstSheet` in `@gede/core`, tagged `seeded`) and
+  `dedupeSeededSheets` collapses the duplicate two offline first-openers can produce; once the
+  server seeds, both client paths become no-ops and can go.
 - **Orphaned snapshot objects.** A `snapshot objects not purged` log line (level error) names the
   document id and prefix; delete `s3://$DOCS_BUCKET/$DOCS_PREFIX<docId>/` by hand or rerun
   Delete All as the owner (a second run finds no rows and touches nothing).
