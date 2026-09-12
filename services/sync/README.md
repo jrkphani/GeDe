@@ -168,16 +168,24 @@ permission, callerId }`. Emails, pending invitations and the link token are for 
 - Sharing writes (`src/routes/share.ts`, SHARE-01..03). Every one is checked server-side;
   each writes its `audit_log` row (`share.*`) in the same transaction as the change.
   - `POST /api/documents/:id/invites { email, permission: view|edit }` (owner or editor) → 201
-    `{ kind: 'share' | 'invite', created: true, shares }`. An address with an account gets a
-    share now and a `share.member` mail; one without gets an `invites` row valid 14 days and a
-    `share.invite` mail whose link is `/d/:id?invite=<token>`. Idempotent per (document,
+    `{ kind: 'share' | 'invite', created: true, delivery: 'sent' | 'failed', shares }`. An
+    address with an account gets a share now and a `share.member` mail; one without gets an
+    `invites` row valid 14 days and a `share.invite` mail whose link is
+    `/d/:id?invite=<token>`. The row is the grant and the mail its notification (#121): the
+    row is written first and stands whatever the send did — a refused send (SES in the
+    sandbox: unverified recipient; a throttle; an outage) answers `delivery: 'failed'` on the
+    201, is logged with the failure class (never the address) and counted on the
+    `GeDe/Sync InviteMailFailures` metric (EMF, dimension `Reason` = template); the SPA shows
+    "Invitation saved — the email could not be sent" with Resend. Idempotent per (document,
     address): while a pending invitation stands, a repeated POST answers 200
-    `{ kind: 'invite', created: false, shares }` — no row, no mail (`invites_pending_key`,
-    migration 0007, decides a race). A refused send (SES sandbox: unverified recipient)
-    withdraws the row it just made — never an earlier one — and answers 502 `unavailable`; the
-    SPA does not retry it (`apiFetch` retries GET only unless asked). 409 when the address
-    already has access or is the owner's. Its own budget: `RATE_LIMIT_INVITES_PER_HOUR` per
-    user, counted after validation and the permission check.
+    `{ kind: 'invite', created: false, delivery: 'skipped', shares }` — no row, no mail
+    (`invites_pending_key`, migration 0007, decides a race). 409 when the address already has
+    access or is the owner's. Its own budget: `RATE_LIMIT_INVITES_PER_HOUR` per user, counted
+    after validation and the permission check.
+  - `POST /api/documents/:id/invites/:inviteId/resend` (owner or editor) → 200
+    `{ delivery: 'sent' | 'failed', shares }`. Sends the pending invitation's mail again — same
+    token, same expiry, no row change, no audit row — and spends the same per-user budget;
+    404 when the invitation is not pending on this document.
   - `DELETE /api/documents/:id/invites/:inviteId` (owner) → 204; 404 when not pending here.
   - `POST /api/documents/:id/invites/accept { token }` (signed in) → `{ permission }`. Converts
     only for the account holding the invitation's address (409 `Finish signing in` while none is

@@ -19,12 +19,15 @@
  *
  * SHARE-02: an address with an account gets a share and a `share.member`
  * mail; one without gets an `invites` row valid 14 days and a `share.invite`
- * mail whose link carries the invitation token. The mail is sent after the
- * row is written; a refused send (SES sandbox: unverified recipient) rolls the
- * invitation back and answers 502 so nothing pending exists that the
- * recipient cannot act on. Conversion to a share happens when the address is
- * bound to an account (`PATCH /api/me { idToken }`, `upsertFromToken`) or
- * when the invitee opens the mail's link signed in as that address.
+ * mail whose link carries the invitation token. The row is the grant and the
+ * mail is only its notification (#121): the row is written first and stands
+ * whatever the send did — a refused send (SES in the sandbox: unverified
+ * recipient; a throttle; an outage) is reported as `delivery: 'failed'` on
+ * the 201, never rolled back, so the sender can share the link another way or
+ * Resend, and the invitation still converts on the invitee's first sign-in.
+ * Conversion to a share happens when the address is bound to an account
+ * (`PATCH /api/me { idToken }`, `upsertFromToken`) or when the invitee opens
+ * the mail's link signed in as that address.
  */
 import { randomBytes } from 'node:crypto';
 
@@ -34,6 +37,7 @@ import { z } from 'zod';
 import { currentUser } from '../auth.js';
 import type { Deps } from '../deps.js';
 import { AppError } from '../errors.js';
+import { deliver, type MailDelivery } from '../mail/delivery.js';
 import { senderFor, shareInviteMail, shareMemberMail } from '../mail/templates.js';
 import { canEdit, requirePermission } from '../permissions.js';
 import {
@@ -133,6 +137,14 @@ export function documentLink(webOrigin: string, documentId: string, query?: stri
   return `${webOrigin}/d/${documentId}${query === undefined ? '' : `?${query}`}`;
 }
 
+/** What `POST …/invites` answers: the row it made (or found) and what became of its mail. */
+export interface InviteOutcome {
+  kind: 'share' | 'invite';
+  created: boolean;
+  delivery: MailDelivery;
+  shares: SharesView;
+}
+
 export function registerShareRoutes(
   api: FastifyInstance,
   ctx: { deps: Deps; rooms: Pick<RoomManager, 'closeUser'> },
@@ -150,14 +162,25 @@ export function registerShareRoutes(
     return sharesView(list, caller);
   }
 
-  /** SES error messages name the recipient; the log line carries the class of failure only. */
-  const mailFailure = (error: unknown) => ({
-    errName: error instanceof Error ? error.name : typeof error,
-    errCode:
-      typeof error === 'object' && error !== null && 'Code' in error
-        ? String(error.Code)
-        : undefined,
-  });
+  /** Send the invitation mail for a pending row; never throws (see `mail/delivery.ts`). */
+  const sendInvite = (
+    request: { id: string; log: Pick<typeof api.log, 'warn'> },
+    invite: { documentId: string; email: string; token: string },
+    actor: { actorName: string | null; actorEmail: string | null },
+    documentTitle: string,
+  ) =>
+    deliver(
+      (mail) => deps.mail.send(mail),
+      shareInviteMail({
+        ...actor,
+        to: invite.email,
+        from,
+        documentTitle,
+        link: documentLink(deps.config.WEB_ORIGIN, invite.documentId, `invite=${invite.token}`),
+      }),
+      request.log,
+      { documentId: invite.documentId, ref: request.id },
+    );
 
   // --- the sheet ------------------------------------------------------------
 
@@ -180,14 +203,8 @@ export function registerShareRoutes(
     timeWindow: '1 hour',
   });
 
-  api.post('/documents/:id/invites', async (request, reply) => {
-    const user = currentUser(request);
-    const id = parseId(request.params);
-    const body = parse(inviteBody, request.body, 'request');
-    const { document, permission } = await requirePermission(repo, user.id, id, 'edit');
-    if (document.deletedAt !== null) throw NOT_FOUND();
-    // Counted after validation and the permission check: the budget is for
-    // invitations that would go out, not for typos or for a viewer's attempts.
+  /** The invitation budget's verdict for this request; 429 with the wait when it is spent. */
+  async function spendInviteBudget(request: Parameters<typeof inviteBucket>[0]): Promise<void> {
     // `isAllowed` is the allow-list answer; the bucket's verdict is `isExceeded`.
     const budget = await inviteBucket(request);
     if (!budget.isAllowed && budget.isExceeded) {
@@ -197,7 +214,28 @@ export function registerShareRoutes(
         `Too many invitations; try again in ${String(budget.ttlInSeconds)} seconds`,
       );
     }
+  }
+
+  api.post('/documents/:id/invites', async (request, reply) => {
+    const user = currentUser(request);
+    const id = parseId(request.params);
+    const body = parse(inviteBody, request.body, 'request');
+    const { document, permission } = await requirePermission(repo, user.id, id, 'edit');
+    if (document.deletedAt !== null) throw NOT_FOUND();
+    // Counted after validation and the permission check: the budget is for
+    // invitations that would go out, not for typos or for a viewer's attempts.
+    await spendInviteBudget(request);
     const actor = { actorName: user.displayName, actorEmail: user.email };
+    const outcome = async (
+      kind: InviteOutcome['kind'],
+      created: boolean,
+      delivery: MailDelivery,
+    ): Promise<InviteOutcome> => ({
+      kind,
+      created,
+      delivery,
+      shares: await participantsOrThrow(id, { id: user.id, permission }),
+    });
 
     const existing = await repo.users.findByEmail(body.email);
     if (existing) {
@@ -214,27 +252,20 @@ export function registerShareRoutes(
       if (!added) {
         throw new AppError(409, 'conflict', 'That person already has access');
       }
-      try {
-        await deps.mail.send(
-          shareMemberMail({
-            ...actor,
-            to: body.email,
-            from,
-            documentTitle: document.title,
-            link: documentLink(deps.config.WEB_ORIGIN, id),
-          }),
-        );
-      } catch (error) {
-        // The share stands — it works without the mail — but the operator is told.
-        request.log.warn(
-          { ...mailFailure(error), template: 'share.member', documentId: id, ref: request.id },
-          'share mail not sent; the share was created',
-        );
-      }
-      return reply.status(201).send({
-        kind: 'share',
-        shares: await participantsOrThrow(id, { id: user.id, permission }),
-      });
+      // The share stands — it works without the mail — and the sender is told how the mail went.
+      const delivery = await deliver(
+        (mail) => deps.mail.send(mail),
+        shareMemberMail({
+          ...actor,
+          to: body.email,
+          from,
+          documentTitle: document.title,
+          link: documentLink(deps.config.WEB_ORIGIN, id),
+        }),
+        request.log,
+        { documentId: id, ref: request.id },
+      );
+      return reply.status(201).send(await outcome('share', true, delivery));
     }
 
     const { invite, created } = await repo.invites.create({
@@ -248,44 +279,40 @@ export function registerShareRoutes(
     if (!created) {
       // Idempotent (review of #76): a pending invitation for this address
       // already stands — a retried or repeated POST — so nothing is written
-      // and no second mail goes out; the caller gets the sheet as it is.
-      return reply.status(200).send({
-        kind: 'invite',
-        created: false,
-        shares: await participantsOrThrow(id, { id: user.id, permission }),
-      });
+      // and no second mail goes out (Resend is the way to send one); the
+      // caller gets the sheet as it is.
+      return reply.status(200).send(await outcome('invite', false, 'skipped'));
     }
-    try {
-      await deps.mail.send(
-        shareInviteMail({
-          ...actor,
-          to: body.email,
-          from,
-          documentTitle: document.title,
-          link: documentLink(deps.config.WEB_ORIGIN, id, `invite=${invite.token}`),
-        }),
-      );
-    } catch (error) {
-      // Nothing pending may exist that the recipient cannot act on: the row
-      // goes, and the sender learns the mail did not go out. Only this row:
-      // `create` wrote nothing else (an earlier valid invitation would have
-      // been returned above instead).
-      request.log.warn(
-        { ...mailFailure(error), template: 'share.invite', documentId: id, ref: request.id },
-        'invitation mail not sent; the invitation was withdrawn',
-      );
-      await repo.invites.remove({ documentId: id, inviteId: invite.id, actorId: user.id });
-      throw new AppError(
-        502,
-        'unavailable',
-        'The invitation could not be sent to that address. Try again later.',
-      );
-    }
-    return reply.status(201).send({
-      kind: 'invite',
-      created: true,
+    // The row stands whatever the send does (#121): it is what converts on the
+    // invitee's first sign-in, and the sender is told when the mail did not go.
+    const delivery = await sendInvite(request, invite, actor, document.title);
+    return reply.status(201).send(await outcome('invite', true, delivery));
+  });
+
+  /**
+   * Send the invitation mail again (#121): after a refused send, or when the
+   * first mail went astray. Nothing about the invitation changes — the same
+   * token, the same expiry — so it is safe to repeat; each send spends the
+   * inviter's budget, which bounds the mail one person can cause.
+   */
+  api.post('/documents/:id/invites/:inviteId/resend', async (request) => {
+    const user = currentUser(request);
+    const { id, inviteId } = parse(inviteParams, request.params, 'link');
+    const { document, permission } = await requirePermission(repo, user.id, id, 'edit');
+    if (document.deletedAt !== null) throw NOT_FOUND();
+    const invite = await repo.invites.pending({ documentId: id, inviteId });
+    if (!invite) throw NOT_FOUND();
+    await spendInviteBudget(request);
+    const delivery = await sendInvite(
+      request,
+      invite,
+      { actorName: user.displayName, actorEmail: user.email },
+      document.title,
+    );
+    return {
+      delivery,
       shares: await participantsOrThrow(id, { id: user.id, permission }),
-    });
+    };
   });
 
   api.delete('/documents/:id/invites/:inviteId', async (request, reply) => {

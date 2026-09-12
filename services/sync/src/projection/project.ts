@@ -193,7 +193,7 @@ function evaluateAll(gd: ReturnType<typeof openDocument>): Map<string, CellResul
 /** What a computed cell shows: its value's plain text, '' for an error, a blank or no result. */
 function shownText(results: ReadonlyMap<string, CellResult>, tableId: string, key: CellKey) {
   const result = results.get(workbookCellId(tableId, key));
-  if (result === undefined || result.error !== null) return '';
+  if (result?.error !== null) return ''; // no result, or an error: nothing shown
   return evaluatedText(result.value);
 }
 

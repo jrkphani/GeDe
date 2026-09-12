@@ -416,8 +416,9 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
         slice: { rowAxis: null, colAxis: null, pins: {} },
       },
     ]);
+    // A formula cell carries what it shows, then its expression (FIND-03, #125).
     expect(stored.rows.find((r: { formula: string | null }) => r.formula !== null)).toMatchObject({
-      text_plain: '=Sum(B2:B3)',
+      text_plain: '0\n=Sum(B2:B3)',
       rich: null,
     });
 
@@ -426,7 +427,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       { sheetId, tableId, rowId: r1, columnId: c1, textPlain: 'Down jacket, summit push' },
     ]);
     expect(await repo.projection.search(doc.id, 'sum', 50)).toEqual([
-      { sheetId, tableId, rowId: r1, columnId: c2, textPlain: '=Sum(B2:B3)' },
+      { sheetId, tableId, rowId: r1, columnId: c2, textPlain: '0\n=Sum(B2:B3)' },
     ]);
     expect(await repo.projection.search(doc.id, 'jackets', 50)).toEqual([]);
     expect(await repo.projection.search(crypto.randomUUID(), 'jacket', 50)).toEqual([]);
@@ -785,9 +786,21 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(
       await repo.invites.remove({ documentId: other.id, inviteId: tok5.invite.id, actorId: owner }),
     ).toBe(false);
+    // Resend (#121) reads a pending invitation of this document by id — with its token — and
+    // nothing else: another document's, an accepted one, a withdrawn one all answer nothing.
+    expect(
+      await repo.invites.pending({ documentId: doc.id, inviteId: tok5.invite.id }),
+    ).toMatchObject({ id: tok5.invite.id, email: 'late@example.com', token: 'tok-5' });
+    expect(
+      await repo.invites.pending({ documentId: other.id, inviteId: tok5.invite.id }),
+    ).toBeUndefined();
+    expect(await repo.invites.pending({ documentId: doc.id, inviteId: tok4!.id })).toBeUndefined();
     expect(
       await repo.invites.remove({ documentId: doc.id, inviteId: tok5.invite.id, actorId: owner }),
     ).toBe(true);
+    expect(
+      await repo.invites.pending({ documentId: doc.id, inviteId: tok5.invite.id }),
+    ).toBeUndefined();
     const audit = await pool.query<{ action: string; target: string | null }>(
       "select action, target from audit_log where document_id = $1 and action like 'share.invite%' order by id",
       [doc.id],

@@ -6,8 +6,8 @@
  * While SES is in the sandbox (production access pending in ap-southeast-1)
  * only verified recipient addresses are delivered; SES answers
  * `MessageRejected` for any other, which surfaces as a failed send. The route
- * treats a failed send as a failed invitation — nothing is stored that the
- * recipient cannot act on.
+ * reports a failed send as `delivery: 'failed'` and keeps the row it
+ * announces (`delivery.ts`, #121): the mail is the notification, not the grant.
  */
 import { SendEmailCommand, type SESv2Client } from '@aws-sdk/client-sesv2';
 

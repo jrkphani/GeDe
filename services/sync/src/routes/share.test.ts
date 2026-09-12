@@ -10,7 +10,7 @@ import { json, startServer, WEB_ORIGIN, type TestServer } from '../test/fakes.js
 import { bearerProtocols, sleep, waitFor, YClient } from '../test/y-client.js';
 import { CLOSE_FORBIDDEN } from '../ws/route.js';
 import type { ProfileView } from './api.js';
-import { mintToken, type SharesView } from './share.js';
+import { mintToken, type InviteOutcome, type SharesView } from './share.js';
 
 interface ErrorBody {
   error: { code: string; message: string; ref: string; details?: unknown };
@@ -37,11 +37,18 @@ function shares(token: string) {
 }
 
 function invite(token: string, email: string, permission: 'view' | 'edit' = 'edit') {
-  return json<{ kind: string; shares: SharesView }>(
+  return json<InviteOutcome>(server, 'POST', `/api/documents/${docId}/invites`, {
+    token,
+    body: { email, permission },
+  });
+}
+
+function resend(token: string, inviteId: string) {
+  return json<{ delivery: string; shares: SharesView }>(
     server,
     'POST',
-    `/api/documents/${docId}/invites`,
-    { token, body: { email, permission } },
+    `/api/documents/${docId}/invites/${inviteId}/resend`,
+    { token },
   );
 }
 
@@ -102,7 +109,7 @@ describe('invitations (SHARE-02)', () => {
     const before = Date.now();
     const res = await invite(alice, 'Sembian@Example.com', 'edit');
     expect(res.status).toBe(201);
-    expect(res.body.kind).toBe('invite');
+    expect(res.body).toMatchObject({ kind: 'invite', created: true, delivery: 'sent' });
     const [pending] = res.body.shares.invites;
     expect(pending).toMatchObject({ email: 'Sembian@Example.com', permission: 'edit' });
     const expires = new Date(pending!.expiresAt).getTime();
@@ -130,7 +137,7 @@ describe('invitations (SHARE-02)', () => {
     const dana = server.repo.seedUser('sub-dana', 'dana@example.com', 'Dana D');
     const res = await invite(bob, 'DANA@example.com', 'view');
     expect(res.status).toBe(201);
-    expect(res.body.kind).toBe('share');
+    expect(res.body).toMatchObject({ kind: 'share', created: true, delivery: 'sent' });
     const dana2 = server.repo.sharesByDoc.get(docId)!.get(dana.id)!;
     dana2.createdAt = new Date(Date.now() + 2000);
     const listed = (await shares(alice)).body.participants;
@@ -151,19 +158,38 @@ describe('invitations (SHARE-02)', () => {
     expect(owner.status).toBe(409);
   });
 
-  test('SHARE-02 a refused send (SES sandbox: unverified recipient) withdraws the invitation and answers 502', async () => {
+  test('SHARE-02 ONB-05 a refused send (SES sandbox: unverified recipient) keeps the invitation pending and answers 201 with delivery failed; the row still converts on sign-in (#121)', async () => {
     server.mail.failNextSend = true;
-    const res = await json<ErrorBody>(server, 'POST', `/api/documents/${docId}/invites`, {
-      token: alice,
-      body: { email: 'nobody@example.com', permission: 'view' },
-    });
-    expect(res.status).toBe(502);
-    expect(res.body.error.code).toBe('unavailable');
-    expect((await shares(alice)).body.invites).toEqual([]);
-    expect(auditActions()).toEqual(['share.invite', 'share.invite_remove']);
+    const res = await invite(alice, 'nobody@example.com', 'view');
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ kind: 'invite', created: true, delivery: 'failed' });
+    // The invitation stands: the sheet lists it, nothing was withdrawn, no second mail went.
+    const [pending] = res.body.shares.invites;
+    expect(pending).toMatchObject({ email: 'nobody@example.com', permission: 'view' });
+    expect((await shares(alice)).body.invites).toEqual([pending]);
+    expect(auditActions()).toEqual(['share.invite']);
+    expect(server.mail.sent).toEqual([]);
+    // SHARE-02: the grant is the row, not the mail — first sign-in with the address converts it.
+    const nobody = server.verifier.issue('tok-nobody', 'sub-nobody', 'nobody@example.com');
+    expect(await me(nobody)).toBeTruthy();
+    const list = (await shares(alice)).body;
+    expect(list.invites).toEqual([]);
+    expect(list.participants.map((p) => [p.email, p.permission])).toContainEqual([
+      'nobody@example.com',
+      'view',
+    ]);
   });
 
-  test('SHARE-02 the log line for a refused send names the failure class and template, never the recipient (review of #76)', async () => {
+  test('SHARE-02 a refused share.member mail keeps the share and answers delivery failed (#121)', async () => {
+    server.repo.seedUser('sub-dana', 'dana@example.com', 'Dana D');
+    server.mail.failNextSend = true;
+    const res = await invite(alice, 'dana@example.com', 'view');
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({ kind: 'share', created: true, delivery: 'failed' });
+    expect(res.body.shares.participants.map((p) => p.email)).toContain('dana@example.com');
+  });
+
+  test('SHARE-02 the log line for a refused send names the failure class and template and counts on InviteMailFailures, never the recipient (review of #76, #121)', async () => {
     await server.close();
     server = await startServer({}, { captureLogs: true });
     alice = server.verifier.issue('tok-alice', 'sub-alice', 'alice@example.com');
@@ -174,10 +200,65 @@ describe('invitations (SHARE-02)', () => {
       token: alice,
       body: { email: 'private.person@example.com', permission: 'view' },
     });
-    const lines = server.logs.filter((l) => l.msg?.includes('invitation mail not sent'));
+    const lines = server.logs.filter((l) => l.msg?.includes('mail not sent'));
     expect(lines).toHaveLength(1);
-    expect(lines[0]).toMatchObject({ errName: 'Error', template: 'share.invite' });
+    expect(lines[0]).toMatchObject({
+      errName: 'Error',
+      template: 'share.invite',
+      // CloudWatch embedded metric format: one count in GeDe/Sync, by template.
+      InviteMailFailures: 1,
+      Reason: 'share.invite',
+      _aws: {
+        CloudWatchMetrics: [
+          {
+            Namespace: 'GeDe/Sync',
+            Dimensions: [['Reason']],
+            Metrics: [{ Name: 'InviteMailFailures', Unit: 'Count' }],
+          },
+        ],
+      },
+    });
     expect(JSON.stringify(server.logs)).not.toContain('private.person');
+  });
+
+  test('SHARE-02 Resend sends the same invitation again — same token, same expiry, no new row — and reports delivery; it spends the invitation budget; only a pending invitation of this document, by an owner or editor (#121)', async () => {
+    server.mail.failNextSend = true;
+    const first = await invite(alice, 'again@example.com', 'view');
+    expect(first.body.delivery).toBe('failed');
+    const [pending] = first.body.shares.invites;
+    const stored = [...server.repo.invitesById.values()][0]!;
+    // The editor can resend (they may invite); the mail carries the same token.
+    const ok = await resend(bob, pending!.id);
+    expect(ok.status).toBe(200);
+    expect(ok.body.delivery).toBe('sent');
+    expect(ok.body.shares.invites).toEqual([pending]);
+    expect(server.repo.invitesById.size).toBe(1);
+    expect(server.mail.sent).toHaveLength(1);
+    expect(server.mail.sent[0]!.template).toBe('share.invite');
+    expect(server.mail.sent[0]!.to).toBe('again@example.com');
+    expect(server.mail.sent[0]!.text).toContain(`?invite=${stored.token}`);
+    expect(auditActions()).toEqual(['share.invite']); // a resend is not a share change
+    // A refused resend is reported, never thrown.
+    server.mail.failNextSend = true;
+    expect((await resend(alice, pending!.id)).body.delivery).toBe('failed');
+    expect((await resend(alice, pending!.id)).body.delivery).toBe('sent');
+    // The budget is per user (3 per hour here): Alice's invitation and two resends spent hers.
+    const spent = await json<ErrorBody>(
+      server,
+      'POST',
+      `/api/documents/${docId}/invites/${pending!.id}/resend`,
+      { token: alice },
+    );
+    expect(spent.status).toBe(429);
+    // A viewer may not; a stranger sees nothing; an unknown or withdrawn invitation is 404.
+    expect((await resend(carol, pending!.id)).status).toBe(403);
+    const dave = server.verifier.issue('tok-dave', 'sub-dave', 'dave@example.com');
+    expect((await resend(dave, pending!.id)).status).toBe(403);
+    expect((await resend(bob, '00000000-0000-4000-8000-000000000000')).status).toBe(404);
+    await json(server, 'DELETE', `/api/documents/${docId}/invites/${pending!.id}`, {
+      token: alice,
+    });
+    expect((await resend(bob, pending!.id)).status).toBe(404);
   });
 
   test('SHARE-02 a repeated invitation for a pending address is idempotent: 200, the same invitation, no second row, no second mail (review of #76)', async () => {
@@ -186,7 +267,7 @@ describe('invitations (SHARE-02)', () => {
     const [pending] = first.body.shares.invites;
     const again = await invite(alice, 'TWICE@example.com', 'view');
     expect(again.status).toBe(200);
-    expect(again.body).toMatchObject({ kind: 'invite', created: false });
+    expect(again.body).toMatchObject({ kind: 'invite', created: false, delivery: 'skipped' });
     expect(again.body.shares.invites).toEqual([pending]);
     expect(server.repo.invitesById.size).toBe(1);
     expect(server.mail.sent).toHaveLength(1);
@@ -194,9 +275,12 @@ describe('invitations (SHARE-02)', () => {
     // A refused send on a later, different address never touches the standing one.
     server.mail.failNextSend = true;
     await invite(alice, 'other@example.com');
-    expect((await shares(alice)).body.invites).toEqual([pending]);
+    expect((await shares(alice)).body.invites.map((i) => i.email)).toEqual([
+      'twice@example.com',
+      'other@example.com',
+    ]);
     // The budget counts the repeat (it was a valid, permitted request), the row count does not.
-    expect(server.repo.invitesById.size).toBe(1);
+    expect(server.repo.invitesById.size).toBe(2);
   });
 
   test('SHARE-02 SHARE-03 an invitation by an editor who has since been removed or demoted is withdrawn at conversion rather than converted (review of #76)', async () => {

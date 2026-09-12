@@ -48,7 +48,7 @@ export function mailFailureLine(template: Mail['template'], at = Date.now()) {
 export function mailFailure(error: unknown): { errName: string; errCode?: string } {
   const errCode =
     typeof error === 'object' && error !== null && 'Code' in error
-      ? String((error as { Code: unknown }).Code)
+      ? String(error.Code)
       : undefined;
   return {
     errName: error instanceof Error ? error.name : typeof error,
@@ -72,7 +72,12 @@ export async function deliver(
     return 'sent';
   } catch (error) {
     log.warn(
-      { ...mailFailure(error), ...mailFailureLine(mail.template), template: mail.template, ...context },
+      {
+        ...mailFailure(error),
+        ...mailFailureLine(mail.template),
+        template: mail.template,
+        ...context,
+      },
       `${mail.template} mail not sent; the ${mail.template === 'share.invite' ? 'invitation' : 'share'} stands`,
     );
     return 'failed';
