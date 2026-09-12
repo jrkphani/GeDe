@@ -18,6 +18,7 @@ export {
   type SegmentedOption,
 } from './components/SegmentedControl.js';
 export { Dialog, DialogClose, type DialogProps, type DialogVariant } from './components/Dialog.js';
+export { AlertDialog, type AlertDialogProps } from './components/AlertDialog.js';
 export { Menu, type MenuEntry, type MenuProps, type MenuRadioOption } from './components/Menu.js';
 export { Popover, type PopoverProps } from './components/Popover.js';
 export { Collapsible, type CollapsibleProps } from './components/Collapsible.js';
