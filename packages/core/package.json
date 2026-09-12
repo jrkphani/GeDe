@@ -14,7 +14,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "prosemirror-model": "^1.25.11",
     "ulid": "^3.0.0",
     "yjs": "^13.6.27"
+  },
+  "devDependencies": {
+    "fast-check": "^4.10.0"
   }
 }

@@ -8,7 +8,9 @@
  *                            columns Y.Array<Y.Map{id,label,width}>,
  *                            rows Y.Array<rowId>,
  *                            cells Y.Map keyed `rowId:colId` → Y.XmlFragment | formula string,
- *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height}>
+ *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height}>,
+ *                            cellFormat Y.Map keyed `rowId:colId` → {format, formatOpts}
+ *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01)
  *   graphs  Y.Map<Y.Map>     by id (Wave 2 fills these in; the slot exists so
  *                            Fit already frames them, DOC-07)
  *   meta    Y.Map            title, createdAt
@@ -23,6 +25,13 @@
  */
 import * as Y from 'yjs';
 
+import {
+  isFormatKind,
+  readFormatOpts,
+  type CellFormat,
+  type FormatKind,
+  type FormatOpts,
+} from '../format/types.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
 
 /** Lattice rows a table's title bar occupies (DS: title bar 44 px = 2 × 22). */
@@ -91,6 +100,10 @@ export interface ColumnRecord {
   /** Every cell in the column wraps, so each row is two lattice units (GRID-09). */
   readonly wrap: boolean;
   readonly source: ColumnSource;
+  /** Data format every cell in the column inherits (FMT-01, FMT-06). Missing key → `auto`. */
+  readonly format: FormatKind;
+  /** Options for `format` (decimals, currency, date pattern, text case). */
+  readonly formatOpts: FormatOpts;
 }
 
 export interface RowMeta {
@@ -241,6 +254,7 @@ function readStripCount(map: Y.Map<unknown>, key: string, fallback: StripCount):
 }
 
 export function columnRecord(map: ColumnMap): ColumnRecord {
+  const format = map.get('format');
   return {
     id: readString(map, 'id'),
     label: readString(map, 'label'),
@@ -248,6 +262,28 @@ export function columnRecord(map: ColumnMap): ColumnRecord {
     hidden: readBoolean(map, 'hidden', false),
     wrap: readBoolean(map, 'wrap', false),
     source: readColumnSource(map),
+    format: isFormatKind(format) ? format : 'auto',
+    formatOpts: readFormatOpts(map.get('formatOpts')),
+  };
+}
+
+/**
+ * Per-cell format overrides (FMT-01 "cell-level override"), keyed like
+ * `cells`. Absent on tables created before Wave 2; `null` then, and the
+ * writer in `format/mutations.ts` creates it on first use.
+ */
+export function cellFormatMap(table: TableMap): Y.Map<unknown> | null {
+  return readMap<unknown>(table, 'cellFormat');
+}
+
+/** The override stored for one cell, or null when it inherits the column's format. */
+export function cellFormatOverride(table: TableMap, rowId: Id, colId: Id): CellFormat | null {
+  const entry = cellFormatMap(table)?.get(cellKey(rowId, colId));
+  if (typeof entry !== 'object' || entry === null || !('format' in entry)) return null;
+  if (!isFormatKind(entry.format)) return null;
+  return {
+    kind: entry.format,
+    opts: readFormatOpts('formatOpts' in entry ? entry.formatOpts : undefined),
   };
 }
 
