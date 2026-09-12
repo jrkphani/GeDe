@@ -630,6 +630,29 @@ describe('GeDe CDK app', () => {
     pipelineTemplate.allResourcesProperties('AWS::CodeBuild::Project', {
       Environment: Match.objectLike({ Type: 'ARM_CONTAINER' }),
     });
+    // Only Synth is MEDIUM (typed eslint over the whole monorepo OOMed on SMALL, exit 134);
+    // it also pins Node's heap to match. Everything else stays SMALL.
+    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project')) as {
+      Properties: {
+        Environment: {
+          ComputeType: string;
+          EnvironmentVariables?: { Name: string; Value: string }[];
+        };
+      };
+    }[];
+    const medium = projects.filter(
+      (p) => p.Properties.Environment.ComputeType === 'BUILD_GENERAL1_MEDIUM',
+    );
+    expect(medium).toHaveLength(1);
+    expect(medium[0]!.Properties.Environment.EnvironmentVariables).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ Name: 'CI', Value: 'true' }),
+        expect.objectContaining({ Name: 'NODE_OPTIONS', Value: '--max-old-space-size=4096' }),
+      ]),
+    );
+    expect(
+      projects.filter((p) => p.Properties.Environment.ComputeType === 'BUILD_GENERAL1_SMALL'),
+    ).toHaveLength(projects.length - 1);
   });
 
   it('every CodeBuild project logs to one group that expires after 30 days (#40, #42)', () => {

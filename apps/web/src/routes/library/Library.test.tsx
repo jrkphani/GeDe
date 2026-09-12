@@ -304,6 +304,35 @@ describe('Library', () => {
     expect(screen.getByRole('heading', { name: 'No workscapes match' })).toBeInTheDocument();
   });
 
+  it('LIB-03 LIB-04 a search that hides the selected row drops the selection: the count stays honest and the toolbar cannot act on an invisible row', async () => {
+    const u = userEvent.setup();
+    serve(live);
+    renderRoutes(routes, ['/']);
+    const everestRow = (await screen.findByText('Everest trek')).closest('tr')!;
+    await u.click(everestRow);
+    expect(screen.getByText('1 of 2 selected')).toBeInTheDocument();
+    const openButton = screen.getByRole('button', { name: 'Open' });
+    expect(openButton).toBeEnabled();
+
+    const search = screen.getByLabelText('Search workscapes');
+    await u.type(search, 'zzz');
+    expect(screen.getByRole('heading', { name: 'No workscapes match' })).toBeInTheDocument();
+    expect(screen.queryByText(/of 0 selected/)).not.toBeInTheDocument();
+    expect(screen.getByText('0 items')).toBeInTheDocument();
+    for (const name of ['Open', 'Participants', 'Delete'])
+      expect(screen.getByRole('button', { name })).toBeDisabled();
+
+    // Narrowing to the selected row keeps it selected; clearing after it was hidden does not
+    // resurrect a selection the user never saw.
+    await u.clear(search);
+    expect(screen.getByText('2 items')).toBeInTheDocument();
+    expect(screen.queryAllByRole('row', { selected: true })).toHaveLength(0);
+    await u.click(screen.getByText('Everest trek').closest('tr')!);
+    await u.type(search, 'ever');
+    expect(screen.getByText('1 of 1 selected')).toBeInTheDocument();
+    expect(openButton).toBeEnabled();
+  });
+
   it('LIB-05 Browse sorts by Name or Date and the choice persists per user', async () => {
     const u = userEvent.setup();
     serve(live);
@@ -591,6 +620,27 @@ describe('Library', () => {
     expect(localStorage.getItem('gede.locale')).toBe('en-IN');
     expect(me.updateMe).toHaveBeenCalledWith({ locale: 'en-IN' });
     expect(screen.getByTestId('live-region')).toHaveTextContent('Language set to English (India)');
+  });
+
+  it('WCAG 3.1.2 every autonym in the locale picker carries its own lang, so தமிழ், हिन्दी and తెలుగు are read in their language', async () => {
+    const u = userEvent.setup();
+    serve(live);
+    renderRoutes(routes, ['/']);
+    await screen.findByText('Everest trek');
+    await u.click(screen.getByRole('button', { name: 'Account: Meena' }));
+    const menu = await screen.findByRole('menu');
+    const langOf = (name: string) =>
+      within(menu)
+        .getByRole('menuitemradio', { name })
+        .querySelector('[lang]')
+        ?.getAttribute('lang');
+    expect(langOf('தமிழ் (India)')).toBe('ta');
+    expect(langOf('हिन्दी (India)')).toBe('hi');
+    expect(langOf('తెలుగు (India)')).toBe('te');
+    expect(langOf('English (United Kingdom)')).toBe('en');
+    // Only the autonym is marked; the region stays in the UI language.
+    const tamil = within(menu).getByRole('menuitemradio', { name: 'தமிழ் (India)' });
+    expect(tamil.querySelector('[lang="ta"]')).toHaveTextContent(/^தமிழ்$/);
   });
 
   it('I18N-05 the account locale from the server wins over the device on sign-in', async () => {

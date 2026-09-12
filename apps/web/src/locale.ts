@@ -13,15 +13,29 @@ export const LOCALES = ['en-US', 'en-GB', 'en-IN', 'ta-IN', 'hi-IN', 'te-IN'] as
 export type Locale = (typeof LOCALES)[number];
 export const DEFAULT_LOCALE: Locale = 'en-US';
 
-/** Names shown in the picker, each in its own language where that differs. */
-export const LOCALE_LABELS: Record<Locale, string> = {
-  'en-US': 'English (United States)',
-  'en-GB': 'English (United Kingdom)',
-  'en-IN': 'English (India)',
-  'ta-IN': 'தமிழ் (India)',
-  'hi-IN': 'हिन्दी (India)',
-  'te-IN': 'తెలుగు (India)',
+/**
+ * Names shown in the picker: the language in its own script (the autonym),
+ * the region in the UI language. The two parts are kept apart so the picker
+ * can mark the autonym with its own `lang` (WCAG 3.1.2, Language of Parts).
+ */
+export const LOCALE_NAMES: Record<Locale, { autonym: string; region: string }> = {
+  'en-US': { autonym: 'English', region: 'United States' },
+  'en-GB': { autonym: 'English', region: 'United Kingdom' },
+  'en-IN': { autonym: 'English', region: 'India' },
+  'ta-IN': { autonym: 'தமிழ்', region: 'India' },
+  'hi-IN': { autonym: 'हिन्दी', region: 'India' },
+  'te-IN': { autonym: 'తెలుగు', region: 'India' },
 };
+
+/** `lang` for an autonym: the language subtag of its locale (`ta` for `ta-IN`). */
+export function languageOf(locale: Locale): string {
+  return locale.slice(0, locale.indexOf('-'));
+}
+
+/** Plain-text label, e.g. for announcements: "தமிழ் (India)". */
+export const LOCALE_LABELS: Record<Locale, string> = Object.fromEntries(
+  LOCALES.map((l) => [l, `${LOCALE_NAMES[l].autonym} (${LOCALE_NAMES[l].region})`]),
+) as Record<Locale, string>;
 
 const DEVICE_KEY = 'gede.locale';
 const userKey = (sub: string): string => `${DEVICE_KEY}.${sub}`;

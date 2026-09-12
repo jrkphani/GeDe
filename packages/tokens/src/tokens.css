@@ -86,20 +86,55 @@
 
   /* breakpoints, for reference in JS */
   --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px; --bp-xl: 1440px;
+
+  /* form controls, scrollbars and the canvas background follow the theme */
+  color-scheme: light;
 }
 
+/* Dark theme — a token swap, never a filter. Two triggers, one palette:
+   an explicit `data-theme="dark"` on the root, or the OS preference unless the
+   root pins `data-theme="light"`. The two blocks must stay identical;
+   tokens.test.ts fails when they drift. */
 /* prettier-ignore */
 [data-theme="dark"] {
+  color-scheme: dark;
   --surface:        #0f1a15;
   --surface-sunken: #0a120e;
   --border:         #24352c;
   --ink:            #e6ede9;
   --ink-muted:      #9fb0a7;
   --action-primary-bg: #2a7b4e;
-  --link:              #7fb195;   /* forest-300: 6.9:1 on the dark surface; forest-700 would be 1.6:1 */
+  --link:              #7fb195;   /* forest-300: 7.3:1 on the dark surface; forest-700 would be 1.6:1 */
   --selection-ring:    #e0a04a;
+  /* status hues lifted for text on the dark surfaces (the 700-weight values sit at 2.4–3.8:1);
+     fills that use them take --surface as their text, so they read on both themes */
+  --success: #6cc48f;   /* 8.4:1 */
+  --warning: #e0a04a;   /* amber-300, 7.9:1 */
+  --danger:  #f0857a;   /* 7.1:1 */
+  --info:    #6fc7e0;   /* 9.3:1 */
   --skeleton-base:  #16231c;
   --skeleton-sheen: #1d2e25;
+}
+
+/* prettier-ignore */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --surface:        #0f1a15;
+    --surface-sunken: #0a120e;
+    --border:         #24352c;
+    --ink:            #e6ede9;
+    --ink-muted:      #9fb0a7;
+    --action-primary-bg: #2a7b4e;
+    --link:              #7fb195;
+    --selection-ring:    #e0a04a;
+    --success: #6cc48f;
+    --warning: #e0a04a;
+    --danger:  #f0857a;
+    --info:    #6fc7e0;
+    --skeleton-base:  #16231c;
+    --skeleton-sheen: #1d2e25;
+  }
 }
 
 /* prettier-ignore */

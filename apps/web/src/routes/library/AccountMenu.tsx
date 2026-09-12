@@ -2,7 +2,14 @@ import { Avatar, Button, Menu, type MenuEntry } from '@gede/ui';
 import { announce } from '../../announce.js';
 import { updateMe } from '../../api/me.js';
 import type { SessionUser } from '../../auth/cognito.js';
-import { isLocale, LOCALE_LABELS, LOCALES, useLocale } from '../../locale.js';
+import {
+  isLocale,
+  languageOf,
+  LOCALE_LABELS,
+  LOCALE_NAMES,
+  LOCALES,
+  useLocale,
+} from '../../locale.js';
 
 export interface AccountMenuProps {
   user: SessionUser;
@@ -42,7 +49,16 @@ export function AccountMenu({ user, onSignOut }: AccountMenuProps) {
       label: 'Language and formats',
       value: locale,
       onValueChange: changeLocale,
-      options: LOCALES.map((l) => ({ value: l, label: LOCALE_LABELS[l] })),
+      // WCAG 3.1.2: each autonym carries its own language so a screen reader switches
+      // voice for தமிழ் / हिन्दी / తెలుగు instead of reading them with the UI voice.
+      options: LOCALES.map((l) => ({
+        value: l,
+        label: (
+          <>
+            <span lang={languageOf(l)}>{LOCALE_NAMES[l].autonym}</span> ({LOCALE_NAMES[l].region})
+          </>
+        ),
+      })),
     },
     { kind: 'separator', id: 's2' },
     { kind: 'item', id: 'signout', label: 'Sign out', onSelect: onSignOut },
