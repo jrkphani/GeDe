@@ -16,6 +16,7 @@ import {
   tableAddresses,
   tableById,
   tableMap,
+  tableUnitBounds,
   type GedeDoc,
   type Id,
 } from '../doc/index.js';
@@ -41,6 +42,7 @@ import {
   stackingOrder,
   stackingPosition,
 } from './arrange.js';
+import { handleRulesRequest, isRulesRequest } from './rule-engine.js';
 import { addColumnRule, removeColumnRule, updateColumnRule } from './rule-writes.js';
 import { describeRule, evaluateRules, readRules, ruleMatches } from './rules.js';
 import { mergeCells, mergeRoom, spanAt, spanCovering, spanIndex, unmergeCells } from './spans.js';
@@ -99,11 +101,16 @@ describe('INSP-04 table look', () => {
     expect(tableById(gd, tableId)?.look.gridlines).toBe('light');
   });
 
-  it('INSP-04 RESP-01 the title and caption visibility never move an address: the title bar keeps its rows', () => {
+  it('INSP-04 RESP-01 the title and caption visibility never move an address: the title bar keeps its rows and the caption is one row at the foot', () => {
     const { gd, tableId } = fixture();
-    const before = tableAddresses(tableMap(gd, tableId)!);
+    const table = tableMap(gd, tableId)!;
+    const before = tableAddresses(table);
+    const bounds = tableUnitBounds(table);
     setTableLook(gd, tableId, { titleShown: false, captionShown: true, caption: 'c' });
-    expect(tableAddresses(tableMap(gd, tableId)!)).toEqual(before);
+    expect(tableAddresses(table)).toEqual(before);
+    expect(tableUnitBounds(table)).toEqual({ ...bounds, rows: bounds.rows + 1 });
+    setTableLook(gd, tableId, { captionShown: false });
+    expect(tableUnitBounds(table)).toEqual(bounds);
   });
 });
 
@@ -146,13 +153,18 @@ describe('INSP-05 INSP-06 INSP-10 appearance', () => {
     expect(readAppearance({ size: 'label', weight: 300, font: 'serif', fill: 'pink' })).toEqual({});
   });
 
-  it('INSP-06 character styles are bundles on the type scale; size never goes under the 11 px floor', () => {
+  it('INSP-06 character styles are bundles on the type scale; size never goes under the 11 px floor nor above a 22 px row', () => {
     expect(characterStyleOf(CHARACTER_STYLE_BUNDLES.title)).toBe('title');
     expect(characterStyleOf(mergeAppearance({ fill: 'amber' }, CHARACTER_STYLE_BUNDLES.body))).toBe(
       'body',
     );
-    expect(characterStyleOf({ size: 'h1', weight: 600 })).toBeNull();
-    for (const px of Object.values(TYPE_SIZE_PX)) expect(px).toBeGreaterThanOrEqual(11);
+    expect(characterStyleOf({ size: 'h3', weight: 400 })).toBeNull();
+    for (const px of Object.values(TYPE_SIZE_PX)) {
+      expect(px).toBeGreaterThanOrEqual(11);
+      expect(px).toBeLessThanOrEqual(22);
+    }
+    // A size stored by a newer client that this scale does not carry reads as absent.
+    expect(readAppearance({ size: 'display' })).toEqual({});
   });
 
   it('A11Y-03 a text colour under 4.5:1 on its fill resolves to ink and says so; numbers keep their right alignment under Automatic (FMT-02)', () => {
@@ -237,6 +249,35 @@ describe('INSP-05 conditional highlighting rules', () => {
     ).toEqual([
       { id: 'ok', when: { trigger: 'wordsOver', count: 2 }, style: { textColour: 'danger' } },
     ]);
+  });
+});
+
+describe('INSP-05 rules as a Worker service', () => {
+  it('INSP-05 a request carries a column\'s rules and cell texts and answers with the first match per cell; malformed input is refused, never thrown', () => {
+    const rules = readRules([
+      { id: 'r1', when: { trigger: 'contains', text: 'due' }, style: { fill: 'amber' } },
+      { id: 'r2', when: { trigger: 'charsOver', count: 3 }, style: { textColour: 'danger' } },
+    ]);
+    const request = {
+      id: 7,
+      tableId: 't',
+      colId: 'c',
+      rules,
+      cells: [
+        { key: 'r:c', text: 'overdue' },
+        { key: 's:c', text: 'a' },
+        { key: 'u:c', text: 'long enough' },
+      ],
+    };
+    expect(isRulesRequest(request)).toBe(true);
+    expect(isRulesRequest({ id: 1 })).toBe(false);
+    const response = handleRulesRequest(request);
+    expect(response.ok && response.matches).toEqual([
+      { key: 'r:c', ruleId: 'r1' },
+      { key: 'u:c', ruleId: 'r2' },
+    ]);
+    const empty = handleRulesRequest({ ...request, rules: [{ bogus: true }] as never });
+    expect(empty.ok && empty.matches).toEqual([]);
   });
 });
 
@@ -333,7 +374,7 @@ describe('INSP-07 arrange', () => {
     expect(tableById(gd, a)?.z).toBe(2);
   });
 
-  it('INSP-07 DOC-07 pin to viewport is a table flag; the table keeps its lattice origin', () => {
+  it('INSP-07 pin to viewport is a table flag; the table keeps its lattice origin', () => {
     const { gd, tableId } = fixture();
     setTablePinned(gd, tableId, true);
     expect(tableById(gd, tableId)?.pinned).toBe(true);

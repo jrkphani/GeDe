@@ -45,12 +45,19 @@ export const GRIDLINE_LABELS: Readonly<Record<GridlineDensity, string>> = {
   contrast: 'High contrast',
 };
 
+/** Lattice rows the caption strip occupies when shown (prototype: one 22 px row at the foot). */
+export const CAPTION_ROWS = 1;
+
 export interface TableLook {
   readonly style: TableStyle;
   /** The title text in the title bar; the bar itself keeps its two lattice rows either way. */
   readonly titleShown: boolean;
   readonly caption: string;
-  /** The caption line under the title, inside the same bar: no address moves (RESP-01). */
+  /**
+   * The caption strip: one lattice row at the foot of the table, after the
+   * footer (the prototype's placement). It extends the table's footprint and
+   * moves no cell address (RESP-01, non-negotiable 3).
+   */
   readonly captionShown: boolean;
   readonly outline: TableOutline;
   readonly gridlines: GridlineDensity;
@@ -152,9 +159,11 @@ export const FONT_WEIGHT_LABELS: Readonly<Record<FontWeight, string>> = {
 
 /**
  * Sizes on the design system's type scale (DS §2), never below the 11 px cell
- * floor — so `mono-cell` (10 px) and `label` (9 px) are not offered.
+ * floor — so `mono-cell` (10 px) and `label` (9 px) are not offered — and
+ * never above what a 22 px lattice row can show: `h1` (28 px) and `display`
+ * (40 px) cannot render in a row, so they are not offered either.
  */
-export const TYPE_SIZES = ['cell', 'body-sm', 'body', 'h3', 'h2', 'h1', 'display'] as const;
+export const TYPE_SIZES = ['cell', 'body-sm', 'body', 'h3', 'h2'] as const;
 export type TypeSize = (typeof TYPE_SIZES)[number];
 /** Pixel size at the 16 px root, for the control's label only; the renderer uses the rem token. */
 export const TYPE_SIZE_PX: Readonly<Record<TypeSize, number>> = {
@@ -163,8 +172,6 @@ export const TYPE_SIZE_PX: Readonly<Record<TypeSize, number>> = {
   body: 15,
   h3: 16,
   h2: 20,
-  h1: 28,
-  display: 40,
 };
 
 export const H_ALIGNS = ['left', 'center', 'right', 'justify'] as const;

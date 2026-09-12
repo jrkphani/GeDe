@@ -66,6 +66,12 @@
   --tint-amber-soft:   var(--amber-50);
   --tint-forest-soft:  var(--forest-50);
   --tint-slate-soft:   var(--slate-50);
+  /* drawn rules — cell borders and table outlines (INSP-04, INSP-05): the PRD's hairline /
+     strong / accent weights. Each references a semantic token, so the dark swap carries them;
+     every one is ≥ 3:1 on both surfaces (UI boundaries, A11Y-03), unlike the 1.2:1 gridline. */
+  --rule-hairline:     var(--ink-muted);
+  --rule-strong:       var(--ink);
+  --rule-accent:       var(--link);
 
   /* presence — assigned on join; never the brand colour */
   --presence-1: #14201a;

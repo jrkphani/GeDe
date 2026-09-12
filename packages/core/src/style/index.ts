@@ -9,5 +9,6 @@ export * from './table.js';
 export * from './appearance.js';
 export * from './rules.js';
 export * from './rule-writes.js';
+export * from './rule-engine.js';
 export * from './spans.js';
 export * from './arrange.js';
