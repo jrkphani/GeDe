@@ -7,7 +7,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import { INVITE_VALID_DAYS } from '../repo/types.js';
 import { json, startServer, WEB_ORIGIN, type TestServer } from '../test/fakes.js';
-import { bearerProtocols, YClient } from '../test/y-client.js';
+import { bearerProtocols, sleep, waitFor, YClient } from '../test/y-client.js';
 import { CLOSE_FORBIDDEN } from '../ws/route.js';
 import type { ProfileView } from './api.js';
 import { mintToken, type SharesView } from './share.js';
@@ -366,6 +366,37 @@ describe('participants (SHARE-01, SHARE-03)', () => {
     ).toBe(404);
     expect(auditActions()).toEqual(['share.permission', 'share.remove']);
     back.close();
+  });
+
+  test('SHARE-03 a removed editor whose client ignores the close handshake cannot keep writing: updates after the removal are refused, not applied', async () => {
+    const bobSocket = await YClient.connect(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(bob),
+    });
+    await bobSocket.synced;
+    const room = server.app.rooms.get(docId)!;
+    bobSocket.setCell('r1:c1', 'before removal');
+    await waitFor(() => room.doc.getMap<string>('cells').get('r1:c1') === 'before removal');
+
+    // A hostile client never answers the close frame (ws gives it 30 s before
+    // the socket is destroyed) and keeps sending. Pausing the client's reads
+    // is that client: the close frame is never processed, the socket stays
+    // OPEN on its side, and its writes still reach the server.
+    (bobSocket.ws as unknown as { _socket: { pause(): void; resume(): void } })._socket.pause();
+    const removed = await json(server, 'DELETE', `/api/documents/${docId}/shares/${bobId}`, {
+      token: alice,
+    });
+    expect(removed.status).toBe(204);
+    expect(bobSocket.ws.readyState).toBe(bobSocket.ws.OPEN);
+
+    bobSocket.setCell('r1:c1', 'after removal');
+    bobSocket.setCell('r2:c1', 'and more');
+    await waitFor(() => room.stats.refusedRevoked >= 2);
+    await sleep(30);
+    expect(room.doc.getMap<string>('cells').get('r1:c1')).toBe('before removal');
+    expect(room.doc.getMap<string>('cells').get('r2:c1')).toBeUndefined();
+
+    (bobSocket.ws as unknown as { _socket: { resume(): void } })._socket.resume();
+    expect((await bobSocket.closed).code).toBe(CLOSE_FORBIDDEN);
   });
 
   test('SHARE-03 permission changes, removals, link mode and stop sharing are owner-only; the owner cannot be changed or removed', async () => {

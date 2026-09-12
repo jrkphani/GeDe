@@ -56,6 +56,14 @@ export class Conn {
   readonly awarenessBucket: TokenBucket;
   /** Set once the room closed this socket for exceeding a limit; later frames are ignored. */
   limited = false;
+  /**
+   * Set once the room closed this socket because the member's permission
+   * changed or ended (`closeMember`, SHARE-03). The permission frozen on the
+   * connection is stale from that moment, so every later frame is refused:
+   * `ws` keeps delivering frames until the peer answers the close handshake
+   * (up to 30 s), and a client that never answers must not keep writing.
+   */
+  revoked = false;
 
   constructor(
     readonly socket: WebSocket,
@@ -79,6 +87,8 @@ export interface RoomStats {
   droppedUpdates: number;
   /** Messages refused because the room had already sealed its writer (dispose in progress). */
   refusedClosing: number;
+  /** Messages refused after the member's permission changed or ended (`closeMember`, SHARE-03). */
+  refusedRevoked: number;
   /** Awareness updates dropped for exceeding the size limit. */
   droppedAwareness: number;
   /** Messages that were not valid protocol. */
@@ -112,6 +122,7 @@ export class Room {
   readonly stats: RoomStats = {
     droppedUpdates: 0,
     refusedClosing: 0,
+    refusedRevoked: 0,
     droppedAwareness: 0,
     malformed: 0,
     slowConsumers: 0,
@@ -245,6 +256,12 @@ export class Room {
     // a frame received before an orderly close (shutdown, 1001) is still applied
     // and persisted (LOAD-05: nothing accepted is lost).
     if (conn.limited) return;
+    if (conn.revoked) {
+      // SHARE-03: the permission this socket was admitted with no longer
+      // holds. Reads and writes alike are refused; the socket is closing.
+      this.stats.refusedRevoked += 1;
+      return;
+    }
     if (this.writer?.sealed === true) {
       // The writer has drained and sealed: anything applied now could never
       // be persisted, so it is refused outright rather than accepted in
@@ -392,11 +409,17 @@ export class Room {
    * (a downgrade to view then arrives as the read-only notice). Resolves the
    * number of sockets closed. The sockets leave through the usual close
    * handler, so awareness and eviction follow as for any departure.
+   *
+   * The connection is marked revoked before the close frame goes out: frames
+   * already queued behind the room load, and any the peer sends before it
+   * answers the handshake (or never does), are refused rather than applied
+   * under the stale permission.
    */
   closeMember(userId: string, code: number, reason: string): number {
     let closed = 0;
     for (const conn of this.conns) {
       if (conn.member.userId !== userId) continue;
+      conn.revoked = true;
       conn.socket.close(code, reason);
       closed += 1;
     }

@@ -6,11 +6,13 @@
  */
 import { render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { Route, Routes } from 'react-router';
+import { useEffect } from 'react';
+import { Route, Routes, useNavigate } from 'react-router';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type * as SharesApi from '../../../api/shares.js';
 import { LiveRegion } from '../../../announce.js';
+import { RequireAuth, SessionProvider, takeReturnTo, useSession } from '../../../auth/session.js';
 import { installMatchMedia } from '../../../test/match-media.js';
 import { renderRoutes, withConfig } from '../../../test/helpers.js';
 import { LinkRedeem } from './LinkRedeem.js';
@@ -32,7 +34,20 @@ vi.mock('../../../api/shares.js', async (importOriginal) => {
     stopSharing: vi.fn(),
   };
 });
+vi.mock('../../../api/me.js', () => ({
+  getMe: vi.fn(),
+  updateMe: vi.fn(() => Promise.resolve()),
+  bindVerifiedEmail: vi.fn(() => Promise.resolve()),
+}));
+vi.mock('../../../auth/cognito.js', () => ({
+  currentUser: vi.fn(),
+  idToken: vi.fn(() => Promise.resolve('id.token.value')),
+  onAuthEvent: vi.fn(() => () => undefined),
+  signOutLocal: vi.fn(() => Promise.resolve()),
+}));
 const shares = await import('../../../api/shares.js');
+const meApi = await import('../../../api/me.js');
+const cognito = await import('../../../auth/cognito.js');
 
 const ID = '6f1b2c3d-0000-4000-8000-00000000abcd';
 const OWNER = { id: 'u-owner', name: 'Meena', email: 'meena@1cloudhub.com' };
@@ -353,10 +368,139 @@ describe('LinkRedeem', () => {
   });
 
   it('SHARE-02 ?invite= accepts the invitation; a refused token still opens the shell without the token', async () => {
+    vi.mocked(meApi.getMe).mockResolvedValue({
+      id: 'u',
+      sub: 'sub-9',
+      email: 'akshaya@example.com',
+      displayName: null,
+      locale: null,
+    });
     vi.mocked(shares.acceptInvite).mockRejectedValue(new Error('404'));
     const { router } = app(`/d/${ID}?invite=tok_abcdefghijklmnop`);
     await screen.findByText('shell');
     expect(shares.acceptInvite).toHaveBeenCalledWith(ID, 'tok_abcdefghijklmnop');
+    // The profile already carries its address: nothing to bind first.
+    expect(meApi.bindVerifiedEmail).not.toHaveBeenCalled();
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('SHARE-02 a new account opening its invitation binds its verified address before presenting the token, so the conversion never races the session', async () => {
+    const order: string[] = [];
+    vi.mocked(meApi.getMe).mockResolvedValue({
+      id: 'u',
+      sub: 'sub-9',
+      email: null,
+      displayName: null,
+      locale: null,
+    });
+    vi.mocked(meApi.bindVerifiedEmail).mockImplementation(() => {
+      order.push('bind');
+      return Promise.resolve({
+        id: 'u',
+        sub: 'sub-9',
+        email: 'akshaya@example.com',
+        displayName: null,
+        locale: null,
+      });
+    });
+    vi.mocked(shares.acceptInvite).mockImplementation(() => {
+      order.push('accept');
+      // The binding converted the invitation already; the service says so and the shell opens.
+      return Promise.reject(new Error('409'));
+    });
+    const { router } = app(`/d/${ID}?invite=tok_abcdefghijklmnop`);
+    await screen.findByText('shell');
+    expect(cognito.idToken).toHaveBeenCalled();
+    expect(meApi.bindVerifiedEmail).toHaveBeenCalledWith('id.token.value');
+    expect(order).toEqual(['bind', 'accept']);
+    expect(router.state.location.search).toBe('');
+  });
+
+  it('SHARE-02 a binding that fails does not stop the invitation being presented', async () => {
+    vi.mocked(meApi.getMe).mockRejectedValue(new Error('offline'));
+    vi.mocked(shares.acceptInvite).mockResolvedValue(undefined);
+    app(`/d/${ID}?invite=tok_abcdefghijklmnop`);
+    await screen.findByText('shell');
+    expect(shares.acceptInvite).toHaveBeenCalledWith(ID, 'tok_abcdefghijklmnop');
+  });
+
+  it('SHARE-01 ?k= needs no address: the link is presented without touching the profile', async () => {
+    vi.mocked(shares.redeemLink).mockResolvedValue(undefined);
+    app(`/d/${ID}?k=tok_abcdefghijklmnop`);
+    await screen.findByText('shell');
+    expect(meApi.getMe).not.toHaveBeenCalled();
+    expect(meApi.bindVerifiedEmail).not.toHaveBeenCalled();
+  });
+
+  it('SHARE-01 AUTH-01 a signed-out visitor with ?k= goes through sign-in and comes back to redeem it', async () => {
+    vi.mocked(cognito.currentUser).mockResolvedValueOnce(null);
+    vi.mocked(meApi.getMe).mockResolvedValue({
+      id: 'u',
+      sub: 'sub-9',
+      email: 'dana@example.com',
+      displayName: 'Dana',
+      locale: null,
+    });
+    vi.mocked(shares.redeemLink).mockResolvedValue(undefined);
+    // What SignIn does once the session is signed in: go where the visitor was headed.
+    function FakeSignIn() {
+      const { state, refresh } = useSession();
+      const navigate = useNavigate();
+      useEffect(() => {
+        if (state.status === 'signed-in') {
+          void navigate(takeReturnTo() ?? '/', { replace: true });
+        }
+      }, [state.status, navigate]);
+      return (
+        <button
+          type="button"
+          onClick={() => {
+            vi.mocked(cognito.currentUser).mockResolvedValue({
+              sub: 'sub-9',
+              email: 'dana@example.com',
+              name: 'Dana',
+            });
+            void refresh();
+          }}
+        >
+          Continue
+        </button>
+      );
+    }
+    const { router } = renderRoutes(
+      [
+        {
+          path: '*',
+          element: (
+            <SessionProvider>
+              <Routes>
+                <Route path="/sign-in" element={<FakeSignIn />} />
+                <Route
+                  path="/d/:id"
+                  element={
+                    <RequireAuth>
+                      <LinkRedeem>
+                        <p>shell</p>
+                      </LinkRedeem>
+                    </RequireAuth>
+                  }
+                />
+              </Routes>
+            </SessionProvider>
+          ),
+        },
+      ],
+      [`/d/${ID}?k=tok_abcdefghijklmnop`],
+    );
+    const user = userEvent.setup();
+    const cont = await screen.findByRole('button', { name: 'Continue' });
+    expect(router.state.location.pathname).toBe('/sign-in');
+    expect(shares.redeemLink).not.toHaveBeenCalled();
+
+    await user.click(cont);
+    await screen.findByText('shell');
+    expect(shares.redeemLink).toHaveBeenCalledWith(ID, 'tok_abcdefghijklmnop');
+    expect(router.state.location.pathname).toBe(`/d/${ID}`);
     expect(router.state.location.search).toBe('');
   });
 
