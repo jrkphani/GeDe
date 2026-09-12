@@ -14,13 +14,13 @@ Projection tables (rebuildable): `sheets`, `tables`, `columns`, `rows`, `cells`,
 
 - Every schema change is a new numbered file in `migrations/` (`0007_add_x.sql`) plus the matching `schema.ts` change, in the same PR. `npm run generate -w packages/db` (drizzle-kit) produces the SQL; review it before committing.
 - Never edit a migration that has reached `main`. `main` is production; the file has already run. Write a new migration that alters or reverts.
-- Migrations are plain SQL, forward-only, idempotent where PostgreSQL allows (`IF NOT EXISTS`). Each runs in a transaction; the runner records it in `_migrations(name, applied_at)`.
+- Migrations are plain SQL, forward-only, idempotent where PostgreSQL allows (`IF NOT EXISTS`). Each runs in a transaction; the runner records it in `__migrations(name, applied_at)`. `migrations.test.ts` refuses any `DROP` other than `DROP CONSTRAINT` and any `TRUNCATE`/`DELETE FROM`; a column added later must use `ALTER TABLE <t> ADD COLUMN IF NOT EXISTS <c>` so the schema-parity test can find it.
 - The runner takes `pg_advisory_lock` before reading `_migrations` and releases it after the last statement, so two tasks booting at once cannot race.
 - Tests run migrations from zero against a throwaway database and assert the resulting schema; there is no other way to know a migration works.
 
 ## Types
 
-- Emails are `citext` (`CREATE EXTENSION IF NOT EXISTS citext` in migration 0001). Uniqueness on `users.email` and lookups on `invites.email` are case-insensitive by type, not by `lower()`.
+- Emails are `citext` (`CREATE EXTENSION IF NOT EXISTS citext` in migration 0000). Uniqueness on `users.email` and lookups on `invites.email` are case-insensitive by type, not by `lower()`.
 - Ids that come from the CRDT (`sheets.id`, `tables.id`, `columns.id`, `rows.id`, `graphs.id`) are `text` ULIDs. Relational ids (`users`, `documents`, `invites`) are `uuid`.
 - `doc_updates.update` is `bytea`. `cells.rich`, `columns.format_opts`, `columns.derived`, `graphs.slice`, `tables.options`, `cells.style` are `jsonb`.
 - Enums are PostgreSQL enums declared in migrations and mirrored with `pgEnum` in `schema.ts`: `link_access(none, view, edit)`, `permission(view, edit)`, `column_format(auto, text, number, currency, date)`, `graph_kind(ring, coverage)`.
