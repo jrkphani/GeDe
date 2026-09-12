@@ -86,6 +86,16 @@
   width: 100%;
   min-height: 2.75rem;
 }
+/* ARCHITECTURE §2 "44 px targets" holds at every width on this screen, not only below lg:
+   the segmented mode switch and the ghost Change / Resend / Back buttons included. */
+.gd-signin .gd-segmented__item,
+.gd-signin .gd-btn--sm {
+  min-height: var(--hit-target);
+}
+.gd-signin .gd-btn--sm {
+  padding-left: var(--space-3);
+  padding-right: var(--space-3);
+}
 .gd-signin__note {
   margin: 0;
   font-size: 0.78125rem;
@@ -181,10 +191,6 @@
   .gd-signin .gd-segmented__item,
   .gd-signedout .gd-btn {
     min-height: var(--hit-target);
-  }
-  .gd-signin .gd-btn--sm {
-    padding-left: var(--space-3);
-    padding-right: var(--space-3);
   }
 }
 

@@ -22,7 +22,19 @@ export async function installFakeCognito(page: Page, session: FakeSession): Prom
         body: JSON.stringify(data),
       });
     switch (operation) {
-      case 'InitiateAuth':
+      case 'InitiateAuth': {
+        const username = (body?.AuthParameters as Record<string, string> | undefined)?.USERNAME;
+        // The pool has `preventUserExistenceErrors` on: an unknown email is never an error.
+        // It answers SELECT_CHALLENGE with the pool's generic factors and no EMAIL_OTP —
+        // exactly what production returned in the Wave 1 audit (#46).
+        if (username !== session.email) {
+          return json({
+            ChallengeName: 'SELECT_CHALLENGE',
+            Session: 'fake-session',
+            AvailableChallenges: ['PASSWORD_SRP', 'PASSWORD', 'WEB_AUTHN'],
+            ChallengeParameters: {},
+          });
+        }
         return json({
           ChallengeName: 'EMAIL_OTP',
           Session: 'fake-session',
@@ -31,6 +43,7 @@ export async function installFakeCognito(page: Page, session: FakeSession): Prom
             CODE_DELIVERY_DESTINATION: 'm***@1cloudhub.com',
           },
         });
+      }
       case 'RespondToAuthChallenge': {
         const responses = (body?.ChallengeResponses ?? {}) as Record<string, string>;
         if (responses.EMAIL_OTP_CODE !== FAKE_CODE) {

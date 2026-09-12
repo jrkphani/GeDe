@@ -1,6 +1,7 @@
 .gd-error {
   --gd-error-accent: var(--warning);
-  --gd-error-tint: var(--amber-50);
+  /* Tint from the accent over the live surface, so it reads on the dark theme too. */
+  --gd-error-tint: color-mix(in srgb, var(--warning) 8%, var(--surface));
   --gd-error-ruler: 1.625rem;
   display: grid;
   grid-template-columns: var(--gd-error-ruler) minmax(0, 36rem);
@@ -113,6 +114,7 @@
 }
 .gd-error__footer {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: var(--space-3);
   margin-top: var(--space-4);
@@ -121,8 +123,12 @@
   font-size: 0.65625rem;
   color: var(--ink-muted);
 }
+/* The reference is the only route to support: a real target, 32 px at desktop, 44 below lg. */
 .gd-error__ref {
-  padding: 0.125rem 0.375rem;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2rem;
+  padding: 0.125rem var(--space-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--surface-sunken);
@@ -140,6 +146,20 @@
 }
 .gd-error-banner__meta {
   font-size: 0.71875rem;
+}
+
+/* RESP-05: below 1024 px every target on the card, the reference included, is 44 px. */
+@media (max-width: 1023.98px) {
+  .gd-error .gd-btn,
+  .gd-error__ref,
+  .gd-error .gd-field__input {
+    min-height: var(--hit-target);
+  }
+  .gd-error__ref {
+    min-width: var(--hit-target);
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
 }
 
 @media (max-width: 479.98px) {

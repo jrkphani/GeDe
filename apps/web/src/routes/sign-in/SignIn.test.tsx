@@ -7,19 +7,16 @@ import type * as Cognito from '../../auth/cognito.js';
 import { renderRoutes, withConfig } from '../../test/helpers.js';
 import { routes } from '../../routes.js';
 
-// The SDK boundary is the only thing mocked; screens, session and router are real.
-vi.mock('../../auth/cognito.js', () => {
+// The SDK boundary is the only thing mocked: the calls that reach Cognito are fakes; the
+// pure parts of the module (`classifyError`, `AuthFailureError`, `describeUnsupportedStep`)
+// are real. Screens, session and router are real.
+vi.mock('../../auth/cognito.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof Cognito>();
   const noUser = { current: null as Cognito.SessionUser | null };
   return {
+    ...actual,
     __noUser: noUser,
     configureAuth: vi.fn(),
-    classifyError: (err: unknown): Cognito.AuthFailure => {
-      const name = err instanceof Error ? err.name : '';
-      if (name === 'PasskeyAuthenticationCanceled') return { kind: 'cancelled' };
-      if (name === 'UserNotFoundException') return { kind: 'unknown-email' };
-      if (name === 'CodeMismatchException') return { kind: 'wrong-code' };
-      return { kind: 'other', message: err instanceof Error ? err.message : 'x' };
-    },
     isPasskeySupported: vi.fn(() => true),
     startPasskeySignIn: vi.fn(),
     startCodeSignIn: vi.fn(),
@@ -87,6 +84,13 @@ describe('sign-in stylesheet', () => {
     expect(block).toMatch(/min-height:\s*var\(--hit-target\)/);
   });
 
+  it('RESP-05 ARCHITECTURE §2 the segmented control and the ghost Change button are 44 px at every width, not only below lg', () => {
+    const unscoped = css.replace(/@media[^{]*\{[\s\S]*?\n\}/g, '');
+    expect(unscoped).toMatch(
+      /\.gd-signin \.gd-segmented__item,\s*\.gd-signin \.gd-btn--sm\s*\{\s*min-height:\s*var\(--hit-target\)/,
+    );
+  });
+
   it('A11Y-06 the address row wraps so Change is never clipped, and labels wrap at 240 CSS px', () => {
     expect(css).toMatch(/\.gd-signin__who\s*\{[^}]*flex-wrap:\s*wrap/);
     expect(css).toMatch(/\.gd-signin__who \.gd-btn\s*\{[^}]*flex:\s*none/);
@@ -121,7 +125,7 @@ describe('SignIn (option 1c)', () => {
     // AUTH-04: address shown with Change, passkey first, then the code.
     expect(await screen.findByText('meena@1cloudhub.com')).toBeInTheDocument();
     const buttons = screen.getAllByRole('button').map((b) => b.textContent);
-    expect(buttons.indexOf('Passkey')).toBeLessThan(buttons.indexOf('Email me a code'));
+    expect(buttons.indexOf('Passkey')).toBeLessThan(buttons.indexOf('Email me a one-time code'));
     await u.click(screen.getByRole('button', { name: 'Change' }));
     expect(screen.getByLabelText('Email')).toHaveValue('meena@1cloudhub.com');
   });
@@ -132,7 +136,7 @@ describe('SignIn (option 1c)', () => {
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     expect(await screen.findByText('meena@1cloudhub.com')).toBeInTheDocument();
     const names = screen.getAllByRole('button').map((b) => b.textContent);
-    expect(names.indexOf('Passkey')).toBeLessThan(names.indexOf('Email me a code'));
+    expect(names.indexOf('Passkey')).toBeLessThan(names.indexOf('Email me a one-time code'));
     expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
     await u.click(screen.getByRole('button', { name: 'Change' }));
     expect(screen.getByLabelText('Email')).toHaveValue('meena@1cloudhub.com');
@@ -155,7 +159,9 @@ describe('SignIn (option 1c)', () => {
     const u = userEvent.setup();
     renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
-    expect(await screen.findByRole('button', { name: 'Email me a code' })).toBeInTheDocument();
+    expect(
+      await screen.findByRole('button', { name: 'Email me a one-time code' }),
+    ).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Passkey' })).not.toBeInTheDocument();
   });
 
@@ -191,7 +197,7 @@ describe('SignIn (option 1c)', () => {
     vi.mocked(cognito.confirmCode).mockRejectedValueOnce(namedError('CodeMismatchException'));
     renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
-    await u.click(await screen.findByRole('button', { name: 'Email me a code' }));
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
     const code = await screen.findByLabelText('Six-digit code');
     expect(code).toHaveAttribute('inputmode', 'numeric');
     expect(code).toHaveAttribute('autocomplete', 'one-time-code');
@@ -220,7 +226,7 @@ describe('SignIn (option 1c)', () => {
     });
     const { router } = renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
-    await u.click(await screen.findByRole('button', { name: 'Email me a code' }));
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
     await u.type(await screen.findByLabelText('Six-digit code'), '123456');
     await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add a passkey to this device?' });
@@ -264,7 +270,7 @@ describe('SignIn (option 1c)', () => {
       const u = userEvent.setup();
       const { router } = renderRoutes(routes, ['/sign-in']);
       await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
-      await u.click(await screen.findByRole('button', { name: 'Email me a code' }));
+      await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
       await u.type(await screen.findByLabelText('Six-digit code'), '123456');
       await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
       expect(
@@ -288,7 +294,7 @@ describe('SignIn (option 1c)', () => {
     });
     const { router } = renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
-    await u.click(await screen.findByRole('button', { name: 'Email me a code' }));
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
     await u.type(await screen.findByLabelText('Six-digit code'), '123456');
     await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
     await waitFor(() => {
@@ -301,15 +307,39 @@ describe('SignIn (option 1c)', () => {
     const u = userEvent.setup();
     vi.mocked(cognito.startPasskeySignIn).mockResolvedValueOnce({
       kind: 'unsupported',
-      reason: 'This account has no passkey yet. Email me a code instead.',
+      reason: 'This account has no passkey yet. Email me a one-time code instead.',
     });
     renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     await u.click(await screen.findByRole('button', { name: 'Passkey' }));
     const alert = await screen.findByRole('alert');
-    expect(alert).toHaveTextContent('This account has no passkey yet. Email me a code instead.');
+    expect(alert).toHaveTextContent(
+      'This account has no passkey yet. Email me a one-time code instead.',
+    );
     expect(alert.textContent).not.toMatch(/[A-Z]+_[A-Z_]+/);
-    expect(screen.getByRole('button', { name: 'Email me a code' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Email me a one-time code' })).toBeEnabled();
+  });
+
+  it('AUTH-04 an unknown email (SELECT_CHALLENGE under preventUserExistenceErrors) says no account uses it and points at Create account', async () => {
+    const u = userEvent.setup();
+    // What `startCodeSignIn` / `startPasskeySignIn` throw for that pool answer (cognito.test.ts).
+    const unknown = () => Promise.reject(new cognito.AuthFailureError({ kind: 'unknown-email' }));
+    vi.mocked(cognito.startCodeSignIn).mockImplementation(unknown);
+    vi.mocked(cognito.startPasskeySignIn).mockImplementation(unknown);
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'audit-nobody@example.invalid{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent(
+      'No account uses this email. Switch to Create account to start one.',
+    );
+    expect(alert).not.toHaveTextContent(/passkey/i);
+    // Same answer for the passkey button: the cause is the account, not the method.
+    await u.click(screen.getByRole('button', { name: 'Passkey' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('No account uses this email.');
+    // The remedy is one click away and keeps the address.
+    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    expect(screen.getByLabelText('Email')).toHaveValue('audit-nobody@example.invalid');
   });
 
   it('AUTH-09 a tokenRefresh_failure Hub event while on a document returns to sign-in with the path retained', async () => {
@@ -373,7 +403,7 @@ describe('SignIn (option 1c)', () => {
     const buttons = screen.getAllByRole('button');
     const at = (name: string) => buttons.indexOf(screen.getByRole('button', { name }));
     expect(at('Passkey')).toBeLessThan(buttons.indexOf(apple));
-    expect(buttons.indexOf(apple)).toBeLessThan(at('Email me a code'));
+    expect(buttons.indexOf(apple)).toBeLessThan(at('Email me a one-time code'));
     await u.click(apple);
     expect(cognito.startAppleSignIn).toHaveBeenCalledTimes(1);
   });

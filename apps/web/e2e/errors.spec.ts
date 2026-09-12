@@ -168,7 +168,7 @@ for (const [statusText, expected] of Object.entries(PAGES)) {
   });
 }
 
-test('ARCHITECTURE §3 404 an unknown address renders the not-found cell from the real router', async ({
+test('ARCHITECTURE §3 A11Y-05 404 an unknown address renders the not-found cell from the real router, inside the shell, and announces the copied reference', async ({
   page,
   checkA11y,
 }) => {
@@ -177,7 +177,67 @@ test('ARCHITECTURE §3 404 an unknown address renders the not-found cell from th
   await expect(e.rowRuler).toHaveText('404');
   await expect(e.title).toHaveText(PAGES[404]!.title);
   await expect(e.ref).toHaveText(PAGES[404]!.ref);
+  // The live region is the shell's, present before anything is announced (#48).
+  await expect(e.live).toHaveAttribute('aria-live', 'polite');
+  await expect(page.locator('[aria-live], [role=status], [role=alert]')).toHaveCount(1);
+  await e.ref.click();
+  await expect(e.live).toHaveText('Reference copied');
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(PAGES[404]!.ref);
   await checkA11y('error 404 via router');
+});
+
+/** Every focusable on the card, by accessible name, with its box. */
+async function measureTargets(page: Page): Promise<{ name: string; w: number; h: number }[]> {
+  const handles = await page
+    .locator('main button, main a[href], main input, main [tabindex]:not([tabindex="-1"])')
+    .all();
+  const out: { name: string; w: number; h: number }[] = [];
+  for (const h of handles) {
+    if (!(await h.isVisible())) continue;
+    const box = (await h.boundingBox())!;
+    const name = (await h.getAttribute('aria-label')) ?? (await h.innerText());
+    out.push({
+      name: name.trim(),
+      w: Math.round(box.width * 10) / 10,
+      h: Math.round(box.height * 10) / 10,
+    });
+  }
+  return out;
+}
+
+for (const width of [480, 768] as const) {
+  test.describe(`${width} px`, () => {
+    test.use({ viewport: { width, height: 900 } });
+
+    test(`RESP-05 at ${width} px every target on every error page, the ref button included, is at least 44 × 44 px`, async ({
+      page,
+      snapshot,
+    }) => {
+      await page.route(HEALTH_URL, (route) => route.fulfill({ status: 503, body: '' }));
+      const short: string[] = [];
+      const urls = [
+        ...Object.keys(PAGES).map((s) => [Number(s), harnessUrl(Number(s))] as const),
+        [404, '/no/such/workscape'] as const,
+      ];
+      for (const [status, url] of urls) {
+        await page.goto(url);
+        await expect(errorPage(page).rowRuler).toHaveText(String(status));
+        if (url.startsWith('/no/')) await snapshot(`error 404 ${width}`);
+        for (const t of await measureTargets(page)) {
+          if (t.w < 44 || t.h < 44) short.push(`${status} "${t.name}" ${t.w}×${t.h}`);
+        }
+      }
+      expect(short, `targets under 44 × 44 px at ${width}px`).toEqual([]);
+    });
+  });
+}
+
+test('DS §3 at 1440 px the reference button is a 32 px target, not a 22 px chip', async ({
+  page,
+}) => {
+  await page.goto('/no/such/workscape');
+  const box = (await errorPage(page).ref.boundingBox())!;
+  expect(box.height).toBeGreaterThanOrEqual(32);
 });
 
 test('ARCHITECTURE §3 503 polls /api/health every 15 s and continues on its own once the API answers 2xx', async ({

@@ -36,7 +36,13 @@ import { useMediaQuery } from '../../use-media-query.js';
 import { AccountMenu } from './AccountMenu.js';
 import { LibraryTable } from './LibraryTable.js';
 import { ParticipantsSheet } from './ParticipantsSheet.js';
-import { filterByQuery, groupDocuments, orderDocuments, type SortKey } from './select.js';
+import {
+  filterByQuery,
+  flattenGroups,
+  groupDocuments,
+  orderDocuments,
+  type SortKey,
+} from './select.js';
 import { readSortPreference, writeSortPreference } from './sort-preference.js';
 
 export const LIBRARY_VIEWS = [
@@ -160,10 +166,16 @@ export function Library() {
     const ordered = orderDocuments(filterByQuery(load.documents, query), view, sort, collate);
     return groupDocuments(ordered, view, collate);
   }, [load, query, view, sort, collate]);
-  const shown = groups.reduce((n, g) => n + g.rows.length, 0);
+  const visible = useMemo(() => flattenGroups(groups), [groups]);
+  const shown = visible.length;
   const total = load.status === 'ready' ? load.documents.length : 0;
-  const selected =
-    load.status === 'ready' ? (load.documents.find((d) => d.id === selectedId) ?? null) : null;
+  // LIB-03/LIB-04: selection is a row on screen. A search that hides the selected row drops
+  // it, so the count never reads "1 of 0 selected" and the toolbar never acts on a row the
+  // user cannot see.
+  const selected = visible.find((d) => d.id === selectedId) ?? null;
+  useEffect(() => {
+    if (load.status === 'ready' && selectedId !== null && selected === null) setSelectedId(null);
+  }, [load.status, selectedId, selected]);
 
   const setView = (next: LibraryView) => {
     setParams(next === 'recents' ? {} : { view: next }, { replace: true });

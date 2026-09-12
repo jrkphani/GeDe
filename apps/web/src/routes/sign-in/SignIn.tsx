@@ -355,7 +355,7 @@ export function SignIn() {
               loadingLabel="Sending code…"
               disabled={busy !== null}
             >
-              Email me a code
+              Email me a one-time code
             </Button>
             {state.error !== null && (
               <p className="gd-signin__error" role="alert">
