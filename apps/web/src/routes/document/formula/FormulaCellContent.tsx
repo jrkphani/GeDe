@@ -5,7 +5,11 @@ import type { CellDisplay } from './use-cell-display.js';
 
 export interface FormulaCellContentProps {
   display: CellDisplay;
-  /** Show the expression on a secondary line (FX-07). Off in the compact 1-unit row. */
+  /**
+   * Show the expression on a secondary line (FX-07). A compact one-unit row
+   * has no second line: pass false there and the expression stays in the
+   * tooltip (`title`) and in the editor.
+   */
   expression?: boolean | undefined;
   className?: string | undefined;
 }

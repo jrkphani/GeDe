@@ -76,6 +76,15 @@ describe('FormulaLayer', () => {
     expect(overlay.style.left).toBe(px(start.value.col, 'col'));
     expect(overlay.style.top).toBe(px(start.value.row, 'row'));
     expect(screen.getByLabelText('Formula, 1 reference')).toBeInTheDocument();
+    // A compact row has no second line: the expression is the tooltip until the row wraps (GRID-09).
+    const expression = `=Sum(${d.addr(0, 0)}:${d.addr(1, 0)})`;
+    expect(screen.queryByLabelText(/^Expression/)).not.toBeInTheDocument();
+    expect(screen.getByTestId('formula-cell')).toHaveAttribute('title', expression);
+    act(() => {
+      setRowWrapped(d.gd, d.tableId, d.rowId(2), true);
+    });
+    expect(overlay.style.height).toBe(px(2, 'row'));
+    expect(screen.getByLabelText(`Expression ${expression}`)).toBeInTheDocument();
     expect(screen.queryByTestId('reference-outlines')).not.toBeInTheDocument();
 
     view.rerender(

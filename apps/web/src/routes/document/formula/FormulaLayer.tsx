@@ -126,11 +126,12 @@ const FormulaCells = memo(function FormulaCells({
         const c = record.columns.findIndex((col) => col.id === colId);
         if (r < 0 || c < 0) return null;
         const ref = cellRefInTable(geometry, c, r);
+        const heightUnits = rowMeta(table, rowId).height;
         const style: CSSProperties = {
           left: `${String(ref.col * LATTICE.col)}px`,
           top: `${String(ref.row * LATTICE.row)}px`,
           width: `${String((record.columns[c]?.width ?? 1) * LATTICE.col)}px`,
-          height: `${String(rowMeta(table, rowId).height * LATTICE.row)}px`,
+          height: `${String(heightUnits * LATTICE.row)}px`,
         };
         return (
           <FormulaCellOverlay
@@ -139,6 +140,7 @@ const FormulaCells = memo(function FormulaCells({
             cellKey={key}
             style={style}
             selected={key === selectedKey}
+            expression={heightUnits >= 2}
           />
         );
       })}
@@ -146,16 +148,23 @@ const FormulaCells = memo(function FormulaCells({
   );
 });
 
+/**
+ * The expression's secondary line needs a second lattice row: it shows in a
+ * wrapped row (GRID-09) and stays in the tooltip and the editor otherwise —
+ * a compact row never clips.
+ */
 function FormulaCellOverlay({
   table,
   cellKey,
   style,
   selected,
+  expression,
 }: {
   table: TableMap;
   cellKey: CellKey;
   style: CSSProperties;
   selected: boolean;
+  expression: boolean;
 }) {
   const display = useCellDisplay(table, cellKey);
   return (
@@ -164,7 +173,7 @@ function FormulaCellOverlay({
       style={style}
       data-testid="formula-overlay"
     >
-      <FormulaCellContent display={display} />
+      <FormulaCellContent display={display} expression={expression} />
     </div>
   );
 }
