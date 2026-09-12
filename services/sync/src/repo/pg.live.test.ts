@@ -326,28 +326,23 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       [old.id, bob, alice],
     );
 
-    const removed: string[] = [];
-    const removeObjects = (doc: { id: string }) => {
-      removed.push(doc.id);
-      return Promise.resolve(true);
-    };
-    const first = await repo.documents.purgeExpired({ limit: 1, exclude: [], removeObjects });
-    expect(first).toEqual({ purged: [{ id: older.id, title: 'older' }], failed: [] }); // oldest first
-    // An S3 failure keeps the document: rows intact, no audit row, reported as failed.
-    const refused = await repo.documents.purgeExpired({
-      limit: 10,
-      exclude: [],
-      removeObjects: () => Promise.resolve(false),
-    });
-    expect(refused).toEqual({ purged: [], failed: [{ id: old.id, title: 'old' }] });
+    // #109: the read and the row delete are two calls; S3 runs between them, outside any transaction.
+    const first = await repo.documents.expiredForPurge({ limit: 1, exclude: [] });
+    expect(first).toEqual([{ id: older.id, title: 'older' }]); // oldest first
+    expect(await repo.documents.purge(first.map((d) => d.id))).toEqual([
+      { id: older.id, title: 'older' },
+    ]);
+    // A document whose objects could not be removed is simply not passed to `purge`: rows intact, no audit row.
+    expect(await repo.documents.expiredForPurge({ limit: 10, exclude: [] })).toEqual([
+      { id: old.id, title: 'old' },
+    ]);
     expect((await repo.documents.get(old.id))?.deletedAt).not.toBeNull();
-    // Excluded documents are skipped; the retry then takes it.
-    expect(
-      await repo.documents.purgeExpired({ limit: 10, exclude: [old.id], removeObjects }),
-    ).toEqual({ purged: [], failed: [] });
-    const second = await repo.documents.purgeExpired({ limit: 10, exclude: [], removeObjects });
-    expect(second).toEqual({ purged: [{ id: old.id, title: 'old' }], failed: [] });
-    expect(removed).toEqual([older.id, old.id]);
+    // Excluded documents are skipped; the retry then takes it. `purge` re-checks: a recent or
+    // unknown id deletes nothing, and a second call for a purged id answers nothing.
+    expect(await repo.documents.expiredForPurge({ limit: 10, exclude: [old.id] })).toEqual([]);
+    expect(await repo.documents.purge([recent.id, live.id, crypto.randomUUID()])).toEqual([]);
+    expect(await repo.documents.purge([old.id, older.id])).toEqual([{ id: old.id, title: 'old' }]);
+    expect(await repo.documents.purge([old.id])).toEqual([]);
 
     const remaining = await pool.query('select id from documents where owner_id = any($1)', [
       [alice, bob],
@@ -797,9 +792,11 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       "select action, target from audit_log where document_id = $1 and action like 'share.invite%' order by id",
       [doc.id],
     );
+    // The accept row names the invitation's address as it was sent (the same
+    // row `accept` writes), not the sign-in's casing (#100: one conversion path).
     expect(audit.rows).toEqual([
       { action: 'share.invite', target: 'Sembian@Example.com' },
-      { action: 'share.invite_accept', target: 'SEMBIAN@example.com' },
+      { action: 'share.invite_accept', target: 'Sembian@Example.com' },
       { action: 'share.invite', target: 'meena@example.com' },
       { action: 'share.invite_accept', target: 'meena@example.com' },
       { action: 'share.invite', target: 'late@example.com' },
@@ -1065,7 +1062,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
         'update documents set ever_shared = true where id = $1 and ever_shared = false',
         [doc.id],
       );
-      const deletion = repo.documents.tryDelete(doc.id);
+      const deletion = repo.documents.tryDelete(doc.id, owner);
       expect(await settles(deletion)).toBe('waiting');
       await other.query('commit');
       expect(await deletion).toEqual({ status: 'shared' });
@@ -1077,12 +1074,14 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     // The guard itself: shared and sample answer by name, a deletable row goes.
     await repo.shares.stop({ documentId: doc.id, actorId: owner });
     await pool.query('update documents set sample = true where id = $1', [doc.id]);
-    expect(await repo.documents.tryDelete(doc.id)).toEqual({ status: 'sample' });
+    expect(await repo.documents.tryDelete(doc.id, owner)).toEqual({ status: 'sample' });
     await pool.query('update documents set sample = false where id = $1', [doc.id]);
-    const deleted = await repo.documents.tryDelete(doc.id);
+    const deleted = await repo.documents.tryDelete(doc.id, owner);
     expect(deleted).toMatchObject({ status: 'deleted', document: { id: doc.id } });
-    expect(await repo.documents.tryDelete(doc.id)).toEqual({ status: 'missing' });
-    expect(await repo.documents.tryDelete(crypto.randomUUID())).toEqual({ status: 'missing' });
+    expect(await repo.documents.tryDelete(doc.id, owner)).toEqual({ status: 'missing' });
+    expect(await repo.documents.tryDelete(crypto.randomUUID(), owner)).toEqual({
+      status: 'missing',
+    });
   });
 
   test('LIB-D3 LIB-D5 LIB-D6 archive and unarchive: the owner’s views hide an archived row, a participant’s do not, delete clears the archive (CHECK: never both), purgeExpired never touches an archived row', async () => {
@@ -1143,12 +1142,9 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       "update documents set archived_at = now() - interval '400 days' where id = $1",
       [doc.id],
     );
-    const purge = await repo.documents.purgeExpired({
-      limit: 10,
-      exclude: [],
-      removeObjects: () => Promise.resolve(true),
-    });
-    expect(purge.purged.map((d) => d.id)).not.toContain(doc.id);
+    const purge = await repo.documents.expiredForPurge({ limit: 10, exclude: [] });
+    expect(purge.map((d) => d.id)).not.toContain(doc.id);
+    expect(await repo.documents.purge([doc.id])).toEqual([]);
     expect(await idsFor(owner, 'archived')).toEqual([doc.id]);
   });
 
@@ -1289,7 +1285,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       expect(listing[0]).toMatchObject({ id: firstId, sample: true });
     }
     // The guard: the sample cannot be deleted (LIB-D10).
-    expect(await repo.documents.tryDelete(firstId)).toEqual({ status: 'sample' });
+    expect(await repo.documents.tryDelete(firstId, owner.id)).toEqual({ status: 'sample' });
     // Shared with a participant (the tour's last step), it is an ordinary row in
     // their library: their own sample stays first, the owner's sorts by date.
     const guest = await user('sub-sample-guest');
@@ -1315,5 +1311,460 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     const guestRecents = await repo.documents.listForUser(guest, 'recents');
     expect(guestRecents.map((d) => d.id)).toEqual([guestSample, firstId]);
     expect(guestRecents[1]).toMatchObject({ sample: true, permission: 'edit', ownerId: owner.id });
+  });
+
+  // --- final red team (#100, #101, #109, #111, #112, #114) -------------------
+
+  /** `Promise.race` against a short timer: 'waiting' while the transaction is blocked on a lock. */
+  const settles = (p: Promise<unknown>) =>
+    Promise.race([
+      p.then(() => 'settled'),
+      new Promise<string>((resolve) => {
+        setTimeout(() => {
+          resolve('waiting');
+        }, 400);
+      }),
+    ]);
+
+  async function pendingInvite(
+    documentId: string,
+    email: string,
+    invitedBy: string,
+    permission: 'view' | 'edit' = 'edit',
+  ) {
+    const { invite } = await repo.invites.create({
+      documentId,
+      email,
+      permission,
+      token: randomBytes(24).toString('base64url'),
+      expiresAt: new Date(Date.now() + 86_400_000),
+      invitedBy,
+    });
+    return invite;
+  }
+
+  test('SHARE-02 SHARE-01 the sign-in conversion re-reads the invitation under the document lock: a Stop sharing or a withdrawal that commits first wins, and no share appears from it (#100)', async () => {
+    const owner = await user('sub-toctou-owner');
+    const doc = await createDoc(owner, 'Contended conversion');
+    await pendingInvite(doc.id, 'dave@example.com', owner);
+
+    // Another task holds the document row (as `stop` does) while Dave signs in.
+    const other = await pool.connect();
+    try {
+      await other.query('begin');
+      await other.query('select id from documents where id = $1 for update', [doc.id]);
+      const signIn = repo.users.upsertFromToken({
+        sub: 'sub-toctou-dave',
+        email: 'dave@example.com',
+      });
+      expect(await settles(signIn)).toBe('waiting'); // the conversion is queued behind the lock
+      // Stop sharing commits first, withdrawing the invitation.
+      await other.query('delete from invites where document_id = $1 and accepted_at is null', [
+        doc.id,
+      ]);
+      await other.query(
+        "insert into audit_log (document_id, user_id, action, target) values ($1, $2, 'share.stop', '{}')",
+        [doc.id, owner],
+      );
+      await other.query('commit');
+      const dave = await signIn;
+      expect(dave.email).toBe('dave@example.com');
+      expect(await repo.documents.sharePermission(doc.id, dave.id)).toBeUndefined();
+      expect((await repo.documents.get(doc.id))?.everShared).toBe(false);
+      const audit = await pool.query<{ action: string }>(
+        'select action from audit_log where document_id = $1 order by id',
+        [doc.id],
+      );
+      expect(audit.rows.map((r) => r.action)).toEqual([
+        'document.create',
+        'share.invite',
+        'share.stop',
+      ]);
+
+      // The owner withdraws one invitation (`invites.remove` now takes the lock too):
+      // the acceptance, queued behind it, finds nothing.
+      const erin = await user('sub-toctou-erin');
+      await pool.query("update users set email = 'erin@example.com' where id = $1", [erin]);
+      const invite = await pendingInvite(doc.id, 'erin@example.com', owner, 'view');
+      await other.query('begin');
+      await other.query('select id from documents where id = $1 for update', [doc.id]);
+      const accept = repo.invites.accept({ inviteId: invite.id, userId: erin });
+      expect(await settles(accept)).toBe('waiting');
+      const removal = repo.invites.remove({
+        documentId: doc.id,
+        inviteId: invite.id,
+        actorId: owner,
+      });
+      expect(await settles(removal)).toBe('waiting');
+      await other.query('commit');
+      // Whichever the lock hands out first: a removed invitation never converts,
+      // and a converted one cannot then be removed.
+      const [accepted, removed] = await Promise.all([accept, removal]);
+      expect(accepted === undefined || !removed).toBe(true);
+      const share = await repo.documents.sharePermission(doc.id, erin);
+      expect(share === undefined ? removed && accepted === undefined : accepted === 'view').toBe(
+        true,
+      );
+    } finally {
+      other.release();
+    }
+  });
+
+  test('SHARE-01 a share given by a link holder is a link share, transitively; migration 0010 backfills existing chains; switching the link off revokes the chain (#101)', async () => {
+    const owner = await user('sub-chain-owner');
+    const linkHolder = await user('sub-chain-link');
+    const invitedByLink = await user('sub-chain-second');
+    const invitedByOwner = await user('sub-chain-owner-invite');
+    const doc = await createDoc(owner, 'Chain');
+    let token = '';
+    await repo.shares.setLinkAccess({
+      documentId: doc.id,
+      access: 'edit',
+      actorId: owner,
+      mintToken: () => {
+        token = randomBytes(32).toString('base64url');
+        return token;
+      },
+    });
+    expect(await repo.shares.redeemLink({ documentId: doc.id, userId: linkHolder, token })).toBe(
+      'edit',
+    );
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: invitedByLink,
+      permission: 'edit',
+      invitedBy: linkHolder,
+      actorId: linkHolder,
+    });
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: invitedByOwner,
+      permission: 'edit',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    // An invitation sent by the link-invited editor converts as a link share too.
+    await pendingInvite(doc.id, 'third@example.com', invitedByLink, 'view');
+    const third = await repo.users.upsertFromToken({
+      sub: 'sub-chain-third',
+      email: 'third@example.com',
+    });
+    const sources = async () =>
+      Object.fromEntries(
+        (
+          await pool.query<{ user_id: string; source: string }>(
+            'select user_id, source from shares where document_id = $1',
+            [doc.id],
+          )
+        ).rows.map((r) => [r.user_id, r.source]),
+      );
+    expect(await sources()).toEqual({
+      [linkHolder]: 'link',
+      [invitedByLink]: 'link',
+      [third.id]: 'link',
+      [invitedByOwner]: 'invite',
+    });
+
+    // A chain from before the fix: rows written as `invite` under a link inviter.
+    await pool.query(
+      "update shares set source = 'invite' where document_id = $1 and user_id = any($2)",
+      [doc.id, [invitedByLink, third.id]],
+    );
+    const backfill = readFileSync(
+      join(MIGRATIONS, '0010_sample_never_deleted_users_deleted_at_link_chain.sql'),
+      'utf8',
+    )
+      .split(/;\s*\n/)
+      .find((statement) => statement.includes('WITH RECURSIVE chain'));
+    expect(backfill).toBeDefined();
+    await pool.query(backfill ?? '');
+    expect(await sources()).toEqual({
+      [linkHolder]: 'link',
+      [invitedByLink]: 'link',
+      [third.id]: 'link',
+      [invitedByOwner]: 'invite',
+    });
+    await pool.query(backfill ?? ''); // idempotent
+    expect(Object.keys(await sources())).toHaveLength(4);
+
+    const off = await repo.shares.setLinkAccess({
+      documentId: doc.id,
+      access: 'none',
+      actorId: owner,
+      mintToken: () => 'unused',
+    });
+    expect([...(off?.revoked ?? [])].sort()).toEqual([linkHolder, invitedByLink, third.id].sort());
+    expect(await sources()).toEqual({ [invitedByOwner]: 'invite' });
+    const revoke = await pool.query<{ target: string }>(
+      "select target from audit_log where document_id = $1 and action = 'share.link_revoke'",
+      [doc.id],
+    );
+    expect(revoke.rows[0]?.target.split(',').sort()).toEqual(
+      [linkHolder, invitedByLink, third.id].sort(),
+    );
+  });
+
+  test('LIB-08 the purge survives a slow object store: nothing is mid-transaction while S3 runs, so idle_in_transaction_session_timeout cannot fire (#109)', async () => {
+    const owner = await user('sub-slow-purge');
+    const doc = await createDoc(owner, 'Slow to purge');
+    await pool.query("update documents set deleted_at = now() - interval '40 days' where id = $1", [
+      doc.id,
+    ]);
+    // The jobs task's sessions carry a 30 s idle-in-transaction timeout (`POOL_TIMEOUTS`);
+    // here it is 300 ms, and S3 takes 600 ms. Before #109 this run died with 25P03.
+    const strict = new pg.Pool({
+      connectionString: (() => {
+        const url = new URL(adminUrl ?? '');
+        url.pathname = `/${dbName}`;
+        url.username = appRole.user;
+        url.password = appRole.password;
+        return url.toString();
+      })(),
+      max: 2,
+      options: '-c idle_in_transaction_session_timeout=300',
+    });
+    try {
+      const strictRepo = createPgRepo(createDb(strict), pino({ level: 'silent' }));
+      const { purgeExpired } = await import('../jobs/purge.js');
+      const result = await purgeExpired({
+        repo: strictRepo,
+        docsPrefix: 'docs/',
+        logger: pino({ level: 'silent' }),
+        s3: {
+          put: () => Promise.resolve(),
+          get: () => Promise.resolve(undefined),
+          deletePrefix: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 600));
+            return 2;
+          },
+        },
+      });
+      expect(result).toEqual({ purged: 1, objectsDeleted: 2, failed: [] });
+      expect(await repo.documents.get(doc.id)).toBeUndefined();
+      const audit = await pool.query(
+        "select user_id from audit_log where document_id = $1 and action = 'document.purge'",
+        [doc.id],
+      );
+      expect(audit.rows).toEqual([{ user_id: null }]);
+    } finally {
+      await strict.end();
+    }
+  });
+
+  test('LIB-D5 SHARE-02 Delete withdraws pending invitations with audit rows; the link cannot be switched on and nothing converts on a document in the trash (#112)', async () => {
+    const owner = await user('sub-trash-owner');
+    const doc = await createDoc(owner, 'Binned');
+    await pendingInvite(doc.id, 'erin@example.com', owner, 'edit');
+    const outcome = await repo.documents.tryDelete(doc.id, owner);
+    expect(outcome).toMatchObject({ status: 'deleted', withdrawn: ['erin@example.com'] });
+    const withdrawn = await pool.query<{ user_id: string; target: string }>(
+      "select user_id, target from audit_log where document_id = $1 and action = 'share.invite_withdraw'",
+      [doc.id],
+    );
+    expect(withdrawn.rows).toEqual([{ user_id: owner, target: `erin@example.com:${owner}` }]);
+    expect(
+      (await pool.query('select count(*)::int as n from invites where document_id = $1', [doc.id]))
+        .rows[0],
+    ).toEqual({ n: 0 });
+    expect(
+      await repo.shares.setLinkAccess({
+        documentId: doc.id,
+        access: 'view',
+        actorId: owner,
+        mintToken: () => 'never',
+      }),
+    ).toBeUndefined();
+    expect((await repo.documents.get(doc.id))?.linkAccess).toBe('none');
+    // A pending invitation planted by hand on the trashed row: skipped by both conversion paths.
+    const planted = await pool.query<{ id: string }>(
+      `insert into invites (document_id, email, permission, token, expires_at, invited_by)
+       values ($1, 'frank@example.com', 'edit', $2, now() + interval '1 day', $3) returning id`,
+      [doc.id, randomBytes(24).toString('base64url'), owner],
+    );
+    const frank = await repo.users.upsertFromToken({
+      sub: 'sub-trash-frank',
+      email: 'frank@example.com',
+    });
+    expect(await repo.documents.sharePermission(doc.id, frank.id)).toBeUndefined();
+    expect(
+      await repo.invites.accept({ inviteId: planted.rows[0]?.id ?? '', userId: frank.id }),
+    ).toBeUndefined();
+    expect((await repo.documents.get(doc.id))?.everShared).toBe(false);
+    expect(
+      await repo.shares.redeemLink({ documentId: doc.id, userId: frank.id, token: 'anything' }),
+    ).toBeUndefined();
+  });
+
+  test('LIB-D10 the schema forbids a sample in the trash (migration 0010 CHECK); softDelete, Delete All and the purge skip it (#114)', async () => {
+    const owner = await user('sub-check-owner');
+    const sampleId = crypto.randomUUID();
+    await repo.documents.createSample({
+      id: sampleId,
+      ownerId: owner,
+      title: SAMPLE_TITLE,
+      snapshot: { seq: 1, s3Key: `docs/${sampleId}/1.yjs`, sizeBytes: 1 },
+      writeSnapshot: () => Promise.resolve(),
+    });
+    await expect(
+      pool.query("update documents set deleted_at = now() - interval '40 days' where id = $1", [
+        sampleId,
+      ]),
+    ).rejects.toThrow(/documents_sample_not_deleted_check/);
+    expect(await repo.documents.softDelete(sampleId)).toBeUndefined();
+    expect(await repo.documents.purgeDeleted(owner, owner, 50)).toEqual([]);
+    expect(await repo.documents.expiredForPurge({ limit: 10, exclude: [] })).not.toContainEqual(
+      expect.objectContaining({ id: sampleId }),
+    );
+    expect(await repo.documents.purge([sampleId])).toEqual([]);
+    expect((await repo.documents.get(sampleId))?.deletedAt).toBeNull();
+  });
+
+  test('AUTH-09 (partial) erasure as the app role: shares, invitations, ownership and the tombstone in one transaction; the sub is kept and refused (#111)', async () => {
+    const alice = await repo.users.upsertFromToken({
+      sub: 'sub-erase-alice',
+      email: 'Alice@Example.com',
+    });
+    const bob = await user('sub-erase-bob');
+    const carol = await user('sub-erase-carol');
+    await pool.query("update users set email = 'bob@example.com' where id = $1", [bob]);
+    await repo.users.updateProfile(alice.id, {
+      displayName: 'Alice',
+      locale: 'en-IN',
+      tourDone: true,
+    });
+    const handed = await createDoc(alice.id, 'Handed over');
+    await repo.shares.add({
+      documentId: handed.id,
+      userId: carol,
+      permission: 'edit',
+      invitedBy: alice.id,
+      actorId: alice.id,
+    });
+    await pool.query(
+      "update shares set created_at = now() - interval '1 hour' where document_id = $1 and user_id = $2",
+      [handed.id, carol],
+    );
+    await repo.shares.add({
+      documentId: handed.id,
+      userId: bob,
+      permission: 'edit',
+      invitedBy: alice.id,
+      actorId: alice.id,
+    });
+    const binned = await createDoc(alice.id, 'Binned');
+    await repo.shares.add({
+      documentId: binned.id,
+      userId: bob,
+      permission: 'view',
+      invitedBy: alice.id,
+      actorId: alice.id,
+    });
+    const theirs = await createDoc(bob, 'Theirs');
+    await repo.shares.add({
+      documentId: theirs.id,
+      userId: alice.id,
+      permission: 'edit',
+      invitedBy: bob,
+      actorId: bob,
+    });
+    await pendingInvite(handed.id, 'erin@example.com', alice.id, 'view');
+    await pendingInvite(theirs.id, 'alice@example.com', bob, 'view');
+    await repo.updates.append(handed.id, [{ update: new Uint8Array([1]), authorId: alice.id }]);
+    const sampleId = crypto.randomUUID();
+    await repo.documents.createSample({
+      id: sampleId,
+      ownerId: alice.id,
+      title: SAMPLE_TITLE,
+      snapshot: { seq: 1, s3Key: `docs/${sampleId}/1.yjs`, sizeBytes: 1 },
+      writeSnapshot: () => Promise.resolve(),
+    });
+
+    const outcome = await repo.users.erase(alice.id);
+    expect(outcome).toMatchObject({
+      cognitoSub: 'sub-erase-alice',
+      transferred: [{ documentId: handed.id, toUserId: carol }],
+      sharesRemoved: [theirs.id],
+      invitesWithdrawn: 1,
+    });
+    expect([...(outcome?.deleted ?? [])].sort()).toEqual([binned.id, sampleId].sort());
+    const row = await pool.query<{ deleted_at: Date | null }>(
+      'select cognito_sub, email, display_name, locale, tour_done_at, last_seen_at, deleted_at from users where id = $1',
+      [alice.id],
+    );
+    expect(row.rows[0]).toMatchObject({
+      cognito_sub: 'sub-erase-alice',
+      email: null,
+      display_name: 'Deleted user',
+      locale: null,
+      tour_done_at: null,
+      last_seen_at: null,
+    });
+    expect(row.rows[0]?.deleted_at).toBeInstanceOf(Date);
+    // The identity's next token: the tombstone, untouched (no address re-bound, no last-seen).
+    const again = await repo.users.upsertFromToken({
+      sub: 'sub-erase-alice',
+      email: 'alice@example.com',
+    });
+    expect(again).toMatchObject({ id: alice.id, email: null, displayName: 'Deleted user' });
+    expect(again.deletedAt).toBeInstanceOf(Date);
+    expect(await repo.users.bindEmail(alice.id, 'alice@example.com')).toMatchObject({
+      user: { email: null },
+      converted: [],
+    });
+    expect(await repo.users.findByEmail('alice@example.com')).toBeUndefined();
+    // Documents: Carol (earliest editor) owns `handed`, Bob's share is hers to manage now.
+    expect(await repo.documents.get(handed.id)).toMatchObject({ ownerId: carol, deletedAt: null });
+    expect(
+      (
+        await pool.query('select user_id, invited_by from shares where document_id = $1', [
+          handed.id,
+        ])
+      ).rows,
+    ).toEqual([{ user_id: bob, invited_by: carol }]);
+    expect(await repo.documents.get(binned.id)).toMatchObject({
+      everShared: false,
+      linkAccess: 'none',
+    });
+    expect((await repo.documents.get(binned.id))?.deletedAt).toBeInstanceOf(Date);
+    expect(await repo.documents.get(sampleId)).toMatchObject({ sample: false });
+    expect((await repo.documents.get(sampleId))?.deletedAt).toBeInstanceOf(Date);
+    expect(await repo.documents.sharePermission(theirs.id, alice.id)).toBeUndefined();
+    // Nothing personal remains: invitations, authors, audit targets.
+    expect(
+      (
+        await pool.query(
+          "select count(*)::int as n from invites where email ilike 'alice@example.com' or invited_by = $1",
+          [alice.id],
+        )
+      ).rows[0],
+    ).toEqual({ n: 0 });
+    expect(
+      (await pool.query('select author_id from doc_updates where document_id = $1', [handed.id]))
+        .rows,
+    ).toEqual([{ author_id: null }]);
+    expect(
+      (
+        await pool.query(
+          "select count(*)::int as n from audit_log where target ilike '%alice@example.com%'",
+        )
+      ).rows[0],
+    ).toEqual({ n: 0 });
+    const kept = await pool.query<{ action: string }>(
+      'select action from audit_log where user_id = $1 order by id',
+      [alice.id],
+    );
+    expect(kept.rows.map((r) => r.action)).toEqual(
+      expect.arrayContaining([
+        'document.create',
+        'share.add',
+        'share.remove',
+        'share.invite_withdraw',
+        'document.transfer',
+        'document.delete',
+      ]),
+    );
+    // Idempotent: a second erasure answers null and changes nothing.
+    expect(await repo.users.erase(alice.id)).toBeNull();
+    expect(await repo.users.erase(crypto.randomUUID())).toBeUndefined();
   });
 });

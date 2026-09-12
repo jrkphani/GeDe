@@ -12,6 +12,7 @@
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
 import pino from 'pino';
@@ -20,6 +21,7 @@ import type pg from 'pg';
 import { applyMigrations, appRoleFromEnv, createDb, createPool, type AppRole } from '@gede/db';
 
 import { createCognitoVerifier } from './auth.js';
+import { createCognitoIdentityStore } from './identity.js';
 import { ConfigError, loadConfig, type Config } from './config.js';
 import { parseInvocation, type Invocation } from './jobs/invocation.js';
 import { purgeExpired } from './jobs/purge.js';
@@ -153,7 +155,15 @@ async function runServer(rt: Runtime): Promise<void> {
     db: rt.repo,
     s3: createS3SnapshotStore(rt.s3, config.DOCS_BUCKET),
     mail: createSesMailer(rt.ses, { fromName: 'GeDe' }),
+    // #111: only once the task role may AdminDeleteUser (infra sets the flag with the grant).
+    identity: config.COGNITO_ERASE_IDENTITY
+      ? createCognitoIdentityStore(
+          new CognitoIdentityProviderClient({ region: config.COGNITO_REGION }),
+          config.COGNITO_USER_POOL_ID,
+        )
+      : null,
   });
+  logger.info({ eraseIdentity: config.COGNITO_ERASE_IDENTITY }, 'account erasure');
 
   let stopping = false;
   const shutdown = (signal: string): void => {

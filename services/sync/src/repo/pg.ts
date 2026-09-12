@@ -44,6 +44,7 @@ import {
   users,
   type Db,
   type Permission,
+  type ShareSource,
 } from '@gede/db';
 
 import type { Logger } from '../logger.js';
@@ -55,9 +56,9 @@ import {
   type DocumentPermission,
   type DocumentRecord,
   type DocumentSummary,
+  type ErasureAuditAction,
   type InviteRecord,
   type LibraryView,
-  type PurgedDocument,
   type Repo,
   type ShareAuditAction,
   type UserRecord,
@@ -84,6 +85,14 @@ export function constantTimeEqual(a: string, b: string): boolean {
   const left = Buffer.from(a, 'utf8');
   const right = Buffer.from(b, 'utf8');
   return left.length === right.length && timingSafeEqual(left, right);
+}
+
+/** What an erased account's row is called wherever a name would show (#111). */
+export const ERASED_DISPLAY_NAME = 'Deleted user';
+
+/** A literal for a case-insensitive `regexp_replace`: every metacharacter escaped. */
+export function escapeRegex(literal: string): string {
+  return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
 type DocumentRow = typeof documents.$inferSelect;
@@ -135,6 +144,7 @@ function toUser(row: UserRow): UserRecord {
     locale: row.locale,
     tourDoneAt: row.tourDoneAt,
     sampleDocumentId: row.sampleDocumentId,
+    deletedAt: row.deletedAt,
   };
 }
 
@@ -167,6 +177,8 @@ interface PendingRow {
   invitedBy: string;
   ownerId: string;
   inviterPermission: Permission | null;
+  /** How the inviter's own share came to be; a `link` inviter's invitations make `link` shares (#101). */
+  inviterSource: ShareSource | null;
 }
 
 /** The inviter's own share, joined to see what they still hold. */
@@ -236,7 +248,8 @@ async function clearSharedIfNone(tx: Executor, documentId: string): Promise<void
 }
 
 /**
- * Pending, unexpired invitations with the inviter's standing: the owner
+ * Pending, unexpired invitations on live documents (#112: nothing converts
+ * on a document in the trash) with the inviter's standing: the owner
  * (`invitedBy === ownerId`, which legacy rows with a null inviter coalesce
  * to) or the inviter's current share permission, null once they are gone.
  * `where` narrows by address or by id.
@@ -251,6 +264,7 @@ function pendingInvitesQuery(tx: Executor, where: SQL) {
       invitedBy: sql<string>`coalesce(${invites.invitedBy}, ${documents.ownerId})`,
       ownerId: documents.ownerId,
       inviterPermission: inviterShare.permission,
+      inviterSource: inviterShare.source,
     })
     .from(invites)
     .innerJoin(documents, eq(documents.id, invites.documentId))
@@ -261,8 +275,18 @@ function pendingInvitesQuery(tx: Executor, where: SQL) {
         eq(inviterShare.userId, sql`coalesce(${invites.invitedBy}, ${documents.ownerId})`),
       ),
     )
-    .where(and(where, invitePending))
+    .where(and(where, invitePending, isNull(documents.deletedAt)))
     .orderBy(asc(invites.createdAt), asc(invites.id));
+}
+
+/**
+ * The `source` a share inherits (#101): a share given by someone who came in
+ * through the share link is a link share — it goes when the link goes — and
+ * so is anything they in turn give. The owner's, and an invited editor's,
+ * shares are `invite` shares.
+ */
+export function inheritedSource(inviterSource: ShareSource | null | undefined): ShareSource {
+  return inviterSource === 'link' ? 'link' : 'invite';
 }
 
 /**
@@ -291,48 +315,84 @@ async function withdrawStale(tx: Executor, row: PendingRow, actorId: string | nu
 }
 
 /**
+ * Convert one pending invitation for `userId`, under the document row lock
+ * (#100, the #88 pattern): the row is read again `FOR UPDATE` after the lock
+ * — with `extra` narrowing it further (`accept` requires the caller to hold
+ * the address) — so an invitation withdrawn, a share stopped or a document
+ * deleted while the caller was on its way is seen, and the inviter's
+ * standing (`inviterStillMay`) is judged on the row as it is now. A stale
+ * one is withdrawn (`share.invite_withdraw` by `actorId`, or the system);
+ * a converted one becomes a share with the invitation's inviter and the
+ * inheritable source (#101), is marked accepted and audited
+ * `share.invite_accept`. `undefined` when nothing pending remained.
+ */
+async function convertOne(
+  tx: Executor,
+  inviteId: string,
+  userId: string,
+  actorId: string | null,
+  extra?: SQL,
+): Promise<ConvertedInvite | undefined> {
+  const [target] = await tx
+    .select({ documentId: invites.documentId })
+    .from(invites)
+    .where(eq(invites.id, inviteId))
+    .limit(1);
+  if (!target || !(await lockDocument(tx, target.documentId))) return undefined;
+  const byId = eq(invites.id, inviteId);
+  const [match] = await pendingInvitesQuery(
+    tx,
+    extra === undefined ? byId : sql`${byId} and ${extra}`,
+  ).for('update', { of: invites });
+  if (!match) return undefined;
+  if (!inviterStillMay(match)) {
+    await withdrawStale(tx, match, actorId);
+    return undefined;
+  }
+  if (match.ownerId !== userId) {
+    await tx
+      .insert(shares)
+      .values({
+        documentId: match.documentId,
+        userId,
+        permission: match.permission,
+        invitedBy: match.invitedBy,
+        source: inheritedSource(match.inviterSource),
+      })
+      .onConflictDoNothing();
+    await markShared(tx, match.documentId);
+  }
+  await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, match.id));
+  await tx.insert(auditLog).values({
+    documentId: match.documentId,
+    userId,
+    action: 'share.invite_accept' satisfies ShareAuditAction,
+    target: match.email,
+  });
+  return { documentId: match.documentId, permission: match.permission };
+}
+
+/**
  * SHARE-02, the conversion: every pending, unexpired invitation for `email`
- * whose inviter still stands (`inviterStillMay`) becomes a share for
- * `userId` — with the invitation's inviter, else the document's owner —
- * unless a share exists already, and is marked accepted either way; one
- * `share.invite_accept` audit row each. A stale one is withdrawn instead
- * (`share.invite_withdraw`, system actor). Idempotent: a second run finds
- * nothing pending.
+ * becomes a share for `userId` through `convertOne` — each under its
+ * document's lock, re-read there, so a withdrawal or a stop that lands
+ * between the listing and the lock wins (#100). Idempotent: a second run
+ * finds nothing pending.
  */
 async function convertInvites(
   tx: Executor,
   userId: string,
   email: string,
 ): Promise<ConvertedInvite[]> {
-  const pending = await pendingInvitesQuery(tx, eq(invites.email, email));
+  const candidates = await tx
+    .select({ id: invites.id })
+    .from(invites)
+    .where(and(eq(invites.email, email), invitePending))
+    .orderBy(asc(invites.createdAt), asc(invites.id));
   const converted: ConvertedInvite[] = [];
-  for (const invite of pending) {
-    if (!inviterStillMay(invite)) {
-      await withdrawStale(tx, invite, null);
-      continue;
-    }
-    if (invite.ownerId !== userId) {
-      await lockDocument(tx, invite.documentId);
-      await tx
-        .insert(shares)
-        .values({
-          documentId: invite.documentId,
-          userId,
-          permission: invite.permission,
-          invitedBy: invite.invitedBy,
-          source: 'invite',
-        })
-        .onConflictDoNothing();
-      await markShared(tx, invite.documentId);
-    }
-    await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, invite.id));
-    await tx.insert(auditLog).values({
-      documentId: invite.documentId,
-      userId,
-      action: 'share.invite_accept' satisfies ShareAuditAction,
-      target: email,
-    });
-    converted.push({ documentId: invite.documentId, permission: invite.permission });
+  for (const { id } of candidates) {
+    const outcome = await convertOne(tx, id, userId, null);
+    if (outcome) converted.push(outcome);
   }
   return converted;
 }
@@ -364,10 +424,13 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
     return db
       .select({
         doc: documents,
-        ownerName: sql<string | null>`coalesce(${owner.displayName}, ${owner.email})`,
+        // Names and addresses apart (#102): the route decides who sees an address.
+        ownerName: owner.displayName,
+        ownerEmail: owner.email,
         sharePermission: shares.permission,
         invitedBy: shares.invitedBy,
-        inviterName: sql<string | null>`coalesce(${inviter.displayName}, ${inviter.email})`,
+        inviterName: inviter.displayName,
+        inviterEmail: inviter.email,
         sharedWithOthers: hasShares(),
         // bigint aggregates arrive from pg as strings; converted below.
         sizeBytes: sql<string | number>`
@@ -395,11 +458,12 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
     const doc = toDocument(row.doc);
     const sharedBy =
       doc.ownerId !== userId && row.invitedBy !== null
-        ? { id: row.invitedBy, name: row.inviterName }
+        ? { id: row.invitedBy, name: row.inviterName, email: row.inviterEmail }
         : null;
     return {
       ...doc,
       ownerName: row.ownerName,
+      ownerEmail: row.ownerEmail,
       sizeBytes: Number(row.sizeBytes),
       sharedBy,
       sharedWithOthers: Boolean(row.sharedWithOthers),
@@ -442,7 +506,12 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               .values({ cognitoSub: identity.sub, email, lastSeenAt: now })
               .onConflictDoUpdate({
                 target: users.cognitoSub,
-                set: { lastSeenAt: now, email: sql`coalesce(${users.email}, excluded.email)` },
+                // A tombstone (#111) is left exactly as it is: no address
+                // re-bound from the token, no last-seen; the resolver refuses it.
+                set: {
+                  lastSeenAt: sql`case when ${users.deletedAt} is null then ${now} else ${users.lastSeenAt} end`,
+                  email: sql`case when ${users.deletedAt} is null then coalesce(${users.email}, excluded.email) else ${users.email} end`,
+                },
               })
               .returning(userColumns);
           let rows: UserRow[];
@@ -466,7 +535,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           // SHARE-02: a token that carries a verified address is one of the two
           // binding paths (`bindEmail` is the other); pending invitations for
           // the address convert here so first sign-in is enough.
-          if (row.email !== null && identity.email !== null) {
+          if (row.deletedAt === null && row.email !== null && identity.email !== null) {
             const converted = await convertInvites(tx, row.id, row.email);
             if (converted.length > 0) {
               logger.info({ userId: row.id, documents: converted.length }, 'invitations converted');
@@ -483,7 +552,9 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             [row] = await tx.transaction((inner) =>
               inner
                 .update(users)
-                .set({ email: sql`coalesce(${users.email}, ${email})` })
+                .set({
+                  email: sql`case when ${users.deletedAt} is null then coalesce(${users.email}, ${email}) else ${users.email} end`,
+                })
                 .where(eq(users.id, id))
                 .returning(userColumns),
             );
@@ -492,6 +563,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             throw error;
           }
           if (!row) return undefined;
+          if (row.deletedAt !== null) return { user: toUser(row), converted: [] };
           // A row that already had a different address keeps it; the caller
           // compares and answers. Only the bound address converts invitations.
           if (row.email?.toLowerCase() !== email.toLowerCase()) {
@@ -527,6 +599,169 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           .where(eq(users.id, id))
           .returning(userColumns);
         return row ? toUser(row) : undefined;
+      },
+
+      erase(id) {
+        return db.transaction(async (tx) => {
+          const [row] = await tx.select().from(users).where(eq(users.id, id)).for('update');
+          if (!row) return undefined;
+          if (row.deletedAt !== null) return null;
+          const now = new Date();
+
+          // Shares the user holds on other people's documents: gone, each
+          // under its document's lock, so `ever_shared` is right (LIB-D4).
+          const held = await tx
+            .select({ documentId: shares.documentId })
+            .from(shares)
+            .where(eq(shares.userId, id))
+            .orderBy(asc(shares.documentId));
+          const sharesRemoved: string[] = [];
+          for (const { documentId } of held) {
+            await lockDocument(tx, documentId);
+            const gone = await tx
+              .delete(shares)
+              .where(and(eq(shares.documentId, documentId), eq(shares.userId, id)))
+              .returning({ userId: shares.userId });
+            if (gone.length === 0) continue;
+            await clearSharedIfNone(tx, documentId);
+            await tx.insert(auditLog).values({
+              documentId,
+              userId: id,
+              action: 'share.remove' satisfies ShareAuditAction,
+              target: id,
+            });
+            sharesRemoved.push(documentId);
+          }
+
+          // Pending invitations the user sent are only as good as their sender.
+          const sent = await pendingInvitesQuery(tx, eq(invites.invitedBy, id));
+          for (const invite of sent) await withdrawStale(tx, invite, id);
+
+          // Every invitation row addressed to them carries their address.
+          if (row.email !== null) {
+            await tx.delete(invites).where(eq(invites.email, row.email));
+          }
+
+          // Owned live documents: to the earliest editor, else into the trash.
+          const owned = await tx
+            .select({ id: documents.id, sample: documents.sample })
+            .from(documents)
+            .where(and(eq(documents.ownerId, id), isNull(documents.deletedAt)))
+            .orderBy(asc(documents.createdAt), asc(documents.id));
+          const transferred: { documentId: string; toUserId: string }[] = [];
+          const deleted: string[] = [];
+          for (const doc of owned) {
+            await lockDocument(tx, doc.id);
+            const [editor] = doc.sample
+              ? []
+              : await tx
+                  .select({ userId: shares.userId })
+                  .from(shares)
+                  .where(and(eq(shares.documentId, doc.id), eq(shares.permission, 'edit')))
+                  .orderBy(asc(shares.createdAt), asc(shares.userId))
+                  .limit(1);
+            if (editor) {
+              // The new owner is implicit edit: their share goes; whoever the
+              // old owner invited is now theirs to manage.
+              await tx
+                .delete(shares)
+                .where(and(eq(shares.documentId, doc.id), eq(shares.userId, editor.userId)));
+              await tx
+                .update(shares)
+                .set({ invitedBy: editor.userId })
+                .where(and(eq(shares.documentId, doc.id), eq(shares.invitedBy, id)));
+              await tx
+                .update(invites)
+                .set({ invitedBy: editor.userId })
+                .where(and(eq(invites.documentId, doc.id), eq(invites.invitedBy, id)));
+              await tx
+                .update(documents)
+                .set({ ownerId: editor.userId, updatedAt: now })
+                .where(eq(documents.id, doc.id));
+              await clearSharedIfNone(tx, doc.id);
+              await tx.insert(auditLog).values({
+                documentId: doc.id,
+                userId: id,
+                action: 'document.transfer' satisfies ErasureAuditAction,
+                target: editor.userId,
+              });
+              transferred.push({ documentId: doc.id, toUserId: editor.userId });
+              continue;
+            }
+            const gone = await tx
+              .delete(shares)
+              .where(eq(shares.documentId, doc.id))
+              .returning({ userId: shares.userId });
+            const withdrawn = await tx
+              .delete(invites)
+              .where(and(eq(invites.documentId, doc.id), isNull(invites.acceptedAt)))
+              .returning({ email: invites.email });
+            if (gone.length > 0 || withdrawn.length > 0) {
+              await tx.insert(auditLog).values({
+                documentId: doc.id,
+                userId: id,
+                action: 'share.stop' satisfies ShareAuditAction,
+                target: JSON.stringify({
+                  users: gone.map((g) => g.userId),
+                  invites: withdrawn.map((w) => w.email),
+                }),
+              });
+            }
+            // The sample flag is cleared first: the CHECK forbids a sample in
+            // the trash, and an erased account's sample is not a sample any more.
+            await tx
+              .update(documents)
+              .set({
+                sample: false,
+                linkAccess: 'none',
+                linkToken: null,
+                everShared: false,
+                archivedAt: null,
+                deletedAt: now,
+                updatedAt: now,
+              })
+              .where(eq(documents.id, doc.id));
+            await tx.insert(auditLog).values({
+              documentId: doc.id,
+              userId: id,
+              action: 'document.delete' satisfies ErasureAuditAction,
+              target: null,
+            });
+            deleted.push(doc.id);
+          }
+
+          // Edits stop being attributable; audit rows keep the actor id (ADR-037)
+          // but not the address.
+          await tx.update(docUpdates).set({ authorId: null }).where(eq(docUpdates.authorId, id));
+          if (row.email !== null) {
+            const pattern = escapeRegex(row.email);
+            await tx
+              .update(auditLog)
+              .set({
+                target: sql`regexp_replace(${auditLog.target}, ${pattern}, '[erased]', 'gi')`,
+              })
+              .where(sql`${auditLog.target} ~* ${pattern}`);
+          }
+
+          await tx
+            .update(users)
+            .set({
+              email: null,
+              displayName: ERASED_DISPLAY_NAME,
+              locale: null,
+              tourDoneAt: null,
+              lastSeenAt: null,
+              deletedAt: now,
+            })
+            .where(eq(users.id, id));
+          return {
+            cognitoSub: row.cognitoSub,
+            transferred,
+            deleted,
+            sharesRemoved,
+            invitesWithdrawn: sent.length,
+          };
+        });
       },
     },
 
@@ -649,12 +884,14 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         const [row] = await db
           .update(documents)
           .set({ deletedAt: now, archivedAt: null, updatedAt: now })
-          .where(and(eq(documents.id, id), isNull(documents.deletedAt)))
+          .where(
+            and(eq(documents.id, id), isNull(documents.deletedAt), eq(documents.sample, false)),
+          )
           .returning();
         return row ? toDocument(row) : undefined;
       },
 
-      tryDelete(id) {
+      tryDelete(id, actorId) {
         return db.transaction(async (tx) => {
           // Hold the row so an acceptance in flight commits its share — and
           // `ever_shared` — before the guard reads them, or waits until after.
@@ -673,7 +910,29 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               ),
             )
             .returning();
-          if (row) return { status: 'deleted', document: toDocument(row) };
+          if (row) {
+            // #112: a pending invitation must not outlive the delete and
+            // convert on a document in the trash (or hold the token alive).
+            const withdrawn = await tx
+              .delete(invites)
+              .where(and(eq(invites.documentId, id), isNull(invites.acceptedAt)))
+              .returning({ email: invites.email, invitedBy: invites.invitedBy });
+            if (withdrawn.length > 0) {
+              await tx.insert(auditLog).values(
+                withdrawn.map((w) => ({
+                  documentId: id,
+                  userId: actorId,
+                  action: 'share.invite_withdraw' satisfies ShareAuditAction,
+                  target: `${w.email}:${w.invitedBy ?? row.ownerId}`,
+                })),
+              );
+            }
+            return {
+              status: 'deleted',
+              document: toDocument(row),
+              withdrawn: withdrawn.map((w) => w.email),
+            };
+          }
           const [current] = await tx
             .select({
               deletedAt: documents.deletedAt,
@@ -742,12 +1001,21 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         });
       },
 
-      purgeDeleted(ownerId, actorId) {
+      purgeDeleted(ownerId, actorId, limit) {
         return db.transaction(async (tx) => {
           const doomed = await tx
             .select({ id: documents.id, title: documents.title })
             .from(documents)
-            .where(and(eq(documents.ownerId, ownerId), isNotNull(documents.deletedAt)))
+            .where(
+              and(
+                eq(documents.ownerId, ownerId),
+                isNotNull(documents.deletedAt),
+                // Belt and braces (#114): the CHECK forbids a sample in the trash.
+                eq(documents.sample, false),
+              ),
+            )
+            .orderBy(asc(documents.deletedAt), asc(documents.id))
+            .limit(limit)
             .for('update');
           if (doomed.length === 0) return [];
           const ids = doomed.map((d) => d.id);
@@ -765,47 +1033,59 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         });
       },
 
-      purgeExpired({ limit, exclude, removeObjects }) {
+      async expiredForPurge({ limit, exclude }) {
+        return db
+          .select({ id: documents.id, title: documents.title })
+          .from(documents)
+          .where(
+            and(
+              isNotNull(documents.deletedAt),
+              not(withinRetention),
+              eq(documents.sample, false),
+              ...(exclude.length === 0 ? [] : [notInArray(documents.id, [...exclude])]),
+            ),
+          )
+          .orderBy(asc(documents.deletedAt), asc(documents.id))
+          .limit(limit);
+      },
+
+      purge(ids) {
+        if (ids.length === 0) return Promise.resolve([]);
         return db.transaction(async (tx) => {
-          const candidates = await tx
+          // Re-checked under the lock: still in the trash, still past the
+          // window, still not a sample. A row recovered or purged by another
+          // run since `expiredForPurge` is simply not here.
+          const doomed = await tx
             .select({ id: documents.id, title: documents.title })
             .from(documents)
             .where(
               and(
+                inArray(documents.id, [...ids]),
                 isNotNull(documents.deletedAt),
                 not(withinRetention),
-                ...(exclude.length === 0 ? [] : [notInArray(documents.id, [...exclude])]),
+                eq(documents.sample, false),
               ),
             )
             .orderBy(asc(documents.deletedAt), asc(documents.id))
-            .limit(limit)
             .for('update', { skipLocked: true });
-          const purged: PurgedDocument[] = [];
-          const failed: PurgedDocument[] = [];
-          // Objects first, rows after, under the claim: a document whose objects
-          // could not be removed keeps its rows and is retried next run.
-          for (const doc of candidates) {
-            if (await removeObjects(doc)) purged.push(doc);
-            else failed.push(doc);
-          }
-          if (purged.length > 0) {
-            // `user_id` null is the system actor: nobody pressed Delete All.
-            await tx.insert(auditLog).values(
-              purged.map((d) => ({
-                documentId: d.id,
-                userId: null,
-                action: 'document.purge',
-                target: d.title,
-              })),
-            );
-            await tx.delete(documents).where(
-              inArray(
-                documents.id,
-                purged.map((d) => d.id),
-              ),
-            );
-          }
-          return { purged, failed };
+          if (doomed.length === 0) return [];
+          // `user_id` null is the system actor: nobody pressed Delete All.
+          await tx.insert(auditLog).values(
+            doomed.map((d) => ({
+              documentId: d.id,
+              userId: null,
+              action: 'document.purge',
+              target: d.title,
+            })),
+          );
+          // shares, invites, doc_updates and snapshots cascade from documents.
+          await tx.delete(documents).where(
+            inArray(
+              documents.id,
+              doomed.map((d) => d.id),
+            ),
+          );
+          return doomed;
         });
       },
 
@@ -870,9 +1150,21 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       add({ documentId, userId, permission, invitedBy, actorId }) {
         return db.transaction(async (tx) => {
           if (!(await lockDocument(tx, documentId))) return false;
+          // #101: a share given by a link-sourced editor goes with the link.
+          const [inviterRow] = await tx
+            .select({ source: shares.source })
+            .from(shares)
+            .where(and(eq(shares.documentId, documentId), eq(shares.userId, invitedBy)))
+            .limit(1);
           const inserted = await tx
             .insert(shares)
-            .values({ documentId, userId, permission, invitedBy, source: 'invite' })
+            .values({
+              documentId,
+              userId,
+              permission,
+              invitedBy,
+              source: inheritedSource(inviterRow?.source),
+            })
             .onConflictDoNothing()
             .returning({ userId: shares.userId });
           if (inserted.length === 0) return false;
@@ -961,7 +1253,8 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           const [current] = await tx
             .select({ linkAccess: documents.linkAccess, linkToken: documents.linkToken })
             .from(documents)
-            .where(eq(documents.id, documentId))
+            // #112: the link of a document in the trash cannot be switched on.
+            .where(and(eq(documents.id, documentId), isNull(documents.deletedAt)))
             .for('update');
           if (!current) return undefined;
           // A fresh token for any level the link is switched to: a link handed
@@ -1024,7 +1317,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               linkToken: documents.linkToken,
             })
             .from(documents)
-            .where(eq(documents.id, documentId))
+            .where(and(eq(documents.id, documentId), isNull(documents.deletedAt)))
             .for('update');
           if (!doc || doc.linkAccess === 'none' || doc.linkToken === null) return undefined;
           // Compared in JS on the fetched row so the query plan never depends on the secret.
@@ -1108,6 +1401,9 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       remove({ documentId, inviteId, actorId }) {
         return db.transaction(async (tx) => {
+          // Lock order documents → invites, as every share transaction (#100):
+          // a conversion in flight either sees this withdrawal or commits first.
+          if (!(await lockDocument(tx, documentId))) return false;
           const gone = await tx
             .delete(invites)
             .where(and(eq(invites.id, inviteId), eq(invites.documentId, documentId), invitePending))
@@ -1131,14 +1427,6 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       accept({ inviteId, userId }) {
         return db.transaction(async (tx) => {
-          // The document row first, then the invitation row: the same order as
-          // `stop`, which holds the document while it withdraws invitations.
-          const [target] = await tx
-            .select({ documentId: invites.documentId })
-            .from(invites)
-            .where(eq(invites.id, inviteId))
-            .limit(1);
-          if (!target || !(await lockDocument(tx, target.documentId))) return undefined;
           // The address check is in SQL: the invitation converts only for the
           // account that holds its (citext-equal) email.
           const holdsAddress = exists(
@@ -1147,36 +1435,8 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               .from(users)
               .where(and(eq(users.id, userId), eq(users.email, invites.email))),
           );
-          const [match] = await pendingInvitesQuery(
-            tx,
-            sql`${invites.id} = ${inviteId} and ${holdsAddress}`,
-          ).for('update', { of: invites });
-          if (!match) return undefined;
-          if (!inviterStillMay(match)) {
-            await withdrawStale(tx, match, userId);
-            return undefined;
-          }
-          if (match.ownerId !== userId) {
-            await tx
-              .insert(shares)
-              .values({
-                documentId: match.documentId,
-                userId,
-                permission: match.permission,
-                invitedBy: match.invitedBy,
-                source: 'invite',
-              })
-              .onConflictDoNothing();
-            await markShared(tx, match.documentId);
-          }
-          await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, match.id));
-          await tx.insert(auditLog).values({
-            documentId: match.documentId,
-            userId,
-            action: 'share.invite_accept' satisfies ShareAuditAction,
-            target: match.email,
-          });
-          return match.permission;
+          const converted = await convertOne(tx, inviteId, userId, userId, holdsAddress);
+          return converted?.permission;
         });
       },
     },

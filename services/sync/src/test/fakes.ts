@@ -9,7 +9,14 @@ import { Writable } from 'node:stream';
 import pino from 'pino';
 
 import { type Config, configSchema } from '../config.js';
-import type { Deps, IdTokenIdentity, Mailer, SnapshotStore, TokenVerifier } from '../deps.js';
+import type {
+  Deps,
+  IdentityStore,
+  IdTokenIdentity,
+  Mailer,
+  SnapshotStore,
+  TokenVerifier,
+} from '../deps.js';
 import { REDACTED_PATHS, requestSerializer } from '../logger.js';
 import type { Mail } from '../mail/templates.js';
 import type { TokenIdentity } from '../repo/types.js';
@@ -91,6 +98,21 @@ export class FakeMailer implements Mailer {
   }
 }
 
+/** FAKE Cognito (#111): records the subs deleted; `failNextDelete` makes one call reject as a throttled API would. */
+export class FakeIdentityStore implements IdentityStore {
+  readonly deleted: string[] = [];
+  failNextDelete = false;
+
+  deleteUser(sub: string): Promise<void> {
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      return Promise.reject(new Error('TooManyRequestsException'));
+    }
+    this.deleted.push(sub);
+    return Promise.resolve();
+  }
+}
+
 /** FAKE S3: a Map of key → bytes. */
 export class FakeSnapshotStore implements SnapshotStore {
   readonly objects = new Map<string, Uint8Array>();
@@ -137,6 +159,7 @@ export interface TestServer {
   verifier: FakeVerifier;
   s3: FakeSnapshotStore;
   mail: FakeMailer;
+  identity: FakeIdentityStore;
   config: Config;
   baseUrl: string;
   wsUrl: string;
@@ -148,6 +171,8 @@ export interface TestServer {
 export interface StartOptions {
   /** Record log lines (with the production serializers and redaction) instead of discarding them. */
   captureLogs?: boolean | undefined;
+  /** Boot without an identity store, as a deploy with `COGNITO_ERASE_IDENTITY` off does. */
+  withoutIdentity?: boolean | undefined;
 }
 
 /** The production logger's shape — same serializers and redaction as `main.ts` — into an array. */
@@ -179,6 +204,7 @@ export async function startServer(
   const verifier = new FakeVerifier();
   const s3 = new FakeSnapshotStore();
   const mail = new FakeMailer();
+  const identity = new FakeIdentityStore();
   const logs: LogLine[] = [];
   const deps: Deps = {
     config,
@@ -187,6 +213,7 @@ export async function startServer(
     db: repo,
     s3,
     mail,
+    identity: options.withoutIdentity === true ? null : identity,
     version: 'test',
   };
   const app = await buildServer(deps);
@@ -198,6 +225,7 @@ export async function startServer(
     verifier,
     s3,
     mail,
+    identity,
     config,
     baseUrl: `http://127.0.0.1:${String(port)}`,
     wsUrl: `ws://127.0.0.1:${String(port)}`,

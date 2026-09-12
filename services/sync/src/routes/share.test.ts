@@ -698,6 +698,153 @@ describe('sheet identity (review of #76)', () => {
   });
 });
 
+describe('link revocation follows the chain (#101)', () => {
+  test('SHARE-01 a share given by an edit-link holder, and a share given by that person in turn, are link shares: switching the link off revokes the whole chain, closes their sockets and audits them; invited people stay', async () => {
+    const on = await json<SharesView>(server, 'PATCH', `/api/documents/${docId}/link`, {
+      token: alice,
+      body: { access: 'edit' },
+    });
+    const dana = server.verifier.issue('tok-dana', 'sub-dana', 'dana@example.com');
+    const danaId = (await me(dana)).id;
+    await json(server, 'POST', `/api/documents/${docId}/link/redeem`, {
+      token: dana,
+      body: { token: on.body.linkToken },
+    });
+    // Dana (link, edit) invites Erin, who has an account: a share at once.
+    const erin = server.verifier.issue('tok-erin', 'sub-erin', 'erin@example.com');
+    const erinId = (await me(erin)).id;
+    const added = await json<{ kind: string; shares: SharesView }>(
+      server,
+      'POST',
+      `/api/documents/${docId}/invites`,
+      { token: dana, body: { email: 'erin@example.com', permission: 'edit' } },
+    );
+    expect(added.status).toBe(201);
+    expect(added.body.shares.participants.find((p) => p.userId === erinId)).toMatchObject({
+      invitedBy: danaId,
+      source: 'link',
+    });
+    // Erin invites Frank (an account) and Gina (no account yet): both inherit.
+    const frank = server.verifier.issue('tok-frank', 'sub-frank', 'frank@example.com');
+    const frankId = (await me(frank)).id;
+    await json(server, 'POST', `/api/documents/${docId}/invites`, {
+      token: erin,
+      body: { email: 'frank@example.com', permission: 'view' },
+    });
+    await json(server, 'POST', `/api/documents/${docId}/invites`, {
+      token: erin,
+      body: { email: 'gina@example.com', permission: 'view' },
+    });
+    const gina = server.verifier.issue('tok-gina', 'sub-gina', 'gina@example.com');
+    const ginaId = (await me(gina)).id; // the token carries the address: converted on sight
+    expect(server.repo.sharesByDoc.get(docId)?.get(frankId)?.source).toBe('link');
+    expect(server.repo.sharesByDoc.get(docId)?.get(ginaId)?.source).toBe('link');
+    // Bob, invited by the owner, is an invite share as before.
+    expect(server.repo.sharesByDoc.get(docId)?.get(bobId)?.source).toBe('invite');
+
+    const erinSocket = await YClient.connect(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(erin),
+    });
+    await erinSocket.synced;
+
+    // Step 4 of the report: the owner switches the link off.
+    const off = await json<SharesView>(server, 'PATCH', `/api/documents/${docId}/link`, {
+      token: alice,
+      body: { access: 'none' },
+    });
+    expect(off.status).toBe(200);
+    expect(off.body.participants.map((p) => p.userId).sort()).toEqual([bobId, carolId].sort());
+    for (const id of [danaId, erinId, frankId, ginaId]) {
+      expect(await repoPermission(id)).toBeUndefined();
+    }
+    expect((await erinSocket.closed).code).toBe(CLOSE_FORBIDDEN);
+    const revoke = server.repo.auditLog.find((a) => a.action === 'share.link_revoke');
+    expect(revoke?.target?.split(',').sort()).toEqual([danaId, erinId, frankId, ginaId].sort());
+    // Erin's access is a 403 now: she cannot invite anyone back in.
+    const again = await json<ErrorBody>(server, 'POST', `/api/documents/${docId}/invites`, {
+      token: erin,
+      body: { email: 'harry@example.com', permission: 'edit' },
+    });
+    expect(again.status).toBe(403);
+  });
+});
+
+describe('a document in the trash accepts no share change (#112)', () => {
+  let deletedId: string;
+  beforeEach(() => {
+    deletedId = server.repo.seedDocument(aliceId, 'binned').id;
+  });
+
+  test('LIB-D5 SHARE-02 Delete withdraws pending invitations with an audit row; the link cannot be switched on; the invitation link and a redeem answer 404; the conversion at sign-in skips it', async () => {
+    const sent = await json<{ shares: SharesView }>(
+      server,
+      'POST',
+      `/api/documents/${deletedId}/invites`,
+      { token: alice, body: { email: 'erin@example.com', permission: 'edit' } },
+    );
+    expect(sent.status).toBe(201);
+    const inviteToken = server.mail.sent.at(-1)?.text.match(/invite=([A-Za-z0-9_-]+)/)?.[1];
+    expect(inviteToken).toBeDefined();
+    // A second, hand-planted invitation (not yet withdrawn) for the conversion path.
+    const del = await json(server, 'DELETE', `/api/documents/${deletedId}`, { token: alice });
+    expect(del.status).toBe(204);
+    expect(
+      server.repo.auditLog.filter(
+        (a) => a.documentId === deletedId && a.action === 'share.invite_withdraw',
+      ),
+    ).toHaveLength(1);
+    expect([...server.repo.invitesById.values()].filter((i) => i.documentId === deletedId)).toEqual(
+      [],
+    );
+
+    const link = await json<ErrorBody>(server, 'PATCH', `/api/documents/${deletedId}/link`, {
+      token: alice,
+      body: { access: 'view' },
+    });
+    expect(link.status).toBe(404);
+    expect((await server.repo.documents.get(deletedId))?.linkAccess).toBe('none');
+
+    const erin = server.verifier.issue('tok-erin', 'sub-erin', 'erin@example.com');
+    const accept = await json<ErrorBody>(
+      server,
+      'POST',
+      `/api/documents/${deletedId}/invites/accept`,
+      { token: erin, body: { token: inviteToken } },
+    );
+    expect(accept.status).toBe(404);
+
+    // A pending invitation that somehow survives on a trashed document (a
+    // hand-run delete) is skipped by the conversion and by the accept route.
+    const planted = await server.repo.invites.create({
+      documentId: deletedId,
+      email: 'frank@example.com',
+      permission: 'edit',
+      token: mintToken(),
+      expiresAt: new Date(Date.now() + DAY),
+      invitedBy: aliceId,
+    });
+    const frank = server.verifier.issue('tok-frank', 'sub-frank', 'frank@example.com');
+    const frankId = (await me(frank)).id;
+    expect(await server.repo.documents.sharePermission(deletedId, frankId)).toBeUndefined();
+    expect(server.repo.invitesById.get(planted.invite.id)?.acceptedAt).toBeNull();
+    const acceptPlanted = await json<ErrorBody>(
+      server,
+      'POST',
+      `/api/documents/${deletedId}/invites/accept`,
+      { token: frank, body: { token: planted.invite.token } },
+    );
+    expect(acceptPlanted.status).toBe(404);
+    expect((await server.repo.documents.get(deletedId))?.everShared).toBe(false);
+
+    // Recovered, the document is as the owner left it: no share, no link, deletable.
+    await json(server, 'POST', `/api/documents/${deletedId}/recover`, { token: alice });
+    expect(await server.repo.documents.get(deletedId)).toMatchObject({
+      everShared: false,
+      linkAccess: 'none',
+    });
+  });
+});
+
 async function repoPermission(userId: string) {
   return server.repo.documents.sharePermission(docId, userId);
 }

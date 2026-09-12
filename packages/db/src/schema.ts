@@ -99,6 +99,12 @@ export const users = pgTable('users', {
    * until then and again after Replay (ONB-08). Per account, never per device.
    */
   tourDoneAt: timestamptz('tour_done_at'),
+  /**
+   * Migration 0010 (#111, ADR-037): set by account erasure. The row stays as a tombstone —
+   * email, display name, locale, tour and last-seen nulled — so the foreign keys that point at
+   * it still resolve and the Cognito `sub` cannot come back as a fresh account.
+   */
+  deletedAt: timestamptz('deleted_at'),
 });
 
 /** One row per workbook. `snapshot_key` points into S3 `docs`. */
@@ -143,6 +149,8 @@ export const documents = pgTable(
       .where(sql`sample`),
     /** Migration 0008: archived or deleted, never both. */
     check('documents_archived_or_deleted_check', sql`archived_at IS NULL OR deleted_at IS NULL`),
+    /** Migration 0010 (#114): the guided sample is never in the trash. */
+    check('documents_sample_not_deleted_check', sql`NOT sample OR deleted_at IS NULL`),
   ],
 );
 

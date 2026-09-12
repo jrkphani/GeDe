@@ -31,6 +31,16 @@ export const configSchema = z.object({
     )
     .pipe(z.array(z.string().min(1)).nonempty()),
   COGNITO_REGION: z.string().min(1),
+  /**
+   * `true` once the task role holds `cognito-idp:AdminDeleteUser` on the pool
+   * (#111, ADR-037): `DELETE /api/me` then deletes the Cognito user after the
+   * database erasure. Off, the erasure still happens and the tombstone row
+   * refuses the identity; the operator deletes the pool user by hand.
+   */
+  COGNITO_ERASE_IDENTITY: z
+    .enum(['true', 'false'])
+    .default('false')
+    .transform((v) => v === 'true'),
 
   /** S3 bucket for compacted Yjs snapshots (`docs`). */
   DOCS_BUCKET: z.string().min(1),

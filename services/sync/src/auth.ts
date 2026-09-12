@@ -159,6 +159,12 @@ export class UserResolver {
       return toAuthUser(cached.user, identity.expiresAt);
     }
     const upserted = await this.repo.users.upsertFromToken(identity);
+    if (upserted.deletedAt !== null) {
+      // #111: an erased account. The token may still be valid for up to an
+      // hour after the Cognito user is deleted (or the deploy has not deleted
+      // it yet); the tombstone answers for it until then.
+      throw new AppError(403, 'account_deleted', 'This account has been deleted');
+    }
     // ONB-01: the first request an account ever makes — whatever it is —
     // leaves the guided sample in its library; the seed is idempotent. A seed
     // that failed answers null (never an error) and is not cached, so the

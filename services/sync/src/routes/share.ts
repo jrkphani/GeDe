@@ -310,6 +310,9 @@ export function registerShareRoutes(
     const invite = await repo.invites.byToken(token);
     // Any mismatch answers the same 404: a token is a secret, not a probe.
     if (invite?.documentId !== id) throw NOT_FOUND();
+    // #112: an invitation to a document in the trash is as gone as the document.
+    const document = await repo.documents.get(id);
+    if (document?.deletedAt !== null) throw NOT_FOUND();
     if (invite.acceptedAt !== null) {
       throw new AppError(409, 'conflict', 'This invitation has already been used');
     }
@@ -378,7 +381,10 @@ export function registerShareRoutes(
     const user = currentUser(request);
     const id = parseId(request.params);
     const { access } = parse(linkBody, request.body, 'request');
-    await requirePermission(repo, user.id, id, 'owner');
+    const { document } = await requirePermission(repo, user.id, id, 'owner');
+    // #112: the link of a document in the trash cannot be switched on (or
+    // changed); recover it first. The repository refuses too.
+    if (document.deletedAt !== null) throw NOT_FOUND();
     const change = await repo.shares.setLinkAccess({
       documentId: id,
       access,

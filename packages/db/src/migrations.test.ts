@@ -190,6 +190,36 @@ describe('migrations', () => {
     expect(sql).not.toMatch(/\bUPDATE\b/);
   });
 
+  test('LIB-D10 SHARE-01 0010 forbids a sample in the trash (recovering any first), adds users.deleted_at for erasure, and makes link-chain shares link shares', () => {
+    expect(files[10]).toBe('0010_sample_never_deleted_users_deleted_at_link_chain.sql');
+    const sql = stripComments(
+      readFileSync(join(dir, '0010_sample_never_deleted_users_deleted_at_link_chain.sql'), 'utf8'),
+    );
+    // Recover before the CHECK: the migration must never fail on a row it could fix.
+    expect(sql.indexOf('SET deleted_at = NULL')).toBeLessThan(
+      sql.indexOf('documents_sample_not_deleted_check'),
+    );
+    expect(sql).toMatch(/WHERE sample AND deleted_at IS NOT NULL/);
+    expect(sql).toMatch(
+      /ADD CONSTRAINT documents_sample_not_deleted_check\s+CHECK \(NOT sample OR deleted_at IS NULL\)/,
+    );
+    expect(sql).toMatch(/ALTER TABLE users ADD COLUMN IF NOT EXISTS deleted_at timestamptz/);
+    // The chain walk starts at link shares and follows invited_by; it only ever promotes to link.
+    expect(sql).toMatch(/WITH RECURSIVE chain AS/);
+    expect(sql).toMatch(/WHERE s\.source = 'link'/);
+    expect(sql).toMatch(/s\.invited_by = c\.user_id/);
+    expect(sql).toMatch(/SET source = 'link'/);
+    expect(sql).not.toMatch(/SET source = 'invite'/);
+    // Both CHECKs are declared in schema.ts under the names the SQL uses.
+    const checks = getTableConfig(schema.documents).checks.map((c) => c.name);
+    expect(checks).toEqual(
+      expect.arrayContaining([
+        'documents_archived_or_deleted_check',
+        'documents_sample_not_deleted_check',
+      ]),
+    );
+  });
+
   test('LOAD-06 every index declared in schema.ts exists in the migrations', () => {
     const sql = stripComments(allSql);
     const declared = [...sql.matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map(
