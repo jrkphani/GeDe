@@ -18,6 +18,17 @@ export const PLACEHOLDER_SYNC_DIR = path.join(INFRA_ROOT, 'assets', 'placeholder
 export const E2E_USER_HANDLER_DIR = path.join(INFRA_ROOT, 'assets', 'e2e-user');
 /** Lambda source of the pool's pre-authentication trigger (binds the e2e user to the gede-e2e client). */
 export const PRE_AUTH_HANDLER_DIR = path.join(INFRA_ROOT, 'assets', 'pre-auth');
+/** Entry of the pool's custom-message trigger (branded, localised codes); bundled with @gede/mail by esbuild at synth. */
+export const CUSTOM_MESSAGE_HANDLER_ENTRY = path.join(
+  INFRA_ROOT,
+  'assets',
+  'custom-message',
+  'index.mjs',
+);
+/** `@gede/mail` source, aliased into the custom-message bundle so synth never reads a stale dist. */
+export const MAIL_PACKAGE_ENTRY = path.join(REPO_ROOT, 'packages', 'mail', 'src', 'index.ts');
+/** The root lockfile: `NodejsFunction` derives the project root and package manager from it. */
+export const ROOT_LOCKFILE = path.join(REPO_ROOT, 'package-lock.json');
 
 export const SYNC_DOCKERFILE = 'services/sync/Dockerfile';
 export const WEB_DIST = path.join(REPO_ROOT, 'apps', 'web', 'dist');

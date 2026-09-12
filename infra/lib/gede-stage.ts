@@ -129,6 +129,7 @@ export class GedeStage extends cdk.Stage {
       serviceLogGroup: service.logGroup,
       serviceSecurityGroup: service.serviceSecurityGroup,
       preAuthFunction: auth.preAuthFunction,
+      customMessageFunction: auth.customMessageFunction,
     });
 
     this.apiUrl = service.apiUrl;

@@ -133,7 +133,21 @@ Change` for that family with a non-zero exit code or `TaskFailedToStart` → SNS
   `ForgotPassword` cannot mint a durable password (ADR-019); the client reads/writes only
   email, name, given/family name and locale, and rotates refresh tokens.
 - **Cognito sends its own mail** until SES leaves the sandbox; the `withSES` block in
-  `AuthStack` is ready to swap in (the SES identity and DKIM records already exist).
+  `AuthStack` is ready to swap in (the SES identity and DKIM records already exist). What it
+  sends is GeDe's (ADR-044): the pool's **custom-message trigger**
+  (`assets/custom-message/index.mjs`, a `NodejsFunction` that esbuild bundles with
+  `@gede/mail`'s source at synth — `--alias`, so no dist can go stale) renders every
+  one-time code from the shared branded layout in the user's `locale` attribute for
+  `CustomMessage_SignUp`, `_ResendCode`, `_Authentication` (the EMAIL_OTP first factor),
+  `_UpdateUserAttribute` and `_VerifyUserAttribute`, and fails open — any fault returns the
+  event untouched, because a trigger that throws refuses the sign-in itself. Under it, the
+  pool's own templates (`VerificationMessageTemplate` and the L1-only
+  `EmailAuthenticationMessage`/`Subject`) carry the same layout in en-US, rendered at synth
+  by `poolMessageTemplates()`; that import is why `packages/mail` must be built before
+  `cdk synth` runs under `tsx` (`npm run verify`'s `tsc -b` does it; the infra tests alias
+  the source). The templates are sender-independent: `withSES` changes only the From
+  address. OpsStack alarms on the function's `Errors`. The SPA client's
+  `authSessionValidity` is ten minutes, the expiry the sign-in screen states (AUTH-06).
 - **CloudFront `/api/*` reaches the ALB by hostname** (`api.<domain>`) and must carry the
   `X-Origin-Verify` header (ADR-018). WebStack generates one secret per generation in
   `ORIGIN_VERIFY_GENERATIONS` and presents `ORIGIN_VERIFY_PRESENTED`; ServiceStack's HTTPS

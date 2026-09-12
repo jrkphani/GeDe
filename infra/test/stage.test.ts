@@ -1,4 +1,4 @@
-import { readFileSync, readdirSync } from 'node:fs';
+import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -6,11 +6,18 @@ import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
 
+import { MAIL_LOCALES } from '@gede/mail';
+
 import { buildApp } from '../lib/app.js';
 import { PLAYWRIGHT_LIVE_ROLE_NAME, PROD } from '../lib/config.js';
 import { type GedeStage } from '../lib/gede-stage.js';
 import { CDK_ASSETS_CLI_VERSION, CDK_CLI_VERSION } from '../lib/pipeline-stack.js';
-import { E2E_CLIENT_NAME } from '../lib/stacks/auth-stack.js';
+import {
+  AUTH_SESSION_VALIDITY,
+  COGNITO_CODE_PLACEHOLDER,
+  E2E_CLIENT_NAME,
+  poolMessageTemplates,
+} from '../lib/stacks/auth-stack.js';
 import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
 import { SPF_RECORD, dmarcRecord } from '../lib/stacks/dns-stack.js';
 import {
@@ -991,7 +998,7 @@ describe('GeDe CDK app', () => {
   });
 
   it('Ops wires alarms and the budget to the alerts email', () => {
-    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 13);
+    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 14);
     stacks.Ops!.resourceCountIs('AWS::SNS::Subscription', 1);
     stacks.Ops!.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'email',
@@ -1470,8 +1477,9 @@ describe('GeDe CDK app', () => {
       SecretArn: { Ref: Match.stringLikeRegexp('^E2eUser') },
       Username: 'e2e@gede.work',
     });
-    // Two functions: the user's custom resource and the pre-authentication trigger.
-    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 2);
+    // Three functions: the user's custom resource, the pre-authentication trigger and
+    // the custom-message trigger.
+    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 3);
     stacks.Auth!.allResourcesProperties('AWS::Lambda::Function', {
       Runtime: 'nodejs22.x',
       Architectures: ['arm64'],
@@ -1561,6 +1569,114 @@ describe('GeDe CDK app', () => {
           },
         ],
       }),
+    });
+  });
+
+  it('AUTH-03 AUTH-04 I18N-05 a custom-message trigger renders every one-time code from @gede/mail, invoked by the pool alone, with no IAM of its own', () => {
+    const [fnId, fn] = Object.entries(stacks.Auth!.findResources('AWS::Lambda::Function')).find(
+      ([, f]) =>
+        (f as { Properties: { Description?: string } }).Properties.Description?.includes(
+          'custom-message',
+        ),
+    )! as [
+      string,
+      { Properties: { Code: { S3Key: string }; Role: { 'Fn::GetAtt': [string, string] } } },
+    ];
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPool', {
+      LambdaConfig: Match.objectLike({ CustomMessage: { 'Fn::GetAtt': [fnId, 'Arn'] } }),
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      Principal: 'cognito-idp.amazonaws.com',
+      FunctionName: { 'Fn::GetAtt': [fnId, 'Arn'] },
+      SourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Lambda::Function', {
+      Description: Match.stringLikeRegexp('custom-message'),
+      Runtime: 'nodejs22.x',
+      Architectures: ['arm64'],
+      Handler: 'index.handler',
+      Timeout: 5,
+      MemorySize: 256,
+    });
+    // Least privilege: the execution role carries the basic managed policy and nothing
+    // else — no inline policy in the stack names this role.
+    const roleId = fn.Properties.Role['Fn::GetAtt'][0];
+    const policies = Object.values(stacks.Auth!.findResources('AWS::IAM::Policy')) as {
+      Properties: { Roles: { Ref: string }[] };
+    }[];
+    expect(policies.some((p) => p.Properties.Roles.some((r) => r.Ref === roleId))).toBe(false);
+    stacks.Auth!.hasResourceProperties('AWS::IAM::Role', {
+      ManagedPolicyArns: [
+        {
+          'Fn::Join': Match.arrayWith([
+            Match.arrayWith([':iam::aws:policy/service-role/AWSLambdaBasicExecutionRole']),
+          ]),
+        },
+      ],
+    });
+    // The staged bundle: the handler and the whole catalogue, six locales, no SDK.
+    const hash = fn.Properties.Code.S3Key.replace(/\.zip$/, '');
+    const roots = [
+      assembly.directory,
+      ...assembly.nestedAssemblies.map((n) => n.nestedAssembly.directory),
+    ];
+    const dir = roots.map((r) => path.join(r, `asset.${hash}`)).find((d) => existsSync(d));
+    expect(dir, `asset.${hash} staged`).toBeDefined();
+    const bundle = readFileSync(path.join(dir!, 'index.mjs'), 'utf8');
+    expect(bundle).toContain('CustomMessage_Authentication');
+    for (const locale of MAIL_LOCALES) expect(bundle, locale).toContain(`"${locale}"`);
+    expect(bundle).toContain('உங்கள் GeDe'); // ta-IN, kept as UTF-8 (--charset=utf8)
+    expect(bundle).not.toMatch(/@aws-sdk|require\(/);
+    expect(bundle.length).toBeLessThan(200_000);
+  });
+
+  it('AUTH-03 AUTH-04 the pool’s own templates are the branded en-US mail with the placeholder once, the floor under the trigger; the EMAIL_OTP session lasts the ten minutes the screen promises', () => {
+    const templates = poolMessageTemplates();
+    expect(templates.signUp.body.split(COGNITO_CODE_PLACEHOLDER)).toHaveLength(2);
+    expect(templates.signIn.body.split(COGNITO_CODE_PLACEHOLDER)).toHaveLength(2);
+    expect(templates.signUp.body.length).toBeLessThan(20_000);
+    expect(templates.signIn.body.length).toBeLessThan(20_000);
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPool', {
+      VerificationMessageTemplate: {
+        DefaultEmailOption: 'CONFIRM_WITH_CODE',
+        EmailSubject: 'Your GeDe sign-up code',
+        EmailMessage: templates.signUp.body,
+      },
+      EmailAuthenticationSubject: 'Your GeDe sign-in code',
+      EmailAuthenticationMessage: templates.signIn.body,
+      // Still Cognito's sender until SES leaves the sandbox (runbook §5).
+      EmailConfiguration: { EmailSendingAccount: 'COGNITO_DEFAULT' },
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ExplicitAuthFlows: ['ALLOW_USER_AUTH'],
+      AuthSessionValidity: AUTH_SESSION_VALIDITY.toMinutes(),
+    });
+  });
+
+  it('AUTH-04 I18N-05 an error in the custom-message trigger is an alarm at the first occurrence', () => {
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-custom-message-errors',
+      Namespace: 'AWS/Lambda',
+      MetricName: 'Errors',
+      Dimensions: [
+        {
+          Name: 'FunctionName',
+          Value: {
+            'Fn::GetStackOutput': Match.objectLike({
+              StackName: 'GeDe-Prod-Auth',
+              OutputName: Match.stringLikeRegexp('CustomMessage'),
+            }),
+          },
+        },
+      ],
+      Statistic: 'Sum',
+      Period: 60,
+      Threshold: 0,
+      EvaluationPeriods: 1,
+      ComparisonOperator: 'GreaterThanThreshold',
+      TreatMissingData: 'notBreaching',
+      AlarmActions: [{ Ref: Match.stringLikeRegexp('^Alerts') }],
     });
   });
 

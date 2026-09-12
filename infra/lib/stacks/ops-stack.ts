@@ -42,6 +42,8 @@ export interface OpsStackProps extends cdk.StackProps {
   readonly serviceSecurityGroup: ec2.ISecurityGroup;
   /** The pool's pre-authentication trigger: an error there refuses a sign-in (#103). */
   readonly preAuthFunction: lambda.IFunction;
+  /** The pool's custom-message trigger: an error there is a stock, English code mail at best. */
+  readonly customMessageFunction: lambda.IFunction;
 }
 
 const GIB = 1024 ** 3;
@@ -472,6 +474,23 @@ export class OpsStack extends cdk.Stack {
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       });
     preAuthErrors.addAlarmAction(notify);
+
+    // AUTH-03/04, I18N-05: the custom-message trigger renders every one-time code. It
+    // fails open (the pool's en-US template goes out instead), so an `Errors` datapoint
+    // means the handler itself did not run — a broken bundle, a runtime fault — and
+    // people are getting the floor, not the localised mail. Reported at the first one.
+    const customMessageErrors = props.customMessageFunction
+      .metricErrors({ period: cdk.Duration.minutes(1), statistic: 'Sum' })
+      .createAlarm(this, 'CustomMessageErrors', {
+        alarmName: `gede-${config.envName}-custom-message-errors`,
+        alarmDescription:
+          'The Cognito custom-message trigger threw: one-time codes are going out with the pool’s en-US template instead of the localised one; read GeDe-Prod-Auth-CustomMessageLogs',
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    customMessageErrors.addAlarmAction(notify);
 
     // `NotificationsWithSubscribers` is create-only on AWS::Budgets::Budget, so any change
     // replaces the resource — and a replacement under the same BudgetName fails ("same name
