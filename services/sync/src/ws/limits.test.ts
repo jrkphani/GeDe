@@ -74,6 +74,7 @@ describe('REST rate limits', () => {
           displayName: null,
           locale: null,
           tourDoneAt: null,
+          librarySort: null,
           sampleDocumentId: null,
           tokenExpiresAt: null,
         },

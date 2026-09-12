@@ -1,4 +1,9 @@
-/** LIB-05: the sort choice persists per user, on this device. */
+/**
+ * LIB-05: the sort choice persists per user — on the account (`users.library_sort`,
+ * `PATCH /api/me { librarySort }`, #133). What is kept here is the device's copy
+ * of the last answer, so the library sorts the right way before the profile
+ * arrives and when the request fails; the profile wins the moment it answers.
+ */
 import type { SortKey } from './select.js';
 
 const key = (sub: string): string => `gede.librarySort.${sub}`;

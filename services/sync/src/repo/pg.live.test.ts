@@ -1245,6 +1245,24 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     ).toBeInstanceOf(Date);
   });
 
+  test('LIB-05 library_sort round-trips as the app role, null until chosen, and the CHECK refuses any other spelling (#133)', async () => {
+    const first = await repo.users.upsertFromToken({ sub: 'sub-sort', email: null });
+    expect(first.librarySort).toBeNull();
+    expect((await repo.users.updateProfile(first.id, { librarySort: 'date' }))?.librarySort).toBe(
+      'date',
+    );
+    expect((await repo.users.upsertFromToken({ sub: 'sub-sort', email: null })).librarySort).toBe(
+      'date',
+    );
+    // A patch without the field leaves it alone.
+    expect((await repo.users.updateProfile(first.id, { locale: 'ta-IN' }))?.librarySort).toBe(
+      'date',
+    );
+    await expect(
+      pool.query("update users set library_sort = 'size' where id = $1", [first.id]),
+    ).rejects.toThrow(/users_library_sort_check/);
+  });
+
   test('ONB-01 createSample is idempotent per owner through documents_owner_sample_key; the upsert reports the sample id', async () => {
     const owner = await repo.users.upsertFromToken({ sub: 'sub-sample-seed', email: null });
     expect(owner.sampleDocumentId).toBeNull();

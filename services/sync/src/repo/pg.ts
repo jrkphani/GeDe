@@ -59,6 +59,7 @@ import {
   type DocumentSummary,
   type ErasureAuditAction,
   type InviteRecord,
+  type LibrarySort,
   type LibraryView,
   type Repo,
   type ShareAuditAction,
@@ -164,9 +165,15 @@ function toUser(row: UserRow): UserRecord {
     displayName: row.displayName,
     locale: row.locale,
     tourDoneAt: row.tourDoneAt,
+    librarySort: toLibrarySort(row.librarySort),
     sampleDocumentId: row.sampleDocumentId,
     deletedAt: row.deletedAt,
   };
+}
+
+/** The CHECK (migration 0010) keeps the column to these; anything else reads as unset. */
+function toLibrarySort(value: string | null): LibrarySort | null {
+  return value === 'name' || value === 'date' ? value : null;
 }
 
 function toInvite(row: typeof invites.$inferSelect): InviteRecord {
@@ -520,7 +527,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       ownerEmail: row.ownerEmail,
       sizeBytes: Number(row.sizeBytes),
       sharedBy,
-      sharedWithOthers: Boolean(row.sharedWithOthers),
+      sharedWithOthers: row.sharedWithOthers,
     };
   }
 
@@ -643,6 +650,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         if (patch.locale !== undefined) set.locale = patch.locale;
         // ONB-03: the flag is a timestamp so support can see when; `false` is Replay (ONB-08).
         if (patch.tourDone !== undefined) set.tourDoneAt = patch.tourDone ? new Date() : null;
+        if (patch.librarySort !== undefined) set.librarySort = patch.librarySort;
         if (Object.keys(set).length === 0) {
           const [row] = await db.select(userColumns).from(users).where(eq(users.id, id)).limit(1);
           return row ? toUser(row) : undefined;

@@ -68,6 +68,8 @@ const profileBody = z
       .optional(),
     /** ONB-03 / ONB-07 / ONB-08: `true` when the tour ends (done or skipped), `false` on Replay. */
     tourDone: z.boolean().optional(),
+    /** LIB-05 (#133): the Browse / Shared sort, per account. */
+    librarySort: z.enum(['name', 'date']).optional(),
   })
   .strict()
   .refine(
@@ -75,7 +77,8 @@ const profileBody = z
       b.displayName !== undefined ||
       b.locale !== undefined ||
       b.idToken !== undefined ||
-      b.tourDone !== undefined,
+      b.tourDone !== undefined ||
+      b.librarySort !== undefined,
     { message: 'Nothing to change' },
   );
 
@@ -134,6 +137,8 @@ export interface ProfileView {
   locale: string | null;
   /** ONB-03: ISO time the tour was completed or skipped; null means the tour is due. */
   tourDoneAt: string | null;
+  /** LIB-05 (#133): the library sort the account chose (`name` | `date`), or null. */
+  librarySort: 'name' | 'date' | null;
   /** ONB-01: the account's guided sample workscape. */
   sampleDocumentId: string | null;
 }
@@ -205,6 +210,7 @@ function profileView(user: AuthUser): ProfileView {
     displayName: user.displayName,
     locale: user.locale,
     tourDoneAt: user.tourDoneAt === null ? null : user.tourDoneAt.toISOString(),
+    librarySort: user.librarySort,
     sampleDocumentId: user.sampleDocumentId,
   };
 }
@@ -278,6 +284,7 @@ export function registerApi(
           ...(body.displayName !== undefined && { displayName: body.displayName }),
           ...(body.locale !== undefined && { locale: body.locale }),
           ...(body.tourDone !== undefined && { tourDone: body.tourDone }),
+          ...(body.librarySort !== undefined && { librarySort: body.librarySort }),
         };
         let updated = await repo.users.updateProfile(user.id, patch);
         if (!updated) throw new Error('user row missing after the auth hook resolved it');

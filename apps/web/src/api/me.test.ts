@@ -29,6 +29,7 @@ describe('me api', () => {
       displayName: 'M',
       locale: null,
       tourDoneAt: null,
+      librarySort: null,
       sampleDocumentId: null,
     });
     expect(toMe({ sub: 's' })).toBeNull();
@@ -76,5 +77,21 @@ describe('me api', () => {
     expect(JSON.parse(init.body as string)).toEqual({ tourDone: false });
     expect(me.tourDoneAt).toBeNull();
     expect(me.sampleDocumentId).toBe('d');
+  });
+
+  it('LIB-05 librarySort reads name or date and nothing else, and goes up through PATCH (#133)', async () => {
+    expect(toMe({ id: 'u1', sub: 's', librarySort: 'date' })?.librarySort).toBe('date');
+    expect(toMe({ id: 'u1', sub: 's', librarySort: 'size' })?.librarySort).toBeNull();
+    expect(toMe({ id: 'u1', sub: 's' })?.librarySort).toBeNull();
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(json(200, { id: 'u1', sub: 's', librarySort: 'date' })),
+    );
+    const me = await updateMe(
+      { librarySort: 'date' },
+      { fetchImpl: fetchImpl as unknown as typeof fetch, getToken: () => Promise.resolve('t') },
+    );
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ librarySort: 'date' });
+    expect(me.librarySort).toBe('date');
   });
 });

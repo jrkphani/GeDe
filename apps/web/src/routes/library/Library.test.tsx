@@ -57,6 +57,7 @@ vi.mock('../../api/me.js', async (importOriginal) => {
         displayName: 'Meena',
         locale: null,
         tourDoneAt: '2026-09-01T00:00:00.000Z',
+        librarySort: null,
         sampleDocumentId: null,
       }),
     ),
@@ -410,8 +411,11 @@ describe('Library', () => {
     expect(names()[0]).toContain('Board minutes');
     await u.click(screen.getByRole('radio', { name: 'Date' }));
     expect(names()[0]).toContain('Board minutes'); // newest first: 10 Sep before 1 Sep
+    // Per account (#133): the choice goes to the profile; the device keeps a copy.
+    expect(me.updateMe).toHaveBeenCalledWith({ librarySort: 'date' });
     expect(localStorage.getItem('gede.librarySort.sub-1')).toBe('date');
     await u.click(screen.getByRole('radio', { name: 'Name' }));
+    expect(me.updateMe).toHaveBeenCalledWith({ librarySort: 'name' });
     expect(localStorage.getItem('gede.librarySort.sub-1')).toBe('name');
     expect(screen.queryByRole('radio', { name: 'Date' })).toBeInTheDocument();
     // Recents never offers a sort.
@@ -419,12 +423,50 @@ describe('Library', () => {
     expect(screen.queryByRole('radio', { name: 'Date' })).not.toBeInTheDocument();
   });
 
-  it('LIB-05 the persisted sort is read back for the user', async () => {
+  it('LIB-05 the persisted sort is read back for the user: the device copy first, then the account wins (#133)', async () => {
     localStorage.setItem('gede.librarySort.sub-1', 'date');
     serve(live);
     renderRoutes(routes, ['/?view=browse']);
     await screen.findByText('Everest trek');
     expect(screen.getByRole('radio', { name: 'Date' })).toHaveAttribute('aria-checked', 'true');
+  });
+
+  it('LIB-05 the account sort wins over the device: a fresh browser sorts the way the account chose (#133)', async () => {
+    localStorage.setItem('gede.librarySort.sub-1', 'name');
+    vi.mocked(me.getMe).mockResolvedValueOnce({
+      id: 'u1',
+      sub: 'sub-1',
+      email: user.email,
+      displayName: 'Meena',
+      locale: null,
+      tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: 'date',
+      sampleDocumentId: null,
+    });
+    serve(live);
+    renderRoutes(routes, ['/?view=browse']);
+    await screen.findByText('Everest trek');
+    await waitFor(() => {
+      expect(screen.getByRole('radio', { name: 'Date' })).toHaveAttribute('aria-checked', 'true');
+    });
+    expect(localStorage.getItem('gede.librarySort.sub-1')).toBe('date');
+    expect(me.updateMe).not.toHaveBeenCalled();
+  });
+
+  it('LIB-05 a sort the account could not save stays on the device and says so (#133)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(me.updateMe).mockRejectedValueOnce(new Error('offline'));
+    serve(live);
+    renderRoutes(routes, ['/?view=browse']);
+    await screen.findByText('Everest trek');
+    await u.click(screen.getByRole('radio', { name: 'Date' }));
+    expect(screen.getByRole('radio', { name: 'Date' })).toHaveAttribute('aria-checked', 'true');
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'Sort saved on this device only; the account could not be updated',
+      );
+    });
+    expect(localStorage.getItem('gede.librarySort.sub-1')).toBe('date');
   });
 
   it('LIB-07 Participants opens a sheet listing everyone with permission; the owner is labelled and cannot be removed', async () => {
@@ -997,6 +1039,7 @@ describe('Library', () => {
       displayName: 'Meena',
       locale: 'ta-IN',
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     serve(live);

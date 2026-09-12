@@ -128,6 +128,7 @@ describe('RequireAuth', () => {
       displayName: 'Meena',
       locale: 'te-IN',
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(cognito.currentUser).mockResolvedValue({
@@ -150,6 +151,7 @@ describe('RequireAuth', () => {
       displayName: null,
       locale: null,
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(cognito.currentUser).mockResolvedValue({
@@ -173,6 +175,7 @@ describe('RequireAuth', () => {
       displayName: 'Meena',
       locale: 'hi-IN',
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(cognito.currentUser).mockResolvedValue({

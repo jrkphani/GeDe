@@ -78,34 +78,49 @@ const timestamptz = (name: string) => timestamp(name, { withTimezone: true, mode
 // ---------------------------------------------------------------------------
 
 /** Created on first sign-in from the JWT. No credentials stored. */
-export const users = pgTable('users', {
-  id: uuid('id')
-    .primaryKey()
-    .default(sql`gen_random_uuid()`),
-  cognitoSub: text('cognito_sub').notNull().unique('users_cognito_sub_key'),
-  /**
-   * Nullable: a Cognito *access* token carries no email claim; filled in when one is seen.
-   * The constraint name is PostgreSQL's default for the inline UNIQUE in 0000 and is what
-   * `services/sync/src/repo/pg.ts` matches on a collision (#42) — keep it explicit here.
-   */
-  email: citext('email').unique('users_email_key'),
-  displayName: text('display_name'),
-  /** I18N-05 (migration 0001): BCP 47 tag from the supported set; null until the user chooses. */
-  locale: text('locale'),
-  createdAt: timestamptz('created_at').notNull().defaultNow(),
-  lastSeenAt: timestamptz('last_seen_at'),
-  /**
-   * ONB-03 (migration 0009): when the account completed or skipped the guided tour; null
-   * until then and again after Replay (ONB-08). Per account, never per device.
-   */
-  tourDoneAt: timestamptz('tour_done_at'),
-  /**
-   * Migration 0010 (#111, ADR-038): set by account erasure. The row stays as a tombstone —
-   * email, display name, locale, tour and last-seen nulled — so the foreign keys that point at
-   * it still resolve and the Cognito `sub` cannot come back as a fresh account.
-   */
-  deletedAt: timestamptz('deleted_at'),
-});
+export const users = pgTable(
+  'users',
+  {
+    id: uuid('id')
+      .primaryKey()
+      .default(sql`gen_random_uuid()`),
+    cognitoSub: text('cognito_sub').notNull().unique('users_cognito_sub_key'),
+    /**
+     * Nullable: a Cognito *access* token carries no email claim; filled in when one is seen.
+     * The constraint name is PostgreSQL's default for the inline UNIQUE in 0000 and is what
+     * `services/sync/src/repo/pg.ts` matches on a collision (#42) — keep it explicit here.
+     */
+    email: citext('email').unique('users_email_key'),
+    displayName: text('display_name'),
+    /** I18N-05 (migration 0001): BCP 47 tag from the supported set; null until the user chooses. */
+    locale: text('locale'),
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
+    lastSeenAt: timestamptz('last_seen_at'),
+    /**
+     * ONB-03 (migration 0009): when the account completed or skipped the guided tour; null
+     * until then and again after Replay (ONB-08). Per account, never per device.
+     */
+    tourDoneAt: timestamptz('tour_done_at'),
+    /**
+     * Migration 0010 (#111, ADR-038): set by account erasure. The row stays as a tombstone —
+     * email, display name, locale, tour and last-seen nulled — so the foreign keys that point at
+     * it still resolve and the Cognito `sub` cannot come back as a fresh account.
+     */
+    deletedAt: timestamptz('deleted_at'),
+    /**
+     * LIB-05 (migration 0011, #133): the Browse / Shared sort the account chose, `name` or
+     * `date` (`users_library_sort_check`); null until chosen. Per account, never per device.
+     */
+    librarySort: text('library_sort'),
+  },
+  (t) => [
+    /** Migration 0011: the two library sorts and nothing else. */
+    check(
+      'users_library_sort_check',
+      sql`${t.librarySort} IS NULL OR ${t.librarySort} IN ('name', 'date')`,
+    ),
+  ],
+);
 
 /** One row per workbook. `snapshot_key` points into S3 `docs`. */
 export const documents = pgTable(

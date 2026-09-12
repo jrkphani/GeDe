@@ -37,6 +37,7 @@ import {
   type DocumentRecord,
   type DocumentSummary,
   type InviteRecord,
+  type LibrarySort,
   type LibraryView,
   type Repo,
   type StoredUpdate,
@@ -65,6 +66,7 @@ interface MutableUser extends Omit<UserRecord, 'sampleDocumentId'> {
   displayName: string | null;
   locale: string | null;
   tourDoneAt: Date | null;
+  librarySort: LibrarySort | null;
   deletedAt: Date | null;
 }
 
@@ -151,6 +153,7 @@ export class FakeRepo implements Repo {
       displayName,
       locale: null,
       tourDoneAt: null,
+      librarySort: null,
       deletedAt: null,
     };
     this.usersBySub.set(sub, user);
@@ -411,6 +414,7 @@ export class FakeRepo implements Repo {
       if (patch.displayName !== undefined) user.displayName = patch.displayName;
       if (patch.locale !== undefined) user.locale = patch.locale;
       if (patch.tourDone !== undefined) user.tourDoneAt = patch.tourDone ? new Date() : null;
+      if (patch.librarySort !== undefined) user.librarySort = patch.librarySort;
       return Promise.resolve(this.userRecord(user));
     },
     erase: (id) => {

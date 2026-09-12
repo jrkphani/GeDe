@@ -60,6 +60,7 @@ const profile = (tourDoneAt: string | null): MeApi.Me => ({
   displayName: 'Meena',
   locale: null,
   tourDoneAt,
+  librarySort: null,
   sampleDocumentId: SAMPLE_ID,
 });
 

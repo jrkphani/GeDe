@@ -247,10 +247,17 @@ export function Library() {
     enabled: load.status === 'ready' && busy === null,
   });
 
-  // LIB-05: the sort choice follows the signed-in user.
+  // LIB-05: the sort choice follows the signed-in user — the device's copy first,
+  // then the account's (`users.library_sort`, #133) as soon as the profile answers.
   useEffect(() => {
     setSort(readSortPreference(sub));
   }, [sub]);
+  const accountSort = session.profile?.librarySort ?? null;
+  useEffect(() => {
+    if (accountSort === null || sub === '') return;
+    setSort(accountSort);
+    writeSortPreference(sub, accountSort);
+  }, [accountSort, sub]);
 
   // Route errors render the catalogue page; the boundary is the router's.
   if (load.status === 'error') throw load.error;
@@ -282,6 +289,11 @@ export function Library() {
     setSort(next);
     if (sub !== '') writeSortPreference(sub, next);
     announce(`Sorted by ${next}`);
+    // LIB-05: per account. The row is sorted already; only the saving can fail, and then
+    // the device keeps the choice until the next sign-in from a device that has it.
+    session.updateProfile({ librarySort: next }).catch(() => {
+      announce('Sort saved on this device only; the account could not be updated');
+    });
   };
 
   const select = (doc: DocumentSummary) => {

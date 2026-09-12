@@ -47,9 +47,7 @@ export function mailFailureLine(template: Mail['template'], at = Date.now()) {
 /** SES error messages name the recipient; the log line carries the class of failure only. */
 export function mailFailure(error: unknown): { errName: string; errCode?: string } {
   const errCode =
-    typeof error === 'object' && error !== null && 'Code' in error
-      ? String(error.Code)
-      : undefined;
+    typeof error === 'object' && error !== null && 'Code' in error ? String(error.Code) : undefined;
   return {
     errName: error instanceof Error ? error.name : typeof error,
     ...(errCode !== undefined && { errCode }),

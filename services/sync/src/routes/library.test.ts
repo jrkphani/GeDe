@@ -1007,6 +1007,36 @@ describe('profile (AUTH-09, I18N-05)', () => {
     expect(res.body.error.details).toEqual([expect.objectContaining({ path: 'tourDone' })]);
   });
 
+  test('LIB-05 PATCH /api/me { librarySort } persists the library sort per account: a second client reads it; only name or date is accepted (#133)', async () => {
+    expect((await me(alice)).librarySort).toBeNull();
+    const res = await json<ProfileView>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { librarySort: 'date' },
+    });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ id: aliceId, librarySort: 'date', locale: null });
+    expect(server.repo.usersBySub.get('sub-alice')?.librarySort).toBe('date');
+    // Per account, not per device.
+    const second = server.verifier.issue('tok-alice-2', 'sub-alice', 'alice@example.com');
+    expect((await me(second)).librarySort).toBe('date');
+    expect(
+      (
+        await json<ProfileView>(server, 'PATCH', '/api/me', {
+          token: second,
+          body: { librarySort: 'name' },
+        })
+      ).body.librarySort,
+    ).toBe('name');
+    expect((await me(alice)).librarySort).toBe('name');
+    const bad = await json<ErrorBody>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { librarySort: 'size' },
+    });
+    expect(bad.status).toBe(400);
+    expect(bad.body.error.details).toEqual([expect.objectContaining({ path: 'librarySort' })]);
+    expect((await me(alice)).librarySort).toBe('name');
+  });
+
   test('I18N-05 PATCH /api/me persists the locale and the next GET reflects it', async () => {
     const res = await json<ProfileView>(server, 'PATCH', '/api/me', {
       token: alice,

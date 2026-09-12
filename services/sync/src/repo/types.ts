@@ -17,6 +17,8 @@ export interface UserRecord {
   readonly locale: string | null;
   /** ONB-03: when the account completed or skipped the guided tour; null until then, and after Replay. */
   readonly tourDoneAt: Date | null;
+  /** LIB-05 (#133): the Browse / Shared sort the account chose, or null until chosen. */
+  readonly librarySort: LibrarySort | null;
   /**
    * ONB-01: the account's guided sample workscape, or null while none exists
    * yet (the resolver seeds it on first sight, `SampleSeeder`).
@@ -28,6 +30,9 @@ export interface UserRecord {
    */
   readonly deletedAt: Date | null;
 }
+
+/** LIB-05: the two library sorts; Recents ignores it. */
+export type LibrarySort = 'name' | 'date';
 
 export interface DocumentRecord {
   readonly id: string;
@@ -234,6 +239,8 @@ export interface ProfilePatch {
   readonly locale?: string;
   /** ONB-03: `true` stamps `tour_done_at` now; `false` clears it (Replay, ONB-08). */
   readonly tourDone?: boolean;
+  /** LIB-05 (#133): the library sort, per account. */
+  readonly librarySort?: LibrarySort;
 }
 
 export interface UsersRepo {

@@ -497,6 +497,7 @@ describe('LinkRedeem', () => {
       displayName: null,
       locale: null,
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(shares.acceptInvite).mockRejectedValue(new Error('404'));
@@ -517,6 +518,7 @@ describe('LinkRedeem', () => {
       displayName: null,
       locale: null,
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(meApi.bindVerifiedEmail).mockImplementation(() => {
@@ -528,6 +530,7 @@ describe('LinkRedeem', () => {
         displayName: null,
         locale: null,
         tourDoneAt: '2026-09-01T00:00:00.000Z',
+        librarySort: null,
         sampleDocumentId: null,
       });
     });
@@ -569,6 +572,7 @@ describe('LinkRedeem', () => {
       displayName: 'Dana',
       locale: null,
       tourDoneAt: '2026-09-01T00:00:00.000Z',
+      librarySort: null,
       sampleDocumentId: null,
     });
     vi.mocked(shares.redeemLink).mockResolvedValue(undefined);
