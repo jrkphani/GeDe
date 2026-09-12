@@ -21,10 +21,10 @@ import {
 import { LiveRegion } from '../../../announce.js';
 import type * as DocumentsApi from '../../../api/documents.js';
 import { withConfig } from '../../../test/helpers.js';
-import { TooltipProvider } from '@gede/ui';
+import { ToastProvider, TooltipProvider } from '@gede/ui';
 import { FindBar } from './FindBar.js';
 import { MatchHighlights } from './MatchHighlights.js';
-import { createSearchClient } from './search-client.js';
+import { createSearchClient, MAX_RESTARTS, type SearchClientEvent } from './search-client.js';
 import { counterText, useFind, type FindNavigation } from './useFind.js';
 
 vi.mock('../../../api/documents.js', async (importOriginal) => {
@@ -87,32 +87,34 @@ function Harness({
   onFind?.(find);
   return (
     <TooltipProvider>
-      <LiveRegion />
-      <button
-        type="button"
-        onClick={() => {
-          find.actions.open();
-        }}
-      >
-        Find
-      </button>
-      <button
-        type="button"
-        onClick={() => {
-          find.actions.open({ replace: true });
-        }}
-      >
-        Find and replace
-      </button>
-      <div data-testid="layer">
-        <MatchHighlights
-          gd={gd}
-          matches={find.state.matches}
-          current={find.state.current}
-          sheetId={sheetId}
-        />
-      </div>
-      <FindBar gd={gd} find={find} editable={editable} phone={phone} />
+      <ToastProvider>
+        <LiveRegion />
+        <button
+          type="button"
+          onClick={() => {
+            find.actions.open();
+          }}
+        >
+          Find
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            find.actions.open({ replace: true });
+          }}
+        >
+          Find and replace
+        </button>
+        <div data-testid="layer">
+          <MatchHighlights
+            gd={gd}
+            matches={find.state.matches}
+            current={find.state.current}
+            sheetId={sheetId}
+          />
+        </div>
+        <FindBar gd={gd} find={find} editable={editable} phone={phone} />
+      </ToastProvider>
     </TooltipProvider>
   );
 }
@@ -160,7 +162,9 @@ describe('Find', () => {
     const client = createSearchClient();
     expect(client.mode).toBe('main');
     const received: number[] = [];
-    client.subscribe((r) => received.push(r.id));
+    client.subscribe((r) => {
+      if (r.type === 'results') received.push(r.id);
+    });
     client.post({
       type: 'query',
       id: 7,
@@ -326,7 +330,7 @@ describe('Find', () => {
     });
   });
 
-  it('FIND-06 matches highlight in place in amber on the active sheet, the current one more strongly, and the list stays in sync', async () => {
+  it('FIND-06 (partial: not in inspector) matches highlight in place in amber on the active sheet, the current one more strongly, and the list stays in sync', async () => {
     const { gd, sheet1 } = fixture();
     render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
     await openAndType('Singapore');
@@ -339,7 +343,7 @@ describe('Find', () => {
     });
     const [first] = highlights();
     expect(first).toHaveClass('gd-find-hit', 'gd-find-hit--current');
-    // B4 of a table at (1,1): title 2 rows + header 1 row → row 4, column B.
+    // B5 of a table at (1,1): title 2 rows + header 1 row → lattice row 4 (0-based), column B.
     expect(first).toHaveStyle({ left: '160px', top: '88px', width: '160px', height: '22px' });
     expect(highlights().filter((h) => h.classList.contains('gd-find-hit--current'))).toHaveLength(
       1,
@@ -389,7 +393,7 @@ describe('Find', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent(/4 of 4, B6 in Table 1/);
   });
 
-  it('FIND-08 Replace rewrites the current match, All rewrites every match in scope, and read-only matches are skipped with a count', async () => {
+  it('FIND-08 Replace rewrites the current match, All rewrites every exact match in scope; read-only matches and fuzzy near misses are left alone with a count', async () => {
     const { gd, sheet1, table1, ids } = fixture();
     // Column 2 becomes derived: its cells are read-only (see isReadOnlyCell's TODO).
     const columns = gd.tables.get(table1)!.get('columns') as Y.Array<Y.Map<unknown>>;
@@ -415,15 +419,27 @@ describe('Find', () => {
     });
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
     await waitFor(() => {
-      expect(screen.getByTestId('find-skipped')).toHaveTextContent('1 skipped');
+      expect(screen.getByTestId('find-skipped')).toHaveTextContent(
+        '1 near match left alone, 1 not editable',
+      );
     });
-    expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Mumbai office');
     expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Mumbai, " hub")');
+    // A fuzzy near miss ("Sngapore") is not what was asked for: untouched (FIND-05 × FIND-08).
+    expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
     // Derived: untouched.
     expect(cellText(t1, ids.rows[2]!, ids.cols[1]!)).toBe('Singapore fund');
     await waitFor(() => {
-      expect(count()).toBe('1 of 1'); // only the read-only match remains
+      expect(count()).toBe('1 of 2'); // the near miss and the read-only match remain
     });
+    // Replace on a read-only match, then on a near miss: each is left alone and stepped past.
+    await userEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    expect(screen.getByTestId('find-skipped')).toHaveTextContent('1 not editable');
+    expect(count()).toBe('2 of 2');
+    await userEvent.click(screen.getByRole('button', { name: 'Replace' }));
+    expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
+    expect(screen.getByTestId('find-skipped')).toHaveTextContent('1 near match left alone');
+    expect(screen.getByTestId('live-region')).toHaveTextContent(/Left B6 in Table 1 alone/);
+    expect(count()).toBe('1 of 2');
     // FIND-10: the bar never closes itself.
     expect(screen.getByRole('search', { name: 'Find' })).toBeInTheDocument();
   });
@@ -542,12 +558,15 @@ describe('Find', () => {
     });
     await userEvent.type(screen.getByRole('textbox', { name: 'Replace with' }), 'Chennai');
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
-    expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Chennai office');
+    // Exact hits in both tables are rewritten in one transaction; the near miss is left alone.
+    expect(cellText(t1, ids.rows[0]!, ids.cols[0]!)).toBe('Chennai');
+    expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Chennai, " hub")');
     expect(
       cellText(t2, tableById(gd, table2)!.rows[0]!, tableById(gd, table2)!.columns[0]!.id),
     ).toBe('Chennai budget');
+    expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
     await waitFor(() => {
-      expect(count()).toBe('No matches');
+      expect(count()).toBe('1 of 1');
     });
     t1.unobserveDeep(noop);
     t2.unobserveDeep(noop);
@@ -589,6 +608,176 @@ describe('Find', () => {
       expect(count()).toBe('1 of 4');
     });
     gd.tables.get(table1)!.unobserveDeep(noop);
+  });
+
+  it('FIND-03 column header labels are indexed as addressable header cells (DOC-06), grouped with cells and never rewritten', async () => {
+    const { gd, sheet1, table1 } = fixture();
+    const columns = gd.tables.get(table1)!.get('columns') as Y.Array<Y.Map<unknown>>;
+    gd.doc.transact(() => {
+      columns.get(0).set('label', 'City');
+    });
+    const nav = navigation();
+    render(<Harness gd={gd} navigation={nav} sheetId={sheet1} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Find and replace' }));
+    const field = screen.getByRole('textbox', { name: 'Find' });
+    await userEvent.clear(field);
+    await userEvent.type(field, 'City');
+    await waitFor(() => {
+      expect(count()).toBe('1 of 1');
+    });
+    // The header sits on the table's header row: lattice row 3 of a table at (1,1).
+    await waitFor(() => {
+      expect(highlights()).toHaveLength(1);
+    });
+    expect(highlights()[0]).toHaveStyle({ left: '160px', top: '66px', height: '22px' });
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(/1 of 1/);
+    });
+    await userEvent.click(screen.getByRole('button', { name: /^Results/ }));
+    const list = screen.getByTestId('find-results');
+    expect(
+      within(list)
+        .getAllByRole('region')
+        .map((g) => g.getAttribute('aria-label')),
+    ).toEqual(['Cells']);
+    expect(within(list).getByRole('button')).toHaveTextContent('B4 header in Table 1');
+    await userEvent.type(screen.getByRole('textbox', { name: 'Replace with' }), 'Town');
+    await userEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(columns.get(0).get('label')).toBe('City');
+    expect(screen.getByTestId('find-skipped')).toHaveTextContent('1 not editable');
+  });
+
+  it('LOAD-05 a Worker that errors is restarted with its index re-sent (results kept meanwhile), and after repeated errors Find stops with a notice — never on the main thread', () => {
+    // FAKE Worker: a class that fails on demand. jsdom has no Worker, so this stands in.
+    const workers: FakeWorker[] = [];
+    class FakeWorker {
+      onmessage: ((e: { data: unknown }) => void) | null = null;
+      onerror: ((e: { message: string; preventDefault(): void }) => void) | null = null;
+      posted: unknown[] = [];
+      terminated = false;
+      constructor() {
+        workers.push(this);
+      }
+      postMessage(m: unknown) {
+        this.posted.push(m);
+      }
+      terminate() {
+        this.terminated = true;
+      }
+      fail() {
+        this.onerror?.({ message: 'boom', preventDefault: () => undefined });
+      }
+    }
+    vi.stubGlobal('Worker', FakeWorker);
+    try {
+      const client = createSearchClient();
+      expect(client.mode).toBe('worker');
+      const events: SearchClientEvent[] = [];
+      client.subscribe((e) => events.push(e));
+      client.post({ type: 'removeTables', tableIds: [] });
+      expect(workers).toHaveLength(1);
+      workers[0]!.fail();
+      expect(workers[0]!.terminated).toBe(true);
+      expect(workers).toHaveLength(2); // restarted
+      expect(events).toEqual([{ type: 'worker-error', restarted: true, message: 'boom' }]);
+      expect(client.stopped).toBe(false);
+      client.post({ type: 'removeTables', tableIds: ['x'] });
+      expect(workers[1]!.posted).toHaveLength(1); // the new worker receives the traffic
+      for (let i = 0; i < MAX_RESTARTS; i += 1) workers.at(-1)!.fail();
+      expect(events.at(-1)).toEqual({ type: 'worker-error', restarted: false, message: 'boom' });
+      expect(client.stopped).toBe(true);
+      expect(workers).toHaveLength(MAX_RESTARTS + 1);
+      expect(client.mode).toBe('worker'); // a stopped client never matches on the main thread
+      client.dispose();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it('LOAD-05 the bar keeps the last results across a Worker restart, re-sends the index and shows the toast', async () => {
+    const workers: FakeIndexWorker[] = [];
+    // FAKE Worker that answers every query with one canned match until told to fail.
+    class FakeIndexWorker {
+      onmessage: ((e: { data: unknown }) => void) | null = null;
+      onerror: ((e: { message: string; preventDefault(): void }) => void) | null = null;
+      posted: { type: string; id?: number }[] = [];
+      constructor() {
+        workers.push(this);
+      }
+      postMessage(m: { type: string; id?: number }) {
+        this.posted.push(m);
+        if (m.type === 'query') {
+          const id = m.id ?? 0;
+          queueMicrotask(() => {
+            this.onmessage?.({
+              data: {
+                type: 'results',
+                id,
+                indexed: 1,
+                matches: [
+                  {
+                    id: 'document/d#name',
+                    entryId: 'document/d',
+                    field: 'name',
+                    text: 'Canned',
+                    distance: 0,
+                    start: 0,
+                    end: 6,
+                    readOnly: true,
+                    target: { kind: 'document', docId: 'd', title: 'Canned' },
+                  },
+                ],
+              },
+            });
+          });
+        }
+      }
+      terminate() {
+        /* nothing to stop */
+      }
+      fail() {
+        this.onerror?.({ message: 'boom', preventDefault: () => undefined });
+      }
+    }
+    vi.stubGlobal('Worker', FakeIndexWorker);
+    try {
+      const { gd, sheet1 } = fixture();
+      render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
+      await openAndType('Canned');
+      await waitFor(() => {
+        expect(count()).toBe('1 of 1');
+      });
+      const first = workers[0]!;
+      expect(first.posted[0]?.type).toBe('reset');
+      act(() => {
+        first.fail();
+      });
+      // A new Worker got the whole index again and the query re-ran; the counter never blanked.
+      expect(workers).toHaveLength(2);
+      expect(workers[1]!.posted.map((m) => m.type)).toEqual(['reset', 'query']);
+      expect(count()).toBe('1 of 1');
+      expect(
+        await screen.findByText('Find restarted after an error; results refreshed.'),
+      ).toBeInTheDocument();
+      for (let i = 0; i < MAX_RESTARTS; i += 1) {
+        act(() => {
+          workers.at(-1)!.fail();
+        });
+      }
+      expect(
+        await screen.findByText(
+          'Find stopped after repeated errors. Close and reopen Find to try again.',
+        ),
+      ).toBeInTheDocument();
+      expect(count()).toBe('1 of 1'); // last results kept
+      // Reopening replaces the stopped client with a fresh one.
+      const before = workers.length;
+      await userEvent.click(screen.getByRole('button', { name: 'Done' }));
+      await userEvent.click(screen.getByRole('button', { name: 'Find' }));
+      expect(workers.length).toBe(before + 1);
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it('I18N-01 Enter during IME composition does not step', async () => {

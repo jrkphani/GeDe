@@ -16,6 +16,7 @@ import type {
   CellEntry,
   DocumentEntry,
   GraphEntry,
+  HeaderEntry,
   SearchEntry,
   SearchField,
   SearchText,
@@ -30,7 +31,10 @@ type WithIndexedTexts<E extends SearchEntry> = Omit<E, 'texts'> & {
   readonly texts: readonly IndexedText[];
 };
 export type IndexedEntry =
-  WithIndexedTexts<CellEntry> | WithIndexedTexts<GraphEntry> | WithIndexedTexts<DocumentEntry>;
+  | WithIndexedTexts<CellEntry>
+  | WithIndexedTexts<HeaderEntry>
+  | WithIndexedTexts<GraphEntry>
+  | WithIndexedTexts<DocumentEntry>;
 
 /** Segment and fold an entry's texts. Runs in the Worker, off the main thread. */
 export function indexEntry(entry: SearchEntry): IndexedEntry {
@@ -79,6 +83,17 @@ export type MatchTarget =
       readonly format: FormatKind;
     }
   | {
+      /** A column header cell (DOC-06); `colLabel` is the matched text. */
+      readonly kind: 'header';
+      readonly sheetId: string;
+      readonly sheetOrdinal: number;
+      readonly tableId: string;
+      readonly tableTitle: string;
+      readonly colId: string;
+      readonly colIndex: number;
+      readonly colLabel: string;
+    }
+  | {
       readonly kind: 'graph';
       readonly sheetId: string;
       readonly sheetOrdinal: number;
@@ -107,10 +122,12 @@ const FIELD_ORDER: Record<SearchField, number> = {
   value: 0,
   formula: 1,
   reference: 2,
-  dimension: 3,
-  name: 4,
+  header: 3,
+  dimension: 4,
+  name: 5,
 };
-const KIND_ORDER = { cell: 0, graph: 1, document: 2 } as const;
+/** Headers sit in the cells group: a table's header row reads before its rows. */
+const KIND_ORDER = { cell: 0, header: 0, graph: 1, document: 2 } as const;
 
 function targetOf(entry: IndexedEntry): MatchTarget {
   switch (entry.kind) {
@@ -128,6 +145,17 @@ function targetOf(entry: IndexedEntry): MatchTarget {
         colLabel: entry.colLabel,
         format: entry.format,
       };
+    case 'header':
+      return {
+        kind: 'header',
+        sheetId: entry.sheetId,
+        sheetOrdinal: entry.sheetOrdinal,
+        tableId: entry.tableId,
+        tableTitle: entry.tableTitle,
+        colId: entry.colId,
+        colIndex: entry.colIndex,
+        colLabel: entry.colLabel,
+      };
     case 'graph':
       return {
         kind: 'graph',
@@ -144,7 +172,7 @@ function targetOf(entry: IndexedEntry): MatchTarget {
 /** Column labels repeat across every row of a table: fold each label once per query. */
 function columnMatcher(columns: readonly (readonly string[])[], budget: number) {
   const cache = new Map<string, boolean>();
-  return (entry: WithIndexedTexts<CellEntry>): boolean => {
+  return (entry: WithIndexedTexts<CellEntry | HeaderEntry>): boolean => {
     const hit = cache.get(entry.colLabel);
     if (hit !== undefined) return hit;
     const label = foldGraphemes(entry.colLabel);
@@ -188,12 +216,20 @@ function compare(a: SearchMatch, b: SearchMatch): number {
   const kb = KIND_ORDER[b.target.kind];
   if (ka !== kb) return ka - kb;
   if (a.distance !== b.distance) return a.distance - b.distance;
-  if (a.target.kind === 'cell' && b.target.kind === 'cell') {
+  const ta = a.target;
+  const tb = b.target;
+  if (
+    (ta.kind === 'cell' || ta.kind === 'header') &&
+    (tb.kind === 'cell' || tb.kind === 'header')
+  ) {
+    // The header row is row -1 of its table: it reads before the data rows.
+    const ra = ta.kind === 'cell' ? ta.rowIndex : -1;
+    const rb = tb.kind === 'cell' ? tb.rowIndex : -1;
     return (
-      a.target.sheetOrdinal - b.target.sheetOrdinal ||
-      (a.target.tableId < b.target.tableId ? -1 : a.target.tableId > b.target.tableId ? 1 : 0) ||
-      a.target.rowIndex - b.target.rowIndex ||
-      a.target.colIndex - b.target.colIndex ||
+      ta.sheetOrdinal - tb.sheetOrdinal ||
+      (ta.tableId < tb.tableId ? -1 : ta.tableId > tb.tableId ? 1 : 0) ||
+      ra - rb ||
+      ta.colIndex - tb.colIndex ||
       FIELD_ORDER[a.field] - FIELD_ORDER[b.field]
     );
   }
@@ -223,10 +259,12 @@ export function search(
   for (const entry of entries) {
     if (entry.kind === 'document' && !options.documents) continue;
     if (hasOperators) {
-      // Operators name columns and formats: only cells have them.
-      if (entry.kind !== 'cell') continue;
+      // Operators name columns and formats: only cells (and their headers) have them.
+      if (entry.kind !== 'cell' && entry.kind !== 'header') continue;
       if (q.columns.length > 0 && !inColumn(entry)) continue;
-      if (q.formats.length > 0 && !q.formats.includes(entry.format)) continue;
+      // A header has no resolved format; `is:` is about values.
+      if (q.formats.length > 0 && (entry.kind !== 'cell' || !q.formats.includes(entry.format)))
+        continue;
     }
     if (!hasPhrase) {
       const first = entry.texts.find((t) => searchable(t.field, options));

@@ -138,7 +138,7 @@ describe('Find in the document shell', () => {
     expect(screen.getByRole('textbox', { name: 'Replace with' })).toBeInTheDocument();
   });
 
-  it('FIND-02 FIND-06 the bar floats over the canvas without displacing it; matches tint in place on the active sheet', async () => {
+  it('FIND-02 FIND-06 (partial: not in inspector) the bar floats over the canvas without displacing it; matches tint in place on the active sheet', async () => {
     seedRoom();
     await openShell();
     const plane = screen.getByTestId('plane');

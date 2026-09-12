@@ -117,7 +117,7 @@ const mod = 'Control';
 
 for (const width of [1024, 1440] as const) {
   test.describe(`find at ${String(width)} px`, () => {
-    test(`FIND-01 FIND-02 FIND-05 FIND-06 FIND-07 FIND-09 KEYS-04 A11Y-05 open, type, step, close at ${String(width)}`, async ({
+    test(`FIND-01 FIND-02 FIND-05 FIND-06 (partial: not in inspector) FIND-07 FIND-09 KEYS-04 A11Y-05 open, type, step, close at ${String(width)}`, async ({
       page,
       checkA11y,
       snapshot,

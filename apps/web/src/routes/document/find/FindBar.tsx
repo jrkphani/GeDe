@@ -1,13 +1,13 @@
 import clsx from 'clsx';
 import { useEffect, useId, type KeyboardEvent as ReactKeyboardEvent } from 'react';
 import type { GedeDoc, SearchMatch } from '@gede/core';
-import { Button, Collapsible, Icon, Menu, Tooltip, type MenuEntry } from '@gede/ui';
+import { Button, Collapsible, Icon, Menu, Toast, Tooltip, type MenuEntry } from '@gede/ui';
 
 import { ARIA_KEYS, LABELS } from '../../../doc/shortcuts.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import { describeMatch } from './match-geometry.js';
-import { counterText, type Find } from './useFind.js';
+import { counterText, skippedText, type Find } from './useFind.js';
 
 export interface FindBarProps {
   gd: GedeDoc;
@@ -27,7 +27,6 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
   const { state, actions, inputRef, focusTick } = find;
   const fieldId = useId();
   const replaceId = useId();
-  const listId = useId();
 
   // FIND-01: opening focuses the field and selects any existing query.
   useEffect(() => {
@@ -182,7 +181,6 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
               variant="ghost"
               className="gd-find__list-toggle"
               aria-label={`Results${none ? '' : ` (${formatNumber(activeLocale(), total)})`}`}
-              aria-controls={listId}
               title="Show the result list"
               disabled={none}
             >
@@ -191,7 +189,6 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
           }
         >
           <ResultList
-            id={listId}
             gd={gd}
             matches={state.matches}
             current={state.current}
@@ -260,20 +257,26 @@ export function FindBar({ gd, find, editable, phone }: FindBarProps) {
               All
             </Button>
           </div>
-          {state.skipped !== null && state.skipped > 0 && (
+          {skippedText(state.skipped) !== '' && (
             <span className="gd-find__skipped" data-testid="find-skipped">
-              {formatNumber(activeLocale(), state.skipped)} skipped: derived, linked, pulled and
-              graph matches are not rewritten
+              {skippedText(state.skipped)}
             </span>
           )}
         </div>
       )}
+      {/* ARCHITECTURE §3: a background operation that was retried automatically is a toast. */}
+      <Toast
+        open={state.notice !== null}
+        onOpenChange={(o) => {
+          if (!o) actions.dismissNotice();
+        }}
+        title={state.notice ?? ''}
+      />
     </div>
   );
 }
 
 interface ResultListProps {
-  id: string;
   gd: GedeDoc;
   matches: readonly SearchMatch[];
   current: number;
@@ -281,19 +284,24 @@ interface ResultListProps {
 }
 
 const GROUP_LABELS = { cell: 'Cells', graph: 'Graphs', document: 'Workscapes' } as const;
+type GroupKind = keyof typeof GROUP_LABELS;
+/** Header cells belong with the cells (DOC-06: they are addressable cells). */
+function groupOf(match: SearchMatch): GroupKind {
+  return match.target.kind === 'header' ? 'cell' : match.target.kind;
+}
 
 /**
  * FIND-06: the result list, in sync with the bar. Grouped by kind (cells,
  * graphs, workscape names — the last navigates). Each row is a button so it
  * is reachable with Tab and arrows; the current row carries `aria-current`.
  */
-function ResultList({ id, gd, matches, current, onPick }: ResultListProps) {
+function ResultList({ gd, matches, current, onPick }: ResultListProps) {
   const groups: {
-    kind: keyof typeof GROUP_LABELS;
+    kind: GroupKind;
     items: { match: SearchMatch; index: number }[];
   }[] = [];
   matches.forEach((match, index) => {
-    const kind = match.target.kind;
+    const kind = groupOf(match);
     let group = groups.find((g) => g.kind === kind);
     if (group === undefined) {
       group = { kind, items: [] };
@@ -302,7 +310,7 @@ function ResultList({ id, gd, matches, current, onPick }: ResultListProps) {
     group.items.push({ match, index });
   });
   return (
-    <div id={id} className="gd-find__list" data-testid="find-results">
+    <div className="gd-find__list" data-testid="find-results">
       {groups.map((group) => (
         <section key={group.kind} className="gd-find__group" aria-label={GROUP_LABELS[group.kind]}>
           <h3 className="gd-mono gd-find__group-label">{GROUP_LABELS[group.kind]}</h3>

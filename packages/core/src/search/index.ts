@@ -25,6 +25,7 @@ export {
   type DocumentEntry,
   type DocumentName,
   type GraphEntry,
+  type HeaderEntry,
   type SearchEntry,
   type SearchField,
   type SearchSnapshot,

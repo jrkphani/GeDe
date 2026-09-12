@@ -24,7 +24,6 @@ import {
   type GedeDoc,
   type SearchMatch,
   type SearchOptions,
-  type SearchResponse,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
@@ -32,7 +31,7 @@ import { listDocuments } from '../../../api/documents.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import { describeMatch } from './match-geometry.js';
-import { createSearchClient, type SearchClient } from './search-client.js';
+import { createSearchClient, type SearchClient, type SearchClientEvent } from './search-client.js';
 
 /** FIND-02 / FIND-10: the counter's words; the numbers go through `Intl` for the active locale (I18N-04). */
 export function counterText(matches: number, current: number, query: string): string {
@@ -64,9 +63,36 @@ export interface FindState {
   readonly current: number;
   /** True until the first results for the latest query arrive. */
   readonly pending: boolean;
-  /** FIND-08: read-only matches skipped by the last Replace / All, once one has run. */
-  readonly skipped: number | null;
+  /**
+   * FIND-08: what the last Replace / All left alone, once one has run —
+   * `readOnly` (derived, linked, pulled, header and graph matches) and `near`
+   * (fuzzy near misses: Replace only ever rewrites exact matches).
+   */
+  readonly skipped: Skipped | null;
+  /** A transient notice for the toast (the worker restarted or stopped); null when there is none. */
+  readonly notice: string | null;
   readonly listOpen: boolean;
+}
+
+export interface Skipped {
+  readonly readOnly: number;
+  readonly near: number;
+}
+
+/** The "n skipped" sentence beneath the replace row; '' when nothing was skipped. */
+export function skippedText(skipped: Skipped | null): string {
+  if (skipped === null || skipped.readOnly + skipped.near === 0) return '';
+  const locale = activeLocale();
+  const parts: string[] = [];
+  if (skipped.near > 0) {
+    parts.push(
+      `${formatNumber(locale, skipped.near)} near ${skipped.near === 1 ? 'match' : 'matches'} left alone`,
+    );
+  }
+  if (skipped.readOnly > 0) {
+    parts.push(`${formatNumber(locale, skipped.readOnly)} not editable`);
+  }
+  return parts.join(', ');
 }
 
 export interface FindActions {
@@ -85,6 +111,7 @@ export interface FindActions {
   /** FIND-08: rewrite the current match, then step to the next. */
   readonly replaceCurrent: () => void;
   readonly replaceAll: () => void;
+  readonly dismissNotice: () => void;
 }
 
 export interface FindNavigation {
@@ -173,12 +200,16 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   const [matches, setMatches] = useState<readonly SearchMatch[]>([]);
   const [current, setCurrent] = useState(-1);
   const [pending, setPending] = useState(false);
-  const [skipped, setSkipped] = useState<number | null>(null);
+  const [skipped, setSkipped] = useState<Skipped | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
   const [listOpen, setListOpen] = useState(false);
   const [focusTick, setFocusTick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
   const client = useRef<SearchClient | null>(null);
+  const disconnect = useRef<(() => void) | null>(null);
+  /** The library document names last indexed, re-sent when the Worker restarts. */
+  const documentsRef = useRef<readonly DocumentName[]>([]);
   const requestId = useRef(0);
   const currentId = useRef<string | null>(null);
   const nav = useRef(navigation);
@@ -205,13 +236,44 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   useEffect(() => cancelAnnounce, [cancelAnnounce]);
 
   // -- the worker ------------------------------------------------------------
-  useEffect(() => {
-    const c = createSearchClient();
-    client.current = c;
-    const unsubscribe = c.subscribe((response: SearchResponse) => {
-      if (response.id !== requestId.current) return; // a stale answer
+  const runQuery = useCallback(() => {
+    const c = client.current;
+    if (c === null) return;
+    requestId.current += 1;
+    setPending(true);
+    c.post({
+      type: 'query',
+      id: requestId.current,
+      query: latest.current.query,
+      options: latest.current.options,
+    });
+  }, []);
+  const gdRef = useRef(gd);
+  gdRef.current = gd;
+
+  const onClientEvent = useCallback(
+    (event: SearchClientEvent) => {
+      if (event.type === 'worker-error') {
+        // The Worker died. The last results stay on screen; matching never moves to the
+        // main thread. A restarted Worker has no index: send it again and re-run.
+        setPending(false);
+        if (event.restarted) {
+          if (latest.current.open) {
+            client.current?.post({
+              type: 'reset',
+              snapshot: buildSearchSnapshot(gdRef.current, documentsRef.current),
+            });
+            runQuery();
+          }
+          setNotice('Find restarted after an error; results refreshed.');
+        } else {
+          setNotice('Find stopped after repeated errors. Close and reopen Find to try again.');
+        }
+        return;
+      }
+      if (event.id !== requestId.current) return; // a stale answer
       setPending(false);
-      const list = response.matches;
+      const list = event.matches;
       setMatches(list);
       // Keep the same match current across a re-query when it survived; else clamp.
       const kept =
@@ -229,33 +291,35 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       if (latest.current.query.trim() !== '') {
         announceCount(counterText(list.length, next, latest.current.query));
       }
-    });
-    return () => {
+    },
+    [announceCount, runQuery],
+  );
+  /** Create the client (once on mount, again after it stopped). */
+  const connect = useCallback(() => {
+    disconnect.current?.();
+    const c = createSearchClient();
+    client.current = c;
+    const unsubscribe = c.subscribe(onClientEvent);
+    disconnect.current = () => {
       unsubscribe();
       c.dispose();
-      client.current = null;
+      if (client.current === c) client.current = null;
+      disconnect.current = null;
     };
-  }, [announceCount]);
-
-  const runQuery = useCallback(() => {
-    const c = client.current;
-    if (c === null) return;
-    requestId.current += 1;
-    setPending(true);
-    c.post({
-      type: 'query',
-      id: requestId.current,
-      query: latest.current.query,
-      options: latest.current.options,
-    });
-  }, []);
+  }, [onClientEvent]);
+  useEffect(() => {
+    connect();
+    return () => {
+      disconnect.current?.();
+    };
+  }, [connect]);
 
   // -- the index: full build on open, incremental while open (FIND-03) ------
   useEffect(() => {
     if (!open) return undefined;
     const c = client.current;
     if (c === null) return undefined;
-    c.post({ type: 'reset', snapshot: buildSearchSnapshot(gd) });
+    c.post({ type: 'reset', snapshot: buildSearchSnapshot(gd, documentsRef.current) });
     runQuery();
 
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -267,7 +331,7 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       timer = null;
       if (sheetsDirty) {
         // Sheet order feeds every entry's ordinal: rebuild.
-        c.post({ type: 'reset', snapshot: buildSearchSnapshot(gd) });
+        c.post({ type: 'reset', snapshot: buildSearchSnapshot(gd, documentsRef.current) });
       } else {
         const tables = [];
         for (const id of changed) {
@@ -327,9 +391,10 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
         for (const doc of lists.flat()) {
           if (doc.id !== docId) byId.set(doc.id, { id: doc.id, title: doc.title });
         }
+        documentsRef.current = [...byId.values()];
         client.current?.post({
           type: 'setDocuments',
-          documents: documentEntriesOf([...byId.values()]),
+          documents: documentEntriesOf(documentsRef.current),
         });
         runQuery();
       })
@@ -359,8 +424,6 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   }, [docId, query]);
 
   // -- navigation (FIND-07) --------------------------------------------------
-  const gdRef = useRef(gd);
-  gdRef.current = gd;
   const step = useCallback(
     (index: number, reveal = true) => {
       const list = latest.current.matches;
@@ -401,11 +464,16 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   );
 
   // -- open / close (FIND-01, FIND-09) ---------------------------------------
-  const openBar = useCallback((opts: { replace?: boolean } = {}) => {
-    setOpen(true);
-    if (opts.replace === true) setReplaceShownState(true);
-    setFocusTick((t) => t + 1);
-  }, []);
+  const openBar = useCallback(
+    (opts: { replace?: boolean } = {}) => {
+      // A client that stopped after repeated Worker errors is replaced on the next open.
+      if (client.current === null || client.current.stopped) connect();
+      setOpen(true);
+      if (opts.replace === true) setReplaceShownState(true);
+      setFocusTick((t) => t + 1);
+    },
+    [connect],
+  );
   const close = useCallback(() => {
     if (!latest.current.open) return;
     const { matches: list, current: index } = latest.current;
@@ -433,10 +501,17 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   );
 
   // -- replace (FIND-08) -----------------------------------------------------
-  type Outcome = 'replaced' | 'skipped' | 'stale';
+  // Replace rewrites exact matches only. With fuzzy on (the default, FIND-05) a
+  // near miss is something Find *found*, not something the person asked to
+  // change: "cat" → "dog" must not turn "hat" into "dog". Near misses are
+  // counted and left alone, like read-only matches.
+  // TODO(richtext): swap setCellText for the mark-preserving Replace op once
+  // the text algebra lands; today marks are dropped, as in the Wave 1 editor.
+  type Outcome = 'replaced' | 'readOnly' | 'near' | 'stale';
   const replaceOne = useCallback(
     (match: SearchMatch, text: string): Outcome => {
-      if (match.readOnly || match.target.kind !== 'cell') return 'skipped';
+      if (match.readOnly || match.target.kind !== 'cell') return 'readOnly';
+      if (match.distance > 0) return 'near';
       const { tableId, rowId, colId } = match.target;
       const table = tableMap(gd, tableId);
       if (table === null) return 'stale';
@@ -465,39 +540,44 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
     const match = list[index];
     if (match === undefined) return;
     const outcome = replaceOne(match, replacement);
-    setSkipped(outcome === 'skipped' ? 1 : 0);
+    // The re-index drops a rewritten match, so its index steps onto the next one by itself;
+    // a skipped match stays, so step past it (before recording what was skipped: a step clears it).
+    if ((outcome === 'readOnly' || outcome === 'near') && list.length > 1) step(index + 1);
+    setSkipped({ readOnly: outcome === 'readOnly' ? 1 : 0, near: outcome === 'near' ? 1 : 0 });
     announce(
       outcome === 'replaced'
         ? `Replaced ${describeMatch(gd, match)}`
-        : outcome === 'skipped'
+        : outcome === 'readOnly'
           ? `Skipped ${describeMatch(gd, match)}: it is not editable`
-          : 'Nothing replaced',
+          : outcome === 'near'
+            ? `Left ${describeMatch(gd, match)} alone: a near match, not an exact one`
+            : 'Nothing replaced',
     );
-    // The re-index drops the rewritten match; keeping the index steps onto the next one.
-    if (outcome === 'skipped' && list.length > 1) step(index + 1);
   }, [editable, gd, replacement, replaceOne, step]);
   const replaceAll = useCallback(() => {
     if (!editable) return;
     const list = latest.current.matches;
     if (list.length === 0) return;
     let replaced = 0;
-    let skippedCount = 0;
+    const left = { readOnly: 0, near: 0 };
     // One transaction: one undo step, one sync message.
     gd.doc.transact(() => {
       for (const match of list) {
         const outcome = replaceOne(match, replacement);
         if (outcome === 'replaced') replaced += 1;
-        else if (outcome === 'skipped') skippedCount += 1;
+        else if (outcome === 'readOnly') left.readOnly += 1;
+        else if (outcome === 'near') left.near += 1;
       }
     }, gd.origin);
-    setSkipped(skippedCount);
-    const locale = activeLocale();
+    setSkipped(left);
+    const detail = skippedText(left);
     announce(
-      `Replaced ${formatNumber(locale, replaced)}${
-        skippedCount > 0 ? `, skipped ${formatNumber(locale, skippedCount)} not editable` : ''
-      }`,
+      `Replaced ${formatNumber(activeLocale(), replaced)}${detail === '' ? '' : `, ${detail}`}`,
     );
   }, [editable, gd, replacement, replaceOne]);
+  const dismissNotice = useCallback(() => {
+    setNotice(null);
+  }, []);
 
   const state = useMemo<FindState>(
     () => ({
@@ -510,9 +590,22 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       current,
       pending,
       skipped,
+      notice,
       listOpen,
     }),
-    [open, replaceShown, query, replacement, options, matches, current, pending, skipped, listOpen],
+    [
+      open,
+      replaceShown,
+      query,
+      replacement,
+      options,
+      matches,
+      current,
+      pending,
+      skipped,
+      notice,
+      listOpen,
+    ],
   );
   const actions = useMemo<FindActions>(
     () => ({
@@ -528,8 +621,20 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       goTo,
       replaceCurrent,
       replaceAll,
+      dismissNotice,
     }),
-    [openBar, close, setQuery, setOption, next, previous, goTo, replaceCurrent, replaceAll],
+    [
+      openBar,
+      close,
+      setQuery,
+      setOption,
+      next,
+      previous,
+      goTo,
+      replaceCurrent,
+      replaceAll,
+      dismissNotice,
+    ],
   );
   return { state, actions, inputRef, focusTick };
 }

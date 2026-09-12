@@ -54,7 +54,7 @@ function cell(
 const ids = (matches: readonly SearchMatch[]) => matches.map((m) => m.entryId);
 
 describe('graphemes', () => {
-  test('SORT-03 splits Tamil and Hindi text into grapheme clusters, never code units', () => {
+  test('SORT-03 (partial: matcher only) splits Tamil and Hindi text into grapheme clusters, never code units', () => {
     // Tamil: a consonant with its pulli (virama) or vowel sign is one cluster (UAX #29).
     expect(graphemes('சிங்கப்பூர்')).toEqual(['சி', 'ங்', 'க', 'ப்', 'பூ', 'ர்']);
     expect('சிங்கப்பூர்'.length).toBe(11);
@@ -67,7 +67,7 @@ describe('graphemes', () => {
     expect(graphemes('👩‍💻x')).toEqual(['👩‍💻', 'x']);
   });
 
-  test('SORT-03 edit distance counts clusters: one typo in a conjunct is one edit', () => {
+  test('SORT-03 (partial: matcher only) edit distance counts clusters: one typo in a conjunct is one edit', () => {
     expect(editDistance(graphemes('क्षत्रिय'), graphemes('क्षत्रीय'), 2)).toBe(1);
     expect(editDistance(graphemes('singapore'), graphemes('sngapore'), 2)).toBe(1);
     expect(editDistance(graphemes('singapore'), graphemes('sngapor'), 2)).toBe(2);
@@ -254,7 +254,7 @@ describe('matcher', () => {
     expect(ids(search(withDoc, 'col:Name Singapore'))).not.toContain('document/d1');
   });
 
-  test('SORT-03 fuzzy matching operates on Tamil and Hindi clusters', () => {
+  test('SORT-03 (partial: matcher only) fuzzy matching operates on Tamil and Hindi clusters', () => {
     const list = [cell('0', 'சிங்கப்பூர்'), cell('1', 'क्षत्रिय'), cell('2', 'मुंबई')];
     // One cluster wrong in the Tamil word (ங் → ங).
     expect(ids(search(list, 'சிஙகப்பூர்'))).toEqual(['0']);
@@ -286,6 +286,8 @@ describe('snapshot', () => {
     const t = tableEntries(gd, tableId)!;
     expect(t.sheetId).toBe(sheetId);
     expect(t.entries.map((e) => e.texts.map((x) => `${x.field}:${x.text}`))).toEqual([
+      ['header:Column 1'],
+      ['header:Column 2'],
       ['value:Base camp'],
       ['value:S$ 1,200'],
       ['formula:=Sum(B5:B7)', 'reference:B5:B7'],
@@ -295,13 +297,31 @@ describe('snapshot', () => {
         'reference:@"Base camp".Name',
       ],
     ]);
-    expect(t.entries.map((e) => [e.rowIndex, e.colIndex, e.format, e.readOnly])).toEqual([
+    const cells = t.entries.filter((e) => e.kind === 'cell');
+    expect(cells.map((e) => [e.rowIndex, e.colIndex, e.format, e.readOnly])).toEqual([
       [0, 0, 'text', false],
       [0, 1, 'currency', false],
       [1, 0, 'text', false],
       [2, 0, 'text', false],
     ]);
-    expect(t.entries[0]?.id).toBe(`${tableId}/${t.entries[0]!.rowId}:${t.entries[0]!.colId}`);
+    expect(cells[0]?.id).toBe(`${tableId}/${cells[0]!.rowId}:${cells[0]!.colId}`);
+    // DOC-06: header cells are addressable, so Find reaches them; read-only until column rename lands.
+    const headers = t.entries.filter((e) => e.kind === 'header');
+    expect(headers.map((h) => [h.colIndex, h.colLabel, h.readOnly, h.id])).toEqual([
+      [0, 'Column 1', true, `${tableId}/header:${headers[0]!.colId}`],
+      [1, 'Column 2', true, `${tableId}/header:${headers[1]!.colId}`],
+    ]);
+    const found = search(t.entries.map(indexEntry), 'Column 2');
+    expect(found.map((m) => [m.target.kind, m.field, m.distance])).toEqual([
+      ['header', 'header', 0],
+      ['header', 'header', 1],
+    ]);
+    // `col:` reaches headers too; `is:` is about values and leaves them out.
+    const exact = { fuzzy: false, formulas: true, documents: true };
+    expect(
+      search(t.entries.map(indexEntry), 'col:"Column 1" column', exact).map((m) => m.target.kind),
+    ).toEqual(['header']);
+    expect(search(t.entries.map(indexEntry), 'is:text column')).toEqual([]);
     expect(tableEntries(gd, 'nope')).toBeNull();
     expect(cellTexts('=Sum(')).toEqual([expect.objectContaining({ field: 'formula' })]);
   });
@@ -360,7 +380,12 @@ describe('snapshot', () => {
       columns.get(1).set('derived', true);
     });
     const t = tableEntries(gd, tableId)!;
-    expect(t.entries.map((e) => e.readOnly)).toEqual([false, true, false, false]);
+    expect(t.entries.filter((e) => e.kind === 'cell').map((e) => e.readOnly)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
   });
 
   test('FIND-08 a column `source` of entered stays editable; derived, linked and pulled sources are read-only', () => {
@@ -372,7 +397,12 @@ describe('snapshot', () => {
       columns.get(1).set('source', 'pulled');
     });
     const t = tableEntries(gd, tableId)!;
-    expect(t.entries.map((e) => e.readOnly)).toEqual([false, true, false, false]);
+    expect(t.entries.filter((e) => e.kind === 'cell').map((e) => e.readOnly)).toEqual([
+      false,
+      true,
+      false,
+      false,
+    ]);
   });
 });
 
@@ -387,7 +417,7 @@ describe('engine', () => {
     engine.handle({ type: 'reset', snapshot: buildSearchSnapshot(gd) });
     const options = { fuzzy: true, formulas: true, documents: true };
     const q = (id: number) => engine.handle({ type: 'query', id, query: 'Singapore', options });
-    expect(q(1)).toMatchObject({ type: 'results', id: 1, indexed: 1 });
+    expect(q(1)).toMatchObject({ type: 'results', id: 1, indexed: 2 }); // one header, one cell
     expect(q(1)?.matches).toHaveLength(1);
 
     const t2 = createTable(gd, { sheetId, at: { col: 1, row: 20 }, columns: 1, rows: 1 });
@@ -414,7 +444,7 @@ describe('engine', () => {
       ],
     });
     expect(q(4)?.matches.map((m) => m.target.kind)).toEqual(['cell', 'document']);
-    expect(engine.size()).toBe(2);
+    expect(engine.size()).toBe(3); // t2's header and cell, plus the document
   });
 
   test('FIND-08 replaceInText rewrites the matched span in clusters and leaves an empty span alone', () => {

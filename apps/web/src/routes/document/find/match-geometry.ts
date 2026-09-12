@@ -6,8 +6,10 @@
  */
 import {
   cellAddress,
+  columnLetter,
   dataGeometry,
   graphRecord,
+  headerRow,
   LATTICE,
   tableMap,
   tableRecord,
@@ -38,6 +40,22 @@ export function matchBounds(gd: GedeDoc, match: SearchMatch): PixelBounds | null
       height: (geometry.rowHeights[rowIndex] ?? 1) * LATTICE.row,
     };
   }
+  if (target.kind === 'header') {
+    const table = tableMap(gd, target.tableId);
+    if (table === null) return null;
+    const record = tableRecord(table);
+    const colIndex = record.columns.findIndex((c) => c.id === target.colId);
+    if (colIndex < 0) return null;
+    const geometry = dataGeometry(table, record);
+    let col = geometry.origin.col;
+    for (let i = 0; i < colIndex; i += 1) col += geometry.columnWidths[i] ?? 1;
+    return {
+      x: col * LATTICE.col,
+      y: headerRow(record) * LATTICE.row,
+      width: (geometry.columnWidths[colIndex] ?? 1) * LATTICE.col,
+      height: LATTICE.row,
+    };
+  }
   if (target.kind === 'graph') {
     const map = gd.graphs.get(target.graphId);
     if (map === undefined) return null;
@@ -59,6 +77,15 @@ export function describeMatch(gd: GedeDoc, match: SearchMatch): string {
     const table = tableMap(gd, target.tableId);
     const address = table === null ? null : cellAddress(table, target.rowId, target.colId);
     return address === null ? target.tableTitle : `${address} in ${target.tableTitle}`;
+  }
+  if (target.kind === 'header') {
+    const table = tableMap(gd, target.tableId);
+    const record = table === null ? null : tableRecord(table);
+    const colIndex = record?.columns.findIndex((c) => c.id === target.colId) ?? -1;
+    if (record === null || colIndex < 0) return `${target.colLabel} header in ${target.tableTitle}`;
+    let col = record.gridCol;
+    for (let i = 0; i < colIndex; i += 1) col += record.columns[i]?.width ?? 1;
+    return `${columnLetter(col)}${String(headerRow(record) + 1)} header in ${target.tableTitle}`;
   }
   if (target.kind === 'graph') return `${target.title === '' ? 'Graph' : target.title} graph`;
   return `${target.title} (workscape)`;

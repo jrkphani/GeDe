@@ -29,7 +29,7 @@ import { resolveFormat } from './format.js';
 import type { FormatKind } from './query.js';
 
 /** Which text of an entry matched. */
-export type SearchField = 'value' | 'formula' | 'reference' | 'dimension' | 'name';
+export type SearchField = 'value' | 'formula' | 'reference' | 'header' | 'dimension' | 'name';
 
 export interface SearchText {
   readonly field: SearchField;
@@ -55,6 +55,26 @@ export interface CellEntry {
   readonly texts: readonly SearchText[];
 }
 
+/**
+ * A column header (DOC-06: header cells carry addresses, so Find reaches them
+ * like any cell). Read-only until a column-rename mutation exists —
+ * TODO(grid branch): rewrite through `setColumnLabel` once it lands.
+ */
+export interface HeaderEntry {
+  readonly kind: 'header';
+  /** `${tableId}/header:${colId}` */
+  readonly id: string;
+  readonly sheetId: Id;
+  readonly sheetOrdinal: number;
+  readonly tableId: Id;
+  readonly tableTitle: string;
+  readonly colId: Id;
+  readonly colIndex: number;
+  readonly colLabel: string;
+  readonly readOnly: true;
+  readonly texts: readonly SearchText[];
+}
+
 export interface GraphEntry {
   readonly kind: 'graph';
   readonly id: string;
@@ -75,12 +95,13 @@ export interface DocumentEntry {
   readonly texts: readonly SearchText[];
 }
 
-export type SearchEntry = CellEntry | GraphEntry | DocumentEntry;
+export type SearchEntry = CellEntry | HeaderEntry | GraphEntry | DocumentEntry;
 
 export interface TableEntries {
   readonly tableId: Id;
   readonly sheetId: Id;
-  readonly entries: readonly CellEntry[];
+  /** Header entries first (one per labelled column), then cells in row, column order. */
+  readonly entries: readonly (CellEntry | HeaderEntry)[];
 }
 
 export interface SearchSnapshot {
@@ -155,6 +176,25 @@ function tableEntriesOf(
   rowsArray(table)
     .toArray()
     .forEach((rowId, i) => rowIndex.set(rowId, i));
+  const headers: HeaderEntry[] = [];
+  columns.forEach((column, ci) => {
+    const colId = readString(column, 'id');
+    const colLabel = readString(column, 'label');
+    if (colLabel === '') return;
+    headers.push({
+      kind: 'header',
+      id: `${tableId}/header:${colId}`,
+      sheetId,
+      sheetOrdinal,
+      tableId,
+      tableTitle,
+      colId,
+      colIndex: ci,
+      colLabel,
+      readOnly: true,
+      texts: [text('header', colLabel)],
+    });
+  });
   const entries: CellEntry[] = [];
   cellsMap(table).forEach((content, key) => {
     const { rowId, colId } = splitCellKey(key);
@@ -184,7 +224,7 @@ function tableEntriesOf(
     });
   });
   entries.sort((a, b) => a.rowIndex - b.rowIndex || a.colIndex - b.colIndex);
-  return { tableId, sheetId, entries };
+  return { tableId, sheetId, entries: [...headers, ...entries] };
 }
 
 /** Index one table; null when it no longer exists. */
