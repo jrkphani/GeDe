@@ -18,9 +18,8 @@ import {
   tableMap,
   tableUnitBounds,
   type GedeDoc,
-  type Id,
 } from '../doc/index.js';
-import { cellKey } from '../ids.js';
+import { cellKey, type CellKey, type Id } from '../ids.js';
 import { commitCellText } from '../engine/commit.js';
 import { UNSAFE_TEXT_ON_FILL, readableTextColour } from './contrast.js';
 import {
@@ -264,9 +263,9 @@ describe('INSP-05 rules as a Worker service', () => {
       colId: 'c',
       rules,
       cells: [
-        { key: 'r:c', text: 'overdue' },
-        { key: 's:c', text: 'a' },
-        { key: 'u:c', text: 'long enough' },
+        { key: 'r:c' as CellKey, text: 'overdue' },
+        { key: 's:c' as CellKey, text: 'a' },
+        { key: 'u:c' as CellKey, text: 'long enough' },
       ],
     };
     expect(isRulesRequest(request)).toBe(true);

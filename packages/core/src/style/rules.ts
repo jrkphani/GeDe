@@ -140,15 +140,19 @@ export interface RuleOutcome {
  */
 export function evaluateRules(rules: readonly ConditionalRule[], text: string): RuleOutcome | null {
   for (const rule of rules) {
-    if (!ruleMatches(rule, text)) continue;
-    return {
-      rule,
-      fill: rule.style.fill,
-      textColour: readableTextColour(rule.style.fill, rule.style.textColour),
-      mark: rule.style.mark,
-    };
+    if (ruleMatches(rule, text)) return ruleOutcome(rule);
   }
   return null;
+}
+
+/** The outcome of a rule known to have matched (the Worker answers with rule ids; this rebuilds the style). */
+export function ruleOutcome(rule: ConditionalRule): RuleOutcome {
+  return {
+    rule,
+    fill: rule.style.fill,
+    textColour: readableTextColour(rule.style.fill, rule.style.textColour),
+    mark: rule.style.mark,
+  };
 }
 
 // ---------------------------------------------------------------------------

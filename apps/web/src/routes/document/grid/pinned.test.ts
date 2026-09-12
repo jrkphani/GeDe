@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { LATTICE, type TableRecord } from '@gede/core';
+import { DEFAULT_TABLE_LOOK, LATTICE, type TableRecord } from '@gede/core';
 
 import { frozenColumns, frozenWidthPx, pinnedPanelOffset } from './pinned.js';
 
@@ -15,6 +15,8 @@ const col = (id: string, width = 1, hidden = false) => ({
   pull: null,
   format: 'auto' as const,
   formatOpts: {},
+  appearance: {},
+  rules: [],
 });
 
 /** A table at column 2 (x = 320 px) with columns of 1, 2 and 1 units: 640 px wide. */
@@ -30,6 +32,9 @@ const table = (frozen: number, columns = [col('a'), col('b', 2), col('c')]): Tab
   headerRows: 1,
   footerRows: 0,
   outlineColumn: null,
+  look: DEFAULT_TABLE_LOOK,
+  z: 0,
+  pinned: false,
 });
 
 describe('pinned panel (GRID-10)', () => {

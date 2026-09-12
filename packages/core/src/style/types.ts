@@ -33,8 +33,8 @@ export const TABLE_STYLE_LABELS: Readonly<Record<TableStyle, string>> = {
 };
 
 /** Table outline weights: the PRD's hairline / strong / accent (INSP-05) plus none. */
-export const TABLE_OUTLINES = ['none', 'hairline', 'strong', 'accent'] as const;
-export type TableOutline = (typeof TABLE_OUTLINES)[number];
+export const OUTLINE_WEIGHTS = ['none', 'hairline', 'strong', 'accent'] as const;
+export type OutlineWeight = (typeof OUTLINE_WEIGHTS)[number];
 
 /** Gridline density (PRD §7: Off, Light, High Contrast), per table. */
 export const GRIDLINE_DENSITIES = ['off', 'light', 'contrast'] as const;
@@ -59,7 +59,7 @@ export interface TableLook {
    * moves no cell address (RESP-01, non-negotiable 3).
    */
   readonly captionShown: boolean;
-  readonly outline: TableOutline;
+  readonly outline: OutlineWeight;
   readonly gridlines: GridlineDensity;
   readonly alternating: boolean;
 }
@@ -215,8 +215,8 @@ function oneOf<T extends string | number>(list: readonly T[], value: unknown): v
 export function isTableStyle(value: unknown): value is TableStyle {
   return oneOf(TABLE_STYLES, value);
 }
-export function isTableOutline(value: unknown): value is TableOutline {
-  return oneOf(TABLE_OUTLINES, value);
+export function isOutlineWeight(value: unknown): value is OutlineWeight {
+  return oneOf(OUTLINE_WEIGHTS, value);
 }
 export function isGridlineDensity(value: unknown): value is GridlineDensity {
   return oneOf(GRIDLINE_DENSITIES, value);

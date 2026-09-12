@@ -44,10 +44,17 @@ export const IDLE: GridState = { selection: null, editing: null };
 
 export type Direction = 'up' | 'down' | 'left' | 'right';
 
-/** What the machine needs to know about a table to traverse it; hidden columns are skipped. */
+/**
+ * What the machine needs to know about a table to traverse it; hidden
+ * columns are skipped, and so are the cells a merged span covers (MENU-04):
+ * `covered` maps each covered cell's `rowId:colId` to its anchor's, and a
+ * move that lands on one lands on the anchor instead — or, from the anchor
+ * itself, carries on past its own span.
+ */
 export interface TraversalTable {
   readonly rows: readonly Id[];
   readonly columns: readonly { readonly id: Id; readonly hidden: boolean }[];
+  readonly covered?: ReadonlyMap<string, string> | undefined;
 }
 
 export type MoveResult =
@@ -99,6 +106,33 @@ export function selectedCell(selection: Selection | null): CellSelection | null 
  * from the last row, or right from the last cell, asks for a new row.
  */
 export function nextCell(
+  table: TraversalTable,
+  from: { readonly rowId: Id; readonly colId: Id },
+  direction: Direction,
+): MoveResult {
+  const covered = table.covered;
+  if (covered === undefined || covered.size === 0) return step(table, from, direction);
+  // MENU-04: a covered landing resolves to its anchor; from the anchor itself the move
+  // carries on past the span. Bounded by the table's cell count, so it always ends.
+  const origin = `${from.rowId}:${from.colId}`;
+  const anchorOfOrigin = covered.get(origin) ?? origin;
+  let cursor = from;
+  for (let guard = table.rows.length * table.columns.length + 1; guard > 0; guard -= 1) {
+    const result = step(table, cursor, direction);
+    if (result.kind !== 'cell') return result;
+    const key = `${result.rowId}:${result.colId}`;
+    const anchor = covered.get(key);
+    if (anchor === undefined) return result;
+    if (anchor !== anchorOfOrigin) {
+      const [rowId, colId] = anchor.split(':');
+      return rowId === undefined || colId === undefined ? result : { kind: 'cell', rowId, colId };
+    }
+    cursor = result;
+  }
+  return { kind: 'stay' };
+}
+
+function step(
   table: TraversalTable,
   from: { readonly rowId: Id; readonly colId: Id },
   direction: Direction,

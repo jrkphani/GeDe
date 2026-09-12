@@ -40,7 +40,7 @@ import { readRules, type ConditionalRule } from '../style/rules.js';
 import {
   DEFAULT_TABLE_LOOK,
   isGridlineDensity,
-  isTableOutline,
+  isOutlineWeight,
   isTableStyle,
   readAppearance,
   type Appearance,
@@ -481,7 +481,7 @@ export function tableLook(map: TableMap): TableLook {
     titleShown: readBoolean(map, 'titleShown', DEFAULT_TABLE_LOOK.titleShown),
     caption: readString(map, 'caption', DEFAULT_TABLE_LOOK.caption),
     captionShown: readBoolean(map, 'captionShown', DEFAULT_TABLE_LOOK.captionShown),
-    outline: isTableOutline(outline) ? outline : DEFAULT_TABLE_LOOK.outline,
+    outline: isOutlineWeight(outline) ? outline : DEFAULT_TABLE_LOOK.outline,
     gridlines: isGridlineDensity(gridlines) ? gridlines : DEFAULT_TABLE_LOOK.gridlines,
     alternating: readBoolean(map, 'alternating', DEFAULT_TABLE_LOOK.alternating),
   };
