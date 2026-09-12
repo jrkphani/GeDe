@@ -152,16 +152,24 @@ export function RichCellEditor({
       if (view === null) return;
       if (then !== 'cancel') {
         const rich = bound ? fragmentToRich(fragment) : richOf(view.state);
-        release();
         if (!bound) latest.current.onCommitRich?.(rich);
+        // The commit's own write (a formula replacing the fragment, an emptied
+        // cell deleted) lands while the session is still capturing, so it merges
+        // into the same step as the keystrokes: one ⌘Z, one edit (KEYS-03).
         latest.current.onCommit(plainText(rich), then);
+        release();
         return;
       }
       if (shared !== null) {
         // Escape undoes what this editor did, back to the depth at open; a
         // collaborator's concurrent edits to the same cell are theirs and stay.
-        while (shared.undoStack.length > depth) shared.undo();
-        shared.clear(false, true);
+        // The undone edit must not come back through ⌘⇧Z, so the redo stack goes —
+        // only when there was something to undo: an untouched edit leaves the
+        // redo history from before the editor opened alone.
+        if (shared.undoStack.length > depth) {
+          while (shared.undoStack.length > depth) shared.undo();
+          shared.clear(false, true);
+        }
       } else if (bound) {
         const manager = (
           yUndoPluginKey.getState(view.state) as { undoManager: Y.UndoManager } | undefined

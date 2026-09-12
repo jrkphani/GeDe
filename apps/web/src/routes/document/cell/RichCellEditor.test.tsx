@@ -3,7 +3,9 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   cellFragment,
+  cellKey,
   cellRich,
+  cellsMap,
   createSheet,
   createTable,
   createUndoManager,
@@ -361,11 +363,19 @@ describe('RichCellEditor with the document undo manager (KEYS-03)', () => {
     vi.restoreAllMocks();
   });
 
-  function documentCell(text: string): {
+  function documentCell(
+    text: string,
+    options: { captureTimeout?: number } = {},
+  ): {
     gd: GedeDoc;
     undo: Y.UndoManager;
     fragment: Y.XmlFragment;
+    /** The fragment the cell holds now (an undo re-creates it). */
+    fragmentNow: () => Y.XmlFragment;
     rich: () => RichDoc;
+    /** The grid's commit path: `setCellText` under the document origin, then the command settles. */
+    commit: (value: string) => void;
+    stored: () => unknown;
   } {
     const gd = openDocument(new Y.Doc());
     const sheetId = createSheet(gd);
@@ -373,7 +383,7 @@ describe('RichCellEditor with the document undo manager (KEYS-03)', () => {
     const record = tableById(gd, tableId)!;
     const rowId = record.rows[0]!;
     const colId = record.columns[0]!.id;
-    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const undo = createUndoManager(gd, { captureTimeout: options.captureTimeout ?? 0 });
     setCellText(gd, tableId, rowId, colId, text);
     undo.stopCapturing();
     const table = tableMap(gd, tableId)!;
@@ -381,15 +391,22 @@ describe('RichCellEditor with the document undo manager (KEYS-03)', () => {
       gd,
       undo,
       fragment: cellFragment(table, rowId, colId)!,
+      fragmentNow: () => cellFragment(table, rowId, colId)!,
       rich: () => cellRich(table, rowId, colId),
+      commit: (value) => {
+        setCellText(gd, tableId, rowId, colId, value);
+        undo.stopCapturing();
+      },
+      stored: () => cellsMap(table).get(cellKey(rowId, colId)),
     };
   }
 
   function mountShared(
     cell: ReturnType<typeof documentCell>,
     seed: RichCellEditorProps['seed'] = { kind: 'existing' },
+    commit?: (value: string) => void,
   ) {
-    const onCommit = vi.fn();
+    const onCommit = vi.fn(commit);
     const onCancel = vi.fn();
     const utils = render(
       <RichCellEditor
@@ -474,6 +491,64 @@ describe('RichCellEditor with the document undo manager (KEYS-03)', () => {
     expect(cell.undo.undoStack).toHaveLength(1);
     fireEvent.keyDown(h.el, key('KeyZ', { shiftKey: true }));
     expect(marksOf(cell.fragment)).toEqual(['bold']);
+    h.unmount();
+  });
+
+  test('KEYS-03 a formula typed over a marked cell commits as one step: ⌘Z brings the text and its marks back', () => {
+    // The real capture timeout: the commit's own write (the fragment replaced by a
+    // formula string) must merge into the session, not ride on a 0 ms window.
+    const cell = documentCell('hello', { captureTimeout: 500 });
+    const bolded = mountShared(cell);
+    selectAll(bolded.el);
+    fireEvent.keyDown(bolded.el, key('KeyB'));
+    fireEvent.keyDown(bolded.el, { code: 'Enter', key: 'Enter' });
+    bolded.unmount();
+    expect(marksOf(cell.fragment)).toEqual(['bold']);
+    expect(cell.undo.undoStack).toHaveLength(2);
+    // Type a formula over it; the grid commits through `setCellText`, which stores a string.
+    const h = mountShared(cell, { kind: 'overwrite', text: '=' }, cell.commit);
+    fireEvent.keyDown(h.el, { code: 'Enter', key: 'Enter' });
+    expect(cell.stored()).toBe('=');
+    expect(cell.undo.undoStack).toHaveLength(3);
+    cell.undo.undo();
+    expect(cell.stored()).toBeInstanceOf(Y.XmlFragment);
+    expect(plainText(cell.rich())).toBe('hello');
+    expect(cell.rich()).toEqual(docNode([paragraphNode([textNode('hello', [{ type: 'bold' }])])]));
+    expect(cell.undo.captureTimeout).toBe(500);
+    h.unmount();
+  });
+
+  test('KEYS-03 emptying a cell and committing is one step', () => {
+    const cell = documentCell('gone', { captureTimeout: 500 });
+    const h = mountShared(cell, { kind: 'existing' }, cell.commit);
+    selectAll(h.el);
+    fireEvent.keyDown(h.el, { code: 'Backspace', key: 'Backspace' });
+    fireEvent.keyDown(h.el, { code: 'Enter', key: 'Enter' });
+    expect(cell.stored()).toBeUndefined();
+    expect(cell.undo.undoStack).toHaveLength(2);
+    cell.undo.undo();
+    expect(plainText(cell.rich())).toBe('gone');
+    h.unmount();
+    // Closing the editor untracks only its own origin: the grid's writes still land on the stack.
+    expect(cell.undo.trackedOrigins.has(cell.gd.origin)).toBe(true);
+    cell.commit('after');
+    expect(cell.undo.undoStack).toHaveLength(2);
+    expect(plainText(cell.rich())).toBe('after');
+  });
+
+  test('KEYS-03 Escape on an untouched edit leaves the redo history alone', () => {
+    const cell = documentCell('keep');
+    cell.commit('keep more');
+    cell.undo.undo();
+    expect(plainText(cell.rich())).toBe('keep');
+    expect(cell.undo.redoStack).toHaveLength(1);
+    // The undo re-created the fragment; bind to the one the cell holds now.
+    const h = mountShared({ ...cell, fragment: cell.fragmentNow() });
+    fireEvent.keyDown(h.el, { code: 'Escape', key: 'Escape' });
+    expect(h.onCancel).toHaveBeenCalledTimes(1);
+    expect(cell.undo.redoStack).toHaveLength(1);
+    cell.undo.redo();
+    expect(plainText(cell.rich())).toBe('keep more');
     h.unmount();
   });
 });

@@ -163,6 +163,11 @@ mark[data-highlight='slate'] {
   cursor: text;
 }
 .gd-rich-editor {
+  /* Fills the cell so a click anywhere in it lands in the editable; the lines sit
+     centred (auto margins, so more lines than fit overflow downwards, never up),
+     exactly where the text at rest sits, so opening does not move it. */
+  display: flex;
+  flex-direction: column;
   box-sizing: border-box;
   width: 100%;
   min-height: 100%;
@@ -173,4 +178,16 @@ mark[data-highlight='slate'] {
 }
 .gd-rich-editor p {
   margin: 0;
+}
+.gd-rich-editor p:first-child {
+  margin-top: auto;
+}
+.gd-rich-editor p:last-child {
+  margin-bottom: auto;
+}
+/* GRID-09: in a wrapped column the editor wraps as the text at rest does (the
+   Wave 1 textarea's `pre-wrap` rule, which the inner editable would otherwise override). */
+.gd-cell--wrap .gd-rich-editor {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
