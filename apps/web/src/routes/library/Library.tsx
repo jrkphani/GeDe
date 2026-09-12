@@ -1,25 +1,51 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
-import * as Collapsible from '@radix-ui/react-collapsible';
 import clsx from 'clsx';
 import {
+  Banner,
   Button,
+  Collapsible,
+  Dialog,
   EmptyState,
   Icon,
-  Menu,
+  SegmentedControl,
   Skeleton,
   TextField,
+  Toast,
   Wordmark,
   type IconName,
+  type MenuEntry,
 } from '@gede/ui';
 import { announce } from '../../announce.js';
-import { createDocument, listDocuments, type DocumentSummary } from '../../api/documents.js';
+import { ApiError } from '../../api/client.js';
+import {
+  createDocument,
+  deleteAllDocuments,
+  deleteDocument,
+  listDocuments,
+  permissionOf,
+  recoverAllDocuments,
+  recoverDocument,
+  type DocumentsView,
+  type DocumentSummary,
+} from '../../api/documents.js';
 import { useSession } from '../../auth/session.js';
-import { formatBytes, formatDate, useLocale } from '../../locale.js';
+import { collator } from '../../intl.js';
+import { useLocale } from '../../locale.js';
 import { useMediaQuery } from '../../use-media-query.js';
+import { AccountMenu } from './AccountMenu.js';
+import { LibraryTable } from './LibraryTable.js';
+import { ParticipantsSheet } from './ParticipantsSheet.js';
+import { filterByQuery, groupDocuments, orderDocuments, type SortKey } from './select.js';
+import { readSortPreference, writeSortPreference } from './sort-preference.js';
 
-export const LIBRARY_VIEWS = ['recents', 'browse', 'shared', 'deleted'] as const;
-export type LibraryView = (typeof LIBRARY_VIEWS)[number];
+export const LIBRARY_VIEWS = [
+  'recents',
+  'browse',
+  'shared',
+  'deleted',
+] as const satisfies readonly DocumentsView[];
+export type LibraryView = DocumentsView;
 
 const VIEW_META: Record<LibraryView, { label: string; icon: IconName }> = {
   recents: { label: 'Recents', icon: 'sheet' },
@@ -28,49 +54,51 @@ const VIEW_META: Record<LibraryView, { label: string; icon: IconName }> = {
   deleted: { label: 'Recently Deleted', icon: 'delete' },
 };
 
+const SORT_OPTIONS: { value: SortKey; label: string }[] = [
+  { value: 'name', label: 'Name' },
+  { value: 'date', label: 'Date' },
+];
+
 function isView(v: string | null): v is LibraryView {
   return v !== null && (LIBRARY_VIEWS as readonly string[]).includes(v);
-}
-
-/** LIB-01 views over one collection; LIB-04 search filters the active view by name. */
-export function selectDocuments(
-  all: readonly DocumentSummary[],
-  view: LibraryView,
-  query: string,
-): DocumentSummary[] {
-  const q = query.trim().toLocaleLowerCase();
-  const live = all.filter((d) => d.deletedAt === null || d.deletedAt === undefined);
-  let rows: DocumentSummary[];
-  switch (view) {
-    case 'recents':
-      rows = [...live].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
-      break;
-    case 'browse':
-      rows = [...live].sort((a, b) =>
-        a.title.localeCompare(b.title, undefined, { sensitivity: 'base' }),
-      );
-      break;
-    case 'shared':
-      rows = live
-        .filter((d) => d.sharedBy !== undefined || d.sharedWithOthers === true)
-        .sort(
-          (a, b) =>
-            (a.sharedBy ?? '').localeCompare(b.sharedBy ?? '') || a.title.localeCompare(b.title),
-        );
-      break;
-    case 'deleted':
-      rows = all
-        .filter((d) => typeof d.deletedAt === 'string')
-        .sort((a, b) => (b.deletedAt ?? '').localeCompare(a.deletedAt ?? ''));
-      break;
-  }
-  return q === '' ? rows : rows.filter((d) => d.title.toLocaleLowerCase().includes(q));
 }
 
 type LoadState =
   | { status: 'loading' }
   | { status: 'ready'; documents: DocumentSummary[] }
   | { status: 'error'; error: unknown };
+
+/** A background action failed: say what, and why, with the reference for support. */
+interface Failure {
+  cause: string;
+  remedy: string;
+  /** Re-run the action that failed, when it can simply be tried again. */
+  retry?: (() => void) | undefined;
+}
+
+function describeFailure(cause: string, err: unknown): Failure {
+  if (err instanceof ApiError) {
+    const ref = err.requestId !== undefined ? ` (ref ${err.requestId.slice(0, 6)})` : '';
+    if (err.status === 404)
+      return { cause, remedy: `This action is not available on the service yet${ref}.` };
+    if (err.status === 403)
+      return { cause, remedy: `You do not have permission to do that${ref}.` };
+    if (err.status === 409)
+      return { cause, remedy: `It is no longer in Recently Deleted${ref}. Refresh the view.` };
+    return {
+      cause,
+      remedy: `The service answered ${err.status} after ${err.attempts} ${err.attempts === 1 ? 'attempt' : 'attempts'}${ref}. Retry in a moment.`,
+    };
+  }
+  return { cause, remedy: 'Retry in a moment.' };
+}
+
+type Confirm = { kind: 'delete'; doc: DocumentSummary } | { kind: 'delete-all'; count: number };
+
+interface Undo {
+  title: string;
+  onUndo: () => void;
+}
 
 export function Library() {
   const session = useSession();
@@ -80,35 +108,62 @@ export function Library() {
   const view: LibraryView = isView(params.get('view'))
     ? (params.get('view') as LibraryView)
     : 'recents';
+  const user = session.state.status === 'signed-in' ? session.state.user : null;
+  const sub = user?.sub ?? '';
+
   const [query, setQuery] = useState('');
   const [load, setLoad] = useState<LoadState>({ status: 'loading' });
   const [creating, setCreating] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [sort, setSort] = useState<SortKey>(() => readSortPreference(sub));
+  const [busy, setBusy] = useState<string | null>(null);
+  const [failure, setFailure] = useState<Failure | null>(null);
+  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [sheetDoc, setSheetDoc] = useState<DocumentSummary | null>(null);
+  // MENU-05 / A11Y-01: the sheet and the confirm dialog hand focus back to what
+  // opened them. A toolbar button is still there when they close; a row menu
+  // item is not, so the row itself is the return point in that case.
+  const [opener, setOpener] = useState<HTMLElement | null>(null);
+  const rowElement = (id: string): HTMLElement | null =>
+    document.querySelector<HTMLElement>(`.gd-lib__row[data-id="${id}"]`);
+  const [undo, setUndo] = useState<Undo | null>(null);
   const narrow = useMediaQuery('(max-width: 899.98px)');
   const [navOpen, setNavOpen] = useState(false);
 
   const fetchDocuments = useCallback(() => {
     setLoad({ status: 'loading' });
-    listDocuments()
+    listDocuments(view)
       .then((documents) => {
         setLoad({ status: 'ready', documents });
       })
       .catch((error: unknown) => {
         setLoad({ status: 'error', error });
       });
-  }, []);
+  }, [view]);
 
   useEffect(() => {
     fetchDocuments();
+    setSelectedId(null);
   }, [fetchDocuments]);
+
+  // LIB-05: the sort choice follows the signed-in user.
+  useEffect(() => {
+    setSort(readSortPreference(sub));
+  }, [sub]);
 
   // Route errors render the catalogue page; the boundary is the router's.
   if (load.status === 'error') throw load.error;
 
-  const rows = useMemo(
-    () => (load.status === 'ready' ? selectDocuments(load.documents, view, query) : []),
-    [load, view, query],
-  );
+  const collate = useMemo(() => collator(locale), [locale]);
+  const groups = useMemo(() => {
+    if (load.status !== 'ready') return [];
+    const ordered = orderDocuments(filterByQuery(load.documents, query), view, sort, collate);
+    return groupDocuments(ordered, view, collate);
+  }, [load, query, view, sort, collate]);
+  const shown = groups.reduce((n, g) => n + g.rows.length, 0);
   const total = load.status === 'ready' ? load.documents.length : 0;
+  const selected =
+    load.status === 'ready' ? (load.documents.find((d) => d.id === selectedId) ?? null) : null;
 
   const setView = (next: LibraryView) => {
     setParams(next === 'recents' ? {} : { view: next }, { replace: true });
@@ -116,28 +171,163 @@ export function Library() {
     announce(`${VIEW_META[next].label} view`);
   };
 
-  // LIB-06: + creates an untitled workscape and opens it immediately.
+  const changeSort = (next: SortKey) => {
+    setSort(next);
+    if (sub !== '') writeSortPreference(sub, next);
+    announce(`Sorted by ${next}`);
+  };
+
+  const select = (doc: DocumentSummary) => {
+    if (doc.id === selectedId) return;
+    setSelectedId(doc.id);
+    announce(`Selected ${doc.title}`);
+  };
+
+  const open = (doc: DocumentSummary) => {
+    void navigate(`/d/${doc.id}`);
+  };
+
+  // LIB-06: + creates an untitled workscape and opens it immediately. The
+  // library still works if it fails, so the failure is a banner with Retry
+  // (§3 placement), not the full-page cell.
   const create = () => {
     setCreating(true);
+    setFailure(null);
     createDocument()
       .then((doc) => {
         void navigate(`/d/${doc.id}?new=1`);
       })
       .catch((error: unknown) => {
         setCreating(false);
-        setLoad({ status: 'error', error });
+        setFailure({ ...describeFailure('Could not create a workscape', error), retry: create });
       });
   };
 
-  const user = session.state.status === 'signed-in' ? session.state.user : null;
-  const signOut = () => {
-    session
-      .signOut()
-      .catch(() => undefined)
+  /** Run an action, refetch on success, surface a banner on failure. */
+  const run = <T,>(
+    id: string,
+    cause: string,
+    action: () => Promise<T>,
+    done?: (result: T) => void,
+  ) => {
+    setBusy(id);
+    setFailure(null);
+    action()
+      .then((result) => {
+        done?.(result);
+        fetchDocuments();
+      })
+      .catch((err: unknown) => {
+        setFailure(describeFailure(cause, err));
+      })
       .finally(() => {
-        void navigate('/signed-out', { replace: true });
+        setBusy(null);
       });
   };
+
+  const remove = (doc: DocumentSummary) => {
+    setConfirm(null);
+    run(
+      `delete-${doc.id}`,
+      `Could not delete ${doc.title}`,
+      () => deleteDocument(doc.id),
+      () => {
+        announce(`Deleted ${doc.title}. Undo is available`);
+        setUndo({
+          title: `${doc.title} moved to Recently Deleted`,
+          onUndo: () => {
+            setUndo(null);
+            run(`recover-${doc.id}`, `Could not recover ${doc.title}`, () =>
+              recoverDocument(doc.id),
+            );
+          },
+        });
+      },
+    );
+  };
+
+  const recover = (doc: DocumentSummary) => {
+    run(
+      `recover-${doc.id}`,
+      `Could not recover ${doc.title}`,
+      () => recoverDocument(doc.id),
+      () => {
+        announce(`${doc.title} recovered`);
+      },
+    );
+  };
+
+  const plural = (n: number) => `${n} ${n === 1 ? 'workscape' : 'workscapes'}`;
+
+  const recoverAll = () => {
+    run('recover-all', 'Could not recover the deleted workscapes', recoverAllDocuments, (n) => {
+      announce(`Recovered ${plural(n)}`);
+    });
+  };
+
+  const deleteAll = () => {
+    setConfirm(null);
+    run('delete-all', 'Could not delete the deleted workscapes', deleteAllDocuments, (n) => {
+      announce(`Deleted ${plural(n)} permanently`);
+    });
+  };
+
+  const signOut = () => {
+    // Leave first: once the session flips to signed-out, RequireAuth would
+    // send this route to /sign-in instead of the signed-out screen.
+    void navigate('/signed-out', { replace: true });
+    void session.signOut();
+  };
+
+  const noSelection = 'Select a workscape first';
+  const ownerOnly = (doc: DocumentSummary, verb: string) =>
+    permissionOf(doc) === 'owner' ? undefined : `Only the owner can ${verb} it`;
+
+  // LIB-03: the row overflow carries the same commands as the toolbar (MENU-02: disabled, never hidden).
+  const rowMenu = (doc: DocumentSummary): MenuEntry[] =>
+    view === 'deleted'
+      ? [
+          {
+            kind: 'item',
+            id: 'recover',
+            label: 'Recover',
+            onSelect: () => {
+              recover(doc);
+            },
+            disabledReason: ownerOnly(doc, 'recover'),
+          },
+        ]
+      : [
+          {
+            kind: 'item',
+            id: 'open',
+            label: 'Open',
+            onSelect: () => {
+              open(doc);
+            },
+            shortcut: 'Enter',
+          },
+          {
+            kind: 'item',
+            id: 'share',
+            label: 'Participants',
+            onSelect: () => {
+              setOpener(rowElement(doc.id));
+              setSheetDoc(doc);
+            },
+          },
+          { kind: 'separator', id: 's' },
+          {
+            kind: 'item',
+            id: 'delete',
+            label: 'Delete',
+            onSelect: () => {
+              setOpener(rowElement(doc.id));
+              setConfirm({ kind: 'delete', doc });
+            },
+            disabledReason: ownerOnly(doc, 'delete'),
+          },
+        ];
 
   const nav = (
     <nav className="gd-lib__nav" aria-label="Library views">
@@ -158,6 +348,104 @@ export function Library() {
     </nav>
   );
 
+  const toolbar = (
+    <div className="gd-lib__toolbar" role="toolbar" aria-label={`${VIEW_META[view].label} actions`}>
+      {view === 'deleted' ? (
+        <>
+          <Button
+            icon={<Icon name="recover" size={15} />}
+            onClick={() => {
+              if (selected) recover(selected);
+            }}
+            disabled={selected === null || busy !== null}
+            title={selected === null ? noSelection : undefined}
+            loading={busy === `recover-${selectedId ?? ''}`}
+            loadingLabel="Recovering…"
+          >
+            Recover
+          </Button>
+          <span className="gd-lib__toolbar-gap" />
+          {/* LIB-08: both disabled when the view is empty. */}
+          <Button
+            onClick={recoverAll}
+            disabled={total === 0 || busy !== null}
+            title={
+              total === 0 ? 'Nothing to recover' : 'Recover everything deleted in the last 30 days'
+            }
+            loading={busy === 'recover-all'}
+            loadingLabel="Recovering…"
+          >
+            Recover All
+          </Button>
+          <Button
+            variant="danger"
+            onClick={() => {
+              setConfirm({ kind: 'delete-all', count: total });
+            }}
+            disabled={total === 0 || busy !== null}
+            title={total === 0 ? 'Nothing to delete' : undefined}
+            loading={busy === 'delete-all'}
+            loadingLabel="Deleting…"
+          >
+            Delete All
+          </Button>
+        </>
+      ) : (
+        <>
+          {/* One primary per view (DS): the first-run state owns it, so the toolbar is secondary. */}
+          <Button
+            onClick={() => {
+              if (selected) open(selected);
+            }}
+            disabled={selected === null}
+            title={selected === null ? noSelection : undefined}
+          >
+            Open
+          </Button>
+          <Button
+            icon={<Icon name="people" size={15} />}
+            onClick={(e) => {
+              setOpener(e.currentTarget);
+              setSheetDoc(selected);
+            }}
+            disabled={selected === null}
+            title={selected === null ? noSelection : undefined}
+          >
+            Participants
+          </Button>
+          <Button
+            icon={<Icon name="delete" size={15} />}
+            onClick={(e) => {
+              if (!selected) return;
+              setOpener(e.currentTarget);
+              setConfirm({ kind: 'delete', doc: selected });
+            }}
+            disabled={
+              selected === null || ownerOnly(selected, 'delete') !== undefined || busy !== null
+            }
+            title={selected === null ? noSelection : ownerOnly(selected, 'delete')}
+            loading={busy === `delete-${selectedId ?? ''}`}
+            loadingLabel="Deleting…"
+          >
+            Delete
+          </Button>
+          {view !== 'recents' && (
+            <>
+              <span className="gd-lib__toolbar-gap" />
+              <SegmentedControl<SortKey>
+                label="Sort by"
+                options={SORT_OPTIONS}
+                value={sort}
+                onChange={changeSort}
+                className="gd-lib__sort"
+              />
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+
   return (
     <div className={clsx('gd-lib', { 'gd-lib--narrow': narrow })}>
       <header className="gd-lib__header">
@@ -175,7 +463,6 @@ export function Library() {
           autoComplete="off"
         />
         <Button
-          variant="primary"
           icon={<Icon name="add-row" size={15} />}
           aria-label="New workscape"
           title="New workscape"
@@ -183,50 +470,66 @@ export function Library() {
           loading={creating}
           loadingLabel="Creating…"
         />
-        <Menu
-          align="end"
-          label="Account"
-          trigger={
-            <Button
-              variant="ghost"
-              icon={<Icon name="people" size={15} />}
-              aria-label={user ? `Account: ${user.name ?? user.email}` : 'Account'}
-            />
-          }
-          entries={[
-            {
-              kind: 'item',
-              id: 'who',
-              label: user?.email ?? '',
-              onSelect: () => undefined,
-              disabledReason: 'Signed in as this account',
-            },
-            { kind: 'separator', id: 's' },
-            { kind: 'item', id: 'signout', label: 'Sign out', onSelect: signOut },
-          ]}
-        />
+        {user && <AccountMenu user={user} onSignOut={signOut} />}
       </header>
 
       {narrow ? (
         // LIB-10: below 900 px the sidebar hides behind a control.
-        <Collapsible.Root open={navOpen} onOpenChange={setNavOpen} className="gd-lib__collapsible">
-          <Collapsible.Trigger asChild>
-            <Button icon={<Icon name="collapse-rail" size={15} />} aria-expanded={navOpen}>
-              {VIEW_META[view].label}
-            </Button>
-          </Collapsible.Trigger>
-          <Collapsible.Content>{nav}</Collapsible.Content>
-        </Collapsible.Root>
+        <Collapsible
+          open={navOpen}
+          onOpenChange={setNavOpen}
+          className="gd-lib__collapsible"
+          trigger={
+            <Button icon={<Icon name="collapse-rail" size={15} />}>{VIEW_META[view].label}</Button>
+          }
+        >
+          {nav}
+        </Collapsible>
       ) : (
         <aside className="gd-lib__sidebar">{nav}</aside>
       )}
 
       <main className="gd-lib__main" aria-labelledby="gd-lib-title">
-        <h1 id="gd-lib-title" className="gd-lib__title">
-          {VIEW_META[view].label}
-        </h1>
+        <div className="gd-lib__heading">
+          <h1 id="gd-lib-title" className="gd-lib__title">
+            {VIEW_META[view].label}
+          </h1>
+          {load.status === 'ready' && (
+            <p className="gd-lib__count">
+              {selected !== null && !narrow
+                ? `1 of ${shown} selected`
+                : `${shown} ${shown === 1 ? 'item' : 'items'}`}
+            </p>
+          )}
+        </div>
+        {toolbar}
+        {failure !== null && (
+          <Banner
+            tone="danger"
+            cause={failure.cause}
+            remedy={failure.remedy}
+            className="gd-lib__banner"
+            action={
+              <>
+                {failure.retry !== undefined && (
+                  <Button size="sm" onClick={failure.retry} disabled={creating}>
+                    Retry
+                  </Button>
+                )}
+                <Button
+                  size="sm"
+                  onClick={() => {
+                    setFailure(null);
+                  }}
+                >
+                  Dismiss
+                </Button>
+              </>
+            }
+          />
+        )}
         <Skeleton active={load.status === 'loading'} rows={6} statusLabel="Loading your workscapes">
-          {rows.length === 0 ? (
+          {groups.length === 0 ? (
             <LibraryEmpty
               view={view}
               total={total}
@@ -235,61 +538,94 @@ export function Library() {
               creating={creating}
             />
           ) : (
-            <table className="gd-lib__table">
-              <thead>
-                <tr>
-                  <th scope="col">Name</th>
-                  {!narrow && <th scope="col">Kind</th>}
-                  <th scope="col" className="gd-lib__num">
-                    Size
-                  </th>
-                  <th scope="col">Modified</th>
-                  {!narrow && <th scope="col">Shared</th>}
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((d) => (
-                  <tr
-                    key={d.id}
-                    className="gd-lib__row"
-                    onDoubleClick={() => {
-                      void navigate(`/d/${d.id}`);
-                    }}
-                  >
-                    <td>
-                      <a
-                        href={`/d/${d.id}`}
-                        className="gd-lib__name"
-                        onClick={(e) => {
-                          e.preventDefault();
-                          void navigate(`/d/${d.id}`);
-                        }}
-                      >
-                        <Icon name="table" size={15} />
-                        {d.title}
-                      </a>
-                    </td>
-                    {!narrow && <td className="gd-lib__muted">Workscape</td>}
-                    <td className="gd-lib__num gd-lib__muted">
-                      {d.sizeBytes !== undefined ? formatBytes(locale, d.sizeBytes) : '—'}
-                    </td>
-                    <td className="gd-lib__muted">
-                      <time dateTime={d.updatedAt}>
-                        {formatDate(locale, d.updatedAt, narrow ? 'numeric' : 'long')}
-                      </time>
-                    </td>
-                    {!narrow && (
-                      <td className="gd-lib__muted">
-                        {d.sharedBy ?? (d.sharedWithOthers ? 'Shared by me' : '—')}
-                      </td>
-                    )}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <LibraryTable
+              groups={groups}
+              view={view}
+              locale={locale}
+              narrow={narrow}
+              selectedId={selectedId}
+              onSelect={select}
+              onOpen={open}
+              rowMenu={rowMenu}
+            />
           )}
         </Skeleton>
       </main>
+
+      <ParticipantsSheet
+        document={sheetDoc}
+        viewerId={user?.sub}
+        viewerEmail={user?.email}
+        returnFocusTo={opener}
+        onClose={() => {
+          setSheetDoc(null);
+        }}
+      />
+
+      <Dialog
+        returnFocusTo={opener}
+        open={confirm?.kind === 'delete'}
+        onOpenChange={(o) => {
+          if (!o) setConfirm(null);
+        }}
+        title={confirm?.kind === 'delete' ? `Delete ${confirm.doc.title}?` : ''}
+        description="It moves to Recently Deleted, where it can be recovered for 30 days."
+        actions={
+          <>
+            <Button
+              onClick={() => {
+                setConfirm(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="primary"
+              onClick={() => {
+                if (confirm?.kind === 'delete') remove(confirm.doc);
+              }}
+            >
+              Delete
+            </Button>
+          </>
+        }
+      />
+
+      <Dialog
+        open={confirm?.kind === 'delete-all'}
+        onOpenChange={(o) => {
+          if (!o) setConfirm(null);
+        }}
+        title={
+          confirm?.kind === 'delete-all'
+            ? `Permanently delete ${confirm.count} ${confirm.count === 1 ? 'workscape' : 'workscapes'}?`
+            : ''
+        }
+        description="Everything in Recently Deleted is removed for good. This cannot be undone."
+        actions={
+          <>
+            <Button
+              onClick={() => {
+                setConfirm(null);
+              }}
+            >
+              Cancel
+            </Button>
+            <Button variant="danger" onClick={deleteAll}>
+              Delete All
+            </Button>
+          </>
+        }
+      />
+
+      <Toast
+        open={undo !== null}
+        onOpenChange={(o) => {
+          if (!o) setUndo(null);
+        }}
+        title={undo?.title ?? ''}
+        undo={undo !== null ? { onUndo: undo.onUndo } : undefined}
+      />
     </div>
   );
 }
@@ -308,7 +644,7 @@ function LibraryEmpty({
   creating: boolean;
 }) {
   // LIB-04: a search with no matches never shows a blank page.
-  if (query.trim() !== '') {
+  if (query.trim() !== '' && total > 0) {
     return (
       <EmptyState
         label={VIEW_META[view].label.toLowerCase()}
@@ -336,26 +672,23 @@ function LibraryEmpty({
       />
     );
   }
-  // AUTH-10 / LIB-01: first run.
-  if (total === 0) {
-    return (
-      <EmptyState
-        label={VIEW_META[view].label.toLowerCase()}
-        title="Create your first workscape"
-        description="Tables, formulas and context graphs on one shared sheet."
-        action={
-          <Button
-            variant="primary"
-            size="lg"
-            onClick={onCreate}
-            loading={creating}
-            loadingLabel="Creating…"
-          >
-            Create workscape
-          </Button>
-        }
-      />
-    );
-  }
-  return <EmptyState label={VIEW_META[view].label.toLowerCase()} title="Nothing here yet" />;
+  // AUTH-10 / LIB-01: first run — one primary action.
+  return (
+    <EmptyState
+      label={VIEW_META[view].label.toLowerCase()}
+      title="Create your first workscape"
+      description="Tables, formulas and context graphs on one shared sheet."
+      action={
+        <Button
+          variant="primary"
+          size="lg"
+          onClick={onCreate}
+          loading={creating}
+          loadingLabel="Creating…"
+        >
+          Create workscape
+        </Button>
+      }
+    />
+  );
 }

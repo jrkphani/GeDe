@@ -24,3 +24,6 @@ export const loading = theme.loading;
 
 /** Motion durations (ms) and easings. */
 export const motion = theme.motion;
+
+/** Minimum interactive target in CSS pixels, mirrored from `--hit-target` (RESP-05). */
+export const hitTarget = theme.hitTarget;

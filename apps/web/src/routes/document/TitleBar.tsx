@@ -4,7 +4,7 @@ import { documentMeta, initials, setTitle, type GedeDoc, type PresenceState } fr
 import { BrandMark, Icon } from '@gede/ui';
 
 import { renameDocument } from '../../api/documents.js';
-import { rememberLastDocument } from '../../auth/session.js';
+import { rememberLastDocument } from '../../last-document.js';
 import { useYVersion } from '../../doc/use-y.js';
 import type { SyncSnapshot } from '../../doc/sync-client.js';
 

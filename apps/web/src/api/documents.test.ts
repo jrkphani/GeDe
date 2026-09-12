@@ -1,75 +1,175 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { setConfigForTests } from '../config.js';
-import { TEST_CONFIG } from '../test/helpers.js';
 import {
-  canEdit,
   createDocument,
-  getDocument,
+  deleteAllDocuments,
+  deleteDocument,
+  displayNameOf,
+  getDocumentShares,
   listDocuments,
+  permissionOf,
+  recoverAllDocuments,
+  recoverDocument,
+  toDocumentShares,
   toDocumentSummary,
 } from './documents.js';
 
 const json = (status: number, body: unknown) =>
-  new Response(JSON.stringify(body), {
-    status,
-    headers: { 'content-type': 'application/json' },
-  });
+  new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } });
 
-/** The exact shape `services/sync/src/routes/api.ts` `view()` produces. */
-const serverView = {
-  id: '6f1b2c3d-0000-4000-8000-000000000001',
-  title: 'Everest trek',
-  ownerId: 'u1',
-  permission: 'view',
-  linkAccess: 'none',
-  updatedAt: '2026-09-12T00:00:00.000Z',
-  deletedAt: null,
-};
+function calls(fetchImpl: ReturnType<typeof vi.fn>): [string, string][] {
+  return fetchImpl.mock.calls.map((c) => {
+    const [url, init] = c as [string, RequestInit];
+    return [init.method ?? 'GET', url];
+  });
+}
 
 describe('documents api', () => {
   beforeEach(() => {
-    setConfigForTests(TEST_CONFIG);
+    setConfigForTests({
+      region: 'r',
+      userPoolId: 'p',
+      userPoolClientId: 'c',
+      apiUrl: 'https://api.test',
+      wsUrl: 'wss://api.test/ws',
+      appleSignIn: false,
+      statusUrl: null,
+    });
   });
   afterEach(() => {
     setConfigForTests(null);
   });
 
-  it('SHARE-03 GET /documents/:id unwraps the { document } envelope and reads the permission', async () => {
-    const fetchImpl = vi.fn(() => Promise.resolve(json(200, { document: serverView })));
-    const doc = await getDocument(serverView.id, {
-      fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: () => Promise.resolve('tok'),
+  it('LIB-02 reads the wave-1 document shape and never invents what the server omitted', () => {
+    const doc = toDocumentSummary({
+      id: 'a',
+      title: 'Everest trek',
+      kind: 'workscape',
+      sizeBytes: 12,
+      updatedAt: '2026-09-01T00:00:00Z',
+      createdAt: '2026-08-01T00:00:00Z',
+      ownerId: 'u1',
+      ownerName: 'Meena',
+      sharedBy: { id: 'u2', name: 'Sembian V' },
+      sharedWithOthers: false,
+      permission: 'edit',
+      deletedAt: null,
     });
-    expect(doc.permission).toBe('view');
-    expect(doc.title).toBe('Everest trek');
-    expect(doc.deletedAt).toBeNull();
-    expect(canEdit(doc)).toBe(false);
-    expect(canEdit({ permission: 'edit' })).toBe(true);
-    expect(canEdit({ permission: 'owner' })).toBe(true);
-    expect(canEdit({ permission: undefined })).toBe(false);
+    expect(doc).toMatchObject({
+      id: 'a',
+      sharedBy: { id: 'u2', name: 'Sembian V' },
+      permission: 'edit',
+      sizeBytes: 12,
+      deletedAt: null,
+    });
+    expect(
+      toDocumentSummary({
+        id: 'n',
+        title: 'x',
+        updatedAt: '2026-09-01T00:00:00Z',
+        ownerName: null,
+        sharedBy: { id: 'u9', name: null },
+      }),
+    ).toMatchObject({ ownerName: null, sharedBy: { id: 'u9', name: null } });
+    const sparse = toDocumentSummary({ id: 'b', title: 'x', updatedAt: '2026-09-01T00:00:00Z' });
+    expect(sparse?.sizeBytes).toBeUndefined();
+    expect(sparse?.sharedBy).toBeUndefined();
+    expect(sparse?.permission).toBeUndefined();
+    expect(permissionOf(sparse!)).toBe('view');
+    expect(toDocumentSummary({ id: 'c' })).toBeNull();
   });
 
-  it('LIB-06 POST /documents unwraps the created document', async () => {
+  it('LIB-01 lists by view and unwraps `{ documents }`', async () => {
     const fetchImpl = vi.fn(() =>
-      Promise.resolve(json(201, { document: { ...serverView, permission: 'owner' } })),
+      Promise.resolve(
+        json(200, {
+          documents: [{ id: 'a', title: 'A', updatedAt: '2026-09-01T00:00:00Z' }, { bad: true }],
+        }),
+      ),
+    );
+    const opts = {
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+      getToken: () => Promise.resolve('t'),
+    };
+    const out = await listDocuments('shared', opts);
+    expect(out.map((d) => d.id)).toEqual(['a']);
+    expect(calls(fetchImpl)).toEqual([['GET', 'https://api.test/documents?view=shared']]);
+  });
+
+  it('LIB-06 create accepts `{ document }` as well as a bare document', async () => {
+    const fetchImpl = vi.fn(() =>
+      Promise.resolve(
+        json(201, { document: { id: 'n', title: 'Untitled', updatedAt: '2026-09-01T00:00:00Z' } }),
+      ),
     );
     const doc = await createDocument({
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: () => Promise.resolve('tok'),
+      getToken: () => Promise.resolve('t'),
     });
-    expect(doc.permission).toBe('owner');
+    expect(doc.id).toBe('n');
+    const [, init] = fetchImpl.mock.calls[0] as unknown as [string, RequestInit];
+    expect(init.method).toBe('POST');
+    expect(JSON.parse(init.body as string)).toEqual({ title: 'Untitled' });
   });
 
-  it('LIB-01 GET /documents reads the { documents } list', async () => {
-    const fetchImpl = vi.fn(() => Promise.resolve(json(200, { documents: [serverView] })));
-    const docs = await listDocuments({
+  it('LIB-08 delete, recover, recover-all and delete-all hit the contract paths; bulk calls report counts', async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(json(200, { document: { id: 'a', title: 'A', updatedAt: 'x' } }))
+      .mockResolvedValueOnce(json(200, { recovered: 3 }))
+      .mockResolvedValueOnce(json(200, { deleted: 2 }));
+    const opts = {
       fetchImpl: fetchImpl as unknown as typeof fetch,
-      getToken: () => Promise.resolve('tok'),
-    });
-    expect(docs.map((d) => d.id)).toEqual([serverView.id]);
+      getToken: () => Promise.resolve('t'),
+    };
+    await deleteDocument('a/b', opts);
+    await recoverDocument('a', opts);
+    expect(await recoverAllDocuments(opts)).toBe(3);
+    expect(await deleteAllDocuments(opts)).toBe(2);
+    expect(calls(fetchImpl)).toEqual([
+      ['DELETE', 'https://api.test/documents/a%2Fb'],
+      ['POST', 'https://api.test/documents/a/recover'],
+      ['POST', 'https://api.test/documents/recover-all'],
+      ['POST', 'https://api.test/documents/delete-all'],
+    ]);
   });
 
-  it('SHARE-03 an unknown permission string is dropped rather than invented', () => {
-    expect(toDocumentSummary({ ...serverView, permission: 'admin' })?.permission).toBeUndefined();
+  it('LIB-07 reads the shares shape with null names kept null; an unreadable one is an error, not an empty list', async () => {
+    expect(
+      toDocumentShares({
+        owner: { id: 'u1', name: null, email: 'm@x.test' },
+        participants: [
+          {
+            userId: 'u2',
+            name: 'Sembian V',
+            email: 's@x.test',
+            permission: 'edit',
+            invitedBy: 'u1',
+          },
+          { userId: 'u3', name: null, email: null, permission: 'nonsense' },
+          { nope: 1 },
+        ],
+        linkAccess: 'view',
+      }),
+    ).toEqual({
+      owner: { id: 'u1', name: null, email: 'm@x.test' },
+      participants: [
+        { userId: 'u2', name: 'Sembian V', email: 's@x.test', permission: 'edit', invitedBy: 'u1' },
+        { userId: 'u3', name: null, email: null, permission: 'view', invitedBy: undefined },
+      ],
+      linkAccess: 'view',
+    });
+    expect(displayNameOf({ name: null, email: 'm@x.test' })).toBe('m@x.test');
+    expect(displayNameOf({ name: null, email: null })).toBeNull();
+    expect(toDocumentShares({ participants: [] })).toBeNull();
+    const fetchImpl = vi.fn(() => Promise.resolve(json(200, { participants: [] })));
+    await expect(
+      getDocumentShares('a', {
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+        getToken: () => Promise.resolve('t'),
+      }),
+    ).rejects.toThrow('The shares response was not in the expected shape');
+    expect(calls(fetchImpl)).toEqual([['GET', 'https://api.test/documents/a/shares']]);
   });
 });

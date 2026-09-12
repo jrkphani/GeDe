@@ -1,0 +1,22 @@
+.gd-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.6875rem;
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.gd-badge--brand {
+  background: var(--forest-50);
+  color: var(--forest-700);
+}
+.gd-badge--live {
+  background: var(--amber-50);
+  color: var(--amber-700);
+}
+.gd-badge--neutral {
+  background: var(--slate-200);
+  color: var(--slate-600);
+}

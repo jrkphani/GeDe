@@ -1,0 +1,24 @@
+.gd-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  border-radius: var(--radius-pill);
+  background: var(--forest-900);
+  color: var(--slate-0);
+  font-family: var(--font-ui);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  line-height: 1;
+  user-select: none;
+}
+.gd-avatar--30 {
+  width: 1.875rem;
+  height: 1.875rem;
+  font-size: 0.75rem;
+}
+.gd-avatar--24 {
+  width: 1.5rem;
+  height: 1.5rem;
+  font-size: 0.625rem;
+}

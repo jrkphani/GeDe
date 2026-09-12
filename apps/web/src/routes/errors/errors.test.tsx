@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -14,9 +14,10 @@ vi.mock('../../auth/cognito.js', () => ({
   accessToken: () => Promise.resolve(null),
   currentUser: () => Promise.resolve(null),
   onAuthEvent: () => () => undefined,
-  signOutLocal: () => Promise.resolve(),
+  signOutLocal: vi.fn(() => Promise.resolve()),
   classifyError: () => ({ kind: 'other', message: 'x' }),
 }));
+const cognito = await import('../../auth/cognito.js');
 
 function routeThatThrows(err: unknown) {
   return [
@@ -53,6 +54,7 @@ describe('error catalogue', () => {
 
 describe('ErrorCell', () => {
   beforeEach(() => {
+    vi.clearAllMocks();
     withConfig();
   });
 
@@ -87,6 +89,28 @@ describe('ErrorCell', () => {
     render(<RouterProvider router={router} />);
     expect(await screen.findByRole('heading', { name: 'Your session ended' })).toBeInTheDocument();
     await u.click(screen.getByRole('button', { name: 'Sign in' }));
+    expect(sessionStorage.getItem('gede.returnTo')).toBe('/?cell=D12');
+    // AUTH-09: the stale tokens go too, or sign-in would bounce straight back here.
+    await waitFor(() => {
+      expect(cognito.signOutLocal).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it('AUTH-09 401 Switch account signs out locally, forgets the email and last document, and keeps the path', async () => {
+    const u = userEvent.setup();
+    localStorage.setItem('gede.lastEmail', 'meena@1cloudhub.com');
+    sessionStorage.setItem('gede.lastDocument', JSON.stringify({ id: 'x', title: 'Everest trek' }));
+    const router = createMemoryRouter(routeThatThrows(new ApiError(401, 'x', undefined)), {
+      initialEntries: ['/?cell=D12'],
+    });
+    render(<RouterProvider router={router} />);
+    await u.click(await screen.findByRole('button', { name: 'Switch account' }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/sign-in');
+    });
+    expect(cognito.signOutLocal).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('gede.lastEmail')).toBeNull();
+    expect(sessionStorage.getItem('gede.lastDocument')).toBeNull();
     expect(sessionStorage.getItem('gede.returnTo')).toBe('/?cell=D12');
   });
 

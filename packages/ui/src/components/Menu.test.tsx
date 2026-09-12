@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -5,6 +7,12 @@ import { Button } from './Button.js';
 import { Menu } from './Menu.js';
 
 describe('Menu', () => {
+  it('RESP-05 menu items take the 44 px target below 1024 px', () => {
+    const css = readFileSync(resolve(__dirname, 'Menu.css'), 'utf8');
+    const block = /@media \(max-width: 1023\.98px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(block).toMatch(/\.gd-menu__item\s*\{[^}]*min-height:\s*var\(--hit-target\)/);
+  });
+
   it('opens on the trigger, shows disabled items with a reason, shortcuts in mono, closes on Escape', async () => {
     const onCopy = vi.fn();
     render(
@@ -45,6 +53,39 @@ describe('Menu', () => {
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
+  });
+
+  it('I18N-05 a radio group names its heading and keeps exactly one option checked', async () => {
+    const onValueChange = vi.fn();
+    render(
+      <Menu
+        trigger={<Button>Account</Button>}
+        entries={[
+          {
+            kind: 'radio',
+            id: 'locale',
+            label: 'Language and formats',
+            value: 'en-IN',
+            onValueChange,
+            options: [
+              { value: 'en-US', label: 'English (United States)' },
+              { value: 'en-IN', label: 'English (India)' },
+            ],
+          },
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Account' }));
+    await screen.findByRole('menu');
+    expect(screen.getByText('Language and formats')).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: 'English (India)' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    const us = screen.getByRole('menuitemradio', { name: 'English (United States)' });
+    expect(us).toHaveAttribute('aria-checked', 'false');
+    await userEvent.click(us);
+    expect(onValueChange).toHaveBeenCalledWith('en-US');
   });
 
   it('is keyboard operable: ArrowDown opens, Enter selects', async () => {

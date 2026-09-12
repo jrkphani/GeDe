@@ -23,6 +23,7 @@ import { PersistenceWriter } from './persistence.js';
 import {
   decodeMessage,
   encodeAwareness,
+  encodeNotice,
   encodeSyncStep1,
   encodeSyncStep2,
   encodeUpdate,
@@ -41,6 +42,8 @@ export interface Member {
 export class Conn {
   /** Awareness client ids this socket has announced; cleared when it leaves. */
   readonly awarenessIds = new Set<number>();
+  /** Set once the read-only notice (type 4) has been sent; it goes out at most once per connection. */
+  readOnlyNotified = false;
   /** Serialises message handling per socket so order is preserved across the async load. */
   queue: Promise<void> = Promise.resolve();
 
@@ -57,6 +60,8 @@ export class Conn {
 export interface RoomStats {
   /** Sync-step-2/update messages dropped from view-only sockets (SHARE-03). */
   droppedUpdates: number;
+  /** Messages refused because the room had already sealed its writer (dispose in progress). */
+  refusedClosing: number;
   /** Awareness updates dropped for exceeding the size limit. */
   droppedAwareness: number;
   /** Messages that were not valid protocol. */
@@ -76,7 +81,12 @@ export class Room {
   readonly doc = new Y.Doc({ gc: true });
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
   readonly conns = new Set<Conn>();
-  readonly stats: RoomStats = { droppedUpdates: 0, droppedAwareness: 0, malformed: 0 };
+  readonly stats: RoomStats = {
+    droppedUpdates: 0,
+    refusedClosing: 0,
+    droppedAwareness: 0,
+    malformed: 0,
+  };
   /** Resolves once the snapshot and log have been applied; rejects if loading failed. */
   readonly ready: Promise<void>;
   private writer: PersistenceWriter | null = null;
@@ -193,6 +203,13 @@ export class Room {
   onEmpty: ((room: Room) => void) | null = null;
 
   private handle(conn: Conn, bytes: Uint8Array): void {
+    if (this.writer?.sealed === true) {
+      // The writer has drained and sealed: anything applied now could never
+      // be persisted, so it is refused outright rather than accepted in
+      // memory and lost. The socket is about to receive its close code.
+      this.stats.refusedClosing += 1;
+      return;
+    }
     const message = decodeMessage(bytes);
     switch (message.kind) {
       case 'sync': {
@@ -209,6 +226,12 @@ export class Room {
             { documentId: this.documentId, userId: conn.member.userId },
             'update from view-only socket dropped',
           );
+          if (!conn.readOnlyNotified) {
+            // LOAD-05: tell the client once so it can show its read-only state
+            // rather than wait for an echo that will never arrive.
+            conn.readOnlyNotified = true;
+            this.send(conn, encodeNotice({ code: 'read-only' }));
+          }
           return;
         }
         if (message.subtype === SYNC_STEP2) {
@@ -274,23 +297,35 @@ export class Room {
   }
 
   /**
-   * Flush persistence, optionally compact, close every socket and free the
-   * document. `going away` (1001) tells the provider to reconnect with backoff.
+   * Drain and seal persistence, close every socket, optionally compact, free
+   * the document. Sockets stay open until the writer has sealed, so an update
+   * that lands while the last append is in flight is still persisted (LOAD-05:
+   * nothing accepted is lost); once sealed, `handle` refuses anything further
+   * and the sockets are closed. `going away` (1001) tells the provider to
+   * reconnect with backoff; 4404 tells it the document is gone.
    */
   async dispose(options: { compact: boolean; closeCode?: number }): Promise<void> {
     if (this.closing) return;
     this.closing = true;
     this.onEmpty = null;
-    for (const conn of this.conns) {
-      conn.socket.close(options.closeCode ?? 1001, 'going away');
-    }
-    this.conns.clear();
+    const closeSockets = (): void => {
+      for (const conn of this.conns) {
+        conn.socket.close(options.closeCode ?? 1001, 'going away');
+      }
+      this.conns.clear();
+    };
     try {
-      await this.ready;
-      await this.writer?.close({ compact: options.compact });
+      try {
+        await this.ready;
+      } catch (error) {
+        closeSockets();
+        throw error;
+      }
+      await this.persistence.close({ compact: options.compact, beforeCompact: closeSockets });
     } catch (error) {
       this.logger.error({ err: error, documentId: this.documentId }, 'room dispose failed');
     } finally {
+      closeSockets();
       this.awareness.destroy();
       this.doc.off('update', this.onDocUpdate);
       this.doc.destroy();

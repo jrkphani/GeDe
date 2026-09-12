@@ -2,6 +2,12 @@ import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
+export interface MenuRadioOption<V extends string = string> {
+  value: V;
+  label: ReactNode;
+  disabledReason?: string | undefined;
+}
+
 export type MenuEntry =
   | {
       kind: 'item';
@@ -23,6 +29,15 @@ export type MenuEntry =
       onCheckedChange: (checked: boolean) => void;
       shortcut?: string | undefined;
       disabledReason?: string | undefined;
+    }
+  | {
+      /** Exactly one of `options` is on; a heading names the group. */
+      kind: 'radio';
+      id: string;
+      label: ReactNode;
+      value: string;
+      onValueChange: (value: string) => void;
+      options: readonly MenuRadioOption[];
     }
   | { kind: 'separator'; id: string };
 
@@ -55,6 +70,16 @@ function Check() {
   );
 }
 
+function itemProps(disabledReason: string | undefined, danger = false) {
+  const disabled = disabledReason !== undefined;
+  return {
+    className: clsx('gd-menu__item', { 'gd-menu__item--danger': danger }),
+    disabled,
+    title: disabledReason,
+    'aria-disabled': disabled || undefined,
+  };
+}
+
 /**
  * Dropdown menu on Radix: anchors to the trigger, flips before leaving the
  * viewport, Escape closes and focus returns to the trigger, arrows move,
@@ -73,44 +98,65 @@ export function Menu({ trigger, entries, align = 'start', label, className }: Me
           aria-label={label}
         >
           {entries.map((e) => {
-            if (e.kind === 'separator')
-              return <DropdownMenu.Separator key={e.id} className="gd-menu__separator" />;
-            const disabled = e.disabledReason !== undefined;
-            const common = {
-              className: clsx('gd-menu__item', {
-                'gd-menu__item--danger': e.kind === 'item' && e.danger === true,
-              }),
-              disabled,
-              title: e.disabledReason,
-              'aria-disabled': disabled || undefined,
-            };
-            const body = (
-              <>
-                <span className="gd-menu__lead">
-                  {e.kind === 'check' && (
-                    <DropdownMenu.ItemIndicator>
-                      <Check />
-                    </DropdownMenu.ItemIndicator>
-                  )}
-                </span>
-                <span className="gd-menu__label">{e.label}</span>
-                {e.shortcut !== undefined && <kbd className="gd-menu__shortcut">{e.shortcut}</kbd>}
-              </>
-            );
-            return e.kind === 'check' ? (
-              <DropdownMenu.CheckboxItem
-                key={e.id}
-                checked={e.checked}
-                onCheckedChange={e.onCheckedChange}
-                {...common}
-              >
-                {body}
-              </DropdownMenu.CheckboxItem>
-            ) : (
-              <DropdownMenu.Item key={e.id} onSelect={e.onSelect} {...common}>
-                {body}
-              </DropdownMenu.Item>
-            );
+            switch (e.kind) {
+              case 'separator':
+                return <DropdownMenu.Separator key={e.id} className="gd-menu__separator" />;
+              case 'radio':
+                return (
+                  <DropdownMenu.Group key={e.id} className="gd-menu__group">
+                    <DropdownMenu.Label className="gd-menu__heading">{e.label}</DropdownMenu.Label>
+                    <DropdownMenu.RadioGroup value={e.value} onValueChange={e.onValueChange}>
+                      {e.options.map((o) => (
+                        <DropdownMenu.RadioItem
+                          key={o.value}
+                          value={o.value}
+                          {...itemProps(o.disabledReason)}
+                        >
+                          <span className="gd-menu__lead">
+                            <DropdownMenu.ItemIndicator>
+                              <Check />
+                            </DropdownMenu.ItemIndicator>
+                          </span>
+                          <span className="gd-menu__label">{o.label}</span>
+                        </DropdownMenu.RadioItem>
+                      ))}
+                    </DropdownMenu.RadioGroup>
+                  </DropdownMenu.Group>
+                );
+              case 'check':
+                return (
+                  <DropdownMenu.CheckboxItem
+                    key={e.id}
+                    checked={e.checked}
+                    onCheckedChange={e.onCheckedChange}
+                    {...itemProps(e.disabledReason)}
+                  >
+                    <span className="gd-menu__lead">
+                      <DropdownMenu.ItemIndicator>
+                        <Check />
+                      </DropdownMenu.ItemIndicator>
+                    </span>
+                    <span className="gd-menu__label">{e.label}</span>
+                    {e.shortcut !== undefined && (
+                      <kbd className="gd-menu__shortcut">{e.shortcut}</kbd>
+                    )}
+                  </DropdownMenu.CheckboxItem>
+                );
+              case 'item':
+                return (
+                  <DropdownMenu.Item
+                    key={e.id}
+                    onSelect={e.onSelect}
+                    {...itemProps(e.disabledReason, e.danger === true)}
+                  >
+                    <span className="gd-menu__lead" />
+                    <span className="gd-menu__label">{e.label}</span>
+                    {e.shortcut !== undefined && (
+                      <kbd className="gd-menu__shortcut">{e.shortcut}</kbd>
+                    )}
+                  </DropdownMenu.Item>
+                );
+            }
           })}
         </DropdownMenu.Content>
       </DropdownMenu.Portal>

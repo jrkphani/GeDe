@@ -19,6 +19,9 @@
 @import './components/Skeleton.css';
 @import './components/Banner.css';
 @import './components/EmptyState.css';
+@import './components/Collapsible.css';
+@import './components/Avatar.css';
+@import './components/Badge.css';
 
 *,
 *::before,
@@ -26,8 +29,10 @@
   box-sizing: border-box;
 }
 
+/* The root stays at the browser default (16 px) so rem sizes and user zoom hold;
+   body copy is 0.9375rem of that. Setting the size on `html` would shrink every rem. */
 html {
-  font: 400 0.9375rem/1.6 var(--font-ui);
+  font-size: 100%;
   color: var(--ink);
   background: var(--surface);
   -webkit-text-size-adjust: 100%;
@@ -36,6 +41,7 @@ html {
 body {
   margin: 0;
   min-height: 100vh;
+  font: 400 0.9375rem/1.6 var(--font-ui);
 }
 
 /* A11Y-02: 2 px amber ring at 2 px offset on every focusable element, never removed. */

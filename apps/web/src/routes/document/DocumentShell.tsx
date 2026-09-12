@@ -27,8 +27,9 @@ import { below, theme } from '@gede/tokens';
 import { Banner, Button, Skeleton } from '@gede/ui';
 
 import { announce } from '../../announce.js';
-import { canEdit, getDocument, type DocumentSummary } from '../../api/documents.js';
-import { rememberLastDocument, useSession } from '../../auth/session.js';
+import { getDocument, permissionOf, type DocumentSummary } from '../../api/documents.js';
+import { useSession } from '../../auth/session.js';
+import { rememberLastDocument } from '../../last-document.js';
 import { CHORDS, LABELS, useShortcuts, type ShortcutBinding } from '../../doc/shortcuts.js';
 import {
   CLOSE_FORBIDDEN,
@@ -102,7 +103,7 @@ export function DocumentShell() {
 
   if (load.status === 'error') throw load.error;
 
-  const editable = !phone && doc !== null && canEdit(doc);
+  const editable = !phone && doc !== null && permissionOf(doc) !== 'view';
 
   if (doc === null || session === null) {
     return (

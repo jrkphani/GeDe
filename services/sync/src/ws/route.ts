@@ -65,6 +65,8 @@ export async function authoriseUpgrade(
   if (resolved.permission === null) {
     return { ok: false, code: CLOSE_FORBIDDEN, reason: 'not a participant' };
   }
+  // A deleted document is served to nobody, its owner included; participants
+  // and the owner learn it is gone (4404), a stranger only that they have no access.
   if (resolved.document.deletedAt !== null) {
     return { ok: false, code: CLOSE_NOT_FOUND, reason: 'document deleted' };
   }

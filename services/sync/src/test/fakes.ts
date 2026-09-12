@@ -54,15 +54,36 @@ export class FakeVerifier implements TokenVerifier {
 export class FakeSnapshotStore implements SnapshotStore {
   readonly objects = new Map<string, Uint8Array>();
   puts = 0;
+  /** Set to make every `put` fail (an S3 outage during a compaction). */
+  failPuts = false;
 
   put(key: string, bytes: Uint8Array): Promise<void> {
     this.puts += 1;
+    if (this.failPuts) return Promise.reject(new Error('simulated S3 put failure'));
     this.objects.set(key, new Uint8Array(bytes));
     return Promise.resolve();
   }
 
   get(key: string): Promise<Uint8Array | undefined> {
     return Promise.resolve(this.objects.get(key));
+  }
+
+  /** Set to make the next `deletePrefix` fail (the purge must still have committed). */
+  failNextDelete = false;
+
+  deletePrefix(prefix: string): Promise<number> {
+    if (this.failNextDelete) {
+      this.failNextDelete = false;
+      return Promise.reject(new Error('simulated S3 failure'));
+    }
+    let deleted = 0;
+    for (const key of [...this.objects.keys()]) {
+      if (key.startsWith(prefix)) {
+        this.objects.delete(key);
+        deleted += 1;
+      }
+    }
+    return Promise.resolve(deleted);
   }
 }
 

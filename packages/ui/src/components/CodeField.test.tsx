@@ -22,12 +22,21 @@ function Harness() {
 }
 
 describe('CodeField', () => {
-  it('AUTH-06 uses numeric input mode and one-time-code autocomplete with maxLength 6', () => {
+  it('AUTH-06 uses numeric input mode and one-time-code autocomplete; the cap is applied after stripping, not by maxLength', () => {
     render(<Harness />);
     const input = screen.getByLabelText('Six-digit code');
     expect(input).toHaveAttribute('inputmode', 'numeric');
     expect(input).toHaveAttribute('autocomplete', 'one-time-code');
-    expect(input).toHaveAttribute('maxlength', '6');
+    expect(input).not.toHaveAttribute('maxlength');
+  });
+
+  it('AUTH-06 a pasted "123 456" becomes 123456 (digits stripped before the six-digit cap)', async () => {
+    render(<Harness />);
+    const input = screen.getByLabelText('Six-digit code');
+    await userEvent.click(input);
+    await userEvent.paste('123 456');
+    expect(input).toHaveValue('123456');
+    expect(screen.getByTestId('complete')).toHaveTextContent('true');
   });
 
   it('AUTH-06 CodeField strips non-digits and caps at six', async () => {

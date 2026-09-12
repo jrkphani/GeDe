@@ -81,6 +81,9 @@
   --lattice-col: 160px;
   --lattice-row: 22px;
 
+  /* interactive targets — 44 CSS px, whatever the root font size (RESP-05, Apple HIG) */
+  --hit-target: 44px;
+
   /* breakpoints, for reference in JS */
   --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px; --bp-xl: 1440px;
 }
@@ -93,6 +96,7 @@
   --ink:            #e6ede9;
   --ink-muted:      #9fb0a7;
   --action-primary-bg: #2a7b4e;
+  --link:              #7fb195;   /* forest-300: 6.9:1 on the dark surface; forest-700 would be 1.6:1 */
   --selection-ring:    #e0a04a;
   --skeleton-base:  #16231c;
   --skeleton-sheen: #1d2e25;

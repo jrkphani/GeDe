@@ -224,15 +224,14 @@
   font-size: 0.625rem;
   opacity: 0.8;
 }
-/* RESP-05: below lg every target is at least 44 px. The root type size is
-   0.9375rem (15 px), so 44 px is 2.9375rem here, not 2.75rem. */
+/* RESP-05: below lg every target is at least the hit-target token (44 px). */
 @media (max-width: 1023.98px) {
   .gd-doc__toolbar .gd-btn,
   .gd-doc__zoom,
   .gd-doc__sheets .gd-tabs__tab,
   .gd-doc__add-sheet {
-    min-width: 2.9375rem;
-    min-height: 2.9375rem;
+    min-width: var(--hit-target);
+    min-height: var(--hit-target);
   }
 }
 
@@ -634,7 +633,7 @@
   background: var(--surface);
 }
 .gd-doc--phone .gd-doc__sheets .gd-tabs__tab {
-  min-height: 2.9375rem; /* 44 px at the 15 px root */
+  min-height: var(--hit-target);
 }
 .gd-doc--phone .gd-doc__sync {
   display: none;

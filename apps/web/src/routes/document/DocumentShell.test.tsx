@@ -106,7 +106,7 @@ describe('DocumentShell', () => {
     });
     await until(() => roomDoc().getArray('sheets').length === 1);
     expect(roomDoc().getMap('meta').get('title')).toBe('Everest trek');
-    expect(localStorage.getItem('gede.lastDocument')).toContain('Everest trek');
+    expect(sessionStorage.getItem('gede.lastDocument')).toContain('Everest trek');
   });
 
   it('DOC-01 SHARE-05 typing the title updates meta.title in the room and PATCHes once the debounce settles (LOAD-04 aria-busy)', async () => {
