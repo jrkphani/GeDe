@@ -22,6 +22,7 @@ vi.mock('../../auth/cognito.js', () => ({
   currentUser: () => Promise.resolve(user),
   onAuthEvent: () => () => undefined,
   signOutLocal: vi.fn(() => Promise.resolve()),
+  syncLocaleAttribute: vi.fn(() => Promise.resolve()),
   classifyError: () => ({ kind: 'other', message: 'x' }),
 }));
 
@@ -1010,6 +1011,9 @@ describe('Library', () => {
     expect(localStorage.getItem('gede.locale.sub-1')).toBe('en-IN');
     expect(localStorage.getItem('gede.locale')).toBe('en-IN');
     expect(me.updateMe).toHaveBeenCalledWith({ locale: 'en-IN' });
+    // … and to the pool's `locale` attribute, so the next sign-in code speaks it.
+    const cognito = await import('../../auth/cognito.js');
+    expect(cognito.syncLocaleAttribute).toHaveBeenCalledWith('en-IN');
     expect(screen.getByTestId('live-region')).toHaveTextContent('Language set to English (India)');
   });
 

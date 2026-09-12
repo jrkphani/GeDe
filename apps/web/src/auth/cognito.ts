@@ -17,6 +17,7 @@ import {
   signInWithRedirect,
   signOut,
   signUp,
+  updateUserAttributes,
   type SignInOutput,
 } from 'aws-amplify/auth';
 import { cognitoUserPoolsTokenProvider } from 'aws-amplify/auth/cognito';
@@ -35,6 +36,8 @@ export interface SessionUser {
   sub: string;
   email: string;
   name: string | undefined;
+  /** The pool's `locale` attribute — what the custom-message trigger renders codes in (I18N-05). */
+  locale?: string | undefined;
 }
 
 /**
@@ -224,16 +227,20 @@ export async function confirmCode(code: string): Promise<SignInStep> {
 /**
  * AUTH-03 sign-up: no password — Cognito's passwordless sign-up. The
  * verification code confirms the address; auto sign-in then continues on the
- * same session without a second code.
+ * same session without a second code. `locale` is the device's active locale
+ * (I18N-05): it becomes the pool's `locale` attribute, which the custom-message
+ * trigger reads to render this very confirmation code — and every later code —
+ * in that language (infra/assets/custom-message).
  */
 export async function startSignUp(
   email: string,
   name: string,
+  locale: string,
 ): Promise<{ destination: string | undefined }> {
   const out = await signUp({
     username: email,
     options: {
-      userAttributes: { email, name },
+      userAttributes: { email, name, locale },
       autoSignIn: { authFlowType: 'USER_AUTH', preferredChallenge: 'EMAIL_OTP' },
     },
   });
@@ -254,6 +261,16 @@ export async function confirmSignUpCode(email: string, code: string): Promise<Si
 
 export async function resendSignUp(email: string): Promise<void> {
   await resendSignUpCode({ username: email });
+}
+
+/**
+ * I18N-05 — mirror the account's locale choice into the pool's `locale` attribute, so
+ * the next sign-in code (sent before the service is ever asked) arrives in that
+ * language. A nicety beside `PATCH /api/me`: the caller treats a failure as
+ * "saved on this device only". The client may write `locale` (infra auth-stack).
+ */
+export async function syncLocaleAttribute(locale: string): Promise<void> {
+  await updateUserAttributes({ userAttributes: { locale } });
 }
 
 /** AUTH-08 — Sign in with Apple through the pool's OIDC provider. */
@@ -283,14 +300,16 @@ export async function currentUser(): Promise<SessionUser | null> {
     const user = await getCurrentUser();
     let email = '';
     let name: string | undefined;
+    let locale: string | undefined;
     try {
       const attrs = await fetchUserAttributes();
       email = attrs.email ?? '';
       name = attrs.name;
+      locale = attrs.locale;
     } catch {
       /* attributes are a nicety; the session is what matters */
     }
-    return { sub: user.userId, email: email || user.username, name };
+    return { sub: user.userId, email: email || user.username, name, locale };
   } catch {
     return null;
   }

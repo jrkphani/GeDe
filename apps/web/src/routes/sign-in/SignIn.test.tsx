@@ -439,7 +439,9 @@ describe('SignIn (option 1c)', () => {
     await u.click(await screen.findByRole('radio', { name: 'Create account' }));
     await u.type(screen.getByLabelText('Email'), 'meena@1cloudhub.com');
     await u.type(screen.getByLabelText('Display name'), 'Meena{Enter}');
-    expect(cognito.startSignUp).toHaveBeenCalledWith('meena@1cloudhub.com', 'Meena');
+    // I18N-05: the device's locale rides along as the pool's `locale` attribute, so the
+    // confirmation code itself arrives in that language.
+    expect(cognito.startSignUp).toHaveBeenCalledWith('meena@1cloudhub.com', 'Meena', 'en-US');
     await u.type(await screen.findByLabelText('Six-digit code'), '654321');
     await u.click(screen.getByRole('button', { name: 'Verify and create account' }));
     expect(cognito.confirmSignUpCode).toHaveBeenCalledWith('meena@1cloudhub.com', '654321');

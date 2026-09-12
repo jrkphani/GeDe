@@ -32,6 +32,7 @@ import {
 } from '../../auth/passkey-offer.js';
 import { readLastEmail, rememberLastEmail, takeReturnTo, useSession } from '../../auth/session.js';
 import { getConfig } from '../../config.js';
+import { activeLocale } from '../../locale.js';
 import { canContinue, flowReducer, initialFlow, type Mode } from './flow.js';
 import { RingMotif } from './RingMotif.js';
 
@@ -145,7 +146,7 @@ export function SignIn() {
       return;
     }
     dispatch({ type: 'busy', busy: 'continue' });
-    startSignUp(state.email.trim(), state.name.trim())
+    startSignUp(state.email.trim(), state.name.trim(), activeLocale())
       .then(({ destination }) => {
         dispatch({ type: 'go-code', purpose: 'sign-up', destination });
         announce('We sent a six-digit code to confirm your email');

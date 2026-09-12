@@ -13,6 +13,8 @@ import {
 vi.mock('aws-amplify/auth', async (importOriginal) => ({
   ...(await importOriginal<typeof AmplifyAuth>()),
   signIn: vi.fn(),
+  signUp: vi.fn(),
+  updateUserAttributes: vi.fn(),
   signOut: vi.fn(() => Promise.resolve()),
 }));
 const amplifyAuth = await import('aws-amplify/auth');
@@ -156,6 +158,36 @@ describe('describeUnsupportedStep', () => {
     expect(describeUnsupportedStep('CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION')).toBe(
       'This account has no passkey yet. Email me a one-time code instead.',
     );
+  });
+});
+
+describe('locale attribute', () => {
+  it('I18N-05 sign-up writes the device locale as the pool’s locale attribute; a locale change updates it', async () => {
+    const { startSignUp, syncLocaleAttribute } = await import('./cognito.js');
+    vi.mocked(amplifyAuth.signUp).mockResolvedValue({
+      isSignUpComplete: false,
+      nextStep: {
+        signUpStep: 'CONFIRM_SIGN_UP',
+        codeDeliveryDetails: { destination: 'm***@1cloudhub.com', deliveryMedium: 'EMAIL' },
+      },
+    });
+    await expect(startSignUp('meena@1cloudhub.com', 'Meena', 'ta-IN')).resolves.toEqual({
+      destination: 'm***@1cloudhub.com',
+    });
+    expect(amplifyAuth.signUp).toHaveBeenCalledWith({
+      username: 'meena@1cloudhub.com',
+      options: {
+        userAttributes: { email: 'meena@1cloudhub.com', name: 'Meena', locale: 'ta-IN' },
+        autoSignIn: { authFlowType: 'USER_AUTH', preferredChallenge: 'EMAIL_OTP' },
+      },
+    });
+    vi.mocked(amplifyAuth.updateUserAttributes).mockResolvedValue(
+      {} as AmplifyAuth.UpdateUserAttributesOutput,
+    );
+    await syncLocaleAttribute('hi-IN');
+    expect(amplifyAuth.updateUserAttributes).toHaveBeenCalledWith({
+      userAttributes: { locale: 'hi-IN' },
+    });
   });
 });
 
