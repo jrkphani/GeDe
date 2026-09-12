@@ -78,12 +78,13 @@ export class Conn {
   readonly awarenessBucket: TokenBucket;
   /**
    * Bytes the socket may hold unread on top of `WS_MAX_BUFFERED_BYTES`: the
-   * step 2 the room sent it on join, once (#99). Serving a document at all
-   * means sending its whole state; that one send is not what makes a socket
-   * a slow consumer.
+   * step 2 the room sent it on join, once (#99), for as long as that step 2
+   * is still in the socket's buffer. Serving a document at all means sending
+   * its whole state; that one send is not what makes a socket a slow consumer.
    */
   bufferAllowance = 0;
-  private step2Sent = false;
+  /** Set once the room has answered this socket's first step 1; a repeat is priced (#99). */
+  step2Sent = false;
   /** Set once the room closed this socket for exceeding a limit; later frames are ignored. */
   limited = false;
   /**
@@ -117,11 +118,20 @@ export class Conn {
     return canEdit(this.member.permission);
   }
 
-  /** The first step 2 this socket receives is allowed on top of the buffer budget. */
-  allowStep2(bytes: number): void {
-    if (this.step2Sent) return;
+  /**
+   * The first step 2 this socket receives is allowed on top of the buffer
+   * budget. True when this was the first; a repeat changes nothing.
+   */
+  allowStep2(bytes: number): boolean {
+    if (this.step2Sent) return false;
     this.step2Sent = true;
     this.bufferAllowance = bytes;
+    return true;
+  }
+
+  /** The step 2 has left the buffer: the socket is back on the plain budget. */
+  endStep2Allowance(): void {
+    this.bufferAllowance = 0;
   }
 }
 
@@ -270,6 +280,23 @@ export class Room {
         return;
       }
       const bytes = toUint8Array(data);
+      if (conn.limited) return;
+      // Every frame costs its length from the bytes bucket (#99), whatever
+      // its type and before it is queued: an awareness frame up to
+      // `maxPayload` would otherwise be assembled by `ws` and dropped below
+      // for free, at any rate — ingress the sync bucket was added to bound.
+      if (!conn.bytesBucket.take(bytes.byteLength)) {
+        this.stats.bytesRateLimited += 1;
+        conn.limited = true;
+        this.refuse(
+          conn,
+          'bytes_rate_limited',
+          { bytes: bytes.byteLength },
+          'byte rate limit exceeded; closing',
+        );
+        socket.close(CLOSE_TOO_MANY_REQUESTS, 'too many bytes');
+        return;
+      }
       // An oversized awareness frame is refused on its length alone, before
       // anything is decoded or queued (#37). The envelope is one varUint byte.
       if (
@@ -381,9 +408,38 @@ export class Room {
             this.refuseMalformed(conn, 'undecodable state vector');
             return;
           }
+          // The provider sends one step 1 per connection. A second one is
+          // a request to encode and send the document again — a message
+          // token buys a document-sized encode and reply — so it is priced
+          // at the room's size estimate from the bytes bucket, before the
+          // encode: a repeat on a document larger than the burst closes
+          // 4429, a repeat on a small one is paid for like any other bytes.
+          if (conn.step2Sent && !conn.bytesBucket.take(this.stateBytes)) {
+            this.stats.bytesRateLimited += 1;
+            conn.limited = true;
+            this.refuse(
+              conn,
+              'bytes_rate_limited',
+              { bytes: this.stateBytes, repeatedStep1: true },
+              'repeated sync step 1 over the byte budget; closing',
+            );
+            conn.socket.close(CLOSE_TOO_MANY_REQUESTS, 'too many bytes');
+            return;
+          }
           const step2 = encodeSyncStep2(this.doc, stateVector);
-          conn.allowStep2(step2.byteLength);
-          this.send(conn, step2);
+          const first = conn.allowStep2(step2.byteLength);
+          // The allowance is for that one send: it ends when `ws` has
+          // handed the step 2 to the socket, so it never adds a document's
+          // worth of slack to every later broadcast (#99).
+          this.send(
+            conn,
+            step2,
+            first
+              ? () => {
+                  conn.endStep2Allowance();
+                }
+              : undefined,
+          );
           return;
         }
         // Step 2 and update carry the same payload: one Yjs update. It is read
@@ -397,21 +453,10 @@ export class Room {
           this.refuseMalformed(conn, 'undecodable update payload');
           return;
         }
-        // Bytes cost tokens too (#99): a connection that sends 200 frames per
-        // second at the frame limit would otherwise be within the message
-        // budget while pushing hundreds of megabytes a second.
-        if (!conn.bytesBucket.take(update.byteLength)) {
-          this.stats.bytesRateLimited += 1;
-          conn.limited = true;
-          this.refuse(
-            conn,
-            'bytes_rate_limited',
-            { bytes: update.byteLength },
-            'sync byte rate limit exceeded; closing',
-          );
-          conn.socket.close(CLOSE_TOO_MANY_REQUESTS, 'too many bytes');
-          return;
-        }
+        // The frame's bytes were charged on arrival (the bytes bucket covers
+        // every frame, #99): a connection that sends 200 frames per second at
+        // the frame limit is within the message budget while pushing
+        // hundreds of megabytes a second, and the byte bucket is what stops it.
         if (!conn.canEdit) {
           // SHARE-03: a view-only participant receives the stream; their edits are rejected here.
           this.stats.droppedUpdates += 1;
@@ -572,7 +617,8 @@ export class Room {
     for (const conn of this.conns) this.send(conn, message);
   };
 
-  private send(conn: Conn, message: Uint8Array): void {
+  /** `onFlushed` runs once `ws` has written the message out of its buffer (not on failure). */
+  private send(conn: Conn, message: Uint8Array, onFlushed?: () => void): void {
     const { socket } = conn;
     if (socket.readyState !== socket.OPEN) return;
     if (socket.bufferedAmount > this.config.WS_MAX_BUFFERED_BYTES + conn.bufferAllowance) {
@@ -598,7 +644,9 @@ export class Room {
       if (error) {
         this.logger.warn({ err: error, documentId: this.documentId }, 'send failed; closing');
         socket.close(1011, 'send failed');
+        return;
       }
+      onFlushed?.();
     });
   }
 

@@ -13,7 +13,7 @@ import * as Y from 'yjs';
 import { METRIC_NAMESPACE, type CountLine, type RefusalReason } from '../metrics.js';
 import { json, startServer, WEB_ORIGIN, type LogLine, type TestServer } from '../test/fakes.js';
 import { bearerProtocols, sleep, waitFor, YClient } from '../test/y-client.js';
-import { MESSAGE_SYNC } from './protocol.js';
+import { MESSAGE_AWARENESS, MESSAGE_SYNC } from './protocol.js';
 import {
   CLOSE_FORBIDDEN,
   CLOSE_MALFORMED,
@@ -206,6 +206,72 @@ describe('bytes per frame, per document and per second (#99)', () => {
     expect(room?.stats.bytesRateLimited).toBe(1);
     expect(room?.doc.getMap<string>('cells').size).toBeLessThan(5);
     expect(refusalReasons(server.logs)).toContain('bytes_rate_limited');
+  });
+
+  test('LOAD-05 the bytes bucket covers every frame: oversized awareness frames are dropped but not free, and over the budget the socket closes 4429 (review of #99)', async () => {
+    await server.close();
+    server = await startServer(
+      {
+        WS_BYTES_PER_SEC: 1,
+        WS_BYTES_BURST: 64 * 1024,
+        WS_MAX_UPDATE_BYTES: 64 * 1024,
+        WS_AWARENESS_BURST: 1000,
+        WS_AWARENESS_PER_SEC: 1000,
+      },
+      { captureLogs: true },
+    );
+    ownerToken = server.verifier.issue('tok-owner', 'sub-owner');
+    ownerId = await userId(ownerToken);
+    docId = server.repo.seedDocument(ownerId, 'awareness-bytes').id;
+    const a = await connect(ownerToken);
+    await a.synced;
+    // Type-1 frames over AWARENESS_MAX_BYTES: never decoded, never fanned out — and each costs its length.
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_AWARENESS);
+    encoding.writeVarUint8Array(encoder, new Uint8Array(20 * 1024));
+    const frame = encoding.toUint8Array(encoder);
+    for (let i = 0; i < 5; i += 1) a.send(frame);
+    const closed = await a.closed;
+    expect(closed).toEqual({ code: CLOSE_TOO_MANY_REQUESTS, reason: 'too many bytes' });
+    const room = server.app.rooms.get(docId);
+    expect(room?.stats.bytesRateLimited).toBe(1);
+    expect(room?.stats.droppedAwareness).toBeGreaterThan(0);
+    expect(refusalReasons(server.logs)).toEqual(['bytes_rate_limited']);
+  });
+
+  test('LOAD-05 a second sync step 1 on one socket is priced at the document’s size: on a document larger than the byte burst it closes 4429 before anything is encoded, and the first step 2’s buffer allowance ends once it has been written (review of #99)', async () => {
+    await server.close();
+    server = await startServer(
+      { WS_BYTES_PER_SEC: 1, WS_BYTES_BURST: 64 * 1024, WS_MAX_UPDATE_BYTES: 64 * 1024 },
+      { captureLogs: true },
+    );
+    ownerToken = server.verifier.issue('tok-owner', 'sub-owner');
+    ownerId = await userId(ownerToken);
+    docId = server.repo.seedDocument(ownerId, 'step1').id;
+    // Grow the document past the burst through the persisted log.
+    const seeded = new Y.Doc();
+    seeded.getText('t').insert(0, 'y'.repeat(100 * 1024));
+    server.repo.updatesByDoc.set(docId, [
+      { seq: 1, update: Y.encodeStateAsUpdate(seeded), authorId: ownerId },
+    ]);
+    const a = await connect(ownerToken);
+    await a.synced;
+    const room = server.app.rooms.get(docId);
+    expect(room?.stateBytes).toBeGreaterThan(64 * 1024);
+    const conn = [...room!.conns][0]!;
+    // The client has the step 2 (it is synced), so `ws` has written it: no slack is left.
+    await waitFor(() => conn.bufferAllowance === 0);
+    expect(conn.step2Sent).toBe(true);
+    // A provider sends one step 1; this one asks for the document again.
+    const encoder = encoding.createEncoder();
+    encoding.writeVarUint(encoder, MESSAGE_SYNC);
+    syncProtocol.writeSyncStep1(encoder, new Y.Doc());
+    a.send(encoding.toUint8Array(encoder));
+    const closed = await a.closed;
+    expect(closed).toEqual({ code: CLOSE_TOO_MANY_REQUESTS, reason: 'too many bytes' });
+    expect(room?.stats.bytesRateLimited).toBe(1);
+    const line = refusals(server.logs).find((l) => l.Reason === 'bytes_rate_limited');
+    expect(line?.repeatedStep1).toBe(true);
   });
 });
 

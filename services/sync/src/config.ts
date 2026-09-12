@@ -70,15 +70,17 @@ export const configSchema = z
     AWARENESS_MAX_BYTES: positiveInt.default(4096),
     /**
      * Largest client → server frame, in bytes (#99, ADR-037): `ws` closes 1009
-     * before the frame is assembled. A client's sync step 2 or update never
-     * approaches this; server → client frames (a step 2 of a large document)
-     * are not bounded by it.
+     * before the frame is assembled. A client's sync step 2 or update is a
+     * few KB in practice; one transaction of ~6,800 rich cells (or ~14,000
+     * plain ones) reaches it. Server → client frames (a step 2 of a large
+     * document) are not bounded by it.
      */
     WS_MAX_UPDATE_BYTES: positiveInt.default(2 * 1024 * 1024),
     /**
      * Bytes a socket may leave unread before it is closed as a slow consumer
      * (#37, #99). The step 2 the room sends a socket on join is allowed on top
-     * of this once, so a large document can still be served.
+     * of this while it is still in the buffer, so a large document can still
+     * be served; once `ws` has written it the plain budget applies again.
      */
     WS_MAX_BUFFERED_BYTES: positiveInt.default(2 * 1024 * 1024),
     /** Sync messages (step 1, step 2, updates, awareness queries) a connection may send per second, sustained; over the burst it is closed (4429). */

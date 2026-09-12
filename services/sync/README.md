@@ -6,39 +6,39 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 
 ## Environment
 
-| Variable                                             | Required         | Default    | Notes                                                                                                           |
-| ---------------------------------------------------- | ---------------- | ---------- | --------------------------------------------------------------------------------------------------------------- |
-| `PORT`                                               |                  | `3000`     |                                                                                                                 |
-| `LOG_LEVEL`                                          |                  | `info`     | pino level                                                                                                      |
-| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |            | libpq names; the master user, injected from Secrets Manager in ECS; boot (migrations) only                      |
-| `PGAPPUSER` `PGAPPPASSWORD`                          | in production    |            | least-privilege role the runtime pool uses (#36); created by the boot; unset = master user                      |
-| `PGSSLMODE`                                          |                  | `disable`  | `verify-full` in production                                                                                     |
-| `PGSSLROOTCERT`                                      | with verify-full |            | `/app/rds-global-bundle.pem` in the image                                                                       |
-| `COGNITO_USER_POOL_ID`                               | yes              |            |                                                                                                                 |
-| `COGNITO_CLIENT_IDS`                                 | yes              |            | comma-separated app client ids a token may carry (the SPA's, the pipeline's `gede-e2e`)                         |
-| `COGNITO_REGION`                                     | yes              |            | also the S3 client region                                                                                       |
-| `COGNITO_ERASE_IDENTITY`                             |                  | `false`    | `true` once the task role may `cognito-idp:AdminDeleteUser`; `DELETE /api/me` then deletes the pool user (#111) |
-| `DOCS_BUCKET`                                        | yes              |            | S3 bucket for snapshots                                                                                         |
-| `DOCS_PREFIX`                                        |                  | ``         | key prefix, e.g. `docs/`                                                                                        |
-| `WEB_ORIGIN`                                         | yes              |            | exact SPA origin; CORS and the WebSocket `Origin` check                                                         |
-| `SNAPSHOT_EVERY_UPDATES`                             |                  | `500`      | compact after this many persisted updates                                                                       |
-| `SNAPSHOT_IDLE_MS`                                   |                  | `300000`   | …or after this long idle                                                                                        |
-| `ROOM_IDLE_MS`                                       |                  | `600000`   | evict a room this long after its last socket leaves                                                             |
-| `PROJECTION_DEBOUNCE_MS`                             |                  | `1000`     | wait after a compaction before writing the projection                                                           |
-| `RATE_LIMIT_PER_MINUTE`                              |                  | `300`      | `/api` requests per verified user per minute → 429                                                              |
-| `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`     | requests per address per minute, every route → 429                                                              |
-| `RATE_LIMIT_INVITES_PER_HOUR`                        |                  | `30`       | invitations per verified user per hour (each is an outbound mail) → 429                                         |
-| `WS_MAX_UPDATE_BYTES`                                |                  | `2 MiB`    | largest client → server frame; `ws` closes 1009 on the declared length (#99)                                    |
-| `WS_MAX_BUFFERED_BYTES`                              |                  | `2 MiB`    | unread bytes a socket may hold (plus its join step 2, once) before it is closed 1013 and terminated             |
-| `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400`  | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429                      |
-| `WS_BYTES_PER_SEC` `WS_BYTES_BURST`                  |                  | `1/4 MiB`  | sync payload bytes per connection; over the burst → 4429 (#99)                                                  |
-| `WS_AWARENESS_PER_SEC` `WS_AWARENESS_BURST`          |                  | `20/40`    | awareness per connection; excess dropped                                                                        |
-| `WS_MAX_ROOMS` `WS_MAX_SOCKETS`                      |                  | `500/2000` | open rooms / sockets one task serves; a join past either → 1013 (#99)                                           |
-| `WS_MAX_SOCKETS_PER_USER`                            |                  | `16`       | sockets one verified user may hold on one task; the next → 4429 (#99)                                           |
-| `WS_PERMISSION_RECHECK_MS`                           |                  | `60000`    | every connection's permission and token expiry re-resolved on this cadence (#104)                               |
-| `DOC_LOG_MAX_BYTES`                                  |                  | `8 MiB`    | `doc_updates` bytes since the last snapshot before the room compacts early (#99)                                |
-| `DOC_MAX_BYTES`                                      |                  | `64 MiB`   | ceiling on one document's state; an update that would pass it → 4413 (#99, ADR-037)                             |
-| `GEDE_VERSION`                                       |                  | build      | reported by `GET /api/version`; the short git sha                                                               |
+| Variable                                             | Required         | Default    | Notes                                                                                                                   |
+| ---------------------------------------------------- | ---------------- | ---------- | ----------------------------------------------------------------------------------------------------------------------- |
+| `PORT`                                               |                  | `3000`     |                                                                                                                         |
+| `LOG_LEVEL`                                          |                  | `info`     | pino level                                                                                                              |
+| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE` | yes              |            | libpq names; the master user, injected from Secrets Manager in ECS; boot (migrations) only                              |
+| `PGAPPUSER` `PGAPPPASSWORD`                          | in production    |            | least-privilege role the runtime pool uses (#36); created by the boot; unset = master user                              |
+| `PGSSLMODE`                                          |                  | `disable`  | `verify-full` in production                                                                                             |
+| `PGSSLROOTCERT`                                      | with verify-full |            | `/app/rds-global-bundle.pem` in the image                                                                               |
+| `COGNITO_USER_POOL_ID`                               | yes              |            |                                                                                                                         |
+| `COGNITO_CLIENT_IDS`                                 | yes              |            | comma-separated app client ids a token may carry (the SPA's, the pipeline's `gede-e2e`)                                 |
+| `COGNITO_REGION`                                     | yes              |            | also the S3 client region                                                                                               |
+| `COGNITO_ERASE_IDENTITY`                             |                  | `false`    | `true` once the task role may `cognito-idp:AdminDeleteUser`; `DELETE /api/me` then deletes the pool user (#111)         |
+| `DOCS_BUCKET`                                        | yes              |            | S3 bucket for snapshots                                                                                                 |
+| `DOCS_PREFIX`                                        |                  | ``         | key prefix, e.g. `docs/`                                                                                                |
+| `WEB_ORIGIN`                                         | yes              |            | exact SPA origin; CORS and the WebSocket `Origin` check                                                                 |
+| `SNAPSHOT_EVERY_UPDATES`                             |                  | `500`      | compact after this many persisted updates                                                                               |
+| `SNAPSHOT_IDLE_MS`                                   |                  | `300000`   | …or after this long idle                                                                                                |
+| `ROOM_IDLE_MS`                                       |                  | `600000`   | evict a room this long after its last socket leaves                                                                     |
+| `PROJECTION_DEBOUNCE_MS`                             |                  | `1000`     | wait after a compaction before writing the projection                                                                   |
+| `RATE_LIMIT_PER_MINUTE`                              |                  | `300`      | `/api` requests per verified user per minute → 429                                                                      |
+| `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`     | requests per address per minute, every route → 429                                                                      |
+| `RATE_LIMIT_INVITES_PER_HOUR`                        |                  | `30`       | invitations per verified user per hour (each is an outbound mail) → 429                                                 |
+| `WS_MAX_UPDATE_BYTES`                                |                  | `2 MiB`    | largest client → server frame; `ws` closes 1009 on the declared length (#99)                                            |
+| `WS_MAX_BUFFERED_BYTES`                              |                  | `2 MiB`    | unread bytes a socket may hold (plus its join step 2 while it is being written) before it is closed 1013 and terminated |
+| `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400`  | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429                              |
+| `WS_BYTES_PER_SEC` `WS_BYTES_BURST`                  |                  | `1/4 MiB`  | sync payload bytes per connection; over the burst → 4429 (#99)                                                          |
+| `WS_AWARENESS_PER_SEC` `WS_AWARENESS_BURST`          |                  | `20/40`    | awareness per connection; excess dropped                                                                                |
+| `WS_MAX_ROOMS` `WS_MAX_SOCKETS`                      |                  | `500/2000` | open rooms / sockets one task serves; a join past either → 1013 (#99)                                                   |
+| `WS_MAX_SOCKETS_PER_USER`                            |                  | `16`       | sockets one verified user may hold on one task; the next → 4429 (#99)                                                   |
+| `WS_PERMISSION_RECHECK_MS`                           |                  | `60000`    | every connection's permission and token expiry re-resolved on this cadence (#104)                                       |
+| `DOC_LOG_MAX_BYTES`                                  |                  | `8 MiB`    | `doc_updates` bytes since the last snapshot before the room compacts early (#99)                                        |
+| `DOC_MAX_BYTES`                                      |                  | `64 MiB`   | ceiling on one document's state; an update that would pass it → 4413 (#99, ADR-037)                                     |
+| `GEDE_VERSION`                                       |                  | build      | reported by `GET /api/version`; the short git sha                                                                       |
 
 There is no auth bypass in any environment. Tests inject a fake verifier through `buildServer` deps.
 
