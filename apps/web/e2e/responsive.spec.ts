@@ -76,10 +76,8 @@ for (const width of BREAKPOINTS) {
       test(`RESP-05 below 1024 px every sign-in target is at least 44 px tall at ${width} px`, async ({
         page,
       }) => {
-        // Known defect on main, recorded so the fix removes this annotation. Measured at
-        // 480 and 768 px: segments 31.5, Email 38.6, Continue 41.4, Change 26.75, Passkey 42.5,
-        // Email me a code 41.4 px. Nothing in @gede/ui grows its targets below 1024 px yet.
-        test.fail(true, 'sign-in targets are 26.75–42.5 px tall below 1024 px, not 44');
+        // Below 1024 px every control in @gede/ui grows to `--hit-target` (44 px), including
+        // the segmented control, the field, the ghost Change button and the method buttons.
         await page.goto('/sign-in');
         const email = page.getByLabel('Email');
         await email.fill(VALID_EMAIL);
@@ -123,12 +121,9 @@ for (const width of BREAKPOINTS) {
     test(`A11Y-06 no label is truncated at 200 % zoom on a ${width} px window`, async ({
       page,
     }) => {
-      if (width === 480) {
-        // Known defect on main: at 240 CSS px the method step's "Change" button clips to
-        // "Cha…" (`.gd-signin__who` does not wrap). 240 px is below WCAG 1.4.10's 320 px
-        // reflow floor, but the design system's definition of done asks for 200 % at 480.
-        test.fail(true, 'the Change button label clips to "Cha…" at 240 CSS px');
-      }
+      // 480 px at 200 % is 240 CSS px, below WCAG 1.4.10's 320 px reflow floor, but the
+      // design system's definition of done asks for 200 % at 480: `.gd-signin__who` wraps
+      // so the Change button keeps its whole label.
       await page.goto('/sign-in');
       const email = page.getByLabel('Email');
       await email.fill(VALID_EMAIL);

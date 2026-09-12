@@ -32,23 +32,21 @@ ids (`ap-southeast-1_1Zp23zP4h`, `1s3mm417d2rp61illc1bsg69bg`, `https://gede.wor
 and serves the result with `vite preview` on port 4173. Nothing in the suite signs in: OTP
 needs a mailbox and passkeys only work on the production RP id.
 
-| Spec                 | Journeys                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `auth.spec.ts`       | AUTH-01 `/` and `/d/:id` land on `/sign-in`, the path is retained · AUTH-02 segmented mode switch keeps the email · AUTH-03 Continue disabled until valid, Enter submits · AUTH-04/05 passkey first, hidden without `PublicKeyCredential`, no password field anywhere · AUTH-08 Apple slot below the passkey when configured · A11Y-01 Tab order, Enter, arrows + Space · A11Y-02 the painted focus ring is the `--focus-ring` token, 2 px solid at 2 px offset |
-| `responsive.spec.ts` | A11Y-06 sign-in at 480, 768, 1024, 1440 px and at 200 % zoom at each: no clipping, no horizontal scroll, no truncated label, passkey above code · RESP-05 44 px targets below 1024 px (`test.fail`, see below)                                                                                                                                                                                                                                                  |
-| `errors.spec.ts`     | Every catalogue page (400/401/403/404/429/500/503/504): copy from ARCHITECTURE-DIGEST §3, amber for 4xx and red for 5xx on the card's top rule, copyable ref announced through the live region (A11Y-04/05) · 503 polls `/api/health` every 15 s and continues on a 2xx · Check now shortcuts the poll · 400 validates a pasted link · the real router's 404                                                                                                    |
-| `document.spec.ts`   | RESP-02 "View only on phone" — `test.skip` with the reason: needs a session and a sync service, and no session is faked                                                                                                                                                                                                                                                                                                                                         |
+| Spec                 | Journeys                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
+| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `auth.spec.ts`       | AUTH-01 `/` and `/d/:id` land on `/sign-in`, the path is retained · AUTH-02 segmented mode switch keeps the email · AUTH-03 Continue disabled until valid, Enter submits · AUTH-04/05 passkey first, hidden without `PublicKeyCredential`, no password field anywhere · AUTH-08 with Apple configured: Passkey → Apple → Email me a code on the method step (option 1c, by position and by Tab), Apple at the email step too, Apple's wording, ≥ 44 px at every step · A11Y-01 Tab order, Enter, arrows + Space · A11Y-02 the painted focus ring is the `--focus-ring` token, 2 px solid at 2 px offset |
+| `responsive.spec.ts` | A11Y-06 sign-in at 480, 768, 1024, 1440 px and at 200 % zoom at each: no clipping, no horizontal scroll, no truncated label, passkey above code · RESP-05 every sign-in target is at least 44 × 44 px at 480 and 768 px                                                                                                                                                                                                                                                                                                                                                                                 |
+| `errors.spec.ts`     | Every catalogue page (400/401/403/404/429/500/503/504): copy from ARCHITECTURE-DIGEST §3, amber for 4xx and red for 5xx on the card's top rule, copyable ref announced through the live region (A11Y-04/05) · 503 polls `/api/health` every 15 s and continues on a 2xx · Check now shortcuts the poll · 400 validates a pasted link · the real router's 404                                                                                                                                                                                                                                            |
+| `document.spec.ts`   | RESP-02 "View only on phone" — `test.skip` with the reason: needs a session and a sync service, and no session is faked                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 
-Four tests are annotated `test.fail(true, reason)` because they document defects on `main`
-that this suite found and cannot fix from `e2e/`:
-
-- AUTH-08: the Apple button paints at 41.25 px — `packages/ui/src/styles.css` sets the root
-  font to 0.9375rem (15 px), so its `2.75rem` height is not the 44 pt Apple requires.
-- RESP-05 (480 and 768 px): sign-in targets are 26.75–42.5 px tall below 1024 px.
-- A11Y-06 (480 px at 200 %): the method step's "Change" button clips to "Cha…" at 240 CSS px.
-
-A `test.fail` test that starts passing fails the run, which is the signal to delete the
-annotation in the PR that fixes the component.
+No test is annotated `test.fail`. When the suite finds a defect it cannot fix from `e2e/`,
+record it as `test.fail(true, reason)` with the measurement in the reason: the test keeps
+running, and the moment the component is fixed the "expected to fail, but passed" result
+fails the run, which is the signal to delete the annotation in that PR. The suite's first
+run recorded three this way (AUTH-08 Apple button at 41.25 px, RESP-05 targets of 26.75–42.5 px
+below 1024 px, A11Y-06 "Change" clipping to "Cha…" at 240 CSS px); PR #30 fixed all three
+(`--hit-target` token, root font at 100 %, `.gd-signin__who` wrapping) and the annotations
+are gone.
 
 ### Error pages without a backend
 
@@ -149,7 +147,8 @@ the CI record of the scan is the Synth build log; the JSON files live only on th
 ## CI
 
 CodeBuild runs `npm ci` → `npx playwright install --only-shell chromium` (after installing
-Chromium's shared libraries with dnf) → `npm run verify` → `npm run e2e` → web build → synth.
-Any red step stops the pipeline before assets are published. Why the suite runs on the AL2023
+Chromium's shared libraries with dnf) → `npm run verify` → `npm run db:parity -w packages/db`
+(every migration against a throwaway postgres:17 in Docker) → `npm run e2e` → web build →
+synth. Any red step stops the pipeline before assets are published. Why the suite runs on the AL2023
 arm64 image rather than a Playwright container is in `infra/CLAUDE.md`, "Playwright on
 CodeBuild"; `infra/test/stage.test.ts` pins the command order.

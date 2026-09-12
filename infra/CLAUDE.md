@@ -86,7 +86,8 @@ so same-region cross-stack references render as `Fn::GetStackOutput` rather than
 
 ## Playwright on CodeBuild
 
-The Synth step runs `npm run e2e` between `npm run verify` and the web build, on the same
+The Synth step runs `npm run e2e` after `npm run verify` and `npm run db:parity` and before
+the web build, on the same
 `aws/codebuild/amazonlinux-aarch64-standard:3.0` (AL2023, arm64, `SMALL`) project. A red
 journey fails Synth, so nothing is published or deployed. Why this and not a Playwright
 Docker image (`mcr.microsoft.com/playwright:v<ver>-noble` via

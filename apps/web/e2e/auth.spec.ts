@@ -148,12 +148,9 @@ test.describe('method step', () => {
     await expect(s.password).toHaveCount(0);
   });
 
-  test('AUTH-08 with Apple configured, the passkey sits above Apple and Apple keeps its own wording', async ({
-    page,
-    checkA11y,
-  }) => {
-    // Same public config with the Apple slot switched on. The button is asserted, never clicked.
-    await page.route('**/config.json', async (route) => {
+  /** Same public config with the Apple slot switched on. The button is asserted, never clicked. */
+  const withApple = (page: Page) =>
+    page.route('**/config.json', async (route) => {
       const res = await route.fetch();
       const body = (await res.json()) as Record<string, unknown>;
       await route.fulfill({
@@ -164,44 +161,64 @@ test.describe('method step', () => {
         },
       });
     });
+
+  test('AUTH-08 with Apple configured, the method step reads Passkey, Apple, Email me a code (option 1c) and Apple keeps its own wording', async ({
+    page,
+    checkA11y,
+  }) => {
+    await withApple(page);
     await page.goto('/sign-in');
     const s = signInScreen(page);
+    // Apple is also offered at the email step, below Continue, with Apple's wording.
+    const apple = page.getByRole('button', { name: 'Sign in with Apple' });
+    await expect(apple).toBeVisible();
+    await expect(s.passkey).toHaveCount(0);
     await s.email.fill(VALID_EMAIL);
     await s.email.press('Enter');
     await expect(s.passkey).toBeVisible();
-    const apple = page.getByRole('button', { name: 'Sign in with Apple' });
     await expect(apple).toBeVisible();
+    await expect(s.emailCode).toBeVisible();
+    // Option 1c, verbatim: passkey above Apple above the email code. Apple is never
+    // subordinate to another provider; the code is a fallback, not a provider.
     const passkeyBox = (await s.passkey.boundingBox())!;
     const appleBox = (await apple.boundingBox())!;
+    const codeBox = (await s.emailCode.boundingBox())!;
     expect(passkeyBox.y + passkeyBox.height).toBeLessThanOrEqual(appleBox.y);
+    expect(appleBox.y + appleBox.height).toBeLessThanOrEqual(codeBox.y);
+    // Same order in the tab sequence: Change → Passkey → Apple → Email me a code.
+    await s.change.focus();
+    await page.keyboard.press('Tab');
+    await expect(s.passkey).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(apple).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(s.emailCode).toBeFocused();
     await expect(s.password).toHaveCount(0);
     await checkA11y('sign-in method step with apple 1440');
   });
 
-  test('AUTH-08 the Apple button meets the 44 pt minimum height', async ({ page }) => {
-    // Known defect on main, recorded here so the fix removes this annotation:
-    // `packages/ui/src/styles.css` sets the root font to 0.9375rem (15 px), so the button's
-    // 2.75rem height paints at 41.25 px, not the 44 pt Apple requires (root rule 6).
-    test.fail(true, 'Apple button paints at 41.25 px because the root font size is 15 px');
-    await page.route('**/config.json', async (route) => {
-      const res = await route.fetch();
-      const body = (await res.json()) as Record<string, unknown>;
-      await route.fulfill({
-        response: res,
-        json: {
-          ...body,
-          appleSignIn: { domain: 'gede-prod.auth.ap-southeast-1.amazoncognito.com' },
-        },
-      });
-    });
+  test('AUTH-08 the Apple button meets the 44 pt minimum height at both steps', async ({
+    page,
+  }) => {
+    // Apple's 44 pt floor (root rule 6): the button takes max(2.75rem, --hit-target) and the
+    // root font stays at 100 %, so 2.75rem is 44 px and never 41.25.
+    await withApple(page);
     await page.goto('/sign-in');
     const s = signInScreen(page);
-    await s.email.fill(VALID_EMAIL);
-    await s.email.press('Enter');
     const apple = page.getByRole('button', { name: 'Sign in with Apple' });
     await expect(apple).toBeVisible();
-    const appleBox = (await apple.boundingBox())!;
-    expect(appleBox.height).toBeGreaterThanOrEqual(44);
+    expect((await apple.boundingBox())!.height, 'email step').toBeGreaterThanOrEqual(44);
+    await s.email.fill(VALID_EMAIL);
+    await s.email.press('Enter');
+    await expect(s.passkey).toBeVisible();
+    await expect(apple).toBeVisible();
+    expect((await apple.boundingBox())!.height, 'method step').toBeGreaterThanOrEqual(44);
+
+    // Sign-up uses Apple's alternative wording, at the same height.
+    await s.signUpMode.click();
+    const appleSignUp = page.getByRole('button', { name: 'Continue with Apple' });
+    await expect(appleSignUp).toBeVisible();
+    expect((await appleSignUp.boundingBox())!.height, 'sign-up step').toBeGreaterThanOrEqual(44);
   });
 });
 
