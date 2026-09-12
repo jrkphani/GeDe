@@ -14,6 +14,8 @@
  *   - `shared`   = live, shared with me, plus my own documents that have a share
  *   - `deleted`  = owned, `deletedAt` within `RECENTLY_DELETED_DAYS`
  *   - sizeBytes  = size of the snapshot at `snapshotSeq` + bytes of updates after it
+ *   - recover    = single and all: only within the retention window; recover-all
+ *                  writes its `document.recover` audit rows itself (one transaction)
  *   - purge      = every owned soft-deleted document (retention or not), cascade
  *                  to updates/snapshots/shares, one `document.purge` audit row each;
  *                  audit rows for the document are kept (no cascade, migration 0003)
@@ -81,6 +83,20 @@ export class FakeRepo implements Repo {
   /** Set to make `append` fail once (to exercise retry). */
   failNextAppend = false;
   appendCalls = 0;
+  private appendGate: Promise<void> | null = null;
+
+  /**
+   * Hold the next `append` (after it has been counted in `appendCalls`) until
+   * the returned function is called — a slow database, for tests that need
+   * something to happen while a flush is in flight.
+   */
+  gateNextAppend(): () => void {
+    let release: () => void = () => undefined;
+    this.appendGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return release;
+  }
   /** Set to make `purgeDeleted` fail before anything changes. */
   failNextPurge = false;
 
@@ -240,12 +256,12 @@ export class FakeRepo implements Repo {
     },
     recover: (id) => {
       const doc = this.docs.get(id);
-      if (doc?.deletedAt == null) return Promise.resolve(undefined);
+      if (!doc || !this.withinRetention(doc, Date.now())) return Promise.resolve(undefined);
       doc.deletedAt = null;
       doc.updatedAt = new Date();
       return Promise.resolve({ ...doc });
     },
-    recoverAllDeleted: (ownerId) => {
+    recoverAllDeleted: (ownerId, actorId) => {
       const now = Date.now();
       const recovered: DocumentRecord[] = [];
       for (const doc of this.docs.values()) {
@@ -253,6 +269,12 @@ export class FakeRepo implements Repo {
         doc.deletedAt = null;
         doc.updatedAt = new Date(now);
         recovered.push({ ...doc });
+        this.auditLog.push({
+          documentId: doc.id,
+          userId: actorId,
+          action: 'document.recover',
+          target: null,
+        });
       }
       return Promise.resolve(recovered);
     },
@@ -324,20 +346,25 @@ export class FakeRepo implements Repo {
         updates,
       });
     },
-    append: (documentId, updates) => {
+    append: async (documentId, updates) => {
       this.appendCalls += 1;
       if (this.failNextAppend) {
         this.failNextAppend = false;
-        return Promise.reject(new Error('simulated append failure'));
+        throw new Error('simulated append failure');
+      }
+      if (this.appendGate) {
+        const gate = this.appendGate;
+        this.appendGate = null;
+        await gate;
       }
       const doc = this.docs.get(documentId);
-      if (!doc) return Promise.reject(new Error(`document ${documentId} does not exist`));
+      if (!doc) throw new Error(`document ${documentId} does not exist`);
       const log = this.updatesByDoc.get(documentId) ?? [];
       const base = Math.max(doc.snapshotSeq, log.at(-1)?.seq ?? 0);
       updates.forEach((u, i) => log.push({ seq: base + i + 1, update: u.update }));
       this.updatesByDoc.set(documentId, log);
       doc.updatedAt = new Date();
-      return Promise.resolve({ firstSeq: base + 1, lastSeq: base + updates.length });
+      return { firstSeq: base + 1, lastSeq: base + updates.length };
     },
     commitSnapshot: ({ documentId, seq, s3Key, sizeBytes }) => {
       const doc = this.docs.get(documentId);

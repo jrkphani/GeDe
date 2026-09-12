@@ -243,16 +243,53 @@ describe('recover (LIB-08)', () => {
     expect(res.body.error.code).toBe('conflict');
   });
 
-  test('SHARE-03 only the owner may recover; an editor gets 403 and never the title', async () => {
+  test('SHARE-03 only the owner may recover; an editor is told it is gone (404), a stranger 403, neither the title', async () => {
     const doc = server.repo.seedDocument(aliceId, SECRET_TITLE);
     server.repo.share(doc.id, bobId, 'edit');
     await server.repo.documents.softDelete(doc.id);
-    const res = await json<ErrorBody>(server, 'POST', `/api/documents/${doc.id}/recover`, {
+    const asEditor = await json<ErrorBody>(server, 'POST', `/api/documents/${doc.id}/recover`, {
       token: bob,
     });
-    expect(res.status).toBe(403);
-    expect(JSON.stringify(res.body)).not.toContain(SECRET_TITLE);
+    expect(asEditor.status).toBe(404);
+    expect(JSON.stringify(asEditor.body)).not.toContain(SECRET_TITLE);
+    const asStranger = await json<ErrorBody>(server, 'POST', `/api/documents/${doc.id}/recover`, {
+      token: carol,
+    });
+    expect(asStranger.status).toBe(403);
+    expect(JSON.stringify(asStranger.body)).not.toContain(SECRET_TITLE);
     expect(server.repo.docs.get(doc.id)?.deletedAt).not.toBeNull();
+  });
+
+  test('LIB-08 a document deleted more than 30 days ago is not recoverable (404), matching the deleted view', async () => {
+    const expired = server.repo.seedDocument(aliceId, 'expired');
+    server.repo.docs.get(expired.id)!.deletedAt = new Date(Date.now() - 31 * DAY);
+    expect((await list(alice, 'deleted')).body.documents).toEqual([]);
+    const res = await json<ErrorBody>(server, 'POST', `/api/documents/${expired.id}/recover`, {
+      token: alice,
+    });
+    expect(res.status).toBe(404);
+    expect(server.repo.docs.get(expired.id)?.deletedAt).not.toBeNull();
+    expect(server.repo.auditLog.filter((e) => e.action === 'document.recover')).toEqual([]);
+  });
+
+  test('LIB-08 a participant of a deleted document gets 404 on every read, a stranger 403', async () => {
+    const doc = server.repo.seedDocument(aliceId, SECRET_TITLE);
+    server.repo.share(doc.id, bobId, 'view');
+    await server.repo.documents.softDelete(doc.id);
+    for (const path of [`/api/documents/${doc.id}`, `/api/documents/${doc.id}/shares`]) {
+      const asViewer = await json<ErrorBody>(server, 'GET', path, { token: bob });
+      expect(asViewer.status, path).toBe(404);
+      expect(asViewer.body.error.message).toBe('Nothing at this address');
+      expect(JSON.stringify(asViewer.body)).not.toContain(SECRET_TITLE);
+      const asStranger = await json<ErrorBody>(server, 'GET', path, { token: carol });
+      expect(asStranger.status, path).toBe(403);
+      expect(JSON.stringify(asStranger.body)).not.toContain(SECRET_TITLE);
+    }
+    const rename = await json<ErrorBody>(server, 'PATCH', `/api/documents/${doc.id}`, {
+      token: bob,
+      body: { title: 'x' },
+    });
+    expect(rename.status).toBe(404);
   });
 
   test('LIB-08 recover needs a token and a well-formed id', async () => {
@@ -433,14 +470,40 @@ describe('GET /api/documents/:id/shares (LIB-07)', () => {
     expect(res.body.participants.some((p) => p.userId === aliceId)).toBe(false);
   });
 
-  test('LIB-07 any participant may read the sheet; a view-only one included', async () => {
+  test('LIB-07 an editor sees emails; a view-only participant sees names only', async () => {
+    server.repo.userById(aliceId)!.displayName = 'Alice A';
     const doc = server.repo.seedDocument(aliceId, 'team');
+    server.repo.share(doc.id, bobId, 'edit');
     server.repo.share(doc.id, carolId, 'view');
-    const res = await json<ParticipantsView>(server, 'GET', `/api/documents/${doc.id}/shares`, {
-      token: carol,
+    server.repo.sharesByDoc.get(doc.id)!.get(carolId)!.createdAt = new Date(Date.now() + 1000);
+
+    const asEditor = await json<ParticipantsView>(
+      server,
+      'GET',
+      `/api/documents/${doc.id}/shares`,
+      { token: bob },
+    );
+    expect(asEditor.status).toBe(200);
+    expect(asEditor.body.owner).toEqual({
+      id: aliceId,
+      name: 'Alice A',
+      email: 'alice@example.com',
     });
-    expect(res.status).toBe(200);
-    expect(res.body.owner.id).toBe(aliceId);
+    expect(asEditor.body.participants.map((p) => p.email)).toEqual(['bob@example.com', null]);
+
+    const asViewer = await json<ParticipantsView>(
+      server,
+      'GET',
+      `/api/documents/${doc.id}/shares`,
+      { token: carol },
+    );
+    expect(asViewer.status).toBe(200);
+    expect(asViewer.body.owner).toEqual({ id: aliceId, name: 'Alice A', email: null });
+    expect(asViewer.body.participants.map((p) => [p.userId, p.permission, p.email])).toEqual([
+      [bobId, 'edit', null],
+      [carolId, 'view', null],
+    ]);
+    expect(JSON.stringify(asViewer.body)).not.toContain('@example.com');
   });
 
   test('SHARE-03 a non-participant gets 403 and the response never carries the title', async () => {

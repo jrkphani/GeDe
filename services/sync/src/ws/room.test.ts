@@ -367,6 +367,43 @@ describe('deletion', () => {
     expect(c.cell('r1:c1')).toBe('kept for recovery');
   });
 
+  test('LOAD-05 LIB-08 an update that lands while DELETE is disposing the room is persisted, even when the final compaction fails', async () => {
+    const a = await connect(ownerToken);
+    await a.synced;
+    server.s3.failPuts = true;
+
+    // First edit: its flush reaches the database and is held there.
+    const release = server.repo.gateNextAppend();
+    a.setCell('r1:c1', 'first');
+    await waitFor(() => server.repo.appendCalls === 1);
+
+    // DELETE starts disposing the room; the drain waits behind the held append.
+    const del = json<null>(server, 'DELETE', `/api/documents/${docId}`, { token: ownerToken });
+    try {
+      await sleep(30);
+      expect(a.ws.readyState).toBe(a.ws.OPEN);
+      // Second edit lands during dispose, before the socket has seen 4404.
+      a.setCell('r2:c1', 'second');
+      await sleep(30);
+    } finally {
+      release();
+    }
+
+    expect((await del).status).toBe(204);
+    expect((await a.closed).code).toBe(CLOSE_NOT_FOUND);
+    // The compaction failed (S3 down), so the log is the only copy — and it is complete.
+    expect(server.repo.updatesByDoc.get(docId)?.map((u) => u.seq)).toEqual([1, 2]);
+    expect(server.repo.snapshotsByDoc.get(docId)).toBeUndefined();
+    expect(server.repo.docs.get(docId)?.deletedAt).not.toBeNull();
+
+    // Recover and reopen from the log alone: both edits are there.
+    server.s3.failPuts = false;
+    await json(server, 'POST', `/api/documents/${docId}/recover`, { token: ownerToken });
+    const b = await connect(editorToken);
+    await b.synced;
+    expect(b.doc.getMap<string>('cells').toJSON()).toEqual({ 'r1:c1': 'first', 'r2:c1': 'second' });
+  });
+
   test('LIB-08 delete-all frees an idling room without a compaction', async () => {
     const a = await connect(ownerToken);
     await a.synced;

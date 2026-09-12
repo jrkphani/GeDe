@@ -131,10 +131,17 @@ export interface DocumentsRepo {
   create(input: { ownerId: string; title: string }): Promise<DocumentRecord>;
   rename(id: string, title: string): Promise<DocumentRecord | undefined>;
   softDelete(id: string): Promise<DocumentRecord | undefined>;
-  /** Clear `deleted_at`; `undefined` when the document is not soft-deleted. */
+  /**
+   * Clear `deleted_at`; `undefined` when the document is not soft-deleted or
+   * its deletion is past the retention window (it is no longer in Recently
+   * Deleted, so it cannot be recovered from there).
+   */
   recover(id: string): Promise<DocumentRecord | undefined>;
-  /** Recover every owned document deleted within the retention window. */
-  recoverAllDeleted(ownerId: string): Promise<DocumentRecord[]>;
+  /**
+   * Recover every owned document deleted within the retention window and
+   * write one `document.recover` audit row per document, in one transaction.
+   */
+  recoverAllDeleted(ownerId: string, actorId: string): Promise<DocumentRecord[]>;
   /**
    * Permanently delete every owned soft-deleted document (including any past
    * the retention window) with its updates, snapshots, shares and invites,

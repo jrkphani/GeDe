@@ -13,7 +13,7 @@ import { z } from 'zod';
 import { currentUser, requireUser, toAuthUser, type AuthUser, type UserResolver } from '../auth.js';
 import type { Deps } from '../deps.js';
 import { AppError } from '../errors.js';
-import { requirePermission } from '../permissions.js';
+import { canEdit, requirePermission } from '../permissions.js';
 import type {
   DocumentListing,
   DocumentPermission,
@@ -109,6 +109,11 @@ export interface ProfileView {
   locale: string | null;
 }
 
+/**
+ * The participants sheet (LIB-07). `email` fields are populated for the owner
+ * and for `edit` participants; a `view` participant receives `null` in every
+ * email field and names only.
+ */
 export interface ParticipantsView {
   owner: { id: string; name: string | null; email: string | null };
   participants: {
@@ -160,13 +165,17 @@ function profileView(user: AuthUser): ProfileView {
   };
 }
 
-function participantsView(list: ParticipantList): ParticipantsView {
+function participantsView(
+  list: ParticipantList,
+  { revealEmails }: { revealEmails: boolean },
+): ParticipantsView {
+  const email = (value: string | null) => (revealEmails ? value : null);
   return {
-    owner: { id: list.owner.id, name: list.owner.name, email: list.owner.email },
+    owner: { id: list.owner.id, name: list.owner.name, email: email(list.owner.email) },
     participants: list.participants.map((p) => ({
       userId: p.userId,
       name: p.name,
-      email: p.email,
+      email: email(p.email),
       permission: p.permission,
       invitedBy: p.invitedBy,
     })),
@@ -234,17 +243,8 @@ export function registerApi(
 
       api.post('/documents/recover-all', async (request) => {
         const user = currentUser(request);
-        const recovered = await repo.documents.recoverAllDeleted(user.id);
-        await Promise.all(
-          recovered.map((doc) =>
-            repo.audit.record({
-              documentId: doc.id,
-              userId: user.id,
-              action: 'document.recover',
-              target: null,
-            }),
-          ),
-        );
+        // The audit rows are written inside the same transaction as the recovery.
+        const recovered = await repo.documents.recoverAllDeleted(user.id, user.id);
         return { recovered: recovered.length };
       });
 
@@ -345,10 +345,12 @@ export function registerApi(
       api.get('/documents/:id/shares', async (request) => {
         const user = currentUser(request);
         const id = parseId(request.params);
-        await requirePermission(repo, user.id, id, 'view');
+        const { permission } = await requirePermission(repo, user.id, id, 'view');
         const list = await repo.documents.participants(id);
         if (!list) throw NOT_FOUND();
-        return participantsView(list);
+        // Emails are for people who can manage or act on the sheet — the owner
+        // and editors. A view-only participant sees names only.
+        return participantsView(list, { revealEmails: canEdit(permission) });
       });
 
       done();

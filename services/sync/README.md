@@ -60,7 +60,8 @@ sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', li
 - `GET /api/documents/:id` → `{ document }` with the same fields as a library row.
   `PATCH /api/documents/:id { title }` (owner or editor). `DELETE /api/documents/:id` (owner) →
   204; moves the document to Recently Deleted and closes its room with 4404.
-- `POST /api/documents/:id/recover` (owner) → `{ document }`; 409 when it is not deleted.
+- `POST /api/documents/:id/recover` (owner) → `{ document }`; 409 when it is not deleted, 404 when
+  its deletion is older than 30 days (it is no longer in Recently Deleted).
 - `POST /api/documents/recover-all` (caller's documents deleted within 30 days) → `{ recovered }`.
 - `POST /api/documents/delete-all` (every soft-deleted document the caller owns, retention or not)
   → `{ deleted }`. Rows in `documents`, `doc_updates`, `snapshots`, `shares`, `invites` go in one
@@ -68,14 +69,16 @@ sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', li
   are deleted best-effort afterwards (a failure is logged with the document id).
 - `GET /api/documents/:id/shares` (any participant) →
   `{ owner: { id, name, email }, participants: [{ userId, name, email, permission, invitedBy }], linkAccess }`.
-  Share and invite writes are Wave 3.
+  Email fields are populated for the owner and `edit` participants; a `view` participant receives
+  `null` in every email field. Share and invite writes are Wave 3.
 - `GET /ws/:docId?token=<access JWT>` — y-websocket protocol plus one server-to-client message,
   type 4 `{ "code": "read-only" }`, sent once per view-only connection on its first rejected write
   (see `src/ws/protocol.ts`). Close codes: 4401 unauthenticated, 4403 not a participant / wrong
   origin, 4404 unknown or deleted document, 1001 on shutdown.
 
-Errors are `{ error: { code, message, ref } }`; `ref` is also sent as `x-request-id`. A 403 never
-carries the document's title.
+Errors are `{ error: { code, message, ref } }`; `ref` is also sent as `x-request-id`. A
+non-participant gets 403 (never the title); a participant of a deleted document gets 404, the
+"may have been deleted" page — only the owner can still read it, in Recently Deleted.
 
 Audit rows (`audit_log.action`): `document.create`, `document.rename`, `document.delete`,
 `document.recover`, `document.purge` (target = the title; the row outlives the document).
@@ -105,3 +108,7 @@ docker build --platform linux/arm64 -f services/sync/Dockerfile -t gede-sync:loc
 npx vitest run services/sync        # no Postgres or S3 needed: fakes are injected
 npm run db:parity -w packages/db    # applies migrations to a throwaway postgres:17 (needs Docker)
 ```
+
+The pipeline's Synth step runs `db:parity` with `CI=true` (privileged CodeBuild, Docker available)
+right after `npm run verify`, so every migration has run against a real PostgreSQL 17 before it
+runs against production. Locally without Docker the script skips; with `CI=true` it fails.
