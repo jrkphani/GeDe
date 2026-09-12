@@ -176,4 +176,36 @@ describe('engine host', () => {
       },
     ]);
   });
+
+  it('FX-06 a Worker that fails hands over to the inline engine from a fresh snapshot; nothing stays pending', async () => {
+    const f = fixture();
+    let fail: ((error: unknown) => void) | null = null;
+    const terminate = vi.fn();
+    // FAKE transport standing in for a Worker whose script never loads: swallows requests, then errors.
+    const dead: EngineTransport = {
+      mode: 'worker',
+      post: () => undefined,
+      onResponse: () => undefined,
+      onError: (h) => {
+        fail = h;
+      },
+      terminate: () => {
+        terminate();
+      },
+    };
+    const host = createEngineHost(f.gd, dead);
+    f.set(0, 0, '=Concat("x", "y")');
+    expect(host.mode).toBe('worker');
+    const silence = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      fail!(new Error('script blocked'));
+      expect(host.mode).toBe('inline');
+      await host.settled();
+      expect(host.result(f.id(0, 0))?.value).toEqual({ kind: 'text', text: 'xy' });
+      expect(terminate).toHaveBeenCalledTimes(1);
+    } finally {
+      silence.mockRestore();
+      host.dispose();
+    }
+  });
 });

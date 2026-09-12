@@ -111,6 +111,10 @@
   transform: scale(calc(1 / var(--gd-zoom, 1)));
   transform-origin: top right;
 }
+/* Dark theme lifts the outline colours; the badge text flips to the surface colour to stay ≥ 4.5:1. */
+[data-theme='dark'] .gd-outline__index {
+  color: var(--surface);
+}
 /* ---- entry popovers (FX-02, FX-04) -------------------------------------- */
 .gd-formula-popover {
   min-width: 16rem;

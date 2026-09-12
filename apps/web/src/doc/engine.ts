@@ -19,6 +19,7 @@ import {
   type EngineRequest,
   type EngineResponse,
   type GedeDoc,
+  workbookSnapshot,
   type WorkbookCellId,
   type WorkbookChange,
 } from '@gede/core';
@@ -28,6 +29,8 @@ export interface EngineTransport {
   readonly mode: 'worker' | 'inline';
   post(request: EngineRequest): void;
   onResponse(handler: (response: EngineResponse) => void): void;
+  /** The transport died (a Worker that failed to load or threw); the host falls back inline. */
+  onError?(handler: (error: unknown) => void): void;
   terminate(): void;
 }
 
@@ -60,6 +63,11 @@ export function workerTransport(): EngineTransport {
     onResponse: (handler) => {
       worker.onmessage = (e: MessageEvent<EngineResponse>) => {
         handler(e.data);
+      };
+    },
+    onError: (handler) => {
+      worker.onerror = (e) => {
+        handler(e.error ?? e.message);
       };
     },
     terminate: () => {
@@ -109,7 +117,8 @@ function defaultTransport(): EngineTransport {
   return typeof Worker === 'undefined' ? inlineTransport() : workerTransport();
 }
 
-export function createEngineHost(gd: GedeDoc, transport = defaultTransport()): EngineHost {
+export function createEngineHost(gd: GedeDoc, initial = defaultTransport()): EngineHost {
+  let transport = initial;
   const results = new Map<WorkbookCellId, CellResult>();
   const cellListeners = new Map<WorkbookCellId, Set<() => void>>();
   const allListeners = new Set<() => void>();
@@ -124,7 +133,7 @@ export function createEngineHost(gd: GedeDoc, transport = defaultTransport()): E
     if (set !== undefined) for (const cb of set) cb();
   };
 
-  transport.onResponse((response) => {
+  const onResponse = (response: EngineResponse) => {
     lastElapsedMs = response.elapsedMs;
     const touched: WorkbookCellId[] = [];
     for (const id of response.removed) {
@@ -141,18 +150,35 @@ export function createEngineHost(gd: GedeDoc, transport = defaultTransport()): E
     }
     pending.delete(response.seq);
     if (pending.size === 0) for (const resolve of settleWaiters.splice(0)) resolve();
-  });
+  };
 
-  const post = (changes: WorkbookChange[]) => {
+  const post = (changes: readonly WorkbookChange[]) => {
     seq += 1;
     const request: EngineRequest = { type: 'apply', seq, changes };
     pending.add(seq);
     transport.post(request);
   };
+
+  // A Worker that cannot load (blocked script, broken bundle) must not leave every
+  // formula pending: the same engine takes over inline, from a fresh snapshot.
+  const attach = (t: EngineTransport) => {
+    t.onResponse(onResponse);
+    t.onError?.((error) => {
+      console.error('formula worker failed; evaluating inline', error);
+      t.terminate();
+      pending.clear();
+      transport = inlineTransport();
+      attach(transport);
+      post([{ type: 'reset', snapshot: workbookSnapshot(gd) }]);
+    });
+  };
+  attach(transport);
   const stopObserving = observeWorkbook(gd, post);
 
   return {
-    mode: transport.mode,
+    get mode() {
+      return transport.mode;
+    },
     result: (cellId) => results.get(cellId),
     subscribe: (cellId, onChange) => {
       let set = cellListeners.get(cellId);

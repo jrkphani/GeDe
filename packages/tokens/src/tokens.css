@@ -121,7 +121,13 @@
   --warning: #e0a04a;   /* amber-300, 7.9:1 */
   --danger:  #f0857a;   /* 7.1:1 */
   --info:    #6fc7e0;   /* 9.3:1 */
+  /* operand outlines lifted for the dark surface, mixed from the same presence hues */
   --reference-1:       #e0a04a;   /* amber-300, as the dark selection ring */
+  --reference-2:       color-mix(in srgb, var(--presence-2) 55%, var(--slate-0));
+  --reference-3:       color-mix(in srgb, var(--presence-3) 55%, var(--slate-0));
+  --reference-4:       color-mix(in srgb, var(--presence-5) 55%, var(--slate-0));
+  --reference-5:       color-mix(in srgb, var(--presence-6) 55%, var(--slate-0));
+  --reference-6:       var(--ink-muted);
   --skeleton-base:  #16231c;
   --skeleton-sheen: #1d2e25;
 }
