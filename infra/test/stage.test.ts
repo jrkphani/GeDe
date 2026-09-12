@@ -692,11 +692,13 @@ describe('GeDe CDK app', () => {
     expect(install[1]).toBe('npm ci');
     expect(install[2]).toBe('npx playwright install --only-shell chromium');
 
-    // Build: verify → migrations parity on a throwaway Postgres (Docker) → Playwright
+    // Build: verify → production-dependency audit → migrations parity on a throwaway
+    // Postgres (Docker) → Playwright
     // journeys → web build → cdk synth. Exact lines: nothing may swallow a failure
     // (no `|| true`, no `--ignore`), so a red journey stops the pipeline before publishing.
     expect(spec.phases.build.commands).toEqual([
       'npm run verify',
+      'npm run audit',
       'npm run db:parity -w packages/db',
       'npm run e2e',
       'npm run build --workspace apps/web',

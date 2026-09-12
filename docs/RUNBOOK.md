@@ -7,7 +7,7 @@ Operations for the production environment. Commands assume the AWS CLI with a pr
 Merging to `main` is the deploy. There is no other path.
 
 1. GitHub notifies CodePipeline `GeDe` through the CodeConnections connection (`triggerOnPush`).
-2. Synth runs `npm ci`, `npm run verify`, `npm run db:parity -w packages/db`, `npm run e2e`, `npm run build --workspace apps/web`, `npm run synth --workspace infra` on CodeBuild ARM (`AMAZON_LINUX_2023_STANDARD_3_0`, SMALL, `node_modules` and the Playwright cache kept locally). Every CodeBuild project logs to one group with 30-day retention.
+2. Synth runs `npm ci`, `npm run verify`, `npm run audit` (production dependencies, high+ advisories fail), `npm run db:parity -w packages/db`, `npm run e2e`, `npm run build --workspace apps/web`, `npm run synth --workspace infra` on CodeBuild ARM (`AMAZON_LINUX_2023_STANDARD_3_0`, SMALL, `node_modules` and the Playwright cache kept locally). Every CodeBuild project logs to one group with 30-day retention.
 3. SelfMutate updates the pipeline if `infra/lib/pipeline-stack.ts` changed the pipeline itself, then restarts the execution.
 4. Assets builds the `linux/arm64` sync image from the repo root with `services/sync/Dockerfile` and publishes assets to both regions.
 5. Prod deploys the eight stacks (Edge in `us-east-1`, the rest in `ap-southeast-1`; Web before Service, see ADR-018). ECS performs a rolling replacement of the sync task with the deployment circuit breaker on.
