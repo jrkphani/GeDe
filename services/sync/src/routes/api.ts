@@ -2,8 +2,8 @@
  * REST under `/api` (ARCHITECTURE §1.3 "Documents & Sharing API"). Every route
  * here runs behind the auth hook; `request.user` is always set.
  *
- * Library (LIB-01, LIB-02, LIB-08), profile (AUTH-09, I18N-05) and the
- * single-document routes. Sharing — the participant list, invitations,
+ * Library (LIB-01, LIB-02, LIB-08, LIB-D1..D11: delete vs archive), profile
+ * (AUTH-09, I18N-05) and the single-document routes. Sharing — the participant list, invitations,
  * permission changes, link access, stop sharing (LIB-07, SHARE-01, SHARE-02)
  * — is in `share.ts`, registered from here under the same hooks.
  */
@@ -37,7 +37,7 @@ import { registerShareRoutes } from './share.js';
 export const SUPPORTED_LOCALES = ['en-US', 'en-GB', 'en-IN', 'ta-IN', 'hi-IN', 'te-IN'] as const;
 export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 
-export const LIBRARY_VIEWS = ['recents', 'browse', 'shared', 'deleted'] as const;
+export const LIBRARY_VIEWS = ['recents', 'browse', 'shared', 'deleted', 'archived'] as const;
 
 const titleSchema = oneLine(200);
 const createBody = z.object({ title: titleSchema.optional() }).strict().default({});
@@ -84,6 +84,12 @@ export interface DocumentView {
   createdAt: string;
   updatedAt: string;
   deletedAt: string | null;
+  /** LIB-D6: set while archived. */
+  archivedAt: string | null;
+  /** LIB-D2/D4: true while the document has been shared and access remains; Delete is refused. */
+  everShared: boolean;
+  /** LIB-D10: the guided sample; Delete and Archive are refused. */
+  sample: boolean;
 }
 
 /** A library row (LIB-02): the document plus size, owner and sharing facts. */
@@ -113,7 +119,17 @@ function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView
     createdAt: doc.createdAt.toISOString(),
     updatedAt: doc.updatedAt.toISOString(),
     deletedAt: doc.deletedAt?.toISOString() ?? null,
+    archivedAt: doc.archivedAt?.toISOString() ?? null,
+    everShared: doc.everShared,
+    sample: doc.sample,
   };
+}
+
+/** LIB-D10: the guided sample is exempt from Delete and Archive; say which. */
+function refuseSample(doc: DocumentRecord, verb: 'deleted' | 'archived'): void {
+  if (doc.sample) {
+    throw new AppError(409, 'sample', `The guided sample cannot be ${verb}`);
+  }
 }
 
 function summaryView(doc: DocumentSummary, permission: DocumentPermission): DocumentSummaryView {
@@ -309,7 +325,8 @@ export function registerApi(
         const user = currentUser(request);
         // The audit rows are written inside the same transaction as the recovery.
         const recovered = await repo.documents.recoverAllDeleted(user.id, user.id);
-        return { recovered: recovered.length };
+        // The ids let the client offer Undo (LIB-D9): each goes back with DELETE.
+        return { recovered: recovered.length, ids: recovered.map((doc) => doc.id) };
       });
 
       api.post('/documents/delete-all', async (request) => {
@@ -372,7 +389,20 @@ export function registerApi(
       api.delete('/documents/:id', async (request, reply) => {
         const user = currentUser(request);
         const id = parseId(request.params);
-        await requirePermission(repo, user.id, id, 'owner');
+        const { document } = await requirePermission(repo, user.id, id, 'owner');
+        // Already in Recently Deleted: gone, before any other answer.
+        if (document.deletedAt !== null) throw NOT_FOUND();
+        refuseSample(document, 'deleted');
+        // LIB-D1/D2: a workscape someone was given access to is archived, never
+        // deleted, so nobody loses a document they hold. The flag is read here
+        // and checked again in the SPA only for the toolbar wording.
+        if (document.everShared) {
+          throw new AppError(
+            409,
+            'shared',
+            'This workscape has been shared, so it can be archived but not deleted',
+          );
+        }
         const deleted = await repo.documents.softDelete(id);
         if (!deleted) throw NOT_FOUND();
         await repo.audit.record({
@@ -404,6 +434,47 @@ export function registerApi(
           target: null,
         });
         return { document: view(recovered, 'owner') };
+      });
+
+      // LIB-D3: archiving preserves every share and the link and closes no
+      // socket; the document leaves the owner's Recents, Browse and Shared only.
+      api.post('/documents/:id/archive', async (request) => {
+        const user = currentUser(request);
+        const id = parseId(request.params);
+        const { document } = await requirePermission(repo, user.id, id, 'owner');
+        if (document.deletedAt !== null) throw NOT_FOUND();
+        refuseSample(document, 'archived');
+        if (document.archivedAt !== null) {
+          throw new AppError(409, 'conflict', 'This workscape is already archived');
+        }
+        const archived = await repo.documents.archive(id);
+        if (!archived) throw NOT_FOUND();
+        await repo.audit.record({
+          documentId: id,
+          userId: user.id,
+          action: 'document.archive',
+          target: null,
+        });
+        return { document: view(archived, 'owner') };
+      });
+
+      api.post('/documents/:id/unarchive', async (request) => {
+        const user = currentUser(request);
+        const id = parseId(request.params);
+        const { document } = await requirePermission(repo, user.id, id, 'owner');
+        if (document.deletedAt !== null) throw NOT_FOUND();
+        if (document.archivedAt === null) {
+          throw new AppError(409, 'conflict', 'This workscape is not archived');
+        }
+        const restored = await repo.documents.unarchive(id);
+        if (!restored) throw NOT_FOUND();
+        await repo.audit.record({
+          documentId: id,
+          userId: user.id,
+          action: 'document.unarchive',
+          target: null,
+        });
+        return { document: view(restored, 'owner') };
       });
 
       api.get('/documents/:id/search', async (request) => {

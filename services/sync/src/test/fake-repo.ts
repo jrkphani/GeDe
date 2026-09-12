@@ -13,6 +13,10 @@
  *   - `browse`   = live, owned
  *   - `shared`   = live, shared with me, plus my own documents that have a share
  *   - `deleted`  = owned, `deletedAt` within `RECENTLY_DELETED_DAYS`
+ *   - `archived` = owned, live, `archivedAt` set (LIB-D6); the three views above
+ *                  hide the owner's archived documents and nothing else (LIB-D3)
+ *   - everShared = set whenever a share is inserted or the link switched on;
+ *                  cleared when the last share goes and the link is off (LIB-D4)
  *   - sizeBytes  = size of the snapshot at `snapshotSeq` + bytes of updates after it
  *   - recover    = single and all: only within the retention window; recover-all
  *                  writes its `document.recover` audit rows itself (one transaction)
@@ -47,6 +51,9 @@ interface MutableDocument extends DocumentRecord {
   snapshotSeq: number;
   updatedAt: Date;
   deletedAt: Date | null;
+  archivedAt: Date | null;
+  everShared: boolean;
+  sample: boolean;
 }
 
 interface MutableInvite extends InviteRecord {
@@ -146,6 +153,7 @@ export class FakeRepo implements Repo {
     title = 'Untitled',
     at = new Date(),
     id: string = randomUUID(),
+    flags: { sample?: boolean } = {},
   ): DocumentRecord {
     const doc: MutableDocument = {
       id,
@@ -158,9 +166,25 @@ export class FakeRepo implements Repo {
       createdAt: at,
       updatedAt: at,
       deletedAt: null,
+      archivedAt: null,
+      everShared: false,
+      sample: flags.sample ?? false,
     };
     this.docs.set(doc.id, doc);
     return { ...doc };
+  }
+
+  /** As `markShared` in `pg.ts`: a share exists (or the link is on), so Delete is off (LIB-D2). */
+  private markShared(documentId: string): void {
+    const doc = this.docs.get(documentId);
+    if (doc) doc.everShared = true;
+  }
+
+  /** As `clearSharedIfNone` in `pg.ts`: no share left and the link off restores deletability (LIB-D4). */
+  private clearSharedIfNone(documentId: string): void {
+    const doc = this.docs.get(documentId);
+    if (doc?.linkAccess !== 'none') return;
+    if ((this.sharesByDoc.get(documentId)?.size ?? 0) === 0) doc.everShared = false;
   }
 
   /** Pending (unaccepted, unexpired) invitations, oldest first, as `pg.ts` orders them. */
@@ -206,6 +230,7 @@ export class FakeRepo implements Repo {
           });
           this.sharesByDoc.set(doc.id, map);
         }
+        this.markShared(doc.id);
       }
       invite.acceptedAt = new Date();
       this.auditLog.push({
@@ -230,6 +255,7 @@ export class FakeRepo implements Repo {
       source: 'invite',
     });
     this.sharesByDoc.set(documentId, map);
+    this.markShared(documentId);
   }
 
   /** As `inviterStillMay` in `pg.ts`: the owner always; an editor while they hold ≥ the invited permission. */
@@ -345,14 +371,18 @@ export class FakeRepo implements Repo {
         const permission = owned ? 'owner' : share?.permission;
         if (permission === undefined) continue;
         const live = doc.deletedAt === null;
+        // LIB-D3: the owner's archived documents leave the owner's views only.
+        const shown = !owned || doc.archivedAt === null;
         const include =
           view === 'recents'
-            ? live
+            ? live && shown
             : view === 'browse'
-              ? live && owned
+              ? live && owned && shown
               : view === 'shared'
-                ? live && (!owned || (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0)
-                : owned && this.withinRetention(doc, now);
+                ? live && shown && (!owned || (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0)
+                : view === 'archived'
+                  ? live && owned && doc.archivedAt !== null
+                  : owned && this.withinRetention(doc, now);
         if (include) out.push({ ...this.summarise(doc, userId), permission });
       }
       out.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime() || (a.id < b.id ? 1 : -1));
@@ -404,7 +434,22 @@ export class FakeRepo implements Repo {
       const doc = this.docs.get(id);
       if (doc?.deletedAt !== null) return Promise.resolve(undefined);
       doc.deletedAt = new Date();
+      doc.archivedAt = null;
       doc.updatedAt = doc.deletedAt;
+      return Promise.resolve({ ...doc });
+    },
+    archive: (id) => {
+      const doc = this.docs.get(id);
+      if (doc?.deletedAt !== null || doc.archivedAt !== null) {
+        return Promise.resolve(undefined);
+      }
+      doc.archivedAt = new Date();
+      return Promise.resolve({ ...doc });
+    },
+    unarchive: (id) => {
+      const doc = this.docs.get(id);
+      if (doc?.archivedAt === null || doc === undefined) return Promise.resolve(undefined);
+      doc.archivedAt = null;
       return Promise.resolve({ ...doc });
     },
     recover: (id) => {
@@ -545,6 +590,7 @@ export class FakeRepo implements Repo {
       if (map.has(userId)) return Promise.resolve(false);
       map.set(userId, { permission, invitedBy, createdAt: new Date(), source: 'invite' });
       this.sharesByDoc.set(documentId, map);
+      this.markShared(documentId);
       this.auditLog.push({ documentId, userId: actorId, action: 'share.add', target: userId });
       return Promise.resolve(true);
     },
@@ -563,6 +609,7 @@ export class FakeRepo implements Repo {
     remove: ({ documentId, userId, actorId }) => {
       const removed = this.sharesByDoc.get(documentId)?.delete(userId) ?? false;
       if (!removed) return Promise.resolve(false);
+      this.clearSharedIfNone(documentId);
       this.auditLog.push({ documentId, userId: actorId, action: 'share.remove', target: userId });
       return Promise.resolve(true);
     },
@@ -577,7 +624,10 @@ export class FakeRepo implements Repo {
         }
       }
       const doc = this.docs.get(documentId);
-      if (doc) doc.linkAccess = 'none';
+      if (doc) {
+        doc.linkAccess = 'none';
+        doc.everShared = false;
+      }
       this.auditLog.push({
         documentId,
         userId: actorId,
@@ -593,6 +643,7 @@ export class FakeRepo implements Repo {
       const turningOff = access === 'none' && doc.linkAccess !== 'none';
       if (remint) doc.linkToken = mintToken();
       doc.linkAccess = access;
+      if (access !== 'none') doc.everShared = true;
       this.auditLog.push({ documentId, userId: actorId, action: 'share.link', target: access });
       const revoked: string[] = [];
       if (remint || turningOff) {
@@ -612,6 +663,7 @@ export class FakeRepo implements Repo {
           });
         }
       }
+      if (turningOff) this.clearSharedIfNone(documentId);
       return Promise.resolve({ document: { ...doc }, revoked });
     },
     redeemLink: ({ documentId, userId, token }) => {
@@ -631,6 +683,7 @@ export class FakeRepo implements Repo {
         source: 'link',
       });
       this.sharesByDoc.set(documentId, map);
+      this.markShared(documentId);
       this.auditLog.push({ documentId, userId, action: 'share.link_redeem', target: granted });
       return Promise.resolve(granted);
     },
@@ -711,6 +764,7 @@ export class FakeRepo implements Repo {
           });
           this.sharesByDoc.set(doc.id, map);
         }
+        this.markShared(doc.id);
       }
       invite.acceptedAt = new Date();
       this.auditLog.push({

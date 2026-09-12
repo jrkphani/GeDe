@@ -98,6 +98,9 @@ function toDocument(row: DocumentRow): DocumentRecord {
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
     deletedAt: row.deletedAt,
+    archivedAt: row.archivedAt,
+    everShared: row.everShared,
+    sample: row.sample,
   };
 }
 
@@ -144,6 +147,48 @@ interface PendingRow {
 
 /** The inviter's own share, joined to see what they still hold. */
 const inviterShare = alias(shares, 'inviter_share');
+/** Any share on the current `documents` row (the shares-exist probe). */
+const anyShare = alias(shares, 'any_share');
+
+/**
+ * LIB-D2/D4: a share now exists (or the link is on), so the document has been
+ * shared and Delete is off the table until every share goes and the link is
+ * off. Idempotent; runs inside the caller's transaction.
+ */
+async function markShared(tx: Executor, documentId: string): Promise<void> {
+  await tx
+    .update(documents)
+    .set({ everShared: true })
+    .where(and(eq(documents.id, documentId), eq(documents.everShared, false)));
+}
+
+/**
+ * LIB-D4 ("revoking all access must restore deletability"): clear
+ * `ever_shared` when no share remains and link access is `none`. Evaluated in
+ * SQL against the rows the transaction sees, so a concurrent insert in another
+ * transaction either commits first (and the clear does not fire) or waits on
+ * the row lock this update takes.
+ */
+async function clearSharedIfNone(tx: Executor, documentId: string): Promise<void> {
+  await tx
+    .update(documents)
+    .set({ everShared: false })
+    .where(
+      and(
+        eq(documents.id, documentId),
+        eq(documents.everShared, true),
+        eq(documents.linkAccess, 'none'),
+        not(
+          exists(
+            tx
+              .select({ one: sql`1` })
+              .from(anyShare)
+              .where(eq(anyShare.documentId, documents.id)),
+          ),
+        ),
+      ),
+    );
+}
 
 /**
  * Pending, unexpired invitations with the inviter's standing: the owner
@@ -232,6 +277,7 @@ async function convertInvites(
           source: 'invite',
         })
         .onConflictDoNothing();
+      await markShared(tx, invite.documentId);
     }
     await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, invite.id));
     await tx.insert(auditLog).values({
@@ -248,7 +294,6 @@ async function convertInvites(
 /** Aliases for the extra `users` joins in the library query and the shares-exist probe. */
 const owner = alias(users, 'owner');
 const inviter = alias(users, 'inviter');
-const anyShare = alias(shares, 'any_share');
 
 /** Deleted within the retention window (LIB-08), evaluated on the database's clock. */
 const withinRetention = sql`${documents.deletedAt} > now() - (${RECENTLY_DELETED_DAYS}::int * interval '1 day')`;
@@ -319,15 +364,20 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
     const owned = eq(documents.ownerId, userId);
     const sharedWithMe = isNotNull(shares.userId);
     const live = isNull(documents.deletedAt);
+    // LIB-D3: archiving hides a document from the owner's views only; a
+    // participant still sees what they were given.
+    const ownedAndShown = and(owned, isNull(documents.archivedAt));
     switch (view) {
       case 'recents':
-        return and(live, or(owned, sharedWithMe));
+        return and(live, or(ownedAndShown, sharedWithMe));
       case 'browse':
-        return and(live, owned);
+        return and(live, ownedAndShown);
       case 'shared':
-        return and(live, or(sharedWithMe, and(owned, hasShares())));
+        return and(live, or(sharedWithMe, and(ownedAndShown, hasShares())));
       case 'deleted':
         return and(owned, isNotNull(documents.deletedAt), withinRetention);
+      case 'archived':
+        return and(live, owned, isNotNull(documents.archivedAt));
     }
   }
 
@@ -483,10 +533,34 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       async softDelete(id) {
         const now = new Date();
+        // Archived or deleted, never both (migration 0008 CHECK): a document
+        // deleted from anywhere leaves the archive as it enters the trash.
         const [row] = await db
           .update(documents)
-          .set({ deletedAt: now, updatedAt: now })
+          .set({ deletedAt: now, archivedAt: null, updatedAt: now })
           .where(and(eq(documents.id, id), isNull(documents.deletedAt)))
+          .returning();
+        return row ? toDocument(row) : undefined;
+      },
+
+      async archive(id) {
+        // `updated_at` is untouched: nothing about the document changed for
+        // its participants (LIB-D3), and Recents orders by it.
+        const [row] = await db
+          .update(documents)
+          .set({ archivedAt: new Date() })
+          .where(
+            and(eq(documents.id, id), isNull(documents.deletedAt), isNull(documents.archivedAt)),
+          )
+          .returning();
+        return row ? toDocument(row) : undefined;
+      },
+
+      async unarchive(id) {
+        const [row] = await db
+          .update(documents)
+          .set({ archivedAt: null })
+          .where(and(eq(documents.id, id), isNotNull(documents.archivedAt)))
           .returning();
         return row ? toDocument(row) : undefined;
       },
@@ -657,6 +731,9 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             .onConflictDoNothing()
             .returning({ userId: shares.userId });
           if (inserted.length === 0) return false;
+          // A person with an account is given access on the spot: that is an
+          // accepted share, not a sent invitation (LIB-D4).
+          await markShared(tx, documentId);
           await tx.insert(auditLog).values({
             documentId,
             userId: actorId,
@@ -692,6 +769,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             .where(and(eq(shares.documentId, documentId), eq(shares.userId, userId)))
             .returning({ userId: shares.userId });
           if (gone.length === 0) return false;
+          await clearSharedIfNone(tx, documentId);
           await tx.insert(auditLog).values({
             documentId,
             userId: actorId,
@@ -712,9 +790,10 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             .delete(invites)
             .where(and(eq(invites.documentId, documentId), isNull(invites.acceptedAt)))
             .returning({ email: invites.email });
+          // Nobody holds access any more: link off, and deletable again (LIB-D4).
           await tx
             .update(documents)
-            .set({ linkAccess: 'none' })
+            .set({ linkAccess: 'none', everShared: false })
             .where(eq(documents.id, documentId));
           // The one row records who lost access: user ids, then withdrawn addresses.
           await tx.insert(auditLog).values({
@@ -742,12 +821,18 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           // out as "view" never becomes "edit", and one switched off stays dead.
           const remint = access !== 'none' && access !== current.linkAccess;
           const turningOff = access === 'none' && current.linkAccess !== 'none';
-          const [row] = await tx
+          // A link that is on is access anyone holding the URL may use (LIB-D1):
+          // switching it on marks the document shared.
+          const [updated] = await tx
             .update(documents)
-            .set({ linkAccess: access, ...(remint && { linkToken: mintToken() }) })
+            .set({
+              linkAccess: access,
+              ...(remint && { linkToken: mintToken() }),
+              ...(access !== 'none' && { everShared: true }),
+            })
             .where(eq(documents.id, documentId))
             .returning();
-          if (!row) return undefined;
+          if (!updated) return undefined;
           await tx.insert(auditLog).values({
             documentId,
             userId: actorId,
@@ -771,6 +856,14 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               });
             }
           }
+          // Off, and the last participant may have gone with it: deletable again (LIB-D4).
+          if (turningOff) await clearSharedIfNone(tx, documentId);
+          const [row] = await tx
+            .select()
+            .from(documents)
+            .where(eq(documents.id, documentId))
+            .limit(1);
+          if (!row) return undefined;
           return { document: toDocument(row), revoked };
         });
       },
@@ -810,6 +903,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               .limit(1);
             return existing?.permission ?? granted;
           }
+          await markShared(tx, documentId);
           await tx.insert(auditLog).values({
             documentId,
             userId,
@@ -918,6 +1012,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
                 source: 'invite',
               })
               .onConflictDoNothing();
+            await markShared(tx, match.documentId);
           }
           await tx.update(invites).set({ acceptedAt: new Date() }).where(eq(invites.id, match.id));
           await tx.insert(auditLog).values({

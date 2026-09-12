@@ -48,7 +48,7 @@ describe('parseInvocation', () => {
 });
 
 describe('purgeExpired job', () => {
-  test('LIB-08 removes only documents deleted more than 30 days ago, any owner, with a system-actor audit row and their S3 objects', async () => {
+  test('LIB-08 LIB-D6 removes only documents deleted more than 30 days ago, any owner, with a system-actor audit row and their S3 objects; an archived document never expires', async () => {
     const repo = new FakeRepo();
     const s3 = new FakeSnapshotStore();
     const alice = repo.seedUser('sub-alice').id;
@@ -57,7 +57,10 @@ describe('purgeExpired job', () => {
     const older = deletedAgo(repo, bob, 'older', 400);
     const recent = deletedAgo(repo, alice, 'recent', RECENTLY_DELETED_DAYS - 1);
     const live = repo.seedDocument(bob, 'live').id;
-    for (const id of [old, older, recent, live]) {
+    // LIB-D6: archive has no expiry; the purge keys off `deleted_at` alone.
+    const archived = repo.seedDocument(alice, 'archived long ago').id;
+    repo.docs.get(archived)!.archivedAt = new Date(Date.now() - 400 * DAY);
+    for (const id of [old, older, recent, live, archived]) {
       await s3.put(snapshotKey('docs/', id, 1), new Uint8Array([1]));
       await s3.put(snapshotKey('docs/', id, 7), new Uint8Array([2]));
     }
@@ -71,7 +74,7 @@ describe('purgeExpired job', () => {
       batchSize: 1,
     });
     expect(result).toEqual({ purged: 2, objectsDeleted: 4, failed: [] });
-    expect([...repo.docs.keys()].sort()).toEqual([live, recent].sort());
+    expect([...repo.docs.keys()].sort()).toEqual([live, recent, archived].sort());
     expect(repo.sharesByDoc.has(old)).toBe(false);
     expect(repo.auditLog).toEqual([
       { documentId: older, userId: null, action: 'document.purge', target: 'older' },
@@ -79,7 +82,11 @@ describe('purgeExpired job', () => {
     ]);
     expect([...s3.objects.keys()].sort()).toEqual(
       [1, 7]
-        .flatMap((seq) => [snapshotKey('docs/', recent, seq), snapshotKey('docs/', live, seq)])
+        .flatMap((seq) => [
+          snapshotKey('docs/', recent, seq),
+          snapshotKey('docs/', live, seq),
+          snapshotKey('docs/', archived, seq),
+        ])
         .sort(),
     );
 

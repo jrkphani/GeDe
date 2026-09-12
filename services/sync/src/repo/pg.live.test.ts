@@ -11,6 +11,8 @@
  * so a query that needs more than DML fails here before it fails in a task.
  */
 import { randomBytes } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import pino from 'pino';
@@ -855,6 +857,231 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       { action: 'share.invite_accept', target: 'b@example.com', user_id: b.id },
       { action: 'share.invite_withdraw', target: `c@example.com:${editor}`, user_id: null },
       { action: 'share.invite_withdraw', target: `d@example.com:${editor}`, user_id: d.id },
+    ]);
+  });
+
+  test('LIB-D2 LIB-D4 ever_shared follows the shares in SQL: set by add, redeem, accept and the conversion, or the link on; cleared when the last share goes and the link is off; never by an invitation sent', async () => {
+    const owner = await user('sub-es-owner');
+    const bob = await user('sub-es-bob');
+    const doc = await createDoc(owner, 'Deletable until shared');
+    const flag = async () =>
+      (
+        await pool.query<{ ever_shared: boolean }>(
+          'select ever_shared from documents where id = $1',
+          [doc.id],
+        )
+      ).rows[0]?.ever_shared;
+    expect(await flag()).toBe(false);
+
+    // An invitation sent sets nothing.
+    const invite = await repo.invites.create({
+      documentId: doc.id,
+      email: 'dana@example.com',
+      permission: 'edit',
+      token: 'tok-es-dana',
+      expiresAt: new Date(Date.now() + 60_000),
+      invitedBy: owner,
+    });
+    expect(await flag()).toBe(false);
+    // Accepted: set. Dana binds the address first (the accept checks it in SQL).
+    const danaRow = await repo.users.upsertFromToken({ sub: 'sub-es-dana', email: null });
+    await repo.users.bindEmail(danaRow.id, 'dana@example.com');
+    // Binding converts the pending invitation on the spot (SHARE-02), so the flag is set here.
+    expect(await flag()).toBe(true);
+    expect(
+      await repo.invites.accept({ inviteId: invite.invite.id, userId: danaRow.id }),
+    ).toBeUndefined();
+
+    // Removing the last participant, with the link off, clears it.
+    expect(
+      await repo.shares.remove({ documentId: doc.id, userId: danaRow.id, actorId: owner }),
+    ).toBe(true);
+    expect(await flag()).toBe(false);
+
+    // A person with an account named in the sheet: set on the spot.
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: bob,
+      permission: 'view',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    expect(await flag()).toBe(true);
+    // Link on while Bob holds a share, then Bob removed: the link keeps it shared.
+    await repo.shares.setLinkAccess({
+      documentId: doc.id,
+      access: 'view',
+      actorId: owner,
+      mintToken: () => 'tok-es-link',
+    });
+    await repo.shares.remove({ documentId: doc.id, userId: bob, actorId: owner });
+    expect(await flag()).toBe(true);
+    // Link off with nobody left: deletable again.
+    await repo.shares.setLinkAccess({
+      documentId: doc.id,
+      access: 'none',
+      actorId: owner,
+      mintToken: () => 'unused',
+    });
+    expect(await flag()).toBe(false);
+
+    // Link switched on alone counts as shared (LIB-D1: "no active share link").
+    const change = await repo.shares.setLinkAccess({
+      documentId: doc.id,
+      access: 'edit',
+      actorId: owner,
+      mintToken: () => 'tok-es-link-2',
+    });
+    expect(change?.document.everShared).toBe(true);
+    // Redeemed by Bob, then the link goes: his link share goes with it and the flag clears.
+    expect(
+      await repo.shares.redeemLink({ documentId: doc.id, userId: bob, token: 'tok-es-link-2' }),
+    ).toBe('edit');
+    await repo.shares.setLinkAccess({
+      documentId: doc.id,
+      access: 'none',
+      actorId: owner,
+      mintToken: () => 'unused',
+    });
+    expect(await repo.documents.sharePermission(doc.id, bob)).toBeUndefined();
+    expect(await flag()).toBe(false);
+
+    // Stop sharing clears it outright.
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: bob,
+      permission: 'edit',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    await repo.shares.setLinkAccess({
+      documentId: doc.id,
+      access: 'view',
+      actorId: owner,
+      mintToken: () => 'tok-es-link-3',
+    });
+    expect(await flag()).toBe(true);
+    await repo.shares.stop({ documentId: doc.id, actorId: owner });
+    expect(await flag()).toBe(false);
+
+    // The listing carries the flag and the new columns.
+    const [row] = await repo.documents.listForUser(owner, 'browse');
+    expect(row).toMatchObject({ id: doc.id, everShared: false, archivedAt: null, sample: false });
+  });
+
+  test('LIB-D3 LIB-D5 LIB-D6 archive and unarchive: the owner’s views hide an archived row, a participant’s do not, delete clears the archive (CHECK: never both), purgeExpired never touches an archived row', async () => {
+    const owner = await user('sub-arch-owner');
+    const bob = await user('sub-arch-bob');
+    const doc = await createDoc(owner, 'Archived trek');
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: bob,
+      permission: 'view',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    const idsFor = async (
+      userId: string,
+      view: 'recents' | 'browse' | 'shared' | 'deleted' | 'archived',
+    ) => (await repo.documents.listForUser(userId, view)).map((d) => d.id);
+
+    const archived = await repo.documents.archive(doc.id);
+    expect(archived?.archivedAt).toBeInstanceOf(Date);
+    expect(archived?.updatedAt.getTime()).toBe(doc.updatedAt.getTime());
+    expect(await repo.documents.archive(doc.id)).toBeUndefined();
+    for (const view of ['recents', 'browse', 'shared'] as const) {
+      expect(await idsFor(owner, view), `owner ${view}`).toEqual([]);
+    }
+    expect(await idsFor(owner, 'archived')).toEqual([doc.id]);
+    expect(await idsFor(owner, 'deleted')).toEqual([]);
+    expect(await idsFor(bob, 'recents')).toEqual([doc.id]);
+    expect(await idsFor(bob, 'shared')).toEqual([doc.id]);
+    expect(await idsFor(bob, 'archived')).toEqual([]);
+    expect(await repo.documents.sharePermission(doc.id, bob)).toBe('view');
+
+    // The CHECK: a row cannot be archived and deleted at once.
+    await expect(
+      pool.query('update documents set deleted_at = now() where id = $1', [doc.id]),
+    ).rejects.toThrow(/documents_archived_or_deleted_check/);
+    // softDelete clears the archive as it sets deleted_at.
+    const deleted = await repo.documents.softDelete(doc.id);
+    expect(deleted).toMatchObject({ archivedAt: null });
+    expect(deleted?.deletedAt).toBeInstanceOf(Date);
+    expect(await idsFor(owner, 'archived')).toEqual([]);
+    expect(await idsFor(owner, 'deleted')).toEqual([doc.id]);
+    expect(await repo.documents.unarchive(doc.id)).toBeUndefined();
+    expect(await repo.documents.recover(doc.id)).toMatchObject({
+      archivedAt: null,
+      deletedAt: null,
+    });
+
+    // Unarchive restores the owner's views.
+    await repo.documents.archive(doc.id);
+    expect(await repo.documents.unarchive(doc.id)).toMatchObject({ archivedAt: null });
+    expect(await repo.documents.unarchive(doc.id)).toBeUndefined();
+    expect(await idsFor(owner, 'browse')).toEqual([doc.id]);
+
+    // Archive has no expiry: an old archive is not a purge candidate.
+    await repo.documents.archive(doc.id);
+    await pool.query(
+      "update documents set archived_at = now() - interval '400 days' where id = $1",
+      [doc.id],
+    );
+    const purge = await repo.documents.purgeExpired({
+      limit: 10,
+      exclude: [],
+      removeObjects: () => Promise.resolve(true),
+    });
+    expect(purge.purged.map((d) => d.id)).not.toContain(doc.id);
+    expect(await idsFor(owner, 'archived')).toEqual([doc.id]);
+  });
+
+  test('LIB-D10 the sample flag is readable by the app role and survives the listing; LIB-D2 the migration’s backfill sets ever_shared from shares and the link, never clearing one', async () => {
+    const owner = await user('sub-sample-owner');
+    const bob = await user('sub-sample-bob');
+    const sample = await createDoc(owner, 'Q3 Delivery — Guided sample');
+    await pool.query('update documents set sample = true where id = $1', [sample.id]);
+    expect((await repo.documents.get(sample.id))?.sample).toBe(true);
+    expect(
+      (await repo.documents.listForUser(owner, 'recents')).find((d) => d.id === sample.id)?.sample,
+    ).toBe(true);
+
+    // The backfill statement from migration 0008, re-run as the app role over rows
+    // the runtime flagged the other way: a share, or a link on, sets the flag.
+    const shared = await createDoc(owner, 'backfill: share');
+    await repo.shares.add({
+      documentId: shared.id,
+      userId: bob,
+      permission: 'view',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    const linked = await createDoc(owner, 'backfill: link');
+    await repo.shares.setLinkAccess({
+      documentId: linked.id,
+      access: 'view',
+      actorId: owner,
+      mintToken: () => 'tok-backfill',
+    });
+    const alone = await createDoc(owner, 'backfill: alone');
+    await pool.query('update documents set ever_shared = false where id = any($1::uuid[])', [
+      [shared.id, linked.id],
+    ]);
+    const migration = readFileSync(
+      join(MIGRATIONS, '0008_documents_archive_ever_shared_sample.sql'),
+      'utf8',
+    );
+    const backfill = /UPDATE documents d[\s\S]*?;/.exec(migration)?.[0];
+    expect(backfill).toBeDefined();
+    await pool.query(backfill ?? '');
+    const flags = await pool.query<{ id: string; ever_shared: boolean }>(
+      'select id, ever_shared from documents where id = any($1::uuid[]) order by title',
+      [[shared.id, linked.id, alone.id]],
+    );
+    expect(flags.rows).toEqual([
+      { id: alone.id, ever_shared: false },
+      { id: linked.id, ever_shared: true },
+      { id: shared.id, ever_shared: true },
     ]);
   });
 });

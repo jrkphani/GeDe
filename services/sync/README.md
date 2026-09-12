@@ -74,14 +74,19 @@ and the per-user limit is the precise one.
   for another account's token, 409 `conflict` when the address already belongs to another
   account, 409 `email_bound` when this account already carries a different address. The SPA
   sends it once, right after sign-in, when `GET /api/me` answers `email: null`.
-- `GET /api/documents?view=recents|browse|shared|deleted` (default `recents`) →
+- `GET /api/documents?view=recents|browse|shared|deleted|archived` (default `recents`) →
   `{ documents: [{ id, title, kind: 'workscape', sizeBytes, createdAt, updatedAt, ownerId, ownerName,
-sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', linkAccess, deletedAt }] }`.
+sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', linkAccess, deletedAt,
+archivedAt, everShared, sample }] }`.
   `recents` = owned + shared with me, live, newest `updatedAt` first; `browse` = owned, live;
   `shared` = shared with me plus my own documents that have shares (`sharedWithOthers: true`);
-  `deleted` = owned, deleted within 30 days. `sizeBytes` is the latest snapshot plus every update
+  `deleted` = owned, deleted within 30 days; `archived` = owned, live, `archivedAt` set (LIB-D6,
+  no expiry). The owner's archived documents are absent from `recents`, `browse` and `shared`; a
+  participant still sees them there (LIB-D3). `sizeBytes` is the latest snapshot plus every update
   logged since it, computed in the same query. `ownerName` / `sharedBy.name` fall back to the
-  person's email and are `null` when neither is known.
+  person's email and are `null` when neither is known. `everShared` (LIB-D2/D4) is true while the
+  document has a participant or its link is on (once it had either); `sample` marks the guided
+  sample (LIB-D10).
 - `POST /api/documents { title? }` → 201 `{ document }`. The room's initial state is written here
   (DOC-03): a Y.Doc seeded by `seedNewDocument` in `@gede/core` (`meta.title`, `meta.createdAt`,
   one sheet "Sheet 1" tagged `seeded`) goes to S3 as snapshot seq 1, and the `documents` row
@@ -91,12 +96,19 @@ sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', li
   request answers 500 and the log names the orphaned key.
 - `GET /api/documents/:id` → `{ document }` with the same fields as a library row.
   `PATCH /api/documents/:id { title }` (owner or editor). `DELETE /api/documents/:id` (owner) →
-  204; moves the document to Recently Deleted and closes its room with 4404.
+  204; moves the document to Recently Deleted (clearing `archivedAt`) and closes its room with 4404. 409 `shared` while `everShared` is true — a workscape someone was given access to is
+  archived, never deleted (LIB-D2); 409 `sample` for the guided sample (LIB-D10).
+- `POST /api/documents/:id/archive` (owner) → `{ document }`; sets `archivedAt` and nothing else:
+  every share, the link and the open room stay (LIB-D3). 409 `conflict` when already archived,
+  409 `sample` for the guided sample, 404 when deleted. `POST /api/documents/:id/unarchive`
+  (owner) → `{ document }`; 409 `conflict` when not archived. Audit `document.archive` /
+  `document.unarchive`.
 - `POST /api/documents/:id/recover` (owner) → `{ document }`; 409 when it is not deleted, 404 when
   its deletion is older than 30 days (it is no longer in Recently Deleted; the database enforces
   the window, not only the route).
-- `POST /api/documents/recover-all` (caller's documents deleted within 30 days) → `{ recovered }`,
-  one `document.recover` audit row per document in the same transaction.
+- `POST /api/documents/recover-all` (caller's documents deleted within 30 days) →
+  `{ recovered, ids }`, one `document.recover` audit row per document in the same transaction;
+  `ids` lets the client's Undo delete each again (LIB-D9).
 - `POST /api/documents/delete-all` (every soft-deleted document the caller owns, retention or not)
   → `{ deleted }`. Rows in `documents`, `doc_updates`, `snapshots`, `shares`, `invites` go in one
   transaction with a `document.purge` audit row each; the S3 objects under `${DOCS_PREFIX}${docId}/`
@@ -174,7 +186,8 @@ non-participant gets 403 (never the title); a participant of a deleted document 
 "may have been deleted" page — only the owner can still read it, in Recently Deleted.
 
 Audit rows (`audit_log.action`): `document.create`, `document.rename`, `document.delete`,
-`document.recover`, `document.purge` (target = the title; the row outlives the document).
+`document.archive`, `document.unarchive`, `document.recover`, `document.purge` (target = the
+title; the row outlives the document).
 `user_id` is null on a `document.purge` written by the nightly job (the system actor); Delete All
 writes the owner's id.
 

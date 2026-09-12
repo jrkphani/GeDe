@@ -395,18 +395,37 @@ describe('persistence', () => {
 });
 
 describe('deletion', () => {
-  test('LIB-08 DELETE closes the open room with 4404 after flushing and compacting its state', async () => {
+  test('LIB-08 LIB-D2 DELETE closes the open room with 4404 after flushing and compacting its state; a shared workscape is refused (409 shared) until sharing stops', async () => {
     const a = await connect(ownerToken);
     const b = await connect(viewerToken);
     await Promise.all([a.synced, b.synced]);
     a.setCell('r1:c1', 'kept for recovery');
+    // LIB-D2: while the viewer holds access the workscape can only be archived.
+    const refused = await json<{ error: { code: string } }>(
+      server,
+      'DELETE',
+      `/api/documents/${docId}`,
+      { token: ownerToken },
+    );
+    expect(refused.status).toBe(409);
+    expect(refused.body.error.code).toBe('shared');
+    expect(a.ws.readyState).toBe(a.ws.OPEN);
+    // LIB-D4: revoking all access restores deletability. The viewer's socket
+    // closes with 4403 for the revocation; the owner's second tab stays.
+    expect(
+      (await json(server, 'POST', `/api/documents/${docId}/stop-sharing`, { token: ownerToken }))
+        .status,
+    ).toBe(200);
+    expect((await b.closed).code).toBe(4403);
+    const a2 = await connect(ownerToken);
+    await a2.synced;
     // Do not wait for the coalescing window: the close must flush it.
     const res = await json<null>(server, 'DELETE', `/api/documents/${docId}`, {
       token: ownerToken,
     });
     expect(res.status).toBe(204);
     expect((await a.closed).code).toBe(CLOSE_NOT_FOUND);
-    expect((await b.closed).code).toBe(CLOSE_NOT_FOUND);
+    expect((await a2.closed).code).toBe(CLOSE_NOT_FOUND);
     expect(server.app.rooms.get(docId)).toBeUndefined();
     expect(server.repo.snapshotsByDoc.get(docId)?.map((s) => s.seq)).toEqual([1]);
     expect(server.repo.updatesByDoc.get(docId)).toEqual([]);
@@ -416,12 +435,14 @@ describe('deletion', () => {
       token: ownerToken,
     });
     expect(recovered.status).toBe(200);
-    const c = await connect(editorToken);
+    const c = await connect(ownerToken);
     await c.synced;
     expect(c.cell('r1:c1')).toBe('kept for recovery');
   });
 
   test('LOAD-05 LIB-08 an update that lands while DELETE is disposing the room is persisted, even when the final compaction fails', async () => {
+    // Deletable only once nobody else holds access (LIB-D2).
+    await json(server, 'POST', `/api/documents/${docId}/stop-sharing`, { token: ownerToken });
     const a = await connect(ownerToken);
     await a.synced;
     server.s3.failPuts = true;
@@ -453,7 +474,7 @@ describe('deletion', () => {
     // Recover and reopen from the log alone: both edits are there.
     server.s3.failPuts = false;
     await json(server, 'POST', `/api/documents/${docId}/recover`, { token: ownerToken });
-    const b = await connect(editorToken);
+    const b = await connect(ownerToken);
     await b.synced;
     expect(b.doc.getMap<string>('cells').toJSON()).toEqual({ 'r1:c1': 'first', 'r2:c1': 'second' });
   });

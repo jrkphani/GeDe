@@ -324,11 +324,16 @@ describe('recover-all and delete-all (LIB-08)', () => {
     const bobs = server.repo.seedDocument(bobId, 'bobs');
     await server.repo.documents.softDelete(bobs.id);
 
-    const res = await json<{ recovered: number }>(server, 'POST', '/api/documents/recover-all', {
-      token: alice,
-    });
+    const res = await json<{ recovered: number; ids: string[] }>(
+      server,
+      'POST',
+      '/api/documents/recover-all',
+      { token: alice },
+    );
     expect(res.status).toBe(200);
-    expect(res.body).toEqual({ recovered: 2 });
+    expect(res.body.recovered).toBe(2);
+    // LIB-D9: the ids come back so the client's Undo can delete each again.
+    expect([...res.body.ids].sort()).toEqual([a.id, b.id].sort());
     expect(server.repo.docs.get(a.id)?.deletedAt).toBeNull();
     expect(server.repo.docs.get(b.id)?.deletedAt).toBeNull();
     expect(server.repo.docs.get(expired.id)?.deletedAt).not.toBeNull();
@@ -340,7 +345,7 @@ describe('recover-all and delete-all (LIB-08)', () => {
     const again = await json<{ recovered: number }>(server, 'POST', '/api/documents/recover-all', {
       token: alice,
     });
-    expect(again.body).toEqual({ recovered: 0 });
+    expect(again.body).toEqual({ recovered: 0, ids: [] });
   });
 
   test('LIB-08 delete-all permanently removes rows, shares, updates, snapshots and S3 objects, and audits each', async () => {
@@ -437,7 +442,7 @@ describe('recover-all and delete-all (LIB-08)', () => {
       '/api/documents/recover-all',
       { token: carol },
     );
-    expect(recovered.body).toEqual({ recovered: 0 });
+    expect(recovered.body).toEqual({ recovered: 0, ids: [] });
     const deleted = await json<{ deleted: number }>(server, 'POST', '/api/documents/delete-all', {
       token: carol,
     });
@@ -559,6 +564,244 @@ describe('GET /api/documents/:id/shares (LIB-07)', () => {
       (await json(server, 'GET', `/api/documents/${crypto.randomUUID()}/shares`, { token: alice }))
         .status,
     ).toBe(404);
+  });
+});
+
+describe('delete vs archive (LIB-D1..D11)', () => {
+  const del = (token: string, id: string) =>
+    json<ErrorBody>(server, 'DELETE', `/api/documents/${id}`, { token });
+  const archive = (token: string, id: string) =>
+    json<{ document: DocumentView } & ErrorBody>(server, 'POST', `/api/documents/${id}/archive`, {
+      token,
+    });
+  const unarchive = (token: string, id: string) =>
+    json<{ document: DocumentView } & ErrorBody>(server, 'POST', `/api/documents/${id}/unarchive`, {
+      token,
+    });
+  const flag = (id: string) => server.repo.docs.get(id)!.everShared;
+  const actions = (id: string) =>
+    server.repo.auditLog.filter((e) => e.documentId === id).map((e) => e.action);
+
+  test('LIB-D1 a workscape with no participant and no link deletes (204) and is listed as not shared', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'mine alone');
+    const listed = (await list(alice, 'browse')).body.documents[0]!;
+    expect(listed).toMatchObject({ everShared: false, archivedAt: null, sample: false });
+    expect((await del(alice, doc.id)).status).toBe(204);
+    expect(actions(doc.id)).toEqual(['document.delete']);
+  });
+
+  test('LIB-D2 LIB-D4 a workscape becomes non-deletable when an invitation is accepted, not when it is sent; delete answers 409 shared', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'to share');
+    server.verifier.issueId('id.alice', 'sub-alice', 'alice@example.com');
+    await json(server, 'PATCH', '/api/me', { token: alice, body: { idToken: 'id.alice' } });
+    const sent = await json<{ kind: string }>(server, 'POST', `/api/documents/${doc.id}/invites`, {
+      token: alice,
+      body: { email: 'dana@example.com', permission: 'edit' },
+    });
+    expect(sent.status).toBe(201);
+    expect(sent.body.kind).toBe('invite');
+    // Sent, not accepted: still deletable.
+    expect(flag(doc.id)).toBe(false);
+    expect((await list(alice, 'browse')).body.documents[0]?.everShared).toBe(false);
+
+    // Dana signs in with the invited address: the invitation converts, the flag flips.
+    const dana = server.verifier.issue('tok-dana', 'sub-dana', 'dana@example.com');
+    await me(dana);
+    expect(flag(doc.id)).toBe(true);
+    const refused = await del(alice, doc.id);
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatchObject({
+      code: 'shared',
+      message: 'This workscape has been shared, so it can be archived but not deleted',
+    });
+    expect(server.repo.docs.get(doc.id)?.deletedAt).toBeNull();
+    // A participant's request is still 403, never 409 (SHARE-03: no hints).
+    expect((await del(dana, doc.id)).status).toBe(403);
+
+    // LIB-D4: removing the last participant restores deletability.
+    const danaId = (await me(dana)).id;
+    await json(server, 'DELETE', `/api/documents/${doc.id}/shares/${danaId}`, { token: alice });
+    expect(flag(doc.id)).toBe(false);
+    expect((await del(alice, doc.id)).status).toBe(204);
+  });
+
+  test('LIB-D2 LIB-D4 naming a person who already has an account shares on the spot; stop sharing restores deletability', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'named');
+    server.verifier.issueId('id.alice', 'sub-alice', 'alice@example.com');
+    await json(server, 'PATCH', '/api/me', { token: alice, body: { idToken: 'id.alice' } });
+    const added = await json<{ kind: string }>(server, 'POST', `/api/documents/${doc.id}/invites`, {
+      token: alice,
+      body: { email: 'bob@example.com', permission: 'view' },
+    });
+    expect(added.body.kind).toBe('share');
+    expect(flag(doc.id)).toBe(true);
+    expect((await del(alice, doc.id)).status).toBe(409);
+    await json(server, 'POST', `/api/documents/${doc.id}/stop-sharing`, { token: alice });
+    expect(flag(doc.id)).toBe(false);
+    expect((await del(alice, doc.id)).status).toBe(204);
+  });
+
+  test('LIB-D1 LIB-D4 an active share link makes a workscape non-deletable; switching it off, with nobody left, restores deletability', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'linked');
+    const on = await json<{ linkToken: string }>(server, 'PATCH', `/api/documents/${doc.id}/link`, {
+      token: alice,
+      body: { access: 'view' },
+    });
+    expect(flag(doc.id)).toBe(true);
+    expect((await del(alice, doc.id)).body.error.code).toBe('shared');
+    // Carol redeems the link, then the link goes: her link share goes with it.
+    const redeemed = await json(server, 'POST', `/api/documents/${doc.id}/link/redeem`, {
+      token: carol,
+      body: { token: on.body.linkToken },
+    });
+    expect(redeemed.status).toBe(200);
+    await json(server, 'PATCH', `/api/documents/${doc.id}/link`, {
+      token: alice,
+      body: { access: 'none' },
+    });
+    expect(server.repo.sharesByDoc.get(doc.id)?.size ?? 0).toBe(0);
+    expect(flag(doc.id)).toBe(false);
+    expect((await del(alice, doc.id)).status).toBe(204);
+  });
+
+  test('LIB-D4 switching the link off while an invited participant remains keeps the workscape non-deletable', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'linked and shared');
+    server.repo.share(doc.id, bobId, 'view');
+    await json(server, 'PATCH', `/api/documents/${doc.id}/link`, {
+      token: alice,
+      body: { access: 'edit' },
+    });
+    await json(server, 'PATCH', `/api/documents/${doc.id}/link`, {
+      token: alice,
+      body: { access: 'none' },
+    });
+    expect(flag(doc.id)).toBe(true);
+    expect((await del(alice, doc.id)).status).toBe(409);
+  });
+
+  test('LIB-D3 LIB-D6 archive keeps every share and the link, hides the row from the owner’s Recents, Browse and Shared, lists it under archived, and participants see no change', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'shared then archived');
+    server.repo.share(doc.id, bobId, 'edit');
+    await json(server, 'PATCH', `/api/documents/${doc.id}/link`, {
+      token: alice,
+      body: { access: 'view' },
+    });
+    const before = (await list(bob, 'recents')).body.documents.map((d) => d.id);
+    expect(before).toEqual([doc.id]);
+
+    const res = await archive(alice, doc.id);
+    expect(res.status).toBe(200);
+    expect(res.body.document.archivedAt).not.toBeNull();
+    expect(res.body.document.everShared).toBe(true);
+    expect(actions(doc.id)).toEqual(['share.link', 'document.archive']);
+
+    for (const view of ['recents', 'browse', 'shared'] as const) {
+      expect(
+        (await list(alice, view)).body.documents.map((d) => d.id),
+        view,
+      ).toEqual([]);
+    }
+    const archived = (await list(alice, 'archived')).body.documents;
+    expect(archived.map((d) => d.id)).toEqual([doc.id]);
+    expect(archived[0]).toMatchObject({ permission: 'owner', sharedWithOthers: true });
+    // Participants: same rows, same access, same link (LIB-D3).
+    expect((await list(bob, 'recents')).body.documents.map((d) => d.id)).toEqual(before);
+    expect((await list(bob, 'shared')).body.documents.map((d) => d.id)).toEqual(before);
+    expect(server.repo.sharesByDoc.get(doc.id)?.get(bobId)?.permission).toBe('edit');
+    expect(server.repo.docs.get(doc.id)?.linkAccess).toBe('view');
+    const bobReads = await json<{ document: DocumentSummaryView }>(
+      server,
+      'GET',
+      `/api/documents/${doc.id}`,
+      { token: bob },
+    );
+    expect(bobReads.status).toBe(200);
+    expect(bobReads.body.document.archivedAt).not.toBeNull();
+    // Archive has no expiry: the row is not in Recently Deleted and `deletedAt` stays null.
+    expect((await list(alice, 'deleted')).body.documents).toEqual([]);
+    expect(server.repo.docs.get(doc.id)?.deletedAt).toBeNull();
+
+    // A second archive is a 409; a participant may not archive (403).
+    expect((await archive(alice, doc.id)).status).toBe(409);
+    expect((await archive(bob, doc.id)).status).toBe(403);
+
+    // Unarchive: back in every view, audited.
+    const back = await unarchive(alice, doc.id);
+    expect(back.status).toBe(200);
+    expect(back.body.document.archivedAt).toBeNull();
+    expect((await list(alice, 'browse')).body.documents.map((d) => d.id)).toEqual([doc.id]);
+    expect((await list(alice, 'archived')).body.documents).toEqual([]);
+    expect(actions(doc.id).at(-1)).toBe('document.unarchive');
+    expect((await unarchive(alice, doc.id)).status).toBe(409);
+  });
+
+  test('LIB-D5 delete from the archive moves the row to Recently Deleted and out of the archive; recover leaves it unarchived', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'archived, unshared');
+    expect((await archive(alice, doc.id)).status).toBe(200);
+    expect((await del(alice, doc.id)).status).toBe(204);
+    const row = server.repo.docs.get(doc.id)!;
+    expect(row.deletedAt).not.toBeNull();
+    expect(row.archivedAt).toBeNull();
+    expect((await list(alice, 'archived')).body.documents).toEqual([]);
+    expect((await list(alice, 'deleted')).body.documents.map((d) => d.id)).toEqual([doc.id]);
+    // A deleted workscape cannot be archived or unarchived: it is gone (404).
+    expect((await archive(alice, doc.id)).status).toBe(404);
+    expect((await unarchive(alice, doc.id)).status).toBe(404);
+    await json(server, 'POST', `/api/documents/${doc.id}/recover`, { token: alice });
+    expect((await list(alice, 'browse')).body.documents.map((d) => d.id)).toEqual([doc.id]);
+  });
+
+  test('LIB-D10 the guided sample is exempt from delete and archive: 409 sample, with the reason', async () => {
+    const sample = server.repo.seedDocument(
+      aliceId,
+      'Q3 Delivery — Guided sample',
+      new Date(),
+      undefined,
+      { sample: true },
+    );
+    const listed = (await list(alice, 'browse')).body.documents[0]!;
+    expect(listed.sample).toBe(true);
+    const deleted = await del(alice, sample.id);
+    expect(deleted.status).toBe(409);
+    expect(deleted.body.error).toMatchObject({
+      code: 'sample',
+      message: 'The guided sample cannot be deleted',
+    });
+    const archived = await archive(alice, sample.id);
+    expect(archived.status).toBe(409);
+    expect(archived.body.error).toMatchObject({
+      code: 'sample',
+      message: 'The guided sample cannot be archived',
+    });
+    expect(server.repo.docs.get(sample.id)).toMatchObject({ deletedAt: null, archivedAt: null });
+    expect(actions(sample.id)).toEqual([]);
+  });
+
+  test('LIB-D11 archive is a document state: a second client of the same account reads it from the list at once, and the view is served by name', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'state');
+    const second = server.verifier.issue('tok-alice-2', 'sub-alice', 'alice@example.com');
+    expect((await list(second, 'browse')).body.documents.map((d) => d.id)).toEqual([doc.id]);
+    await archive(alice, doc.id);
+    expect((await list(second, 'browse')).body.documents).toEqual([]);
+    expect((await list(second, 'archived')).body.documents.map((d) => d.id)).toEqual([doc.id]);
+    expect((await list(alice, 'archive')).status).toBe(400);
+  });
+
+  test('LIB-D6 archive and unarchive need a token, a well-formed id and an existing document', async () => {
+    const doc = server.repo.seedDocument(aliceId, 'x');
+    for (const path of ['archive', 'unarchive']) {
+      expect((await json(server, 'POST', `/api/documents/${doc.id}/${path}`)).status).toBe(401);
+      expect(
+        (await json(server, 'POST', `/api/documents/not-a-uuid/${path}`, { token: alice })).status,
+      ).toBe(400);
+      expect(
+        (
+          await json(server, 'POST', `/api/documents/${crypto.randomUUID()}/${path}`, {
+            token: alice,
+          })
+        ).status,
+      ).toBe(404);
+    }
   });
 });
 

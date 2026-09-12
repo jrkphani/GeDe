@@ -365,13 +365,19 @@ describe('projection through the room and GET /api/documents/:id/search', () => 
       json<{ results: unknown[] }>(server, 'GET', `/api/documents/${id}/search?q=sheet`, {
         token,
       });
+    // LIB-D2: a shared workscape is not deletable; the viewer's share goes first
+    // (their request below then answers as a stranger's would).
+    expect(
+      (await json(server, 'DELETE', `/api/documents/${id}`, { token: owner })).body,
+    ).toMatchObject({ error: { code: 'shared' } });
+    await json(server, 'POST', `/api/documents/${id}/stop-sharing`, { token: owner });
     expect((await json(server, 'DELETE', `/api/documents/${id}`, { token: owner })).status).toBe(
       204,
     );
     // The projection rows are still there (the nightly purge removes them); the route must not serve them.
     expect(server.repo.projections.get(id)).toBeDefined();
     expect((await search(owner)).status).toBe(404);
-    expect((await search(viewer)).status).toBe(404);
+    expect((await search(viewer)).status).toBe(403);
     expect((await search(stranger)).status).toBe(403);
     expect(
       (await json(server, 'POST', `/api/documents/${id}/recover`, { token: owner })).status,
