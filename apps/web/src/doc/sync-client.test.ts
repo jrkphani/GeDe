@@ -116,20 +116,35 @@ describe('SyncClient', () => {
     expect(c.getSnapshot()).toMatchObject({ status: 'synced', attempts: 0, failure: null });
   });
 
-  it('AUTH-09 a 4401 close retries once with a fresh token, a second 4401 becomes a failure', async () => {
+  it('AUTH-09 a 4401 close retries once with a token forced through refresh, a second 4401 in the same window is terminal', async () => {
     vi.useFakeTimers();
     room.options = {
       refuseWith: { code: CLOSE_UNAUTHENTICATED, reason: 'invalid token' },
       refuseCount: 1,
     };
-    const { c } = client(room);
+    let refreshes = 0;
+    const { c } = client(room, {
+      refreshToken: () => Promise.resolve(`fresh-${String(++refreshes)}`),
+    });
     clients.push(c);
     c.connect();
     await vi.advanceTimersByTimeAsync(10);
+    // The retry used the forced refresh, not the cached token.
     expect(room.urls).toEqual([
       `${WS_URL}/${DOC_ID}?token=tok-1`,
-      `${WS_URL}/${DOC_ID}?token=tok-2`,
+      `${WS_URL}/${DOC_ID}?token=fresh-1`,
     ]);
+    expect(refreshes).toBe(1);
+    expect(c.getSnapshot().status).toBe('synced');
+    // The window closed on sync: a later 4401 gets its own single retry.
+    room.options = {
+      refuseWith: { code: CLOSE_UNAUTHENTICATED, reason: 'expired' },
+      refuseCount: 1,
+    };
+    room.refusals = 0;
+    room.dropAll();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(refreshes).toBe(2);
     expect(c.getSnapshot().status).toBe('synced');
     c.destroy();
 
@@ -202,6 +217,17 @@ describe('SyncClient', () => {
     c.setOnline(true);
     await vi.advanceTimersByTimeAsync(10);
     expect(c.getSnapshot().status).toBe('synced');
+  });
+
+  it('SHARE-03 the server’s type-4 read-only notice flips readOnly on the snapshot', async () => {
+    room.options = { viewOnly: true };
+    const { c, history } = client(room);
+    clients.push(c);
+    expect(c.getSnapshot().readOnly).toBe(false);
+    c.connect();
+    // The provider answers step 1 with a step 2, the first write the room drops and notices.
+    await until(() => c.getSnapshot().readOnly);
+    expect(history.some((h) => h.readOnly)).toBe(true);
   });
 
   it('AUTH-09 a signed-out session (no token) never opens a socket', async () => {

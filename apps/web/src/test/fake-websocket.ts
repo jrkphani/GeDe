@@ -13,6 +13,8 @@ import * as Y from 'yjs';
 
 const MESSAGE_SYNC = 0;
 const MESSAGE_AWARENESS = 1;
+/** GeDe's server → client notice (`services/sync/src/ws/protocol.ts`). */
+const MESSAGE_NOTICE = 4;
 
 export interface FakeRoomOptions {
   /** Drop sync-step-2 and update messages from every socket (SHARE-03 view-only). */
@@ -27,6 +29,7 @@ export class FakeRoom {
   readonly doc = new Y.Doc();
   readonly awareness = new awarenessProtocol.Awareness(this.doc);
   readonly sockets = new Set<FakeWebSocket>();
+  private readonly notified = new Set<FakeWebSocket>();
   /** Every URL a socket connected with, in order — for token assertions. */
   readonly urls: string[] = [];
   droppedUpdates = 0;
@@ -89,6 +92,14 @@ export class FakeRoom {
       const subtype = decoding.readVarUint(decoder);
       if (subtype !== syncProtocol.messageYjsSyncStep1 && this.options.viewOnly === true) {
         this.droppedUpdates += 1;
+        // As the service does: one read-only notice per connection, on the first drop.
+        if (!this.notified.has(socket)) {
+          this.notified.add(socket);
+          const notice = encoding.createEncoder();
+          encoding.writeVarUint(notice, MESSAGE_NOTICE);
+          encoding.writeVarString(notice, JSON.stringify({ code: 'read-only' }));
+          socket.deliver(encoding.toUint8Array(notice));
+        }
         return;
       }
       const encoder = encoding.createEncoder();

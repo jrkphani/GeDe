@@ -107,6 +107,27 @@ export const CHORDS = {
   redo: { code: 'KeyZ', mod: true, shift: true } satisfies Chord,
 } as const;
 
+/**
+ * `aria-keyshortcuts` values (WAI-ARIA 1.2 key tokens, physical keys, `Meta`
+ * for ⌘); the glyph labels above are for eyes, these are for assistive tech.
+ */
+export const ARIA_KEYS = {
+  zoomIn: 'Meta+Equal',
+  zoomOut: 'Meta+Minus',
+  actualSize: 'Meta+0',
+  fit: 'Shift+Meta+0',
+  nextSheet: 'Control+Tab',
+  previousSheet: 'Control+Shift+Tab',
+  inspector: 'Alt+Meta+I',
+  formatInspector: 'Alt+Meta+1',
+  organizeInspector: 'Alt+Meta+2',
+  addRow: 'Alt+Meta+ArrowDown',
+  addColumn: 'Alt+Meta+ArrowRight',
+  escape: 'Escape',
+  undo: 'Meta+Z',
+  redo: 'Shift+Meta+Z',
+} as const satisfies Record<keyof typeof CHORDS, string>;
+
 export const LABELS = {
   zoomIn: '⌘+',
   zoomOut: '⌘−',

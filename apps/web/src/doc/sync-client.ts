@@ -7,15 +7,21 @@
  *     refresh; the query string is the only place a browser socket can carry it);
  *   - reconnects back off exponentially with jitter (the provider's own backoff
  *     is deterministic and capped at 2.5 s);
- *   - the server's close codes are read: 4401 retries once with a fresh token,
- *     4403 / 4404 / 4400 are terminal and surface as a failure the chrome can
- *     show with a Retry (LOAD-05: only a failed sync surfaces anything);
+ *   - the server's close codes are read: 4401 retries once with a token forced
+ *     through Cognito's refresh; a second 4401 in the same sync-less window is
+ *     terminal (the session is gone, not the token stale); 4403 / 4404 / 4400
+ *     are terminal at once. Terminal closes surface as a failure the chrome
+ *     shows (LOAD-05: only a failed sync surfaces anything);
+ *   - the server's type-4 notice `{ code: 'read-only' }` (SHARE-03) flips
+ *     `readOnly`, so a permission downgraded mid-session is shown, not
+ *     discovered by edits that never echo;
  *   - the tab going hidden pauses the socket, coming back resumes it.
  *
  * Framework-free: the React hook (`use-document.ts`) subscribes to `snapshot`
  * with `useSyncExternalStore`. Nothing here imports the DOM beyond the
  * `WebSocket` constructor, which tests replace with a fake.
  */
+import * as decoding from 'lib0/decoding';
 import { Awareness } from 'y-protocols/awareness';
 import { WebsocketProvider } from 'y-websocket';
 import type * as Y from 'yjs';
@@ -28,6 +34,8 @@ export type SyncStatus = 'connecting' | 'synced' | 'offline' | 'reconnecting';
 export interface SyncFailure {
   readonly code: number;
   readonly reason: string;
+  /** Decided on this device (no token to send) rather than by the server. */
+  readonly local?: boolean | undefined;
 }
 
 export interface SyncSnapshot {
@@ -37,7 +45,12 @@ export interface SyncSnapshot {
   readonly attempts: number;
   /** Has this session ever completed a sync? Drives 'connecting' vs 'reconnecting'. */
   readonly everSynced: boolean;
+  /** The server said this socket is view-only (type-4 notice): its updates are dropped. */
+  readonly readOnly: boolean;
 }
+
+/** GeDe's one addition to the wire format: server → client notices. */
+export const MESSAGE_NOTICE = 4;
 
 export const CLOSE_BAD_REQUEST = 4400;
 export const CLOSE_UNAUTHENTICATED = 4401;
@@ -57,6 +70,8 @@ export interface SyncClientOptions {
   wsUrl: string;
   /** Re-read on every connect. `null` means signed out. */
   getToken: () => Promise<string | null>;
+  /** Forced refresh, used for the one retry after a 4401. Defaults to `getToken`. */
+  refreshToken?: (() => Promise<string | null>) | undefined;
   /** Test seams. */
   WebSocketImpl?: typeof WebSocket | undefined;
   random?: (() => number) | undefined;
@@ -74,20 +89,25 @@ export class SyncClient {
     failure: null,
     attempts: 0,
     everSynced: false,
+    readOnly: false,
   };
   private readonly listeners = new Set<Listener>();
   private wanted = false;
   private paused = false;
   private destroyed = false;
   private unauthenticatedRetries = 0;
+  /** The next attempt must fetch a forced-refresh token (after a 4401). */
+  private forceRefresh = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private connectSeq = 0;
   private readonly random: () => number;
   private readonly isOnline: () => boolean;
   private readonly getToken: () => Promise<string | null>;
+  private readonly refreshToken: () => Promise<string | null>;
 
   constructor(options: SyncClientOptions) {
     this.getToken = options.getToken;
+    this.refreshToken = options.refreshToken ?? options.getToken;
     this.random = options.random ?? Math.random;
     this.isOnline =
       options.isOnline ?? (() => (typeof navigator === 'undefined' ? true : navigator.onLine));
@@ -103,6 +123,10 @@ export class SyncClient {
     });
     this.provider.on('sync', this.onSync);
     this.provider.on('connection-close', this.onClose);
+    // The stock provider only knows types 0–3; GeDe's type 4 carries notices.
+    this.provider.messageHandlers[MESSAGE_NOTICE] = (_encoder, decoder) => {
+      this.onNotice(decoder);
+    };
   }
 
   // -- external store -------------------------------------------------------
@@ -122,7 +146,8 @@ export class SyncClient {
       next.status === this.snapshot.status &&
       next.failure === this.snapshot.failure &&
       next.attempts === this.snapshot.attempts &&
-      next.everSynced === this.snapshot.everSynced
+      next.everSynced === this.snapshot.everSynced &&
+      next.readOnly === this.snapshot.readOnly
     ) {
       return;
     }
@@ -249,8 +274,10 @@ export class SyncClient {
       return;
     }
     let token: string | null;
+    const fetchToken = this.forceRefresh ? this.refreshToken : this.getToken;
+    this.forceRefresh = false;
     try {
-      token = await this.getToken();
+      token = await fetchToken();
     } catch {
       token = null;
     }
@@ -258,7 +285,7 @@ export class SyncClient {
     if (token === null) {
       this.set({
         status: 'offline',
-        failure: { code: CLOSE_UNAUTHENTICATED, reason: 'signed out' },
+        failure: { code: CLOSE_UNAUTHENTICATED, reason: 'signed out', local: true },
       });
       return;
     }
@@ -268,9 +295,26 @@ export class SyncClient {
 
   private readonly onSync = (synced: boolean): void => {
     if (!synced) return;
+    // A sync closes the 4401 window: the refreshed token was accepted.
     this.unauthenticatedRetries = 0;
     this.set({ status: 'synced', failure: null, attempts: 0, everSynced: true });
   };
+
+  private onNotice(decoder: decoding.Decoder): void {
+    let notice: unknown;
+    try {
+      notice = JSON.parse(decoding.readVarString(decoder));
+    } catch {
+      return;
+    }
+    if (
+      typeof notice === 'object' &&
+      notice !== null &&
+      (notice as { code?: unknown }).code === 'read-only'
+    ) {
+      this.set({ readOnly: true });
+    }
+  }
 
   private readonly onClose = (event: CloseEvent | null): void => {
     if (this.destroyed || !this.wanted || this.paused) return;
@@ -282,8 +326,9 @@ export class SyncClient {
       code === CLOSE_UNAUTHENTICATED &&
       this.unauthenticatedRetries < MAX_UNAUTHENTICATED_RETRIES
     ) {
-      // The token in the URL was stale. Fetch a fresh one and try immediately, once.
+      // The token in the URL was stale. Force a refresh and try immediately, once per window.
       this.unauthenticatedRetries += 1;
+      this.forceRefresh = true;
       this.set({ status: this.snapshot.everSynced ? 'reconnecting' : 'connecting' });
       this.schedule(0);
       return;

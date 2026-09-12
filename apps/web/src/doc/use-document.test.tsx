@@ -5,9 +5,11 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   cellText,
+  createSheet,
   createTable,
   documentMeta,
   listSheets,
+  openDocument,
   setCellText,
   tableById,
   tableMap,
@@ -29,18 +31,23 @@ function Harness({
   probe,
   store,
   getToken,
+  title = 'Everest trek',
+  userSub = 'sub-1',
 }: {
   room: FakeRoom;
   probe: Probe;
-  store: string;
+  store?: string | undefined;
   getToken?: () => Promise<string | null>;
+  title?: string;
+  userSub?: string;
 }) {
   const result = useDocument(DOC_ID, {
-    seed: { title: 'Everest trek', createdAt: '2026-09-12T00:00:00Z' },
+    seed: { title, createdAt: '2026-09-12T00:00:00Z' },
+    userSub,
     wsUrl: 'wss://ws.test/ws',
     getToken: getToken ?? (() => Promise.resolve('tok')),
     WebSocketImpl: room.WebSocket,
-    storeName: () => store,
+    ...(store === undefined ? {} : { storeName: () => store }),
   });
   probe.result = result;
   return (
@@ -127,6 +134,45 @@ describe('useDocument', () => {
     await waitFor(() => {
       expect(screen.getByTestId('live-region')).toHaveTextContent('Reconnecting');
     });
+  });
+
+  it('AUTH-09 the replica is stored per user: the IndexedDB name carries the sub', async () => {
+    const room = new FakeRoom();
+    const probe: Probe = { result: null };
+    render(<Harness room={room} probe={probe} userSub="sub-private" />);
+    await waitFor(() => {
+      expect(screen.getByTestId('status')).toHaveTextContent('synced');
+    });
+    expect(session(probe).persistence?.name).toBe(`gede-doc-sub-private-${DOC_ID}`);
+    expect(localStorage.getItem('gede.replicas')).toContain(`gede-doc-sub-private-${DOC_ID}`);
+  });
+
+  it('DOC-03 a document the room already holds is never seeded again; seeded duplicates are collapsed on sync', async () => {
+    const room = new FakeRoom();
+    const other = openDocument(room.doc);
+    createSheet(other, { label: 'Existing' });
+    const probe: Probe = { result: null };
+    render(<Harness room={room} probe={probe} store={store} />);
+    await waitFor(() => {
+      expect(screen.getByTestId('ready')).toHaveTextContent('true');
+    });
+    expect(listSheets(session(probe).gd).map((s) => s.label)).toEqual(['Existing']);
+    expect(room.doc.getArray('sheets').length).toBe(1);
+  });
+
+  it('DOC-01 the record’s title is the source of truth: a differing meta.title is re-seeded on open', async () => {
+    const room = new FakeRoom();
+    const other = openDocument(room.doc);
+    other.doc.transact(() => {
+      other.meta.set('title', 'Stale room title');
+    });
+    const probe: Probe = { result: null };
+    render(<Harness room={room} probe={probe} store={store} title="Everest trek (library)" />);
+    await waitFor(() => {
+      expect(screen.getByTestId('ready')).toHaveTextContent('true');
+    });
+    expect(documentMeta(session(probe).gd).title).toBe('Everest trek (library)');
+    await until(() => room.doc.getMap('meta').get('title') === 'Everest trek (library)');
   });
 
   it('AUTH-09 the token is read from the session before each connect', async () => {
