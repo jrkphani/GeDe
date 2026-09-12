@@ -89,7 +89,13 @@ export interface DocumentSummary extends DocumentRecord {
   readonly sizeBytes: number;
   /** Who shared it with the caller; null for the owner. */
   readonly sharedBy: PersonRef | null;
-  /** True when at least one participant besides the owner has a share. */
+  /**
+   * The one definition of "shared" (#139): a participant exists or can arrive —
+   * a share row, the link on, or a pending unexpired invitation. Read by the
+   * title pill (SHARE-05), the library row (LIB-02) and the Shared view
+   * (LIB-01); deletability is `everShared` (LIB-D4), which pending invitations
+   * never set.
+   */
   readonly sharedWithOthers: boolean;
 }
 

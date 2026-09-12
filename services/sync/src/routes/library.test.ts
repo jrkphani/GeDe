@@ -135,6 +135,61 @@ describe('GET /api/documents views (LIB-01)', () => {
     });
   });
 
+  test('SHARE-05 LIB-01 LIB-02 LIB-D2 one definition of shared: a link-only and an invitation-only workscape are sharedWithOthers, listed under Shared, while everShared follows accepted access (#139)', async () => {
+    const linkOnly = server.repo.seedDocument(aliceId, 'link only');
+    const inviteOnly = server.repo.seedDocument(aliceId, 'invitation only');
+    const nothing = server.repo.seedDocument(aliceId, 'nothing');
+    await json(server, 'PATCH', `/api/documents/${linkOnly.id}/link`, {
+      token: alice,
+      body: { access: 'view' },
+    });
+    await json(server, 'POST', `/api/documents/${inviteOnly.id}/invites`, {
+      token: alice,
+      body: { email: 'new@example.com', permission: 'view' },
+    });
+    const one = async (id: string) =>
+      (
+        await json<{ document: DocumentSummaryView }>(server, 'GET', `/api/documents/${id}`, {
+          token: alice,
+        })
+      ).body.document;
+    // The title pill and the library row read `sharedWithOthers`; the delete/archive slot
+    // reads `everShared` (LIB-D4: a sent invitation never makes a workscape non-deletable).
+    expect(await one(linkOnly.id)).toMatchObject({ sharedWithOthers: true, everShared: true });
+    expect(await one(inviteOnly.id)).toMatchObject({ sharedWithOthers: true, everShared: false });
+    expect(await one(nothing.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
+    const shared = await list(alice, 'shared');
+    expect(shared.body.documents.map((d) => d.id).sort()).toEqual(
+      [linkOnly.id, inviteOnly.id].sort(),
+    );
+    const browse = await list(alice, 'browse');
+    expect(browse.body.documents.find((d) => d.id === inviteOnly.id)).toMatchObject({
+      sharedWithOthers: true,
+    });
+    // Revoking restores both: the link off, the invitation withdrawn.
+    await json(server, 'PATCH', `/api/documents/${linkOnly.id}/link`, {
+      token: alice,
+      body: { access: 'none' },
+    });
+    const sheet = await json<{ invites: { id: string }[] }>(
+      server,
+      'GET',
+      `/api/documents/${inviteOnly.id}/shares`,
+      { token: alice },
+    );
+    await json(
+      server,
+      'DELETE',
+      `/api/documents/${inviteOnly.id}/invites/${sheet.body.invites[0]!.id}`,
+      {
+        token: alice,
+      },
+    );
+    expect(await one(linkOnly.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
+    expect(await one(inviteOnly.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
+    expect((await list(alice, 'shared')).body.documents).toEqual([]);
+  });
+
   test('LIB-08 deleted lists my own documents deleted within 30 days only', async () => {
     const recent = server.repo.seedDocument(aliceId, 'recent');
     await server.repo.documents.softDelete(recent.id);

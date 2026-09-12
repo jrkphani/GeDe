@@ -19,6 +19,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  ne,
   not,
   notInArray,
   or,
@@ -444,14 +445,28 @@ const inviter = alias(users, 'inviter');
 const withinRetention = sql`${documents.deletedAt} > now() - (${RECENTLY_DELETED_DAYS}::int * interval '1 day')`;
 
 export function createPgRepo(db: Db, logger: Logger): Repo {
-  /** `EXISTS (SELECT 1 FROM shares WHERE document_id = documents.id)` for the current row. */
-  const hasShares = () =>
-    exists(
+  /**
+   * One definition of "shared" for the current `documents` row (#139, SHARE-05,
+   * LIB-01/02): participants exist or can arrive — a share row, the link on,
+   * or a pending unexpired invitation. The title pill, the library row and
+   * the Shared view all read this; deletability (`ever_shared`, LIB-D4) is
+   * the narrower fact — an accepted share or the link — and stays separate.
+   */
+  const sharedWithOthers = (): SQL<boolean> => {
+    const anyShareExists = exists(
       db
         .select({ one: sql`1` })
         .from(anyShare)
         .where(eq(anyShare.documentId, documents.id)),
     );
+    const pendingInviteExists = exists(
+      db
+        .select({ one: sql`1` })
+        .from(invites)
+        .where(and(eq(invites.documentId, documents.id), invitePending)),
+    );
+    return sql<boolean>`(${anyShareExists} or ${ne(documents.linkAccess, 'none')} or ${pendingInviteExists})`;
+  };
 
   /**
    * The library projection of `documents` for one caller: the row, the owner's
@@ -470,7 +485,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         invitedBy: shares.invitedBy,
         inviterName: inviter.displayName,
         inviterEmail: inviter.email,
-        sharedWithOthers: hasShares(),
+        sharedWithOthers: sharedWithOthers(),
         // bigint aggregates arrive from pg as strings; converted below.
         sizeBytes: sql<string | number>`
           coalesce(${snapshots.sizeBytes}, 0)::bigint
@@ -522,7 +537,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       case 'browse':
         return and(live, ownedAndShown);
       case 'shared':
-        return and(live, or(sharedWithMe, and(ownedAndShown, hasShares())));
+        return and(live, or(sharedWithMe, and(ownedAndShown, sharedWithOthers())));
       case 'deleted':
         return and(owned, isNotNull(documents.deletedAt), withinRetention);
       case 'archived':

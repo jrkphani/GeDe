@@ -315,6 +315,15 @@ export class FakeRepo implements Repo {
     return (snapshot?.sizeBytes ?? 0) + tail;
   }
 
+  /** As `sharedWithOthers` in `pg.ts` (#139): a share, the link on, or a pending invitation. */
+  private sharedWithOthers(doc: MutableDocument): boolean {
+    return (
+      (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0 ||
+      doc.linkAccess !== 'none' ||
+      this.pendingInvites((i) => i.documentId === doc.id).length > 0
+    );
+  }
+
   private summarise(doc: MutableDocument, userId: string): DocumentSummary {
     const share = doc.ownerId === userId ? undefined : this.sharesByDoc.get(doc.id)?.get(userId);
     const owner = this.userById(doc.ownerId);
@@ -332,7 +341,7 @@ export class FakeRepo implements Repo {
             email: inviter?.email ?? null,
           }
         : null,
-      sharedWithOthers: (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0,
+      sharedWithOthers: this.sharedWithOthers(doc),
     };
   }
 
@@ -549,7 +558,7 @@ export class FakeRepo implements Repo {
             : view === 'browse'
               ? live && owned && shown
               : view === 'shared'
-                ? live && shown && (!owned || (this.sharesByDoc.get(doc.id)?.size ?? 0) > 0)
+                ? live && shown && (!owned || this.sharedWithOthers(doc))
                 : view === 'archived'
                   ? live && owned && doc.archivedAt !== null
                   : owned && this.withinRetention(doc, now);

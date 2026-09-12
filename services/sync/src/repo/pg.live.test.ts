@@ -916,8 +916,14 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
         )
       ).rows[0]?.ever_shared;
     expect(await flag()).toBe(false);
+    /** The one "shared" the pill, the row and the Shared view read (#139). */
+    const shared = async () => (await repo.documents.summarise(doc.id, owner))?.sharedWithOthers;
+    const inSharedView = async () =>
+      (await repo.documents.listForUser(owner, 'shared')).some((d) => d.id === doc.id);
+    expect(await shared()).toBe(false);
+    expect(await inSharedView()).toBe(false);
 
-    // An invitation sent sets nothing.
+    // An invitation sent sets nothing for deletability — but someone can now arrive, so it is shared.
     const invite = await repo.invites.create({
       documentId: doc.id,
       email: 'dana@example.com',
@@ -927,6 +933,8 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       invitedBy: owner,
     });
     expect(await flag()).toBe(false);
+    expect(await shared()).toBe(true);
+    expect(await inSharedView()).toBe(true);
     // Accepted: set. Dana binds the address first (the accept checks it in SQL).
     const danaRow = await repo.users.upsertFromToken({ sub: 'sub-es-dana', email: null });
     await repo.users.bindEmail(danaRow.id, 'dana@example.com');
@@ -936,11 +944,13 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       await repo.invites.accept({ inviteId: invite.invite.id, userId: danaRow.id }),
     ).toBeUndefined();
 
-    // Removing the last participant, with the link off, clears it.
+    // Removing the last participant, with the link off, clears it — and nothing is shared.
     expect(
       await repo.shares.remove({ documentId: doc.id, userId: danaRow.id, actorId: owner }),
     ).toBe(true);
     expect(await flag()).toBe(false);
+    expect(await shared()).toBe(false);
+    expect(await inSharedView()).toBe(false);
 
     // A person with an account named in the sheet: set on the spot.
     await repo.shares.add({
@@ -960,7 +970,9 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     });
     await repo.shares.remove({ documentId: doc.id, userId: bob, actorId: owner });
     expect(await flag()).toBe(true);
-    // Link off with nobody left: deletable again.
+    expect(await shared()).toBe(true); // link only: shared (#139)
+    expect(await inSharedView()).toBe(true);
+    // Link off with nobody left: deletable again, and not shared.
     await repo.shares.setLinkAccess({
       documentId: doc.id,
       access: 'none',
@@ -968,6 +980,7 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       mintToken: () => 'unused',
     });
     expect(await flag()).toBe(false);
+    expect(await shared()).toBe(false);
 
     // Link switched on alone counts as shared (LIB-D1: "no active share link").
     const change = await repo.shares.setLinkAccess({

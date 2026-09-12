@@ -31,7 +31,12 @@ export interface DocumentSummary {
   ownerName?: string | null | undefined;
   /** Set when another participant shared it with the caller. */
   sharedBy?: Sharer | undefined;
-  /** True when the caller shared it with others. */
+  /**
+   * The service's one definition of "shared" (#139): a participant exists or
+   * can arrive — a share, a pending invitation, or the link on. The title pill
+   * (SHARE-05), the library row (LIB-02) and the Shared view (LIB-01) read
+   * it; the delete/archive slot reads `everShared` (LIB-D2/D4) instead.
+   */
   sharedWithOthers?: boolean | undefined;
   /** Absent means the server did not say; the UI then treats the caller as a viewer. */
   permission?: DocumentPermission | undefined;
