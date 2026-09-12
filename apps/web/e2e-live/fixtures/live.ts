@@ -112,10 +112,14 @@ async function mintTokens(): Promise<Omit<LiveSession, 'api' | 'apiUrl'>> {
   };
 }
 
-/** Soft-delete every document the account owns, then purge Recently Deleted. */
+/**
+ * Soft-delete every document the account owns — live (`browse`) and archived alike; DELETE
+ * takes an archived document straight to Recently Deleted — then purge Recently Deleted.
+ */
 export async function deleteEverything(session: LiveSession): Promise<void> {
-  const list = await session.api('/documents?view=browse');
-  if (list.ok) {
+  for (const view of ['browse', 'archived']) {
+    const list = await session.api(`/documents?view=${view}`);
+    if (!list.ok) continue;
     const { documents } = (await list.json()) as { documents: { id: string }[] };
     for (const { id } of documents) {
       // 409 `sample` / `shared` are the API refusing on purpose; nothing to do about them here.

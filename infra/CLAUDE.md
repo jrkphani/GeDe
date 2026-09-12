@@ -94,9 +94,14 @@ Change` for that family with a non-zero exit code or `TaskFailedToStart` → SNS
   whole event, so a password passed as a property would land in CloudWatch. SelfMutate creates
   the role before the stage deploys, so the policy always has a role to attach to. Know what
   the password is: because the pool's sign-in policy must list PASSWORD as a first factor (next
-  bullet), the SPA client's `USER_AUTH` flow also accepts it for this one account — it is a
-  real production credential, guarded by IAM on the secret (the handler and the step's role are
-  the only readers), not by the `gede-e2e` client's flow list. Rotation is in runbook §3.
+  bullet), the SPA client's `USER_AUTH` flow would accept it for this one account. Two things
+  stand in the way: IAM on the secret (the handler and the step's role are the only readers),
+  and the pool's **pre-authentication trigger** (`assets/pre-auth/index.mjs`), which refuses
+  `e2e@<domain>` on any client but `gede-e2e` and refuses everyone else on `gede-e2e` — so the
+  password only ever works behind `AdminInitiateAuth`. The trigger finds the client by name
+  (`ListUserPoolClients` on `userpool/*`; its id would make a pool → trigger → client → pool
+  cycle). A leak is still one test account with its own documents: the suite never shares,
+  links or invites, so the account owns nothing anyone else can reach. Rotation is in runbook §3.
 - **Passwordless Cognito.** Cognito requires PASSWORD in `AllowedFirstAuthFactors` of a
   choice-based pool (CloudFormation rejected the override on 2026-09-12), so the pool policy is
   `[PASSWORD, EMAIL_OTP, WEB_AUTHN]`. Passwordless is enforced at the client: the SPA app client

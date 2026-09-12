@@ -16,6 +16,8 @@ export const PLACEHOLDER_SYNC_DIR = path.join(INFRA_ROOT, 'assets', 'placeholder
 
 /** Lambda source of the custom resource that creates the live suite's Cognito user (`AuthStack`). */
 export const E2E_USER_HANDLER_DIR = path.join(INFRA_ROOT, 'assets', 'e2e-user');
+/** Lambda source of the pool's pre-authentication trigger (binds the e2e user to the gede-e2e client). */
+export const PRE_AUTH_HANDLER_DIR = path.join(INFRA_ROOT, 'assets', 'pre-auth');
 
 export const SYNC_DOCKERFILE = 'services/sync/Dockerfile';
 export const WEB_DIST = path.join(REPO_ROOT, 'apps', 'web', 'dist');

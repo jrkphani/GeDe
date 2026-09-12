@@ -7,7 +7,7 @@ import { defineConfig, devices } from '@playwright/test';
  * needs and how it signs in is in `e2e-live/fixtures/live.ts` and docs/TESTING.md.
  *
  * One worker, serial: the suite shares one account, cleans up after itself, and a production
- * service is not a load target. Sixty seconds per test: every step crosses the network.
+ * service is not a load target. Two minutes per test: every step crosses the network.
  */
 const CI = Boolean(process.env.CI);
 const baseURL = process.env.E2E_BASE_URL;
@@ -18,7 +18,8 @@ if (baseURL === undefined || baseURL === '') {
 export default defineConfig({
   testDir: './e2e-live',
   testMatch: /.*\.spec\.ts$/,
-  timeout: 60_000,
+  // Nine steps and three sign-ins, every one across the network: 120 s per test.
+  timeout: 120_000,
   // The whole run, retries included: one journey twice over is minutes, not ten. Past this
   // the suite is hung (the CodeBuild step has its own 20-minute cap above it).
   globalTimeout: 10 * 60_000,

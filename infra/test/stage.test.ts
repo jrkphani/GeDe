@@ -1081,8 +1081,9 @@ describe('GeDe CDK app', () => {
       SecretArn: { Ref: Match.stringLikeRegexp('^E2eUser') },
       Username: 'e2e@gede.work',
     });
-    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 1);
-    stacks.Auth!.hasResourceProperties('AWS::Lambda::Function', {
+    // Two functions: the user's custom resource and the pre-authentication trigger.
+    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 2);
+    stacks.Auth!.allResourcesProperties('AWS::Lambda::Function', {
       Runtime: 'nodejs22.x',
       Architectures: ['arm64'],
       Handler: 'index.handler',
@@ -1133,6 +1134,44 @@ describe('GeDe CDK app', () => {
           ]),
         }),
       ]),
+    });
+  });
+
+  it('AUTH-04 a pre-authentication trigger binds e2e@gede.work to the gede-e2e client, so the password is not a browser credential (#35 residual)', () => {
+    const [preAuthId] = Object.entries(stacks.Auth!.findResources('AWS::Lambda::Function')).find(
+      ([, fn]) =>
+        (fn as { Properties: { Description?: string } }).Properties.Description?.includes(
+          'pre-authentication',
+        ),
+    )!;
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPool', {
+      LambdaConfig: { PreAuthentication: { 'Fn::GetAtt': [preAuthId, 'Arn'] } },
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      Principal: 'cognito-idp.amazonaws.com',
+      FunctionName: { 'Fn::GetAtt': [preAuthId, 'Arn'] },
+      SourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Lambda::Function', {
+      Description: Match.stringLikeRegexp('pre-authentication'),
+      Environment: {
+        Variables: { E2E_USERNAME: 'e2e@gede.work', E2E_CLIENT_NAME: E2E_CLIENT_NAME },
+      },
+      Timeout: 5,
+    });
+    // It finds the client by name (the id would be a pool → trigger → client → pool cycle).
+    stacks.Auth!.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: Match.objectLike({
+        Statement: [
+          {
+            Sid: 'FindE2eClient',
+            Effect: 'Allow',
+            Action: 'cognito-idp:ListUserPoolClients',
+            Resource: 'arn:aws:cognito-idp:ap-southeast-1:975049998516:userpool/*',
+          },
+        ],
+      }),
     });
   });
 

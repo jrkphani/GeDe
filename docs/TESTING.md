@@ -185,6 +185,11 @@ has an account and a client of its own, both created by CDK (`infra/lib/stacks/a
   with a permanent password generated into Secrets Manager `gede/prod/e2e-user`. The
   handler receives the secret's ARN, never the value, and logs only the outcome.
 - `services/sync` accepts tokens from both clients (`COGNITO_CLIENT_IDS`).
+- The pool's pre-authentication trigger (`infra/assets/pre-auth/`) lets `e2e@gede.work` sign
+  in through `gede-e2e` only and lets nobody else use that client, so the password never works
+  from a browser. What a leak of the secret would expose is one test account and its own
+  throwaway documents: the suite never shares, links or invites, and nothing is shared with it.
+  Keep the account that way — no step of the live journey may share, or accept an invitation.
 
 Per worker, `fixtures/live.ts` reads the secret and mints real tokens with
 `AdminInitiateAuth`. Each sign-in then drives the real screen — email, "Email me a one-time

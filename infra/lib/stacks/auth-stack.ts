@@ -11,7 +11,7 @@ import {
 import { type Construct } from 'constructs';
 
 import { type EnvConfig, PLAYWRIGHT_LIVE_ROLE_NAME, e2eUsername } from '../config.js';
-import { E2E_USER_HANDLER_DIR } from '../paths.js';
+import { E2E_USER_HANDLER_DIR, PRE_AUTH_HANDLER_DIR } from '../paths.js';
 
 export interface AuthStackProps extends cdk.StackProps {
   readonly config: EnvConfig;
@@ -214,11 +214,12 @@ export class AuthStack extends cdk.Stack {
     // ---- The live suite's way in (Playwright-Live) ---------------------------------------
     // A client of its own so the SPA client never gains a password flow. ADMIN_USER_PASSWORD_AUTH
     // needs IAM (`AdminInitiateAuth`); the step's role is the only principal granted it (below).
-    // That does not make the password inert: the pool's sign-in policy lists PASSWORD as a first
-    // factor (Cognito insists, see the pool), so the SPA client's USER_AUTH flow would also take
-    // it for this one account — the only one with a password. IAM on the secret (the handler's
-    // role and the step's role are its only readers) is what protects the account. Refresh
-    // tokens live a day: a run needs minutes.
+    // That alone does not make the password inert: the pool's sign-in policy lists PASSWORD as
+    // a first factor (Cognito insists, see the pool), so the SPA client's USER_AUTH flow would
+    // also take it for this one account — the only one with a password. Two guards: IAM on the
+    // secret (the handler's role and the step's role are its only readers), and the
+    // pre-authentication trigger below, which lets this account in through this client only.
+    // Refresh tokens live a day: a run needs minutes.
     this.e2eClient = new cognito.UserPoolClient(this, 'E2e', {
       userPool: this.userPool,
       userPoolClientName: E2E_CLIENT_NAME,
@@ -286,6 +287,35 @@ export class AuthStack extends cdk.Stack {
     });
     // The function's role policy (the grants above) must exist before the first invoke.
     e2eUser.node.addDependency(e2eUserHandler);
+
+    // What makes the password above *not* a browser credential: a pre-authentication trigger
+    // that lets e2e@<domain> sign in only through gede-e2e (IAM-gated) and lets nobody else
+    // use that client. The function finds the client by name at run time — passing its id
+    // in would be a pool → trigger → client → pool cycle — so its one grant is
+    // ListUserPoolClients, on any pool in the account (the pool ARN would close the cycle).
+    const preAuth = new lambda.Function(this, 'PreAuth', {
+      description: `GeDe ${config.envName}: pre-authentication trigger (e2e user ↔ gede-e2e client only)`,
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(PRE_AUTH_HANDLER_DIR),
+      timeout: cdk.Duration.seconds(5),
+      environment: { E2E_USERNAME: username, E2E_CLIENT_NAME: E2E_CLIENT_NAME },
+      logGroup: new logs.LogGroup(this, 'PreAuthLogs', {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+    preAuth.addToRolePolicy(
+      new iam.PolicyStatement({
+        sid: 'FindE2eClient',
+        actions: ['cognito-idp:ListUserPoolClients'],
+        resources: [
+          cdk.Arn.format({ service: 'cognito-idp', resource: 'userpool', resourceName: '*' }, this),
+        ],
+      }),
+    );
+    this.userPool.addTrigger(cognito.UserPoolOperation.PRE_AUTHENTICATION, preAuth);
 
     // What the Playwright-Live CodeBuild role may do, attached here because only this stack
     // knows the exact pool and secret ARNs (PipelineStack creates the role by its fixed name).

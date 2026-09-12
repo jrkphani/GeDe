@@ -11,7 +11,10 @@
  * `MessageAction: SUPPRESS` so no invitation mail is sent, `email_verified: true` so the
  * ID token carries a verified address the sync service will bind) then
  * `AdminSetUserPassword` with `Permanent: true` (no FORCE_CHANGE_PASSWORD challenge).
- * Delete: `AdminDeleteUser` (a missing user is fine).
+ * Delete: `AdminDeleteUser` (a missing user is fine). The physical id is `<pool>/<username>`
+ * from the current properties, so a changed username is a replacement: CloudFormation
+ * creates the new user, then sends a Delete for the old id with the old properties, and
+ * the old account goes.
  *
  * Runs on the Lambda Node.js runtime, whose bundled AWS SDK v3 provides both clients.
  */
@@ -69,9 +72,7 @@ async function respond(event, context, status, reason) {
   const body = JSON.stringify({
     Status: status,
     Reason: reason,
-    PhysicalResourceId:
-      event.PhysicalResourceId ??
-      `${event.ResourceProperties.UserPoolId}/${event.ResourceProperties.Username}`,
+    PhysicalResourceId: `${event.ResourceProperties.UserPoolId}/${event.ResourceProperties.Username}`,
     StackId: event.StackId,
     RequestId: event.RequestId,
     LogicalResourceId: event.LogicalResourceId,
@@ -95,6 +96,11 @@ export async function handler(event, context) {
     const name = error instanceof Error ? error.name : 'Error';
     const message = error instanceof Error ? error.message : String(error);
     console.error(`e2e user ${event.RequestType} failed: ${name}: ${message}`);
-    await respond(event, context, 'FAILED', `${name}: ${message}. See ${context.logStreamName}.`);
+    try {
+      await respond(event, context, 'FAILED', `${name}: ${message}. See ${context.logStreamName}.`);
+    } catch (responseError) {
+      // CloudFormation will time the resource out on its own; the log line above is the record.
+      console.error(`e2e user: could not answer CloudFormation: ${String(responseError)}`);
+    }
   }
 }
