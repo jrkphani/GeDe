@@ -342,7 +342,7 @@ describe('SignIn (option 1c)', () => {
     expect(screen.getByLabelText('Email')).toHaveValue('audit-nobody@example.invalid');
   });
 
-  it('AUTH-04 the code step in sign-in mode says what to do if no code arrives (the obfuscated simulated challenge, ADR-040)', async () => {
+  it('AUTH-04 the code step in sign-in mode says what to do if no code arrives (the obfuscated simulated challenge, ADR 040)', async () => {
     const u = userEvent.setup();
     vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
       kind: 'code',

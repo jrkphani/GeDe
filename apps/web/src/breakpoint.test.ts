@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { PHONE_QUERIES, isPhone, readPointerEnvironment, usePhone } from './breakpoint.js';
 import { installMatchMedia, phoneMedia } from './test/match-media.js';
 
-describe('phone predicate (ADR-039)', () => {
+describe('phone predicate (ADR 039)', () => {
   it('RESP-02 a narrow viewport with a coarse pointer, or without hover, is a phone', () => {
     expect(isPhone({ narrow: true, coarse: true, noHover: true })).toBe(true);
     expect(isPhone({ narrow: true, coarse: true, noHover: false })).toBe(true);

@@ -64,7 +64,7 @@ describe('sign-in steps', () => {
     });
   });
 
-  it('AUTH-04 the obfuscated "password reset required" answer for an unknown email (RESET_PASSWORD step, or the raw exception) is unknown-email too (#46, ADR-040)', async () => {
+  it('AUTH-04 the obfuscated "password reset required" answer for an unknown email (RESET_PASSWORD step, or the raw exception) is unknown-email too (#46, ADR 040)', async () => {
     // What Amplify makes of the 400 PasswordResetRequiredException the pool sends for some
     // unknown addresses under preventUserExistenceErrors (final audit, 2026-09-13).
     vi.mocked(amplifyAuth.signIn).mockResolvedValue({
