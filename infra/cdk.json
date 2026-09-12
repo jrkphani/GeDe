@@ -16,7 +16,7 @@
   },
   "context": {
     "codeConnectionArn": "arn:aws:codeconnections:ap-southeast-1:975049998516:connection/d17b8942-b1cc-4600-8a1a-d2f8a08acdeb",
-    "hostedZoneId": "REPLACE_AFTER_DOMAIN_REGISTRATION",
+    "hostedZoneId": "Z02288231TKFZONAXG3D7",
     "appleSignIn": false,
     "githubRepo": "jrkphani/GeDe",
     "githubBranch": "main",
