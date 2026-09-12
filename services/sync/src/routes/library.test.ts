@@ -6,7 +6,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 
 import { json, startServer, type TestServer } from '../test/fakes.js';
-import type { DocumentSummaryView, DocumentView, ParticipantsView, ProfileView } from './api.js';
+import type { DocumentSummaryView, DocumentView, ProfileView } from './api.js';
+import type { SharesView as ParticipantsView } from './share.js';
 
 interface ErrorBody {
   error: { code: string; message: string; ref: string; details?: unknown };
@@ -466,10 +467,22 @@ describe('GET /api/documents/:id/shares (LIB-07)', () => {
           email: 'bob@example.com',
           permission: 'edit',
           invitedBy: aliceId,
+          source: 'invite',
         },
-        { userId: carolId, name: null, email: null, permission: 'view', invitedBy: bobId },
+        {
+          userId: carolId,
+          name: null,
+          email: null,
+          permission: 'view',
+          invitedBy: bobId,
+          source: 'invite',
+        },
       ],
+      invites: [],
       linkAccess: 'none',
+      linkToken: null,
+      permission: 'owner',
+      callerId: aliceId,
     });
     expect(res.body.participants.some((p) => p.userId === aliceId)).toBe(false);
   });

@@ -9,8 +9,9 @@ import { Writable } from 'node:stream';
 import pino from 'pino';
 
 import { type Config, configSchema } from '../config.js';
-import type { Deps, SnapshotStore, TokenVerifier } from '../deps.js';
+import type { Deps, IdTokenIdentity, Mailer, SnapshotStore, TokenVerifier } from '../deps.js';
 import { REDACTED_PATHS, requestSerializer } from '../logger.js';
+import type { Mail } from '../mail/templates.js';
 import type { TokenIdentity } from '../repo/types.js';
 import { buildServer, type SyncServer } from '../server.js';
 import { FakeRepo } from './fake-repo.js';
@@ -37,18 +38,50 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-/** FAKE verifier: `tokens` maps a bearer string to the identity it stands for. */
+/**
+ * FAKE verifier: `tokens` maps a bearer string to the identity it stands for,
+ * `idTokens` an ID-token string to what it attests. The two are separate maps,
+ * as the real verifier is two verifiers: an access token is never accepted as
+ * an ID token or the other way round.
+ */
 export class FakeVerifier implements TokenVerifier {
   readonly tokens = new Map<string, TokenIdentity>();
+  readonly idTokens = new Map<string, IdTokenIdentity>();
 
   issue(token: string, sub: string, email: string | null = null): string {
     this.tokens.set(token, { sub, email });
     return token;
   }
 
+  /** An ID token for `sub` attesting `email` (verified), or none when `email` is null. */
+  issueId(token: string, sub: string, email: string | null): string {
+    this.idTokens.set(token, { sub, email });
+    return token;
+  }
+
   verify(token: string): Promise<TokenIdentity> {
     const identity = this.tokens.get(token);
     return identity ? Promise.resolve(identity) : Promise.reject(new Error('invalid token'));
+  }
+
+  verifyIdToken(token: string): Promise<IdTokenIdentity> {
+    const identity = this.idTokens.get(token);
+    return identity ? Promise.resolve(identity) : Promise.reject(new Error('invalid id token'));
+  }
+}
+
+/** FAKE SES: records every message; `failNextSend` makes one send reject as the sandbox would for an unverified recipient. */
+export class FakeMailer implements Mailer {
+  readonly sent: Mail[] = [];
+  failNextSend = false;
+
+  send(mail: Mail): Promise<void> {
+    if (this.failNextSend) {
+      this.failNextSend = false;
+      return Promise.reject(new Error('MessageRejected: Email address is not verified'));
+    }
+    this.sent.push(mail);
+    return Promise.resolve();
   }
 }
 
@@ -97,6 +130,7 @@ export interface TestServer {
   repo: FakeRepo;
   verifier: FakeVerifier;
   s3: FakeSnapshotStore;
+  mail: FakeMailer;
   config: Config;
   baseUrl: string;
   wsUrl: string;
@@ -138,6 +172,7 @@ export async function startServer(
   const repo = new FakeRepo();
   const verifier = new FakeVerifier();
   const s3 = new FakeSnapshotStore();
+  const mail = new FakeMailer();
   const logs: LogLine[] = [];
   const deps: Deps = {
     config,
@@ -145,6 +180,7 @@ export async function startServer(
     verifier,
     db: repo,
     s3,
+    mail,
     version: 'test',
   };
   const app = await buildServer(deps);
@@ -155,6 +191,7 @@ export async function startServer(
     repo,
     verifier,
     s3,
+    mail,
     config,
     baseUrl: `http://127.0.0.1:${String(port)}`,
     wsUrl: `ws://127.0.0.1:${String(port)}`,

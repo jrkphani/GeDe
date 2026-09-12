@@ -4,6 +4,7 @@ import { LiveRegion } from './announce.js';
 import { RequireAuth, SessionProvider } from './auth/session.js';
 import { useLocale } from './locale.js';
 import { DocumentShell } from './routes/document/DocumentShell.js';
+import { LinkRedeem } from './routes/document/share/LinkRedeem.js';
 import { NotFound, RouteError } from './routes/errors/RouteError.js';
 import { Library } from './routes/library/Library.js';
 import { SignIn } from './routes/sign-in/SignIn.js';
@@ -61,7 +62,9 @@ export const routes: RouteObject[] = [
             path: '/d/:id',
             element: (
               <RequireAuth>
-                <DocumentShell />
+                <LinkRedeem>
+                  <DocumentShell />
+                </LinkRedeem>
               </RequireAuth>
             ),
           },

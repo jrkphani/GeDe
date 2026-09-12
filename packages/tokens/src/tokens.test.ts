@@ -1,6 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { theme } from './theme.js';
 
 const css = readFileSync(resolve(__dirname, 'tokens.css'), 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
 
@@ -52,5 +53,19 @@ describe('dark theme', () => {
     expect(Object.fromEntries(explicit)['--surface']).toBe('#0f1a15');
     expect(Object.fromEntries(explicit)['color-scheme']).toBe('dark');
     expect(Object.fromEntries(declarations(/:root/))['color-scheme']).toBe('light');
+  });
+});
+
+describe('presence palette', () => {
+  it('SHARE-04 six presence colours, assigned on join, none of them the brand colour, in CSS and in theme.ts alike', () => {
+    const root = Object.fromEntries(declarations(/:root/));
+    const presence = [1, 2, 3, 4, 5, 6].map((n) => root[`--presence-${String(n)}`]);
+    expect(presence.every((c) => typeof c === 'string' && /^#[0-9a-f]{6}$/.test(c))).toBe(true);
+    expect(new Set(presence).size).toBe(6);
+    expect(presence).toEqual([...theme.color.presence]);
+    const brand = [theme.color.brand.subtle, theme.color.brand.base, theme.color.brand.strong];
+    for (const colour of presence) expect(brand).not.toContain(colour);
+    expect(presence).not.toContain(root['--forest-700']);
+    expect(presence).not.toContain(root['--forest-500']);
   });
 });

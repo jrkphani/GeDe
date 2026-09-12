@@ -103,6 +103,21 @@ export class RoomManager {
     this.logger.info({ documentId, closeCode: options.closeCode }, 'room closed');
   }
 
+  /**
+   * A participant's permission changed or ended (SHARE-01/03): close the
+   * sockets they hold on the document so the next connection resolves the
+   * new permission. Nothing to do when the room is not open.
+   */
+  closeUser(documentId: string, userId: string, code: number, reason: string): number {
+    const room = this.rooms.get(documentId);
+    if (!room) return 0;
+    const closed = room.closeMember(userId, code, reason);
+    if (closed > 0) {
+      this.logger.info({ documentId, userId, closeCode: code, sockets: closed }, 'sockets closed');
+    }
+    return closed;
+  }
+
   /** Remove the room from the map first so a new join creates a fresh room that loads from storage. */
   async evict(room: Room): Promise<void> {
     if (this.rooms.get(room.documentId) === room) this.rooms.delete(room.documentId);

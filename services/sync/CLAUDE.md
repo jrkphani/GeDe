@@ -11,7 +11,9 @@ Read the root `CLAUDE.md` first.
 - The only unauthenticated routes are `GET /healthz` and `GET /api/health`, and they answer `{ ok }` only. There is no allowlist, no debug token, no `NODE_ENV` bypass.
 - Two rate limits (#37, #42). Per address, on every route at `onRequest` (`ip-limit.ts`, `RATE_LIMIT_PER_IP_PER_MINUTE`): the only bound on callers with no, an invalid or a rotating token, including WebSocket upgrades (which carry the token in a subprotocol, so they are address-keyed only). Per verified user, on `/api` at `preHandler` after the auth hook (`@fastify/rate-limit`, `RATE_LIMIT_PER_MINUTE`, key `user:<id>` — never the bearer string). Both in memory, per task.
 - `request.ip` is what one hop of `X-Forwarded-For` yields (`trustProxy` trusts the ALB and nothing further, so a forged leftmost entry never counts): on the direct `/ws/*` path that is the **real client**; on `/api/*`, which arrives CloudFront → ALB, it is the **CloudFront edge** — every user behind one POP shares that address bucket, which is why it is generous and the per-user limit is the precise one. Do not key anything else on `request.ip` for `/api` without reading this.
-- `users.email` is never bound from a token in this pool: the SPA sends access tokens, which carry no `email`, and `username` is a Cognito-generated UUID (`signInAliases: { email: true }` makes email a username _attribute_, not the username). `emailFromClaims` keeps its guards (`email_verified`, an email-shaped `username`) for a pool configured otherwise and returns `null` in production; the address arrives through `PATCH /api/me` (#42 tracks the binding path).
+- `users.email` is never bound from an access token in this pool: the SPA sends access tokens, which carry no `email`, and `username` is a Cognito-generated UUID (`signInAliases: { email: true }` makes email a username _attribute_, not the username). `emailFromClaims` keeps its guards (`email_verified`, an email-shaped `username`) for a pool configured otherwise and returns `null` in production. The address arrives through `PATCH /api/me { idToken }`: the SPA presents its Cognito **ID** token once after sign-in, the service verifies it (`tokenUse: 'id'`, same `sub`, `email_verified`) and binds the address — never a client-claimed string. That binding converts pending invitations into shares (SHARE-02), so it must be Cognito's word.
+- Sharing routes live in `routes/share.ts` (`README.md` lists them). Rules: any participant reads the sheet (a viewer gets names only); the owner and editors invite; the owner alone changes permissions, removes people, sets the link mode and stops sharing. A permission is frozen on a socket at upgrade, so a change closes that user's sockets (`RoomManager.closeUser`: 4403 when removed, 1001 to reconnect and re-resolve otherwise) and marks the connection `revoked` so frames that arrive before the peer answers the close are refused. Every share change writes its `audit_log` row (`share.*`) in the same transaction. Invitations: their own per-user budget (`RATE_LIMIT_INVITES_PER_HOUR`) counted after validation and the permission check; idempotent per (document, address) while one is pending; converted only while the inviter still holds what they granted (else withdrawn, `share.invite_withdraw`). Link access: any level change re-mints the token and, like switching off, revokes `source = link` shares.
+- Share mail goes through `mail/` (SES v2, `Deps.mail`, sender `no-reply@<WEB_ORIGIN host>`, display name GeDe; templates in `mail/templates.ts` follow DESIGN-SYSTEM §6). While SES is in the sandbox only verified recipients receive mail; a refused send withdraws the invitation and answers 502 so nothing pending exists that the recipient cannot act on.
 - A socket with `view` permission receives the document stream; its update messages are dropped and counted. Awareness from view-only sockets is accepted.
 - `sub` maps to `users.cognito_sub`; the row is created on first sight from the JWT claims (email, name). Nothing else about identity is stored.
 
@@ -38,20 +40,20 @@ Read the root `CLAUDE.md` first.
 
 Set by `infra/lib/stacks/service-stack.ts` (the names are the contract; change both sides in one PR):
 
-| Variable                                                    | Purpose                                                                    |
-| ----------------------------------------------------------- | -------------------------------------------------------------------------- |
-| `PORT`                                                      | Listen port (3000)                                                         |
-| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE`        | Injected from the RDS master secret by ECS; migrations and bootstrap only  |
-| `PGAPPUSER` `PGAPPPASSWORD`                                 | Injected from `gede/prod/db-app`; the runtime pool. Required in production |
-| `PGSSLMODE` `PGSSLROOTCERT`                                 | `verify-full` with `/app/rds-global-bundle.pem` (copied by the Dockerfile) |
-| `COGNITO_USER_POOL_ID` `COGNITO_CLIENT_ID` `COGNITO_REGION` | JWT issuer, expected `client_id`, JWKS region                              |
-| `DOCS_BUCKET` `DOCS_PREFIX`                                 | Snapshot bucket and key prefix (`docs/`); the task role is scoped to it    |
-| `WEB_ORIGIN`                                                | CORS origin (`https://gede.work`)                                          |
-| `NODE_ENV`                                                  | `production` in the task                                                   |
-| `LOG_LEVEL`                                                 | Optional; pino level, default `info`                                       |
-| `PROJECTION_DEBOUNCE_MS`                                    | Optional; wait after a compaction before the projection write (1 s)        |
-| `RATE_LIMIT_PER_MINUTE` `WS_*`                              | Optional; the limits above (README has the defaults)                       |
-| `GEDE_VERSION`                                              | Baked into the image by the `GEDE_VERSION` build arg (short git sha)       |
+| Variable                                                     | Purpose                                                                    |
+| ------------------------------------------------------------ | -------------------------------------------------------------------------- |
+| `PORT`                                                       | Listen port (3000)                                                         |
+| `PGHOST` `PGPORT` `PGUSER` `PGPASSWORD` `PGDATABASE`         | Injected from the RDS master secret by ECS; migrations and bootstrap only  |
+| `PGAPPUSER` `PGAPPPASSWORD`                                  | Injected from `gede/prod/db-app`; the runtime pool. Required in production |
+| `PGSSLMODE` `PGSSLROOTCERT`                                  | `verify-full` with `/app/rds-global-bundle.pem` (copied by the Dockerfile) |
+| `COGNITO_USER_POOL_ID` `COGNITO_CLIENT_ID` `COGNITO_REGION`  | JWT issuer, expected `client_id`, JWKS region                              |
+| `DOCS_BUCKET` `DOCS_PREFIX`                                  | Snapshot bucket and key prefix (`docs/`); the task role is scoped to it    |
+| `WEB_ORIGIN`                                                 | CORS origin (`https://gede.work`)                                          |
+| `NODE_ENV`                                                   | `production` in the task                                                   |
+| `LOG_LEVEL`                                                  | Optional; pino level, default `info`                                       |
+| `PROJECTION_DEBOUNCE_MS`                                     | Optional; wait after a compaction before the projection write (1 s)        |
+| `RATE_LIMIT_PER_MINUTE` `RATE_LIMIT_INVITES_PER_HOUR` `WS_*` | Optional; the limits above (README has the defaults)                       |
+| `GEDE_VERSION`                                               | Baked into the image by the `GEDE_VERSION` build arg (short git sha)       |
 
 Locally, `PG*` point at a local PostgreSQL 17, `PGSSLMODE=disable`, and `PGAPPUSER` is unset (the runtime is the master user; the boot log says which). Read everything once in `config.ts` with `zod`; nothing else touches `process.env`. The SES sender is `no-reply@<WEB_ORIGIN host>`.
 
@@ -63,7 +65,7 @@ Locally, `PG*` point at a local PostgreSQL 17, `PGSSLMODE=disable`, and `PGAPPUS
 
 ## Tests
 
-- `buildServer(deps)` takes every external dependency (db pool, S3 client, SES client, JWT verifier, clock) so tests inject fakes. No live AWS in unit tests; no network in `vitest`.
+- `buildServer(deps)` takes every external dependency (db repo, S3 store, SES mailer, JWT verifier) so tests inject fakes (`test/fakes.ts`: `FakeVerifier` with `issue`/`issueId`, `FakeSnapshotStore`, `FakeMailer` with `sent[]`). No live AWS in unit tests; no network in `vitest`.
 - `src/repo/pg.live.test.ts` runs the real SQL against a throwaway database when `DATABASE_URL` is set and is skipped otherwise. Add a case there whenever `pg.ts` gains a query the fake mirrors.
 - Test names start with the requirement id: `test('SHARE-03 view-only socket updates are dropped', …)`.
 - WebSocket tests use a real `ws` client against an ephemeral port.

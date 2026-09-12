@@ -60,6 +60,12 @@ export const configSchema = z.object({
    * edge is the address every user behind that POP shares (`server.ts`).
    */
   RATE_LIMIT_PER_IP_PER_MINUTE: positiveInt.default(3000),
+  /**
+   * Invitations one verified user may send per hour before 429 (SHARE-02).
+   * A stricter bucket than the request limit: every invitation is an
+   * outbound email from the product's domain.
+   */
+  RATE_LIMIT_INVITES_PER_HOUR: positiveInt.default(30),
   /** Graceful shutdown budget; ECS sends SIGKILL 30 s after SIGTERM. */
   SHUTDOWN_TIMEOUT_MS: positiveInt.default(25_000),
 });

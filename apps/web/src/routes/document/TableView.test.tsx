@@ -34,6 +34,7 @@ import {
   textNode,
   type GedeDoc,
   type Id,
+  type PresenceState,
 } from '@gede/core';
 
 import { LiveRegion } from '../../announce.js';
@@ -50,6 +51,7 @@ interface HarnessProps {
   tier?: ZoomTier;
   undo?: Y.UndoManager | undefined;
   viewSorted?: boolean;
+  presence?: readonly PresenceState[];
   grid: { current: Grid | null };
 }
 
@@ -61,6 +63,7 @@ function Harness({
   tier = 'micro',
   undo,
   viewSorted,
+  presence = [],
   grid,
 }: HarnessProps) {
   const g = useGrid(gd, editable, { undo });
@@ -78,7 +81,7 @@ function Harness({
         editing={g.state.editing}
         editable={editable}
         viewSorted={viewSorted}
-        presence={[]}
+        presence={presence}
         pinnedLeft={pinnedLeft}
         undo={undo}
         actions={g.actions}
@@ -839,6 +842,27 @@ describe('rich text in the grid (marks, formats, undo)', () => {
       .getByRole('grid')
       .parentElement!.querySelectorAll('.gd-cell--frozen .gd-rich strong');
     expect(strongs.length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('SHARE-04 a collaborator’s selection renders as an outline in their presence colour with a name tag', () => {
+    mount({
+      presence: [
+        {
+          userId: 'u-2',
+          name: 'Sembian V',
+          colour: 4,
+          sheetId: null,
+          cell: { tableId, rowId: rows[1]!, colId: cols[2]! },
+        },
+      ],
+    });
+    const tagged = screen.getByLabelText('Sembian V is here');
+    expect(tagged).toHaveClass('gd-cell__presence-tag');
+    const cell = tagged.closest('.gd-cell');
+    expect(cell).toHaveClass('gd-cell--presence');
+    expect(cell).toHaveStyle({ '--gd-presence': 'var(--presence-4)' });
+    // One outline per collaborator, none anywhere else.
+    expect(document.querySelectorAll('.gd-cell--presence')).toHaveLength(1);
   });
 });
 

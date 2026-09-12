@@ -10,9 +10,9 @@ import {
 } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { Skeleton } from '@gede/ui';
-import { getMe } from '../api/me.js';
+import { bindVerifiedEmail, getMe } from '../api/me.js';
 import { bindUserLocale, unbindUserLocale } from '../locale.js';
-import { currentUser, onAuthEvent, signOutLocal, type SessionUser } from './cognito.js';
+import { currentUser, idToken, onAuthEvent, signOutLocal, type SessionUser } from './cognito.js';
 
 export type SessionState =
   { status: 'loading' } | { status: 'signed-out' } | { status: 'signed-in'; user: SessionUser };
@@ -95,8 +95,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     bindUserLocale(user.sub);
     setState({ status: 'signed-in', user });
     getMe()
-      .then((me) => {
-        if (epoch.current === mine) bindUserLocale(user.sub, me.locale);
+      .then(async (me) => {
+        if (epoch.current !== mine) return;
+        bindUserLocale(user.sub, me.locale);
+        // SHARE-02: the service knows this account by `sub` only until the ID
+        // token binds its verified address; that binding is what converts a
+        // pending invitation into a share on first sign-in.
+        if (me.email === null) {
+          const token = await idToken();
+          if (token !== null && epoch.current === mine) await bindVerifiedEmail(token);
+        }
       })
       .catch(() => {
         /* the profile is a nicety; the local choice already applies */

@@ -280,7 +280,8 @@ describe('GeDe CDK app', () => {
             Sid?: string;
             Effect: string;
             Action: string | string[];
-            Condition?: Record<string, Record<string, string[]>>;
+            Resource?: unknown;
+            Condition?: Record<string, Record<string, string | string[]>>;
           }[];
         };
       };
@@ -315,6 +316,15 @@ describe('GeDe CDK app', () => {
       const allowed = statements.filter((s) => s.Effect === 'Allow').flatMap(actions);
       expect(allowed.filter((a) => a.startsWith('s3:') && a.includes('*'))).toEqual([]);
       expect(allowed.filter((a) => a.startsWith('secretsmanager:'))).toEqual([]);
+
+      // SHARE-02: share mail is `ses:SendEmail` only (no SendRawEmail, no wildcard), on the
+      // domain identity, from the product's sender address and nothing else.
+      const mail = statements.find((s) => s.Sid === 'ShareMail')!;
+      expect(mail.Effect).toBe('Allow');
+      expect(actions(mail)).toEqual(['ses:SendEmail']);
+      expect(mail.Condition).toEqual({ StringEquals: { 'ses:FromAddress': 'no-reply@gede.work' } });
+      expect(JSON.stringify(mail.Resource)).toMatch(/identity\//);
+      expect(allowed.filter((a) => a.startsWith('ses:'))).toEqual(['ses:SendEmail']);
     }
     for (const prefix of ['TaskExecutionRole', 'JobsTaskExecutionRole']) {
       const executionPolicy = policies.find(([id]) => id.startsWith(prefix))?.[1];

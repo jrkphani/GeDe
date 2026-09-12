@@ -14,6 +14,10 @@ export type ErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'conflict'
+  /** `PATCH /api/me { idToken }`: the row already carries a different address (review of #76). */
+  | 'email_bound'
+  /** An invitation past its 14 days (410). */
+  | 'expired'
   | 'too_many_requests'
   | 'server_error'
   | 'unavailable';
