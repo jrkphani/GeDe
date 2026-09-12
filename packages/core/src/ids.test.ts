@@ -30,4 +30,9 @@ describe('ids', () => {
       expect(() => splitCellKey(bad)).toThrow(RangeError);
     }
   });
+
+  test('GRID-02 ids minted in one millisecond sort in creation order', () => {
+    const ids = Array.from({ length: 200 }, () => newId());
+    expect([...ids].sort()).toEqual(ids);
+  });
 });
