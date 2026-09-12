@@ -56,7 +56,11 @@ function readExtent(value: unknown): SpanExtent | null {
 /**
  * Every span on the table, resolved and clipped. A span whose anchor is gone,
  * or that would overlap an earlier span, is dropped from the index (its
- * entry stays stored, harmless, until the next write cleans it).
+ * entry stays stored, harmless, until the next write cleans it). A span
+ * whose anchor column is hidden is not in force either: the anchor has no
+ * lattice presence to draw the span from (GRID-02), so the cells it would
+ * cover show as themselves until the column is unhidden — nothing a person
+ * can see is ever hidden behind an anchor they cannot see.
  */
 export function spanIndex(table: TableMap, record: TableRecord = tableRecord(table)): SpanIndex {
   const map = readMap<unknown>(table, 'spans');
@@ -73,6 +77,7 @@ export function spanIndex(table: TableMap, record: TableRecord = tableRecord(tab
     const r0 = rowAt.get(rowId);
     const c0 = colAt.get(colId);
     if (r0 === undefined || c0 === undefined) continue;
+    if (record.columns[c0]?.hidden === true) continue;
     const rowIds = record.rows.slice(r0, r0 + extent.rows);
     const colIds = record.columns.slice(c0, c0 + extent.cols).map((c) => c.id);
     if (rowIds.length === 1 && colIds.length === 1) continue;

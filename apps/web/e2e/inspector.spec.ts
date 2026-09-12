@@ -364,9 +364,29 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
       await page.getByRole('option', { name: 'Accent' }).click();
       await expect(table).toHaveAttribute('data-outline', 'accent');
       await expect.poll(tables).toContain('"style":"forest"');
-      // Fit columns to content measures with the real canvas here.
+      // Fit columns to content measures with the real canvas here (GRID-01: whole units). A
+      // collaborator writes a value wider than one unit into column 1 first, so the fit has
+      // something to change: the table grows from three units to four. A width is geometry,
+      // and geometry is addressing (GRID-02): the next column's cell now reads D5, as it
+      // would after dragging the divider.
+      const wide = openDocument(room.doc);
+      const fitted = tableById(wide, Array.from(wide.tables.keys())[0]!)!;
+      setCellText(
+        wide,
+        fitted.id,
+        fitted.rows[3]!,
+        fitted.columns[0]!.id,
+        'Namche Bazaar acclimatisation day',
+      );
+      await expect(table).toHaveCSS('width', '480px');
       await rail.getByRole('button', { name: 'Fit columns to content' }).click();
       await expect(page.getByTestId('live-region')).toContainText('Fitted 3 columns to content');
+      await expect(table).toHaveCSS('width', '640px');
+      await expect(firstCell(page)).toHaveCSS('width', '320px');
+      await expect(page.getByRole('grid').first().getByRole('gridcell').nth(1)).toHaveAttribute(
+        'data-address',
+        'D5',
+      );
       await settled(page, '[data-testid="inspector"]');
       await checkA11y(`inspector table tab ${String(width)}`);
       await snapshot(`appearance-table-${String(width)}`);

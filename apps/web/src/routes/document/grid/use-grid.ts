@@ -253,6 +253,16 @@ function reconcileSelection(
   }
   const cell = selection.cell;
   if (cell === null) return;
+  // MENU-04: a collaborator's merge can cover the selected cell (or the one being edited —
+  // its draft commits on unmount, GRID-06). The placeholder has no focus target, so the
+  // selection lands on the span's anchor, as an arrow into the span would.
+  const anchor = now.covered?.get(`${cell.rowId}:${cell.colId}`);
+  if (anchor !== undefined) {
+    const [rowId, colId] = anchor.split(':');
+    if (rowId !== undefined && colId !== undefined)
+      dispatch({ type: 'select', cell: { tableId: selection.tableId, rowId, colId } });
+    return;
+  }
   const rowOk = now.rows.includes(cell.rowId);
   const column = now.columns.find((c) => c.id === cell.colId);
   const colOk = column !== undefined && !column.hidden;

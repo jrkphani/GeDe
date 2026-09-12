@@ -1357,4 +1357,33 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
       screen.getByRole('gridcell', { name: /^C5, hidden under the span/ }),
     ).toBeInTheDocument();
   });
+
+  it('MENU-04 SHARE-04 GRID-06 a collaborator’s merge covers the cell being edited here: the draft commits into the covered cell (its data is kept), and the selection lands on the anchor with focus', async () => {
+    const other = openDocument(new Y.Doc());
+    Y.applyUpdate(other.doc, Y.encodeStateAsUpdate(gd.doc));
+    mount();
+    await userEvent.click(cellAt(0, 1));
+    fireEvent.keyDown(cellAt(0, 1), { code: 'KeyQ', key: 'q' });
+    expect(screen.getByLabelText('Edit C5')).toBeInTheDocument();
+    act(() => {
+      mergeCells(other, tableId, rows[0]!, cols[0]!, { rows: 1, cols: 2 });
+      Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(other.doc, Y.encodeStateVector(gd.doc)));
+    });
+    // The placeholder is no focus target: the selection is the anchor, and it has focus.
+    expect(selected()).toBe('B5');
+    await waitFor(() => {
+      expect(document.activeElement).toBe(cellAt(0, 0));
+    });
+    expect(screen.queryByLabelText('Edit C5')).not.toBeInTheDocument();
+    // Nothing typed was lost: the covered cell holds it, and unmerging shows it.
+    await waitFor(() => {
+      expect(cellRich(tableMap(gd, tableId)!, rows[0]!, cols[1]!)).toEqual(
+        docNode([paragraphNode([textNode('q')])]),
+      );
+    });
+    act(() => {
+      unmergeCells(gd, tableId, rows[0]!, cols[0]!);
+    });
+    expect(screen.getByRole('gridcell', { name: /^C5, q/ })).toBeInTheDocument();
+  });
 });

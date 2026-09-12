@@ -4,6 +4,7 @@ import {
   GRIDLINE_DENSITIES,
   GRIDLINE_LABELS,
   OUTLINE_WEIGHTS,
+  setTableLook,
   TABLE_STYLE_LABELS,
   TABLE_STYLES,
   tableRecord,
@@ -13,6 +14,7 @@ import {
   type TableMap,
 } from '@gede/core';
 
+import { announce } from '../../../announce.js';
 import { peekEngine } from '../../../doc/engine.js';
 import { useLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/index.js';
@@ -126,7 +128,17 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
               disabled={!editable}
               placeholder="What this table holds"
               onChange={(e) => {
-                commands.setTableLook(record.id, { caption: e.currentTarget.value });
+                // As the title field does (TitleBar): the document is the state, and the
+                // keystrokes merge into one undo step through the manager's capture window
+                // — a `GridCommands` call would settle (and announce) every character.
+                if (editable) setTableLook(gd, record.id, { caption: e.currentTarget.value });
+              }}
+              onBlur={() => {
+                announce(
+                  look.caption === ''
+                    ? `${record.title}: caption cleared`
+                    : `${record.title}: caption is “${look.caption}”`,
+                );
               }}
             />
           )}

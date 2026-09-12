@@ -9,14 +9,17 @@ import * as Y from 'yjs';
 
 import {
   cellAddress,
+  cellText,
   createSheet,
   createTable,
+  hideColumn,
   openDocument,
   setCellText,
   tableAddresses,
   tableById,
   tableMap,
   tableUnitBounds,
+  unhideColumn,
   type GedeDoc,
 } from '../doc/index.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
@@ -300,6 +303,24 @@ describe('MENU-04 merged cells as spans', () => {
     expect(unmergeCells(gd, tableId, r1, c1)).toBe(true);
     expect(spanIndex(table).byAnchor.size).toBe(0);
     expect(unmergeCells(gd, tableId, r1, c1)).toBe(false);
+  });
+
+  it('MENU-04 GRID-02 a span whose anchor column is hidden is not in force: the cells it covered show as themselves, and the span returns when the column is unhidden', () => {
+    const { gd, tableId } = fixture(3, 3);
+    const record = tableById(gd, tableId)!;
+    const [r0] = record.rows as [Id];
+    const [c0, c1] = record.columns.map((c) => c.id) as [Id, Id];
+    setCellText(gd, tableId, r0, c1, 'under the span');
+    expect(mergeCells(gd, tableId, r0, c0, { rows: 1, cols: 2 })).toBeNull();
+    const table = tableMap(gd, tableId)!;
+    expect(spanCovering(table, r0, c1)).not.toBeNull();
+    hideColumn(gd, tableId, c0);
+    // The anchor has no lattice presence, so nothing may hide behind it.
+    expect(spanIndex(table).byAnchor.size).toBe(0);
+    expect(spanCovering(table, r0, c1)).toBeNull();
+    expect(cellText(table, r0, c1)).toBe('under the span');
+    unhideColumn(gd, tableId, c0);
+    expect(spanCovering(table, r0, c1)?.anchor).toBe(cellKey(r0, c0));
   });
 
   it('MENU-04 a merge past the table edge or over another span is refused and writes nothing', () => {

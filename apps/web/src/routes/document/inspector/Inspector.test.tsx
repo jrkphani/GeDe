@@ -17,6 +17,7 @@ import {
   columnLetter,
   createSheet,
   createTable,
+  createUndoManager,
   DEFAULT_SEARCH_OPTIONS,
   hasMarkThroughout,
   LATTICE,
@@ -92,6 +93,8 @@ interface HarnessProps {
   select?: 'table' | 'cell' | null;
   find?: Find;
   slots?: InspectorProps['slots'];
+  /** KEYS-03: the document's undo manager, so a command settles one undo step as the shell does. */
+  undo?: Y.UndoManager;
 }
 
 function Harness({
@@ -102,8 +105,9 @@ function Harness({
   select = 'cell',
   find = fakeFind(),
   slots,
+  undo,
 }: HarnessProps) {
-  const g = useGrid(gd, editable);
+  const g = useGrid(gd, editable, { undo });
   grid.current = g;
   useYVersion(gd.tables);
   const record = tableById(gd, tableId);
@@ -254,8 +258,9 @@ describe('Inspector', () => {
     expect(screen.getByTestId('inspector-selected')).toHaveTextContent('Nothing selected');
   });
 
-  it('INSP-04 INSP-12 the Table tab: style, title and caption, header row, footer, frozen columns, row and column counts, outline, gridlines, alternating colour, width, wrap and fit write through at once', async () => {
-    await mount();
+  it('INSP-04 INSP-12 KEYS-03 the Table tab: style, title and caption, header row, footer, frozen columns, row and column counts, outline, gridlines, alternating colour, width, wrap and fit write through at once; typing a caption is one undo step', async () => {
+    const undo = createUndoManager(gd);
+    await mount({ undo });
     await userEvent.click(tab('Table'));
     // Table style: one of the four ramp pairs, as a Radix toggle group with labelled swatches.
     const style = section('table style');
@@ -271,6 +276,13 @@ describe('Inspector', () => {
     await userEvent.type(within(titling).getByRole('textbox', { name: 'Caption text' }), 'Q3');
     expect(tableById(gd, tableId)?.look.caption).toBe('Q3');
     expect(tableAddresses(tableMap(gd, tableId)!)).toEqual(before);
+    // The keystrokes merged through the capture window (as the title field's do): one undo
+    // clears the caption.
+    act(() => {
+      undo.undo();
+    });
+    expect(tableById(gd, tableId)?.look.caption).toBe('');
+    await userEvent.type(within(titling).getByRole('textbox', { name: 'Caption text' }), 'Q3');
     // Outline, gridline density and alternating rows.
     const lines = section('outline and gridlines');
     await userEvent.click(within(lines).getByRole('combobox', { name: 'Table outline' }));
