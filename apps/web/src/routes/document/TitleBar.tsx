@@ -204,7 +204,11 @@ export function TitleBar({
           )}
         </span>
       ) : (
-        <h1 className="gd-doc__title-static">{title === '' ? serverTitle : title}</h1>
+        // The static title truncates with an ellipsis (#124); the full name is one hover away
+        // for a viewer or a read-only sync at any width (the accessible name is never cut).
+        <h1 className="gd-doc__title-static" title={title === '' ? serverTitle : title}>
+          {title === '' ? serverTitle : title}
+        </h1>
       )}
       {/* Secondary controls: one row with the title from md up; below md the bar is two
           lines (DS §5 "two-line chrome bar") and these take the second, so the title, the

@@ -812,8 +812,21 @@ button.gd-cell__chevron:hover {
     width: var(--hit-target);
     height: var(--hit-target);
   }
+  /* The visible line stays one header row tall on the boundary; hover and focus paint it,
+     never the invisible box (which would draw a 44 px ring into the title bar and over the
+     next column's label). */
   .gd-table__divider::after {
+    top: auto;
     right: calc(var(--hit-target) - var(--gd-divider-inset));
+    height: var(--lattice-row);
+  }
+  .gd-table__divider:focus-visible {
+    outline: none;
+  }
+  .gd-table__divider:focus-visible::after {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
   }
 }
 .gd-table__corner {

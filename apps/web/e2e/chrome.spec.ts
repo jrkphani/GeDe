@@ -14,6 +14,7 @@ import {
   asDesktop,
   asPhone,
   BREAKPOINTS,
+  computedTokenColor,
   expect,
   expectNoHorizontalOverflow,
   test,
@@ -234,5 +235,76 @@ test.describe('targets below lg', () => {
       expect(hit).toMatch(name);
     }
     await checkA11y('chrome targets 768');
+  });
+
+  test('A11Y-02 RESP-05 at 768 px the ▼ and the divider draw hover and focus on the visible glyph and line, not on the 44 px box', async ({
+    page,
+  }) => {
+    await installFakes(page);
+    await asDesktop(page, 768);
+    await signInTo(page, `/d/${DOC_ID}`);
+    await page.getByRole('grid').getByRole('gridcell').first().click();
+    const trigger = page.getByRole('button', { name: /^Sort, filter or group/ }).first();
+    const divider = page.getByRole('separator', { name: /^Resize column/ }).first();
+    const header = page.locator('.gd-table__header').first();
+    const headerBox = (await header.boundingBox())!;
+
+    // Keyboard focus: the button's own outline is off; the ring is on the 18 px glyph square
+    // at the bottom-right of the box, inside the header row, ring token and width intact.
+    await page.keyboard.press('Shift');
+    await trigger.focus();
+    await page.keyboard.press('Shift');
+    const ring = await trigger.evaluate((el) => {
+      const own = getComputedStyle(el);
+      const glyph = getComputedStyle(el, '::before');
+      return {
+        focusVisible: el.matches(':focus-visible'),
+        ownOutline: own.outlineStyle,
+        ownShadow: own.boxShadow,
+        ownBackground: own.backgroundColor,
+        glyphOutline: `${glyph.outlineWidth} ${glyph.outlineStyle}`,
+        glyphColor: glyph.outlineColor,
+        glyphWidth: parseFloat(glyph.width),
+        glyphHeight: parseFloat(glyph.height),
+      };
+    });
+    expect(ring.focusVisible).toBe(true);
+    expect(ring.ownOutline).toBe('none');
+    expect(ring.ownShadow).toBe('none');
+    expect(ring.ownBackground).toBe('rgba(0, 0, 0, 0)');
+    expect(ring.glyphOutline).toBe('2px solid');
+    expect(ring.glyphColor).toBe(await computedTokenColor(page, '--focus-ring'));
+    expect(ring.glyphWidth).toBe(18);
+    expect(ring.glyphHeight).toBe(18);
+
+    // Hover: the box stays transparent; the glyph square takes the tint.
+    const triggerBox = (await trigger.boundingBox())!;
+    await page.mouse.move(triggerBox.x + 6, triggerBox.y + 6); // top-left: inside the table title bar
+    await expect
+      .poll(() => trigger.evaluate((el) => getComputedStyle(el, '::before').backgroundColor))
+      .not.toBe('rgba(0, 0, 0, 0)');
+    expect(await trigger.evaluate((el) => getComputedStyle(el).backgroundColor)).toBe(
+      'rgba(0, 0, 0, 0)',
+    );
+
+    // The divider's line is one header row tall on the boundary; focus rings the line.
+    await divider.focus();
+    await page.keyboard.press('Shift');
+    const line = await divider.evaluate((el) => {
+      const own = getComputedStyle(el);
+      const after = getComputedStyle(el, '::after');
+      return {
+        focusVisible: el.matches(':focus-visible'),
+        ownOutline: own.outlineStyle,
+        lineHeight: parseFloat(after.height),
+        lineOutline: `${after.outlineWidth} ${after.outlineStyle}`,
+        lineColor: after.outlineColor,
+      };
+    });
+    expect(line.focusVisible).toBe(true);
+    expect(line.ownOutline).toBe('none');
+    expect(line.lineHeight).toBeLessThanOrEqual(headerBox.height + 1);
+    expect(line.lineOutline).toBe('2px solid');
+    expect(line.lineColor).toBe(await computedTokenColor(page, '--focus-ring'));
   });
 });
