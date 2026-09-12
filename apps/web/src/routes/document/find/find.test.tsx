@@ -511,6 +511,36 @@ describe('Find', () => {
     });
   });
 
+  it('FIND-03 FIND-08 re-indexes every table touched by one transaction even with deeper observers attached (as each TableView is)', async () => {
+    const { gd, sheet1, table1, table2, ids } = fixture();
+    // TableView observes its own map deeply; Yjs rewrites event.path per observer, so the
+    // index must not rely on it.
+    const t1 = gd.tables.get(table1)!;
+    const t2 = gd.tables.get(table2)!;
+    const noop = () => undefined;
+    t1.observeDeep(noop);
+    t2.observeDeep(noop);
+    render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Find and replace' }));
+    const field = screen.getByRole('textbox', { name: 'Find' });
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Singapore');
+    await waitFor(() => {
+      expect(count()).toBe('1 of 4');
+    });
+    await userEvent.type(screen.getByRole('textbox', { name: 'Replace with' }), 'Chennai');
+    await userEvent.click(screen.getByRole('button', { name: 'All' }));
+    expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Chennai office');
+    expect(
+      cellText(t2, tableById(gd, table2)!.rows[0]!, tableById(gd, table2)!.columns[0]!.id),
+    ).toBe('Chennai budget');
+    await waitFor(() => {
+      expect(count()).toBe('No matches');
+    });
+    t1.unobserveDeep(noop);
+    t2.unobserveDeep(noop);
+  });
+
   it('I18N-01 Enter during IME composition does not step', async () => {
     const { gd, sheet1 } = fixture();
     const nav = navigation();

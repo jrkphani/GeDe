@@ -54,7 +54,7 @@ function cell(
 const ids = (matches: readonly SearchMatch[]) => matches.map((m) => m.entryId);
 
 describe('graphemes', () => {
-  test('SORT-03 splits Tamil and Hindi text into grapheme clusters, not UTF-16 units', () => {
+  test('SORT-03 splits Tamil and Hindi text into grapheme clusters, never code units', () => {
     // Tamil: a consonant with its pulli (virama) or vowel sign is one cluster (UAX #29).
     expect(graphemes('சிங்கப்பூர்')).toEqual(['சி', 'ங்', 'க', 'ப்', 'பூ', 'ர்']);
     expect('சிங்கப்பூர்'.length).toBe(11);

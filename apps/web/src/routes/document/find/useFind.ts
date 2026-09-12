@@ -9,7 +9,7 @@
  * the highlights never go stale.
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import type * as Y from 'yjs';
+import * as Y from 'yjs';
 import {
   buildSearchSnapshot,
   cellText,
@@ -113,6 +113,21 @@ function storeQuery(docId: string, query: string): void {
   }
 }
 
+/**
+ * The table a deep event under `gd.tables` belongs to. Walks `target.parent`
+ * up to the tables map and reads the table's own `id` field — never
+ * `event.path` or `event.currentTarget`, which Yjs rewrites for every deep
+ * observer up the chain (each TableView observes its own map deeply), so by
+ * the time a deferred listener runs they may describe another observer's view.
+ */
+function tableIdOf(target: Y.AbstractType<unknown>, tables: object): string | null {
+  let type: Y.AbstractType<unknown> | null = target;
+  while (type !== null && type.parent !== tables) type = type.parent;
+  if (!(type instanceof Y.Map)) return null;
+  const id: unknown = type.get('id');
+  return typeof id === 'string' ? id : null;
+}
+
 /** Table ids touched by a batch of deep events under `gd.tables`, split into changed and removed. */
 function tableChanges(
   events: readonly Y.YEvent<Y.AbstractType<unknown>>[],
@@ -128,8 +143,8 @@ function tableChanges(
       });
       continue;
     }
-    const head = event.path[0];
-    if (typeof head === 'string') changed.add(head);
+    const id = tableIdOf(event.target, tables);
+    if (id !== null) changed.add(id);
   }
   return { changed, removed };
 }
