@@ -56,3 +56,28 @@ describe('Tabs', () => {
     expect(panel).toBeEmptyDOMElement();
   });
 });
+
+describe('Tabs without panes', () => {
+  it('A11Y-04 a tab with no content still owns an empty panel, out of the tab order, so its aria-controls resolves', () => {
+    render(
+      <Tabs
+        label="Sheets"
+        value="s1"
+        onChange={() => undefined}
+        items={[
+          { value: 's1', label: 'Trek' },
+          { value: 's2', label: 'Budget' },
+        ]}
+      />,
+    );
+    for (const tab of screen.getAllByRole('tab')) {
+      const controls = tab.getAttribute('aria-controls');
+      expect(controls).toBeTruthy();
+      const panel = document.getElementById(controls ?? '');
+      expect(panel).not.toBeNull();
+      expect(panel).toHaveClass('gd-tabs__panel--empty');
+      expect(panel).toBeEmptyDOMElement();
+      expect(panel).toHaveAttribute('tabindex', '-1');
+    }
+  });
+});

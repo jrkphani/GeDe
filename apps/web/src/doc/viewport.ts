@@ -131,3 +131,30 @@ export function toCanvas(v: Viewport, point: { x: number; y: number }): { x: num
 export function formatZoom(zoom: number): string {
   return `${String(Math.round(zoom * 100))}%`;
 }
+
+/**
+ * FIND-07: pan just enough that a canvas rectangle (pixels at zoom 1) sits
+ * inside the viewport with `padding` around it; a rectangle already in view
+ * leaves the viewport unchanged. Zoom never changes — stepping through matches
+ * moves the plane, it does not re-scale it. A rectangle wider or taller than
+ * the viewport aligns its top-left edge.
+ */
+export function revealBounds(
+  v: Viewport,
+  size: Size,
+  bounds: PixelBounds,
+  padding: number,
+): Viewport {
+  if (size.width <= 0 || size.height <= 0) return v;
+  const left = bounds.x * v.zoom - padding;
+  const top = bounds.y * v.zoom - padding;
+  const right = (bounds.x + bounds.width) * v.zoom + padding;
+  const bottom = (bounds.y + bounds.height) * v.zoom + padding;
+  let x = v.x;
+  let y = v.y;
+  if (left < v.x || right - left > size.width) x = left;
+  else if (right > v.x + size.width) x = right - size.width;
+  if (top < v.y || bottom - top > size.height) y = top;
+  else if (bottom > v.y + size.height) y = bottom - size.height;
+  return clampViewport({ x, y, zoom: v.zoom });
+}

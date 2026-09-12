@@ -26,6 +26,8 @@ export interface ToolbarProps {
   onInspector: (mode: InspectorMode | null) => void;
   /** The Table menu (grid/TableMenu): row, column, freeze, header and footer commands. */
   tableMenu?: ReactNode | undefined;
+  /** FIND-01: the magnifier opens the Find bar. */
+  onFind: () => void;
 }
 
 interface ToolProps {
@@ -153,6 +155,7 @@ export function Toolbar({
   onFit,
   onInspector,
   tableMenu,
+  onFind,
 }: ToolbarProps) {
   const viewOnly = editable ? undefined : 'you have view-only access';
   const needsTable = viewOnly ?? (hasTable ? undefined : 'select a table first');
@@ -210,6 +213,15 @@ export function Toolbar({
         <Tool icon="sort" label="Sort" disabledReason={`sorting ${wave2}`} />
       </Cluster>
       <span className="gd-doc__toolgap" />
+      <Cluster label="Find">
+        <Tool
+          icon="search"
+          label="Find"
+          shortcut={LABELS.find}
+          ariaKeys={ARIA_KEYS.find}
+          onClick={onFind}
+        />
+      </Cluster>
       <Cluster label="View">
         <Tool
           icon="zoom-out"
