@@ -66,6 +66,7 @@ import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2
 import { pinnedPanelOffset } from './grid/pinned.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
+import { DerivePanel } from './ref/index.js'; // wave3/references
 import { SortPanel, useSortCommands } from './sort/index.js';
 import {
   NULL_VIEW_STORE,
@@ -846,8 +847,19 @@ function OpenDocument({
                 ),
                 sort: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
                 filter: <SortPanel gd={gd} tableId={selection?.tableId ?? null} commands={sort} />,
-                // slot: derive (references #77) / graph (context graph release).
-                derive: undefined,
+                // REF-02..04 (#77): cross-table relation, derived-column composition and the
+                // pipeline audit list, for the selected table.
+                derive:
+                  selection?.tableId === undefined ? undefined : (
+                    <DerivePanel
+                      gd={gd}
+                      tableId={selection.tableId}
+                      sourceColId={cell?.colId}
+                      undo={session.undo}
+                      editable={editable}
+                    />
+                  ),
+                // slot: graph (context graph release).
                 graph: undefined,
               }}
             />

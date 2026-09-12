@@ -214,6 +214,46 @@ export function markSplitChildren(
   });
 }
 
+/**
+ * HIER-07: `markSplitChildren` for many parents at once — the effective depths
+ * are computed once for the table, so a first materialisation of a whole
+ * column is one walk, not one per parent. Parents or rows not in the table
+ * are skipped. Returns how many rows were written.
+ */
+export function markSplitChildrenBatch(
+  gd: GedeDoc,
+  tableId: Id,
+  groups: ReadonlyMap<Id, readonly Id[]>,
+): number {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    const rows = rowsArray(table).toArray();
+    const index = new Map(rows.map((id, i) => [id, i]));
+    const depths = effectiveDepths(rows.map((id) => rowMeta(table, id).depth));
+    let written = 0;
+    for (const [parentRowId, rowIds] of groups) {
+      const parentIndex = index.get(parentRowId);
+      if (parentIndex === undefined) continue;
+      const depth = (depths[parentIndex] ?? 0) + 1;
+      for (const id of rowIds) {
+        if (!index.has(id)) continue;
+        const meta = rowMetaFor(table, id);
+        let touched = false;
+        if (meta.get('depth') !== depth) {
+          meta.set('depth', depth);
+          touched = true;
+        }
+        if (meta.get('splitChild') !== true) {
+          meta.set('splitChild', true);
+          touched = true;
+        }
+        if (touched) written += 1;
+      }
+    }
+    return written;
+  });
+}
+
 /** HIER-07: the reverse of `markSplitChildren`, when a split is removed and its rows become ordinary. */
 export function clearSplitChildren(gd: GedeDoc, tableId: Id, rowIds: readonly Id[]): void {
   transact(gd, () => {

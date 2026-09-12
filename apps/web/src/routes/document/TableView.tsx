@@ -989,7 +989,36 @@ const COLUMN_KEYS = {
   source: true,
   format: true,
   formatOpts: true,
+  derive: true,
+  link: true,
+  pull: true,
 } as const satisfies Record<keyof ColumnRecord, true>;
+
+/** REF-02..04 specs are plain JSON rebuilt per render; compare by content. */
+function specsEqual(a: unknown, b: unknown): boolean {
+  return a === b || JSON.stringify(a) === JSON.stringify(b);
+}
+
+const ROW_META_KEYS = {
+  depth: true,
+  collapsed: true,
+  height: true,
+  group: true,
+  splitChild: true,
+  pulledFrom: true,
+  splitOf: true,
+} as const satisfies Record<keyof RowMeta, true>;
+
+function rowMetaEqual(a: RowMeta, b: RowMeta): boolean {
+  const { pulledFrom: _pa, splitOf: _sa, ...restA } = a;
+  const { pulledFrom: _pb, splitOf: _sb, ...restB } = b;
+  const { pulledFrom: _k1, splitOf: _k2, ...restKeys } = ROW_META_KEYS;
+  return (
+    fieldsEqual(restKeys, restA, restB) &&
+    specsEqual(a.pulledFrom, b.pulledFrom) &&
+    specsEqual(a.splitOf, b.splitOf)
+  );
+}
 
 /** The outline row is rebuilt per render too (HIER-04); compare what the cell draws. */
 function outlineRowsEqual(a: OutlineRow | null, b: OutlineRow | null): boolean {
@@ -999,11 +1028,15 @@ function outlineRowsEqual(a: OutlineRow | null, b: OutlineRow | null): boolean {
 }
 
 function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
-  const { formatOpts: _a, ...restA } = a;
-  const { formatOpts: _b, ...restB } = b;
-  const { formatOpts: _keys, ...restKeys } = COLUMN_KEYS;
+  const { formatOpts: _a, derive: _da, link: _la, pull: _pa, ...restA } = a;
+  const { formatOpts: _b, derive: _db, link: _lb, pull: _pb, ...restB } = b;
+  const { formatOpts: _keys, derive: _kd, link: _kl, pull: _kp, ...restKeys } = COLUMN_KEYS;
   return (
-    fieldsEqual(restKeys, restA, restB) && fieldsEqual(FORMAT_OPTS_KEYS, a.formatOpts, b.formatOpts)
+    fieldsEqual(restKeys, restA, restB) &&
+    fieldsEqual(FORMAT_OPTS_KEYS, a.formatOpts, b.formatOpts) &&
+    specsEqual(a.derive, b.derive) &&
+    specsEqual(a.link, b.link) &&
+    specsEqual(a.pull, b.pull)
   );
 }
 
@@ -1026,6 +1059,7 @@ const COMPARED_CELL_PROPS = {
   outline: true,
   outlineLocked: true,
   column: true,
+  rowMeta: true,
   locale: true,
   undo: true,
   frozen: true,
@@ -1073,7 +1107,7 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
   ) {
     return false;
   }
-  return columnsEqual(a.column, b.column);
+  return columnsEqual(a.column, b.column) && rowMetaEqual(a.rowMeta, b.rowMeta);
 }
 
 function arrowDirection(code: string): Direction | null {

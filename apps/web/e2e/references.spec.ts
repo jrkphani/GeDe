@@ -225,8 +225,9 @@ for (const width of [1024, 1440]) {
     await page.getByRole('button', { name: 'Add table' }).click();
     await expect(page.getByRole('grid', { name: 'Table 2' })).toBeVisible();
     const second = tableTitled(gd, 'Table 2');
-    // Beside Table 1 rather than beneath it, so the child rows Table 1 grows never overlap it.
-    setTablePosition(gd, second.id, { col: 9, row: 1 });
+    // Well beneath Table 1 (which grows child rows later) and inside the 1024 viewport: the
+    // canvas virtualises tables outside it, and a table beside Table 1 sits past 1024 px.
+    setTablePosition(gd, second.id, { col: 1, row: 30 });
     setPull(gd, second.id, second.cols[0] ?? '', {
       tableId: t.id,
       colId: t.cols[0] ?? '',
@@ -282,6 +283,9 @@ for (const width of [1024, 1440]) {
     // page with every reference kind on screen.
     if (width === 1440) {
       await page.emulateMedia({ colorScheme: 'dark' });
+      // The theme swap runs the tokens' colour transitions; axe samples computed colours,
+      // so wait for every transition to finish before measuring contrast.
+      await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
       await expect(table1.getByTestId('reference-cell').locator('.gd-ref__value')).toHaveText(
         'Namche Bazaar',
       );

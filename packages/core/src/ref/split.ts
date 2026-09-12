@@ -15,7 +15,7 @@
  * Like pulls, the reconcile is deterministic (child ids derive from the
  * parent's), idempotent and a minimal diff (`rows.ts`), runs under
  * `SPLIT_ORIGIN`, and converges across replicas. The flag and depth go
- * through `markSplitChildren` (ADR-025), inside the reconcile's transaction. One `Split` column per table renders children; a second one
+ * through `markSplitChildrenBatch` (ADR-025), inside the reconcile's transaction. One `Split` column per table renders children; a second one
  * evaluates but is shown joined in its own cell.
  */
 import { rowMetaFor } from '../doc/mutations.js';
@@ -35,7 +35,7 @@ import {
 } from '../doc/schema.js';
 import { workbookCellId, type WorkbookCellId } from '../engine/types.js';
 import type { CellValue } from '../formula/evaluate.js';
-import { markSplitChildren } from '../hier/mutations.js';
+import { markSplitChildrenBatch } from '../hier/mutations.js';
 import { effectiveDepths } from '../hier/outline.js';
 import { cellKey, type Id } from '../ids.js';
 import { orderMembers, RowEditor } from './rows.js';
@@ -155,22 +155,24 @@ function reconcileInTransaction(gd: GedeDoc, tableId: Id, pieces: SplitPieces): 
   // The depth every child should hold: one under its parent's *effective* depth (HIER-02),
   // computed once for the table rather than once per parent inside `markSplitChildren`.
   const depths = effectiveDepths(editor.ids.map((id) => rowMeta(table, id).depth));
+  // The outline's contract (ADR-025): flag and depth are written by `markSplitChildren`
+  // (the outer transaction's origin wins, so it stays untracked by undo). Every parent
+  // whose children are not already flagged at their depth is collected and written in one
+  // batch, so a first materialisation of a whole column walks the table once.
+  const unsettled = new Map<Id, readonly Id[]>();
   for (const [parentId, ids] of wanted) {
-    const parts = effective.get(parentId) ?? [];
     if (ids.length === 0) continue;
-    // The outline's contract (ADR-025): flag and depth are written by `markSplitChildren`
-    // (the outer transaction's origin wins, so it stays untracked by undo) — called only
-    // for a parent whose children are not already flagged at that depth, since it walks
-    // the whole table each time.
     const wantDepth = (depths[editor.indexOf(parentId)] ?? 0) + 1;
     const settled = ids.every((id) => {
       const meta = metas.get(id);
       return meta?.get('splitChild') === true && meta.get('depth') === wantDepth;
     });
-    if (!settled) {
-      markSplitChildren(gd, tableId, parentId, ids);
-      writes += 1;
-    }
+    if (!settled) unsettled.set(parentId, ids);
+  }
+  if (unsettled.size > 0) writes += markSplitChildrenBatch(gd, tableId, unsettled);
+  for (const [parentId, ids] of wanted) {
+    const parts = effective.get(parentId) ?? [];
+    if (ids.length === 0) continue;
     ids.forEach((childId, index) => {
       const meta = rowMetaFor(table, childId);
       const splitOf = readSplitOf(meta.get('splitOf'));

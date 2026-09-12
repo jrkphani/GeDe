@@ -2,6 +2,7 @@ import { describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 
 import {
+  addRow,
   cellReadOnlyReason,
   cellText,
   createSheet,
@@ -578,6 +579,24 @@ describe('REF-02 pulls', () => {
     setCellText(gd, source, leh.rowId, leh.colId, 'Nepal');
     expect(reconciles).toBe(1);
     expect(tableById(gd, target)?.rows).toHaveLength(4);
+    stop();
+  });
+
+  test('REF-02 own rows come first and the mirrored block last: a row appended after the block moves up', () => {
+    const { gd, sheetId } = harness();
+    const { source, target, receiving, sourceCol } = pulled(gd, sheetId);
+    const stop = observePulls(gd);
+    setPull(gd, target, receiving, { tableId: source, colId: sourceCol, filter: '' });
+    const own = tableById(gd, target)?.rows[0] ?? '';
+    const appended = addRow(gd, target);
+    const rows = tableById(gd, target)?.rows ?? [];
+    expect(rows.slice(0, 2)).toEqual([own, appended]);
+    expect(rows).toHaveLength(5);
+    const table = tableMap(gd, target);
+    if (table === null) throw new Error('no table');
+    expect(rows.slice(2).every((id) => rowMeta(table, id).pulledFrom !== null)).toBe(true);
+    // Settled: nothing more to move.
+    expect(reconcilePull(gd, target)).toBe(0);
     stop();
   });
 

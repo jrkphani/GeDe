@@ -233,6 +233,21 @@ function reconcileInTransaction(gd: GedeDoc, tableId: Id, reader: PullReader): n
     editor.insertAt(at, id);
   });
   orderMembers(editor, desired);
+  // Own rows first, the mirrored block last (ADR-032): a row appended after the block —
+  // `addRow` puts a new row at the end — moves up before it, one row at a time.
+  const inBlock = (id: Id): boolean => {
+    // A row inserted this pass is pulled too; its provenance is written below.
+    if (isPulled(id) || desiredSet.has(id)) return true;
+    const parent = rowMeta(table, id).splitOf?.rowId;
+    return parent !== undefined && (isPulled(parent) || desiredSet.has(parent));
+  };
+  for (let guard = editor.ids.length; guard > 0; guard -= 1) {
+    const first = editor.ids.findIndex(inBlock);
+    if (first < 0) break;
+    const stray = editor.ids.findIndex((id, i) => i > first && !inBlock(id));
+    if (stray < 0) break;
+    editor.move(editor.ids[stray] ?? '', first);
+  }
   writes += editor.writes;
   if (plan === null) return writes;
 
