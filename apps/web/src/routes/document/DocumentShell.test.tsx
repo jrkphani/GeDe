@@ -428,6 +428,21 @@ describe('DocumentShell', () => {
     expect(cell).toHaveTextContent('');
   });
 
+  it('GRID-06 LOAD-05 selecting another cell while editing commits the draft instead of dropping it', async () => {
+    await openShell();
+    const grid = await addTable();
+    const [first, second] = within(grid).getAllByRole('gridcell');
+    await userEvent.dblClick(first!);
+    await userEvent.type(screen.getByLabelText('Edit B5'), 'Base camp');
+    // The pointerdown on another cell moves the selection before the browser blurs the editor.
+    fireEvent.pointerDown(second!);
+    await waitFor(() => {
+      expect(screen.queryByLabelText('Edit B5')).not.toBeInTheDocument();
+    });
+    expect(first).toHaveTextContent('Base camp');
+    await until(() => JSON.stringify(roomDoc().getMap('tables').toJSON()).includes('Base camp'));
+  });
+
   it('LOAD-06 A11Y-05 going offline shows the local-save banner and announces; coming back clears it', async () => {
     await openShell();
     await waitFor(() => {

@@ -366,9 +366,25 @@ function CellEditor({ initial, address, onCommit, onCancel }: CellEditorProps) {
   const [value, setValue] = useState(initial);
   const ref = useRef<HTMLInputElement>(null);
   const done = useRef(false);
+  const latest = useRef({ value, onCommit });
+  latest.current = { value, onCommit };
+  const mounted = useRef(false);
   useEffect(() => {
+    mounted.current = true;
     ref.current?.focus();
     ref.current?.select();
+    // GRID-06: blur commits. Selecting another cell (or switching sheet) unmounts the
+    // editor before the browser blurs it, so the draft commits here unless already
+    // finished. Deferred one microtask so StrictMode's mount → unmount → mount rehearsal
+    // (which remounts synchronously) does not commit.
+    return () => {
+      mounted.current = false;
+      queueMicrotask(() => {
+        if (mounted.current || done.current) return;
+        done.current = true;
+        latest.current.onCommit(latest.current.value);
+      });
+    };
   }, []);
   const finish = (commit: boolean) => {
     if (done.current) return;
