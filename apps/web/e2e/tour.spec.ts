@@ -328,7 +328,9 @@ for (const width of [1024, 1440] as const) {
     await expect(field).toBeFocused();
     await expect(step4).toBeVisible();
     await field.fill('Blocked');
-    await expect(page.getByTestId('find-count')).toHaveText(/of 2/);
+    // Two Blocked cells, and the graph bound in step 3 whose Status dimension carries the
+    // value (FIND-03 "graph dimension values", #125).
+    await expect(page.getByTestId('find-count')).toHaveText(/of 3/);
 
     // Step 5 — Share and invite.
     const step5 = page.getByRole('dialog', { name: 'Invite someone by email' });
@@ -356,7 +358,6 @@ for (const width of [1024, 1440] as const) {
       'Invitation saved — the email could not be sent; share the link or try again',
     );
     await expect(sheet.getByRole('button', { name: 'Resend' }).first()).toBeVisible();
-    await checkA11y(`share sheet mail failed ${String(width)}`);
 
     // ONB-14: completion names where to replay; ONB-03: the account flag is set once.
     await sheet.getByRole('button', { name: 'Done' }).click();

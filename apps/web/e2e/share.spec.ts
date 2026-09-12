@@ -121,7 +121,15 @@ async function installFakes(page: Page): Promise<{ sheet: FakeSheet; calls: stri
         invitedBy: SESSION.sub,
         expiresAt: '2026-09-26T00:00:00.000Z',
       });
-      return route.fulfill({ status: 201, json: { kind: 'invite', created: true, shares: sheet } });
+      // #121: an address SES refuses (the sandbox) is saved with `delivery: 'failed'`.
+      const delivery = body.email.endsWith('.invalid') ? 'failed' : 'sent';
+      return route.fulfill({
+        status: 201,
+        json: { kind: 'invite', created: true, delivery, shares: sheet },
+      });
+    }
+    if (method === 'POST' && /^\/invites\/inv-\d+\/resend$/.test(path)) {
+      return route.fulfill({ status: 200, json: { delivery: 'sent', shares: sheet } });
     }
     if (method === 'PATCH' && path === '/link') {
       const body = route.request().postDataJSON() as { access: FakeSheet['linkAccess'] };
@@ -219,6 +227,27 @@ for (const width of [1024, 1440]) {
     await expect(page.getByTestId('live-region')).toHaveText(
       /Invitation sent to akshaya@example.com/,
     );
+
+    // SHARE-02 (#121): an invitation whose mail was refused is saved; the sheet says so
+    // with Resend, and Resend reports the new delivery.
+    await dialog
+      .getByRole('textbox', { name: 'Add people by email' })
+      .fill('nobody@example.invalid');
+    await page.keyboard.press('Enter');
+    await expect(list.getByRole('listitem')).toHaveCount(4);
+    await expect(list.getByRole('listitem').nth(3)).toContainText('Invited · email not sent');
+    const notice = dialog.getByTestId('share-mail-failed');
+    await expect(notice).toContainText(
+      'Invitation saved — the email could not be sent; share the link or try again',
+    );
+    await settled(page);
+    await checkA11y(`share sheet mail failed ${String(width)}`);
+    await notice.getByRole('button', { name: 'Resend' }).click();
+    await expect(page.getByTestId('live-region')).toHaveText(
+      /Invitation sent again to nobody@example.invalid/,
+    );
+    await expect(notice).toHaveCount(0);
+    expect(calls).toContain('POST /invites/inv-2/resend');
 
     // Per-person permission, by keyboard on the Radix select.
     const perm = dialog.getByRole('combobox', { name: 'Permission for Sembian V' });
