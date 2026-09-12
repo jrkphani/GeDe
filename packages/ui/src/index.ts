@@ -25,6 +25,7 @@ export { Avatar, initialsOf, type AvatarProps, type AvatarSize } from './compone
 export { Badge, type BadgeProps, type BadgeTone } from './components/Badge.js';
 export { Tabs, type TabItem, type TabsProps } from './components/Tabs.js';
 export { Switch, type SwitchProps } from './components/Switch.js';
+export { Select, type SelectOption, type SelectProps } from './components/Select.js';
 export { Checkbox, type CheckboxProps } from './components/Checkbox.js';
 export { Tooltip, TooltipProvider, type TooltipProps } from './components/Tooltip.js';
 export {

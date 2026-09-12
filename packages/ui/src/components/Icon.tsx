@@ -53,6 +53,8 @@ export const ICON_NAMES = [
   'settings',
   'chevron-left',
   'chevron-right',
+  'chevron-down',
+  'check',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -154,6 +156,8 @@ const GLYPHS: Record<IconName, Glyph> = {
   },
   'chevron-left': { d: 'M11 3.5 5.5 9l5.5 5.5' },
   'chevron-right': { d: 'M7 3.5 12.5 9 7 14.5' },
+  'chevron-down': { d: 'M3.5 7 9 12.5 14.5 7' },
+  check: { d: 'M3.5 9.5l3.5 3.5 7.5-8' },
   apple: {
     d: '',
     extra: [
