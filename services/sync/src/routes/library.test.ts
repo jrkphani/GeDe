@@ -969,6 +969,7 @@ describe('profile (AUTH-09, I18N-05)', () => {
       displayName: null,
       locale: null,
       tourDoneAt: null,
+      librarySort: null,
       sampleDocumentId: server.repo.sampleOf(aliceId),
     });
     expect(res.body.sampleDocumentId).toMatch(/^[0-9a-f-]{36}$/);

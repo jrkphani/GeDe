@@ -126,7 +126,7 @@ export function engineValueReader(gd: GedeDoc): SearchValueReader {
   const locale = activeLocale();
   return (tableId, rowId, colId) => {
     const result = host.result(workbookCellId(tableId, cellKey(rowId, colId)));
-    if (result === undefined || result.value === null || result.error !== null) return undefined;
+    if (result?.value == null || result.error !== null) return undefined;
     return formatCellValue(locale, result.value);
   };
 }
