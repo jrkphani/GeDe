@@ -16,24 +16,34 @@ export interface SkeletonProps {
   /** The real content, rendered when `active` is false and the hold has elapsed. */
   children?: ReactNode | undefined;
   className?: string | undefined;
+  /** Timing owned by the caller (`useLoadingTiers`), so the hold spans phases. */
+  tiers?: LoadingTiers | undefined;
 }
 
 /** Varied bar widths so the placeholder reads as content, not a barcode. */
 const BAR_WIDTHS = [72, 56, 84, 40, 64, 48, 76, 60] as const;
 
+export interface LoadingTiers {
+  /** Show the skeleton: `active` held past `delay`, then kept for `minHold` (LOAD-01, LOAD-02). */
+  visible: boolean;
+  /** Over one second: time to name the object (LOAD-01 tier 3). */
+  slow: boolean;
+}
+
+export interface LoadingTierOptions {
+  delay?: number | undefined;
+  minHold?: number | undefined;
+}
+
 /**
- * Three-tier loading state. Nothing shows under `delay`; a content-shaped
- * skeleton from then; after one second the status line names what is loading.
+ * The loading tiers as a hook, so one timer can span several phases of a
+ * load (a REST record, then a replica) and the 400 ms hold is honoured across
+ * them rather than restarted by each phase's own skeleton.
  */
-export function Skeleton({
-  active,
-  delay = loadingTiers.delay,
-  minHold = loadingTiers.minHold,
-  rows,
-  statusLabel,
-  children,
-  className,
-}: SkeletonProps) {
+export function useLoadingTiers(
+  active: boolean,
+  { delay = loadingTiers.delay, minHold = loadingTiers.minHold }: LoadingTierOptions = {},
+): LoadingTiers {
   const [visible, setVisible] = useState(false);
   const [slow, setSlow] = useState(false);
   const shownAt = useRef<number | null>(null);
@@ -66,6 +76,27 @@ export function Skeleton({
       window.clearTimeout(hide);
     };
   }, [active, delay, minHold]);
+
+  return { visible, slow };
+}
+
+/**
+ * Three-tier loading state. Nothing shows under `delay`; a content-shaped
+ * skeleton from then; after one second the status line names what is loading.
+ * Pass `tiers` from `useLoadingTiers` to share one timer across instances.
+ */
+export function Skeleton({
+  active,
+  delay,
+  minHold,
+  rows,
+  statusLabel,
+  children,
+  className,
+  tiers,
+}: SkeletonProps) {
+  const own = useLoadingTiers(tiers === undefined && active, { delay, minHold });
+  const { visible, slow } = tiers ?? own;
 
   if (!active && !visible) return <>{children}</>;
   if (!visible) return null;

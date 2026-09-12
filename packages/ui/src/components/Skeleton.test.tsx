@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { Skeleton } from './Skeleton.js';
+import { Skeleton, useLoadingTiers } from './Skeleton.js';
 
 describe('Skeleton', () => {
   beforeEach(() => {
@@ -47,6 +47,45 @@ describe('Skeleton', () => {
     expect(container.querySelector('.gd-skeleton')).not.toBeNull();
     act(() => {
       vi.advanceTimersByTime(399);
+    });
+    expect(container.querySelector('.gd-skeleton')).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(container.querySelector('.gd-skeleton')).toBeNull();
+    expect(container).toHaveTextContent('ready');
+  });
+
+  it('LOAD-02 the hold spans phases: a second instance sharing useLoadingTiers does not restart it', () => {
+    // Phase A (a REST record) then phase B (a replica) each render their own Skeleton at
+    // different tree positions; the timer is owned by the parent so the 400 ms hold is one hold.
+    function Shell({ phase, active }: { phase: 'a' | 'b'; active: boolean }) {
+      const tiers = useLoadingTiers(active);
+      return phase === 'a' ? (
+        <div data-phase="a">
+          <Skeleton active={active} tiers={tiers} rows={8} />
+        </div>
+      ) : (
+        <main data-phase="b">
+          <Skeleton active={active} tiers={tiers} rows={8}>
+            {'ready'}
+          </Skeleton>
+        </main>
+      );
+    }
+    const { container, rerender } = render(<Shell phase="a" active />);
+    act(() => {
+      vi.advanceTimersByTime(200);
+    });
+    expect(container.querySelector('[data-phase="a"] .gd-skeleton')).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(100);
+    });
+    // Phase B mounts a fresh Skeleton instance 100 ms into the hold and the load completes.
+    rerender(<Shell phase="b" active={false} />);
+    expect(container.querySelector('[data-phase="b"] .gd-skeleton')).not.toBeNull();
+    act(() => {
+      vi.advanceTimersByTime(299);
     });
     expect(container.querySelector('.gd-skeleton')).not.toBeNull();
     act(() => {

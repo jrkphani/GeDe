@@ -50,6 +50,12 @@ export {
   type AppleSignInButtonProps,
   type AppleSignInWording,
 } from './components/AppleSignInButton.js';
-export { Skeleton, type SkeletonProps } from './components/Skeleton.js';
+export {
+  Skeleton,
+  useLoadingTiers,
+  type LoadingTierOptions,
+  type LoadingTiers,
+  type SkeletonProps,
+} from './components/Skeleton.js';
 export { Banner, type BannerProps } from './components/Banner.js';
 export { EmptyState, type EmptyStateProps } from './components/EmptyState.js';
