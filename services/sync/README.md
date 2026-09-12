@@ -72,13 +72,15 @@ and the per-user limit is the precise one.
 - `GET /healthz`, `GET /api/health` — `{ ok }`; 503 when `SELECT 1` fails. No auth, and no
   version: an unauthenticated caller learns only that the service is up (#42).
 - `GET /api/version` → `{ version }` (the short git sha baked into the image).
-- `GET /api/me` → `{ id, sub, email, displayName, locale, tourDoneAt, sampleDocumentId }`.
+- `GET /api/me` → `{ id, sub, email, displayName, locale, tourDoneAt, librarySort, sampleDocumentId }`.
   `tourDoneAt` (ONB-03) is the ISO time the account completed or skipped the guided tour, null
-  while the tour is due; `sampleDocumentId` (ONB-01) is the account's guided sample workscape,
-  seeded by the account's first request (see below).
-  `PATCH /api/me { displayName?, locale?, idToken?, tourDone? }` — display name 1–80 characters
-  after trimming; locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`; `tourDone: true` stamps
-  `tourDoneAt` now and `false` clears it (Replay, ONB-08); at least one field (I18N-05, AUTH-09).
+  while the tour is due; `librarySort` (LIB-05, #133) is the Browse / Shared sort the account
+  chose, `name` | `date` | null; `sampleDocumentId` (ONB-01) is the account's guided sample
+  workscape, seeded by the account's first request (see below).
+  `PATCH /api/me { displayName?, locale?, idToken?, tourDone?, librarySort? }` — display name
+  1–80 characters after trimming; locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`;
+  `tourDone: true` stamps `tourDoneAt` now and `false` clears it (Replay, ONB-08);
+  `librarySort` is `name` or `date`; at least one field (I18N-05, AUTH-09).
   `idToken` is the caller's Cognito **ID** token (SHARE-02): the service verifies it (`tokenUse:
 'id'`, same pool and client), requires its `sub` to be the caller's and `email_verified`, binds
   the address to `users.email` and converts every pending, unexpired invitation for it into a

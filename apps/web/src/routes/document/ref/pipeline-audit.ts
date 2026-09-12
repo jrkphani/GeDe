@@ -8,6 +8,7 @@
 import {
   cellKey,
   derivedColumnsOf,
+  evaluatedText,
   pullLabel,
   pullOf,
   rowMeta,
@@ -22,7 +23,7 @@ import {
 } from '@gede/core';
 
 export interface StepOutcome {
-  /** Rows the step produced a value for. */
+  /** Rows the step produced a value for (nothing matched — blank or empty — is not a value). */
   readonly rows: number;
   /** Rows whose evaluation failed (the cell shows the error). */
   readonly errors: number;
@@ -79,7 +80,7 @@ function outcomeOf(
     }
     if (result.version > version) version = result.version;
     if (result.error !== null) errors += 1;
-    else rows += 1;
+    else if (evaluatedText(result.value) !== '') rows += 1;
   }
   return { rows, errors, pending, version };
 }

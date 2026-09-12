@@ -295,6 +295,53 @@ for (const width of [1024, 1440]) {
   });
 }
 
+test('INSP-09 the Derive tab lists the pipeline step by step with what each reads, its rows and its last recompute, following the selected derived cell (#127)', async ({
+  page,
+  checkA11y,
+  snapshot,
+}) => {
+  const room = await installFakes(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signInTo(page, `/d/${DOC_ID}`);
+  await page.getByRole('button', { name: 'Add table' }).click();
+  await enter(page, 'B5', 'Lukla (2860 m)');
+  await enter(page, 'B6', 'Namche (3440 m)');
+  await enter(page, 'B7', 'Leh');
+  const gd = openDocument(room.doc);
+  const t = tableTitled(gd, 'Table 1');
+  addDerivedColumn(gd, t.id, {
+    sourceColId: t.cols[0] ?? '',
+    method: 'Extract',
+    args: ['/\\(([^)]*)\\)/'],
+  });
+  await expect(page.getByTestId('lineage-header')).toContainText('derived pipeline ▸ 1 step');
+  // Select a derived cell: the audit list's step for its column is current.
+  await page.locator('[data-address="C5"]').click();
+  const rail = page.getByTestId('inspector');
+  await rail.getByRole('tab', { name: 'Derive' }).click();
+  const step = rail.getByRole('list', { name: 'Derived pipeline' }).getByTestId('pipeline-step');
+  await expect(step).toHaveCount(1);
+  await expect(step.first()).toHaveAttribute('aria-current', 'true');
+  await expect(step.first()).toContainText('Step 1');
+  await expect(step.first()).toContainText('@"Column 1".Extract(');
+  await expect(step.first()).toContainText('from Column 1');
+  // Two rows match the pattern; "Leh" and the empty rows yield nothing, which is not a row.
+  await expect(step.first()).toContainText('2 rows');
+  await expect(step.first()).toContainText(/recomputed \d{1,2}:\d{2}/);
+  await expect(step.first().getByRole('button', { name: /^Edit / })).toBeEnabled();
+  await expect(step.first().getByRole('button', { name: /^Remove / })).toBeEnabled();
+  await checkA11y('derive pipeline audit 1440');
+  await step.first().scrollIntoViewIfNeeded();
+  await snapshot('derive-pipeline-1440');
+  await page.emulateMedia({ colorScheme: 'dark' });
+  await page.evaluate(() => Promise.all(document.getAnimations().map((a) => a.finished)));
+  await checkA11y('derive pipeline audit 1440 dark');
+  await snapshot('derive-pipeline-1440-dark');
+  // A cell in a plain column: no step is current.
+  await page.locator('[data-address="B5"]').click();
+  await expect(step.first()).not.toHaveAttribute('aria-current', 'true');
+});
+
 test('RESP-02 REF-03 on a phone a mapping cell shows its value and offers no picker', async ({
   page,
 }) => {
