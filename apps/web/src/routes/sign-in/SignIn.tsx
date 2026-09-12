@@ -173,10 +173,14 @@ export function SignIn() {
       .catch(fail);
   };
 
-  const apple = () => {
-    dispatch({ type: 'busy', busy: 'apple' });
-    startAppleSignIn().catch(fail);
-  };
+  // AUTH-08: rendered only when the pool has Apple configured (`config.appleSignIn`).
+  const apple =
+    config.appleSignIn === false
+      ? null
+      : () => {
+          dispatch({ type: 'busy', busy: 'apple' });
+          startAppleSignIn().catch(fail);
+        };
 
   const addPasskey = () => {
     setRegistering(true);
@@ -275,6 +279,21 @@ export function SignIn() {
             <p className="gd-signin__note">
               No password. A passkey on this device, or a code by email.
             </p>
+            {/* AUTH-08: Apple is offered at the sign-in and the sign-up step alike. No passkey
+                exists before the address is known, so nothing sits above it here. */}
+            {apple !== null && (
+              <>
+                <span className="gd-signin__or" aria-hidden="true">
+                  or
+                </span>
+                <AppleSignInButton
+                  wording={state.mode === 'sign-up' ? 'Continue with Apple' : 'Sign in with Apple'}
+                  onClick={apple}
+                  loading={busy === 'apple'}
+                  disabled={busy !== null}
+                />
+              </>
+            )}
           </form>
         )}
 
@@ -315,7 +334,8 @@ export function SignIn() {
             >
               Email me a code
             </Button>
-            {config.appleSignIn !== false && (
+            {/* Passkey above Apple, Apple never subordinate: black, Apple's glyph, 44 pt. */}
+            {apple !== null && (
               <>
                 <span className="gd-signin__or" aria-hidden="true">
                   or

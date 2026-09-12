@@ -3,8 +3,10 @@ import { useNavigate } from 'react-router';
 import clsx from 'clsx';
 import { Button, TextField, Wordmark } from '@gede/ui';
 import { announce } from '../../announce.js';
+import { signOutLocal } from '../../auth/cognito.js';
 import { forgetLastEmail, rememberReturnTo } from '../../auth/session.js';
 import { getConfig } from '../../config.js';
+import { forgetLastDocument } from '../../last-document.js';
 import { POLL_INTERVAL_MS, pageForStatus, type ErrorAction, type ErrorPage } from './catalogue.js';
 
 export interface ErrorCellProps {
@@ -163,13 +165,17 @@ export function ErrorCell({
         void navigate('/?view=deleted');
         return;
       case 'sign-in':
-        if (returnTo !== undefined) rememberReturnTo(returnTo);
-        void navigate('/sign-in');
-        return;
       case 'switch-account':
-        forgetLastEmail();
+        // AUTH-09: the server no longer honours these tokens, so drop them
+        // here too — otherwise the sign-in screen would bounce straight back.
+        if (action === 'switch-account') {
+          forgetLastEmail();
+          forgetLastDocument();
+        }
         if (returnTo !== undefined) rememberReturnTo(returnTo);
-        void navigate('/sign-in');
+        void signOutLocal()
+          .catch(() => undefined)
+          .then(() => navigate('/sign-in'));
         return;
       case 'paste-link':
         setPasteOpen(true);

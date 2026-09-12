@@ -88,8 +88,10 @@
   font-size: 0.78125rem;
   color: var(--ink-muted);
 }
+/* Address + Change: wraps rather than clipping the button when the card is narrow (A11Y-06). */
 .gd-signin__who {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: var(--space-2);
@@ -97,7 +99,11 @@
   font-size: 0.84375rem;
   color: var(--ink-muted);
 }
+.gd-signin__who .gd-btn {
+  flex: none;
+}
 .gd-signin__email {
+  min-width: 0;
   font-family: var(--font-mono);
   font-size: 0.78125rem;
   color: var(--ink);
@@ -164,6 +170,21 @@
   }
 }
 
+/* RESP-05: below 1024 px every target on the sign-in and signed-out screens is at least 44 px. */
+@media (max-width: 1023.98px) {
+  .gd-signin .gd-btn,
+  .gd-signin .gd-apple,
+  .gd-signin .gd-field__input,
+  .gd-signin .gd-segmented__item,
+  .gd-signedout .gd-btn {
+    min-height: var(--hit-target);
+  }
+  .gd-signin .gd-btn--sm {
+    padding-left: var(--space-3);
+    padding-right: var(--space-3);
+  }
+}
+
 @media (max-width: 479.98px) {
   .gd-signin {
     padding: var(--space-4);
@@ -173,6 +194,18 @@
   }
   .gd-signin__card {
     padding: var(--space-4);
+  }
+  /* 480 px at 200 % zoom is 240 CSS px: labels wrap instead of clipping (A11Y-06). */
+  .gd-signin .gd-btn {
+    white-space: normal;
+  }
+  .gd-signin .gd-segmented__item {
+    white-space: normal;
+    padding-left: var(--space-2);
+    padding-right: var(--space-2);
+  }
+  .gd-signin__row {
+    flex-wrap: wrap;
   }
 }
 
