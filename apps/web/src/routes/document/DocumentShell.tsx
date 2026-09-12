@@ -64,6 +64,7 @@ import { Inspector } from './Inspector.js';
 import { SheetTabs } from './SheetTabs.js';
 import { TableView } from './TableView.js';
 import { TitleBar } from './TitleBar.js';
+import { ShareControls } from './share/ShareControls.js';
 import { Toolbar, type InspectorMode } from './Toolbar.js';
 
 type LoadState =
@@ -576,6 +577,7 @@ function OpenDocument({
         serverTitle={doc.title}
         sharedFlag={sharedFlag}
         participants={others}
+        shareSlot={<ShareControls doc={doc} participants={others} phone={phone} />}
         sync={sync}
         ready={ready}
         phone={phone}

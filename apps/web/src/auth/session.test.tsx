@@ -9,12 +9,14 @@ import { RequireAuth, SessionProvider, takeReturnTo, useSession } from './sessio
 
 vi.mock('./cognito.js', () => ({
   currentUser: vi.fn(),
+  idToken: vi.fn(() => Promise.resolve('id.token.value')),
   onAuthEvent: vi.fn(() => () => undefined),
   signOutLocal: vi.fn(() => Promise.resolve()),
 }));
 vi.mock('../api/me.js', () => ({
   getMe: vi.fn(() => Promise.reject(new Error('no profile in this test'))),
   updateMe: vi.fn(() => Promise.resolve()),
+  bindVerifiedEmail: vi.fn(() => Promise.resolve()),
 }));
 const cognito = await import('./cognito.js');
 const meApi = await import('../api/me.js');
@@ -136,6 +138,49 @@ describe('RequireAuth', () => {
     await waitFor(() => {
       expect(document.documentElement.lang).toBe('te-IN');
     });
+  });
+
+  it('SHARE-02 a profile without an address presents the ID token once, so pending invitations convert on first sign-in', async () => {
+    vi.mocked(meApi.getMe).mockResolvedValueOnce({
+      id: 'u',
+      sub: 'sub-9',
+      email: null,
+      displayName: null,
+      locale: null,
+    });
+    vi.mocked(cognito.currentUser).mockResolvedValue({
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      name: 'Meena',
+    });
+    app('/');
+    await screen.findByText('hello meena@1cloudhub.com');
+    await waitFor(() => {
+      expect(meApi.bindVerifiedEmail).toHaveBeenCalledWith('id.token.value');
+    });
+    expect(meApi.bindVerifiedEmail).toHaveBeenCalledTimes(1);
+  });
+
+  it('SHARE-02 a profile that already carries its address never sends the ID token', async () => {
+    vi.mocked(meApi.getMe).mockResolvedValueOnce({
+      id: 'u',
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      displayName: 'Meena',
+      locale: 'hi-IN',
+    });
+    vi.mocked(cognito.currentUser).mockResolvedValue({
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      name: 'Meena',
+    });
+    app('/');
+    await screen.findByText('hello meena@1cloudhub.com');
+    // The profile has been read (its locale applied) and no binding followed.
+    await waitFor(() => {
+      expect(document.documentElement.lang).toBe('hi-IN');
+    });
+    expect(meApi.bindVerifiedEmail).not.toHaveBeenCalled();
   });
 
   it('takeReturnTo rejects protocol-relative and external values', () => {

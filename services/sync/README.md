@@ -26,6 +26,7 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 | `PROJECTION_DEBOUNCE_MS`                             |                  | `1000`    | wait after a compaction before writing the projection                                      |
 | `RATE_LIMIT_PER_MINUTE`                              |                  | `300`     | `/api` requests per verified user per minute → 429                                         |
 | `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`    | requests per address per minute, every route → 429                                         |
+| `RATE_LIMIT_INVITES_PER_HOUR`                        |                  | `30`      | invitations per verified user per hour (each is an outbound mail) → 429                    |
 | `WS_MAX_BUFFERED_BYTES`                              |                  | `16 MiB`  | unread bytes a socket may hold before it is closed 1013                                    |
 | `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400` | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429 |
 | `WS_AWARENESS_PER_SEC` `WS_AWARENESS_BURST`          |                  | `20/40`   | awareness per connection; excess dropped                                                   |
@@ -64,8 +65,15 @@ and the per-user limit is the precise one.
   version: an unauthenticated caller learns only that the service is up (#42).
 - `GET /api/version` → `{ version }` (the short git sha baked into the image).
 - `GET /api/me` → `{ id, sub, email, displayName, locale }`.
-  `PATCH /api/me { displayName?, locale? }` — display name 1–80 characters after trimming;
+  `PATCH /api/me { displayName?, locale?, idToken? }` — display name 1–80 characters after trimming;
   locale one of `en-US en-GB en-IN ta-IN hi-IN te-IN`; at least one field (I18N-05, AUTH-09).
+  `idToken` is the caller's Cognito **ID** token (SHARE-02): the service verifies it (`tokenUse:
+'id'`, same pool and client), requires its `sub` to be the caller's and `email_verified`, binds
+  the address to `users.email` and converts every pending, unexpired invitation for it into a
+  share in the same transaction. 400 for an invalid token or one without a verified email, 403
+  for another account's token, 409 `conflict` when the address already belongs to another
+  account, 409 `email_bound` when this account already carries a different address. The SPA
+  sends it once, right after sign-in, when `GET /api/me` answers `email: null`.
 - `GET /api/documents?view=recents|browse|shared|deleted` (default `recents`) →
   `{ documents: [{ id, title, kind: 'workscape', sizeBytes, createdAt, updatedAt, ownerId, ownerName,
 sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', linkAccess, deletedAt }] }`.
@@ -94,9 +102,54 @@ sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', li
   transaction with a `document.purge` audit row each; the S3 objects under `${DOCS_PREFIX}${docId}/`
   are deleted best-effort afterwards (a failure is logged with the document id).
 - `GET /api/documents/:id/shares` (any participant) →
-  `{ owner: { id, name, email }, participants: [{ userId, name, email, permission, invitedBy }], linkAccess }`.
-  Email fields are populated for the owner and `edit` participants; a `view` participant receives
-  `null` in every email field. Share and invite writes are Wave 3.
+  `{ owner: { id, name, email }, participants: [{ userId, name, email, permission, invitedBy,
+source }], invites: [{ id, email, permission, invitedBy, expiresAt }], linkAccess, linkToken,
+permission, callerId }`. Emails, pending invitations and the link token are for the owner and
+  `edit` participants; a `view` participant receives `null` emails, `invites: []` and
+  `linkToken: null`. `permission` is the caller's, `callerId` their `users.id` (for "(you)").
+  `source` is `invite` or `link` — a `link` share came through "anyone with the link" and goes
+  with it.
+- Sharing writes (`src/routes/share.ts`, SHARE-01..03). Every one is checked server-side;
+  each writes its `audit_log` row (`share.*`) in the same transaction as the change.
+  - `POST /api/documents/:id/invites { email, permission: view|edit }` (owner or editor) → 201
+    `{ kind: 'share' | 'invite', created: true, shares }`. An address with an account gets a
+    share now and a `share.member` mail; one without gets an `invites` row valid 14 days and a
+    `share.invite` mail whose link is `/d/:id?invite=<token>`. Idempotent per (document,
+    address): while a pending invitation stands, a repeated POST answers 200
+    `{ kind: 'invite', created: false, shares }` — no row, no mail (`invites_pending_key`,
+    migration 0007, decides a race). A refused send (SES sandbox: unverified recipient)
+    withdraws the row it just made — never an earlier one — and answers 502 `unavailable`; the
+    SPA does not retry it (`apiFetch` retries GET only unless asked). 409 when the address
+    already has access or is the owner's. Its own budget: `RATE_LIMIT_INVITES_PER_HOUR` per
+    user, counted after validation and the permission check.
+  - `DELETE /api/documents/:id/invites/:inviteId` (owner) → 204; 404 when not pending here.
+  - `POST /api/documents/:id/invites/accept { token }` (signed in) → `{ permission }`. Converts
+    only for the account holding the invitation's address (409 `Finish signing in` while none is
+    bound, 403 for another address, 409 when already used, 410 `expired`, 404 otherwise — also
+    when the inviter no longer stands, see below).
+  - `PATCH /api/documents/:id/shares/:userId { permission }` (owner) → the sheet; the person's
+    sockets close 1001 so the provider reconnects and resolves the new permission.
+  - `DELETE /api/documents/:id/shares/:userId` (owner) → 204; their sockets close 4403.
+  - `PATCH /api/documents/:id/link { access: none|view|edit }` (owner) → the sheet. Every
+    change to `view` or `edit` — from `none` or from the other level — mints a fresh
+    `link_token`: a link handed out as "view" never becomes "edit", and one switched off stays
+    dead. Switching off or re-minting revokes every `source: link` share (`share.link_revoke`
+    names them; their sockets close 4403); invited shares are untouched. The SPA's Copy link is
+    `/d/:id?k=<token>` while on, else the plain address.
+  - `POST /api/documents/:id/link/redeem { token }` (signed in) → `{ permission }`: the link's
+    level becomes a `link` share for the caller (an explicit share is never lowered); 404 for a
+    wrong token or link access off — the document's existence is not confirmed.
+  - `POST /api/documents/:id/stop-sharing` (owner) → the sheet: every share and pending
+    invitation gone, link access `none`, every participant's sockets closed 4403; the
+    `share.stop` row's target is `{ users: [...ids], invites: [...addresses] }`.
+  - Conversion on first sign-in (SHARE-02) runs wherever `users.email` becomes known:
+    `PATCH /api/me { idToken }` above, and `upsertFromToken` for a token that carries a verified
+    address (not this pool's access tokens). Both call the same `convertInvites` in `repo/pg.ts`.
+    An invitation is only as good as its inviter: it converts while the inviter is the owner or
+    still holds at least what it grants (`edit` for an edit invitation, any share for a view
+    one); otherwise it is withdrawn at that moment with a `share.invite_withdraw` row
+    (`target = <address>:<inviter id>`) and grants nothing — on the sign-in path and the mail
+    link alike.
 - `GET /api/documents/:id/search?q=<phrase>` (any participant) → `{ results: [{ sheetId, tableId,
 rowId, columnId, snippet }] }`, at most 50, in sheet / table / row / column order. Every word of
   `q` must match a cell's `text_plain` (`to_tsvector('simple', text_plain) @@ plainto_tsquery('simple', q)`,

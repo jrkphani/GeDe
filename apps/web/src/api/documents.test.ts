@@ -155,8 +155,22 @@ describe('documents api', () => {
     ).toEqual({
       owner: { id: 'u1', name: null, email: 'm@x.test' },
       participants: [
-        { userId: 'u2', name: 'Sembian V', email: 's@x.test', permission: 'edit', invitedBy: 'u1' },
-        { userId: 'u3', name: null, email: null, permission: 'view', invitedBy: undefined },
+        {
+          userId: 'u2',
+          name: 'Sembian V',
+          email: 's@x.test',
+          permission: 'edit',
+          invitedBy: 'u1',
+          source: 'invite',
+        },
+        {
+          userId: 'u3',
+          name: null,
+          email: null,
+          permission: 'view',
+          invitedBy: undefined,
+          source: 'invite',
+        },
       ],
       linkAccess: 'view',
     });

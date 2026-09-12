@@ -1,12 +1,13 @@
-import { useEffect, useRef, useState, type CSSProperties, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { Link } from 'react-router';
-import { documentMeta, initials, setTitle, type GedeDoc, type PresenceState } from '@gede/core';
+import { documentMeta, setTitle, type GedeDoc, type PresenceState } from '@gede/core';
 import { BrandMark, Icon } from '@gede/ui';
 
 import { renameDocument } from '../../api/documents.js';
 import { rememberLastDocument } from '../../last-document.js';
 import { useYVersion } from '../../doc/use-y.js';
 import type { SyncSnapshot } from '../../doc/sync-client.js';
+import { SharedIndicator } from './share/SharedIndicator.js';
 
 export interface TitleBarProps {
   docId: string;
@@ -17,6 +18,12 @@ export interface TitleBarProps {
   sharedFlag: boolean;
   /** Other participants currently in the room (SHARE-05 avatars). */
   participants: readonly PresenceState[];
+  /**
+   * The sharing controls for the row (SHARE-01, SHARE-05): the Shared pill,
+   * the Share button and its sheet. When given, it replaces the pill drawn
+   * here from `sharedFlag` and `participants`.
+   */
+  shareSlot?: ReactNode | undefined;
   sync: SyncSnapshot;
   /** Until the document is ready, the field shows the record's title and does not edit. */
   ready: boolean;
@@ -48,6 +55,7 @@ export function TitleBar({
   serverTitle,
   sharedFlag,
   participants,
+  shareSlot,
   sync,
   ready,
   phone,
@@ -132,9 +140,6 @@ export function TitleBar({
     }
   };
 
-  const others = uniqueByUser(participants);
-  const shared = sharedFlag || others.length > 0;
-
   return (
     <header className="gd-doc__titlebar">
       <Link
@@ -171,30 +176,7 @@ export function TitleBar({
         <h1 className="gd-doc__title-static">{title === '' ? serverTitle : title}</h1>
       )}
       <span className="gd-doc__shared" data-slot="shared">
-        {shared && (
-          <span className="gd-doc__badge" title={sharedTitle(others)}>
-            <Icon name="people" size={13} /> Shared
-            {others.length > 0 && (
-              <span className="gd-doc__avatars" aria-label={sharedTitle(others)}>
-                {others.slice(0, 4).map((p) => (
-                  <span
-                    key={p.userId}
-                    className="gd-doc__avatar"
-                    style={
-                      { '--gd-presence': `var(--presence-${String(p.colour)})` } as CSSProperties
-                    }
-                    title={p.name}
-                  >
-                    {initials(p.name)}
-                  </span>
-                ))}
-                {others.length > 4 && (
-                  <span className="gd-doc__avatar gd-doc__avatar--more">+{others.length - 4}</span>
-                )}
-              </span>
-            )}
-          </span>
-        )}
+        {shareSlot ?? <SharedIndicator sharedFlag={sharedFlag} participants={participants} />}
       </span>
       <span
         className={`gd-doc__sync gd-doc__sync--${sync.status}`}
@@ -216,15 +198,4 @@ export function TitleBar({
       )}
     </header>
   );
-}
-
-function uniqueByUser(list: readonly PresenceState[]): PresenceState[] {
-  const seen = new Map<string, PresenceState>();
-  for (const p of list) if (!seen.has(p.userId)) seen.set(p.userId, p);
-  return Array.from(seen.values());
-}
-
-function sharedTitle(others: readonly PresenceState[]): string {
-  if (others.length === 0) return 'Shared';
-  return `Shared · ${others.map((p) => p.name).join(', ')} ${others.length === 1 ? 'is' : 'are'} here`;
 }

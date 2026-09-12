@@ -126,9 +126,37 @@ describe('migrations', () => {
     expect(checksum).toMatch(/ALTER TABLE __migrations ADD COLUMN IF NOT EXISTS checksum text/);
   });
 
+  test('SHARE-02 0006 records the inviter and the send time on invites and indexes the address the conversion looks up', () => {
+    expect(files[6]).toBe('0006_invites_inviter.sql');
+    const sql = stripComments(readFileSync(join(dir, '0006_invites_inviter.sql'), 'utf8'));
+    expect(sql).toMatch(
+      /ALTER TABLE invites ADD COLUMN IF NOT EXISTS invited_by uuid REFERENCES users\(id\)/,
+    );
+    expect(sql).toMatch(
+      /ALTER TABLE invites ADD COLUMN IF NOT EXISTS created_at timestamptz NOT NULL DEFAULT now\(\)/,
+    );
+    expect(sql).toContain('CREATE INDEX IF NOT EXISTS invites_email_idx ON invites (email)');
+  });
+
+  test('SHARE-01 0007 adds shares.source (invite | link) and one pending invitation per address per document', () => {
+    expect(files[7]).toBe('0007_share_source_invite_pending_key.sql');
+    const sql = stripComments(
+      readFileSync(join(dir, '0007_share_source_invite_pending_key.sql'), 'utf8'),
+    );
+    expect(sql).toMatch(/CREATE TYPE share_source AS ENUM \('invite', 'link'\)/);
+    expect(sql).toMatch(
+      /ALTER TABLE shares ADD COLUMN IF NOT EXISTS source share_source NOT NULL DEFAULT 'invite'/,
+    );
+    expect(sql).toContain(
+      'CREATE UNIQUE INDEX IF NOT EXISTS invites_pending_key ON invites (document_id, email) WHERE accepted_at IS NULL',
+    );
+  });
+
   test('LOAD-06 every index declared in schema.ts exists in the migrations', () => {
     const sql = stripComments(allSql);
-    const declared = [...sql.matchAll(/CREATE INDEX IF NOT EXISTS (\w+)/g)].map((m) => m[1]);
+    const declared = [...sql.matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map(
+      (m) => m[1],
+    );
     for (const table of [
       schema.documents,
       schema.shares,

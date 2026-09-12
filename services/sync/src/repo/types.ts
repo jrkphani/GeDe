@@ -4,7 +4,7 @@
  * (`src/test/fake-repo.ts`). Keeping the surface small keeps the fake honest:
  * it implements exactly the queries the service issues, nothing more.
  */
-import type { LinkAccess, Permission } from '@gede/db';
+import type { LinkAccess, Permission, ShareSource } from '@gede/db';
 
 import type { Projection } from '../projection/project.js';
 
@@ -22,6 +22,14 @@ export interface DocumentRecord {
   readonly ownerId: string;
   readonly title: string;
   readonly linkAccess: LinkAccess;
+  /**
+   * The secret that "anyone with the link" presents (SHARE-01). Minted
+   * whenever link access goes from `none` to `view`/`edit` — a link the
+   * owner switched off stays dead if they switch link access on again —
+   * kept across a view/edit change, and only ever handed to people who may
+   * share (the owner and editors).
+   */
+  readonly linkToken: string | null;
   readonly snapshotKey: string | null;
   readonly snapshotSeq: number;
   readonly createdAt: Date;
@@ -71,6 +79,17 @@ export interface Participant {
   readonly email: string | null;
   readonly permission: Permission;
   readonly invitedBy: string;
+  /** `link` when they arrived through "anyone with the link"; such shares go with the link. */
+  readonly source: ShareSource;
+}
+
+/** An invitation not yet accepted and not yet expired (SHARE-02), as the share sheet lists it. */
+export interface PendingInvite {
+  readonly id: string;
+  readonly email: string;
+  readonly permission: Permission;
+  readonly invitedBy: string | null;
+  readonly expiresAt: Date;
 }
 
 export interface ParticipantList {
@@ -80,7 +99,35 @@ export interface ParticipantList {
     readonly email: string | null;
   };
   readonly participants: readonly Participant[];
+  readonly invites: readonly PendingInvite[];
   readonly linkAccess: LinkAccess;
+  readonly linkToken: string | null;
+}
+
+/** How long an invitation stays valid (SHARE-02). */
+export const INVITE_VALID_DAYS = 14;
+
+export interface InviteRecord {
+  readonly id: string;
+  readonly documentId: string;
+  readonly email: string;
+  readonly permission: Permission;
+  readonly token: string;
+  readonly invitedBy: string | null;
+  readonly expiresAt: Date;
+  readonly acceptedAt: Date | null;
+  readonly createdAt: Date;
+}
+
+/** A share an invitation converted into (SHARE-02), for the caller's log line. */
+export interface ConvertedInvite {
+  readonly documentId: string;
+  readonly permission: Permission;
+}
+
+export interface EmailBinding {
+  readonly user: UserRecord;
+  readonly converted: readonly ConvertedInvite[];
 }
 
 /** What a permanent delete removed, so the caller can clean S3 up afterwards. */
@@ -118,10 +165,160 @@ export interface ProfilePatch {
 }
 
 export interface UsersRepo {
-  /** Insert on first sight of a `sub`, otherwise refresh `last_seen_at` (and fill a missing email). */
+  /**
+   * Insert on first sight of a `sub`, otherwise refresh `last_seen_at` (and
+   * fill a missing email). When the token carried an address, pending
+   * invitations for it convert to shares in the same transaction (SHARE-02).
+   */
   upsertFromToken(identity: TokenIdentity): Promise<UserRecord>;
   /** Set the fields present in `patch`; `undefined` when the user does not exist. */
   updateProfile(id: string, patch: ProfilePatch): Promise<UserRecord | undefined>;
+  /**
+   * Bind a verified address to a user whose row has none yet, and convert
+   * every pending, unexpired invitation for that address into a share, all
+   * in one transaction (SHARE-02: "converts to a share on first sign-in").
+   * An invitation converts only while its inviter is the owner or still
+   * holds at least the invited permission; otherwise it is withdrawn with a
+   * `share.invite_withdraw` row (a removed editor's invitations must not
+   * outlive them). A row that already carries the same address is a no-op
+   * that still converts (a retry, or an invitation sent after the binding);
+   * one that carries a different address is left as it is — the caller
+   * compares `user.email` and answers. Throws `EmailTakenError` when another
+   * account holds the address; `undefined` when the user does not exist.
+   */
+  bindEmail(id: string, email: string): Promise<EmailBinding | undefined>;
+  /** The user registered under `email` (case-insensitive), if any. */
+  findByEmail(email: string): Promise<UserRecord | undefined>;
+}
+
+/** `users.email` is unique; the address already belongs to another Cognito identity. */
+export class EmailTakenError extends Error {
+  constructor() {
+    super('email already registered to another account');
+    this.name = 'EmailTakenError';
+  }
+}
+
+/**
+ * Audit actions the sharing routes write (ARCHITECTURE §1.5 `audit_log`:
+ * "share changes"). `share.link_revoke` (the link switched off or re-minted
+ * took its shares with it) and `share.invite_withdraw` (an invitation whose
+ * inviter no longer holds what it grants) are written by the system: their
+ * `user_id` is the actor whose change caused them, or null at conversion.
+ */
+export type ShareAuditAction =
+  | 'share.add'
+  | 'share.permission'
+  | 'share.remove'
+  | 'share.stop'
+  | 'share.link'
+  | 'share.link_redeem'
+  | 'share.link_revoke'
+  | 'share.invite'
+  | 'share.invite_remove'
+  | 'share.invite_withdraw'
+  | 'share.invite_accept';
+
+/** What `setLinkAccess` did, so the route can close the sockets of anyone whose link share went. */
+export interface LinkChange {
+  readonly document: DocumentRecord;
+  /** Participants whose `link` share was revoked (link switched off or token re-minted). */
+  readonly revoked: readonly string[];
+}
+
+export interface SharesRepo {
+  /**
+   * Give `userId` `permission` on the document, recording `invitedBy`; a
+   * second call for the same person changes nothing and resolves `false`
+   * (the caller answers 409). One `share.add` audit row by `actorId`.
+   */
+  add(input: {
+    documentId: string;
+    userId: string;
+    permission: Permission;
+    invitedBy: string;
+    actorId: string;
+  }): Promise<boolean>;
+  /** Change a participant's permission; `false` when there is no such share. Audit `share.permission`. */
+  setPermission(input: {
+    documentId: string;
+    userId: string;
+    permission: Permission;
+    actorId: string;
+  }): Promise<boolean>;
+  /** Remove a participant; `false` when there was no share. Audit `share.remove`. */
+  remove(input: { documentId: string; userId: string; actorId: string }): Promise<boolean>;
+  /**
+   * Stop sharing (SHARE-01): every share and every pending invitation go,
+   * link access returns to `none`, one `share.stop` audit row whose target
+   * names who lost access (user ids and withdrawn addresses). Resolves the
+   * ids of the participants removed so their sockets can be closed.
+   */
+  stop(input: { documentId: string; actorId: string }): Promise<string[]>;
+  /**
+   * Set the link mode. Any change to `view` or `edit` — from `none` or from
+   * the other level — mints a fresh `link_token` (`mintToken` supplies it):
+   * a link handed out at one level never becomes another. Switching off or
+   * re-minting revokes every `link` share (their holders no longer have the
+   * link that admitted them) with one `share.link_revoke` row naming them;
+   * `invite` shares are untouched. Audit `share.link` with the mode.
+   * `undefined` when the document does not exist.
+   */
+  setLinkAccess(input: {
+    documentId: string;
+    access: LinkAccess;
+    actorId: string;
+    mintToken: () => string;
+  }): Promise<LinkChange | undefined>;
+  /**
+   * "Anyone with the link" (SHARE-01): when `token` is the document's live
+   * link token and link access is on, give `userId` the link's permission
+   * as a `link` share unless they already hold a share — an explicit share
+   * is never lowered by a link — and resolve the permission they now hold.
+   * `undefined` when the token does not match or link access is off. Audit
+   * `share.link_redeem` only when a share was created.
+   */
+  redeemLink(input: {
+    documentId: string;
+    userId: string;
+    token: string;
+  }): Promise<Permission | undefined>;
+}
+
+export interface InvitesRepo {
+  /**
+   * Invite an address without an account (SHARE-02), idempotently: when a
+   * pending, unexpired invitation for the same document and address exists
+   * it is returned with `created: false` and nothing is written — a retried
+   * or repeated POST never makes a second row or a second mail. Otherwise an
+   * expired unaccepted row for the pair is dropped, the new one is inserted
+   * with its token and expiry (`invites_pending_key` decides a race), and
+   * one `share.invite` audit row (target = the address) is written — one
+   * transaction.
+   */
+  create(input: {
+    documentId: string;
+    email: string;
+    permission: Permission;
+    token: string;
+    expiresAt: Date;
+    invitedBy: string;
+  }): Promise<{ invite: InviteRecord; created: boolean }>;
+  /** Withdraw a pending invitation; `false` when it does not exist on this document. Audit `share.invite_remove`. */
+  remove(input: { documentId: string; inviteId: string; actorId: string }): Promise<boolean>;
+  /** The invitation carrying `token`, accepted or not, expired or not; the caller decides. */
+  byToken(token: string): Promise<InviteRecord | undefined>;
+  /**
+   * Accept one invitation for `userId`, whose bound address must equal the
+   * invitation's (checked in SQL, case-insensitively): insert the share with
+   * the invitation's inviter, mark it accepted, audit `share.invite_accept`.
+   * Resolves the permission granted, or `undefined` when the invitation is
+   * gone, expired, already accepted, or for another address. An invitation
+   * whose inviter no longer holds what it grants (removed, or demoted below
+   * the invited permission) is withdrawn instead — `share.invite_withdraw`,
+   * `undefined` — exactly as the conversion on sign-in treats it.
+   */
+  accept(input: { inviteId: string; userId: string }): Promise<Permission | undefined>;
 }
 
 export interface DocumentsRepo {
@@ -181,7 +378,11 @@ export interface DocumentsRepo {
   }): Promise<{ purged: PurgedDocument[]; failed: PurgedDocument[] }>;
   /** Explicit share permission for a user, if any. Ownership is checked separately. */
   sharePermission(documentId: string, userId: string): Promise<Permission | undefined>;
-  /** Owner, every share with the inviter, and the link mode (LIB-07). */
+  /**
+   * Owner, every share with the inviter, every pending unexpired invitation,
+   * the link mode and the link token (LIB-07, SHARE-01). The route decides
+   * who sees emails, invitations and the token.
+   */
   participants(documentId: string): Promise<ParticipantList | undefined>;
 }
 
@@ -261,6 +462,8 @@ export interface Repo {
   ping(): Promise<void>;
   readonly users: UsersRepo;
   readonly documents: DocumentsRepo;
+  readonly shares: SharesRepo;
+  readonly invites: InvitesRepo;
   readonly updates: UpdatesRepo;
   readonly audit: AuditRepo;
   readonly projection: ProjectionRepo;

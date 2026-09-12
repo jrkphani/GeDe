@@ -29,9 +29,9 @@ export async function resolvePermission(
   if (document.ownerId === userId) return { document, permission: 'owner' };
   const shared = await repo.documents.sharePermission(documentId, userId);
   if (shared !== undefined) return { document, permission: shared };
-  // TODO(SHARE-01 link access): when `document.linkAccess` is `view` or `edit`
-  // and the request presents the document's `link_token`, grant that level.
-  // Until the link flow ships this branch grants nothing — no fabricated access.
+  // Link access (SHARE-01) is not a per-request grant: presenting the link
+  // token to `POST /documents/:id/link/redeem` turns it into a share at the
+  // link's level, so every later request and every socket resolves here.
   return { document, permission: null };
 }
 
