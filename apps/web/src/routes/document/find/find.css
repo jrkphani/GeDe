@@ -109,7 +109,8 @@
   display: none;
 }
 .gd-find__count--none {
-  color: var(--warning);
+  /* Live amber; --selection-ring swaps for dark (--warning does not, and would fall to 3.4:1). */
+  color: var(--selection-ring);
 }
 .gd-find__nav {
   display: inline-flex;
