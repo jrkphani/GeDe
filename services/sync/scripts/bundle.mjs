@@ -11,7 +11,8 @@ import { build } from 'esbuild';
 const here = dirname(fileURLToPath(import.meta.url));
 const root = resolve(here, '..');
 const pkg = JSON.parse(readFileSync(resolve(root, 'package.json'), 'utf8'));
-const version = process.env.GEDE_VERSION ?? pkg.version;
+// `||`, not `??`: the Dockerfile exports GEDE_VERSION as an empty string when the build arg is unset.
+const version = process.env.GEDE_VERSION || pkg.version;
 
 const outDir = resolve(root, 'dist');
 const migrationsSrc = resolve(root, '../../packages/db/migrations');
