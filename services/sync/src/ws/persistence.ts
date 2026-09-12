@@ -49,6 +49,10 @@ export class PersistenceWriter {
   private lastSeq: number;
   /** Sequence number the current snapshot covers. */
   private snapshotSeq: number;
+  /** Everything up to here was in the doc when it was loaded, or in this writer's last snapshot. */
+  private coversFrom: number;
+  /** Updates this writer has appended since `coversFrom`; what its next snapshot adds. */
+  private appendedSince = 0;
 
   readonly stats: PersistenceStats = {
     persisted: 0,
@@ -70,9 +74,12 @@ export class PersistenceWriter {
     initial: { snapshotSeq: number; lastSeq: number },
     /** Called with the snapshot's bytes after each successful compaction (the projection hook). */
     private readonly onSnapshot?: (bytes: Uint8Array, seq: number) => void,
+    /** Called when a commit was refused because another task wrote to the document (#39). */
+    private readonly onSuperseded?: () => void,
   ) {
     this.snapshotSeq = initial.snapshotSeq;
     this.lastSeq = initial.lastSeq;
+    this.coversFrom = initial.lastSeq;
     this.armIdleTimer();
   }
 
@@ -180,6 +187,7 @@ export class PersistenceWriter {
     try {
       const range = await this.repo.append(this.documentId, batch);
       this.lastSeq = range.lastSeq;
+      this.appendedSince += batch.length;
       this.stats.persisted += batch.length;
       this.retryDelay = RETRY_BASE_MS;
       this.logger.debug(
@@ -222,6 +230,8 @@ export class PersistenceWriter {
         seq,
         s3Key: key,
         sizeBytes: bytes.byteLength,
+        coversFrom: this.coversFrom,
+        appended: this.appendedSince,
       });
     } catch (error) {
       // The log is intact, so nothing is lost; the next threshold retries.
@@ -229,14 +239,18 @@ export class PersistenceWriter {
       return;
     }
     if (!committed) {
-      // Another task compacted this document past `seq` (#39): the database kept
-      // its pointer and log, our object is unreferenced, and this writer is
-      // behind. Nothing to advance; the next compaction re-reads the truth.
+      // Another task compacted this document past `seq`, or wrote to it rows
+      // this snapshot does not contain (#39): the database kept its pointer and
+      // log, our object is unreferenced, and this writer is behind. Nothing to
+      // advance; the next compaction re-reads the truth.
       this.stats.staleSnapshots += 1;
       this.logger.warn({ documentId: this.documentId, seq }, 'snapshot superseded; not committed');
+      this.onSuperseded?.();
       return;
     }
     this.snapshotSeq = seq;
+    this.coversFrom = seq;
+    this.appendedSince = 0;
     this.stats.snapshots += 1;
     this.logger.info(
       { documentId: this.documentId, seq, bytes: bytes.byteLength, key },

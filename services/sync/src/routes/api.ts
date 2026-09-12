@@ -242,10 +242,13 @@ export function registerApi(
 
   app.register(
     (api, _opts, done) => {
-      // preValidation, not onRequest: the rate limiter is a route-level onRequest
-      // hook (@fastify/rate-limit attaches per route), and it must count a caller
-      // before the 401 for a missing token is thrown (#37).
+      // preValidation, not onRequest: the per-address limiter (`ip-limit.ts`) is an
+      // onRequest hook and must count a caller before the 401 for a missing token
+      // is thrown; the body (≤ bodyLimit) is parsed before that 401, which is
+      // accepted. The per-user limiter then runs at preHandler, keyed by the
+      // verified user the auth hook attached (#37).
       api.addHook('preValidation', requireUser(resolver));
+      api.addHook('preHandler', api.rateLimit());
 
       // --- service -----------------------------------------------------------
 

@@ -200,12 +200,23 @@ export interface UpdatesRepo {
    * the `snapshot_seq` already committed. A stale commit (another task
    * compacted further, #39) changes nothing and resolves `false`; the log
    * above the committed seq is never pruned.
+   *
+   * `coversFrom` / `appended` say what the snapshot contains: everything up
+   * to `coversFrom` (the state the writer loaded, or its last commit) plus
+   * the `appended` updates it wrote since. When another task has committed a
+   * snapshot past `coversFrom`, or the log holds a different number of rows
+   * in `(coversFrom, seq]`, that task wrote to this document without the
+   * writer seeing it (no cross-task fan-out yet): the commit is refused and
+   * nothing is pruned — the snapshot would not contain those rows (#39
+   * residual, review of #66). The writer's room then reloads from storage.
    */
   commitSnapshot(input: {
     documentId: string;
     seq: number;
     s3Key: string;
     sizeBytes: number;
+    coversFrom: number;
+    appended: number;
   }): Promise<boolean>;
 }
 

@@ -166,6 +166,8 @@ describe('sizeBytes (LIB-02)', () => {
     expect(res.body.documents[0]?.sizeBytes).toBe(150);
 
     await server.repo.updates.commitSnapshot({
+      coversFrom: 0,
+      appended: 2,
       documentId: doc.id,
       seq: 2,
       s3Key: `docs/${doc.id}/2.yjs`,
@@ -348,6 +350,8 @@ describe('recover-all and delete-all (LIB-08)', () => {
     ]);
     await server.s3.put(`docs/${doomed.id}/1.yjs`, new Uint8Array([9]));
     await server.repo.updates.commitSnapshot({
+      coversFrom: 0,
+      appended: 0,
       documentId: doomed.id,
       seq: 1,
       s3Key: `docs/${doomed.id}/1.yjs`,

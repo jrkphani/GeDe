@@ -2,9 +2,13 @@
  * Rate limiting and back-pressure (#37): REST buckets per caller, per-connection
  * update and awareness buckets, slow-consumer closes, the proxy hop count.
  */
+import * as encoding from 'lib0/encoding';
 import pino from 'pino';
 import { afterEach, beforeEach, describe, expect, test } from 'vitest';
-import { rateLimitKey, trustOneHop } from '../server.js';
+import * as syncProtocol from 'y-protocols/sync';
+import * as Y from 'yjs';
+import { AddressLimiter } from '../ip-limit.js';
+import { perUserKey, trustOneHop } from '../server.js';
 import { FakeRepo } from '../test/fake-repo.js';
 import {
   FakeSnapshotStore,
@@ -15,6 +19,7 @@ import {
   type TestServer,
 } from '../test/fakes.js';
 import { bearerProtocols, sleep, waitFor, YClient } from '../test/y-client.js';
+import { MESSAGE_QUERY_AWARENESS, MESSAGE_SYNC } from './protocol.js';
 import { Room } from './room.js';
 import { CLOSE_TOO_MANY_REQUESTS, CLOSE_TRY_AGAIN_LATER } from './route.js';
 import { TokenBucket } from './throttle.js';
@@ -35,22 +40,21 @@ describe('TokenBucket', () => {
   });
 });
 
-describe('REST rate limit', () => {
+describe('REST rate limits', () => {
   let server: TestServer;
-  beforeEach(async () => {
-    server = await startServer({ RATE_LIMIT_PER_MINUTE: 3 });
-  });
   afterEach(async () => {
     await server.close();
   });
 
-  test('LOAD-05 a caller over the per-minute budget gets 429 with the error contract; other callers and health checks are unaffected', async () => {
+  test('LOAD-05 the per-user budget is keyed by the verified user, not the bearer string: a rotating token shares the bucket, 429 follows the error contract, other users and health checks are unaffected', async () => {
+    server = await startServer({ RATE_LIMIT_PER_MINUTE: 3, RATE_LIMIT_PER_IP_PER_MINUTE: 1000 });
     const alice = server.verifier.issue('tok-alice', 'sub-alice');
+    const aliceAgain = server.verifier.issue('tok-alice-rotated', 'sub-alice');
     const bob = server.verifier.issue('tok-bob', 'sub-bob');
-    for (let i = 0; i < 3; i += 1) {
-      expect((await json(server, 'GET', '/api/me', { token: alice })).status).toBe(200);
-    }
-    const limited = await json<ErrorBody>(server, 'GET', '/api/me', { token: alice });
+    expect((await json(server, 'GET', '/api/me', { token: alice })).status).toBe(200);
+    expect((await json(server, 'GET', '/api/me', { token: aliceAgain })).status).toBe(200);
+    expect((await json(server, 'GET', '/api/me', { token: alice })).status).toBe(200);
+    const limited = await json<ErrorBody>(server, 'GET', '/api/me', { token: aliceAgain });
     expect(limited.status).toBe(429);
     expect(limited.body.error.code).toBe('too_many_requests');
     expect(limited.body.error.ref).toBe(limited.headers.get('x-request-id'));
@@ -60,23 +64,49 @@ describe('REST rate limit', () => {
       expect((await json(server, 'GET', '/healthz')).status).toBe(200);
       expect((await json(server, 'GET', '/api/health')).status).toBe(200);
     }
+    expect(perUserKey({ ip: '1.1.1.1' })).toBe('ip:1.1.1.1');
+    expect(
+      perUserKey({
+        user: { id: 'u1', sub: 's', email: null, displayName: null, locale: null },
+        ip: '1.1.1.1',
+      }),
+    ).toBe('user:u1');
   });
 
-  test('AUTH-01 unauthenticated callers are keyed by the address the ALB appended, never a forged leftmost X-Forwarded-For', async () => {
-    const hit = (forwardedFor: string) =>
-      fetch(`${server.baseUrl}/api/me`, { headers: { 'x-forwarded-for': forwardedFor } });
-    for (let i = 0; i < 3; i += 1) expect((await hit('9.9.9.9, 1.1.1.1')).status).toBe(401);
-    expect((await hit('9.9.9.9, 1.1.1.1')).status).toBe(429);
+  test('AUTH-01 the per-address budget bounds callers with no or a rotating invalid token, keyed by the address the ALB appended, never a forged leftmost X-Forwarded-For', async () => {
+    server = await startServer({ RATE_LIMIT_PER_MINUTE: 1000, RATE_LIMIT_PER_IP_PER_MINUTE: 3 });
+    const hit = (forwardedFor: string, token?: string) =>
+      fetch(`${server.baseUrl}/api/me`, {
+        headers: {
+          'x-forwarded-for': forwardedFor,
+          ...(token === undefined ? {} : { authorization: `Bearer ${token}` }),
+        },
+      });
+    // Random bearers are not fresh buckets: the address pays for each 401.
+    expect((await hit('9.9.9.9, 1.1.1.1', 'random-1')).status).toBe(401);
+    expect((await hit('9.9.9.9, 1.1.1.1', 'random-2')).status).toBe(401);
+    expect((await hit('9.9.9.9, 1.1.1.1')).status).toBe(401);
+    const limited = await hit('9.9.9.9, 1.1.1.1', 'random-3');
+    expect(limited.status).toBe(429);
+    expect(((await limited.json()) as ErrorBody).error.code).toBe('too_many_requests');
     // A different forged leftmost address does not buy a new bucket…
     expect((await hit('8.8.8.8, 1.1.1.1')).status).toBe(429);
     // …a different client behind the ALB does.
     expect((await hit('9.9.9.9, 2.2.2.2')).status).toBe(401);
     expect(trustOneHop('127.0.0.1', 0)).toBe(true);
     expect(trustOneHop('1.1.1.1', 1)).toBe(false);
-    expect(rateLimitKey({ headers: { authorization: 'Bearer abc' }, ip: '1.1.1.1' })).toMatch(
-      /^user:[A-Za-z0-9_-]{43}$/,
-    );
-    expect(rateLimitKey({ headers: {}, ip: '1.1.1.1' })).toBe('ip:1.1.1.1');
+  });
+
+  test('LOAD-05 the address limiter refills at its rate and evicts the least recently seen address', () => {
+    let now = 0;
+    const limiter = new AddressLimiter(60, () => now);
+    for (let i = 0; i < 60; i += 1) expect(limiter.take('a')).toBe(true);
+    expect(limiter.take('a')).toBe(false);
+    now = 2_000; // two seconds → two tokens at 60/min
+    expect([limiter.take('a'), limiter.take('a'), limiter.take('a')]).toEqual([true, true, false]);
+    for (let i = 0; i < 10_000; i += 1) limiter.take(`addr-${String(i)}`);
+    expect(limiter.size).toBe(10_000); // 'a' was the least recently seen and went
+    expect(limiter.take('a')).toBe(true); // a fresh bucket
   });
 });
 
@@ -89,7 +119,7 @@ describe('WebSocket limits', () => {
   beforeEach(async () => {
     server = await startServer({
       WS_UPDATES_PER_SEC: 1,
-      WS_UPDATES_BURST: 3,
+      WS_UPDATES_BURST: 4,
       WS_AWARENESS_PER_SEC: 1,
       WS_AWARENESS_BURST: 2,
     });
@@ -113,13 +143,50 @@ describe('WebSocket limits', () => {
 
   test('LOAD-05 a connection sending updates over its burst is closed with 4429; the room keeps what it accepted', async () => {
     const client = await connect();
-    // The handshake's step 2 took one token; two more updates fit, the fourth does not.
+    // The handshake cost two tokens (the client's step 1, then its step 2); two more
+    // updates fit, the third does not.
     for (let i = 0; i < 5; i += 1) client.setCell(`r${String(i)}:c1`, 'x');
     const closed = await client.closed;
     expect(closed.code).toBe(CLOSE_TOO_MANY_REQUESTS);
     const room = server.app.rooms.get(docId);
     expect(room?.stats.rateLimited).toBe(1);
     expect(room?.doc.getMap<string>('cells').size).toBeGreaterThanOrEqual(2);
+  });
+
+  test('LOAD-05 sync step 1 and awareness queries cost tokens too: a burst of reads from a view-only socket is closed with 4429 (review of #66)', async () => {
+    const viewer = server.verifier.issue('tok-viewer', 'sub-viewer');
+    const viewerId = (await json<{ id: string }>(server, 'GET', '/api/me', { token: viewer })).body
+      .id;
+    server.repo.share(docId, viewerId, 'view');
+    const client = await YClient.connect(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
+      protocols: bearerProtocols(viewer),
+    });
+    clients.push(client);
+    await client.synced; // step 1 + step 2 (dropped as a write, but the token was taken first)
+    const step2s = () =>
+      client.received.filter(
+        (m) => m[0] === MESSAGE_SYNC && m[1] === syncProtocol.messageYjsSyncStep2,
+      ).length;
+    const before = step2s();
+    // Each step 1 with an empty state vector would make the server encode and send
+    // the whole document; the bucket (burst 4) refuses the third of these.
+    for (let i = 0; i < 6; i += 1) {
+      const encoder = encoding.createEncoder();
+      encoding.writeVarUint(encoder, MESSAGE_SYNC);
+      syncProtocol.writeSyncStep1(encoder, new Y.Doc());
+      client.send(encoding.toUint8Array(encoder));
+    }
+    const closed = await client.closed;
+    expect(closed).toEqual({ code: CLOSE_TOO_MANY_REQUESTS, reason: 'too many sync messages' });
+    const room = server.app.rooms.get(docId);
+    expect(room?.stats.rateLimited).toBe(1);
+    // At most two full step-2 replies went out before the close.
+    expect(step2s() - before).toBeLessThanOrEqual(2);
+
+    // An awareness query burst is refused the same way.
+    const other = await connect();
+    for (let i = 0; i < 6; i += 1) other.send(new Uint8Array([MESSAGE_QUERY_AWARENESS]));
+    expect((await other.closed).reason).toBe('too many awareness queries');
   });
 
   test('SHARE-04 awareness over its budget is dropped, not fanned out, and the connection stays open', async () => {

@@ -498,7 +498,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         });
       },
 
-      commitSnapshot({ documentId, seq, s3Key, sizeBytes }) {
+      commitSnapshot({ documentId, seq, s3Key, sizeBytes, coversFrom, appended }) {
         return db.transaction(async (tx) => {
           // The same row lock `append` takes: no sequence number is assigned
           // while the pointer moves, and two compactions serialise here.
@@ -515,6 +515,35 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             logger.warn(
               { documentId, seq, committedSeq: doc.snapshotSeq },
               'stale snapshot commit ignored',
+            );
+            return false;
+          }
+          // The snapshot must contain everything it would supersede. Another
+          // task's commit since this writer loaded (or last committed) may have
+          // pruned rows this snapshot never saw; and rows in (coversFrom, seq]
+          // the writer did not append belong to another task. Either refuses.
+          if (doc.snapshotSeq > coversFrom) {
+            logger.warn(
+              { documentId, seq, coversFrom, committedSeq: doc.snapshotSeq },
+              'another task compacted this document since it was loaded; not committed',
+            );
+            return false;
+          }
+          const [logged] = await tx
+            .select({ n: sql<string | number>`count(*)::int` })
+            .from(docUpdates)
+            .where(
+              and(
+                eq(docUpdates.documentId, documentId),
+                gt(docUpdates.seq, coversFrom),
+                sql`${docUpdates.seq} <= ${seq}`,
+              ),
+            );
+          const loggedRows = Number(logged?.n ?? 0);
+          if (loggedRows !== appended) {
+            logger.warn(
+              { documentId, seq, coversFrom, appended, loggedRows },
+              'snapshot does not cover every logged update; not committed',
             );
             return false;
           }

@@ -2,16 +2,15 @@
  * Assembles the Fastify instance from injected dependencies. `main.ts` passes
  * the real verifier, repository and S3 store; tests pass fakes.
  */
-import { createHash } from 'node:crypto';
-
 import cors from '@fastify/cors';
 import rateLimit from '@fastify/rate-limit';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyInstance, type FastifyRequest } from 'fastify';
 
-import { bearerToken, UserResolver } from './auth.js';
+import { UserResolver } from './auth.js';
 import type { Deps } from './deps.js';
 import { AppError, newRequestId, registerErrorHandling } from './errors.js';
+import { AddressLimiter, registerAddressLimit } from './ip-limit.js';
 import { ProjectionWorker } from './projection/worker.js';
 import { registerApi } from './routes/api.js';
 import { registerHealth } from './routes/health.js';
@@ -21,11 +20,14 @@ import { registerWs, selectSubprotocol } from './ws/route.js';
 /** proxy-addr callback: trust the socket peer (hop 0, the ALB) and nothing further up the chain. */
 export const trustOneHop = (_address: string, hop: number): boolean => hop < 1;
 
-/** Bucket key: `user:<sha256 of the token>` for a bearer caller, else `ip:<address>`. */
-export function rateLimitKey(request: Pick<FastifyRequest, 'headers' | 'ip'>): string {
-  const token = bearerToken(request);
-  if (token !== null) return `user:${createHash('sha256').update(token).digest('base64url')}`;
-  return `ip:${request.ip}`;
+/**
+ * Per-user bucket key for `/api`: the verified user's id (the auth hook has run
+ * by `preHandler`), never the bearer string — a rotating token is the same
+ * user, and a random one never reaches this hook. The address is the fallback
+ * only for a route that reaches this without a user (none today).
+ */
+export function perUserKey(request: Pick<FastifyRequest, 'user' | 'ip'>): string {
+  return request.user === undefined ? `ip:${request.ip}` : `user:${request.user.id}`;
 }
 
 /** The Fastify instance plus the room manager and projection worker, exposed for shutdown and tests. */
@@ -61,15 +63,17 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
     maxAge: 600,
   });
 
-  // REST and upgrade rate limit per caller (#37): keyed by a digest of the
-  // bearer token when one is presented (per user, never the token itself),
-  // otherwise by the client address. Health checks are exempt; the answer
-  // follows the error contract with `too_many_requests`.
+  // Two limits (#37, review of #66). First, coarse and per address, on every
+  // route at `onRequest` — the only thing that bounds callers with no or a
+  // rotating token. Second, precise and per verified user, on `/api` at
+  // `preHandler` (after the auth hook) — see `registerApi`. Health checks are
+  // exempt from both; the answer follows the error contract (`too_many_requests`).
+  registerAddressLimit(app, new AddressLimiter(deps.config.RATE_LIMIT_PER_IP_PER_MINUTE));
   await app.register(rateLimit, {
+    global: false,
     max: deps.config.RATE_LIMIT_PER_MINUTE,
     timeWindow: '1 minute',
-    keyGenerator: rateLimitKey,
-    allowList: (request) => request.url === '/healthz' || request.url === '/api/health',
+    keyGenerator: perUserKey,
     errorResponseBuilder: (_request, context) =>
       new AppError(429, 'too_many_requests', `Too many requests; try again in ${context.after}`),
   });

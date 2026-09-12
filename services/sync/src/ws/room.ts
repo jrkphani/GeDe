@@ -163,6 +163,13 @@ export class Room {
         : (bytes) => {
             this.projection?.schedule(this.documentId, bytes);
           },
+      () => {
+        // Another task wrote to this document behind this room (#39): its
+        // in-memory state is no longer the whole truth. The manager drops the
+        // room; sockets get 1001, reconnect with backoff, and the fresh room
+        // loads snapshot + log — the clients' replicas re-send what it lacks.
+        this.onSuperseded?.(this);
+      },
     );
     this.logger.info(
       { documentId: this.documentId, snapshotSeq: state.snapshotSeq, replayed: state.replayed },
@@ -230,6 +237,8 @@ export class Room {
 
   /** Set by the RoomManager to schedule eviction. */
   onEmpty: ((room: Room) => void) | null = null;
+  /** Set by the RoomManager: this room's state was superseded by another task's write (#39). */
+  onSuperseded: ((room: Room) => void) | null = null;
 
   private handle(conn: Conn, bytes: Uint8Array): void {
     // Frames still queued after the room closed this socket for a limit are ignored;
@@ -246,6 +255,11 @@ export class Room {
     const message = decodeMessage(bytes);
     switch (message.kind) {
       case 'sync': {
+        // Every sync message costs a token, reads included (#37, review of #66): a
+        // step 1 makes the server encode and send whatever the client is missing —
+        // the whole document for an empty state vector — from view-only sockets
+        // too, so it is the cheapest amplifier a connection has.
+        if (!this.takeUpdateToken(conn, 'too many sync messages')) return;
         if (message.subtype === SYNC_STEP1) {
           // A read: reply with what the client is missing.
           const stateVector = decoding.readVarUint8Array(message.decoder);
@@ -265,18 +279,6 @@ export class Room {
             conn.readOnlyNotified = true;
             this.send(conn, encodeNotice({ code: 'read-only' }));
           }
-          return;
-        }
-        if (!conn.updateBucket.take()) {
-          // More updates per second than any editor produces (#37): the
-          // connection goes, with a code the client treats as terminal.
-          this.stats.rateLimited += 1;
-          conn.limited = true;
-          this.logger.warn(
-            { documentId: this.documentId, userId: conn.member.userId },
-            'update rate limit exceeded; closing',
-          );
-          conn.socket.close(CLOSE_TOO_MANY_REQUESTS, 'too many updates');
           return;
         }
         if (message.subtype === SYNC_STEP2) {
@@ -300,6 +302,8 @@ export class Room {
         return;
       }
       case 'queryAwareness': {
+        // A read that fans every presence state back to one socket: same bucket as sync.
+        if (!this.takeUpdateToken(conn, 'too many awareness queries')) return;
         const states = this.awareness.getStates();
         this.send(conn, encodeAwareness(this.awareness, [...states.keys()]));
         return;
@@ -309,6 +313,23 @@ export class Room {
       case 'unknown':
         this.stats.malformed += 1;
     }
+  }
+
+  /**
+   * Take one token from the connection's sync bucket. Over the burst — more
+   * messages per second than any editor or provider produces (#37) — the
+   * connection is closed with a code the client treats as terminal.
+   */
+  private takeUpdateToken(conn: Conn, reason: string): boolean {
+    if (conn.updateBucket.take()) return true;
+    this.stats.rateLimited += 1;
+    conn.limited = true;
+    this.logger.warn(
+      { documentId: this.documentId, userId: conn.member.userId, reason },
+      'sync rate limit exceeded; closing',
+    );
+    conn.socket.close(CLOSE_TOO_MANY_REQUESTS, reason);
+    return false;
   }
 
   private readonly onDocUpdate = (update: Uint8Array, origin: unknown): void => {

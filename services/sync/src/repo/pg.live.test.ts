@@ -107,13 +107,34 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       [2, 3, 4, 5].map((n) => ({ update: new Uint8Array([n]), authorId: owner })),
     );
     expect(
-      await repo.updates.commitSnapshot({ documentId: doc.id, seq: 5, s3Key: 'k5', sizeBytes: 1 }),
+      await repo.updates.commitSnapshot({
+        documentId: doc.id,
+        seq: 5,
+        s3Key: 'k5',
+        sizeBytes: 1,
+        coversFrom: 1,
+        appended: 4,
+      }),
     ).toBe(true);
     expect(
-      await repo.updates.commitSnapshot({ documentId: doc.id, seq: 3, s3Key: 'k3', sizeBytes: 1 }),
+      await repo.updates.commitSnapshot({
+        documentId: doc.id,
+        seq: 3,
+        s3Key: 'k3',
+        sizeBytes: 1,
+        coversFrom: 1,
+        appended: 2,
+      }),
     ).toBe(false);
     expect(
-      await repo.updates.commitSnapshot({ documentId: doc.id, seq: 5, s3Key: 'k5b', sizeBytes: 1 }),
+      await repo.updates.commitSnapshot({
+        documentId: doc.id,
+        seq: 5,
+        s3Key: 'k5b',
+        sizeBytes: 1,
+        coversFrom: 1,
+        appended: 4,
+      }),
     ).toBe(false);
     const row = await pool.query('select snapshot_key, snapshot_seq from documents where id = $1', [
       doc.id,
@@ -131,7 +152,14 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       other.id,
       [2, 3, 4, 5].map((n) => ({ update: new Uint8Array([n]), authorId: owner })),
     );
-    await repo.updates.commitSnapshot({ documentId: other.id, seq: 3, s3Key: 'o3', sizeBytes: 1 });
+    await repo.updates.commitSnapshot({
+      documentId: other.id,
+      seq: 3,
+      s3Key: 'o3',
+      sizeBytes: 1,
+      coversFrom: 1,
+      appended: 2,
+    });
     const tail = await repo.updates.loadState(other.id);
     expect(tail.updates.map((u) => u.seq)).toEqual([4, 5]);
   });
@@ -148,17 +176,23 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     const holder = await pool.connect();
     await holder.query('BEGIN');
     await holder.query('SELECT 1 FROM documents WHERE id = $1 FOR UPDATE', [doc.id]);
+    // Task A appended 2..5 (loaded at the seed, seq 1); task B loaded when the
+    // log reached 3 and appended nothing since.
     const newer = repo.updates.commitSnapshot({
       documentId: doc.id,
       seq: 5,
       s3Key: 'c5',
       sizeBytes: 1,
+      coversFrom: 1,
+      appended: 4,
     });
     const older = repo.updates.commitSnapshot({
       documentId: doc.id,
       seq: 3,
       s3Key: 'c3',
       sizeBytes: 1,
+      coversFrom: 3,
+      appended: 0,
     });
     // Both transactions are blocked on the row before the holder lets go.
     await new Promise((resolve) => setTimeout(resolve, 100));
@@ -170,21 +204,25 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     holder.release();
     const [newerCommitted, olderCommitted] = await Promise.all([newer, older]);
 
-    // Whichever ran first, the pointer ends at 5, the log is pruned to 5, and
-    // the older commit either landed first (then got superseded) or was refused.
-    expect(newerCommitted).toBe(true);
+    // Exactly one commit lands, whichever the lock handed out first: if A's
+    // (seq 5) went first, B's is stale; if B's (seq 3) went first, A's is
+    // refused because a snapshot it never saw now covers rows it would
+    // supersede (#39 residual) — A's room reloads rather than prune blind.
+    expect(newerCommitted).not.toBe(olderCommitted);
+    const winner = newerCommitted ? { key: 'c5', seq: '5' } : { key: 'c3', seq: '3' };
     const row = await pool.query('select snapshot_key, snapshot_seq from documents where id = $1', [
       doc.id,
     ]);
-    expect(row.rows[0]).toEqual({ snapshot_key: 'c5', snapshot_seq: '5' });
+    expect(row.rows[0]).toEqual({ snapshot_key: winner.key, snapshot_seq: winner.seq });
     const snaps = await pool.query(
       'select seq from snapshots where document_id = $1 order by seq',
       [doc.id],
     );
-    expect(snaps.rows.map((r: { seq: string }) => r.seq)).toEqual(
-      olderCommitted ? ['1', '3', '5'] : ['1', '5'],
+    expect(snaps.rows.map((r: { seq: string }) => r.seq)).toEqual(['1', winner.seq]);
+    // The log is pruned to the winner and nothing above it is lost.
+    expect((await repo.updates.loadState(doc.id)).updates.map((u) => u.seq)).toEqual(
+      newerCommitted ? [] : [4, 5],
     );
-    expect((await repo.updates.loadState(doc.id)).updates).toEqual([]);
   });
 
   test('LIB-08 recover honours the 30-day window; recover-all audits every document it recovers (#42)', async () => {
