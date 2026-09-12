@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Skeleton } from './Skeleton.js';
@@ -70,5 +72,15 @@ describe('Skeleton', () => {
       vi.advanceTimersByTime(1000);
     });
     expect(screen.getByRole('status')).toHaveTextContent('Loading 1Cloudhub - Workscape');
+  });
+
+  it('LOAD-07 under prefers-reduced-motion the bars are a flat tint with no shimmer', () => {
+    const css = readFileSync(resolve(__dirname, 'Skeleton.css'), 'utf8');
+    const reduced = /@media \(prefers-reduced-motion: reduce\)\s*\{([\s\S]*?)\n\}/.exec(css)?.[1];
+    expect(reduced).toBeDefined();
+    expect(reduced).toMatch(/\.gd-skeleton__bar\s*\{[^}]*background:\s*var\(--skeleton-base\)/);
+    expect(reduced).not.toMatch(/animation/);
+    // The shimmer itself runs on the token, not a literal duration.
+    expect(css).toMatch(/animation:\s*gd-shimmer var\(--skeleton-speed\)/);
   });
 });

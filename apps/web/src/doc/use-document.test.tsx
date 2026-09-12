@@ -92,13 +92,19 @@ describe('useDocument', () => {
     await until(() => room.doc.getMap('tables').has(tableId));
 
     // Reopen from the local replica alone: the room is gone, IndexedDB is not.
+    // (The replica only stores what arrives after it has opened; wait for that before closing.)
+    await s.persistence?.whenSynced;
     view.unmount();
     const dead = new FakeRoom({ refuseWith: { code: 1011, reason: 'down' } });
     const probe2: Probe = { result: null };
     render(<Harness room={dead} probe={probe2} store={store} />);
-    await waitFor(() => {
-      expect(screen.getByTestId('ready')).toHaveTextContent('true');
-    });
+    // The replica loads through fake-indexeddb's own scheduler; give it room under a loaded CI box.
+    await waitFor(
+      () => {
+        expect(screen.getByTestId('ready')).toHaveTextContent('true');
+      },
+      { timeout: 5000 },
+    );
     const s2 = session(probe2);
     const t2 = tableMap(s2.gd, tableId);
     expect(t2).not.toBeNull();

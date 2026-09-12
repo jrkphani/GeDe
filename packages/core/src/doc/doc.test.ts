@@ -235,7 +235,7 @@ describe('tables and snapping', () => {
 });
 
 describe('cells', () => {
-  test('GRID-04 setCellText stores plain text as a paragraph fragment and formulas as strings', () => {
+  test('setCellText stores plain text as a paragraph fragment and formulas as strings', () => {
     const gd = fresh();
     const sheet = createSheet(gd);
     const id = createTable(gd, { sheetId: sheet, at: { col: 0, row: 0 }, columns: 1, rows: 1 });
@@ -257,7 +257,7 @@ describe('cells', () => {
     expect((stored as Y.Map<unknown>).has(`${row}:${col}`)).toBe(false);
   });
 
-  test('GRID-04 multi-line text round-trips as one paragraph per line', () => {
+  test('multi-line text round-trips as one paragraph per line', () => {
     const gd = fresh();
     const sheet = createSheet(gd);
     const id = createTable(gd, { sheetId: sheet, at: { col: 0, row: 0 }, columns: 1, rows: 1 });
@@ -266,7 +266,7 @@ describe('cells', () => {
     expect(cellText(table(gd, id), rec?.rows[0] ?? '', rec?.columns[0]?.id ?? '')).toBe('a\nb');
   });
 
-  test('KEYS-03 undo is scoped to local edits; a remote edit stays put', () => {
+  test('undo is scoped to local edits; a remote edit stays put', () => {
     const { a, b } = pair();
     const undoA = createUndoManager(a, { captureTimeout: 0 });
     const sheet = createSheet(a);

@@ -5,10 +5,15 @@
  */
 import { useCallback, useRef, useSyncExternalStore } from 'react';
 import type { Awareness } from 'y-protocols/awareness';
-import type * as Y from 'yjs';
+
+/** Any Yjs shared type (Y.Map, Y.Array, Y.XmlFragment …); structural so generics stay out of callers. */
+export interface DeepObservable {
+  observeDeep(handler: (events: unknown, transaction: unknown) => void): void;
+  unobserveDeep(handler: (events: unknown, transaction: unknown) => void): void;
+}
 
 /** Re-render when anything under `type` changes (observeDeep). Returns a change counter. */
-export function useYVersion(type: Y.AbstractType<unknown> | null | undefined): number {
+export function useYVersion(type: DeepObservable | null | undefined): number {
   const version = useRef(0);
   const subscribe = useCallback(
     (onChange: () => void) => {

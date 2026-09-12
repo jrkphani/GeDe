@@ -25,6 +25,7 @@ export const ICON_NAMES = [
   // view
   'gridlines',
   'zoom-in',
+  'zoom-out',
   'fit',
   'pin',
   'collapse-rail',
@@ -89,6 +90,7 @@ const GLYPHS: Record<IconName, Glyph> = {
   'zoom-in': {
     d: 'M8 2.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM12 12l3.8 3.8M8 5.6v4.8M5.6 8h4.8',
   },
+  'zoom-out': { d: 'M8 2.5a5.5 5.5 0 1 1 0 11 5.5 5.5 0 0 1 0-11zM12 12l3.8 3.8M5.6 8h4.8' },
   fit: { d: 'M2 6.5V2h4.5M11.5 2H16v4.5M16 11.5V16h-4.5M6.5 16H2v-4.5M6 6h6v6H6z' },
   pin: { d: 'M6.5 2.5h5l-.8 4.3 2.8 2.7v1.5H4.5V9.5l2.8-2.7zM9 11v5' },
   'collapse-rail': { d: 'M2 3h14v12H2zM11 3v12M8 6.5 5.5 9 8 11.5' },
