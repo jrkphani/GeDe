@@ -1,6 +1,6 @@
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu';
 import clsx from 'clsx';
-import type { ReactNode } from 'react';
+import { useLayoutEffect, useState, type ReactNode } from 'react';
 
 import { MenuEntries, type MenuEntry, type MenuParts } from './menu-entries.js';
 
@@ -55,8 +55,32 @@ export function Menu({
   onCloseAutoFocus,
   modal = true,
 }: MenuProps) {
+  const [open, setOpen] = useState(false);
+  // A modal menu marks the rest of the page `aria-hidden` (Radix `hideOthers`) while the
+  // page's own tab stops stay focusable — axe `aria-hidden-focus`, serious (#131). The same
+  // elements are made `inert` for the duration, as `Select` does: Radix already keeps focus
+  // inside the menu; this makes the DOM say so. A layout effect, so on close `inert` is gone
+  // before Radix returns focus to the trigger, which sits inside the hidden subtree.
+  useLayoutEffect(() => {
+    if (!open || !modal || typeof document === 'undefined') return undefined;
+    const touched: HTMLElement[] = [];
+    const apply = (): void => {
+      for (const el of document.querySelectorAll<HTMLElement>('[data-aria-hidden="true"]')) {
+        if (el.inert) continue;
+        el.inert = true;
+        touched.push(el);
+      }
+    };
+    // Radix marks the rest of the page once the content has mounted (a frame later than `open`).
+    apply();
+    const frame = requestAnimationFrame(apply);
+    return () => {
+      cancelAnimationFrame(frame);
+      for (const el of touched) el.inert = false;
+    };
+  }, [open, modal]);
   return (
-    <DropdownMenu.Root modal={modal}>
+    <DropdownMenu.Root modal={modal} open={open} onOpenChange={setOpen}>
       <DropdownMenu.Trigger asChild>{trigger}</DropdownMenu.Trigger>
       <DropdownMenu.Portal>
         <DropdownMenu.Content

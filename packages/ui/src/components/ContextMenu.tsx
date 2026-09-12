@@ -1,6 +1,6 @@
 import * as RadixContextMenu from '@radix-ui/react-context-menu';
 import clsx from 'clsx';
-import { useRef, type KeyboardEvent, type ReactNode } from 'react';
+import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 
 import { MenuEntries, type MenuEntry, type MenuParts } from './menu-entries.js';
 
@@ -66,6 +66,8 @@ export function ContextMenu({
   // MENU-05: Radix returns focus to its trigger, which here is a whole region;
   // the element that actually had focus (a cell, a header) is what should get it back.
   const opener = useRef<HTMLElement | null>(null);
+  const content = useRef<HTMLDivElement | null>(null);
+  const [open, setOpen] = useState(false);
   const remember = () => {
     const active = document.activeElement;
     opener.current = active instanceof HTMLElement ? active : null;
@@ -76,14 +78,33 @@ export function ContextMenu({
       // hidden-but-focusable element, axe `aria-hidden-focus`); a click outside both
       // closes the menu and lands where it was aimed, as desktop menus do.
       modal={false}
-      onOpenChange={(open) => {
-        if (open) remember();
-        onOpenChange?.(open);
+      onOpenChange={(next) => {
+        if (next) remember();
+        setOpen(next);
+        onOpenChange?.(next);
       }}
     >
       <RadixContextMenu.Trigger
         asChild
         disabled={disabled === true}
+        // MENU-05: a press anywhere outside the menu closes it. Radix learns of an outside
+        // press from a `pointerdown` that bubbles to the document; content inside the
+        // region (a cell, a graph) stops that propagation for its own reasons (a press
+        // there must not pan the canvas), so the press is seen here, in the capture
+        // phase, and the menu is dismissed the way Escape dismisses it. The press then
+        // lands where it was aimed.
+        onPointerDownCapture={(event) => {
+          if (!open || content.current === null) return;
+          if (event.target instanceof Node && content.current.contains(event.target)) return;
+          content.current.dispatchEvent(
+            new KeyboardEvent('keydown', {
+              key: 'Escape',
+              code: 'Escape',
+              bubbles: true,
+              cancelable: true,
+            }),
+          );
+        }}
         onKeyDown={(event) => {
           if (disabled === true || event.defaultPrevented || !isContextMenuKey(event)) return;
           const target = event.target;
@@ -105,6 +126,7 @@ export function ContextMenu({
       </RadixContextMenu.Trigger>
       <RadixContextMenu.Portal>
         <RadixContextMenu.Content
+          ref={content}
           className={clsx('gd-menu', className)}
           collisionPadding={8}
           aria-label={label}

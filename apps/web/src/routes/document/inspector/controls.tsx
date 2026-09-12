@@ -4,8 +4,8 @@
  * one way an unimplemented control is shown — disabled, with its reason,
  * never styled as operable (INSP-11).
  */
-import { Button, Icon, Tooltip } from '@gede/ui';
-import type { ReactNode } from 'react';
+import { Button, Icon, Tooltip, type ButtonProps } from '@gede/ui';
+import { useId, type ReactNode } from 'react';
 
 export function Section({
   label,
@@ -58,6 +58,7 @@ export function Stepper({
   const downReason =
     disabledReason ?? (value <= min ? (decrementReason ?? 'at the minimum') : undefined);
   const upReason = disabledReason ?? (value >= max ? 'at the maximum' : undefined);
+  const reasonId = useId();
   return (
     <div className="gd-insp__stepper" role="group" aria-label={label}>
       <span className="gd-insp__stepper-label">{label}</span>
@@ -72,6 +73,7 @@ export function Stepper({
           aria-label={`Fewer ${unit ?? label}`}
           title={downReason === undefined ? `Fewer ${unit ?? label}` : `Fewer — ${downReason}`}
           aria-disabled={downReason !== undefined || undefined}
+          aria-describedby={downReason === undefined ? undefined : `${reasonId}-down`}
           onClick={
             downReason === undefined
               ? () => {
@@ -88,6 +90,7 @@ export function Stepper({
           aria-label={`More ${unit ?? label}`}
           title={upReason === undefined ? `More ${unit ?? label}` : `More — ${upReason}`}
           aria-disabled={upReason !== undefined || undefined}
+          aria-describedby={upReason === undefined ? undefined : `${reasonId}-up`}
           onClick={
             upReason === undefined
               ? () => {
@@ -99,7 +102,75 @@ export function Stepper({
           +
         </Button>
       </span>
+      {downReason !== undefined && (
+        <span id={`${reasonId}-down`} className="gd-visually-hidden" aria-hidden="true">
+          {downReason}
+        </span>
+      )}
+      {upReason !== undefined && (
+        <span id={`${reasonId}-up`} className="gd-visually-hidden" aria-hidden="true">
+          {upReason}
+        </span>
+      )}
     </div>
+  );
+}
+
+export interface ReasonedButtonProps extends Omit<ButtonProps, 'onClick' | 'title'> {
+  /** The command's name: the tooltip, and the label unless `children` is given. */
+  label: string;
+  /** Why the command is unavailable; undefined when it can run. */
+  reason: string | undefined;
+  onClick?: (() => void) | undefined;
+  /** A hint shown beside the label while the command is available. */
+  available?: string | undefined;
+}
+
+/**
+ * INSP-11 / MENU-02: a command button that, when unavailable, looks disabled
+ * and carries its reason where every reader can reach it — the tooltip for
+ * the pointer and for the keyboard (the button stays focusable, so the
+ * tooltip opens on focus), `title` for hover, and `aria-describedby` to a
+ * visually hidden sentence for assistive tech (#126). One component, so no
+ * tab renders a disabled control its own way.
+ */
+export function ReasonedButton({
+  label,
+  reason,
+  onClick,
+  available,
+  children,
+  ...rest
+}: ReasonedButtonProps) {
+  const reasonId = useId();
+  const unavailable = reason !== undefined;
+  const tip = unavailable ? `${label} — ${reason}` : (available ?? label);
+  return (
+    <>
+      <Tooltip content={tip}>
+        <Button
+          size="sm"
+          variant="secondary"
+          {...rest}
+          aria-disabled={unavailable || undefined}
+          aria-describedby={unavailable ? reasonId : undefined}
+          title={tip}
+          onClick={unavailable ? undefined : onClick}
+        >
+          {children ?? label}
+        </Button>
+      </Tooltip>
+      {unavailable && (
+        <span
+          id={reasonId}
+          className="gd-visually-hidden"
+          aria-hidden="true"
+          data-testid="control-reason"
+        >
+          {reason}
+        </span>
+      )}
+    </>
   );
 }
 
@@ -129,18 +200,7 @@ export function Unavailable({
   icon?: ReactNode | undefined;
 }) {
   return (
-    <Tooltip content={`${label} — ${reason}`}>
-      <Button
-        size="sm"
-        variant="secondary"
-        className="gd-insp__unavailable"
-        aria-disabled="true"
-        title={`${label} — ${reason}`}
-        icon={icon}
-      >
-        {label}
-      </Button>
-    </Tooltip>
+    <ReasonedButton label={label} reason={reason} className="gd-insp__unavailable" icon={icon} />
   );
 }
 

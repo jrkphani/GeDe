@@ -64,6 +64,40 @@ describe('ContextMenu', () => {
     expect(isContextMenuKey({ code: 'KeyF', shiftKey: true })).toBe(false);
   });
 
+  it('MENU-05 a press outside the menu closes it even when the pressed content stops the event from bubbling (#131)', async () => {
+    render(
+      <ContextMenu
+        label="Cell menu"
+        entries={[{ kind: 'item', id: 'copy', label: 'Copy', onSelect: () => undefined }]}
+        trigger={
+          <div data-testid="scope">
+            <button type="button">B5</button>
+            {/* A graph object: its press must not pan the canvas, so it never bubbles. */}
+            <div
+              data-testid="graph"
+              onPointerDown={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              Graph
+            </div>
+          </div>
+        }
+      />,
+    );
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'B5' }), { clientX: 5, clientY: 5 });
+    expect(await screen.findByRole('menu')).toBeInTheDocument();
+    fireEvent.pointerDown(screen.getByTestId('graph'), { button: 0 });
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    // A press inside the menu is the menu's own.
+    fireEvent.contextMenu(screen.getByRole('button', { name: 'B5' }), { clientX: 5, clientY: 5 });
+    const item = await screen.findByRole('menuitem', { name: 'Copy' });
+    fireEvent.pointerDown(item, { button: 0 });
+    expect(screen.getByRole('menu')).toBeInTheDocument();
+  });
+
   it('RESP-02 disabled: nothing opens on right-click or from the keyboard', () => {
     render(<Fixture disabled />);
     const cell = screen.getByRole('button', { name: 'B5' });

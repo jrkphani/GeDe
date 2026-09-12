@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
 import { Button } from './Button.js';
@@ -50,8 +50,37 @@ describe('Menu', () => {
     const magic = screen.getByRole('menuitem', { name: /Magic fill/ });
     expect(magic).toHaveAttribute('aria-disabled', 'true');
     expect(magic).toHaveAttribute('title', 'Select a column with text first');
+    // MENU-02 (#126): the reason is reachable by assistive tech, not only on hover.
+    expect(magic).toHaveAccessibleDescription('Select a column with text first');
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it('A11Y a modal menu makes the aria-hidden page inert while open, so no hidden tab stop remains (#131)', async () => {
+    render(
+      <div>
+        <button type="button">Elsewhere</button>
+        <Menu
+          trigger={<Button>Account</Button>}
+          entries={[{ kind: 'item', id: 'out', label: 'Sign out', onSelect: () => undefined }]}
+        />
+      </div>,
+    );
+    const trigger = screen.getByRole('button', { name: 'Account' });
+    const elsewhere = screen.getByRole('button', { name: 'Elsewhere' });
+    await userEvent.click(trigger);
+    await screen.findByRole('menu');
+    // Radix hides the page from assistive tech; the same subtree must not stay focusable.
+    const hidden = elsewhere.closest('[aria-hidden="true"]');
+    expect(hidden).not.toBeNull();
+    // Radix marks the page a frame after the menu mounts; the inert mark follows it.
+    await waitFor(() => {
+      expect(hidden).toHaveProperty('inert', true);
+    });
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    expect(hidden).toHaveProperty('inert', false);
     expect(trigger).toHaveFocus();
   });
 

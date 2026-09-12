@@ -459,6 +459,9 @@ export const TableView = memo(function TableView({
                     <div
                       key={col.id}
                       role="columnheader"
+                      // MENU-05: focusable by script only, so a column menu opened on the header
+                      // can return focus to it; the grid keeps one tab stop (A11Y-01).
+                      tabIndex={-1}
                       aria-sort={ariaSortOf(projection.view, col.id)}
                       className={clsx('gd-table__header', {
                         'gd-table__header--frozen': frozenIds.has(col.id),

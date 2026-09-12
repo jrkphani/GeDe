@@ -345,6 +345,28 @@ describe('context menus', () => {
     expect(byId('copy-snapshot')).toMatchObject({ disabledReason: undefined });
   });
 
+  it('MENU-05 Escape from a column menu returns focus to the header it opened on; a command that moves the selection sends focus to the new cell (#131)', async () => {
+    render(<Harness />);
+    await userEvent.click(cells()[0]!);
+    const header = screen.getAllByRole('columnheader')[1]!;
+    fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    expect(header).toHaveFocus();
+    fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    await userEvent.click(screen.getByRole('menuitem', { name: /^Add column after/ }));
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    const selected = document.querySelector('[role="gridcell"][aria-selected="true"]');
+    expect(selected).not.toBeNull();
+    expect(selected).toHaveFocus();
+  });
+
   it('KEYS Shift+F10 and the ContextMenu key open the menu for the focused cell', async () => {
     render(<Harness />);
     const cell = cells()[1]!;
