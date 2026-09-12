@@ -95,6 +95,13 @@
   letter-spacing: 0.02em;
   color: var(--ink-muted);
 }
+/* LIB-08 / LIB-D5: the retention period, stated beside the count while the view has rows
+   (the empty state says it in its own words). */
+.gd-lib__retention {
+  margin: 0;
+  font-size: 0.78125rem;
+  color: var(--ink-muted);
+}
 
 .gd-lib__toolbar {
   display: flex;
@@ -145,9 +152,10 @@
   border-bottom: 1px solid var(--border);
   color: var(--ink);
 }
+/* A11Y-02: the row's focus ring is the global one — 2 px amber at 2 px offset (#143);
+   rows are 44 px with 8 px of cell padding, so the ring sits in the neighbours' padding. */
 .gd-lib__row {
   cursor: default;
-  outline-offset: -2px;
 }
 .gd-lib__row:hover {
   background: var(--surface-sunken);

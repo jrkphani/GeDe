@@ -101,8 +101,8 @@ Outputs, all under `apps/web/test-results/` (gitignored):
 5. Network: the app may only reach the preview on `localhost`. Stub anything external with
    `page.route(url, …)`; never stub the app's own modules, never fake a session.
 6. Breakpoints and zoom: use `test.use({ viewport: { width, height: 900 } })` for 480, 768,
-   1024, 1440 and `test.use(zoomed200(width))` for 200 % zoom (see below). Do not invent
-   other widths.
+   1024, 1440 and `test.use(zoomed200(width))` for 200 % zoom (see below); a phone journey
+   adds touch (`phoneContext(480)` / `asPhone(page)`). Do not invent other widths.
 7. Run `npm run e2e` and `npm run traceability`, commit `docs/TRACEABILITY.md`.
 
 ### Breakpoint and zoom conventions
@@ -117,6 +117,15 @@ Outputs, all under `apps/web/test-results/` (gitignored):
 - The pass criterion at every size: every control visible and inside the viewport,
   `document.documentElement.scrollWidth <= clientWidth`, and reading order preserved
   (`expectNoHorizontalOverflow`, bounding-box comparisons).
+- A phone is a narrow viewport **and** a coarse pointer (ADR-039): width alone is a desktop
+  window, editable at any size. `test.use(phoneContext(480))` or `await asPhone(page, 480)`
+  turns touch emulation on, which is what flips Chromium's `(pointer: coarse)` and
+  `(hover: none)`; `asDesktop(page, width)` turns it off. A phone journey that only sets the
+  viewport is wrong — it asserts the phone contract against a desktop. `zoomed200(width)` is
+  a desktop at zoom (editable); `{ ...zoomed200(1440), hasTouch: true }` is a phone.
+- `chrome.spec.ts` covers the document chrome itself at 320 and every breakpoint, at 200 %
+  with a mouse and with touch, light and dark: the title row fits a long title (#124) and
+  every secondary target measures 44 px below `lg` (#135).
 
 ## Accessibility (axe)
 

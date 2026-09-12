@@ -64,12 +64,77 @@ describe('sign-in steps', () => {
     });
   });
 
+  it('AUTH-04 the obfuscated "password reset required" answer for an unknown email (RESET_PASSWORD step, or the raw exception) is unknown-email too (#46, ADR 040)', async () => {
+    // What Amplify makes of the 400 PasswordResetRequiredException the pool sends for some
+    // unknown addresses under preventUserExistenceErrors (final audit, 2026-09-13).
+    vi.mocked(amplifyAuth.signIn).mockResolvedValue({
+      isSignedIn: false,
+      nextStep: { signInStep: 'RESET_PASSWORD' },
+    });
+    for (const start of [startCodeSignIn, startPasskeySignIn]) {
+      const err = await start('nobody-final-audit@example.invalid').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(AuthFailureError);
+      expect(classifyError(err)).toEqual({ kind: 'unknown-email' });
+    }
+    const raw = Object.assign(new Error('Password reset required for the user'), {
+      name: 'PasswordResetRequiredException',
+    });
+    expect(classifyError(raw)).toEqual({ kind: 'unknown-email' });
+  });
+
   it('classifyError keeps the pool exceptions it distinguishes and passes AuthFailureError through', () => {
     const named = (name: string) => Object.assign(new Error(name), { name });
     expect(classifyError(named('UserNotFoundException'))).toEqual({ kind: 'unknown-email' });
     expect(classifyError(named('PasskeyAuthenticationCanceled'))).toEqual({ kind: 'cancelled' });
     expect(classifyError(new AuthFailureError({ kind: 'exists' }))).toEqual({ kind: 'exists' });
-    expect(classifyError(new Error('boom'))).toEqual({ kind: 'other', message: 'boom' });
+  });
+
+  it('AUTH-05 every other exception becomes plain copy by name; the SDK message never reaches the screen (#144)', () => {
+    const named = (name: string, message: string) => Object.assign(new Error(message), { name });
+    expect(
+      classifyError(
+        named(
+          'UserLambdaValidationException',
+          'PreAuthentication failed with error This account signs in only through the pipeline..',
+        ),
+      ),
+    ).toEqual({
+      kind: 'other',
+      message: 'This account cannot sign in from here. Contact support.',
+    });
+    expect(classifyError(named('LimitExceededException', 'Attempt limit exceeded'))).toEqual({
+      kind: 'other',
+      message: 'Too many attempts for now. Wait a few minutes and try again.',
+    });
+    expect(
+      classifyError(named('NotAuthorizedException', 'Incorrect username or password.')),
+    ).toEqual({
+      kind: 'other',
+      message: 'That sign-in did not go through. Check the address and try again.',
+    });
+    const other = classifyError(new Error('boom'));
+    expect(other.kind).toBe('other');
+    if (other.kind === 'other') {
+      expect(other.message).not.toContain('boom');
+      expect(other.message).toBe(
+        'Something went wrong. Try again, or contact support if it continues.',
+      );
+    }
+    for (const name of [
+      'NetworkError',
+      'CodeDeliveryFailureException',
+      'InvalidParameterException',
+      'TooManyRequestsException',
+      'Whatever',
+    ]) {
+      const f = classifyError(named(name, `raw ${name} text`));
+      expect(f.kind).toBe('other');
+      if (f.kind === 'other') {
+        expect(f.message).not.toContain('raw');
+        expect(f.message).not.toMatch(/Exception|Error\b/);
+        expect(f.message.endsWith('.')).toBe(true);
+      }
+    }
   });
 });
 

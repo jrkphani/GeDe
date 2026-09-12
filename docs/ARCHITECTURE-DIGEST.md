@@ -311,6 +311,8 @@ Card layout (from the template): a mini lattice with column ruler `A B C` and ro
 - meta: `elapsed 31s` · ref: `ref 504·tmo`
 - behaviour: "Banner over a skeleton, not a hard failure page — a slow document is not a broken one, and the skeleton keeps the final geometry."
 
+**Recorded 2026-09-13 (#144).** Four catalogue fields differ from the data array above, deliberately, because the array's values are the mock's invented data (CLAUDE.md non-negotiable 8): 400 `ref 4a19c2` → `ref 400·req` (no request was sent, so there is no request id to quote; the other pages' `ref <code>·<tag>` form is used instead); 403 `owner · Meenarapan D` → `owner · not shown` (the name is never disclosed to a non-participant, per the page's own behaviour note; the live page fills the owner in when the service provides one); 404 `checked 3 shards` → `nothing to open` (there are no shards to count); 504 `elapsed 31s` → a live counter from `elapsed 0s`. Titles, bodies, kickers, CTAs, colours and the row-ruler code are verbatim (`apps/web/src/routes/errors/catalogue.ts`).
+
 ### Rules (verbatim)
 - Never lose work: unsaved edits stay in the local replica through every error state.
 - Say what happened in the title, what it means in the body, one action in the button.

@@ -11,7 +11,7 @@ import type { Page } from '@playwright/test';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
-import { expect, test } from './fixtures/test.js';
+import { asPhone, expect, test } from './fixtures/test.js';
 
 const DOC_ID = '6f1b2c3d-0000-4000-8000-00000000e2e1';
 const SESSION: FakeSession = {
@@ -269,7 +269,7 @@ test('RESP-02 at 480 the sheet opens read-only: who has access and Copy link, no
   checkA11y,
 }) => {
   await installFakes(page);
-  await page.setViewportSize({ width: 480, height: 800 });
+  await asPhone(page, 480, 800);
   await signInTo(page, `/d/${DOC_ID}`);
   await page.getByRole('button', { name: 'Share' }).click();
   const dialog = page.getByRole('dialog', { name: 'Share Everest trek' });

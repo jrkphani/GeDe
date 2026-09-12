@@ -33,9 +33,23 @@
 
 .gd-signin__copy {
   position: relative;
+  isolation: isolate;
   grid-column: 1;
   grid-row: 2;
   max-width: 34rem;
+}
+/* The copy sits over the ring motif by design (ARCHITECTURE §2, option 1c). Where a white
+   node or spoke met a glyph the two merged (#144); a soft halo in the field's own colour
+   behind the copy keeps every glyph whole without drawing a box around it. */
+.gd-signin__copy::before {
+  content: '';
+  position: absolute;
+  inset: calc(-1 * var(--space-5)) calc(-1 * var(--space-6));
+  z-index: -1;
+  border-radius: var(--radius-lg);
+  background: var(--forest-700);
+  filter: blur(var(--space-4));
+  pointer-events: none;
 }
 .gd-signin__headline {
   margin: 0 0 var(--space-3);

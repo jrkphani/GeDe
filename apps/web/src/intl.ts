@@ -48,10 +48,12 @@ export function formatBytes(locale: Locale, bytes: number): string {
     value /= 1000;
     i += 1;
   }
+  // The short display of `byte` is the bare singular in every locale ("215 byte", #143);
+  // the long display inflects ("215 bytes", "1 byte"). The larger units keep their symbols.
   return new Intl.NumberFormat(locale, {
     style: 'unit',
     unit: units[i] ?? 'byte',
-    unitDisplay: 'short',
+    unitDisplay: i === 0 ? 'long' : 'short',
     maximumFractionDigits: i === 0 ? 0 : 1,
   }).format(value);
 }

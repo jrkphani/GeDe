@@ -342,6 +342,73 @@ describe('SignIn (option 1c)', () => {
     expect(screen.getByLabelText('Email')).toHaveValue('audit-nobody@example.invalid');
   });
 
+  it('AUTH-04 the code step in sign-in mode says what to do if no code arrives (the obfuscated simulated challenge, ADR 040)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
+      kind: 'code',
+      destination: 'n***@e***',
+    });
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'nobody@example.invalid{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
+    await screen.findByLabelText('Six-digit code');
+    expect(
+      screen.getByText(/If no code arrives, this email may not have an account yet/),
+    ).toBeInTheDocument();
+    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    expect(screen.getByLabelText('Email')).toHaveValue('nobody@example.invalid');
+    expect(screen.queryByText(/If no code arrives/)).not.toBeInTheDocument();
+  });
+
+  it('AUTH-02 A11Y-01 switching mode from the keyboard keeps focus on the segmented control; Change and Back still place the caret in the email field (#144)', async () => {
+    const u = userEvent.setup();
+    renderRoutes(routes, ['/sign-in']);
+    const email = await screen.findByLabelText('Email');
+    expect(email).toHaveFocus(); // arriving at the screen lands in the field
+    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    expect(screen.getByRole('radio', { name: 'Create account' })).toBeChecked();
+    expect(screen.getByRole('radio', { name: 'Create account' })).toHaveFocus();
+    expect(screen.getByLabelText('Email')).not.toHaveFocus();
+    await u.click(screen.getByRole('radio', { name: 'Sign in' }));
+    expect(screen.getByRole('radio', { name: 'Sign in' })).toHaveFocus();
+    await u.type(screen.getByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Change' }));
+    expect(screen.getByLabelText('Email')).toHaveFocus();
+  });
+
+  it('AUTH-06 an error replaces the resend notice, and a fresh notice replaces the error (#144)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
+    vi.mocked(cognito.confirmCode).mockRejectedValue(namedError('CodeMismatchException'));
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
+    await u.click(await screen.findByRole('button', { name: 'Resend code' }));
+    expect(await screen.findByText('A new code is on its way.')).toBeInTheDocument();
+    await u.type(screen.getByLabelText('Six-digit code'), '111111');
+    await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('That code does not match');
+    expect(screen.queryByText('A new code is on its way.')).not.toBeInTheDocument();
+    await u.click(screen.getByRole('button', { name: 'Resend code' }));
+    expect(await screen.findByText('A new code is on its way.')).toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+  });
+
+  it('AUTH-05 a pool exception GeDe does not name surfaces as plain copy, never the SDK text (#144)', async () => {
+    const u = userEvent.setup();
+    const raw = new Error(
+      'PreAuthentication failed with error This account signs in only through the pipeline..',
+    );
+    raw.name = 'UserLambdaValidationException';
+    vi.mocked(cognito.startCodeSignIn).mockRejectedValueOnce(raw);
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'e2e@gede.work{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This account cannot sign in from here. Contact support.');
+    expect(alert.textContent).not.toMatch(/PreAuthentication|failed with error|\.\./);
+  });
+
   it('AUTH-09 a tokenRefresh_failure Hub event while on a document returns to sign-in with the path retained', async () => {
     let hub: ((e: Cognito.AuthEvent) => void) | null = null;
     vi.mocked(cognito.onAuthEvent).mockImplementationOnce((handler) => {

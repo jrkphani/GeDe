@@ -37,7 +37,11 @@ export interface SessionUser {
   name: string | undefined;
 }
 
-/** Errors the UI distinguishes; everything else surfaces as `message`. */
+/**
+ * Errors the UI distinguishes. `other` carries plain copy for the screen, never
+ * the SDK's text (#144): the pool's messages ("PreAuthentication failed with
+ * error …", "Incorrect username or password.") are not written for people.
+ */
 export type AuthFailure =
   | { kind: 'cancelled' }
   | { kind: 'unknown-email' }
@@ -45,6 +49,31 @@ export type AuthFailure =
   | { kind: 'wrong-code' }
   | { kind: 'expired-code' }
   | { kind: 'other'; message: string };
+
+/** Plain copy for the pool's other exceptions, by SDK name (#144). */
+export function describeOtherFailure(name: string): string {
+  switch (name) {
+    case 'LimitExceededException':
+    case 'TooManyRequestsException':
+    case 'TooManyFailedAttemptsException':
+      return 'Too many attempts for now. Wait a few minutes and try again.';
+    case 'NetworkError':
+    case 'NetworkingError':
+      return 'The service could not be reached. Check the connection and try again.';
+    case 'NotAuthorizedException':
+      return 'That sign-in did not go through. Check the address and try again.';
+    case 'UserLambdaValidationException':
+      // The pool's pre-authentication trigger refused: only the pipeline's account is
+      // ever refused this way (infra auth-stack), so a person seeing it is in the wrong place.
+      return 'This account cannot sign in from here. Contact support.';
+    case 'CodeDeliveryFailureException':
+      return 'The code could not be sent to this address. Check it and try again.';
+    case 'InvalidParameterException':
+      return 'Something about that request was not accepted. Check the address and try again.';
+    default:
+      return 'Something went wrong. Try again, or contact support if it continues.';
+  }
+}
 
 /**
  * A pool answer that is a failure in GeDe's terms even though the SDK returned
@@ -99,7 +128,6 @@ export function describeUnsupportedStep(step: string): string {
     case 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION':
       return 'This account requires an authenticator app, which GeDe does not support. Contact support.';
     case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED':
-    case 'RESET_PASSWORD':
     case 'CONFIRM_SIGN_IN_WITH_PASSWORD':
       return 'This account is set to use a password. GeDe signs in with a passkey or a code by email; contact support.';
     case 'CONFIRM_SIGN_UP':
@@ -109,6 +137,22 @@ export function describeUnsupportedStep(step: string): string {
   }
 }
 
+/**
+ * AUTH-04 under `preventUserExistenceErrors` (ADR-040, #46): the pool never raises
+ * UserNotFoundException. An unknown address is answered with one of three shapes,
+ * two of which are decidable here:
+ *
+ * - `SELECT_CHALLENGE` listing the pool's generic factors (PASSWORD, PASSWORD_SRP,
+ *   WEB_AUTHN) and no EMAIL_OTP. A known account with a verified address always
+ *   lists EMAIL_OTP, so its absence is "no account".
+ * - `PasswordResetRequiredException`, which the SDK turns into a RESET_PASSWORD step.
+ *   No GeDe account has a password to reset — the SPA client has no password flow
+ *   (ADR-011) and recovery is admin-only — so this too can only mean "no account".
+ * - A simulated EMAIL_OTP challenge with a masked destination, identical to a real
+ *   one. Nothing in the response, and no side-effect-free API, tells them apart
+ *   (ResendConfirmationCode is obfuscated for confirmed users as well — measured,
+ *   ADR-040). The code step says so and points to Create account.
+ */
 function toStep(out: SignInOutput): SignInStep {
   const step = out.nextStep;
   switch (step.signInStep) {
@@ -117,14 +161,12 @@ function toStep(out: SignInOutput): SignInStep {
     case 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE':
       return { kind: 'code', destination: step.codeDeliveryDetails?.destination };
     case 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION':
-      // AUTH-04: the pool has `preventUserExistenceErrors` on, so an unknown email never
-      // raises UserNotFoundException. It answers SELECT_CHALLENGE with the pool's generic
-      // factors (PASSWORD, PASSWORD_SRP, WEB_AUTHN) and no EMAIL_OTP — a known account
-      // with a verified address always lists EMAIL_OTP. That absence is the "no account" signal.
       if (!(step.availableChallenges ?? []).includes('EMAIL_OTP')) {
         throw new AuthFailureError({ kind: 'unknown-email' });
       }
       return { kind: 'unsupported', reason: describeUnsupportedStep(step.signInStep) };
+    case 'RESET_PASSWORD':
+      throw new AuthFailureError({ kind: 'unknown-email' });
     default:
       return { kind: 'unsupported', reason: describeUnsupportedStep(step.signInStep) };
   }
@@ -133,13 +175,13 @@ function toStep(out: SignInOutput): SignInStep {
 export function classifyError(err: unknown): AuthFailure {
   if (err instanceof AuthFailureError) return err.failure;
   const name = err instanceof Error ? err.name : '';
-  const message = err instanceof Error ? err.message : 'Something went wrong';
   switch (name) {
     case 'PasskeyAuthenticationCanceled':
     case 'PasskeyRegistrationCanceled':
     case 'PasskeyOperationAborted':
       return { kind: 'cancelled' };
     case 'UserNotFoundException':
+    case 'PasswordResetRequiredException': // the obfuscated "no account" (see toStep)
       return { kind: 'unknown-email' };
     case 'UsernameExistsException':
       return { kind: 'exists' };
@@ -148,7 +190,7 @@ export function classifyError(err: unknown): AuthFailure {
     case 'ExpiredCodeException':
       return { kind: 'expired-code' };
     default:
-      return { kind: 'other', message };
+      return { kind: 'other', message: describeOtherFailure(name) };
   }
 }
 

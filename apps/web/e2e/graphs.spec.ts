@@ -16,7 +16,7 @@ import {
   type GedeDoc,
   type Id,
 } from '@gede/core';
-import { expect, test, zoomed200 } from './fixtures/test.js';
+import { asPhone, expect, test, zoomed200 } from './fixtures/test.js';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
@@ -349,7 +349,7 @@ test('RESP-02 GRAPH-01 at 480 the pair renders read-only: no drag, no corner, no
   await page.getByRole('button', { name: 'Add graph' }).click();
   await page.getByRole('button', { name: 'Bind the graph to Table 1' }).click();
   await expect(page.getByTestId('ring-graph')).toBeVisible();
-  await page.setViewportSize({ width: 480, height: 900 });
+  await asPhone(page, 480, 900);
   await expect(page.getByText('View only on phone')).toBeVisible();
   await expect(page.getByTestId('ring-graph')).toBeVisible();
   await expect(page.getByRole('button', { name: /^Move Ring graph/ })).toHaveCount(0);
@@ -395,8 +395,8 @@ test.describe('200 % zoom', () => {
     checkA11y,
     snapshot,
   }) => {
-    // 1440 at 200 % is a 720 px layout viewport: the phone contract holds (RESP-02), so the
-    // pair is made on the collaborator's replica and arrives over the socket, read-only here.
+    // 1440 at 200 % is a 720 px layout viewport with a mouse: the tablet chrome, editable
+    // (ADR-039). The pair is made on the collaborator's replica and arrives over the socket.
     const room = await installFakes(page);
     await signInTo(page, `/d/${DOC_ID}`);
     await expect(page.getByRole('tab', { name: /Sheet 1/ })).toBeVisible();
@@ -410,7 +410,8 @@ test.describe('200 % zoom', () => {
     await expect(
       page.getByTestId('ring-graph').getByRole('button', { name: /^Context α/ }),
     ).toBeVisible();
-    await expect(ring.getByRole('button', { name: /^Move Ring graph/ })).toHaveCount(0);
+    await expect(ring.getByRole('button', { name: /^Move Ring graph/ })).toBeVisible();
+    await expect(page.getByText('View only on phone')).toHaveCount(0);
     await checkA11y('graph zoom200 1440');
     await snapshot('graph-zoom200-1440');
   });

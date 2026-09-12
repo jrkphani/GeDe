@@ -9,7 +9,7 @@ import type { DocumentsView, DocumentSummary } from '../../api/documents.js';
 import type * as MeApi from '../../api/me.js';
 import { RECENCY_LABELS } from '../../intl.js';
 import { resetLocaleForTests } from '../../locale.js';
-import { installMatchMedia } from '../../test/match-media.js';
+import { installMatchMedia, phoneMedia } from '../../test/match-media.js';
 import { renderRoutes, withConfig } from '../../test/helpers.js';
 import { routes } from '../../routes.js';
 
@@ -574,6 +574,8 @@ describe('Library', () => {
     const row = (await screen.findByText('Old plan')).closest('tr')!;
     expect(within(row).getByText('Sep 5, 2026')).toBeInTheDocument();
     expect(screen.getByRole('columnheader', { name: 'Deleted' })).toBeInTheDocument();
+    // LIB-D5 (#143): the retention period is stated while rows are present, not only when empty.
+    expect(screen.getByText(/stays here for 30 days/)).toBeInTheDocument();
     await u.click(row);
     await u.click(screen.getByRole('button', { name: 'Recover' }));
     await waitFor(() => {
@@ -863,8 +865,8 @@ describe('Library', () => {
     second.unmount();
   });
 
-  it('RESP-02 below 768 px the library is read-only: no delete, archive, recover or purge affordance renders', async () => {
-    installMatchMedia((q) => q.includes('767.98') || q.includes('899.98') || q.includes('1023.98'));
+  it('RESP-02 on a phone (below 768 px, coarse pointer) the library is read-only: no delete, archive, recover or purge affordance renders', async () => {
+    installMatchMedia(phoneMedia);
     const u = userEvent.setup();
     serve({ ...live, deleted: [oldPlan], archived: [archivedTrek] });
     const { unmount } = renderRoutes(routes, ['/']);
@@ -885,6 +887,24 @@ describe('Library', () => {
     await screen.findByText('Old plan');
     for (const name of ['Recover', 'Recover All', 'Delete All', 'Recover Old plan']) {
       expect(screen.queryByRole('button', { name })).not.toBeInTheDocument();
+    }
+  });
+
+  it('A11Y-06 a fine-pointer window under 768 px (a desktop at 200 % zoom) keeps the library actions', async () => {
+    // Narrow, but the pointer is fine and hover works: not a phone (ADR-039).
+    installMatchMedia((q) => q.includes('767.98') || q.includes('899.98') || q.includes('1023.98'));
+    const u = userEvent.setup();
+    serve({ ...live, deleted: [oldPlan] });
+    const { unmount } = renderRoutes(routes, ['/']);
+    const row = (await screen.findByText('Everest trek')).closest('tr')!;
+    await u.click(row);
+    expect(screen.queryByText('View only on phone')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete' })).toBeInTheDocument();
+    unmount();
+    renderRoutes(routes, ['/?view=deleted']);
+    await screen.findByText('Old plan');
+    for (const name of ['Recover', 'Recover All', 'Delete All']) {
+      expect(screen.getByRole('button', { name })).toBeInTheDocument();
     }
   });
 

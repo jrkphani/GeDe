@@ -16,22 +16,33 @@
 }
 
 /* ---- title row (DOC-01) ------------------------------------------------- */
+/* One row from md up. The title is the only flexible item and truncates with an
+   ellipsis; the controls keep their size and wrap under it before anything clips, so the
+   page never scrolls sideways at any width or zoom (#124, A11Y-06). */
 .gd-doc__titlebar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: var(--space-3);
+  gap: var(--space-1) var(--space-3);
   min-height: calc(var(--lattice-row) * 2);
   padding: 0 var(--space-3);
   border-bottom: 1px solid var(--border);
 }
 .gd-doc__home {
   display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  /* DS §3: an icon's hit area is at least 32 px (44 px below lg, further down). */
+  min-width: 2rem;
+  min-height: 2rem;
+  border-radius: var(--radius-sm);
   color: var(--link);
 }
 .gd-doc__title-wrap {
   position: relative;
   display: flex;
-  flex: 1;
+  flex: 1 1 8rem;
   min-width: 0;
   align-items: center;
   gap: var(--space-2);
@@ -47,6 +58,7 @@
   font-size: 1rem;
   font-weight: 600;
   letter-spacing: -0.01em;
+  text-overflow: ellipsis;
 }
 .gd-doc__title:hover:not(:disabled) {
   border-color: var(--border);
@@ -55,7 +67,7 @@
   border-color: var(--focus-ring);
 }
 .gd-doc__title-static {
-  flex: 1;
+  flex: 1 1 8rem;
   min-width: 0;
   margin: 0;
   font-size: 1rem;
@@ -63,6 +75,43 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.gd-doc__title-controls {
+  display: flex;
+  flex: none;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-3);
+  min-width: 0;
+}
+/* Below md the bar is two lines (DS §5 sm: "two-line chrome bar; share and account
+   remain"): mark, title and the read-only note on the first, the controls on the second.
+   Nothing here depends on the phone predicate — a fine-pointer window this narrow (a
+   desktop at 200 % zoom, ADR-039) gets the same two lines with the title field editable. */
+@media (max-width: 767.98px) {
+  .gd-doc__titlebar {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-areas:
+      'home title note'
+      'controls controls controls';
+    row-gap: 0;
+    padding-bottom: var(--space-1);
+  }
+  .gd-doc__home {
+    grid-area: home;
+  }
+  .gd-doc__title-wrap,
+  .gd-doc__title-static {
+    grid-area: title;
+  }
+  .gd-doc__readonly {
+    grid-area: note;
+  }
+  .gd-doc__title-controls {
+    grid-area: controls;
+    min-height: 0;
+  }
 }
 .gd-doc__saving {
   display: inline-flex;
@@ -106,7 +155,7 @@
   border: 2px solid var(--surface);
   border-radius: var(--radius-pill);
   background: var(--gd-presence, var(--presence-1));
-  color: var(--slate-0);
+  color: var(--presence-ink);
   font-family: var(--font-mono);
   font-size: 0.5625rem;
   font-weight: 500;
@@ -228,13 +277,25 @@
   font-size: 0.625rem;
   opacity: 0.8;
 }
-/* RESP-05: below lg every target is at least the hit-target token (44 px). */
+/* DS §3: every chrome control is at least 32 px tall at desktop (the Share button and
+   Add sheet were 28 px, #135). */
+.gd-doc__shared .gd-btn,
+.gd-doc__add-sheet {
+  min-height: 2rem;
+}
+/* RESP-05: below lg every target is at least the hit-target token (44 px). The title row
+   is 44 px tall, so its mark, field and Share button fill it (#135). */
 @media (max-width: 1023.98px) {
   .gd-doc__toolbar .gd-btn,
   .gd-doc__zoom,
   .gd-doc__sheets .gd-tabs__tab,
-  .gd-doc__add-sheet {
+  .gd-doc__add-sheet,
+  .gd-doc__home {
     min-width: var(--hit-target);
+    min-height: var(--hit-target);
+  }
+  .gd-doc__title,
+  .gd-doc__shared .gd-btn {
     min-height: var(--hit-target);
   }
 }
@@ -486,7 +547,7 @@
   padding: 0 var(--space-1);
   border-bottom-left-radius: var(--radius-sm);
   background: var(--gd-presence, var(--presence-1));
-  color: var(--slate-0);
+  color: var(--presence-ink);
   font-family: var(--font-mono);
   /* Issue #65: the label step (9 px) is the floor of the type scale; nothing renders below it. */
   font-size: 0.5625rem;
@@ -734,6 +795,39 @@ button.gd-cell__chevron:hover {
   outline: 2px solid var(--focus-ring);
   outline-offset: -1px;
   border-radius: var(--radius-sm);
+}
+/* RESP-05: below lg the divider is a 44 px target (#135). The header stops clipping so
+   the box can leave it: 44 px tall, grown upward into the table's two-row title bar (never
+   down into the first data row); 44 px wide, from where the ▼'s box ends (sort.css) to
+   31 px past the boundary, over the next column's label — its visible 2 px line stays on
+   the boundary. The label keeps its own ellipsis clipping, so nothing else changes. */
+@media (max-width: 1023.98px) {
+  .gd-table__header {
+    overflow: visible;
+  }
+  .gd-table__divider {
+    --gd-divider-inset: 0.8125rem; /* 13 px: the 7 px grip plus the ▼'s 6 px clearance */
+    top: auto;
+    right: calc(var(--gd-divider-inset) - var(--hit-target));
+    width: var(--hit-target);
+    height: var(--hit-target);
+  }
+  /* The visible line stays one header row tall on the boundary; hover and focus paint it,
+     never the invisible box (which would draw a 44 px ring into the title bar and over the
+     next column's label). */
+  .gd-table__divider::after {
+    top: auto;
+    right: calc(var(--hit-target) - var(--gd-divider-inset));
+    height: var(--lattice-row);
+  }
+  .gd-table__divider:focus-visible {
+    outline: none;
+  }
+  .gd-table__divider:focus-visible::after {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
 }
 .gd-table__corner {
   position: absolute;
@@ -1013,7 +1107,7 @@ button.gd-cell__chevron:hover {
   min-width: 1.125rem;
   height: 1.125rem;
   border-radius: var(--radius-pill);
-  color: var(--slate-0);
+  color: var(--presence-ink); /* the badge sits on a reference colour, a presence hue */
   font-size: 0.625rem;
 }
 .gd-insp__operand-kind,
@@ -1073,8 +1167,12 @@ button.gd-cell__chevron:hover {
   line-height: 1.5;
 }
 
-/* md: the inspector opens as an overlay sheet (RESP-03); the strip stays on the edge. */
+/* md: the inspector opens as an overlay sheet (RESP-03); the strip stays on the edge, as
+   wide as its 44 px expand control (RESP-05). */
 @media (max-width: 1023.98px) {
+  .gd-doc {
+    --gd-inspector-strip: var(--hit-target);
+  }
   .gd-inspector {
     position: absolute;
     top: 0;

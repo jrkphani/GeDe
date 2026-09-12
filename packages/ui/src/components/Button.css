@@ -58,8 +58,10 @@
   min-width: 2.75rem;
   min-height: 2.75rem;
 }
+/* RESP-05. Two classes, so this outranks the per-size floors above (a one-class rule
+   lost to them and left sm icon buttons at 32 px below lg, #135). */
 @media (max-width: 1023.98px) {
-  .gd-btn--icon-only {
+  .gd-btn.gd-btn--icon-only {
     min-width: var(--hit-target);
     min-height: var(--hit-target);
   }

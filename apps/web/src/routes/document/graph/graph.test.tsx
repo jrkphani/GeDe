@@ -25,7 +25,7 @@ import type * as CoverageGraphModule from './CoverageGraph.js';
 import type * as RingGraphModule from './RingGraph.js';
 import { setDocumentSeamsForTests } from '../../../doc/use-document.js';
 import { FakeRoom, until } from '../../../test/fake-websocket.js';
-import { installMatchMedia } from '../../../test/match-media.js';
+import { installMatchMedia, phoneMedia } from '../../../test/match-media.js';
 import { renderRoutes, withConfig } from '../../../test/helpers.js';
 import { routes } from '../../../routes.js';
 
@@ -603,7 +603,7 @@ describe('context graphs', () => {
     });
     await until(() => room.doc.getMap('graphs').size === 2);
     first.unmount();
-    installMatchMedia((q) => q.includes('767.98') || q.includes('899.98'));
+    installMatchMedia(phoneMedia);
     await openShell();
     await waitFor(() => {
       expect(screen.getByTestId('ring-graph')).toBeInTheDocument();

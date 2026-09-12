@@ -10,7 +10,7 @@ import type * as Y from 'yjs';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { FakeRoom } from './fakes/room.js';
-import { computedTokenColor, expect, test } from './fixtures/test.js';
+import { asDesktop, asPhone, computedTokenColor, expect, test } from './fixtures/test.js';
 import { createSheet, createTable, openDocument } from '@gede/core';
 
 const DOC_ID = '6f1b2c3d-0000-4000-8000-00000000e2e0';
@@ -237,11 +237,12 @@ test.describe('document shell', () => {
     }) => {
       const room = await installFakes(page);
       // Author a table from the room side, as a desktop collaborator would.
-      await page.setViewportSize({ width, height: 800 });
+      const phone = width < 768;
+      // A phone is narrow AND coarse-pointered (ADR-039); a tablet keeps a fine pointer here.
+      await (phone ? asPhone(page, width, 800) : asDesktop(page, width, 800));
       await signInTo(page, `/d/${DOC_ID}`);
       await expect(page.getByRole('tab', { name: /Sheet 1/ })).toBeVisible();
       await expect.poll(() => room.doc.getArray('sheets').length).toBe(1);
-      const phone = width < 768;
       if (phone) {
         await expect(page.getByText('View only on phone')).toBeVisible();
         await expect(page.getByRole('toolbar')).toHaveCount(0);
@@ -269,15 +270,18 @@ test.describe('document shell', () => {
   }
 
   // 200 % browser zoom halves the CSS viewport at a 2× device scale: a 1440 px window
-  // becomes 720 CSS px (phone chrome, read-only), a 2560 px window 1280 CSS px (desktop).
+  // becomes 720 CSS px, a 2560 px window 1280 CSS px. Under 768 px the pointer decides
+  // (ADR-039): a mouse keeps the tablet chrome and editing; a touch screen is a phone.
   for (const zoomed of [
-    { width: 720, height: 450, chrome: 'phone' },
-    { width: 1280, height: 720, chrome: 'desktop' },
+    { width: 720, height: 450, chrome: 'tablet', hasTouch: false },
+    { width: 720, height: 450, chrome: 'phone', hasTouch: true },
+    { width: 1280, height: 720, chrome: 'desktop', hasTouch: false },
   ] as const) {
-    test.describe(`at 200 % browser zoom on a ${String(zoomed.width * 2)} px window`, () => {
+    test.describe(`at 200 % browser zoom on a ${String(zoomed.width * 2)} px ${zoomed.hasTouch ? 'touch screen' : 'window'}`, () => {
       test.use({
         viewport: { width: zoomed.width, height: zoomed.height },
         deviceScaleFactor: 2,
+        hasTouch: zoomed.hasTouch,
       });
 
       test(`A11Y-06 the ${zoomed.chrome} layout holds at 200 % zoom with no loss of content`, async ({
@@ -298,6 +302,7 @@ test.describe('document shell', () => {
         } else {
           await expect(page.getByLabel('Workscape title')).toBeVisible();
           await expect(page.getByRole('toolbar', { name: 'Document tools' })).toBeVisible();
+          await expect(page.getByText('View only on phone')).toHaveCount(0);
         }
         const overflow = await page.evaluate(
           () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
@@ -650,7 +655,7 @@ test.describe('grid editing', () => {
     const tableId = createTable(gd, { sheetId, at: { col: 0, row: 0 }, columns: 2, rows: 2 });
     const tableMap = room.doc.getMap('tables').get(tableId) as Y.Map<unknown>;
     (tableMap.get('columns') as Y.Array<Y.Map<unknown>>).get(1).set('source', 'derived');
-    await page.setViewportSize({ width: 480, height: 800 });
+    await asPhone(page, 480, 800);
     await signInTo(page, `/d/${DOC_ID}`);
     await expect(page.getByText('View only on phone')).toBeVisible();
     const grid = page.getByRole('grid').first();

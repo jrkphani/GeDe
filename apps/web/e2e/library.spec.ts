@@ -1,7 +1,7 @@
 import { type Page } from '@playwright/test';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
-import { expect, test } from './fixtures/test.js';
+import { asPhone, expect, test } from './fixtures/test.js';
 
 /**
  * Library chrome against the built bundle. Cognito and the documents REST API
@@ -365,7 +365,7 @@ test('RESP-02 at 480 the library is read-only: no delete, archive, recover or pu
   checkA11y,
 }) => {
   await installLibDFakes(page);
-  await page.setViewportSize({ width: 480, height: 900 });
+  await asPhone(page, 480, 900);
   await signIn(page);
   await page.getByText('Shared trek').click();
   await expect(page.getByRole('button', { name: /^(Delete|Archive)$/ })).toHaveCount(0);

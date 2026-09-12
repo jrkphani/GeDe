@@ -1,4 +1,4 @@
-import * as ToggleGroup from '@radix-ui/react-toggle-group';
+import * as RadioGroup from '@radix-ui/react-radio-group';
 import clsx from 'clsx';
 import type { ReactNode } from 'react';
 
@@ -19,8 +19,11 @@ export interface SegmentedControlProps<V extends string> {
 }
 
 /**
- * Switch a view. Exactly one segment is always on: Radix ToggleGroup `single`
- * with an empty selection rejected, so the control never reads as "nothing".
+ * Switch a view. Exactly one segment is always on, so the control is a radio
+ * group and follows the ARIA radio pattern: Tab lands on the checked segment,
+ * the arrow keys move the selection (not just focus), Space checks. Radix
+ * RadioGroup supplies that; a ToggleGroup announces its items as radios but
+ * moves only focus on arrows (#144).
  */
 export function SegmentedControl<V extends string>({
   label,
@@ -31,26 +34,25 @@ export function SegmentedControl<V extends string>({
   disabled,
 }: SegmentedControlProps<V>) {
   return (
-    <ToggleGroup.Root
-      type="single"
+    <RadioGroup.Root
       className={clsx('gd-segmented', className)}
       aria-label={label}
       value={value}
       disabled={disabled === true}
       onValueChange={(next) => {
-        if (next !== '') onChange(next as V);
+        onChange(next as V);
       }}
     >
       {options.map((o) => (
-        <ToggleGroup.Item
+        <RadioGroup.Item
           key={o.value}
           value={o.value}
           className="gd-segmented__item"
           disabled={o.disabled}
         >
           {o.label}
-        </ToggleGroup.Item>
+        </RadioGroup.Item>
       ))}
-    </ToggleGroup.Root>
+    </RadioGroup.Root>
   );
 }

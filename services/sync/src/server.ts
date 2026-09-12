@@ -58,6 +58,17 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
 
   registerErrorHandling(app);
 
+  // The static web behaviour gets its security headers from CloudFront
+  // (infra web-stack.ts); `/api/*` is proxied to this process and carried none
+  // (#144). The same three on every response, error responses included: no
+  // sniffing of a JSON body into a script, a year of HSTS to match the edge,
+  // and no referrer leaking a document path to a third party.
+  app.addHook('onSend', async (_request, reply) => {
+    reply.header('x-content-type-options', 'nosniff');
+    reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains; preload');
+    reply.header('referrer-policy', 'strict-origin-when-cross-origin');
+  });
+
   await app.register(cors, {
     origin: deps.config.WEB_ORIGIN,
     methods: ['GET', 'POST', 'PATCH', 'DELETE'],

@@ -36,6 +36,7 @@ import {
 import { useSession } from '../../auth/session.js';
 import { collator } from '../../intl.js';
 import { useLocale } from '../../locale.js';
+import { usePhone } from '../../breakpoint.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { useTourAutoStart } from '../tour/TourController.js';
 import { AccountMenu } from './AccountMenu.js';
@@ -197,9 +198,10 @@ export function Library() {
   // ONB-02: the first arrival at the library after sign-in starts the tour.
   useTourAutoStart();
   const narrow = useMediaQuery('(max-width: 899.98px)');
-  // RESP-02 / non-negotiable 5: below 768 px the product is read-only — no
-  // delete, archive, recover or purge affordance renders in the library either.
-  const phone = useMediaQuery('(max-width: 767.98px)');
+  // RESP-02 / non-negotiable 5: on a phone the product is read-only — no delete,
+  // archive, recover or purge affordance renders in the library either (ADR-031;
+  // the predicate and its fine-pointer exception are ADR-039).
+  const phone = usePhone();
   const canManage = !phone;
   const [navOpen, setNavOpen] = useState(false);
 
@@ -808,6 +810,13 @@ export function Library() {
               {selected !== null && !narrow
                 ? `1 of ${shown} selected`
                 : `${shown} ${shown === 1 ? 'item' : 'items'}`}
+            </p>
+          )}
+          {load.status === 'ready' && view === 'deleted' && total > 0 && (
+            // LIB-08: the 30-day retention is stated where the rows are, not only in the
+            // empty state or a button's tooltip (#143).
+            <p className="gd-lib__retention">
+              Anything deleted stays here for 30 days, then is removed for good.
             </p>
           )}
         </div>

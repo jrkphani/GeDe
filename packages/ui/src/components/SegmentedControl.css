@@ -28,7 +28,7 @@
 .gd-segmented__item:hover:not(:disabled) {
   color: var(--ink);
 }
-.gd-segmented__item[data-state='on'] {
+.gd-segmented__item[data-state='checked'] {
   background: var(--surface);
   color: var(--ink);
   font-weight: 600;

@@ -6,7 +6,15 @@
  * the network edge: Cognito (`fakes/cognito`), the documents REST API
  * (routes below) and the y-websocket room (`fakes/room`).
  */
-import { BREAKPOINTS, expect, test, zoomed200, type Breakpoint } from './fixtures/test.js';
+import {
+  asDesktop,
+  asPhone,
+  BREAKPOINTS,
+  expect,
+  test,
+  zoomed200,
+  type Breakpoint,
+} from './fixtures/test.js';
 import type { Page } from '@playwright/test';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
@@ -111,7 +119,8 @@ async function signInTo(page: Page, path: string): Promise<void> {
 
 async function openDoc(page: Page, width: Breakpoint, height = 900): Promise<FakeRoom> {
   const room = await installFakes(page);
-  await page.setViewportSize({ width, height });
+  // 480 is a phone: narrow and coarse-pointered (ADR-039); the wider widths keep a fine pointer.
+  await (width < 768 ? asPhone(page, width, height) : asDesktop(page, width, height));
   await signInTo(page, `/d/${DOC_ID}`);
   await expect(page.getByRole('tab', { name: /Trek/ })).toBeVisible();
   await expect(page.getByRole('grid').first()).toBeVisible();
@@ -569,7 +578,7 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
     await rail.getByRole('radio', { name: 'Slate' }).click();
     await rail.getByRole('switch', { name: 'Alternating row colour' }).click();
     for (const width of [768, 480] as const) {
-      await page.setViewportSize({ width, height: 900 });
+      await (width < 768 ? asPhone(page, width, 900) : asDesktop(page, width, 900));
       await expect(page.locator('.gd-table').first()).toHaveAttribute('data-style', 'slate');
       await expect(page.locator('.gd-table').first()).toHaveCSS('width', '480px');
       await snapshot(`appearance-${String(width)}`);
@@ -815,12 +824,13 @@ test.describe('keyboard map', () => {
 });
 
 test.describe('200 % zoom', () => {
-  // At 200 % every breakpoint's layout viewport is under 768 CSS px: the phone contract
-  // holds (no rail, no menus), and the chrome must still fit without horizontal overflow.
+  // At 200 % every breakpoint's layout viewport is under 768 CSS px, but the pointer is
+  // still a mouse: not a phone (ADR-039, #137). The tablet chrome holds — editing, the
+  // rail as a strip/overlay — and it must still fit without horizontal overflow.
   for (const width of BREAKPOINTS) {
     test.describe(`${String(width)} px`, () => {
       test.use(zoomed200(width));
-      test(`A11Y-06 RESP-02 the document renders at 200 % zoom at ${String(width)} px without horizontal overflow`, async ({
+      test(`A11Y-06 RESP-03 the document stays editable at 200 % zoom at ${String(width)} px without horizontal overflow`, async ({
         page,
         checkA11y,
       }) => {
@@ -834,9 +844,31 @@ test.describe('200 % zoom', () => {
           );
           expect(overflow).toBe(false);
         }
-        await expect(inspector(page)).toHaveCount(0);
+        await expect(page.getByText('View only on phone')).toHaveCount(0);
+        await expect(page.getByRole('toolbar', { name: 'Document tools' })).toBeVisible();
+        await expect(page.getByRole('button', { name: /inspector/ }).first()).toBeVisible();
         await checkA11y(`wave2 zoom200 ${String(width)}`);
       });
     });
   }
+
+  test.describe('1440 px on a touch screen', () => {
+    test.use({ ...zoomed200(1440), hasTouch: true });
+    test('RESP-02 A11Y-06 a coarse-pointer 720 px viewport is a phone: read-only, no rail, no overflow', async ({
+      page,
+      checkA11y,
+    }) => {
+      await installFakes(page);
+      await signInTo(page, `/d/${DOC_ID}`);
+      await expect(page.getByRole('tab', { name: /Trek/ })).toBeVisible();
+      await expect(page.getByText('View only on phone')).toBeVisible();
+      await expect(inspector(page)).toHaveCount(0);
+      await expect(page.getByRole('toolbar')).toHaveCount(0);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth > document.documentElement.clientWidth,
+      );
+      expect(overflow).toBe(false);
+      await checkA11y('wave2 zoom200 1440 touch');
+    });
+  });
 });

@@ -204,19 +204,28 @@ export function TitleBar({
           )}
         </span>
       ) : (
-        <h1 className="gd-doc__title-static">{title === '' ? serverTitle : title}</h1>
+        // The static title truncates with an ellipsis (#124); the full name is one hover away
+        // for a viewer or a read-only sync at any width (the accessible name is never cut).
+        <h1 className="gd-doc__title-static" title={title === '' ? serverTitle : title}>
+          {title === '' ? serverTitle : title}
+        </h1>
       )}
-      <span className="gd-doc__shared" data-slot="shared">
-        {shareSlot ?? <SharedIndicator sharedFlag={sharedFlag} participants={participants} />}
-      </span>
-      <span
-        className={`gd-doc__sync gd-doc__sync--${sync.status}`}
-        data-status={sync.status}
-        data-testid="sync-status"
-      >
-        <span className="gd-doc__sync-dot" aria-hidden="true" />
-        {STATUS_LABEL[sync.status]}
-      </span>
+      {/* Secondary controls: one row with the title from md up; below md the bar is two
+          lines (DS §5 "two-line chrome bar") and these take the second, so the title, the
+          mark and the read-only note always fit the first (#124). */}
+      <div className="gd-doc__title-controls">
+        <span className="gd-doc__shared" data-slot="shared">
+          {shareSlot ?? <SharedIndicator sharedFlag={sharedFlag} participants={participants} />}
+        </span>
+        <span
+          className={`gd-doc__sync gd-doc__sync--${sync.status}`}
+          data-status={sync.status}
+          data-testid="sync-status"
+        >
+          <span className="gd-doc__sync-dot" aria-hidden="true" />
+          {STATUS_LABEL[sync.status]}
+        </span>
+      </div>
       {phone && (
         <span className="gd-doc__readonly" role="status">
           <Icon name="locked" size={13} /> View only on phone

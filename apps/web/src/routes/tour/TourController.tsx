@@ -12,13 +12,12 @@
  *   - ONB-14: completion shows the confirmation naming the `?` in the library.
  */
 import { Toast } from '@gede/ui';
-import { below } from '@gede/tokens';
 import { useCallback, useEffect, useSyncExternalStore } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
 import { useSession } from '../../auth/session.js';
 import { useMessages } from '../../i18n/index.js';
-import { useMediaQuery } from '../../use-media-query.js';
+import { usePhone } from '../../breakpoint.js';
 import { tourFlag } from './flag-queue.js';
 import {
   autoStartTour,
@@ -41,9 +40,9 @@ export function useTourState() {
   return useSyncExternalStore(subscribeTour, tourState, tourState);
 }
 
-/** ONB-13: the tour needs an editable document, so it never runs on a phone. */
+/** ONB-13: the tour needs an editable document, so it never runs on a phone (ADR-035, ADR-039). */
 export function useTourAllowed(): boolean {
-  return !useMediaQuery(below('md'));
+  return !usePhone();
 }
 
 /**

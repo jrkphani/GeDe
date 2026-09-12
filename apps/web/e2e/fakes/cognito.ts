@@ -9,6 +9,20 @@ import { fakeTokens, type FakeSession } from './jwt.js';
 
 export const FAKE_CODE = '123456';
 
+/**
+ * Unknown addresses, by the three shapes the pool was measured to answer under
+ * `preventUserExistenceErrors` (final audit 2026-09-13, #46, ADR-040). The fake picks
+ * the shape by the address's local part; any other unknown address gets SELECT_CHALLENGE.
+ */
+export const UNKNOWN = {
+  /** 200 SELECT_CHALLENGE with the pool's generic factors and no EMAIL_OTP. */
+  selectChallenge: 'audit-nobody@example.invalid',
+  /** 400 PasswordResetRequiredException (the SDK turns it into a RESET_PASSWORD step). */
+  passwordReset: 'nobody-reset@example.invalid',
+  /** 200 with a simulated EMAIL_OTP challenge and a masked destination — identical to a real one. */
+  simulatedCode: 'nobody-simulated@example.invalid',
+} as const;
+
 export async function installFakeCognito(page: Page, session: FakeSession): Promise<void> {
   await page.route(`https://cognito-idp.${session.region}.amazonaws.com/**`, (route) => {
     const request = route.request();
@@ -24,9 +38,25 @@ export async function installFakeCognito(page: Page, session: FakeSession): Prom
     switch (operation) {
       case 'InitiateAuth': {
         const username = (body?.AuthParameters as Record<string, string> | undefined)?.USERNAME;
-        // The pool has `preventUserExistenceErrors` on: an unknown email is never an error.
-        // It answers SELECT_CHALLENGE with the pool's generic factors and no EMAIL_OTP —
-        // exactly what production returned in the Wave 1 audit (#46).
+        // The pool has `preventUserExistenceErrors` on: an unknown email is never a
+        // UserNotFoundException. Production answers with one of three shapes (see UNKNOWN).
+        if (username === UNKNOWN.passwordReset) {
+          return json(
+            { __type: 'PasswordResetRequiredException', message: 'Password reset required' },
+            400,
+          );
+        }
+        if (username === UNKNOWN.simulatedCode) {
+          return json({
+            ChallengeName: 'EMAIL_OTP',
+            Session: 'fake-session',
+            AvailableChallenges: ['PASSWORD_SRP', 'PASSWORD', 'EMAIL_OTP'],
+            ChallengeParameters: {
+              CODE_DELIVERY_DELIVERY_MEDIUM: 'EMAIL',
+              CODE_DELIVERY_DESTINATION: 'n***@e***',
+            },
+          });
+        }
         if (username !== session.email) {
           return json({
             ChallengeName: 'SELECT_CHALLENGE',

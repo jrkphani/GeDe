@@ -1,6 +1,11 @@
 /**
  * Error page catalogue — copy verbatim from ARCHITECTURE-DIGEST §3.
  * 4xx is amber, 5xx is red; the card's top rule carries that colour.
+ *
+ * Four `meta` / `ref` fields differ from the digest's data array on purpose and
+ * are recorded there (2026-09-13, #144): the array carries the mock's invented
+ * data (a request id for a request never sent, an owner's name a non-participant
+ * must not see, a shard count, a fixed elapsed time) and GeDe shows none of it.
  */
 export const ERROR_STATUSES = [400, 401, 403, 404, 429, 500, 503, 504] as const;
 export type ErrorStatus = (typeof ERROR_STATUSES)[number];

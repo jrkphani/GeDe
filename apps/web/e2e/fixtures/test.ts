@@ -171,6 +171,37 @@ export function zoomed200(width: Breakpoint, height = 900) {
   };
 }
 
+/**
+ * A phone (RESP-02, ADR-039) is a narrow viewport AND a coarse pointer. Touch
+ * emulation is what flips Chromium's `(pointer: coarse)` and `(hover: none)`;
+ * width alone leaves a fine pointer — a desktop at 200 % zoom, which stays
+ * editable. Use as `test.use(phoneContext(480))`, or `asPhone(page)` to switch
+ * an open page (CDP, so it works mid-test; the single project is Chromium).
+ */
+export function phoneContext(width: Breakpoint | 720 = 480, height = 900) {
+  return { viewport: { width, height }, hasTouch: true };
+}
+
+async function setTouchEmulation(page: Page, enabled: boolean): Promise<void> {
+  const cdp = await page.context().newCDPSession(page);
+  await cdp.send('Emulation.setTouchEmulationEnabled', { enabled, maxTouchPoints: 5 });
+  await expect
+    .poll(() => page.evaluate(() => window.matchMedia('(pointer: coarse)').matches))
+    .toBe(enabled);
+}
+
+/** Resize to a phone and make the pointer coarse. */
+export async function asPhone(page: Page, width = 480, height = 900): Promise<void> {
+  await page.setViewportSize({ width, height });
+  await setTouchEmulation(page, true);
+}
+
+/** Resize with a fine pointer (a desktop window, at any width). */
+export async function asDesktop(page: Page, width: number, height = 900): Promise<void> {
+  await page.setViewportSize({ width, height });
+  await setTouchEmulation(page, false);
+}
+
 /** Resolve a `--token` colour to its computed rgb() form, exactly as the browser paints it. */
 export async function computedTokenColor(page: Page, token: string): Promise<string> {
   return page.evaluate((t) => {
