@@ -7,15 +7,19 @@
  * (packages/db/CLAUDE.md). Per cell: `text_plain` is the text the editor
  * shows (formula source or flattened rich text — the GIN index searches it,
  * FIND-03), `rich` is the ProseMirror JSON of the cell's `Y.XmlFragment`,
- * `formula` is the source of a formula cell. Graphs are not projected yet:
- * the CRDT slot holds only geometry, while `graphs` needs `pair_id`, `kind`
- * and `table_id` (Wave 2 graphs work).
+ * `formula` is the source of a formula cell. Graphs (GRAPH-01..11) project one
+ * row per half of a pair — pair id, kind, source table, dimension columns,
+ * geometry and the slice — only while bound to a table that is itself
+ * projected (`graphs.table_id` is NOT NULL and a foreign key); an unbound
+ * pair, or one whose table is gone, has nothing to search or audit and is
+ * skipped until it binds again.
  */
 import * as Y from 'yjs';
 
 import {
   cellsMap,
   fragmentText,
+  graphsOnSheet,
   isFormula,
   listSheets,
   openDocument,
@@ -23,6 +27,8 @@ import {
   splitCellKey,
   tablesOnSheet,
   workbookIndexOf,
+  type GraphKind,
+  type GraphSlice,
   type TableMap,
 } from '@gede/core';
 
@@ -75,6 +81,22 @@ export interface ProjectedCell {
   readonly formula: string | null;
 }
 
+/** One half of a graph pair (`graphs` table); `slice` is the stored JSON as-is. */
+export interface ProjectedGraph {
+  readonly id: string;
+  readonly sheetId: string;
+  readonly pairId: string;
+  readonly kind: GraphKind;
+  readonly tableId: string;
+  /** Dimension column ids that are still columns of the table, in checklist order. */
+  readonly dimensionColumns: readonly string[];
+  readonly gridCol: number;
+  readonly gridRow: number;
+  readonly widthUnits: number;
+  readonly heightUnits: number;
+  readonly slice: GraphSlice;
+}
+
 export interface Projection {
   readonly documentId: string;
   readonly sheets: readonly ProjectedSheet[];
@@ -82,6 +104,7 @@ export interface Projection {
   readonly columns: readonly ProjectedColumn[];
   readonly rows: readonly ProjectedRow[];
   readonly cells: readonly ProjectedCell[];
+  readonly graphs: readonly ProjectedGraph[];
 }
 
 function attrsOf(value: unknown): Record<string, unknown> | undefined {
@@ -186,8 +209,12 @@ export function projectDocument(doc: Y.Doc, documentId: string): Projection {
   const columns: ProjectedColumn[] = [];
   const rows: ProjectedRow[] = [];
   const cells: ProjectedCell[] = [];
+  const graphs: ProjectedGraph[] = [];
   const seenSheets = new Set<string>();
   const seenTables = new Set<string>();
+  const seenGraphs = new Set<string>();
+  /** Column ids per projected table, so a graph's dimensions never name a column that is gone. */
+  const columnsOf = new Map<string, Set<string>>();
 
   for (const sheet of listSheets(gd)) {
     if (sheet.id === '' || seenSheets.has(sheet.id)) continue;
@@ -212,6 +239,7 @@ export function projectDocument(doc: Y.Doc, documentId: string): Projection {
         gridRow: table.gridRow,
       });
       const columnIds = new Set<string>();
+      columnsOf.set(table.id, columnIds);
       table.columns.forEach((column, index) => {
         if (column.id === '' || columnIds.has(column.id)) return;
         columnIds.add(column.id);
@@ -239,5 +267,29 @@ export function projectDocument(doc: Y.Doc, documentId: string): Projection {
       cells.push(...projectCells(map, rowIds, columnIds, project));
     }
   }
-  return { documentId, sheets, tables, columns, rows, cells };
+  // Graphs after every table: `table_id` must reference a projected table.
+  for (const sheet of listSheets(gd)) {
+    if (sheet.id === '') continue;
+    for (const graph of graphsOnSheet(gd, sheet.id)) {
+      if (graph.id === '' || seenGraphs.has(graph.id)) continue;
+      if (graph.tableId === null) continue;
+      const tableColumns = columnsOf.get(graph.tableId);
+      if (tableColumns === undefined) continue;
+      seenGraphs.add(graph.id);
+      graphs.push({
+        id: graph.id,
+        sheetId: sheet.id,
+        pairId: graph.pairId,
+        kind: graph.kind,
+        tableId: graph.tableId,
+        dimensionColumns: graph.dimensions.filter((id) => tableColumns.has(id)),
+        gridCol: graph.gridCol,
+        gridRow: graph.gridRow,
+        widthUnits: graph.widthUnits,
+        heightUnits: graph.heightUnits,
+        slice: graph.slice,
+      });
+    }
+  }
+  return { documentId, sheets, tables, columns, rows, cells, graphs };
 }

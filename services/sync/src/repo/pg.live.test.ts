@@ -21,6 +21,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 
 import {
+  createGraphPair,
   createTable,
   encodeSeededDocument,
   listSheets,
@@ -387,12 +388,37 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     setCellText(gd, tableId, r1, c2, '=Sum(B2:B3)');
     setCellText(gd, tableId, r2, c1, 'Crampons for the icefall');
 
+    // GRAPH-01: a bound pair projects into `graphs`, one row per half.
+    const pair = createGraphPair(gd, { sheetId, tableId });
+
     await repo.projection.replace(projectDocument(y, doc.id));
     const stored = await pool.query(
       `select c.text_plain, c.formula, c.rich from cells c join rows r on r.id = c.row_id join tables t on t.id = r.table_id join sheets s on s.id = t.sheet_id where s.document_id = $1 order by r.ordinal, c.column_id`,
       [doc.id],
     );
     expect(stored.rows).toHaveLength(3);
+    const storedGraphs = await pool.query(
+      `select id, pair_id, kind, table_id, dimension_columns, slice from graphs where sheet_id = $1 order by id`,
+      [sheetId],
+    );
+    expect(storedGraphs.rows).toEqual([
+      {
+        id: pair.ringId,
+        pair_id: pair.pairId,
+        kind: 'ring',
+        table_id: tableId,
+        dimension_columns: [c1, c2],
+        slice: { rowAxis: null, colAxis: null, pins: {} },
+      },
+      {
+        id: pair.coverageId,
+        pair_id: pair.pairId,
+        kind: 'coverage',
+        table_id: tableId,
+        dimension_columns: [c1, c2],
+        slice: { rowAxis: null, colAxis: null, pins: {} },
+      },
+    ]);
     expect(stored.rows.find((r: { formula: string | null }) => r.formula !== null)).toMatchObject({
       text_plain: '=Sum(B2:B3)',
       rich: null,

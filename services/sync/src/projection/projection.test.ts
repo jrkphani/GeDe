@@ -6,7 +6,9 @@ import {
   addRow,
   cellKey,
   cellsMap,
+  columnsArray,
   commitCellText,
+  createGraphPair,
   createSheet,
   createTable,
   encodeSeededDocument,
@@ -14,6 +16,8 @@ import {
   openDocument,
   seedNewDocument,
   setCellText,
+  setGraphPosition,
+  setGraphSlice,
   setRowDepth,
   tableById,
   tableMap,
@@ -166,7 +170,54 @@ describe('projectDocument', () => {
       columns: [],
       rows: [],
       cells: [],
+      graphs: [],
     });
+  });
+
+  test('GRAPH-01 GRAPH-02 GRAPH-03 graphs project one row per half with pair, kind, table, dimensions, geometry and slice; an unbound pair or one whose table is gone is skipped', () => {
+    const { gd, sheetId, tableId, cols } = sample();
+    const pair = createGraphPair(gd, { sheetId, tableId });
+    setGraphSlice(gd, pair.pairId, {
+      rowAxis: cols[1] ?? null,
+      colAxis: null,
+      pins: { [cols[0] ?? '']: 'Down jacket' },
+    });
+    setGraphPosition(gd, pair.coverageId, { col: 12, row: 9 });
+    const unbound = createGraphPair(gd, { sheetId, tableId: null });
+    const projection = projectDocument(gd.doc, DOC_ID);
+    expect(projection.graphs.map((g) => g.id)).toEqual([pair.ringId, pair.coverageId]);
+    expect(projection.graphs.some((g) => g.id === unbound.ringId)).toBe(false);
+    const [ring, coverage] = projection.graphs;
+    expect(ring).toEqual({
+      id: pair.ringId,
+      sheetId,
+      pairId: pair.pairId,
+      kind: 'ring',
+      tableId,
+      dimensionColumns: cols,
+      gridCol: ring?.gridCol,
+      gridRow: ring?.gridRow,
+      widthUnits: 6,
+      heightUnits: 28,
+      slice: { rowAxis: cols[1], colAxis: null, pins: { [cols[0] ?? '']: 'Down jacket' } },
+    });
+    expect(coverage).toMatchObject({
+      kind: 'coverage',
+      pairId: pair.pairId,
+      gridCol: 12,
+      gridRow: 9,
+    });
+    // A dimension whose column is gone is dropped; a pair whose table is gone is skipped.
+    const map = tableMap(gd, tableId);
+    if (!map) throw new Error('table');
+    gd.doc.transact(() => {
+      columnsArray(map).delete(0, 1);
+    });
+    expect(projectDocument(gd.doc, DOC_ID).graphs[0]?.dimensionColumns).toEqual(cols.slice(1));
+    gd.doc.transact(() => {
+      gd.tables.delete(tableId);
+    });
+    expect(projectDocument(gd.doc, DOC_ID).graphs).toEqual([]);
   });
 
   test('FIND-03 a second sheet and nested elements project in order; mark attrs become mark attrs', () => {
