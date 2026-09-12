@@ -1,12 +1,13 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import * as path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import * as cdk from 'aws-cdk-lib';
 import { Match, Template } from 'aws-cdk-lib/assertions';
 import { beforeAll, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../lib/app.js';
+import { PROD } from '../lib/config.js';
 import { type GedeStage } from '../lib/gede-stage.js';
 import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
 import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
@@ -16,10 +17,50 @@ import {
   ORIGIN_VERIFY_GENERATIONS,
   ORIGIN_VERIFY_HEADER,
   ORIGIN_VERIFY_PRESENTED,
+  webRuntimeConfig,
 } from '../lib/stacks/web-stack.js';
 
 const TEST_ZONE_ID = 'Z0000000000000000TEST';
 const INFRA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const REPO_ROOT = path.resolve(INFRA_ROOT, '..');
+
+/**
+ * The SPA's own `parseConfig` (apps/web/src/config.ts), the one authority on what
+ * `/config.json` may contain (#61). Loaded at run time through a computed specifier:
+ * a literal import would pull the web app into infra's TypeScript program (`rootDir`),
+ * while vitest resolves and transforms the file like any other.
+ */
+async function webParseConfig(): Promise<(raw: unknown) => unknown> {
+  const specifier = pathToFileURL(path.join(REPO_ROOT, 'apps/web/src/config.ts')).href;
+  const mod = (await import(specifier)) as { parseConfig: (raw: unknown) => unknown };
+  return mod.parseConfig;
+}
+
+/**
+ * The `config.json` the Web stack deploys, as staged in the assembly. `Source.jsonData`
+ * writes CloudFormation tokens as `<<marker:0xbaba:N>>` (unquoted; the deployment Lambda
+ * substitutes the resolved value, JSON-encoded), so each marker stands in for a string here.
+ */
+function renderedWebConfig(assembly: cdk.cx_api.CloudAssembly): unknown {
+  const roots = [
+    assembly.directory,
+    ...assembly.nestedAssemblies.map((n) => n.nestedAssembly.directory),
+  ];
+  for (const root of roots) {
+    for (const entry of readdirSync(root)) {
+      if (!entry.startsWith('asset.')) continue;
+      const file = path.join(root, entry, 'config.json');
+      let text: string;
+      try {
+        text = readFileSync(file, 'utf8');
+      } catch {
+        continue;
+      }
+      return JSON.parse(text.replace(/<<marker:0xbaba:(\d+)>>/g, '"marker-$1"')) as unknown;
+    }
+  }
+  throw new Error('no config.json asset in the assembly');
+}
 
 /** Feature flags and defaults exactly as the CLI reads them, so tests synthesize what the pipeline does. */
 function cdkJsonContext(): Record<string, unknown> {
@@ -50,6 +91,7 @@ interface DockerImageSource {
 
 describe('GeDe CDK app', () => {
   let pipelineTemplate: Template;
+  let assembly: cdk.cx_api.CloudAssembly;
   const stacks: Record<string, Template> = {};
   let stackNames: string[] = [];
   let serviceImages: DockerImageSource[] = [];
@@ -60,7 +102,7 @@ describe('GeDe CDK app', () => {
     });
     const pipelineStack = buildApp(app);
     const stage = pipelineStack.node.findChild('Prod') as GedeStage;
-    const assembly = app.synth();
+    assembly = app.synth();
     const nested = assembly.getNestedAssembly(stage.artifactId);
     const manifest = nested.artifacts.find(
       (a): a is cdk.cx_api.AssetManifestArtifact =>
@@ -562,6 +604,29 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it("AUTH-08 the deployed config.json parses with the SPA's own parseConfig and says appleSignIn: false while the flag is off (#61)", async () => {
+    const raw = renderedWebConfig(assembly);
+    expect(raw).toMatchObject({
+      region: 'ap-southeast-1',
+      apiUrl: 'https://gede.work/api',
+      wsUrl: 'wss://ws.gede.work/ws',
+      appleSignIn: false,
+    });
+    const parseConfig = await webParseConfig();
+    expect(parseConfig(raw)).toMatchObject({ appleSignIn: false, statusUrl: null });
+    // The pure renderer agrees with the staged file, so a unit assertion on it is meaningful.
+    expect(
+      webRuntimeConfig(PROD, { userPoolId: 'p', userPoolClientId: 'c', appleSignIn: false }),
+    ).toEqual({
+      region: 'ap-southeast-1',
+      userPoolId: 'p',
+      userPoolClientId: 'c',
+      apiUrl: 'https://gede.work/api',
+      wsUrl: 'wss://ws.gede.work/ws',
+      appleSignIn: false,
+    });
+  });
+
   it('WAF blocks floods per IP before three AWS managed rule groups inspect the request (#42)', () => {
     stacks.Edge!.hasResourceProperties('AWS::WAFv2::WebACL', {
       Scope: 'CLOUDFRONT',
@@ -820,6 +885,58 @@ describe('GeDe CDK app', () => {
         { Key: 'ManagedBy', Value: 'CDK' },
         { Key: 'Organization', Value: 'quadnomics' },
       ]),
+    });
+  });
+});
+
+describe('GeDe CDK app with -c appleSignIn=true (the switch stays off in cdk.json)', () => {
+  let auth: Template;
+  let web: Template;
+  let raw: unknown;
+
+  beforeAll(() => {
+    const app = new cdk.App({
+      context: { ...cdkJsonContext(), hostedZoneId: TEST_ZONE_ID, appleSignIn: true },
+    });
+    const pipelineStack = buildApp(app);
+    const stage = pipelineStack.node.findChild('Prod') as GedeStage;
+    const assembly = app.synth();
+    auth = Template.fromStack(stageStack(stage, 'GeDe-Prod-Auth'));
+    web = Template.fromStack(stageStack(stage, 'GeDe-Prod-Web'));
+    raw = renderedWebConfig(assembly);
+  });
+
+  it('AUTH-08 Auth adds the Apple provider, the gede-prod hosted-UI domain and the code grant on the SPA client', () => {
+    auth.hasResourceProperties('AWS::Cognito::UserPoolIdentityProvider', {
+      ProviderType: 'SignInWithApple',
+      AttributeMapping: { email: 'email', given_name: 'firstName', family_name: 'lastName' },
+    });
+    auth.hasResourceProperties('AWS::Cognito::UserPoolDomain', { Domain: 'gede-prod' });
+    auth.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ExplicitAuthFlows: ['ALLOW_USER_AUTH'],
+      SupportedIdentityProviders: ['COGNITO', 'SignInWithApple'],
+      AllowedOAuthFlows: ['code'],
+      CallbackURLs: ['https://gede.work/auth/callback'],
+    });
+  });
+
+  it("AUTH-08 config.json says appleSignIn: { domain } with the hosted-UI host, and the SPA's parseConfig accepts it (#61)", async () => {
+    const domain = 'gede-prod.auth.ap-southeast-1.amazoncognito.com';
+    expect(raw).toMatchObject({ appleSignIn: { domain } });
+    const parseConfig = await webParseConfig();
+    expect(parseConfig(raw)).toMatchObject({ appleSignIn: { domain } });
+    // The same host is what the CSP lets the SPA connect to.
+    web.allResourcesProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        SecurityHeadersConfig: Match.objectLike({
+          ContentSecurityPolicy: {
+            ContentSecurityPolicy: Match.stringLikeRegexp(
+              String.raw`connect-src 'self' https://cognito-idp\.ap-southeast-1\.amazonaws\.com wss://ws\.gede\.work https://gede-prod\.auth\.ap-southeast-1\.amazoncognito\.com; `,
+            ),
+            Override: true,
+          },
+        }),
+      }),
     });
   });
 });

@@ -80,7 +80,7 @@ If a task logs `database app role misconfigured; exiting`, the secret injection 
 Prerequisites: an Apple Developer team, an App ID, a Services ID whose return URL is `https://<cognito-domain>/oauth2/idpresponse`, and a Sign in with Apple key (`.p8`).
 
 1. Create the secret: `aws secretsmanager create-secret --name gede/prod/apple-signin --secret-string file://apple.json` with the four fields above.
-2. In `infra/cdk.json` set `"appleSignIn": true`. Commit and merge. The Auth stack adds the Apple identity provider to the pool and the client; the Web stack writes `"appleSignIn": true` into `config.json`.
+2. In `infra/cdk.json` set `"appleSignIn": true`. Commit and merge. The Auth stack adds the Apple identity provider to the pool and the client; the Web stack writes `"appleSignIn": { "domain": "gede-prod.auth.ap-southeast-1.amazoncognito.com" }` into `config.json` (`false` while the flag is off; the SPA rejects any other shape at boot, #61).
 3. The SPA renders Apple's button (black, Apple's glyph, 44 pt, below the passkey button) only when `config.json` says so.
 4. Verify on `https://gede.work`: Sign in with Apple federates into the same `users` row by verified email (AUTH-08).
 

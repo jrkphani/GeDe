@@ -150,7 +150,7 @@ follow `GeDe-<EnvName>-<Stack>` automatically.
 
 **Sign in with Apple.** Create the `gede/prod/apple-signin` secret, set `appleSignIn: true`
 in `cdk.json`, merge. `AuthStack` adds the Apple IdP, the hosted-UI domain `gede-prod`, and
-the OAuth callback `https://gede.work/auth/callback`; `/config.json` flips `appleSignIn`.
+the OAuth callback `https://gede.work/auth/callback`; `/config.json` gets `appleSignIn: { domain: "gede-prod.auth.ap-southeast-1.amazoncognito.com" }` (`false` otherwise — the SPA's `parseConfig` accepts nothing else, #61).
 
 **SES production mail.** After production access is granted in ap-southeast-1, replace
 `UserPoolEmail.withCognito()` with the commented `withSES` block.

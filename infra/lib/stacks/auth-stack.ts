@@ -22,6 +22,13 @@ export class AuthStack extends cdk.Stack {
   readonly userPool: cognito.UserPool;
   readonly userPoolClient: cognito.UserPoolClient;
   readonly emailIdentity: ses.EmailIdentity;
+  /**
+   * Host of the Cognito hosted UI Apple redirects through (`gede-<env>.auth.<region>.amazoncognito.com`),
+   * or `undefined` when Apple is off. `WebStack` writes it into `config.json` as
+   * `appleSignIn: { domain }` (issue #61) and names it in the CSP; Amplify's `oauth.domain`
+   * takes the bare host, no scheme.
+   */
+  readonly hostedUiDomain: string | undefined;
 
   constructor(scope: Construct, id: string, props: AuthStackProps) {
     super(scope, id, props);
@@ -104,10 +111,16 @@ export class AuthStack extends cdk.Stack {
       supportedIdentityProviders.push(cognito.UserPoolClientIdentityProvider.APPLE);
 
       // Hosted UI endpoint Apple redirects back through. The SPA never shows it.
+      const domainPrefix = `gede-${config.envName}`;
       new cognito.UserPoolDomain(this, 'Domain', {
         userPool: this.userPool,
-        cognitoDomain: { domainPrefix: `gede-${config.envName}` },
+        cognitoDomain: { domainPrefix },
       });
+      // A Cognito-prefix domain has a fixed shape, so the host is a plain string (no token)
+      // and can be written into config.json and the CSP without a stack reference.
+      this.hostedUiDomain = `${domainPrefix}.auth.${config.region}.amazoncognito.com`;
+    } else {
+      this.hostedUiDomain = undefined;
     }
 
     // The only attributes the product uses: email (sign-in alias, AUTH-03), the display

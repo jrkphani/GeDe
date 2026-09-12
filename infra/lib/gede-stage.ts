@@ -77,7 +77,8 @@ export class GedeStage extends cdk.Stage {
       webAcl: edge.webAcl,
       userPoolId: auth.userPool.userPoolId,
       userPoolClientId: auth.userPoolClient.userPoolClientId,
-      appleSignIn,
+      // `false | { domain }`, the shape apps/web's parseConfig accepts (#61).
+      appleSignIn: auth.hostedUiDomain === undefined ? false : { domain: auth.hostedUiDomain },
     });
 
     const service = new ServiceStack(this, 'Service', {
