@@ -33,6 +33,7 @@ import { useYVersion } from '../../../doc/use-y.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
 import { TableView } from '../TableView.js';
 import { DerivedColumnPanel } from './DerivedColumnPanel.js';
+import { auditPipeline } from './pipeline-audit.js';
 
 interface HarnessProps {
   gd: GedeDoc;
@@ -325,6 +326,79 @@ describe('REF-04 derived columns', () => {
     await userEvent.click(await screen.findByRole('option', { name: 'Format' }));
     await userEvent.click(within(panel).getByRole('button', { name: 'Update derived column' }));
     expect(tableById(gd, notes)!.columns[1]!.label).toBe('@"Column 1".Format("Title Case")');
+  });
+
+  it("INSP-09 the pipeline audit list walks the chain step by step with what each reads, its rows, errors and last recompute; the selected column's step is current; a pull is a step too (#127)", async () => {
+    const p = tableById(gd, peaks)!;
+    const [c1, c2] = p.columns.map((c) => c.id) as [Id, Id];
+    // Step 1 reads Column 1; step 2 reads step 1 (A → B → C). Split needs a delimiter:
+    // the empty one is an invalid argument, so every row of step 3 errors.
+    const step1 = addDerivedColumn(gd, peaks, { sourceColId: c1, method: 'Concat', args: [' ✓'] })!;
+    const step2 = addDerivedColumn(gd, peaks, {
+      sourceColId: step1,
+      method: 'Format',
+      args: ['Upper Case'],
+    })!;
+    const step3 = addDerivedColumn(gd, peaks, { sourceColId: c2, method: 'Split', args: [''] })!;
+    await settled();
+    const host = engineFor(gd.doc);
+    const steps = auditPipeline(gd, peaks, (id) => host.result(id));
+    expect(
+      steps.map((s) =>
+        s.kind === 'derived'
+          ? [s.step, s.source, s.outcome.rows, s.outcome.errors, s.outcome.pending]
+          : s.kind,
+      ),
+    ).toEqual([
+      [1, { label: 'Column 1', step: null }, 3, 0, 0],
+      [2, { label: '@"Column 1".Concat(" ✓")', step: 1 }, 3, 0, 0],
+      [3, { label: 'Column 2', step: null }, 0, 3, 0],
+    ]);
+
+    const { rerender } = render(<DerivedColumnPanel gd={gd} tableId={peaks} sourceColId={step2} />);
+    const panel = screen.getByTestId('derived-column-panel');
+    const list = within(panel).getByRole('list', { name: 'Derived pipeline' });
+    const items = within(list).getAllByTestId('pipeline-step');
+    expect(items).toHaveLength(3);
+    expect(items[0]).toHaveTextContent('Step 1');
+    expect(items[0]).toHaveTextContent('from Column 1');
+    expect(items[0]).toHaveTextContent('3 rows');
+    expect(items[0]).toHaveTextContent(/recomputed \d{1,2}:\d{2}:\d{2}/);
+    expect(items[1]).toHaveTextContent('Step 2');
+    expect(items[1]).toHaveTextContent('from step 1 (@"Column 1".Concat(" ✓"))');
+    expect(items[2]).toHaveTextContent('0 rows · 3 errors');
+    // The selection: step 2's column is selected, so its step is current and it is the
+    // compose form's source.
+    expect(items[1]).toHaveAttribute('aria-current', 'true');
+    expect(items[0]).not.toHaveAttribute('aria-current');
+    expect(within(panel).getByRole('combobox', { name: 'Source column' })).toHaveTextContent(
+      '.Format("Upper Case")',
+    );
+    // Selecting another column moves both.
+    rerender(<DerivedColumnPanel gd={gd} tableId={peaks} sourceColId={step3} />);
+    expect(within(list).getAllByTestId('pipeline-step')[2]).toHaveAttribute('aria-current', 'true');
+    expect(within(panel).getByRole('combobox', { name: 'Source column' })).toHaveTextContent(
+      '@"Column 2".Split("")',
+    );
+    // Remove takes the step out of the chain.
+    await userEvent.click(
+      within(list).getByRole('button', { name: `Remove @"Column 2".Split("")` }),
+    );
+    expect(tableById(gd, peaks)!.columns.some((c) => c.id === step3)).toBe(false);
+    await waitFor(() => {
+      expect(within(list).getAllByTestId('pipeline-step')).toHaveLength(2);
+    });
+    // A pull is a step of the pipeline as well: it lists the rows it mirrored.
+    const n = tableById(gd, notes)!;
+    setPull(gd, peaks, c2, { tableId: notes, colId: n.columns[0]!.id, filter: '' });
+    await settled();
+    await waitFor(() => {
+      expect(within(list).getAllByTestId('pipeline-step')).toHaveLength(3);
+    });
+    const pull = within(list).getAllByTestId('pipeline-step')[2]!;
+    expect(pull).toHaveTextContent('Pull');
+    expect(pull).toHaveTextContent('↰ Notes · Column 1');
+    expect(pull).toHaveTextContent(/\d+ rows? pulled/);
   });
 });
 

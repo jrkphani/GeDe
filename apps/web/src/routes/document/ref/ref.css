@@ -189,3 +189,46 @@
 .gd-derive__status--error {
   color: var(--danger);
 }
+
+/* INSP-09 (#127): the pipeline audit list — one step per row: index and signature, then
+   what it reads and produced, then Edit / Remove. The selected column's step is marked
+   with a left rule and a background, never colour alone (`aria-current`). */
+.gd-derive__audit {
+  counter-reset: step;
+}
+.gd-derive__step {
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--space-1);
+  padding: var(--space-2);
+  min-height: 0;
+  border-left: 3px solid transparent;
+}
+.gd-derive__step[aria-current='true'] {
+  border-left-color: var(--rule-accent);
+  background: var(--surface-sunken);
+}
+.gd-derive__step-head {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.gd-derive__step-index {
+  flex: none;
+  font-family: var(--font-ui);
+  font-size: 0.71875rem;
+  font-weight: 600;
+  color: var(--ink-muted);
+}
+.gd-derive__step-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  font-family: var(--font-ui);
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+}
+.gd-derive__step .gd-derive__actions {
+  justify-content: flex-end;
+}
