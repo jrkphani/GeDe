@@ -51,6 +51,9 @@ export function orderDocuments(
       return out.sort(byDateDesc((d) => d.updatedAt));
     case 'deleted':
       return out.sort(byDateDesc((d) => d.deletedAt ?? d.updatedAt));
+    case 'archived':
+      // LIB-D6: most recently archived first, as Recently Deleted orders by deletion.
+      return out.sort(byDateDesc((d) => d.archivedAt ?? d.updatedAt));
     case 'browse':
     case 'shared':
       return sort === 'name'
@@ -61,7 +64,7 @@ export function orderDocuments(
 
 /**
  * LIB-01: Recents grouped by recency; Shared grouped by who shared it, then
- * "Shared by me"; Browse and Recently Deleted are flat.
+ * "Shared by me"; Browse, Archived and Recently Deleted are flat.
  */
 export function groupDocuments(
   ordered: readonly DocumentSummary[],

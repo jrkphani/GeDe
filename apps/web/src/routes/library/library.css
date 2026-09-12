@@ -109,6 +109,12 @@
 .gd-lib__banner {
   margin-bottom: var(--space-4);
 }
+/* RESP-02: below 768 px the library is read-only; the toolbar says so where the actions were. */
+.gd-lib__phone-note {
+  margin: 0;
+  color: var(--ink-muted);
+  font-size: 0.78125rem;
+}
 
 .gd-lib__table {
   width: 100%;
@@ -186,9 +192,31 @@
 .gd-lib__actions-col {
   width: 2.75rem;
   text-align: right;
+  white-space: nowrap;
+}
+/* LIB-D6 / LIB-D7: a view with a per-row action (Unarchive, Recover) widens the column for it. */
+.gd-lib__table--row-action .gd-lib__actions-col {
+  width: 9rem;
+}
+.gd-lib__row-action {
+  margin-right: var(--space-1);
+  vertical-align: middle;
 }
 .gd-lib__more {
   vertical-align: middle;
+}
+/*
+ * LIB-D2 / LIB-D10: the fourth toolbar slot stays focusable when it is unavailable
+ * so its tooltip can say why (aria-disabled, not disabled). Same look as :disabled.
+ */
+.gd-lib__toolbar .gd-btn[aria-disabled='true']:not(:disabled) {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.gd-lib__toolbar .gd-btn[aria-disabled='true']:not(:disabled):hover,
+.gd-lib__toolbar .gd-btn[aria-disabled='true']:not(:disabled):active {
+  --gd-btn-bg: var(--surface);
+  transform: none;
 }
 
 /* Participants sheet (LIB-07). */

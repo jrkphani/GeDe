@@ -288,15 +288,19 @@ describe('documents', () => {
     });
     expect(asEditor.status).toBe(403);
 
-    const asOwner = await json<null>(server, 'DELETE', `/api/documents/${doc.id}`, {
+    // LIB-D2: with Bob holding access the owner is refused too — archive is the path.
+    const shared = await json<ErrorBody>(server, 'DELETE', `/api/documents/${doc.id}`, {
       token: alice,
     });
-    expect(asOwner.status).toBe(204);
+    expect(shared.status).toBe(409);
+    expect(shared.body.error.code).toBe('shared');
+    expect(server.repo.docs.get(doc.id)?.deletedAt).toBeNull();
+
+    // The rule for a participant of a deleted document (ARCHITECTURE §3) still
+    // applies to rows that reach that state (data from before LIB-D, an
+    // invitation accepted while the row sat in the trash): put one there.
+    await server.repo.documents.softDelete(doc.id);
     expect(server.repo.docs.get(doc.id)?.deletedAt).not.toBeNull();
-    expect(server.repo.auditLog.at(-1)).toMatchObject({
-      action: 'document.delete',
-      documentId: doc.id,
-    });
 
     const again = await json<ErrorBody>(server, 'DELETE', `/api/documents/${doc.id}`, {
       token: alice,

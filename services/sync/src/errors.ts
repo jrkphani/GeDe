@@ -14,6 +14,10 @@ export type ErrorCode =
   | 'forbidden'
   | 'not_found'
   | 'conflict'
+  /** `DELETE /api/documents/:id` on a workscape that has been shared: archive it instead (LIB-D2). */
+  | 'shared'
+  /** Delete or Archive on the guided sample (LIB-D10). */
+  | 'sample'
   /** `PATCH /api/me { idToken }`: the row already carries a different address (review of #76). */
   | 'email_bound'
   /** An invitation past its 14 days (410). */

@@ -1,17 +1,18 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router';
 import clsx from 'clsx';
 import {
+  AlertDialog,
   Banner,
   Button,
   Collapsible,
-  Dialog,
   EmptyState,
   Icon,
   SegmentedControl,
   Skeleton,
   TextField,
   Toast,
+  Tooltip,
   Wordmark,
   type IconName,
   type MenuEntry,
@@ -19,13 +20,16 @@ import {
 import { announce } from '../../announce.js';
 import { ApiError } from '../../api/client.js';
 import {
+  archiveDocument,
   createDocument,
   deleteAllDocuments,
   deleteDocument,
+  deletionModeOf,
   listDocuments,
   permissionOf,
   recoverAllDocuments,
   recoverDocument,
+  unarchiveDocument,
   type DocumentsView,
   type DocumentSummary,
 } from '../../api/documents.js';
@@ -36,6 +40,7 @@ import { useMediaQuery } from '../../use-media-query.js';
 import { AccountMenu } from './AccountMenu.js';
 import { LibraryTable } from './LibraryTable.js';
 import { ParticipantsSheet } from './ParticipantsSheet.js';
+import { LIBRARY_REFRESH_MS, useLibraryRefresh } from './refresh.js';
 import {
   filterByQuery,
   flattenGroups,
@@ -45,10 +50,12 @@ import {
 } from './select.js';
 import { readSortPreference, writeSortPreference } from './sort-preference.js';
 
+/** Sidebar order (prototype, PROTOTYPE-CHANGES §2.1): Recents · Browse · Shared · Archived · Recently Deleted. */
 export const LIBRARY_VIEWS = [
   'recents',
   'browse',
   'shared',
+  'archived',
   'deleted',
 ] as const satisfies readonly DocumentsView[];
 export type LibraryView = DocumentsView;
@@ -57,6 +64,7 @@ const VIEW_META: Record<LibraryView, { label: string; icon: IconName }> = {
   recents: { label: 'Recents', icon: 'sheet' },
   browse: { label: 'Browse', icon: 'table' },
   shared: { label: 'Shared', icon: 'people' },
+  archived: { label: 'Archived', icon: 'archive' },
   deleted: { label: 'Recently Deleted', icon: 'delete' },
 };
 
@@ -64,6 +72,27 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
   { value: 'name', label: 'Name' },
   { value: 'date', label: 'Date' },
 ];
+
+/**
+ * Toolbar and toast copy (LIB-D2, LIB-D9, LIB-D10; PROTOTYPE-CHANGES §2.3, §2.5,
+ * verbatim where the prototype has the string). Names are set in curly quotes.
+ */
+export const COPY = {
+  archiveTip: 'Archive — shared workscapes cannot be deleted',
+  sampleTip: 'The guided sample cannot be deleted',
+  deleted: (name: string) => `“${name}” moved to Recently Deleted`,
+  archived: (name: string) => `“${name}” archived — participants keep their access`,
+  unarchived: (name: string) => `“${name}” unarchived`,
+  recovered: (name: string) => `“${name}” recovered`,
+  recoveredAll: (n: number) => `Recovered ${plural(n)}`,
+  purgedOne: 'Deleted permanently — this one cannot be undone',
+  purgedMany: (n: number) => `Deleted ${plural(n)} permanently — this cannot be undone`,
+  phone: 'View only on phone',
+} as const;
+
+function plural(n: number): string {
+  return `${n} ${n === 1 ? 'workscape' : 'workscapes'}`;
+}
 
 function isView(v: string | null): v is LibraryView {
   return v !== null && (LIBRARY_VIEWS as readonly string[]).includes(v);
@@ -74,6 +103,11 @@ type LoadState =
   | { status: 'ready'; documents: DocumentSummary[] }
   | { status: 'error'; error: unknown };
 
+/** Same rows in the same order: a silent refresh then leaves the state alone (no re-render). */
+function sameDocuments(a: readonly DocumentSummary[], b: readonly DocumentSummary[]): boolean {
+  return a.length === b.length && a.every((doc, i) => JSON.stringify(doc) === JSON.stringify(b[i]));
+}
+
 /** A background action failed: say what, and why, with the reference for support. */
 interface Failure {
   cause: string;
@@ -82,15 +116,37 @@ interface Failure {
   retry?: (() => void) | undefined;
 }
 
-function describeFailure(cause: string, err: unknown): Failure {
+/** The service's stable `error.code` from a parsed error body, when there is one. */
+function errorCode(err: ApiError): string | undefined {
+  const body: unknown = err.body;
+  if (typeof body !== 'object' || body === null || !('error' in body)) return undefined;
+  const { error } = body;
+  if (typeof error !== 'object' || error === null || !('code' in error)) return undefined;
+  return typeof error.code === 'string' ? error.code : undefined;
+}
+
+/**
+ * `conflict` names what a 409 means for this action ("It is no longer in
+ * Recently Deleted"); the two LIB-D refusals carry their own wording.
+ */
+function describeFailure(cause: string, err: unknown, conflict: string): Failure {
   if (err instanceof ApiError) {
     const ref = err.requestId !== undefined ? ` (ref ${err.requestId.slice(0, 6)})` : '';
     if (err.status === 404)
       return { cause, remedy: `This action is not available on the service yet${ref}.` };
     if (err.status === 403)
       return { cause, remedy: `You do not have permission to do that${ref}.` };
-    if (err.status === 409)
-      return { cause, remedy: `It is no longer in Recently Deleted${ref}. Refresh the view.` };
+    if (err.status === 409) {
+      const code = errorCode(err);
+      if (code === 'shared')
+        return {
+          cause,
+          remedy: `It has been shared, so it can be archived but not deleted${ref}.`,
+        };
+      if (code === 'sample')
+        return { cause, remedy: `The guided sample cannot be deleted or archived${ref}.` };
+      return { cause, remedy: `${conflict}${ref}. The view has been refreshed.` };
+    }
     return {
       cause,
       remedy: `The service answered ${err.status} after ${err.attempts} ${err.attempts === 1 ? 'attempt' : 'attempts'}${ref}. Retry in a moment.`,
@@ -99,11 +155,14 @@ function describeFailure(cause: string, err: unknown): Failure {
   return { cause, remedy: 'Retry in a moment.' };
 }
 
-type Confirm = { kind: 'delete'; doc: DocumentSummary } | { kind: 'delete-all'; count: number };
-
-interface Undo {
+/**
+ * LIB-D9: every delete, archive, recover and unarchive raises one of these.
+ * Reversible actions carry `undo`, which reverses through the API; permanent
+ * ones say in `title` that they cannot be undone and carry none.
+ */
+interface Notice {
   title: string;
-  onUndo: () => void;
+  undo?: (() => void) | undefined;
 }
 
 export function Library() {
@@ -124,16 +183,20 @@ export function Library() {
   const [sort, setSort] = useState<SortKey>(() => readSortPreference(sub));
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<Failure | null>(null);
-  const [confirm, setConfirm] = useState<Confirm | null>(null);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState<number | null>(null);
   const [sheetDoc, setSheetDoc] = useState<DocumentSummary | null>(null);
-  // MENU-05 / A11Y-01: the sheet and the confirm dialog hand focus back to what
-  // opened them. A toolbar button is still there when they close; a row menu
-  // item is not, so the row itself is the return point in that case.
+  // MENU-05 / A11Y-01: the sheet hands focus back to what opened it. A toolbar
+  // button is still there when it closes; a row menu item is not, so the row
+  // itself is the return point in that case.
   const [opener, setOpener] = useState<HTMLElement | null>(null);
   const rowElement = (id: string): HTMLElement | null =>
     document.querySelector<HTMLElement>(`.gd-lib__row[data-id="${id}"]`);
-  const [undo, setUndo] = useState<Undo | null>(null);
+  const [notice, setNotice] = useState<Notice | null>(null);
   const narrow = useMediaQuery('(max-width: 899.98px)');
+  // RESP-02 / non-negotiable 5: below 768 px the product is read-only — no
+  // delete, archive, recover or purge affordance renders in the library either.
+  const phone = useMediaQuery('(max-width: 767.98px)');
+  const canManage = !phone;
   const [navOpen, setNavOpen] = useState(false);
 
   const fetchDocuments = useCallback(() => {
@@ -151,6 +214,32 @@ export function Library() {
     fetchDocuments();
     setSelectedId(null);
   }, [fetchDocuments]);
+
+  // LIB-D11: the same view, re-read silently on a cadence and when the tab
+  // comes back, so a state change made by another client of this account —
+  // an archive, a delete, a recover — appears without a reload. Only a
+  // changed list replaces the state; a failed read is retried on the next tick.
+  const inFlight = useRef(false);
+  const refresh = useCallback(() => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    listDocuments(view)
+      .then((documents) => {
+        setLoad((prev) =>
+          prev.status === 'ready' && !sameDocuments(prev.documents, documents)
+            ? { status: 'ready', documents }
+            : prev,
+        );
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        inFlight.current = false;
+      });
+  }, [view]);
+  useLibraryRefresh(refresh, {
+    intervalMs: LIBRARY_REFRESH_MS,
+    enabled: load.status === 'ready' && busy === null,
+  });
 
   // LIB-05: the sort choice follows the signed-in user.
   useEffect(() => {
@@ -211,48 +300,97 @@ export function Library() {
       })
       .catch((error: unknown) => {
         setCreating(false);
-        setFailure({ ...describeFailure('Could not create a workscape', error), retry: create });
+        setFailure({
+          ...describeFailure('Could not create a workscape', error, 'It already exists'),
+          retry: create,
+        });
       });
   };
 
-  /** Run an action, refetch on success, surface a banner on failure. */
+  /**
+   * Run an action, refetch on success, surface a banner on failure. A 409 also
+   * refetches: the state moved under this client (LIB-D11), so the view is
+   * brought up to date along with the explanation.
+   */
   const run = <T,>(
     id: string,
     cause: string,
+    conflict: string,
     action: () => Promise<T>,
     done?: (result: T) => void,
   ) => {
     setBusy(id);
     setFailure(null);
+    setNotice(null);
     action()
       .then((result) => {
         done?.(result);
         fetchDocuments();
       })
       .catch((err: unknown) => {
-        setFailure(describeFailure(cause, err));
+        setFailure(describeFailure(cause, err, conflict));
+        if (err instanceof ApiError && err.status === 409) fetchDocuments();
       })
       .finally(() => {
         setBusy(null);
       });
   };
 
+  /** LIB-D9: the confirmation toast; `undo` reverses through the API. */
+  const notify = (title: string, undo?: () => void) => {
+    announce(undo === undefined ? title : `${title}. Undo is available`);
+    setNotice({ title, undo });
+  };
+
   const remove = (doc: DocumentSummary) => {
-    setConfirm(null);
     run(
       `delete-${doc.id}`,
       `Could not delete ${doc.title}`,
+      'It is not there any more',
       () => deleteDocument(doc.id),
       () => {
-        announce(`Deleted ${doc.title}. Undo is available`);
-        setUndo({
-          title: `${doc.title} moved to Recently Deleted`,
-          onUndo: () => {
-            setUndo(null);
-            run(`recover-${doc.id}`, `Could not recover ${doc.title}`, () =>
-              recoverDocument(doc.id),
-            );
-          },
+        notify(COPY.deleted(doc.title), () => {
+          run(
+            `recover-${doc.id}`,
+            `Could not recover ${doc.title}`,
+            'It is no longer in Recently Deleted',
+            () => recoverDocument(doc.id),
+          );
+        });
+      },
+    );
+  };
+
+  const archive = (doc: DocumentSummary) => {
+    run(
+      `archive-${doc.id}`,
+      `Could not archive ${doc.title}`,
+      'It is already archived',
+      () => archiveDocument(doc.id),
+      () => {
+        notify(COPY.archived(doc.title), () => {
+          run(
+            `unarchive-${doc.id}`,
+            `Could not unarchive ${doc.title}`,
+            'It is not archived any more',
+            () => unarchiveDocument(doc.id),
+          );
+        });
+      },
+    );
+  };
+
+  const unarchive = (doc: DocumentSummary) => {
+    run(
+      `unarchive-${doc.id}`,
+      `Could not unarchive ${doc.title}`,
+      'It is not archived any more',
+      () => unarchiveDocument(doc.id),
+      () => {
+        notify(COPY.unarchived(doc.title), () => {
+          run(`archive-${doc.id}`, `Could not archive ${doc.title}`, 'It is already archived', () =>
+            archiveDocument(doc.id),
+          );
         });
       },
     );
@@ -262,26 +400,55 @@ export function Library() {
     run(
       `recover-${doc.id}`,
       `Could not recover ${doc.title}`,
+      'It is no longer in Recently Deleted',
       () => recoverDocument(doc.id),
       () => {
-        announce(`${doc.title} recovered`);
+        notify(COPY.recovered(doc.title), () => {
+          run(`delete-${doc.id}`, `Could not delete ${doc.title}`, 'It is not there any more', () =>
+            deleteDocument(doc.id),
+          );
+        });
       },
     );
   };
 
-  const plural = (n: number) => `${n} ${n === 1 ? 'workscape' : 'workscapes'}`;
-
   const recoverAll = () => {
-    run('recover-all', 'Could not recover the deleted workscapes', recoverAllDocuments, (n) => {
-      announce(`Recovered ${plural(n)}`);
-    });
+    run(
+      'recover-all',
+      'Could not recover the deleted workscapes',
+      'Nothing is in Recently Deleted',
+      recoverAllDocuments,
+      ({ count, ids }) => {
+        // Undo deletes each recovered workscape again; the server answers
+        // 409 for any that was shared meanwhile, and the banner says so.
+        notify(
+          COPY.recoveredAll(count),
+          ids.length === 0
+            ? undefined
+            : () => {
+                run(
+                  'recover-all-undo',
+                  'Could not move the recovered workscapes back',
+                  'One of them is not there any more',
+                  () => Promise.all(ids.map((id) => deleteDocument(id))),
+                );
+              },
+        );
+      },
+    );
   };
 
   const deleteAll = () => {
-    setConfirm(null);
-    run('delete-all', 'Could not delete the deleted workscapes', deleteAllDocuments, (n) => {
-      announce(`Deleted ${plural(n)} permanently`);
-    });
+    setConfirmDeleteAll(null);
+    run(
+      'delete-all',
+      'Could not delete the deleted workscapes',
+      'Nothing is in Recently Deleted',
+      deleteAllDocuments,
+      (n) => {
+        notify(n === 1 ? COPY.purgedOne : COPY.purgedMany(n));
+      },
+    );
   };
 
   const signOut = () => {
@@ -295,51 +462,135 @@ export function Library() {
   const ownerOnly = (doc: DocumentSummary, verb: string) =>
     permissionOf(doc) === 'owner' ? undefined : `Only the owner can ${verb} it`;
 
-  // LIB-03: the row overflow carries the same commands as the toolbar (MENU-02: disabled, never hidden).
-  const rowMenu = (doc: DocumentSummary): MenuEntry[] =>
-    view === 'deleted'
-      ? [
-          {
-            kind: 'item',
-            id: 'recover',
-            label: 'Recover',
-            onSelect: () => {
-              recover(doc);
+  /**
+   * The fourth toolbar slot and the matching row-menu item (LIB-D1, LIB-D2,
+   * LIB-D10; PROTOTYPE-CHANGES §2.3): Delete for a workscape nobody else
+   * holds, Archive once someone does, neither for the guided sample. `reason`
+   * is set when the action is unavailable and says why; `tip` otherwise.
+   */
+  const slot = (doc: DocumentSummary | null) => {
+    const mode = doc === null ? 'delete' : deletionModeOf(doc);
+    const label = mode === 'archive' ? 'Archive' : 'Delete';
+    const icon: IconName = mode === 'archive' ? 'archive' : 'delete';
+    const reason =
+      doc === null
+        ? noSelection
+        : mode === 'sample'
+          ? COPY.sampleTip
+          : ownerOnly(doc, label.toLowerCase());
+    const tip = mode === 'archive' ? COPY.archiveTip : label;
+    const act = () => {
+      if (doc === null || reason !== undefined) return;
+      if (mode === 'archive') archive(doc);
+      else remove(doc);
+    };
+    const busyId = doc === null ? '' : `${mode === 'archive' ? 'archive' : 'delete'}-${doc.id}`;
+    return { mode, label, icon, reason, tip, act, busyId };
+  };
+
+  // LIB-03: the row overflow carries the same commands as the toolbar (MENU-02:
+  // disabled, never hidden — except on phone, where none of them exist).
+  const rowMenu = (doc: DocumentSummary): MenuEntry[] => {
+    if (view === 'deleted') {
+      return canManage
+        ? [
+            {
+              kind: 'item',
+              id: 'recover',
+              label: 'Recover',
+              onSelect: () => {
+                recover(doc);
+              },
+              disabledReason: ownerOnly(doc, 'recover'),
             },
-            disabledReason: ownerOnly(doc, 'recover'),
-          },
-        ]
-      : [
-          {
-            kind: 'item',
-            id: 'open',
-            label: 'Open',
-            onSelect: () => {
-              open(doc);
+          ]
+        : [];
+    }
+    const openItem: MenuEntry = {
+      kind: 'item',
+      id: 'open',
+      label: 'Open',
+      onSelect: () => {
+        open(doc);
+      },
+      shortcut: 'Enter',
+    };
+    if (view === 'archived') {
+      return canManage
+        ? [
+            openItem,
+            {
+              kind: 'item',
+              id: 'unarchive',
+              label: 'Unarchive',
+              onSelect: () => {
+                unarchive(doc);
+              },
+              disabledReason: ownerOnly(doc, 'unarchive'),
             },
-            shortcut: 'Enter',
-          },
-          {
-            kind: 'item',
-            id: 'share',
-            label: 'Participants',
-            onSelect: () => {
-              setOpener(rowElement(doc.id));
-              setSheetDoc(doc);
-            },
-          },
-          { kind: 'separator', id: 's' },
-          {
-            kind: 'item',
-            id: 'delete',
-            label: 'Delete',
-            onSelect: () => {
-              setOpener(rowElement(doc.id));
-              setConfirm({ kind: 'delete', doc });
-            },
-            disabledReason: ownerOnly(doc, 'delete'),
-          },
-        ];
+          ]
+        : [openItem];
+    }
+    const entries: MenuEntry[] = [
+      openItem,
+      {
+        kind: 'item',
+        id: 'share',
+        label: 'Participants',
+        onSelect: () => {
+          setOpener(rowElement(doc.id));
+          setSheetDoc(doc);
+        },
+      },
+    ];
+    if (canManage) {
+      const s = slot(doc);
+      entries.push(
+        { kind: 'separator', id: 's' },
+        {
+          kind: 'item',
+          id: s.mode === 'archive' ? 'archive' : 'delete',
+          label: s.label,
+          onSelect: s.act,
+          disabledReason: s.reason,
+        },
+      );
+    }
+    return entries;
+  };
+
+  /** LIB-D6 / LIB-D7: the per-row Unarchive and Recover, on every row of those views. */
+  const rowAction =
+    canManage && (view === 'archived' || view === 'deleted')
+      ? (doc: DocumentSummary) => {
+          const isRecover = view === 'deleted';
+          const verb = isRecover ? 'Recover' : 'Unarchive';
+          const reason = ownerOnly(doc, verb.toLowerCase());
+          const id = `${isRecover ? 'recover' : 'unarchive'}-${doc.id}`;
+          return (
+            <Button
+              size="sm"
+              icon={<Icon name="recover" size={13} />}
+              className="gd-lib__row-action"
+              aria-label={`${verb} ${doc.title}`}
+              title={reason}
+              disabled={reason !== undefined || busy !== null}
+              loading={busy === id}
+              loadingLabel={isRecover ? 'Recovering…' : 'Unarchiving…'}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (isRecover) recover(doc);
+                else unarchive(doc);
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+              }}
+            >
+              {verb}
+            </Button>
+          );
+        }
+      : undefined;
 
   const nav = (
     <nav className="gd-lib__nav" aria-label="Library views">
@@ -360,60 +611,116 @@ export function Library() {
     </nav>
   );
 
+  const openButton = (
+    <Button
+      onClick={() => {
+        if (selected) open(selected);
+      }}
+      disabled={selected === null}
+      title={selected === null ? noSelection : undefined}
+    >
+      Open
+    </Button>
+  );
+
+  const phoneNote = <p className="gd-lib__phone-note">{COPY.phone}</p>;
+
+  const slotButton = () => {
+    const s = slot(selected);
+    const unavailable = s.reason !== undefined;
+    return (
+      <Tooltip content={unavailable ? s.reason : s.tip}>
+        <Button
+          icon={<Icon name={s.icon} size={15} />}
+          onClick={s.act}
+          // aria-disabled, not disabled: the control stays focusable so its
+          // tooltip can say why (LIB-D2, LIB-D10), as the document toolbar does.
+          aria-disabled={unavailable || undefined}
+          data-mode={s.mode}
+          loading={busy === s.busyId && s.busyId !== ''}
+          loadingLabel={s.mode === 'archive' ? 'Archiving…' : 'Deleting…'}
+          disabled={busy !== null}
+        >
+          {s.label}
+        </Button>
+      </Tooltip>
+    );
+  };
+
   const toolbar = (
     <div className="gd-lib__toolbar" role="toolbar" aria-label={`${VIEW_META[view].label} actions`}>
       {view === 'deleted' ? (
+        !canManage ? (
+          phoneNote
+        ) : (
+          <>
+            <Button
+              icon={<Icon name="recover" size={15} />}
+              onClick={() => {
+                if (selected) recover(selected);
+              }}
+              disabled={selected === null || busy !== null}
+              title={selected === null ? noSelection : undefined}
+              loading={busy === `recover-${selectedId ?? ''}`}
+              loadingLabel="Recovering…"
+            >
+              Recover
+            </Button>
+            <span className="gd-lib__toolbar-gap" />
+            {/* LIB-08: both disabled when the view is empty. */}
+            <Button
+              onClick={recoverAll}
+              disabled={total === 0 || busy !== null}
+              title={
+                total === 0
+                  ? 'Nothing to recover'
+                  : 'Recover everything deleted in the last 30 days'
+              }
+              loading={busy === 'recover-all'}
+              loadingLabel="Recovering…"
+            >
+              Recover All
+            </Button>
+            <Button
+              variant="danger"
+              onClick={() => {
+                setConfirmDeleteAll(total);
+              }}
+              disabled={total === 0 || busy !== null}
+              title={total === 0 ? 'Nothing to delete' : undefined}
+              loading={busy === 'delete-all'}
+              loadingLabel="Deleting…"
+            >
+              Delete All
+            </Button>
+          </>
+        )
+      ) : view === 'archived' ? (
         <>
-          <Button
-            icon={<Icon name="recover" size={15} />}
-            onClick={() => {
-              if (selected) recover(selected);
-            }}
-            disabled={selected === null || busy !== null}
-            title={selected === null ? noSelection : undefined}
-            loading={busy === `recover-${selectedId ?? ''}`}
-            loadingLabel="Recovering…"
-          >
-            Recover
-          </Button>
-          <span className="gd-lib__toolbar-gap" />
-          {/* LIB-08: both disabled when the view is empty. */}
-          <Button
-            onClick={recoverAll}
-            disabled={total === 0 || busy !== null}
-            title={
-              total === 0 ? 'Nothing to recover' : 'Recover everything deleted in the last 30 days'
-            }
-            loading={busy === 'recover-all'}
-            loadingLabel="Recovering…"
-          >
-            Recover All
-          </Button>
-          <Button
-            variant="danger"
-            onClick={() => {
-              setConfirm({ kind: 'delete-all', count: total });
-            }}
-            disabled={total === 0 || busy !== null}
-            title={total === 0 ? 'Nothing to delete' : undefined}
-            loading={busy === 'delete-all'}
-            loadingLabel="Deleting…"
-          >
-            Delete All
-          </Button>
+          {openButton}
+          {canManage ? (
+            <Button
+              icon={<Icon name="recover" size={15} />}
+              onClick={() => {
+                if (selected) unarchive(selected);
+              }}
+              disabled={
+                selected === null || ownerOnly(selected, 'unarchive') !== undefined || busy !== null
+              }
+              title={selected === null ? noSelection : ownerOnly(selected, 'unarchive')}
+              loading={busy === `unarchive-${selectedId ?? ''}`}
+              loadingLabel="Unarchiving…"
+            >
+              Unarchive
+            </Button>
+          ) : (
+            phoneNote
+          )}
         </>
       ) : (
         <>
           {/* One primary per view (DS): the first-run state owns it, so the toolbar is secondary. */}
-          <Button
-            onClick={() => {
-              if (selected) open(selected);
-            }}
-            disabled={selected === null}
-            title={selected === null ? noSelection : undefined}
-          >
-            Open
-          </Button>
+          {openButton}
           <Button
             icon={<Icon name="people" size={15} />}
             onClick={(e) => {
@@ -425,22 +732,7 @@ export function Library() {
           >
             Participants
           </Button>
-          <Button
-            icon={<Icon name="delete" size={15} />}
-            onClick={(e) => {
-              if (!selected) return;
-              setOpener(e.currentTarget);
-              setConfirm({ kind: 'delete', doc: selected });
-            }}
-            disabled={
-              selected === null || ownerOnly(selected, 'delete') !== undefined || busy !== null
-            }
-            title={selected === null ? noSelection : ownerOnly(selected, 'delete')}
-            loading={busy === `delete-${selectedId ?? ''}`}
-            loadingLabel="Deleting…"
-          >
-            Delete
-          </Button>
+          {canManage ? slotButton() : phoneNote}
           {view !== 'recents' && (
             <>
               <span className="gd-lib__toolbar-gap" />
@@ -559,6 +851,7 @@ export function Library() {
               onSelect={select}
               onOpen={open}
               rowMenu={rowMenu}
+              rowAction={rowAction}
             />
           )}
         </Skeleton>
@@ -574,69 +867,25 @@ export function Library() {
         }}
       />
 
-      <Dialog
-        returnFocusTo={opener}
-        open={confirm?.kind === 'delete'}
+      {/* LIB-D8: Delete All is permanent, and says so before proceeding. */}
+      <AlertDialog
+        open={confirmDeleteAll !== null}
         onOpenChange={(o) => {
-          if (!o) setConfirm(null);
+          if (!o) setConfirmDeleteAll(null);
         }}
-        title={confirm?.kind === 'delete' ? `Delete ${confirm.doc.title}?` : ''}
-        description="It moves to Recently Deleted, where it can be recovered for 30 days."
-        actions={
-          <>
-            <Button
-              onClick={() => {
-                setConfirm(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              variant="primary"
-              onClick={() => {
-                if (confirm?.kind === 'delete') remove(confirm.doc);
-              }}
-            >
-              Delete
-            </Button>
-          </>
-        }
-      />
-
-      <Dialog
-        open={confirm?.kind === 'delete-all'}
-        onOpenChange={(o) => {
-          if (!o) setConfirm(null);
-        }}
-        title={
-          confirm?.kind === 'delete-all'
-            ? `Permanently delete ${confirm.count} ${confirm.count === 1 ? 'workscape' : 'workscapes'}?`
-            : ''
-        }
+        title={`Permanently delete ${plural(confirmDeleteAll ?? 0)}?`}
         description="Everything in Recently Deleted is removed for good. This cannot be undone."
-        actions={
-          <>
-            <Button
-              onClick={() => {
-                setConfirm(null);
-              }}
-            >
-              Cancel
-            </Button>
-            <Button variant="danger" onClick={deleteAll}>
-              Delete All
-            </Button>
-          </>
-        }
+        actionLabel="Delete All"
+        onAction={deleteAll}
       />
 
       <Toast
-        open={undo !== null}
+        open={notice !== null}
         onOpenChange={(o) => {
-          if (!o) setUndo(null);
+          if (!o) setNotice(null);
         }}
-        title={undo?.title ?? ''}
-        undo={undo !== null ? { onUndo: undo.onUndo } : undefined}
+        title={notice?.title ?? ''}
+        undo={notice?.undo !== undefined ? { onUndo: notice.undo } : undefined}
       />
     </div>
   );
@@ -672,6 +921,16 @@ function LibraryEmpty({
         label="recently deleted"
         title="No items"
         description="Anything you delete stays here for 30 days."
+      />
+    );
+  }
+  // LIB-D6: Archived empty state (prototype copy).
+  if (view === 'archived') {
+    return (
+      <EmptyState
+        label="archived"
+        title="Nothing archived"
+        description="Archived workscapes stay here, with their participants, until you unarchive them."
       />
     );
   }

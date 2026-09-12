@@ -35,6 +35,18 @@ export interface DocumentRecord {
   readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly deletedAt: Date | null;
+  /** LIB-D6: archived by the owner, no expiry. Never set together with `deletedAt`. */
+  readonly archivedAt: Date | null;
+  /**
+   * LIB-D2/D4 (ADR): true while the document has a participant, or its link is
+   * on once it had one. Set inside the share transactions — an accepted
+   * invitation, a redeemed link, a person with an account named in the sheet,
+   * the link switched on — never by sending an invitation; cleared when the
+   * last share goes and link access is `none`. Delete is refused while true.
+   */
+  readonly everShared: boolean;
+  /** LIB-D10: the guided sample workscape; exempt from Delete and Archive. */
+  readonly sample: boolean;
 }
 
 /** What a caller may do with a document. `owner` implies edit plus sharing and deletion. */
@@ -66,12 +78,20 @@ export interface DocumentListing extends DocumentSummary {
 }
 
 /**
- * Library views (LIB-01). `recents` and `browse` and `shared` exclude deleted
- * documents; `deleted` is the owner's Recently Deleted for the last 30 days.
+ * Library views (LIB-01, LIB-D3, LIB-D6). `recents`, `browse` and `shared`
+ * exclude deleted documents and, for the owner, archived ones — a participant
+ * still sees an archived document they were given (LIB-D3); `deleted` is the
+ * owner's Recently Deleted for the last 30 days; `archived` is the owner's
+ * archived documents, without expiry.
  */
-export type LibraryView = 'recents' | 'browse' | 'shared' | 'deleted';
+export type LibraryView = 'recents' | 'browse' | 'shared' | 'deleted' | 'archived';
 
 export const RECENTLY_DELETED_DAYS = 30;
+
+/** What `DocumentsRepo.tryDelete` did, or why it did nothing. */
+export type DeleteOutcome =
+  | { readonly status: 'deleted'; readonly document: DocumentRecord }
+  | { readonly status: 'missing' | 'shared' | 'sample' };
 
 export interface Participant {
   readonly userId: string;
@@ -226,6 +246,14 @@ export interface LinkChange {
   readonly revoked: readonly string[];
 }
 
+/**
+ * `documents.ever_shared` (LIB-D2, LIB-D4) is maintained here and in
+ * `InvitesRepo`, inside the same transaction as the share change it follows:
+ * every path that inserts a share (`add`, `redeemLink`, `accept`, the
+ * conversion on sign-in) and switching the link on set it; `remove`, `stop`
+ * and `setLinkAccess` clear it once no share remains and the link is off.
+ * Sending an invitation never sets it. Nothing outside the repository writes it.
+ */
 export interface SharesRepo {
   /**
    * Give `userId` `permission` on the document, recording `invitedBy`; a
@@ -340,13 +368,37 @@ export interface DocumentsRepo {
     snapshot: { seq: number; s3Key: string; sizeBytes: number };
   }): Promise<DocumentRecord>;
   rename(id: string, title: string): Promise<DocumentRecord | undefined>;
+  /**
+   * Move to Recently Deleted (LIB-D5): set `deleted_at` and clear
+   * `archived_at` (a document is archived or deleted, never both).
+   * `undefined` when the document does not exist or is already deleted.
+   * Unguarded — the jobs and tests put any row in the trash with it; the
+   * owner's Delete goes through `tryDelete`.
+   */
   softDelete(id: string): Promise<DocumentRecord | undefined>;
+  /**
+   * The owner's Delete (LIB-D1, LIB-D2, LIB-D10): in one transaction, holding
+   * the document row against a share being inserted, soft-delete it only
+   * while `ever_shared` is false, the link is off and it is not the sample.
+   * `shared` and `sample` name the refusal (the route answers 409);
+   * `missing` covers a row that does not exist or is deleted already.
+   */
+  tryDelete(id: string): Promise<DeleteOutcome>;
   /**
    * Clear `deleted_at`; `undefined` when the document is not soft-deleted or
    * its deletion is past the retention window (it is no longer in Recently
    * Deleted, so it cannot be recovered from there).
    */
   recover(id: string): Promise<DocumentRecord | undefined>;
+  /**
+   * Set `archived_at` (LIB-D3, LIB-D6): the document leaves the owner's
+   * Recents, Browse and Shared views and nothing else changes — every share,
+   * the link and the room stay. `undefined` when the document does not exist,
+   * is deleted, or is archived already. The route refuses the sample.
+   */
+  archive(id: string): Promise<DocumentRecord | undefined>;
+  /** Clear `archived_at`; `undefined` when the document is not archived. */
+  unarchive(id: string): Promise<DocumentRecord | undefined>;
   /**
    * Recover every owned document deleted within the retention window and
    * write one `document.recover` audit row per document, in one transaction.

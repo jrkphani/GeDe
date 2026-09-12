@@ -9,6 +9,9 @@ import {
   listDocuments,
   permissionOf,
   recoverAllDocuments,
+  archiveDocument,
+  unarchiveDocument,
+  deletionModeOf,
   recoverDocument,
   toDocumentShares,
   toDocumentSummary,
@@ -79,6 +82,34 @@ describe('documents api', () => {
     expect(toDocumentSummary({ id: 'c' })).toBeNull();
   });
 
+  it('LIB-D1 LIB-D2 LIB-D10 reads archivedAt, everShared, sample and linkAccess, and derives the toolbar mode: delete, archive for a shared workscape, neither for the sample', () => {
+    const base = { id: 'a', title: 'x', updatedAt: '2026-09-01T00:00:00Z' };
+    const plain = toDocumentSummary(base)!;
+    expect(plain).toMatchObject({
+      archivedAt: null,
+      everShared: false,
+      sample: false,
+      linkAccess: 'none',
+    });
+    expect(deletionModeOf(plain)).toBe('delete');
+    const shared = toDocumentSummary({ ...base, everShared: true, linkAccess: 'view' })!;
+    expect(shared.linkAccess).toBe('view');
+    expect(deletionModeOf(shared)).toBe('archive');
+    const archived = toDocumentSummary({ ...base, archivedAt: '2026-09-02T00:00:00Z' })!;
+    expect(archived.archivedAt).toBe('2026-09-02T00:00:00Z');
+    // The sample wins over everything else: it is never deletable or archivable.
+    const sample = toDocumentSummary({ ...base, sample: true, everShared: true })!;
+    expect(deletionModeOf(sample)).toBe('sample');
+    // Strings and other junk never become flags.
+    expect(
+      toDocumentSummary({ ...base, everShared: 'yes', sample: 1, linkAccess: 'all' }),
+    ).toMatchObject({
+      everShared: false,
+      sample: false,
+      linkAccess: 'none',
+    });
+  });
+
   it('LIB-01 lists by view and unwraps `{ documents }`', async () => {
     const fetchImpl = vi.fn(() =>
       Promise.resolve(
@@ -117,21 +148,28 @@ describe('documents api', () => {
       .fn()
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(json(200, { document: { id: 'a', title: 'A', updatedAt: 'x' } }))
-      .mockResolvedValueOnce(json(200, { recovered: 3 }))
-      .mockResolvedValueOnce(json(200, { deleted: 2 }));
+      .mockResolvedValueOnce(json(200, { recovered: 3, ids: ['a', 'b', 'c'] }))
+      .mockResolvedValueOnce(json(200, { deleted: 2 }))
+      .mockResolvedValueOnce(json(200, { document: { id: 'a', title: 'A', updatedAt: 'x' } }))
+      .mockResolvedValueOnce(json(200, { document: { id: 'a', title: 'A', updatedAt: 'x' } }));
     const opts = {
       fetchImpl: fetchImpl as unknown as typeof fetch,
       getToken: () => Promise.resolve('t'),
     };
     await deleteDocument('a/b', opts);
     await recoverDocument('a', opts);
-    expect(await recoverAllDocuments(opts)).toBe(3);
+    expect(await recoverAllDocuments(opts)).toEqual({ count: 3, ids: ['a', 'b', 'c'] });
     expect(await deleteAllDocuments(opts)).toBe(2);
+    // LIB-D3 / LIB-D6: archive and unarchive are POSTs on the document.
+    await archiveDocument('a', opts);
+    await unarchiveDocument('a', opts);
     expect(calls(fetchImpl)).toEqual([
       ['DELETE', 'https://api.test/documents/a%2Fb'],
       ['POST', 'https://api.test/documents/a/recover'],
       ['POST', 'https://api.test/documents/recover-all'],
       ['POST', 'https://api.test/documents/delete-all'],
+      ['POST', 'https://api.test/documents/a/archive'],
+      ['POST', 'https://api.test/documents/a/unarchive'],
     ]);
   });
 

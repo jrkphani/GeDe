@@ -84,6 +84,14 @@ describe('library selection', () => {
     expect(orderDocuments([a, b], 'deleted', 'name', en).map((d) => d.id)).toEqual(['y', 'x']);
   });
 
+  it('LIB-D6 Archived orders by archive time, newest first, and is a flat list', () => {
+    const a = doc({ id: 'x', title: 'X', archivedAt: '2026-09-01T00:00:00Z' });
+    const b = doc({ id: 'y', title: 'Y', archivedAt: '2026-09-05T00:00:00Z' });
+    const ordered = orderDocuments([a, b], 'archived', 'name', en);
+    expect(ordered.map((d) => d.id)).toEqual(['y', 'x']);
+    expect(groupDocuments(ordered, 'archived', en).map((g) => g.label)).toEqual(['']);
+  });
+
   it('LIB-04 search filters by name, case-insensitively, as typed', () => {
     expect(filterByQuery([today, yesterday], 'EVEREST').map((d) => d.id)).toEqual(['a']);
     expect(filterByQuery([today, yesterday], '  ').map((d) => d.id)).toEqual(['a', 'b']);

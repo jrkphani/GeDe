@@ -3,8 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { ICON_NAMES, Icon } from './Icon.js';
 
 describe('Icon', () => {
-  it('defines the 30 catalogue glyphs plus more, passkey, apple, the find set, the sort arrows and the keyboard glyph', () => {
-    expect(ICON_NAMES).toHaveLength(43);
+  it('defines the 30 catalogue glyphs plus more, passkey, apple, the find set, the sort arrows, the keyboard glyph and archive', () => {
+    expect(ICON_NAMES).toHaveLength(44);
+    expect(ICON_NAMES).toContain('archive');
     expect(ICON_NAMES).toContain('chevron-down');
     expect(ICON_NAMES).toContain('check');
     expect(ICON_NAMES).toContain('keyboard');

@@ -37,6 +37,7 @@ export const ICON_NAMES = [
   'download',
   'delete',
   'recover',
+  'archive',
   'more',
   // state
   'complete',
@@ -130,6 +131,7 @@ const GLYPHS: Record<IconName, Glyph> = {
     d: 'M3 4.5h12M7 4.5V3h4v1.5M4.5 4.5l.8 10a1.5 1.5 0 0 0 1.5 1.4h4.4a1.5 1.5 0 0 0 1.5-1.4l.8-10M7.3 8v5M10.7 8v5',
   },
   recover: { d: 'M3.2 8.3A6 6 0 1 1 5 13.4M3 4.5v4h4' },
+  archive: { d: 'M2.5 3.5h13v3h-13zM3.5 6.5v8a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1v-8M7.3 9.5h3.4' },
   more: {
     d: '',
     extra: [

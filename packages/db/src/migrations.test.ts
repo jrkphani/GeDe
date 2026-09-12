@@ -152,6 +152,31 @@ describe('migrations', () => {
     );
   });
 
+  test('LIB-D11 LIB-D10 0008 makes archive and trash document states: archived_at, ever_shared, sample, never both archived and deleted, and backfills ever_shared from shares and the link', () => {
+    expect(files[8]).toBe('0008_documents_archive_ever_shared_sample.sql');
+    const sql = stripComments(
+      readFileSync(join(dir, '0008_documents_archive_ever_shared_sample.sql'), 'utf8'),
+    );
+    expect(sql).toMatch(/ALTER TABLE documents ADD COLUMN IF NOT EXISTS archived_at timestamptz/);
+    expect(sql).toMatch(
+      /ALTER TABLE documents ADD COLUMN IF NOT EXISTS ever_shared boolean NOT NULL DEFAULT false/,
+    );
+    expect(sql).toMatch(
+      /ALTER TABLE documents ADD COLUMN IF NOT EXISTS sample boolean NOT NULL DEFAULT false/,
+    );
+    expect(sql).toMatch(
+      /ADD CONSTRAINT documents_archived_or_deleted_check\s+CHECK \(archived_at IS NULL OR deleted_at IS NULL\)/,
+    );
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS documents_archived_owner_idx ON documents (owner_id) WHERE archived_at IS NOT NULL',
+    );
+    // The backfill sets the flag; it never clears one and never touches other columns.
+    expect(sql).toMatch(/UPDATE documents d\s+SET ever_shared = true/);
+    expect(sql).toMatch(/link_access <> 'none'/);
+    expect(sql).toMatch(/EXISTS \(SELECT 1 FROM shares s WHERE s\.document_id = d\.id\)/);
+    expect(sql).not.toMatch(/SET ever_shared = false/);
+  });
+
   test('LOAD-06 every index declared in schema.ts exists in the migrations', () => {
     const sql = stripComments(allSql);
     const declared = [...sql.matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map(

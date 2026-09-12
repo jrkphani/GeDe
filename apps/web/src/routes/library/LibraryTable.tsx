@@ -1,4 +1,4 @@
-import { useEffect, useRef, type KeyboardEvent } from 'react';
+import { useEffect, useRef, type KeyboardEvent, type ReactNode } from 'react';
 import clsx from 'clsx';
 import { Button, Icon, Menu, type MenuEntry } from '@gede/ui';
 import type { DocumentsView, DocumentSummary } from '../../api/documents.js';
@@ -17,13 +17,38 @@ export interface LibraryTableProps {
   onOpen: (doc: DocumentSummary) => void;
   /** LIB-03: the row overflow menu, revealed on the selected row. */
   rowMenu: (doc: DocumentSummary) => readonly MenuEntry[];
+  /**
+   * LIB-D6 / LIB-D7: a per-row action shown on every row of a view — Unarchive
+   * in Archived, Recover in Recently Deleted. Rendered in the actions column
+   * beside the overflow control; absent on phone, where the library is read-only.
+   */
+  rowAction?: ((doc: DocumentSummary) => ReactNode) | undefined;
 }
 
 const KIND_LABEL = { workscape: 'Workscape' } as const;
 
+/** LIB-D10 / ONB-01: the guided sample is flagged in the Shared column, as the prototype does. */
+export const SAMPLE_LABEL = 'Sample';
+
 function sharerOf(doc: DocumentSummary): string {
+  if (doc.sample === true) return SAMPLE_LABEL;
   if (doc.sharedBy !== undefined) return doc.sharedBy.name ?? SHARED_WITH_ME;
   return doc.sharedWithOthers === true ? SHARED_BY_ME : '—';
+}
+
+const DATE_LABEL: Record<DocumentsView, string> = {
+  recents: 'Modified',
+  browse: 'Modified',
+  shared: 'Modified',
+  deleted: 'Deleted',
+  archived: 'Archived',
+};
+
+/** The date the view is about: deletion in Recently Deleted, archiving in Archived, else the edit. */
+function dateOf(view: DocumentsView, d: DocumentSummary): string {
+  if (view === 'deleted') return d.deletedAt ?? d.updatedAt;
+  if (view === 'archived') return d.archivedAt ?? d.updatedAt;
+  return d.updatedAt;
 }
 
 /**
@@ -40,13 +65,12 @@ export function LibraryTable({
   onSelect,
   onOpen,
   rowMenu,
+  rowAction,
 }: LibraryTableProps) {
   const rows = flattenGroups(groups);
   const bodyRef = useRef<HTMLTableElement>(null);
   const columns = narrow ? 4 : 6;
-  const dateLabel = view === 'deleted' ? 'Deleted' : 'Modified';
-  const dateOf = (d: DocumentSummary) =>
-    view === 'deleted' ? (d.deletedAt ?? d.updatedAt) : d.updatedAt;
+  const dateLabel = DATE_LABEL[view];
 
   // Keep focus on the selected row when selection moves by keyboard.
   useEffect(() => {
@@ -116,7 +140,10 @@ export function LibraryTable({
     <table
       ref={bodyRef}
       role="grid"
-      className={clsx('gd-lib__table', { 'gd-lib__table--narrow': narrow })}
+      className={clsx('gd-lib__table', {
+        'gd-lib__table--narrow': narrow,
+        'gd-lib__table--row-action': rowAction !== undefined,
+      })}
       aria-label="Workscapes"
       aria-rowcount={rows.length}
       onKeyDown={onKeyDown}
@@ -190,8 +217,8 @@ export function LibraryTable({
                   {d.sizeBytes !== undefined ? formatBytes(locale, d.sizeBytes) : '—'}
                 </td>
                 <td role="gridcell" className="gd-lib__muted">
-                  <time dateTime={dateOf(d)}>
-                    {formatDate(locale, dateOf(d), narrow ? 'numeric' : 'long')}
+                  <time dateTime={dateOf(view, d)}>
+                    {formatDate(locale, dateOf(view, d), narrow ? 'numeric' : 'long')}
                   </time>
                 </td>
                 {!narrow && (
@@ -207,6 +234,7 @@ export function LibraryTable({
                     e.stopPropagation();
                   }}
                 >
+                  {rowAction?.(d)}
                   {selected && (
                     <Menu
                       align="end"

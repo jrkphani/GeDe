@@ -7,7 +7,8 @@ import { apiFetch, type RequestOptions } from './client.js';
  */
 export type DocumentPermission = 'owner' | 'edit' | 'view';
 export type DocumentKind = 'workscape';
-export type DocumentsView = 'recents' | 'browse' | 'shared' | 'deleted';
+export type DocumentsView = 'recents' | 'browse' | 'shared' | 'deleted' | 'archived';
+export type LinkAccess = 'none' | 'view' | 'edit';
 
 export interface Sharer {
   id: string;
@@ -36,6 +37,18 @@ export interface DocumentSummary {
   permission?: DocumentPermission | undefined;
   sizeBytes?: number | undefined;
   deletedAt?: string | null | undefined;
+  /** LIB-D6: set while archived by the owner. */
+  archivedAt?: string | null | undefined;
+  /**
+   * LIB-D2/D4: true while the workscape has been shared and access remains —
+   * a participant, or the link on. The server refuses Delete while it is true;
+   * the toolbar offers Archive instead. Absent means the server did not say,
+   * which is read as not shared (Delete stays offered; the server has the last word).
+   */
+  everShared?: boolean | undefined;
+  /** LIB-D10: the guided sample; Delete and Archive are disabled for it. */
+  sample?: boolean | undefined;
+  linkAccess?: LinkAccess | undefined;
 }
 
 export interface Participant {
@@ -78,6 +91,18 @@ export function permissionOf(doc: DocumentSummary): DocumentPermission {
   return doc.permission ?? 'view';
 }
 
+/**
+ * LIB-D1/D2: what the fourth toolbar slot offers for a live row. `delete`
+ * while nobody else holds access; `archive` once someone does (or the link
+ * is on); `sample` for the guided sample, which offers neither (LIB-D10).
+ */
+export type DeletionMode = 'delete' | 'archive' | 'sample';
+
+export function deletionModeOf(doc: DocumentSummary): DeletionMode {
+  if (doc.sample === true) return 'sample';
+  return doc.everShared === true ? 'archive' : 'delete';
+}
+
 /** Tolerant reader: required fields must be strings; optional ones are kept only when well-typed. */
 export function toDocumentSummary(v: unknown): DocumentSummary | null {
   if (!isRecord(v)) return null;
@@ -98,6 +123,10 @@ export function toDocumentSummary(v: unknown): DocumentSummary | null {
     permission: toPermission(v.permission),
     sizeBytes: typeof v.sizeBytes === 'number' ? v.sizeBytes : undefined,
     deletedAt: str(v.deletedAt) ?? null,
+    archivedAt: str(v.archivedAt) ?? null,
+    everShared: v.everShared === true,
+    sample: v.sample === true,
+    linkAccess: v.linkAccess === 'view' || v.linkAccess === 'edit' ? v.linkAccess : 'none',
   };
 }
 
@@ -153,7 +182,11 @@ export async function renameDocument(
   });
 }
 
-/** Soft delete: the workscape moves to Recently Deleted for 30 days (LIB-08). */
+/**
+ * Soft delete: the workscape moves to Recently Deleted for 30 days (LIB-08,
+ * LIB-D5). The server answers 409 `shared` for a workscape someone holds
+ * access to (LIB-D2) and 409 `sample` for the guided sample (LIB-D10).
+ */
 export async function deleteDocument(id: string, options?: RequestOptions): Promise<void> {
   await apiFetch<unknown>(`/documents/${encode(id)}`, {
     ...options,
@@ -171,18 +204,46 @@ export async function recoverDocument(id: string, options?: RequestOptions): Pro
   });
 }
 
+/** LIB-D3: archive keeps every participant's access; the row leaves the owner's views only. */
+export async function archiveDocument(id: string, options?: RequestOptions): Promise<void> {
+  await apiFetch<unknown>(`/documents/${encode(id)}/archive`, {
+    ...options,
+    method: 'POST',
+    retry: true,
+  });
+}
+
+/** LIB-D6: back into the owner's views; a workscape that is not archived answers 409 `conflict`. */
+export async function unarchiveDocument(id: string, options?: RequestOptions): Promise<void> {
+  await apiFetch<unknown>(`/documents/${encode(id)}/unarchive`, {
+    ...options,
+    method: 'POST',
+    retry: true,
+  });
+}
+
 function countOf(raw: unknown, key: string): number {
   return isRecord(raw) && typeof raw[key] === 'number' ? raw[key] : 0;
 }
 
-/** Recovers everything deleted within the 30-day window; resolves with how many. */
-export async function recoverAllDocuments(options?: RequestOptions): Promise<number> {
+export interface RecoveredAll {
+  count: number;
+  /** The recovered ids, so Undo can delete each again (LIB-D9). Empty when the server sent none. */
+  ids: string[];
+}
+
+/** Recovers everything deleted within the 30-day window; resolves with how many, and which. */
+export async function recoverAllDocuments(options?: RequestOptions): Promise<RecoveredAll> {
   const raw = await apiFetch<unknown>('/documents/recover-all', {
     ...options,
     method: 'POST',
     retry: true,
   });
-  return countOf(raw, 'recovered');
+  const ids =
+    isRecord(raw) && Array.isArray(raw.ids)
+      ? raw.ids.filter((id): id is string => typeof id === 'string')
+      : [];
+  return { count: countOf(raw, 'recovered'), ids };
 }
 
 /** Permanent: purges everything in Recently Deleted; resolves with how many. */
