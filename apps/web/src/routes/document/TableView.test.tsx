@@ -917,6 +917,13 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
     await userEvent.click(chevronIn(rowEls()[0]!)!);
     expect(rowEls()).toHaveLength(6);
     expect(live()).toHaveTextContent('Expanded the row');
+    // A11Y-01: with a cell selected elsewhere, the chevron does not take its focus either.
+    await userEvent.click(cellAt(3, 1));
+    expect(cellAt(3, 1)).toHaveFocus();
+    await userEvent.click(chevronIn(rowEls()[0]!)!);
+    expect(rowEls()).toHaveLength(4);
+    expect(cellAt(1, 1)).toHaveFocus(); // the same cell, now drawn one row up
+    expect(selected()).toBe('C6');
   });
 
   it('HIER-06 collapsing with a cell inside the subtree selected hands the selection to the parent, before anything hides', async () => {

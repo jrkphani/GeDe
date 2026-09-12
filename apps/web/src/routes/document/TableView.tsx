@@ -638,7 +638,10 @@ function OutlineMarks({ row, control }: OutlineMarksProps) {
             tabIndex={-1}
             data-testid="outline-chevron"
             onPointerDown={(e) => {
-              e.stopPropagation(); // the press must not also arm the cell under it
+              // The press must neither arm the cell under it nor take focus from the
+              // selected cell: the grid's one tab stop stays where it is (A11Y-01).
+              e.stopPropagation();
+              e.preventDefault();
             }}
             onClick={(e) => {
               e.stopPropagation();
