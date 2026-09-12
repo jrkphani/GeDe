@@ -204,6 +204,9 @@ export class PipelineStack extends cdk.Stack {
       buildEnvironment: ARM_SMALL,
       cache: codebuild.Cache.local(codebuild.LocalCacheMode.CUSTOM),
       partialBuildSpec: PLAYWRIGHT_BUILD_SPEC,
+      // Hard cap (CodeBuild's default is an hour): ~3 min of install and a journey bounded by
+      // Playwright's own timeouts leave a wide margin; past it the step is hung, not slow.
+      timeout: cdk.Duration.minutes(20),
     });
     // After Smoke: there is no point signing in to a deployment whose health probe failed.
     live.addStepDependency(smoke);

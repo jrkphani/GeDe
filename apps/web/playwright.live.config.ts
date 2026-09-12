@@ -19,6 +19,9 @@ export default defineConfig({
   testDir: './e2e-live',
   testMatch: /.*\.spec\.ts$/,
   timeout: 60_000,
+  // The whole run, retries included: one journey twice over is minutes, not ten. Past this
+  // the suite is hung (the CodeBuild step has its own 20-minute cap above it).
+  globalTimeout: 10 * 60_000,
   expect: { timeout: 10_000 },
   fullyParallel: false,
   workers: 1,

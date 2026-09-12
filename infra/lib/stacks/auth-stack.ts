@@ -32,10 +32,12 @@ export const E2E_CLIENT_NAME = 'gede-e2e';
  *
  * Plus what the pipeline's post-deploy `Playwright-Live` step needs to sign in without a
  * mailbox or a passkey (docs/TESTING.md "Live suite"): a second app client `gede-e2e` whose
- * only flow is `ADMIN_USER_PASSWORD_AUTH` (usable with IAM credentials alone — the SPA
- * client stays `USER_AUTH`-only, ADR-011), one account `e2e@<domain>` whose permanent
- * password lives in Secrets Manager, and the grant that lets the step's role call
- * `AdminInitiateAuth` on this pool and read that secret.
+ * only flow is `ADMIN_USER_PASSWORD_AUTH` (needs IAM credentials — the SPA client stays
+ * `USER_AUTH`-only, ADR-011), one account `e2e@<domain>` whose permanent password lives in
+ * Secrets Manager, and the grant that lets the step's role call `AdminInitiateAuth` on this
+ * pool and read that secret. The password is a real sign-in credential for that account
+ * (the pool's sign-in policy admits PASSWORD as a first factor, so `USER_AUTH` on the SPA
+ * client takes it too); the secret's IAM is what guards it, not the client's flow list.
  */
 export class AuthStack extends cdk.Stack {
   readonly userPool: cognito.UserPool;
@@ -211,8 +213,12 @@ export class AuthStack extends cdk.Stack {
 
     // ---- The live suite's way in (Playwright-Live) ---------------------------------------
     // A client of its own so the SPA client never gains a password flow. ADMIN_USER_PASSWORD_AUTH
-    // needs IAM (`AdminInitiateAuth`), so the password alone opens nothing; the step's role is
-    // the only principal granted it (below). Refresh tokens live a day: a run needs minutes.
+    // needs IAM (`AdminInitiateAuth`); the step's role is the only principal granted it (below).
+    // That does not make the password inert: the pool's sign-in policy lists PASSWORD as a first
+    // factor (Cognito insists, see the pool), so the SPA client's USER_AUTH flow would also take
+    // it for this one account — the only one with a password. IAM on the secret (the handler's
+    // role and the step's role are its only readers) is what protects the account. Refresh
+    // tokens live a day: a run needs minutes.
     this.e2eClient = new cognito.UserPoolClient(this, 'E2e', {
       userPool: this.userPool,
       userPoolClientName: E2E_CLIENT_NAME,

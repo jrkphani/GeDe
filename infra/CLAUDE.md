@@ -83,8 +83,8 @@ Change` for that family with a non-zero exit code or `TaskFailedToStart` → SNS
   filter on the job log (`GeDe/Jobs PurgeFailures`) with an alarm. The scheduler and the rule
   live in Ops, not Service, so the alerts topic needs no cross-stack cycle.
 - **The live suite's way in.** `AuthStack` adds a second app client `gede-e2e` whose only flow
-  is `ADMIN_USER_PASSWORD_AUTH` (needs IAM, so the password alone opens nothing), the account
-  `e2e@<domain>` with a permanent generated password in `gede/<env>/e2e-user`, and an
+  is `ADMIN_USER_PASSWORD_AUTH` (needs IAM), the account `e2e@<domain>` with a permanent
+  generated password in `gede/<env>/e2e-user`, and an
   `AWS::IAM::Policy` attached **by name** to `gede-pipeline-playwright-live` — the role
   `PipelineStack` creates for the Playwright-Live step (`PLAYWRIGHT_LIVE_ROLE_NAME` in
   `lib/config.ts`). The two stacks meet on the name because the pipeline stack cannot know the
@@ -92,7 +92,11 @@ Change` for that family with a non-zero exit code or `TaskFailedToStart` → SNS
   `services/sync` verifies tokens from both clients (`COGNITO_CLIENT_IDS`). The user is created by
   a small Lambda (`assets/e2e-user/index.mjs`), not `AwsCustomResource`: that handler logs its
   whole event, so a password passed as a property would land in CloudWatch. SelfMutate creates
-  the role before the stage deploys, so the policy always has a role to attach to.
+  the role before the stage deploys, so the policy always has a role to attach to. Know what
+  the password is: because the pool's sign-in policy must list PASSWORD as a first factor (next
+  bullet), the SPA client's `USER_AUTH` flow also accepts it for this one account — it is a
+  real production credential, guarded by IAM on the secret (the handler and the step's role are
+  the only readers), not by the `gede-e2e` client's flow list. Rotation is in runbook §3.
 - **Passwordless Cognito.** Cognito requires PASSWORD in `AllowedFirstAuthFactors` of a
   choice-based pool (CloudFormation rejected the override on 2026-09-12), so the pool policy is
   `[PASSWORD, EMAIL_OTP, WEB_AUTHN]`. Passwordless is enforced at the client: the SPA app client

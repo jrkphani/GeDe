@@ -942,6 +942,7 @@ describe('GeDe CDK app', () => {
       Properties: {
         Source: { BuildSpec?: string };
         ServiceRole: unknown;
+        TimeoutInMinutes?: number;
         Environment: {
           ComputeType: string;
           EnvironmentVariables?: { Name: string; Value: string }[];
@@ -969,6 +970,8 @@ describe('GeDe CDK app', () => {
       expect.arrayContaining(['node_modules/**/*', '/root/.cache/ms-playwright/**/*']),
     );
     expect(live[0]!.Properties.Environment.ComputeType).toBe('BUILD_GENERAL1_SMALL');
+    // A hung suite cannot hold the execution for CodeBuild's default hour.
+    expect(live[0]!.Properties.TimeoutInMinutes).toBe(20);
     expect(live[0]!.Properties.Environment.EnvironmentVariables).toEqual(
       expect.arrayContaining([expect.objectContaining({ Name: 'CI', Value: 'true' })]),
     );
