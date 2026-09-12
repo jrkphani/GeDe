@@ -39,6 +39,8 @@ export function HelpMenu() {
     <>
       <Menu
         align="end"
+        // Two short items: the page stays readable and focusable around it (no hidden tab stops).
+        modal={false}
         label={t('library.help.label')}
         entries={entries}
         trigger={

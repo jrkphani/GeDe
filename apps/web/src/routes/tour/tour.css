@@ -20,15 +20,12 @@
 .gd-tour__scrim {
   position: fixed;
   z-index: 25;
+  box-sizing: border-box;
   pointer-events: none;
   border: 2px solid var(--selection-ring);
   border-radius: var(--radius-lg);
   box-shadow: 0 0 0 9999px color-mix(in srgb, var(--slate-900) 46%, transparent);
-  transition:
-    left var(--dur-fast) var(--ease-out),
-    top var(--dur-fast) var(--ease-out),
-    width var(--dur-fast) var(--ease-out),
-    height var(--dur-fast) var(--ease-out);
+  /* No transition: the ring tracks the live box exactly, scroll and zoom included (ONB-04). */
 }
 .gd-tour__scrim--full {
   inset: 0;
@@ -164,9 +161,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .gd-tour__scrim,
   .gd-tour__card {
-    transition: none;
     animation: none;
   }
 }

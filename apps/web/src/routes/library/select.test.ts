@@ -130,13 +130,8 @@ describe('library selection', () => {
     );
     expect(shared.map((g) => g.label)).toEqual(['Sample', 'Om']);
     // Flat views keep it first without a heading.
-    expect(groupDocuments(orderDocuments(rows, 'browse', 'name', en), 'browse', en, NOW)).toEqual([
-      { id: 'all', label: '', rows: expect.arrayContaining([sample]) },
-    ]);
-    expect(
-      flattenGroups(
-        groupDocuments(orderDocuments(rows, 'browse', 'name', en), 'browse', en, NOW),
-      )[0]?.id,
-    ).toBe('s');
+    const browse = groupDocuments(orderDocuments(rows, 'browse', 'name', en), 'browse', en, NOW);
+    expect(browse.map((g) => [g.id, g.label])).toEqual([['all', '']]);
+    expect(flattenGroups(browse)[0]?.id).toBe('s');
   });
 });

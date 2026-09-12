@@ -231,13 +231,16 @@ function OpenDocument({
   useTableFlags(gd); // INSP-07: `pinned` and `z` decide the layers below; nothing else inside a table
   useYVersion(gd.graphs, { depth: 'shallow' });
   const awarenessVersion = useAwarenessVersion(session.sync.awareness);
-  // ONB-05: the guided tour reads this document for its step-2 and step-3 checks.
+  // ONB-05: the guided tour reads this document for its step-2 and step-3 checks —
+  // once it has loaded, so the counts it takes as its baseline are the document's, not
+  // an empty replica's.
   useEffect(() => {
+    if (!ready) return;
     setTourDocument(gd);
     return () => {
       setTourDocument(null);
     };
-  }, [gd]);
+  }, [gd, ready]);
 
   // Viewer state (never document state): active sheet, selection, viewport, chrome toggles.
   const sheets = listSheets(gd);
