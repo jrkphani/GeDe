@@ -10,13 +10,10 @@
  *     refresh) and offers it in a fresh subprotocol list;
  *   - reconnects back off exponentially with jitter (the provider's own backoff
  *     is deterministic and capped at 2.5 s);
- *   - the server's close codes are read: a 4401 first retries the same token
- *     through the legacy `?token=` transport (a task from before #32 does not
- *     read the subprotocol, and a rolling deploy runs both for a minute; the
- *     old task still selects `gede.v1`, so the echo cannot tell them apart —
- *     the fallback is unconditional and goes with #63), then once more with a
- *     token forced through Cognito's refresh, on both transports; a 4401 after
- *     all four is terminal (the session is gone, not the token stale);
+ *   - the server's close codes are read: a 4401 retries once with a token
+ *     forced through Cognito's refresh; a second 4401 is terminal (the session
+ *     is gone, not the token stale). The subprotocol is the only transport —
+ *     the `?token=` fallback for the #32 rolling deploy went with #63;
  *     4403 / 4404 / 4400 are terminal at once. Terminal closes surface as a
  *     failure the chrome shows (LOAD-05: only a failed sync surfaces anything);
  *   - the server's type-4 notice `{ code: 'read-only' }` (SHARE-03) flips
@@ -76,25 +73,16 @@ export function wsProtocols(token: string): string[] {
 export const OFFLINE_AFTER_ATTEMPTS = 3;
 export const MAX_BACKOFF_MS = 30_000;
 
-/** How the access token is offered on one connect attempt. */
-export type TokenTransport = 'subprotocol' | 'query';
-
 /**
- * The transports tried on consecutive 4401s within one sync-less window, in
- * order: the current token on both transports, then a token forced through
- * refresh on both. Beyond the last, a 4401 means the session is gone.
- * TODO(#63): drop the `query` entries when the server stops accepting `?token=`.
+ * The tokens tried on consecutive 4401s within one sync-less window, in
+ * order: the session's current token, then one forced through refresh. Beyond
+ * the last, a 4401 means the session is gone. Every attempt offers the token
+ * as the `bearer.` subprotocol (#63: the server reads nothing else).
  */
 export const UNAUTHENTICATED_RETRY_PLAN: readonly {
-  transport: TokenTransport;
-  /** Fetch the token through the forced refresh (`refresh`), or offer the previous attempt's token again (`reuse`). */
-  token: 'session' | 'refresh' | 'reuse';
-}[] = [
-  { transport: 'subprotocol', token: 'session' },
-  { transport: 'query', token: 'reuse' },
-  { transport: 'subprotocol', token: 'refresh' },
-  { transport: 'query', token: 'reuse' },
-];
+  /** Read the session's token (`session`) or fetch one through the forced refresh (`refresh`). */
+  token: 'session' | 'refresh';
+}[] = [{ token: 'session' }, { token: 'refresh' }];
 
 export interface SyncClientOptions {
   docId: string;
@@ -132,8 +120,6 @@ export class SyncClient {
   private authAttempt = 0;
   /** The next attempt must fetch a forced-refresh token (after a 4401). */
   private forceRefresh = false;
-  /** The token the last attempt offered, for a retry of the same token on the other transport. */
-  private lastToken: string | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private connectSeq = 0;
   private readonly random: () => number;
@@ -310,12 +296,10 @@ export class SyncClient {
       return;
     }
     let token: string | null;
-    const step = UNAUTHENTICATED_RETRY_PLAN[this.authAttempt];
     const fetchToken = this.forceRefresh ? this.refreshToken : this.getToken;
     this.forceRefresh = false;
     try {
-      token =
-        step?.token === 'reuse' && this.lastToken !== null ? this.lastToken : await fetchToken();
+      token = await fetchToken();
     } catch {
       token = null;
     }
@@ -327,18 +311,10 @@ export class SyncClient {
       });
       return;
     }
-    this.lastToken = token;
-    const transport = step?.transport ?? 'subprotocol';
-    if (transport === 'query') {
-      // Legacy transport (#63): the token in the URL, `gede.v1` still offered so
-      // either generation of server selects it.
-      this.provider.params = { token };
-      this.provider.protocols = [WS_SUBPROTOCOL];
-    } else {
-      // y-websocket 3.x passes `protocols` to every `new WebSocket(url, protocols)`.
-      this.provider.params = {};
-      this.provider.protocols = wsProtocols(token);
-    }
+    // y-websocket 3.x passes `protocols` to every `new WebSocket(url, protocols)`;
+    // `params` stays empty so nothing about the session ever reaches the URL (#63).
+    this.provider.params = {};
+    this.provider.protocols = wsProtocols(token);
     this.provider.connect();
   }
 
@@ -374,8 +350,7 @@ export class SyncClient {
     if (code === CLOSE_UNAUTHENTICATED) {
       const next = UNAUTHENTICATED_RETRY_PLAN[this.authAttempt + 1];
       if (next !== undefined) {
-        // Not accepted as offered: try the next step of the plan at once —
-        // the other transport (an older task), then a refreshed token.
+        // Not accepted as offered: try the next step of the plan at once (a refreshed token).
         this.authAttempt += 1;
         this.forceRefresh = next.token === 'refresh';
         this.set({ status: this.snapshot.everSynced ? 'reconnecting' : 'connecting' });

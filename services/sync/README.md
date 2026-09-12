@@ -172,9 +172,8 @@ rowId, columnId, snippet }] }`, at most 50, in sheet / table / row / column orde
   `{ "code": "read-only" }`, sent once per view-only connection on its first rejected write (see
   `src/ws/protocol.ts`). The access token is offered as a subprotocol: `Sec-WebSocket-Protocol:
 gede.v1, bearer.<access JWT>` (`new WebSocket(url, ['gede.v1', 'bearer.' + token])`); the server
-  selects `gede.v1` and never echoes the bearer entry. `?token=<access JWT>` is still accepted for
-  one release and logs a deprecation warning (never the token; the request log redacts the
-  parameter) — it goes in the release after this one. Close codes: 4401 unauthenticated, 4403 not
+  selects `gede.v1` and never echoes the bearer entry. A `?token=` query parameter is not read
+  (#63; the request log still redacts it). Close codes: 4401 unauthenticated, 4403 not
   a participant / wrong origin, 4404 unknown or deleted document, 4429 more sync messages per
   second than `WS_UPDATES_BURST` allows — step 1 and awareness queries count too, since each makes
   the server encode and send (the client treats it as terminal), 1013 the socket stopped

@@ -36,7 +36,7 @@ describe('logger redaction (issue #34)', () => {
     expect(redactTokenParam('/api/documents')).toBe('/api/documents');
   });
 
-  test('AUTH-01 a logged request never carries the token from the deprecated query string or from the headers', () => {
+  test('AUTH-01 a logged request never carries a token from the query string (unread since #63) or from the headers', () => {
     const lines: string[] = [];
     const logger = productionShapedLogger(lines);
     const request = {

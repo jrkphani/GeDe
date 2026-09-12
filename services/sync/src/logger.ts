@@ -4,8 +4,9 @@
  *
  * `requestSerializer` replaces Fastify's default `req` serializer (Fastify
  * takes serializers from the pino instance it is given): the same fields, with
- * any `token` query parameter redacted so the deprecated `?token=` WebSocket
- * transport (issue #32) never puts an access token in a log line.
+ * any `token` query parameter redacted. The server no longer reads a token
+ * from the URL (#63), but a client that puts one there anyway must never see
+ * it land in a log line (#34) — defence in depth.
  */
 import type { FastifyBaseLogger, FastifyRequest } from 'fastify';
 

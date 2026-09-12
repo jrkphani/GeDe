@@ -121,12 +121,12 @@ describe('SyncClient', () => {
     expect(c.getSnapshot()).toMatchObject({ status: 'synced', attempts: 0, failure: null });
   });
 
-  it('AUTH-09 a 4401 close retries the same token on the legacy transport, then a refreshed token on both; a 4401 after all four is terminal', async () => {
+  it('AUTH-09 a 4401 close retries once with a refreshed token; a second 4401 is terminal; no attempt puts the token in the URL (#63)', async () => {
     vi.useFakeTimers();
-    // Two refusals: the subprotocol attempt and the legacy attempt with the stale token.
+    // One refusal: the session token is stale, the refreshed one is accepted.
     room.options = {
       refuseWith: { code: CLOSE_UNAUTHENTICATED, reason: 'invalid token' },
-      refuseCount: 2,
+      refuseCount: 1,
     };
     let refreshes = 0;
     const { c } = client(room, {
@@ -135,17 +135,18 @@ describe('SyncClient', () => {
     clients.push(c);
     c.connect();
     await vi.advanceTimersByTimeAsync(10);
-    // The same token both ways first (no forced refresh), then the forced refresh on
-    // the subprotocol, which synced.
-    expect(room.tokens).toEqual(['tok-1', 'tok-1', 'fresh-1']);
-    expect(room.urls.map((u) => u.includes('token='))).toEqual([false, true, false]);
-    expect(room.protocols.map((p) => p.length)).toEqual([2, 1, 2]);
+    expect(room.tokens).toEqual(['tok-1', 'fresh-1']);
+    expect(room.urls).toEqual([`${WS_URL}/${DOC_ID}`, `${WS_URL}/${DOC_ID}`]);
+    expect(room.protocols).toEqual([
+      [WS_SUBPROTOCOL, 'bearer.tok-1'],
+      [WS_SUBPROTOCOL, 'bearer.fresh-1'],
+    ]);
     expect(refreshes).toBe(1);
     expect(c.getSnapshot().status).toBe('synced');
     // The window closed on sync: a later 4401 gets its own plan.
     room.options = {
       refuseWith: { code: CLOSE_UNAUTHENTICATED, reason: 'expired' },
-      refuseCount: 2,
+      refuseCount: 1,
     };
     room.refusals = 0;
     room.dropAll();
@@ -159,41 +160,14 @@ describe('SyncClient', () => {
     clients.push(second.c);
     second.c.connect();
     await vi.advanceTimersByTimeAsync(10);
-    expect(again.tokens).toEqual(['tok-1', 'tok-1', 'fresh', 'fresh']);
-    expect(again.urls.map((u) => u.includes('token='))).toEqual([false, true, false, true]);
+    expect(again.tokens).toEqual(['tok-1', 'fresh']);
+    expect(again.urls.every((u) => u === `${WS_URL}/${DOC_ID}`)).toBe(true);
     expect(second.c.getSnapshot()).toMatchObject({
       status: 'offline',
       failure: { code: CLOSE_UNAUTHENTICATED, reason: 'expired' },
     });
     await vi.advanceTimersByTimeAsync(60_000);
-    expect(again.urls).toHaveLength(4); // no further attempts without Retry
-  });
-
-  it('AUTH-09 LOAD-05 a task from before #32 (rolling-deploy window) is reached through the legacy ?token= transport without a refresh', async () => {
-    vi.useFakeTimers();
-    room.options = { legacyOnly: true };
-    let refreshes = 0;
-    const { c, doc } = client(room, {
-      refreshToken: () => Promise.resolve(`fresh-${String(++refreshes)}`),
-    });
-    clients.push(c);
-    c.connect();
-    await vi.advanceTimersByTimeAsync(10);
-    expect(c.getSnapshot().status).toBe('synced');
-    expect(refreshes).toBe(0);
-    expect(room.tokens).toEqual(['tok-1', 'tok-1']); // the same token, the other way
-    expect(room.urls[1]).toBe(`${WS_URL}/${DOC_ID}?token=tok-1`);
-    // `gede.v1` is still offered so the old server selects it too.
-    expect(room.protocols[1]).toEqual([WS_SUBPROTOCOL]);
-    doc.getMap('meta').set('title', 'through the old task');
-    await vi.advanceTimersByTimeAsync(10);
-    expect(room.doc.getMap('meta').get('title')).toBe('through the old task');
-    // The next connect starts from the subprotocol again (the deploy has moved on).
-    room.options = {};
-    room.dropAll();
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(c.getSnapshot().status).toBe('synced');
-    expect(room.urls.at(-1)).toBe(`${WS_URL}/${DOC_ID}`);
+    expect(again.urls).toHaveLength(2); // no further attempts without Retry
   });
 
   it('SHARE-03 a 4403 is terminal: no reconnect until Retry, which reconnects at once', async () => {

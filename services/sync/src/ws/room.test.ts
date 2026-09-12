@@ -81,30 +81,31 @@ describe('upgrade authorisation', () => {
     expect(server.app.rooms.get(docId)?.size).toBe(1);
   });
 
-  test('AUTH-01 ?token= is still accepted for one release, with a deprecation warning; no log line carries the token', async () => {
+  test('AUTH-01 a valid token in ?token= is refused with 4401 (#63); the request log still redacts it', async () => {
     await server.close();
     server = await startServer({}, { captureLogs: true });
-    const legacyToken = server.verifier.issue('tok-legacy', 'sub-owner');
+    const validToken = server.verifier.issue('tok-query', 'sub-owner');
     const legacy = await YClient.connect(
-      `${server.wsUrl}/ws/${docId}?token=${legacyToken}`,
+      `${server.wsUrl}/ws/${docId}?token=${validToken}`,
       WEB_ORIGIN,
     );
     clients.push(legacy);
-    expect((await legacy.closed).code).toBe(CLOSE_NOT_FOUND); // a fresh fake repo: the point is the log
-    const deprecation = server.logs.find((l) => l.msg?.includes('query string is deprecated'));
-    expect(deprecation).toMatchObject({ level: 40, documentId: docId });
+    // The same token as a subprotocol would reach the permission check (4404 on this
+    // fresh fake repo); in the URL it is not read at all, so the outcome is 4401.
+    expect((await legacy.closed).code).toBe(CLOSE_UNAUTHENTICATED);
+    expect(legacy.received).toEqual([]);
+    expect(server.logs.some((l) => l.msg?.includes('deprecated'))).toBe(false);
     const incoming = server.logs.find((l) => l.msg === 'incoming request');
     expect((incoming?.req as { url: string }).url).toBe(`/ws/${docId}?token=[redacted]`);
-    expect(JSON.stringify(server.logs)).not.toContain(legacyToken);
+    expect(JSON.stringify(server.logs)).not.toContain(validToken);
 
-    // With the subprotocol nothing is deprecated and the URL is clean.
+    // The subprotocol is the transport; the URL stays clean and the token never reaches a log line.
     server.logs.length = 0;
     const modern = new YClient(`${server.wsUrl}/ws/${docId}`, WEB_ORIGIN, {
-      protocols: bearerProtocols(legacyToken),
+      protocols: bearerProtocols(validToken),
     });
-    await modern.closed;
-    expect(server.logs.some((l) => l.msg?.includes('deprecated'))).toBe(false);
-    expect(JSON.stringify(server.logs)).not.toContain(legacyToken);
+    expect((await modern.closed).code).toBe(CLOSE_NOT_FOUND);
+    expect(JSON.stringify(server.logs)).not.toContain(validToken);
   });
 
   test('SHARE-03 a signed-in non-participant closes with 4403; an unknown document with 4404', async () => {
