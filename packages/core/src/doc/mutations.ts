@@ -469,10 +469,7 @@ export function scaleTable(gd: GedeDoc, tableId: Id, options: ScaleTableOptions)
     }
     if (options.wrapped !== undefined) {
       const height = options.wrapped ? WRAPPED_ROW_HEIGHT : DEFAULT_ROW_HEIGHT;
-      for (const rowId of rowsArray(table).toArray()) {
-        const meta = metaFor(table, rowId);
-        if (meta.get('height') !== height) meta.set('height', height);
-      }
+      for (const rowId of rowsArray(table).toArray()) setRowHeight(table, rowId, height);
     }
     return widths;
   });
@@ -503,6 +500,21 @@ export function setFooterRows(gd: GedeDoc, tableId: Id, count: StripCount): void
   });
 }
 
+/**
+ * Store a row height, writing nothing when it already reads that way — a row
+ * with no meta is one unit, so setting one unit there is not a write and not
+ * an undo step.
+ */
+function setRowHeight(table: TableMap, rowId: Id, height: number): void {
+  const existing = rowMetaMap(table).get(rowId);
+  if (existing === undefined) {
+    if (height === DEFAULT_ROW_HEIGHT) return;
+    metaFor(table, rowId).set('height', height);
+    return;
+  }
+  if (existing.get('height') !== height) existing.set('height', height);
+}
+
 function metaFor(table: TableMap, rowId: Id): RowMetaMap {
   const metas = rowMetaMap(table);
   let meta = metas.get(rowId);
@@ -519,8 +531,9 @@ function metaFor(table: TableMap, rowId: Id): RowMetaMap {
 /** A wrapped row occupies two lattice rows so addressing stays exact (GRID-09). */
 export function setRowWrapped(gd: GedeDoc, tableId: Id, rowId: Id, wrapped: boolean): void {
   transact(gd, () => {
-    metaFor(requireTable(gd, tableId), rowId).set(
-      'height',
+    setRowHeight(
+      requireTable(gd, tableId),
+      rowId,
       wrapped ? WRAPPED_ROW_HEIGHT : DEFAULT_ROW_HEIGHT,
     );
   });

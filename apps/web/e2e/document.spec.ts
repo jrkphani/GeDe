@@ -306,7 +306,7 @@ async function panBy(page: Page, dx: number, dy: number): Promise<void> {
 
 test.describe('grid editing', () => {
   for (const width of [1024, 1440] as const) {
-    test(`GRID-03 GRID-04 GRID-05 GRID-06 GRID-07 KEYS-06 I18N-02 A11Y-01 at ${String(width)} px: arm, type to overwrite, commit down and right, traverse with wrap, append past the last row, add a row by chord — mouse unplugged`, async ({
+    test(`GRID-03 GRID-04 GRID-05 GRID-06 GRID-07 KEYS-06 (partial: ⌘] and ⌘[ ship with the hierarchy work) I18N-02 A11Y-01 at ${String(width)} px: arm, type to overwrite, commit down and right, traverse with wrap, append past the last row, add a row by chord — mouse unplugged`, async ({
       page,
       checkA11y,
     }) => {

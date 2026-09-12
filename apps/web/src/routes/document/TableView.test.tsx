@@ -305,8 +305,8 @@ describe('read-only cells (GRID-04, A11Y-04)', () => {
   });
 });
 
-describe('traversal (GRID-05, KEYS-06, A11Y-01)', () => {
-  it('GRID-05 KEYS-06 Tab, Shift+Tab and the arrows move; Tab and the arrows wrap at row ends', async () => {
+describe('traversal (GRID-05, A11Y-01, KEYS-06 (partial: nest and promote later))', () => {
+  it('GRID-05 KEYS-06 (partial: ⌘] and ⌘[ nest and promote ship with the hierarchy work) Tab, Shift+Tab and the arrows move; Tab and the arrows wrap at row ends', async () => {
     mount();
     await userEvent.click(cellAt(0, 0));
     const key = (code: string, shiftKey = false) => {
@@ -387,6 +387,24 @@ describe('traversal (GRID-05, KEYS-06, A11Y-01)', () => {
     cellAt(0, 0).dispatchEvent(addRow);
     expect(addRow.defaultPrevented).toBe(false);
     expect(selected()).toBe('B5');
+  });
+
+  it('GRID-03 GRID-05 A11Y-01 after Escape clears the selection, Tab and the arrows on the still-focused cell re-arm it and move — never dead keys', async () => {
+    mount();
+    await userEvent.click(cellAt(1, 1));
+    act(() => {
+      gridRef.current?.actions.clear(); // what the shell does on Escape (GRID-03)
+    });
+    expect(selected()).toBeNull();
+    expect(cellAt(1, 1)).toHaveFocus();
+    fireEvent.keyDown(cellAt(1, 1), { code: 'Tab', key: 'Tab' });
+    expect(selected()).toBe('D6');
+    act(() => {
+      gridRef.current?.actions.clear();
+    });
+    fireEvent.keyDown(cellAt(1, 2), { code: 'ArrowDown', key: 'ArrowDown' });
+    expect(selected()).toBe('D7');
+    expect(cellAt(2, 2)).toHaveFocus();
   });
 
   it('GRID-05 GRID-02 traversal skips hidden columns and addresses recompute around them', () => {

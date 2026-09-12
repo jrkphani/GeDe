@@ -221,6 +221,24 @@ describe('resize and scale snap to the lattice', () => {
     expect(tableById(gd, id)?.columns.map((c) => c.width)).toEqual([1, 1, 1]);
   });
 
+  test('GRID-08 GRID-09 KEYS-03 scaling to compact, or unwrapping, rows that are already one unit writes nothing: no row meta appears and no undo step is added', () => {
+    const { gd, id, rows } = fixture();
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const metas = table(gd, id).get('rowMeta') as Y.Map<unknown>;
+    expect(metas.size).toBe(0);
+    expect(scaleTable(gd, id, { wrapped: false })).toEqual([1, 1, 1]);
+    setRowWrapped(gd, id, rows[0] ?? '', false);
+    expect(metas.size).toBe(0);
+    expect(undo.undoStack).toHaveLength(0);
+    // A real change still writes exactly what it needs.
+    setRowWrapped(gd, id, rows[0] ?? '', true);
+    expect(metas.size).toBe(1);
+    expect(undo.undoStack).toHaveLength(1);
+    scaleTable(gd, id, { wrapped: true });
+    expect(rowHeights(table(gd, id))).toEqual([2, 2, 2]);
+    expect(undo.undoStack).toHaveLength(2);
+  });
+
   test('GRID-01 GRID-08 a column resize never desynchronises the ruler from the data: the address follows the width', () => {
     const { gd, id, rows, cols } = fixture();
     const t = table(gd, id);

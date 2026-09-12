@@ -9,12 +9,12 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
-  cellReadOnlyReason,
   cellText,
   columnLetter,
   distributeUnits,
   LATTICE,
   rowHeights as effectiveRowHeights,
+  rowMeta,
   TABLE_TITLE_ROWS,
   tableAddresses,
   tableRecord,
@@ -151,6 +151,13 @@ export const TableView = memo(function TableView({
     rows: record.rows,
     columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
   };
+  // GRID-04: the read-only reason is a column fact (source) or a row fact (group band);
+  // resolve each once per render rather than re-reading the Yjs column array per cell.
+  const columnOrdinal = new Map<Id, number>(record.columns.map((c, i) => [c.id, i]));
+  const columnReadOnly = new Map<Id, ReadOnlyReason | null>(
+    record.columns.map((c) => [c.id, c.source === 'entered' ? null : c.source]),
+  );
+  const rowIsGroup = (rowId: Id): boolean => rowMeta(table, rowId).group;
 
   // M8: with nothing selected in this table, its first cell is the tab stop (roving tabindex).
   const tableHasSelection = selectedCell !== null && selectedCell.tableId === record.id;
@@ -265,6 +272,7 @@ export const TableView = memo(function TableView({
             )}
             {record.rows.map((rowId, ri) => {
               const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
+              const groupRow = rowIsGroup(rowId);
               return (
                 <div
                   key={rowId}
@@ -285,9 +293,11 @@ export const TableView = memo(function TableView({
                       editing.cell.rowId === rowId &&
                       editing.cell.colId === col.id;
                     const other = presenceByCell.get(`${rowId}:${col.id}`);
-                    const colOrdinal = record.columns.findIndex((c) => c.id === col.id);
-                    const address = addresses?.[ri]?.[colOrdinal];
+                    const address = addresses?.[ri]?.[columnOrdinal.get(col.id) ?? -1];
                     const cell = { tableId: record.id, rowId, colId: col.id };
+                    // Column source wins over the row band, as `cellReadOnlyReason` in core.
+                    const readOnly: ReadOnlyReason | null =
+                      columnReadOnly.get(col.id) ?? (groupRow ? 'group' : null);
                     return (
                       <Cell
                         key={col.id}
@@ -300,7 +310,7 @@ export const TableView = memo(function TableView({
                         tabStop={isSelected || (!tableHasSelection && ri === 0 && ci === 0)}
                         editing={isEditing ? editing : null}
                         editable={editable}
-                        readOnly={cellReadOnlyReason(table, rowId, col.id)}
+                        readOnly={readOnly}
                         frozen={frozenIds.has(col.id)}
                         freezeEdge={col.id === freezeEdgeId}
                         wrap={col.wrap || (rowHeights[ri] ?? 1) === WRAPPED_ROW_HEIGHT}
@@ -572,11 +582,19 @@ function Cell({
       return;
     }
     const mod = e.metaKey || e.ctrlKey;
+    // Escape clears the selection but leaves focus on this cell (GRID-03); a move
+    // from here re-arms it first, so Tab and the arrows are never dead keys
+    // (GRID-05, A11Y-01). `dispatch` updates the machine synchronously, so the
+    // move that follows sees the new selection.
+    const rearm = () => {
+      if (!selected) actions.selectCell(cell);
+    };
     const arrow = arrowDirection(e.code);
     if (arrow !== null) {
       if (mod || e.altKey) return; // ⌥⌘↓ / ⌥⌘→ add a row or column (the shell binds them)
       e.preventDefault();
       e.stopPropagation();
+      rearm();
       actions.move(arrow);
       return;
     }
@@ -608,6 +626,7 @@ function Cell({
         if (result.kind === 'stay' || (result.kind === 'append-row' && !editable)) return;
         e.preventDefault();
         e.stopPropagation();
+        rearm();
         actions.move(direction);
         return;
       }
