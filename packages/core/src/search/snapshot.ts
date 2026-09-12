@@ -8,7 +8,7 @@
  */
 import * as Y from 'yjs';
 
-import { splitCellKey, type Id } from '../ids.js';
+import { splitCellKey, type CellKey, type Id } from '../ids.js';
 import { parse } from '../formula/parser.js';
 import { references } from '../formula/ast.js';
 import { workbookIndexOf } from '../engine/commit.js';
@@ -26,6 +26,7 @@ import {
   type GraphMap,
   type TableMap,
 } from '../doc/schema.js';
+import { spanIndex } from '../style/spans.js';
 import { resolveFormat } from './format.js';
 import type { FormatKind } from './query.js';
 
@@ -203,13 +204,16 @@ function tableEntriesOf(
     });
   });
   const entries: CellEntry[] = [];
+  // MENU-04 / ADR-033: a cell a merged span covers is off the grid the way a hidden column's
+  // cells are — it keeps its data, but nothing in it can be found or highlighted.
+  const covered = spanIndex(table).covered;
   cellsMap(table).forEach((content, key) => {
     const { rowId, colId } = splitCellKey(key);
     const ci = colIndex.get(colId);
     const ri = rowIndex.get(rowId);
     if (ci === undefined || ri === undefined) return; // orphaned cell: not addressable
     const column = columns[ci];
-    if (column === undefined || hidden.has(colId)) return;
+    if (column === undefined || hidden.has(colId) || covered.has(key as CellKey)) return;
     const texts = cellTexts(content, project);
     if (texts.length === 0) return;
     const value = texts[0]?.text ?? '';

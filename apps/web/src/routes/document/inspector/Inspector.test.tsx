@@ -11,14 +11,21 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  cellAppearanceOverride,
   cellFormatOverride,
   cellRich,
+  columnLetter,
   createSheet,
   createTable,
+  createUndoManager,
   DEFAULT_SEARCH_OPTIONS,
   hasMarkThroughout,
+  LATTICE,
   openDocument,
   setCellText,
+  sheetEdgesShown,
+  spanAt,
+  tableAddresses,
   tableById,
   tableMap,
   toggleMarkThroughout,
@@ -86,6 +93,8 @@ interface HarnessProps {
   select?: 'table' | 'cell' | null;
   find?: Find;
   slots?: InspectorProps['slots'];
+  /** KEYS-03: the document's undo manager, so a command settles one undo step as the shell does. */
+  undo?: Y.UndoManager;
 }
 
 function Harness({
@@ -96,8 +105,9 @@ function Harness({
   select = 'cell',
   find = fakeFind(),
   slots,
+  undo,
 }: HarnessProps) {
-  const g = useGrid(gd, editable);
+  const g = useGrid(gd, editable, { undo });
   grid.current = g;
   useYVersion(gd.tables);
   const record = tableById(gd, tableId);
@@ -248,9 +258,54 @@ describe('Inspector', () => {
     expect(screen.getByTestId('inspector-selected')).toHaveTextContent('Nothing selected');
   });
 
-  it('INSP-04 (partial: styles, caption, outline, gridline density, alternating colour and fit-to-content are disabled stubs) INSP-12 the Table tab: header row, footer, frozen columns, row and column counts, width and wrap write through at once', async () => {
-    await mount();
+  it('INSP-04 INSP-12 KEYS-03 the Table tab: style, title and caption, header row, footer, frozen columns, row and column counts, outline, gridlines, alternating colour, width, wrap and fit write through at once; typing a caption is one undo step', async () => {
+    const undo = createUndoManager(gd);
+    await mount({ undo });
     await userEvent.click(tab('Table'));
+    // Table style: one of the four ramp pairs, as a Radix toggle group with labelled swatches.
+    const style = section('table style');
+    // Only the neutral pair is offered (DS "no third meaning"): Plain and Slate.
+    expect(
+      within(style)
+        .getAllByRole('radio')
+        .map((r) => r.textContent),
+    ).toEqual(['Plain', 'Slate']);
+    await userEvent.click(within(style).getByRole('radio', { name: 'Slate' }));
+    expect(tableById(gd, tableId)?.look.style).toBe('slate');
+    // Title and caption: the title bar keeps its rows; the caption is a strip at the foot.
+    const before = tableAddresses(tableMap(gd, tableId)!);
+    const titling = section('title and caption');
+    await userEvent.click(within(titling).getByRole('switch', { name: 'Title' }));
+    expect(tableById(gd, tableId)?.look.titleShown).toBe(false);
+    await userEvent.click(within(titling).getByRole('switch', { name: 'Caption' }));
+    expect(tableById(gd, tableId)?.look.captionShown).toBe(true);
+    await userEvent.type(within(titling).getByRole('textbox', { name: 'Caption text' }), 'Q3');
+    expect(tableById(gd, tableId)?.look.caption).toBe('Q3');
+    expect(tableAddresses(tableMap(gd, tableId)!)).toEqual(before);
+    // The keystrokes merged through the capture window (as the title field's do): one undo
+    // clears the caption.
+    act(() => {
+      undo.undo();
+    });
+    expect(tableById(gd, tableId)?.look.caption).toBe('');
+    await userEvent.type(within(titling).getByRole('textbox', { name: 'Caption text' }), 'Q3');
+    // Outline, gridline density and alternating rows.
+    const lines = section('outline and gridlines');
+    await userEvent.click(within(lines).getByRole('combobox', { name: 'Table outline' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Accent' }));
+    expect(tableById(gd, tableId)?.look.outline).toBe('accent');
+    await userEvent.click(within(lines).getByRole('combobox', { name: 'Gridline density' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'High contrast' }));
+    expect(tableById(gd, tableId)?.look.gridlines).toBe('contrast');
+    await userEvent.click(within(lines).getByRole('switch', { name: 'Alternating row colour' }));
+    expect(tableById(gd, tableId)?.look.alternating).toBe(true);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('alternating rows updated');
+    // Fit-to-content needs a text measurer; jsdom has no 2D canvas, so the buttons say so
+    // rather than guessing a width (INSP-11 shape, a live reason).
+    expect(
+      within(section('row and column size')).getByRole('button', { name: 'Fit columns to content' })
+        .title,
+    ).toBe('Fit columns to content — text cannot be measured in this browser');
     const headers = section('headers and footer');
     await userEvent.click(within(headers).getByRole('switch', { name: 'Header row' }));
     expect(tableById(gd, tableId)?.headerRows).toBe(0);
@@ -298,7 +353,7 @@ describe('Inspector', () => {
     expect(within(section('row')).getByText(/under/)).toBeInTheDocument();
   });
 
-  it('INSP-05 (partial: fill, the border matrix and conditional highlighting are disabled stubs) INSP-10 FMT-06 the Cell tab scopes the data format to the column by default, states the scope before applying, and the cell override beats it', async () => {
+  it('INSP-05 INSP-10 FMT-06 the Cell tab scopes the data format to the column by default, states the scope before applying, and the cell override beats it', async () => {
     await mount();
     await userEvent.click(tab('Cell'));
     const format = section('data format');
@@ -340,9 +395,217 @@ describe('Inspector', () => {
     );
   });
 
-  it('INSP-06 (partial: font, weight, size, character styles, colour and alignment are disabled stubs) KEYS-05 the Text tab toggles marks over the whole selected cell, shows the chord beside each, and wraps the column or the row', async () => {
+  it('INSP-05 INSP-10 INSP-12 fill and the border matrix write to the column by default and to the cell as an override, one transaction each, with the scope stated first', async () => {
+    await mount();
+    await userEvent.click(tab('Cell'));
+    const fill = section('fill and border');
+    expect(fill).toHaveTextContent(
+      'The fill and border applies to Column 1 for all 4 rows, and for rows added later.',
+    );
+    await userEvent.click(within(fill).getByRole('radio', { name: 'Amber' }));
+    const record = tableById(gd, tableId)!;
+    expect(record.columns[0]?.appearance.fill).toBe('amber');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Fill set for column Column 1');
+    // The positional matrix: nine edges, then the weight.
+    const edges = within(fill).getByRole('radiogroup', { name: 'Border edges' });
+    expect(within(edges).getAllByRole('radio')).toHaveLength(9);
+    await userEvent.click(within(edges).getByRole('radio', { name: /Top and bottom/ }));
+    expect(tableById(gd, tableId)?.columns[0]?.appearance.border).toEqual({
+      edges: 'top-bottom',
+      weight: 'hairline',
+    });
+    await userEvent.click(within(fill).getByRole('combobox', { name: 'Weight' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Strong' }));
+    expect(tableById(gd, tableId)?.columns[0]?.appearance.border?.weight).toBe('strong');
+    // Cell scope: an override on B5 only; the column keeps amber.
+    await userEvent.click(within(fill).getByRole('radio', { name: 'Cell B5' }));
+    expect(fill).toHaveTextContent('The fill and border applies to cell B5 only.');
+    await userEvent.click(within(fill).getByRole('radio', { name: 'Slate' }));
+    const table = tableMap(gd, tableId)!;
+    expect(cellAppearanceOverride(table, record.rows[0]!, record.columns[0]!.id)?.fill).toBe(
+      'slate',
+    );
+    expect(tableById(gd, tableId)?.columns[0]?.appearance.fill).toBe('amber');
+    await userEvent.click(within(fill).getByRole('button', { name: 'Use column appearance' }));
+    expect(cellAppearanceOverride(table, record.rows[0]!, record.columns[0]!.id)).toBeNull();
+    // Cell scope "None" over the column's amber is an explicit none: the cell shows no fill
+    // while the column keeps its own (INSP-10 "applies to cell B5 only").
+    await userEvent.click(within(fill).getByRole('radio', { name: 'None' }));
+    expect(cellAppearanceOverride(table, record.rows[0]!, record.columns[0]!.id)?.fill).toBe(
+      'none',
+    );
+    await userEvent.click(within(edges).getByRole('radio', { name: /No border/ }));
+    expect(cellAppearanceOverride(table, record.rows[0]!, record.columns[0]!.id)?.border).toEqual({
+      edges: 'none',
+      weight: 'strong',
+    });
+    await userEvent.click(within(fill).getByRole('button', { name: 'Use column appearance' }));
+    // Back on the column: "None" clears the fill; "No border" clears the border.
+    await userEvent.click(within(fill).getByRole('radio', { name: 'Column Column 1' }));
+    await userEvent.click(within(fill).getByRole('radio', { name: 'None' }));
+    await userEvent.click(within(edges).getByRole('radio', { name: /No border/ }));
+    expect(tableById(gd, tableId)?.columns[0]?.appearance).toEqual({});
+  });
+
+  it('INSP-05 A11Y-04 conditional highlighting rules are the PRD triggers on the column, listed in priority order, each with a fill, text colour or mark, and removable', async () => {
+    await mount();
+    await userEvent.click(tab('Cell'));
+    const rules = section('conditional highlighting');
+    expect(rules).toHaveTextContent('Rules apply to every cell of Column 1, first match first.');
+    const add = within(rules).getByRole('button', { name: 'Add a rule' });
+    expect(add.title).toBe('Add a rule — the rule needs its text or count');
+    await userEvent.type(within(rules).getByRole('textbox', { name: 'Text' }), 'camp');
+    await userEvent.click(add);
+    let record = tableById(gd, tableId)!;
+    expect(record.columns[0]?.rules).toHaveLength(1);
+    expect(record.columns[0]?.rules[0]).toMatchObject({
+      when: { trigger: 'contains', text: 'camp' },
+      style: { fill: 'amber' },
+    });
+    expect(within(rules).getByRole('list', { name: 'Rules' })).toHaveTextContent(
+      'contains “camp” Amber fill',
+    );
+    // A metrics trigger with a count, and a mark as the output.
+    await userEvent.click(within(rules).getByRole('combobox', { name: 'When the text' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Characters over' }));
+    await userEvent.click(within(rules).getByRole('combobox', { name: 'Mark' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Strikethrough' }));
+    await userEvent.click(within(rules).getByRole('button', { name: 'Add a rule' }));
+    record = tableById(gd, tableId)!;
+    expect(record.columns[0]?.rules[1]).toMatchObject({
+      when: { trigger: 'charsOver', count: 40 },
+      style: { fill: 'amber', mark: 'strikethrough' },
+    });
+    // A pattern trigger names a Smart Chip; a border is an output too (PRD §8).
+    await userEvent.click(within(rules).getByRole('combobox', { name: 'When the text' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Fails chip' }));
+    expect(within(rules).getByRole('combobox', { name: 'Chip' })).toHaveTextContent('Email');
+    await userEvent.click(within(rules).getByRole('combobox', { name: 'Border' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Outline only' }));
+    await userEvent.click(within(rules).getByRole('combobox', { name: 'Border weight' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Accent' }));
+    await userEvent.click(within(rules).getByRole('button', { name: 'Add a rule' }));
+    expect(tableById(gd, tableId)?.columns[0]?.rules[2]).toMatchObject({
+      when: { trigger: 'failsChip', chip: 'email' },
+      style: { border: { edges: 'outline', weight: 'accent' } },
+    });
+    // The list order is the priority: the third rule moves up one place.
+    expect(within(rules).getByRole('button', { name: 'Move rule 1 up' }).title).toBe(
+      'Move rule 1 up — already first',
+    );
+    await userEvent.click(within(rules).getByRole('button', { name: 'Move rule 3 up' }));
+    expect(tableById(gd, tableId)?.columns[0]?.rules[1]?.when).toEqual({
+      trigger: 'failsChip',
+      chip: 'email',
+    });
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Rule moved up');
+    await userEvent.click(
+      within(rules).getByRole('button', { name: 'Remove rule 1: contains “camp”' }),
+    );
+    expect(tableById(gd, tableId)?.columns[0]?.rules).toHaveLength(2);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Rule removed');
+  });
+
+  it('MENU-04 GRID-01 the merge controls span rows and columns from the cell; every address stays; unmerge shows the covered cells again', async () => {
+    await mount();
+    await userEvent.click(tab('Cell'));
+    const merge = section('merge');
+    const table = tableMap(gd, tableId)!;
+    const before = tableAddresses(table);
+    await userEvent.click(within(merge).getByRole('button', { name: 'More columns' }));
+    await userEvent.click(within(merge).getByRole('button', { name: 'More rows' }));
+    const record = tableById(gd, tableId)!;
+    expect(spanAt(table, record.rows[0]!, record.columns[0]!.id)).toMatchObject({
+      rows: 2,
+      cols: 2,
+    });
+    expect(tableAddresses(table)).toEqual(before);
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'B5 spans 2 rows and 2 columns; every address stays',
+    );
+    // Past the edge the stepper stops: three columns, so at most three across.
+    await userEvent.click(within(merge).getByRole('button', { name: 'More columns' }));
+    expect(within(merge).getByRole('button', { name: 'More columns' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    await userEvent.click(within(merge).getByRole('button', { name: 'Unmerge cells' }));
+    expect(spanAt(table, record.rows[0]!, record.columns[0]!.id)).toBeNull();
+    expect(within(merge).getByRole('button', { name: 'Unmerge cells' }).title).toBe(
+      'Unmerge cells — the cell is not merged',
+    );
+  });
+
+  it('INSP-06 INSP-10 KEYS-05 the Text tab sets family, weight, size, character styles, text colour and alignment on the column with a cell override, toggles marks over the whole cell with the chord beside each, and wraps the column or the row', async () => {
     await mount();
     await userEvent.click(tab('Text'));
+    const font = section('font');
+    expect(font).toHaveTextContent(
+      'The typography applies to Column 1 for all 4 rows, and for rows added later.',
+    );
+    await userEvent.click(within(font).getByRole('combobox', { name: 'Family' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'IBM Plex Mono' }));
+    await userEvent.click(within(font).getByRole('combobox', { name: 'Weight' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Semibold' }));
+    await userEvent.click(within(font).getByRole('combobox', { name: 'Size' }));
+    // The whole type scale above the 11.5 px cell floor; the four weights end at 600 (DS §2).
+    const sizes = (await screen.findAllByRole('option')).map((o) => o.textContent);
+    expect(sizes).toEqual([
+      '11.5 px · cell',
+      '13 px · body-sm',
+      '15 px · body',
+      '16 px · h3',
+      '20 px · h2',
+      '28 px · h1',
+      '40 px · display',
+    ]);
+    await userEvent.click(screen.getByRole('option', { name: '15 px · body' }));
+    expect(tableById(gd, tableId)?.columns[0]?.appearance).toEqual({
+      font: 'mono',
+      weight: 600,
+      size: 'body',
+    });
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false); // body fits the compact row
+    await userEvent.click(within(font).getByRole('combobox', { name: 'Weight' }));
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual([
+      'Light',
+      'Regular',
+      'Medium',
+      'Semibold',
+    ]);
+    await userEvent.keyboard('{Escape}');
+    // Character styles are bundles on the scale; the active one reads pressed. Title (h2) needs
+    // the wrapped row, so choosing it wraps the column in the same step (GRID-09).
+    const presets = within(section('character styles'));
+    await userEvent.click(presets.getByRole('button', { name: 'Title' }));
+    expect(tableById(gd, tableId)?.columns[0]?.appearance).toMatchObject({
+      size: 'h2',
+      weight: 600,
+    });
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(true);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('the column wraps to fit the size');
+    expect(presets.getByRole('button', { name: 'Title' })).toHaveAttribute('aria-pressed', 'true');
+    // Text colour and alignment.
+    const colour = within(section('text colour'));
+    await userEvent.click(colour.getByRole('combobox', { name: 'Text colour' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Danger' }));
+    expect(tableById(gd, tableId)?.columns[0]?.appearance.textColour).toBe('danger');
+    const align = section('alignment');
+    await userEvent.click(within(align).getByRole('radio', { name: 'Centre' }));
+    await userEvent.click(within(align).getByRole('radio', { name: 'Bottom' }));
+    expect(tableById(gd, tableId)?.columns[0]?.appearance).toMatchObject({
+      hAlign: 'center',
+      vAlign: 'bottom',
+    });
+    // Cell scope: the override is the cell's own; the column keeps its values.
+    await userEvent.click(within(font).getByRole('radio', { name: 'Cell B5' }));
+    await userEvent.click(within(font).getByRole('combobox', { name: 'Weight' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Regular' }));
+    const rec = tableById(gd, tableId)!;
+    expect(
+      cellAppearanceOverride(tableMap(gd, tableId)!, rec.rows[0]!, rec.columns[0]!.id),
+    ).toEqual({ weight: 400 });
+    expect(rec.columns[0]?.appearance.weight).toBe(600);
     const marks = within(section('marks'));
     const bold = marks.getByRole('button', { name: 'Bold' });
     expect(bold).toHaveAttribute('aria-pressed', 'false');
@@ -360,24 +623,61 @@ describe('Inspector', () => {
     const rich = cellRich(table, record.rows[0]!, record.columns[0]!.id);
     expect(hasMarkThroughout(rich, 'subscript')).toBe(true);
     expect(hasMarkThroughout(rich, 'superscript')).toBe(false);
+    // The Title preset wrapped the column above; the switch reads on and unwraps it.
     const wrap = within(section('wrap'));
+    expect(wrap.getByRole('switch', { name: 'Wrap column Column 1' })).toBeChecked();
     await userEvent.click(wrap.getByRole('switch', { name: 'Wrap column Column 1' }));
-    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(true);
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false);
     await userEvent.click(wrap.getByRole('switch', { name: 'Wrap this row' }));
     expect(screen.getByTestId('live-region')).toHaveTextContent('Wrapped the row');
   });
 
-  it('INSP-07 (partial: stacking order, canvas layout, pin to viewport and DAG edges are disabled stubs) the Arrange tab states size and position in grid address and pixels, and moves the table on the lattice', async () => {
+  it('INSP-07 the Arrange tab: stacking order, canvas layout, size and position in grid address and pixels, pin to viewport and DAG edges — live, positions staying on the lattice', async () => {
+    // A second table on the sheet, so stacking and layout have something to order.
+    const other = createTable(gd, { sheetId, at: { col: 6, row: 1 }, columns: 2, rows: 2 });
     await mount();
     await userEvent.click(tab('Arrange'));
+    const stacking = section('stacking order');
+    expect(stacking).toHaveTextContent('Table 1 is 1 of 2, back to front.');
+    expect(within(stacking).getByRole('button', { name: 'Back' }).title).toBe(
+      'Back — already at the back',
+    );
+    await userEvent.click(within(stacking).getByRole('button', { name: 'Front' }));
+    expect(tableById(gd, tableId)?.z).toBe(1);
+    expect(tableById(gd, other)?.z).toBe(0);
+    expect(stacking).toHaveTextContent('Table 1 is 2 of 2');
+    const layout = section('canvas layout');
+    await userEvent.click(within(layout).getByRole('button', { name: 'Stacked' }));
+    // Stacked: one column from the first origin, each table under the last (RESP-01 addresses follow).
+    expect(tableById(gd, other)?.gridCol).toBe(1);
+    expect(tableById(gd, tableId)?.gridCol).toBe(1);
+    expect(tableById(gd, tableId)?.gridRow).toBeGreaterThan(tableById(gd, other)!.gridRow);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Stacked: 2 tables placed');
+    const viewport = section('viewport');
+    await userEvent.click(within(viewport).getByRole('switch', { name: 'Pin to viewport' }));
+    expect(tableById(gd, tableId)?.pinned).toBe(true);
+    await userEvent.click(within(viewport).getByRole('switch', { name: 'DAG edges' }));
+    expect(sheetEdgesShown(gd, sheetId)).toBe(true);
+    expect(viewport).toHaveTextContent(/Reads from\s*0 tables/);
+    // Lanes: left to right on one row; Table 1 (at the front) lands after the other.
+    await userEvent.click(within(layout).getByRole('button', { name: 'Pipeline lanes' }));
+    const laned = tableById(gd, tableId)!;
+    expect(laned.gridRow).toBe(tableById(gd, other)!.gridRow);
+    expect(laned.gridCol).toBeGreaterThan(tableById(gd, other)!.gridCol);
     const position = section('position');
-    expect(position).toHaveTextContent('B2');
-    expect(position).toHaveTextContent('160 × 22');
+    expect(position).toHaveTextContent(
+      `${columnLetter(laned.gridCol)}${String(laned.gridRow + 1)}`,
+    );
+    expect(position).toHaveTextContent(
+      `${String(laned.gridCol * LATTICE.col)} × ${String(laned.gridRow * LATTICE.row)}`,
+    );
     await userEvent.click(within(position).getByRole('button', { name: 'More column' }));
     await userEvent.click(within(position).getByRole('button', { name: 'More row' }));
     const record = tableById(gd, tableId)!;
-    expect([record.gridCol, record.gridRow]).toEqual([2, 2]);
-    expect(position).toHaveTextContent('C3');
+    expect([record.gridCol, record.gridRow]).toEqual([laned.gridCol + 1, laned.gridRow + 1]);
+    expect(position).toHaveTextContent(
+      `${columnLetter(laned.gridCol + 1)}${String(laned.gridRow + 2)}`,
+    );
     expect(section('size')).toHaveTextContent('3 units · 480 px');
   });
 
@@ -403,27 +703,26 @@ describe('Inspector', () => {
     expect(screen.getByRole('tabpanel').querySelector('[data-slot="sort"]')).toBeNull();
   });
 
-  it('INSP-11 a control no release has built is disabled with the issue that owns it as its reason, never operable; view-only disables the writes with that reason', async () => {
+  it('INSP-11 every disabled control carries a live reason — a limit of the moment or the issue that owns it — never a bare "not implemented"; the appearance controls no longer wait on any issue; view-only disables the writes with that reason', async () => {
     const { rerender } = await mount();
     await userEvent.click(tab('Cell'));
-    const fill = within(section('fill')).getByRole('button', { name: 'Fill' });
-    expect(fill).toHaveAttribute('aria-disabled', 'true');
-    expect(fill.title).toBe('Fill — arrives with #83 (cell appearance)');
-    const weight = within(section('border')).getByRole('combobox', { name: 'Weight' });
+    // The weight waits on an edge being chosen: a live reason, not a release.
+    const weight = within(section('fill and border')).getByRole('combobox', { name: 'Weight' });
     expect(weight).toBeDisabled();
-    expect(weight).toHaveAttribute('title', 'arrives with #83 (cell appearance)');
-    // Every disabled reason in the rail names an issue; none says "not implemented" and stops.
-    for (const tabName of ['Table', 'Text', 'Arrange'] as const) {
+    expect(weight).toHaveAttribute('title', 'choose an edge first');
+    for (const tabName of ['Table', 'Cell', 'Text', 'Arrange'] as const) {
       await userEvent.click(tab(tabName));
+      const panel = screen.getByRole('tabpanel');
       const reasons = Array.from(
-        screen.getByRole('tabpanel').querySelectorAll<HTMLElement>('[aria-disabled="true"][title]'),
+        panel.querySelectorAll<HTMLElement>('[aria-disabled="true"][title], [disabled][title]'),
       ).map((el) => el.title);
-      expect(reasons.length).toBeGreaterThan(0);
       // Live limits ("already at …", "nests at most one level") say why now; a control that
       // waits for a release names the issue that owns it — never a bare "not implemented".
       for (const reason of reasons) {
         expect(reason).not.toMatch(/not implemented|in this release/);
         if (reason.includes('arrives')) expect(reason).toMatch(/#\d+/);
+        // INSP-04..07 and MENU-04 have shipped: nothing in these tabs names their issues.
+        expect(reason).not.toMatch(/#8[2-57]\b/);
       }
     }
     await userEvent.click(tab('Cell'));

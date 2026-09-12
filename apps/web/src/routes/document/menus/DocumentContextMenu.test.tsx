@@ -10,8 +10,11 @@ import * as Y from 'yjs';
 import {
   createSheet,
   createTable,
+  LATTICE,
   openDocument,
   setCellText,
+  spanAt,
+  tableAddresses,
   tableById,
   tableMap,
   type GedeDoc,
@@ -117,7 +120,8 @@ describe('context menus', () => {
       'Quick filter…',
       'Show filter options',
       'Show category options',
-      'Merge cells',
+      'Merge with cell to the right',
+      'Merge with cell below',
       'Unmerge cells',
       'Cut',
       'Copy',
@@ -144,8 +148,68 @@ describe('context menus', () => {
       'title',
       'arrives with #86 (context graphs)',
     );
-    const merge = screen.getByRole('menuitem', { name: 'Merge cells' });
-    expect(merge).toHaveAttribute('title', 'arrives with #87 (merge controls)');
+    // MENU-02 / INSP-04: Fit width needs a text measurer; jsdom has none, so the item says so.
+    fireEvent.contextMenu(screen.getAllByRole('columnheader')[1]!, { clientX: 200, clientY: 5 });
+    const fit = await screen.findByRole('menuitem', { name: 'Fit width to content' });
+    expect(fit).toHaveAttribute('aria-disabled', 'true');
+    expect(fit).toHaveAttribute('title', 'text cannot be measured in this browser');
+    await userEvent.keyboard('{Escape}');
+    fireEvent.contextMenu(cells()[0]!, { clientX: 10, clientY: 10 });
+    await screen.findByRole('menu');
+    // MENU-04: a live limit reads as its own reason — the cell is not merged, so nothing to unmerge.
+    const unmerge = screen.getByRole('menuitem', { name: 'Unmerge cells' });
+    expect(unmerge).toHaveAttribute('aria-disabled', 'true');
+    expect(unmerge).toHaveAttribute('title', 'the cell is not merged');
+  });
+
+  it('MENU-04 GRID-01 merge with the cell to the right and below spans from the cell; covered cells leave the grid but keep their addresses; unmerge brings them back', async () => {
+    render(<Harness />);
+    const table = tableMap(gd, tableId)!;
+    const record = tableById(gd, tableId)!;
+    const before = tableAddresses(table);
+    const target = cells()[0]!;
+    fireEvent.contextMenu(target, { clientX: 10, clientY: 10 });
+    await userEvent.click(
+      await screen.findByRole('menuitem', { name: 'Merge with cell to the right' }),
+    );
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    fireEvent.contextMenu(cells()[0]!, { clientX: 10, clientY: 10 });
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Merge with cell below' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    expect(spanAt(table, record.rows[0]!, record.columns[0]!.id)).toMatchObject({
+      rows: 2,
+      cols: 2,
+    });
+    expect(tableAddresses(table)).toEqual(before);
+    // The anchor draws over two columns and two rows; the three covered cells are placeholders.
+    const anchor = screen.getByRole('gridcell', { name: /^B5/ });
+    expect(anchor).toHaveClass('gd-cell--span');
+    expect(anchor.style.width).toBe(`${String(2 * LATTICE.col)}px`);
+    expect(anchor.style.height).toBe(`${String(2 * LATTICE.row)}px`);
+    expect(document.querySelectorAll('[data-covered="true"]')).toHaveLength(3);
+    expect(screen.queryByRole('gridcell', { name: /^C5/ })).not.toBeInTheDocument();
+    // Traversal skips the covered cells: right from the anchor lands on D5.
+    anchor.focus();
+    fireEvent.keyDown(anchor, { code: 'ArrowRight', key: 'ArrowRight' });
+    expect(screen.getByRole('gridcell', { name: /^D5/ })).toHaveAttribute('aria-selected', 'true');
+    // Unmerge from a menu on the anchor.
+    fireEvent.contextMenu(screen.getByRole('gridcell', { name: /^B5/ }), {
+      clientX: 10,
+      clientY: 10,
+    });
+    await userEvent.click(await screen.findByRole('menuitem', { name: 'Unmerge cells' }));
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    expect(spanAt(table, record.rows[0]!, record.columns[0]!.id)).toBeNull();
+    expect(screen.getByRole('gridcell', { name: /^C5/ })).toBeInTheDocument();
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'unmerged; the cells it covered are back',
+    );
   });
 
   it('MENU-04 MENU-05 the commands act on the right-clicked cell and the menu closes with focus back on it', async () => {

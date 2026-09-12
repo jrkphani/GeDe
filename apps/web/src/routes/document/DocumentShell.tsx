@@ -10,6 +10,7 @@ import {
   LATTICE,
   listSheets,
   sheetBounds,
+  sheetEdgesShown,
   tableById,
   tableMap,
   tablesOnSheet,
@@ -85,6 +86,7 @@ import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
 import type { MenuContext } from './menus/entries.js';
 import { SheetTabs } from './SheetTabs.js';
 import { TableView } from './TableView.js';
+import { DagEdges, useTableFlags } from './style/index.js'; // wave4/inspector-controls
 import { TitleBar } from './TitleBar.js';
 import { ShareControls } from './share/ShareControls.js';
 import { Toolbar, type InspectorMode } from './Toolbar.js';
@@ -103,6 +105,9 @@ const FIT_PADDING = theme.space[4];
  * 768 px the product is read-only (RESP-02); a view-only participant is
  * read-only at every width (SHARE-03).
  */
+/** A ghost carries no collaborator tags (INSP-07): the live, pinned copy does. */
+const NO_PRESENCE: readonly PresenceState[] = [];
+
 export function DocumentShell() {
   const { id = '' } = useParams();
   const [params] = useSearchParams();
@@ -222,6 +227,7 @@ function OpenDocument({
   // TableView watches its own map deeply, so a cell edit re-renders one table.
   useYVersion(gd.sheets); // deep: a sheet label lives in a nested map
   useYVersion(gd.tables, { depth: 'shallow' });
+  useTableFlags(gd); // INSP-07: `pinned` and `z` decide the layers below; nothing else inside a table
   useYVersion(gd.graphs, { depth: 'shallow' });
   const awarenessVersion = useAwarenessVersion(session.sync.awareness);
 
@@ -611,6 +617,8 @@ function OpenDocument({
     viewport,
     measured ?? { width: theme.breakpoint.lg, height: theme.breakpoint.md },
   );
+  // INSP-07 / PRD §10: pinned tables render in the viewport layer whatever the pan.
+  const pinnedTables = tables.filter((t) => t.pinned);
   const visibleTables = tables.filter((t) => {
     const map = tableMap(gd, t.id);
     if (map === null) return false;
@@ -667,6 +675,14 @@ function OpenDocument({
             <TableMenu gd={gd} selection={selection} editable={editable} commands={grid.commands} />
           }
           onGridlines={setGridlines}
+          pinned={selectedTable?.pinned ?? null}
+          onPin={(on) => {
+            if (selectedTable !== null) grid.commands.setTablePinned(selectedTable.id, on);
+          }}
+          edgesShown={activeSheetId !== null && sheetEdgesShown(gd, activeSheetId)}
+          onEdges={(on) => {
+            if (activeSheetId !== null) grid.commands.setSheetEdgesShown(activeSheetId, on);
+          }}
           onZoomIn={() => {
             zoomStep(ZOOM_STEP);
           }}
@@ -828,10 +844,66 @@ function OpenDocument({
                     }
                   : undefined
               }
+              pinned={
+                pinnedTables.length === 0
+                  ? undefined
+                  : pinnedTables.map((t) => {
+                      const map = tableMap(gd, t.id);
+                      if (map === null) return null;
+                      // Anchored at the plane's edge: the wrapper cancels the lattice origin.
+                      return (
+                        <div
+                          key={t.id}
+                          className="gd-pinned"
+                          style={{
+                            transform: `translate(${String(-t.gridCol * LATTICE.col)}px, ${String(-t.gridRow * LATTICE.row)}px)`,
+                          }}
+                        >
+                          <TableView
+                            table={map}
+                            tier={tier}
+                            selected={selection?.tableId === t.id}
+                            selectedCell={cell !== null && cell.tableId === t.id ? cell : null}
+                            editing={
+                              editing !== null && editing.cell.tableId === t.id ? editing : null
+                            }
+                            editable={editable}
+                            presence={onSheet}
+                            pinnedLeft={null}
+                            undo={session.undo}
+                            actions={grid.actions}
+                            commands={grid.commands}
+                            sort={phone ? undefined : sort}
+                          />
+                        </div>
+                      );
+                    })
+              }
             >
               {visibleTables.map((t) => {
                 const map = tableMap(gd, t.id);
                 if (map === null) return null;
+                // INSP-07 / PRD §10: a pinned table's live copy is in the pinned layer; here a
+                // ghost keeps its place in the DAG — inert, so no duplicate tab stops or grid.
+                if (t.pinned) {
+                  return (
+                    <div key={t.id} className="gd-ghost" inert data-testid="pinned-ghost">
+                      <span className="gd-ghost__label">Pinned to viewport</span>
+                      <TableView
+                        table={map}
+                        tier={tier}
+                        selected={false}
+                        selectedCell={null}
+                        editing={null}
+                        editable={false}
+                        presence={NO_PRESENCE}
+                        pinnedLeft={null}
+                        actions={grid.actions}
+                        commands={grid.commands}
+                      />
+                    </div>
+                  );
+                }
                 return (
                   <TableView
                     key={t.id}
@@ -850,6 +922,8 @@ function OpenDocument({
                   />
                 );
               })}
+              {/* wave4/inspector-controls: DAG edges between the sheet's tables (INSP-07, PRD §7) */}
+              <DagEdges gd={gd} sheetId={activeSheetId} />
               {/* FIND-06: amber match highlights, in the layer so they pan and zoom with the tables. */}
               <MatchHighlights
                 gd={gd}

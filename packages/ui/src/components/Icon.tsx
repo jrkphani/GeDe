@@ -61,6 +61,8 @@ export const ICON_NAMES = [
   'arrow-down',
   // keys (KEYS-01, KEYS-08)
   'keyboard',
+  // appearance (INSP-05): a conditional rule matched this cell
+  'rule',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -170,6 +172,8 @@ const GLYPHS: Record<IconName, Glyph> = {
   keyboard: {
     d: 'M2 5h14v8H2zM4.5 7.5h1M7.5 7.5h1M10.5 7.5h1M13.5 7.5h1M4.5 10.5h1M7 10.5h4M13.5 10.5h1',
   },
+  // A flag: the cue a matched rule adds beside the fill (A11Y-04, never hue alone).
+  rule: { d: 'M4.5 16V2.5M4.5 3h9l-2.2 3.5 2.2 3.5h-9' },
   apple: {
     d: '',
     extra: [

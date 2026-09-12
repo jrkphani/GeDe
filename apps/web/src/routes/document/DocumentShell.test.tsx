@@ -194,7 +194,7 @@ describe('DocumentShell', () => {
     );
     const pin = screen.getByRole('button', { name: 'Pin to viewport' });
     expect(pin).toHaveAttribute('aria-disabled', 'true');
-    expect(pin.title).toMatch(/arrives with a later release/);
+    expect(pin.title).toMatch(/select a table first/); // INSP-07: live, needs a table
     expect(pin).not.toBeDisabled(); // reachable, so the reason is available on hover and focus
     const addRow = screen.getByRole('button', { name: 'Add row' });
     expect(addRow).toHaveAttribute('aria-disabled', 'true');
@@ -741,5 +741,53 @@ describe('DocumentShell', () => {
     await waitFor(() => {
       expect(within(inspector).getByLabelText('Address B7')).toBeInTheDocument();
     });
+  });
+
+  it('INSP-07 DOC-02 the toolbar pins the selected table: its live copy moves to a layer that scales but never pans, a ghost stays at its lattice origin; DAG edges draw the lineage between tables', async () => {
+    await openShell();
+    const pin = screen.getByRole('button', { name: 'Pin to viewport' });
+    expect(pin.title).toMatch(/select a table first/);
+    const grid = await addTable();
+    await addTable();
+    await until(() => roomDoc().getMap('tables').size === 2);
+    await userEvent.click(within(grid).getAllByRole('gridcell')[0]!);
+    await userEvent.click(pin);
+    expect(pin).toHaveAttribute('aria-pressed', 'true');
+    const other = openDocument(roomDoc());
+    const [first, second] = Array.from(other.tables.keys());
+    expect(tableById(other, first!)?.pinned).toBe(true);
+    // The pinned layer holds the live table at the plane's edge; the ghost is inert in the sheet.
+    const layer = screen.getByTestId('pinned-layer');
+    expect(within(layer).getByRole('grid')).toBeInTheDocument();
+    expect(layer.style.transform).toBe('scale(1)');
+    const ghost = screen.getByTestId('pinned-ghost');
+    expect(ghost).toHaveAttribute('inert');
+    // Panning moves the sheet layer and leaves the pinned layer where it is.
+    fireEvent.wheel(screen.getByTestId('plane'), { deltaX: 300, deltaY: 300 });
+    expect(layerTransform()).toMatch(/translate\(-300px, -300px\)/);
+    expect(layer.style.transform).toBe('scale(1)');
+    await userEvent.click(within(layer).getAllByRole('gridcell')[0]!);
+    await userEvent.click(screen.getByRole('button', { name: 'Pin to viewport' }));
+    expect(screen.queryByTestId('pinned-layer')).not.toBeInTheDocument();
+    // DAG edges: a formula in the second table reading the first draws one edge, labelled by count.
+    const edges = screen.getByRole('button', { name: 'DAG edges' });
+    await userEvent.click(edges);
+    expect(edges).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByTestId('dag-edges')).toHaveAttribute('data-count', '0');
+    room.edit(() => {
+      const target = tableById(other, second!)!;
+      const source = tableById(other, first!)!;
+      const cells = other.tables.get(second!)?.get('cells') as Y.Map<unknown>;
+      cells.set(
+        `${target.rows[0]!}:${target.columns[0]!.id}`,
+        `=Sum({c:${source.id}:${source.rows[0]!}:${source.columns[0]!.id}})`,
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('dag-edges')).toHaveAttribute('data-count', '1');
+    });
+    expect(screen.getByTestId('dag-edges').querySelector('title')?.textContent).toMatch(
+      /Table 2 reads Table 1 in 1 cell/,
+    );
   });
 });

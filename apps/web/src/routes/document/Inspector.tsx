@@ -162,7 +162,9 @@ export function Inspector({
     {
       value: 'cell',
       label: 'Cell',
-      content: withTable((t) => <CellTab gd={gd} table={t} cell={cell} editable={editable} />),
+      content: withTable((t) => (
+        <CellTab gd={gd} table={t} cell={cell} editable={editable} commands={commands} />
+      )),
     },
     {
       value: 'text',
@@ -181,7 +183,9 @@ export function Inspector({
     {
       value: 'arrange',
       label: 'Arrange',
-      content: withTable((t) => <ArrangeTab gd={gd} table={t} editable={editable} />),
+      content: withTable((t) => (
+        <ArrangeTab gd={gd} table={t} editable={editable} commands={commands} />
+      )),
     },
     // INSP-08: only when a graph is selected — the graph release sets the slot.
     ...(slots?.graph === undefined

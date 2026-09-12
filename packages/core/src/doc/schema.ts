@@ -3,14 +3,21 @@
  *
  * One `Y.Doc` per workscape. Its share map carries four top-level types:
  *
- *   sheets  Y.Array<Y.Map>   id, label, parentContext, seeded (ordinal is array order)
+ *   sheets  Y.Array<Y.Map>   id, label, parentContext, seeded (ordinal is array order),
+ *                            edgesShown (the sheet's DAG edges, INSP-07)
  *   tables  Y.Map<Y.Map>     by id: sheetId, title, gridCol, gridRow,
  *                            columns Y.Array<Y.Map{id,label,width}>,
  *                            rows Y.Array<rowId>,
  *                            cells Y.Map keyed `rowId:colId` → Y.XmlFragment | formula string,
  *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height}>,
  *                            cellFormat Y.Map keyed `rowId:colId` → {format, formatOpts}
- *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01)
+ *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01),
+ *                            style · titleShown · caption · captionShown · outline · gridlines ·
+ *                            alternating (the table look, INSP-04), z (stacking, INSP-07),
+ *                            pinned (INSP-07 / PRD §10), cellAppearance Y.Map keyed like `cells`
+ *                            → Appearance override (INSP-05/06), spans Y.Map keyed by anchor →
+ *                            {rows, cols} (MENU-04); a column map may carry `appearance` and
+ *                            `rules` (INSP-05/06). None of these moves an address.
  *   graphs  Y.Map<Y.Map>     by id: sheetId, pairId, kind ring|coverage, tableId ('' when
  *                            unbound), dimensions (JSON array of column ids), slice (JSON
  *                            {rowAxis, colAxis, pins}), gridCol, gridRow, widthUnits,
@@ -36,6 +43,16 @@ import {
 } from '../format/types.js';
 import { isMethodName, type MethodName } from '../formula/ast.js';
 import { cellKey, type CellKey, type Id } from '../ids.js';
+import { readRules, type ConditionalRule } from '../style/rules.js';
+import {
+  DEFAULT_TABLE_LOOK,
+  isGridlineDensity,
+  isOutlineWeight,
+  isTableStyle,
+  readAppearance,
+  type Appearance,
+  type TableLook,
+} from '../style/types.js';
 
 /** Lattice rows a table's title bar occupies (DS: title bar 44 px = 2 × 22). */
 export const TABLE_TITLE_ROWS = 2;
@@ -163,6 +180,10 @@ export interface ColumnRecord {
   readonly format: FormatKind;
   /** Options for `format` (decimals, currency, date pattern, text case). */
   readonly formatOpts: FormatOpts;
+  /** Fill, border, typography and alignment every cell inherits (INSP-05, INSP-06, INSP-10). */
+  readonly appearance: Appearance;
+  /** Conditional highlighting rules, first match wins (INSP-05). */
+  readonly rules: readonly ConditionalRule[];
 }
 
 export interface RowMeta {
@@ -212,6 +233,12 @@ export interface TableRecord {
    * `outlineColumnId`. Stored as `outlineColumn`.
    */
   readonly outlineColumn: Id | null;
+  /** Table style, title and caption, outline, gridlines, banding (INSP-04). */
+  readonly look: TableLook;
+  /** Stacking order on the sheet (INSP-07): higher draws above; ties by id. Stored as `z`. */
+  readonly z: number;
+  /** Pinned to the viewport (INSP-07, PRD §10): sticks at the screen edge while the sheet pans. */
+  readonly pinned: boolean;
 }
 
 /** The two halves of a graph pair (GRAPH-01, GRAPH-02). */
@@ -446,6 +473,24 @@ export function columnRecord(map: ColumnMap): ColumnRecord {
     pull: source === 'pulled' ? readPullSpec(map.get('pull')) : null,
     format: isFormatKind(format) ? format : 'auto',
     formatOpts: readFormatOpts(map.get('formatOpts')),
+    appearance: readAppearance(map.get('appearance')),
+    rules: readRules(map.get('rules')),
+  };
+}
+
+/** The table's look (INSP-04) from its map, defaults for every absent key. */
+export function tableLook(map: TableMap): TableLook {
+  const style = map.get('style');
+  const outline = map.get('outline');
+  const gridlines = map.get('gridlines');
+  return {
+    style: isTableStyle(style) ? style : DEFAULT_TABLE_LOOK.style,
+    titleShown: readBoolean(map, 'titleShown', DEFAULT_TABLE_LOOK.titleShown),
+    caption: readString(map, 'caption', DEFAULT_TABLE_LOOK.caption),
+    captionShown: readBoolean(map, 'captionShown', DEFAULT_TABLE_LOOK.captionShown),
+    outline: isOutlineWeight(outline) ? outline : DEFAULT_TABLE_LOOK.outline,
+    gridlines: isGridlineDensity(gridlines) ? gridlines : DEFAULT_TABLE_LOOK.gridlines,
+    alternating: readBoolean(map, 'alternating', DEFAULT_TABLE_LOOK.alternating),
   };
 }
 
@@ -486,6 +531,9 @@ export function tableRecord(map: TableMap): TableRecord {
     headerRows: readStripCount(map, 'headerRows', TABLE_HEADER_ROWS),
     footerRows: readStripCount(map, 'footerRows', DEFAULT_FOOTER_ROWS),
     outlineColumn: readColumnRef(map, 'outlineColumn', columns),
+    look: tableLook(map),
+    z: Math.round(readNumber(map, 'z', 0)),
+    pinned: readBoolean(map, 'pinned', false),
   };
 }
 

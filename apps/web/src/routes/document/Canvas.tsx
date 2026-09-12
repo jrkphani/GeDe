@@ -32,6 +32,12 @@ export interface CanvasProps {
   /** Double-clicking empty canvas offers a table there (PRD §11 empty-sheet affordance). */
   onPlaceTable?: ((at: { x: number; y: number }) => void) | undefined;
   children: ReactNode;
+  /**
+   * INSP-07 / PRD §10: objects pinned to the viewport. They sit in a layer
+   * that zooms with the sheet but never pans, anchored at the plane's
+   * top-left edge; their ghosts stay among `children`.
+   */
+  pinned?: ReactNode | undefined;
 }
 
 /** Until the container has been measured, assume the lg breakpoint so rulers render at once. */
@@ -67,6 +73,7 @@ export function Canvas({
   onClearSelection,
   onPlaceTable,
   children,
+  pinned,
 }: CanvasProps) {
   const planeRef = useRef<HTMLDivElement>(null);
   const gridRef = useRef<HTMLCanvasElement>(null);
@@ -280,6 +287,20 @@ export function Canvas({
         <div className="gd-canvas__layer" style={layerStyle} data-testid="layer">
           {children}
         </div>
+        {pinned !== undefined && pinned !== null && (
+          <div
+            className="gd-canvas__pinned-layer"
+            style={
+              {
+                transform: `scale(${String(viewport.zoom)})`,
+                '--gd-zoom': viewport.zoom,
+              } as CSSProperties
+            }
+            data-testid="pinned-layer"
+          >
+            {pinned}
+          </div>
+        )}
       </div>
     </div>
   );

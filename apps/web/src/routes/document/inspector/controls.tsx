@@ -109,18 +109,8 @@ export function Stepper({
  * reader can find the plan; a control with no owner here is removed, not stubbed.
  */
 export const TRACKED = {
-  /** INSP-04: table styles, caption, outline, gridline density, alternating rows, fit-to-content. */
-  tableAppearance: 'arrives with #82 (table appearance)',
-  /** INSP-05: fill, border matrix and weight, conditional highlighting. */
-  cellAppearance: 'arrives with #83 (cell appearance)',
-  /** INSP-06: font family, weight, size, character styles, text colour, alignment. */
-  typography: 'arrives with #84 (typography)',
-  /** INSP-07: stacking order, canvas layout, pin to viewport, DAG edges. */
-  arrange: 'arrives with #85 (arrange)',
   /** INSP-08 / GRAPH-*: graphs, "Graph this table", the Graph tab. */
   graph: 'arrives with #86 (context graphs)',
-  /** MENU-04: merge and unmerge cells. */
-  merge: 'arrives with #87 (merge controls)',
 } as const;
 
 /**

@@ -1,31 +1,48 @@
+import { Button, Switch, Tooltip } from '@gede/ui';
 import {
+  CANVAS_LAYOUT_LABELS,
+  CANVAS_LAYOUTS,
   columnLetter,
+  dagEdges,
+  edgesOf,
   LATTICE,
   setTablePosition,
+  sheetEdgesShown,
+  STACKING_LABELS,
+  STACKING_MOVES,
+  stackingPosition,
   tableRecord,
   type GedeDoc,
+  type StackingMove,
   type TableMap,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { useYVersion } from '../../../doc/use-y.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
-import { Section, Stepper, TRACKED, Unavailable, UnavailableRow } from './controls.js';
+import type { GridCommands } from '../grid/commands.js';
+import { Section, Stepper } from './controls.js';
 
 export interface ArrangeTabProps {
   gd: GedeDoc;
   table: TableMap;
   editable: boolean;
+  commands: GridCommands;
 }
 
 /**
- * INSP-07: the Arrange tab. Position in both grid address and pixels, live
- * through `setTablePosition` (RESP-01: the table moves on the lattice, its
- * cells keep their offsets, so every address follows the origin). Stacking
- * order, canvas layout, pin to viewport and DAG edges are not implemented
- * yet and say so (INSP-11).
+ * INSP-07: the Arrange tab. Stacking order among the sheet's tables, canvas
+ * layout (the prototype's Side by side / Pipeline lanes / Stacked), size,
+ * position in both grid address and pixels (live through `setTablePosition`,
+ * RESP-01: the table moves on the lattice and every address follows its
+ * origin), pin to viewport (PRD §10) and the sheet's DAG edges (PRD §7;
+ * cross-sheet edges are counted here, not drawn, PRD §11).
  */
-export function ArrangeTab({ gd, table, editable }: ArrangeTabProps) {
+export function ArrangeTab({ gd, table, editable, commands }: ArrangeTabProps) {
+  // Stacking, edges and the sheet flag live outside this table's map.
+  useYVersion(gd.tables);
+  useYVersion(gd.sheets);
   const record = tableRecord(table);
   const locale = activeLocale();
   const viewOnly = editable ? undefined : 'you have view-only access';
@@ -34,16 +51,88 @@ export function ArrangeTab({ gd, table, editable }: ArrangeTabProps) {
     setTablePosition(gd, record.id, { col, row });
     announce(`${record.title} moved to ${columnLetter(col)}${String(row + 1)}`);
   };
+  const stack = stackingPosition(gd, record.id);
+  const edges = dagEdges(gd, record.sheetId);
+  const mine = edgesOf(edges, record.id);
+  const edgesShown = sheetEdgesShown(gd, record.sheetId);
+  const stackReason = (m: StackingMove): string | undefined => {
+    if (viewOnly !== undefined) return viewOnly;
+    if (stack === null || stack.count < 2) return 'the only table on this sheet';
+    if ((m === 'back' || m === 'backward') && stack.index === 0) return 'already at the back';
+    if ((m === 'front' || m === 'forward') && stack.index === stack.count - 1)
+      return 'already at the front';
+    return undefined;
+  };
+  const layoutReason =
+    viewOnly ?? (stack === null || stack.count < 2 ? 'the only table on this sheet' : undefined);
+
   return (
     <>
-      <Section label="stacking order">
-        <UnavailableRow
-          labels={['Back', 'Backward', 'Forward', 'Front']}
-          reason={TRACKED.arrange}
-        />
+      <Section
+        label="stacking order"
+        hint={
+          stack === null
+            ? undefined
+            : `${record.title} is ${String(stack.index + 1)} of ${String(stack.count)}, back to front.`
+        }
+      >
+        <div className="gd-insp__row" role="group" aria-label="Stacking order">
+          {STACKING_MOVES.map((m) => {
+            const reason = stackReason(m);
+            const label = STACKING_LABELS[m];
+            return (
+              <Tooltip key={m} content={reason === undefined ? label : `${label} — ${reason}`}>
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-disabled={reason !== undefined || undefined}
+                  title={reason === undefined ? label : `${label} — ${reason}`}
+                  onClick={
+                    reason === undefined
+                      ? () => {
+                          commands.restack(record.id, m);
+                        }
+                      : undefined
+                  }
+                >
+                  {label}
+                </Button>
+              </Tooltip>
+            );
+          })}
+        </div>
       </Section>
-      <Section label="canvas layout">
-        <Unavailable label="Canvas layout" reason={TRACKED.arrange} />
+      <Section
+        label="canvas layout"
+        hint="Places every table on this sheet at once; positions stay on the lattice and every address follows its table."
+      >
+        <div className="gd-insp__row" role="group" aria-label="Canvas layout">
+          {CANVAS_LAYOUTS.map((layout) => {
+            const label = CANVAS_LAYOUT_LABELS[layout];
+            return (
+              <Tooltip
+                key={layout}
+                content={layoutReason === undefined ? label : `${label} — ${layoutReason}`}
+              >
+                <Button
+                  size="sm"
+                  variant="secondary"
+                  aria-disabled={layoutReason !== undefined || undefined}
+                  title={layoutReason === undefined ? label : `${label} — ${layoutReason}`}
+                  onClick={
+                    layoutReason === undefined
+                      ? () => {
+                          commands.layoutSheet(record.sheetId, layout);
+                        }
+                      : undefined
+                  }
+                >
+                  {label}
+                </Button>
+              </Tooltip>
+            );
+          })}
+        </div>
       </Section>
       <Section label="size" hint="Whole lattice units; change the width from the Table tab.">
         <dl className="gd-insp__facts">
@@ -104,10 +193,49 @@ export function ArrangeTab({ gd, table, editable }: ArrangeTabProps) {
           </dl>
         </div>
       </Section>
-      <Section label="viewport">
-        <div className="gd-insp__row">
-          <Unavailable label="Pin to viewport" reason={TRACKED.arrange} />
-          <Unavailable label="DAG edges" reason={TRACKED.arrange} />
+      <Section
+        label="viewport"
+        hint="A pinned table keeps its place on screen while the sheet pans; a ghost stays where it belongs."
+      >
+        <div className="gd-insp__stack">
+          <Switch
+            label="Pin to viewport"
+            checked={record.pinned}
+            disabled={!editable}
+            onCheckedChange={(on) => {
+              commands.setTablePinned(record.id, on);
+            }}
+          />
+          <Switch
+            label="DAG edges"
+            checked={edgesShown}
+            disabled={!editable}
+            onCheckedChange={(on) => {
+              commands.setSheetEdgesShown(record.sheetId, on);
+            }}
+          />
+          <dl className="gd-insp__facts" aria-label="Lineage">
+            <div>
+              <dt>Reads from</dt>
+              <dd className="gd-mono">
+                {formatNumber(locale, mine.in)} {mine.in === 1 ? 'table' : 'tables'}
+              </dd>
+            </div>
+            <div>
+              <dt>Read by</dt>
+              <dd className="gd-mono">
+                {formatNumber(locale, mine.out)} {mine.out === 1 ? 'table' : 'tables'}
+              </dd>
+            </div>
+            {mine.crossSheet > 0 && (
+              <div>
+                <dt>Across sheets</dt>
+                <dd className="gd-mono">
+                  {formatNumber(locale, mine.crossSheet)} — reported, not drawn
+                </dd>
+              </div>
+            )}
+          </dl>
         </div>
       </Section>
     </>

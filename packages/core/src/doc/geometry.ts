@@ -9,6 +9,7 @@ import { addressGrid, cellRefInTable, formatAddress, type TableGeometry } from '
 import { hiddenRowIds } from '../hier/outline.js';
 import type { Id } from '../ids.js';
 import { LATTICE, pointToPx, type Pixels } from '../lattice.js';
+import { CAPTION_ROWS } from '../style/types.js';
 import {
   DEFAULT_ROW_HEIGHT,
   graphsOnSheet,
@@ -144,7 +145,7 @@ export function tableWidthUnits(record: TableRecord): number {
   );
 }
 
-/** Lattice footprint of the whole table: title bar + header + rows + footer strip. */
+/** Lattice footprint of the whole table: title bar + header + rows + footer strip + caption strip. */
 export function tableUnitBounds(
   table: TableMap,
   record: TableRecord = tableRecord(table),
@@ -153,7 +154,8 @@ export function tableUnitBounds(
     TABLE_TITLE_ROWS +
     record.headerRows +
     rowHeights(table, record).reduce((a, b) => a + b, 0) +
-    record.footerRows;
+    record.footerRows +
+    (record.look.captionShown ? CAPTION_ROWS : 0);
   return { col: record.gridCol, row: record.gridRow, cols: tableWidthUnits(record), rows };
 }
 
