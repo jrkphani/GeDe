@@ -1,7 +1,17 @@
 import fc from 'fast-check';
 import { describe, expect, test } from 'vitest';
 
-import { concat, extract, format, marksAt, matches, replace, slice, split } from './algebra.js';
+import {
+  concat,
+  extract,
+  format,
+  marksAt,
+  matches,
+  replace,
+  replaceSpan,
+  slice,
+  split,
+} from './algebra.js';
 import { checkDoc } from './schema.js';
 import {
   docNode,
@@ -284,6 +294,41 @@ describe('text algebra — replace', () => {
 
   test('a replacement containing a newline introduces a paragraph break', () => {
     expect(plainText(replace(richFromText('a, b'), ', ', '\n'))).toBe('a\nb');
+  });
+});
+
+describe('text algebra — replaceSpan (FIND-08)', () => {
+  test('FIND-08 replaceSpan keeps marks outside the span and gives the new text the marks where the span began', () => {
+    const d = docNode([
+      paragraphNode([textNode('Trip to '), textNode('Singapore', [bold]), textNode(' soon')]),
+    ]);
+    expect(replaceSpan(d, 8, 17, 'Mumbai')).toEqual(
+      docNode([
+        paragraphNode([textNode('Trip to '), textNode('Mumbai', [bold]), textNode(' soon')]),
+      ]),
+    );
+    expect(replaceSpan(d, 0, 4, 'Flew')).toEqual(
+      docNode([
+        paragraphNode([textNode('Flew to '), textNode('Singapore', [bold]), textNode(' soon')]),
+      ]),
+    );
+  });
+
+  test('FIND-08 replaceSpan projects to String.slice splicing and leaves a bad span alone', () => {
+    fc.assert(
+      fc.property(arbDoc, fc.nat(30), fc.nat(30), arbText, (d, a, b, repl) => {
+        const flat = plainText(d);
+        const from = Math.min(a, flat.length);
+        const to = Math.min(b, flat.length);
+        const out = replaceSpan(d, from, to, repl);
+        checkDoc(out);
+        if (from >= to) expect(out).toEqual(normalise(d));
+        else expect(plainText(out)).toBe(flat.slice(0, from) + repl + flat.slice(to));
+      }),
+    );
+    const d = richFromText('abc');
+    expect(replaceSpan(d, 2, 9, 'x')).toEqual(normalise(d));
+    expect(replaceSpan(d, -1, 2, 'x')).toEqual(normalise(d));
   });
 });
 

@@ -16,8 +16,9 @@ import {
   DEFAULT_SEARCH_OPTIONS,
   documentEntriesOf,
   graphEntriesOf,
+  graphemes,
+  replaceInCell,
   replaceInText,
-  setCellText,
   tableEntries,
   tableMap,
   type DocumentName,
@@ -505,8 +506,8 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   // near miss is something Find *found*, not something the person asked to
   // change: "cat" → "dog" must not turn "hat" into "dog". Near misses are
   // counted and left alone, like read-only matches.
-  // TODO(richtext): swap setCellText for the mark-preserving Replace op once
-  // the text algebra lands; today marks are dropped, as in the Wave 1 editor.
+  // The write goes through `replaceInCell`, the text algebra's mark-preserving
+  // span replacement: bold on the untouched part of a cell stays bold.
   type Outcome = 'replaced' | 'readOnly' | 'near' | 'stale';
   const replaceOne = useCallback(
     (match: SearchMatch, text: string): Outcome => {
@@ -516,21 +517,14 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       const table = tableMap(gd, tableId);
       if (table === null) return 'stale';
       const before = cellText(table, rowId, colId);
-      let after: string;
-      if (match.field === 'reference') {
-        const at = before.indexOf(match.text);
-        if (at < 0) return 'stale';
-        after =
-          before.slice(0, at) +
-          replaceInText(match.text, match, text) +
-          before.slice(at + match.text.length);
-      } else {
-        if (before !== match.text) return 'stale';
-        after = replaceInText(before, match, text);
-      }
-      if (after === before) return 'stale';
-      setCellText(gd, tableId, rowId, colId, after);
-      return 'replaced';
+      // Where the matched text sits in the cell; the span's UTF-16 offsets follow from it.
+      const base = match.field === 'reference' ? before.indexOf(match.text) : 0;
+      if (base < 0 || (match.field !== 'reference' && before !== match.text)) return 'stale';
+      if (replaceInText(match.text, match, text) === match.text) return 'stale';
+      const clusters = graphemes(match.text);
+      const from = base + clusters.slice(0, match.start).join('').length;
+      const to = base + clusters.slice(0, match.end).join('').length;
+      return replaceInCell(gd, tableId, rowId, colId, { from, to }, text) ? 'replaced' : 'stale';
     },
     [gd],
   );

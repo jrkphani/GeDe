@@ -33,8 +33,8 @@ test.describe('rich cell (harness)', () => {
     await cell.dblclick();
     const editor = page.getByRole('textbox', { name: 'Edit A1' });
     await expect(editor).toBeFocused();
-    // The caret opens at the end; select all, then ⌘B marks all of it.
-    await page.keyboard.press(`${m}+a`);
+    // The caret opens at the end; select all (triple-click, platform-neutral), then ⌘B marks all of it.
+    await editor.click({ clickCount: 3 });
     await page.keyboard.press(`${m}+b`);
     await expect(editor.locator('strong')).toHaveText('Everest trek');
     await page.keyboard.press('Enter');
@@ -51,7 +51,7 @@ test.describe('rich cell (harness)', () => {
     const cell = page.locator('[data-address="A1"]');
     await cell.dblclick();
     const editor = page.getByRole('textbox', { name: 'Edit A1' });
-    await page.keyboard.press(`${m}+a`);
+    await editor.click({ clickCount: 3 });
     await page.keyboard.press(`${m}+i`);
     await page.keyboard.press(`${m}+u`);
     await page.keyboard.press(`${m}+Shift+x`);

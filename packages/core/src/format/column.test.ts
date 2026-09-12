@@ -28,7 +28,7 @@ function fixture(): { gd: GedeDoc; tableId: string; colId: string; rows: readonl
   return { gd, tableId, colId: record.columns[0]!.id, rows: record.rows };
 }
 
-describe('column formats in the document (FMT-01, FMT-06)', () => {
+describe('column formats in the document (FMT-01; FMT-06 (partial) inheritance)', () => {
   test('FMT-01 a column created before formats existed reads as Automatic with no options', () => {
     const { gd, tableId, colId } = fixture();
     const column = columnById(tableMap(gd, tableId)!, colId)!;
@@ -58,7 +58,7 @@ describe('column formats in the document (FMT-01, FMT-06)', () => {
     expect(countOverrides(table, colId)).toBe(0);
   });
 
-  test('FMT-06 a row appended after the column was formatted inherits the format', () => {
+  test('FMT-06 (partial) a row appended after the column was formatted inherits the format', () => {
     const { gd, tableId, colId } = fixture();
     setColumnFormat(gd, tableId, colId, 'date', { datePattern: 'DD/MM/YYYY' });
     const newRow = addRow(gd, tableId);

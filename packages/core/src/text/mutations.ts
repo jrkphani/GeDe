@@ -16,6 +16,7 @@ import {
   type TableMap,
 } from '../doc/schema.js';
 import { cellKey, type Id } from '../ids.js';
+import { replaceSpan } from './algebra.js';
 import {
   EMPTY_DOC,
   isEmptyDoc,
@@ -82,4 +83,32 @@ export function setCellRich(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id, doc:
     cells.set(key, richToFragment(next));
   }, gd.origin);
   return written;
+}
+
+/**
+ * FIND-08 on a rich cell: replace one UTF-16 span of the cell's plain text
+ * and keep the marks around it (a formula cell is edited as its source).
+ * False when the span does not fit the cell's current text — Replace never
+ * rewrites more than the match it can locate — or the row or column went.
+ */
+export function replaceInCell(
+  gd: GedeDoc,
+  tableId: Id,
+  rowId: Id,
+  colId: Id,
+  span: { readonly from: number; readonly to: number },
+  replacement: string,
+): boolean {
+  const table = tableMap(gd, tableId);
+  if (table === null) return false;
+  const current = cellRich(table, rowId, colId);
+  const length = plainText(current).length;
+  if (span.from < 0 || span.to > length || span.from >= span.to) return false;
+  return setCellRich(
+    gd,
+    tableId,
+    rowId,
+    colId,
+    replaceSpan(current, span.from, span.to, replacement),
+  );
 }

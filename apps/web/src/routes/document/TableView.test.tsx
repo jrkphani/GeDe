@@ -727,7 +727,7 @@ describe('read-only viewers (RESP-02, SHARE-03)', () => {
   });
 });
 
-describe('rich text in the grid (KEYS-05, FMT-01..05, KEYS-03)', () => {
+describe('rich text in the grid (marks, formats, undo)', () => {
   const bold = { type: 'bold' } as const;
 
   it('INSP-06 (partial) a marked cell renders its marks at rest, without ProseMirror', () => {

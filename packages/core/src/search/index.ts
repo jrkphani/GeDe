@@ -5,12 +5,14 @@
  */
 export { graphemes, foldGraphemes } from './graphemes.js';
 export { editDistance, exactFind, approximateFind, type Found } from './distance.js';
+// The `is:` operator's four kinds (no `auto`): aliased so they do not shadow
+// the column data formats' `FormatKind` / `FORMAT_KINDS` (packages/core/src/format).
 export {
-  FORMAT_KINDS,
+  FORMAT_KINDS as SEARCH_FORMAT_KINDS,
   isEmptyQuery,
-  isFormatKind,
+  isFormatKind as isSearchFormatKind,
   parseQuery,
-  type FormatKind,
+  type FormatKind as SearchFormatKind,
   type ParsedQuery,
 } from './query.js';
 export { inferFormat, resolveFormat } from './format.js';

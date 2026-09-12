@@ -12,7 +12,7 @@ import {
   tableMap,
   type GedeDoc,
 } from '../doc/index.js';
-import { cellFragment, cellRich, setCellRich } from './mutations.js';
+import { cellFragment, cellRich, replaceInCell, setCellRich } from './mutations.js';
 import { docNode, EMPTY_DOC, paragraphNode, richFromText, textNode } from './types.js';
 
 function fixture(): { gd: GedeDoc; tableId: string; rowId: string; colId: string } {
@@ -61,6 +61,38 @@ describe('rich cell reads and writes', () => {
     expect(undo.undoStack.length).toBe(1);
     undo.undo();
     expect(cellText(table, rowId, colId)).toBe('first');
+  });
+
+  test('FIND-08 replaceInCell rewrites one span in place and keeps the marks around it', () => {
+    const { gd, tableId, rowId, colId } = fixture();
+    setCellRich(
+      gd,
+      tableId,
+      rowId,
+      colId,
+      docNode([paragraphNode([textNode('Singapore'), textNode(' office', [bold])])]),
+    );
+    const table = tableMap(gd, tableId)!;
+    const before = cellFragment(table, rowId, colId);
+    expect(replaceInCell(gd, tableId, rowId, colId, { from: 0, to: 9 }, 'Mumbai')).toBe(true);
+    expect(cellRich(table, rowId, colId)).toEqual(
+      docNode([paragraphNode([textNode('Mumbai'), textNode(' office', [bold])])]),
+    );
+    expect(cellFragment(table, rowId, colId)).toBe(before);
+    // A span past the text, or an empty one, rewrites nothing.
+    expect(replaceInCell(gd, tableId, rowId, colId, { from: 5, to: 40 }, 'x')).toBe(false);
+    expect(replaceInCell(gd, tableId, rowId, colId, { from: 3, to: 3 }, 'x')).toBe(false);
+    expect(cellText(table, rowId, colId)).toBe('Mumbai office');
+    // A formula cell is edited as its source.
+    setCellText(gd, tableId, rowId, colId, '=Concat(@Trek.Singapore)');
+    expect(replaceInCell(gd, tableId, rowId, colId, { from: 14, to: 23 }, 'Mumbai')).toBe(true);
+    expect(cellText(table, rowId, colId)).toBe('=Concat(@Trek.Mumbai)');
+  });
+
+  test('setCellRich returns false when the row went while the editor was open (GRID-02)', () => {
+    const { gd, tableId, colId } = fixture();
+    expect(setCellRich(gd, tableId, 'gone-row', colId, richFromText('x'))).toBe(false);
+    expect(replaceInCell(gd, tableId, 'gone-row', colId, { from: 0, to: 1 }, 'y')).toBe(false);
   });
 
   test('setCellText on a marked cell with the same text keeps the marks (Wave 1 guard)', () => {

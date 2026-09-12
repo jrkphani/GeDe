@@ -250,7 +250,7 @@ export function formatDate(date: CivilDate, pattern: DatePattern, locale: Format
   if (pattern === 'YYYY-MM-DD') return isoDate(date);
   // The two numeric patterns render as their names promise in every locale (PRD §22 names
   // them); the month-name patterns go through Intl for the locale's order and month names.
-  // PRD §23's en-US short date (M/D/Y) is not one of the §22 patterns — filed as a spec gap.
+  // PRD §23's en-US short date (M/D/Y) is not one of the §22 patterns — spec gap, issue #70.
   if (pattern === 'DD/MM/YYYY') {
     return `${pad2(date.day)}/${pad2(date.month)}/${String(date.year).padStart(4, '0')}`;
   }

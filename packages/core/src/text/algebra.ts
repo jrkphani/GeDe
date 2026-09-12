@@ -244,6 +244,24 @@ export function replace(d: RichDoc, pattern: Pattern, replacement: string | Rich
   return concat(pieces);
 }
 
+/**
+ * Replace one plain-text span `[from, to)` with a string, keeping every mark
+ * outside it and giving the replacement the marks in force where the span
+ * began (FIND-08 on a marked cell: replacing a word inside a bold run keeps
+ * the run bold). Out-of-range or inverted spans leave the document as is.
+ */
+export function replaceSpan(d: RichDoc, from: number, to: number, replacement: string): RichDoc {
+  const flat = plainText(d);
+  if (from < 0 || to > flat.length || from >= to) return normalise(d);
+  const marks = marksAt(d, from);
+  const middle = docNode(
+    replacement
+      .split(PARAGRAPH_BREAK)
+      .map((line) => paragraphNode(line === '' ? [] : [textNode(line, marks)])),
+  );
+  return concat([slice(d, 0, from), middle, slice(d, to, flat.length)]);
+}
+
 // ---------------------------------------------------------------------------
 // Format (PRD §22 Text presets)
 // ---------------------------------------------------------------------------

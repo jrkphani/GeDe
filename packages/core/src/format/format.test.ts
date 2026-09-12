@@ -423,8 +423,8 @@ describe('sumCurrency (FMT-03, FMT-05, FX-02)', () => {
   });
 });
 
-describe('describeScope (FMT-06)', () => {
-  test('FMT-06 states the column, the format, the row count and that later rows inherit', () => {
+describe('describeScope (FMT-06 (partial) scope sentence)', () => {
+  test('FMT-06 (partial) states the column, the format, the row count and that later rows inherit', () => {
     expect(
       describeScope({
         columnLabel: 'Amount',

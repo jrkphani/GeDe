@@ -176,13 +176,14 @@ test.describe('document shell', () => {
     await cell.dblclick();
     const editor = page.getByLabel('Edit B5');
     await expect(editor).toHaveAttribute('contenteditable', 'true');
-    await page.keyboard.press(`${mod}+a`);
+    await editor.click({ clickCount: 3 });
     await page.keyboard.press(`${mod}+b`);
     await expect(editor.locator('strong')).toHaveText('Everest');
     await page.keyboard.press('Enter');
     await expect(cell.locator('.gd-rich strong')).toHaveText('Everest');
+    // The room holds the mark as a text attribute; Y.XmlText renders it as a `<bold>` tag.
     await expect
-      .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()).includes('"bold"'))
+      .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()).includes('<bold>'))
       .toBe(true);
     // KEYS-03: one ⌘Z at document level takes the whole edit session back.
     await page.keyboard.press(`${mod}+z`);

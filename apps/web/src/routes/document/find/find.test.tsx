@@ -8,12 +8,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   addRow,
+  cellRich,
   cellText,
   createSheet,
   createTable,
+  docNode,
   openDocument,
+  paragraphNode,
+  setCellRich,
   setCellText,
   tableById,
+  textNode,
   type GedeDoc,
   type SearchMatch,
 } from '@gede/core';
@@ -443,6 +448,50 @@ describe('Find', () => {
     expect(count()).toBe('1 of 2');
     // FIND-10: the bar never closes itself.
     expect(screen.getByRole('search', { name: 'Find' })).toBeInTheDocument();
+  });
+
+  it('FIND-08 Replace keeps the marks on the untouched part of a rich cell and gives the new text the marks the match had', async () => {
+    const { gd, sheet1, table1, ids } = fixture();
+    const bold = { type: 'bold' } as const;
+    // "Singapore" is plain; " office" is bold — and one where the match itself is bold.
+    setCellRich(
+      gd,
+      table1,
+      ids.rows[0]!,
+      ids.cols[0]!,
+      docNode([paragraphNode([textNode('Singapore'), textNode(' office', [bold])])]),
+    );
+    setCellRich(
+      gd,
+      table1,
+      ids.rows[2]!,
+      ids.cols[0]!,
+      docNode([
+        paragraphNode([textNode('Trip to '), textNode('Singapore', [bold]), textNode(' soon')]),
+      ]),
+    );
+    render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);
+    await userEvent.click(screen.getByRole('button', { name: 'Find and replace' }));
+    const field = screen.getByRole('textbox', { name: 'Find' });
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Singapore');
+    await waitFor(() => {
+      expect(count()).toMatch(/of 5/);
+    });
+    await userEvent.type(screen.getByRole('textbox', { name: 'Replace with' }), 'Mumbai');
+    await userEvent.click(screen.getByRole('button', { name: 'All' }));
+    const t1 = gd.tables.get(table1)!;
+    await waitFor(() => {
+      expect(cellText(t1, ids.rows[0]!, ids.cols[0]!)).toBe('Mumbai office');
+    });
+    expect(cellRich(t1, ids.rows[0]!, ids.cols[0]!)).toEqual(
+      docNode([paragraphNode([textNode('Mumbai'), textNode(' office', [bold])])]),
+    );
+    expect(cellRich(t1, ids.rows[2]!, ids.cols[0]!)).toEqual(
+      docNode([
+        paragraphNode([textNode('Trip to '), textNode('Mumbai', [bold]), textNode(' soon')]),
+      ]),
+    );
   });
 
   it('FIND-08 SHARE-03 a view-only participant sees Replace disabled with the reason; on phone the row is absent', async () => {
