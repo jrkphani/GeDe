@@ -15,7 +15,9 @@ Projection tables (rebuildable): `sheets`, `tables`, `columns`, `rows`, `cells`,
 - Every schema change is a new numbered file in `migrations/` (`0007_add_x.sql`) plus the matching `schema.ts` change, in the same PR. `npm run generate -w packages/db` (drizzle-kit) produces the SQL; review it before committing.
 - Never edit a migration that has reached `main`. `main` is production; the file has already run. Write a new migration that alters or reverts.
 - Migrations are plain SQL, forward-only, idempotent where PostgreSQL allows (`IF NOT EXISTS`). Each runs in a transaction; the runner records it in `__migrations(name, applied_at)`. `migrations.test.ts` refuses any `DROP` other than `DROP CONSTRAINT` and any `TRUNCATE`/`DELETE FROM`; a column added later must use `ALTER TABLE <t> ADD COLUMN IF NOT EXISTS <c>` so the schema-parity test can find it.
-- The runner takes `pg_advisory_lock` before reading `_migrations` and releases it after the last statement, so two tasks booting at once cannot race.
+- The runner takes `pg_advisory_lock` before reading `__migrations` and releases it after the last statement, so two tasks booting at once cannot race; the wait is bounded by `lock_timeout` (2 min) and an unlock failure never masks the error that caused it.
+- The ledger records the SHA-256 of every applied file (migration 0005, `checksum`). A file whose text differs from its row fails the boot with the file named; rows from before 0005 are pinned on the next run. So: never edit a shipped file, not even a comment — write a new one.
+- Every foreign key a cascade or the projection walks has an index (migration 0004); declare new ones in `schema.ts` as well, `migrations.test.ts` and `db:parity` check both directions.
 - Tests run migrations from zero against a throwaway database and assert the resulting schema; there is no other way to know a migration works. `npm run db:parity` does this in Docker; the pipeline's Synth step runs it with `CI=true` (where a missing Docker is a failure) before anything deploys.
 
 ## Types
@@ -34,7 +36,8 @@ Projection tables (rebuildable): `sheets`, `tables`, `columns`, `rows`, `cells`,
 
 ## Package shape
 
-- Exports: `schema` (Drizzle tables and enums), `migrate(pool, logger)`, and `createPool(config)` (TLS `verify-full` with the RDS CA bundle when `DB_CA_BUNDLE_PATH` is set).
+- Exports: `schema` (Drizzle tables and enums), `applyMigrations(pool, dir, options)`, and `createPool(env)` (TLS `verify-full` with the RDS CA bundle from `PGSSLROOTCERT`; with `NODE_ENV=production` any other `PGSSLMODE` is refused). Every pooled session carries `statement_timeout` 30 s, `lock_timeout` 10 s and `idle_in_transaction_session_timeout` 30 s (`POOL_TIMEOUTS`).
+- Unique constraints the service matches by name (`users_email_key`) are named explicitly in `schema.ts`; keep them equal to what the SQL created.
 - No business logic here. Queries that encode permissions or document rules belong in `services/sync`.
 - Dev dependencies only for `drizzle-kit`; runtime dependencies are `drizzle-orm` and `pg`.
 

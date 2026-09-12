@@ -49,7 +49,7 @@ Forced:
 
 1. Fastest and preferred: revert the merge commit on `main` (`git revert <sha>`, PR, merge). The pipeline redeploys the previous code with a new execution and `main` stays truthful.
 2. Re-run a previous execution: console → Pipelines → GeDe → the last green execution → Retry, or `aws codepipeline start-pipeline-execution --name GeDe --source-revisions actionName=Source,revisionType=COMMIT_ID,revisionValue=<sha>`. This deploys that commit but leaves `main` ahead of production; follow with a revert.
-3. Database: migrations are forward-only. If a migration must be undone, write the reverse migration and deploy it. Use RDS point-in-time restore only for data loss, never for schema.
+3. Database: migrations are forward-only. If a migration must be undone, write the reverse migration and deploy it. Use RDS point-in-time restore only for data loss, never for schema. The ledger stores a checksum per applied file: a task that boots with an edited shipped migration exits with `migration <file> failed: file text differs`, the circuit breaker keeps the previous task set, and the fix is to restore the file's text and add the change as a new migration.
 
 ## 3. Secrets
 
