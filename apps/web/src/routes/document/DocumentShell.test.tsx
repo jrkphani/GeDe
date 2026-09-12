@@ -1,4 +1,4 @@
-import { screen } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as DocumentsApi from '../../api/documents.js';
 import { installMatchMedia } from '../../test/match-media.js';
@@ -42,7 +42,11 @@ describe('DocumentShell', () => {
 
   it('renders the chrome: mark to library, title, Shared slot, sheet strip and rulers from the lattice', async () => {
     const { container } = renderRoutes(routes, [`/d/${ID}`]);
-    expect(await screen.findByLabelText('Workscape title')).toHaveValue('Everest trek');
+    // The input renders before the document fetch resolves; wait for the value, not the element.
+    const title = await screen.findByLabelText('Workscape title');
+    await waitFor(() => {
+      expect(title).toHaveValue('Everest trek');
+    });
     expect(screen.getByRole('link', { name: 'Back to my workscapes' })).toHaveAttribute(
       'href',
       '/',
