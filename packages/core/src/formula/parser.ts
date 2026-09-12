@@ -6,6 +6,7 @@ import { columnIndex, normaliseRange, type CellRef } from '../address.js';
 import { err, ok, type Result } from '../result.js';
 import type {
   Ast,
+  BoundRef,
   CallExpr,
   EntityRef,
   Expr,
@@ -142,16 +143,24 @@ class Parser {
     switch (t.kind) {
       case 'string':
         this.next();
-        return { kind: 'string', value: String(t.value ?? ''), span: t.span };
+        return { kind: 'string', value: typeof t.value === 'string' ? t.value : '', span: t.span };
       case 'number':
         this.next();
         return { kind: 'number', value: Number(t.value ?? 0), span: t.span };
       case 'at':
         return this.parseEntity();
+      case 'bound':
+        return this.parseBound();
       case 'ident':
         if (this.peekPastSpace(1).kind === 'lparen') return this.parseCall();
         return this.parseCellReference();
       case 'other':
+        if (t.text === '#' && this.peek(1).text.toUpperCase() === 'REF') {
+          fail('#REF names a cell that was removed; replace it', {
+            start: t.span.start,
+            end: this.peek(1).span.end,
+          });
+        }
         if (t.text === '-' && this.peek(1).kind === 'number') {
           this.next();
           const num = this.next();
@@ -220,7 +229,7 @@ class Parser {
       if (seg.kind === 'ident') {
         path.push(seg.text);
       } else if (seg.kind === 'string') {
-        path.push(String(seg.value ?? ''));
+        path.push(typeof seg.value === 'string' ? seg.value : '');
       } else {
         fail(path.length === 0 ? 'expected a name after @' : 'expected a name after .', {
           start: at.span.start,
@@ -237,10 +246,17 @@ class Parser {
     }
   }
 
-  /** In list mode a token starts a reference when it is `@`, an address, or a column. */
+  private parseBound(): BoundRef {
+    const t = this.next();
+    const ref = t.value;
+    if (typeof ref !== 'object') fail('malformed reference token', t.span);
+    return { kind: 'bound', ref, span: t.span };
+  }
+
+  /** In list mode a token starts a reference when it is `@`, a bound token, an address, or a column. */
   private startsReference(): boolean {
     const t = this.peek();
-    if (t.kind === 'at') return true;
+    if (t.kind === 'at' || t.kind === 'bound') return true;
     if (t.kind !== 'ident') return false;
     if (ADDRESS_RE.test(t.text)) return true;
     return (
@@ -270,7 +286,13 @@ class Parser {
     while (this.peek().kind !== 'eof') {
       if (this.startsReference()) {
         flushSeparator(this.peek().span.start);
-        const ref = this.peek().kind === 'at' ? this.parseEntity() : this.parseCellReference();
+        const head = this.peek().kind;
+        const ref =
+          head === 'at'
+            ? this.parseEntity()
+            : head === 'bound'
+              ? this.parseBound()
+              : this.parseCellReference();
         items.push(ref);
         referenceCount += 1;
         continue;

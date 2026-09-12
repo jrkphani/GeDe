@@ -9,7 +9,7 @@
 import { bench, describe } from 'vitest';
 
 import { cellKey } from '../ids.js';
-import { chainSheet, thousandCellSheet } from './__fixtures__/sheets.js';
+import { chainSheet, colIdAt, TABLE_ID, thousandCellSheet } from './__fixtures__/sheets.js';
 import { FormulaEngine } from './engine.js';
 
 describe('FormulaEngine budgets (PRD §20)', () => {
@@ -24,9 +24,9 @@ describe('FormulaEngine budgets (PRD §20)', () => {
       engine1.apply([
         {
           type: 'cells',
-          tableId: 'T1',
+          tableId: TABLE_ID,
           cells: {
-            [cellKey(thousand.rowIds[5] ?? '', 'c0')]: { kind: 'text', text: String(tick) },
+            [cellKey(thousand.rowIds[5] ?? '', colIdAt(0))]: { kind: 'text', text: String(tick) },
           },
         },
       ]);
@@ -42,8 +42,10 @@ describe('FormulaEngine budgets (PRD §20)', () => {
     engine2.apply([
       {
         type: 'cells',
-        tableId: 'T1',
-        cells: { [cellKey(chain.rowIds[0] ?? '', 'c0')]: { kind: 'text', text: String(head) } },
+        tableId: TABLE_ID,
+        cells: {
+          [cellKey(chain.rowIds[0] ?? '', colIdAt(0))]: { kind: 'text', text: String(head) },
+        },
       },
     ]);
   });

@@ -17,6 +17,7 @@ function fakeResolver(
   formulas: Record<string, string> = {},
 ): Resolver {
   const resolver: Resolver = {
+    bound: () => undefined,
     valueAt(ref, depth) {
       const address = formatAddress(ref);
       const formula = formulas[address];
@@ -216,6 +217,7 @@ describe('evaluation chains (FX-06)', () => {
     const ast = parse('=Sum(A1)');
     if (!ast.ok) throw new Error('parse');
     const resolver: Resolver = {
+      bound: () => undefined,
       valueAt: () => {
         throw new Error('must not be called');
       },

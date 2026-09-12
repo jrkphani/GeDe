@@ -4,6 +4,7 @@
  * in list mode anything that is not a reference is separator text).
  */
 import type { ParseError, Span } from './ast.js';
+import { decodeBound, type BoundReference } from './bound.js';
 
 export type TokenKind =
   | 'equals'
@@ -17,6 +18,7 @@ export type TokenKind =
   | 'lparen'
   | 'rparen'
   | 'space'
+  | 'bound'
   | 'other'
   | 'eof';
 
@@ -24,8 +26,8 @@ export interface Token {
   readonly kind: TokenKind;
   /** Raw text as typed. */
   readonly text: string;
-  /** Decoded value for strings; numeric value for numbers. */
-  readonly value: string | number | undefined;
+  /** Decoded value for strings; numeric value for numbers; the reference for bound tokens. */
+  readonly value: string | number | BoundReference | undefined;
   readonly span: Span;
 }
 
@@ -41,7 +43,12 @@ export function tokenize(text: string): TokenizeResult {
   let i = 0;
   const n = text.length;
 
-  const push = (kind: TokenKind, start: number, end: number, value?: string | number): void => {
+  const push = (
+    kind: TokenKind,
+    start: number,
+    end: number,
+    value?: string | number | BoundReference,
+  ): void => {
     tokens.push({ kind, text: text.slice(start, end), value, span: { start, end } });
   };
 
@@ -63,6 +70,16 @@ export function tokenize(text: string): TokenizeResult {
       push('lparen', start, ++i);
     } else if (ch === ')') {
       push('rparen', start, ++i);
+    } else if (ch === '{') {
+      // An id-bound token (`{c:…}`); a brace that is not one is ordinary text.
+      const close = text.indexOf('}', i);
+      const bound = close < 0 ? null : decodeBound(text.slice(i, close + 1));
+      if (bound === null) {
+        push('other', start, ++i);
+      } else {
+        i = close + 1;
+        push('bound', start, i, bound);
+      }
     } else if (ch === '"' || ch === "'") {
       const quote = ch;
       i += 1;

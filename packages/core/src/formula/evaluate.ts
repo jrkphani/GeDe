@@ -10,6 +10,7 @@
 import { formatAddress, cellsInRange, type CellRef } from '../address.js';
 import { err, ok, type Result } from '../result.js';
 import type { Ast, Expr, Reference, Separator } from './ast.js';
+import type { BoundReference } from './bound.js';
 
 export type CellValue =
   | { readonly kind: 'text'; readonly text: string }
@@ -39,6 +40,8 @@ export type FormulaError =
   | { readonly kind: 'circular' }
   /** `⚠ unknown reference` — an `@` path resolves to nothing. */
   | { readonly kind: 'unknown-entity'; readonly path: string }
+  /** `⚠ reference removed` — a bound cell, row, column or table was deleted (PRD §20 id semantics). */
+  | { readonly kind: 'reference-removed'; readonly label: string }
   /** `⚠ invalid argument` — e.g. a quoted string inside Sum. */
   | { readonly kind: 'invalid-argument'; readonly message: string };
 
@@ -53,6 +56,17 @@ export interface Resolver {
     col: number,
     depth: number,
   ): readonly { readonly row: number; readonly value: CellValue }[];
+  /**
+   * The cells an id-bound reference reads, each with its current A1 label
+   * (for error messages), or `undefined` when a bound target no longer exists.
+   */
+  bound(ref: BoundReference, depth: number): readonly BoundOperand[] | undefined;
+}
+
+export interface BoundOperand {
+  /** The cell's current address (or `#REF`-style label), for `text-in-range` messages. */
+  readonly address: string;
+  readonly value: CellValue;
 }
 
 export interface EvaluateOptions {
@@ -79,6 +93,8 @@ export function errorLabel(error: FormulaError): string {
       return '⚠ circular';
     case 'unknown-entity':
       return '⚠ unknown reference';
+    case 'reference-removed':
+      return '⚠ reference removed';
     case 'invalid-argument':
       return '⚠ invalid argument';
   }
@@ -113,6 +129,17 @@ function fail(error: FormulaError): never {
 
 function entityText(path: readonly string[]): string {
   return `@${path.join('.')}`;
+}
+
+function boundLabel(ref: BoundReference): string {
+  switch (ref.kind) {
+    case 'cell':
+      return ref.spelling === 'entity' ? 'an @ path' : 'a cell';
+    case 'range':
+      return 'a range';
+    case 'column':
+      return 'a column';
+  }
 }
 
 interface Operand {
@@ -247,6 +274,13 @@ class Evaluator {
         const value = this.resolver.entity(ref.path, this.depth);
         if (value === undefined) fail({ kind: 'unknown-entity', path: entityText(ref.path) });
         return [{ address: entityText(ref.path), value }];
+      }
+      case 'bound': {
+        const operands = this.resolver.bound(ref.ref, this.depth);
+        if (operands === undefined) {
+          fail({ kind: 'reference-removed', label: boundLabel(ref.ref) });
+        }
+        return operands.map((o) => ({ address: o.address, value: o.value }));
       }
     }
   }

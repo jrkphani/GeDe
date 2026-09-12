@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'vitest';
 
 import { cellKey } from '../ids.js';
-import { addr, chainSheet, thousandCellSheet } from './__fixtures__/sheets.js';
+import {
+  chainSheet,
+  colIdAt,
+  rowIdAt,
+  TABLE_ID,
+  thousandCellSheet,
+} from './__fixtures__/sheets.js';
 import { FormulaEngine } from './engine.js';
 import { workbookCellId } from './types.js';
 
@@ -26,7 +32,7 @@ describe('FormulaEngine performance budgets (PRD §20)', () => {
     const { table, rowIds } = thousandCellSheet();
     const engine = new FormulaEngine();
     engine.apply([{ type: 'reset', snapshot: { tables: [table] } }]);
-    const total = engine.result(workbookCellId('T1', cellKey(rowIds[0] ?? '', 'c3')));
+    const total = engine.result(workbookCellId(TABLE_ID, cellKey(rowIds[0] ?? '', colIdAt(3))));
     expect(total?.value?.kind).toBe('number');
     let tick = 100;
     const ms = medianMs(20, () => {
@@ -34,15 +40,15 @@ describe('FormulaEngine performance budgets (PRD §20)', () => {
       const out = engine.apply([
         {
           type: 'cells',
-          tableId: 'T1',
-          cells: { [cellKey(rowIds[5] ?? '', 'c0')]: { kind: 'text', text: String(tick) } },
+          tableId: TABLE_ID,
+          cells: { [cellKey(rowIds[5] ?? '', colIdAt(0))]: { kind: 'text', text: String(tick) } },
         },
       ]);
       // The row's Sum and the column total, nothing else.
       expect(out.results.map((r) => r.cellId).sort()).toEqual(
         [
-          workbookCellId('T1', cellKey(rowIds[5] ?? '', 'c3')),
-          workbookCellId('T1', cellKey(rowIds[0] ?? '', 'c3')),
+          workbookCellId(TABLE_ID, cellKey(rowIds[5] ?? '', colIdAt(3))),
+          workbookCellId(TABLE_ID, cellKey(rowIds[0] ?? '', colIdAt(3))),
         ].sort(),
       );
     });
@@ -60,15 +66,17 @@ describe('FormulaEngine performance budgets (PRD §20)', () => {
       const out = engine.apply([
         {
           type: 'cells',
-          tableId: 'T1',
-          cells: { [cellKey(rowIds[0] ?? '', 'c0')]: { kind: 'text', text: String(head) } },
+          tableId: TABLE_ID,
+          cells: { [cellKey(rowIds[0] ?? '', colIdAt(0))]: { kind: 'text', text: String(head) } },
         },
       ]);
       expect(out.results).toHaveLength(499);
     });
-    const last = engine.result(workbookCellId('T1', cellKey(rowIds[499] ?? '', 'c0')));
+    const last = engine.result(workbookCellId(TABLE_ID, cellKey(rowIds[499] ?? '', colIdAt(0))));
     expect(last?.value).toEqual({ kind: 'number', value: head });
-    expect(last?.operands[0]?.label).toBe(addr(498, 0));
+    expect(last?.operands[0]?.cellIds).toEqual([
+      workbookCellId(TABLE_ID, cellKey(rowIdAt(498), colIdAt(0))),
+    ]);
     console.warn(`500-row chain: ${ms.toFixed(2)} ms (budget 50 ms)`);
     expect(ms).toBeLessThan(200);
   });

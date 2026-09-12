@@ -33,13 +33,12 @@ export {
   cellsInRangeOn,
   dataOriginRow,
   entityKey,
-  entityLabel,
   indexTable,
   positionKey,
-  resolveOperands,
-  resolveReference,
   type SheetIndex,
 } from './sheet-index.js';
+export { WorkbookIndex, type LabelReader } from './workbook-index.js';
+export { commitCellText, workbookIndexOf } from './commit.js';
 export {
   buildEntityIndex,
   formatEntityPath,

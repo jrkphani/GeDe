@@ -7,25 +7,10 @@
  * position maps to the cell whose top-left lattice unit it is; a two-unit
  * column is addressed by its first letter (`cellRefInTable`).
  */
-import {
-  formatAddress,
-  formatColumn,
-  formatRange,
-  offsetsFromSizes,
-  type CellRange,
-  type CellRef,
-} from '../address.js';
+import { offsetsFromSizes, type CellRange, type CellRef } from '../address.js';
 import { TABLE_HEADER_ROWS, TABLE_TITLE_ROWS } from '../doc/schema.js';
-import type { UnitBounds } from '../doc/geometry.js';
 import { cellKey, type Id } from '../ids.js';
-import { references, type Ast, type Reference } from '../formula/ast.js';
-import {
-  workbookCellId,
-  type EntityEntry,
-  type IndexedCell,
-  type OperandOutline,
-  type TableStructure,
-} from './types.js';
+import { workbookCellId, type IndexedCell, type TableStructure } from './types.js';
 
 export interface SheetIndex {
   readonly sheetId: Id;
@@ -108,109 +93,7 @@ export function cellsInColumnOn(index: SheetIndex, col: number): readonly Indexe
   return index.byColumn.get(col) ?? [];
 }
 
-function rectOfRange(index: SheetIndex, range: CellRange): UnitBounds {
-  const end = cellAtPosition(index, range.end);
-  return {
-    col: range.start.col,
-    row: range.start.row,
-    cols: range.end.col - range.start.col + (end?.cols ?? 1),
-    rows: range.end.row - range.start.row + (end?.rows ?? 1),
-  };
-}
-
-function rectOfCells(cells: readonly IndexedCell[]): UnitBounds | null {
-  if (cells.length === 0) return null;
-  let minCol = Infinity;
-  let minRow = Infinity;
-  let maxCol = -Infinity;
-  let maxRow = -Infinity;
-  for (const c of cells) {
-    minCol = Math.min(minCol, c.ref.col);
-    minRow = Math.min(minRow, c.ref.row);
-    maxCol = Math.max(maxCol, c.ref.col + c.cols);
-    maxRow = Math.max(maxRow, c.ref.row + c.rows);
-  }
-  return { col: minCol, row: minRow, cols: maxCol - minCol, rows: maxRow - minRow };
-}
-
-export function entityLabel(path: readonly string[]): string {
-  return `@${path.join('.')}`;
-}
-
-/**
- * Resolve one reference against a sheet: the cells it reads and the block to
- * outline. `entities` answers `@` paths; pass `null` when only geometry is
- * wanted (the main thread drawing outlines for a draft).
- */
-export function resolveReference(
-  index: SheetIndex,
-  ref: Reference,
-  operandIndex: number,
-  entities: ReadonlyMap<string, EntityEntry> | null,
-  entityRect: ((cellId: string) => UnitBounds | null) | null,
-): OperandOutline {
-  switch (ref.kind) {
-    case 'address': {
-      const cell = cellAtPosition(index, ref.ref);
-      return {
-        index: operandIndex,
-        kind: 'address',
-        label: formatAddress(ref.ref),
-        span: ref.span,
-        rect: {
-          col: ref.ref.col,
-          row: ref.ref.row,
-          cols: cell?.cols ?? 1,
-          rows: cell?.rows ?? 1,
-        },
-        cellIds: cell === undefined ? [] : [cell.cellId],
-      };
-    }
-    case 'range':
-      return {
-        index: operandIndex,
-        kind: 'range',
-        label: formatRange(ref.range),
-        span: ref.span,
-        rect: rectOfRange(index, ref.range),
-        cellIds: cellsInRangeOn(index, ref.range).map((c) => c.cellId),
-      };
-    case 'column': {
-      const cells = cellsInColumnOn(index, ref.col);
-      return {
-        index: operandIndex,
-        kind: 'column',
-        label: formatColumn({ col: ref.col }),
-        span: ref.span,
-        rect: rectOfCells(cells),
-        cellIds: cells.map((c) => c.cellId),
-      };
-    }
-    case 'entity': {
-      const entry = entities?.get(entityKey(ref.path));
-      return {
-        index: operandIndex,
-        kind: 'entity',
-        label: entityLabel(ref.path),
-        span: ref.span,
-        rect: entry === undefined ? null : (entityRect?.(entry.cellId) ?? null),
-        cellIds: entry === undefined ? [] : [entry.cellId],
-      };
-    }
-  }
-}
-
 /** Case-insensitive lookup key for an `@` path. */
 export function entityKey(path: readonly string[]): string {
   return path.map((s) => s.trim().toLowerCase()).join('\0');
-}
-
-/** Every operand of a parsed formula, resolved on `index` (FX-08). */
-export function resolveOperands(
-  index: SheetIndex,
-  ast: Ast,
-  entities: ReadonlyMap<string, EntityEntry> | null,
-  entityRect: ((cellId: string) => UnitBounds | null) | null,
-): OperandOutline[] {
-  return references(ast).map((ref, i) => resolveReference(index, ref, i, entities, entityRect));
 }

@@ -5,7 +5,8 @@
  *   call      := name '(' [arg (',' arg)*] ')'          name ∈ { Concat, Sum }
  *   arg       := string | number | call | reference
  *   list      := (reference | separator)+               at least one reference
- *   reference := address | range | column | entity
+ *   reference := address | range | column | entity | bound
+ *   bound     := '{' … '}'                             id-bound token, see bound.ts
  *   address   := letters{1,3} digits                     B14
  *   range     := address ':' address                     B2:B14
  *   column    := letters ':' letters                     B:B
@@ -20,6 +21,7 @@
  * each operand in its own colour (FX-08) and point at parse errors.
  */
 import type { CellRange, CellRef } from '../address.js';
+import type { BoundReference } from './bound.js';
 
 export interface Span {
   /** Offset of the first character, counting the leading `=` as offset 0. */
@@ -53,7 +55,14 @@ export interface EntityRef {
   readonly span: Span;
 }
 
-export type Reference = AddressRef | RangeRef | ColumnRefNode | EntityRef;
+/** A reference already bound to ids (the stored form; see bound.ts). */
+export interface BoundRef {
+  readonly kind: 'bound';
+  readonly ref: BoundReference;
+  readonly span: Span;
+}
+
+export type Reference = AddressRef | RangeRef | ColumnRefNode | EntityRef | BoundRef;
 
 export interface StringLiteral {
   readonly kind: 'string';
@@ -102,7 +111,8 @@ export function isReference(node: Expr | Separator): node is Reference {
     node.kind === 'address' ||
     node.kind === 'range' ||
     node.kind === 'column' ||
-    node.kind === 'entity'
+    node.kind === 'entity' ||
+    node.kind === 'bound'
   );
 }
 

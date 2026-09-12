@@ -23,6 +23,8 @@ export function cellErrorMessage(error: CellError): string {
       return 'This formula depends on its own result';
     case 'unknown-entity':
       return `${error.path} does not name anything in this workscape`;
+    case 'reference-removed':
+      return `This formula reads ${error.label} that was deleted; undo the delete or re-enter the formula`;
     case 'invalid-argument':
       return error.message;
   }

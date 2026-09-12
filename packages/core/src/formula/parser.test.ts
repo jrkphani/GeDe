@@ -21,6 +21,8 @@ function describeRef(ref: Reference): string {
       return `col ${String(ref.col)}`;
     case 'entity':
       return `@${ref.path.join('.')}`;
+    case 'bound':
+      return `bound ${ref.ref.kind}`;
   }
 }
 

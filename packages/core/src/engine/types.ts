@@ -84,19 +84,35 @@ export type WorkbookChange =
 /** Why a formula cell shows `⚠`: a parse failure or an evaluation error. */
 export type CellError = FormulaError | { readonly kind: 'parse'; readonly error: ParseError };
 
+export type OperandKind = 'address' | 'range' | 'column' | 'entity';
+
 /**
- * One operand of a formula, in operand order (FX-08 colours by `index`).
- * `rect` is the lattice block to outline — a range is one block, a column the
- * span of its populated cells — or `null` when nothing on the sheet answers.
+ * One operand as the engine resolved it, in operand order: the cells it
+ * reads (the dependency edges) and whether a bound target is gone. Geometry
+ * is deliberately absent — the UI projects labels and blocks from the
+ * current lattice (`WorkbookIndex.operands`), so results never go stale
+ * when a table moves.
+ */
+export interface ResolvedOperand {
+  readonly index: number;
+  readonly kind: OperandKind;
+  readonly cellIds: readonly WorkbookCellId[];
+  readonly missing: boolean;
+}
+
+/**
+ * One operand for drawing (FX-08 colours by `index`): its label as the person
+ * sees it today and the lattice block to outline — a range is one block, a
+ * column the span of its populated cells — or `null` when nothing answers.
  */
 export interface OperandOutline {
   readonly index: number;
-  readonly kind: 'address' | 'range' | 'column' | 'entity';
-  /** As written: `B14`, `B2:B14`, `B:B`, `@Group.Entity`. */
+  readonly kind: OperandKind;
+  /** As projected today: `B14`, `B2:B14`, `B:B`, `@Group.Entity`, or `#REF`. */
   readonly label: string;
+  /** Span in the text the outline was resolved from (a draft or a projected source). */
   readonly span: Span;
   readonly rect: UnitBounds | null;
-  /** Cells the operand reads, for the dependency graph. */
   readonly cellIds: readonly WorkbookCellId[];
 }
 
@@ -107,7 +123,7 @@ export interface CellResult {
   readonly source: string;
   readonly value: CellValue | null;
   readonly error: CellError | null;
-  readonly operands: readonly OperandOutline[];
+  readonly operands: readonly ResolvedOperand[];
 }
 
 // ---------------------------------------------------------------------------

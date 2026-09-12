@@ -5,13 +5,17 @@ import * as Y from 'yjs';
 import {
   addRow,
   cellAddress,
+  cellText,
   createSheet,
   createTable,
   openDocument,
   setCellText,
+  setRowWrapped,
+  setTablePosition,
   tableById,
   tableMap,
 } from '../doc/index.js';
+import { commitCellText, workbookIndexOf } from './commit.js';
 import { cellKey, type Id } from '../ids.js';
 import { FormulaEngine } from './engine.js';
 import { observeWorkbook } from './snapshot.js';
@@ -67,10 +71,12 @@ function setUp(rows: number) {
   const tableId = createTable(gd, { sheetId, at: { col: 1, row: 1 }, columns: 1, rows });
   const engine = new FormulaEngine();
   const results = new Map<string, CellResult>();
+  const reported: string[][] = [];
   observeWorkbook(gd, (changes) => {
     const out = engine.apply(changes);
     for (const id of out.removed) results.delete(id);
     for (const r of out.results) results.set(r.cellId, r);
+    reported.push(out.results.map((r) => r.cellId));
   });
   const record = () => {
     const t = tableById(gd, tableId);
@@ -95,7 +101,7 @@ function setUp(rows: number) {
   };
   const id = (i: number) => workbookCellId(tableId, cellKey(rowId(i), colId()));
   const write = (i: number, cell: ModelCell) => {
-    setCellText(
+    commitCellText(
       gd,
       tableId,
       rowId(i),
@@ -110,7 +116,7 @@ function setUp(rows: number) {
       throw new Error(`no numeric result at ${addr(i)}: ${JSON.stringify(r)}`);
     return r.value.value;
   };
-  return { gd, tableId, engine, results, rowId, colId, addr, id, write, valueOf };
+  return { gd, tableId, engine, results, reported, rowId, colId, addr, id, write, valueOf };
 }
 
 describe('FormulaEngine properties', () => {
@@ -146,37 +152,55 @@ describe('FormulaEngine properties', () => {
     );
   });
 
-  test('GRID-02 after inserting a row above a referenced cell, every reference resolves to the cell now at that address', () => {
+  test('FX-06 structural edits — rows inserted anywhere, the table moved, rows wrapped — never change what a formula reads (PRD §20 id-bound references)', () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 4, max: 12 }),
         fc.nat(),
-        fc.nat(),
-        (rows, pickTarget, pickInsert) => {
+        fc.array(
+          fc.oneof(
+            fc.record({ op: fc.constant('insert' as const), after: fc.nat() }),
+            fc.record({
+              op: fc.constant('move' as const),
+              col: fc.nat({ max: 20 }),
+              row: fc.nat({ max: 40 }),
+            }),
+            fc.record({ op: fc.constant('wrap' as const), row: fc.nat() }),
+          ),
+          { minLength: 1, maxLength: 6 },
+        ),
+        (rows, pickTarget, edits) => {
           const h = setUp(rows);
           // Rows 0..rows-2 hold i+1; the last row holds `=Sum(<target>)`.
-          const target = 1 + (pickTarget % (rows - 2));
+          const target = pickTarget % (rows - 1);
           for (let i = 0; i < rows - 1; i += 1) h.write(i, { value: i + 1, reads: [] });
-          const formulaRow = rows - 1;
-          const address = h.addr(target);
-          h.write(formulaRow, { value: 0, reads: [target] });
-          expect(h.valueOf(formulaRow, { value: 0, reads: [target] })).toBe(target + 1);
-
-          // Insert after row `after` (0 ≤ after < target): the new row lands at ordinal after+1 ≤ target.
-          const after = pickInsert % target;
-          addRow(h.gd, h.tableId, h.rowId(after));
-          const inserted = after + 1;
-          // The formula text is unchanged, so the address now names whatever sits there (GRID-02).
-          const map = tableMap(h.gd, h.tableId)!;
-          const record = tableById(h.gd, h.tableId)!;
-          const nowAt = record.rows.findIndex(
-            (rowId) => cellAddress(map, rowId, h.colId()) === address,
+          const formulaRowId = h.rowId(rows - 1);
+          const targetRowId = h.rowId(target);
+          h.write(rows - 1, { value: 0, reads: [target] });
+          const formulaId = h.id(rows - 1);
+          expect(h.results.get(formulaId)?.value).toEqual({ kind: 'number', value: target + 1 });
+          const reports = h.reported.length;
+          for (const edit of edits) {
+            const count = tableById(h.gd, h.tableId)!.rows.length;
+            if (edit.op === 'insert') {
+              const inserted = addRow(h.gd, h.tableId, h.rowId(edit.after % count));
+              setCellText(h.gd, h.tableId, inserted, h.colId(), '1000');
+            } else if (edit.op === 'move') {
+              setTablePosition(h.gd, h.tableId, { col: edit.col, row: edit.row });
+            } else {
+              setRowWrapped(h.gd, h.tableId, h.rowId(edit.row % count), true);
+            }
+          }
+          // The stored source is untouched, the binding holds, and nothing was re-evaluated.
+          expect(h.results.get(formulaId)?.value).toEqual({ kind: 'number', value: target + 1 });
+          expect(h.engine.dependenciesOf(formulaId)).toEqual(
+            new Set([workbookCellId(h.tableId, cellKey(targetRowId, h.colId()))]),
           );
-          expect(nowAt).toBe(target);
-          const formulaId = h.id(formulaRow + 1);
-          expect(h.engine.dependenciesOf(formulaId)).toEqual(new Set([h.id(nowAt)]));
-          const value = inserted === target ? 0 : target; // the new blank row, or the row that slid down into the address
-          expect(h.results.get(formulaId)?.value).toEqual({ kind: 'number', value });
+          expect(h.reported.slice(reports).flat()).toEqual([]);
+          // The projection follows the cell: it names wherever the target row sits now.
+          const map = tableMap(h.gd, h.tableId)!;
+          const shown = workbookIndexOf(h.gd).project(cellText(map, formulaRowId, h.colId()));
+          expect(shown).toBe(`=Sum(${cellAddress(map, targetRowId, h.colId())})`);
         },
       ),
       { numRuns: 40 },
