@@ -738,6 +738,12 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     const kept = await repo.users.bindEmail(sembian.id, 'else@example.com');
     expect(kept?.user.email).toBe('SEMBIAN@example.com');
     expect(await repo.users.bindEmail(crypto.randomUUID(), 'x@example.com')).toBeUndefined();
+    // The email lookup (the invite route's "already an account?") reads the same
+    // columns, sample id included (ONB-01), case-insensitively.
+    expect(await repo.users.findByEmail('sembian@EXAMPLE.com')).toMatchObject({
+      id: sembian.id,
+      sampleDocumentId: null,
+    });
     // `users_email_key`: the address cannot be bound to a second account.
     const rival = await repo.users.upsertFromToken({ sub: 'sub-rival', email: null });
     await expect(repo.users.bindEmail(rival.id, 'sembian@example.com')).rejects.toThrow(
@@ -1265,5 +1271,29 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     }
     // The guard: the sample cannot be deleted (LIB-D10).
     expect(await repo.documents.tryDelete(firstId)).toEqual({ status: 'sample' });
+    // Shared with a participant (the tour's last step), it is an ordinary row in
+    // their library: their own sample stays first, the owner's sorts by date.
+    const guest = await user('sub-sample-guest');
+    const guestSample = crypto.randomUUID();
+    await repo.documents.createSample({
+      id: guestSample,
+      ownerId: guest,
+      title: SAMPLE_TITLE,
+      snapshot: { seq: 1, s3Key: `docs/${guestSample}/1.yjs`, sizeBytes: bytes.byteLength },
+    });
+    await pool.query(
+      "update documents set updated_at = now() + interval '1 minute' where id = $1",
+      [firstId],
+    );
+    await repo.shares.add({
+      documentId: firstId,
+      userId: guest,
+      permission: 'edit',
+      invitedBy: owner.id,
+      actorId: owner.id,
+    });
+    const guestRecents = await repo.documents.listForUser(guest, 'recents');
+    expect(guestRecents.map((d) => d.id)).toEqual([guestSample, firstId]);
+    expect(guestRecents[1]).toMatchObject({ sample: true, permission: 'edit', ownerId: owner.id });
   });
 });

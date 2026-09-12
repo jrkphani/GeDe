@@ -1035,4 +1035,38 @@ describe('guided sample (ONB-01)', () => {
     expect(server.repo.sampleOf(daveId)).not.toBeNull();
     expect((await listAll(dave, 'recents')).body.documents.map((d) => d.sample)).toEqual([true]);
   });
+
+  test('ONB-01 someone else’s sample shared with me is an ordinary shared row: not flagged, not pinned, my own sample stays first', async () => {
+    // The tour's last step invites a person to the sample, so this is the common case.
+    const alicesSample = server.repo.sampleOf(aliceId)!;
+    const bobsSample = server.repo.sampleOf(bobId)!;
+    server.repo.docs.get(alicesSample)!.updatedAt = new Date(Date.now() + 60_000);
+    server.repo.share(alicesSample, bobId, 'edit');
+    for (const view of ['recents', 'shared'] as const) {
+      const rows = (await listAll(bob, view)).body.documents;
+      const theirs = rows.find((d) => d.id === alicesSample);
+      expect(theirs).toMatchObject({
+        sample: false,
+        permission: 'edit',
+        ownerId: aliceId,
+        sharedBy: { id: aliceId },
+      });
+      if (view === 'recents') {
+        expect(rows[0]).toMatchObject({ id: bobsSample, sample: true, permission: 'owner' });
+      }
+    }
+    // Alice still sees it as her sample, pinned and flagged.
+    expect((await listAll(alice, 'recents')).body.documents[0]).toMatchObject({
+      id: alicesSample,
+      sample: true,
+    });
+    const direct = await json<{ document: DocumentView }>(
+      server,
+      'GET',
+      `/api/documents/${alicesSample}`,
+      { token: bob },
+    );
+    expect(direct.status).toBe(200);
+    expect(direct.body.document.sample).toBe(false);
+  });
 });

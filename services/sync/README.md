@@ -82,8 +82,9 @@ and the per-user limit is the precise one.
   `{ documents: [{ id, title, kind: 'workscape', sizeBytes, createdAt, updatedAt, ownerId, ownerName,
 sharedBy?: { id, name }, sharedWithOthers, permission: 'owner'|'edit'|'view', linkAccess, deletedAt,
 archivedAt, everShared, sample }] }`.
-  The guided sample (`sample: true`) is pinned above every other row in every view it appears in
-  (ONB-01); after it, `recents` = owned + shared with me, live, newest `updatedAt` first; `browse` = owned, live;
+  The caller's own guided sample (`sample: true`) is pinned above every other row in every view it
+  appears in (ONB-01); someone else's sample shared with the caller lists as an ordinary shared row
+  with `sample: false`. After it, `recents` = owned + shared with me, live, newest `updatedAt` first; `browse` = owned, live;
   `shared` = shared with me plus my own documents that have shares (`sharedWithOthers: true`);
   `deleted` = owned, deleted within 30 days; `archived` = owned, live, `archivedAt` set (LIB-D6,
   no expiry). The owner's archived documents are absent from `recents`, `browse` and `shared`; a

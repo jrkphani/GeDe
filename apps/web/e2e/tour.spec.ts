@@ -399,22 +399,29 @@ test('ONB-08 Replay guided tour from the ? help control clears the flag and rest
   await expect(menu.getByRole('menuitem', { name: 'Keyboard shortcuts' })).toBeVisible();
   await checkA11y('library help menu 1440');
   await menu.getByRole('menuitem', { name: 'Replay guided tour' }).click();
+  // Under load, a trigger click that lands while the last menu is still leaving is taken by
+  // Radix as a pointer-down outside the menu and dismisses the one it opens (the one-off
+  // ONB-08 timeout): wait for the menu to have gone before the next trigger click.
+  await expect(menu).toBeHidden();
   const step1 = page.getByRole('dialog', { name: 'Open the sample workscape' });
   await expect(step1).toBeVisible();
   await expect(step1).toHaveAttribute('data-step', '1');
   await expect.poll(() => fakes.patches).toEqual([{ tourDone: false }]);
   // Replay while running: still step 1.
   await help.click();
-  await page.getByRole('menuitem', { name: 'Replay guided tour' }).click();
+  await menu.getByRole('menuitem', { name: 'Replay guided tour' }).click();
+  await expect(menu).toBeHidden();
   await expect(step1).toHaveAttribute('data-step', '1');
+  await expect.poll(() => fakes.patches).toEqual([{ tourDone: false }, { tourDone: false }]);
   await step1.getByRole('button', { name: 'Skip' }).click();
   await expect(step1).toBeHidden();
+  await expect.poll(() => fakes.patches).toHaveLength(3);
   await help.click();
-  await page.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
+  await menu.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
   await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
 });
 
-test('ONB-13 RESP-02 below 768 px (480) the tour does not run and the flag stays unset; at 768 it does', async ({
+test('ONB-13 RESP-02 RESP-05 below 768 px (480) the tour does not run and the flag stays unset; at 768 it does, with a 44 px Skip', async ({
   page,
 }) => {
   const fakes = await installFakes(page, null);
@@ -427,7 +434,12 @@ test('ONB-13 RESP-02 below 768 px (480) the tour does not run and the flag stays
   expect(fakes.patches).toEqual([]);
   // Widening past the phone breakpoint on the same arrival brings the tour (the flag is still unset).
   await page.setViewportSize({ width: 768, height: 900 });
-  await expect(page.getByRole('dialog', { name: 'Open the sample workscape' })).toBeVisible();
+  const step1 = page.getByRole('dialog', { name: 'Open the sample workscape' });
+  await expect(step1).toBeVisible();
   await expectCardPlaced(page, 'sample');
   expect(fakes.patches).toEqual([]);
+  // RESP-05: below 1024 px the card's one control is a 44 px target.
+  const skip = (await step1.getByRole('button', { name: 'Skip' }).boundingBox())!;
+  expect(skip.width).toBeGreaterThanOrEqual(44);
+  expect(skip.height).toBeGreaterThanOrEqual(44);
 });

@@ -401,10 +401,11 @@ export class FakeRepo implements Repo {
                   : owned && this.withinRetention(doc, now);
         if (include) out.push({ ...this.summarise(doc, userId), permission });
       }
-      // ONB-01: the guided sample is pinned first, as pg.ts orders it.
+      // ONB-01: the caller's own guided sample is pinned first, as pg.ts orders it.
+      const own = (d: DocumentListing): number => Number(d.sample && d.ownerId === userId);
       out.sort(
         (a, b) =>
-          Number(b.sample) - Number(a.sample) ||
+          own(b) - own(a) ||
           b.updatedAt.getTime() - a.updatedAt.getTime() ||
           (a.id < b.id ? 1 : -1),
       );

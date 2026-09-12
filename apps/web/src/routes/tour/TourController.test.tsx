@@ -138,7 +138,9 @@ describe('TourController', () => {
     expect(readFileSync(join(__dirname, 'tour.css'), 'utf8')).toMatch(
       /\.gd-tour__scrim \{[^}]*pointer-events: none;/,
     );
-    // The sample row is pinned above the newer row and carries the anchor.
+    // The sample row is pinned above the newer row and carries the anchor. The list
+    // arrives on its own fetch, after the profile that started the tour.
+    await screen.findByText('Q3 Delivery — Guided sample');
     const rows = screen.getAllByRole('row').filter((r) => r.hasAttribute('data-id'));
     expect(rows[0]).toHaveAttribute('data-tour', 'sample');
     expect(rows[0]).toHaveTextContent('Q3 Delivery — Guided sample');

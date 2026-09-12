@@ -95,7 +95,12 @@ export interface DocumentView {
   archivedAt: string | null;
   /** LIB-D2/D4: true while the document has been shared and access remains; Delete is refused. */
   everShared: boolean;
-  /** LIB-D10: the guided sample; Delete and Archive are refused. */
+  /**
+   * ONB-01 / LIB-D10: the caller's own guided sample — pinned, flagged
+   * `Sample`, the tour's step-1 target; Delete and Archive are refused.
+   * Someone else's sample shared with the caller is an ordinary shared row,
+   * so this is false for it.
+   */
   sample: boolean;
 }
 
@@ -132,7 +137,9 @@ function view(doc: DocumentRecord, permission: DocumentPermission): DocumentView
     deletedAt: doc.deletedAt?.toISOString() ?? null,
     archivedAt: doc.archivedAt?.toISOString() ?? null,
     everShared: doc.everShared,
-    sample: doc.sample,
+    // ONB-01: "the sample" in a library is the caller's own; a participant on
+    // someone else's sample sees a shared workscape like any other.
+    sample: doc.sample && permission === 'owner',
   };
 }
 

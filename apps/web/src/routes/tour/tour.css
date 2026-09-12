@@ -123,6 +123,13 @@
 .gd-tour__skip.gd-btn:hover:not(:disabled) {
   color: var(--ink);
 }
+/* RESP-05: the tour runs from 768 px, where every target is at least 44 px. */
+@media (max-width: 1023.98px) {
+  .gd-tour__skip.gd-btn {
+    min-width: var(--hit-target);
+    min-height: var(--hit-target);
+  }
+}
 
 /* ONB-14: the completion confirmation is the toast in its forest variant. */
 .gd-toast.gd-tour__toast {

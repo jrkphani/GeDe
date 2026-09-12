@@ -532,10 +532,17 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
     documents: {
       async listForUser(userId, view) {
-        // ONB-01: the guided sample is pinned above every other row in every view it appears in.
+        // ONB-01: the caller's own guided sample is pinned above every other
+        // row in every view it appears in. Someone else's sample, shared with
+        // the caller (the tour's last step invites a person to it), is an
+        // ordinary shared row and sorts with the rest.
         const rows = await summaryQuery(userId)
           .where(scopeFor(userId, view))
-          .orderBy(desc(documents.sample), desc(documents.updatedAt), desc(documents.id));
+          .orderBy(
+            desc(sql`(${documents.sample} and ${documents.ownerId} = ${userId})`),
+            desc(documents.updatedAt),
+            desc(documents.id),
+          );
         const listings: DocumentListing[] = [];
         for (const row of rows) {
           const permission: DocumentPermission | null =
