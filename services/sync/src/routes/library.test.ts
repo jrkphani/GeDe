@@ -135,7 +135,7 @@ describe('GET /api/documents views (LIB-01)', () => {
     });
   });
 
-  test('SHARE-05 LIB-01 LIB-02 LIB-D2 one definition of shared: a link-only and an invitation-only workscape are sharedWithOthers, listed under Shared, while everShared follows accepted access (#139)', async () => {
+  test('SHARE-05 LIB-01 LIB-02 LIB-D2 LIB-D4 one definition of shared: a link-only workscape is sharedWithOthers and listed under Shared; an invitation-only one is not — a pending invitation is not a participant and the workscape stays deletable (#139)', async () => {
     const linkOnly = server.repo.seedDocument(aliceId, 'link only');
     const inviteOnly = server.repo.seedDocument(aliceId, 'invitation only');
     const nothing = server.repo.seedDocument(aliceId, 'nothing');
@@ -153,20 +153,19 @@ describe('GET /api/documents views (LIB-01)', () => {
           token: alice,
         })
       ).body.document;
-    // The title pill and the library row read `sharedWithOthers`; the delete/archive slot
-    // reads `everShared` (LIB-D4: a sent invitation never makes a workscape non-deletable).
+    // The title pill, the library row and the delete/archive slot read the same facts: a
+    // share or the link on. A sent invitation is neither (LIB-D4: accepted, not sent), so
+    // the workscape is not "Shared" while it can still be deleted.
     expect(await one(linkOnly.id)).toMatchObject({ sharedWithOthers: true, everShared: true });
-    expect(await one(inviteOnly.id)).toMatchObject({ sharedWithOthers: true, everShared: false });
+    expect(await one(inviteOnly.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
     expect(await one(nothing.id)).toMatchObject({ sharedWithOthers: false, everShared: false });
     const shared = await list(alice, 'shared');
-    expect(shared.body.documents.map((d) => d.id).sort()).toEqual(
-      [linkOnly.id, inviteOnly.id].sort(),
-    );
+    expect(shared.body.documents.map((d) => d.id)).toEqual([linkOnly.id]);
     const browse = await list(alice, 'browse');
     expect(browse.body.documents.find((d) => d.id === inviteOnly.id)).toMatchObject({
-      sharedWithOthers: true,
+      sharedWithOthers: false,
     });
-    // Revoking restores both: the link off, the invitation withdrawn.
+    // Revoking restores the link-only one; withdrawing the invitation changes nothing.
     await json(server, 'PATCH', `/api/documents/${linkOnly.id}/link`, {
       token: alice,
       body: { access: 'none' },

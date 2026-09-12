@@ -32,10 +32,11 @@ export interface DocumentSummary {
   /** Set when another participant shared it with the caller. */
   sharedBy?: Sharer | undefined;
   /**
-   * The service's one definition of "shared" (#139): a participant exists or
-   * can arrive — a share, a pending invitation, or the link on. The title pill
-   * (SHARE-05), the library row (LIB-02) and the Shared view (LIB-01) read
-   * it; the delete/archive slot reads `everShared` (LIB-D2/D4) instead.
+   * The service's one definition of "shared" (#139): a participant exists (a
+   * share) or the link is on — the same facts as `everShared` (LIB-D1/D4), so
+   * the title pill (SHARE-05), the library row (LIB-02), the Shared view
+   * (LIB-01) and the delete/archive slot agree. A pending invitation is not a
+   * participant and does not count.
    */
   sharedWithOthers?: boolean | undefined;
   /** Absent means the server did not say; the UI then treats the caller as a viewer. */

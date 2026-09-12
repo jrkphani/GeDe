@@ -923,7 +923,8 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(await shared()).toBe(false);
     expect(await inSharedView()).toBe(false);
 
-    // An invitation sent sets nothing for deletability — but someone can now arrive, so it is shared.
+    // An invitation sent sets nothing: not deletability, and not "shared" — a pending
+    // invitee is not a participant (SHARE-05, LIB-D4), so the pill and the slot agree.
     const invite = await repo.invites.create({
       documentId: doc.id,
       email: 'dana@example.com',
@@ -933,8 +934,8 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       invitedBy: owner,
     });
     expect(await flag()).toBe(false);
-    expect(await shared()).toBe(true);
-    expect(await inSharedView()).toBe(true);
+    expect(await shared()).toBe(false);
+    expect(await inSharedView()).toBe(false);
     // Accepted: set. Dana binds the address first (the accept checks it in SQL).
     const danaRow = await repo.users.upsertFromToken({ sub: 'sub-es-dana', email: null });
     await repo.users.bindEmail(danaRow.id, 'dana@example.com');

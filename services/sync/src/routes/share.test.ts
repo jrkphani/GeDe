@@ -57,7 +57,11 @@ function auditActions(): string[] {
 }
 
 beforeEach(async () => {
-  server = await startServer({ RATE_LIMIT_INVITES_PER_HOUR: 3 });
+  // The resend cooldown is off here so the budget can be exercised; its own test turns it on.
+  server = await startServer({
+    RATE_LIMIT_INVITES_PER_HOUR: 3,
+    RATE_LIMIT_RESEND_COOLDOWN_SECONDS: 0,
+  });
   alice = server.verifier.issue('tok-alice', 'sub-alice', 'alice@example.com');
   bob = server.verifier.issue('tok-bob', 'sub-bob', 'bob@example.com');
   carol = server.verifier.issue('tok-carol', 'sub-carol', 'carol@example.com');
@@ -259,6 +263,42 @@ describe('invitations (SHARE-02)', () => {
       token: alice,
     });
     expect((await resend(bob, pending!.id)).status).toBe(404);
+  });
+
+  test('SHARE-02 Resend of one invitation is on a cooldown whoever asks: a second resend inside RATE_LIMIT_RESEND_COOLDOWN_SECONDS is 429 with the wait, another invitation is not held up, and the budget is not spent by the refusal (#121 review)', async () => {
+    await server.close();
+    server = await startServer({ RATE_LIMIT_INVITES_PER_HOUR: 3 });
+    alice = server.verifier.issue('tok-alice', 'sub-alice', 'alice@example.com');
+    bob = server.verifier.issue('tok-bob', 'sub-bob', 'bob@example.com');
+    aliceId = (await me(alice)).id;
+    bobId = (await me(bob)).id;
+    docId = server.repo.seedDocument(aliceId, SECRET_TITLE).id;
+    server.repo.share(docId, bobId, 'edit');
+    server.mail.failNextSend = true;
+    const first = await invite(alice, 'cool@example.com', 'view');
+    expect(first.body.delivery).toBe('failed');
+    const [pending] = first.body.shares.invites;
+    const other = (await invite(alice, 'other@example.com', 'view')).body.shares.invites.find(
+      (i) => i.email === 'other@example.com',
+    )!;
+    // The first resend goes; the next, by anyone, waits out the cooldown.
+    expect((await resend(alice, pending!.id)).body.delivery).toBe('sent');
+    const held = await json<ErrorBody>(
+      server,
+      'POST',
+      `/api/documents/${docId}/invites/${pending!.id}/resend`,
+      { token: bob },
+    );
+    expect(held.status).toBe(429);
+    expect(held.body.error.code).toBe('too_many_requests');
+    expect(held.body.error.message).toMatch(/sent again recently; try again in \d+ seconds/);
+    expect(server.mail.sent).toHaveLength(2); // other@'s invitation and the one resend
+    // Another invitation on the same document is not held by this one's cooldown.
+    expect((await resend(bob, other.id)).body.delivery).toBe('sent');
+    // Bob's budget (3 per hour) was not spent by the refusal: two invitations still go.
+    expect((await invite(bob, 'b1@example.com')).status).toBe(201);
+    expect((await invite(bob, 'b2@example.com')).status).toBe(201);
+    expect((await invite(bob, 'b3@example.com')).status).toBe(429);
   });
 
   test('SHARE-02 a repeated invitation for a pending address is idempotent: 200, the same invitation, no second row, no second mail (review of #76)', async () => {

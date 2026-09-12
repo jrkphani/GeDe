@@ -68,6 +68,7 @@ describe('DELETE /api/me', () => {
       displayName: ERASED_DISPLAY_NAME,
       locale: null,
       tourDoneAt: null,
+      librarySort: null,
       cognitoSub: 'sub-alice',
     });
     expect(row?.deletedAt).toBeInstanceOf(Date);

@@ -342,7 +342,13 @@ describe('REF-04 derived columns', () => {
     const step3 = addDerivedColumn(gd, peaks, { sourceColId: c2, method: 'Split', args: [''] })!;
     await settled();
     const host = engineFor(gd.doc);
-    const steps = auditPipeline(gd, peaks, (id) => host.result(id));
+    const before = Date.now();
+    const steps = auditPipeline(
+      gd,
+      peaks,
+      (id) => host.result(id),
+      (id) => host.computedAt(id),
+    );
     expect(
       steps.map((s) =>
         s.kind === 'derived'
@@ -354,6 +360,18 @@ describe('REF-04 derived columns', () => {
       [2, { label: '@"Column 1".Concat(" ✓")', step: 1 }, 3, 0, 0],
       [3, { label: 'Column 2', step: null }, 0, 3, 0],
     ]);
+    // The last recompute is the engine host's time for the newest result — real, not a time
+    // the list made up when it first saw the result; without a reader there is none.
+    for (const s of steps) {
+      if (s.kind !== 'derived') continue;
+      expect(s.outcome.at).toBeGreaterThan(0);
+      expect(s.outcome.at).toBeLessThanOrEqual(before);
+    }
+    expect(
+      auditPipeline(gd, peaks, (id) => host.result(id)).every(
+        (s) => s.kind !== 'derived' || s.outcome.at === undefined,
+      ),
+    ).toBe(true);
 
     const { rerender } = render(<DerivedColumnPanel gd={gd} tableId={peaks} sourceColId={step2} />);
     const panel = screen.getByTestId('derived-column-panel');

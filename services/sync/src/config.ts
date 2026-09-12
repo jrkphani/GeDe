@@ -131,6 +131,12 @@ export const configSchema = z
      * outbound email from the product's domain.
      */
     RATE_LIMIT_INVITES_PER_HOUR: positiveInt.default(30),
+    /**
+     * Resend cooldown per invitation (#121 review): one resend of a given
+     * invitation per window, whoever asks, so no address can be mailed the
+     * same invitation repeatedly inside the per-user budget. 0 disables it.
+     */
+    RATE_LIMIT_RESEND_COOLDOWN_SECONDS: z.coerce.number().int().nonnegative().default(600),
     /** Graceful shutdown budget; ECS sends SIGKILL 30 s after SIGTERM. */
     SHUTDOWN_TIMEOUT_MS: positiveInt.default(25_000),
   })

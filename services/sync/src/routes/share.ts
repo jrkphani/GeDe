@@ -216,6 +216,33 @@ export function registerShareRoutes(
     }
   }
 
+  // One resend of a given invitation per cooldown, whoever asks (#121 review):
+  // the per-user budget bounds what one person can cause, this bounds what one
+  // address can receive — the same invitation cannot be mailed again and again
+  // by an editor with budget to spare. Keyed by the invitation, not the caller.
+  const resendCooldownMs = deps.config.RATE_LIMIT_RESEND_COOLDOWN_SECONDS * 1000;
+  const resendBucket =
+    resendCooldownMs === 0
+      ? null
+      : api.createRateLimit({
+          max: 1,
+          timeWindow: resendCooldownMs,
+          keyGenerator: (request) => `invite:${(request.params as { inviteId: string }).inviteId}`,
+        });
+
+  /** 429 with the wait while this invitation was resent inside the cooldown. */
+  async function spendResendCooldown(request: Parameters<typeof inviteBucket>[0]): Promise<void> {
+    if (resendBucket === null) return;
+    const verdict = await resendBucket(request);
+    if (!verdict.isAllowed && verdict.isExceeded) {
+      throw new AppError(
+        429,
+        'too_many_requests',
+        `That invitation was sent again recently; try again in ${String(verdict.ttlInSeconds)} seconds`,
+      );
+    }
+  }
+
   api.post('/documents/:id/invites', async (request, reply) => {
     const user = currentUser(request);
     const id = parseId(request.params);
@@ -293,7 +320,9 @@ export function registerShareRoutes(
    * Send the invitation mail again (#121): after a refused send, or when the
    * first mail went astray. Nothing about the invitation changes — the same
    * token, the same expiry — so it is safe to repeat; each send spends the
-   * inviter's budget, which bounds the mail one person can cause.
+   * inviter's budget, which bounds the mail one person can cause, and the
+   * invitation's cooldown (`RATE_LIMIT_RESEND_COOLDOWN_SECONDS`), which bounds
+   * what one address receives.
    */
   api.post('/documents/:id/invites/:inviteId/resend', async (request) => {
     const user = currentUser(request);
@@ -302,6 +331,7 @@ export function registerShareRoutes(
     if (document.deletedAt !== null) throw NOT_FOUND();
     const invite = await repo.invites.pending({ documentId: id, inviteId });
     if (!invite) throw NOT_FOUND();
+    await spendResendCooldown(request);
     await spendInviteBudget(request);
     const delivery = await sendInvite(
       request,

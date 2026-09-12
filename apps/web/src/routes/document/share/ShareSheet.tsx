@@ -32,6 +32,9 @@ import { reportTourInvite } from '../../tour/store.js';
 /** #121: the invitation exists; only its mail did not go out. */
 export const MAIL_FAILED_NOTICE =
   'Invitation saved — the email could not be sent; share the link or try again';
+/** #121: the person already had an account and has access now; only the mail did not go out. */
+export const SHARE_MAIL_FAILED_NOTICE =
+  'Access given — the email could not be sent; share the link with them';
 
 export interface ShareSheetProps {
   docId: string;
@@ -130,9 +133,12 @@ export function ShareSheet({
    * outage). The invitation stands — it converts when the person signs in —
    * so this is a notice with a way forward, not an error on the field.
    */
-  const [mailFailed, setMailFailed] = useState<{ inviteId: string | null; email: string } | null>(
-    null,
-  );
+  const [mailFailed, setMailFailed] = useState<{
+    inviteId: string | null;
+    email: string;
+    /** `share`: the address had an account and has access now; `invite`: a pending invitation. */
+    kind: 'share' | 'invite';
+  } | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -223,8 +229,10 @@ export function ShareSheet({
         const pending = outcome.shares.invites.find(
           (i) => i.email.toLowerCase() === address.toLowerCase(),
         );
-        setMailFailed({ inviteId: pending?.id ?? null, email: address });
-        announce(`${MAIL_FAILED_NOTICE} (${address})`);
+        setMailFailed({ inviteId: pending?.id ?? null, email: address, kind: outcome.kind });
+        announce(
+          `${outcome.kind === 'share' ? SHARE_MAIL_FAILED_NOTICE : MAIL_FAILED_NOTICE} (${address})`,
+        );
       } else {
         announce(
           outcome.kind === 'share'
@@ -255,7 +263,7 @@ export function ShareSheet({
     run(`invite-resend:${invite.id}`, async () => {
       const outcome = await resendInvite(docId, invite.id);
       if (outcome.delivery === 'failed') {
-        setMailFailed({ inviteId: invite.id, email: invite.email });
+        setMailFailed({ inviteId: invite.id, email: invite.email, kind: 'invite' });
         announce(`The email to ${invite.email} could not be sent again; share the link instead`);
       } else {
         setMailFailed((current) => (current?.inviteId === invite.id ? null : current));
@@ -448,7 +456,8 @@ export function ShareSheet({
                 <p className="gd-share__notice" role="status" data-testid="share-mail-failed">
                   <Icon name="warning" size={13} />
                   <span>
-                    {MAIL_FAILED_NOTICE} ({mailFailed.email})
+                    {mailFailed.kind === 'share' ? SHARE_MAIL_FAILED_NOTICE : MAIL_FAILED_NOTICE} (
+                    {mailFailed.email})
                   </span>
                   {mailFailed.inviteId !== null && canInvite && (
                     <Button

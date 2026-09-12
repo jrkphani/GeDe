@@ -28,6 +28,7 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 | `RATE_LIMIT_PER_MINUTE`                              |                  | `300`      | `/api` requests per verified user per minute → 429                                                                      |
 | `RATE_LIMIT_PER_IP_PER_MINUTE`                       |                  | `3000`     | requests per address per minute, every route → 429                                                                      |
 | `RATE_LIMIT_INVITES_PER_HOUR`                        |                  | `30`       | invitations per verified user per hour (each is an outbound mail) → 429                                                 |
+| `RATE_LIMIT_RESEND_COOLDOWN_SECONDS`                 |                  | `600`      | one Resend of a given invitation per window, whoever asks (0 disables) → 429                                            |
 | `WS_MAX_UPDATE_BYTES`                                |                  | `2 MiB`    | largest client → server frame; `ws` closes 1009 on the declared length (#99)                                            |
 | `WS_MAX_BUFFERED_BYTES`                              |                  | `2 MiB`    | unread bytes a socket may hold (plus its join step 2 while it is being written) before it is closed 1013 and terminated |
 | `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400`  | sync messages (step 1/2, updates, awareness queries) per connection; over the burst → 4429                              |
@@ -108,7 +109,7 @@ archivedAt, everShared, sample }] }`.
   The caller's own guided sample (`sample: true`) is pinned above every other row in every view it
   appears in (ONB-01); someone else's sample shared with the caller lists as an ordinary shared row
   with `sample: false`. After it, `recents` = owned + shared with me, live, newest `updatedAt` first; `browse` = owned, live;
-  `shared` = shared with me plus my own documents that have shares (`sharedWithOthers: true`);
+  `shared` = shared with me plus my own documents that are shared (`sharedWithOthers: true`: a share row or the link on — a pending invitation is not a participant, #139);
   `deleted` = owned, deleted within 30 days; `archived` = owned, live, `archivedAt` set (LIB-D6,
   no expiry). The owner's archived documents are absent from `recents`, `browse` and `shared`; a
   participant still sees them there (LIB-D3). `sizeBytes` is the latest snapshot plus every update
@@ -187,6 +188,8 @@ permission, callerId }`. Emails, pending invitations and the link token are for 
   - `POST /api/documents/:id/invites/:inviteId/resend` (owner or editor) → 200
     `{ delivery: 'sent' | 'failed', shares }`. Sends the pending invitation's mail again — same
     token, same expiry, no row change, no audit row — and spends the same per-user budget;
+    one resend of a given invitation per `RATE_LIMIT_RESEND_COOLDOWN_SECONDS` (429 with the wait
+    inside it, whoever asks, so an address is never mailed the same invitation repeatedly);
     404 when the invitation is not pending on this document.
   - `DELETE /api/documents/:id/invites/:inviteId` (owner) → 204; 404 when not pending here.
   - `POST /api/documents/:id/invites/accept { token }` (signed in) → `{ permission }`. Converts

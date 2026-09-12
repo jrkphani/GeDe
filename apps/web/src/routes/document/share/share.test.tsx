@@ -387,6 +387,27 @@ describe('ShareSheet', () => {
     reported.mockRestore();
   });
 
+  it('SHARE-02 a share whose mail was refused says the person has access, never "Invitation saved", and offers no Resend (#121 review)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(shares.inviteToDocument).mockResolvedValue({
+      kind: 'share',
+      created: true,
+      delivery: 'failed',
+      shares: sheet(),
+    });
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const field = await within(dialog).findByRole('textbox', { name: 'Add people by email' });
+    await u.type(field, 'known@example.com{Enter}');
+    const notice = await within(dialog).findByTestId('share-mail-failed');
+    expect(notice).toHaveTextContent(
+      'Access given — the email could not be sent; share the link with them (known@example.com)',
+    );
+    expect(notice).not.toHaveTextContent('Invitation saved');
+    expect(within(notice).queryByRole('button', { name: 'Resend' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Access given');
+  });
+
   it('SHARE-02 a failed invitation request is shown on the field (aria-invalid, described by the message) with the ref, and the tour is not told (#121)', async () => {
     const u = userEvent.setup();
     vi.mocked(shares.inviteToDocument).mockRejectedValue(

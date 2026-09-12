@@ -95,11 +95,11 @@ export interface DocumentSummary extends DocumentRecord {
   /** Who shared it with the caller; null for the owner. */
   readonly sharedBy: PersonRef | null;
   /**
-   * The one definition of "shared" (#139): a participant exists or can arrive —
-   * a share row, the link on, or a pending unexpired invitation. Read by the
-   * title pill (SHARE-05), the library row (LIB-02) and the Shared view
-   * (LIB-01); deletability is `everShared` (LIB-D4), which pending invitations
-   * never set.
+   * The one definition of "shared" (#139): a participant exists (a share row)
+   * or the link is on — the live form of `everShared` (LIB-D1/D4), so the
+   * title pill (SHARE-05), the library row (LIB-02), the Shared view (LIB-01)
+   * and the delete/archive slot agree. A pending invitation is not a
+   * participant and does not count.
    */
   readonly sharedWithOthers: boolean;
 }

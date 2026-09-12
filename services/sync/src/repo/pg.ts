@@ -171,7 +171,7 @@ function toUser(row: UserRow): UserRecord {
   };
 }
 
-/** The CHECK (migration 0010) keeps the column to these; anything else reads as unset. */
+/** The CHECK (migration 0011) keeps the column to these; anything else reads as unset. */
 function toLibrarySort(value: string | null): LibrarySort | null {
   return value === 'name' || value === 'date' ? value : null;
 }
@@ -454,10 +454,12 @@ const withinRetention = sql`${documents.deletedAt} > now() - (${RECENTLY_DELETED
 export function createPgRepo(db: Db, logger: Logger): Repo {
   /**
    * One definition of "shared" for the current `documents` row (#139, SHARE-05,
-   * LIB-01/02): participants exist or can arrive — a share row, the link on,
-   * or a pending unexpired invitation. The title pill, the library row and
-   * the Shared view all read this; deletability (`ever_shared`, LIB-D4) is
-   * the narrower fact — an accepted share or the link — and stays separate.
+   * LIB-01/02): a participant exists (a share row) or the link is on — the
+   * same facts that make the workscape non-deletable (`ever_shared`, LIB-D1/D4),
+   * so the title pill, the library row, the Shared view and the delete/archive
+   * slot never disagree. A pending invitation is not a participant (SHARE-01
+   * lists it apart; LIB-D4: sent is not accepted) and leaves the workscape
+   * deletable, so it does not count — the sheet still lists it, with Resend.
    */
   const sharedWithOthers = (): SQL<boolean> => {
     const anyShareExists = exists(
@@ -466,13 +468,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         .from(anyShare)
         .where(eq(anyShare.documentId, documents.id)),
     );
-    const pendingInviteExists = exists(
-      db
-        .select({ one: sql`1` })
-        .from(invites)
-        .where(and(eq(invites.documentId, documents.id), invitePending)),
-    );
-    return sql<boolean>`(${anyShareExists} or ${ne(documents.linkAccess, 'none')} or ${pendingInviteExists})`;
+    return sql<boolean>`(${anyShareExists} or ${ne(documents.linkAccess, 'none')})`;
   };
 
   /**
@@ -882,6 +878,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
               displayName: ERASED_DISPLAY_NAME,
               locale: null,
               tourDoneAt: null,
+              librarySort: null,
               lastSeenAt: null,
               deletedAt: now,
             })

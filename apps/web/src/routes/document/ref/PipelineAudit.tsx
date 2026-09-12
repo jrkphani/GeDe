@@ -10,7 +10,7 @@
  */
 import { clearPull, type DeriveSpec, type GedeDoc, type Id } from '@gede/core';
 import { Button } from '@gede/ui';
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from 'react';
 
 import { announce } from '../../../announce.js';
 import { engineFor, peekEngine } from '../../../doc/engine.js';
@@ -65,24 +65,21 @@ export function PipelineAudit({
   const tableVersion = useYVersion(table);
   const engineVersion = useEngineVersion(gd);
   const host = peekEngine(gd.doc);
-  const steps = auditPipeline(gd, tableId, (id) => host?.result(id));
-  // When a step's newest result version moves, its last recompute is now: stamped after
-  // the render that observed the new version, kept per column, one re-render to show it.
-  const stamps = useRef(new Map<Id, { version: number; at: number }>());
-  const [, setStamped] = useState(0);
-  useEffect(() => {
-    let changed = false;
-    for (const step of steps) {
-      if (step.kind !== 'derived' || step.outcome.version === 0) continue;
-      const seen = stamps.current.get(step.colId);
-      if (seen?.version !== step.outcome.version) {
-        stamps.current.set(step.colId, { version: step.outcome.version, at: Date.now() });
-        changed = true;
-      }
-    }
-    if (changed) setStamped((n) => n + 1);
-    // `steps` is derived from these versions; re-reading on their change is the point.
-  }, [steps, engineVersion, tableVersion, tableId]);
+  // One walk of the table's rows per change of the table or of the engine's results —
+  // not per render: with a thousand rows and a few steps the walk is thousands of lookups.
+  // The last recompute is the engine host's own time for the step's newest result — never a
+  // time this list made up on seeing it.
+  const steps = useMemo(
+    () =>
+      auditPipeline(
+        gd,
+        tableId,
+        (id) => host?.result(id),
+        (id) => host?.computedAt(id),
+      ),
+    // `tableVersion` and `engineVersion` are what the walk reads; they are the cache key.
+    [gd, tableId, host, tableVersion, engineVersion],
+  );
   if (steps.length === 0) return null;
 
   const n = (value: number) => formatNumber(locale, value);
@@ -107,7 +104,7 @@ export function PipelineAudit({
       <ol className="gd-derive__list gd-derive__audit" aria-label="Derived pipeline">
         {steps.map((step) => {
           const current = step.colId === selectedColId;
-          const stamp = step.kind === 'derived' ? stamps.current.get(step.colId)?.at : undefined;
+          const stamp = step.kind === 'derived' ? step.outcome.at : undefined;
           return (
             <li
               key={step.colId}

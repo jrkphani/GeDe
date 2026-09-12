@@ -31,6 +31,8 @@ export interface StepOutcome {
   readonly pending: number;
   /** The newest result version among the step's cells; 0 with no result. Ticks on recompute. */
   readonly version: number;
+  /** When the step's newest result arrived (engine host time); `undefined` with no result. */
+  readonly at: number | undefined;
 }
 
 export interface DerivedStep {
@@ -59,34 +61,50 @@ export interface PullStep {
 export type PipelineStep = DerivedStep | PullStep;
 
 export type ResultReader = (cellId: string) => CellResult | undefined;
+/** When a cell's current result arrived, as the engine host recorded it. */
+export type ComputedAtReader = (cellId: string) => number | undefined;
 
 function outcomeOf(
   table: TableMap,
   record: TableRecord,
   colId: Id,
   resultOf: ResultReader,
+  computedAt: ComputedAtReader,
 ): StepOutcome {
   let rows = 0;
   let errors = 0;
   let pending = 0;
   let version = 0;
+  let at: number | undefined;
   for (const rowId of record.rows) {
     // A category band has no cells of its own (GRID-04).
     if (rowMeta(table, rowId).group) continue;
-    const result = resultOf(workbookCellId(record.id, cellKey(rowId, colId)));
+    const cellId = workbookCellId(record.id, cellKey(rowId, colId));
+    const result = resultOf(cellId);
     if (result === undefined) {
       pending += 1;
       continue;
     }
-    if (result.version > version) version = result.version;
+    if (result.version > version) {
+      version = result.version;
+      at = computedAt(cellId);
+    }
     if (result.error !== null) errors += 1;
     else if (evaluatedText(result.value) !== '') rows += 1;
   }
-  return { rows, errors, pending, version };
+  return { rows, errors, pending, version, at };
 }
 
-/** The table's derivation chain, source → step 1 → step 2 …, each with its last outcome. */
-export function auditPipeline(gd: GedeDoc, tableId: Id, resultOf: ResultReader): PipelineStep[] {
+/**
+ * The table's derivation chain, source → step 1 → step 2 …, each with its last
+ * outcome. `computedAt` times the newest result; without it no step has a time.
+ */
+export function auditPipeline(
+  gd: GedeDoc,
+  tableId: Id,
+  resultOf: ResultReader,
+  computedAt: ComputedAtReader = () => undefined,
+): PipelineStep[] {
   const table = gd.tables.get(tableId);
   if (table === undefined) return [];
   const record = tableRecord(table);
@@ -106,7 +124,7 @@ export function auditPipeline(gd: GedeDoc, tableId: Id, resultOf: ResultReader):
         label: source?.label ?? '#REF',
         step: source === undefined ? null : (stepOf.get(source.id) ?? null),
       },
-      outcome: outcomeOf(table, record, d.column.id, resultOf),
+      outcome: outcomeOf(table, record, d.column.id, resultOf, computedAt),
     };
   });
   const pull = pullOf(table);
