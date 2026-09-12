@@ -131,6 +131,14 @@ function isPixels(at: LatticeUnits | Pixels): at is Pixels {
   return 'x' in at;
 }
 
+/** Whole, non-negative lattice units; NaN or ±Infinity must never reach the map (GRID-01). */
+function snapUnits(at: LatticeUnits): LatticeUnits {
+  if (!Number.isFinite(at.col) || !Number.isFinite(at.row)) {
+    throw new RangeError(`lattice units must be finite, got ${String(at.col)},${String(at.row)}`);
+  }
+  return { col: Math.max(0, Math.round(at.col)), row: Math.max(0, Math.round(at.row)) };
+}
+
 /** A prelim column map cannot be read back until integrated, so the id is returned alongside it. */
 function newColumn(label: string): { id: Id; map: ColumnMap } {
   const id = newId();
@@ -145,12 +153,7 @@ function newColumn(label: string): { id: Id; map: ColumnMap } {
 export function createTable(gd: GedeDoc, options: CreateTableOptions): Id {
   const columnCount = Math.max(1, Math.round(options.columns ?? 3));
   const rowCount = Math.max(0, Math.round(options.rows ?? 5));
-  const origin = isPixels(options.at)
-    ? snapPoint(options.at)
-    : {
-        col: Math.max(0, Math.round(options.at.col)),
-        row: Math.max(0, Math.round(options.at.row)),
-      };
+  const origin = isPixels(options.at) ? snapPoint(options.at) : snapUnits(options.at);
   return transact(gd, () => {
     const id = newId();
     const map: TableMap = new Y.Map<unknown>();
@@ -185,9 +188,7 @@ export function setTableTitle(gd: GedeDoc, tableId: Id, title: string): void {
 
 /** Move a table; pixels snap to the lattice, units clamp at A1 (GRID-01, DOC-04). */
 export function setTablePosition(gd: GedeDoc, tableId: Id, at: LatticeUnits | Pixels): void {
-  const origin = isPixels(at)
-    ? snapPoint(at)
-    : { col: Math.max(0, Math.round(at.col)), row: Math.max(0, Math.round(at.row)) };
+  const origin = isPixels(at) ? snapPoint(at) : snapUnits(at);
   transact(gd, () => {
     const table = requireTable(gd, tableId);
     table.set('gridCol', origin.col);

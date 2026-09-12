@@ -134,6 +134,14 @@ describe('tables and snapping', () => {
     expect(tableById(gd, id)).toMatchObject({ gridCol: 0, gridRow: 5 });
     setTablePosition(gd, id, { col: 2.6, row: -1 });
     expect(tableById(gd, id)).toMatchObject({ gridCol: 3, gridRow: 0 });
+    // A non-finite unit is a caller bug; it must throw rather than store NaN / Infinity.
+    expect(() => {
+      setTablePosition(gd, id, { col: Number.NaN, row: 0 });
+    }).toThrow(RangeError);
+    expect(() => {
+      setTablePosition(gd, id, { col: 0, row: Number.POSITIVE_INFINITY });
+    }).toThrow();
+    expect(tableMap(gd, id)?.toJSON()).toMatchObject({ gridCol: 3, gridRow: 0 });
   });
 
   test('GRID-01 resizeColumn snaps to whole units with a minimum of one', () => {
