@@ -47,6 +47,39 @@ describe('Menu', () => {
     expect(trigger).toHaveFocus();
   });
 
+  it('I18N-05 a radio group names its heading and keeps exactly one option checked', async () => {
+    const onValueChange = vi.fn();
+    render(
+      <Menu
+        trigger={<Button>Account</Button>}
+        entries={[
+          {
+            kind: 'radio',
+            id: 'locale',
+            label: 'Language and formats',
+            value: 'en-IN',
+            onValueChange,
+            options: [
+              { value: 'en-US', label: 'English (United States)' },
+              { value: 'en-IN', label: 'English (India)' },
+            ],
+          },
+        ]}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Account' }));
+    await screen.findByRole('menu');
+    expect(screen.getByText('Language and formats')).toBeInTheDocument();
+    expect(screen.getByRole('menuitemradio', { name: 'English (India)' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    const us = screen.getByRole('menuitemradio', { name: 'English (United States)' });
+    expect(us).toHaveAttribute('aria-checked', 'false');
+    await userEvent.click(us);
+    expect(onValueChange).toHaveBeenCalledWith('en-US');
+  });
+
   it('is keyboard operable: ArrowDown opens, Enter selects', async () => {
     const onCopy = vi.fn();
     render(

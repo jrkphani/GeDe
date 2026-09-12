@@ -43,4 +43,15 @@ describe('Dialog', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
+
+  it('LIB-07 the sheet variant is the same dialog on an edge panel', () => {
+    render(
+      <Dialog open onOpenChange={() => undefined} title="Participants" variant="sheet">
+        <p>Meenarapan D</p>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Participants' });
+    expect(dialog).toHaveClass('gd-dialog--sheet');
+    expect(dialog).toHaveAttribute('data-variant', 'sheet');
+  });
 });

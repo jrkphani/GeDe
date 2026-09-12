@@ -19,6 +19,9 @@
 @import './components/Skeleton.css';
 @import './components/Banner.css';
 @import './components/EmptyState.css';
+@import './components/Collapsible.css';
+@import './components/Avatar.css';
+@import './components/Badge.css';
 
 *,
 *::before,
