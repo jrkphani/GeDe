@@ -62,6 +62,13 @@ export interface AuditEntry {
 
 const RETENTION_MS = RECENTLY_DELETED_DAYS * 24 * 60 * 60 * 1000;
 
+/** Postgres `text` refuses NUL; the fake must fail the same way so a route cannot pass here and 500 in production. */
+function assertText(value: string): void {
+  if (value.includes('\u0000')) {
+    throw new Error('invalid byte sequence for encoding "UTF8": 0x00');
+  }
+}
+
 export class FakeRepo implements Repo {
   readonly usersBySub = new Map<string, MutableUser>();
   readonly docs = new Map<string, MutableDocument>();
@@ -174,6 +181,7 @@ export class FakeRepo implements Repo {
     updateProfile: (id, patch) => {
       const user = this.userById(id);
       if (!user) return Promise.resolve(undefined);
+      if (patch.displayName !== undefined) assertText(patch.displayName);
       if (patch.displayName !== undefined) user.displayName = patch.displayName;
       if (patch.locale !== undefined) user.locale = patch.locale;
       return Promise.resolve({ ...user });
@@ -211,8 +219,12 @@ export class FakeRepo implements Repo {
       const doc = this.docs.get(id);
       return Promise.resolve(doc ? this.summarise(doc, userId) : undefined);
     },
-    create: ({ ownerId, title }) => Promise.resolve(this.seedDocument(ownerId, title)),
+    create: ({ ownerId, title }) => {
+      assertText(title);
+      return Promise.resolve(this.seedDocument(ownerId, title));
+    },
     rename: (id, title) => {
+      assertText(title);
       const doc = this.docs.get(id);
       if (doc?.deletedAt !== null) return Promise.resolve(undefined);
       doc.title = title;

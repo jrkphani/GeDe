@@ -33,13 +33,25 @@ export type SupportedLocale = (typeof SUPPORTED_LOCALES)[number];
 export const LIBRARY_VIEWS = ['recents', 'browse', 'shared', 'deleted'] as const;
 
 const documentId = z.string().uuid();
-const titleSchema = z.string().trim().min(1).max(200);
+/**
+ * A one-line human label. Control characters are refused up front: Postgres
+ * `text` cannot hold NUL (the insert fails and would surface as a 500), and a
+ * title or name has no use for the rest of `\p{Cc}` either.
+ */
+const oneLine = (max: number) =>
+  z
+    .string()
+    .trim()
+    .min(1)
+    .max(max)
+    .regex(/^\P{Cc}*$/u, 'Control characters are not allowed');
+const titleSchema = oneLine(200);
 const createBody = z.object({ title: titleSchema.optional() }).strict().default({});
 const patchBody = z.object({ title: titleSchema }).strict();
 const listQuery = z.object({ view: z.enum(LIBRARY_VIEWS).default('recents') });
 const profileBody = z
   .object({
-    displayName: z.string().trim().min(1).max(80).optional(),
+    displayName: oneLine(80).optional(),
     locale: z.enum(SUPPORTED_LOCALES).optional(),
   })
   .strict()

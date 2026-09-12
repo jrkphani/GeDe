@@ -552,6 +552,32 @@ describe('profile (AUTH-09, I18N-05)', () => {
     expect(max.body.displayName).toBe('y'.repeat(80));
   });
 
+  test('AUTH-09 LIB-06 a NUL or other control character in a name or title is a 400, never a 500', async () => {
+    // Postgres `text` rejects NUL outright ("invalid byte sequence for encoding UTF8: 0x00");
+    // without the schema check the insert fails and the client sees a server_error.
+    const doc = server.repo.seedDocument(aliceId, 'plain');
+    const probes: [string, string, Record<string, string>][] = [
+      ['PATCH', '/api/me', { displayName: 'a\u0000b' }],
+      ['PATCH', '/api/me', { displayName: 'a\nb' }],
+      ['PATCH', '/api/me', { displayName: 'a\u001b[31mb' }],
+      ['POST', '/api/documents', { title: 'a\u0000b' }],
+      ['PATCH', `/api/documents/${doc.id}`, { title: 'a\tb' }],
+    ];
+    for (const [method, path, body] of probes) {
+      const res = await json<ErrorBody>(server, method, path, { token: alice, body });
+      expect(res.status, JSON.stringify(body)).toBe(400);
+      expect(res.body.error.code).toBe('bad_request');
+    }
+    expect(server.repo.docs.get(doc.id)?.title).toBe('plain');
+    // Non-ASCII, including combining marks, is fine.
+    const ok = await json<ProfileView>(server, 'PATCH', '/api/me', {
+      token: alice,
+      body: { displayName: 'தமிழ் — नाम' },
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.body.displayName).toBe('தமிழ் — नाम');
+  });
+
   test('AUTH-09 PATCH /api/me needs a token', async () => {
     const res = await json<ErrorBody>(server, 'PATCH', '/api/me', { body: { locale: 'en-GB' } });
     expect(res.status).toBe(401);
