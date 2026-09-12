@@ -16,7 +16,7 @@ Projection tables (rebuildable): `sheets`, `tables`, `columns`, `rows`, `cells`,
 - Never edit a migration that has reached `main`. `main` is production; the file has already run. Write a new migration that alters or reverts.
 - Migrations are plain SQL, forward-only, idempotent where PostgreSQL allows (`IF NOT EXISTS`). Each runs in a transaction; the runner records it in `__migrations(name, applied_at)`. `migrations.test.ts` refuses any `DROP` other than `DROP CONSTRAINT` and any `TRUNCATE`/`DELETE FROM`; a column added later must use `ALTER TABLE <t> ADD COLUMN IF NOT EXISTS <c>` so the schema-parity test can find it.
 - The runner takes `pg_advisory_lock` before reading `_migrations` and releases it after the last statement, so two tasks booting at once cannot race.
-- Tests run migrations from zero against a throwaway database and assert the resulting schema; there is no other way to know a migration works.
+- Tests run migrations from zero against a throwaway database and assert the resulting schema; there is no other way to know a migration works. `npm run db:parity` does this in Docker; the pipeline's Synth step runs it with `CI=true` (where a missing Docker is a failure) before anything deploys.
 
 ## Types
 

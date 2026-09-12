@@ -2,6 +2,8 @@
  * Runs inside `parity.sh` against a live throwaway Postgres (PG* env set).
  * 1. Applies migrations; applies them again and requires a no-op.
  * 2. Compares every table and column in `src/schema.ts` with information_schema.
+ * 3. Checks the constraints later migrations change (0003: no foreign key on
+ *    `audit_log.document_id`, so a purge's audit row outlives the document).
  */
 import { getTableColumns, getTableName } from 'drizzle-orm';
 import type { PgTable } from 'drizzle-orm/pg-core';
@@ -75,6 +77,12 @@ try {
       if (!declared.has(c))
         problems.push(`column ${name}.${c} exists in the database but not in schema.ts`);
     }
+  }
+  const { rows: fks } = await pool.query<{ conname: string }>(
+    "SELECT conname FROM pg_constraint WHERE conrelid = 'audit_log'::regclass AND contype = 'f'",
+  );
+  if (fks.some((c) => c.conname === 'audit_log_document_id_fkey')) {
+    problems.push('audit_log.document_id still has its foreign key (migration 0003 did not apply)');
   }
   if (problems.length > 0) {
     throw new Error(`schema parity failed:\n  ${problems.join('\n  ')}`);
