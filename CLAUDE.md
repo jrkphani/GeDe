@@ -9,11 +9,12 @@ reference for anything here.
 
 | Question                                 | Where                                                                                                                                |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| What must the product do?                | `docs/REQUIREMENTS.md` — 147 numbered requirements (PRD §24). Verbatim.                                                              |
+| What must the product do?                | `docs/REQUIREMENTS.md` — 172 numbered requirements (PRD §24). Verbatim.                                                              |
 | Why / narrative                          | `docs/PRD-DIGEST.md`; full PRD at `docs/handover/specs/Text-Oriented Spreadsheet PRD.dc.html`                                        |
 | Architecture, data model, capacity       | `docs/ARCHITECTURE-DIGEST.md`; C4 at `docs/handover/specs/GeDe Architecture C4.dc.html`                                              |
 | Design system, tokens, components        | `docs/DESIGN-SYSTEM-DIGEST.md`; `packages/tokens/` is the only place a colour, radius or duration may be written                     |
 | Sign-in (option 1c shipped), error pages | `docs/ARCHITECTURE-DIGEST.md` §2–3                                                                                                   |
+| First-run tour (direction 1a)            | `docs/handover/specs/GeDe First Run.dc.html`; binding rows ONB-01..14 in `docs/REQUIREMENTS.md`; digest in `docs/PRD-DIGEST.md` §24  |
 | Keyboard map                             | `docs/handover/reference/shortcuts.md`                                                                                               |
 | Behaviour when prose is ambiguous        | `docs/handover/prototype/Work Scape Canvas.dc.html` (open in a browser). **PRD wins over prototype**; file the difference in the PR. |
 

@@ -1,6 +1,6 @@
 # GeDe — Text-Oriented Spreadsheet PRD: Narrative Digest (§1–§23)
 
-Source: `handover/specs/Text-Oriented Spreadsheet PRD.dc.html` ("Specification · sections 1–24 · v1 scope"). §24 (147 numbered requirements) is captured separately in `requirements-prd-24.md`. Items struck through in the source are marked **[removed in v1]** below.
+Source: `handover/specs/Text-Oriented Spreadsheet PRD.dc.html` (package 2026-09-12; header reads "Specification · sections 1–24 · 135 requirements · v1 scope" — the "135" is a stale figure, the table holds 172). §24 (172 numbered requirements) is captured separately in `REQUIREMENTS.md`. Items struck through in the source are marked **[removed in v1]** below. The 2026-09-12 package added two §24 blocks with no §1–23 prose behind them; they are digested at the end of this file.
 
 ## What the product is
 
@@ -223,3 +223,40 @@ Input from English (US, UK, India), Tamil, Hindi and Telugu keyboards; cell text
 - **Number/date:** `Intl.NumberFormat` / `Intl.DateTimeFormat`; Indian locales group lakh/crore; localised month names in long form.
 - **Chrome and formulas:** function names (`Concat`, `Sum`) and A1 addresses stay ASCII in every locale; `@` entity paths may contain any script; menu/inspector copy ships in English for v1 with string tables ready for translation.
 - **Picker:** a locale control in the chrome switches language, keyboard expectations and formats together and persists per user.
+
+## §24 addenda (package 2026-09-12): first-run tour and delete / archive
+
+Two blocks were appended to §24 in the 2026-09-12 handover. Neither has narrative prose in §1–23; the binding wording is the 25 rows in `REQUIREMENTS.md` (ONB-01..14, LIB-D1..11). The direction exploration behind the tour is `handover/specs/GeDe First Run.dc.html` (two options, 1a coachmarks and 1b checklist rail; **1a is the one shipped**). Where that spec and the PRD differ — the spec says four steps and "Help ▸ Guided tour", the PRD says five steps and the help control in the library header — the PRD wins.
+
+### First-run guided tour (ONB)
+
+"Five steps over the live interface. Written for users fluent in iCloud Numbers, so it teaches only what Numbers does not."
+
+- **Sample workscape.** Every library holds `Q3 Delivery — Guided sample`, pinned above all other rows, flagged Sample in the shared column, and seeded with the tables, formulas and dates the tour refers to (ONB-01). It cannot be deleted or archived; its toolbar action is disabled with an explanatory tooltip (LIB-D10).
+- **Trigger and state.** The tour starts on the user's first arrival at the library after authentication, only while the per-user completion flag is unset; users arriving from a shared invitation get it too (ONB-02). Completing step 5 or skipping at any step sets a **per-account, server-side** flag — not per device or browser (ONB-03, ONB-07). Replay from the help control in the library header clears the flag and restarts at step 1 (ONB-08). Below 768 px the tour does not run and the flag stays unset so a larger viewport still receives it (ONB-13).
+- **Steps, in order, each advancing only when the user performs the action — there is no Next control** (ONB-05): open the sample; write a cross-table reference; add a context graph; open Find and search; invite by email. Step 2 has no single target (formulas are typed in a cell) so its card centres in the viewport with no spotlight (ONB-06).
+- **Spotlight.** Each other step spotlights its target by live bounding box, re-measured on scroll, resize, zoom and any layout change, with the rest of the page dimmed. The dim layer never intercepts pointer events; the spotlit element stays fully operable and the tour never blocks an edit (ONB-04, ONB-11).
+- **Card.** Step counter, progress dots, title, instruction body, a comparison note, and the pending action rendered in amber; the card flips above its target when there is no room below (ONB-09). Copy names the iCloud Numbers equivalent, then the difference; nothing Numbers already teaches is taught; context graphs, having no Numbers analogue, are introduced on their own terms (ONB-10). All strings live in the same message catalogue as the rest of the UI and render in all six locales (ONB-12).
+- **Completion.** Finishing step 5 confirms completion and states where the tour can be replayed (ONB-14).
+
+### Library: delete and archive (LIB-D)
+
+"Deletion is conditional on sharing history. A workscape that has ever had a participant can only be archived, so that no one loses access to a document they were given."
+
+- **Delete vs archive.** A workscape with no participants and no active share link is deletable; the toolbar action reads Delete (LIB-D1). One that has ever been shared is not: the same toolbar slot becomes Archive with a tooltip saying shared workscapes cannot be deleted (LIB-D2). The switch happens the moment the **first invitation is accepted**, not when it is sent; revoking all access restores deletability (LIB-D4).
+- **Archive semantics.** Archiving preserves every participant's access and all share links; it removes the workscape from the owner's Recents, Browse and Shared views only, and participants see no change (LIB-D3). The sidebar gains an Archived view, each row with Unarchive; archive has no expiry (LIB-D6).
+- **Recently Deleted.** Deleting moves the workscape there, recoverable, with 30-day retention and automatic purge (LIB-D5). The view offers per-item Recover, Recover All and Delete All (LIB-D7); Delete All is permanent and says so before proceeding (LIB-D8).
+- **Feedback.** Every delete, archive, recover and unarchive raises a confirmation; reversible ones carry Undo, permanent ones state they cannot be undone (LIB-D9).
+- **Shared state.** Archive and trash are document states, not library-local flags; a second client on the same account sees the same state without a reload (LIB-D11).
+
+### Open items from the changelog, and how the build resolves them
+
+The package `CHANGELOG.md` lists three items the prototype fakes in memory. The PRD rows above already settle each one; this is the implementation the build must take.
+
+| Open item (changelog) | Binding rows | Resolution |
+|---|---|---|
+| ONB-3 and LIB-D10 need server-side state; the prototype fakes both in memory (`localStorage['gede.tour.done']`, in-memory `lib.trashed` / `lib.archived`). | ONB-02, ONB-03, ONB-07, ONB-08, ONB-01 | A per-user `tour_done` flag on the server (account-scoped, readable at library load, cleared by Replay). The sample workscape is created server-side per user at account creation, not seeded by the client, so it is present in every library including one first reached from a shared link. |
+| Archive and trash must be document states, not library-local flags — a second client must see the same state. | LIB-D3, LIB-D5, LIB-D6, LIB-D11 | `archived_at` and `deleted_at` are nullable timestamps on the document record (migration; never both set). Library views filter on them; a 30-day purge job keys off `deleted_at`; state changes propagate to other clients through the same channel as any other document change. |
+| Deletability flips when the first invitation is **accepted**, not when it is sent. | LIB-D1, LIB-D2, LIB-D4 | An `ever_shared` flag on the document, set server-side when the first invitation is accepted (or a share link is first used), never by sending. Delete is offered only while `ever_shared` is false and there is no active share link. |
+
+One wording tension to record: LIB-D2 says a workscape that has *ever* been shared must not be deletable, while LIB-D4 says revoking all access must *restore* deletability. The build follows LIB-D4 as the specific transition rule — `ever_shared` is cleared when the last participant is removed and no share link remains — and the PR that implements it must state so.

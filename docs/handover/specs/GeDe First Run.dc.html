@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:oklch(0.968 0.004 150);font-family:'Helvetica Neue',Helvetica,Arial,sans-serif}
+a{color:#14532d}a:hover{color:#b45309}
+</style>
+</helmet>
+
+<section style="padding:34px 34px 48px; display:flex; flex-direction:column; gap:22px">
+  <div style="max-width:860px; display:flex; flex-direction:column; gap:8px">
+    <span style="font-family:'IBM Plex Mono',monospace; font-size:10.5px; letter-spacing:.08em; color:#b45309">TURN 1 · FIRST-RUN GUIDE</span>
+    <h1 style="margin:0; font-size:26px; font-weight:600; letter-spacing:-0.015em; color:#12140f">Two ways to run the 90-second pass</h1>
+    <p style="margin:0; font-size:13.5px; line-height:1.6; color:oklch(0.4 0.008 150); text-wrap:pretty">Both work the same sample workscape, <strong style="font-weight:600">Q3 Delivery</strong>, which is seeded into every library at first login and stays there — resettable, never deleted. Both cover the same four steps, performed for real: cross-table reference, context graph, workscape-wide find, invite by email. Both skip what Numbers already teaches. They differ in who holds the pace.</p>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; gap:26px; align-items:flex-start">
+
+    <div id="1a" style="display:flex; flex-direction:column; gap:11px; width:790px">
+      <div style="display:flex; align-items:baseline; gap:10px">
+        <span style="display:flex; align-items:center; height:20px; padding:0 7px; border-radius:4px; background:#14532d; color:#fff; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.06em">1A</span>
+        <span style="font-size:15px; font-weight:600; color:#12140f">Coachmarks — the tour drives</span>
+      </div>
+      <p style="margin:0; max-width:700px; font-size:12.5px; line-height:1.6; color:oklch(0.42 0.008 150)">One spotlight at a time, scrim over everything else, a numbered card anchored to the target. The step only advances when the action is actually performed. Fastest to a finish, most interruptive; Skip is always in the card.</p>
+      <dc-import name="GeDe Guide Mock" variant="coach" hint-size="760px,470px"></dc-import>
+    </div>
+
+    <div id="1b" style="display:flex; flex-direction:column; gap:11px; width:790px">
+      <div style="display:flex; align-items:baseline; gap:10px">
+        <span style="display:flex; align-items:center; height:20px; padding:0 7px; border-radius:4px; background:#14532d; color:#fff; font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.06em">1B</span>
+        <span style="font-size:15px; font-weight:600; color:#12140f">Checklist rail — the user drives</span>
+      </div>
+      <p style="margin:0; max-width:700px; font-size:12.5px; line-height:1.6; color:oklch(0.42 0.008 150)">A docked rail lists the four tasks; the active one expands with its copy and a “Show me where” that flashes the target. Nothing is blocked, tasks tick themselves as the user does them, and the rail collapses to a pill. Slower, but survives a user who wanders off mid-tour.</p>
+      <dc-import name="GeDe Guide Mock" variant="checklist" hint-size="760px,470px"></dc-import>
+    </div>
+  </div>
+
+  <div style="max-width:860px; padding:16px 18px; background:#fff; border:1px solid oklch(0.9 0.004 150); border-radius:10px; display:flex; flex-direction:column; gap:9px">
+    <span style="font-family:'IBM Plex Mono',monospace; font-size:10px; letter-spacing:.07em; color:#b45309">SHARED BY BOTH</span>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(230px,1fr)); gap:14px; font-size:12px; line-height:1.55; color:oklch(0.38 0.008 150)">
+      <div><strong style="display:block; font-weight:600; color:#12140f; margin-bottom:3px">Seeded sample</strong>Q3 Delivery is created at first login and pinned in the library for every user. Reset restores it; deleting it is not offered.</div>
+      <div><strong style="display:block; font-weight:600; color:#12140f; margin-bottom:3px">Numbers framing</strong>Each step names the Numbers equivalent, then the difference. Tables, formula bar and inspector are never explained.</div>
+      <div><strong style="display:block; font-weight:600; color:#12140f; margin-bottom:3px">Skip and replay</strong>Dismissable at any point, replayable from Help ▸ Guided tour. Invited users get the same pass on the shared doc.</div>
+      <div><strong style="display:block; font-weight:600; color:#12140f; margin-bottom:3px">Ends on sharing</strong>Step 4 is an email invite on the sample, so the first invite a user sends costs nothing.</div>
+    </div>
+  </div>
+</section>
+
+</x-dc>
+</body>
+</html>
