@@ -27,12 +27,19 @@ import { cellKey, type CellKey, type Id } from '../ids.js';
 
 /** Lattice rows a table's title bar occupies (DS: title bar 44 px = 2 × 22). */
 export const TABLE_TITLE_ROWS = 2;
-/** Lattice rows the column-header row occupies (GRID-11: 0 or 1; Wave 1 is always 1). */
+/**
+ * Default lattice rows the column-header row occupies (GRID-11: a table's
+ * `headerRows` is 0 or 1; this is the value when the key is absent).
+ */
 export const TABLE_HEADER_ROWS = 1;
+/** Default footer count-strip rows (GRID-11: 0 or 1; absent means none). */
+export const DEFAULT_FOOTER_ROWS = 0;
 /** Default column width in lattice units. */
 export const DEFAULT_COLUMN_WIDTH = 1;
 /** Default row height in lattice units; a wrapped row is 2 (GRID-09). */
 export const DEFAULT_ROW_HEIGHT = 1;
+/** Lattice rows a wrapped row occupies (GRID-09) — exactly two, never more. */
+export const WRAPPED_ROW_HEIGHT = 2;
 
 export type SheetMap = Y.Map<unknown>;
 export type TableMap = Y.Map<unknown>;
@@ -67,19 +74,36 @@ export interface SheetRecord {
   readonly parentContext: string | null;
 }
 
+/**
+ * Where a column's values come from (GRID-04). Only `entered` cells take
+ * typing; the derive, link and pull features set the others when they bind a
+ * column, and the grid renders those cells locked.
+ */
+export type ColumnSource = 'entered' | 'derived' | 'linked' | 'pulled';
+
 export interface ColumnRecord {
   readonly id: Id;
   readonly label: string;
   /** Whole lattice units (GRID-01). */
   readonly width: number;
+  /** A hidden column has no lattice width; what follows it moves left (GRID-02). */
+  readonly hidden: boolean;
+  /** Every cell in the column wraps, so each row is two lattice units (GRID-09). */
+  readonly wrap: boolean;
+  readonly source: ColumnSource;
 }
 
 export interface RowMeta {
   readonly depth: number;
   readonly collapsed: boolean;
-  /** Whole lattice units; 2 when wrapped (GRID-09). */
+  /** Whole lattice units; 2 when the row itself is wrapped (GRID-09). */
   readonly height: number;
+  /** A category band (PRD §15): its cells are not editable (GRID-04). Set by grouping. */
+  readonly group: boolean;
 }
+
+/** Header and footer counts are 0 or 1 (GRID-11). */
+export type StripCount = 0 | 1;
 
 export interface TableRecord {
   readonly id: Id;
@@ -90,6 +114,10 @@ export interface TableRecord {
   readonly gridRow: number;
   readonly columns: readonly ColumnRecord[];
   readonly rows: readonly Id[];
+  /** Leading columns that are shaded and carried by the pinned panel (GRID-10). */
+  readonly frozenColumns: number;
+  readonly headerRows: StripCount;
+  readonly footerRows: StripCount;
 }
 
 export interface GraphRecord {
@@ -197,23 +225,48 @@ export function rowMetaMap(table: TableMap): Y.Map<RowMetaMap> {
   return map;
 }
 
+const COLUMN_SOURCES: readonly ColumnSource[] = ['entered', 'derived', 'linked', 'pulled'];
+
+export function readColumnSource(map: ColumnMap): ColumnSource {
+  const v = map.get('source');
+  return typeof v === 'string' && (COLUMN_SOURCES as readonly string[]).includes(v)
+    ? (v as ColumnSource)
+    : 'entered';
+}
+
+function readStripCount(map: Y.Map<unknown>, key: string, fallback: StripCount): StripCount {
+  const v = map.get(key);
+  if (v === 0 || v === 1) return v;
+  return fallback;
+}
+
 export function columnRecord(map: ColumnMap): ColumnRecord {
   return {
     id: readString(map, 'id'),
     label: readString(map, 'label'),
     width: Math.max(1, Math.round(readNumber(map, 'width', DEFAULT_COLUMN_WIDTH))),
+    hidden: readBoolean(map, 'hidden', false),
+    wrap: readBoolean(map, 'wrap', false),
+    source: readColumnSource(map),
   };
 }
 
 export function tableRecord(map: TableMap): TableRecord {
+  const columns = columnsArray(map).toArray().map(columnRecord);
   return {
     id: readString(map, 'id'),
     sheetId: readString(map, 'sheetId'),
     title: readString(map, 'title'),
     gridCol: Math.max(0, Math.round(readNumber(map, 'gridCol', 0))),
     gridRow: Math.max(0, Math.round(readNumber(map, 'gridRow', 0))),
-    columns: columnsArray(map).toArray().map(columnRecord),
+    columns,
     rows: rowsArray(map).toArray(),
+    frozenColumns: Math.min(
+      columns.length,
+      Math.max(0, Math.round(readNumber(map, 'frozenColumns', 0))),
+    ),
+    headerRows: readStripCount(map, 'headerRows', TABLE_HEADER_ROWS),
+    footerRows: readStripCount(map, 'footerRows', DEFAULT_FOOTER_ROWS),
   };
 }
 
@@ -258,13 +311,36 @@ export function objectCount(gd: GedeDoc, sheetId: Id): number {
 export function rowMeta(table: TableMap, rowId: Id): RowMeta {
   const meta = rowMetaMap(table).get(rowId);
   if (meta === undefined) {
-    return { depth: 0, collapsed: false, height: DEFAULT_ROW_HEIGHT };
+    return { depth: 0, collapsed: false, height: DEFAULT_ROW_HEIGHT, group: false };
   }
   return {
     depth: Math.max(0, Math.round(readNumber(meta, 'depth', 0))),
     collapsed: readBoolean(meta, 'collapsed', false),
-    height: Math.max(1, Math.round(readNumber(meta, 'height', DEFAULT_ROW_HEIGHT))),
+    // A row is one unit or wrapped (two); anything else stored is clamped so addressing stays exact.
+    height:
+      Math.round(readNumber(meta, 'height', DEFAULT_ROW_HEIGHT)) >= WRAPPED_ROW_HEIGHT
+        ? WRAPPED_ROW_HEIGHT
+        : DEFAULT_ROW_HEIGHT,
+    group: readBoolean(meta, 'group', false),
   };
+}
+
+/**
+ * Whether a cell takes typing (GRID-04). Derived, linked and pulled columns
+ * and category-band rows are read-only; the reason names which, so the grid
+ * can say so rather than merely tint the cell (A11Y-04).
+ */
+export type ReadOnlyReason = Exclude<ColumnSource, 'entered'> | 'group';
+
+export function cellReadOnlyReason(table: TableMap, rowId: Id, colId: Id): ReadOnlyReason | null {
+  const column = columnsArray(table)
+    .toArray()
+    .find((c) => readString(c, 'id') === colId);
+  if (column !== undefined) {
+    const source = readColumnSource(column);
+    if (source !== 'entered') return source;
+  }
+  return rowMeta(table, rowId).group ? 'group' : null;
 }
 
 export function documentMeta(gd: GedeDoc): DocumentMeta {

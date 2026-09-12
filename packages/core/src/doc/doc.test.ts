@@ -221,7 +221,7 @@ describe('tables and snapping', () => {
     expect(tableById(gd, id)?.columns[1]?.label).toBe('Mid');
   });
 
-  test('GRID-02 (partial) addresses derive from the lattice origin below the title and header rows', () => {
+  test('GRID-02 addresses derive from the lattice origin below the title and header rows', () => {
     const gd = fresh();
     const sheet = createSheet(gd);
     const id = createTable(gd, { sheetId: sheet, at: { col: 1, row: 2 }, columns: 2, rows: 2 });
@@ -237,7 +237,7 @@ describe('tables and snapping', () => {
     ]);
   });
 
-  test('GRID-02 (partial: delete and hide are Wave 2) addresses recompute on insert and on column resize, without being stored', () => {
+  test('GRID-02 addresses recompute on insert and on column resize, without being stored', () => {
     const gd = fresh();
     const sheet = createSheet(gd);
     const id = createTable(gd, { sheetId: sheet, at: { col: 0, row: 0 }, columns: 2, rows: 2 });
