@@ -15,6 +15,7 @@ import {
   bigint,
   bigserial,
   boolean,
+  check,
   customType,
   index,
   uniqueIndex,
@@ -114,8 +115,26 @@ export const documents = pgTable(
     createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     deletedAt: timestamptz('deleted_at'),
+    /** LIB-D6 (migration 0008): archived by the owner; never expires. Never set with `deleted_at`. */
+    archivedAt: timestamptz('archived_at'),
+    /**
+     * LIB-D2/D4 (migration 0008): true while the document has a participant or its link is on
+     * (once it had one). Maintained by `services/sync` inside the share transactions; Delete is
+     * refused while it is true.
+     */
+    everShared: boolean('ever_shared').notNull().default(false),
+    /** LIB-D10 (migration 0008): the guided sample; exempt from Delete and Archive. */
+    sample: boolean('sample').notNull().default(false),
   },
-  (t) => [index('documents_owner_id_idx').on(t.ownerId)],
+  (t) => [
+    index('documents_owner_id_idx').on(t.ownerId),
+    /** Migration 0008: the Archived view. */
+    index('documents_archived_owner_idx')
+      .on(t.ownerId)
+      .where(sql`archived_at IS NOT NULL`),
+    /** Migration 0008: archived or deleted, never both. */
+    check('documents_archived_or_deleted_check', sql`archived_at IS NULL OR deleted_at IS NULL`),
+  ],
 );
 
 /** The participant list in the share sheet. Owner is implicit edit. */
