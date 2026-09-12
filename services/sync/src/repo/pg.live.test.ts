@@ -1767,4 +1767,58 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(await repo.users.erase(alice.id)).toBeNull();
     expect(await repo.users.erase(crypto.randomUUID())).toBeUndefined();
   });
+
+  test('AUTH-09 (partial) erasure withdraws a sent invitation under the document lock: an acceptance that commits first stands, is never "withdrawn" after the fact, and the acceptor inherits the document (#111, review)', async () => {
+    const owner = await repo.users.upsertFromToken({
+      sub: 'sub-erase-race-owner',
+      email: 'race-owner@example.com',
+    });
+    const erin = await user('sub-erase-race-erin');
+    await pool.query("update users set email = 'race-erin@example.com' where id = $1", [erin]);
+    const doc = await createDoc(owner.id, 'Raced');
+    const invite = await pendingInvite(doc.id, 'race-erin@example.com', owner.id, 'edit');
+
+    // Erin's acceptance holds the document row (as `convertOne` does) while the erasure starts.
+    const other = await pool.connect();
+    try {
+      await other.query('begin');
+      await other.query('select id from documents where id = $1 for update', [doc.id]);
+      const erasure = repo.users.erase(owner.id);
+      expect(await settles(erasure)).toBe('waiting');
+      await other.query(
+        `insert into shares (document_id, user_id, permission, invited_by, source) values ($1, $2, 'edit', $3, 'invite')`,
+        [doc.id, erin, owner.id],
+      );
+      await other.query('update invites set accepted_at = now() where id = $1', [invite.id]);
+      await other.query(
+        "insert into audit_log (document_id, user_id, action, target) values ($1, $2, 'share.invite_accept', 'race-erin@example.com')",
+        [doc.id, erin],
+      );
+      await other.query('commit');
+      const outcome = await erasure;
+      expect(outcome).toMatchObject({
+        invitesWithdrawn: 0,
+        transferred: [{ documentId: doc.id, toUserId: erin }],
+      });
+    } finally {
+      other.release();
+    }
+    const audit = await pool.query<{ action: string }>(
+      'select action from audit_log where document_id = $1 order by id',
+      [doc.id],
+    );
+    expect(audit.rows.map((r) => r.action)).toEqual([
+      'document.create',
+      'share.invite',
+      'share.invite_accept',
+      'document.transfer',
+    ]);
+    expect(await repo.documents.get(doc.id)).toMatchObject({ ownerId: erin, deletedAt: null });
+    // The accepted row survives (it is history), with the address it was sent to scrubbed.
+    const rows = await pool.query<{ accepted_at: Date | null }>(
+      'select accepted_at from invites where id = $1',
+      [invite.id],
+    );
+    expect(rows.rows[0]?.accepted_at).toBeInstanceOf(Date);
+  });
 });

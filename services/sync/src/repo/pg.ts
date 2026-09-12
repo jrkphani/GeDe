@@ -90,6 +90,15 @@ export function constantTimeEqual(a: string, b: string): boolean {
 /** What an erased account's row is called wherever a name would show (#111). */
 export const ERASED_DISPLAY_NAME = 'Deleted user';
 
+/** The audit actions whose `target` carries an email address (what erasure scrubs, ADR-037). */
+export const ADDRESS_BEARING_AUDIT_ACTIONS: readonly ShareAuditAction[] = [
+  'share.invite',
+  'share.invite_accept',
+  'share.invite_withdraw',
+  'share.invite_remove',
+  'share.stop',
+];
+
 /** A literal for a case-insensitive `regexp_replace`: every metacharacter escaped. */
 export function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
@@ -303,15 +312,30 @@ export function inviterStillMay(
   return row.permission === 'view' || row.inviterPermission === 'edit';
 }
 
-/** Withdraw an invitation whose inviter no longer holds what it grants, with its audit row. */
-async function withdrawStale(tx: Executor, row: PendingRow, actorId: string | null): Promise<void> {
-  await tx.delete(invites).where(eq(invites.id, row.id));
+/**
+ * Withdraw an invitation whose inviter no longer holds what it grants, with
+ * its audit row. Only a row that is still pending goes, and the audit row is
+ * written only when one did: called under the document lock on a row read
+ * `FOR UPDATE`, this is belt and braces; called on a stale read it is what
+ * keeps a just-accepted invitation from being "withdrawn" after the fact.
+ */
+async function withdrawStale(
+  tx: Executor,
+  row: PendingRow,
+  actorId: string | null,
+): Promise<boolean> {
+  const gone = await tx
+    .delete(invites)
+    .where(and(eq(invites.id, row.id), isNull(invites.acceptedAt)))
+    .returning({ id: invites.id });
+  if (gone.length === 0) return false;
   await tx.insert(auditLog).values({
     documentId: row.documentId,
     userId: actorId,
     action: 'share.invite_withdraw' satisfies ShareAuditAction,
     target: `${row.email}:${row.invitedBy}`,
   });
+  return true;
 }
 
 /**
@@ -603,7 +627,12 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
 
       erase(id) {
         return db.transaction(async (tx) => {
-          const [row] = await tx.select().from(users).where(eq(users.id, id)).for('update');
+          // NO KEY UPDATE, not UPDATE: the row's key is not changing, and a
+          // plain FOR UPDATE would conflict with the FOR KEY SHARE every
+          // share or invitation insert takes on it through its foreign key —
+          // an acceptance in flight (which holds a document lock this
+          // transaction is about to wait for) would deadlock with it.
+          const [row] = await tx.select().from(users).where(eq(users.id, id)).for('no key update');
           if (!row) return undefined;
           if (row.deletedAt !== null) return null;
           const now = new Date();
@@ -633,9 +662,24 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             sharesRemoved.push(documentId);
           }
 
-          // Pending invitations the user sent are only as good as their sender.
-          const sent = await pendingInvitesQuery(tx, eq(invites.invitedBy, id));
-          for (const invite of sent) await withdrawStale(tx, invite, id);
+          // Pending invitations the user sent are only as good as their
+          // sender. Each is withdrawn under its document's lock after a
+          // `FOR UPDATE` re-read (the #100 pattern): an acceptance in flight
+          // either committed first — and the row is no longer pending — or
+          // waits behind the lock and finds it gone.
+          const sent = await tx
+            .select({ id: invites.id, documentId: invites.documentId })
+            .from(invites)
+            .where(and(eq(invites.invitedBy, id), invitePending))
+            .orderBy(asc(invites.documentId), asc(invites.id));
+          let invitesWithdrawn = 0;
+          for (const { id: inviteId, documentId } of sent) {
+            if (!(await lockDocument(tx, documentId))) continue;
+            const [fresh] = await pendingInvitesQuery(tx, eq(invites.id, inviteId)).for('update', {
+              of: invites,
+            });
+            if (fresh && (await withdrawStale(tx, fresh, id))) invitesWithdrawn += 1;
+          }
 
           // Every invitation row addressed to them carries their address.
           if (row.email !== null) {
@@ -734,13 +778,20 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           // but not the address.
           await tx.update(docUpdates).set({ authorId: null }).where(eq(docUpdates.authorId, id));
           if (row.email !== null) {
+            // Only the share actions carry an address in `target`; the scan
+            // is bounded to them.
             const pattern = escapeRegex(row.email);
             await tx
               .update(auditLog)
               .set({
                 target: sql`regexp_replace(${auditLog.target}, ${pattern}, '[erased]', 'gi')`,
               })
-              .where(sql`${auditLog.target} ~* ${pattern}`);
+              .where(
+                and(
+                  inArray(auditLog.action, [...ADDRESS_BEARING_AUDIT_ACTIONS]),
+                  sql`${auditLog.target} ~* ${pattern}`,
+                ),
+              );
           }
 
           await tx
@@ -759,7 +810,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             transferred,
             deleted,
             sharesRemoved,
-            invitesWithdrawn: sent.length,
+            invitesWithdrawn,
           };
         });
       },

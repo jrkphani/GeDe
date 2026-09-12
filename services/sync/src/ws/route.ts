@@ -173,17 +173,18 @@ export function registerWs(
         socket.close(outcome.code, outcome.reason);
         return;
       }
-      request.log.info(
-        { documentId: outcome.documentId, userId: outcome.user.id, permission: outcome.permission },
-        'websocket joined',
-      );
       // A refused join (task full, too many sockets, #99) has already closed
       // the socket with its code and written its metric line.
-      deps.rooms.join(outcome.documentId, socket, {
+      const conn = deps.rooms.join(outcome.documentId, socket, {
         userId: outcome.user.id,
         permission: outcome.permission,
         tokenExpiresAt: outcome.tokenExpiresAt,
       });
+      if (conn === undefined) return;
+      request.log.info(
+        { documentId: outcome.documentId, userId: outcome.user.id, permission: outcome.permission },
+        'websocket joined',
+      );
     },
   );
 }

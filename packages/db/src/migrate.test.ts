@@ -229,6 +229,14 @@ describe('applyMigrations', () => {
     expect(db.ledger.size).toBe(4);
   });
 
+  test('LOAD-06 an empty migrations directory beside a non-empty ledger fails the boot rather than passing as a rollback (#110)', async () => {
+    const db = fakePool({ ledger: ['0000_init.sql'] });
+    await expect(
+      applyMigrations(db.pool, '/ignored', { readFiles: () => Promise.resolve([]) }),
+    ).rejects.toThrow(/no migration files on disk but the ledger holds 1 rows/);
+    expect(db.released).toBe(1);
+  });
+
   test('LOAD-06 a second run is a no-op', async () => {
     const db = fakePool();
     await applyMigrations(db.pool, '/ignored', { readFiles });

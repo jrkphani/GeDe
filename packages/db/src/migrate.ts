@@ -262,6 +262,14 @@ export async function applyMigrations(
       // booting against a schema the next one already moved forward, which
       // additive migrations permit), logged, never fatal — the rollback must
       // be able to come up.
+      if (files.length === 0 && done.size > 0) {
+        // A directory with nothing in it beside a ledger with rows is not a
+        // rollback, it is a build that lost the migrations (#110).
+        throw new MigrationError(
+          'migrations directory',
+          new Error(`no migration files on disk but the ledger holds ${String(done.size)} rows`),
+        );
+      }
       const onDisk = new Set(files.map((file) => file.name));
       const newestOnDisk = files.at(-1)?.name ?? '';
       const ahead = [...done.keys()].filter((name) => !onDisk.has(name) && name > newestOnDisk);
