@@ -81,7 +81,8 @@
   color: var(--ink);
   box-shadow: var(--elev-overlay);
   animation: gd-fade-in var(--dur-base) var(--ease-standard);
-  z-index: 30;
+  /* Above the dialog (41): a select inside a sheet must open over it. */
+  z-index: 50;
 }
 .gd-select__viewport {
   display: flex;

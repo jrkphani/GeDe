@@ -91,9 +91,9 @@
   gap: var(--space-2);
 }
 
-/* RESP-05: below 1024 px every target is at least 44 × 44 px. */
+/* RESP-05: below 1024 px every target in the sheet is at least 44 px tall. */
 @media (max-width: 1023.98px) {
-  .gd-share__invite .gd-btn {
+  .gd-share .gd-btn {
     min-height: var(--hit-target);
   }
 }
