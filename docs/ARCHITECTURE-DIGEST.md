@@ -92,6 +92,8 @@ Named services and settings (verbatim where stated):
 - **Secrets Manager · SSM** — DB credentials, Cognito ids, feature flags
 - **CloudWatch** — logs, RUM, alarms → SNS email
 
+> **As built (not in the handover; see `DECISIONS.md` ADR-018–021).** `/api` goes through CloudFront only: CloudFront adds a secret `X-Origin-Verify` header and the ALB's HTTPS listener answers 403 to anything but `/ws/*` (direct, JWT-checked on upgrade) and `/api/*` + `/healthz` carrying the header. The WAF runs a per-IP rate rule plus three AWS managed groups. SPA deep links are served by a viewer-request CloudFront Function on the shell behaviour, so API status codes pass through untouched. SPA responses carry a Content-Security-Policy. Cognito account recovery is off (nothing to recover in an OTP/passkey pool); refresh tokens rotate. The `api.<domain>` record exists only as the CloudFront origin hostname.
+
 Delivery pipeline (verbatim): "GitHub source → CodeBuild (`ARM_CONTAINER`) verify → build `linux/arm64` image to ECR and bundle to S3 → CodePipeline deploy to staging, manual approval, production → smoke test → automatic rollback on failure. Everything above is one CDK app (TypeScript) with two stages."
 
 So: environments are **staging** and **production** (two CDK stages); no separate dev environment is named. CodeBuild uses the ARM_CONTAINER environment type. Container images go to **ECR**; the SPA bundle goes to S3. No Lambda or EC2 is named — compute is ECS Fargate on Graviton only.
