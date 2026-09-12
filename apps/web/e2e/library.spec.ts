@@ -294,37 +294,45 @@ test('LIB-D2 LIB-D3 LIB-D6 a shared workscape offers Archive, not Delete; archiv
   ]);
 });
 
-test('LIB-D7 LIB-D8 Recently Deleted: per-row Recover, and Delete All confirmed by an alert dialog that says it is permanent', async ({
-  page,
-  checkA11y,
-}) => {
-  const { calls } = await installLibDFakes(page);
-  await page.setViewportSize({ width: 1024, height: 900 });
-  await signIn(page);
-  await page.getByRole('button', { name: 'Recently Deleted' }).click();
-  const row = page.getByRole('row').filter({ hasText: 'Old plan' });
-  await expect(row.getByRole('button', { name: 'Recover Old plan' })).toBeVisible();
-  await page.getByRole('button', { name: 'Delete All' }).click();
-  const dialog = page.getByRole('alertdialog', { name: 'Permanently delete 1 workscape?' });
-  await expect(dialog).toContainText('This cannot be undone.');
-  await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
-  // The dialog's 300 ms enter motion blends colours; axe must see it settled.
-  await page.waitForFunction(() =>
-    Array.from(document.querySelectorAll('.gd-dialog, .gd-dialog__overlay')).every((el) =>
-      el.getAnimations().every((animation) => animation.playState === 'finished'),
-    ),
-  );
-  await checkA11y('library-delete-all-confirm');
-  await page.keyboard.press('Escape');
-  await expect(dialog).toHaveCount(0);
-  expect(calls).toEqual([]);
-  await page.getByRole('button', { name: 'Delete All' }).click();
-  await dialog.getByRole('button', { name: 'Delete All' }).click();
-  const toast = page.locator('.gd-toast');
-  await expect(toast).toContainText('Deleted permanently — this one cannot be undone');
-  await expect(toast.getByRole('button', { name: 'Undo' })).toHaveCount(0);
-  await expect(page.getByRole('heading', { name: 'No items' })).toBeVisible();
-  expect(calls).toEqual(['POST /delete-all']);
+// Dark for this journey (DoD "light and dark checked"): the alert dialog, the
+// per-row Recover and the permanent-delete toast go through axe on the dark palette;
+// the other LIB-D journeys above and below run light.
+test.describe('dark', () => {
+  test.use({ colorScheme: 'dark' });
+
+  test('LIB-D7 LIB-D8 Recently Deleted: per-row Recover, and Delete All confirmed by an alert dialog that says it is permanent', async ({
+    page,
+    checkA11y,
+  }) => {
+    const { calls } = await installLibDFakes(page);
+    await page.setViewportSize({ width: 1024, height: 900 });
+    await signIn(page);
+    await page.getByRole('button', { name: 'Recently Deleted' }).click();
+    const row = page.getByRole('row').filter({ hasText: 'Old plan' });
+    await expect(row.getByRole('button', { name: 'Recover Old plan' })).toBeVisible();
+    await page.getByRole('button', { name: 'Delete All' }).click();
+    const dialog = page.getByRole('alertdialog', { name: 'Permanently delete 1 workscape?' });
+    await expect(dialog).toContainText('This cannot be undone.');
+    await expect(dialog.getByRole('button', { name: 'Cancel' })).toBeFocused();
+    // The dialog's 300 ms enter motion blends colours; axe must see it settled.
+    await page.waitForFunction(() =>
+      Array.from(document.querySelectorAll('.gd-dialog, .gd-dialog__overlay')).every((el) =>
+        el.getAnimations().every((animation) => animation.playState === 'finished'),
+      ),
+    );
+    await checkA11y('library-delete-all-confirm-dark');
+    await page.keyboard.press('Escape');
+    await expect(dialog).toHaveCount(0);
+    expect(calls).toEqual([]);
+    await page.getByRole('button', { name: 'Delete All' }).click();
+    await dialog.getByRole('button', { name: 'Delete All' }).click();
+    const toast = page.locator('.gd-toast');
+    await expect(toast).toContainText('Deleted permanently — this one cannot be undone');
+    await expect(toast.getByRole('button', { name: 'Undo' })).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'No items' })).toBeVisible();
+    await checkA11y('library-delete-all-toast-dark');
+    expect(calls).toEqual(['POST /delete-all']);
+  });
 });
 
 test('LIB-D10 the guided sample cannot be deleted or archived: the action is disabled with the reason', async ({
