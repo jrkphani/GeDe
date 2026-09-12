@@ -11,8 +11,10 @@
  *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height}>,
  *                            cellFormat Y.Map keyed `rowId:colId` → {format, formatOpts}
  *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01)
- *   graphs  Y.Map<Y.Map>     by id (Wave 2 fills these in; the slot exists so
- *                            Fit already frames them, DOC-07)
+ *   graphs  Y.Map<Y.Map>     by id: sheetId, pairId, kind ring|coverage, tableId ('' when
+ *                            unbound), dimensions (JSON array of column ids), slice (JSON
+ *                            {rowAxis, colAxis, pins}), gridCol, gridRow, widthUnits,
+ *                            heightUnits (GRAPH-01..11; `graph/` reads and writes them)
  *   meta    Y.Map            title, createdAt
  *
  * They are top-level shared types rather than keys of one nested map so two
@@ -212,9 +214,42 @@ export interface TableRecord {
   readonly outlineColumn: Id | null;
 }
 
+/** The two halves of a graph pair (GRAPH-01, GRAPH-02). */
+export type GraphKind = 'ring' | 'coverage';
+
+/**
+ * The coverage slice (GRAPH-08): two dimension columns on the axes and every
+ * other dimension pinned to one parameter value. A null axis means "the
+ * default" (the first dimension for rows, the next for columns); a pin absent
+ * from `pins` defaults to the selected context's binding, else the first
+ * parameter. Shared by the pair, stored on both halves.
+ */
+export interface GraphSlice {
+  readonly rowAxis: Id | null;
+  readonly colAxis: Id | null;
+  readonly pins: Readonly<Record<Id, string>>;
+}
+
+export const EMPTY_SLICE: GraphSlice = { rowAxis: null, colAxis: null, pins: {} };
+
+/** Default footprint of a graph object in lattice units (PRD §19 "roomy, 6 × 28"). */
+export const GRAPH_DEFAULT_WIDTH_UNITS = 6;
+export const GRAPH_DEFAULT_HEIGHT_UNITS = 28;
+/** Smallest box a graph can be resized to (GRAPH-11). */
+export const GRAPH_MIN_WIDTH_UNITS = 2;
+export const GRAPH_MIN_HEIGHT_UNITS = 8;
+
 export interface GraphRecord {
   readonly id: Id;
   readonly sheetId: Id;
+  /** Both halves of a pair carry the same `pairId` (GRAPH-02). */
+  readonly pairId: Id;
+  readonly kind: GraphKind;
+  /** The source table; null while unbound (pointing mode, GRAPH-03) or once the table is gone. */
+  readonly tableId: Id | null;
+  /** Column ids marked as dimensions, in checklist order (GRAPH-05). */
+  readonly dimensions: readonly Id[];
+  readonly slice: GraphSlice;
   readonly gridCol: number;
   readonly gridRow: number;
   readonly widthUnits: number;
@@ -481,10 +516,52 @@ export function tablesOnSheet(gd: GedeDoc, sheetId: Id): TableRecord[] {
   return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
 }
 
+const GRAPH_KINDS: readonly GraphKind[] = ['ring', 'coverage'];
+
+export function readGraphKind(map: GraphMap): GraphKind {
+  const v = map.get('kind');
+  return typeof v === 'string' && (GRAPH_KINDS as readonly string[]).includes(v)
+    ? (v as GraphKind)
+    : 'ring';
+}
+
+/** A stored id list (plain JSON array); anything malformed reads as empty. */
+export function readIdList(value: unknown): Id[] {
+  if (!Array.isArray(value)) return [];
+  const out: Id[] = [];
+  for (const v of value) {
+    if (typeof v === 'string' && v !== '' && !out.includes(v)) out.push(v);
+  }
+  return out;
+}
+
+/** The stored slice, or the empty slice when absent or malformed (a newer client's shape). */
+export function readGraphSlice(value: unknown): GraphSlice {
+  if (!isRecord(value)) return EMPTY_SLICE;
+  const { rowAxis, colAxis, pins } = value;
+  const out: Record<Id, string> = {};
+  if (isRecord(pins)) {
+    for (const [k, v] of Object.entries(pins)) {
+      if (k !== '' && typeof v === 'string') out[k] = v;
+    }
+  }
+  return {
+    rowAxis: typeof rowAxis === 'string' && rowAxis !== '' ? rowAxis : null,
+    colAxis: typeof colAxis === 'string' && colAxis !== '' ? colAxis : null,
+    pins: out,
+  };
+}
+
 export function graphRecord(map: GraphMap): GraphRecord {
+  const tableId = readString(map, 'tableId');
   return {
     id: readString(map, 'id'),
     sheetId: readString(map, 'sheetId'),
+    pairId: readString(map, 'pairId') || readString(map, 'id'),
+    kind: readGraphKind(map),
+    tableId: tableId === '' ? null : tableId,
+    dimensions: readIdList(map.get('dimensions')),
+    slice: readGraphSlice(map.get('slice')),
     gridCol: Math.max(0, Math.round(readNumber(map, 'gridCol', 0))),
     gridRow: Math.max(0, Math.round(readNumber(map, 'gridRow', 0))),
     widthUnits: Math.max(1, Math.round(readNumber(map, 'widthUnits', 1))),
@@ -492,12 +569,34 @@ export function graphRecord(map: GraphMap): GraphRecord {
   };
 }
 
+export function graphMap(gd: GedeDoc, graphId: Id): GraphMap | null {
+  return gd.graphs.get(graphId) ?? null;
+}
+
+export function graphById(gd: GedeDoc, graphId: Id): GraphRecord | null {
+  const map = graphMap(gd, graphId);
+  return map === null ? null : graphRecord(map);
+}
+
+/** Graphs on a sheet in creation order (ULIDs sort by time); the ring of a pair precedes its coverage. */
 export function graphsOnSheet(gd: GedeDoc, sheetId: Id): GraphRecord[] {
   const out: GraphRecord[] = [];
   gd.graphs.forEach((map) => {
     if (readString(map, 'sheetId') === sheetId) out.push(graphRecord(map));
   });
-  return out;
+  return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/** Both halves of a pair, ring first, wherever they sit (GRAPH-02). */
+export function graphsInPair(gd: GedeDoc, pairId: Id): GraphRecord[] {
+  const out: GraphRecord[] = [];
+  gd.graphs.forEach((map) => {
+    const record = graphRecord(map);
+    if (record.pairId === pairId) out.push(record);
+  });
+  return out.sort((a, b) =>
+    a.kind === b.kind ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.kind === 'ring' ? -1 : 1,
+  );
 }
 
 /** Objects (tables + graphs) on a sheet, for the tab's object count (DOC-03). */
