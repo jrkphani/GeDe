@@ -164,7 +164,7 @@ export function registerShareRoutes(
 
   /** Send the invitation mail for a pending row; never throws (see `mail/delivery.ts`). */
   const sendInvite = (
-    request: { id: string; log: Pick<typeof api.log, 'warn'> },
+    request: { id: string; log: Pick<typeof api.log, 'info'> },
     invite: { documentId: string; email: string; token: string },
     actor: { actorName: string | null; actorEmail: string | null },
     documentTitle: string,
