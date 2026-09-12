@@ -50,7 +50,7 @@ Retry: 5xx and 429 retry four times with jittered exponential backoff, then beco
 ## Tests
 
 - Unit: Vitest + React Testing Library, jsdom. Test names start with the requirement id: `test('GRID-03 single click arms a cell', …)`. `docs/TRACEABILITY.md` is generated from these names.
-- E2E: Playwright journeys in `e2e/`, run at 480, 768, 1024 and 1440 px and at 200 % zoom. Phone journeys assert the absence of edit affordances.
+- E2E: Playwright journeys in `e2e/`, run at 480, 768, 1024 and 1440 px and at 200 % zoom, with axe on every screen. No backend, no session: the suite builds `e2e/dist/` with `e2e/vite.config.ts` (config from `e2e/fixtures/config.json`, error pages via the `e2e/harness` entry) and fails on `serious`/`critical` axe violations. Phone journeys assert the absence of edit affordances. See `docs/TESTING.md`.
 - No mocked API responses presented as real. Fakes are labelled fakes.
 
 ## Running locally
@@ -59,5 +59,6 @@ Retry: 5xx and 429 retry four times with jittered exponential backoff, then beco
 cp apps/web/public/config.example.json apps/web/public/config.json   # once, then edit
 npm run dev -w services/sync    # sync + REST on :3000 (needs a local Postgres, see services/sync/CLAUDE.md)
 npm run dev                     # Vite on :5173, proxies /api and /ws to :3000
-npm run e2e                     # needs a built web bundle and a running sync service
+npm run e2e:install             # once: Chrome Headless Shell
+npm run e2e                     # builds e2e/dist, serves it, runs the journeys + axe (no sync needed)
 ```

@@ -30,7 +30,7 @@ npm run verify      # typecheck + lint + format:check + unit tests (what CI runs
 npm run dev         # web dev server; needs apps/web/public/config.json and the sync service on :3000
 npm run build       # all workspaces
 npm run synth       # cdk synth (infra)
-npm run e2e         # Playwright journeys (needs a built web bundle and a running sync service)
+npm run e2e         # Playwright journeys + axe against a built bundle (no backend; docs/TESTING.md)
 ```
 
 See `apps/web/CLAUDE.md` for local config and `services/sync/CLAUDE.md` for the environment variables and a local Postgres.
