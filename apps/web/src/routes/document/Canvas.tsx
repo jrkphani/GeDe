@@ -19,6 +19,7 @@ import {
   type Size,
   type Viewport,
 } from '../../doc/viewport.js';
+import { rowIsLabelled, rowLabelStep } from './ruler.js';
 
 export interface CanvasProps {
   viewport: Viewport;
@@ -207,15 +208,19 @@ export function Canvas({
     if (!d.moved) onClearSelection();
   };
 
-  const layerStyle: CSSProperties = {
+  const layerStyle = {
     transform: `translate(${String(-viewport.x)}px, ${String(-viewport.y)}px) scale(${String(viewport.zoom)})`,
-  };
+    // Screen-space overlays inside the layer (presence tags) counter-scale by this (#65).
+    '--gd-zoom': viewport.zoom,
+  } as CSSProperties;
   const colPx = LATTICE.col * viewport.zoom;
   const rowPx = LATTICE.row * viewport.zoom;
   const cols: number[] = [];
   for (let c = range.colStart; c < range.colEnd; c += 1) cols.push(c);
   const rows: number[] = [];
   for (let r = range.rowStart; r < range.rowEnd; r += 1) rows.push(r);
+  // Issue #65: below ~50 % the row pitch is under a label's height; thin the labels.
+  const labelStep = rowLabelStep(rowPx);
 
   return (
     <div className={clsx('gd-canvas', `gd-canvas--${tier}`)} data-zoom-tier={tier}>
@@ -239,8 +244,9 @@ export function Canvas({
             className="gd-canvas__ruler-cell"
             style={{ top: `${String(r * rowPx - viewport.y)}px`, height: `${String(rowPx)}px` }}
             data-row={r}
+            data-labelled={rowIsLabelled(r, labelStep) || undefined}
           >
-            {r + 1}
+            {rowIsLabelled(r, labelStep) ? r + 1 : ''}
           </span>
         ))}
       </div>

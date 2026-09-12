@@ -470,6 +470,15 @@ test.describe('grid editing', () => {
       await expect(divider).toHaveAttribute('aria-valuenow', '3');
       await expect(table).toHaveCSS('width', '800px');
       // GRID-08 the corner handle scales the whole table: right adds a unit, down wraps every row.
+      // At 1024 the 800 px table reaches the inspector strip (RESP-04: 38 px is the rail's);
+      // pan the sheet left so the corner and the extra unit have room on screen (DOC-04).
+      if (width === 1024) {
+        const plane = await page.getByTestId('plane').boundingBox();
+        if (!plane) throw new Error('plane has no box');
+        await page.mouse.move(plane.x + plane.width / 2, plane.y + plane.height - 40);
+        await page.mouse.wheel(240, 0);
+        await expect(page.getByTestId('layer')).toHaveAttribute('style', /translate\(-240px/);
+      }
       const corner = page.getByRole('separator', { name: 'Resize Table 1' });
       const cbox = await corner.boundingBox();
       if (!cbox) throw new Error('corner has no box');
@@ -486,6 +495,14 @@ test.describe('grid editing', () => {
       await page.keyboard.press('ArrowUp');
       await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px');
       await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B6');
+      if (width === 1024) {
+        // Back to A1 so the pans below start from the same origin at every width.
+        const plane = await page.getByTestId('plane').boundingBox();
+        if (!plane) throw new Error('plane has no box');
+        await page.mouse.move(plane.x + plane.width / 2, plane.y + plane.height - 40);
+        await page.mouse.wheel(-240, 0);
+        await expect(page.getByTestId('layer')).toHaveAttribute('style', /translate\(0px/);
+      }
       // GRID-09 via the Table menu: wrap the selected column; rows are two lattice units, addresses exact.
       await grid.getByRole('gridcell').first().click();
       await page.getByRole('button', { name: 'Table menu' }).click();

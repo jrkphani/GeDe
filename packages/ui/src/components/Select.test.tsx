@@ -100,4 +100,23 @@ describe('Select', () => {
     expect(screen.getByRole('combobox', { name: 'Permission for Meena' })).toBeInTheDocument();
     expect(screen.getByText('Permission')).toHaveClass('gd-visually-hidden');
   });
+
+  it('INSP-11 INSP-10 disabledReason disables the trigger and carries the reason on hover; hint sits beside the label without joining its name', async () => {
+    render(
+      <Select
+        label="Format"
+        hint="whole column"
+        value="edit"
+        onValueChange={() => undefined}
+        options={OPTIONS}
+        disabledReason="not implemented in this release"
+      />,
+    );
+    const trigger = screen.getByRole('combobox', { name: 'Format' });
+    expect(trigger).toBeDisabled();
+    expect(trigger).toHaveAttribute('title', 'not implemented in this release');
+    expect(screen.getByText('whole column')).toBeInTheDocument();
+    await userEvent.click(trigger);
+    expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+  });
 });

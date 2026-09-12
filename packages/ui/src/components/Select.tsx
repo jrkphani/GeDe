@@ -20,6 +20,13 @@ export interface SelectProps<V extends string> {
   onValueChange: (value: V) => void;
   options: readonly SelectOption<V>[];
   disabled?: boolean | undefined;
+  /**
+   * INSP-11 / MENU-02: disabled with the reason as the trigger's tooltip —
+   * a control that cannot act says why, and is never hidden.
+   */
+  disabledReason?: string | undefined;
+  /** Short mono note at the right of the label, e.g. the scope of the change (INSP-10). */
+  hint?: ReactNode | undefined;
   /** `sm` for a select that sits inside a list row; `md` for a form field. */
   size?: 'sm' | 'md' | undefined;
   id?: string | undefined;
@@ -41,6 +48,8 @@ export function Select<V extends string>({
   onValueChange,
   options,
   disabled,
+  disabledReason,
+  hint,
   size = 'md',
   id,
   className,
@@ -48,20 +57,25 @@ export function Select<V extends string>({
 }: SelectProps<V>) {
   const autoId = useId();
   const triggerId = id ?? autoId;
+  const isDisabled = disabled === true || disabledReason !== undefined;
   return (
     <div className={clsx('gd-select', `gd-select--${size}`, className)}>
-      <label
-        htmlFor={triggerId}
-        className={clsx('gd-select__label', { 'gd-visually-hidden': hideLabel })}
-      >
-        {label}
-      </label>
-      <RadixSelect.Root
-        value={value}
-        onValueChange={onValueChange}
-        {...(disabled !== undefined && { disabled })}
-      >
-        <RadixSelect.Trigger id={triggerId} className="gd-select__trigger" aria-label={ariaLabel}>
+      <span className="gd-select__head">
+        <label
+          htmlFor={triggerId}
+          className={clsx('gd-select__label', { 'gd-visually-hidden': hideLabel })}
+        >
+          {label}
+        </label>
+        {hint !== undefined && <span className="gd-select__hint">{hint}</span>}
+      </span>
+      <RadixSelect.Root value={value} onValueChange={onValueChange} disabled={isDisabled}>
+        <RadixSelect.Trigger
+          id={triggerId}
+          className="gd-select__trigger"
+          aria-label={ariaLabel}
+          title={disabledReason}
+        >
           <RadixSelect.Value />
           <RadixSelect.Icon className="gd-select__chevron">
             <Icon name="chevron-down" size={13} />

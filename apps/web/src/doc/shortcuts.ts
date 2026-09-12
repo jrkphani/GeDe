@@ -29,6 +29,12 @@ export interface ShortcutBinding {
   readonly inEditors?: boolean | undefined;
   /** Skip without preventing default. */
   readonly disabled?: boolean | undefined;
+  /**
+   * Run without preventing the browser's default: the chord's default action is
+   * the route (⌥⇧⌘V lets the browser raise its `paste` event), the handler only
+   * arms what that route should do.
+   */
+  readonly passive?: boolean | undefined;
 }
 
 export function isApplePlatform(userAgent: string = navigator.userAgent): boolean {
@@ -77,7 +83,7 @@ export function useShortcuts(bindings: readonly ShortcutBinding[]): void {
         if (binding.disabled === true) continue;
         if (editable && binding.inEditors !== true) continue;
         if (!matchesChord(event, binding.chord, apple)) continue;
-        event.preventDefault();
+        if (binding.passive !== true) event.preventDefault();
         binding.run(event);
         return;
       }
@@ -89,71 +95,133 @@ export function useShortcuts(bindings: readonly ShortcutBinding[]): void {
   }, []);
 }
 
-/** The chords this shell binds (subset of `docs/handover/reference/shortcuts.md`). */
+/**
+ * The chords this shell binds — every modifier chord in
+ * `docs/handover/reference/shortcuts.md` (KEYS-02..07). The shortcut sheet
+ * (KEYS-01) and the handler both read `routes/document/keys/shortcut-map.ts`,
+ * which maps each of these ids to its group and action, so the two cannot drift.
+ */
 export const CHORDS = {
-  zoomIn: { code: ['Equal', 'NumpadAdd'], mod: true } satisfies Chord,
-  zoomOut: { code: ['Minus', 'NumpadSubtract'], mod: true } satisfies Chord,
-  actualSize: { code: ['Digit0', 'Numpad0'], mod: true } satisfies Chord,
-  fit: { code: ['Digit0', 'Numpad0'], mod: true, shift: true } satisfies Chord,
-  nextSheet: { code: 'Tab', ctrl: true } satisfies Chord,
-  previousSheet: { code: 'Tab', ctrl: true, shift: true } satisfies Chord,
-  inspector: { code: 'KeyI', mod: true, alt: true } satisfies Chord,
-  formatInspector: { code: ['Digit1', 'Numpad1'], mod: true, alt: true } satisfies Chord,
-  organizeInspector: { code: ['Digit2', 'Numpad2'], mod: true, alt: true } satisfies Chord,
-  addRow: { code: 'ArrowDown', mod: true, alt: true } satisfies Chord,
-  addColumn: { code: 'ArrowRight', mod: true, alt: true } satisfies Chord,
-  escape: { code: 'Escape' } satisfies Chord,
+  // Document (KEYS-02)
+  newWorkscape: { code: 'KeyN', mod: true } satisfies Chord,
+  open: { code: 'KeyO', mod: true } satisfies Chord,
+  print: { code: 'KeyP', mod: true } satisfies Chord,
+  close: { code: 'KeyW', mod: true } satisfies Chord,
+  // `?` is Shift+/ on the reference layout; the physical key is what counts (I18N-02).
+  shortcutSheet: { code: 'Slash', shift: true } satisfies Chord,
+  // Edit (KEYS-03). Cut, copy and paste ride the browser's own clipboard events
+  // (`keys/useClipboard.ts`); the chords here name them for the sheet and menus.
   undo: { code: 'KeyZ', mod: true } satisfies Chord,
   redo: { code: 'KeyZ', mod: true, shift: true } satisfies Chord,
+  cut: { code: 'KeyX', mod: true } satisfies Chord,
+  copy: { code: 'KeyC', mod: true } satisfies Chord,
+  paste: { code: 'KeyV', mod: true } satisfies Chord,
+  pasteMatchStyle: { code: 'KeyV', mod: true, alt: true, shift: true } satisfies Chord,
+  selectAll: { code: 'KeyA', mod: true } satisfies Chord,
+  clear: { code: ['Backspace', 'Delete'] } satisfies Chord,
   // Find (KEYS-04): ⌘F · ⌥⌘F · ⌘G · ⇧⌘G; Esc closes the bar through `escape`.
   find: { code: 'KeyF', mod: true } satisfies Chord,
   findReplace: { code: 'KeyF', mod: true, alt: true } satisfies Chord,
   findNext: { code: 'KeyG', mod: true } satisfies Chord,
   findPrevious: { code: 'KeyG', mod: true, shift: true } satisfies Chord,
+  // Format (KEYS-05). The inline marks live in `cell/marks.ts` (MARK_CHORDS).
+  formatInspector: { code: ['Digit1', 'Numpad1'], mod: true, alt: true } satisfies Chord,
+  organizeInspector: { code: ['Digit2', 'Numpad2'], mod: true, alt: true } satisfies Chord,
+  // Table and cells (KEYS-06)
+  addRow: { code: 'ArrowDown', mod: true, alt: true } satisfies Chord,
+  addColumn: { code: 'ArrowRight', mod: true, alt: true } satisfies Chord,
+  // The hierarchy chords mirror `routes/document/grid/hier-keys.ts` (HIER_CHORDS); the
+  // shortcut-map test pins the two tables equal. ⌥← / ⌥→ are not in the handover map —
+  // ADR-025 / ADR-030 record why they exist and why the plain ⌥ is kept.
+  nest: { code: 'BracketRight', mod: true } satisfies Chord,
+  promote: { code: 'BracketLeft', mod: true } satisfies Chord,
+  collapse: { code: 'ArrowLeft', alt: true } satisfies Chord,
+  expand: { code: 'ArrowRight', alt: true } satisfies Chord,
+  escape: { code: 'Escape' } satisfies Chord,
+  // View (KEYS-07)
+  zoomIn: { code: ['Equal', 'NumpadAdd'], mod: true } satisfies Chord,
+  zoomOut: { code: ['Minus', 'NumpadSubtract'], mod: true } satisfies Chord,
+  actualSize: { code: ['Digit0', 'Numpad0'], mod: true } satisfies Chord,
+  fit: { code: ['Digit0', 'Numpad0'], mod: true, shift: true } satisfies Chord,
+  inspector: { code: 'KeyI', mod: true, alt: true } satisfies Chord,
+  nextSheet: { code: 'Tab', ctrl: true } satisfies Chord,
+  previousSheet: { code: 'Tab', ctrl: true, shift: true } satisfies Chord,
 } as const;
+
+export type ChordId = keyof typeof CHORDS;
 
 /**
  * `aria-keyshortcuts` values (WAI-ARIA 1.2 key tokens, physical keys, `Meta`
- * for ⌘); the glyph labels above are for eyes, these are for assistive tech.
+ * for ⌘); the glyph labels below are for eyes, these are for assistive tech.
  */
 export const ARIA_KEYS = {
-  zoomIn: 'Meta+Equal',
-  zoomOut: 'Meta+Minus',
-  actualSize: 'Meta+0',
-  fit: 'Shift+Meta+0',
-  nextSheet: 'Control+Tab',
-  previousSheet: 'Control+Shift+Tab',
-  inspector: 'Alt+Meta+I',
-  formatInspector: 'Alt+Meta+1',
-  organizeInspector: 'Alt+Meta+2',
-  addRow: 'Alt+Meta+ArrowDown',
-  addColumn: 'Alt+Meta+ArrowRight',
-  escape: 'Escape',
+  newWorkscape: 'Meta+N',
+  open: 'Meta+O',
+  print: 'Meta+P',
+  close: 'Meta+W',
+  shortcutSheet: 'Shift+/',
   undo: 'Meta+Z',
   redo: 'Shift+Meta+Z',
+  cut: 'Meta+X',
+  copy: 'Meta+C',
+  paste: 'Meta+V',
+  pasteMatchStyle: 'Alt+Shift+Meta+V',
+  selectAll: 'Meta+A',
+  clear: 'Backspace',
   find: 'Meta+F',
   findReplace: 'Alt+Meta+F',
   findNext: 'Meta+G',
   findPrevious: 'Shift+Meta+G',
-} as const satisfies Record<keyof typeof CHORDS, string>;
+  formatInspector: 'Alt+Meta+1',
+  organizeInspector: 'Alt+Meta+2',
+  addRow: 'Alt+Meta+ArrowDown',
+  addColumn: 'Alt+Meta+ArrowRight',
+  nest: 'Meta+BracketRight',
+  promote: 'Meta+BracketLeft',
+  collapse: 'Alt+ArrowLeft',
+  expand: 'Alt+ArrowRight',
+  escape: 'Escape',
+  zoomIn: 'Meta+Equal',
+  zoomOut: 'Meta+Minus',
+  actualSize: 'Meta+0',
+  fit: 'Shift+Meta+0',
+  inspector: 'Alt+Meta+I',
+  nextSheet: 'Control+Tab',
+  previousSheet: 'Control+Shift+Tab',
+} as const satisfies Record<ChordId, string>;
 
 export const LABELS = {
-  zoomIn: '⌘+',
-  zoomOut: '⌘−',
-  actualSize: '⌘0',
-  fit: '⇧⌘0',
-  nextSheet: '⌃⇥',
-  previousSheet: '⌃⇧⇥',
-  inspector: '⌥⌘I',
-  formatInspector: '⌥⌘1',
-  organizeInspector: '⌥⌘2',
-  addRow: '⌥⌘↓',
-  addColumn: '⌥⌘→',
-  escape: 'Esc',
+  newWorkscape: '⌘N',
+  open: '⌘O',
+  print: '⌘P',
+  close: '⌘W',
+  shortcutSheet: '?',
   undo: '⌘Z',
   redo: '⇧⌘Z',
+  cut: '⌘X',
+  copy: '⌘C',
+  paste: '⌘V',
+  pasteMatchStyle: '⌥⇧⌘V',
+  selectAll: '⌘A',
+  clear: '⌫',
   find: '⌘F',
   findReplace: '⌥⌘F',
   findNext: '⌘G',
   findPrevious: '⇧⌘G',
-} as const satisfies Record<keyof typeof CHORDS, string>;
+  formatInspector: '⌥⌘1',
+  organizeInspector: '⌥⌘2',
+  addRow: '⌥⌘↓',
+  addColumn: '⌥⌘→',
+  nest: '⌘]',
+  promote: '⌘[',
+  collapse: '⌥←',
+  expand: '⌥→',
+  escape: 'Esc',
+  zoomIn: '⌘+',
+  zoomOut: '⌘−',
+  actualSize: '⌘0',
+  fit: '⇧⌘0',
+  inspector: '⌥⌘I',
+  nextSheet: '⌃⇥',
+  previousSheet: '⌃⇧⇥',
+} as const satisfies Record<ChordId, string>;

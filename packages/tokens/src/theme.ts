@@ -35,7 +35,8 @@ export const theme = {
     enter:    { duration: 300, easing: 'cubic-bezier(0,0,0.15,1)' },
   },
   loading: { delay: 200, minHold: 400, shimmer: 1400 },
-  breakpoint: { xs: 0, sm: 480, md: 768, lg: 1024, xl: 1440 },
+  /** `inspector` is INSP-02's own threshold: the rail starts open from here (RESP-04 docks it from `lg`). */
+  breakpoint: { xs: 0, sm: 480, md: 768, lg: 1024, inspector: 1200, xl: 1440 },
   lattice: { col: 160, row: 22 },
   /** Outline indent per hierarchy level, CSS px (HIER-04). */
   outlineIndent: 15,
