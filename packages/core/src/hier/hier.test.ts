@@ -84,8 +84,8 @@ function outlineFixture(gd: GedeDoc) {
   return s;
 }
 
-describe('nest and promote (HIER-01, HIER-02, HIER-10)', () => {
-  test('HIER-01 HIER-10 nestRow stores depth per row in the document; promoteRow takes it back', () => {
+describe('nest and promote (HIER-02, HIER-10)', () => {
+  test('HIER-01 (partial: the write; the inspector mounts the controls later) HIER-10 nestRow stores depth per row in the document; promoteRow takes it back', () => {
     const gd = fresh();
     const { tableId, rows, table } = seed(gd);
     const r1 = rows[1] ?? '';
@@ -148,7 +148,7 @@ describe('nest and promote (HIER-01, HIER-02, HIER-10)', () => {
     );
   });
 
-  test('HIER-01 KEYS-03 a nest that moves a subtree is one undo step; a refused nest is no step at all', () => {
+  test('HIER-01 (partial: the write) KEYS-03 a nest that moves a subtree is one undo step; a refused nest is no step at all', () => {
     const gd = fresh();
     const undo = createUndoManager(gd, { captureTimeout: 0 });
     const { tableId, rows } = outlineFixture(gd);
@@ -330,7 +330,7 @@ describe('collapse (HIER-06, HIER-09, HIER-10)', () => {
   });
 });
 
-describe('split children (HIER-07)', () => {
+describe('split children', () => {
   test('HIER-07 (partial: Split() in formulas) rows marked as split children sit one under their parent, are read-only for that reason, and collapse with the parent', () => {
     const gd = fresh();
     const { tableId, rows, cols, table } = seed(gd);

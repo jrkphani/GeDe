@@ -139,7 +139,8 @@ function mount(props: Partial<Omit<HarnessProps, 'grid' | 'gd' | 'tableId'>> = {
   return view;
 }
 
-const grid = () => screen.getByRole('grid');
+// A flat table is a grid; one with nesting is a treegrid (HIER-04). Both are the same element.
+const grid = () => screen.queryByRole('treegrid') ?? screen.getByRole('grid');
 const cells = () => within(grid()).getAllByRole('gridcell');
 const cellAt = (r: number, c: number, columns = 3) => cells()[r * columns + c]!;
 const live = () => screen.getByTestId('live-region');
@@ -838,7 +839,7 @@ describe('rich text in the grid (marks, formats, undo)', () => {
   });
 });
 
-describe('row hierarchy in the grid (HIER-01..09, KEYS-06)', () => {
+describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
   /** Three more rows so the fixture is B5:D10; r1 and r2 nested under r0, r2 two deep. */
   function outlineFixture(): void {
     const r3 = addRow(gd, tableId);

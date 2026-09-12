@@ -196,6 +196,10 @@ export const TableView = memo(function TableView({
   // shows no depth, though the data keeps it (HIER-08).
   const outline = tableOutline(table, record);
   const showOutline = !outline.grouped && outline.column !== null;
+  // A table with any nesting is a treegrid to assistive tech: that is the role whose
+  // rows carry `aria-level` and `aria-expanded` (a plain grid's may not). A flat table
+  // stays a grid, so nothing changes for it.
+  const hierarchical = showOutline && outline.rows.some((r) => r.depth > 0 || r.hasChildren);
   // Ordinal among the rows that render, per row: `aria-rowindex` counts what is in the grid.
   let drawn = 0;
   const visibleOrdinals = outline.rows.map((r) => (r.hidden ? -1 : drawn++));
@@ -256,7 +260,7 @@ export const TableView = memo(function TableView({
         <>
           <div
             className="gd-table__grid"
-            role="grid"
+            role={hierarchical ? 'treegrid' : 'grid'}
             aria-label={record.title}
             aria-rowcount={visibleRowCount + record.headerRows}
             aria-colcount={columnCount}
@@ -319,14 +323,14 @@ export const TableView = memo(function TableView({
               if (outlineRow === undefined || outlineRow.hidden) return null; // HIER-06
               const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
               const { readOnly: rowReadOnly, wrapped: rowWrapped } = rowFacts(rowId);
-              const parentRow = showOutline && outlineRow.hasChildren;
+              const parentRow = hierarchical && outlineRow.hasChildren;
               return (
                 <div
                   key={rowId}
                   className="gd-table__row"
                   role="row"
                   aria-rowindex={(visibleOrdinals[ri] ?? 0) + 1 + record.headerRows}
-                  aria-level={showOutline ? outlineRow.depth + 1 : undefined}
+                  aria-level={hierarchical ? outlineRow.depth + 1 : undefined}
                   aria-expanded={parentRow ? !outlineRow.collapsed : undefined}
                   style={{ height: `${String(heightPx)}px` }}
                   data-depth={showOutline ? outlineRow.depth : undefined}
