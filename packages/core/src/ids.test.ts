@@ -31,7 +31,7 @@ describe('ids', () => {
     }
   });
 
-  test('GRID-02 ids minted in one millisecond sort in creation order', () => {
+  test('ids minted in one millisecond sort in creation order', () => {
     const ids = Array.from({ length: 200 }, () => newId());
     expect([...ids].sort()).toEqual(ids);
   });

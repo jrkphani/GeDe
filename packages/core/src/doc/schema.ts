@@ -3,7 +3,7 @@
  *
  * One `Y.Doc` per workscape. Its share map carries four top-level types:
  *
- *   sheets  Y.Array<Y.Map>   id, label, ordinal, parentContext
+ *   sheets  Y.Array<Y.Map>   id, label, parentContext, seeded (ordinal is array order)
  *   tables  Y.Map<Y.Map>     by id: sheetId, title, gridCol, gridRow,
  *                            columns Y.Array<Y.Map{id,label,width}>,
  *                            rows Y.Array<rowId>,
@@ -59,8 +59,10 @@ export interface GedeDoc {
 export interface SheetRecord {
   readonly id: Id;
   readonly label: string;
-  /** 1-based position in the strip, derived from array order (DOC-03). */
+  /** 1-based position in the strip, derived from array order (DOC-03); never stored. */
   readonly ordinal: number;
+  /** True for the sheet a client created to give an empty document its first sheet. */
+  readonly seeded: boolean;
   /** Graph context a child sheet was opened from, else null (PRD §11). */
   readonly parentContext: string | null;
 }
@@ -152,6 +154,7 @@ export function sheetRecord(map: SheetMap, index: number): SheetRecord {
     id: readString(map, 'id'),
     label: readString(map, 'label'),
     ordinal: index + 1,
+    seeded: readBoolean(map, 'seeded', false),
     parentContext: typeof parent === 'string' ? parent : null,
   };
 }

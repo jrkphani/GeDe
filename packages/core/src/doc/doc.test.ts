@@ -13,10 +13,12 @@ import {
   createTable,
   createUndoManager,
   dataGeometry,
+  dedupeSeededSheets,
   deleteTable,
   documentMeta,
   ensureFirstSheet,
   initials,
+  isDocEmpty,
   listSheets,
   objectCount,
   openDocument,
@@ -63,7 +65,7 @@ function table(gd: GedeDoc, tableId: string) {
 }
 
 describe('document schema', () => {
-  test('DOC-03 sheets carry id, label, ordinal and parentContext; + appends at the end', () => {
+  test('DOC-03 sheets carry id, label and parentContext; ordinal is array order; + appends at the end', () => {
     const gd = fresh();
     const first = createSheet(gd);
     const second = createSheet(gd, { label: 'GovernBASE' });
@@ -75,6 +77,45 @@ describe('document schema', () => {
     expect(sheets[2]?.parentContext).toBe('α');
     expect(sheets[0]?.parentContext).toBeNull();
     expect(sheets.every((s) => isId(s.id))).toBe(true);
+    // Ordinal is never stored: array order is the fact.
+    expect(gd.sheets.get(0).has('ordinal')).toBe(false);
+  });
+
+  test('DOC-03 two clients that seed an empty document offline converge on one sheet after dedupe', () => {
+    const a = fresh();
+    const b = fresh();
+    expect(isDocEmpty(a.doc)).toBe(true);
+    const seedA = ensureFirstSheet(a);
+    const seedB = ensureFirstSheet(b);
+    expect(isDocEmpty(a.doc)).toBe(false);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc));
+    Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(b.doc));
+    expect(listSheets(a)).toHaveLength(2);
+    const removed = dedupeSeededSheets(a);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc)));
+    const keep = seedA < seedB ? seedA : seedB;
+    expect(removed).toEqual([seedA < seedB ? seedB : seedA]);
+    expect(listSheets(a).map((s) => s.id)).toEqual([keep]);
+    expect(listSheets(b).map((s) => s.id)).toEqual([keep]);
+    expect(dedupeSeededSheets(b)).toEqual([]);
+  });
+
+  test('DOC-03 a seeded sheet that already holds a table is never removed by dedupe', () => {
+    const a = fresh();
+    const b = fresh();
+    const seedA = ensureFirstSheet(a);
+    const seedB = ensureFirstSheet(b);
+    createTable(b, { sheetId: seedB, at: { col: 0, row: 0 } });
+    Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(b.doc));
+    const removed = dedupeSeededSheets(a);
+    // Whichever seed sorts later is only removable while empty.
+    if (seedA < seedB) {
+      expect(removed).toEqual([]);
+      expect(listSheets(a)).toHaveLength(2);
+    } else {
+      expect(removed).toEqual([seedA]);
+      expect(listSheets(a).map((s) => s.id)).toEqual([seedB]);
+    }
   });
 
   test('DOC-03 ensureFirstSheet is idempotent and never an undo step', () => {
@@ -98,7 +139,7 @@ describe('document schema', () => {
     expect(tablesOnSheet(gd, s1).map((t) => t.title)).toEqual(['Table 1', 'Table 2']);
   });
 
-  test('DOC-01 meta holds the title; seeding fills only what is missing and stays out of undo', () => {
+  test('DOC-01 meta holds the title; the server record wins on open, createdAt fills once, none of it is an undo step', () => {
     const gd = fresh();
     const undo = createUndoManager(gd);
     seedMeta(gd, { title: 'Everest trek', createdAt: '2026-09-12T00:00:00Z' });
@@ -106,10 +147,17 @@ describe('document schema', () => {
     expect(undo.canUndo()).toBe(false);
     setTitle(gd, 'Everest trek 2027');
     expect(undo.canUndo()).toBe(true);
-    seedMeta(gd, { title: 'Overwrite attempt' });
-    expect(documentMeta(gd).title).toBe('Everest trek 2027');
-    undo.undo();
-    expect(documentMeta(gd).title).toBe('Everest trek');
+    // The next open reads the record again: the library's title is the truth.
+    let writes = 0;
+    gd.doc.on('update', () => {
+      writes += 1;
+    });
+    seedMeta(gd, { title: 'Everest trek 2027', createdAt: '1999-01-01T00:00:00Z' });
+    expect(writes).toBe(0); // already matching: nothing written
+    expect(documentMeta(gd).createdAt).toBe('2026-09-12T00:00:00Z');
+    seedMeta(gd, { title: 'Renamed in the library' });
+    expect(documentMeta(gd).title).toBe('Renamed in the library');
+    expect(undo.undoStack).toHaveLength(1); // the reconcile did not join the undo stack
   });
 });
 
@@ -173,7 +221,7 @@ describe('tables and snapping', () => {
     expect(tableById(gd, id)?.columns[1]?.label).toBe('Mid');
   });
 
-  test('GRID-02 addresses derive from the lattice origin below the title and header rows', () => {
+  test('GRID-02 (partial) addresses derive from the lattice origin below the title and header rows', () => {
     const gd = fresh();
     const sheet = createSheet(gd);
     const id = createTable(gd, { sheetId: sheet, at: { col: 1, row: 2 }, columns: 2, rows: 2 });
@@ -189,7 +237,7 @@ describe('tables and snapping', () => {
     ]);
   });
 
-  test('GRID-02 addresses recompute on insert and on column resize, without being stored', () => {
+  test('GRID-02 (partial: delete and hide are Wave 2) addresses recompute on insert and on column resize, without being stored', () => {
     const gd = fresh();
     const sheet = createSheet(gd);
     const id = createTable(gd, { sheetId: sheet, at: { col: 0, row: 0 }, columns: 2, rows: 2 });

@@ -15,6 +15,7 @@ import {
   fragmentText,
   isFormula,
   listSheets,
+  objectCount,
   readString,
   rowMetaMap,
   rowsArray,
@@ -53,16 +54,20 @@ export function setTitle(gd: GedeDoc, title: string): void {
 }
 
 /**
- * Seed `meta` from the server record the first time a document opens, without
- * touching the undo stack. No-op when the document already carries a title.
+ * Reconcile `meta` with the server record on open, without touching the undo
+ * stack. The record's title is the source of truth (the library and the
+ * document must agree), so a differing `meta.title` is overwritten;
+ * `createdAt` is only filled in when missing. Nothing is written when
+ * everything already matches.
  */
 export function seedMeta(gd: GedeDoc, seed: { title: string; createdAt?: string }): void {
+  const titleDiffers = readString(gd.meta, 'title') !== seed.title;
+  const createdMissing = gd.meta.get('createdAt') === undefined;
+  if (!titleDiffers && !createdMissing) return;
   gd.doc.transact(() => {
-    if (readString(gd.meta, 'title') === '') gd.meta.set('title', seed.title);
-    if (gd.meta.get('createdAt') === undefined) {
-      gd.meta.set('createdAt', seed.createdAt ?? new Date().toISOString());
-    }
-  }, 'seed');
+    if (titleDiffers) gd.meta.set('title', seed.title);
+    if (createdMissing) gd.meta.set('createdAt', seed.createdAt ?? new Date().toISOString());
+  }, SEED_ORIGIN);
 }
 
 // ---------------------------------------------------------------------------
@@ -75,11 +80,9 @@ export function createSheet(
 ): Id {
   return transact(gd, () => {
     const id = newId();
-    const ordinal = gd.sheets.length + 1;
     const map: SheetMap = new Y.Map<unknown>();
     map.set('id', id);
-    map.set('label', options.label ?? `Sheet ${ordinal}`);
-    map.set('ordinal', ordinal);
+    map.set('label', options.label ?? `Sheet ${String(gd.sheets.length + 1)}`);
     map.set('parentContext', options.parentContext ?? null);
     gd.sheets.push([map]);
     return id;
@@ -93,10 +96,23 @@ export function renameSheet(gd: GedeDoc, sheetId: Id, label: string): void {
   });
 }
 
+/** Transaction origin for client-side seeding; never tracked by undo. */
+export const SEED_ORIGIN = 'seed';
+
+/** True when nobody has ever written to this document: no client in the struct store. */
+export function isDocEmpty(doc: Y.Doc): boolean {
+  return doc.store.clients.size === 0;
+}
+
 /**
- * A document must always have a sheet; call this once the replica has synced
- * (never on a cold, empty doc — two clients would each add one). Returns the
- * first sheet's id. Seeding is not an undo step.
+ * A document must always have a sheet. Call this only once the replica has
+ * synced and the store is still empty (`isDocEmpty`); the sheet is tagged
+ * `seeded` so `dedupeSeededSheets` can collapse the duplicates two clients
+ * produce when they both open an empty document offline. Returns the first
+ * sheet's id. Seeding is not an undo step.
+ *
+ * TODO(Wave 2, services/sync): `POST /api/documents` should seed the initial
+ * room state server-side so the client never has to.
  */
 export function ensureFirstSheet(gd: GedeDoc): Id {
   const existing = listSheets(gd)[0];
@@ -107,11 +123,33 @@ export function ensureFirstSheet(gd: GedeDoc): Id {
     const map: SheetMap = new Y.Map<unknown>();
     map.set('id', id);
     map.set('label', 'Sheet 1');
-    map.set('ordinal', 1);
     map.set('parentContext', null);
+    map.set('seeded', true);
     gd.sheets.push([map]);
-  }, 'seed');
+  }, SEED_ORIGIN);
   return id;
+}
+
+/**
+ * After a merge, keep exactly one seeded sheet: the lowest id (earliest ULID)
+ * wins; other seeded sheets that hold no objects are removed. A seeded sheet
+ * someone already used stays — nothing a person made is discarded. Returns
+ * the ids removed.
+ */
+export function dedupeSeededSheets(gd: GedeDoc): Id[] {
+  const sheets = listSheets(gd);
+  const seeded = sheets.filter((s) => s.seeded);
+  if (seeded.length < 2) return [];
+  const keep = seeded.reduce((a, b) => (b.id < a.id ? b : a));
+  const removable = seeded.filter((s) => s.id !== keep.id && objectCount(gd, s.id) === 0);
+  if (removable.length === 0) return [];
+  gd.doc.transact(() => {
+    for (const s of removable) {
+      const index = gd.sheets.toArray().findIndex((m) => readString(m, 'id') === s.id);
+      if (index >= 0) gd.sheets.delete(index, 1);
+    }
+  }, SEED_ORIGIN);
+  return removable.map((s) => s.id);
 }
 
 // ---------------------------------------------------------------------------
