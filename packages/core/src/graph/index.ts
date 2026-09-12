@@ -11,6 +11,7 @@
 export {
   coverageLabel,
   deriveGraph,
+  describeTuple,
   distinctValueCount,
   GREEK_SYMBOLS,
   normaliseValue,
@@ -19,6 +20,7 @@ export {
   symbolFor,
   TUPLE_SEPARATOR,
   tupleKeyOf,
+  tupleLookupKey,
   UNBOUND_MARK,
   type GraphContext,
   type GraphDerivation,

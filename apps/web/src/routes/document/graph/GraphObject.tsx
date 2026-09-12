@@ -186,6 +186,14 @@ export function GraphObject({
   };
   const onHeaderKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
     if (e.nativeEvent.isComposing || !editable) return;
+    // The header is a button: Enter or Space selects the graph, as a pointer press does
+    // (A11Y-01 — the Graph tab must be reachable without a pointer).
+    if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') {
+      e.preventDefault();
+      e.stopPropagation();
+      actions.select(graph.id);
+      return;
+    }
     let next: LatticeUnits = { col: graph.gridCol, row: graph.gridRow };
     switch (e.code) {
       case 'ArrowRight':
@@ -238,7 +246,7 @@ export function GraphObject({
         tabIndex={editable ? 0 : undefined}
         aria-label={
           editable
-            ? `Move ${name}: drag, or arrows when focused (one lattice unit a press)`
+            ? `Move ${name}: drag, or arrows when focused (one lattice unit a press); Enter selects it`
             : undefined
         }
         onPointerDown={onHeaderPointerDown}

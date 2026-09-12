@@ -210,9 +210,9 @@ describe('context graphs', () => {
     const svg = screen.getByTestId('ring-graph');
     const nodes = within(svg).getAllByRole('button', { name: /^Context / });
     expect(nodes.map((n) => n.getAttribute('aria-label'))).toEqual([
-      'Context α: Nepal · Spring, complete',
-      'Context β: India · Spring, complete',
-      'Context γ: Nepal · ∅, draft',
+      'Context α: Column 1 Nepal, Column 2 Spring, complete',
+      'Context β: Column 1 India, Column 2 Spring, complete',
+      'Context γ: Column 1 Nepal, Column 2 unbound, draft',
     ]);
     expect(nodes[0]).toHaveClass('gd-ring__node--complete');
     expect(nodes[2]).toHaveClass('gd-ring__node--draft');
@@ -230,7 +230,9 @@ describe('context graphs', () => {
       expect(within(ring()).getByTestId('graph-stat')).toHaveTextContent('3 / 4');
     });
     expect(
-      within(svg).getByRole('button', { name: 'Context γ: Nepal · Autumn, complete' }),
+      within(svg).getByRole('button', {
+        name: 'Context γ: Column 1 Nepal, Column 2 Autumn, complete',
+      }),
     ).toBeInTheDocument();
     // REF-05: a derived column is listed, disabled, with its reason, never checked.
     addDerivedColumn(gd, tableId, { sourceColId: cols[0] ?? '', method: 'Extract', args: ['/e/'] });
@@ -270,14 +272,14 @@ describe('context graphs', () => {
     });
     const cells = () => within(screen.getByTestId('coverage-graph')).getAllByRole('button');
     expect(cells().map((c) => c.getAttribute('aria-label'))).toEqual([
-      'α: Nepal · Spring · Easy',
-      'Unexplored: Nepal · Autumn · Easy. Add a row',
-      'Unexplored: India · Spring · Easy. Add a row',
-      'Unexplored: India · Autumn · Easy. Add a row',
+      'α: Column 1 Nepal, Column 2 Spring, Column 3 Easy',
+      'Unexplored: Column 1 Nepal, Column 2 Autumn, Column 3 Easy. Add a row',
+      'Unexplored: Column 1 India, Column 2 Spring, Column 3 Easy. Add a row',
+      'Unexplored: Column 1 India, Column 2 Autumn, Column 3 Easy. Add a row',
     ]);
     // GRAPH-10: clicking a node selects its row; the pin follows the selection (row β is Hard).
     const nodeBeta = within(screen.getByTestId('ring-graph')).getByRole('button', {
-      name: 'Context β: India · Spring · Hard, complete',
+      name: 'Context β: Column 1 India, Column 2 Spring, Column 3 Hard, complete',
     });
     await userEvent.click(nodeBeta);
     await waitFor(() => {
@@ -308,7 +310,7 @@ describe('context graphs', () => {
 
     // GRAPH-09: hovering a node mutes what is not adjacent across the pair, draws spokes and lights the row.
     const nodeAlpha = within(screen.getByTestId('ring-graph')).getByRole('button', {
-      name: 'Context α: Nepal · Spring · Easy, complete',
+      name: 'Context α: Column 1 Nepal, Column 2 Spring, Column 3 Easy, complete',
     });
     fireEvent.pointerEnter(nodeAlpha);
     await waitFor(() => {
@@ -339,7 +341,7 @@ describe('context graphs', () => {
     // GRAPH-10: an empty coverage cell appends a row pre-filled with the whole tuple, pins included.
     const rowsBefore = tableById(gd, tableId)?.rows.length ?? 0;
     const empty = within(screen.getByTestId('coverage-graph')).getByRole('button', {
-      name: 'Unexplored: India · Autumn · Easy. Add a row',
+      name: 'Unexplored: Column 1 India, Column 2 Autumn, Column 3 Easy. Add a row',
     });
     await userEvent.click(empty);
     await until(() => (tableById(gd, tableId)?.rows.length ?? 0) === rowsBefore + 1);
@@ -463,6 +465,90 @@ describe('context graphs', () => {
     await until(() => room.doc.getMap('graphs').size === 2);
     expect(ring()).toBeInTheDocument();
     expect(coverage()).toBeInTheDocument();
+  });
+
+  it('A11Y-01 INSP-08 GRAPH-09 a graph is selectable without a pointer: Enter on the header or on a node opens the Graph tab; keyboard focus emphasises across the pair and lights the row', async () => {
+    await openShell();
+    await addTable();
+    const { gd, tableId, rows, cols } = roomTable();
+    gd.doc.transact(() => {
+      setCellText(gd, tableId, rows[0] ?? '', cols[0] ?? '', 'India');
+      setCellText(gd, tableId, rows[0] ?? '', cols[1] ?? '', 'Q1');
+      setCellText(gd, tableId, rows[0] ?? '', cols[2] ?? '', 'Retail');
+    });
+    await graphThisTable();
+    // Drop the graph selection (Escape clears it, as for cells).
+    fireEvent.keyDown(window, { code: 'Escape' });
+    await userEvent.click(screen.getByTestId('plane'));
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: 'Graph' })).not.toBeInTheDocument();
+    });
+    // Enter on the header (a button) selects the graph: the Graph tab appears.
+    const header = within(ring()).getByRole('button', { name: /^Move Ring graph/ });
+    header.focus();
+    fireEvent.keyDown(header, { code: 'Enter' });
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Graph' })).toBeInTheDocument();
+    });
+    expect(ring()).toHaveAttribute('data-selected', 'true');
+    fireEvent.keyDown(window, { code: 'Escape' });
+    await userEvent.click(screen.getByTestId('plane'));
+    await waitFor(() => {
+      expect(screen.queryByRole('tab', { name: 'Graph' })).not.toBeInTheDocument();
+    });
+    // Focus on a node (the roving tab stop) emphasises across the pair, as a hover does.
+    const node = within(screen.getByTestId('ring-graph')).getByRole('button', {
+      name: 'Context α: Column 1 India, Column 2 Q1, Column 3 Retail, complete',
+    });
+    fireEvent.focus(node);
+    await waitFor(() => {
+      expect(screen.getAllByTestId('ring-spoke')).toHaveLength(3);
+    });
+    expect(
+      within(screen.getByTestId('coverage-graph')).getByRole('button', { name: /^α:/ }),
+    ).toHaveClass('gd-coverage__cell--lit');
+    expect(document.querySelector('.gd-table__row--lit')).not.toBeNull();
+    // Enter on the node selects the graph and its row, as a click does.
+    fireEvent.keyDown(node, { code: 'Enter' });
+    await waitFor(() => {
+      expect(screen.getByRole('tab', { name: 'Graph' })).toBeInTheDocument();
+    });
+    expect(node).toHaveAttribute('aria-pressed', 'true');
+    // Tab is never trapped: the roving handler leaves it to the browser.
+    expect(fireEvent.keyDown(node, { code: 'Tab' })).toBe(true);
+  });
+
+  it('GRAPH-08 a one-dimensional graph shows one coverage column, one cell per parameter, with unique keys', async () => {
+    const keyErrors: string[] = [];
+    const original = console.error.bind(console);
+    vi.spyOn(console, 'error').mockImplementation((...args: unknown[]) => {
+      if (String(args[0]).includes('same key')) keyErrors.push(String(args[0]));
+      else original(...args);
+    });
+    await openShell();
+    await addTable();
+    const { gd, tableId, rows, cols } = roomTable();
+    gd.doc.transact(() => {
+      setCellText(gd, tableId, rows[0] ?? '', cols[0] ?? '', 'India');
+      setCellText(gd, tableId, rows[1] ?? '', cols[0] ?? '', 'Nepal');
+      setCellText(gd, tableId, rows[2] ?? '', cols[0] ?? '', 'Peru');
+    });
+    await graphThisTable();
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
+    const list = screen.getByTestId('dimension-checklist');
+    await userEvent.click(within(list).getByLabelText(/Column 2/));
+    await userEvent.click(within(list).getByLabelText(/Column 3/));
+    await waitFor(() => {
+      expect(within(coverage()).getByTestId('coverage-axes')).toHaveTextContent(/^rows Column 1$/);
+    });
+    const cells = within(screen.getByTestId('coverage-graph')).getAllByRole('button');
+    expect(cells.map((c) => c.getAttribute('aria-label'))).toEqual([
+      'α: Column 1 India',
+      'β: Column 1 Nepal',
+      'γ: Column 1 Peru',
+    ]);
+    expect(within(ring()).getByTestId('graph-stat')).toHaveTextContent('3 / 3');
+    expect(keyErrors).toEqual([]);
   });
 
   it('RESP-02 GRAPH-01 on the phone the pair renders read-only: no header drag, no corner, no pointing, no write-back', async () => {

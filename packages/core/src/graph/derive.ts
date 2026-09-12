@@ -61,8 +61,14 @@ export interface GraphContext {
   readonly bindings: readonly (string | null)[];
   /** Every dimension bound (GRAPH-06 "complete"); a partial row is a draft. */
   readonly complete: boolean;
-  /** Values joined with ` · `, `∅` for a gap — the coverage lookup key and the child sheet's label. */
+  /** Values joined with ` · `, `∅` for a gap — the label people read (the child sheet's `parentContext`). */
   readonly tupleKey: string;
+  /**
+   * The identity of the tuple: unambiguous however the values are spelt (a value
+   * may itself contain ` · ` or `∅`). What the covered count and the coverage
+   * cells match on.
+   */
+  readonly lookupKey: string;
 }
 
 export interface GraphDerivation {
@@ -123,9 +129,14 @@ export function parameterKey(dimensionId: Id, value: string): string {
   return `${dimensionId}|${value}`;
 }
 
-/** The lookup key for a tuple of bindings (dimension order). */
+/** The readable label for a tuple of bindings (dimension order). Not an identity: see `tupleLookupKey`. */
 export function tupleKeyOf(bindings: readonly (string | null)[]): string {
   return bindings.map((b) => b ?? UNBOUND_MARK).join(TUPLE_SEPARATOR);
+}
+
+/** The identity of a tuple of bindings: two tuples share it iff every binding is equal. */
+export function tupleLookupKey(bindings: readonly (string | null)[]): string {
+  return JSON.stringify(bindings);
 }
 
 /** A cell's contribution to a dimension: trimmed text, empty meaning unbound. */
@@ -176,14 +187,25 @@ export function deriveGraph(input: GraphInput): GraphDerivation {
       }
       lists[at]?.push(row.id);
     });
-    // A row with nothing on any dimension is not a context yet (PRD §19: "type into a row
-    // of the table to place the first context").
+    // A row with nothing on any dimension is not a context yet. The PRD (§19) only
+    // says "each row is a context"; the handover prototype leaves wholly empty rows
+    // out ("Type into a row of the table to place the first context"), and so does
+    // this, or a fresh shaped table would show six empty drafts.
     if (bound === 0) continue;
     const complete = dimensionIds.length > 0 && bound === dimensionIds.length;
     const tupleKey = tupleKeyOf(bindings);
-    if (complete) covered.add(tupleKey);
+    const lookupKey = tupleLookupKey(bindings);
+    if (complete) covered.add(lookupKey);
     const index = contexts.length;
-    contexts.push({ id: row.id, index, symbol: symbolFor(index), bindings, complete, tupleKey });
+    contexts.push({
+      id: row.id,
+      index,
+      symbol: symbolFor(index),
+      bindings,
+      complete,
+      tupleKey,
+      lookupKey,
+    });
   }
   const dimensions: GraphDimension[] = dimensionIds.map((id, di) => {
     const index = parameterIndex[di] ?? new Map<string, number>();
@@ -211,6 +233,23 @@ export function deriveGraph(input: GraphInput): GraphDerivation {
     tupleSpace,
     draftCount: contexts.filter((c) => !c.complete).length,
   };
+}
+
+/**
+ * A tuple spoken with its dimensions, for an accessible name (A11Y): `Region
+ * India, Quarter Q3`; a gap reads `Quarter unbound`. `tupleKey` is the terse
+ * visual form; this one says what each value is.
+ */
+export function describeTuple(
+  dimensions: readonly Pick<GraphDimension, 'label'>[],
+  bindings: readonly (string | null | undefined)[],
+): string {
+  return dimensions
+    .map((d, i) => {
+      const value = bindings[i];
+      return `${d.label} ${value === null || value === undefined || value === '' ? 'unbound' : value}`;
+    })
+    .join(', ');
 }
 
 /** Distinct non-empty values of a column, in row order — the checklist's count (GRAPH-05). */

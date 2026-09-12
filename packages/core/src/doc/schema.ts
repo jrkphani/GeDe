@@ -245,7 +245,11 @@ export interface GraphRecord {
   /** Both halves of a pair carry the same `pairId` (GRAPH-02). */
   readonly pairId: Id;
   readonly kind: GraphKind;
-  /** The source table; null while unbound (pointing mode, GRAPH-03) or once the table is gone. */
+  /**
+   * The source table; null while unbound (pointing mode, GRAPH-03). The id is kept
+   * as stored when the table has since been deleted: readers resolve it with
+   * `tableById` and treat a miss as unbound.
+   */
   readonly tableId: Id | null;
   /** Column ids marked as dimensions, in checklist order (GRAPH-05). */
   readonly dimensions: readonly Id[];

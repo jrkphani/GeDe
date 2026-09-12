@@ -209,15 +209,17 @@ for (const width of [1024, 1440] as const) {
     // (The stored pin above stays explicit; the selection default is covered by the unit tests.)
     await page
       .getByTestId('ring-graph')
-      .getByRole('button', { name: 'Context β: India · Spring · Hard, complete' })
+      .getByRole('button', {
+        name: 'Context β: Column 1 India, Column 2 Spring, Column 3 Hard, complete',
+      })
       .click();
     // GRAPH-10: the click selected the source row.
     await expect(page.locator('[data-address="B6"]')).toHaveAttribute('aria-selected', 'true');
 
     // ── GRAPH-09: hover mutes what is not adjacent across the pair, draws spokes, lights the row.
-    const alpha = page
-      .getByTestId('ring-graph')
-      .getByRole('button', { name: 'Context α: Nepal · Spring · Easy, complete' });
+    const alpha = page.getByTestId('ring-graph').getByRole('button', {
+      name: 'Context α: Column 1 Nepal, Column 2 Spring, Column 3 Easy, complete',
+    });
     await alpha.hover();
     await expect(page.getByTestId('ring-spoke')).toHaveCount(3);
     await expect(page.locator('.gd-table__row--lit')).toHaveCount(1);
@@ -233,7 +235,9 @@ for (const width of [1024, 1440] as const) {
     // ── GRAPH-10: an empty coverage cell appends a row pre-filled with its tuple, pins included.
     await page
       .getByTestId('coverage-graph')
-      .getByRole('button', { name: 'Unexplored: India · Autumn · Easy. Add a row' })
+      .getByRole('button', {
+        name: 'Unexplored: Column 1 India, Column 2 Autumn, Column 3 Easy. Add a row',
+      })
       .click();
     await expect(page.locator('[data-address="B10"]')).toHaveText('India');
     await expect(page.locator('[data-address="C10"]')).toHaveText('Autumn');

@@ -7,6 +7,7 @@ import type { GraphSlice } from '../doc/schema.js';
 import type { Id } from '../ids.js';
 import {
   tupleKeyOf,
+  tupleLookupKey,
   type GraphContext,
   type GraphDerivation,
   type GraphDimension,
@@ -24,7 +25,10 @@ export interface CoverageCell {
   readonly colValue: string;
   /** The complete tuple this cell stands for (dimension order), pins included. */
   readonly bindings: readonly string[];
+  /** The readable tuple (`a · b · c`). */
   readonly tupleKey: string;
+  /** The tuple's identity, unique per cell (`GraphContext.lookupKey`). */
+  readonly lookupKey: string;
   /** The context covering the tuple (the last complete row with it), or null when unexplored. */
   readonly context: GraphContext | null;
 }
@@ -33,7 +37,10 @@ export interface CoverageMatrix {
   readonly rowAxis: GraphDimension | null;
   readonly colAxis: GraphDimension | null;
   readonly pins: readonly ResolvedPin[];
-  /** `cells[r][c]` for row parameter r and column parameter c. */
+  /**
+   * `cells[r][c]` for row parameter r and column parameter c. A one-dimensional
+   * graph (both axes the same dimension) is one column: `cells[r][0]`.
+   */
   readonly cells: readonly (readonly CoverageCell[])[];
 }
 
@@ -82,7 +89,12 @@ export function resolveSlice(
   return { rowAxis, colAxis, pins };
 }
 
-/** The matrix for a resolved slice. Only complete contexts fill cells; the last one wins per tuple. */
+/**
+ * The matrix for a resolved slice. Only complete contexts fill cells; the last
+ * one wins per tuple. With one dimension the two axes coincide and the matrix
+ * is a single column, one cell per parameter — not a parameter × parameter
+ * square, which would repeat every tuple along its row.
+ */
 export function coverageMatrix(
   derivation: GraphDerivation,
   resolved: ResolvedSlice,
@@ -90,10 +102,11 @@ export function coverageMatrix(
   const { rowAxis, colAxis, pins } = resolved;
   if (rowAxis === null || colAxis === null) return { rowAxis, colAxis, pins, cells: [] };
   const byTuple = new Map<string, GraphContext>();
-  for (const c of derivation.contexts) if (c.complete) byTuple.set(c.tupleKey, c);
+  for (const c of derivation.contexts) if (c.complete) byTuple.set(c.lookupKey, c);
   const pinByDim = new Map(pins.map((p) => [p.dimension.id, p.value]));
+  const oneDimensional = rowAxis.id === colAxis.id;
   const cells = rowAxis.parameters.map((rp) =>
-    colAxis.parameters.map((cp): CoverageCell => {
+    (oneDimensional ? [rp] : colAxis.parameters).map((cp): CoverageCell => {
       const bindings = derivation.dimensions.map((d) =>
         d.id === rowAxis.id
           ? rp.value
@@ -101,13 +114,14 @@ export function coverageMatrix(
             ? cp.value
             : (pinByDim.get(d.id) ?? ''),
       );
-      const tupleKey = tupleKeyOf(bindings);
+      const lookupKey = tupleLookupKey(bindings);
       return {
         rowValue: rp.value,
         colValue: cp.value,
         bindings,
-        tupleKey,
-        context: byTuple.get(tupleKey) ?? null,
+        tupleKey: tupleKeyOf(bindings),
+        lookupKey,
+        context: byTuple.get(lookupKey) ?? null,
       };
     }),
   );

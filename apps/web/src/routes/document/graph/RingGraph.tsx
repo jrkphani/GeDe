@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { useMemo, type CSSProperties } from 'react';
 import {
   adjacencyOf,
+  describeTuple,
   DOT_RADIUS,
   DOT_RADIUS_EMPHASISED,
   NODE_RADIUS_DENSE,
@@ -169,6 +170,8 @@ export function RingGraph({
             onKeyDown={(e) => {
               if (activation(e) === null) return;
               e.preventDefault();
+              e.stopPropagation();
+              actions.select(graph.id);
               hover({ role: 'parameter', key: dot.key });
             }}
           >
@@ -194,7 +197,8 @@ export function RingGraph({
         const context = contexts.get(node.contextId);
         const lit = adjacency.contextIds.has(node.contextId);
         const selected = selectedRowId === node.contextId;
-        const tuple = context?.tupleKey ?? '';
+        // The name says what each value is: "Context α: Region India, Quarter Q3, complete".
+        const tuple = describeTuple(derivation.dimensions, context?.bindings ?? []);
         return (
           <g
             key={node.contextId}
@@ -244,8 +248,10 @@ export function RingGraph({
               e.stopPropagation();
               if (what === 'open') {
                 if (editable && context !== undefined) actions.openChild(context);
-              } else if (tableId !== null) {
-                actions.selectRow(tableId, node.contextId);
+              } else {
+                // As a click: the graph is selected (the Graph tab opens) and the row with it (A11Y-01).
+                actions.select(graph.id);
+                if (tableId !== null) actions.selectRow(tableId, node.contextId);
               }
             }}
           >

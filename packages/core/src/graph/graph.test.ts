@@ -313,13 +313,41 @@ describe('GRAPH-08 coverage slice', () => {
     });
   });
 
-  test('GRAPH-08 a one-dimensional graph uses that dimension for both axes; a stale axis falls back', () => {
-    const d = deriveGraph(input(['Only'], [['a'], ['b']]));
+  test('GRAPH-08 a one-dimensional graph uses that dimension for both axes and is one column, one cell per parameter; a stale axis falls back', () => {
+    const d = deriveGraph(input(['Only'], [['a'], ['b'], ['']]));
     const r = resolveSlice(d, { rowAxis: 'gone', colAxis: 'gone', pins: { gone: 'x' } }, null);
     expect(r.rowAxis?.id).toBe('d0');
     expect(r.colAxis?.id).toBe('d0');
     expect(r.pins).toEqual([]);
-    expect(coverageMatrix(d, r).cells.length).toBe(2);
+    const m = coverageMatrix(d, r);
+    // Not a 2 × 2 square of repeated tuples: every cell is a distinct tuple.
+    expect(m.cells.map((row) => row.map((c) => [c.tupleKey, c.context?.symbol ?? '']))).toEqual([
+      [['a', 'α']],
+      [['b', 'β']],
+    ]);
+    const keys = m.cells.flat().map((c) => c.lookupKey);
+    expect(new Set(keys).size).toBe(keys.length);
+  });
+
+  test('GRAPH-07 GRAPH-08 tuples are matched by identity, not by their label: a value may contain the separator or the gap mark', () => {
+    const d = deriveGraph(
+      input(
+        ['A', 'B'],
+        [
+          ['x · y', 'z'],
+          ['x', 'y · z'], // same label as the row above, a different tuple
+          ['∅', 'q'],
+          ['', 'q'], // a draft whose label reads like the row above
+        ],
+      ),
+    );
+    expect(d.contexts.map((c) => c.tupleKey)).toEqual(['x · y · z', 'x · y · z', '∅ · q', '∅ · q']);
+    expect(d.coveredTuples).toBe(3);
+    expect(coverageLabel(d)).toBe('3 / 9');
+    const m = coverageMatrix(d, resolveSlice(d, { rowAxis: null, colAxis: null, pins: {} }, null));
+    const filled = m.cells.flat().filter((c) => c.context !== null);
+    expect(filled.map((c) => c.context?.symbol)).toEqual(['α', 'β', 'γ']);
+    for (const cell of filled) expect(cell.context?.bindings).toEqual(cell.bindings);
   });
 
   test('GRAPH-10 an empty cell writes back the full tuple, pins included', () => {
@@ -330,7 +358,14 @@ describe('GRAPH-08 coverage slice', () => {
     expect(
       cellWriteBack(
         d,
-        empty ?? { rowValue: '', colValue: '', bindings: [], tupleKey: '', context: null },
+        empty ?? {
+          rowValue: '',
+          colValue: '',
+          bindings: [],
+          tupleKey: '',
+          lookupKey: '',
+          context: null,
+        },
       ),
     ).toEqual({
       d0: 'India',

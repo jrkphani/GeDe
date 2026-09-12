@@ -4,6 +4,7 @@ import {
   adjacencyOf,
   cellWriteBack,
   coverageMatrix,
+  describeTuple,
   resolveSlice,
   truncateLabel,
   type GraphDerivation,
@@ -79,14 +80,23 @@ export function CoverageGraph({
   }
   if (matrix.rowAxis === null || matrix.colAxis === null) return null;
 
+  // One dimension: the axes coincide and the matrix is a single unlabelled column.
+  const oneDimensional = matrix.rowAxis.id === matrix.colAxis.id;
+  const colParams = oneDimensional ? [] : matrix.colAxis.parameters;
   const width = LABEL_COLUMN + cols * COVERAGE_CELL;
   const height = LABEL_BAND + rows * COVERAGE_CELL;
   const pinNote = matrix.pins.map((p) => `${p.dimension.label}: ${p.value}`).join(' · ');
+  const axesNote = oneDimensional
+    ? `rows ${matrix.rowAxis.label}`
+    : `rows ${matrix.rowAxis.label} · columns ${matrix.colAxis.label}`;
+  const svgName = oneDimensional
+    ? `Coverage of ${sourceTitle}: ${matrix.rowAxis.label}`
+    : `Coverage of ${sourceTitle}: ${matrix.rowAxis.label} by ${matrix.colAxis.label}`;
 
   return (
     <div className="gd-coverage">
       <p className="gd-mono gd-coverage__axes" data-testid="coverage-axes">
-        {`rows ${matrix.rowAxis.label} · columns ${matrix.colAxis.label}`}
+        {axesNote}
         {pinNote !== '' && (
           <span
             className="gd-coverage__pins"
@@ -105,7 +115,7 @@ export function CoverageGraph({
           viewBox={`0 0 ${String(width)} ${String(height)}`}
           preserveAspectRatio="xMinYMin meet"
           role="group"
-          aria-label={`Coverage of ${sourceTitle}: ${matrix.rowAxis.label} by ${matrix.colAxis.label}`}
+          aria-label={svgName}
           data-testid="coverage-graph"
           onKeyDown={(e) => {
             roving.onKeyDown(e);
@@ -114,7 +124,7 @@ export function CoverageGraph({
             hover(null);
           }}
         >
-          {matrix.colAxis.parameters.map((p, c) => (
+          {colParams.map((p, c) => (
             <text
               key={p.key}
               className="gd-mono gd-coverage__col-label"
@@ -150,13 +160,15 @@ export function CoverageGraph({
               const selected = hit !== null && selectedRowId === hit.id;
               const x = LABEL_COLUMN + c * COVERAGE_CELL;
               const y = LABEL_BAND + r * COVERAGE_CELL;
+              // The name says what each value is: "α: Region India, Quarter Q3".
+              const tuple = describeTuple(derivation.dimensions, cell.bindings);
               const name =
                 hit === null
-                  ? `Unexplored: ${cell.tupleKey}${editable ? '. Add a row' : ''}`
-                  : `${hit.symbol}: ${cell.tupleKey}`;
+                  ? `Unexplored: ${tuple}${editable ? '. Add a row' : ''}`
+                  : `${hit.symbol}: ${tuple}`;
               return (
                 <g
-                  key={cell.tupleKey}
+                  key={cell.lookupKey}
                   className={clsx('gd-coverage__cell', {
                     'gd-coverage__cell--filled': hit !== null,
                     'gd-coverage__cell--empty': hit === null,
@@ -209,7 +221,11 @@ export function CoverageGraph({
                     if (tableId === null) return;
                     if (what === 'open') {
                       if (editable && hit !== null) actions.openChild(hit);
-                    } else if (hit !== null) actions.selectRow(tableId, hit.id);
+                      return;
+                    }
+                    // As a click: the graph is selected (the Graph tab opens) and then the cell acts (A11Y-01).
+                    actions.select(graph.id);
+                    if (hit !== null) actions.selectRow(tableId, hit.id);
                     else if (editable) actions.appendRow(tableId, cellWriteBack(derivation, cell));
                   }}
                 >
