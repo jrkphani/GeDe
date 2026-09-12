@@ -40,13 +40,6 @@ export function formatDate(locale: Locale, iso: string, style: DateStyle = 'long
   return new Intl.DateTimeFormat(locale, opts).format(date);
 }
 
-/** Time of day, for rows dated today. */
-export function formatTime(locale: Locale, iso: string): string {
-  const date = new Date(iso);
-  if (Number.isNaN(date.getTime())) return '';
-  return new Intl.DateTimeFormat(locale, { hour: 'numeric', minute: '2-digit' }).format(date);
-}
-
 export function formatBytes(locale: Locale, bytes: number): string {
   const units = ['byte', 'kilobyte', 'megabyte', 'gigabyte'] as const;
   let value = bytes;
