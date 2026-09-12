@@ -185,7 +185,15 @@ export class AuthStack extends cdk.Stack {
       // USER_AUTH only: never add `userPassword` or `userSrp` (ADR-011). The pool still
       // lists PASSWORD as a first factor because Cognito insists; this client cannot use it.
       authFlows: { user: true },
-      preventUserExistenceErrors: true,
+      // AUTH-04 wants "No account uses this email. Switch to Create account to start one."
+      // — a disclosure by design. With the obfuscation on, Cognito answers an unknown
+      // address with one of three shapes (PasswordResetRequired, a simulated EMAIL_OTP
+      // challenge, or SELECT_CHALLENGE), and the simulated code step cannot be told apart
+      // client-side (#46, ADR-040). Off, the SPA gets UserNotFoundException and one
+      // branch. The trade is small: sign-up already discloses existence, there is no
+      // password to spray, and the WAF rate rule bounds bulk probing. The pipeline's
+      // e2e client keeps the obfuscation.
+      preventUserExistenceErrors: false,
       accessTokenValidity: cdk.Duration.hours(1),
       idTokenValidity: cdk.Duration.hours(1),
       refreshTokenValidity: cdk.Duration.days(30),

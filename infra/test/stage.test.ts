@@ -189,6 +189,20 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('AUTH-04 the SPA client reports unknown addresses so the sign-in copy can (#46, ADR 040)', () => {
+    // The SPA client answers an unknown address with UserNotFoundException — the one
+    // branch the "No account uses this email" copy needs. The pipeline's e2e client
+    // keeps the obfuscation: nothing user-facing signs in through it.
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ExplicitAuthFlows: ['ALLOW_USER_AUTH'],
+      PreventUserExistenceErrors: 'LEGACY',
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ExplicitAuthFlows: ['ALLOW_ADMIN_USER_PASSWORD_AUTH', 'ALLOW_REFRESH_TOKEN_AUTH'],
+      PreventUserExistenceErrors: 'ENABLED',
+    });
+  });
+
   it('AUTH-03 a changed email stays unverified and the original stays in force until the code is confirmed (#107)', () => {
     // The client may write `email` (above); with no recovery path an unverified update
     // would be a lockout and takeover primitive. Auto-verification of email stays on.
