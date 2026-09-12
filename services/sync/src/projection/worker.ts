@@ -63,6 +63,16 @@ export class ProjectionWorker {
 
   /** Project now, bypassing the debounce (jobs). Resolves after the write; rejects on failure. */
   projectNow(documentId: string, bytes: Uint8Array): Promise<void> {
+    // `bytes` is newer than anything still waiting in the debounce window for this
+    // document; letting that timer fire later would overwrite this projection with the
+    // older state (seen on CodeBuild: the seed projection from POST /api/documents
+    // landed after a job's projectNow and emptied the search index).
+    const current = this.pending.get(documentId);
+    if (current) {
+      clearTimeout(current.timer);
+      this.pending.delete(documentId);
+      this.stats.coalesced += 1;
+    }
     return this.run(documentId, bytes, { rethrow: true });
   }
 
