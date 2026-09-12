@@ -73,6 +73,15 @@ export interface TableViewProps {
   editing: Editing | null;
   /** RESP-02 / SHARE-03: no edit affordance renders when false. */
   editable: boolean;
+  /**
+   * True while this viewer's sort or filter (per-user view state, ADR on PR #74)
+   * reorders or drops rows. Depth is relative to the row above in *document*
+   * order, so a sorted or filtered view could draw a child above its parent:
+   * the outline is then treated as under grouping (HIER-08) — depth kept, not
+   * shown, no chevron — and nest/promote are refused from this table. The sort
+   * feature wires it; until then it defaults to false.
+   */
+  viewSorted?: boolean | undefined;
   /** Other participants' selections on this table (SHARE-04). */
   presence: readonly PresenceState[];
   /**
@@ -117,6 +126,7 @@ export const TableView = memo(function TableView({
   selectedCell,
   editing,
   editable,
+  viewSorted = false,
   presence,
   pinnedLeft,
   undo,
@@ -195,7 +205,12 @@ export const TableView = memo(function TableView({
   // not drawn at all (HIER-06); while the table is grouped the outline column
   // shows no depth, though the data keeps it (HIER-08).
   const outline = tableOutline(table, record);
-  const showOutline = !outline.grouped && outline.column !== null;
+  const showOutline = !outline.grouped && !viewSorted && outline.column !== null;
+  const outlineLocked = outline.grouped
+    ? 'Hierarchy is unavailable while the table is grouped'
+    : viewSorted
+      ? 'Hierarchy is unavailable while the view is sorted or filtered'
+      : null;
   // A table with any nesting is a treegrid to assistive tech: that is the role whose
   // rows carry `aria-level` and `aria-expanded` (a plain grid's may not). A flat table
   // stays a grid, so nothing changes for it.
@@ -369,6 +384,7 @@ export const TableView = memo(function TableView({
                         editable={editable}
                         readOnly={readOnly}
                         outline={showOutline && col.id === outline.column ? outlineRow : null}
+                        outlineLocked={outlineLocked}
                         column={col}
                         locale={locale}
                         undo={undo ?? null}
@@ -679,6 +695,12 @@ interface CellProps {
    * every cell while the table is grouped (HIER-08).
    */
   outline: OutlineRow | null;
+  /**
+   * Why the outline is inactive on this table, or null when it is live: the
+   * chords then announce the reason instead of writing (HIER-08; sorted or
+   * filtered view). Same value on every cell of the table.
+   */
+  outlineLocked: string | null;
   /** The column record, resolved once per table render; carries the column's data format (FMT-01). */
   column: ColumnRecord;
   locale: FormatLocale;
@@ -719,6 +741,7 @@ function Cell({
   editable,
   readOnly,
   outline,
+  outlineLocked,
   column,
   locale,
   undo,
@@ -779,6 +802,10 @@ function Cell({
       e.preventDefault();
       e.stopPropagation();
       rearm();
+      if (outlineLocked !== null) {
+        announce(outlineLocked); // HIER-08: depth is kept, not shown, not edited
+        return;
+      }
       switch (hierarchy) {
         case 'nest':
           commands.nestRow(cell.tableId, cell.rowId);

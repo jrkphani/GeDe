@@ -14,7 +14,7 @@
  * invariant to chance; the PRD's invariant wins.)
  */
 import type { Id } from '../ids.js';
-import { rowMetaFor } from '../doc/mutations.js';
+import { rowMetaFor, settleCollapsed } from '../doc/mutations.js';
 import {
   columnsArray,
   readString,
@@ -82,6 +82,8 @@ function shiftSubtree(gd: GedeDoc, tableId: Id, rowId: Id, delta: 1 | -1): numbe
       const id = rows[i];
       if (id !== undefined) writeDepth(table, id, (depths[i] ?? 0) + delta);
     }
+    // A promote can take the last child out from under a collapsed parent (HIER-06).
+    if (delta === -1) settleCollapsed(table);
     return (depths[index] ?? 0) + delta;
   });
 }

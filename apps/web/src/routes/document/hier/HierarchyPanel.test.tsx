@@ -30,7 +30,7 @@ let rows: readonly Id[];
 let cols: readonly Id[];
 const gridRef: { current: Grid | null } = { current: null };
 
-function Harness({ editable = true }: { editable?: boolean }) {
+function Harness({ editable = true, viewSorted }: { editable?: boolean; viewSorted?: boolean }) {
   const grid = useGrid(gd, editable);
   gridRef.current = grid;
   return (
@@ -40,6 +40,7 @@ function Harness({ editable = true }: { editable?: boolean }) {
         selection={grid.state.selection}
         commands={grid.commands}
         editable={editable}
+        viewSorted={viewSorted}
       />
       <LiveRegion />
     </>
@@ -72,10 +73,10 @@ describe('HierarchyPanel', () => {
     select(rows[1]!);
     expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('Lobuche');
     expect(screen.getByTestId('hierarchy-parent')).toHaveTextContent('↳ under Base camp');
-    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('Level 2');
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
     select(rows[0]!);
     expect(screen.getByTestId('hierarchy-parent')).toHaveTextContent('top level — no parent');
-    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('Level 1');
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 0');
     // A blank row is named by its address; a blank parent likewise.
     select(rows[2]!);
     expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('B7');
@@ -91,10 +92,10 @@ describe('HierarchyPanel', () => {
     expect(button('Nest ⇥')).toBeEnabled();
     expect(button('Nest ⇥')).toHaveAttribute('aria-keyshortcuts', 'Meta+BracketRight');
     await userEvent.click(button('Nest ⇥'));
-    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('Level 2');
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
     expect(screen.getByTestId('hierarchy-parent')).toHaveTextContent('↳ under Base camp');
     await userEvent.click(button('Nest ⇥'));
-    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('Level 3');
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 2');
     expect(screen.getByTestId('hierarchy-parent')).toHaveTextContent('↳ under Lobuche');
     expect(button('Nest ⇥')).toBeDisabled();
     expect(button('Nest ⇥')).toHaveAttribute(
@@ -102,7 +103,7 @@ describe('HierarchyPanel', () => {
       'A row nests at most one level deeper than the row above it',
     );
     await userEvent.click(button('⇤ Promote'));
-    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('Level 2');
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
     expect(screen.getByTestId('live-region')).toHaveTextContent('Promoted to level 2');
   });
 
@@ -125,7 +126,7 @@ describe('HierarchyPanel', () => {
     expect(screen.queryByRole('button', { name: /Collapse row|Expand row/ })).toBeNull();
   });
 
-  it('HIER-08 while the table is grouped the panel says so and the depth controls stay usable on the data', () => {
+  it('HIER-08 while the table is grouped the panel says so, shows the kept depth, and disables the depth controls with the reason', () => {
     render(<Harness />);
     act(() => {
       gd.doc.transact(() => {
@@ -134,14 +135,32 @@ describe('HierarchyPanel', () => {
     });
     select(rows[1]!);
     expect(screen.getByTestId('hierarchy-grouped')).toHaveTextContent('Grouped by Column 2');
-    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('Level 2');
-    expect(button('⇤ Promote')).toBeEnabled();
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
+    expect(button('⇤ Promote')).toBeDisabled();
+    expect(button('⇤ Promote')).toHaveAttribute('title', 'Unavailable while the table is grouped');
     act(() => {
       gd.doc.transact(() => {
         tableMap(gd, tableId)!.set('groupBy', null);
       });
     });
     expect(screen.queryByTestId('hierarchy-grouped')).toBeNull();
+    expect(button('⇤ Promote')).toBeEnabled();
+  });
+
+  it('HIER-08 while the viewer’s sort or filter is active the panel says so and every depth and collapse control is disabled with the reason; the data keeps its depth', () => {
+    render(<Harness viewSorted />);
+    select(rows[1]!);
+    expect(screen.getByTestId('hierarchy-sorted')).toHaveTextContent('sorted or filtered');
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
+    for (const name of ['⇤ Promote', 'Nest ⇥', 'Collapse all']) {
+      expect(button(name)).toBeDisabled();
+      expect(button(name)).toHaveAttribute(
+        'title',
+        'Unavailable while the view is sorted or filtered',
+      );
+    }
+    select(rows[0]!);
+    expect(button('Collapse row')).toBeDisabled();
   });
 
   it('RESP-02 SHARE-03 for a read-only viewer every control is disabled and says "View only"; nothing writes', async () => {

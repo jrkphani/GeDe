@@ -49,6 +49,7 @@ interface HarnessProps {
   pinnedLeft?: number | null;
   tier?: ZoomTier;
   undo?: Y.UndoManager | undefined;
+  viewSorted?: boolean;
   grid: { current: Grid | null };
 }
 
@@ -59,6 +60,7 @@ function Harness({
   pinnedLeft = null,
   tier = 'micro',
   undo,
+  viewSorted,
   grid,
 }: HarnessProps) {
   const g = useGrid(gd, editable, { undo });
@@ -75,6 +77,7 @@ function Harness({
         selectedCell={g.cell}
         editing={g.state.editing}
         editable={editable}
+        viewSorted={viewSorted}
         presence={[]}
         pinnedLeft={pinnedLeft}
         undo={undo}
@@ -1041,6 +1044,33 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
     });
     expect(cellAt(2, 0)).toHaveClass('gd-cell--outline');
     expect(rowEls()[2]).toHaveAttribute('aria-level', '3');
+  });
+
+  it('HIER-08 under the viewer’s sort or filter the outline is not drawn, the table is a plain grid, and ⌘] ⌘[ ⌥← announce why instead of writing', async () => {
+    outlineFixture();
+    mount({ viewSorted: true });
+    expect(screen.queryByRole('treegrid')).toBeNull();
+    expect(cellAt(2, 0)).not.toHaveClass('gd-cell--outline');
+    expect(screen.queryByTestId('outline-chevron')).toBeNull();
+    expect(rowEls()[2]).not.toHaveAttribute('aria-level');
+    await userEvent.click(cellAt(3, 1));
+    const chord = new KeyboardEvent('keydown', {
+      code: 'BracketRight',
+      key: ']',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    cellAt(3, 1).dispatchEvent(chord);
+    expect(chord.defaultPrevented).toBe(true); // handled, so nothing else takes the chord
+    fireEvent.keyDown(cellAt(3, 1), { code: 'BracketLeft', key: '[', metaKey: true });
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowLeft', key: 'ArrowLeft', altKey: true });
+    expect(live()).toHaveTextContent(
+      'Hierarchy is unavailable while the view is sorted or filtered',
+    );
+    expect(rowMeta(tableMap(gd, tableId)!, rows[3]!).depth).toBe(0);
+    expect(rowMeta(tableMap(gd, tableId)!, rows[0]!).collapsed).toBe(false);
+    expect(rowEls()).toHaveLength(6);
   });
 
   it('HIER-04 the designated outline column carries the outline; a hidden one falls back to the first visible column', () => {

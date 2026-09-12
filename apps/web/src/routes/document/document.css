@@ -609,16 +609,35 @@
   color: var(--ink-muted);
   font: inherit;
 }
+/* The button is a pointer target only (tabIndex -1, never focused): the keyboard route is
+   ⌥← / ⌥→ on the focused cell, which keeps the grid's one tab stop. No focus rule, by design. */
 button.gd-cell__chevron {
+  position: relative;
   cursor: pointer;
 }
 button.gd-cell__chevron:hover {
   color: var(--ink);
 }
-button.gd-cell__chevron:focus-visible {
-  outline: 2px solid var(--focus-ring);
-  outline-offset: -2px;
-  border-radius: var(--radius-sm);
+/* RESP-05: below lg the chevron's hit area is the hit-target token (44 px), centred on the
+   glyph. It overlaps the neighbouring rows' leading edge by (44 − 22) / 2; that is the trade-off
+   for a target inside a 22 px lattice row (ADR-025). */
+@media (max-width: 1023.98px) {
+  /* The cell clips its content; the outline cell lets the hit area out (its text clips itself,
+     `.gd-rich`), except while the editor is open in it. */
+  .gd-cell--outline:not(.gd-cell--editing):has(> button.gd-cell__chevron) {
+    overflow: visible;
+  }
+  button.gd-cell__chevron {
+    z-index: 1; /* the hit area paints over the next row's cells, which are positioned too */
+  }
+  button.gd-cell__chevron::before {
+    content: '';
+    position: absolute;
+    top: calc((var(--lattice-row) - var(--hit-target)) / 2);
+    left: calc((var(--space-4) - var(--hit-target)) / 2);
+    width: var(--hit-target);
+    height: var(--hit-target);
+  }
 }
 .gd-cell__chevron-glyph {
   transition: transform var(--dur-fast) var(--ease-standard);

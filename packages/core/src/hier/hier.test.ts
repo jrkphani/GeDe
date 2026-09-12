@@ -9,16 +9,19 @@ import { describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 
 import {
+  addRow,
   cellAddress,
   cellReadOnlyReason,
   createSheet,
   createTable,
   createUndoManager,
+  deleteRow,
   hideColumn,
   openDocument,
   rowHeights,
   rowMeta,
   setRowDepth,
+  setRowWrapped,
   tableAddresses,
   tableById,
   tableMap,
@@ -330,6 +333,40 @@ describe('collapse (HIER-06, HIER-09, HIER-10)', () => {
   });
 });
 
+describe('a row that loses its last child (HIER-06)', () => {
+  test('HIER-06 promoting, deleting or inserting under a collapsed parent that leaves it childless clears its collapsed flag in the same step', () => {
+    const gd = fresh();
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const { tableId, rows, table } = seed(gd);
+    const [r0, r1, r2] = rows;
+    nestRow(gd, tableId, r1 ?? '');
+    setRowCollapsed(gd, tableId, r0 ?? '', true);
+    undo.clear();
+    // Promote the only child: the parent is childless and no longer collapsed — one undo step.
+    expect(promoteRow(gd, tableId, r1 ?? '')).toBe(0);
+    expect(rowMeta(table, r0 ?? '').collapsed).toBe(false);
+    expect(undo.undoStack).toHaveLength(1);
+    undo.undo();
+    expect(rowMeta(table, r0 ?? '').collapsed).toBe(true);
+    expect(rowDepths(gd, tableId)[1]).toBe(1);
+    // Delete the only child.
+    deleteRow(gd, tableId, r1 ?? '');
+    expect(rowMeta(table, r0 ?? '').collapsed).toBe(false);
+    // Insert a top-level row directly under a collapsed parent: the subtree now belongs to the
+    // new row and the old parent is childless.
+    nestRow(gd, tableId, r2 ?? '');
+    setRowCollapsed(gd, tableId, r0 ?? '', true);
+    const inserted = addRow(gd, tableId, r0 ?? '');
+    expect(rowDepths(gd, tableId).slice(0, 3)).toEqual([0, 0, 1]);
+    expect(rowMeta(table, r0 ?? '').collapsed).toBe(false);
+    expect(rowOutline(table, r2 ?? '')?.parent).toBe(inserted);
+    // A parent that keeps a child keeps its flag.
+    setRowCollapsed(gd, tableId, inserted, true);
+    addRow(gd, tableId);
+    expect(rowMeta(table, inserted).collapsed).toBe(true);
+  });
+});
+
 describe('split children', () => {
   test('HIER-07 (partial: Split() in formulas) rows marked as split children sit one under their parent, are read-only for that reason, and collapse with the parent', () => {
     const gd = fresh();
@@ -399,6 +436,32 @@ describe('two replicas (HIER-10, SHARE)', () => {
     expect(rowMeta(ta, rows[0] ?? '').collapsed).toBe(true);
     expect(tableAddresses(ta)).toEqual(tableAddresses(tb));
     expect(cellAddress(ta, rows[3] ?? '', cols[0] ?? '')).toBe('B6');
+  });
+
+  test('HIER-10 GRID-09 two replicas that first write different keys of the same row while apart keep both writes: the meta map is born with the row', () => {
+    const a = fresh();
+    const b = fresh();
+    const { tableId, rows } = seed(a);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc));
+    // A row added after the fork on A, synced, then written on both sides.
+    const added = addRow(a, tableId);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc)));
+    for (const rowId of [rows[1] ?? '', added]) {
+      nestRow(a, tableId, rowId); // A: depth
+      setRowWrapped(b, tableId, rowId, true); // B: height
+    }
+    const fromA = Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc));
+    const fromB = Y.encodeStateAsUpdate(b.doc, Y.encodeStateVector(a.doc));
+    Y.applyUpdate(a.doc, fromB);
+    Y.applyUpdate(b.doc, fromA);
+    const ta = tableMap(a, tableId);
+    const tb = tableMap(b, tableId);
+    if (ta === null || tb === null) throw new Error('tables');
+    for (const rowId of [rows[1] ?? '', added]) {
+      expect(rowMeta(ta, rowId)).toMatchObject({ depth: 1, height: 2 });
+      expect(rowMeta(tb, rowId)).toMatchObject({ depth: 1, height: 2 });
+    }
+    expect(tableAddresses(ta)).toEqual(tableAddresses(tb));
   });
 
   test('HIER-02 HIER-10 concurrent nests on two replicas converge; the effective outline is valid on both even when the stored depths are not', () => {

@@ -34,6 +34,12 @@ export interface HierarchyPanelProps {
   commands: GridCommands;
   /** RESP-02 / SHARE-03: the controls render disabled, with the reason, when false. */
   editable: boolean;
+  /**
+   * True while this viewer's sort or filter reorders or drops rows (per-user
+   * view state): the outline is not drawn and nest/promote are disabled, as
+   * under grouping (HIER-08). The sort feature wires it; default false.
+   */
+  viewSorted?: boolean | undefined;
 }
 
 /** How a row is named in the panel: its outline-column text, else its address, else "(blank row)". */
@@ -45,7 +51,13 @@ export function rowLabel(table: TableMap, outline: TableOutline, rowId: Id): str
   return address ?? '(blank row)';
 }
 
-export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyPanelProps) {
+export function HierarchyPanel({
+  gd,
+  selection,
+  commands,
+  editable,
+  viewSorted = false,
+}: HierarchyPanelProps) {
   useYVersion(gd.tables);
   const headingId = useId();
   const table = selection === null ? null : tableMap(gd, selection.tableId);
@@ -73,7 +85,13 @@ export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyP
   const anyCollapsed = outline.rows.some((r) => r.collapsed);
   const parentLabel =
     row?.parent === null || row?.parent === undefined ? null : rowLabel(table, outline, row.parent);
-  const disabledReason = viewOnly ? 'View only' : null;
+  // Depth is edited only when the drawn order is document order (HIER-08).
+  const depthLocked = groupedBy
+    ? 'Unavailable while the table is grouped'
+    : viewSorted
+      ? 'Unavailable while the view is sorted or filtered'
+      : null;
+  const disabledReason = viewOnly ? 'View only' : depthLocked;
 
   return (
     <section className="gd-hier" aria-labelledby={headingId} data-testid="hierarchy-panel">
@@ -87,6 +105,12 @@ export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyP
           kept and returns when grouping is removed.
         </p>
       )}
+      {!groupedBy && viewSorted && (
+        <p className="gd-inspector__note gd-hier__grouped" data-testid="hierarchy-sorted">
+          The outline is hidden while your view is sorted or filtered; depth is kept and returns
+          when the sort or filter is cleared.
+        </p>
+      )}
       {row === null || rowId === null ? (
         <p className="gd-inspector__note">Select a cell to see its row.</p>
       ) : (
@@ -98,12 +122,12 @@ export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyP
             {parentLabel === null ? 'top level — no parent' : `↳ under ${parentLabel}`}
           </p>
           <p className="gd-inspector__counts" data-testid="hierarchy-depth">
-            Level {row.depth + 1}
+            depth {row.depth}
           </p>
           <div className="gd-hier__actions" role="group" aria-label="Row depth">
             <Button
               size="sm"
-              disabled={viewOnly || !row.canPromote}
+              disabled={disabledReason !== null || !row.canPromote}
               title={
                 disabledReason ??
                 (row.canPromote
@@ -119,7 +143,7 @@ export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyP
             </Button>
             <Button
               size="sm"
-              disabled={viewOnly || !row.canNest}
+              disabled={disabledReason !== null || !row.canNest}
               title={
                 disabledReason ??
                 (row.canNest
@@ -139,7 +163,7 @@ export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyP
               <Button
                 size="sm"
                 variant="ghost"
-                disabled={viewOnly}
+                disabled={disabledReason !== null}
                 title={
                   disabledReason ?? (row.collapsed ? HIER_LABELS.expand : HIER_LABELS.collapse)
                 }
@@ -159,7 +183,7 @@ export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyP
         <Button
           size="sm"
           variant="ghost"
-          disabled={viewOnly || !anyCollapsible}
+          disabled={disabledReason !== null || !anyCollapsible}
           title={disabledReason ?? 'Collapse every row that has children'}
           onClick={() => {
             commands.collapseAll(tableId);
@@ -170,7 +194,7 @@ export function HierarchyPanel({ gd, selection, commands, editable }: HierarchyP
         <Button
           size="sm"
           variant="ghost"
-          disabled={viewOnly || !anyCollapsed}
+          disabled={disabledReason !== null || !anyCollapsed}
           title={disabledReason ?? 'Expand every collapsed row'}
           onClick={() => {
             commands.expandAll(tableId);

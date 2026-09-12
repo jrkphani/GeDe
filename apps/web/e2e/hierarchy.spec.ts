@@ -230,6 +230,47 @@ test.describe('row hierarchy', () => {
     });
   }
 
+  test('RESP-05 HIER-05 at 768 px the chevron’s hit area is the 44 px target: a press 18 px below the 22 px row still toggles the row, and the box measures 44 × 44', async ({
+    page,
+    checkA11y,
+  }) => {
+    const { room, tableId, rows } = await installFakes(page);
+    const gd = openDocument(room.doc);
+    nestRow(gd, tableId, rows[1]!);
+    nestRow(gd, tableId, rows[2]!);
+    await page.setViewportSize({ width: 768, height: 800 });
+    await signInTo(page, `/d/${DOC_ID}`);
+    const grid = anyGrid(page);
+    await expect(grid).toBeVisible();
+    const cell = (address: string) => grid.locator(`[role="gridcell"][data-address="${address}"]`);
+    const chevron = cell('B5').getByRole('button', { name: 'Collapse B5' });
+    await expect(chevron).toBeVisible();
+    const box = await chevron.evaluate((el) => {
+      const before = getComputedStyle(el, '::before');
+      const own = el.getBoundingClientRect();
+      return {
+        width: before.width,
+        height: before.height,
+        top: parseFloat(before.top),
+        ownHeight: own.height,
+        centerX: own.x + own.width / 2,
+        centerY: own.y + own.height / 2,
+      };
+    });
+    expect(box.width).toBe('44px');
+    expect(box.height).toBe('44px');
+    expect(box.ownHeight).toBeLessThanOrEqual(22); // the glyph stays inside the lattice row
+    expect(box.top).toBe(-11); // the area is centred on it
+    // A press below the row, inside the area, toggles the row; the same press on a plain
+    // cell would have armed the row beneath.
+    await page.mouse.click(box.centerX, box.centerY + 18);
+    await expect(dataRows(page)).toHaveCount(3);
+    await expect(cell('B5').getByRole('button', { name: 'Expand B5' })).toBeVisible();
+    await page.mouse.click(box.centerX, box.centerY - 18);
+    await expect(dataRows(page)).toHaveCount(5);
+    await checkA11y('document hierarchy 768');
+  });
+
   test('RESP-02 HIER-04 HIER-05 HIER-06 at 480 px the outline renders read-only: indent, ↳ and the chevron state show, a collapsed subtree stays hidden, and neither the chevron nor ⌘] nor ⌥→ writes anything', async ({
     page,
     checkA11y,
