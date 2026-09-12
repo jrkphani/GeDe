@@ -83,7 +83,8 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
 
   await app.register(websocket, {
     options: {
-      maxPayload: deps.config.WS_MAX_PAYLOAD_BYTES,
+      // The largest client → server frame (#99): `ws` closes 1009 on the declared length.
+      maxPayload: deps.config.WS_MAX_UPDATE_BYTES,
       // Select `gede.v1`; never echo the `bearer.<token>` entry (issue #32).
       handleProtocols: selectSubprotocol,
     },

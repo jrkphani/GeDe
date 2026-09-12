@@ -48,8 +48,14 @@ export class FakeVerifier implements TokenVerifier {
   readonly tokens = new Map<string, TokenIdentity>();
   readonly idTokens = new Map<string, IdTokenIdentity>();
 
-  issue(token: string, sub: string, email: string | null = null): string {
-    this.tokens.set(token, { sub, email });
+  issue(
+    token: string,
+    sub: string,
+    email: string | null = null,
+    /** The token's expiry (ms epoch); null when the test does not care (#104). */
+    expiresAt: number | null = null,
+  ): string {
+    this.tokens.set(token, { sub, email, expiresAt });
     return token;
   }
 

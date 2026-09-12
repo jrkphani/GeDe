@@ -43,6 +43,12 @@ export interface AuthUser {
    * off or the seed failed (logged; retried on the account's next request).
    */
   readonly sampleDocumentId: string | null;
+  /**
+   * When the access token this request presented expires (ms epoch), or
+   * null when unknown. A WebSocket keeps it on its connection so the
+   * periodic re-check (#104) can end the socket past the token's life.
+   */
+  readonly tokenExpiresAt: number | null;
 }
 
 /** Gives an account its guided sample on first sight (`SampleSeeder`); the resolver calls it after the upsert. */
@@ -108,7 +114,11 @@ export function createCognitoVerifier(config: Config): TokenVerifier {
   return {
     async verify(token) {
       const payload = await access.verify(token);
-      return { sub: payload.sub, email: emailFromClaims(payload) };
+      return {
+        sub: payload.sub,
+        email: emailFromClaims(payload),
+        expiresAt: typeof payload.exp === 'number' ? payload.exp * 1000 : null,
+      };
     },
     async verifyIdToken(token) {
       const payload = await id.verify(token);
@@ -146,7 +156,7 @@ export class UserResolver {
       now - cached.at < this.ttlMs &&
       (identity.email === null || cached.user.email !== null)
     ) {
-      return toAuthUser(cached.user);
+      return toAuthUser(cached.user, identity.expiresAt);
     }
     const upserted = await this.repo.users.upsertFromToken(identity);
     // ONB-01: the first request an account ever makes — whatever it is —
@@ -157,16 +167,21 @@ export class UserResolver {
     if (this.samples === null || user.sampleDocumentId !== null) {
       this.cache.set(identity.sub, { user, at: now });
     }
-    return toAuthUser(user);
+    return toAuthUser(user, identity.expiresAt);
   }
 
   /** Replace the cached row after a profile change so the next request sees it. */
   remember(user: UserRecord): void {
     this.cache.set(user.cognitoSub, { user, at: Date.now() });
   }
+
+  /** Drop the cached row (account erased, #111): the next request resolves from the database. */
+  forget(sub: string): void {
+    this.cache.delete(sub);
+  }
 }
 
-export function toAuthUser(user: UserRecord): AuthUser {
+export function toAuthUser(user: UserRecord, tokenExpiresAt: number | null = null): AuthUser {
   return {
     id: user.id,
     sub: user.cognitoSub,
@@ -175,6 +190,7 @@ export function toAuthUser(user: UserRecord): AuthUser {
     locale: user.locale,
     tourDoneAt: user.tourDoneAt,
     sampleDocumentId: user.sampleDocumentId,
+    tokenExpiresAt,
   };
 }
 

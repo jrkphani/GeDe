@@ -95,7 +95,8 @@ export class FakeRepo implements Repo {
   readonly docs = new Map<string, MutableDocument>();
   readonly sharesByDoc = new Map<string, Map<string, FakeShare>>();
   readonly invitesById = new Map<string, MutableInvite>();
-  readonly updatesByDoc = new Map<string, StoredUpdate[]>();
+  /** The log, with the author each row was appended under (what `doc_updates.author_id` holds). */
+  readonly updatesByDoc = new Map<string, (StoredUpdate & { authorId: string | null })[]>();
   readonly snapshotsByDoc = new Map<string, { seq: number; s3Key: string; sizeBytes: number }[]>();
   readonly auditLog: AuditEntry[] = [];
   /** Set to make `ping` fail. */
@@ -869,7 +870,9 @@ export class FakeRepo implements Repo {
       if (!doc) throw new Error(`document ${documentId} does not exist`);
       const log = this.updatesByDoc.get(documentId) ?? [];
       const base = Math.max(doc.snapshotSeq, log.at(-1)?.seq ?? 0);
-      updates.forEach((u, i) => log.push({ seq: base + i + 1, update: u.update }));
+      updates.forEach((u, i) =>
+        log.push({ seq: base + i + 1, update: u.update, authorId: u.authorId }),
+      );
       this.updatesByDoc.set(documentId, log);
       doc.updatedAt = new Date();
       return { firstSeq: base + 1, lastSeq: base + updates.length };

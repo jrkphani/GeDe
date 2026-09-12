@@ -32,8 +32,14 @@ export const CLOSE_NOT_FOUND = 4404;
 export const CLOSE_BAD_REQUEST = 4400;
 /** The connection sent updates faster than the per-connection limit (#37); the client must not retry blindly. */
 export const CLOSE_TOO_MANY_REQUESTS = 4429;
-/** Standard "try again later": the socket stopped reading and its buffer filled (#37). */
+/** Standard "try again later": the socket stopped reading and its buffer filled (#37), or the task is full (#99). */
 export const CLOSE_TRY_AGAIN_LATER = 1013;
+/** Standard "invalid frame payload data": a frame that is not the protocol or an update that does not decode (#105). */
+export const CLOSE_MALFORMED = 1007;
+/** Standard "message too big": what `ws` sends for a frame over `WS_MAX_UPDATE_BYTES` (#99). */
+export const CLOSE_MESSAGE_TOO_BIG = 1009;
+/** The update would take the document past `DOC_MAX_BYTES` (#99, ADR-036); the client treats 44xx as terminal. */
+export const CLOSE_TOO_LARGE = 4413;
 
 /** The subprotocol the server selects; the client must offer it alongside `bearer.<token>`. */
 export const WS_SUBPROTOCOL = 'gede.v1';
@@ -41,7 +47,14 @@ export const WS_SUBPROTOCOL = 'gede.v1';
 export const WS_BEARER_PREFIX = 'bearer.';
 
 export type WsAuthOutcome =
-  | { ok: true; user: AuthUser; documentId: string; permission: DocumentPermission }
+  | {
+      ok: true;
+      user: AuthUser;
+      documentId: string;
+      permission: DocumentPermission;
+      /** When the presented token expires (ms epoch), for the periodic re-check (#104). */
+      tokenExpiresAt: number | null;
+    }
   | { ok: false; code: number; reason: string };
 
 declare module 'fastify' {
@@ -128,7 +141,13 @@ export async function authoriseUpgrade(
   if (resolved.document.deletedAt !== null) {
     return { ok: false, code: CLOSE_NOT_FOUND, reason: 'document deleted' };
   }
-  return { ok: true, user, documentId: p.data.docId, permission: resolved.permission };
+  return {
+    ok: true,
+    user,
+    documentId: p.data.docId,
+    permission: resolved.permission,
+    tokenExpiresAt: user.tokenExpiresAt,
+  };
 }
 
 export function registerWs(
@@ -158,9 +177,12 @@ export function registerWs(
         { documentId: outcome.documentId, userId: outcome.user.id, permission: outcome.permission },
         'websocket joined',
       );
+      // A refused join (task full, too many sockets, #99) has already closed
+      // the socket with its code and written its metric line.
       deps.rooms.join(outcome.documentId, socket, {
         userId: outcome.user.id,
         permission: outcome.permission,
+        tokenExpiresAt: outcome.tokenExpiresAt,
       });
     },
   );

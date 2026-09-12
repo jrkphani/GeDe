@@ -167,6 +167,8 @@ export interface TokenIdentity {
   readonly sub: string;
   /** Email, when the token carried one. Access tokens usually do not. */
   readonly email: string | null;
+  /** The token's `exp` as ms epoch, or null when the verifier does not report one (#104). */
+  readonly expiresAt: number | null;
 }
 
 export interface StoredUpdate {
@@ -199,7 +201,7 @@ export interface UsersRepo {
    * fill a missing email). When the token carried an address, pending
    * invitations for it convert to shares in the same transaction (SHARE-02).
    */
-  upsertFromToken(identity: TokenIdentity): Promise<UserRecord>;
+  upsertFromToken(identity: Pick<TokenIdentity, 'sub' | 'email'>): Promise<UserRecord>;
   /** Set the fields present in `patch`; `undefined` when the user does not exist. */
   updateProfile(id: string, patch: ProfilePatch): Promise<UserRecord | undefined>;
   /**

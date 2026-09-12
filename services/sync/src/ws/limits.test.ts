@@ -75,6 +75,7 @@ describe('REST rate limits', () => {
           locale: null,
           tourDoneAt: null,
           sampleDocumentId: null,
+          tokenExpiresAt: null,
         },
         ip: '1.1.1.1',
       }),
@@ -229,6 +230,7 @@ describe('slow consumer back-pressure', () => {
     await room.ready;
     // FAKE socket: what `ws` exposes, with the buffer already past the limit.
     const closes: [number, string][] = [];
+    const terminated: boolean[] = [];
     const sent: Uint8Array[] = [];
     const socket = {
       OPEN: 1,
@@ -238,10 +240,13 @@ describe('slow consumer back-pressure', () => {
       once: () => socket,
       send: (m: Uint8Array) => sent.push(m),
       close: (code: number, reason: string) => closes.push([code, reason]),
+      terminate: () => terminated.push(true),
     };
-    room.join(socket as never, { userId: owner, permission: 'owner' });
+    room.join(socket as never, { userId: owner, permission: 'owner', tokenExpiresAt: null });
     await waitFor(() => closes.length === 1);
     expect(closes[0]).toEqual([CLOSE_TRY_AGAIN_LATER, 'slow consumer']);
+    // #99: terminated in the same step as the close, not after ws's 30 s close timeout.
+    expect(terminated).toEqual([true]);
     expect(sent).toEqual([]);
     expect(room.stats.slowConsumers).toBe(1);
     await room.dispose({ compact: false });

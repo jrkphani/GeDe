@@ -19,6 +19,8 @@ export interface LoadedState {
   readonly lastSeq: number;
   /** Log rows replayed after the snapshot. */
   readonly replayed: number;
+  /** Bytes applied (snapshot plus replayed rows): the room's first estimate of the document's size (#99). */
+  readonly bytes: number;
 }
 
 export async function loadStoredState(
@@ -29,18 +31,21 @@ export async function loadStoredState(
 ): Promise<LoadedState> {
   const state = await repo.loadState(documentId);
   let lastSeq = state.snapshotSeq;
+  let bytes = 0;
   if (state.snapshotKey !== null) {
-    const bytes = await s3.get(state.snapshotKey);
-    if (bytes === undefined) {
+    const snapshot = await s3.get(state.snapshotKey);
+    if (snapshot === undefined) {
       // The pointer exists but the object does not: refuse to serve a
       // document with silently missing history.
       throw new Error(`snapshot ${state.snapshotKey} is missing from the bucket`);
     }
-    Y.applyUpdate(doc, bytes, LOAD_ORIGIN);
+    Y.applyUpdate(doc, snapshot, LOAD_ORIGIN);
+    bytes += snapshot.byteLength;
   }
   for (const entry of state.updates) {
     Y.applyUpdate(doc, entry.update, LOAD_ORIGIN);
     lastSeq = Math.max(lastSeq, entry.seq);
+    bytes += entry.update.byteLength;
   }
-  return { snapshotSeq: state.snapshotSeq, lastSeq, replayed: state.updates.length };
+  return { snapshotSeq: state.snapshotSeq, lastSeq, replayed: state.updates.length, bytes };
 }

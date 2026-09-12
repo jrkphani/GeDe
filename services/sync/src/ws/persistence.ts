@@ -53,6 +53,8 @@ export class PersistenceWriter {
   private coversFrom: number;
   /** Updates this writer has appended since `coversFrom`; what its next snapshot adds. */
   private appendedSince = 0;
+  /** Bytes this writer has appended to the log since its last snapshot (#99: bounds the log between snapshots). */
+  private bytesSinceSnapshot = 0;
 
   readonly stats: PersistenceStats = {
     persisted: 0,
@@ -68,7 +70,11 @@ export class PersistenceWriter {
     private readonly s3: SnapshotStore,
     private readonly config: Pick<
       Config,
-      'SNAPSHOT_EVERY_UPDATES' | 'SNAPSHOT_IDLE_MS' | 'PERSIST_COALESCE_MS' | 'DOCS_PREFIX'
+      | 'SNAPSHOT_EVERY_UPDATES'
+      | 'SNAPSHOT_IDLE_MS'
+      | 'PERSIST_COALESCE_MS'
+      | 'DOCS_PREFIX'
+      | 'DOC_LOG_MAX_BYTES'
     >,
     private readonly logger: Logger,
     initial: { snapshotSeq: number; lastSeq: number },
@@ -188,6 +194,7 @@ export class PersistenceWriter {
       const range = await this.repo.append(this.documentId, batch);
       this.lastSeq = range.lastSeq;
       this.appendedSince += batch.length;
+      this.bytesSinceSnapshot += batch.reduce((n, u) => n + u.update.byteLength, 0);
       this.stats.persisted += batch.length;
       this.retryDelay = RETRY_BASE_MS;
       this.logger.debug(
@@ -211,7 +218,14 @@ export class PersistenceWriter {
       }
       return;
     }
-    if (this.lastSeq - this.snapshotSeq >= this.config.SNAPSHOT_EVERY_UPDATES) {
+    // Every N updates, or once the log holds more than DOC_LOG_MAX_BYTES since
+    // the last snapshot (#99): a few large updates compact as early as many
+    // small ones, so `doc_updates` is bounded in bytes per document, not
+    // only in rows.
+    if (
+      this.lastSeq - this.snapshotSeq >= this.config.SNAPSHOT_EVERY_UPDATES ||
+      this.bytesSinceSnapshot >= this.config.DOC_LOG_MAX_BYTES
+    ) {
       await this.compactNow();
     }
   }
@@ -251,6 +265,7 @@ export class PersistenceWriter {
     this.snapshotSeq = seq;
     this.coversFrom = seq;
     this.appendedSince = 0;
+    this.bytesSinceSnapshot = 0;
     this.stats.snapshots += 1;
     this.logger.info(
       { documentId: this.documentId, seq, bytes: bytes.byteLength, key },

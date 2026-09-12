@@ -55,16 +55,53 @@ export const configSchema = z.object({
   PROJECTION_DEBOUNCE_MS: positiveInt.default(1_000),
   /** Largest awareness update accepted from a client, in bytes. */
   AWARENESS_MAX_BYTES: positiveInt.default(4096),
-  /** Largest WebSocket frame accepted, in bytes (a sync step 2 of a large document). */
-  WS_MAX_PAYLOAD_BYTES: positiveInt.default(16 * 1024 * 1024),
-  /** Bytes a socket may leave unread before it is closed as a slow consumer (#37). */
-  WS_MAX_BUFFERED_BYTES: positiveInt.default(16 * 1024 * 1024),
+  /**
+   * Largest client → server frame, in bytes (#99, ADR-036): `ws` closes 1009
+   * before the frame is assembled. A client's sync step 2 or update never
+   * approaches this; server → client frames (a step 2 of a large document)
+   * are not bounded by it.
+   */
+  WS_MAX_UPDATE_BYTES: positiveInt.default(2 * 1024 * 1024),
+  /**
+   * Bytes a socket may leave unread before it is closed as a slow consumer
+   * (#37, #99). The step 2 the room sends a socket on join is allowed on top
+   * of this once, so a large document can still be served.
+   */
+  WS_MAX_BUFFERED_BYTES: positiveInt.default(2 * 1024 * 1024),
   /** Sync messages (step 1, step 2, updates, awareness queries) a connection may send per second, sustained; over the burst it is closed (4429). */
   WS_UPDATES_PER_SEC: positiveInt.default(200),
   WS_UPDATES_BURST: positiveInt.default(400),
+  /** Bytes of sync payload a connection may send per second, sustained; over the burst it is closed (4429) (#99). */
+  WS_BYTES_PER_SEC: positiveInt.default(1024 * 1024),
+  WS_BYTES_BURST: positiveInt.default(4 * 1024 * 1024),
   /** Awareness updates a connection may send per second, sustained; excess is dropped. */
   WS_AWARENESS_PER_SEC: positiveInt.default(20),
   WS_AWARENESS_BURST: positiveInt.default(40),
+  /** Open rooms one task serves; a join that would open one more is refused 1013 (#99). */
+  WS_MAX_ROOMS: positiveInt.default(500),
+  /** Sockets one verified user may hold on one task, across documents; the next is refused 4429 (#99). */
+  WS_MAX_SOCKETS_PER_USER: positiveInt.default(16),
+  /** Sockets one task serves in total; the next is refused 1013 (#99). */
+  WS_MAX_SOCKETS: positiveInt.default(2000),
+  /**
+   * How often a connection's permission (and its token's expiry) is
+   * re-resolved from the database (#104): a share change made on another
+   * task, or by hand, reaches the socket within this interval.
+   */
+  WS_PERMISSION_RECHECK_MS: positiveInt.default(60_000),
+  /**
+   * Bytes appended to `doc_updates` since the last snapshot before the room
+   * compacts early (#99, ADR-036): the log never holds more than this per
+   * document between snapshots, whatever the update count.
+   */
+  DOC_LOG_MAX_BYTES: positiveInt.default(8 * 1024 * 1024),
+  /**
+   * Hard ceiling on one document's state, in bytes (#99, ADR-036). An update
+   * that would take the document past it is refused and the socket closed
+   * 4413; the ceiling is checked against the room's running estimate, which
+   * the next snapshot corrects to the encoded size.
+   */
+  DOC_MAX_BYTES: positiveInt.default(64 * 1024 * 1024),
   /** `/api` requests per minute per verified user before 429 (#37). */
   RATE_LIMIT_PER_MINUTE: positiveInt.default(300),
   /**
