@@ -23,13 +23,14 @@ import {
   cellAddress,
   cellReadOnlyReason,
   clearCell as clearCellText,
+  commitCellText,
   deleteColumn as deleteColumnMutation,
   deleteRow as deleteRowMutation,
   hideColumn as hideColumnMutation,
   insertRowBefore,
   scaleTable as scaleTableMutation,
+  plainText,
   setCellRich,
-  setCellText,
   setColumnWidth as setColumnWidthMutation,
   setColumnWrap as setColumnWrapMutation,
   setFooterRows as setFooterRowsMutation,
@@ -50,6 +51,8 @@ import {
 } from '@gede/core';
 
 import type { CellSelection, GridEvent, GridState } from '../../../doc/selection.js';
+import { workbookIndexFor } from '../../../doc/workbook-index.js';
+import { isFormulaInput } from '../formula/input.js';
 
 export interface GridCommands {
   /**
@@ -343,11 +346,17 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     commitCell(cell, text) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
       // False when the row or column went while the editor was open: the draft is dropped
-      // rather than written as a cell keyed to nothing (GRID-02).
-      return setCellText(gd, cell.tableId, cell.rowId, cell.colId, text);
+      // rather than written as a cell keyed to nothing (GRID-02). A formula's references
+      // are bound to ids here, once, against today's geometry (PRD §20).
+      return commitCellText(gd, cell.tableId, cell.rowId, cell.colId, text, {
+        index: workbookIndexFor(gd.doc),
+      });
     },
     commitRichCell(cell, doc) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
+      // A formula is a plain string bound to ids (PRD §20), never a fragment: the `commitCell`
+      // that follows from the same editor finish writes it through commitCellText.
+      if (isFormulaInput(plainText(doc))) return true;
       return setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
     },
     readOnlyReason,

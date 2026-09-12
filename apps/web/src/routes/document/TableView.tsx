@@ -24,6 +24,7 @@ import {
   WRAPPED_ROW_HEIGHT,
   EMPTY_DOC,
   plainText,
+  richFromText,
   type ColumnRecord,
   type FormatLocale,
   type Id,
@@ -48,6 +49,12 @@ import {
 } from '../../doc/selection.js';
 import { CellContent, layoutCell, RichCellEditor, toFormatLocale } from './cell/index.js';
 import { useLocale } from '../../locale.js';
+import {
+  FormulaCell,
+  insertClickedAddress,
+  isFormulaInput,
+  projectSource,
+} from './formula/index.js'; // wave2/formulas
 import { readOnlyLabel, type GridCommands } from './grid/commands.js';
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
@@ -598,8 +605,13 @@ function Cell({
 }: CellProps) {
   // Micro only: below it cell text is not laid out at all (DOC-05).
   const rich = tier === 'micro' ? cellRich(table, cell.rowId, cell.colId) : EMPTY_DOC;
+  const source = plainText(rich);
+  // FX-07 / PRD §20: a formula cell's label, tooltip and editor text are the projected
+  // expression (today's addresses), never the stored id tokens; at rest it shows its value.
+  const formula = isFormulaInput(source);
+  const shown = formula && table.doc !== null ? projectSource(table.doc, source) : null;
   const format = cellFormatFor(table, column, cell.rowId);
-  const layout = layoutCell(rich, format, locale);
+  const layout = layoutCell(shown === null ? rich : richFromText(shown), format, locale);
   const text = layout.text;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -726,6 +738,12 @@ function Cell({
       }
       onPointerDown={(e) => {
         e.stopPropagation();
+        // FX-05: while a formula is being edited elsewhere, a press here inserts this
+        // address into it; the default is cancelled so the editor keeps focus.
+        if (address !== undefined && editing === null && insertClickedAddress(address)) {
+          e.preventDefault();
+          return;
+        }
         actions.selectCell(cell);
       }}
       onFocus={() => {
@@ -746,12 +764,14 @@ function Cell({
     >
       {editing !== null && canEdit ? (
         <RichCellEditor
-          initial={plainText(rich)}
+          initial={shown ?? source}
           seed={editing.seed}
           address={address}
           fragment={cellFragment(table, cell.rowId, cell.colId)}
           undoManager={undo}
           locale={locale}
+          table={table}
+          cell={cell}
           onCommit={(value, then) => {
             actions.commit(cell, value, then);
           }}
@@ -762,6 +782,8 @@ function Cell({
           }}
           onCancel={actions.cancel}
         />
+      ) : formula && tier === 'micro' ? (
+        <FormulaCell table={table} cell={cell} expression={wrap} />
       ) : (
         tier === 'micro' && (
           <CellContent content={rich} layout={layout} format={format} locale={locale} />

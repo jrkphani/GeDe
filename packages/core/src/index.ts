@@ -12,3 +12,4 @@ export * from './doc/index.js';
 export * from './search/index.js';
 export * from './text/index.js';
 export * from './format/index.js';
+export * from './engine/index.js';

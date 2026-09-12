@@ -1,6 +1,7 @@
 export type {
   AddressRef,
   Ast,
+  BoundRef,
   CallExpr,
   ColumnRefNode,
   EntityRef,
@@ -9,6 +10,7 @@ export type {
   ListExpr,
   NumberLiteral,
   ParseError,
+  PlaceholderRef,
   RangeRef,
   Reference,
   Separator,
@@ -17,12 +19,34 @@ export type {
 } from './ast.js';
 export { isReference, references } from './ast.js';
 export { parse } from './parser.js';
+export {
+  BOUND_RE,
+  decodeBound,
+  encodeBound,
+  isOpenCorner,
+  HIDDEN_REFERENCE_TEXT,
+  REMOVED_REFERENCE_TEXT,
+  type BoundCell,
+  type BoundColumn,
+  type BoundRange,
+  type BoundReference,
+  type CornerId,
+  type OpenCorner,
+} from './bound.js';
+export {
+  bindFormula,
+  projectFormula,
+  type Binder,
+  type BoundTarget,
+  type Projector,
+} from './project.js';
 export { tokenize, type Token, type TokenKind } from './tokenizer.js';
 export {
   DEFAULT_MAX_DEPTH,
   defaultFormatValue,
   errorLabel,
   evaluate,
+  type BoundOperand,
   type CellValue,
   type EvaluateOptions,
   type EvaluateResult,

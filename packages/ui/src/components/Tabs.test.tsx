@@ -33,7 +33,7 @@ describe('Tabs', () => {
     expect(screen.getByText('Cell pane')).toBeVisible();
   });
 
-  it('DOC-03 a tab without content still controls a real, hidden panel, so aria-controls resolves (WCAG 4.1.2)', () => {
+  it('a tab without content still controls a real, hidden panel, so aria-controls resolves (WCAG 4.1.2)', () => {
     render(
       <Tabs<Pane>
         label="Sheets"

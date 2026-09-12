@@ -11,6 +11,7 @@ import * as Y from 'yjs';
 import { splitCellKey, type Id } from '../ids.js';
 import { parse } from '../formula/parser.js';
 import { references } from '../formula/ast.js';
+import { workbookIndexOf } from '../engine/commit.js';
 import {
   cellReadOnlyReason,
   cellsMap,
@@ -119,24 +120,40 @@ function text(field: SearchField, value: string): SearchText {
   return { field, text: value };
 }
 
-/** The texts Find sees for one cell: its value, or a formula's source plus each reference it names. */
-export function cellTexts(content: Y.XmlFragment | string): SearchText[] {
+/**
+ * The texts Find sees for one cell: its value, or a formula's expression plus
+ * each reference it names — as the person reads them (FIND-03). A stored
+ * formula holds id tokens (PRD §20); `project` turns them into today's A1 /
+ * `@` text before anything is indexed, so "B6" finds `=Sum(B6)` and a ULID
+ * fragment finds nothing.
+ */
+export function cellTexts(
+  content: Y.XmlFragment | string,
+  project: (source: string) => string = (s) => s,
+): SearchText[] {
   if (!isFormula(content)) {
     const value = fragmentText(content);
     return value === '' ? [] : [text('value', value)];
   }
-  const out: SearchText[] = [text('formula', content)];
-  const ast = parse(content);
+  const shown = project(content);
+  const out: SearchText[] = [text('formula', shown)];
+  const ast = parse(shown);
   if (ast.ok) {
     const seen = new Set<string>();
     for (const ref of references(ast.value)) {
-      const source = content.slice(ref.span.start, ref.span.end);
+      const source = shown.slice(ref.span.start, ref.span.end);
       if (source === '' || seen.has(source)) continue;
       seen.add(source);
       out.push(text('reference', source));
     }
   }
   return out;
+}
+
+/** One workbook index per snapshot build: every formula on every table projects through it. */
+function projectorFor(gd: GedeDoc): (source: string) => string {
+  const index = workbookIndexOf(gd);
+  return (source) => (source.includes('{') ? index.project(source) : source);
 }
 
 function sheetOrdinals(gd: GedeDoc): Map<Id, number> {
@@ -149,6 +166,7 @@ function tableEntriesOf(
   tableId: Id,
   table: TableMap,
   ordinals: ReadonlyMap<Id, number>,
+  project: (source: string) => string,
 ): TableEntries {
   const sheetId = readString(table, 'sheetId');
   const sheetOrdinal = ordinals.get(sheetId) ?? Number.MAX_SAFE_INTEGER;
@@ -192,7 +210,7 @@ function tableEntriesOf(
     if (ci === undefined || ri === undefined) return; // orphaned cell: not addressable
     const column = columns[ci];
     if (column === undefined || hidden.has(colId)) return;
-    const texts = cellTexts(content);
+    const texts = cellTexts(content, project);
     if (texts.length === 0) return;
     const value = texts[0]?.text ?? '';
     entries.push({
@@ -221,7 +239,7 @@ function tableEntriesOf(
 export function tableEntries(gd: GedeDoc, tableId: Id): TableEntries | null {
   const table = tableMap(gd, tableId);
   if (table === null) return null;
-  return tableEntriesOf(tableId, table, sheetOrdinals(gd));
+  return tableEntriesOf(tableId, table, sheetOrdinals(gd), projectorFor(gd));
 }
 
 function stringsOf(value: unknown): string[] {
@@ -277,9 +295,10 @@ export function buildSearchSnapshot(
   documents: readonly DocumentName[] = [],
 ): SearchSnapshot {
   const ordinals = sheetOrdinals(gd);
+  const project = projectorFor(gd);
   const tables: TableEntries[] = [];
   gd.tables.forEach((table, tableId) => {
-    tables.push(tableEntriesOf(tableId, table, ordinals));
+    tables.push(tableEntriesOf(tableId, table, ordinals, project));
   });
   return { tables, graphs: graphEntriesOf(gd), documents: documentEntriesOf(documents) };
 }

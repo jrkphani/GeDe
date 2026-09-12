@@ -19,6 +19,7 @@ export {
 } from './components/SegmentedControl.js';
 export { Dialog, DialogClose, type DialogProps, type DialogVariant } from './components/Dialog.js';
 export { Menu, type MenuEntry, type MenuProps, type MenuRadioOption } from './components/Menu.js';
+export { Popover, type PopoverProps } from './components/Popover.js';
 export { Collapsible, type CollapsibleProps } from './components/Collapsible.js';
 export { Avatar, initialsOf, type AvatarProps, type AvatarSize } from './components/Avatar.js';
 export { Badge, type BadgeProps, type BadgeTone } from './components/Badge.js';
