@@ -194,15 +194,19 @@ export interface UpdatesRepo {
     updates: readonly { update: Uint8Array; authorId: string | null }[],
   ): Promise<AppendedRange>;
   /**
-   * Record a compaction atomically: insert the snapshot row, point the
-   * document at it, and prune the log up to and including `seq`.
+   * Record a compaction atomically and monotonically: under the document
+   * row lock, insert the snapshot row, point the document at it and prune
+   * the log up to and including `seq` — but only when `seq` is greater than
+   * the `snapshot_seq` already committed. A stale commit (another task
+   * compacted further, #39) changes nothing and resolves `false`; the log
+   * above the committed seq is never pruned.
    */
   commitSnapshot(input: {
     documentId: string;
     seq: number;
     s3Key: string;
     sizeBytes: number;
-  }): Promise<void>;
+  }): Promise<boolean>;
 }
 
 export interface AuditRepo {

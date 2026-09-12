@@ -485,16 +485,37 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         });
       },
 
-      async commitSnapshot({ documentId, seq, s3Key, sizeBytes }) {
-        await db.transaction(async (tx) => {
+      commitSnapshot({ documentId, seq, s3Key, sizeBytes }) {
+        return db.transaction(async (tx) => {
+          // The same row lock `append` takes: no sequence number is assigned
+          // while the pointer moves, and two compactions serialise here.
+          const [doc] = await tx
+            .select({ snapshotSeq: documents.snapshotSeq })
+            .from(documents)
+            .where(eq(documents.id, documentId))
+            .for('update');
+          if (!doc) throw new Error(`document ${documentId} does not exist`);
+          // Monotonic (#39): a task whose in-memory state is behind another
+          // task's snapshot must never move the pointer back or prune what
+          // its snapshot does not contain.
+          if (seq <= doc.snapshotSeq) {
+            logger.warn(
+              { documentId, seq, committedSeq: doc.snapshotSeq },
+              'stale snapshot commit ignored',
+            );
+            return false;
+          }
           await tx.insert(snapshots).values({ documentId, seq, s3Key, sizeBytes });
-          await tx
+          const moved = await tx
             .update(documents)
             .set({ snapshotKey: s3Key, snapshotSeq: seq })
-            .where(eq(documents.id, documentId));
+            .where(and(eq(documents.id, documentId), sql`${documents.snapshotSeq} < ${seq}`))
+            .returning({ id: documents.id });
+          if (moved.length === 0) throw new Error('snapshot pointer did not advance under lock');
           await tx
             .delete(docUpdates)
             .where(and(eq(docUpdates.documentId, documentId), sql`${docUpdates.seq} <= ${seq}`));
+          return true;
         });
       },
     },

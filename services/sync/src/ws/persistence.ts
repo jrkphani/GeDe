@@ -28,6 +28,8 @@ export interface PersistenceStats {
   snapshots: number;
   /** Failed flush attempts (retried). */
   flushFailures: number;
+  /** Compactions the database refused because a newer snapshot was already committed (#39). */
+  staleSnapshots: number;
 }
 
 const RETRY_BASE_MS = 1_000;
@@ -48,7 +50,12 @@ export class PersistenceWriter {
   /** Sequence number the current snapshot covers. */
   private snapshotSeq: number;
 
-  readonly stats: PersistenceStats = { persisted: 0, snapshots: 0, flushFailures: 0 };
+  readonly stats: PersistenceStats = {
+    persisted: 0,
+    snapshots: 0,
+    flushFailures: 0,
+    staleSnapshots: 0,
+  };
 
   constructor(
     private readonly documentId: string,
@@ -207,9 +214,10 @@ export class PersistenceWriter {
     if (seq <= this.snapshotSeq) return;
     const bytes = Y.encodeStateAsUpdate(this.doc);
     const key = snapshotKey(this.config.DOCS_PREFIX, this.documentId, seq);
+    let committed: boolean;
     try {
       await this.s3.put(key, bytes);
-      await this.repo.commitSnapshot({
+      committed = await this.repo.commitSnapshot({
         documentId: this.documentId,
         seq,
         s3Key: key,
@@ -218,6 +226,14 @@ export class PersistenceWriter {
     } catch (error) {
       // The log is intact, so nothing is lost; the next threshold retries.
       this.logger.error({ err: error, documentId: this.documentId, seq }, 'snapshot failed');
+      return;
+    }
+    if (!committed) {
+      // Another task compacted this document past `seq` (#39): the database kept
+      // its pointer and log, our object is unreferenced, and this writer is
+      // behind. Nothing to advance; the next compaction re-reads the truth.
+      this.stats.staleSnapshots += 1;
+      this.logger.warn({ documentId: this.documentId, seq }, 'snapshot superseded; not committed');
       return;
     }
     this.snapshotSeq = seq;

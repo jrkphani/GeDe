@@ -99,6 +99,43 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(after.rows[0]).toEqual({ n: 1 });
   });
 
+  test('LOAD-06 commitSnapshot is monotonic under the row lock: a stale commit is refused and prunes nothing (#39)', async () => {
+    const owner = await user('sub-monotonic');
+    const doc = await createDoc(owner, 'Two tasks');
+    await repo.updates.append(
+      doc.id,
+      [2, 3, 4, 5].map((n) => ({ update: new Uint8Array([n]), authorId: owner })),
+    );
+    expect(
+      await repo.updates.commitSnapshot({ documentId: doc.id, seq: 5, s3Key: 'k5', sizeBytes: 1 }),
+    ).toBe(true);
+    expect(
+      await repo.updates.commitSnapshot({ documentId: doc.id, seq: 3, s3Key: 'k3', sizeBytes: 1 }),
+    ).toBe(false);
+    expect(
+      await repo.updates.commitSnapshot({ documentId: doc.id, seq: 5, s3Key: 'k5b', sizeBytes: 1 }),
+    ).toBe(false);
+    const row = await pool.query('select snapshot_key, snapshot_seq from documents where id = $1', [
+      doc.id,
+    ]);
+    expect(row.rows[0]).toEqual({ snapshot_key: 'k5', snapshot_seq: '5' });
+    const snaps = await pool.query(
+      'select seq from snapshots where document_id = $1 order by seq',
+      [doc.id],
+    );
+    expect(snaps.rows.map((r: { seq: string }) => r.seq)).toEqual(['1', '5']);
+
+    // In the other order the log above the newest snapshot survives the older commit.
+    const other = await createDoc(owner, 'Other order');
+    await repo.updates.append(
+      other.id,
+      [2, 3, 4, 5].map((n) => ({ update: new Uint8Array([n]), authorId: owner })),
+    );
+    await repo.updates.commitSnapshot({ documentId: other.id, seq: 3, s3Key: 'o3', sizeBytes: 1 });
+    const tail = await repo.updates.loadState(other.id);
+    expect(tail.updates.map((u) => u.seq)).toEqual([4, 5]);
+  });
+
   test('LIB-08 purgeExpired deletes only documents past retention, any owner, cascading and auditing with the system actor', async () => {
     const alice = await user('sub-alice');
     const bob = await user('sub-bob');
