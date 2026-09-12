@@ -44,6 +44,8 @@ function handlers(overrides: Partial<KeyHandlers> = {}): KeyHandlers {
       toggleInspector: vi.fn(),
       showInspector: vi.fn(),
       toggleShortcutSheet: vi.fn(),
+      nextObject: vi.fn(),
+      previousObject: vi.fn(),
     },
     edit: {
       undo: vi.fn(),
@@ -206,6 +208,27 @@ describe('document key bindings', () => {
     expect(h.view.actualSize).toHaveBeenCalledTimes(1);
     expect(h.view.fit).toHaveBeenCalledTimes(1);
     expect(h.view.toggleInspector).toHaveBeenCalledTimes(1);
+    // ADR-038 (#131): ⌃⌥→ / ⌃⌥← move to the next or previous object on the sheet.
+    press({ code: 'ArrowRight', ctrlKey: true, altKey: true });
+    press({ code: 'ArrowLeft', ctrlKey: true, altKey: true });
+    expect(h.view.nextObject).toHaveBeenCalledTimes(1);
+    expect(h.view.previousObject).toHaveBeenCalledTimes(1);
+  });
+
+  it('KEYS-05 KEYS-07 off Apple platforms Ctrl+= zooms and Ctrl+Alt+= is superscript — the two never fire together (ADR-038, #136)', () => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Windows NT 10.0) jsdom');
+    const h = handlers();
+    render(<Host h={h} />);
+    press({ code: 'Equal', ctrlKey: true });
+    expect(h.view.zoomIn).toHaveBeenCalledTimes(1);
+    expect(h.edit.toggleMark).not.toHaveBeenCalled();
+    press({ code: 'Equal', ctrlKey: true, altKey: true });
+    press({ code: 'Minus', ctrlKey: true, altKey: true, shiftKey: true });
+    expect(h.view.zoomIn).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(h.edit.toggleMark).mock.calls.map((c) => c[0])).toEqual([
+      'superscript',
+      'subscript',
+    ]);
   });
 
   it('GRID-03 Escape clears the selection only while no layered surface is open', () => {

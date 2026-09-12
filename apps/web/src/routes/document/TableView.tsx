@@ -52,7 +52,7 @@ import { Icon } from '@gede/ui';
 import type * as Y from 'yjs';
 
 import { announce } from '../../announce.js';
-import { ARIA_KEYS } from '../../doc/shortcuts.js';
+import { ARIA_KEYS, CHORDS, isApplePlatform, matchesChord } from '../../doc/shortcuts.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import {
   nextCell,
@@ -73,7 +73,7 @@ import {
 import { useWorkbookIndexVersion } from '../../doc/workbook-index.js';
 import { useCellVersions } from './grid/cell-versions.js';
 import { readOnlyLabel, type GridCommands } from './grid/commands.js';
-import { HIER_ARIA_KEYS, hierarchyKey } from './grid/hier-keys.js';
+import { HIER_ARIA_KEYS, HIER_LABELS, hierarchyKey } from './grid/hier-keys.js';
 import {
   DerivedCell,
   LineageHeader,
@@ -1411,6 +1411,10 @@ const Cell = memo(function Cell({
       default:
         break;
     }
+    // KEYS-01 (ADR-038, #136): `?` (Shift+/ by physical key) opens the shortcut sheet from an
+    // armed cell as from anywhere else; the shell's binding takes it. Type-to-edit yields to
+    // that one chord — Enter then `?` types the character.
+    if (matchesChord(e, CHORDS.shortcutSheet, isApplePlatform())) return;
     // GRID-04: any printable character overwrites and opens the editor.
     if (mod || e.key.length !== 1 || !editable) return;
     e.preventDefault();
@@ -1442,10 +1446,11 @@ const Cell = memo(function Cell({
     );
   }
   const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
+  // KEYS-08 (#136): the chevron names its chord, so ⌥← / ⌥→ have a route beside the command.
   const chevronControl =
     outline !== null && outline.hasChildren && editable
       ? {
-          label: `${outline.collapsed ? 'Expand' : 'Collapse'} ${address ?? 'row'}`,
+          label: `${outline.collapsed ? 'Expand' : 'Collapse'} ${address ?? 'row'} (${outline.collapsed ? HIER_LABELS.expand : HIER_LABELS.collapse})`,
           onToggle: () => {
             commands.toggleCollapse(cell.tableId, cell.rowId);
           },

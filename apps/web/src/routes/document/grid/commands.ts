@@ -408,6 +408,18 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
   };
   const skippedNote = (skipped: number): string =>
     skipped === 0 ? '' : `; ${String(skipped)} read-only ${skipped === 1 ? 'row' : 'rows'} skipped`;
+  /**
+   * FX-07 / REF-01 (ADR-039): a formula or reference cell shows its expression or path on
+   * a secondary line, which a compact row has no room for; committing one into a compact
+   * row wraps the row (GRID-09) in the same transaction, so it is part of the same undo step.
+   * A row is never unwrapped by a commit: its height is the person's once set.
+   */
+  const wrapRowForFormula = (tableId: Id, rowId: Id, text: string): void => {
+    if (!isFormulaInput(text)) return;
+    const t = map(tableId);
+    if (t === null || rowMeta(t, rowId).height === WRAPPED_ROW_HEIGHT) return;
+    setRowWrapped(gd, tableId, rowId, true);
+  };
 
   /** After a row or column goes, land the selection on a neighbour, else the table. */
   const reselectAfterRow = (tableId: Id, before: TableRecord, index: number) => {
@@ -658,7 +670,10 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
           } else {
             ok = commitCellText(gd, tableId, rowId, colId, value.text, { index });
           }
-          if (ok) written += 1;
+          if (ok) {
+            written += 1;
+            wrapRowForFormula(tableId, rowId, value.text);
+          }
         });
       }, gd.origin);
       announce(
@@ -687,9 +702,14 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       // False when the row or column went while the editor was open: the draft is dropped
       // rather than written as a cell keyed to nothing (GRID-02). A formula's references
       // are bound to ids here, once, against today's geometry (PRD §20).
-      return commitCellText(gd, cell.tableId, cell.rowId, cell.colId, text, {
-        index: workbookIndexFor(gd.doc),
-      });
+      let written = false;
+      gd.doc.transact(() => {
+        written = commitCellText(gd, cell.tableId, cell.rowId, cell.colId, text, {
+          index: workbookIndexFor(gd.doc),
+        });
+        if (written) wrapRowForFormula(cell.tableId, cell.rowId, text);
+      }, gd.origin);
+      return written;
     },
     commitRichCell(cell, doc) {
       if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;

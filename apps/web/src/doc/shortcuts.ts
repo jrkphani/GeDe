@@ -48,7 +48,12 @@ export function isEditableTarget(target: EventTarget | null): boolean {
   return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
 }
 
-/** Does this event match the chord? Modifiers must match exactly so ⌘0 and ⇧⌘0 differ. */
+/**
+ * Does this event match the chord? Modifiers must match exactly so ⌘0 and ⇧⌘0
+ * differ. Off Apple platforms `mod` is Ctrl, so a chord that wants both ⌘ and
+ * ⌃ (`⌃⌘+` superscript) would collide with the one that wants ⌘ alone (`⌘+`
+ * zoom): there, ⌃⌘ is spelled Ctrl+Alt (ADR-038, #136).
+ */
 export function matchesChord(
   event: Pick<KeyboardEvent, 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>,
   chord: Chord,
@@ -60,11 +65,12 @@ export function matchesChord(
   const wantsCtrl = chord.ctrl === true;
   const meta = apple ? wantsMod : false;
   const ctrl = apple ? wantsCtrl : wantsMod || wantsCtrl;
+  const alt = chord.alt === true || (!apple && wantsMod && wantsCtrl);
   return (
     event.metaKey === meta &&
     event.ctrlKey === ctrl &&
     event.shiftKey === (chord.shift === true) &&
-    event.altKey === (chord.alt === true)
+    event.altKey === alt
   );
 }
 
@@ -146,6 +152,11 @@ export const CHORDS = {
   inspector: { code: 'KeyI', mod: true, alt: true } satisfies Chord,
   nextSheet: { code: 'Tab', ctrl: true } satisfies Chord,
   previousSheet: { code: 'Tab', ctrl: true, shift: true } satisfies Chord,
+  // Not in the handover map (ADR-038): Tab never leaves a table forward (past the last
+  // cell it appends a row, GRID-05), so these move focus to the sheet's next or previous
+  // object — a table, a graph — without a pointer (A11Y-01, #131).
+  nextObject: { code: 'ArrowRight', ctrl: true, alt: true } satisfies Chord,
+  previousObject: { code: 'ArrowLeft', ctrl: true, alt: true } satisfies Chord,
 } as const;
 
 export type ChordId = keyof typeof CHORDS;
@@ -188,6 +199,8 @@ export const ARIA_KEYS = {
   inspector: 'Alt+Meta+I',
   nextSheet: 'Control+Tab',
   previousSheet: 'Control+Shift+Tab',
+  nextObject: 'Control+Alt+ArrowRight',
+  previousObject: 'Control+Alt+ArrowLeft',
 } as const satisfies Record<ChordId, string>;
 
 export const LABELS = {
@@ -224,4 +237,6 @@ export const LABELS = {
   inspector: '⌥⌘I',
   nextSheet: '⌃⇥',
   previousSheet: '⌃⇧⇥',
+  nextObject: '⌃⌥→',
+  previousObject: '⌃⌥←',
 } as const satisfies Record<ChordId, string>;

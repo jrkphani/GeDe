@@ -79,6 +79,8 @@ export interface MenuContext {
   sheets: {
     add: () => void;
   };
+  /** KEYS-03 ⌘A / KEYS-08: the cell menu's "Select the table" (ADR-038). */
+  selectTable?: ((tableId: Id) => void) | undefined;
   slots?: MenuSlots | undefined;
 }
 
@@ -499,6 +501,18 @@ export function cellMenuEntries(
     },
     sep('s-clipboard'),
     ...clipboardEntries(ctx, target),
+    {
+      // KEYS-08: ⌘A's pointer route. ⌘A selects the table — the object — since the grid has
+      // no range selection (ADR-038).
+      kind: 'item',
+      id: 'select-all',
+      label: 'Select the table',
+      shortcut: LABELS.selectAll,
+      disabledReason: ctx.selectTable === undefined ? 'select a cell first' : undefined,
+      onSelect: () => {
+        ctx.selectTable?.(tableId);
+      },
+    },
     sep('s-wrap'),
     {
       kind: 'check',

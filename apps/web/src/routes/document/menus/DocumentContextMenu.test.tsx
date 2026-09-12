@@ -138,6 +138,7 @@ describe('context menus', () => {
       'Paste',
       'Paste and match style',
       'Clear all',
+      'Select the table',
       'Wrap text',
     ]);
     expect(within(menu).getAllByRole('separator').length).toBeGreaterThanOrEqual(7);

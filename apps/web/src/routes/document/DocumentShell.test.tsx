@@ -695,6 +695,73 @@ describe('DocumentShell', () => {
     expect(first.getAttribute('aria-label')).toBe('B5, Line one\nLine two');
   });
 
+  it('KEYS-01 `?` opens the shortcut sheet from an armed cell instead of starting an edit; Enter then `?` types it (ADR-038, #136)', async () => {
+    await openShell();
+    const grid = await addTable();
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    expect(first).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(first, { code: 'Slash', key: '?', shiftKey: true });
+    expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
+    expect(screen.queryByLabelText('Edit B5')).toBeNull();
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+    // Any other printable key still overwrites and opens the editor (GRID-04).
+    fireEvent.keyDown(first, { code: 'KeyQ', key: 'q' });
+    expect(screen.getByLabelText('Edit B5')).toBeInTheDocument();
+  });
+
+  it('A11Y-01 ⌃⌥→ and ⌃⌥← move focus to the next and previous object on the sheet — a graph a keyboard user could not reach by Tab (ADR-038, #131)', async () => {
+    await openShell();
+    const grid = await addTable();
+    // GRAPH-01 / GRAPH-04: + Graph, then "Add shaped table" binds a pair to a new table.
+    await userEvent.click(screen.getByRole('button', { name: 'Add graph' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Add shaped table' }));
+    await waitFor(() => {
+      expect(document.querySelectorAll('[data-graph-id]').length).toBeGreaterThan(0);
+    });
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    // Objects in render order: the two tables, then the graphs. Two steps reach a graph.
+    fireEvent.keyDown(window, { code: 'ArrowRight', ctrlKey: true, altKey: true });
+    expect(document.activeElement?.closest('[data-table-id]')).not.toBe(
+      grid.closest('[data-table-id]'),
+    );
+    fireEvent.keyDown(window, { code: 'ArrowRight', ctrlKey: true, altKey: true });
+    const header = document.activeElement as HTMLElement;
+    expect(header.closest('[data-graph-id]')).not.toBeNull();
+    expect(header).toHaveClass('gd-graph__header');
+    expect(screen.getByTestId('live-region')).toHaveTextContent(/graph/i);
+    fireEvent.keyDown(window, { code: 'ArrowLeft', ctrlKey: true, altKey: true });
+    expect(document.activeElement?.closest('[data-table-id]')).not.toBeNull();
+    expect(document.activeElement).toHaveAttribute('role', 'gridcell');
+  });
+
+  it('KEYS-03 ⌘A selects the table; ⌫ then says a cell is needed rather than clearing the table (ADR-038, #145)', async () => {
+    await openShell();
+    const grid = await addTable();
+    const first = within(grid).getAllByRole('gridcell')[0]!;
+    act(() => {
+      first.focus();
+    });
+    fireEvent.keyDown(first, { code: 'KeyQ', key: 'q' });
+    fireEvent.keyDown(screen.getByLabelText('Edit B5'), { code: 'Enter' });
+    fireEvent.keyDown(window, { code: 'KeyA', metaKey: true });
+    expect(screen.getByTestId('selected-table')).toBeInTheDocument();
+    expect(screen.queryByRole('gridcell', { selected: true })).toBeNull();
+    fireEvent.keyDown(window, { code: 'Backspace' });
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'The table is selected; select a cell to clear it',
+    );
+    expect(first).toHaveTextContent('q');
+  });
+
   it('LOAD-01 LOAD-02 LOAD-03 while the document loads a content-shaped skeleton appears after 200 ms with 22 px lattice rows', async () => {
     vi.mocked(docs.getDocument).mockReturnValue(new Promise(() => undefined));
     renderRoutes(routes, [`/d/${ID}`]);

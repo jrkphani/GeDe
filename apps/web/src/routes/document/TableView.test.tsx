@@ -936,7 +936,7 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
     const child = rowEls()[1]!;
     const chevron = chevronIn(parent)!;
     expect(chevron.tagName).toBe('BUTTON');
-    expect(chevron).toHaveAccessibleName('Collapse B5');
+    expect(chevron).toHaveAccessibleName('Collapse B5 (⌥←)');
     expect(chevron).toHaveAttribute('aria-expanded', 'true');
     expect(parent).toHaveAttribute('aria-expanded', 'true');
     // r1 has r2 under it, so it has a chevron; r2, r3.. have none.
@@ -950,7 +950,7 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
       rowEls().map((r) => within(r).getAllByRole('gridcell')[0]!.getAttribute('data-address')),
     ).toEqual(['B5', 'B6', 'B7', 'B8']);
     expect(cellAt(1, 0)).toHaveTextContent('Row 4');
-    expect(chevronIn(rowEls()[0]!)).toHaveAccessibleName('Expand B5');
+    expect(chevronIn(rowEls()[0]!)).toHaveAccessibleName('Expand B5 (⌥→)');
     expect(rowEls()[0]).toHaveAttribute('aria-expanded', 'false');
     expect(grid()).toHaveAttribute('aria-rowcount', '5'); // header + 4
     expect(live()).toHaveTextContent('Collapsed the row');

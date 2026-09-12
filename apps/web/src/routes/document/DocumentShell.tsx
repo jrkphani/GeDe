@@ -88,6 +88,7 @@ import type { HeadObject } from './inspector/InspectorHead.js';
 import { documentBindings } from './keys/bindings.js';
 import type { CellSelection } from './selection.js';
 import { useCellClipboard } from './keys/clipboard.js';
+import { currentObject, objectEntry, sheetObjects, stepObject } from './keys/objects.js';
 import { setTourDocument } from '../tour/store.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
@@ -321,7 +322,11 @@ function OpenDocument({
       clearSelection();
       setViewport((v) => ({ x: 0, y: 0, zoom: v.zoom }));
       const sheet = listSheets(gd).find((s) => s.id === sheetId);
-      if (sheet !== undefined) announce(`Sheet ${String(sheet.ordinal)}, ${sheet.label}`);
+      // A sheet still named by its ordinal ("Sheet 2") is announced once, not "Sheet 2, Sheet 2" (#142).
+      if (sheet !== undefined) {
+        const ordinal = `Sheet ${String(sheet.ordinal)}`;
+        announce(sheet.label === ordinal ? ordinal : `${ordinal}, ${sheet.label}`);
+      }
     },
     [gd, clearSelection],
   );
@@ -509,6 +514,19 @@ function OpenDocument({
     if (tab !== undefined) setOrganizeTab(tab);
     setInspectorOpen(true);
   }, []);
+  // ADR-038 ⌃⌥→ / ⌃⌥←: the next or previous object on the sheet takes focus at its own
+  // entry — a cell (which arms it), a graph's header. Tab cannot do this forward (GRID-05).
+  const moveObject = useCallback((direction: 1 | -1) => {
+    const objects = sheetObjects(document.querySelector('.gd-canvas') ?? document);
+    const next = stepObject(objects, currentObject(document.activeElement), direction);
+    const entry = next === null ? null : objectEntry(next);
+    if (next === null || entry === null) {
+      announce(objects.length === 0 ? 'Nothing on this sheet' : 'No other object on this sheet');
+      return;
+    }
+    entry.focus({ preventScroll: true });
+    announce(next.getAttribute('aria-label') ?? 'Object');
+  }, []);
   useShortcuts(
     documentBindings({
       phone,
@@ -550,15 +568,25 @@ function OpenDocument({
         toggleShortcutSheet: () => {
           setShortcutsOpen((o) => !o);
         },
+        nextObject: () => {
+          moveObject(1);
+        },
+        previousObject: () => {
+          moveObject(-1);
+        },
       },
       edit: {
         undo: () => session.undo.undo(),
         redo: () => session.undo.redo(),
+        // KEYS-03 ⌘A selects the table (the object); there is no range selection (ADR-038).
         selectAll: () => {
           if (selection !== null) selectTable(selection.tableId);
         },
         clear: () => {
           if (cell !== null) grid.commands.clearCell(cell);
+        },
+        clearNeedsCell: () => {
+          announce('The table is selected; select a cell to clear it');
         },
         clearSelection: clearAll,
         toggleMark,
@@ -595,6 +623,7 @@ function OpenDocument({
       },
     },
     sheets: { add: appendSheet },
+    selectTable,
     slots: {
       // SORT-01..06 (#74): the viewer's own sort, filter and grouping; the options live in
       // the Organize inspector, so "show … options" opens it.

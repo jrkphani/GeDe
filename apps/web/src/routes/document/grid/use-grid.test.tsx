@@ -19,6 +19,7 @@ import {
   nestRow,
   openDocument,
   orphanCellKeys,
+  rowHeights,
   setCellText,
   setRowCollapsed,
   tableById,
@@ -204,6 +205,35 @@ describe('undo granularity (KEYS-03)', () => {
       undo.undo();
     });
     expect(tableById(a, tableId)?.columns[0]?.width).toBe(2);
+  });
+});
+
+describe('the formula expression line (FX-07, REF-01, ADR-039)', () => {
+  it('FX-07 GRID-09 committing a formula into a compact row wraps the row in the same undo step; a text commit leaves the height alone and never unwraps (#142)', () => {
+    const undo = createUndoManager(a, { captureTimeout: 0 });
+    const { result } = renderHook(() => useGrid(a, true, { undo }));
+    const table = tableMap(a, tableId)!;
+    expect(rowHeights(table)).toEqual([1, 1, 1]);
+    act(() => {
+      result.current.commands.commitCell({ tableId, rowId: rows[1]!, colId: cols[0]! }, '=Sum(A1)');
+    });
+    expect(rowHeights(table)).toEqual([1, 2, 1]);
+    expect(undo.undoStack).toHaveLength(1);
+    act(() => {
+      undo.undo();
+    });
+    expect(rowHeights(table)).toEqual([1, 1, 1]);
+    expect(cellText(table, rows[1]!, cols[0]!)).toBe('');
+    act(() => {
+      undo.redo();
+      result.current.commands.commitCell({ tableId, rowId: rows[1]!, colId: cols[0]! }, 'text');
+    });
+    // The row keeps the height the commit gave it: a commit never unwraps.
+    expect(rowHeights(table)).toEqual([1, 2, 1]);
+    act(() => {
+      result.current.commands.commitCell({ tableId, rowId: rows[0]!, colId: cols[1]! }, 'plain');
+    });
+    expect(rowHeights(table)).toEqual([1, 2, 1]);
   });
 });
 
