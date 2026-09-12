@@ -6,6 +6,11 @@
     "types": ["node"],
     "tsBuildInfoFile": "dist/.tsbuildinfo-test"
   },
-  "include": ["src/**/*.test.ts", "vitest.config.ts"],
+  "include": [
+    "src/**/*.test.ts",
+    "src/**/*.bench.ts",
+    "src/**/__fixtures__/*.ts",
+    "vitest.config.ts"
+  ],
   "references": [{ "path": "./tsconfig.src.json" }]
 }

@@ -13,9 +13,15 @@ import type { Ast, Expr, Reference, Separator } from './ast.js';
 
 export type CellValue =
   | { readonly kind: 'text'; readonly text: string }
-  | { readonly kind: 'number'; readonly value: number }
-  | { readonly kind: 'currency'; readonly value: number; readonly code: string }
-  | { readonly kind: 'date'; readonly iso: string }
+  /** `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not `String(value)`. */
+  | { readonly kind: 'number'; readonly value: number; readonly text?: string }
+  | {
+      readonly kind: 'currency';
+      readonly value: number;
+      readonly code: string;
+      readonly text?: string;
+    }
+  | { readonly kind: 'date'; readonly iso: string; readonly text?: string }
   | { readonly kind: 'blank' }
   /** A referenced formula cell that is itself in error. Its error propagates (FX-06). */
   | { readonly kind: 'error'; readonly error: FormulaError };
@@ -83,11 +89,11 @@ export function defaultFormatValue(value: CellValue): string {
     case 'text':
       return value.text;
     case 'number':
-      return String(value.value);
+      return value.text ?? String(value.value);
     case 'currency':
-      return `${value.code} ${String(value.value)}`;
+      return value.text ?? `${value.code} ${String(value.value)}`;
     case 'date':
-      return value.iso;
+      return value.text ?? value.iso;
     case 'blank':
       return '';
     case 'error':
