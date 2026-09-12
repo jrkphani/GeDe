@@ -264,8 +264,14 @@ describe('Inspector', () => {
     await userEvent.click(tab('Table'));
     // Table style: one of the four ramp pairs, as a Radix toggle group with labelled swatches.
     const style = section('table style');
-    await userEvent.click(within(style).getByRole('radio', { name: 'Forest' }));
-    expect(tableById(gd, tableId)?.look.style).toBe('forest');
+    // Only the neutral pair is offered (DS "no third meaning"): Plain and Slate.
+    expect(
+      within(style)
+        .getAllByRole('radio')
+        .map((r) => r.textContent),
+    ).toEqual(['Plain', 'Slate']);
+    await userEvent.click(within(style).getByRole('radio', { name: 'Slate' }));
+    expect(tableById(gd, tableId)?.look.style).toBe('slate');
     // Title and caption: the title bar keeps its rows; the caption is a strip at the foot.
     const before = tableAddresses(tableMap(gd, tableId)!);
     const titling = section('title and caption');
@@ -422,6 +428,18 @@ describe('Inspector', () => {
     expect(tableById(gd, tableId)?.columns[0]?.appearance.fill).toBe('amber');
     await userEvent.click(within(fill).getByRole('button', { name: 'Use column appearance' }));
     expect(cellAppearanceOverride(table, record.rows[0]!, record.columns[0]!.id)).toBeNull();
+    // Cell scope "None" over the column's amber is an explicit none: the cell shows no fill
+    // while the column keeps its own (INSP-10 "applies to cell B5 only").
+    await userEvent.click(within(fill).getByRole('radio', { name: 'None' }));
+    expect(cellAppearanceOverride(table, record.rows[0]!, record.columns[0]!.id)?.fill).toBe(
+      'none',
+    );
+    await userEvent.click(within(edges).getByRole('radio', { name: /No border/ }));
+    expect(cellAppearanceOverride(table, record.rows[0]!, record.columns[0]!.id)?.border).toEqual({
+      edges: 'none',
+      weight: 'strong',
+    });
+    await userEvent.click(within(fill).getByRole('button', { name: 'Use column appearance' }));
     // Back on the column: "None" clears the fill; "No border" clears the border.
     await userEvent.click(within(fill).getByRole('radio', { name: 'Column Column 1' }));
     await userEvent.click(within(fill).getByRole('radio', { name: 'None' }));
@@ -458,14 +476,33 @@ describe('Inspector', () => {
       when: { trigger: 'charsOver', count: 40 },
       style: { fill: 'amber', mark: 'strikethrough' },
     });
-    // A pattern trigger names a Smart Chip.
+    // A pattern trigger names a Smart Chip; a border is an output too (PRD §8).
     await userEvent.click(within(rules).getByRole('combobox', { name: 'When the text' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Fails chip' }));
     expect(within(rules).getByRole('combobox', { name: 'Chip' })).toHaveTextContent('Email');
+    await userEvent.click(within(rules).getByRole('combobox', { name: 'Border' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Outline only' }));
+    await userEvent.click(within(rules).getByRole('combobox', { name: 'Border weight' }));
+    await userEvent.click(await screen.findByRole('option', { name: 'Accent' }));
+    await userEvent.click(within(rules).getByRole('button', { name: 'Add a rule' }));
+    expect(tableById(gd, tableId)?.columns[0]?.rules[2]).toMatchObject({
+      when: { trigger: 'failsChip', chip: 'email' },
+      style: { border: { edges: 'outline', weight: 'accent' } },
+    });
+    // The list order is the priority: the third rule moves up one place.
+    expect(within(rules).getByRole('button', { name: 'Move rule 1 up' }).title).toBe(
+      'Move rule 1 up — already first',
+    );
+    await userEvent.click(within(rules).getByRole('button', { name: 'Move rule 3 up' }));
+    expect(tableById(gd, tableId)?.columns[0]?.rules[1]?.when).toEqual({
+      trigger: 'failsChip',
+      chip: 'email',
+    });
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Rule moved up');
     await userEvent.click(
       within(rules).getByRole('button', { name: 'Remove rule 1: contains “camp”' }),
     );
-    expect(tableById(gd, tableId)?.columns[0]?.rules).toHaveLength(1);
+    expect(tableById(gd, tableId)?.columns[0]?.rules).toHaveLength(2);
     expect(screen.getByTestId('live-region')).toHaveTextContent('Rule removed');
   });
 
@@ -511,7 +548,7 @@ describe('Inspector', () => {
     await userEvent.click(within(font).getByRole('combobox', { name: 'Weight' }));
     await userEvent.click(await screen.findByRole('option', { name: 'Semibold' }));
     await userEvent.click(within(font).getByRole('combobox', { name: 'Size' }));
-    // The type scale from the 11.5 px cell floor to h2; nothing that cannot fit a row.
+    // The whole type scale above the 11.5 px cell floor; the four weights end at 600 (DS §2).
     const sizes = (await screen.findAllByRole('option')).map((o) => o.textContent);
     expect(sizes).toEqual([
       '11.5 px · cell',
@@ -519,6 +556,8 @@ describe('Inspector', () => {
       '15 px · body',
       '16 px · h3',
       '20 px · h2',
+      '28 px · h1',
+      '40 px · display',
     ]);
     await userEvent.click(screen.getByRole('option', { name: '15 px · body' }));
     expect(tableById(gd, tableId)?.columns[0]?.appearance).toEqual({
@@ -526,13 +565,25 @@ describe('Inspector', () => {
       weight: 600,
       size: 'body',
     });
-    // Character styles are bundles on the scale; the active one reads pressed.
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false); // body fits the compact row
+    await userEvent.click(within(font).getByRole('combobox', { name: 'Weight' }));
+    expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual([
+      'Light',
+      'Regular',
+      'Medium',
+      'Semibold',
+    ]);
+    await userEvent.keyboard('{Escape}');
+    // Character styles are bundles on the scale; the active one reads pressed. Title (h2) needs
+    // the wrapped row, so choosing it wraps the column in the same step (GRID-09).
     const presets = within(section('character styles'));
     await userEvent.click(presets.getByRole('button', { name: 'Title' }));
     expect(tableById(gd, tableId)?.columns[0]?.appearance).toMatchObject({
       size: 'h2',
       weight: 600,
     });
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(true);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('the column wraps to fit the size');
     expect(presets.getByRole('button', { name: 'Title' })).toHaveAttribute('aria-pressed', 'true');
     // Text colour and alignment.
     const colour = within(section('text colour'));
@@ -572,9 +623,11 @@ describe('Inspector', () => {
     const rich = cellRich(table, record.rows[0]!, record.columns[0]!.id);
     expect(hasMarkThroughout(rich, 'subscript')).toBe(true);
     expect(hasMarkThroughout(rich, 'superscript')).toBe(false);
+    // The Title preset wrapped the column above; the switch reads on and unwraps it.
     const wrap = within(section('wrap'));
+    expect(wrap.getByRole('switch', { name: 'Wrap column Column 1' })).toBeChecked();
     await userEvent.click(wrap.getByRole('switch', { name: 'Wrap column Column 1' }));
-    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(true);
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false);
     await userEvent.click(wrap.getByRole('switch', { name: 'Wrap this row' }));
     expect(screen.getByTestId('live-region')).toHaveTextContent('Wrapped the row');
   });

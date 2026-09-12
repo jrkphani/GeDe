@@ -61,6 +61,25 @@ export function updateColumnRule(
   return true;
 }
 
+/** Move a rule one place up (earlier, higher priority) or down. False when it cannot move. */
+export function moveColumnRule(
+  gd: GedeDoc,
+  tableId: Id,
+  colId: Id,
+  ruleId: string,
+  direction: 'up' | 'down',
+): boolean {
+  const rules = [...rulesOf(gd, tableId, colId)];
+  const from = rules.findIndex((r) => r.id === ruleId);
+  const to = direction === 'up' ? from - 1 : from + 1;
+  if (from < 0 || to < 0 || to >= rules.length) return false;
+  const [moved] = rules.splice(from, 1);
+  if (moved === undefined) return false;
+  rules.splice(to, 0, moved);
+  setColumnRules(gd, tableId, colId, rules);
+  return true;
+}
+
 export function removeColumnRule(gd: GedeDoc, tableId: Id, colId: Id, ruleId: string): boolean {
   const rules = rulesOf(gd, tableId, colId);
   if (!rules.some((r) => r.id === ruleId)) return false;

@@ -30,7 +30,7 @@ import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GridCommands } from '../grid/commands.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { TRACKED } from '../inspector/controls.js';
-import { canvasMeasure, fitColumnsToContent } from '../style/index.js';
+import { canMeasure, canvasMeasure, fitColumnsToContent } from '../style/index.js';
 
 export type MenuTarget =
   | { kind: 'cell'; tableId: Id; rowId: Id; colId: Id }
@@ -533,19 +533,24 @@ export function columnMenuEntries(
       kind: 'item',
       id: 'col-fit',
       label: 'Fit width to content',
-      disabledReason: viewOnly,
+      // INSP-04 / MENU-03: measures this column's widest cell and snaps to whole units. Where
+      // no 2D canvas exists the item says so (MENU-02), as the inspector's buttons do.
+      disabledReason:
+        viewOnly ?? (canMeasure() ? undefined : 'text cannot be measured in this browser'),
       onSelect: () => {
-        // INSP-04 / MENU-03: measure this column's widest cell and snap to whole units.
         const measure = canvasMeasure();
         const table = tableMap(gd, tableId);
         if (measure === null || table === null) return;
         const engine = peekEngine(gd.doc);
-        const widths = fitColumnsToContent(table, record, {
-          locale: toFormatLocale(activeLocale()),
-          measure,
-          cellValue: (cellId) => engine?.result(cellId)?.value ?? undefined,
-        }).filter((w) => w.colId === colId);
-        commands.fitColumns(tableId, widths);
+        commands.fitColumns(
+          tableId,
+          fitColumnsToContent(table, record, {
+            locale: toFormatLocale(activeLocale()),
+            measure,
+            cellValue: (cellId) => engine?.result(cellId)?.value ?? undefined,
+            only: [colId],
+          }),
+        );
       },
     },
     sep('s-clipboard'),

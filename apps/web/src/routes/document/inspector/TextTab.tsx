@@ -1,10 +1,12 @@
 import { Button, SegmentedControl, Select, Switch, Tooltip } from '@gede/ui';
 import {
   cellRich,
+  cellText,
   CHARACTER_STYLE_BUNDLES,
   CHARACTER_STYLE_LABELS,
   CHARACTER_STYLES,
   characterStyleOf,
+  detectIndicLang,
   FONT_FAMILIES,
   FONT_FAMILY_LABELS,
   FONT_WEIGHT_LABELS,
@@ -12,6 +14,7 @@ import {
   H_ALIGNS,
   hasMarkThroughout,
   rowMeta,
+  sizeRefusal,
   tableRecord,
   TEXT_COLOUR_TOKENS,
   TOGGLE_MARKS,
@@ -94,6 +97,15 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
   const look = useAppearanceScope(table, record, cell, editable, commands, 'the typography');
   const a = look.effective;
   const activeStyle = characterStyleOf(a);
+  // I18N-03: Indic text keeps the 1.7 line height, so the two largest sizes cannot be shown for
+  // it even on the wrapped row; they read disabled with that reason (INSP-11).
+  const indic =
+    cell === null || column === null
+      ? false
+      : look.scope === 'cell'
+        ? detectIndicLang(cellText(table, cell.rowId, cell.colId)) !== null
+        : record.rows.some((rowId) => detectIndicLang(cellText(table, rowId, column.id)) !== null);
+  const refused = TYPE_SIZES.filter((size) => sizeRefusal(size, indic) !== undefined);
 
   return (
     <>
@@ -129,8 +141,16 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
             options={TYPE_SIZES.map((size) => ({
               value: size,
               label: `${String(TYPE_SIZE_PX[size])} px · ${size}`,
+              disabled: refused.includes(size),
             }))}
           />
+          {refused.length > 0 && (
+            <p className="gd-insp__reason">
+              {refused.map((s) => `${String(TYPE_SIZE_PX[s])} px`).join(' and ')} — need more than a
+              wrapped row for Tamil, Hindi or Telugu text at the 1.7 line height. Sizes past the
+              compact row wrap it.
+            </p>
+          )}
         </div>
       </Section>
       <Section

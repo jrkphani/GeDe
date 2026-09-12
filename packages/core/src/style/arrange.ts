@@ -9,6 +9,8 @@
  */
 import {
   cellsMap,
+  columnRecord,
+  columnsArray,
   isFormula,
   readBoolean,
   readString,
@@ -200,10 +202,14 @@ function referencedTables(ref: BoundReference): Id[] {
 }
 
 /**
- * The table-to-table dependency edges a sheet's formulas imply: one edge per
- * (from, to) pair, counted, from the id-bound tokens of every formula cell
- * in a table on the sheet. Self-references are not edges. Edges into a table
- * on another sheet are returned with `crossSheet`.
+ * The table-to-table dependency edges that touch a sheet: one edge per
+ * (from, to) pair, counted, from every reader anywhere in the workbook —
+ * the id-bound tokens of its formula cells (typed formulas, reference cells,
+ * pulled cells), its mapping columns (REF-03 `link`) and its pull columns
+ * (REF-02 `pull`, whether or not the filter matches a row today). Self-
+ * references are not edges. An edge is returned when either end is on the
+ * sheet; one whose other end is elsewhere carries `crossSheet` — reported
+ * numerically in both directions, never drawn (PRD §11).
  */
 export function dagEdges(gd: GedeDoc, sheetId: Id): DagEdge[] {
   const counts = new Map<string, DagEdge>();
@@ -211,9 +217,26 @@ export function dagEdges(gd: GedeDoc, sheetId: Id): DagEdge[] {
   gd.tables.forEach((map, id) => {
     sheetOf.set(id, readString(map, 'sheetId'));
   });
-  for (const to of tablesOnSheet(gd, sheetId)) {
-    const map = tableMap(gd, to.id);
-    if (map === null) continue;
+  const add = (from: Id, to: Id, n: number) => {
+    if (from === to || !sheetOf.has(from)) return;
+    const fromSheet = sheetOf.get(from);
+    const toSheet = sheetOf.get(to);
+    if (fromSheet !== sheetId && toSheet !== sheetId) return;
+    const key = `${from}>${to}`;
+    const edge = counts.get(key);
+    counts.set(key, {
+      from,
+      to,
+      count: (edge?.count ?? 0) + n,
+      crossSheet: fromSheet !== toSheet,
+    });
+  };
+  gd.tables.forEach((map, to) => {
+    for (const column of columnsArray(map).toArray()) {
+      const record = columnRecord(column);
+      if (record.link !== null) add(record.link.tableId, to, 1);
+      if (record.pull !== null) add(record.pull.tableId, to, 1);
+    }
     cellsMap(map).forEach((value) => {
       if (!isFormula(value)) return;
       const tokens = tokenize(value);
@@ -222,20 +245,13 @@ export function dagEdges(gd: GedeDoc, sheetId: Id): DagEdge[] {
       for (const token of tokens.tokens) {
         if (token.kind !== 'bound' || typeof token.value !== 'object') continue;
         for (const from of referencedTables(token.value)) {
-          if (from === to.id || seen.has(from) || !sheetOf.has(from)) continue;
+          if (seen.has(from)) continue;
           seen.add(from);
-          const key = `${from}>${to.id}`;
-          const edge = counts.get(key);
-          counts.set(key, {
-            from,
-            to: to.id,
-            count: (edge?.count ?? 0) + 1,
-            crossSheet: sheetOf.get(from) !== sheetId,
-          });
+          add(from, to, 1);
         }
       }
     });
-  }
+  });
   return Array.from(counts.values());
 }
 

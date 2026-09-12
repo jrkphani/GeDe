@@ -8,6 +8,7 @@
  */
 import type { CellFormat } from '../format/types.js';
 import { cellKey, type Id } from '../ids.js';
+import type { HighlightToken } from '../text/types.js';
 import {
   readMap,
   rowsArray,
@@ -25,6 +26,7 @@ import {
   readAppearance,
   type Appearance,
   type AppearanceKey,
+  type CellBorder,
   type HAlign,
 } from './types.js';
 import { nestedMap, requireColumn, requireTable, transact } from './write.js';
@@ -77,7 +79,10 @@ export function countAppearanceOverrides(table: TableMap, colId: Id): number {
 export interface ResolvedLook {
   readonly appearance: Appearance;
   readonly rule: RuleOutcome | null;
-  readonly fill: Appearance['fill'];
+  /** The tint to paint, or undefined: an explicit `none` resolves to no fill. */
+  readonly fill: HighlightToken | undefined;
+  /** The border to draw, or undefined: a rule's beats the appearance's; `none` edges draw nothing. */
+  readonly border: CellBorder | undefined;
   readonly textColour: Appearance['textColour'];
   /** `hAlign`, or the format's own when Automatic. */
   readonly hAlign: HAlign;
@@ -90,14 +95,17 @@ export function resolveLook(
   rule: RuleOutcome | null,
   format: CellFormat,
 ): ResolvedLook {
-  const fill = rule?.fill ?? appearance.fill;
+  const own = appearance.fill === 'none' ? undefined : appearance.fill;
+  const fill = rule?.fill ?? own;
   const wanted = rule?.textColour ?? appearance.textColour;
   const textColour = readableTextColour(fill, wanted);
   const numeric = format.kind === 'number' || format.kind === 'currency';
+  const border = rule?.border ?? appearance.border;
   return {
     appearance,
     rule,
     fill,
+    border: border?.edges === 'none' ? undefined : border,
     textColour,
     hAlign: appearance.hAlign ?? (numeric ? 'right' : 'left'),
     inkAdjusted: wanted !== undefined && textColour !== wanted,

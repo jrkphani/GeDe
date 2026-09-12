@@ -21,6 +21,8 @@ import {
   LATTICE,
   markSplitChildren,
   mergeCells,
+  commitCellText,
+  setFrozenColumns,
   nestRow,
   openDocument,
   paragraphNode,
@@ -1301,7 +1303,7 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
 
   it('INSP-04 the table look paints as attributes on the table: style, outline, gridlines, banding, a hidden title keeps its bar, the caption is a strip at the foot', () => {
     setTableLook(gd, tableId, {
-      style: 'forest',
+      style: 'slate',
       outline: 'accent',
       gridlines: 'contrast',
       alternating: true,
@@ -1311,7 +1313,7 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
     });
     mount();
     const table = screen.getByRole('grid').closest('.gd-table')!;
-    expect(table).toHaveAttribute('data-style', 'forest');
+    expect(table).toHaveAttribute('data-style', 'slate');
     expect(table).toHaveAttribute('data-outline', 'accent');
     expect(table).toHaveAttribute('data-gridlines', 'contrast');
     expect(table).toHaveAttribute('data-alternating', 'true');
@@ -1333,6 +1335,9 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
     expect(anchor).toHaveClass('gd-cell--span');
     expect(anchor.style.width).toBe(`${String(2 * LATTICE.col)}px`);
     expect(anchor.style.height).toBe(`${String(2 * LATTICE.row)}px`);
+    // The anchor tells assistive tech how many positions it stands for.
+    expect(anchor).toHaveAttribute('aria-colspan', '2');
+    expect(anchor).toHaveAttribute('aria-rowspan', '2');
     const placeholders = Array.from(
       document.querySelectorAll<HTMLElement>('[data-covered="true"]'),
     );
@@ -1356,6 +1361,72 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
     expect(
       screen.getByRole('gridcell', { name: /^C5, hidden under the span/ }),
     ).toBeInTheDocument();
+  });
+
+  it('INSP-05 FX-07 a rule on a formula cell matches the evaluated value, never the source', async () => {
+    setSharedRuleEvaluatorForTests(createRuleEvaluator({ worker: false }));
+    setCellText(gd, tableId, rows[0]!, cols[0]!, '7');
+    setCellText(gd, tableId, rows[1]!, cols[0]!, '5');
+    commitCellText(gd, tableId, rows[2]!, cols[0]!, '=Sum(B5:B6)');
+    addColumnRule(gd, tableId, cols[0]!, {
+      when: { trigger: 'contains', text: '12' },
+      style: { fill: 'slate' },
+    });
+    addColumnRule(gd, tableId, cols[0]!, {
+      when: { trigger: 'contains', text: 'Sum' },
+      style: { fill: 'amber' },
+    });
+    mount();
+    // The formula evaluates to 12: the first rule matches the value; the source text never matches.
+    await waitFor(() => {
+      expect(cellAt(2, 0)).toHaveAttribute('data-fill', 'slate');
+    });
+    expect(cellAt(2, 0)).not.toHaveAttribute('data-fill', 'amber');
+  });
+
+  it('INSP-05 a rule may draw a border, which beats the column\'s; a cell\'s explicit "none" shows no fill over a column fill (INSP-10)', async () => {
+    setSharedRuleEvaluatorForTests(createRuleEvaluator({ worker: false }));
+    setColumnAppearance(gd, tableId, cols[0]!, {
+      fill: 'amber',
+      border: { edges: 'all', weight: 'hairline' },
+    });
+    setCellAppearance(gd, tableId, rows[1]!, cols[0]!, {
+      fill: 'none',
+      border: { edges: 'none', weight: 'hairline' },
+    });
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'flagged');
+    addColumnRule(gd, tableId, cols[0]!, {
+      when: { trigger: 'contains', text: 'flag' },
+      style: { border: { edges: 'outline', weight: 'accent' } },
+    });
+    mount();
+    await waitFor(() => {
+      expect(cellAt(0, 0).style.getPropertyValue('--gd-border-colour')).toBe('var(--rule-accent)');
+    });
+    expect(cellAt(0, 0)).toHaveAttribute('data-fill', 'amber');
+    expect(cellAt(1, 0)).not.toHaveAttribute('data-fill');
+    expect(cellAt(1, 0)).not.toHaveClass('gd-cell--bordered');
+    expect(cellAt(2, 0)).toHaveAttribute('data-fill', 'amber');
+    expect(cellAt(2, 0).style.getPropertyValue('--gd-border-colour')).toBe('var(--rule-hairline)');
+  });
+
+  it("GRID-10 INSP-05 the pinned mirror paints the frozen cells' fill, type and span box like the grid", () => {
+    setColumnAppearance(gd, tableId, cols[0]!, { fill: 'slate', weight: 600, size: 'h3' });
+    mergeCells(gd, tableId, rows[0]!, cols[0]!, { rows: 1, cols: 2 });
+    act(() => {
+      setFrozenColumns(gd, tableId, 2);
+    });
+    mount({ pinnedLeft: 40 });
+    const mirror = screen.getByTestId('pinned-panel');
+    const cells = mirror.querySelectorAll<HTMLElement>('.gd-cell');
+    const first = cells[0]!;
+    expect(first).toHaveAttribute('data-fill', 'slate');
+    expect(first).toHaveAttribute('data-weight', '600');
+    expect(first).toHaveAttribute('data-size', 'h3');
+    expect(first).toHaveClass('gd-cell--span');
+    expect(first.style.width).toBe(`${String(2 * LATTICE.col)}px`);
+    expect(cells[1]).toHaveClass('gd-cell--covered');
+    expect(cells[1]!.style.width).toBe('0px');
   });
 
   it('MENU-04 SHARE-04 GRID-06 a collaborator’s merge covers the cell being edited here: the draft commits into the covered cell (its data is kept), and the selection lands on the anchor with focus', async () => {

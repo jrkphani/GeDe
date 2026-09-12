@@ -888,6 +888,7 @@ function OpenDocument({
                 if (t.pinned) {
                   return (
                     <div key={t.id} className="gd-ghost" inert data-testid="pinned-ghost">
+                      <span className="gd-ghost__label">Pinned to viewport</span>
                       <TableView
                         table={map}
                         tier={tier}

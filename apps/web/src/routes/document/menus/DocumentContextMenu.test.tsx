@@ -148,6 +148,14 @@ describe('context menus', () => {
       'title',
       'arrives with #86 (context graphs)',
     );
+    // MENU-02 / INSP-04: Fit width needs a text measurer; jsdom has none, so the item says so.
+    fireEvent.contextMenu(screen.getAllByRole('columnheader')[1]!, { clientX: 200, clientY: 5 });
+    const fit = await screen.findByRole('menuitem', { name: 'Fit width to content' });
+    expect(fit).toHaveAttribute('aria-disabled', 'true');
+    expect(fit).toHaveAttribute('title', 'text cannot be measured in this browser');
+    await userEvent.keyboard('{Escape}');
+    fireEvent.contextMenu(cells()[0]!, { clientX: 10, clientY: 10 });
+    await screen.findByRole('menu');
     // MENU-04: a live limit reads as its own reason — the cell is not merged, so nothing to unmerge.
     const unmerge = screen.getByRole('menuitem', { name: 'Unmerge cells' });
     expect(unmerge).toHaveAttribute('aria-disabled', 'true');

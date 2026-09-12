@@ -29,10 +29,13 @@ export {
   type RuleMatches,
 } from './useColumnRules.js';
 export {
+  canMeasure,
   canvasMeasure,
   fitColumnsToContent,
   fitRowsToContent,
   MAX_FIT_UNITS,
+  widestLine,
   type FitMeasure,
   type FitOptions,
+  type MeasureFont,
 } from './fit.js';

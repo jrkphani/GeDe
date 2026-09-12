@@ -10,6 +10,9 @@
 import { useState } from 'react';
 import { Button, Select, TextField } from '@gede/ui';
 import {
+  BORDER_EDGE_LABELS,
+  BORDER_EDGES,
+  BORDER_WEIGHTS,
   CHIP_IDS,
   CHIP_PATTERNS,
   describeRule,
@@ -18,6 +21,8 @@ import {
   RULE_TRIGGERS,
   TEXT_COLOUR_TOKENS,
   TOGGLE_MARKS,
+  type BorderEdges,
+  type BorderWeight,
   type ChipId,
   type ColumnRecord,
   type ConditionalRule,
@@ -62,6 +67,8 @@ const MARK_LABELS: Readonly<Record<ToggleMark, string>> = {
   subscript: 'Subscript',
 };
 
+type RuleBorderEdges = Exclude<BorderEdges, 'none'>;
+
 interface Draft {
   trigger: RuleTrigger;
   text: string;
@@ -70,6 +77,8 @@ interface Draft {
   fill: HighlightToken | '';
   textColour: TextColourToken | '';
   mark: ToggleMark | '';
+  border: RuleBorderEdges | '';
+  weight: BorderWeight;
 }
 
 const EMPTY_DRAFT: Draft = {
@@ -80,6 +89,16 @@ const EMPTY_DRAFT: Draft = {
   fill: 'amber',
   textColour: '',
   mark: '',
+  border: '',
+  weight: 'hairline',
+};
+
+const RULE_BORDER_EDGES = BORDER_EDGES.filter((e): e is RuleBorderEdges => e !== 'none');
+
+const WEIGHT_LABELS: Readonly<Record<BorderWeight, string>> = {
+  hairline: 'Hairline',
+  strong: 'Strong',
+  accent: 'Accent',
 };
 
 function conditionOf(d: Draft): RuleCondition | null {
@@ -106,20 +125,25 @@ function styleWords(rule: ConditionalRule): string {
   if (rule.style.textColour !== undefined)
     parts.push(`${TEXT_COLOUR_LABELS[rule.style.textColour]} text`);
   if (rule.style.mark !== undefined) parts.push(MARK_LABELS[rule.style.mark].toLowerCase());
+  if (rule.style.border !== undefined)
+    parts.push(
+      `${WEIGHT_LABELS[rule.style.border.weight].toLowerCase()} border, ${BORDER_EDGE_LABELS[rule.style.border.edges].toLowerCase()}`,
+    );
   return parts.length === 0 ? 'glyph only' : parts.join(', ');
 }
 
 export function RulesSection({ tableId, column, disabledReason, commands }: RulesSectionProps) {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
   const condition = conditionOf(draft);
-  const hasOutput = draft.fill !== '' || draft.textColour !== '' || draft.mark !== '';
+  const hasOutput =
+    draft.fill !== '' || draft.textColour !== '' || draft.mark !== '' || draft.border !== '';
   const addReason =
     disabledReason ??
     (condition === null
       ? 'the rule needs its text or count'
       : hasOutput
         ? undefined
-        : 'choose a fill, text colour or mark');
+        : 'choose a fill, text colour, mark or border');
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => {
     setDraft((d) => ({ ...d, [key]: value }));
   };
@@ -149,6 +173,27 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
                 <span className="gd-insp__rule-text">
                   {describeRule(rule)}{' '}
                   <span className="gd-insp__rule-style">{styleWords(rule)}</span>
+                </span>
+                {/* Priority is list order: up and down move a rule one place (INSP-05). */}
+                <span className="gd-insp__rule-keys">
+                  <MoveRule
+                    label={`Move rule ${String(i + 1)} up`}
+                    reason={disabledReason ?? (i === 0 ? 'already first' : undefined)}
+                    onClick={() => {
+                      if (column !== null) commands.moveRule(tableId, column.id, rule.id, 'up');
+                    }}
+                  >
+                    ↑
+                  </MoveRule>
+                  <MoveRule
+                    label={`Move rule ${String(i + 1)} down`}
+                    reason={disabledReason ?? (i === rules.length - 1 ? 'already last' : undefined)}
+                    onClick={() => {
+                      if (column !== null) commands.moveRule(tableId, column.id, rule.id, 'down');
+                    }}
+                  >
+                    ↓
+                  </MoveRule>
                 </span>
                 <Button
                   size="sm"
@@ -248,6 +293,28 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
           }}
           options={TOGGLE_MARKS.map((m) => ({ value: m, label: MARK_LABELS[m] }))}
         />
+        <Select
+          label="Border"
+          value={draft.border}
+          placeholder="None"
+          clearLabel="None"
+          disabledReason={disabledReason}
+          onValueChange={(border) => {
+            set('border', border);
+          }}
+          options={RULE_BORDER_EDGES.map((e) => ({ value: e, label: BORDER_EDGE_LABELS[e] }))}
+        />
+        {draft.border !== '' && (
+          <Select
+            label="Border weight"
+            value={draft.weight}
+            disabledReason={disabledReason}
+            onValueChange={(weight) => {
+              set('weight', weight);
+            }}
+            options={BORDER_WEIGHTS.map((w) => ({ value: w, label: WEIGHT_LABELS[w] }))}
+          />
+        )}
         <Button
           size="sm"
           variant="secondary"
@@ -262,6 +329,9 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
                       ...(draft.fill === '' ? {} : { fill: draft.fill }),
                       ...(draft.textColour === '' ? {} : { textColour: draft.textColour }),
                       ...(draft.mark === '' ? {} : { mark: draft.mark }),
+                      ...(draft.border === ''
+                        ? {}
+                        : { border: { edges: draft.border, weight: draft.weight } }),
                     },
                   });
                   if (created !== null) setDraft({ ...EMPTY_DRAFT, trigger: draft.trigger });
@@ -273,5 +343,30 @@ export function RulesSection({ tableId, column, disabledReason, commands }: Rule
         </Button>
       </div>
     </Section>
+  );
+}
+
+function MoveRule({
+  label,
+  reason,
+  onClick,
+  children,
+}: {
+  label: string;
+  reason: string | undefined;
+  onClick: () => void;
+  children: string;
+}) {
+  return (
+    <Button
+      size="sm"
+      variant="ghost"
+      aria-label={label}
+      aria-disabled={reason !== undefined || undefined}
+      title={reason === undefined ? label : `${label} — ${reason}`}
+      onClick={reason === undefined ? onClick : undefined}
+    >
+      {children}
+    </Button>
   );
 }

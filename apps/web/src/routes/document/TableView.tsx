@@ -688,6 +688,7 @@ export const TableView = memo(function TableView({
               table={table}
               record={record}
               spans={spans}
+              lookOf={lookOf}
               outline={showOutline ? outline : null}
               rowOrdinal={rowOrdinal}
               left={pinnedLeft}
@@ -769,6 +770,8 @@ interface PinnedPanelProps {
   record: TableRecord;
   /** MENU-04: cells a span covers mirror as empty placeholders here too. */
   spans: SpanIndex;
+  /** INSP-05/06: the same resolved look the grid paints, so a frozen cell mirrors its fill, border, type and span. */
+  lookOf: (col: ColumnRecord, rowId: Id) => CellLook;
   /** The outline to mirror in the frozen outline column, or null while grouped or sorted (HIER-08). */
   outline: TableOutline | null;
   /** Document ordinal per row id: `rowHeights` and the outline are in document order. */
@@ -794,6 +797,7 @@ function PinnedPanel({
   table,
   record,
   spans,
+  lookOf,
   outline,
   rowOrdinal,
   left,
@@ -866,10 +870,27 @@ function PinnedPanel({
                       />
                     );
                   }
+                  // The mirror carries only the frozen columns: a span's box is clipped to them.
+                  const grid = lookOf(col, rowId);
+                  const look: CellLook =
+                    grid.span === null
+                      ? grid
+                      : {
+                          ...grid,
+                          spanUnits: {
+                            widthUnits: grid.span.colIds.reduce(
+                              (acc, id) => acc + (columns.find((c) => c.id === id)?.width ?? 0),
+                              0,
+                            ),
+                            heightUnits: grid.spanUnits?.heightUnits ?? 1,
+                          },
+                        };
+                  const format = cellFormatFor(table, col, rowId);
+                  const paint = paintLook(look, format);
                   return (
                     <div
                       key={col.id}
-                      className={clsx('gd-cell', 'gd-cell--frozen', {
+                      className={clsx('gd-cell', 'gd-cell--frozen', paint.className, {
                         'gd-cell--selected': isSelected,
                         'gd-cell--wrap':
                           col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
@@ -878,7 +899,9 @@ function PinnedPanel({
                       style={{
                         width: `${String(col.width * LATTICE.col)}px`,
                         ...outlineStyle(onOutline ? outlineRow : undefined),
+                        ...paint.style,
                       }}
+                      {...paint.data}
                       onPointerDown={() => {
                         onSelect({ tableId: record.id, rowId, colId: col.id });
                       }}
@@ -888,7 +911,7 @@ function PinnedPanel({
                       )}
                       <CellContent
                         content={cellRich(table, rowId, col.id)}
-                        format={cellFormatFor(table, col, rowId)}
+                        format={format}
                         locale={locale}
                       />
                     </div>
@@ -1433,6 +1456,8 @@ const Cell = memo(function Cell({
       tabIndex={tabStop ? 0 : -1}
       aria-selected={selected || undefined}
       aria-readonly={readOnly === null ? undefined : true}
+      aria-colspan={look.span === null || look.span.cols === 1 ? undefined : look.span.cols}
+      aria-rowspan={look.span === null || look.span.rows === 1 ? undefined : look.span.rows}
       aria-label={
         address === undefined
           ? undefined

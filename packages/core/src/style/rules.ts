@@ -18,6 +18,7 @@ import {
   type ToggleMark,
 } from '../text/types.js';
 import { readableTextColour } from './contrast.js';
+import { readCellBorder, type CellBorder } from './types.js';
 
 export const RULE_TRIGGERS = [
   'contains',
@@ -50,11 +51,16 @@ export type RuleCondition =
     }
   | { readonly trigger: 'matchesChip' | 'failsChip'; readonly chip: ChipId };
 
-/** What a matched rule applies. The mark reuses the rich-text vocabulary (KEYS-05). */
+/**
+ * What a matched rule applies (PRD §8: "cell background color, borders, or
+ * applies rich text presets"). The mark reuses the rich-text vocabulary
+ * (KEYS-05); the border is the matrix's own shape.
+ */
 export interface RuleStyle {
   readonly fill?: HighlightToken;
   readonly textColour?: TextColourToken;
   readonly mark?: ToggleMark;
+  readonly border?: CellBorder;
 }
 
 export interface ConditionalRule {
@@ -132,6 +138,7 @@ export interface RuleOutcome {
   /** Auto-adjusted to `ink` when the pair with `fill` is under 4.5:1. */
   readonly textColour: TextColourToken | undefined;
   readonly mark: ToggleMark | undefined;
+  readonly border: CellBorder | undefined;
 }
 
 /**
@@ -152,6 +159,7 @@ export function ruleOutcome(rule: ConditionalRule): RuleOutcome {
     fill: rule.style.fill,
     textColour: readableTextColour(rule.style.fill, rule.style.textColour),
     mark: rule.style.mark,
+    border: rule.style.border,
   };
 }
 
@@ -191,6 +199,8 @@ function readRuleStyle(value: unknown): RuleStyle {
   if (isHighlightToken(v.fill)) out.fill = v.fill;
   if (isTextColourToken(v.textColour)) out.textColour = v.textColour;
   if (typeof v.mark === 'string' && isToggleMark(v.mark)) out.mark = v.mark;
+  const border = readCellBorder(v.border);
+  if (border !== undefined && border.edges !== 'none') out.border = border;
   return out;
 }
 

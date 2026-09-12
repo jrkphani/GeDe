@@ -154,11 +154,13 @@ export function paintLook(look: CellLook, format: CellFormat): LookPaint {
   const a = look.appearance;
   const classes: string[] = [];
   const style: Record<string, string> & CSSProperties = {};
-  if (a.border !== undefined) {
-    const sides = borderSides(a.border.edges);
+  // A rule's border beats the appearance's; explicit `none` edges draw nothing (`resolveLook`).
+  const border = resolved.border;
+  if (border !== undefined) {
+    const sides = borderSides(border.edges);
     classes.push('gd-cell--bordered');
-    style['--gd-border-colour'] = `var(--rule-${a.border.weight})`;
-    style['--gd-border-width'] = a.border.weight === 'hairline' ? '1px' : '2px';
+    style['--gd-border-colour'] = `var(--rule-${border.weight})`;
+    style['--gd-border-width'] = border.weight === 'hairline' ? '1px' : '2px';
     style['--gd-bt'] = sides.top ? '1' : '0';
     style['--gd-br'] = sides.right ? '1' : '0';
     style['--gd-bb'] = sides.bottom ? '1' : '0';

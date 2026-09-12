@@ -353,8 +353,8 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
 
       // Table tab: style, caption, outline, gridlines, banding.
       await rail.getByRole('tab', { name: 'Table' }).click();
-      await rail.getByRole('radio', { name: 'Forest' }).click();
-      await expect(table).toHaveAttribute('data-style', 'forest');
+      await rail.getByRole('radio', { name: 'Slate' }).click();
+      await expect(table).toHaveAttribute('data-style', 'slate');
       await rail.getByRole('switch', { name: 'Alternating row colour' }).click();
       await expect(table).toHaveAttribute('data-alternating', 'true');
       await rail.getByRole('switch', { name: 'Caption' }).click();
@@ -363,7 +363,7 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
       await rail.getByRole('combobox', { name: 'Table outline' }).click();
       await page.getByRole('option', { name: 'Accent' }).click();
       await expect(table).toHaveAttribute('data-outline', 'accent');
-      await expect.poll(tables).toContain('"style":"forest"');
+      await expect.poll(tables).toContain('"style":"slate"');
       // Fit columns to content measures with the real canvas here (GRID-01: whole units). A
       // collaborator writes a value wider than one unit into column 1 first, so the fit has
       // something to change: the table grows from three units to four. A width is geometry,
@@ -460,6 +460,86 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
     });
   }
 
+  test('INSP-06 I18N-03 every type size fits its row without clipping descenders or matras, in en and ta: the sizes past the compact row wrap it', async ({
+    page,
+  }) => {
+    const room = await openDoc(page, 1440);
+    const gd = openDocument(room.doc);
+    const tableId = Array.from(gd.tables.keys())[0]!;
+    const record = tableById(gd, tableId)!;
+    // Descenders in Latin; a conjunct and matras in Tamil (the tallest Indic boxes).
+    setCellText(gd, tableId, record.rows[0]!, record.columns[0]!.id, 'Kathmandu gyp');
+    setCellText(gd, tableId, record.rows[1]!, record.columns[0]!.id, 'வணக்கம் ஜோ');
+    await firstCell(page).click();
+    const rail = inspector(page);
+    await rail.getByRole('tab', { name: 'Text' }).click();
+    const grid = page.getByRole('grid').first();
+    const fits = async (index: number) => {
+      const cell = grid.getByRole('gridcell').nth(index);
+      return cell.evaluate((el) => {
+        const rich = el.querySelector('.gd-rich');
+        if (rich === null) return { ok: false, why: 'no text' };
+        // The line box must sit inside the cell's box to half a pixel a side — the sub-pixel
+        // re-centring the DS Indic note accepts (@gede/ui styles.css); anything more clips.
+        const box = el.getBoundingClientRect();
+        const line = rich.getBoundingClientRect();
+        const inside = line.top >= box.top - 0.5 && line.bottom <= box.bottom + 0.5;
+        return { ok: inside, why: `${String(line.height)} in ${String(box.height)}` };
+      });
+    };
+    // Column scope covers the Tamil cell too, so the DS's 1.7 Indic floor decides: h1 and display
+    // cannot fit even the wrapped row and read disabled with the reason; the rest fit in both
+    // scripts. `cell` is the default (a re-selection fires nothing), so it is chosen last.
+    await rail.getByRole('combobox', { name: 'Size' }).click();
+    await expect(page.getByRole('option', { name: /· h1$/ })).toHaveAttribute('data-disabled', '');
+    await expect(page.getByRole('option', { name: /· display$/ })).toHaveAttribute(
+      'data-disabled',
+      '',
+    );
+    await page.keyboard.press('Escape');
+    await expect(rail.getByRole('region', { name: 'font' })).toContainText(
+      '28 px and 40 px — need more than a wrapped row for Tamil, Hindi or Telugu text',
+    );
+    for (const size of ['body-sm', 'body', 'h3', 'h2', 'cell']) {
+      await rail.getByRole('combobox', { name: 'Size' }).click();
+      await page.getByRole('option', { name: new RegExp(`· ${size}$`) }).click();
+      await expect(firstCell(page)).toHaveAttribute('data-size', size);
+      const en = await fits(0);
+      const ta = await fits(3);
+      expect(en.ok, `${size} en ${en.why}`).toBe(true);
+      expect(ta.ok, `${size} ta ${ta.why}`).toBe(true);
+    }
+    // body and up took the wrapped row: 44 px, not 22 (the column stays wrapped afterwards).
+    await expect(firstCell(page)).toHaveCSS('height', '44px');
+    // At cell scope on the Latin cell every size is offered; h1 and display fit its wrapped row.
+    await rail.getByRole('radio', { name: 'Cell B5' }).click();
+    for (const size of ['h1', 'display']) {
+      await rail.getByRole('combobox', { name: 'Size' }).click();
+      await page.getByRole('option', { name: new RegExp(`· ${size}$`) }).click();
+      await expect(firstCell(page)).toHaveAttribute('data-size', size);
+      const en = await fits(0);
+      expect(en.ok, `${size} en ${en.why}`).toBe(true);
+    }
+  });
+
+  test('INSP-07 the edge layer paints under the tables and takes no pointer events', async ({
+    page,
+  }) => {
+    await openDoc(page, 1440);
+    await firstCell(page).click();
+    await page.getByRole('button', { name: 'DAG edges' }).click();
+    const edges = page.getByTestId('dag-edges');
+    await expect(edges).toHaveCSS('pointer-events', 'none');
+    const zEdges = Number(await edges.evaluate((el) => getComputedStyle(el).zIndex));
+    const zTable = Number(
+      await page
+        .locator('.gd-table')
+        .first()
+        .evaluate((el) => getComputedStyle(el).zIndex),
+    );
+    expect(zEdges).toBeLessThan(zTable);
+  });
+
   test('MENU-04 GRID-01 merge with the cell to the right spans the anchor over the covered cell, addresses stay, unmerge restores; the styled table renders at 480 and 768 read-only', async ({
     page,
     snapshot,
@@ -486,11 +566,11 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
     // Style the table, then read it on the two narrower breakpoints (RESP-01: same geometry).
     const rail = inspector(page);
     await rail.getByRole('tab', { name: 'Table' }).click();
-    await rail.getByRole('radio', { name: 'Amber' }).click();
+    await rail.getByRole('radio', { name: 'Slate' }).click();
     await rail.getByRole('switch', { name: 'Alternating row colour' }).click();
     for (const width of [768, 480] as const) {
       await page.setViewportSize({ width, height: 900 });
-      await expect(page.locator('.gd-table').first()).toHaveAttribute('data-style', 'amber');
+      await expect(page.locator('.gd-table').first()).toHaveAttribute('data-style', 'slate');
       await expect(page.locator('.gd-table').first()).toHaveCSS('width', '480px');
       await snapshot(`appearance-${String(width)}`);
     }

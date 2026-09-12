@@ -1202,21 +1202,16 @@ button.gd-cell__chevron:hover {
    borders are an inset pseudo-element, a span is a wider anchor box.
    ========================================================================= */
 
-/* ---- table styles (INSP-04): a header band and an alternating band per ramp.
-   The prototype's swatches are (head, alt) pairs; these are the four the ramps express. */
+/* ---- table styles (INSP-04): a header band and an alternating band from one neutral ramp.
+   The prototype's swatches are (head, alt) pairs; only the neutral one is offered — amber
+   and forest carry the live and brand meanings (DS §2 "no third meaning", ADR-034). */
 .gd-table[data-style='slate'] .gd-table__row--header {
   background: var(--tint-slate);
-}
-.gd-table[data-style='forest'] .gd-table__row--header {
-  background: var(--tint-forest);
-}
-.gd-table[data-style='amber'] .gd-table__row--header {
-  background: var(--tint-amber);
 }
 .gd-table[data-style] .gd-table__row--header .gd-table__header--frozen {
   background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
-/* On a header band the muted letter and glyphs take ink: ink-muted on the forest tint is 4.46:1. */
+/* On a header band the muted letter and glyphs take ink (measured in contrast.test.ts). */
 .gd-table[data-style] .gd-table__letter,
 .gd-table[data-style] .gd-table__header-glyph {
   color: var(--ink);
@@ -1227,12 +1222,6 @@ button.gd-cell__chevron:hover {
 }
 .gd-table[data-alternating][data-style='slate'] {
   --gd-band-tone: var(--tint-slate-soft);
-}
-.gd-table[data-alternating][data-style='forest'] {
-  --gd-band-tone: var(--tint-forest-soft);
-}
-.gd-table[data-alternating][data-style='amber'] {
-  --gd-band-tone: var(--tint-amber-soft);
 }
 .gd-table[data-alternating]
   .gd-table__grid
@@ -1288,7 +1277,7 @@ button.gd-cell__chevron:hover {
   padding: 0 var(--space-2);
   border-top: 1px dashed var(--border);
   color: var(--ink-muted);
-  font-size: 0.65625rem;
+  font-size: var(--text-cell); /* the DS floor for grid content */
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1326,12 +1315,14 @@ button.gd-cell__chevron:hover {
   box-shadow: var(--elev-overlay);
 }
 
-/* ---- DAG edges (INSP-07, PRD §7): table-to-table lineage in the layer, above tables */
+/* ---- DAG edges (INSP-07, PRD §7, §20 "a non-interactive layer under the DOM"): table-to-table
+   lineage in the transformed layer, painted beneath every table (the layer is a stacking
+   context, so −1 sits under the tables' 0…n and above nothing else). */
 .gd-edges {
   position: absolute;
   top: 0;
   left: 0;
-  z-index: 55;
+  z-index: -1;
   overflow: visible;
   pointer-events: none;
 }
@@ -1348,7 +1339,7 @@ button.gd-cell__chevron:hover {
 .gd-edges__label {
   fill: var(--ink);
   font-family: var(--font-mono);
-  font-size: 0.5625rem;
+  font-size: var(--text-label);
   paint-order: stroke;
   stroke: var(--surface);
   stroke-width: 3;
@@ -1370,12 +1361,18 @@ button.gd-cell__chevron:hover {
   color: inherit;
 }
 
-/* ---- typography (INSP-06): the token families, the four weights, the type scale */
+/* ---- typography (INSP-06): the token families, the four weights (300–600, DS §2 has no 700),
+   the type scale. Each size sets the line box `TYPE_SIZE_LINE` in @gede/core records: the
+   cell scale's 1.35 up to h3 (fits the 22 px row), the DS leading from h2 (which takes the
+   wrapped row). Indic text keeps the 1.7 floor `:lang()` sets in @gede/ui (I18N-03). */
 .gd-cell[data-font='mono'] {
   font-family: var(--font-mono);
 }
 .gd-cell[data-font='ui'] {
   font-family: var(--font-ui);
+}
+.gd-cell[data-weight='300'] {
+  font-weight: 300;
 }
 .gd-cell[data-weight='400'] {
   font-weight: 400;
@@ -1385,9 +1382,6 @@ button.gd-cell__chevron:hover {
 }
 .gd-cell[data-weight='600'] {
   font-weight: 600;
-}
-.gd-cell[data-weight='700'] {
-  font-weight: 700;
 }
 .gd-cell[data-size='cell'] {
   font-size: var(--text-cell);
@@ -1400,11 +1394,43 @@ button.gd-cell__chevron:hover {
 }
 .gd-cell[data-size='h3'] {
   font-size: var(--text-h3);
+  line-height: 1.3; /* 20.8 px: the most the compact cell's 21 px content box takes */
   letter-spacing: -0.01em;
 }
 .gd-cell[data-size='h2'] {
   font-size: var(--text-h2);
+  line-height: 1.25;
   letter-spacing: -0.02em;
+}
+.gd-cell[data-size='h1'] {
+  font-size: var(--text-h1);
+  line-height: 1.15;
+  letter-spacing: -0.03em;
+}
+.gd-cell[data-size='display'] {
+  font-size: var(--text-display);
+  line-height: 1.05;
+  letter-spacing: -0.04em;
+}
+/* A sized cell on the wrapped row shows one line of the larger type, centred without the
+   wrapped row's top padding, so display (42 px) sits inside the 43 px content box. */
+.gd-cell--wrap[data-size='h2'],
+.gd-cell--wrap[data-size='h1'],
+.gd-cell--wrap[data-size='display'] {
+  align-items: center;
+  padding-top: 0;
+}
+.gd-cell--wrap[data-size='h2'] .gd-rich,
+.gd-cell--wrap[data-size='h1'] .gd-rich,
+.gd-cell--wrap[data-size='display'] .gd-rich {
+  display: block;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.gd-cell--wrap[data-size='h2'] .gd-rich__p,
+.gd-cell--wrap[data-size='h1'] .gd-rich__p,
+.gd-cell--wrap[data-size='display'] .gd-rich__p {
+  white-space: nowrap;
 }
 
 /* ---- alignment (INSP-06): horizontal on the text, vertical on the cell's flex axis */
@@ -1531,18 +1557,6 @@ button.gd-cell__chevron:hover {
 .gd-insp__style-swatch[data-style='slate'] .gd-insp__style-band {
   background: var(--tint-slate-soft);
 }
-.gd-insp__style-swatch[data-style='forest'] .gd-insp__style-head {
-  background: var(--tint-forest);
-}
-.gd-insp__style-swatch[data-style='forest'] .gd-insp__style-band {
-  background: var(--tint-forest-soft);
-}
-.gd-insp__style-swatch[data-style='amber'] .gd-insp__style-head {
-  background: var(--tint-amber);
-}
-.gd-insp__style-swatch[data-style='amber'] .gd-insp__style-band {
-  background: var(--tint-amber-soft);
-}
 .gd-insp__fill,
 .gd-insp__ink {
   display: inline-flex;
@@ -1601,7 +1615,7 @@ button.gd-cell__chevron:hover {
   line-height: 1;
 }
 .gd-insp__edge-label {
-  font-size: 0.5625rem;
+  font-size: var(--text-label);
   line-height: 1.2;
   white-space: normal;
   text-align: center;
@@ -1616,7 +1630,7 @@ button.gd-cell__chevron:hover {
 }
 .gd-insp__rule {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto 1fr auto auto;
   align-items: center;
   gap: var(--space-2);
   padding: var(--space-1) var(--space-2);
@@ -1658,14 +1672,16 @@ button.gd-cell__chevron:hover {
   border-style: dashed;
   pointer-events: none;
 }
-.gd-ghost .gd-table::after {
-  content: 'pinned to viewport';
+/* The ghost's label is a rendered string (I18N-05), placed over the ghost's header row. */
+.gd-ghost__label {
   position: absolute;
   top: calc(var(--lattice-row) * 2 + var(--space-1));
   left: var(--space-2);
   font-family: var(--font-mono);
-  font-size: 0.5625rem;
+  font-size: var(--text-label);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--ink);
+  white-space: nowrap;
+  pointer-events: none;
 }

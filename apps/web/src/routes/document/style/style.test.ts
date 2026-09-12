@@ -13,6 +13,8 @@ import {
   LATTICE,
   mergeCells,
   openDocument,
+  cellRich,
+  setCellRich,
   setCellText,
   setColumnAppearance,
   setColumnWidth,
@@ -25,7 +27,14 @@ import {
 } from '@gede/core';
 
 import { nextCell, type TraversalTable } from '../../../doc/selection.js';
-import { fitColumnsToContent, fitRowsToContent, MAX_FIT_UNITS, type FitMeasure } from './fit.js';
+import { layoutCell } from '../cell/layout.js';
+import {
+  fitColumnsToContent,
+  fitRowsToContent,
+  MAX_FIT_UNITS,
+  widestLine,
+  type FitMeasure,
+} from './fit.js';
 import { createRuleEvaluator } from './rules-client.js';
 
 function fixture(): { gd: GedeDoc; tableId: Id; rows: readonly Id[]; cols: readonly Id[] } {
@@ -36,9 +45,14 @@ function fixture(): { gd: GedeDoc; tableId: Id; rows: readonly Id[]; cols: reado
   return { gd, tableId, rows: rec.rows, cols: rec.columns.map((c) => c.id) };
 }
 
-/** A FAKE measurer: 7 canvas px per character, doubled for the h2 size, so widths are arithmetic. */
+/**
+ * A FAKE measurer: 7 canvas px per character, doubled for the h2 size, 9 for a bold (600)
+ * run and 8 for an italic one, so widths are arithmetic.
+ */
 const perChar: FitMeasure = {
-  measure: (text, font) => text.length * (font.size === 'h2' ? 14 : 7),
+  measure: (text, font) =>
+    text.length *
+    (font.size === 'h2' ? 14 : font.weight === 600 ? 9 : font.italic === true ? 8 : 7),
 };
 
 describe('INSP-04 fit to content', () => {
@@ -60,6 +74,46 @@ describe('INSP-04 fit to content', () => {
     ]);
     // Every width is a whole number of lattice columns.
     for (const w of widths) expect(Number.isInteger(w.units)).toBe(true);
+  });
+
+  it('INSP-04 the widest line is measured per paragraph and per run: a bold run is wider, a second paragraph does not add to the first', () => {
+    const { gd, tableId, rows, cols } = fixture();
+    const table = tableMap(gd, tableId)!;
+    // Two paragraphs of 20 characters: one line of 140 px, not 40 characters joined (287 px).
+    setCellText(gd, tableId, rows[0]!, cols[0]!, `${'x'.repeat(20)}\n${'y'.repeat(20)}`);
+    // A bold run of 20: 180 px, past one unit with the chrome.
+    setCellRich(gd, tableId, rows[1]!, cols[1]!, {
+      type: 'doc',
+      content: [
+        {
+          type: 'paragraph',
+          content: [{ type: 'text', text: 'x'.repeat(20), marks: [{ type: 'bold' }] }],
+        },
+      ],
+    });
+    const layout = layoutCell(
+      cellRich(table, rows[1]!, cols[1]!),
+      { kind: 'auto', opts: {} },
+      'en-US',
+    );
+    expect(widestLine(layout, { family: 'ui', weight: 400, size: 'cell' }, perChar)).toBe(180);
+    const widths = fitColumnsToContent(table, tableById(gd, tableId)!, {
+      locale: 'en-US',
+      measure: perChar,
+    });
+    expect(widths).toEqual([
+      { colId: cols[0], units: 1 },
+      { colId: cols[1], units: 2 },
+      { colId: cols[2], units: 1 },
+    ]);
+    // `only` restricts to the column the menu was opened on.
+    expect(
+      fitColumnsToContent(table, tableById(gd, tableId)!, {
+        locale: 'en-US',
+        measure: perChar,
+        only: [cols[1]!],
+      }),
+    ).toEqual([{ colId: cols[1], units: 2 }]);
   });
 
   it('INSP-04 GRID-09 rows wrap when any cell runs past its column; the rest read compact; a wrapped column is not counted twice', () => {

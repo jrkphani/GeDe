@@ -45,18 +45,36 @@ import {
   stackingPosition,
 } from './arrange.js';
 import { handleRulesRequest, isRulesRequest } from './rule-engine.js';
-import { addColumnRule, removeColumnRule, updateColumnRule } from './rule-writes.js';
+import {
+  addColumnRule,
+  moveColumnRule,
+  removeColumnRule,
+  updateColumnRule,
+} from './rule-writes.js';
 import { describeRule, evaluateRules, readRules, ruleMatches } from './rules.js';
 import { mergeCells, mergeRoom, spanAt, spanCovering, spanIndex, unmergeCells } from './spans.js';
 import { setTableLook } from './table.js';
 import {
+  BOLD_WEIGHT,
   characterStyleOf,
   CHARACTER_STYLE_BUNDLES,
   DEFAULT_TABLE_LOOK,
+  FONT_WEIGHTS,
+  INDIC_LINE_HEIGHT,
   mergeAppearance,
   readAppearance,
+  rowContentPx,
+  rowsForSize,
+  sizeRefusal,
+  TABLE_STYLES,
+  TYPE_SIZE_LINE,
   TYPE_SIZE_PX,
+  TYPE_SIZES,
 } from './types.js';
+import { LATTICE } from '../lattice.js';
+import { addMappingColumn } from '../ref/mapping.js';
+import { setPull } from '../ref/pull.js';
+import { tableEntries, type CellEntry } from '../search/snapshot.js';
 
 function fixture(rows = 4, columns = 3): { gd: GedeDoc; sheetId: Id; tableId: Id } {
   const gd = openDocument(new Y.Doc());
@@ -73,16 +91,16 @@ describe('INSP-04 table look', () => {
     gd.doc.on('afterTransaction', () => {
       transactions += 1;
     });
-    setTableLook(gd, tableId, { style: 'forest', alternating: true });
+    setTableLook(gd, tableId, { style: 'slate', alternating: true });
     expect(transactions).toBe(1);
     const look = tableById(gd, tableId)?.look;
-    expect(look?.style).toBe('forest');
+    expect(look?.style).toBe('slate');
     expect(look?.alternating).toBe(true);
     expect(look?.outline).toBe('hairline');
     setTableLook(gd, tableId, { outline: 'accent', gridlines: 'contrast', captionShown: true });
     setTableLook(gd, tableId, { caption: 'Field notes', titleShown: false });
     expect(tableById(gd, tableId)?.look).toEqual({
-      style: 'forest',
+      style: 'slate',
       titleShown: false,
       caption: 'Field notes',
       captionShown: true,
@@ -152,21 +170,95 @@ describe('INSP-05 INSP-06 INSP-10 appearance', () => {
       border: { edges: 'top-bottom', weight: 'strong' },
     });
     expect(readAppearance({ border: { edges: 'diagonal', weight: 'strong' } })).toEqual({});
-    expect(readAppearance({ size: 'label', weight: 300, font: 'serif', fill: 'pink' })).toEqual({});
+    expect(readAppearance({ size: 'label', weight: 700, font: 'serif', fill: 'pink' })).toEqual({});
   });
 
-  it('INSP-06 character styles are bundles on the type scale; size never goes under the 11 px floor nor above a 22 px row', () => {
+  it('INSP-06 character styles are bundles on the type scale; the whole scale above the 11 px floor is offered and every line box fits a compact or a wrapped row, in Latin and Indic alike', () => {
     expect(characterStyleOf(CHARACTER_STYLE_BUNDLES.title)).toBe('title');
     expect(characterStyleOf(mergeAppearance({ fill: 'amber' }, CHARACTER_STYLE_BUNDLES.body))).toBe(
       'body',
     );
     expect(characterStyleOf({ size: 'h3', weight: 400 })).toBeNull();
-    for (const px of Object.values(TYPE_SIZE_PX)) {
-      expect(px).toBeGreaterThanOrEqual(11);
-      expect(px).toBeLessThanOrEqual(22);
+    expect(TYPE_SIZES).toEqual(['cell', 'body-sm', 'body', 'h3', 'h2', 'h1', 'display']);
+    for (const size of TYPE_SIZES) {
+      expect(TYPE_SIZE_PX[size]).toBeGreaterThanOrEqual(11);
+      for (const indic of [false, true]) {
+        const box = TYPE_SIZE_PX[size] * (indic ? INDIC_LINE_HEIGHT : TYPE_SIZE_LINE[size]);
+        const rows = rowsForSize(size, indic);
+        // The compact row's content box (22 px less the rule) or the wrapped row's, never past
+        // either (GRID-09); a size that fits neither is refused, never clipped.
+        if (rows === null) expect(box).toBeGreaterThan(rowContentPx(2) + 0.5);
+        else
+          expect(rowContentPx(rows) + 0.5, `${size} ${indic ? 'ta' : 'en'}`).toBeGreaterThanOrEqual(
+            box,
+          );
+        expect(rowContentPx(1)).toBe(LATTICE.row - 1);
+      }
     }
-    // A size stored by a newer client that this scale does not carry reads as absent.
-    expect(readAppearance({ size: 'display' })).toEqual({});
+    // Every Latin size fits a row or the wrapped row; what fits the compact row stays compact.
+    expect(rowsForSize('h3', false)).toBe(1);
+    expect(rowsForSize('h2', false)).toBe(2);
+    expect(rowsForSize('display', false)).toBe(2);
+    // Indic at the DS's 1.7 floor: cell stays compact, body-sm (22.1 px) to h2 wrap, h1 and
+    // display cannot be shown and say so (INSP-11).
+    expect(rowsForSize('cell', true)).toBe(1);
+    expect(rowsForSize('body-sm', true)).toBe(2);
+    expect(rowsForSize('body', true)).toBe(2);
+    expect(rowsForSize('h2', true)).toBe(2);
+    expect(rowsForSize('h1', true)).toBeNull();
+    expect(sizeRefusal('display', true)).toMatch(/needs more than a wrapped row/);
+    expect(sizeRefusal('display', false)).toBeUndefined();
+    // DS §2 has no 700: the four steps end at 600 and the Bold mark renders there too.
+    expect(FONT_WEIGHTS).toEqual([300, 400, 500, 600]);
+    expect(BOLD_WEIGHT).toBe(600);
+    expect(readAppearance({ weight: 700 })).toEqual({});
+    // Table bands are neutral only (DS "no third meaning"): plain and slate.
+    expect(TABLE_STYLES).toEqual(['plain', 'slate']);
+  });
+
+  it('INSP-10 a cell can say "none" over a column fill or border, which is not the same as inheriting; a rule may draw a border', () => {
+    const { gd, tableId } = fixture();
+    const record = tableById(gd, tableId)!;
+    const col = record.columns[0]!.id;
+    const row = record.rows[0]!;
+    setColumnAppearance(gd, tableId, col, {
+      fill: 'amber',
+      border: { edges: 'all', weight: 'hairline' },
+    });
+    setCellAppearance(gd, tableId, row, col, {
+      fill: 'none',
+      border: { edges: 'none', weight: 'hairline' },
+    });
+    const table = tableMap(gd, tableId)!;
+    const effective = cellAppearanceFor(table, tableById(gd, tableId)!.columns[0]!, row);
+    expect(effective.fill).toBe('none');
+    const look = resolveLook(effective, null, { kind: 'auto', opts: {} });
+    expect(look.fill).toBeUndefined();
+    expect(look.border).toBeUndefined();
+    // Clearing the override (null) is inherit: the column's fill shows again.
+    setCellAppearance(gd, tableId, row, col, { fill: null, border: null });
+    expect(cellAppearanceOverride(table, row, col)).toBeNull();
+    const ruled = resolveLook(
+      { fill: 'none' },
+      {
+        rule: { id: 'r', when: { trigger: 'contains', text: 'x' }, style: {} },
+        fill: undefined,
+        textColour: undefined,
+        mark: undefined,
+        border: { edges: 'outline', weight: 'accent' },
+      },
+      { kind: 'auto', opts: {} },
+    );
+    expect(ruled.border).toEqual({ edges: 'outline', weight: 'accent' });
+    expect(
+      readRules([
+        {
+          id: 'b',
+          when: { trigger: 'contains', text: 'x' },
+          style: { border: { edges: 'left', weight: 'strong' } },
+        },
+      ])[0]?.style.border,
+    ).toEqual({ edges: 'left', weight: 'strong' });
   });
 
   it('A11Y-03 a text colour under 4.5:1 on its fill resolves to ink and says so; numbers keep their right alignment under Automatic (FMT-02)', () => {
@@ -225,6 +317,24 @@ describe('INSP-05 conditional highlighting rules', () => {
     expect(hit?.textColour).toBe('ink');
     expect(evaluateRules(rules, 'other')?.mark).toBe('strikethrough');
     expect(evaluateRules(rules, '')).toBeNull();
+  });
+
+  it('INSP-05 a rule moves up or down the list, which is its priority', () => {
+    const { gd, tableId } = fixture();
+    const col = tableById(gd, tableId)!.columns[0]!.id;
+    const a = addColumnRule(gd, tableId, col, {
+      when: { trigger: 'contains', text: 'a' },
+      style: {},
+    });
+    const b = addColumnRule(gd, tableId, col, {
+      when: { trigger: 'contains', text: 'b' },
+      style: {},
+    });
+    expect(moveColumnRule(gd, tableId, col, a.id, 'up')).toBe(false);
+    expect(moveColumnRule(gd, tableId, col, b.id, 'up')).toBe(true);
+    expect(tableById(gd, tableId)!.columns[0]!.rules.map((r) => r.id)).toEqual([b.id, a.id]);
+    expect(moveColumnRule(gd, tableId, col, b.id, 'down')).toBe(true);
+    expect(tableById(gd, tableId)!.columns[0]!.rules.map((r) => r.id)).toEqual([a.id, b.id]);
   });
 
   it('INSP-05 rules live on the column, one transaction per change, malformed entries dropped on read', () => {
@@ -430,6 +540,44 @@ describe('INSP-07 arrange', () => {
     expect(tableById(gd, b)?.gridRow).toBe(7);
   });
 
+  it('INSP-07 REF-02 REF-03 DAG edges include mapping and pull columns (a pull with no match too), and a reader on another sheet counts as "read by" from either sheet', () => {
+    const { gd, sheetId, tableId: a } = fixture(3, 2);
+    const b = createTable(gd, { sheetId, at: { col: 6, row: 1 }, columns: 1, rows: 1 });
+    const other = createSheet(gd);
+    const c = createTable(gd, { sheetId: other, at: { col: 1, row: 1 }, columns: 1, rows: 1 });
+    const aRec = tableById(gd, a)!;
+    // b maps onto a's first column; c (other sheet) pulls from a with a filter nothing matches.
+    expect(addMappingColumn(gd, b, { tableId: a, colId: aRec.columns[0]!.id })).not.toBeNull();
+    const cCol = tableById(gd, c)!.columns[0]!.id;
+    expect(
+      setPull(gd, c, cCol, { tableId: a, colId: aRec.columns[0]!.id, filter: 'nothing here' }),
+    ).toBe(true);
+    const edges = dagEdges(gd, sheetId);
+    expect(edges).toEqual([
+      { from: a, to: b, count: 1, crossSheet: false },
+      { from: a, to: c, count: 1, crossSheet: true },
+    ]);
+    // a is read by two tables, one of them elsewhere — reported from a's sheet and from c's.
+    expect(edgesOf(edges, a)).toEqual({ in: 0, out: 2, crossSheet: 1 });
+    expect(edgesOf(dagEdges(gd, other), c)).toEqual({ in: 1, out: 0, crossSheet: 1 });
+  });
+
+  it('MENU-04 FIND-01 Find skips the cells a span covers, as it skips a hidden column', () => {
+    const { gd, tableId } = fixture();
+    const record = tableById(gd, tableId)!;
+    setCellText(gd, tableId, record.rows[0]!, record.columns[1]!.id, 'hidden under');
+    setCellText(gd, tableId, record.rows[1]!, record.columns[1]!.id, 'hidden beside');
+    const cells = () =>
+      tableEntries(gd, tableId)!.entries.filter((e): e is CellEntry => e.kind === 'cell');
+    const before = cells().length;
+    mergeCells(gd, tableId, record.rows[0]!, record.columns[0]!.id, { rows: 1, cols: 2 });
+    const after = cells();
+    expect(after).toHaveLength(before - 1);
+    const values = after.map((e) => e.texts.map((t) => t.text).join(' '));
+    expect(values.some((v) => v.includes('hidden under'))).toBe(false);
+    expect(values.some((v) => v.includes('hidden beside'))).toBe(true);
+  });
+
   it('INSP-07 DAG edges come from the id-bound formula tokens, counted per table pair, cross-sheet ones flagged; visibility is a sheet flag', () => {
     const { gd, sheetId, tableId: a } = fixture(3, 2);
     const b = createTable(gd, { sheetId, at: { col: 6, row: 1 }, columns: 2, rows: 2 });
@@ -450,9 +598,13 @@ describe('INSP-07 arrange', () => {
       `=Concat({c:${b}:${bRec.rows[0]!}:${bRec.columns[0]!.id}})`,
     );
     const edges = dagEdges(gd, sheetId);
-    expect(edges).toEqual([{ from: a, to: b, count: 2, crossSheet: false }]);
+    expect(edges).toEqual([
+      { from: a, to: b, count: 2, crossSheet: false },
+      { from: b, to: c, count: 1, crossSheet: true },
+    ]);
     expect(edgesOf(edges, a)).toEqual({ in: 0, out: 1, crossSheet: 0 });
-    expect(edgesOf(edges, b)).toEqual({ in: 1, out: 0, crossSheet: 0 });
+    // b is read by c on another sheet: "read by" says so from b's own sheet (PRD §11).
+    expect(edgesOf(edges, b)).toEqual({ in: 1, out: 1, crossSheet: 1 });
     // From the other sheet, c's edge from b is reported as cross-sheet (PRD §11: counted, not drawn).
     const otherEdges = dagEdges(gd, other);
     expect(otherEdges).toEqual([{ from: b, to: c, count: 1, crossSheet: true }]);

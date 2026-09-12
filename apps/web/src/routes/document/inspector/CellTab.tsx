@@ -273,7 +273,11 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
             value={look.effective.fill ?? 'none'}
             disabled={look.disabledReason !== undefined}
             onChange={(fill) => {
-              look.write({ fill: fill === 'none' ? null : fill });
+              // INSP-10: at cell scope "None" over a column fill is an explicit `none` — the cell
+              // shows no fill; at column scope (or with no column fill) it clears back to inherit.
+              const columnFill = look.column?.appearance.fill;
+              const explicit = look.scope === 'cell' && columnFill !== undefined;
+              look.write({ fill: fill === 'none' ? (explicit ? 'none' : null) : fill });
             }}
             options={FILLS.map((f) => ({
               value: f.value,
@@ -291,11 +295,12 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
             value={look.effective.border?.edges ?? 'none'}
             disabled={look.disabledReason !== undefined}
             onChange={(edges) => {
+              const weight = look.effective.border?.weight ?? 'hairline';
+              const columnBorder = look.column?.appearance.border;
+              const explicit = look.scope === 'cell' && columnBorder !== undefined;
               look.write({
                 border:
-                  edges === 'none'
-                    ? null
-                    : { edges, weight: look.effective.border?.weight ?? 'hairline' },
+                  edges === 'none' ? (explicit ? { edges, weight } : null) : { edges, weight },
               });
             }}
             options={BORDER_EDGES.map((edges) => ({
@@ -315,7 +320,9 @@ export function CellTab({ gd, table, cell, editable, commands }: CellTabProps) {
             value={look.effective.border?.weight ?? 'hairline'}
             disabledReason={
               look.disabledReason ??
-              (look.effective.border === undefined ? 'choose an edge first' : undefined)
+              (look.effective.border === undefined || look.effective.border.edges === 'none'
+                ? 'choose an edge first'
+                : undefined)
             }
             onValueChange={(weight) => {
               const border = look.effective.border;

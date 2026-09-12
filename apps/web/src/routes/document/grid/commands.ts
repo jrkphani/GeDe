@@ -27,16 +27,19 @@ import {
   CANVAS_LAYOUT_LABELS,
   cellAddress,
   cellReadOnlyReason,
+  cellText,
   clearCell as clearCellText,
   collapseAll as collapseAllMutation,
   commitCellText,
   deleteColumn as deleteColumnMutation,
   deleteRow as deleteRowMutation,
+  detectIndicLang,
   expandAll as expandAllMutation,
   hideColumn as hideColumnMutation,
   insertRowBefore,
   layoutSheet,
   mergeCells as mergeCellsMutation,
+  moveColumnRule,
   nestRow as nestRowMutation,
   promoteRow as promoteRowMutation,
   removeColumnRule,
@@ -48,6 +51,8 @@ import {
   renameColumn as renameColumnMutation,
   rowMeta,
   rowReadOnlyReason,
+  rowsForSize,
+  sizeRefusal,
   setCellAppearance,
   setCellRich,
   setColumnAppearance,
@@ -71,6 +76,7 @@ import {
   unhideColumn as unhideColumnMutation,
   unmergeCells as unmergeCellsMutation,
   updateColumnRule,
+  WRAPPED_ROW_HEIGHT,
   type AppearancePatch,
   type CanvasLayout,
   type ConditionalRule,
@@ -195,6 +201,8 @@ export interface GridCommands {
     patch: Partial<Omit<ConditionalRule, 'id'>>,
   ): boolean;
   removeRule(tableId: Id, colId: Id, ruleId: string): boolean;
+  /** INSP-05: move a rule one place up or down the list — its priority. */
+  moveRule(tableId: Id, colId: Id, ruleId: string, direction: 'up' | 'down'): boolean;
   /**
    * MENU-04: merge from the anchor across rows × columns as a visual span —
    * the covered cells keep their addresses and data (non-negotiable 3).
@@ -667,21 +675,57 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       return true;
     },
     setColumnAppearance(tableId, colId, patch) {
-      const column = record(tableId)?.columns.find((c) => c.id === colId);
-      if (!editable() || column === undefined) return false;
-      setColumnAppearance(gd, tableId, colId, patch);
-      announce(`${describePatch(patch)} for column ${column.label}`);
+      const rec = record(tableId);
+      const column = rec?.columns.find((c) => c.id === colId);
+      const t = map(tableId);
+      if (!editable() || rec === null || column === undefined || t === null) return false;
+      // INSP-06 / GRID-09: a size whose line box needs the wrapped row wraps the column, in the
+      // same transaction — the lattice already has the two-unit row (ADR-024).
+      const indic = rec.rows.some((rowId) => detectIndicLang(cellText(t, rowId, colId)) !== null);
+      const refusal = patch.size == null ? undefined : sizeRefusal(patch.size, indic);
+      if (refusal !== undefined) {
+        announce(`Size not applied: ${refusal}`);
+        return false;
+      }
+      const wraps = patch.size != null && rowsForSize(patch.size, indic) === 2 && !column.wrap;
+      gd.doc.transact(() => {
+        setColumnAppearance(gd, tableId, colId, patch);
+        if (wraps) setColumnWrapMutation(gd, tableId, colId, true);
+      }, gd.origin);
+      announce(
+        `${describePatch(patch)} for column ${column.label}${wraps ? '; the column wraps to fit the size' : ''}`,
+      );
       return true;
     },
     setCellAppearance(cell, patch) {
-      if (!editable() || map(cell.tableId) === null) return false;
-      setCellAppearance(gd, cell.tableId, cell.rowId, cell.colId, patch);
+      const t = map(cell.tableId);
+      if (!editable() || t === null) return false;
+      const indic = detectIndicLang(cellText(t, cell.rowId, cell.colId)) !== null;
+      const refusal = patch?.size == null ? undefined : sizeRefusal(patch.size, indic);
+      if (refusal !== undefined) {
+        announce(`Size not applied: ${refusal}`);
+        return false;
+      }
+      const wraps =
+        patch?.size != null &&
+        rowsForSize(patch.size, indic) === 2 &&
+        rowMeta(t, cell.rowId).height !== WRAPPED_ROW_HEIGHT;
+      gd.doc.transact(() => {
+        setCellAppearance(gd, cell.tableId, cell.rowId, cell.colId, patch);
+        if (wraps) setRowWrapped(gd, cell.tableId, cell.rowId, true);
+      }, gd.origin);
       announce(
         patch === null
           ? `${addressOf(cell)} follows its column again`
-          : `${describePatch(patch)} for ${addressOf(cell)}`,
+          : `${describePatch(patch)} for ${addressOf(cell)}${wraps ? '; the row wraps to fit the size' : ''}`,
       );
       return true;
+    },
+    moveRule(tableId, colId, ruleId, direction) {
+      if (!editable() || record(tableId) === null) return false;
+      const ok = moveColumnRule(gd, tableId, colId, ruleId, direction);
+      if (ok) announce(direction === 'up' ? 'Rule moved up' : 'Rule moved down');
+      return ok;
     },
     addRule(tableId, colId, rule) {
       const column = record(tableId)?.columns.find((c) => c.id === colId);

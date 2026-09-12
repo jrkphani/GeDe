@@ -17,19 +17,18 @@ import type { HighlightToken, TextColourToken } from '../text/types.js';
 // ---------------------------------------------------------------------------
 
 /**
- * Table styles: the prototype's six swatches are header-band + alternate-band
- * colour pairs (Work Scape Canvas `tableStyles`, styles 1–6). The token ramps
- * express four of them — Plain (style 6), Slate (1), Forest (3), Amber (5);
- * the blue (2) and red (4) pairs have no ramp in `packages/tokens` and are not
- * offered until one exists.
+ * Table styles: the prototype's six swatches are unnamed header-band +
+ * alternate-band colour pairs (Work Scape Canvas `tableStyles`, 1–6). The
+ * design system gives each hue one job — amber is the live state, forest the
+ * brand, "grey = everything else, no third meaning" (DS §2) — so a table
+ * band may only be neutral: Plain (the prototype's 6) and Slate (its 1). The
+ * blue, green, red and amber pairs are not offered (ADR-033).
  */
-export const TABLE_STYLES = ['plain', 'slate', 'forest', 'amber'] as const;
+export const TABLE_STYLES = ['plain', 'slate'] as const;
 export type TableStyle = (typeof TABLE_STYLES)[number];
 export const TABLE_STYLE_LABELS: Readonly<Record<TableStyle, string>> = {
   plain: 'Plain',
   slate: 'Slate',
-  forest: 'Forest',
-  amber: 'Amber',
 };
 
 /** Table outline weights: the PRD's hairline / strong / accent (INSP-05) plus none. */
@@ -147,23 +146,30 @@ export const FONT_FAMILY_LABELS: Readonly<Record<FontFamily, string>> = {
   mono: 'IBM Plex Mono',
 };
 
-/** The four-step weight scale (INSP-06). */
-export const FONT_WEIGHTS = [400, 500, 600, 700] as const;
+/**
+ * The four-step weight scale (INSP-06), ending where the design system's
+ * scale ends: DS §2 has no 700, so the steps are 300 / 400 / 500 / 600 (the
+ * prototype's Thin / Regular / Medium / Bold) and the Bold mark is 600 too.
+ */
+export const FONT_WEIGHTS = [300, 400, 500, 600] as const;
 export type FontWeight = (typeof FONT_WEIGHTS)[number];
 export const FONT_WEIGHT_LABELS: Readonly<Record<FontWeight, string>> = {
+  300: 'Light',
   400: 'Regular',
   500: 'Medium',
   600: 'Semibold',
-  700: 'Bold',
 };
+/** The weight the Bold mark and a rule's bold output render at: the scale's heaviest. */
+export const BOLD_WEIGHT: FontWeight = 600;
 
 /**
  * Sizes on the design system's type scale (DS §2), never below the 11 px cell
- * floor — so `mono-cell` (10 px) and `label` (9 px) are not offered — and
- * never above what a 22 px lattice row can show: `h1` (28 px) and `display`
- * (40 px) cannot render in a row, so they are not offered either.
+ * floor — so `mono-cell` (10 px) and `label` (9 px) are not offered. The
+ * whole scale above the floor is: a size whose line box does not fit the
+ * 22 px compact row takes the two-unit wrapped row the lattice already has
+ * (GRID-09, ADR-024), and choosing it wraps the row.
  */
-export const TYPE_SIZES = ['cell', 'body-sm', 'body', 'h3', 'h2'] as const;
+export const TYPE_SIZES = ['cell', 'body-sm', 'body', 'h3', 'h2', 'h1', 'display'] as const;
 export type TypeSize = (typeof TYPE_SIZES)[number];
 /** Pixel size at the 16 px root, for the control's label only; the renderer uses the rem token. */
 export const TYPE_SIZE_PX: Readonly<Record<TypeSize, number>> = {
@@ -172,7 +178,61 @@ export const TYPE_SIZE_PX: Readonly<Record<TypeSize, number>> = {
   body: 15,
   h3: 16,
   h2: 20,
+  h1: 28,
+  display: 40,
 };
+
+/**
+ * The line box of each size on the grid, as `document.css` sets it: the cell
+ * scale's 1.35 up to body, 1.3 for h3 (20.8 px, the most a compact cell's
+ * 21 px content box takes), the DS scale's own leading from h2 up. Indic
+ * scripts always take the 1.7 the design system makes a floor (I18N-03,
+ * `:lang(ta)` in @gede/ui, so matras never clip) — which is why h1 and
+ * display cannot be shown for Indic text even on the wrapped row (47.6 and
+ * 68 px against 43).
+ */
+export const INDIC_LINE_HEIGHT = 1.7;
+export const TYPE_SIZE_LINE: Readonly<Record<TypeSize, number>> = {
+  cell: 1.35,
+  'body-sm': 1.35,
+  body: 1.35,
+  h3: 1.3,
+  h2: 1.25,
+  h1: 1.15,
+  display: 1.05,
+};
+
+/** The lattice row in px; mirrored here so this module stays free of the lattice import cycle. */
+const ROW_PX = 22;
+/** The cell's bottom rule (`.gd-cell`, border-box): a row's content box is one pixel shorter. */
+const RULE_PX = 1;
+/** A line box within half a pixel of the content box is inside it: it re-centres, nothing clips. */
+const SUBPIXEL = 0.5;
+
+/** What a cell's content box can show on `rows` lattice rows. */
+export function rowContentPx(rows: 1 | 2): number {
+  return rows * ROW_PX - RULE_PX;
+}
+
+/**
+ * Lattice rows a size's line box needs: 1 when it fits the compact row's
+ * content box, 2 when it fits the wrapped row's (GRID-09), null when it fits
+ * neither — h1 and display on Indic text, which the inspector refuses with
+ * that reason (INSP-11).
+ */
+export function rowsForSize(size: TypeSize, indic: boolean): 1 | 2 | null {
+  const px = TYPE_SIZE_PX[size] * (indic ? INDIC_LINE_HEIGHT : TYPE_SIZE_LINE[size]);
+  if (px <= rowContentPx(1) + SUBPIXEL) return 1;
+  if (px <= rowContentPx(2) + SUBPIXEL) return 2;
+  return null;
+}
+
+/** INSP-11: why a size cannot be chosen for Indic text, or undefined when it can. */
+export function sizeRefusal(size: TypeSize, indic: boolean): string | undefined {
+  return rowsForSize(size, indic) === null
+    ? `${String(TYPE_SIZE_PX[size])} px needs more than a wrapped row for Tamil, Hindi or Telugu text at the 1.7 line height`
+    : undefined;
+}
 
 export const H_ALIGNS = ['left', 'center', 'right', 'justify'] as const;
 export type HAlign = (typeof H_ALIGNS)[number];
@@ -185,8 +245,15 @@ export type VAlign = (typeof V_ALIGNS)[number];
  * (Automatic alignment: numbers right, text left, FMT-02; middle vertically;
  * the cell scale; regular weight; the UI family; no fill; ink).
  */
+/**
+ * A fill is one ramp tint, or the explicit `none` a cell writes to show no
+ * fill over a column that has one (INSP-10: "applies to cell B5 only"); an
+ * absent field inherits.
+ */
+export type FillValue = HighlightToken | 'none';
+
 export interface Appearance {
-  readonly fill?: HighlightToken;
+  readonly fill?: FillValue;
   readonly border?: CellBorder;
   readonly font?: FontFamily;
   readonly weight?: FontWeight;
@@ -258,7 +325,7 @@ export function readAppearance(value: unknown): Appearance {
   const out: {
     -readonly [K in keyof Appearance]?: Appearance[K];
   } = {};
-  if (isHighlightToken(v.fill)) out.fill = v.fill;
+  if (isHighlightToken(v.fill) || v.fill === 'none') out.fill = v.fill;
   const border = readCellBorder(v.border);
   if (border !== undefined) out.border = border;
   if (isFontFamily(v.font)) out.font = v.font;
