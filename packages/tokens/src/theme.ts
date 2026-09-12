@@ -35,6 +35,8 @@ export const theme = {
   loading: { delay: 200, minHold: 400, shimmer: 1400 },
   breakpoint: { xs: 0, sm: 480, md: 768, lg: 1024, xl: 1440 },
   lattice: { col: 160, row: 22 },
+  /** Minimum interactive target in CSS pixels (RESP-05; Apple's 44 pt). */
+  hitTarget: 44,
 } as const;
 
 export type Theme = typeof theme;

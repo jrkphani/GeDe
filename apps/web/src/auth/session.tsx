@@ -4,11 +4,14 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import { Navigate, useLocation } from 'react-router';
 import { Skeleton } from '@gede/ui';
+import { getMe } from '../api/me.js';
+import { bindUserLocale, unbindUserLocale } from '../locale.js';
 import { currentUser, onAuthEvent, signOutLocal, type SessionUser } from './cognito.js';
 
 export type SessionState =
@@ -26,7 +29,6 @@ const SessionContext = createContext<Session | null>(null);
 
 const RETURN_TO_KEY = 'gede.returnTo';
 const LAST_EMAIL_KEY = 'gede.lastEmail';
-const LAST_DOCUMENT_KEY = 'gede.lastDocument';
 
 export function rememberReturnTo(path: string): void {
   try {
@@ -68,52 +70,45 @@ export function forgetLastEmail(): void {
   }
 }
 
-export interface LastDocument {
-  id: string;
-  title: string;
-}
-export function rememberLastDocument(doc: LastDocument): void {
-  try {
-    localStorage.setItem(LAST_DOCUMENT_KEY, JSON.stringify(doc));
-  } catch {
-    /* nothing to remember with */
-  }
-}
-export function readLastDocument(): LastDocument | null {
-  try {
-    const raw = localStorage.getItem(LAST_DOCUMENT_KEY);
-    if (raw === null) return null;
-    const v: unknown = JSON.parse(raw);
-    if (typeof v === 'object' && v !== null && 'id' in v && 'title' in v) {
-      const { id, title } = v;
-      if (typeof id === 'string' && typeof title === 'string') return { id, title };
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
-export function forgetLastDocument(): void {
-  try {
-    localStorage.removeItem(LAST_DOCUMENT_KEY);
-  } catch {
-    /* nothing to forget */
-  }
-}
+/**
+ * @deprecated Import from `../last-document.js`. Kept so the document shell
+ * on `main` keeps compiling until it moves to the new module.
+ */
+export { rememberLastDocument, type LastDocument } from '../last-document.js';
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<SessionState>({ status: 'loading' });
+  // Which sign-in the in-flight profile fetch belongs to; a later sign-out or
+  // a different user makes an older answer irrelevant.
+  const epoch = useRef(0);
 
   const refresh = useCallback(async () => {
     const user = await currentUser();
-    setState(user ? { status: 'signed-in', user } : { status: 'signed-out' });
-    if (user) rememberLastEmail(user.email);
+    const mine = ++epoch.current;
+    if (!user) {
+      unbindUserLocale();
+      setState({ status: 'signed-out' });
+      return;
+    }
+    rememberLastEmail(user.email);
+    // I18N-05: the user's own locale, first from this device, then from the server.
+    bindUserLocale(user.sub);
+    setState({ status: 'signed-in', user });
+    getMe()
+      .then((me) => {
+        if (epoch.current === mine) bindUserLocale(user.sub, me.locale);
+      })
+      .catch(() => {
+        /* the profile is a nicety; the local choice already applies */
+      });
   }, []);
 
   const signOut = useCallback(async () => {
+    epoch.current += 1;
     try {
       await signOutLocal();
     } finally {
+      unbindUserLocale();
       setState({ status: 'signed-out' });
     }
   }, []);
@@ -122,6 +117,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     void refresh();
     return onAuthEvent((event) => {
       if (event === 'signedOut' || event === 'tokenRefresh_failure') {
+        epoch.current += 1;
+        unbindUserLocale();
         setState({ status: 'signed-out' });
       } else if (event === 'signedIn' || event === 'signInWithRedirect') {
         void refresh();

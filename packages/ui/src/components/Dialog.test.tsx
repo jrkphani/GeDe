@@ -43,4 +43,35 @@ describe('Dialog', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
     expect(trigger).toHaveFocus();
   });
+
+  it('MENU-05 returnFocusTo sends focus to the named element when the opener is gone', async () => {
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      const [anchor, setAnchor] = useState<HTMLButtonElement | null>(null);
+      return (
+        <>
+          <button type="button" ref={setAnchor}>
+            Row
+          </button>
+          <Dialog open={open} onOpenChange={setOpen} title="Participants" returnFocusTo={anchor} />
+        </>
+      );
+    }
+    render(<Harness />);
+    await screen.findByRole('dialog', { name: 'Participants' });
+    await userEvent.keyboard('{Escape}');
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Row' })).toHaveFocus();
+  });
+
+  it('LIB-07 the sheet variant is the same dialog on an edge panel', () => {
+    render(
+      <Dialog open onOpenChange={() => undefined} title="Participants" variant="sheet">
+        <p>Meenarapan D</p>
+      </Dialog>,
+    );
+    const dialog = screen.getByRole('dialog', { name: 'Participants' });
+    expect(dialog).toHaveClass('gd-dialog--sheet');
+    expect(dialog).toHaveAttribute('data-variant', 'sheet');
+  });
 });

@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -34,6 +36,27 @@ vi.mock('../../auth/cognito.js', () => {
   };
 });
 
+vi.mock('../../api/me.js', () => ({
+  getMe: vi.fn(() => Promise.reject(new Error('no profile in this test'))),
+  updateMe: vi.fn(() => Promise.resolve()),
+}));
+// Screens the flow lands on after sign-in need a quiet API; the fake is labelled here.
+vi.mock('../../api/documents.js', () => ({
+  listDocuments: vi.fn(() => Promise.resolve([])),
+  createDocument: vi.fn(() => Promise.reject(new Error('not exercised by sign-in tests'))),
+  getDocument: vi.fn(() =>
+    Promise.resolve({
+      id: '01ARZ3NDEKTSV4RRFFQ69G5FAV',
+      title: 'Everest trek',
+      createdAt: '2026-09-01T00:00:00Z',
+      updatedAt: '2026-09-01T00:00:00Z',
+      ownerId: 'sub-1',
+    }),
+  ),
+  renameDocument: vi.fn(() => Promise.resolve()),
+  permissionOf: () => 'view',
+}));
+
 const cognito = (await import('../../auth/cognito.js')) as unknown as typeof Cognito & {
   __noUser: { current: Cognito.SessionUser | null };
 };
@@ -45,6 +68,30 @@ function namedError(name: string): Error {
   e.name = name;
   return e;
 }
+
+describe('sign-in stylesheet', () => {
+  const css = readFileSync(resolve(__dirname, 'sign-in.css'), 'utf8');
+
+  it('RESP-05 below 1024 px every sign-in target takes the 44 px token', () => {
+    const block = /@media \(max-width: 1023\.98px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    for (const selector of [
+      '.gd-signin .gd-btn',
+      '.gd-signin .gd-apple',
+      '.gd-signin .gd-field__input',
+      '.gd-signin .gd-segmented__item',
+      '.gd-signedout .gd-btn',
+    ])
+      expect(block).toContain(selector);
+    expect(block).toMatch(/min-height:\s*var\(--hit-target\)/);
+  });
+
+  it('A11Y-06 the address row wraps so Change is never clipped, and labels wrap at 240 CSS px', () => {
+    expect(css).toMatch(/\.gd-signin__who\s*\{[^}]*flex-wrap:\s*wrap/);
+    expect(css).toMatch(/\.gd-signin__who \.gd-btn\s*\{[^}]*flex:\s*none/);
+    const narrow = /@media \(max-width: 479\.98px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(narrow).toMatch(/\.gd-signin \.gd-btn\s*\{[^}]*white-space:\s*normal/);
+  });
+});
 
 describe('SignIn (option 1c)', () => {
   beforeEach(() => {
@@ -75,6 +122,19 @@ describe('SignIn (option 1c)', () => {
     expect(buttons.indexOf('Passkey')).toBeLessThan(buttons.indexOf('Email me a code'));
     await u.click(screen.getByRole('button', { name: 'Change' }));
     expect(screen.getByLabelText('Email')).toHaveValue('meena@1cloudhub.com');
+  });
+
+  it('AUTH-04 a known email gets the method step: passkey first, then the code, the address shown with Change', async () => {
+    const u = userEvent.setup();
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    expect(await screen.findByText('meena@1cloudhub.com')).toBeInTheDocument();
+    const names = screen.getAllByRole('button').map((b) => b.textContent);
+    expect(names.indexOf('Passkey')).toBeLessThan(names.indexOf('Email me a code'));
+    expect(screen.queryByLabelText('Email')).not.toBeInTheDocument();
+    await u.click(screen.getByRole('button', { name: 'Change' }));
+    expect(screen.getByLabelText('Email')).toHaveValue('meena@1cloudhub.com');
+    expect(screen.queryByRole('button', { name: 'Passkey' })).not.toBeInTheDocument();
   });
 
   it('AUTH-02 switching to Create account keeps the email, resets to the email step and asks for a name', async () => {
@@ -164,14 +224,60 @@ describe('SignIn (option 1c)', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Add a passkey to this device?' });
     expect(dialog).toBeInTheDocument();
     await u.click(screen.getByRole('button', { name: 'Not now' }));
-    expect(localStorage.getItem('gede.passkeyOfferDeclinedAt')).not.toBeNull();
+    // Keyed by the user, not the device: the next person on this machine is still asked.
+    expect(localStorage.getItem('gede.passkeyOfferDeclinedAt.sub-1')).not.toBeNull();
+    expect(localStorage.getItem('gede.passkeyOfferDeclinedAt')).toBeNull();
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/');
     });
   });
 
-  it('AUTH-07 does not re-offer within 30 days', async () => {
-    localStorage.setItem('gede.passkeyOfferDeclinedAt', String(Date.now() - 1000));
+  it('AUTH-07 the offer survives the signedIn Hub event Amplify fires before confirmSignIn resolves', async () => {
+    // Amplify dispatches `signedIn` inside confirmSignIn; the session provider's
+    // refresh then wins a network round trip against handleStep. The offer must
+    // already be pending when that refresh lands, or the screen navigates away.
+    let hub: ((event: Cognito.AuthEvent) => void) | undefined;
+    vi.mocked(cognito.onAuthEvent).mockImplementationOnce((handler) => {
+      hub = handler;
+      return () => undefined;
+    });
+    // Each session read is a network round trip; later ones land later, in their own task.
+    let reads = 0;
+    vi.mocked(cognito.currentUser).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          reads += 1;
+          setTimeout(() => {
+            resolve(cognito.__noUser.current);
+          }, 20 * reads);
+        }),
+    );
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
+    vi.mocked(cognito.confirmCode).mockImplementation(() => {
+      cognito.__noUser.current = user;
+      hub?.('signedIn');
+      return Promise.resolve({ kind: 'done' });
+    });
+    try {
+      const u = userEvent.setup();
+      const { router } = renderRoutes(routes, ['/sign-in']);
+      await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+      await u.click(await screen.findByRole('button', { name: 'Email me a code' }));
+      await u.type(await screen.findByLabelText('Six-digit code'), '123456');
+      await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
+      expect(
+        await screen.findByRole('dialog', { name: 'Add a passkey to this device?' }),
+      ).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe('/sign-in');
+    } finally {
+      vi.mocked(cognito.currentUser).mockImplementation(() =>
+        Promise.resolve(cognito.__noUser.current),
+      );
+    }
+  });
+
+  it('AUTH-07 does not re-offer within 30 days to the user who declined', async () => {
+    localStorage.setItem('gede.passkeyOfferDeclinedAt.sub-1', String(Date.now() - 1000));
     const u = userEvent.setup();
     vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
     vi.mocked(cognito.confirmCode).mockImplementation(() => {
@@ -187,6 +293,40 @@ describe('SignIn (option 1c)', () => {
       expect(router.state.location.pathname).toBe('/');
     });
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
+
+  it('AUTH-05 a pool step GeDe does not offer surfaces as plain copy, never the SDK enum', async () => {
+    const u = userEvent.setup();
+    vi.mocked(cognito.startPasskeySignIn).mockResolvedValueOnce({
+      kind: 'unsupported',
+      reason: 'This account has no passkey yet. Email me a code instead.',
+    });
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Passkey' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('This account has no passkey yet. Email me a code instead.');
+    expect(alert.textContent).not.toMatch(/[A-Z]+_[A-Z_]+/);
+    expect(screen.getByRole('button', { name: 'Email me a code' })).toBeEnabled();
+  });
+
+  it('AUTH-09 a tokenRefresh_failure Hub event while on a document returns to sign-in with the path retained', async () => {
+    let hub: ((e: Cognito.AuthEvent) => void) | null = null;
+    vi.mocked(cognito.onAuthEvent).mockImplementationOnce((handler) => {
+      hub = handler;
+      return () => undefined;
+    });
+    cognito.__noUser.current = user;
+    const { router } = renderRoutes(routes, ['/d/01ARZ3NDEKTSV4RRFFQ69G5FAV?cell=D12']);
+    await waitFor(() => {
+      expect(screen.getByLabelText('Workscape title')).toHaveValue('Everest trek');
+    });
+    hub!('tokenRefresh_failure');
+    expect(await screen.findByRole('heading', { name: 'Sign in' })).toBeInTheDocument();
+    expect(router.state.location.pathname).toBe('/sign-in');
+    expect(sessionStorage.getItem('gede.returnTo')).toBe('/d/01ARZ3NDEKTSV4RRFFQ69G5FAV?cell=D12');
+    // The address is pre-filled for the person who was signed out; nothing else was kept.
+    expect(screen.getByLabelText('Email')).toHaveValue('meena@1cloudhub.com');
   });
 
   it('AUTH-03 sign-up sends the name with no password and verifies with a code', async () => {
@@ -206,27 +346,78 @@ describe('SignIn (option 1c)', () => {
     expect(cognito.confirmSignUpCode).toHaveBeenCalledWith('meena@1cloudhub.com', '654321');
   });
 
-  it('AUTH-08 shows the Apple button only when configured, below the passkey', async () => {
+  it('AUTH-08 (button only) the Apple button is absent unless config.appleSignIn is set', async () => {
+    renderRoutes(routes, ['/sign-in']);
+    await screen.findByLabelText('Email');
+    expect(screen.queryByRole('button', { name: /Apple/ })).not.toBeInTheDocument();
+  });
+
+  it('AUTH-08 (button only) Apple is offered at the sign-in step, the sign-up step, and between Passkey and the email code on the method step', async () => {
     withConfig({ appleSignIn: { domain: 'auth.test' } });
     const u = userEvent.setup();
     renderRoutes(routes, ['/sign-in']);
-    await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    // Sign-in, email step.
+    await screen.findByLabelText('Email');
+    const appleSignIn = screen.getByRole('button', { name: 'Sign in with Apple' });
+    expect(appleSignIn).toHaveClass('gd-apple');
+    // Sign-up step keeps it, with Apple's own alternative wording.
+    await u.click(screen.getByRole('radio', { name: 'Create account' }));
+    const appleSignUp = screen.getByRole('button', { name: 'Continue with Apple' });
+    expect(appleSignUp).toHaveClass('gd-apple');
+    // Method step, option 1c verbatim: passkey above Apple above email code.
+    await u.click(screen.getByRole('radio', { name: 'Sign in' }));
+    await u.type(screen.getByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     const apple = await screen.findByRole('button', { name: 'Sign in with Apple' });
     const buttons = screen.getAllByRole('button');
-    expect(buttons.indexOf(screen.getByRole('button', { name: 'Passkey' }))).toBeLessThan(
-      buttons.indexOf(apple),
-    );
+    const at = (name: string) => buttons.indexOf(screen.getByRole('button', { name }));
+    expect(at('Passkey')).toBeLessThan(buttons.indexOf(apple));
+    expect(buttons.indexOf(apple)).toBeLessThan(at('Email me a code'));
     await u.click(apple);
-    expect(cognito.startAppleSignIn).toHaveBeenCalled();
+    expect(cognito.startAppleSignIn).toHaveBeenCalledTimes(1);
   });
 
-  it('AUTH-09 the session is memory-only: reload with no user shows sign-in; signed-out page names the last document', async () => {
-    localStorage.setItem('gede.lastDocument', JSON.stringify({ id: 'x', title: 'Everest trek' }));
+  it('AUTH-09 tokens are held in memory only: after a sign-in nothing token-like is in web storage', async () => {
+    const u = userEvent.setup();
+    vi.mocked(cognito.startPasskeySignIn).mockImplementationOnce(() => {
+      cognito.__noUser.current = user;
+      return Promise.resolve({ kind: 'done' });
+    });
+    const { router } = renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Passkey' }));
+    await waitFor(() => {
+      expect(router.state.location.pathname).toBe('/');
+    });
+    const stored = [localStorage, sessionStorage].flatMap((store) =>
+      Array.from({ length: store.length }, (_, i) => store.key(i) ?? '').map(
+        (k) => `${k}=${store.getItem(k) ?? ''}`,
+      ),
+    );
+    // Only the remembered address and the return path may be stored — never a token.
+    expect(stored.filter((e) => /token|jwt|eyJ|cognito|refresh/i.test(e))).toEqual([]);
+    expect(localStorage.getItem('gede.lastEmail')).toBe('meena@1cloudhub.com');
+  });
+
+  it('AUTH-09 the signed-out screen names the last document and offers Sign back in and Switch account', async () => {
+    sessionStorage.setItem('gede.lastDocument', JSON.stringify({ id: 'x', title: 'Everest trek' }));
     localStorage.setItem('gede.lastEmail', 'meena@1cloudhub.com');
     renderRoutes(routes, ['/signed-out']);
     expect(await screen.findByRole('heading', { name: 'Signed out of GeDe' })).toBeInTheDocument();
     expect(screen.getByText('Everest trek')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Sign back in/ })).toBeInTheDocument();
+    expect(
+      screen.getByRole('button', { name: 'Sign back in as meena@1cloudhub.com' }),
+    ).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Switch account' })).toBeInTheDocument();
+  });
+
+  it('AUTH-09 Switch account on the signed-out screen forgets the email and the last document', async () => {
+    const u = userEvent.setup();
+    sessionStorage.setItem('gede.lastDocument', JSON.stringify({ id: 'x', title: 'Everest trek' }));
+    localStorage.setItem('gede.lastEmail', 'meena@1cloudhub.com');
+    renderRoutes(routes, ['/signed-out']);
+    await u.click(await screen.findByRole('button', { name: 'Switch account' }));
+    expect(await screen.findByLabelText('Email')).toHaveValue('');
+    expect(localStorage.getItem('gede.lastEmail')).toBeNull();
+    expect(sessionStorage.getItem('gede.lastDocument')).toBeNull();
   });
 });

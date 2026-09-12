@@ -15,6 +15,7 @@ import {
   classifyError,
   confirmCode,
   confirmSignUpCode,
+  currentUser,
   isPasskeySupported,
   registerPasskey,
   resendSignUp,
@@ -66,17 +67,23 @@ export function SignIn() {
   const [state, dispatch] = useReducer(flowReducer, undefined, () =>
     initialFlow({ email: readLastEmail() }),
   );
-  const [offerPasskey, setOfferPasskey] = useState(false);
+  /**
+   * AUTH-07 passkey offer. `pending` holds the screen while the signed-in
+   * user's `sub` is read (the decline memory is per user); `open` shows it.
+   */
+  const [offer, setOffer] = useState<
+    { status: 'none' } | { status: 'pending' } | { status: 'open'; sub: string }
+  >({ status: 'none' });
   const [registering, setRegistering] = useState(false);
   const emailRef = useRef<HTMLInputElement>(null);
 
   // The one place that leaves this screen: once the session is signed in and
   // no passkey offer is pending, go where the visitor was headed (AUTH-01).
   useEffect(() => {
-    if (session.state.status === 'signed-in' && !offerPasskey) {
+    if (session.state.status === 'signed-in' && offer.status === 'none') {
       void navigate(takeReturnTo() ?? '/', { replace: true });
     }
-  }, [session.state.status, offerPasskey, navigate]);
+  }, [session.state.status, offer.status, navigate]);
 
   const finish = useCallback(async () => {
     await session.refresh();
@@ -97,10 +104,20 @@ export function SignIn() {
     switch (step.kind) {
       case 'done':
         rememberLastEmail(state.email.trim());
-        // AUTH-07: after a code sign-in, offer a passkey unless declined within 30 days.
-        if (viaCode && passkeys && !passkeyOfferDeclinedRecently()) {
-          await session.refresh();
-          setOfferPasskey(true);
+        // AUTH-07: after a code sign-in, offer a passkey unless this user declined
+        // within 30 days. Hold the screen before the session flips: Amplify's
+        // `signedIn` Hub event has already started a refresh, and the signed-in
+        // effect leaves the moment it lands unless an offer is pending.
+        if (viaCode && passkeys) {
+          setOffer({ status: 'pending' });
+          const user = await currentUser();
+          if (user !== null && !passkeyOfferDeclinedRecently(user.sub)) {
+            setOffer({ status: 'open', sub: user.sub });
+            await session.refresh();
+          } else {
+            setOffer({ status: 'none' });
+            await finish();
+          }
         } else {
           await finish();
         }
@@ -110,10 +127,7 @@ export function SignIn() {
         announce('We sent a six-digit code to your email');
         return;
       case 'unsupported':
-        dispatch({
-          type: 'error',
-          message: `This account needs a sign-in method GeDe does not offer (${step.step}).`,
-        });
+        dispatch({ type: 'error', message: step.reason });
     }
   };
 
@@ -173,10 +187,14 @@ export function SignIn() {
       .catch(fail);
   };
 
-  const apple = () => {
-    dispatch({ type: 'busy', busy: 'apple' });
-    startAppleSignIn().catch(fail);
-  };
+  // AUTH-08: rendered only when the pool has Apple configured (`config.appleSignIn`).
+  const apple =
+    config.appleSignIn === false
+      ? null
+      : () => {
+          dispatch({ type: 'busy', busy: 'apple' });
+          startAppleSignIn().catch(fail);
+        };
 
   const addPasskey = () => {
     setRegistering(true);
@@ -189,13 +207,13 @@ export function SignIn() {
       })
       .finally(() => {
         setRegistering(false);
-        setOfferPasskey(false); // the signed-in effect navigates from here
+        setOffer({ status: 'none' }); // the signed-in effect navigates from here
       });
   };
 
   const declinePasskey = () => {
-    recordPasskeyOfferDeclined();
-    setOfferPasskey(false);
+    if (offer.status === 'open') recordPasskeyOfferDeclined(offer.sub);
+    setOffer({ status: 'none' });
   };
 
   const busy = state.busy;
@@ -275,6 +293,21 @@ export function SignIn() {
             <p className="gd-signin__note">
               No password. A passkey on this device, or a code by email.
             </p>
+            {/* AUTH-08: Apple is offered at the sign-in and the sign-up step alike. No passkey
+                exists before the address is known, so nothing sits above it here. */}
+            {apple !== null && (
+              <>
+                <span className="gd-signin__or" aria-hidden="true">
+                  or
+                </span>
+                <AppleSignInButton
+                  wording={state.mode === 'sign-up' ? 'Continue with Apple' : 'Sign in with Apple'}
+                  onClick={apple}
+                  loading={busy === 'apple'}
+                  disabled={busy !== null}
+                />
+              </>
+            )}
           </form>
         )}
 
@@ -305,6 +338,15 @@ export function SignIn() {
                 Passkey
               </Button>
             )}
+            {/* Option 1c order, verbatim: passkey above Apple above email code. Apple is
+                never subordinate to another provider; the code is a fallback, not one. */}
+            {apple !== null && (
+              <AppleSignInButton
+                onClick={apple}
+                loading={busy === 'apple'}
+                disabled={busy !== null}
+              />
+            )}
             <Button
               variant={passkeys ? 'secondary' : 'primary'}
               size="lg"
@@ -315,18 +357,6 @@ export function SignIn() {
             >
               Email me a code
             </Button>
-            {config.appleSignIn !== false && (
-              <>
-                <span className="gd-signin__or" aria-hidden="true">
-                  or
-                </span>
-                <AppleSignInButton
-                  onClick={apple}
-                  loading={busy === 'apple'}
-                  disabled={busy !== null}
-                />
-              </>
-            )}
             {state.error !== null && (
               <p className="gd-signin__error" role="alert">
                 {state.error}
@@ -395,7 +425,7 @@ export function SignIn() {
       </div>
 
       <Dialog
-        open={offerPasskey}
+        open={offer.status === 'open'}
         onOpenChange={(open) => {
           if (!open) declinePasskey();
         }}

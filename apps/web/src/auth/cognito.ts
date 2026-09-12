@@ -26,7 +26,8 @@ import type { AppConfig } from '../config.js';
 export type SignInStep =
   | { kind: 'done' }
   | { kind: 'code'; destination: string | undefined }
-  | { kind: 'unsupported'; step: string };
+  /** Cognito asked for something GeDe does not offer; `reason` is plain copy for the screen. */
+  | { kind: 'unsupported'; reason: string };
 
 export interface SessionUser {
   sub: string;
@@ -72,6 +73,29 @@ export function configureAuth(config: AppConfig): void {
   cognitoUserPoolsTokenProvider.setKeyValueStorage(sharedInMemoryStorage);
 }
 
+/** Plain copy for the next steps the pool could ask for; the SDK's enum never reaches the screen. */
+export function describeUnsupportedStep(step: string): string {
+  switch (step) {
+    case 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION':
+      return 'This account has no passkey yet. Email me a code instead.';
+    case 'CONFIRM_SIGN_IN_WITH_SMS_CODE':
+      return 'This account is set to receive codes by SMS, which GeDe does not send. Contact support.';
+    case 'CONFIRM_SIGN_IN_WITH_TOTP_CODE':
+    case 'CONTINUE_SIGN_IN_WITH_TOTP_SETUP':
+    case 'CONTINUE_SIGN_IN_WITH_MFA_SELECTION':
+    case 'CONTINUE_SIGN_IN_WITH_MFA_SETUP_SELECTION':
+      return 'This account requires an authenticator app, which GeDe does not support. Contact support.';
+    case 'CONFIRM_SIGN_IN_WITH_NEW_PASSWORD_REQUIRED':
+    case 'RESET_PASSWORD':
+    case 'CONFIRM_SIGN_IN_WITH_PASSWORD':
+      return 'This account is set to use a password. GeDe signs in with a passkey or a code by email; contact support.';
+    case 'CONFIRM_SIGN_UP':
+      return 'This email has not been verified yet. Switch to Create account to finish setting it up.';
+    default:
+      return 'This account needs a sign-in method GeDe does not offer. Contact support.';
+  }
+}
+
 function toStep(out: SignInOutput): SignInStep {
   const step = out.nextStep;
   switch (step.signInStep) {
@@ -80,7 +104,7 @@ function toStep(out: SignInOutput): SignInStep {
     case 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE':
       return { kind: 'code', destination: step.codeDeliveryDetails?.destination };
     default:
-      return { kind: 'unsupported', step: step.signInStep };
+      return { kind: 'unsupported', reason: describeUnsupportedStep(step.signInStep) };
   }
 }
 

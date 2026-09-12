@@ -17,8 +17,11 @@ export {
   type SegmentedControlProps,
   type SegmentedOption,
 } from './components/SegmentedControl.js';
-export { Dialog, DialogClose, type DialogProps } from './components/Dialog.js';
-export { Menu, type MenuEntry, type MenuProps } from './components/Menu.js';
+export { Dialog, DialogClose, type DialogProps, type DialogVariant } from './components/Dialog.js';
+export { Menu, type MenuEntry, type MenuProps, type MenuRadioOption } from './components/Menu.js';
+export { Collapsible, type CollapsibleProps } from './components/Collapsible.js';
+export { Avatar, initialsOf, type AvatarProps, type AvatarSize } from './components/Avatar.js';
+export { Badge, type BadgeProps, type BadgeTone } from './components/Badge.js';
 export { Tabs, type TabItem, type TabsProps } from './components/Tabs.js';
 export { Switch, type SwitchProps } from './components/Switch.js';
 export { Checkbox, type CheckboxProps } from './components/Checkbox.js';
