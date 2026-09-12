@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { render, screen } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, expect, it, vi } from 'vitest';
@@ -5,6 +7,12 @@ import { Button } from './Button.js';
 import { Menu } from './Menu.js';
 
 describe('Menu', () => {
+  it('RESP-05 menu items take the 44 px target below 1024 px', () => {
+    const css = readFileSync(resolve(__dirname, 'Menu.css'), 'utf8');
+    const block = /@media \(max-width: 1023\.98px\) \{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(block).toMatch(/\.gd-menu__item\s*\{[^}]*min-height:\s*var\(--hit-target\)/);
+  });
+
   it('opens on the trigger, shows disabled items with a reason, shortcuts in mono, closes on Escape', async () => {
     const onCopy = vi.fn();
     render(

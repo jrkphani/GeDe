@@ -225,9 +225,18 @@ describe('Library', () => {
     expect(screen.getByText('1 of 2 selected')).toBeInTheDocument();
   });
 
-  it('LIB-03 deleting a selected workscape names it, soft-deletes it and offers Undo', async () => {
+  it('LIB-03 LOAD-04 deleting a selected workscape names it, shows "Deleting…" in flight, soft-deletes it and offers Undo', async () => {
     const u = userEvent.setup();
     serve(live);
+    let finish = (): void => {
+      /* replaced once deleteDocument is called */
+    };
+    vi.mocked(docs.deleteDocument).mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finish = resolve;
+        }),
+    );
     renderRoutes(routes, ['/']);
     await u.click((await screen.findByText('Everest trek')).closest('tr')!);
     await u.click(screen.getByRole('button', { name: 'Delete' }));
@@ -236,6 +245,10 @@ describe('Library', () => {
     await waitFor(() => {
       expect(docs.deleteDocument).toHaveBeenCalledWith(everest.id);
     });
+    // LOAD-04: the action in flight keeps its button, switches to the participle, is busy.
+    const inFlight = screen.getByRole('button', { name: 'Deleting…' });
+    expect(inFlight).toHaveAttribute('aria-busy', 'true');
+    finish();
     const undo = await screen.findByRole('button', { name: 'Undo' });
     expect(undo.closest('.gd-toast')).toHaveTextContent('Everest trek moved to Recently Deleted');
     await u.click(undo);
@@ -286,15 +299,16 @@ describe('Library', () => {
   it('LIB-07 Participants opens a sheet listing everyone with permission; the owner is labelled and cannot be removed', async () => {
     const u = userEvent.setup();
     serve(live);
+    // The service keys people by its own user id (`u1`, as GET /me reports), never the Cognito sub.
     vi.mocked(docs.getDocumentShares).mockResolvedValue({
-      owner: { id: 'sub-1', name: 'Meena', email: 'meena@1cloudhub.com' },
+      owner: { id: 'u1', name: 'Meena', email: 'meena@1cloudhub.com' },
       participants: [
         {
-          userId: 'sub-3',
+          userId: 'u3',
           name: 'Akshaya A',
           email: 'akshaya@1cloudhub.com',
           permission: 'edit',
-          invitedBy: 'sub-1',
+          invitedBy: 'u1',
         },
       ],
       linkAccess: 'none',
@@ -323,14 +337,14 @@ describe('Library', () => {
     const u = userEvent.setup();
     serve(live);
     vi.mocked(docs.getDocumentShares).mockResolvedValue({
-      owner: { id: 'sub-1', name: null, email: 'meena@1cloudhub.com' },
+      owner: { id: 'u1', name: null, email: 'meena@1cloudhub.com' },
       participants: [
         {
-          userId: 'sub-5',
+          userId: 'u5',
           name: null,
           email: 'vijay@1cloudhub.com',
           permission: 'view',
-          invitedBy: 'sub-1',
+          invitedBy: 'u1',
         },
       ],
       linkAccess: 'edit',

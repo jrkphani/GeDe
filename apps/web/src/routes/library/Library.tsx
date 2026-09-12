@@ -371,6 +371,8 @@ export function Library() {
             }}
             disabled={total === 0 || busy !== null}
             title={total === 0 ? 'Nothing to delete' : undefined}
+            loading={busy === 'delete-all'}
+            loadingLabel="Deleting…"
           >
             Delete All
           </Button>
@@ -406,6 +408,8 @@ export function Library() {
               selected === null || ownerOnly(selected, 'delete') !== undefined || busy !== null
             }
             title={selected === null ? noSelection : ownerOnly(selected, 'delete')}
+            loading={busy === `delete-${selectedId ?? ''}`}
+            loadingLabel="Deleting…"
           >
             Delete
           </Button>
@@ -529,6 +533,7 @@ export function Library() {
       <ParticipantsSheet
         document={sheetDoc}
         viewerId={user?.sub}
+        viewerEmail={user?.email}
         onClose={() => {
           setSheetDoc(null);
         }}

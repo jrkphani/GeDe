@@ -12,8 +12,13 @@ export interface ParticipantsSheetProps {
   /** The workscape whose participants to show; null closes the sheet. */
   document: DocumentSummary | null;
   onClose: () => void;
-  /** The signed-in user's id, to mark "(you)". */
+  /**
+   * Who is looking, to mark "(you)". The service keys people by its own user
+   * id, not the Cognito sub the session holds, so the verified email is what
+   * actually matches; the id is honoured when it does.
+   */
   viewerId: string | undefined;
+  viewerEmail: string | undefined;
 }
 
 type SharesState =
@@ -43,10 +48,17 @@ function describeFailure(err: unknown): string {
  * never removable. Fed by `GET /api/documents/:id/shares`; there is no remove
  * endpoint in the wave-1 contract, so Remove renders disabled with the reason.
  */
-export function ParticipantsSheet({ document, onClose, viewerId }: ParticipantsSheetProps) {
+export function ParticipantsSheet({
+  document,
+  onClose,
+  viewerId,
+  viewerEmail,
+}: ParticipantsSheetProps) {
   const [state, setState] = useState<SharesState>({ status: 'loading' });
   const [attempt, setAttempt] = useState(0);
   const id = document?.id;
+  const isViewer = (p: { id: string; email: string | null }) =>
+    p.id === viewerId || (p.email !== null && viewerEmail !== undefined && p.email === viewerEmail);
 
   useEffect(() => {
     if (id === undefined) return undefined;
@@ -101,7 +113,7 @@ export function ParticipantsSheet({ document, onClose, viewerId }: ParticipantsS
               <ul className="gd-participants__list" aria-label="People with access">
                 <Person
                   person={state.shares.owner}
-                  you={state.shares.owner.id === viewerId}
+                  you={isViewer(state.shares.owner)}
                   trailing={<Badge>Owner</Badge>}
                 />
                 {state.shares.participants.map((p) => {
@@ -110,7 +122,7 @@ export function ParticipantsSheet({ document, onClose, viewerId }: ParticipantsS
                     <Person
                       key={p.userId}
                       person={p}
-                      you={p.userId === viewerId}
+                      you={isViewer({ id: p.userId, email: p.email })}
                       trailing={
                         <>
                           <span className="gd-participants__permission">

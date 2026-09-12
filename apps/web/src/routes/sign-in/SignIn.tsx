@@ -98,9 +98,12 @@ export function SignIn() {
       case 'done':
         rememberLastEmail(state.email.trim());
         // AUTH-07: after a code sign-in, offer a passkey unless declined within 30 days.
+        // Set the offer before the session flips: Amplify's `signedIn` Hub event has
+        // already started a refresh, and the signed-in effect leaves this screen the
+        // moment it lands unless an offer is pending.
         if (viaCode && passkeys && !passkeyOfferDeclinedRecently()) {
-          await session.refresh();
           setOfferPasskey(true);
+          await session.refresh();
         } else {
           await finish();
         }

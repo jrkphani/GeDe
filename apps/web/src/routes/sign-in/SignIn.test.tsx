@@ -230,6 +230,50 @@ describe('SignIn (option 1c)', () => {
     });
   });
 
+  it('AUTH-07 the offer survives the signedIn Hub event Amplify fires before confirmSignIn resolves', async () => {
+    // Amplify dispatches `signedIn` inside confirmSignIn; the session provider's
+    // refresh then wins a network round trip against handleStep. The offer must
+    // already be pending when that refresh lands, or the screen navigates away.
+    let hub: ((event: Cognito.AuthEvent) => void) | undefined;
+    vi.mocked(cognito.onAuthEvent).mockImplementationOnce((handler) => {
+      hub = handler;
+      return () => undefined;
+    });
+    // Each session read is a network round trip; later ones land later, in their own task.
+    let reads = 0;
+    vi.mocked(cognito.currentUser).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          reads += 1;
+          setTimeout(() => {
+            resolve(cognito.__noUser.current);
+          }, 20 * reads);
+        }),
+    );
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
+    vi.mocked(cognito.confirmCode).mockImplementation(() => {
+      cognito.__noUser.current = user;
+      hub?.('signedIn');
+      return Promise.resolve({ kind: 'done' });
+    });
+    try {
+      const u = userEvent.setup();
+      const { router } = renderRoutes(routes, ['/sign-in']);
+      await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+      await u.click(await screen.findByRole('button', { name: 'Email me a code' }));
+      await u.type(await screen.findByLabelText('Six-digit code'), '123456');
+      await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
+      expect(
+        await screen.findByRole('dialog', { name: 'Add a passkey to this device?' }),
+      ).toBeInTheDocument();
+      expect(router.state.location.pathname).toBe('/sign-in');
+    } finally {
+      vi.mocked(cognito.currentUser).mockImplementation(() =>
+        Promise.resolve(cognito.__noUser.current),
+      );
+    }
+  });
+
   it('AUTH-07 does not re-offer within 30 days', async () => {
     localStorage.setItem('gede.passkeyOfferDeclinedAt', String(Date.now() - 1000));
     const u = userEvent.setup();

@@ -73,3 +73,10 @@
   margin: 0.3125rem 0.25rem;
   background: var(--border);
 }
+
+/* RESP-05: below 1024 px every interactive target, menu items included, is at least 44 px. */
+@media (max-width: 1023.98px) {
+  .gd-menu__item {
+    min-height: var(--hit-target);
+  }
+}
