@@ -89,6 +89,8 @@ export interface SharesView {
     permission: 'view' | 'edit';
     invitedBy: string | null;
     expiresAt: string;
+    /** #121: ISO time SES last accepted the mail; null while it never did (Resend). */
+    mailSentAt: string | null;
   }[];
   linkAccess: DocumentRecord['linkAccess'];
   /** Present for the owner and editors while link access is on; null otherwise. */
@@ -123,6 +125,7 @@ export function sharesView(
           permission: i.permission,
           invitedBy: i.invitedBy,
           expiresAt: i.expiresAt.toISOString(),
+          mailSentAt: i.mailSentAt?.toISOString() ?? null,
         }))
       : [],
     linkAccess: list.linkAccess,
@@ -162,14 +165,18 @@ export function registerShareRoutes(
     return sharesView(list, caller);
   }
 
-  /** Send the invitation mail for a pending row; never throws (see `mail/delivery.ts`). */
-  const sendInvite = (
+  /**
+   * Send the invitation mail for a pending row; never throws (see `mail/delivery.ts`).
+   * An accepted send is recorded on the row (`mail_sent_at`, #121) so the sheet still
+   * knows after a reload which invitations were never mailed.
+   */
+  const sendInvite = async (
     request: { id: string; log: Pick<typeof api.log, 'info'> },
-    invite: { documentId: string; email: string; token: string },
+    invite: { id: string; documentId: string; email: string; token: string },
     actor: { actorName: string | null; actorEmail: string | null },
     documentTitle: string,
-  ) =>
-    deliver(
+  ): Promise<MailDelivery> => {
+    const delivery = await deliver(
       (mail) => deps.mail.send(mail),
       shareInviteMail({
         ...actor,
@@ -181,6 +188,9 @@ export function registerShareRoutes(
       request.log,
       { documentId: invite.documentId, ref: request.id },
     );
+    if (delivery === 'sent') await repo.invites.markMailSent({ inviteId: invite.id });
+    return delivery;
+  };
 
   // --- the sheet ------------------------------------------------------------
 

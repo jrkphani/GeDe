@@ -187,6 +187,7 @@ function toInvite(row: typeof invites.$inferSelect): InviteRecord {
     expiresAt: row.expiresAt,
     acceptedAt: row.acceptedAt,
     createdAt: row.createdAt,
+    mailSentAt: row.mailSentAt,
   };
 }
 
@@ -1261,6 +1262,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
             permission: invites.permission,
             invitedBy: invites.invitedBy,
             expiresAt: invites.expiresAt,
+            mailSentAt: invites.mailSentAt,
           })
           .from(invites)
           .where(and(eq(invites.documentId, documentId), invitePending))
@@ -1552,6 +1554,15 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
       async byToken(token) {
         const [row] = await db.select().from(invites).where(eq(invites.token, token)).limit(1);
         return row ? toInvite(row) : undefined;
+      },
+
+      async markMailSent({ inviteId }) {
+        const rows = await db
+          .update(invites)
+          .set({ mailSentAt: new Date() })
+          .where(eq(invites.id, inviteId))
+          .returning({ id: invites.id });
+        return rows.length > 0;
       },
 
       async pending({ documentId, inviteId }) {

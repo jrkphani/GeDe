@@ -59,6 +59,7 @@ interface MutableDocument extends DocumentRecord {
 
 interface MutableInvite extends InviteRecord {
   acceptedAt: Date | null;
+  mailSentAt: Date | null;
 }
 
 interface MutableUser extends Omit<UserRecord, 'sampleDocumentId'> {
@@ -830,6 +831,7 @@ export class FakeRepo implements Repo {
         permission: i.permission,
         invitedBy: i.invitedBy,
         expiresAt: i.expiresAt,
+        mailSentAt: i.mailSentAt,
       }));
       return Promise.resolve({
         owner: {
@@ -982,10 +984,17 @@ export class FakeRepo implements Repo {
         expiresAt,
         acceptedAt: null,
         createdAt: new Date(),
+        mailSentAt: null,
       };
       this.invitesById.set(invite.id, invite);
       this.auditLog.push({ documentId, userId: invitedBy, action: 'share.invite', target: email });
       return Promise.resolve({ invite: { ...invite }, created: true });
+    },
+    markMailSent: ({ inviteId }) => {
+      const invite = this.invitesById.get(inviteId);
+      if (!invite) return Promise.resolve(false);
+      invite.mailSentAt = new Date();
+      return Promise.resolve(true);
     },
     remove: ({ documentId, inviteId, actorId }) => {
       const invite = this.pendingInvites(

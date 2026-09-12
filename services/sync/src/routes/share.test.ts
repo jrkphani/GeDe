@@ -116,6 +116,8 @@ describe('invitations (SHARE-02)', () => {
     expect(res.body).toMatchObject({ kind: 'invite', created: true, delivery: 'sent' });
     const [pending] = res.body.shares.invites;
     expect(pending).toMatchObject({ email: 'Sembian@Example.com', permission: 'edit' });
+    // #121: an accepted send is recorded on the row, so a reload knows the mail went.
+    expect(pending!.mailSentAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
     const expires = new Date(pending!.expiresAt).getTime();
     expect(expires - before).toBeGreaterThanOrEqual(INVITE_VALID_DAYS * DAY - 1000);
     expect(expires - before).toBeLessThanOrEqual(INVITE_VALID_DAYS * DAY + 5000);
@@ -170,6 +172,8 @@ describe('invitations (SHARE-02)', () => {
     // The invitation stands: the sheet lists it, nothing was withdrawn, no second mail went.
     const [pending] = res.body.shares.invites;
     expect(pending).toMatchObject({ email: 'nobody@example.com', permission: 'view' });
+    // #121: never mailed — null persists, so a reloaded sheet still says "email not sent".
+    expect(pending!.mailSentAt).toBeNull();
     expect((await shares(alice)).body.invites).toEqual([pending]);
     expect(auditActions()).toEqual(['share.invite']);
     expect(server.mail.sent).toEqual([]);
@@ -232,10 +236,14 @@ describe('invitations (SHARE-02)', () => {
     const [pending] = first.body.shares.invites;
     const stored = [...server.repo.invitesById.values()][0]!;
     // The editor can resend (they may invite); the mail carries the same token.
+    expect(pending!.mailSentAt).toBeNull();
     const ok = await resend(bob, pending!.id);
     expect(ok.status).toBe(200);
     expect(ok.body.delivery).toBe('sent');
-    expect(ok.body.shares.invites).toEqual([pending]);
+    // The accepted resend is recorded; nothing else about the row moves.
+    expect(ok.body.shares.invites).toEqual([
+      { ...pending, mailSentAt: expect.stringMatching(/^\d{4}-\d{2}-\d{2}T/) as string },
+    ]);
     expect(server.repo.invitesById.size).toBe(1);
     expect(server.mail.sent).toHaveLength(1);
     expect(server.mail.sent[0]!.template).toBe('share.invite');

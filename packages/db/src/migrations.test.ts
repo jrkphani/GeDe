@@ -220,9 +220,12 @@ describe('migrations', () => {
     );
   });
 
-  test('LIB-05 0011 adds users.library_sort, checked to name or date, additively; the CHECK is declared in schema.ts (#133)', () => {
-    expect(files[11]).toBe('0011_users_library_sort.sql');
-    const sql = stripComments(readFileSync(join(dir, '0011_users_library_sort.sql'), 'utf8'));
+  test('LIB-05 SHARE-02 0011 adds users.library_sort, checked to name or date, and invites.mail_sent_at, additively; the CHECK is declared in schema.ts (#133, #121)', () => {
+    expect(files[11]).toBe('0011_users_library_sort_invites_mail_sent_at.sql');
+    const sql = stripComments(
+      readFileSync(join(dir, '0011_users_library_sort_invites_mail_sent_at.sql'), 'utf8'),
+    );
+    expect(sql).toMatch(/ALTER TABLE invites ADD COLUMN IF NOT EXISTS mail_sent_at timestamptz/);
     expect(sql).toMatch(/ALTER TABLE users ADD COLUMN IF NOT EXISTS library_sort text/);
     expect(sql).toMatch(
       /ADD CONSTRAINT users_library_sort_check\s+CHECK \(library_sort IS NULL OR library_sort IN \('name', 'date'\)\)/,

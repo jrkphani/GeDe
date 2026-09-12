@@ -208,6 +208,11 @@ export const invites = pgTable(
     token: text('token').notNull().unique(),
     expiresAt: timestamptz('expires_at').notNull(),
     acceptedAt: timestamptz('accepted_at'),
+    /**
+     * SHARE-02 (migration 0011, #121): when SES last accepted the invitation's mail; null while
+     * it never did. The row is the grant either way; null shows as "email not sent" with Resend.
+     */
+    mailSentAt: timestamptz('mail_sent_at'),
     /** Migration 0006: who sent it; null on rows from before, converted as the owner. */
     invitedBy: uuid('invited_by').references(() => users.id),
     /** Migration 0006. */

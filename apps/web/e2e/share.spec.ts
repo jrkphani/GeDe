@@ -61,6 +61,8 @@ interface FakeSheet {
     permission: 'view' | 'edit';
     invitedBy: string;
     expiresAt: string;
+    /** #121: null while the service never managed to mail it. */
+    mailSentAt: string | null;
   }[];
   linkAccess: 'none' | 'view' | 'edit';
   linkToken: string | null;
@@ -114,21 +116,26 @@ async function installFakes(page: Page): Promise<{ sheet: FakeSheet; calls: stri
     if (method === 'GET' && path === '/shares') return route.fulfill({ json: sheet });
     if (method === 'POST' && path === '/invites') {
       const body = route.request().postDataJSON() as { email: string; permission: 'view' | 'edit' };
+      // #121: an address SES refuses (the sandbox) is saved with `delivery: 'failed'` and no
+      // `mailSentAt`, as the service persists it.
+      const delivery = body.email.endsWith('.invalid') ? 'failed' : 'sent';
       sheet.invites.push({
         id: `inv-${String(sheet.invites.length + 1)}`,
         email: body.email,
         permission: body.permission,
         invitedBy: SESSION.sub,
         expiresAt: '2026-09-26T00:00:00.000Z',
+        mailSentAt: delivery === 'sent' ? '2026-09-13T00:00:00.000Z' : null,
       });
-      // #121: an address SES refuses (the sandbox) is saved with `delivery: 'failed'`.
-      const delivery = body.email.endsWith('.invalid') ? 'failed' : 'sent';
       return route.fulfill({
         status: 201,
         json: { kind: 'invite', created: true, delivery, shares: sheet },
       });
     }
-    if (method === 'POST' && /^\/invites\/inv-\d+\/resend$/.test(path)) {
+    const resent = /^\/invites\/(inv-\d+)\/resend$/.exec(path);
+    if (method === 'POST' && resent !== null) {
+      const invite = sheet.invites.find((i) => i.id === resent[1]);
+      if (invite) invite.mailSentAt = '2026-09-13T00:01:00.000Z';
       return route.fulfill({ status: 200, json: { delivery: 'sent', shares: sheet } });
     }
     if (method === 'PATCH' && path === '/link') {

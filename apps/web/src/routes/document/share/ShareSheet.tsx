@@ -129,16 +129,12 @@ export function ShareSheet({
   const [email, setEmail] = useState('');
   const [inviteError, setInviteError] = useState<string | null>(null);
   /**
-   * #121: the last invitation whose mail was refused (SES in the sandbox, an
-   * outage). The invitation stands — it converts when the person signs in —
-   * so this is a notice with a way forward, not an error on the field.
+   * #121: an address with an account whose share mail was refused this
+   * session. The person has access, so this is a notice and nothing to redo.
+   * (An invitation whose mail was refused is read off the sheet itself:
+   * `mailSentAt` null — the service keeps it, so a reload shows it too.)
    */
-  const [mailFailed, setMailFailed] = useState<{
-    inviteId: string | null;
-    email: string;
-    /** `share`: the address had an account and has access now; `invite`: a pending invitation. */
-    kind: 'share' | 'invite';
-  } | null>(null);
+  const [shareMailFailed, setShareMailFailed] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [confirmStop, setConfirmStop] = useState(false);
@@ -207,6 +203,10 @@ export function ShareSheet({
   // "(you)" matches on the service's user id, which the sheet names as `callerId`
   // (review of #76: a viewer receives no emails, and the session holds only the Cognito sub).
   const isViewer = (p: { id: string }) => sheet !== null && p.id === sheet.callerId;
+  // #121: invitations the service never managed to mail; persisted, so a reload shows them.
+  const unsent = sheet === null ? [] : sheet.invites.filter((i) => i.mailSentAt === null);
+  /** The one unsent invitation the notice can resend itself; with several, each row has Resend. */
+  const soleUnsent = unsent.length === 1 ? unsent[0] : undefined;
 
   const onInvite = async (event: SyntheticEvent) => {
     event.preventDefault();
@@ -218,18 +218,16 @@ export function ShareSheet({
       return;
     }
     setInviteError(null);
-    setMailFailed(null);
+    setShareMailFailed(null);
     setBusy('invite');
     setFailure(null);
     try {
       const outcome = await inviteToDocument(docId, address, permission);
       adopt(outcome.shares);
       if (outcome.delivery === 'failed') {
-        // The invitation (or share) exists; only its mail did not go out.
-        const pending = outcome.shares.invites.find(
-          (i) => i.email.toLowerCase() === address.toLowerCase(),
-        );
-        setMailFailed({ inviteId: pending?.id ?? null, email: address, kind: outcome.kind });
+        // The invitation (or share) exists; only its mail did not go out. An invitation
+        // carries that on its row (`mailSentAt` null), which the sheet renders below.
+        if (outcome.kind === 'share') setShareMailFailed(address);
         announce(
           `${outcome.kind === 'share' ? SHARE_MAIL_FAILED_NOTICE : MAIL_FAILED_NOTICE} (${address})`,
         );
@@ -261,12 +259,11 @@ export function ShareSheet({
   /** #121: send an invitation's mail again; the row and its token stay as they are. */
   const onResend = (invite: { id: string; email: string }) =>
     run(`invite-resend:${invite.id}`, async () => {
+      // The row's `mailSentAt` in the answered sheet says what happened; the words say it too.
       const outcome = await resendInvite(docId, invite.id);
       if (outcome.delivery === 'failed') {
-        setMailFailed({ inviteId: invite.id, email: invite.email, kind: 'invite' });
         announce(`The email to ${invite.email} could not be sent again; share the link instead`);
       } else {
-        setMailFailed((current) => (current?.inviteId === invite.id ? null : current));
         announce(`Invitation sent again to ${invite.email}`);
       }
       return outcome.shares;
@@ -452,23 +449,28 @@ export function ShareSheet({
                   </Button>
                 </form>
               )}
-              {mailFailed !== null && (
+              {shareMailFailed !== null && (
                 <p className="gd-share__notice" role="status" data-testid="share-mail-failed">
                   <Icon name="warning" size={13} />
                   <span>
-                    {mailFailed.kind === 'share' ? SHARE_MAIL_FAILED_NOTICE : MAIL_FAILED_NOTICE} (
-                    {mailFailed.email})
+                    {SHARE_MAIL_FAILED_NOTICE} ({shareMailFailed})
                   </span>
-                  {mailFailed.inviteId !== null && canInvite && (
+                </p>
+              )}
+              {canInvite && unsent.length > 0 && (
+                <p className="gd-share__notice" role="status" data-testid="share-mail-failed">
+                  <Icon name="warning" size={13} />
+                  <span>
+                    {MAIL_FAILED_NOTICE} ({unsent.map((i) => i.email).join(', ')})
+                  </span>
+                  {soleUnsent !== undefined && (
                     <Button
                       variant="secondary"
                       size="sm"
-                      loading={busy === `invite-resend:${mailFailed.inviteId}`}
+                      loading={busy === `invite-resend:${soleUnsent.id}`}
                       loadingLabel="Sending…"
-                      disabled={busy !== null && busy !== `invite-resend:${mailFailed.inviteId}`}
-                      onClick={() =>
-                        void onResend({ id: mailFailed.inviteId ?? '', email: mailFailed.email })
-                      }
+                      disabled={busy !== null && busy !== `invite-resend:${soleUnsent.id}`}
+                      onClick={() => void onResend(soleUnsent)}
                     >
                       Resend
                     </Button>
@@ -514,7 +516,7 @@ export function ShareSheet({
                       expires={formatDate(locale, invite.expiresAt)}
                       manage={canManage}
                       resend={canInvite}
-                      mailFailed={mailFailed?.inviteId === invite.id}
+                      mailFailed={invite.mailSentAt === null}
                       busy={busy !== null}
                       onResend={() => onResend(invite)}
                       onRemove={() =>

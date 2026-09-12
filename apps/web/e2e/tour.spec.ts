@@ -109,6 +109,7 @@ async function installFakes(page: Page, tourDoneAt: string | null): Promise<Fake
       permission: string;
       invitedBy: string;
       expiresAt: string;
+      mailSentAt: string | null;
     }[],
     linkAccess: 'none',
     linkToken: null,
@@ -128,6 +129,7 @@ async function installFakes(page: Page, tourDoneAt: string | null): Promise<Fake
         permission: body.permission,
         invitedBy: SESSION.sub,
         expiresAt: '2026-09-27T00:00:00.000Z',
+        mailSentAt: null,
       });
       // As production answers while SES is in the sandbox (#121): the invitation is
       // created, its mail was refused. The tour's action is the invitation.

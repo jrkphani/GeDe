@@ -21,6 +21,11 @@ export interface PendingInvite {
   permission: SharePermission;
   invitedBy: string | null;
   expiresAt: string;
+  /**
+   * #121: ISO time SES last accepted the invitation's mail; null while it never
+   * did — the sheet says "email not sent" and offers Resend, after a reload too.
+   */
+  mailSentAt: string | null;
 }
 
 export interface ShareSheet extends DocumentShares {
@@ -48,6 +53,7 @@ function toInvite(v: unknown): PendingInvite | null {
     permission: v.permission === 'edit' ? 'edit' : 'view',
     invitedBy: str(v.invitedBy) ?? null,
     expiresAt,
+    mailSentAt: str(v.mailSentAt) ?? null,
   };
 }
 

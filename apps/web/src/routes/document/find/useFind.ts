@@ -74,9 +74,9 @@ export interface FindState {
   /**
    * FIND-08: what the last Replace / All left alone, once one has run —
    * `readOnly` (derived, linked, pulled, header and graph matches, and the
-   * shown value of any formula), `near` (fuzzy near misses: Replace only ever
-   * rewrites exact matches) and `formulas` (matches inside formula text,
-   * which All never rewrites: Replace changes those one at a time, with notice).
+   * shown value of any formula) and `near` (fuzzy near misses: Replace only
+   * ever rewrites exact matches) — and `formulas`, the matches it rewrote
+   * inside formula text, which are called out so their results get checked.
    */
   readonly skipped: Skipped | null;
   /** A transient notice for the toast (the worker restarted or stopped); null when there is none. */
@@ -87,7 +87,12 @@ export interface FindState {
 export interface Skipped {
   readonly readOnly: number;
   readonly near: number;
-  /** FIND-08: matches in formula expressions that Replace All left alone (#125). */
+  /**
+   * Not skipped: matches rewritten inside formula text (an expression or a
+   * reference path). Formula expressions are in Find's scope (FIND-03) and
+   * outside FIND-08's exclusions, so Replace and All both rewrite them —
+   * with notice, since a rewritten literal changes what the formula computes.
+   */
   readonly formulas: number;
 }
 
@@ -108,7 +113,7 @@ export function skippedText(skipped: Skipped | null): string {
   }
   if (skipped.formulas > 0) {
     parts.push(
-      `${formatNumber(locale, skipped.formulas)} in ${skipped.formulas === 1 ? 'a formula' : 'formulas'} left alone`,
+      `${formatNumber(locale, skipped.formulas)} inside ${skipped.formulas === 1 ? 'a formula' : 'formulas'} — check ${skipped.formulas === 1 ? 'its result' : 'their results'}`,
     );
   }
   return parts.join(', ');
@@ -578,17 +583,18 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   // The write goes through `replaceInCell`, the text algebra's mark-preserving
   // span replacement: bold on the untouched part of a cell stays bold.
   // A match inside a formula's text (its expression or a reference path) is
-  // editable, but a literal there is not a value: Replace All leaves every
-  // such match alone and counts it (FIND-08, #125); Replace rewrites the
-  // current one and says so, since the person is looking at that very cell.
-  type Outcome = 'replaced' | 'readOnly' | 'near' | 'formula' | 'stale';
+  // rewritten like any other (FIND-03 puts expressions in scope; FIND-08's
+  // exclusions are derived, linked, pulled and graph matches, and nothing
+  // else): `replaceInCell` re-binds the result through `commitCellText`. It
+  // is counted apart and announced, since a rewritten literal changes what
+  // the formula computes (#125).
+  type Outcome = 'replaced' | 'readOnly' | 'near' | 'stale';
   const inFormula = (match: SearchMatch) =>
     match.field === 'formula' || match.field === 'reference';
   const replaceOne = useCallback(
-    (match: SearchMatch, text: string, options: { formulas: boolean }): Outcome => {
+    (match: SearchMatch, text: string): Outcome => {
       if (match.readOnly || match.target.kind !== 'cell') return 'readOnly';
       if (match.distance > 0) return 'near';
-      if (!options.formulas && inFormula(match)) return 'formula';
       const { tableId, rowId, colId } = match.target;
       const table = tableMap(gd, tableId);
       if (table === null) return 'stale';
@@ -609,7 +615,7 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
     const { matches: list, current: index } = latest.current;
     const match = list[index];
     if (match === undefined) return;
-    const outcome = replaceOne(match, replacement, { formulas: true });
+    const outcome = replaceOne(match, replacement);
     // The re-index drops a rewritten match, so its index steps onto the next one by itself;
     // a skipped match stays, so step past it (before recording what was skipped: a step clears it).
     if ((outcome === 'readOnly' || outcome === 'near') && list.length > 1) step(index + 1);
@@ -617,6 +623,7 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
       ...NOTHING_SKIPPED,
       readOnly: outcome === 'readOnly' ? 1 : 0,
       near: outcome === 'near' ? 1 : 0,
+      formulas: outcome === 'replaced' && inFormula(match) ? 1 : 0,
     });
     announce(
       outcome === 'replaced'
@@ -639,18 +646,23 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
     // One transaction: one undo step, one sync message.
     gd.doc.transact(() => {
       for (const match of list) {
-        const outcome = replaceOne(match, replacement, { formulas: false });
-        if (outcome === 'replaced') replaced += 1;
-        else if (outcome === 'readOnly') left.readOnly += 1;
+        const outcome = replaceOne(match, replacement);
+        if (outcome === 'replaced') {
+          replaced += 1;
+          if (inFormula(match)) left.formulas += 1;
+        } else if (outcome === 'readOnly') left.readOnly += 1;
         else if (outcome === 'near') left.near += 1;
-        else if (outcome === 'formula') left.formulas += 1;
       }
     }, gd.origin);
     setSkipped(left);
-    const detail = skippedText(left);
-    announce(
-      `Replaced ${formatNumber(activeLocale(), replaced)}${detail === '' ? '' : `, ${detail}`}`,
-    );
+    const locale = activeLocale();
+    const parts = [`${formatNumber(locale, replaced)} replaced`];
+    if (left.formulas > 0) {
+      parts.push(`${formatNumber(locale, left.formulas)} inside formulas — check their results`);
+    }
+    const skipped = skippedText({ ...left, formulas: 0 });
+    if (skipped !== '') parts.push(skipped);
+    announce(parts.join(', '));
   }, [editable, gd, replacement, replaceOne]);
   const dismissNotice = useCallback(() => {
     setNotice(null);

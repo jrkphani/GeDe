@@ -162,7 +162,7 @@ archivedAt, everShared, sample }] }`.
   are deleted best-effort afterwards (a failure is logged with the document id).
 - `GET /api/documents/:id/shares` (any participant) →
   `{ owner: { id, name, email }, participants: [{ userId, name, email, permission, invitedBy,
-source }], invites: [{ id, email, permission, invitedBy, expiresAt }], linkAccess, linkToken,
+source }], invites: [{ id, email, permission, invitedBy, expiresAt, mailSentAt }], linkAccess, linkToken,
 permission, callerId }`. Emails, pending invitations and the link token are for the owner and
   `edit` participants; a `view` participant receives `null` emails, `invites: []` and
   `linkToken: null`. `permission` is the caller's, `callerId` their `users.id` (for "(you)").
@@ -178,8 +178,10 @@ permission, callerId }`. Emails, pending invitations and the link token are for 
     row is written first and stands whatever the send did — a refused send (SES in the
     sandbox: unverified recipient; a throttle; an outage) answers `delivery: 'failed'` on the
     201, is logged with the failure class (never the address) and counted on the
-    `GeDe/Sync InviteMailFailures` metric (EMF, dimension `Reason` = template); the SPA shows
-    "Invitation saved — the email could not be sent" with Resend. Idempotent per (document,
+    `GeDe/Sync InviteMailFailures` metric (EMF, dimension `Reason` = template). An accepted
+    send is recorded as `invites.mail_sent_at` (migration 0011) and answered as the
+    invitation's `mailSentAt`; null means never mailed, and the SPA shows "Invitation saved —
+    the email could not be sent" with Resend, after a reload as well. Idempotent per (document,
     address): while a pending invitation stands, a repeated POST answers 200
     `{ kind: 'invite', created: false, delivery: 'skipped', shares }` — no row, no mail
     (`invites_pending_key`, migration 0007, decides a race). 409 when the address already has
@@ -187,7 +189,8 @@ permission, callerId }`. Emails, pending invitations and the link token are for 
     after validation and the permission check.
   - `POST /api/documents/:id/invites/:inviteId/resend` (owner or editor) → 200
     `{ delivery: 'sent' | 'failed', shares }`. Sends the pending invitation's mail again — same
-    token, same expiry, no row change, no audit row — and spends the same per-user budget;
+    token, same expiry, only `mail_sent_at` moves on an accepted send, no audit row — and
+    spends the same per-user budget;
     one resend of a given invitation per `RATE_LIMIT_RESEND_COOLDOWN_SECONDS` (429 with the wait
     inside it, whoever asks, so an address is never mailed the same invitation repeatedly);
     404 when the invitation is not pending on this document.

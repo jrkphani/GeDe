@@ -488,7 +488,7 @@ describe('Find', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent(/4 of 4, B6 in Table 1/);
   });
 
-  it('FIND-08 Replace rewrites the current match, All rewrites every exact match in scope; read-only matches, fuzzy near misses and formula text are left alone with a count, and Replace inside a formula gives notice (#125)', async () => {
+  it('FIND-08 FIND-03 Replace rewrites the current match, All rewrites every exact match in scope, formula text included and called out; read-only matches and fuzzy near misses are left alone with a count (#125)', async () => {
     const { gd, sheet1, table1, ids } = fixture();
     // Column 2 becomes derived: its cells are read-only (cellReadOnlyReason, GRID-04).
     const columns = gd.tables.get(table1)!.get('columns') as Y.Array<Y.Map<unknown>>;
@@ -515,31 +515,27 @@ describe('Find', () => {
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
     await waitFor(() => {
       expect(screen.getByTestId('find-skipped')).toHaveTextContent(
-        '1 near match left alone, 1 not editable, 1 in a formula left alone',
+        '1 near match left alone, 1 not editable, 1 inside a formula — check its result',
       );
     });
-    // FIND-08 (#125): All never rewrites formula text — a literal there is not a value.
-    expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Singapore, " hub")');
+    // FIND-03 puts formula expressions in scope and FIND-08 excludes only derived, linked,
+    // pulled and graph matches: the literal inside the formula is rewritten (re-bound through
+    // commitCellText) and called out so its result is checked (#125).
+    expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Mumbai, " hub")');
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      '2 replaced, 1 inside formulas — check their results, 1 near match left alone, 1 not editable',
+    );
     // A fuzzy near miss ("Sngapore") is not what was asked for: untouched (FIND-05 × FIND-08).
     expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
     // Derived: untouched.
     expect(cellText(t1, ids.rows[2]!, ids.cols[1]!)).toBe('Singapore fund');
     await waitFor(() => {
-      expect(count()).toBe('1 of 3'); // the read-only match, the formula and the near miss remain
+      expect(count()).toBe('1 of 2'); // the read-only match and the near miss remain
     });
     // Replace on a read-only match: left alone and stepped past.
     await userEvent.click(screen.getByRole('button', { name: 'Replace' }));
     expect(screen.getByTestId('find-skipped')).toHaveTextContent('1 not editable');
-    expect(count()).toBe('2 of 3');
-    // Replace on the formula match: rewritten, with notice, because the person chose that cell.
-    await userEvent.click(screen.getByRole('button', { name: 'Replace' }));
-    expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Mumbai, " hub")');
-    expect(screen.getByTestId('live-region')).toHaveTextContent(
-      /Replaced inside the formula in B8 in Table 1; check its result/,
-    );
-    await waitFor(() => {
-      expect(count()).toBe('2 of 2');
-    });
+    expect(count()).toBe('2 of 2');
     // Replace on a near miss: left alone and stepped past.
     await userEvent.click(screen.getByRole('button', { name: 'Replace' }));
     expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
@@ -708,16 +704,16 @@ describe('Find', () => {
     });
     await userEvent.type(screen.getByRole('textbox', { name: 'Replace with' }), 'Chennai');
     await userEvent.click(screen.getByRole('button', { name: 'All' }));
-    // Exact hits in both tables are rewritten in one transaction; the near miss and the
-    // formula's text are left alone (FIND-08).
+    // Exact hits in both tables are rewritten in one transaction, the formula's reference
+    // path included (FIND-03); the near miss is left alone (FIND-08).
     expect(cellText(t1, ids.rows[0]!, ids.cols[0]!)).toBe('Chennai');
-    expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Singapore, " hub")');
+    expect(cellText(t1, ids.rows[3]!, ids.cols[0]!)).toBe('=Concat(@Trek.Chennai, " hub")');
     expect(
       cellText(t2, tableById(gd, table2)!.rows[0]!, tableById(gd, table2)!.columns[0]!.id),
     ).toBe('Chennai budget');
     expect(cellText(t1, ids.rows[1]!, ids.cols[0]!)).toBe('Sngapore office');
     await waitFor(() => {
-      expect(count()).toBe('1 of 2');
+      expect(count()).toBe('1 of 1');
     });
     t1.unobserveDeep(noop);
     t2.unobserveDeep(noop);

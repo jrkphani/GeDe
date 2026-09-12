@@ -790,7 +790,22 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     // nothing else: another document's, an accepted one, a withdrawn one all answer nothing.
     expect(
       await repo.invites.pending({ documentId: doc.id, inviteId: tok5.invite.id }),
-    ).toMatchObject({ id: tok5.invite.id, email: 'late@example.com', token: 'tok-5' });
+    ).toMatchObject({
+      id: tok5.invite.id,
+      email: 'late@example.com',
+      token: 'tok-5',
+      mailSentAt: null,
+    });
+    // An accepted send is recorded on the row (#121); the sheet reads it back; no audit row.
+    expect(await repo.invites.markMailSent({ inviteId: tok5.invite.id })).toBe(true);
+    expect(await repo.invites.markMailSent({ inviteId: crypto.randomUUID() })).toBe(false);
+    expect(
+      (await repo.invites.pending({ documentId: doc.id, inviteId: tok5.invite.id }))?.mailSentAt,
+    ).toBeInstanceOf(Date);
+    expect(
+      (await repo.documents.participants(doc.id))?.invites.find((i) => i.id === tok5.invite.id)
+        ?.mailSentAt,
+    ).toBeInstanceOf(Date);
     expect(
       await repo.invites.pending({ documentId: other.id, inviteId: tok5.invite.id }),
     ).toBeUndefined();

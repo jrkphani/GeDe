@@ -146,6 +146,8 @@ export interface PendingInvite {
   readonly permission: Permission;
   readonly invitedBy: string | null;
   readonly expiresAt: Date;
+  /** #121: when SES last accepted the mail; null while it never did ("email not sent", Resend). */
+  readonly mailSentAt: Date | null;
 }
 
 export interface ParticipantList {
@@ -173,6 +175,8 @@ export interface InviteRecord {
   readonly expiresAt: Date;
   readonly acceptedAt: Date | null;
   readonly createdAt: Date;
+  /** #121: when SES last accepted the invitation's mail; null while it never did. */
+  readonly mailSentAt: Date | null;
 }
 
 /** A share an invitation converted into (SHARE-02), for the caller's log line. */
@@ -417,6 +421,11 @@ export interface InvitesRepo {
    * builds the mail from its token); `undefined` when there is none.
    */
   pending(input: { documentId: string; inviteId: string }): Promise<InviteRecord | undefined>;
+  /**
+   * Record that SES accepted the invitation's mail (#121): `mail_sent_at = now()`.
+   * Not a share change — no audit row. `false` when no such invitation exists.
+   */
+  markMailSent(input: { inviteId: string }): Promise<boolean>;
   /** The invitation carrying `token`, accepted or not, expired or not; the caller decides. */
   byToken(token: string): Promise<InviteRecord | undefined>;
   /**

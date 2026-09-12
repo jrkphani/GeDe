@@ -67,6 +67,7 @@ const PENDING = {
   permission: 'view' as const,
   invitedBy: 'u-owner',
   expiresAt: '2026-09-26T00:00:00.000Z',
+  mailSentAt: '2026-09-12T00:00:00.000Z',
 };
 
 function sheet(overrides: Partial<SharesApi.ShareSheet> = {}): SharesApi.ShareSheet {
@@ -332,7 +333,7 @@ describe('ShareSheet', () => {
 
   it('SHARE-02 ONB-05 an invitation whose mail was refused is saved: the sheet says so with Resend, the row reads "email not sent", the tour is told, and Resend reports the new delivery (#121)', async () => {
     const u = userEvent.setup();
-    const created = { ...PENDING, id: 'inv-9', email: 'nobody@example.invalid' };
+    const created = { ...PENDING, id: 'inv-9', email: 'nobody@example.invalid', mailSentAt: null };
     vi.mocked(shares.inviteToDocument).mockResolvedValue({
       kind: 'invite',
       created: true,
@@ -370,9 +371,12 @@ describe('ShareSheet', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent(
       'The email to nobody@example.invalid could not be sent again; share the link instead',
     );
+    // The service records the accepted send on the row; the sheet reads it back.
     vi.mocked(shares.resendInvite).mockResolvedValueOnce({
       delivery: 'sent',
-      shares: sheet({ invites: [PENDING, created] }),
+      shares: sheet({
+        invites: [PENDING, { ...created, mailSentAt: '2026-09-13T00:00:00.000Z' }],
+      }),
     });
     await u.click(
       within(dialog).getByRole('button', { name: 'Resend invitation to nobody@example.invalid' }),
@@ -385,6 +389,25 @@ describe('ShareSheet', () => {
     expect(within(dialog).queryByTestId('share-mail-failed')).not.toBeInTheDocument();
     expect(within(dialog).queryByText('Invited · email not sent')).not.toBeInTheDocument();
     reported.mockRestore();
+  });
+
+  it('SHARE-02 an invitation the service never mailed is shown as "email not sent" with Resend on a fresh open of the sheet, from the row itself (#121)', async () => {
+    const never = { ...PENDING, id: 'inv-7', email: 'later@example.invalid', mailSentAt: null };
+    vi.mocked(shares.getShareSheet).mockResolvedValue(sheet({ invites: [PENDING, never] }));
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const notice = await within(dialog).findByTestId('share-mail-failed');
+    expect(notice).toHaveTextContent(
+      'Invitation saved — the email could not be sent; share the link or try again (later@example.invalid)',
+    );
+    expect(within(notice).getByRole('button', { name: 'Resend' })).toBeEnabled();
+    const rows = within(dialog).getAllByRole('listitem');
+    expect(rows.find((r) => r.textContent?.includes('akshaya@example.com'))).toHaveTextContent(
+      /Invited · expires/,
+    );
+    expect(rows.find((r) => r.textContent?.includes('later@example.invalid'))).toHaveTextContent(
+      'Invited · email not sent',
+    );
   });
 
   it('SHARE-02 a share whose mail was refused says the person has access, never "Invitation saved", and offers no Resend (#121 review)', async () => {
