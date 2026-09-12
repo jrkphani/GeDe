@@ -32,6 +32,20 @@ proto.setPointerCapture ??= () => undefined;
 proto.releasePointerCapture ??= () => undefined;
 proto.scrollIntoView ??= () => undefined;
 
+// jsdom has no layout: `Range` has no client rects and the document has no
+// `elementFromPoint`. ProseMirror reads both (`scrollToSelection` after every
+// transaction that scrolls into view, `posAtCoords` on mousedown) and throws
+// without them, which vitest counts as an unhandled error even though the
+// assertions pass. Empty geometry is what a layout-free DOM honestly reports.
+type RectGaps = Partial<Pick<Range, 'getClientRects' | 'getBoundingClientRect'>>;
+const rangeProto: RectGaps = window.Range.prototype;
+const emptyRect = (): DOMRect => new window.DOMRect(0, 0, 0, 0);
+rangeProto.getClientRects ??= () => [] as unknown as DOMRectList;
+rangeProto.getBoundingClientRect ??= emptyRect;
+type PointGaps = Partial<Pick<Document, 'elementFromPoint'>>;
+const documentProto: PointGaps = window.Document.prototype;
+documentProto.elementFromPoint ??= () => null;
+
 const TOP_LAYER = new Set([':popover-open', ':modal']);
 // eslint-disable-next-line @typescript-eslint/unbound-method -- rebound with .call below
 const nativeMatches = window.Element.prototype.matches;

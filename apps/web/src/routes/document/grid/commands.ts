@@ -28,6 +28,7 @@ import {
   hideColumn as hideColumnMutation,
   insertRowBefore,
   scaleTable as scaleTableMutation,
+  setCellRich,
   setCellText,
   setColumnWidth as setColumnWidthMutation,
   setColumnWrap as setColumnWrapMutation,
@@ -42,6 +43,7 @@ import {
   type GedeDoc,
   type Id,
   type ReadOnlyReason,
+  type RichDoc,
   type ScaleTableOptions,
   type StripCount,
   type TableRecord,
@@ -87,6 +89,8 @@ export interface GridCommands {
   clearCell(cell: CellSelection): boolean;
   /** GRID-06: write the editor's text; read-only cells refuse. */
   commitCell(cell: CellSelection, text: string): boolean;
+  /** GRID-06: write the editor's rich text (marks included); read-only cells refuse. */
+  commitRichCell(cell: CellSelection, doc: RichDoc): boolean;
   /** GRID-04: why a cell will not take typing, or null when it will. */
   readOnlyReason(cell: CellSelection): ReadOnlyReason | null;
 }
@@ -341,6 +345,10 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       // False when the row or column went while the editor was open: the draft is dropped
       // rather than written as a cell keyed to nothing (GRID-02).
       return setCellText(gd, cell.tableId, cell.rowId, cell.colId, text);
+    },
+    commitRichCell(cell, doc) {
+      if (!editable() || map(cell.tableId) === null || refuseReadOnly(cell)) return false;
+      return setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
     },
     readOnlyReason,
   };

@@ -42,6 +42,7 @@ export default mergeConfig(
         input: {
           index: path.join(webRoot, 'index.html'),
           harness: path.join(webRoot, 'e2e/harness/index.html'),
+          richtext: path.join(webRoot, 'e2e/harness/richtext/index.html'),
         },
       },
     },

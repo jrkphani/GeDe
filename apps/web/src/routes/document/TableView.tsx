@@ -9,7 +9,9 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
-  cellText,
+  cellFormatFor,
+  cellFragment,
+  cellRich,
   columnLetter,
   distributeUnits,
   LATTICE,
@@ -20,6 +22,10 @@ import {
   tableRecord,
   tableWraps,
   WRAPPED_ROW_HEIGHT,
+  EMPTY_DOC,
+  plainText,
+  type ColumnRecord,
+  type FormatLocale,
   type Id,
   type PresenceState,
   type ReadOnlyReason,
@@ -27,6 +33,7 @@ import {
   type TableRecord,
 } from '@gede/core';
 import { Icon } from '@gede/ui';
+import type * as Y from 'yjs';
 
 import { announce } from '../../announce.js';
 import { ARIA_KEYS } from '../../doc/shortcuts.js';
@@ -39,7 +46,8 @@ import {
   type Editing,
   type TraversalTable,
 } from '../../doc/selection.js';
-import { CellEditor } from './CellEditor.js';
+import { CellContent, layoutCell, RichCellEditor, toFormatLocale } from './cell/index.js';
+import { useLocale } from '../../locale.js';
 import { readOnlyLabel, type GridCommands } from './grid/commands.js';
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
@@ -61,6 +69,11 @@ export interface TableViewProps {
    * (`grid/pinned.ts`).
    */
   pinnedLeft: number | null;
+  /**
+   * The document's undo manager (KEYS-03): the rich editor writes through it so
+   * an edit session is one step, inside the editor and after commit alike.
+   */
+  undo?: Y.UndoManager | null | undefined;
   actions: GridActions;
   commands: GridCommands;
 }
@@ -94,10 +107,13 @@ export const TableView = memo(function TableView({
   editable,
   presence,
   pinnedLeft,
+  undo,
   actions,
   commands,
 }: TableViewProps) {
   useYVersion(table);
+  const [activeLocale] = useLocale();
+  const locale = toFormatLocale(activeLocale);
   const record = tableRecord(table);
   const ref = useRef<HTMLElement>(null);
   const [columnPreview, setColumnPreview] = useState<ColumnPreview | null>(null);
@@ -315,6 +331,9 @@ export const TableView = memo(function TableView({
                         editing={isEditing ? editing : null}
                         editable={editable}
                         readOnly={readOnly}
+                        column={col}
+                        locale={locale}
+                        undo={undo ?? null}
                         frozen={frozenIds.has(col.id)}
                         freezeEdge={col.id === freezeEdgeId}
                         // Per-column wrap clamps that column's cells only; a row wrapped on its
@@ -353,6 +372,7 @@ export const TableView = memo(function TableView({
               left={pinnedLeft}
               rowHeights={rowHeights}
               selectedCell={selectedCell}
+              locale={locale}
               onSelect={actions.selectCell}
             />
           )}
@@ -425,6 +445,7 @@ interface PinnedPanelProps {
   left: number;
   rowHeights: readonly number[];
   selectedCell: CellSelection | null;
+  locale: FormatLocale;
   onSelect: (cell: CellSelection) => void;
 }
 
@@ -440,6 +461,7 @@ function PinnedPanel({
   left,
   rowHeights,
   selectedCell,
+  locale,
   onSelect,
 }: PinnedPanelProps) {
   const columns = frozenColumnsOf(record);
@@ -497,7 +519,11 @@ function PinnedPanel({
                   onSelect({ tableId: record.id, rowId, colId: col.id });
                 }}
               >
-                <span className="gd-cell__text">{cellText(table, rowId, col.id)}</span>
+                <CellContent
+                  content={cellRich(table, rowId, col.id)}
+                  format={cellFormatFor(table, col, rowId)}
+                  locale={locale}
+                />
               </div>
             );
           })}
@@ -520,6 +546,10 @@ interface CellProps {
   editable: boolean;
   /** GRID-04: derived, linked, pulled and group cells are not editable. */
   readOnly: ReadOnlyReason | null;
+  /** The column record, resolved once per table render; carries the column's data format (FMT-01). */
+  column: ColumnRecord;
+  locale: FormatLocale;
+  undo: Y.UndoManager | null;
   frozen: boolean;
   freezeEdge: boolean;
   wrap: boolean;
@@ -555,6 +585,9 @@ function Cell({
   editing,
   editable,
   readOnly,
+  column,
+  locale,
+  undo,
   frozen,
   freezeEdge,
   wrap,
@@ -563,7 +596,11 @@ function Cell({
   actions,
   commands,
 }: CellProps) {
-  const text = tier === 'micro' ? cellText(table, cell.rowId, cell.colId) : '';
+  // Micro only: below it cell text is not laid out at all (DOC-05).
+  const rich = tier === 'micro' ? cellRich(table, cell.rowId, cell.colId) : EMPTY_DOC;
+  const format = cellFormatFor(table, column, cell.rowId);
+  const layout = layoutCell(rich, format, locale);
+  const text = layout.text;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (selected && editing === null) ref.current?.focus({ preventScroll: true });
@@ -708,17 +745,27 @@ function Cell({
       data-read-only={readOnly ?? undefined}
     >
       {editing !== null && canEdit ? (
-        <CellEditor
-          initial={text}
+        <RichCellEditor
+          initial={plainText(rich)}
           seed={editing.seed}
           address={address}
+          fragment={cellFragment(table, cell.rowId, cell.colId)}
+          undoManager={undo}
+          locale={locale}
           onCommit={(value, then) => {
             actions.commit(cell, value, then);
+          }}
+          onCommitRich={(doc) => {
+            // A cell with no fragment yet (empty, or a formula): the marks arrive here,
+            // then `onCommit` follows with the same text and is a no-op write.
+            commands.commitRichCell(cell, doc);
           }}
           onCancel={actions.cancel}
         />
       ) : (
-        tier === 'micro' && <span className="gd-cell__text">{text}</span>
+        tier === 'micro' && (
+          <CellContent content={rich} layout={layout} format={format} locale={locale} />
+        )
       )}
       {readOnly !== null && (
         <span className="gd-cell__lock" aria-hidden="true">

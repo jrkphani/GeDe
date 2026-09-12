@@ -1,0 +1,193 @@
+/* ---- rich cell content at rest (DOM-first, no ProseMirror) ---------------- */
+/* Tokens only. The cell (.gd-cell, document.css) owns size, padding and the
+   1.35 line-height; this owns marks, alignment, the invalid state and the
+   Indic line-height rule. */
+
+.gd-rich {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-rich--right {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.gd-rich__p {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* GRID-09: a wrapped cell shows two lines, clipped, like the plain text did. */
+.gd-cell--wrap .gd-rich {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.gd-cell--wrap .gd-rich__p {
+  white-space: normal;
+}
+
+/* I18N-03: Noto fallbacks are in --font-ui; Indic scripts need 1.7 or matras clip. */
+.gd-rich--indic,
+.gd-rich-editor[lang='ta'],
+.gd-rich-editor[lang='hi'],
+.gd-rich-editor[lang='te'] {
+  line-height: 1.7;
+}
+
+/* Marks. Weight 600 is the heaviest the type scale allows (DS: no 700). */
+.gd-rich strong,
+.gd-rich-editor strong {
+  font-weight: 600;
+}
+.gd-rich em,
+.gd-rich-editor em {
+  font-style: italic;
+}
+.gd-rich u,
+.gd-rich-editor u {
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+.gd-rich s,
+.gd-rich-editor s {
+  text-decoration: line-through;
+}
+.gd-rich sup,
+.gd-rich sub,
+.gd-rich-editor sup,
+.gd-rich-editor sub {
+  font-size: 0.75em;
+  line-height: 0;
+  position: relative;
+  vertical-align: baseline;
+}
+.gd-rich sup,
+.gd-rich-editor sup {
+  top: -0.45em;
+}
+.gd-rich sub,
+.gd-rich-editor sub {
+  bottom: -0.25em;
+}
+.gd-rich a,
+.gd-rich-editor a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+}
+
+/* Text colour by token (INSP-06); every pair is ≥ 4.5:1 on the surface. */
+[data-ink='ink'] {
+  color: var(--ink);
+}
+[data-ink='ink-muted'] {
+  color: var(--ink-muted);
+}
+[data-ink='brand'] {
+  color: var(--link);
+}
+[data-ink='live'] {
+  color: var(--selection-ring);
+}
+[data-ink='success'] {
+  color: var(--success);
+}
+[data-ink='warning'] {
+  color: var(--warning);
+}
+[data-ink='danger'] {
+  color: var(--danger);
+}
+[data-ink='info'] {
+  color: var(--info);
+}
+
+/* Highlight by ramp: the 100 step, so ink keeps its contrast on it. */
+mark[data-highlight] {
+  color: inherit;
+  padding: 0 0.05em;
+  border-radius: var(--radius-sm);
+}
+mark[data-highlight='amber'] {
+  background: var(--amber-100);
+}
+mark[data-highlight='forest'] {
+  background: var(--forest-100);
+}
+mark[data-highlight='slate'] {
+  background: var(--slate-200);
+}
+[data-theme='dark'] mark[data-highlight='amber'] {
+  background: color-mix(in srgb, var(--amber-700) 35%, var(--surface));
+}
+[data-theme='dark'] mark[data-highlight='forest'] {
+  background: color-mix(in srgb, var(--forest-500) 35%, var(--surface));
+}
+[data-theme='dark'] mark[data-highlight='slate'] {
+  background: color-mix(in srgb, var(--ink-muted) 30%, var(--surface));
+}
+
+/* FMT-05 / A11Y-04: an invalid value tints the cell AND shows a glyph with text. */
+.gd-cell:has(> .gd-rich--invalid) {
+  background: color-mix(in srgb, var(--warning) 12%, var(--surface));
+}
+.gd-rich--invalid {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.gd-rich--invalid .gd-rich__p {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+.gd-rich__warn {
+  display: inline-flex;
+  flex: 0 0 auto;
+  color: var(--warning);
+}
+
+/* ---- the editor ------------------------------------------------------------ */
+.gd-cell__editor--rich {
+  display: flex;
+  align-items: center;
+  padding: 0;
+  white-space: nowrap;
+  cursor: text;
+}
+.gd-rich-editor {
+  /* Fills the cell so a click anywhere in it lands in the editable; the lines sit
+     centred (auto margins, so more lines than fit overflow downwards, never up),
+     exactly where the text at rest sits, so opening does not move it. */
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 100%;
+  padding: 0 var(--space-2);
+  outline: none;
+  white-space: pre;
+  word-wrap: normal;
+}
+.gd-rich-editor p {
+  margin: 0;
+}
+.gd-rich-editor p:first-child {
+  margin-top: auto;
+}
+.gd-rich-editor p:last-child {
+  margin-bottom: auto;
+}
+/* GRID-09: in a wrapped column the editor wraps as the text at rest does (the
+   Wave 1 textarea's `pre-wrap` rule, which the inner editable would otherwise override). */
+.gd-cell--wrap .gd-rich-editor {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

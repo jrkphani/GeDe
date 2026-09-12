@@ -156,6 +156,44 @@ test.describe('document shell', () => {
     await checkA11y('document table 1440');
   });
 
+  test('KEYS-05 (partial) KEYS-03 ⌘B in the cell editor bolds by physical key; the mark survives commit and re-render; ⌘Z undoes the edit in one step', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signInTo(page, `/d/${DOC_ID}`);
+    await page.getByRole('button', { name: 'Add table' }).click();
+    const grid = page.getByRole('grid').first();
+    const cell = grid.getByRole('gridcell').first();
+    await cell.click();
+    await page.keyboard.type('Everest');
+    await page.keyboard.press('Enter');
+    await expect(cell).toHaveText('Everest');
+    // Open it again, select all, ⌘B (Ctrl+B outside Apple), commit.
+    const apple = await page.evaluate(() => /Macintosh|Mac OS X/.test(navigator.userAgent));
+    const mod = apple ? 'Meta' : 'Control';
+    await cell.dblclick();
+    const editor = page.getByLabel('Edit B5');
+    await expect(editor).toHaveAttribute('contenteditable', 'true');
+    await editor.click({ clickCount: 3 });
+    await page.keyboard.press(`${mod}+b`);
+    await expect(editor.locator('strong')).toHaveText('Everest');
+    await page.keyboard.press('Enter');
+    await expect(cell.locator('.gd-rich strong')).toHaveText('Everest');
+    // The room holds the mark as a text attribute; Y.XmlText renders it as a `<bold>` tag.
+    await expect
+      .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()).includes('<bold>'))
+      .toBe(true);
+    // KEYS-03: one ⌘Z at document level takes the whole edit session back.
+    await page.keyboard.press(`${mod}+z`);
+    await expect(cell.locator('.gd-rich strong')).toHaveCount(0);
+    await expect(cell).toHaveText('Everest');
+    await page.keyboard.press(`${mod}+Shift+z`);
+    await expect(cell.locator('.gd-rich strong')).toHaveText('Everest');
+    await checkA11y('document rich cell 1440');
+  });
+
   test('DOC-04 DOC-05 DOC-07 pans by dragging, zooms with ⌥scroll into the macro tier, and Fit frames the table', async ({
     page,
     checkA11y,
@@ -344,7 +382,7 @@ test.describe('grid editing', () => {
       expect(shadow).toContain(amber);
       // GRID-04: typing overwrites; GRID-06: Enter commits and moves down.
       await page.keyboard.type('Base camp');
-      await expect(page.getByLabel('Edit B5')).toHaveValue('Base camp');
+      await expect(page.getByLabel('Edit B5')).toHaveText('Base camp');
       await page.keyboard.press('Enter');
       await expect(b5).toHaveText('Base camp');
       expect(await selectedAddress(page)).toBe('B6');
@@ -363,7 +401,7 @@ test.describe('grid editing', () => {
       expect(await selectedAddress(page)).toBe('B6');
       // Enter on a cell opens it on its text; Escape cancels; Delete clears.
       await page.keyboard.press('Enter');
-      await expect(page.getByLabel('Edit B6')).toHaveValue('Lobuche');
+      await expect(page.getByLabel('Edit B6')).toHaveText('Lobuche');
       await page.keyboard.type(' (4,940 m)');
       await page.keyboard.press('Escape');
       await expect(grid.getByRole('gridcell').nth(3)).toHaveText('Lobuche');
