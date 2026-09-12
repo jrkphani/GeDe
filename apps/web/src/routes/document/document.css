@@ -1193,3 +1193,305 @@ button.gd-cell__chevron:hover {
 .gd-doc--phone .gd-doc__sync {
   display: none;
 }
+
+/* =========================================================================
+   Appearance (INSP-04..07, MENU-04) — wave4/inspector-controls.
+   Every colour, size and weight here is a token; the grid writes names as
+   data attributes and custom properties, never values. Nothing in this
+   section changes a cell's box in the lattice: fills and type are paint,
+   borders are an inset pseudo-element, a span is a wider anchor box.
+   ========================================================================= */
+
+/* ---- table styles (INSP-04): a header band and an alternating band per ramp.
+   The prototype's swatches are (head, alt) pairs; these are the four the ramps express. */
+.gd-table[data-style='slate'] .gd-table__row--header {
+  background: var(--tint-slate);
+}
+.gd-table[data-style='forest'] .gd-table__row--header {
+  background: var(--tint-forest);
+}
+.gd-table[data-style='amber'] .gd-table__row--header {
+  background: var(--tint-amber);
+}
+.gd-table[data-style] .gd-table__row--header .gd-table__header--frozen {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+/* Alternating rows (INSP-04): every second data row takes the style's soft band. */
+.gd-table[data-alternating] {
+  --gd-band-tone: var(--surface-sunken);
+}
+.gd-table[data-alternating][data-style='slate'] {
+  --gd-band-tone: var(--tint-slate-soft);
+}
+.gd-table[data-alternating][data-style='forest'] {
+  --gd-band-tone: var(--tint-forest-soft);
+}
+.gd-table[data-alternating][data-style='amber'] {
+  --gd-band-tone: var(--tint-amber-soft);
+}
+.gd-table[data-alternating]
+  .gd-table__grid
+  > :nth-child(even of .gd-table__row:not(.gd-table__row--header))
+  .gd-cell:not(.gd-cell--frozen):not([data-fill]),
+.gd-table[data-alternating]
+  [role='rowgroup']
+  > :nth-child(even of .gd-table__row:not(.gd-band))
+  .gd-cell:not(.gd-cell--frozen):not([data-fill]) {
+  background: var(--gd-band-tone);
+}
+
+/* ---- table outline (INSP-04): the PRD's weights on the table's own border.
+   Content-box, so the outline sits outside the lattice footprint (GRID-01). */
+.gd-table[data-outline='none'] {
+  border-color: transparent;
+}
+.gd-table[data-outline='strong'] {
+  border-color: var(--rule-strong);
+  border-width: 2px;
+  margin: -2px 0 0 -2px;
+}
+.gd-table[data-outline='accent'] {
+  border-color: var(--rule-accent);
+  border-width: 2px;
+  margin: -2px 0 0 -2px;
+}
+
+/* ---- gridline density (INSP-04, PRD §7 Off / Light / High contrast), per table */
+.gd-table[data-gridlines='off'] .gd-cell {
+  border-right-color: transparent;
+  border-bottom-color: transparent;
+}
+.gd-table[data-gridlines='off'] .gd-table__header {
+  border-right-color: transparent;
+}
+.gd-table[data-gridlines='contrast'] .gd-cell {
+  border-right-color: var(--ink-muted);
+  border-bottom-color: var(--ink-muted);
+}
+.gd-table[data-gridlines='contrast'] .gd-table__header {
+  border-right-color: var(--ink-muted);
+}
+.gd-table[data-gridlines] .gd-cell--freeze-edge {
+  border-right-color: var(--ink);
+}
+
+/* ---- caption strip (INSP-04): one lattice row at the foot, dashed rule above (prototype) */
+.gd-table__caption {
+  display: flex;
+  align-items: center;
+  box-sizing: border-box;
+  padding: 0 var(--space-2);
+  border-top: 1px dashed var(--border);
+  color: var(--ink-muted);
+  font-size: 0.65625rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.gd-table__caption-empty {
+  font-style: italic;
+}
+
+/* ---- stacking order (INSP-07): tables paint in z order; overlays stay above every table */
+.gd-table {
+  z-index: var(--gd-z, 0);
+}
+.gd-canvas__layer > .gd-outlines,
+.gd-canvas__layer > .gd-find-hits {
+  z-index: 60;
+}
+
+/* ---- pin to viewport (INSP-07, PRD §10): the pinned copy sits in a layer that scales but
+   never pans; a ghost stays at the lattice origin so the DAG context is kept. */
+.gd-canvas__pinned-layer {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 70;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  transform-origin: 0 0;
+  pointer-events: none;
+}
+.gd-canvas__pinned-layer > * {
+  pointer-events: auto;
+}
+.gd-canvas__pinned-layer .gd-table {
+  box-shadow: var(--elev-overlay);
+}
+.gd-table--ghost {
+  opacity: 0.32;
+  border-style: dashed;
+  pointer-events: none;
+}
+.gd-table--ghost::after {
+  content: 'pinned to viewport';
+  position: absolute;
+  top: calc(var(--lattice-row) * 2 + var(--space-1));
+  left: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+/* ---- DAG edges (INSP-07, PRD §7): table-to-table lineage in the layer, above tables */
+.gd-edges {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 55;
+  overflow: visible;
+  pointer-events: none;
+}
+.gd-edges__path {
+  fill: none;
+  stroke: var(--rule-accent);
+  stroke-width: 1.5;
+  stroke-dasharray: 5 4;
+  vector-effect: non-scaling-stroke;
+}
+.gd-edges__end {
+  fill: var(--rule-accent);
+}
+.gd-edges__label {
+  fill: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 0.5625rem;
+  paint-order: stroke;
+  stroke: var(--surface);
+  stroke-width: 3;
+}
+
+/* ---- cell fill (INSP-05): one ramp tint; the tint tokens carry the dark swap */
+.gd-cell[data-fill='amber'] {
+  background-color: var(--tint-amber);
+}
+.gd-cell[data-fill='forest'] {
+  background-color: var(--tint-forest);
+}
+.gd-cell[data-fill='slate'] {
+  background-color: var(--tint-slate);
+}
+
+/* ---- text colour (INSP-06): the same tokens the inline mark uses (`[data-ink]` in cell.css) */
+.gd-cell[data-ink] .gd-rich {
+  color: inherit;
+}
+
+/* ---- typography (INSP-06): the token families, the four weights, the type scale */
+.gd-cell[data-font='mono'] {
+  font-family: var(--font-mono);
+}
+.gd-cell[data-font='ui'] {
+  font-family: var(--font-ui);
+}
+.gd-cell[data-weight='400'] {
+  font-weight: 400;
+}
+.gd-cell[data-weight='500'] {
+  font-weight: 500;
+}
+.gd-cell[data-weight='600'] {
+  font-weight: 600;
+}
+.gd-cell[data-weight='700'] {
+  font-weight: 700;
+}
+.gd-cell[data-size='cell'] {
+  font-size: var(--text-cell);
+}
+.gd-cell[data-size='body-sm'] {
+  font-size: var(--text-body-sm);
+}
+.gd-cell[data-size='body'] {
+  font-size: var(--text-body);
+}
+.gd-cell[data-size='h3'] {
+  font-size: var(--text-h3);
+  letter-spacing: -0.01em;
+}
+.gd-cell[data-size='h2'] {
+  font-size: var(--text-h2);
+  letter-spacing: -0.02em;
+}
+
+/* ---- alignment (INSP-06): horizontal on the text, vertical on the cell's flex axis */
+.gd-cell[data-halign='left'] .gd-rich {
+  width: 100%;
+  text-align: left;
+  margin-left: 0;
+}
+.gd-cell[data-halign='center'] .gd-rich {
+  width: 100%;
+  text-align: center;
+  margin-left: 0;
+}
+.gd-cell[data-halign='right'] .gd-rich {
+  width: 100%;
+  text-align: right;
+}
+.gd-cell[data-halign='justify'] .gd-rich {
+  width: 100%;
+  text-align: justify;
+  margin-left: 0;
+}
+.gd-cell[data-valign='top'] {
+  align-items: flex-start;
+}
+.gd-cell[data-valign='middle'] {
+  align-items: center;
+}
+.gd-cell[data-valign='bottom'] {
+  align-items: flex-end;
+}
+
+/* ---- border matrix (INSP-05): an inset pseudo-element per side, so the lattice box is
+   untouched (GRID-01). Sides are 0/1 flags, weight and colour are tokens. */
+.gd-cell--bordered::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border-style: solid;
+  border-color: var(--gd-border-colour, var(--rule-hairline));
+  border-top-width: calc(var(--gd-bt, 0) * var(--gd-border-width, 1px));
+  border-right-width: calc(var(--gd-br, 0) * var(--gd-border-width, 1px));
+  border-bottom-width: calc(var(--gd-bb, 0) * var(--gd-border-width, 1px));
+  border-left-width: calc(var(--gd-bl, 0) * var(--gd-border-width, 1px));
+}
+
+/* ---- conditional rules (INSP-05, A11Y-04): the fill and colour come through the data
+   attributes above; the cue is a glyph with the rule's words, and a mark when the rule sets one. */
+.gd-cell__rule {
+  display: inline-flex;
+  flex: none;
+  margin-left: auto;
+  padding-left: var(--space-1);
+  color: var(--ink-muted);
+}
+.gd-cell[data-mark='bold'] .gd-rich {
+  font-weight: 600;
+}
+.gd-cell[data-mark='italic'] .gd-rich {
+  font-style: italic;
+}
+.gd-cell[data-mark='underline'] .gd-rich {
+  text-decoration: underline;
+}
+.gd-cell[data-mark='strikethrough'] .gd-rich {
+  text-decoration: line-through;
+}
+
+/* ---- merged cells (MENU-04): the anchor's box grows over the covered cells, which keep
+   their width in the row and paint nothing. Addresses are untouched (non-negotiable 3). */
+.gd-cell--span:not([data-fill]) {
+  z-index: 1;
+  background-color: var(--surface);
+}
+.gd-cell--covered {
+  visibility: hidden;
+  border-color: transparent;
+}

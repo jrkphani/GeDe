@@ -252,7 +252,7 @@ describe('INSP-05 conditional highlighting rules', () => {
 });
 
 describe('INSP-05 rules as a Worker service', () => {
-  it('INSP-05 a request carries a column\'s rules and cell texts and answers with the first match per cell; malformed input is refused, never thrown', () => {
+  it("INSP-05 a request carries a column's rules and cell texts and answers with the first match per cell; malformed input is refused, never thrown", () => {
     const rules = readRules([
       { id: 'r1', when: { trigger: 'contains', text: 'due' }, style: { fill: 'amber' } },
       { id: 'r2', when: { trigger: 'charsOver', count: 3 }, style: { textColour: 'danger' } },

@@ -37,9 +37,21 @@ export interface CellLook {
   readonly span: CellSpan | null;
   /** True when another cell's span hides this one: it renders as an empty placeholder. */
   readonly covered: boolean;
+  /**
+   * The anchor box of a span in lattice units — the widths of the columns
+   * and heights of the rows it covers, as the table renders them now (a
+   * column drag previews a width before it commits). Null off a span.
+   */
+  readonly spanUnits: { readonly widthUnits: number; readonly heightUnits: number } | null;
 }
 
-export const PLAIN_LOOK: CellLook = { appearance: {}, rule: null, span: null, covered: false };
+export const PLAIN_LOOK: CellLook = {
+  appearance: {},
+  rule: null,
+  span: null,
+  covered: false,
+  spanUnits: null,
+};
 
 /**
  * Resolve the look of one cell. `rules` is the column's matched rules from
@@ -52,6 +64,8 @@ export function styleOf(
   rowId: Id,
   rule: RuleOutcome | null,
   spans: SpanIndex,
+  /** Geometry of a span's anchor box, asked for only when the cell anchors one. */
+  spanUnits: (span: CellSpan) => CellLook['spanUnits'],
 ): CellLook {
   const key = cellKey(rowId, column.id);
   const appearance = cellAppearanceFor(table, column, rowId);
@@ -62,7 +76,7 @@ export function styleOf(
   if (rule === null && span === null && !covered && isEmptyAppearance(appearance)) {
     return PLAIN_LOOK;
   }
-  return { appearance, rule, span, covered };
+  return { appearance, rule, span, covered, spanUnits: span === null ? null : spanUnits(span) };
 }
 
 export function looksEqual(a: CellLook, b: CellLook): boolean {
@@ -71,6 +85,11 @@ export function looksEqual(a: CellLook, b: CellLook): boolean {
   if ((a.span === null) !== (b.span === null)) return false;
   if (a.span !== null && b.span !== null) {
     if (a.span.rows !== b.span.rows || a.span.cols !== b.span.cols) return false;
+    if (
+      a.spanUnits?.widthUnits !== b.spanUnits?.widthUnits ||
+      a.spanUnits?.heightUnits !== b.spanUnits?.heightUnits
+    )
+      return false;
   }
   if ((a.rule === null) !== (b.rule === null)) return false;
   if (a.rule !== null && b.rule !== null) {
@@ -112,15 +131,10 @@ export interface LookPaint {
 
 /**
  * The paint for a cell: the resolved look as attributes. `format` decides
- * Automatic alignment (numbers right, FMT-02). Span geometry needs the
- * widths of the columns it covers and the heights of the rows, in lattice
- * units, so the anchor box can be sized without touching any other cell.
+ * Automatic alignment (numbers right, FMT-02). A span's anchor box is sized
+ * from `spanUnits`, so no other cell is touched.
  */
-export function paintLook(
-  look: CellLook,
-  format: CellFormat,
-  span: { widthUnits: number; heightUnits: number } | null,
-): LookPaint {
+export function paintLook(look: CellLook, format: CellFormat): LookPaint {
   const resolved = resolveLook(look.appearance, look.rule, format);
   const a = look.appearance;
   const classes: string[] = [];
@@ -135,10 +149,10 @@ export function paintLook(
     style['--gd-bb'] = sides.bottom ? '1' : '0';
     style['--gd-bl'] = sides.left ? '1' : '0';
   }
-  if (look.span !== null && span !== null) {
+  if (look.span !== null && look.spanUnits !== null) {
     classes.push('gd-cell--span');
-    style.width = `${String(span.widthUnits * LATTICE.col)}px`;
-    style.height = `${String(span.heightUnits * LATTICE.row)}px`;
+    style.width = `${String(look.spanUnits.widthUnits * LATTICE.col)}px`;
+    style.height = `${String(look.spanUnits.heightUnits * LATTICE.row)}px`;
   }
   if (look.covered) classes.push('gd-cell--covered');
   if (look.rule !== null) classes.push('gd-cell--rule');

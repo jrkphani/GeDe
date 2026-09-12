@@ -12,6 +12,8 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
 } from 'react';
 import {
+  appearanceEqual,
+  CAPTION_ROWS,
   cellFormatFor,
   cellFragment,
   cellKey,
@@ -22,6 +24,7 @@ import {
   rowHeights as effectiveRowHeights,
   rowMeta,
   rowReadOnlyReason,
+  spanIndex,
   TABLE_TITLE_ROWS,
   tableAddresses,
   tableOutline,
@@ -40,6 +43,7 @@ import {
   type PresenceState,
   type ReadOnlyReason,
   type RowMeta,
+  type SpanIndex,
   type TableMap,
   type TableOutline,
   type TableRecord,
@@ -91,6 +95,15 @@ import {
   useTableProjection,
   type SortCommands,
 } from './sort/index.js';
+import {
+  looksEqual,
+  paintLook,
+  paintTable,
+  PLAIN_LOOK,
+  styleOf,
+  useColumnRules,
+  type CellLook,
+} from './style/index.js'; // wave4/inspector-controls
 
 export interface TableViewProps {
   table: TableMap;
@@ -218,10 +231,17 @@ export const TableView = memo(function TableView({
   const addresses = tier === 'micro' ? tableAddresses(table) : null;
   const headerPx = record.headerRows === 1 ? HEADER_PX : 0;
   const footerPx = record.footerRows === 1 ? FOOTER_PX : 0;
+  // INSP-04: the caption strip is one lattice row at the foot; INSP-05/MENU-04: the
+  // matched rules (from the rules Worker) and the merged spans, resolved once per render.
+  const captionPx = record.look.captionShown ? CAPTION_ROWS * LATTICE.row : 0;
+  const rules = useColumnRules(table, record, version);
+  const spans = useMemo(() => spanIndex(table, record), [table, record]);
+  const paint = paintTable(record);
   const style: CSSProperties = {
     left: `${String(record.gridCol * LATTICE.col)}px`,
     top: `${String(record.gridRow * LATTICE.row)}px`,
     width: `${String(widthPx)}px`,
+    ...paint.style,
   };
   const showAffordances = editable && selected && tier !== 'macro';
 
@@ -299,8 +319,9 @@ export const TableView = memo(function TableView({
     () => ({
       rows: stableVisibleRows,
       columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
+      covered: spans.covered,
     }),
-    [stableVisibleRows, record.columns],
+    [stableVisibleRows, record.columns, spans],
   );
   const traversal = useMemo(() => () => traversalRef.current, []);
   // GRID-04: the read-only reason is a column fact (source) or a row fact (group band);
@@ -356,6 +377,20 @@ export const TableView = memo(function TableView({
 
   const rowCount = record.rows.length;
   const columnCount = visible.length;
+  // INSP-05 / INSP-06 / MENU-04: the look of one cell — appearance, matched rule, span —
+  // with a span's anchor box measured over the widths and heights rendering now.
+  const visibleIndex = new Map<Id, number>(visible.map((c, i) => [c.id, i]));
+  const lookOf = (col: ColumnRecord, rowId: Id): CellLook =>
+    styleOf(table, col, rowId, rules.get(cellKey(rowId, col.id)) ?? null, spans, (span) => ({
+      widthUnits: span.colIds.reduce((acc, id) => {
+        const i = visibleIndex.get(id);
+        return i === undefined ? acc : acc + (columnUnits[i] ?? 1);
+      }, 0),
+      heightUnits: span.rowIds.reduce(
+        (acc, id) => acc + (rowHeights[rowOrdinal.get(id) ?? 0] ?? 1),
+        0,
+      ),
+    }));
 
   return (
     <section
@@ -363,11 +398,13 @@ export const TableView = memo(function TableView({
       className={clsx('gd-table', `gd-table--${tier}`, {
         'gd-table--selected': selected,
         'gd-table--resizing': columnPreview !== null || tablePreview !== null,
+        'gd-table--pinned': record.pinned,
       })}
       style={style}
       aria-label={record.title}
       data-table-id={record.id}
       data-frozen-columns={record.frozenColumns}
+      {...paint.data}
     >
       <header
         className="gd-table__title"
@@ -377,7 +414,8 @@ export const TableView = memo(function TableView({
           actions.selectTable(record.id);
         }}
       >
-        <span className="gd-table__title-text">{record.title}</span>
+        {/* INSP-04: a hidden title leaves its two-row bar (no address moves); the section's name stays. */}
+        {record.look.titleShown && <span className="gd-table__title-text">{record.title}</span>}
         <span className="gd-mono gd-table__degree" aria-hidden="true">
           {columnLetter(record.gridCol)}
           {record.gridRow + 1}
@@ -388,7 +426,7 @@ export const TableView = memo(function TableView({
       {tier === 'macro' ? (
         <div
           className="gd-table__block"
-          style={{ height: `${String(headerPx + renderedBodyPx + footerPx)}px` }}
+          style={{ height: `${String(headerPx + renderedBodyPx + footerPx + captionPx)}px` }}
           aria-hidden="true"
         />
       ) : (
@@ -592,6 +630,7 @@ export const TableView = memo(function TableView({
                               wrap={col.wrap || rowWrapped}
                               other={other}
                               version={versions.of(cellKey(rowId, col.id))}
+                              look={lookOf(col, rowId)}
                               traversal={traversal}
                               actions={actions}
                               commands={commands}
@@ -632,10 +671,24 @@ export const TableView = memo(function TableView({
               </span>
             </div>
           )}
+          {record.look.captionShown && (
+            <div
+              className="gd-table__caption"
+              style={{ height: `${String(captionPx)}px` }}
+              data-testid="table-caption"
+            >
+              {record.look.caption === '' ? (
+                <span className="gd-table__caption-empty">No caption yet</span>
+              ) : (
+                record.look.caption
+              )}
+            </div>
+          )}
           {pinnedLeft !== null && record.frozenColumns > 0 && (
             <PinnedPanel
               table={table}
               record={record}
+              spans={spans}
               outline={showOutline ? outline : null}
               rowOrdinal={rowOrdinal}
               left={pinnedLeft}
@@ -715,6 +768,8 @@ export const TableView = memo(function TableView({
 interface PinnedPanelProps {
   table: TableMap;
   record: TableRecord;
+  /** MENU-04: cells a span covers mirror as empty placeholders here too. */
+  spans: SpanIndex;
   /** The outline to mirror in the frozen outline column, or null while grouped or sorted (HIER-08). */
   outline: TableOutline | null;
   /** Document ordinal per row id: `rowHeights` and the outline are in document order. */
@@ -739,6 +794,7 @@ interface PinnedPanelProps {
 function PinnedPanel({
   table,
   record,
+  spans,
   outline,
   rowOrdinal,
   left,
@@ -800,6 +856,15 @@ function PinnedPanel({
                     selectedCell.rowId === rowId &&
                     selectedCell.colId === col.id;
                   const onOutline = outline !== null && col.id === outline.column;
+                  if (spans.covered.has(cellKey(rowId, col.id))) {
+                    return (
+                      <div
+                        key={col.id}
+                        className="gd-cell gd-cell--frozen gd-cell--covered"
+                        style={{ width: `${String(col.width * LATTICE.col)}px` }}
+                      />
+                    );
+                  }
                   return (
                     <div
                       key={col.id}
@@ -949,6 +1014,8 @@ interface CellProps {
    * memoised cell re-reads the document exactly then.
    */
   version: number;
+  /** INSP-05 / INSP-06 / MENU-04: the cell's resolved look, compared by value (`looksEqual`). */
+  look: CellLook;
   traversal: () => TraversalTable;
   actions: GridActions;
   commands: GridCommands;
@@ -999,6 +1066,8 @@ const COLUMN_KEYS = {
   derive: true,
   link: true,
   pull: true,
+  appearance: true,
+  rules: true,
 } as const satisfies Record<keyof ColumnRecord, true>;
 
 /** REF-02..04 specs are plain JSON rebuilt per render; compare by content. */
@@ -1035,15 +1104,41 @@ function outlineRowsEqual(a: OutlineRow | null, b: OutlineRow | null): boolean {
 }
 
 function columnsEqual(a: ColumnRecord, b: ColumnRecord): boolean {
-  const { formatOpts: _a, derive: _da, link: _la, pull: _pa, ...restA } = a;
-  const { formatOpts: _b, derive: _db, link: _lb, pull: _pb, ...restB } = b;
-  const { formatOpts: _keys, derive: _kd, link: _kl, pull: _kp, ...restKeys } = COLUMN_KEYS;
+  const {
+    formatOpts: _a,
+    derive: _da,
+    link: _la,
+    pull: _pa,
+    appearance: _aa,
+    rules: _ra,
+    ...restA
+  } = a;
+  const {
+    formatOpts: _b,
+    derive: _db,
+    link: _lb,
+    pull: _pb,
+    appearance: _ab,
+    rules: _rb,
+    ...restB
+  } = b;
+  const {
+    formatOpts: _keys,
+    derive: _kd,
+    link: _kl,
+    pull: _kp,
+    appearance: _ka,
+    rules: _kr,
+    ...restKeys
+  } = COLUMN_KEYS;
   return (
     fieldsEqual(restKeys, restA, restB) &&
     fieldsEqual(FORMAT_OPTS_KEYS, a.formatOpts, b.formatOpts) &&
     specsEqual(a.derive, b.derive) &&
     specsEqual(a.link, b.link) &&
-    specsEqual(a.pull, b.pull)
+    specsEqual(a.pull, b.pull) &&
+    appearanceEqual(a.appearance, b.appearance) &&
+    specsEqual(a.rules, b.rules)
   );
 }
 
@@ -1074,6 +1169,7 @@ const COMPARED_CELL_PROPS = {
   wrap: true,
   other: true,
   version: true,
+  look: true,
   traversal: true,
   actions: true,
   commands: true,
@@ -1110,7 +1206,8 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
     a.version !== b.version ||
     a.traversal !== b.traversal ||
     a.actions !== b.actions ||
-    a.commands !== b.commands
+    a.commands !== b.commands ||
+    !looksEqual(a.look, b.look)
   ) {
     return false;
   }
@@ -1153,6 +1250,7 @@ const Cell = memo(function Cell({
   freezeEdge,
   wrap,
   other,
+  look = PLAIN_LOOK,
   traversal,
   actions,
   commands,
@@ -1170,6 +1268,8 @@ const Cell = memo(function Cell({
   const format = cellFormatFor(table, column, cell.rowId);
   const layout = layoutCell(shown === null ? rich : richFromText(shown), format, locale);
   const text = layout.text;
+  // INSP-05 / INSP-06: the paint for this look — classes, custom properties, data attributes.
+  const paint = paintLook(look, format);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (selected && editing === null) ref.current?.focus({ preventScroll: true });
@@ -1299,6 +1399,21 @@ const Cell = memo(function Cell({
     other === undefined
       ? undefined
       : ({ '--gd-presence': `var(--presence-${String(other.colour)})` } as CSSProperties);
+  // MENU-04: a cell under another cell's span keeps its width in the row and nothing else —
+  // no content, no tab stop, hidden from assistive tech, like a hidden column's cells.
+  if (look.covered) {
+    return (
+      <div
+        className="gd-cell gd-cell--covered"
+        style={{ width: `${String(widthPx)}px` }}
+        aria-hidden="true"
+        data-address={address}
+        data-row-id={cell.rowId}
+        data-col-id={cell.colId}
+        data-covered="true"
+      />
+    );
+  }
   const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
   const chevronControl =
     outline !== null && outline.hasChildren && editable
@@ -1329,21 +1444,23 @@ const Cell = memo(function Cell({
               outline.hasChildren ? ` ${HIER_ARIA_KEYS.collapse} ${HIER_ARIA_KEYS.expand}` : ''
             }`
       }
-      className={clsx('gd-cell', {
+      className={clsx('gd-cell', paint.className, {
         'gd-cell--selected': selected,
         'gd-cell--editing': editing !== null,
         'gd-cell--presence': other !== undefined,
         'gd-cell--locked': readOnly !== null,
         'gd-cell--frozen': frozen,
         'gd-cell--freeze-edge': freezeEdge,
-        'gd-cell--wrap': wrap,
+        'gd-cell--wrap': wrap || (look.span !== null && look.span.rows > 1),
         'gd-cell--outline': outline !== null,
       })}
       style={{
         width: `${String(widthPx)}px`,
         ...presenceStyle,
         ...outlineStyle(outline ?? undefined),
+        ...paint.style,
       }}
+      {...paint.data}
       title={
         tier === 'micro' && editing === null
           ? lockLabel === undefined
@@ -1426,6 +1543,12 @@ const Cell = memo(function Cell({
       {readOnly !== null && (
         <span className="gd-cell__lock" aria-hidden="true">
           <Icon name="locked" size={13} />
+        </span>
+      )}
+      {/* INSP-05 / A11Y-04: a matched rule carries a glyph with the rule's words, never a tint alone. */}
+      {paint.ruleLabel !== null && (
+        <span className="gd-cell__rule" title={paint.ruleLabel}>
+          <Icon name="rule" size={13} label={paint.ruleLabel} />
         </span>
       )}
       {other !== undefined && (
