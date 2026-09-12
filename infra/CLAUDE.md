@@ -58,7 +58,14 @@ warns but does not fail. Tests always pass a fake zone id.
 The unit tests load `cdk.json` + `cdk.context.json` so they synthesize with the same flags as
 the CLI. One consequence worth knowing: `@aws-cdk/core:defaultCrossStackReferences` is `weak`,
 so same-region cross-stack references render as `Fn::GetStackOutput` rather than
-`Fn::ImportValue`. Stack order is still enforced by CDK's dependency graph.
+`Fn::ImportValue`. Stack order is still enforced by CDK's dependency graph. **A weak reference
+is resolved when the consuming resource is created or updated and is not refreshed when the
+producer's output changes** (ADR-036, #97). So a value may cross a stack boundary only if it
+cannot change without the consumer's own template changing: identifiers (VPC, role, cluster,
+log group, pool, secret, bucket, ALB, function), never a task-definition revision or anything
+else a deploy re-registers. Pass the stable name instead (`jobsFamily` is a string; the
+scheduler targets the family ARN). Check with
+`grep -rho '"OutputName": *"[^"]*"' cdk.out/assembly-GeDe-Pipeline-Prod | sort -u`.
 
 ## Placeholders at synth time
 
@@ -80,8 +87,24 @@ so same-region cross-stack references render as `Fn::GetStackOutput` rather than
   runs the jobs task nightly (02:30 Asia/Singapore, public subnets + public IP, the service
   security group so it reaches RDS) and the alerting: an EventBridge rule on `ECS Task State
 Change` for that family with a non-zero exit code or `TaskFailedToStart` → SNS, plus a metric
-  filter on the job log (`GeDe/Jobs PurgeFailures`) with an alarm. The scheduler and the rule
-  live in Ops, not Service, so the alerts topic needs no cross-stack cycle.
+  filter on the job log (`GeDe/Jobs PurgeFailures`) with an alarm, and an alarm on
+  `AWS/Scheduler InvocationDroppedCount` for a run the scheduler could not start. The scheduler and the rule
+  live in Ops, not Service, so the alerts topic needs no cross-stack cycle. Ops receives the
+  jobs **family name and roles**, not the task definition, and targets the family ARN with no
+  revision (`EcsRunFamilyTask` in `ops-stack.ts`, `ecs:RunTask` on `<family>:*`): the L2
+  `EcsRunFargateTask` pins the revision synthesized that day, which the next deploy
+  deregisters (#97, ADR-036).
+- **The alerts topic policy is written once**, in `OpsStack.grantPublishers`: the SNS default
+  owner statement restated, then CloudWatch, EventBridge and Budgets with `aws:SourceAccount`
+  and `aws:SourceArn`. Never let an L2 `grantPublish` on it — `event_targets.SnsTopic` did,
+  and the one-statement policy it attached replaced the default and refused every alarm
+  (#98). The purge-failed rule uses a plain `IRuleTarget` for that reason.
+- **Access logs (#113)**: `WebStack.logsBucket` (OBJECT_WRITER ownership for CloudFront's ACL,
+  90-day expiry, `DESTROY`) receives CloudFront standard logs under `cloudfront/` and the ALB's
+  under `alb/` (`ServiceStack` calls `alb.logAccessLogs`, which writes the ELB delivery
+  statements into that bucket's policy across the stack boundary — Service already deploys
+  after Web). WAF logs go to `aws-waf-logs-gede-<env>-web` in us-east-1 (30 days,
+  `Authorization`/`Cookie` redacted); WAF writes the log group's resource policy itself.
 - **The live suite's way in.** `AuthStack` adds a second app client `gede-e2e` whose only flow
   is `ADMIN_USER_PASSWORD_AUTH` (needs IAM), the account `e2e@<domain>` with a permanent
   generated password in `gede/<env>/e2e-user`, and an

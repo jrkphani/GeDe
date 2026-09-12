@@ -47,6 +47,8 @@ export class AuthStack extends cdk.Stack {
   /** `{ username, password }` of the live suite's account. */
   readonly e2eUserSecret: secretsmanager.Secret;
   readonly emailIdentity: ses.EmailIdentity;
+  /** The pool's pre-authentication trigger; OpsStack alarms on its `Errors` (#103). */
+  readonly preAuthFunction: lambda.IFunction;
   /** Stage outputs the pipeline's Playwright-Live step reads (`envFromCfnOutputs`). */
   readonly userPoolIdOutput: cdk.CfnOutput;
   readonly e2eClientIdOutput: cdk.CfnOutput;
@@ -79,6 +81,11 @@ export class AuthStack extends cdk.Stack {
       selfSignUpEnabled: true,
       signInAliases: { email: true },
       autoVerify: { email: true },
+      // The SPA client may write `email` (ADR-019). Without this an `UpdateUserAttributes`
+      // call with a live access token replaces the verified sign-in address at once, and
+      // with `accountRecovery: NONE` there is no way back — a lockout and takeover primitive
+      // (#107). With it the original address stays in force until the new one is verified.
+      keepOriginal: { email: true },
       standardAttributes: { email: { required: true, mutable: true } },
       featurePlan: cognito.FeaturePlan.ESSENTIALS,
       // Cognito requires PASSWORD in the allowed first factors of a choice-based pool
@@ -316,6 +323,7 @@ export class AuthStack extends cdk.Stack {
       }),
     );
     this.userPool.addTrigger(cognito.UserPoolOperation.PRE_AUTHENTICATION, preAuth);
+    this.preAuthFunction = preAuth;
 
     // What the Playwright-Live CodeBuild role may do, attached here because only this stack
     // knows the exact pool and secret ARNs (PipelineStack creates the role by its fixed name).

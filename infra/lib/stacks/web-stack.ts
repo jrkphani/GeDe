@@ -48,6 +48,12 @@ export const ORIGIN_VERIFY_GENERATIONS: readonly number[] = [1];
  */
 export const ORIGIN_VERIFY_PRESENTED = 1;
 
+/** Days CloudFront and ALB access logs are kept before the bucket lifecycle expires them (#113). */
+export const ACCESS_LOG_RETENTION_DAYS = 90;
+
+/** Object-key prefixes in the access-logs bucket, one per entry point. */
+export const ACCESS_LOG_PREFIXES = { cloudfront: 'cloudfront/', alb: 'alb' } as const;
+
 /**
  * viewer-request function for the SPA behaviours only. A path whose last segment has no
  * extension is a client-side route and is served `index.html`; real files (`/config.json`,
@@ -104,11 +110,39 @@ export class WebStack extends cdk.Stack {
   readonly appUrl: cdk.CfnOutput;
   /** One per generation, oldest first; ServiceStack's listener rule accepts all of them. */
   readonly originVerifySecrets: readonly secretsmanager.ISecret[];
+  /**
+   * Request logs of the two entry points (#113): CloudFront standard logs under
+   * `cloudfront/`, and the ALB's access logs under `alb/` (ServiceStack calls
+   * `logAccessLogs` on it, which writes the ELB delivery statements into this bucket's
+   * policy — Service already deploys after Web). Kept `ACCESS_LOG_RETENTION_DAYS`.
+   */
+  readonly logsBucket: s3.Bucket;
 
   constructor(scope: Construct, id: string, props: WebStackProps) {
     super(scope, id, { ...props, crossRegionReferences: true });
     const { config } = props;
     const prefix = `gede-${config.envName}`;
+
+    // CloudFront standard logging needs a bucket that still honours ACLs (its
+    // `awslogsdelivery` account is granted by ACL), hence OBJECT_WRITER ownership and the
+    // log-delivery ACL; both are otherwise defaults nothing here relies on. Public access is
+    // blocked, TLS is enforced, and objects expire — logs are not a record to keep.
+    this.logsBucket = new s3.Bucket(this, 'AccessLogs', {
+      objectOwnership: s3.ObjectOwnership.OBJECT_WRITER,
+      accessControl: s3.BucketAccessControl.LOG_DELIVERY_WRITE,
+      blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL,
+      encryption: s3.BucketEncryption.S3_MANAGED,
+      enforceSSL: true,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+      autoDeleteObjects: true,
+      lifecycleRules: [
+        {
+          id: `expire-${String(ACCESS_LOG_RETENTION_DAYS)}d`,
+          expiration: cdk.Duration.days(ACCESS_LOG_RETENTION_DAYS),
+          abortIncompleteMultipartUploadAfter: cdk.Duration.days(7),
+        },
+      ],
+    });
 
     // ---- Origin verification (issue #33) ------------------------------------------------
     // The ALB is internet-facing (the WebSocket must reach it directly, ADR-010) but only
@@ -238,6 +272,13 @@ export class WebStack extends cdk.Stack {
       httpVersion: cloudfront.HttpVersion.HTTP2_AND_3,
       priceClass: cloudfront.PriceClass.PRICE_CLASS_200,
       minimumProtocolVersion: cloudfront.SecurityPolicyProtocol.TLS_V1_2_2021,
+      // Standard logs, no cookies. URLs are safe to log since #63: the WebSocket token
+      // travels as a subprotocol and `?token=` is refused, and nothing else puts a
+      // credential in a query string.
+      enableLogging: true,
+      logBucket: this.logsBucket,
+      logFilePrefix: ACCESS_LOG_PREFIXES.cloudfront,
+      logIncludesCookies: false,
       defaultBehavior: {
         origin: s3Origin,
         viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

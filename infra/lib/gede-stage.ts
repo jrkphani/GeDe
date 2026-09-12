@@ -21,7 +21,7 @@ export interface GedeStageProps extends cdk.StageProps {
  * One complete environment. Stack order is implied by construct references:
  *
  *   Network → Data ─────────────→ Service → Ops
- *             Auth ──→ Web ──────↗    ↘
+ *             Auth ──→ Web ──────↗    ↘      ↗ (Auth: the pre-auth trigger's alarm)
  *   Edge (us-east-1) ↗    ↘──────────→ Dns
  *
  * Web precedes Service because Service's listener rule accepts the origin-verify header
@@ -100,6 +100,7 @@ export class GedeStage extends cdk.Stage {
       // The SPA's tokens and the live suite's (`gede-e2e`) both verify.
       userPoolClientIds: [auth.userPoolClient.userPoolClientId, auth.e2eClient.userPoolClientId],
       originVerifySecrets: web.originVerifySecrets,
+      logsBucket: web.logsBucket,
     });
 
     new DnsStack(this, 'Dns', {
@@ -120,10 +121,14 @@ export class GedeStage extends cdk.Stage {
       targetGroup: service.targetGroup,
       database: data.database,
       cluster: service.cluster,
-      jobsTaskDefinition: service.jobsTaskDefinition,
+      // By family and roles, not the task definition (ADR-036).
+      jobsFamily: service.jobsFamily,
+      jobsTaskRole: service.jobsTaskRole,
+      jobsExecutionRole: service.jobsExecutionRole,
       jobsLogGroup: service.jobsLogGroup,
       serviceLogGroup: service.logGroup,
       serviceSecurityGroup: service.serviceSecurityGroup,
+      preAuthFunction: auth.preAuthFunction,
     });
 
     this.apiUrl = service.apiUrl;

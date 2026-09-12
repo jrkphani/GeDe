@@ -8,8 +8,8 @@ Merging to `main` is the deploy. There is no other path.
 
 1. GitHub notifies CodePipeline `GeDe` through the CodeConnections connection (`triggerOnPush`).
 2. Synth runs `npm ci`, `npm run verify`, `npm run audit` (production dependencies, high+ advisories fail), `npm run db:parity -w packages/db`, `npm run e2e`, `npm run build --workspace apps/web`, `npm run synth --workspace infra` on CodeBuild ARM (`AMAZON_LINUX_2023_STANDARD_3_0`, SMALL, `node_modules` and the Playwright cache kept locally). Every CodeBuild project logs to one group with 30-day retention.
-3. SelfMutate updates the pipeline if `infra/lib/pipeline-stack.ts` changed the pipeline itself, then restarts the execution.
-4. Assets builds the `linux/arm64` sync image from the repo root with `services/sync/Dockerfile` and publishes assets to both regions.
+3. SelfMutate updates the pipeline if `infra/lib/pipeline-stack.ts` changed the pipeline itself, then restarts the execution. It installs `aws-cdk` at the exact version pinned in `CDK_CLI_VERSION` (= the root lockfile's; a test holds them equal, #106) — never a dist-tag, because this step holds the deploy roles. Bump the CLI first and the framework in a later merge.
+4. Assets builds the `linux/arm64` sync image from the repo root with `services/sync/Dockerfile` and publishes assets to both regions, with `cdk-assets` pinned the same way (`CDK_ASSETS_CLI_VERSION`). Only the image publisher runs privileged.
 5. Prod deploys the eight stacks (Edge in `us-east-1`, the rest in `ap-southeast-1`; Web before Service, see ADR-018). ECS performs a rolling replacement of the sync task with the deployment circuit breaker on.
 6. Smoke curls `$APP_URL/api/health` through CloudFront (12 retries, 10 s apart), checks `$APP_URL/` for `id="root"`, and asserts that `$API_URL/api/health` — the bare ALB hostname, without the origin-verify header — answers 403. All URLs are stage outputs.
 7. Playwright-Live signs in to `https://gede.work` as `e2e@gede.work` (through the `gede-e2e` client and the `gede/prod/e2e-user` secret) and runs `apps/web/e2e-live/` — library, new workscape, a cell edit that survives a reload and a fresh browser, find, the share sheet, Delete All, sign out (docs/TESTING.md "Live suite"). Same image as Synth, its own role `gede-pipeline-playwright-live`, about 3 minutes.
@@ -116,29 +116,47 @@ The task connects with `PGSSLMODE=verify-full` and `PGSSLROOTCERT=/app/rds-globa
 
 ## 8. Alarms
 
-All alarms notify the SNS topic created by the Ops stack (display name `GeDe prod alerts`) with one email subscription, `jrkphani@icloud.com`. Confirm the subscription email once after the first deploy.
+All alarms notify the SNS topic created by the Ops stack (display name `GeDe prod alerts`) with one email subscription, `jrkphani@icloud.com`. The topic's policy names the three publishers — CloudWatch alarms, the EventBridge rule, Budgets — each conditioned on this account and a source-ARN pattern, next to a restatement of SNS's default owner statement (ADR-036; until 2026-09-13 the policy held only the rule's grant and every alarm action failed, #98).
+
+**The subscription must be confirmed by a person, and it still is not** (`PendingConfirmation` on 2026-09-13, since the first deploy on 2026-09-12). Until it is, every alarm publishes into a topic nobody receives. Find the "AWS Notification - Subscription Confirmation" mail (check junk; SNS confirmation links expire after three days), or have SNS send a fresh one. Nothing in the stacks re-sends it — a resend is a decision for the mailbox owner, and re-subscribing programmatically on every deploy would spam the address:
+
+```bash
+# State: a real ARN means confirmed; "PendingConfirmation" means not
+TOPIC=$(aws sns list-topics --query "Topics[?contains(TopicArn,'GeDe-Prod-Ops-Alerts')].TopicArn" --output text)
+aws sns list-subscriptions-by-topic --topic-arn "$TOPIC" --query 'Subscriptions[].{arn:SubscriptionArn,endpoint:Endpoint}'
+# Send a new confirmation mail (creates a second pending subscription for the same address;
+# confirming either one is enough, and SNS drops the pending duplicate after three days)
+aws sns subscribe --topic-arn "$TOPIC" --protocol email --notification-endpoint jrkphani@icloud.com
+# Once confirmed, prove the path end to end: re-trigger an alarm and expect the mail
+aws cloudwatch set-alarm-state --alarm-name gede-prod-purge-never-ran --state-value ALARM --state-reason "delivery test"
+aws cloudwatch describe-alarm-history --alarm-name gede-prod-purge-never-ran --history-item-type Action --max-items 3
+```
+
+Anything but `Successfully executed action` in that history is the topic policy again.
 
 ```bash
 aws cloudwatch describe-alarms --alarm-name-prefix gede-prod \
   --query 'MetricAlarms[].{name:AlarmName,state:StateValue,reason:StateReason}' --output table
-aws budgets describe-budgets --account-id 975049998516 --query 'Budgets[?BudgetName==`gede-prod-monthly`]'
+aws budgets describe-budgets --account-id 975049998516 --query 'Budgets[?BudgetName==`gede-prod-monthly-r2`]'
 ```
 
-| Alarm                              | Threshold                                                          | First action                                                                                                                                                                                                                 |
-| ---------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `gede-prod-service-cpu`            | > 60 % for two 5-minute periods                                    | Check room count and update rate in the service logs; consider growth step 1.                                                                                                                                                |
-| `gede-prod-service-memory`         | > 80 % for two 5-minute periods                                    | Rooms live in memory (1 GiB task). Check open rooms and document sizes in the log; raise `memoryLimitMiB` in `service-stack.ts` or bring growth step 1 forward. An OOM-killed task restarts; edits are in `doc_updates`.     |
-| `gede-prod-no-healthy-target`      | healthy targets < 1 for 3 consecutive minutes                      | The outage alarm. `aws ecs describe-services` for the deployment state and stopped-task reason; `/healthz` fails on `SELECT 1`, so check RDS next.                                                                           |
-| `gede-prod-alb-5xx`                | > 1 % of requests (ELB + target) in 5 min                          | Tail the service log group; search for the `ref` shown in the error envelope.                                                                                                                                                |
-| `gede-prod-alb-latency`            | target response time p90 > 2 s for three 5-minute periods          | A slow task or database, not a slow request: check `gede-prod-db-cpu-credits`, then the service CPU and memory, then the slowest `/api` routes in the log.                                                                   |
-| `gede-prod-db-free-storage`        | < 5 GiB (25 % of 20 GB)                                            | Increase allocated storage (online); check that snapshot pruning of `doc_updates` is running.                                                                                                                                |
-| `gede-prod-db-cpu-credits`         | `CPUCreditBalance` < 20 for three 5-minute periods (full = 144)    | db.t4g.micro is about to run at its 10 % baseline. Find what burns CPU (`pg_stat_statements` via the master user), or move to `db.t4g.small`.                                                                                |
-| `gede-prod-db-freeable-memory`     | < 100 MiB for three 5-minute periods (the instance has 1 GiB)      | Connection count or `work_mem`; the pool is small by design (`pg` defaults). Move to `db.t4g.small` if it recurs.                                                                                                            |
-| `gede-prod-purge-failed`           | ≥ 1 failure line in the purge job log                              | §14 "Nightly purge": read the job's log stream for the S3 error; the documents are retried next night.                                                                                                                       |
-| `gede-prod-sample-seed-failed`     | ≥ 1 `guided sample seed failed` line in the service log in 5 min   | A new account could not get its guided sample (ONB-01): S3 put or the insert failed. The account is served without it and the seed retries on its next request; read the service log stream for the `err`.                   |
-| `gede-prod-purge-never-ran`        | no `job finished` line for the purge in 26 hours (missing = alarm) | The scheduler did not invoke, the task did not start, or the job hung. `aws scheduler get-schedule`, then stopped tasks of the `gede-prod-jobs` family (§14). Sits in ALARM from a fresh deploy until the first nightly run. |
-| Rule `gede-prod-purge-task-failed` | jobs task exit code ≠ 0 or failed to start                         | Same as above; the email carries the task ARN, stop code and reason.                                                                                                                                                         |
-| Budget `gede-prod-monthly`         | 80 % of US$100 actual, or a forecast above 100 %                   | Compare the bill by service; the ALB and Fargate are the fixed lines.                                                                                                                                                        |
+| Alarm                                | Threshold                                                          | First action                                                                                                                                                                                                                                                                                         |
+| ------------------------------------ | ------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `gede-prod-service-cpu`              | > 60 % for two 5-minute periods                                    | Check room count and update rate in the service logs; consider growth step 1.                                                                                                                                                                                                                        |
+| `gede-prod-service-memory`           | > 80 % for two 5-minute periods                                    | Rooms live in memory (1 GiB task). Check open rooms and document sizes in the log; raise `memoryLimitMiB` in `service-stack.ts` or bring growth step 1 forward. An OOM-killed task restarts; edits are in `doc_updates`.                                                                             |
+| `gede-prod-no-healthy-target`        | healthy targets < 1 for 3 consecutive minutes                      | The outage alarm. `aws ecs describe-services` for the deployment state and stopped-task reason; `/healthz` fails on `SELECT 1`, so check RDS next.                                                                                                                                                   |
+| `gede-prod-alb-5xx`                  | > 1 % of requests (ELB + target) in 5 min                          | Tail the service log group; search for the `ref` shown in the error envelope.                                                                                                                                                                                                                        |
+| `gede-prod-alb-latency`              | target response time p90 > 2 s for three 5-minute periods          | A slow task or database, not a slow request: check `gede-prod-db-cpu-credits`, then the service CPU and memory, then the slowest `/api` routes in the log.                                                                                                                                           |
+| `gede-prod-db-free-storage`          | < 5 GiB (25 % of 20 GB)                                            | Increase allocated storage (online); check that snapshot pruning of `doc_updates` is running.                                                                                                                                                                                                        |
+| `gede-prod-db-cpu-credits`           | `CPUCreditBalance` < 20 for three 5-minute periods (full = 144)    | db.t4g.micro is about to run at its 10 % baseline. Find what burns CPU (`pg_stat_statements` via the master user), or move to `db.t4g.small`.                                                                                                                                                        |
+| `gede-prod-db-freeable-memory`       | < 100 MiB for three 5-minute periods (the instance has 1 GiB)      | Connection count or `work_mem`; the pool is small by design (`pg` defaults). Move to `db.t4g.small` if it recurs.                                                                                                                                                                                    |
+| `gede-prod-purge-failed`             | ≥ 1 failure line in the purge job log                              | §14 "Nightly purge": read the job's log stream for the S3 error; the documents are retried next night.                                                                                                                                                                                               |
+| `gede-prod-sample-seed-failed`       | ≥ 1 `guided sample seed failed` line in the service log in 5 min   | A new account could not get its guided sample (ONB-01): S3 put or the insert failed. The account is served without it and the seed retries on its next request; read the service log stream for the `err`.                                                                                           |
+| `gede-prod-purge-never-ran`          | no `job finished` line for the purge in 26 hours (missing = alarm) | The scheduler did not invoke, the task did not start, or the job hung. `aws scheduler get-schedule`, then stopped tasks of the `gede-prod-jobs` family (§14). Sits in ALARM from a fresh deploy until the first nightly run.                                                                         |
+| `gede-prod-purge-invocation-dropped` | EventBridge Scheduler `InvocationDroppedCount` > 0 in an hour      | `RunTask` itself was refused and the retry too, so no task and no log line exist: an INACTIVE task definition or a role the scheduler cannot pass. `aws scheduler get-schedule` — the target must be the family ARN, no revision (#97) — then run the task by hand (§14).                            |
+| `gede-prod-pre-auth-errors`          | the pool's pre-authentication trigger threw, ≥ 1 in a minute       | Either a refused sign-in — the `e2e@gede.work` password or the `gede-e2e` client used outside the pipeline, which is a leak to investigate (§3) — or a fault in the trigger; the log group `GeDe-Prod-Auth-PreAuthLogs…` says which. A failed client lookup no longer refuses ordinary users (#103). |
+| Rule `gede-prod-purge-task-failed`   | jobs task exit code ≠ 0 or failed to start                         | Same as above; the email carries the task ARN, stop code and reason.                                                                                                                                                                                                                                 |
+| Budget `gede-prod-monthly-r2`        | 80 % of US$100 actual, or a forecast above 100 %                   | Compare the bill by service; the ALB and Fargate are the fixed lines. The budget mails the address directly, not through the topic (the topic already admits Budgets for when that changes).                                                                                                         |
 
 Not yet implemented from the handover guardrails: snapshot lag > 15 min and WebSocket reconnect rate. Both need custom metrics emitted by the sync service.
 
@@ -156,7 +174,8 @@ About US$62 per month: ALB ≈ 18, Fargate ARM ≈ 15, RDS `db.t4g.micro` ≈ 15
 | CDK bootstrap `ap-southeast-1` | `cdk bootstrap aws://975049998516/ap-southeast-1`                                                                                                                                                        | 2026-09-12 |
 | CodeConnections connection     | `arn:aws:codeconnections:ap-southeast-1:975049998516:connection/d17b8942-b1cc-4600-8a1a-d2f8a08acdeb` (`gede-github`), in `infra/cdk.json`; GitHub App handshake completed in the console.               | 2026-09-12 |
 | Only laptop deploy             | `npx -w infra cdk deploy GeDe-Pipeline --profile phani-quadnomics`                                                                                                                                       | 2026-09-12 |
-| SNS subscription               | `jrkphani@icloud.com` — **still `PendingConfirmation` on 2026-09-13** (see "Ops review"); confirm from the email SNS sent, or re-send it from the topic's Subscriptions tab                              | open       |
+| SNS subscription               | `jrkphani@icloud.com` — **still `PendingConfirmation` on 2026-09-13** (§8 has the commands); confirm from the email SNS sent, or have SNS send a new one                                                 | open       |
+| Branch protection on `main`    | Applied with `gh api` on 2026-09-13 (§13)                                                                                                                                                                | 2026-09-13 |
 | v1 final RDS snapshot          | `us-east-1`, tagged `Purpose=v1-final-backup`; delete after 30 days                                                                                                                                      | 2026-09-12 |
 
 Update the date column if any step is re-run.
@@ -193,52 +212,62 @@ The value CloudFront sends the ALB in `X-Origin-Verify` (ADR-018) is rotated by 
 
 Synth refuses a `ORIGIN_VERIFY_PRESENTED` that is not in `ORIGIN_VERIFY_GENERATIONS`, so steps cannot be merged out of order.
 
-Do this immediately if a CloudFront origin configuration or a Secrets Manager read was exposed. Do not put a value into a secret by hand: CloudFormation only re-resolves the `{{resolve:secretsmanager:…}}` references when it updates the listener rule and the distribution, so a hand-edited value would silently break `/api/*` at the next unrelated deploy of either stack.
+Do this immediately if a CloudFront origin configuration or a Secrets Manager read was exposed — and the list of who can read it is wider than the secret's IAM: the value sits in the ALB listener-rule condition and in the distribution's origin headers, so **any principal with `elasticloadbalancing:DescribeRules` or `cloudfront:GetDistributionConfig` can read it** (observed during the 2026-09-13 red team). A compromised read-only IAM principal is therefore a rotation trigger (ADR-018 accepts the design). Do not put a value into a secret by hand: CloudFormation only re-resolves the `{{resolve:secretsmanager:…}}` references when it updates the listener rule and the distribution, so a hand-edited value would silently break `/api/*` at the next unrelated deploy of either stack.
 
 ## 13. Branch protection
 
-`main` is production and the pipeline has no manual approval gate (ADR-021), so the review gate is GitHub. Apply once, as the repository owner (not run by CI; verify first with `gh api repos/jrkphani/GeDe/branches/main/protection`):
+`main` is production and the pipeline has no manual approval gate (ADR-021), so the review gate is GitHub. ADR-021 named the gate in 2026-09-12 but it was never applied (#96); it was applied by the owner with `gh api` on 2026-09-13. What is in force (`gh api repos/jrkphani/GeDe/branches/main/protection` to confirm):
+
+| Rule                                                               | Applied   | Why this and not the ADR-021 wording                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| ------------------------------------------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Pull request required                                              | yes       | Nothing lands on `main` by a direct push. Every deploy has a PR with the template, the requirement IDs and the tests it names.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| Required approving reviews                                         | **0**     | The repository has one human committer. A count of 1 would block every merge, or be satisfied by the author approving their own PR from a second account — a ritual, not a review. Raise it to 1 the day a second maintainer exists.                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Required status checks                                             | **none**  | A required check must be a status that reports _on the pull request_. `npm run verify` runs only in CodePipeline, after the merge (ADR-012: no GitHub Actions, and the pipeline's CodeBuild projects are triggered by CodePipeline, not by GitHub). Requiring a context nothing posts would block every merge. Adding a PR-time check means a second CodeBuild project on a GitHub webhook source with `reportBuildStatus: true`; that is a deliberate addition to `infra/lib/pipeline-stack.ts`, not a protection setting, and is not done. Until then a red `verify` is caught by the pipeline's Synth step before anything is published or deployed (§1). |
+| Linear history                                                     | yes       | Squash-merge only; `main` reads as one commit per PR.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Force pushes                                                       | forbidden | `main` is production; its history is the deploy log.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+| Deletion                                                           | forbidden |                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Enforce for administrators                                         | **no**    | The owner can still push to `main` in an emergency (a pipeline stuck on a bad merge with no time for a PR). Every such push is visible in the history and is the exception the four-phase workflow forbids; treat one as an incident to write up.                                                                                                                                                                                                                                                                                                                                                                                                            |
+| Dismiss stale reviews, last-push approval, conversation resolution | no        | Meaningless with 0 required reviews; switch them on with the review count.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+
+To re-apply or change it (repository owner, not CI):
 
 ```bash
 gh api --method PUT repos/jrkphani/GeDe/branches/main/protection \
   --input - <<'JSON'
 {
-  "required_status_checks": { "strict": true, "contexts": ["verify"] },
-  "enforce_admins": true,
-  "required_pull_request_reviews": {
-    "required_approving_review_count": 1,
-    "dismiss_stale_reviews": true,
-    "require_last_push_approval": true
-  },
+  "required_status_checks": null,
+  "enforce_admins": false,
+  "required_pull_request_reviews": { "required_approving_review_count": 0 },
   "restrictions": null,
   "required_linear_history": true,
   "allow_force_pushes": false,
-  "allow_deletions": false,
-  "required_conversation_resolution": true
+  "allow_deletions": false
 }
 JSON
 ```
 
-`contexts` must name a status check that actually reports on pull requests. Today `npm run verify` runs only inside CodePipeline after the merge, so either add a PR-time check that posts a `verify` status (a CodeBuild project with the GitHub webhook source, `reportBuildStatus: true`) or, until then, apply the command with `"contexts": []` and rely on the review requirement. Add a `CODEOWNERS` file naming the owner for `infra/**` and `services/sync/**` so those paths require the owner's review.
+A `CODEOWNERS` file naming the owner for `infra/**` and `services/sync/**` only has an effect together with a review count of at least 1; add both at the same time.
 
 ## 14. Nightly purge (LIB-08)
 
 Recently Deleted holds a document for 30 days. Past that, the document is no longer recoverable from the library, and the nightly job removes it for good: the `documents` row (which cascades to `doc_updates`, `snapshots`, `shares`, `invites`), a `document.purge` row in `audit_log` with `user_id` null (the system actor; Delete All writes the owner's id), then the S3 objects under `docs/<docId>/`. The projection rows cascade with the document.
 
-How it runs: EventBridge Scheduler `gede-prod-nightly-purge` (02:30 Asia/Singapore, one retry within the hour) starts the `gede-prod-jobs` Fargate task definition — the same image as the service with command `node main.js --job purge` — on the service cluster, in the public subnets with a public IP and the service security group. The task applies migrations under the advisory lock (a no-op after the service has booted), purges in batches of 100, and exits 0. It exits 1 when any S3 prefix could not be removed (the rows are already gone) or the database failed; that fires the `gede-prod-purge-task-failed` rule (email with task ARN, stop code, reason) and, from the log line, the `gede-prod-purge-failed` alarm.
+How it runs: EventBridge Scheduler `gede-prod-nightly-purge` (02:30 Asia/Singapore, one retry within the hour) starts the `gede-prod-jobs` Fargate task **family** — its target is the family ARN with no revision, so `RunTask` picks the latest ACTIVE revision, the one the last deploy registered — on the service cluster, in the public subnets with a public IP and the service security group. The scheduler role may run `gede-prod-jobs:*` and pass the family's two roles. (Until 2026-09-13 both were pinned to revision `:1`, deregistered the day before, and the purge had never run: #97, ADR-036.) The task definition is the same image as the service with command `node main.js --job purge`. The task applies migrations under the advisory lock (a no-op after the service has booted), purges in batches of 50, and exits 0. It exits 1 when any S3 prefix could not be removed (those documents' rows are kept for the next night, see below) or the database failed; that fires the `gede-prod-purge-task-failed` rule (email with task ARN, stop code, reason) and, from the log line, the `gede-prod-purge-failed` alarm. A run that the scheduler could not even start fires `gede-prod-purge-invocation-dropped` (§8).
 
 ```bash
-# Schedule state and last run
-aws scheduler get-schedule --name gede-prod-nightly-purge --query '{state:State,expr:ScheduleExpression,tz:ScheduleExpressionTimezone}'
+# Schedule state and last run: the target must be the family ARN, with no ":<revision>"
+aws scheduler get-schedule --name gede-prod-nightly-purge --query '{state:State,expr:ScheduleExpression,tz:ScheduleExpressionTimezone,target:Target.EcsParameters.TaskDefinitionArn}'
 JOBS_LOG=$(aws logs describe-log-groups --log-group-name-prefix GeDe-Prod-Service-JobsLogs --query 'logGroups[0].logGroupName' --output text)
 aws logs tail "$JOBS_LOG" --since 24h            # look for "purge complete" and the counts
 
-# Run it now (same task, same command), e.g. after fixing a failure
+# Run it now (same task, same command), e.g. after fixing a failure. The family name is
+# enough: ECS runs the latest ACTIVE revision.
 CLUSTER=$(aws ecs list-clusters --query "clusterArns[?contains(@, 'GeDe-Prod-Service')]|[0]" --output text)
-TASKDEF=$(aws ecs list-task-definitions --family-prefix gede-prod-jobs --sort DESC --max-items 1 --query 'taskDefinitionArns[0]' --output text)
+TASKDEF=gede-prod-jobs
 SERVICE=$(aws ecs list-services --cluster "$CLUSTER" --query 'serviceArns[0]' --output text)
 NET=$(aws ecs describe-services --cluster "$CLUSTER" --services "$SERVICE" --query 'services[0].networkConfiguration' --output json)
 aws ecs run-task --cluster "$CLUSTER" --task-definition "$TASKDEF" --launch-type FARGATE --network-configuration "$NET"
+# Then: `job finished` with exitCode 0 in $JOBS_LOG, and gede-prod-purge-never-ran back to OK within the hour.
 
 # Rebuild the search projection for one document, or all live documents
 aws ecs run-task --cluster "$CLUSTER" --task-definition "$TASKDEF" --launch-type FARGATE --network-configuration "$NET" \
@@ -262,5 +291,54 @@ Read-only pass over the production account (`aws --profile phani-quadnomics`, `a
 **Budget** (`budgets describe-budgets`): limit US$100, actual US$52.84 for the month so far, **forecast US$128.45**. The only notification was `ACTUAL > 80 %`, which had not fired; nothing said the forecast was over. Added a `FORECASTED > 100 %` notification — expect that email on the first deploy. Look at the bill by service before adjusting the limit; the fixed lines (ALB, Fargate, RDS, WAF) were estimated at about US$62 in §9, so a forecast of US$128 is worth explaining (CodeBuild minutes from the day's many pipeline runs and image publishes are the first suspect).
 
 **Nightly purge**: the schedule exists (`cron(30 2 * * ? *)`, `Asia/Singapore`, `ENABLED`, one retry within the hour) and the jobs log group has **no streams** — the Ops stack was created at 14:48 SGT on 2026-09-12, so the first run is the following 02:30. `GeDe/Jobs` has no metrics yet for the same reason. Check after the first night: `aws logs tail "$JOBS_LOG" --since 24h` (§14) should show `job finished` with `exitCode: 0`, and `gede-prod-purge-never-ran` should be `OK`.
+
+_Addendum 2026-09-13 (final red team, #97):_ that first run **failed and was dropped** — the schedule and the scheduler role were pinned to `gede-prod-jobs:1`, deregistered at 20:15 SGT on 2026-09-12 by the next deploy, and the weak cross-stack reference never refreshed (`AWS/Scheduler InvocationDroppedCount 1` at 02:30 SGT; `purge-never-ran` in ALARM with its action failing on the topic policy, #98). Fixed in the same PR as this note (family ARN, `:*` grant, ADR-036). After the fix deploys: run the task by hand once (§14) so the retention promise is caught up that day, then confirm the next 02:30 run from the log.
+
+## 16. Access logs (#113)
+
+Since 2026-09-13 every request on the production path leaves a record. The Wave 1 deferral ("no access logs until the WebSocket token is off the URL", #42) no longer applies: since #32/#63 the token travels as a `Sec-WebSocket-Protocol` entry and `?token=` is refused with 4401, so URLs in these logs carry no credential and are safe to keep.
+
+| What                                                                                | Where                                                                                              | Kept    |
+| ----------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- | ------- |
+| CloudFront standard logs (SPA and `/api/*`)                                         | S3 bucket `GeDe-Prod-Web-AccessLogs…`, prefix `cloudfront/`; no cookies                            | 90 days |
+| ALB access logs (`/api/*`, `/healthz`, `/ws/*`, and every 403 the listener refuses) | Same bucket, prefix `alb/AWSLogs/975049998516/`                                                    | 90 days |
+| WAF (every request the web ACL evaluated, with the rule that matched)               | CloudWatch Logs `aws-waf-logs-gede-prod-web` in `us-east-1`; `Authorization` and `Cookie` redacted | 30 days |
+
+```bash
+LOGS=$(aws s3api list-buckets --query "Buckets[?starts_with(Name,'gede-prod-web-accesslogs')].Name" --output text)
+aws s3 ls "s3://$LOGS/alb/AWSLogs/975049998516/elasticloadbalancing/ap-southeast-1/" --recursive | tail
+aws s3 ls "s3://$LOGS/cloudfront/" | tail
+# WAF: blocked requests in the last hour
+aws logs filter-log-events --region us-east-1 --log-group-name aws-waf-logs-gede-prod-web \
+  --start-time $(( $(date +%s) - 3600 ))000 --filter-pattern '{ $.action = "BLOCK" }' --query 'events[].message' | head
+```
+
+The bucket is `DESTROY` with a lifecycle expiry: logs are evidence for an incident window, not a record to keep. The ALB writes only after its first request (up to five minutes of delay); CloudFront delivers within an hour. Still not logged: RDS (no `postgresql` log export, default parameter group) and VPC flow logs — both deferred in #113 with the reasons there (the app-role bootstrap's bind parameters must never reach a statement log).
+
+## 17. Account hygiene left to a person (#116)
+
+**Orphaned CodeBuild log groups.** Before #43 each CodeBuild project logged to its own never-expiring group. The pipeline now logs everything to `GeDe-Pipeline-BuildLogs…` (30 days), but the five old groups remain, empty (`storedBytes` 0 on 2026-09-13) and without retention. Not a CDK resource, so not deleted by the pipeline; delete them once by hand:
+
+```bash
+for g in /aws/codebuild/GeDe-selfupdate \
+         /aws/codebuild/PipelineBuildSynthCdkBuildP-PL7pCuIcfpnR \
+         /aws/codebuild/PipelineAssetsDockerAssetA7-az5TGSO39rBB \
+         /aws/codebuild/PipelineAssetsFileAsset5D8C-31Db1hIFbg70 \
+         /aws/codebuild/PipelineProdSmoke8CD850E1-5m60zQLyZCp3; do
+  aws logs delete-log-group --log-group-name "$g"
+done
+```
+
+**ECR image scanning.** The sync image lives in the CDK bootstrap repository `cdk-hnb659fds-container-assets-975049998516-ap-southeast-1` (tags immutable, `scanOnPush` off) and Amazon Inspector is disabled for the account (`inspector2 batch-get-account-status`, 2026-09-13). The bootstrap stack owns the repository, so its `scanOnPush` flag is not ours to set (a `cdk bootstrap` would revert it); the registry-level rule below is free (basic scanning) and survives a re-bootstrap:
+
+```bash
+aws ecr put-registry-scanning-configuration --scan-type BASIC \
+  --rules '[{"scanFrequency":"SCAN_ON_PUSH","repositoryFilters":[{"filter":"cdk-hnb659fds-container-assets-*","filterType":"WILDCARD"}]}]'
+# Findings for the running image, after the next deploy
+aws ecr describe-image-scan-findings --repository-name cdk-hnb659fds-container-assets-975049998516-ap-southeast-1 \
+  --image-id imageTag=<tag from the task definition> --query 'imageScanFindingsSummary'
+```
+
+Inspector (`aws inspector2 enable --resource-types ECR`) would add continuous rescanning at a per-image monthly charge; basic scan-on-push is enough while there is one image a day.
 
 **Service and database**: one running task, deployment `COMPLETED`; RDS `available`, Postgres 17.9, 20 GB, no `MaxAllocatedStorage` (storage autoscaling off — deliberate; the free-storage alarm is the guard), single-AZ (accepted, §9 cost). No drift check was run (`cdk-drift-check` skill) because the pipeline had deployed three hours earlier.
