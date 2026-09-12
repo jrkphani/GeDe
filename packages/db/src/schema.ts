@@ -81,6 +81,8 @@ export const users = pgTable('users', {
   /** Nullable: a Cognito *access* token carries no email claim; filled in when one is seen. */
   email: citext('email').unique(),
   displayName: text('display_name'),
+  /** I18N-05 (migration 0001): BCP 47 tag from the supported set; null until the user chooses. */
+  locale: text('locale'),
   createdAt: timestamptz('created_at').notNull().defaultNow(),
   lastSeenAt: timestamptz('last_seen_at'),
 });
@@ -100,6 +102,8 @@ export const documents = pgTable(
     linkToken: text('link_token').unique(),
     snapshotKey: text('snapshot_key'),
     snapshotSeq: bigint('snapshot_seq', { mode: 'number' }).notNull().default(0),
+    /** LIB-02 (migration 0002). */
+    createdAt: timestamptz('created_at').notNull().defaultNow(),
     updatedAt: timestamptz('updated_at').notNull().defaultNow(),
     deletedAt: timestamptz('deleted_at'),
   },
@@ -270,14 +274,16 @@ export const graphs = pgTable('graphs', {
   slice: jsonb('slice'),
 });
 
-/** Share changes, deletes, restores. Partitioned monthly once volume warrants. */
+/**
+ * Share changes, deletes, restores, purges. Partitioned monthly once volume warrants.
+ * `document_id` deliberately has no foreign key (migration 0003): a
+ * `document.purge` row must survive the row it describes.
+ */
 export const auditLog = pgTable(
   'audit_log',
   {
     id: bigserial('id', { mode: 'number' }).primaryKey(),
-    documentId: uuid('document_id')
-      .notNull()
-      .references(() => documents.id, { onDelete: 'cascade' }),
+    documentId: uuid('document_id').notNull(),
     userId: uuid('user_id').references(() => users.id),
     action: text('action').notNull(),
     target: text('target'),

@@ -3,15 +3,22 @@
 # them a second time (must be a no-op), then check that every table and column
 # declared in src/schema.ts exists in the live database.
 #
-# Skips cleanly (exit 0, message on stderr) when Docker is not available so
-# `npm run verify` stays green on machines without it. CI runs it for real.
+# Locally, skips cleanly (exit 0, message on stderr) when Docker is not
+# available so a laptop without it is not blocked. In the pipeline (`CI=true`,
+# set on the Synth step in infra/lib/pipeline-stack.ts, whose CodeBuild
+# project runs privileged so Docker is there) a missing Docker is a failure:
+# the migrations must have run somewhere before they run against production.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 root="$(cd "$here/../../.." && pwd)"
 
 if ! command -v docker >/dev/null 2>&1 || ! docker info >/dev/null 2>&1; then
-  echo "db:parity: docker is not available; skipping" >&2
+  if [ "${CI:-}" = "true" ]; then
+    echo "db:parity: CI=true but docker is not available; the migrations were not exercised" >&2
+    exit 1
+  fi
+  echo "db:parity: docker is not available; skipping (set CI=true to make this a failure)" >&2
   exit 0
 fi
 

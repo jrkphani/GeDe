@@ -27,6 +27,8 @@ export interface AuthUser {
   readonly sub: string;
   readonly email: string | null;
   readonly displayName: string | null;
+  /** I18N-05: the persisted locale choice, or null until the user makes one. */
+  readonly locale: string | null;
 }
 
 declare module 'fastify' {
@@ -91,10 +93,21 @@ export class UserResolver {
     this.cache.set(identity.sub, { user, at: now });
     return toAuthUser(user);
   }
+
+  /** Replace the cached row after a profile change so the next request sees it. */
+  remember(user: UserRecord): void {
+    this.cache.set(user.cognitoSub, { user, at: Date.now() });
+  }
 }
 
-function toAuthUser(user: UserRecord): AuthUser {
-  return { id: user.id, sub: user.cognitoSub, email: user.email, displayName: user.displayName };
+export function toAuthUser(user: UserRecord): AuthUser {
+  return {
+    id: user.id,
+    sub: user.cognitoSub,
+    email: user.email,
+    displayName: user.displayName,
+    locale: user.locale,
+  };
 }
 
 export function bearerToken(request: FastifyRequest): string | null {

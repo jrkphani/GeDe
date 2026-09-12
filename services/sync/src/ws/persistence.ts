@@ -32,6 +32,8 @@ export interface PersistenceStats {
 
 const RETRY_BASE_MS = 1_000;
 const RETRY_MAX_MS = 10_000;
+/** Flush passes `close()` makes before giving up on a database that keeps failing. */
+const CLOSE_MAX_FLUSHES = 5;
 
 export class PersistenceWriter {
   private pending: PendingUpdate[] = [];
@@ -99,15 +101,57 @@ export class PersistenceWriter {
     return this.chain;
   }
 
-  /** Flush, stop timers. Called on room eviction and on shutdown. */
-  async close(options: { compact: boolean }): Promise<void> {
-    this.closed = true;
-    if (this.flushTimer) clearTimeout(this.flushTimer);
+  /** True once `close()` has drained the queue; later updates are refused, never silently dropped. */
+  get sealed(): boolean {
+    return this.closed;
+  }
+
+  /**
+   * Drain, seal, optionally compact. Called on room eviction, on delete and
+   * on shutdown. Updates keep being accepted while the drain runs — a frame
+   * that lands during the final append is flushed by the next pass — and
+   * the writer seals only once a pass finds nothing pending, in the same
+   * synchronous step as that check; `beforeCompact` (the room closing its
+   * sockets) runs in that step too. The room checks `sealed` before it
+   * applies a message, so no update can slip in between. A flush that keeps
+   * failing (database down) is retried `CLOSE_MAX_FLUSHES` times with the
+   * usual backoff and then given up with the count in the log; the process
+   * shutdown deadline bounds the wait.
+   */
+  async close(options: { compact: boolean; beforeCompact?: () => void }): Promise<void> {
+    this.clearFlushTimer();
     if (this.idleTimer) clearTimeout(this.idleTimer);
-    this.flushTimer = null;
     this.idleTimer = null;
-    await this.flush();
+    let attempts = 0;
+    do {
+      attempts += 1;
+      // Chains behind a pass already in flight (its batch is no longer in
+      // `pending`), then writes whatever arrived meanwhile.
+      await this.flush();
+      // A failed pass arms its own retry timer; this loop is the retry.
+      this.clearFlushTimer();
+      if (this.pending.length > 0 && attempts < CLOSE_MAX_FLUSHES) {
+        await new Promise((resolve) => setTimeout(resolve, this.retryDelay));
+      }
+    } while (this.pending.length > 0 && attempts < CLOSE_MAX_FLUSHES);
+    // Same synchronous step as the last `pending` check: nothing can enqueue in between.
+    this.closed = true;
+    this.clearFlushTimer();
+    options.beforeCompact?.();
+    if (this.pending.length > 0) {
+      this.logger.error(
+        { documentId: this.documentId, pending: this.pending.length, attempts },
+        'writer closed with updates still unpersisted',
+      );
+      return;
+    }
     if (options.compact) await this.compact();
+  }
+
+  /** A method, not inline: an `await` may have re-armed the timer TypeScript's narrowing believes is null. */
+  private clearFlushTimer(): void {
+    if (this.flushTimer) clearTimeout(this.flushTimer);
+    this.flushTimer = null;
   }
 
   private armIdleTimer(): void {

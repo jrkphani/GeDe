@@ -11,6 +11,8 @@ export interface UserRecord {
   readonly cognitoSub: string;
   readonly email: string | null;
   readonly displayName: string | null;
+  /** I18N-05: one of the supported BCP 47 tags, or null until chosen. */
+  readonly locale: string | null;
 }
 
 export interface DocumentRecord {
@@ -20,6 +22,7 @@ export interface DocumentRecord {
   readonly linkAccess: LinkAccess;
   readonly snapshotKey: string | null;
   readonly snapshotSeq: number;
+  readonly createdAt: Date;
   readonly updatedAt: Date;
   readonly deletedAt: Date | null;
 }
@@ -27,8 +30,61 @@ export interface DocumentRecord {
 /** What a caller may do with a document. `owner` implies edit plus sharing and deletion. */
 export type DocumentPermission = 'owner' | Permission;
 
-export interface DocumentListing extends DocumentRecord {
+/** A person as the library shows them: display name, else email, else nothing. */
+export interface PersonRef {
+  readonly id: string;
+  readonly name: string | null;
+}
+
+/**
+ * A document as one caller sees it in the library (LIB-01, LIB-02): the row
+ * plus who owns it, who shared it with the caller, whether it is shared at
+ * all, and its size. Everything here comes from one query per list.
+ */
+export interface DocumentSummary extends DocumentRecord {
+  readonly ownerName: string | null;
+  /** Latest snapshot `size_bytes` plus the bytes of every update logged since it. */
+  readonly sizeBytes: number;
+  /** Who shared it with the caller; null for the owner. */
+  readonly sharedBy: PersonRef | null;
+  /** True when at least one participant besides the owner has a share. */
+  readonly sharedWithOthers: boolean;
+}
+
+export interface DocumentListing extends DocumentSummary {
   readonly permission: DocumentPermission;
+}
+
+/**
+ * Library views (LIB-01). `recents` and `browse` and `shared` exclude deleted
+ * documents; `deleted` is the owner's Recently Deleted for the last 30 days.
+ */
+export type LibraryView = 'recents' | 'browse' | 'shared' | 'deleted';
+
+export const RECENTLY_DELETED_DAYS = 30;
+
+export interface Participant {
+  readonly userId: string;
+  readonly name: string | null;
+  readonly email: string | null;
+  readonly permission: Permission;
+  readonly invitedBy: string;
+}
+
+export interface ParticipantList {
+  readonly owner: {
+    readonly id: string;
+    readonly name: string | null;
+    readonly email: string | null;
+  };
+  readonly participants: readonly Participant[];
+  readonly linkAccess: LinkAccess;
+}
+
+/** What a permanent delete removed, so the caller can clean S3 up afterwards. */
+export interface PurgedDocument {
+  readonly id: string;
+  readonly title: string;
 }
 
 export interface TokenIdentity {
@@ -54,19 +110,49 @@ export interface AppendedRange {
   readonly lastSeq: number;
 }
 
+export interface ProfilePatch {
+  readonly displayName?: string;
+  readonly locale?: string;
+}
+
 export interface UsersRepo {
   /** Insert on first sight of a `sub`, otherwise refresh `last_seen_at` (and fill a missing email). */
   upsertFromToken(identity: TokenIdentity): Promise<UserRecord>;
+  /** Set the fields present in `patch`; `undefined` when the user does not exist. */
+  updateProfile(id: string, patch: ProfilePatch): Promise<UserRecord | undefined>;
 }
 
 export interface DocumentsRepo {
-  listForUser(userId: string, view: 'active' | 'deleted'): Promise<DocumentListing[]>;
+  /** One query, no per-row follow-ups: the library rows for a view, newest `updated_at` first. */
+  listForUser(userId: string, view: LibraryView): Promise<DocumentListing[]>;
   get(id: string): Promise<DocumentRecord | undefined>;
+  /** The library row for one document as `userId` sees it. Does not check access; callers do. */
+  summarise(id: string, userId: string): Promise<DocumentSummary | undefined>;
   create(input: { ownerId: string; title: string }): Promise<DocumentRecord>;
   rename(id: string, title: string): Promise<DocumentRecord | undefined>;
   softDelete(id: string): Promise<DocumentRecord | undefined>;
+  /**
+   * Clear `deleted_at`; `undefined` when the document is not soft-deleted or
+   * its deletion is past the retention window (it is no longer in Recently
+   * Deleted, so it cannot be recovered from there).
+   */
+  recover(id: string): Promise<DocumentRecord | undefined>;
+  /**
+   * Recover every owned document deleted within the retention window and
+   * write one `document.recover` audit row per document, in one transaction.
+   */
+  recoverAllDeleted(ownerId: string, actorId: string): Promise<DocumentRecord[]>;
+  /**
+   * Permanently delete every owned soft-deleted document (including any past
+   * the retention window) with its updates, snapshots, shares and invites,
+   * and write one `document.purge` audit row per document, all in one
+   * transaction. S3 objects are the caller's job once this has committed.
+   */
+  purgeDeleted(ownerId: string, actorId: string): Promise<PurgedDocument[]>;
   /** Explicit share permission for a user, if any. Ownership is checked separately. */
   sharePermission(documentId: string, userId: string): Promise<Permission | undefined>;
+  /** Owner, every share with the inviter, and the link mode (LIB-07). */
+  participants(documentId: string): Promise<ParticipantList | undefined>;
 }
 
 export interface UpdatesRepo {
