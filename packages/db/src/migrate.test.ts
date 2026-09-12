@@ -142,6 +142,93 @@ describe('applyMigrations', () => {
     expect(db.released).toBe(1);
   });
 
+  test('LOAD-06 a shipped migration that was removed fails the boot with its name; a renamed one is refused under the old name and never re-applied under the new (#110)', async () => {
+    const removed = fakePool({
+      ledger: ['0000_init.sql', '0001_second.sql', '0002_third.sql'],
+      checksums: {
+        '0000_init.sql': migrationChecksum('CREATE TABLE a ()'),
+        '0001_second.sql': migrationChecksum('CREATE TABLE b ()'),
+        '0002_third.sql': migrationChecksum('CREATE TABLE c ()'),
+      },
+    });
+    await expect(
+      applyMigrations(removed.pool, '/ignored', {
+        readFiles: () => Promise.resolve(files.filter((f) => f.name !== '0001_second.sql')),
+      }),
+    ).rejects.toThrow(/migration 0001_second\.sql failed: ledger row has no file on disk/);
+    expect(removed.statements.filter((s) => /^CREATE TABLE [abc] /.test(s))).toEqual([]);
+    expect(removed.released).toBe(1);
+
+    const renamed = fakePool({
+      ledger: ['0000_init.sql', '0001_second.sql', '0002_third.sql'],
+      checksums: {
+        '0000_init.sql': migrationChecksum('CREATE TABLE a ()'),
+        '0001_second.sql': migrationChecksum('CREATE TABLE b ()'),
+        '0002_third.sql': migrationChecksum('CREATE TABLE c ()'),
+      },
+    });
+    const error = await applyMigrations(renamed.pool, '/ignored', {
+      readFiles: () =>
+        Promise.resolve(
+          files.map((f) => (f.name === '0002_third.sql' ? { ...f, name: '0002_third_v2.sql' } : f)),
+        ),
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(MigrationError);
+    expect((error as MigrationError).migration).toBe('0002_third.sql');
+    expect((error as Error).message).toContain('never removed or renamed');
+    // Under the new name nothing ran and nothing was recorded.
+    expect(renamed.statements.filter((s) => /^CREATE TABLE [abc] /.test(s))).toEqual([]);
+    expect(renamed.ledger.has('0002_third_v2.sql')).toBe(false);
+    expect(renamed.ledger.size).toBe(3);
+  });
+
+  test('LOAD-06 a new file that sorts before the newest applied migration is refused, not applied out of order (#110)', async () => {
+    const db = fakePool({
+      ledger: ['0000_init.sql', '0002_third.sql'],
+      checksums: {
+        '0000_init.sql': migrationChecksum('CREATE TABLE a ()'),
+        '0002_third.sql': migrationChecksum('CREATE TABLE c ()'),
+      },
+    });
+    await expect(applyMigrations(db.pool, '/ignored', { readFiles })).rejects.toThrow(
+      /migration 0001_second\.sql failed: sorts before the newest applied migration 0002_third\.sql/,
+    );
+    expect(db.statements.filter((s) => /^CREATE TABLE [abc] /.test(s))).toEqual([]);
+    expect(db.ledger.size).toBe(2);
+    expect(db.released).toBe(1);
+  });
+
+  test('LOAD-06 a ledger row newer than every file is a rolled-back deploy: logged, tolerated, nothing applied (#110)', async () => {
+    const db = fakePool({
+      ledger: ['0000_init.sql', '0001_second.sql', '0002_third.sql', '0003_from_the_future.sql'],
+      checksums: {
+        '0000_init.sql': migrationChecksum('CREATE TABLE a ()'),
+        '0001_second.sql': migrationChecksum('CREATE TABLE b ()'),
+        '0002_third.sql': migrationChecksum('CREATE TABLE c ()'),
+        '0003_from_the_future.sql': migrationChecksum('CREATE TABLE d ()'),
+      },
+    });
+    const warnings: { message: string; meta: Record<string, unknown> | undefined }[] = [];
+    const result = await applyMigrations(db.pool, '/ignored', {
+      readFiles,
+      logger: {
+        info: () => undefined,
+        warn: (message, meta) => {
+          warnings.push({ message, meta });
+        },
+        error: () => undefined,
+      },
+    });
+    expect(result).toEqual({ applied: [], skipped: 3 });
+    expect(warnings).toEqual([
+      {
+        message: 'ledger is ahead of the files on disk (a rolled-back deploy?)',
+        meta: { migrations: ['0003_from_the_future.sql'] },
+      },
+    ]);
+    expect(db.ledger.size).toBe(4);
+  });
+
   test('LOAD-06 a second run is a no-op', async () => {
     const db = fakePool();
     await applyMigrations(db.pool, '/ignored', { readFiles });
