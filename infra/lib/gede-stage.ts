@@ -20,9 +20,13 @@ export interface GedeStageProps extends cdk.StageProps {
 /**
  * One complete environment. Stack order is implied by construct references:
  *
- *   Network → Data → Service → Ops
- *            Auth  ↗    ↘
- *   Edge (us-east-1) → Web → Dns ← Service
+ *   Network → Data ─────────────→ Service → Ops
+ *             Auth ──→ Web ──────↗    ↘
+ *   Edge (us-east-1) ↗    ↘──────────→ Dns
+ *
+ * Web precedes Service because Service's listener rule accepts the origin-verify header
+ * values Web generates and CloudFront presents (ADR-018): on a rotation CloudFront starts
+ * sending the new value before the ALB stops accepting the old one.
  *
  * Stack names are `GeDe-<envName>-<Name>`; the stage id is only a construct-tree prefix.
  */
@@ -64,6 +68,17 @@ export class GedeStage extends cdk.Stage {
       hostedZoneId,
     });
 
+    const web = new WebStack(this, 'Web', {
+      env,
+      stackName: name('Web'),
+      config,
+      certificate: edge.certificate,
+      webAcl: edge.webAcl,
+      userPoolId: auth.userPool.userPoolId,
+      userPoolClientId: auth.userPoolClient.userPoolClientId,
+      appleSignIn,
+    });
+
     const service = new ServiceStack(this, 'Service', {
       env,
       stackName: name('Service'),
@@ -76,17 +91,7 @@ export class GedeStage extends cdk.Stage {
       emailIdentity: auth.emailIdentity,
       userPoolId: auth.userPool.userPoolId,
       userPoolClientId: auth.userPoolClient.userPoolClientId,
-    });
-
-    const web = new WebStack(this, 'Web', {
-      env,
-      stackName: name('Web'),
-      config,
-      certificate: edge.certificate,
-      webAcl: edge.webAcl,
-      userPoolId: auth.userPool.userPoolId,
-      userPoolClientId: auth.userPoolClient.userPoolClientId,
-      appleSignIn,
+      originVerifySecrets: web.originVerifySecrets,
     });
 
     new DnsStack(this, 'Dns', {

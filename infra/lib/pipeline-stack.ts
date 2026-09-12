@@ -2,6 +2,7 @@ import * as cdk from 'aws-cdk-lib';
 import {
   aws_codebuild as codebuild,
   aws_codepipeline as codepipeline,
+  aws_logs as logs,
   pipelines,
 } from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
@@ -107,6 +108,13 @@ export class PipelineStack extends cdk.Stack {
       }),
     });
 
+    // One log group for every CodeBuild project in the pipeline (Synth, SelfMutate, Assets,
+    // Smoke); without it CodeBuild creates never-expiring groups per project (issue #42).
+    const buildLogs = new logs.LogGroup(this, 'BuildLogs', {
+      retention: logs.RetentionDays.ONE_MONTH,
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     const pipeline = new pipelines.CodePipeline(this, 'Pipeline', {
       pipelineName: 'GeDe',
       pipelineType: codepipeline.PipelineType.V2,
@@ -117,7 +125,10 @@ export class PipelineStack extends cdk.Stack {
       // The Synth project runs privileged so `db:parity` can start Postgres in Docker.
       dockerEnabledForSynth: true,
       dockerEnabledForSelfMutation: false,
-      codeBuildDefaults: { buildEnvironment: ARM_SMALL },
+      codeBuildDefaults: {
+        buildEnvironment: ARM_SMALL,
+        logging: { cloudWatch: { logGroup: buildLogs } },
+      },
       assetPublishingCodeBuildDefaults: {
         buildEnvironment: { ...ARM_SMALL, privileged: true },
       },
@@ -130,16 +141,21 @@ export class PipelineStack extends cdk.Stack {
       appleSignIn: context.appleSignIn,
     });
 
+    // The API is probed through CloudFront (`/api/health`), which adds the origin-verify
+    // header; the bare origin hostname must answer 403 without it (issue #33).
     const smoke = new pipelines.ShellStep('Smoke', {
       envFromCfnOutputs: { API_URL: prod.apiUrl, APP_URL: prod.appUrl },
       commands: [
-        'curl -fsS --retry 12 --retry-delay 10 --retry-all-errors "$API_URL/healthz"',
+        'curl -fsS --retry 12 --retry-delay 10 --retry-all-errors "$APP_URL/api/health"',
         'curl -fsS --retry 6 --retry-delay 10 --retry-all-errors "$APP_URL/" | grep -q \'id="root"\'',
+        'test "$(curl -sS -o /dev/null -w \'%{http_code}\' "$API_URL/api/health")" = 403',
       ],
     });
 
     pipeline.addStage(prod, {
-      // Enable once a Staging stage precedes Prod (see infra/CLAUDE.md):
+      // Deliberately absent: with a single Prod environment there is nothing to promote from,
+      // and a gate that a merger approves themselves adds latency, not review. Enable it once
+      // a Staging stage precedes Prod (see infra/CLAUDE.md and ADR-021):
       // pre: [new pipelines.ManualApprovalStep('PromoteToProd')],
       post: [smoke],
     });

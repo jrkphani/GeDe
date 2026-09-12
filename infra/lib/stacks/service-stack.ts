@@ -5,16 +5,19 @@ import {
   aws_ecr_assets as ecr_assets,
   aws_ecs as ecs,
   aws_elasticloadbalancingv2 as elbv2,
+  aws_iam as iam,
   aws_logs as logs,
   type aws_rds as rds,
   aws_route53 as route53,
   type aws_s3 as s3,
+  type aws_secretsmanager as secretsmanager,
   type aws_ses as ses,
 } from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
 
 import { type EnvConfig } from '../config.js';
 import { PLACEHOLDER_SYNC_DIR, REPO_ROOT, SYNC_DOCKERFILE, repoFileExists } from '../paths.js';
+import { ORIGIN_VERIFY_HEADER } from './web-stack.js';
 
 export interface ServiceStackProps extends cdk.StackProps {
   readonly config: EnvConfig;
@@ -26,14 +29,25 @@ export interface ServiceStackProps extends cdk.StackProps {
   readonly emailIdentity: ses.IEmailIdentity;
   readonly userPoolId: string;
   readonly userPoolClientId: string;
+  /** Accepted `X-Origin-Verify` values, from WebStack (all generations). */
+  readonly originVerifySecrets: readonly secretsmanager.ISecret[];
 }
 
 const CONTAINER_PORT = 3000;
 const DB_PORT = 5432;
+/** Object-key prefix the service owns in the docs bucket; matches `DOCS_PREFIX` below. */
+const DOCS_PREFIX = 'docs/';
 
 /**
  * The sync/API service: one ARM64 Fargate task behind an internet-facing ALB that
  * terminates TLS for api.<domain> and ws.<domain>.
+ *
+ * The HTTPS listener is deny-by-default (fixed 403). `/ws/*` is forwarded as-is (the
+ * WebSocket cannot go through CloudFront, ADR-010; the service verifies the JWT on every
+ * upgrade). `/api/*` and `/healthz` are forwarded only when the request carries the
+ * `X-Origin-Verify` header CloudFront adds, so the WAF cannot be bypassed by calling
+ * `api.<domain>` directly (issue #33). Target-group health checks do not pass through the
+ * listener, so the internal `/healthz` probe is unaffected.
  */
 export class ServiceStack extends cdk.Stack {
   readonly alb: elbv2.ApplicationLoadBalancer;
@@ -101,15 +115,44 @@ export class ServiceStack extends cdk.Stack {
         COGNITO_CLIENT_ID: props.userPoolClientId,
         COGNITO_REGION: config.region,
         DOCS_BUCKET: props.docsBucket.bucketName,
-        DOCS_PREFIX: 'docs/',
+        DOCS_PREFIX,
         WEB_ORIGIN: `https://${config.domain}`,
       },
     });
 
-    // Least privilege: the docs prefix, its own database secret, and the domain's SES identity.
-    props.docsBucket.grantReadWrite(taskDefinition.taskRole, 'docs/*');
-    dbSecret.grantRead(taskDefinition.taskRole);
-    props.emailIdentity.grantSendEmail(taskDefinition.taskRole);
+    // Least privilege for the task role (issue #42), written as explicit statements because
+    // `grantRead`/`grantReadWrite` render unconditioned `s3:List*`/`s3:GetBucket*` and
+    // `s3:DeleteObject*`. What services/sync/src/s3.ts calls: GetObject, PutObject,
+    // ListObjectsV2 under a document prefix, and DeleteObjects for a purge — on a versioned
+    // bucket that writes delete markers (s3:DeleteObject), never removes a version
+    // (s3:DeleteObjectVersion, denied explicitly). The DB secret is read by the *execution*
+    // role to inject `PG*`; the service never calls Secrets Manager, so the task role gets
+    // no grant on it.
+    const taskRole = taskDefinition.taskRole;
+    taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'DocsObjects',
+        actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+        resources: [props.docsBucket.arnForObjects(`${DOCS_PREFIX}*`)],
+      }),
+    );
+    taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'ListDocsPrefixOnly',
+        actions: ['s3:ListBucket'],
+        resources: [props.docsBucket.bucketArn],
+        conditions: { StringLike: { 's3:prefix': [`${DOCS_PREFIX}*`] } },
+      }),
+    );
+    taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'NeverDeleteVersions',
+        effect: iam.Effect.DENY,
+        actions: ['s3:DeleteObjectVersion'],
+        resources: [props.docsBucket.arnForObjects('*')],
+      }),
+    );
+    props.emailIdentity.grantSendEmail(taskRole);
 
     const serviceSg = new ec2.SecurityGroup(this, 'ServiceSecurityGroup', {
       vpc,
@@ -158,14 +201,20 @@ export class ServiceStack extends cdk.Stack {
       securityGroup: albSg,
       idleTimeout: cdk.Duration.seconds(3600),
       dropInvalidHeaderFields: true,
+      deletionProtection: true,
     });
 
+    // Deny by default; the rules below open exactly two paths.
     const https = this.alb.addListener('Https', {
       port: 443,
       protocol: elbv2.ApplicationProtocol.HTTPS,
       certificates: [elbv2.ListenerCertificate.fromCertificateManager(certificate)],
       sslPolicy: elbv2.SslPolicy.RECOMMENDED_TLS,
       open: true,
+      defaultAction: elbv2.ListenerAction.fixedResponse(403, {
+        contentType: 'application/json',
+        messageBody: '{"error":"forbidden"}',
+      }),
     });
 
     this.alb.addListener('Http', {
@@ -180,7 +229,8 @@ export class ServiceStack extends cdk.Stack {
     });
 
     // Registering the service as a target also adds the ALB-SG → service-SG ingress on 3000.
-    https.addTargets('Sync', {
+    // With `conditions` this is a listener rule, not the default action.
+    const syncTargets = https.addTargets('Sync', {
       port: CONTAINER_PORT,
       protocol: elbv2.ApplicationProtocol.HTTP,
       targets: [this.service],
@@ -190,6 +240,23 @@ export class ServiceStack extends cdk.Stack {
       },
       stickinessCookieDuration: cdk.Duration.hours(1),
       deregistrationDelay: cdk.Duration.seconds(30),
+      priority: 20,
+      conditions: [
+        elbv2.ListenerCondition.pathPatterns(['/api/*', '/healthz']),
+        elbv2.ListenerCondition.httpHeader(
+          ORIGIN_VERIFY_HEADER,
+          // `{{resolve:secretsmanager:…}}` per generation, substituted at deploy time.
+          props.originVerifySecrets.map((secret) => secret.secretValue.unsafeUnwrap()),
+        ),
+      ],
+    });
+
+    // The WebSocket goes straight to the ALB (ADR-010); JWT + permission checks happen on the
+    // upgrade in services/sync/src/ws/route.ts.
+    https.addAction('Ws', {
+      priority: 10,
+      conditions: [elbv2.ListenerCondition.pathPatterns(['/ws/*'])],
+      action: elbv2.ListenerAction.forward([syncTargets]),
     });
 
     this.apiUrl = new cdk.CfnOutput(this, 'ApiUrl', { value: `https://api.${config.domain}` });
@@ -217,7 +284,19 @@ export class ServiceStack extends cdk.Stack {
     return ecs.ContainerImage.fromAsset(REPO_ROOT, {
       file: SYNC_DOCKERFILE,
       platform: ecr_assets.Platform.LINUX_ARM64,
-      exclude: ['**/node_modules', '**/dist', '**/cdk.out', '.git', 'docs', 'apps', '**/*.test.ts'],
+      // Mirrors the root .dockerignore (which the asset fingerprint also honours) plus tests.
+      exclude: [
+        '**/node_modules',
+        '**/dist',
+        '**/cdk.out',
+        '.git',
+        '.claude',
+        '**/.env',
+        '**/.env.*',
+        'docs',
+        'apps',
+        '**/*.test.ts',
+      ],
     });
   }
 }

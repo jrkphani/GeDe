@@ -53,7 +53,10 @@ export class AuthStack extends cdk.Stack {
       signInPolicy: { allowedFirstAuthFactors: { password: true, emailOtp: true, passkey: true } },
       passkeyRelyingPartyId: config.domain,
       passkeyUserVerification: cognito.PasskeyUserVerification.REQUIRED,
-      accountRecovery: cognito.AccountRecovery.EMAIL_ONLY,
+      // Nothing to recover in an OTP/passkey pool. With EMAIL_ONLY, `ForgotPassword` +
+      // `ConfirmForgotPassword` on the public client could set a durable password on an
+      // account that was never meant to have one (issue #35). NONE renders `admin_only`.
+      accountRecovery: cognito.AccountRecovery.NONE,
       mfa: cognito.Mfa.OFF,
       deletionProtection: true,
       removalPolicy: cdk.RemovalPolicy.RETAIN,
@@ -107,15 +110,42 @@ export class AuthStack extends cdk.Stack {
       });
     }
 
+    // The only attributes the product uses: email (sign-in alias, AUTH-03), the display
+    // name (AUTH-03), locale, and the given/family names Apple maps (an IdP mapping fails
+    // if the client cannot write its targets). `email_verified` is read-only by nature.
+    // The ID token carries only readable attributes, so services/sync sees the same set.
+    const readAttributes = new cognito.ClientAttributes().withStandardAttributes({
+      email: true,
+      emailVerified: true,
+      fullname: true,
+      givenName: true,
+      familyName: true,
+      locale: true,
+    });
+    const writeAttributes = new cognito.ClientAttributes().withStandardAttributes({
+      email: true,
+      fullname: true,
+      givenName: true,
+      familyName: true,
+      locale: true,
+    });
+
     this.userPoolClient = new cognito.UserPoolClient(this, 'Spa', {
       userPool: this.userPool,
       generateSecret: false,
+      // USER_AUTH only: never add `userPassword` or `userSrp` (ADR-011). The pool still
+      // lists PASSWORD as a first factor because Cognito insists; this client cannot use it.
       authFlows: { user: true },
       preventUserExistenceErrors: true,
       accessTokenValidity: cdk.Duration.hours(1),
       idTokenValidity: cdk.Duration.hours(1),
       refreshTokenValidity: cdk.Duration.days(30),
+      // Each refresh issues a new refresh token and retires the old one after the grace
+      // period (AUTH-09); Amplify v6 stores the rotated token (refreshAuthTokens.mjs).
+      refreshTokenRotationGracePeriod: cdk.Duration.seconds(30),
       enableTokenRevocation: true,
+      readAttributes,
+      writeAttributes,
       supportedIdentityProviders,
       // Without Apple there is no hosted-UI flow at all; the L2 would otherwise default to
       // implicit+code grants with an https://example.com callback.

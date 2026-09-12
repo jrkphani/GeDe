@@ -8,6 +8,12 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 import { buildApp } from '../lib/app.js';
 import { type GedeStage } from '../lib/gede-stage.js';
+import { RATE_LIMIT_PER_IP, WAF_MANAGED_RULE_GROUPS } from '../lib/stacks/edge-stack.js';
+import {
+  ORIGIN_VERIFY_GENERATIONS,
+  ORIGIN_VERIFY_HEADER,
+  ORIGIN_VERIFY_PRESENTED,
+} from '../lib/stacks/web-stack.js';
 
 const TEST_ZONE_ID = 'Z0000000000000000TEST';
 const INFRA_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,12 +85,26 @@ describe('GeDe CDK app', () => {
     });
     stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
       GenerateSecret: false,
-      ExplicitAuthFlows: Match.arrayWith(['ALLOW_USER_AUTH']),
+      // USER_AUTH only: no password or SRP flow on the client.
+      ExplicitAuthFlows: ['ALLOW_USER_AUTH'],
       SupportedIdentityProviders: ['COGNITO'],
       AllowedOAuthFlowsUserPoolClient: false,
       CallbackURLs: Match.absent(),
     });
     stacks.Auth!.resourceCountIs('AWS::Cognito::UserPoolIdentityProvider', 0);
+  });
+
+  it('AUTH-09 no password recovery path, attribute scopes restricted, refresh tokens rotate (#35)', () => {
+    // AccountRecovery.NONE: ForgotPassword cannot set a durable password on an OTP/passkey account.
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPool', {
+      AccountRecoverySetting: { RecoveryMechanisms: [{ Name: 'admin_only', Priority: 1 }] },
+    });
+    stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPoolClient', {
+      ReadAttributes: ['email', 'email_verified', 'family_name', 'given_name', 'locale', 'name'],
+      WriteAttributes: ['email', 'family_name', 'given_name', 'locale', 'name'],
+      RefreshTokenRotation: { Feature: 'ENABLED', RetryGracePeriodSeconds: 30 },
+      EnableTokenRevocation: true,
+    });
   });
 
   it('RDS is a protected Postgres 17 Graviton instance in isolated subnets', () => {
@@ -154,10 +174,57 @@ describe('GeDe CDK app', () => {
     });
   });
 
-  it('ALB keeps WebSocket connections open for an hour and redirects HTTP', () => {
+  it('task role is limited to docs/* objects, prefix-scoped listing, and can never delete a version (#42)', () => {
+    interface Policy {
+      Properties: {
+        PolicyDocument: {
+          Statement: {
+            Sid?: string;
+            Effect: string;
+            Action: string | string[];
+            Condition?: Record<string, Record<string, string[]>>;
+          }[];
+        };
+      };
+    }
+    const policies = Object.entries(stacks.Service!.findResources('AWS::IAM::Policy')) as [
+      string,
+      Policy,
+    ][];
+    const taskPolicy = policies.find(([id]) => id.startsWith('TaskTaskRole'))?.[1];
+    expect(taskPolicy).toBeDefined();
+    const statements = taskPolicy!.Properties.PolicyDocument.Statement;
+    const actions = (s: { Action: string | string[] }): string[] =>
+      Array.isArray(s.Action) ? s.Action : [s.Action];
+
+    const objects = statements.find((s) => s.Sid === 'DocsObjects')!;
+    expect(objects.Effect).toBe('Allow');
+    expect(actions(objects).sort()).toEqual(['s3:DeleteObject', 's3:GetObject', 's3:PutObject']);
+
+    const list = statements.find((s) => s.Sid === 'ListDocsPrefixOnly')!;
+    expect(actions(list)).toEqual(['s3:ListBucket']);
+    expect(list.Condition).toEqual({ StringLike: { 's3:prefix': ['docs/*'] } });
+
+    const deny = statements.find((s) => s.Sid === 'NeverDeleteVersions')!;
+    expect(deny.Effect).toBe('Deny');
+    expect(actions(deny)).toEqual(['s3:DeleteObjectVersion']);
+
+    // No wildcard S3 actions anywhere, and no Secrets Manager access: the execution role
+    // injects PG*; the service never calls Secrets Manager.
+    const allowed = statements.filter((s) => s.Effect === 'Allow').flatMap(actions);
+    expect(allowed.filter((a) => a.startsWith('s3:') && a.includes('*'))).toEqual([]);
+    expect(allowed.filter((a) => a.startsWith('secretsmanager:'))).toEqual([]);
+    const executionPolicy = policies.find(([id]) => id.startsWith('TaskExecutionRole'))?.[1];
+    expect(executionPolicy!.Properties.PolicyDocument.Statement.flatMap(actions)).toContain(
+      'secretsmanager:GetSecretValue',
+    );
+  });
+
+  it('ALB keeps WebSocket connections open for an hour, redirects HTTP, and cannot be deleted by accident', () => {
     stacks.Service!.hasResourceProperties('AWS::ElasticLoadBalancingV2::LoadBalancer', {
       Scheme: 'internet-facing',
       LoadBalancerAttributes: Match.arrayWith([
+        { Key: 'deletion_protection.enabled', Value: 'true' },
         { Key: 'idle_timeout.timeout_seconds', Value: '3600' },
         { Key: 'routing.http.drop_invalid_header_fields.enabled', Value: 'true' },
       ]),
@@ -186,7 +253,63 @@ describe('GeDe CDK app', () => {
     });
   });
 
-  it('CloudFront serves both aliases with the WAF and SPA fallbacks', () => {
+  it('ALB forwards /api only with the CloudFront origin-verify header, /ws directly, else 403 (#33)', () => {
+    // Deny by default.
+    stacks.Service!.hasResourceProperties('AWS::ElasticLoadBalancingV2::Listener', {
+      Port: 443,
+      Protocol: 'HTTPS',
+      DefaultActions: [
+        {
+          Type: 'fixed-response',
+          FixedResponseConfig: Match.objectLike({ StatusCode: '403' }),
+        },
+      ],
+    });
+    stacks.Service!.resourceCountIs('AWS::ElasticLoadBalancingV2::ListenerRule', 2);
+    // The WebSocket keeps its direct path (ADR-010); the service checks the JWT on upgrade.
+    stacks.Service!.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Priority: 10,
+      Actions: [Match.objectLike({ Type: 'forward' })],
+      Conditions: [{ Field: 'path-pattern', PathPatternConfig: { Values: ['/ws/*'] } }],
+    });
+    // /api/* and /healthz need every listed generation's value; each is a Secrets Manager
+    // dynamic reference resolved at deploy time, never a literal in the template.
+    const secretRef = Match.objectLike({
+      'Fn::Join': [
+        '',
+        Match.arrayWith([
+          '{{resolve:secretsmanager:',
+          Match.objectLike({
+            'Fn::GetStackOutput': Match.objectLike({ StackName: 'GeDe-Prod-Web' }),
+          }),
+          ':SecretString:::}}',
+        ]),
+      ],
+    });
+    stacks.Service!.hasResourceProperties('AWS::ElasticLoadBalancingV2::ListenerRule', {
+      Priority: 20,
+      Actions: [Match.objectLike({ Type: 'forward' })],
+      Conditions: [
+        { Field: 'path-pattern', PathPatternConfig: { Values: ['/api/*', '/healthz'] } },
+        {
+          Field: 'http-header',
+          HttpHeaderConfig: {
+            HttpHeaderName: ORIGIN_VERIFY_HEADER,
+            Values: ORIGIN_VERIFY_GENERATIONS.map(() => secretRef),
+          },
+        },
+      ],
+    });
+    // One generated, punctuation-free secret per generation, all in the Web stack. CloudFront
+    // presents a generation the ALB accepts (rotation is add → present → drop, runbook §12).
+    expect(ORIGIN_VERIFY_GENERATIONS).toContain(ORIGIN_VERIFY_PRESENTED);
+    stacks.Web!.resourceCountIs('AWS::SecretsManager::Secret', ORIGIN_VERIFY_GENERATIONS.length);
+    stacks.Web!.hasResourceProperties('AWS::SecretsManager::Secret', {
+      GenerateSecretString: { ExcludePunctuation: true, PasswordLength: 64 },
+    });
+  });
+
+  it('CloudFront serves both aliases with the WAF, the origin-verify header and a per-behaviour SPA fallback (#33, #38)', () => {
     stacks.Web!.hasResourceProperties('AWS::CloudFront::Distribution', {
       DistributionConfig: Match.objectLike({
         Aliases: ['gede.work', 'www.gede.work'],
@@ -194,15 +317,44 @@ describe('GeDe CDK app', () => {
         HttpVersion: 'http2and3',
         PriceClass: 'PriceClass_200',
         WebACLId: Match.anyValue(),
-        CustomErrorResponses: Match.arrayWith([
-          Match.objectLike({ ErrorCode: 403, ResponseCode: 200, ResponsePagePath: '/index.html' }),
-          Match.objectLike({ ErrorCode: 404, ResponseCode: 200, ResponsePagePath: '/index.html' }),
-        ]),
-        CacheBehaviors: Match.arrayWith([
-          Match.objectLike({ PathPattern: '/assets/*' }),
-          Match.objectLike({ PathPattern: '/api/*', ViewerProtocolPolicy: 'https-only' }),
+        // No distribution-wide error rewrites: /api/* 403/404 reach the browser as such.
+        CustomErrorResponses: Match.absent(),
+        DefaultCacheBehavior: Match.objectLike({
+          FunctionAssociations: [
+            Match.objectLike({ EventType: 'viewer-request', FunctionARN: Match.anyValue() }),
+          ],
+        }),
+        CacheBehaviors: [
+          Match.objectLike({ PathPattern: '/assets/*', FunctionAssociations: Match.absent() }),
+          Match.objectLike({
+            PathPattern: '/api/*',
+            ViewerProtocolPolicy: 'https-only',
+            FunctionAssociations: Match.absent(),
+            // Managed ALL_VIEWER_EXCEPT_HOST_HEADER: Host is the origin's, not the viewer's.
+            OriginRequestPolicyId: 'b689b0a8-53d0-40ab-baf2-68738e2966ac',
+          }),
+        ],
+        Origins: Match.arrayWith([
+          Match.objectLike({
+            DomainName: 'api.gede.work',
+            OriginCustomHeaders: [
+              {
+                HeaderName: ORIGIN_VERIFY_HEADER,
+                HeaderValue: Match.objectLike({
+                  'Fn::Join': ['', Match.arrayWith(['{{resolve:secretsmanager:'])],
+                }),
+              },
+            ],
+          }),
         ]),
       }),
+    });
+    stacks.Web!.hasResourceProperties('AWS::CloudFront::Function', {
+      Name: 'gede-prod-spa-router',
+      AutoPublish: true,
+      FunctionConfig: Match.objectLike({ Runtime: 'cloudfront-js-2.0' }),
+      // Extension-less last segment → /index.html; files pass through untouched.
+      FunctionCode: Match.stringLikeRegexp(String.raw`indexOf\('\.'\) === -1[\s\S]*'/index\.html'`),
     });
     stacks.Web!.hasResourceProperties('AWS::CloudFront::CachePolicy', {
       CachePolicyConfig: Match.objectLike({
@@ -212,14 +364,69 @@ describe('GeDe CDK app', () => {
         DefaultTTL: 0,
       }),
     });
-    stacks.Edge!.hasResourceProperties('AWS::WAFv2::WebACL', {
-      Scope: 'CLOUDFRONT',
-      DefaultAction: { Allow: {} },
-    });
     stacks.Edge!.hasResourceProperties('AWS::CertificateManager::Certificate', {
       DomainName: 'gede.work',
       SubjectAlternativeNames: ['www.gede.work'],
     });
+  });
+
+  it('SPA responses carry a Content-Security-Policy that names every origin the app uses (#42)', () => {
+    const csp = Match.stringLikeRegexp(
+      [
+        String.raw`^default-src 'self'; `,
+        String.raw`script-src 'self'; `,
+        String.raw`style-src 'self' 'unsafe-inline' https://fonts\.googleapis\.com; `,
+        String.raw`font-src 'self' https://fonts\.gstatic\.com; `,
+        String.raw`img-src 'self' data:; `,
+        String.raw`connect-src 'self' https://cognito-idp\.ap-southeast-1\.amazonaws\.com wss://ws\.gede\.work; `,
+        String.raw`worker-src 'self' blob:; `,
+        String.raw`manifest-src 'self'; `,
+        String.raw`object-src 'none'; `,
+        String.raw`base-uri 'self'; `,
+        String.raw`form-action 'self'; `,
+        String.raw`frame-ancestors 'none'$`,
+      ].join(''),
+    );
+    // Both the shell and the immutable-assets policy carry it; nothing else is relaxed.
+    stacks.Web!.resourceCountIs('AWS::CloudFront::ResponseHeadersPolicy', 2);
+    stacks.Web!.allResourcesProperties('AWS::CloudFront::ResponseHeadersPolicy', {
+      ResponseHeadersPolicyConfig: Match.objectLike({
+        SecurityHeadersConfig: Match.objectLike({
+          ContentSecurityPolicy: { ContentSecurityPolicy: csp, Override: true },
+          FrameOptions: { FrameOption: 'DENY', Override: true },
+          StrictTransportSecurity: Match.objectLike({ AccessControlMaxAgeSec: 31536000 }),
+        }),
+      }),
+    });
+  });
+
+  it('WAF blocks floods per IP before three AWS managed rule groups inspect the request (#42)', () => {
+    stacks.Edge!.hasResourceProperties('AWS::WAFv2::WebACL', {
+      Scope: 'CLOUDFRONT',
+      DefaultAction: { Allow: {} },
+      Rules: [
+        Match.objectLike({
+          Name: 'RateLimitPerIp',
+          Priority: 0,
+          Action: { Block: {} },
+          Statement: { RateBasedStatement: { AggregateKeyType: 'IP', Limit: RATE_LIMIT_PER_IP } },
+        }),
+        ...WAF_MANAGED_RULE_GROUPS.map((name, index) =>
+          Match.objectLike({
+            Name: name,
+            Priority: index + 1,
+            OverrideAction: { None: {} },
+            Statement: { ManagedRuleGroupStatement: { VendorName: 'AWS', Name: name } },
+          }),
+        ),
+      ],
+    });
+    expect(RATE_LIMIT_PER_IP).toBe(2000);
+    expect(WAF_MANAGED_RULE_GROUPS).toEqual([
+      'AWSManagedRulesCommonRuleSet',
+      'AWSManagedRulesKnownBadInputsRuleSet',
+      'AWSManagedRulesAmazonIpReputationList',
+    ]);
   });
 
   it('DNS aliases apex/www to CloudFront and api/ws to the ALB', () => {
@@ -262,6 +469,37 @@ describe('GeDe CDK app', () => {
     pipelineTemplate.allResourcesProperties('AWS::CodeBuild::Project', {
       Environment: Match.objectLike({ Type: 'ARM_CONTAINER' }),
     });
+  });
+
+  it('every CodeBuild project logs to one group that expires after 30 days (#40, #42)', () => {
+    pipelineTemplate.resourceCountIs('AWS::Logs::LogGroup', 1);
+    pipelineTemplate.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+    const [logGroupId] = Object.keys(pipelineTemplate.findResources('AWS::Logs::LogGroup'));
+    pipelineTemplate.resourceCountIs('AWS::CodeBuild::Project', 5);
+    pipelineTemplate.allResourcesProperties('AWS::CodeBuild::Project', {
+      LogsConfig: { CloudWatchLogs: { GroupName: { Ref: logGroupId }, Status: 'ENABLED' } },
+    });
+  });
+
+  it('Smoke probes the API through CloudFront and proves the bare origin answers 403 (#33)', () => {
+    interface Project {
+      Properties: { Source: { BuildSpec?: string } };
+    }
+    const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project'));
+    const smoke = (projects as Project[]).filter((p) =>
+      p.Properties.Source.BuildSpec?.includes('id=\\"root\\"'),
+    );
+    expect(smoke).toHaveLength(1);
+    const spec = JSON.parse(smoke[0]!.Properties.Source.BuildSpec!) as {
+      phases: { build: { commands: string[] } };
+    };
+    const commands = spec.phases.build.commands;
+    expect(commands.some((c) => c.includes('"$APP_URL/api/health"'))).toBe(true);
+    expect(commands.some((c) => c.includes('"$API_URL/api/health"') && c.includes('= 403'))).toBe(
+      true,
+    );
+    // Nothing curls the ALB hostname expecting success any more.
+    expect(commands.some((c) => c.includes('$API_URL/healthz'))).toBe(false);
   });
 
   it('LOAD-06 Synth installs Chromium, then runs verify, db:parity, e2e, the web build and cdk synth in that order', () => {
