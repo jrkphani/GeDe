@@ -28,6 +28,9 @@
   padding-top: 0.375rem;
   padding-bottom: 0.375rem;
 }
+.gd-lib__account.gd-btn--icon-only {
+  padding: 0.25rem;
+}
 
 .gd-lib__sidebar {
   padding: var(--space-3);
@@ -59,26 +62,52 @@
   transition: background-color var(--dur-fast) var(--ease-out);
 }
 .gd-lib__navitem:hover {
-  background: var(--slate-200);
+  background: color-mix(in srgb, var(--ink) 8%, transparent);
 }
+/* Active view: brand tint plus weight, so the state survives greyscale (A11Y-04).
+   Mixed from the link colour so the tint follows the theme instead of a fixed light green. */
 .gd-lib__navitem--active {
-  background: var(--forest-50);
+  background: color-mix(in srgb, var(--link) 14%, var(--surface));
   color: var(--link);
   font-weight: 600;
-}
-.gd-lib--narrow .gd-lib__navitem {
-  min-height: 2.75rem;
 }
 
 .gd-lib__main {
   padding: var(--space-4) var(--space-5) var(--space-6);
   overflow: auto;
 }
+.gd-lib__heading {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-3);
+  margin-bottom: var(--space-3);
+}
 .gd-lib__title {
-  margin: 0 0 var(--space-4);
+  margin: 0;
   font-size: 1.25rem;
   font-weight: 600;
   letter-spacing: -0.02em;
+}
+.gd-lib__count {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 0.65625rem;
+  letter-spacing: 0.02em;
+  color: var(--ink-muted);
+}
+
+.gd-lib__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+.gd-lib__toolbar-gap {
+  flex: 1;
+}
+.gd-lib__banner {
+  margin-bottom: var(--space-4);
 }
 
 .gd-lib__table {
@@ -105,22 +134,46 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.gd-lib__group th {
+  padding-top: var(--space-4);
+  border-bottom: 1px solid var(--border);
+  color: var(--ink);
+}
+.gd-lib__row {
+  cursor: default;
+  outline-offset: -2px;
+}
 .gd-lib__row:hover {
   background: var(--surface-sunken);
 }
+/* LIB-03 selection: amber inset ring plus weight, never the tint alone (A11Y-04). */
+.gd-lib__row--selected,
+.gd-lib__row--selected:hover {
+  background: color-mix(in srgb, var(--link) 12%, var(--surface));
+  box-shadow: inset 2px 0 0 var(--selection-ring);
+}
+.gd-lib__row--selected .gd-lib__title-text {
+  font-weight: 600;
+}
 .gd-lib__name {
-  display: inline-flex;
-  align-items: center;
-  gap: var(--space-2);
+  width: 40%;
+  max-width: 0;
   color: var(--ink);
   font-weight: 500;
-  text-decoration: none;
 }
-.gd-lib__name .gd-icon {
+.gd-lib__name-inner {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.gd-lib__title-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-lib__doc-icon {
   color: var(--selection-ring);
-}
-.gd-lib__name:hover {
-  text-decoration: underline;
 }
 .gd-lib__num {
   text-align: right;
@@ -129,4 +182,89 @@
 }
 .gd-lib__muted {
   color: var(--ink-muted);
+}
+.gd-lib__actions-col {
+  width: 2.75rem;
+  text-align: right;
+}
+.gd-lib__more {
+  vertical-align: middle;
+}
+
+/* Participants sheet (LIB-07). */
+.gd-participants__list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.gd-participants__person {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: 2.75rem;
+  padding: var(--space-2) 0;
+  border-bottom: 1px solid var(--border);
+}
+.gd-participants__who {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.gd-participants__name {
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-participants__email {
+  font-size: 0.78125rem;
+  color: var(--ink-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-participants__permission {
+  font-size: 0.78125rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+.gd-participants__link {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  font-size: 0.78125rem;
+  color: var(--ink-muted);
+}
+.gd-participants__error {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--danger);
+}
+.gd-participants__error p {
+  margin: 0;
+  color: var(--ink);
+}
+
+/* RESP-05: below 1024 px every target is at least 44 × 44 px. */
+@media (max-width: 1023.98px) {
+  .gd-lib .gd-btn,
+  .gd-lib__navitem,
+  .gd-lib__search .gd-field__input,
+  .gd-lib .gd-segmented__item {
+    min-height: 2.75rem;
+  }
+  .gd-lib .gd-btn--icon-only,
+  .gd-lib__account.gd-btn--icon-only {
+    min-width: 2.75rem;
+  }
+  .gd-lib__actions-col {
+    width: 3.25rem;
+  }
 }
