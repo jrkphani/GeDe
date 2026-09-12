@@ -108,14 +108,14 @@ aws cloudwatch describe-alarms --alarm-name-prefix gede-prod \
 aws budgets describe-budgets --account-id 975049998516 --query 'Budgets[?BudgetName==`gede-prod-monthly`]'
 ```
 
-| Alarm                              | Threshold                                  | First action                                                                                  |
-| ---------------------------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
-| `gede-prod-service-cpu`            | > 60 % for two 5-minute periods            | Check room count and update rate in the service logs; consider growth step 1.                 |
-| `gede-prod-alb-5xx`                | > 1 % of requests (ELB + target) in 5 min  | Tail the service log group; search for the `ref` shown in the error envelope.                 |
-| `gede-prod-db-free-storage`        | < 5 GiB (25 % of 20 GB)                    | Increase allocated storage (online); check that snapshot pruning of `doc_updates` is running. |
-| `gede-prod-purge-failed`           | ≥ 1 failure line in the purge job log      | §14 "Nightly purge": read the job's log stream, remove orphaned S3 prefixes, rerun by hand.   |
-| Rule `gede-prod-purge-task-failed` | jobs task exit code ≠ 0 or failed to start | Same as above; the email carries the task ARN, stop code and reason.                          |
-| Budget `gede-prod-monthly`         | 80 % of US$100 actual                      | Compare the bill by service; the ALB and Fargate are the fixed lines.                         |
+| Alarm                              | Threshold                                  | First action                                                                                           |
+| ---------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| `gede-prod-service-cpu`            | > 60 % for two 5-minute periods            | Check room count and update rate in the service logs; consider growth step 1.                          |
+| `gede-prod-alb-5xx`                | > 1 % of requests (ELB + target) in 5 min  | Tail the service log group; search for the `ref` shown in the error envelope.                          |
+| `gede-prod-db-free-storage`        | < 5 GiB (25 % of 20 GB)                    | Increase allocated storage (online); check that snapshot pruning of `doc_updates` is running.          |
+| `gede-prod-purge-failed`           | ≥ 1 failure line in the purge job log      | §14 "Nightly purge": read the job's log stream for the S3 error; the documents are retried next night. |
+| Rule `gede-prod-purge-task-failed` | jobs task exit code ≠ 0 or failed to start | Same as above; the email carries the task ARN, stop code and reason.                                   |
+| Budget `gede-prod-monthly`         | 80 % of US$100 actual                      | Compare the bill by service; the ALB and Fargate are the fixed lines.                                  |
 
 Not yet implemented from the handover guardrails: snapshot lag > 15 min and WebSocket reconnect rate. Both need custom metrics emitted by the sync service. Nor is there an alarm for a purge that never runs (Scheduler failed to invoke); `aws scheduler get-schedule` and the job log group are the checks for that.
 
@@ -220,6 +220,6 @@ aws ecs run-task --cluster "$CLUSTER" --task-definition "$TASKDEF" --launch-type
   --overrides '{"containerOverrides":[{"name":"purge","command":["node","main.js","--job","reproject","all"]}]}'
 ```
 
-When the job reports orphaned objects (`snapshot objects not purged; the database rows are gone`, then `purge left orphaned snapshot objects` with the prefixes): delete each `s3://<docs bucket>/docs/<docId>/` by hand (`aws s3 rm --recursive`). The bucket is versioned, so this writes delete markers and the lifecycle rule expires the versions. A rerun of the job finds no rows for those documents and does not retry the objects.
+Order of operations, per batch of 50: the rows are claimed (`FOR UPDATE SKIP LOCKED`), each document's S3 prefix is removed while the claim is held, and only the documents whose objects went are deleted when the transaction commits. When the job reports `snapshot objects not removed; the document is kept for the next run` (and exits 1 with `purge could not remove every document`), nothing is orphaned: the document's rows and objects are both still there and the next night retries them. Fix the S3 error (permissions, throttling) and either wait for the schedule or run the task by hand. The bucket is versioned, so a removal writes delete markers; the lifecycle rule expires the noncurrent versions and the markers after 90 days.
 
 What the purge never touches: live documents, documents deleted less than 30 days ago (measured on the database clock, `deleted_at < now() - 30 days`), and `audit_log`.

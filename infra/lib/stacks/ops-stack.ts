@@ -125,7 +125,7 @@ export class OpsStack extends cdk.Stack {
     });
 
     // Alert on any stopped jobs task whose container exited non-zero (the job reports
-    // orphaned S3 objects or a database failure that way) or that never started.
+    // documents it could not remove or a database failure that way) or that never started.
     const family = props.jobsTaskDefinition.family;
     const purgeFailed = new events.Rule(this, 'PurgeTaskFailed', {
       ruleName: `gede-${config.envName}-purge-task-failed`,
@@ -167,14 +167,14 @@ export class OpsStack extends cdk.Stack {
     );
 
     // The same failure as a metric, from the job's own log lines (`main.ts` logs
-    // `purge left orphaned snapshot objects` / `job failed` before exiting 1), so a
+    // `purge could not remove every document` / `job failed` before exiting 1), so a
     // dashboard can show it and the alarm history keeps a record per night.
     const purgeFailures = new logs.MetricFilter(this, 'PurgeFailures', {
       logGroup: props.jobsLogGroup,
       metricNamespace: 'GeDe/Jobs',
       metricName: 'PurgeFailures',
       filterPattern: logs.FilterPattern.any(
-        logs.FilterPattern.stringValue('$.msg', '=', 'purge left orphaned snapshot objects'),
+        logs.FilterPattern.stringValue('$.msg', '=', 'purge could not remove every document'),
         logs.FilterPattern.stringValue('$.msg', '=', 'job failed'),
       ),
       metricValue: '1',
@@ -185,7 +185,7 @@ export class OpsStack extends cdk.Stack {
       .createAlarm(this, 'PurgeFailed', {
         alarmName: `gede-${config.envName}-purge-failed`,
         alarmDescription:
-          'The nightly purge job logged a failure (orphaned S3 objects or a database error)',
+          'The nightly purge job logged a failure (documents it could not remove, or a database error)',
         threshold: 0,
         evaluationPeriods: 1,
         comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,

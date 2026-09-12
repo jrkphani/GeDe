@@ -121,11 +121,28 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
       [old.id, bob, alice],
     );
 
-    const first = await repo.documents.purgeExpired(1);
-    expect(first).toEqual([{ id: older.id, title: 'older' }]); // oldest deletion first
-    const second = await repo.documents.purgeExpired(10);
-    expect(second).toEqual([{ id: old.id, title: 'old' }]);
-    expect(await repo.documents.purgeExpired(10)).toEqual([]);
+    const removed: string[] = [];
+    const removeObjects = (doc: { id: string }) => {
+      removed.push(doc.id);
+      return Promise.resolve(true);
+    };
+    const first = await repo.documents.purgeExpired({ limit: 1, exclude: [], removeObjects });
+    expect(first).toEqual({ purged: [{ id: older.id, title: 'older' }], failed: [] }); // oldest first
+    // An S3 failure keeps the document: rows intact, no audit row, reported as failed.
+    const refused = await repo.documents.purgeExpired({
+      limit: 10,
+      exclude: [],
+      removeObjects: () => Promise.resolve(false),
+    });
+    expect(refused).toEqual({ purged: [], failed: [{ id: old.id, title: 'old' }] });
+    expect((await repo.documents.get(old.id))?.deletedAt).not.toBeNull();
+    // Excluded documents are skipped; the retry then takes it.
+    expect(
+      await repo.documents.purgeExpired({ limit: 10, exclude: [old.id], removeObjects }),
+    ).toEqual({ purged: [], failed: [] });
+    const second = await repo.documents.purgeExpired({ limit: 10, exclude: [], removeObjects });
+    expect(second).toEqual({ purged: [{ id: old.id, title: 'old' }], failed: [] });
+    expect(removed).toEqual([older.id, old.id]);
 
     const remaining = await pool.query('select id from documents where owner_id = any($1)', [
       [alice, bob],

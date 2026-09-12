@@ -172,8 +172,8 @@ async function runJob(
         docsPrefix: config.DOCS_PREFIX,
         logger,
       });
-      if (result.orphanedPrefixes.length > 0) {
-        logger.error({ prefixes: result.orphanedPrefixes }, 'purge left orphaned snapshot objects');
+      if (result.failed.length > 0) {
+        logger.error({ documents: result.failed }, 'purge could not remove every document');
         return 1;
       }
       return 0;

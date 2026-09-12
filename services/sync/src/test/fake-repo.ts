@@ -330,15 +330,18 @@ export class FakeRepo implements Repo {
       }
       return Promise.resolve(purged);
     },
-    purgeExpired: (limit) => {
+    purgeExpired: async ({ limit, exclude, removeObjects }) => {
       if (this.failNextPurge) {
         this.failNextPurge = false;
-        return Promise.reject(new Error('simulated purge failure'));
+        throw new Error('simulated purge failure');
       }
       const now = Date.now();
       // Oldest deletion first, then id, as the SQL orders; at most `limit` per call.
-      const expired = [...this.docs.values()]
-        .filter((doc) => doc.deletedAt !== null && !this.withinRetention(doc, now))
+      const candidates = [...this.docs.values()]
+        .filter(
+          (doc) =>
+            doc.deletedAt !== null && !this.withinRetention(doc, now) && !exclude.includes(doc.id),
+        )
         .sort(
           (a, b) =>
             (a.deletedAt?.getTime() ?? 0) - (b.deletedAt?.getTime() ?? 0) ||
@@ -346,7 +349,14 @@ export class FakeRepo implements Repo {
         )
         .slice(0, limit);
       const purged: { id: string; title: string }[] = [];
-      for (const doc of expired) {
+      const failed: { id: string; title: string }[] = [];
+      // Objects first; only a document whose objects went loses its rows.
+      for (const doc of candidates) {
+        const ref = { id: doc.id, title: doc.title };
+        if (!(await removeObjects(ref))) {
+          failed.push(ref);
+          continue;
+        }
         this.auditLog.push({
           documentId: doc.id,
           userId: null,
@@ -357,9 +367,9 @@ export class FakeRepo implements Repo {
         this.updatesByDoc.delete(doc.id);
         this.snapshotsByDoc.delete(doc.id);
         this.sharesByDoc.delete(doc.id);
-        purged.push({ id: doc.id, title: doc.title });
+        purged.push(ref);
       }
-      return Promise.resolve(purged);
+      return { purged, failed };
     },
     sharePermission: (documentId, userId) =>
       Promise.resolve(this.sharesByDoc.get(documentId)?.get(userId)?.permission),

@@ -70,7 +70,7 @@ describe('purgeExpired job', () => {
       logger: silent,
       batchSize: 1,
     });
-    expect(result).toEqual({ purged: 2, objectsDeleted: 4, orphanedPrefixes: [] });
+    expect(result).toEqual({ purged: 2, objectsDeleted: 4, failed: [] });
     expect([...repo.docs.keys()].sort()).toEqual([live, recent].sort());
     expect(repo.sharesByDoc.has(old)).toBe(false);
     expect(repo.auditLog).toEqual([
@@ -87,20 +87,37 @@ describe('purgeExpired job', () => {
     expect(await purgeExpired({ repo, s3, docsPrefix: 'docs/', logger: silent })).toEqual({
       purged: 0,
       objectsDeleted: 0,
-      orphanedPrefixes: [],
+      failed: [],
     });
   });
 
-  test('LIB-08 an S3 failure is reported as an orphaned prefix (the rows are gone) and the rest still runs', async () => {
+  test('LIB-08 objects go before rows: an S3 failure keeps that document (rows and objects) for the next run, the rest still goes, nothing is orphaned', async () => {
     const repo = new FakeRepo();
     const s3 = new FakeSnapshotStore();
     const alice = repo.seedUser('sub-alice').id;
     const first = deletedAgo(repo, alice, 'first', 100);
     const second = deletedAgo(repo, alice, 'second', 90);
+    await s3.put(snapshotKey('docs/', first, 1), new Uint8Array([1]));
     await s3.put(snapshotKey('docs/', second, 1), new Uint8Array([1]));
-    s3.failNextDelete = true;
-    const result = await purgeExpired({ repo, s3, docsPrefix: 'docs/', logger: silent });
-    expect(result).toEqual({ purged: 2, objectsDeleted: 1, orphanedPrefixes: [`docs/${first}/`] });
+    s3.failNextDelete = true; // `first` is oldest, so its delete is the one that fails
+    const result = await purgeExpired({
+      repo,
+      s3,
+      docsPrefix: 'docs/',
+      logger: silent,
+      batchSize: 1,
+    });
+    expect(result).toEqual({ purged: 1, objectsDeleted: 1, failed: [first] });
+    // The failed document is intact on both sides; no audit row claims it was purged.
+    expect([...repo.docs.keys()]).toEqual([first]);
+    expect([...s3.objects.keys()]).toEqual([snapshotKey('docs/', first, 1)]);
+    expect(repo.auditLog.map((a) => a.documentId)).toEqual([second]);
+    // Retry-safe: the next run finishes the job.
+    expect(await purgeExpired({ repo, s3, docsPrefix: 'docs/', logger: silent })).toEqual({
+      purged: 1,
+      objectsDeleted: 1,
+      failed: [],
+    });
     expect(repo.docs.size).toBe(0);
     expect(s3.objects.size).toBe(0);
   });

@@ -123,10 +123,12 @@ node main.js --job purge                    # LIB-08: delete documents soft-dele
 node main.js --job reproject <docId>|all    # rebuild the projection from snapshot + log
 ```
 
-`purge` removes rows (one transaction per batch of 100, a `document.purge` audit row each with
-`user_id` null), then the S3 objects under `${DOCS_PREFIX}${docId}/`; it exits 1 when any prefix
-could not be removed (the rows are gone, the log names the prefix). EventBridge Scheduler runs it
-nightly (`infra/lib/stacks/ops-stack.ts`); a non-zero exit alerts. `reproject all` skips deleted
+`purge` works in batches of 50: it claims the rows in a transaction, removes each document's S3
+objects under `${DOCS_PREFIX}${docId}/` while the claim is held, and deletes only the documents
+whose objects went (a `document.purge` audit row each with `user_id` null) when it commits. A
+document whose objects could not be removed keeps its rows and is retried next run, so an S3
+failure never orphans an object; the job then exits 1, which alerts. EventBridge Scheduler runs it
+nightly (`infra/lib/stacks/ops-stack.ts`). `reproject all` skips deleted
 documents and exits 1 if any document failed (its log line says which). See `docs/RUNBOOK.md`.
 
 ## Runbook
@@ -139,9 +141,10 @@ documents and exits 1 if any document failed (its log line says which). See `doc
   `dedupeSeededSheets` in `@gede/core` remain for them and are no-ops on a seeded replica.
 - **Orphaned snapshot objects.** A `snapshot objects not purged` log line (level error) names the
   document id and prefix; delete `s3://$DOCS_BUCKET/$DOCS_PREFIX<docId>/` by hand or rerun
-  Delete All as the owner (a second run finds no rows and touches nothing). The same line from the
-  purge job makes it exit 1, which alerts. A `document insert failed after its seed snapshot`
-  line names one orphaned `<docId>/1.yjs` object.
+  Delete All as the owner (a second run finds no rows and touches nothing). The nightly purge
+  cannot produce that line: it removes objects before rows and keeps a document whose objects
+  failed for the next run. A `document insert failed after its seed snapshot` line names one
+  orphaned `<docId>/1.yjs` object.
 
 ## Build and image
 

@@ -19,6 +19,7 @@ import {
   isNotNull,
   isNull,
   not,
+  notInArray,
   or,
   sql,
 } from 'drizzle-orm';
@@ -47,6 +48,7 @@ import {
   type DocumentRecord,
   type DocumentSummary,
   type LibraryView,
+  type PurgedDocument,
   type Repo,
   type UserRecord,
 } from './types.js';
@@ -339,28 +341,47 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
         });
       },
 
-      purgeExpired(limit) {
+      purgeExpired({ limit, exclude, removeObjects }) {
         return db.transaction(async (tx) => {
-          const doomed = await tx
+          const candidates = await tx
             .select({ id: documents.id, title: documents.title })
             .from(documents)
-            .where(and(isNotNull(documents.deletedAt), not(withinRetention)))
+            .where(
+              and(
+                isNotNull(documents.deletedAt),
+                not(withinRetention),
+                ...(exclude.length === 0 ? [] : [notInArray(documents.id, [...exclude])]),
+              ),
+            )
             .orderBy(asc(documents.deletedAt), asc(documents.id))
             .limit(limit)
             .for('update', { skipLocked: true });
-          if (doomed.length === 0) return [];
-          const ids = doomed.map((d) => d.id);
-          // `user_id` null is the system actor: nobody pressed Delete All.
-          await tx.insert(auditLog).values(
-            doomed.map((d) => ({
-              documentId: d.id,
-              userId: null,
-              action: 'document.purge',
-              target: d.title,
-            })),
-          );
-          await tx.delete(documents).where(inArray(documents.id, ids));
-          return doomed;
+          const purged: PurgedDocument[] = [];
+          const failed: PurgedDocument[] = [];
+          // Objects first, rows after, under the claim: a document whose objects
+          // could not be removed keeps its rows and is retried next run.
+          for (const doc of candidates) {
+            if (await removeObjects(doc)) purged.push(doc);
+            else failed.push(doc);
+          }
+          if (purged.length > 0) {
+            // `user_id` null is the system actor: nobody pressed Delete All.
+            await tx.insert(auditLog).values(
+              purged.map((d) => ({
+                documentId: d.id,
+                userId: null,
+                action: 'document.purge',
+                target: d.title,
+              })),
+            );
+            await tx.delete(documents).where(
+              inArray(
+                documents.id,
+                purged.map((d) => d.id),
+              ),
+            );
+          }
+          return { purged, failed };
         });
       },
 

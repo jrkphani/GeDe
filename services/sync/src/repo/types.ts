@@ -166,11 +166,19 @@ export interface DocumentsRepo {
    * The nightly job's half of LIB-08: permanently delete up to `limit`
    * documents, any owner, whose soft-deletion is older than the retention
    * window, with the same cascade and one `document.purge` audit row each
-   * written by the system actor (`user_id` null), all in one transaction.
-   * Returns what went so the caller can remove the S3 objects. Call again
-   * until it returns fewer than `limit`.
+   * written by the system actor (`user_id` null). The rows are claimed
+   * (locked) first, `removeObjects` runs for each while the claim is held,
+   * and only the documents whose objects are gone are deleted when the
+   * transaction commits — an S3 failure leaves that document's rows in
+   * place for the next run, never an orphaned object (review finding 3).
+   * `exclude` skips documents that already failed in this run. Call again
+   * until `purged.length + failed.length < limit`.
    */
-  purgeExpired(limit: number): Promise<PurgedDocument[]>;
+  purgeExpired(input: {
+    limit: number;
+    exclude: readonly string[];
+    removeObjects: (doc: PurgedDocument) => Promise<boolean>;
+  }): Promise<{ purged: PurgedDocument[]; failed: PurgedDocument[] }>;
   /** Explicit share permission for a user, if any. Ownership is checked separately. */
   sharePermission(documentId: string, userId: string): Promise<Permission | undefined>;
   /** Owner, every share with the inviter, and the link mode (LIB-07). */
