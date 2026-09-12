@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { Permission } from '@gede/db';
 
+import type { Projection } from '../projection/project.js';
 import {
   RECENTLY_DELETED_DAYS,
   type DocumentListing,
@@ -329,6 +330,37 @@ export class FakeRepo implements Repo {
       }
       return Promise.resolve(purged);
     },
+    purgeExpired: (limit) => {
+      if (this.failNextPurge) {
+        this.failNextPurge = false;
+        return Promise.reject(new Error('simulated purge failure'));
+      }
+      const now = Date.now();
+      // Oldest deletion first, then id, as the SQL orders; at most `limit` per call.
+      const expired = [...this.docs.values()]
+        .filter((doc) => doc.deletedAt !== null && !this.withinRetention(doc, now))
+        .sort(
+          (a, b) =>
+            (a.deletedAt?.getTime() ?? 0) - (b.deletedAt?.getTime() ?? 0) ||
+            (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+        )
+        .slice(0, limit);
+      const purged: { id: string; title: string }[] = [];
+      for (const doc of expired) {
+        this.auditLog.push({
+          documentId: doc.id,
+          userId: null,
+          action: 'document.purge',
+          target: doc.title,
+        });
+        this.docs.delete(doc.id);
+        this.updatesByDoc.delete(doc.id);
+        this.snapshotsByDoc.delete(doc.id);
+        this.sharesByDoc.delete(doc.id);
+        purged.push({ id: doc.id, title: doc.title });
+      }
+      return Promise.resolve(purged);
+    },
     sharePermission: (documentId, userId) =>
       Promise.resolve(this.sharesByDoc.get(documentId)?.get(userId)?.permission),
     participants: (documentId) => {
@@ -417,4 +449,78 @@ export class FakeRepo implements Repo {
       return Promise.resolve();
     },
   };
+
+  /** The last projection written per document — what the tables would hold. */
+  readonly projections = new Map<string, Projection>();
+  /** Set to make the next `replace` fail (a rolled-back transaction leaves the previous projection). */
+  failNextProjection = false;
+  projectionWrites = 0;
+
+  readonly projection: Repo['projection'] = {
+    replace: (projection) => {
+      this.projectionWrites += 1;
+      if (this.failNextProjection) {
+        this.failNextProjection = false;
+        return Promise.reject(new Error('simulated projection failure'));
+      }
+      this.projections.set(projection.documentId, projection);
+      return Promise.resolve();
+    },
+    search: (documentId, query, limit) => {
+      const projection = this.projections.get(documentId);
+      if (!projection) return Promise.resolve([]);
+      // Approximates `to_tsvector('simple', text_plain) @@ plainto_tsquery('simple', q)`:
+      // the simple dictionary lowercases and splits on non-word characters, and
+      // plainto_tsquery ANDs every word (no prefix matching, no stemming).
+      const wanted = tokens(query);
+      if (wanted.length === 0) return Promise.resolve([]);
+      const sheetOrdinal = new Map(projection.sheets.map((s) => [s.id, s.ordinal]));
+      const tableOf = new Map(projection.rows.map((r) => [r.id, r.tableId]));
+      const rowOrdinal = new Map(projection.rows.map((r) => [r.id, r.ordinal]));
+      const columnOrdinal = new Map(projection.columns.map((c) => [c.id, c.ordinal]));
+      const sheetOf = new Map(projection.tables.map((t) => [t.id, t.sheetId]));
+      const hits = projection.cells
+        .filter((cell) => {
+          const have = new Set(tokens(cell.textPlain));
+          return wanted.every((w) => have.has(w));
+        })
+        .map((cell) => {
+          const tableId = tableOf.get(cell.rowId) ?? '';
+          return {
+            sheetId: sheetOf.get(tableId) ?? '',
+            tableId,
+            rowId: cell.rowId,
+            columnId: cell.columnId,
+            textPlain: cell.textPlain,
+          };
+        })
+        .sort(
+          (a, b) =>
+            (sheetOrdinal.get(a.sheetId) ?? 0) - (sheetOrdinal.get(b.sheetId) ?? 0) ||
+            (a.tableId < b.tableId ? -1 : a.tableId > b.tableId ? 1 : 0) ||
+            (rowOrdinal.get(a.rowId) ?? 0) - (rowOrdinal.get(b.rowId) ?? 0) ||
+            (columnOrdinal.get(a.columnId) ?? 0) - (columnOrdinal.get(b.columnId) ?? 0),
+        );
+      return Promise.resolve(hits.slice(0, limit));
+    },
+    liveDocumentIds: () =>
+      Promise.resolve(
+        [...this.docs.values()]
+          .filter((d) => d.deletedAt === null)
+          .sort(
+            (a, b) =>
+              a.createdAt.getTime() - b.createdAt.getTime() ||
+              (a.id < b.id ? -1 : a.id > b.id ? 1 : 0),
+          )
+          .map((d) => d.id),
+      ),
+  };
+}
+
+/** The `simple` text-search parser, near enough: lowercase words of letters and digits. */
+function tokens(text: string): string[] {
+  return text
+    .toLowerCase()
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter((t) => t !== '');
 }

@@ -18,6 +18,7 @@ import { currentUser, requireUser, toAuthUser, type AuthUser, type UserResolver 
 import type { Deps } from '../deps.js';
 import { AppError } from '../errors.js';
 import { canEdit, requirePermission } from '../permissions.js';
+import type { ProjectionWorker } from '../projection/worker.js';
 import type {
   DocumentListing,
   DocumentPermission,
@@ -53,6 +54,13 @@ const titleSchema = oneLine(200);
 const createBody = z.object({ title: titleSchema.optional() }).strict().default({});
 const patchBody = z.object({ title: titleSchema }).strict();
 const listQuery = z.object({ view: z.enum(LIBRARY_VIEWS).default('recents') });
+/** FIND-03: a search phrase; every word must match. Control characters are refused as for titles. */
+const searchQuery = z.object({ q: oneLine(200) });
+
+/** Most hits one search answers (the find bar pages nothing yet). */
+export const SEARCH_LIMIT = 50;
+/** Characters of context either side of the first match in a snippet. */
+const SNIPPET_CONTEXT = 40;
 const profileBody = z
   .object({
     displayName: oneLine(80).optional(),
@@ -190,11 +198,45 @@ function participantsView(
   };
 }
 
+/** One hit as the API returns it (FIND-03); ids locate the cell, the snippet previews it. */
+export interface SearchHitView {
+  sheetId: string;
+  tableId: string;
+  rowId: string;
+  columnId: string;
+  snippet: string;
+}
+
+/**
+ * A short window of the cell text around the first word of the query
+ * (case-insensitive), with ellipses where it was cut. Falls back to the
+ * head of the text when the words matched only after normalisation.
+ */
+export function snippetOf(text: string, query: string): string {
+  const flat = text.replace(/\s+/g, ' ').trim();
+  const words = query
+    .toLowerCase()
+    .split(/\s+/)
+    .filter((w) => w !== '');
+  const lower = flat.toLowerCase();
+  let at = -1;
+  for (const word of words) {
+    const found = lower.indexOf(word);
+    if (found >= 0 && (at < 0 || found < at)) at = found;
+  }
+  const start = Math.max(0, (at < 0 ? 0 : at) - SNIPPET_CONTEXT);
+  const end = Math.min(flat.length, (at < 0 ? 0 : at) + SNIPPET_CONTEXT * 2);
+  const head = start > 0 ? '…' : '';
+  const tail = end < flat.length ? '…' : '';
+  return `${head}${flat.slice(start, end)}${tail}`;
+}
+
 export function registerApi(
   app: FastifyInstance,
   deps: Deps,
   resolver: UserResolver,
   rooms: RoomManager,
+  projection: Pick<ProjectionWorker, 'schedule'>,
 ): void {
   const repo = deps.db;
 
@@ -257,6 +299,8 @@ export function registerApi(
           );
           throw error;
         }
+        // The projection of a new document is one sheet; it makes the row searchable at once.
+        projection.schedule(id, bytes);
         return reply.status(201).send({ document: view(doc, 'owner') });
       });
 
@@ -362,6 +406,23 @@ export function registerApi(
           target: null,
         });
         return { document: view(recovered, 'owner') };
+      });
+
+      api.get('/documents/:id/search', async (request) => {
+        const user = currentUser(request);
+        const id = parseId(request.params);
+        const { q } = parse(searchQuery, request.query, 'query');
+        // Participants only: a stranger learns nothing, not even that the document exists (403).
+        await requirePermission(repo, user.id, id, 'view');
+        const hits = await repo.projection.search(id, q, SEARCH_LIMIT);
+        const results: SearchHitView[] = hits.map((hit) => ({
+          sheetId: hit.sheetId,
+          tableId: hit.tableId,
+          rowId: hit.rowId,
+          columnId: hit.columnId,
+          snippet: snippetOf(hit.textPlain, q),
+        }));
+        return { results };
       });
 
       api.get('/documents/:id/shares', async (request) => {

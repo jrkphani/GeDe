@@ -61,6 +61,8 @@ export class PersistenceWriter {
     >,
     private readonly logger: Logger,
     initial: { snapshotSeq: number; lastSeq: number },
+    /** Called with the snapshot's bytes after each successful compaction (the projection hook). */
+    private readonly onSnapshot?: (bytes: Uint8Array, seq: number) => void,
   ) {
     this.snapshotSeq = initial.snapshotSeq;
     this.lastSeq = initial.lastSeq;
@@ -224,5 +226,6 @@ export class PersistenceWriter {
       { documentId: this.documentId, seq, bytes: bytes.byteLength, key },
       'snapshot written',
     );
+    this.onSnapshot?.(bytes, seq);
   }
 }

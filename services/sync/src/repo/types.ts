@@ -6,6 +6,8 @@
  */
 import type { LinkAccess, Permission } from '@gede/db';
 
+import type { Projection } from '../projection/project.js';
+
 export interface UserRecord {
   readonly id: string;
   readonly cognitoSub: string;
@@ -160,6 +162,15 @@ export interface DocumentsRepo {
    * transaction. S3 objects are the caller's job once this has committed.
    */
   purgeDeleted(ownerId: string, actorId: string): Promise<PurgedDocument[]>;
+  /**
+   * The nightly job's half of LIB-08: permanently delete up to `limit`
+   * documents, any owner, whose soft-deletion is older than the retention
+   * window, with the same cascade and one `document.purge` audit row each
+   * written by the system actor (`user_id` null), all in one transaction.
+   * Returns what went so the caller can remove the S3 objects. Call again
+   * until it returns fewer than `limit`.
+   */
+  purgeExpired(limit: number): Promise<PurgedDocument[]>;
   /** Explicit share permission for a user, if any. Ownership is checked separately. */
   sharePermission(documentId: string, userId: string): Promise<Permission | undefined>;
   /** Owner, every share with the inviter, and the link mode (LIB-07). */
@@ -195,6 +206,33 @@ export interface AuditRepo {
   }): Promise<void>;
 }
 
+/** One full-text hit in a document's projected cells (FIND-03). */
+export interface SearchHit {
+  readonly sheetId: string;
+  readonly tableId: string;
+  readonly rowId: string;
+  readonly columnId: string;
+  /** The cell's `text_plain`; the route trims it to a snippet. */
+  readonly textPlain: string;
+}
+
+export interface ProjectionRepo {
+  /**
+   * Replace the document's whole projection (sheets, tables, columns, rows,
+   * cells) in one transaction. The projection is rebuildable: deleting the
+   * sheets cascades through the rest, then everything is inserted afresh.
+   */
+  replace(projection: Projection): Promise<void>;
+  /**
+   * Cells of one document matching every word of `query`
+   * (`to_tsvector('simple', text_plain) @@ plainto_tsquery('simple', $q)`),
+   * in sheet, table, row, column order, at most `limit`.
+   */
+  search(documentId: string, query: string, limit: number): Promise<SearchHit[]>;
+  /** Ids of every live (not soft-deleted) document, for a full rebuild. */
+  liveDocumentIds(): Promise<string[]>;
+}
+
 export interface Repo {
   /** `SELECT 1` — throws when the database is unreachable. */
   ping(): Promise<void>;
@@ -202,4 +240,5 @@ export interface Repo {
   readonly documents: DocumentsRepo;
   readonly updates: UpdatesRepo;
   readonly audit: AuditRepo;
+  readonly projection: ProjectionRepo;
 }

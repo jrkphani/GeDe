@@ -9,13 +9,17 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { UserResolver } from './auth.js';
 import type { Deps } from './deps.js';
 import { newRequestId, registerErrorHandling } from './errors.js';
+import { ProjectionWorker } from './projection/worker.js';
 import { registerApi } from './routes/api.js';
 import { registerHealth } from './routes/health.js';
 import { RoomManager } from './ws/room-manager.js';
 import { registerWs, selectSubprotocol } from './ws/route.js';
 
-/** The Fastify instance plus the room manager, exposed for shutdown and tests. */
-export type SyncServer = FastifyInstance & { readonly rooms: RoomManager };
+/** The Fastify instance plus the room manager and projection worker, exposed for shutdown and tests. */
+export type SyncServer = FastifyInstance & {
+  readonly rooms: RoomManager;
+  readonly projection: ProjectionWorker;
+};
 
 export async function buildServer(deps: Deps): Promise<SyncServer> {
   const app = Fastify({
@@ -27,7 +31,8 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
     bodyLimit: 64 * 1024,
   });
 
-  const rooms = new RoomManager(deps.db, deps.s3, deps.config, deps.logger);
+  const projection = new ProjectionWorker(deps.db.projection, deps.config, deps.logger);
+  const rooms = new RoomManager(deps.db, deps.s3, deps.config, deps.logger, projection);
 
   registerErrorHandling(app);
 
@@ -56,13 +61,15 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
   const resolver = new UserResolver(deps.verifier, deps.db);
 
   registerHealth(app, deps);
-  registerApi(app, deps, resolver, rooms);
+  registerApi(app, deps, resolver, rooms, projection);
   registerWs(app, { config: deps.config, repo: deps.db, resolver, rooms });
 
   // Runs during app.close(), after @fastify/websocket has stopped accepting
   // upgrades: flush every room's pending updates before the pool goes away.
   app.addHook('onClose', async () => {
     await rooms.shutdown();
+    // Rooms compact on shutdown; write what they scheduled before the pool goes away.
+    await projection.close();
   });
 
   await app.ready();
@@ -70,5 +77,5 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
   // (legacy `await fastify()` support); strip that so the async return is not
   // treated as a thenable.
   const instance: FastifyInstance = app;
-  return Object.assign(instance, { rooms });
+  return Object.assign(instance, { rooms, projection });
 }
