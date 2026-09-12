@@ -15,9 +15,11 @@ import {
   deleteRow,
   deleteTable,
   hideColumn,
+  nestRow,
   openDocument,
   orphanCellKeys,
   setCellText,
+  setRowCollapsed,
   tableById,
   tableMap,
   type GedeDoc,
@@ -94,6 +96,39 @@ describe('remote structure under the selection (GRID-02, GRID-03, GRID-05, SHARE
       deleteColumn(b, tableId, cols[2]!);
     });
     expect(result.current.state.selection).toEqual({ tableId, cell: null }); // only a hidden column remains
+  });
+
+  it('HIER-06 HIER-10 a collaborator collapsing the parent of the selected row moves the selection off the hidden subtree; traversal skips it', () => {
+    nestRow(a, tableId, rows[1]!);
+    nestRow(a, tableId, rows[2]!);
+    const { result } = renderHook(() => useGrid(a, true));
+    act(() => {
+      result.current.actions.selectCell({ tableId, rowId: rows[2]!, colId: cols[1]! });
+    });
+    act(() => {
+      setRowCollapsed(b, tableId, rows[0]!, true);
+    });
+    // The hidden row's nearest drawn ancestor takes the selection: r0, the row that collapsed.
+    expect(result.current.cell).toEqual({ tableId, rowId: rows[0], colId: cols[1] });
+    // Down from the last drawn row appends a row (GRID-05) rather than entering the hidden subtree.
+    act(() => {
+      result.current.actions.move('down');
+    });
+    const after = tableById(a, tableId)!.rows;
+    expect(after).toHaveLength(4);
+    expect(result.current.cell?.rowId).toBe(after[3]);
+    // An edit in flight on a row that gets hidden is dropped the same way a deleted row's is.
+    act(() => {
+      setRowCollapsed(b, tableId, rows[0]!, false);
+      result.current.actions.selectCell({ tableId, rowId: rows[1]!, colId: cols[0]! });
+      result.current.actions.dispatch({ type: 'edit', seed: { kind: 'overwrite', text: 'd' } });
+    });
+    expect(result.current.state.editing).not.toBeNull();
+    act(() => {
+      setRowCollapsed(b, tableId, rows[0]!, true);
+    });
+    expect(result.current.state.editing).toBeNull();
+    expect(result.current.cell?.rowId).toBe(rows[0]);
   });
 
   it('GRID-03 a collaborator deleting the selected table clears the selection; an edit in flight is dropped, not written', () => {

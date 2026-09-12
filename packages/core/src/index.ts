@@ -9,6 +9,7 @@ export * from './ids.js';
 export * from './graph.js';
 export * from './formula/index.js';
 export * from './doc/index.js';
+export * from './hier/index.js';
 export * from './search/index.js';
 export * from './text/index.js';
 export * from './format/index.js';

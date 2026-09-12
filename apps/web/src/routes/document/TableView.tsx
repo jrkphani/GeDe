@@ -17,8 +17,10 @@ import {
   LATTICE,
   rowHeights as effectiveRowHeights,
   rowMeta,
+  rowReadOnlyReason,
   TABLE_TITLE_ROWS,
   tableAddresses,
+  tableOutline,
   tableRecord,
   tableWraps,
   WRAPPED_ROW_HEIGHT,
@@ -28,9 +30,11 @@ import {
   type ColumnRecord,
   type FormatLocale,
   type Id,
+  type OutlineRow,
   type PresenceState,
   type ReadOnlyReason,
   type TableMap,
+  type TableOutline,
   type TableRecord,
 } from '@gede/core';
 import { Icon } from '@gede/ui';
@@ -56,6 +60,7 @@ import {
   projectSource,
 } from './formula/index.js'; // wave2/formulas
 import { readOnlyLabel, type GridCommands } from './grid/commands.js';
+import { HIER_ARIA_KEYS, hierarchyKey } from './grid/hier-keys.js';
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
@@ -68,6 +73,15 @@ export interface TableViewProps {
   editing: Editing | null;
   /** RESP-02 / SHARE-03: no edit affordance renders when false. */
   editable: boolean;
+  /**
+   * True while this viewer's sort or filter (per-user view state, ADR on PR #74)
+   * reorders or drops rows. Depth is relative to the row above in *document*
+   * order, so a sorted or filtered view could draw a child above its parent:
+   * the outline is then treated as under grouping (HIER-08) — depth kept, not
+   * shown, no chevron — and nest/promote are refused from this table. The sort
+   * feature wires it; until then it defaults to false.
+   */
+  viewSorted?: boolean | undefined;
   /** Other participants' selections on this table (SHARE-04). */
   presence: readonly PresenceState[];
   /**
@@ -112,6 +126,7 @@ export const TableView = memo(function TableView({
   selectedCell,
   editing,
   editable,
+  viewSorted = false,
   presence,
   pinnedLeft,
   undo,
@@ -180,11 +195,30 @@ export const TableView = memo(function TableView({
   const columnReadOnly = new Map<Id, ReadOnlyReason | null>(
     record.columns.map((c) => [c.id, c.source === 'entered' ? null : c.source]),
   );
-  // One rowMeta read per row: the group band (GRID-04) and the row's own wrap (GRID-09).
-  const rowFacts = (rowId: Id): { group: boolean; wrapped: boolean } => {
+  // One rowMeta read per row: the row-level read-only reason (GRID-04: a category
+  // band; HIER-07: a split child) and the row's own wrap (GRID-09).
+  const rowFacts = (rowId: Id): { readOnly: ReadOnlyReason | null; wrapped: boolean } => {
     const meta = rowMeta(table, rowId);
-    return { group: meta.group, wrapped: meta.height === WRAPPED_ROW_HEIGHT };
+    return { readOnly: rowReadOnlyReason(meta), wrapped: meta.height === WRAPPED_ROW_HEIGHT };
   };
+  // HIER-04..08: the outline, once per render. Rows under a collapsed parent are
+  // not drawn at all (HIER-06); while the table is grouped the outline column
+  // shows no depth, though the data keeps it (HIER-08).
+  const outline = tableOutline(table, record);
+  const showOutline = !outline.grouped && !viewSorted && outline.column !== null;
+  const outlineLocked = outline.grouped
+    ? 'Hierarchy is unavailable while the table is grouped'
+    : viewSorted
+      ? 'Hierarchy is unavailable while the view is sorted or filtered'
+      : null;
+  // A table with any nesting is a treegrid to assistive tech: that is the role whose
+  // rows carry `aria-level` and `aria-expanded` (a plain grid's may not). A flat table
+  // stays a grid, so nothing changes for it.
+  const hierarchical = showOutline && outline.rows.some((r) => r.depth > 0 || r.hasChildren);
+  // Ordinal among the rows that render, per row: `aria-rowindex` counts what is in the grid.
+  let drawn = 0;
+  const visibleOrdinals = outline.rows.map((r) => (r.hidden ? -1 : drawn++));
+  const visibleRowCount = drawn;
 
   // M8: with nothing selected in this table, its first cell is the tab stop (roving tabindex).
   const tableHasSelection = selectedCell !== null && selectedCell.tableId === record.id;
@@ -241,9 +275,9 @@ export const TableView = memo(function TableView({
         <>
           <div
             className="gd-table__grid"
-            role="grid"
+            role={hierarchical ? 'treegrid' : 'grid'}
             aria-label={record.title}
-            aria-rowcount={rowCount + record.headerRows}
+            aria-rowcount={visibleRowCount + record.headerRows}
             aria-colcount={columnCount}
             onPointerDown={(e) => {
               e.stopPropagation();
@@ -298,15 +332,23 @@ export const TableView = memo(function TableView({
               </div>
             )}
             {record.rows.map((rowId, ri) => {
+              // The outline has one entry per row; a missing one cannot happen, but a row
+              // that is not drawn must not be drawn.
+              const outlineRow = outline.rows[ri];
+              if (outlineRow === undefined || outlineRow.hidden) return null; // HIER-06
               const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
-              const { group: groupRow, wrapped: rowWrapped } = rowFacts(rowId);
+              const { readOnly: rowReadOnly, wrapped: rowWrapped } = rowFacts(rowId);
+              const parentRow = hierarchical && outlineRow.hasChildren;
               return (
                 <div
                   key={rowId}
                   className="gd-table__row"
                   role="row"
-                  aria-rowindex={ri + 1 + record.headerRows}
+                  aria-rowindex={(visibleOrdinals[ri] ?? 0) + 1 + record.headerRows}
+                  aria-level={hierarchical ? outlineRow.depth + 1 : undefined}
+                  aria-expanded={parentRow ? !outlineRow.collapsed : undefined}
                   style={{ height: `${String(heightPx)}px` }}
+                  data-depth={showOutline ? outlineRow.depth : undefined}
                 >
                   {visible.map((col, ci) => {
                     const isSelected =
@@ -322,9 +364,9 @@ export const TableView = memo(function TableView({
                     const other = presenceByCell.get(`${rowId}:${col.id}`);
                     const address = addresses?.[ri]?.[columnOrdinal.get(col.id) ?? -1] ?? undefined;
                     const cell = { tableId: record.id, rowId, colId: col.id };
-                    // Column source wins over the row band, as `cellReadOnlyReason` in core.
+                    // Column source wins over the row reason, as `cellReadOnlyReason` in core.
                     const readOnly: ReadOnlyReason | null =
-                      columnReadOnly.get(col.id) ?? (groupRow ? 'group' : null);
+                      columnReadOnly.get(col.id) ?? rowReadOnly;
                     return (
                       <Cell
                         key={col.id}
@@ -334,10 +376,15 @@ export const TableView = memo(function TableView({
                         tier={tier}
                         address={address}
                         selected={isSelected}
-                        tabStop={isSelected || (!tableHasSelection && ri === 0 && ci === 0)}
+                        tabStop={
+                          isSelected ||
+                          (!tableHasSelection && visibleOrdinals[ri] === 0 && ci === 0)
+                        }
                         editing={isEditing ? editing : null}
                         editable={editable}
                         readOnly={readOnly}
+                        outline={showOutline && col.id === outline.column ? outlineRow : null}
+                        outlineLocked={outlineLocked}
                         column={col}
                         locale={locale}
                         undo={undo ?? null}
@@ -376,6 +423,7 @@ export const TableView = memo(function TableView({
             <PinnedPanel
               table={table}
               record={record}
+              outline={showOutline ? outline : null}
               left={pinnedLeft}
               rowHeights={rowHeights}
               selectedCell={selectedCell}
@@ -449,6 +497,8 @@ export const TableView = memo(function TableView({
 interface PinnedPanelProps {
   table: TableMap;
   record: TableRecord;
+  /** The outline to mirror in the frozen outline column, or null while grouped (HIER-08). */
+  outline: TableOutline | null;
   left: number;
   rowHeights: readonly number[];
   selectedCell: CellSelection | null;
@@ -460,11 +510,13 @@ interface PinnedPanelProps {
  * GRID-10: the frozen columns, carried along the viewport's left edge while the
  * table is scrolled under it. A mirror of cells already in the grid, so it is
  * hidden from assistive tech and holds no tab stops; pointing at a mirrored
- * cell selects the real one.
+ * cell selects the real one. The outline column mirrors its indent, prefix
+ * and chevron state too (HIER-04, HIER-05), without the control.
  */
 function PinnedPanel({
   table,
   record,
+  outline,
   left,
   rowHeights,
   selectedCell,
@@ -502,41 +554,125 @@ function PinnedPanel({
           ))}
         </div>
       )}
-      {record.rows.map((rowId, ri) => (
-        <div
-          key={rowId}
-          className="gd-table__row"
-          style={{ height: `${String((rowHeights[ri] ?? 1) * LATTICE.row)}px` }}
-        >
-          {columns.map((col) => {
-            const isSelected =
-              selectedCell !== null &&
-              selectedCell.tableId === record.id &&
-              selectedCell.rowId === rowId &&
-              selectedCell.colId === col.id;
-            return (
-              <div
-                key={col.id}
-                className={clsx('gd-cell', 'gd-cell--frozen', {
-                  'gd-cell--selected': isSelected,
-                  'gd-cell--wrap': col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
-                })}
-                style={{ width: `${String(col.width * LATTICE.col)}px` }}
-                onPointerDown={() => {
-                  onSelect({ tableId: record.id, rowId, colId: col.id });
-                }}
-              >
-                <CellContent
-                  content={cellRich(table, rowId, col.id)}
-                  format={cellFormatFor(table, col, rowId)}
-                  locale={locale}
-                />
-              </div>
-            );
-          })}
-        </div>
-      ))}
+      {record.rows.map((rowId, ri) => {
+        if (rowHeights[ri] === 0) return null; // HIER-06: hidden under a collapsed parent
+        const outlineRow = outline?.rows[ri];
+        return (
+          <div
+            key={rowId}
+            className="gd-table__row"
+            style={{ height: `${String((rowHeights[ri] ?? 1) * LATTICE.row)}px` }}
+          >
+            {columns.map((col) => {
+              const isSelected =
+                selectedCell !== null &&
+                selectedCell.tableId === record.id &&
+                selectedCell.rowId === rowId &&
+                selectedCell.colId === col.id;
+              const onOutline = outline !== null && col.id === outline.column;
+              return (
+                <div
+                  key={col.id}
+                  className={clsx('gd-cell', 'gd-cell--frozen', {
+                    'gd-cell--selected': isSelected,
+                    'gd-cell--wrap':
+                      col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
+                    'gd-cell--outline': onOutline,
+                  })}
+                  style={{
+                    width: `${String(col.width * LATTICE.col)}px`,
+                    ...outlineStyle(onOutline ? outlineRow : undefined),
+                  }}
+                  onPointerDown={() => {
+                    onSelect({ tableId: record.id, rowId, colId: col.id });
+                  }}
+                >
+                  {onOutline && outlineRow !== undefined && (
+                    <OutlineMarks row={outlineRow} control={null} />
+                  )}
+                  <CellContent
+                    content={cellRich(table, rowId, col.id)}
+                    format={cellFormatFor(table, col, rowId)}
+                    locale={locale}
+                  />
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
+  );
+}
+
+/** HIER-04: the indent rides a custom property the stylesheet multiplies by `--outline-indent`. */
+function outlineStyle(row: OutlineRow | undefined): CSSProperties | undefined {
+  if (row === undefined || row.depth === 0) return undefined;
+  return { '--gd-outline-depth': row.depth } as CSSProperties;
+}
+
+interface OutlineMarksProps {
+  row: OutlineRow;
+  /**
+   * The chevron's handler and label, or null for a mirror or a read-only
+   * viewer (RESP-02, SHARE-03): the state still shows, as a glyph the row's
+   * `aria-expanded` speaks for, but nothing here toggles it.
+   */
+  control: { readonly label: string; readonly onToggle: () => void } | null;
+}
+
+/**
+ * HIER-04 / HIER-05: what the outline column prefixes a cell with — a
+ * disclosure chevron on a row with descendants (rotated when expanded) and
+ * `↳` on a child row. Both are decorative to assistive tech: the row carries
+ * `aria-level` and `aria-expanded`, and the chevron button its own label.
+ */
+function OutlineMarks({ row, control }: OutlineMarksProps) {
+  const chevron = (
+    <Icon
+      name="chevron-right"
+      size={13}
+      className={clsx('gd-cell__chevron-glyph', {
+        'gd-cell__chevron-glyph--expanded': !row.collapsed,
+      })}
+    />
+  );
+  return (
+    <>
+      {row.hasChildren &&
+        (control === null ? (
+          <span className="gd-cell__chevron" aria-hidden="true" data-testid="outline-chevron">
+            {chevron}
+          </span>
+        ) : (
+          <button
+            type="button"
+            className="gd-cell__chevron"
+            aria-label={control.label}
+            aria-expanded={!row.collapsed}
+            title={control.label}
+            tabIndex={-1}
+            data-testid="outline-chevron"
+            onPointerDown={(e) => {
+              // The press must neither arm the cell under it nor take focus from the
+              // selected cell: the grid's one tab stop stays where it is (A11Y-01).
+              e.stopPropagation();
+              e.preventDefault();
+            }}
+            onClick={(e) => {
+              e.stopPropagation();
+              control.onToggle();
+            }}
+          >
+            {chevron}
+          </button>
+        ))}
+      {row.depth > 0 && (
+        <span className="gd-cell__branch" aria-hidden="true">
+          ↳
+        </span>
+      )}
+    </>
   );
 }
 
@@ -551,8 +687,20 @@ interface CellProps {
   tabStop: boolean;
   editing: Editing | null;
   editable: boolean;
-  /** GRID-04: derived, linked, pulled and group cells are not editable. */
+  /** GRID-04: derived, linked, pulled, group and split-child cells are not editable. */
   readOnly: ReadOnlyReason | null;
+  /**
+   * HIER-04 / HIER-05: set on the outline column's cell only — the row's
+   * depth, chevron and prefix render here. Null on every other cell, and on
+   * every cell while the table is grouped (HIER-08).
+   */
+  outline: OutlineRow | null;
+  /**
+   * Why the outline is inactive on this table, or null when it is live: the
+   * chords then announce the reason instead of writing (HIER-08; sorted or
+   * filtered view). Same value on every cell of the table.
+   */
+  outlineLocked: string | null;
   /** The column record, resolved once per table render; carries the column's data format (FMT-01). */
   column: ColumnRecord;
   locale: FormatLocale;
@@ -592,6 +740,8 @@ function Cell({
   editing,
   editable,
   readOnly,
+  outline,
+  outlineLocked,
   column,
   locale,
   undo,
@@ -644,6 +794,33 @@ function Cell({
     const rearm = () => {
       if (!selected) actions.selectCell(cell);
     };
+    // KEYS-06 / HIER-01 / HIER-06: ⌘] ⌘[ ⌥← ⌥→ act on this cell's row, by physical key.
+    // A read-only viewer gets nothing from them (RESP-02): no default, no write.
+    const hierarchy = hierarchyKey(e);
+    if (hierarchy !== null) {
+      if (!editable) return;
+      e.preventDefault();
+      e.stopPropagation();
+      rearm();
+      if (outlineLocked !== null) {
+        announce(outlineLocked); // HIER-08: depth is kept, not shown, not edited
+        return;
+      }
+      switch (hierarchy) {
+        case 'nest':
+          commands.nestRow(cell.tableId, cell.rowId);
+          return;
+        case 'promote':
+          commands.promoteRow(cell.tableId, cell.rowId);
+          return;
+        case 'collapse':
+          commands.setCollapsed(cell.tableId, cell.rowId, true);
+          return;
+        case 'expand':
+          commands.setCollapsed(cell.tableId, cell.rowId, false);
+          return;
+      }
+    }
     const arrow = arrowDirection(e.code);
     if (arrow !== null) {
       if (mod || e.altKey) return; // ⌥⌘↓ / ⌥⌘→ add a row or column (the shell binds them)
@@ -706,6 +883,15 @@ function Cell({
       ? undefined
       : ({ '--gd-presence': `var(--presence-${String(other.colour)})` } as CSSProperties);
   const lockLabel = readOnly === null ? undefined : `Read-only: ${readOnlyLabel(readOnly)}`;
+  const chevronControl =
+    outline !== null && outline.hasChildren && editable
+      ? {
+          label: `${outline.collapsed ? 'Expand' : 'Collapse'} ${address ?? 'row'}`,
+          onToggle: () => {
+            commands.toggleCollapse(cell.tableId, cell.rowId);
+          },
+        }
+      : null;
 
   return (
     <div
@@ -719,6 +905,13 @@ function Cell({
           ? undefined
           : `${address}${text === '' ? '' : `, ${text}`}${lockLabel === undefined ? '' : `, ${lockLabel}`}`
       }
+      aria-keyshortcuts={
+        outline === null || !editable
+          ? undefined
+          : `${HIER_ARIA_KEYS.nest} ${HIER_ARIA_KEYS.promote}${
+              outline.hasChildren ? ` ${HIER_ARIA_KEYS.collapse} ${HIER_ARIA_KEYS.expand}` : ''
+            }`
+      }
       className={clsx('gd-cell', {
         'gd-cell--selected': selected,
         'gd-cell--editing': editing !== null,
@@ -727,8 +920,13 @@ function Cell({
         'gd-cell--frozen': frozen,
         'gd-cell--freeze-edge': freezeEdge,
         'gd-cell--wrap': wrap,
+        'gd-cell--outline': outline !== null,
       })}
-      style={{ width: `${String(widthPx)}px`, ...presenceStyle }}
+      style={{
+        width: `${String(widthPx)}px`,
+        ...presenceStyle,
+        ...outlineStyle(outline ?? undefined),
+      }}
       title={
         tier === 'micro' && editing === null
           ? lockLabel === undefined
@@ -746,9 +944,10 @@ function Cell({
         }
         actions.selectCell(cell);
       }}
-      onFocus={() => {
-        // Tabbing onto a cell arms it (A11Y-01), so Enter can open the editor.
-        if (!selected) actions.selectCell(cell);
+      onFocus={(e) => {
+        // Tabbing onto a cell arms it (A11Y-01), so Enter can open the editor. Focus
+        // landing on the chevron inside it (HIER-05) is not a selection.
+        if (!selected && e.target === e.currentTarget) actions.selectCell(cell);
       }}
       onDoubleClick={() => {
         if (!editable) return;
@@ -762,6 +961,7 @@ function Cell({
       data-address={address}
       data-read-only={readOnly ?? undefined}
     >
+      {outline !== null && <OutlineMarks row={outline} control={chevronControl} />}
       {editing !== null && canEdit ? (
         <RichCellEditor
           initial={shown ?? source}

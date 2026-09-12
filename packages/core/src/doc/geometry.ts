@@ -6,6 +6,7 @@
  * `address.ts`; nothing here is stored.
  */
 import { addressGrid, cellRefInTable, formatAddress, type TableGeometry } from '../address.js';
+import { hiddenRowIds } from '../hier/outline.js';
 import type { Id } from '../ids.js';
 import { LATTICE, pointToPx, type Pixels } from '../lattice.js';
 import {
@@ -44,17 +45,30 @@ export function tableWraps(record: TableRecord): boolean {
 }
 
 /**
+ * Which data rows are hidden, in row order: a row under a collapsed ancestor
+ * (HIER-06). Like a hidden column (GRID-02) it keeps its data but has no
+ * lattice presence — no height, no address — and the rows below move up.
+ */
+export function rowHidden(table: TableMap, record: TableRecord = tableRecord(table)): boolean[] {
+  const hidden = hiddenRowIds(table, record);
+  return record.rows.map((rowId) => hidden.has(rowId));
+}
+
+/**
  * Heights of each data row in units, in row order (GRID-09): two when the row
- * itself is wrapped or any visible column wraps, else one. Never anything else,
- * so the row after a wrapped row is exactly two addresses down.
+ * itself is wrapped or any visible column wraps, else one — and zero for a row
+ * hidden under a collapsed parent (HIER-06). Never anything else, so the row
+ * after a wrapped row is exactly two addresses down.
  */
 export function rowHeights(table: TableMap, record: TableRecord = tableRecord(table)): number[] {
   const wrapAll = tableWraps(record);
-  return record.rows.map((rowId) =>
-    wrapAll || rowMeta(table, rowId).height >= WRAPPED_ROW_HEIGHT
+  const hidden = rowHidden(table, record);
+  return record.rows.map((rowId, i) => {
+    if (hidden[i] === true) return 0;
+    return wrapAll || rowMeta(table, rowId).height >= WRAPPED_ROW_HEIGHT
       ? WRAPPED_ROW_HEIGHT
-      : DEFAULT_ROW_HEIGHT,
-  );
+      : DEFAULT_ROW_HEIGHT;
+  });
 }
 
 /** Widths of each column in units, in column order; a hidden column is 0 (GRID-02). */
@@ -87,7 +101,9 @@ export function headerRow(record: TableRecord): number | null {
 
 /**
  * The A1 address of the data cell at (rowId, colId), or null when either id is
- * unknown or the column is hidden (a hidden column has no lattice presence).
+ * unknown, the column is hidden, or the row is hidden under a collapsed parent
+ * (neither has a lattice presence — GRID-02, HIER-06). Depth alone never
+ * changes an address (HIER-09).
  */
 export function cellAddress(table: TableMap, rowId: Id, colId: Id): string | null {
   const record = tableRecord(table);
@@ -95,20 +111,29 @@ export function cellAddress(table: TableMap, rowId: Id, colId: Id): string | nul
   const colOrdinal = record.columns.findIndex((c) => c.id === colId);
   if (rowOrdinal < 0 || colOrdinal < 0) return null;
   if (record.columns[colOrdinal]?.hidden === true) return null;
-  return formatAddress(cellRefInTable(dataGeometry(table, record), colOrdinal, rowOrdinal));
+  const geometry = dataGeometry(table, record);
+  if (geometry.rowHeights[rowOrdinal] === 0) return null;
+  return formatAddress(cellRefInTable(geometry, colOrdinal, rowOrdinal));
 }
 
 /**
  * Every data-cell address, `[rowOrdinal][columnOrdinal]` (GRID-02). A hidden
- * column has no address (`null`) and the column after it takes its letter —
- * the same answer `cellAddress` gives one cell at a time.
+ * column has no address (`null`) and the column after it takes its letter; a
+ * hidden row likewise has none and the row after it takes its number — the
+ * same answer `cellAddress` gives one cell at a time.
  */
 export function tableAddresses(table: TableMap): (string | null)[][] {
   const record = tableRecord(table);
-  const grid = addressGrid(dataGeometry(table, record));
-  const hidden = record.columns.map((c) => c.hidden);
-  if (!hidden.some(Boolean)) return grid;
-  return grid.map((row) => row.map((address, ci) => (hidden[ci] === true ? null : address)));
+  const geometry = dataGeometry(table, record);
+  const grid = addressGrid(geometry);
+  const hiddenColumn = record.columns.map((c) => c.hidden);
+  const hiddenRow = geometry.rowHeights.map((h) => h === 0);
+  if (!hiddenColumn.some(Boolean) && !hiddenRow.some(Boolean)) return grid;
+  return grid.map((row, ri) =>
+    row.map((address, ci) =>
+      hiddenRow[ri] === true || hiddenColumn[ci] === true ? null : address,
+    ),
+  );
 }
 
 /** Sum of the visible column widths in units; never below one so a table always has a footprint. */

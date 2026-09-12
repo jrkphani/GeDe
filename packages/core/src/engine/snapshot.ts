@@ -7,6 +7,7 @@
 import * as Y from 'yjs';
 
 import { rowHeights } from '../doc/geometry.js';
+import { effectiveDepths } from '../hier/outline.js';
 import {
   cellsMap,
   fragmentText,
@@ -43,7 +44,9 @@ export function tableStructure(table: TableMap): TableStructure {
     })),
     rows: record.rows,
     rowHeights: rowHeights(table, record),
-    rowDepths: record.rows.map((rowId) => rowMeta(table, rowId).depth),
+    // Effective depths (HIER-02): a merge can leave a stored depth deeper than the
+    // row above allows, and an `@` path must be qualified by the parent the reader sees.
+    rowDepths: effectiveDepths(record.rows.map((rowId) => rowMeta(table, rowId).depth)),
   };
 }
 

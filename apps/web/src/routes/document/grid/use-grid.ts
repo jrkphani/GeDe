@@ -8,9 +8,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import * as Y from 'yjs';
 import {
   cellAddress,
+  hiddenRowIds,
   sweepOrphanCells,
   tableById,
   tableMap,
+  tableRecord,
   type GedeDoc,
   type Id,
 } from '@gede/core';
@@ -79,10 +81,14 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
 
   const lookup = useCallback(
     (tableId: Id): TraversalTable | null => {
-      const record = tableById(gd, tableId);
-      if (record === null) return null;
+      const table = tableMap(gd, tableId);
+      if (table === null) return null;
+      const record = tableRecord(table);
+      // HIER-06: rows under a collapsed parent are not drawn, so traversal skips
+      // them the way it skips hidden columns, and a selection left on one moves.
+      const hidden = hiddenRowIds(table, record);
       return {
-        rows: record.rows,
+        rows: hidden.size === 0 ? record.rows : record.rows.filter((id) => !hidden.has(id)),
         columns: record.columns.map((c) => ({ id: c.id, hidden: c.hidden })),
       };
     },
@@ -142,7 +148,13 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
         const tableId = table.get('id');
         if (typeof tableId === 'string') sweepOrphanCells(gd, tableId);
       }
-      reconcileSelection(stateRef.current, lookup, snapshotRef.current, dispatch);
+      reconcileSelection(
+        stateRef.current,
+        lookup,
+        (tableId) => tableById(gd, tableId)?.rows ?? null,
+        snapshotRef.current,
+        dispatch,
+      );
     };
     gd.tables.observeDeep(onChange);
     return () => {
@@ -181,12 +193,15 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
 
 /**
  * After the document changed, move the selection off anything that no longer
- * renders: table gone → cleared; row gone → the row now at its index; column
- * gone or hidden → the visible column now at its place; nothing left → the table.
+ * renders: table gone → cleared; row gone → the row now at its index; row
+ * hidden under a collapsed parent (HIER-06) → the nearest drawn row above it,
+ * which is the ancestor that collapsed; column gone or hidden → the visible
+ * column now at its place; nothing left → the table.
  */
 function reconcileSelection(
   state: GridState,
   lookup: (tableId: Id) => TraversalTable | null,
+  allRows: (tableId: Id) => readonly Id[] | null,
   snapshot: { tableId: Id; table: TraversalTable } | null,
   dispatch: (event: GridEvent) => void,
 ): void {
@@ -206,8 +221,20 @@ function reconcileSelection(
   const prev = snapshot?.tableId === selection.tableId ? snapshot.table : null;
   let rowId: Id | undefined = cell.rowId;
   if (!rowOk) {
-    const was = prev?.rows.indexOf(cell.rowId) ?? -1;
-    rowId = now.rows[Math.min(Math.max(was, 0), now.rows.length - 1)];
+    const full = allRows(selection.tableId) ?? [];
+    const stillThere = full.indexOf(cell.rowId);
+    if (stillThere >= 0) {
+      // Hidden, not deleted: the nearest row above it that still renders.
+      const drawn = new Set(now.rows);
+      rowId =
+        full
+          .slice(0, stillThere)
+          .reverse()
+          .find((id) => drawn.has(id)) ?? now.rows[0];
+    } else {
+      const was = prev?.rows.indexOf(cell.rowId) ?? -1;
+      rowId = now.rows[Math.min(Math.max(was, 0), now.rows.length - 1)];
+    }
   }
   let colId: Id | undefined = cell.colId;
   if (!colOk) {

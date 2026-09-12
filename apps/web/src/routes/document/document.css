@@ -589,6 +589,75 @@
   border-bottom: 1px solid var(--border);
 }
 
+/* ---- outline column (HIER-04, HIER-05): indent per level, ↳ on children, a chevron on parents.
+   The indent is `--outline-indent` (15 px, packages/tokens) × the row's depth, carried by
+   `--gd-outline-depth` on the cell; it pads the cell and never moves the cell (HIER-09). */
+.gd-cell--outline {
+  padding-left: calc(var(--space-2) + var(--gd-outline-depth, 0) * var(--outline-indent));
+}
+.gd-cell__chevron {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: var(--space-4);
+  height: 100%;
+  margin-left: calc(-1 * var(--space-1));
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+}
+/* The button is a pointer target only (tabIndex -1, never focused): the keyboard route is
+   ⌥← / ⌥→ on the focused cell, which keeps the grid's one tab stop. No focus rule, by design. */
+button.gd-cell__chevron {
+  position: relative;
+  cursor: pointer;
+}
+button.gd-cell__chevron:hover {
+  color: var(--ink);
+}
+/* RESP-05: below lg the chevron's hit area is the hit-target token (44 px), centred on the
+   glyph. It overlaps the neighbouring rows' leading edge by (44 − 22) / 2; that is the trade-off
+   for a target inside a 22 px lattice row (ADR-025). */
+@media (max-width: 1023.98px) {
+  /* The cell clips its content; the outline cell lets the hit area out (its text clips itself,
+     `.gd-rich`), except while the editor is open in it. */
+  .gd-cell--outline:not(.gd-cell--editing):has(> button.gd-cell__chevron) {
+    overflow: visible;
+  }
+  button.gd-cell__chevron {
+    z-index: 1; /* the hit area paints over the next row's cells, which are positioned too */
+  }
+  button.gd-cell__chevron::before {
+    content: '';
+    position: absolute;
+    top: calc((var(--lattice-row) - var(--hit-target)) / 2);
+    left: calc((var(--space-4) - var(--hit-target)) / 2);
+    width: var(--hit-target);
+    height: var(--hit-target);
+  }
+}
+.gd-cell__chevron-glyph {
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+.gd-cell__chevron-glyph--expanded {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .gd-cell__chevron-glyph {
+    transition: none;
+  }
+}
+.gd-cell__branch {
+  flex: none;
+  margin-right: var(--space-1);
+  color: var(--ink-muted);
+  font-size: 0.625rem;
+  line-height: 1;
+}
+
 /* ---- footer count strip (GRID-11): one lattice unit, mono counts */
 .gd-table__footer {
   display: flex;
@@ -725,6 +794,48 @@
 .gd-inspector__note[aria-disabled='true'] {
   opacity: 0.45;
 }
+/* Hierarchy panel (HIER-01, HIER-03): row, parent, depth, promote / nest, collapse. */
+.gd-hier {
+  padding: var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.gd-hier__heading {
+  margin: 0 0 var(--space-2);
+  font-weight: 500;
+}
+.gd-hier__row {
+  margin: 0;
+  font-size: 0.8125rem;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.gd-hier__parent {
+  margin: var(--space-1) 0 0;
+  font-size: 0.75rem;
+  color: var(--ink-muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.gd-hier .gd-inspector__counts {
+  margin: var(--space-1) 0 0;
+}
+.gd-hier__actions {
+  display: flex;
+  gap: var(--space-2);
+  margin-top: var(--space-2);
+}
+.gd-hier__actions .gd-btn {
+  flex: 1;
+}
+.gd-hier__grouped,
+.gd-hier__hint {
+  padding: 0;
+  margin: var(--space-2) 0 0;
+  line-height: 1.5;
+}
+
 /* md: the inspector opens as an overlay sheet (RESP-03). */
 @media (max-width: 1023.98px) {
   .gd-inspector {

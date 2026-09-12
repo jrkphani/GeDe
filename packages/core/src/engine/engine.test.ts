@@ -22,6 +22,7 @@ import {
   tableMap,
   type GedeDoc,
 } from '../doc/index.js';
+import { nestRow, setRowCollapsed } from '../hier/mutations.js';
 import { commitCellText, workbookIndexOf } from './commit.js';
 import { FormulaEngine } from './engine.js';
 import { observeWorkbook } from './snapshot.js';
@@ -505,6 +506,46 @@ describe('FormulaEngine over a Y.Doc', () => {
     expect(g.shown(1, 2)).toBe('=Sum(#hidden)');
     setColumnHidden(h.gd, g.tableId, g.colId(1), false);
     expect(g.shown(1, 2)).toBe(`=Sum(${g.addr(0, 1)})`);
+  });
+
+  test('HIER-06 GRID-02 a row hidden under a collapsed parent keeps its bound reference and its value, projects as #hidden, and never takes the address of the row that moved up', () => {
+    const h = harness();
+    // r0 > r1 > r2, r3, r4 — then r3 > r4 so the last parent can collapse too.
+    const g = grid(h.gd, h.sheetId, 5, 2);
+    for (let r = 0; r < 5; r += 1) g.set(r, 0, String(r + 1));
+    nestRow(h.gd, g.tableId, g.rowId(1));
+    nestRow(h.gd, g.tableId, g.rowId(2));
+    nestRow(h.gd, g.tableId, g.rowId(2));
+    g.set(3, 1, `=Sum(${g.addr(1, 0)})`);
+    g.set(4, 1, `=Sum(${g.addr(0, 0)}:${g.addr(4, 0)})`);
+    expect(numberOf(h.results.get(g.id(3, 1)))).toBe(2);
+    expect(numberOf(h.results.get(g.id(4, 1)))).toBe(15);
+
+    setRowCollapsed(h.gd, g.tableId, g.rowId(0), true); // hides r1 and r2; r3 takes r1's address
+    const index = h.engine.index;
+    expect(cellAddress(tableMap(h.gd, g.tableId)!, g.rowId(1), g.colId(0))).toBeNull();
+    expect(
+      index.positionOf({ tableId: g.tableId, rowId: g.rowId(1), colId: g.colId(0) }),
+    ).toBeNull();
+    expect(index.addressOf(g.id(1, 0))).toBe('#REF');
+    expect(g.shown(3, 1)).toBe('=Sum(#hidden)');
+    // The address r3 now holds resolves to r3, not to the hidden row that had it.
+    expect(index.binder(h.sheetId).cellAt({ col: 1, row: 5 })).toMatchObject({ rowId: g.rowId(3) });
+    // Id-bound evaluation is unaffected: the hidden cell and the range's interior still count.
+    expect(numberOf(h.results.get(g.id(3, 1)))).toBe(2);
+    expect(numberOf(h.results.get(g.id(4, 1)))).toBe(15);
+
+    // A hidden last row is not one past the table's end: the extent stops at the last drawn row.
+    nestRow(h.gd, g.tableId, g.rowId(4));
+    setRowCollapsed(h.gd, g.tableId, g.rowId(3), true);
+    expect(
+      index.positionOf({ tableId: g.tableId, rowId: g.rowId(4), colId: g.colId(0) }),
+    ).toBeNull();
+    expect(index.extentOf(g.tableId)).toMatchObject({ firstRow: 4, lastRow: 5 });
+    expect(index.binder(h.sheetId).cellAt({ col: 1, row: 6 })).toBeNull();
+
+    setRowCollapsed(h.gd, g.tableId, g.rowId(0), false);
+    expect(g.shown(3, 1)).toBe(`=Sum(${g.addr(1, 0)})`);
   });
 
   test('FX-06 a range that reaches past the table binds open-ended: a row inserted above slides it, a row appended joins it, nothing shifts silently', () => {

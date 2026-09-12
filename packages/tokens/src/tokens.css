@@ -89,6 +89,8 @@
   /* canvas lattice — absolute, NOT on the space scale */
   --lattice-col: 160px;
   --lattice-row: 22px;
+  /* outline indent per hierarchy level inside the outline column (HIER-04) */
+  --outline-indent: 15px;
 
   /* interactive targets — 44 CSS px, whatever the root font size (RESP-05, Apple HIG) */
   --hit-target: 44px;

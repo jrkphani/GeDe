@@ -5,6 +5,7 @@
  */
 import * as Y from 'yjs';
 
+import { effectiveDepths, hasDescendants } from '../hier/outline.js';
 import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
 import { snapPoint, snapSizeToUnits, type LatticeUnits, type Pixels } from '../lattice.js';
 import {
@@ -18,6 +19,7 @@ import {
   objectCount,
   readNumber,
   readString,
+  rowMeta,
   rowMetaMap,
   rowsArray,
   tableMap,
@@ -204,11 +206,14 @@ export function createTable(gd: GedeDoc, options: CreateTableOptions): Id {
       Array.from({ length: columnCount }, (_, i) => newColumn(`Column ${String(i + 1)}`).map),
     );
     map.set('columns', columns);
+    const rowIds = Array.from({ length: rowCount }, () => newId());
     const rows = new Y.Array<Id>();
-    rows.push(Array.from({ length: rowCount }, () => newId()));
+    rows.push(rowIds);
     map.set('rows', rows);
     map.set('cells', new Y.Map<unknown>());
-    map.set('rowMeta', new Y.Map<RowMetaMap>());
+    const metas = new Y.Map<RowMetaMap>();
+    for (const rowId of rowIds) metas.set(rowId, newRowMeta());
+    map.set('rowMeta', metas);
     gd.tables.set(id, map);
     return id;
   });
@@ -230,13 +235,49 @@ export function setTablePosition(gd: GedeDoc, tableId: Id, at: LatticeUnits | Pi
   });
 }
 
+/**
+ * A row's meta map with the defaults every reader assumes. Created with the row
+ * (`createTable`, `addRow`, `insertRowBefore`) rather than on first write: two
+ * replicas that first write different keys of the same row while apart (one
+ * nests it, the other wraps it) would each create their own nested map, and
+ * Yjs keeps one of them — the other replica's write would be lost. A map that
+ * exists from the row's birth takes both writes.
+ */
+function newRowMeta(): RowMetaMap {
+  const meta: RowMetaMap = new Y.Map<unknown>();
+  meta.set('depth', 0);
+  meta.set('collapsed', false);
+  meta.set('height', DEFAULT_ROW_HEIGHT);
+  return meta;
+}
+
+/**
+ * HIER-06: `collapsed` means something only on a row with descendants. Call it
+ * inside the transaction of any structural change that can leave a row
+ * childless — a delete, a promote, a row inserted directly under a collapsed
+ * parent — so the flag does not linger to hide the next subtree that forms
+ * there. Reads effective depths (HIER-02); writes only where the flag is set.
+ */
+export function settleCollapsed(table: TableMap): void {
+  const rows = rowsArray(table).toArray();
+  const metas = rowMetaMap(table);
+  const depths = effectiveDepths(rows.map((id) => rowMeta(table, id).depth));
+  rows.forEach((id, i) => {
+    const meta = metas.get(id);
+    if (meta?.get('collapsed') === true && !hasDescendants(depths, i)) meta.set('collapsed', false);
+  });
+}
+
 /** Append a row (or insert after `afterRowId`). Returns the new row id (GRID-07). */
 export function addRow(gd: GedeDoc, tableId: Id, afterRowId?: Id): Id {
   return transact(gd, () => {
-    const rows = rowsArray(requireTable(gd, tableId));
+    const table = requireTable(gd, tableId);
+    const rows = rowsArray(table);
     const id = newId();
     const after = afterRowId === undefined ? -1 : rows.toArray().indexOf(afterRowId);
     rows.insert(after < 0 ? rows.length : after + 1, [id]);
+    rowMetaMap(table).set(id, newRowMeta());
+    settleCollapsed(table);
     return id;
   });
 }
@@ -244,10 +285,13 @@ export function addRow(gd: GedeDoc, tableId: Id, afterRowId?: Id): Id {
 /** Insert a row above `beforeRowId` (PRD §17 "Add row above"). Returns the new row id. */
 export function insertRowBefore(gd: GedeDoc, tableId: Id, beforeRowId: Id): Id {
   return transact(gd, () => {
-    const rows = rowsArray(requireTable(gd, tableId));
+    const table = requireTable(gd, tableId);
+    const rows = rowsArray(table);
     const id = newId();
     const before = rows.toArray().indexOf(beforeRowId);
     rows.insert(before < 0 ? 0 : before, [id]);
+    rowMetaMap(table).set(id, newRowMeta());
+    settleCollapsed(table);
     return id;
   });
 }
@@ -317,6 +361,7 @@ export function deleteRow(gd: GedeDoc, tableId: Id, rowId: Id): boolean {
     rows.delete(index, 1);
     rowMetaMap(table).delete(rowId);
     deleteCells(table, (key) => key.startsWith(`${rowId}:`));
+    settleCollapsed(table);
     return true;
   });
 }
@@ -501,20 +546,23 @@ function setRowHeight(table: TableMap, rowId: Id, height: number): void {
   const existing = rowMetaMap(table).get(rowId);
   if (existing === undefined) {
     if (height === DEFAULT_ROW_HEIGHT) return;
-    metaFor(table, rowId).set('height', height);
+    rowMetaFor(table, rowId).set('height', height);
     return;
   }
   if (existing.get('height') !== height) existing.set('height', height);
 }
 
-function metaFor(table: TableMap, rowId: Id): RowMetaMap {
+/**
+ * The row's meta map. Rows created since Wave 3 carry one from birth (see
+ * `newRowMeta`); for older rows it is created here, inside the caller's
+ * transaction, on first write. A row with no meta reads as depth 0, expanded,
+ * one unit (`rowMeta` in `schema.ts`), so creating one is never itself a change.
+ */
+export function rowMetaFor(table: TableMap, rowId: Id): RowMetaMap {
   const metas = rowMetaMap(table);
   let meta = metas.get(rowId);
   if (meta === undefined) {
-    meta = new Y.Map<unknown>();
-    meta.set('depth', 0);
-    meta.set('collapsed', false);
-    meta.set('height', DEFAULT_ROW_HEIGHT);
+    meta = newRowMeta();
     metas.set(rowId, meta);
   }
   return meta;
@@ -531,9 +579,14 @@ export function setRowWrapped(gd: GedeDoc, tableId: Id, rowId: Id, wrapped: bool
   });
 }
 
+/**
+ * Raw depth write, unvalidated: what the projection and fixtures use. The
+ * user path is `nestRow` / `promoteRow` in `hier/mutations.ts`, which enforce
+ * HIER-02 and move the subtree with the row.
+ */
 export function setRowDepth(gd: GedeDoc, tableId: Id, rowId: Id, depth: number): void {
   transact(gd, () => {
-    metaFor(requireTable(gd, tableId), rowId).set('depth', Math.max(0, Math.round(depth)));
+    rowMetaFor(requireTable(gd, tableId), rowId).set('depth', Math.max(0, Math.round(depth)));
   });
 }
 

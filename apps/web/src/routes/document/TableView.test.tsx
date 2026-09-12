@@ -7,21 +7,28 @@
 import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useRef } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addRow,
   cellRich,
   createSheet,
   createTable,
   createUndoManager,
   docNode,
+  hideColumn,
   LATTICE,
+  markSplitChildren,
+  nestRow,
   openDocument,
   paragraphNode,
+  rowMeta,
   setCellFormat,
   setCellRich,
   setCellText,
   setColumnFormat,
+  setOutlineColumn,
+  setRowCollapsed,
   tableById,
   tableMap,
   textNode,
@@ -42,6 +49,7 @@ interface HarnessProps {
   pinnedLeft?: number | null;
   tier?: ZoomTier;
   undo?: Y.UndoManager | undefined;
+  viewSorted?: boolean;
   grid: { current: Grid | null };
 }
 
@@ -52,6 +60,7 @@ function Harness({
   pinnedLeft = null,
   tier = 'micro',
   undo,
+  viewSorted,
   grid,
 }: HarnessProps) {
   const g = useGrid(gd, editable, { undo });
@@ -68,6 +77,7 @@ function Harness({
         selectedCell={g.cell}
         editing={g.state.editing}
         editable={editable}
+        viewSorted={viewSorted}
         presence={[]}
         pinnedLeft={pinnedLeft}
         undo={undo}
@@ -132,7 +142,8 @@ function mount(props: Partial<Omit<HarnessProps, 'grid' | 'gd' | 'tableId'>> = {
   return view;
 }
 
-const grid = () => screen.getByRole('grid');
+// A flat table is a grid; one with nesting is a treegrid (HIER-04). Both are the same element.
+const grid = () => screen.queryByRole('treegrid') ?? screen.getByRole('grid');
 const cells = () => within(grid()).getAllByRole('gridcell');
 const cellAt = (r: number, c: number, columns = 3) => cells()[r * columns + c]!;
 const live = () => screen.getByTestId('live-region');
@@ -828,5 +839,330 @@ describe('rich text in the grid (marks, formats, undo)', () => {
       .getByRole('grid')
       .parentElement!.querySelectorAll('.gd-cell--frozen .gd-rich strong');
     expect(strongs.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
+  /** Three more rows so the fixture is B5:D10; r1 and r2 nested under r0, r2 two deep. */
+  function outlineFixture(): void {
+    const r3 = addRow(gd, tableId);
+    const r4 = addRow(gd, tableId);
+    const r5 = addRow(gd, tableId);
+    rows = [...rows, r3, r4, r5];
+    rows.forEach((rowId, i) => {
+      setCellText(gd, tableId, rowId, cols[0]!, `Row ${String(i + 1)}`);
+    });
+    nestRow(gd, tableId, rows[1]!);
+    nestRow(gd, tableId, rows[2]!);
+    nestRow(gd, tableId, rows[2]!);
+  }
+  const rowEls = () => within(grid()).getAllByRole('row').slice(1); // after the header
+  const chevronIn = (row: HTMLElement) => within(row).queryByTestId('outline-chevron');
+  const levels = () => rowEls().map((r) => r.getAttribute('aria-level'));
+
+  // The chords resolve `mod` from the platform: ⌘ here, Ctrl elsewhere (I18N-02).
+  beforeEach(() => {
+    vi.spyOn(navigator, 'userAgent', 'get').mockReturnValue('Mozilla/5.0 (Macintosh) jsdom');
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('HIER-04 HIER-09 depth indents the outline column by --outline-indent per level and prefixes ↳; no other column moves and no address changes', () => {
+    outlineFixture();
+    mount();
+    const before = cells().map((el) => el.getAttribute('data-address'));
+    expect(before.slice(0, 3)).toEqual(['B5', 'C5', 'D5']);
+    // r2 at depth 2: the outline cell carries the depth; the others carry nothing.
+    const outlineCell = cellAt(2, 0);
+    expect(outlineCell).toHaveClass('gd-cell--outline');
+    expect(outlineCell.style.getPropertyValue('--gd-outline-depth')).toBe('2');
+    expect(within(outlineCell).getByText('↳')).toHaveAttribute('aria-hidden', 'true');
+    expect(cellAt(2, 1)).not.toHaveClass('gd-cell--outline');
+    expect(cellAt(2, 1).style.getPropertyValue('--gd-outline-depth')).toBe('');
+    // The top-level row has no prefix and no indent.
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-outline-depth')).toBe('');
+    expect(within(cellAt(0, 0)).queryByText('↳')).toBeNull();
+    // HIER-09: addresses B5:D10 exactly as without any depth.
+    expect(cells().map((el) => el.getAttribute('data-address'))).toEqual(before);
+    expect(cellAt(2, 0)).toHaveAttribute('data-address', 'B7');
+    // The rows speak their level to assistive tech.
+    expect(levels()).toEqual(['1', '2', '3', '1', '1', '1']);
+  });
+
+  it('HIER-05 HIER-06 a row with descendants shows a labelled chevron with aria-expanded; pressing it hides the whole subtree, the rows below take the freed addresses, and the row says so', async () => {
+    outlineFixture();
+    mount();
+    const parent = rowEls()[0]!;
+    const child = rowEls()[1]!;
+    const chevron = chevronIn(parent)!;
+    expect(chevron.tagName).toBe('BUTTON');
+    expect(chevron).toHaveAccessibleName('Collapse B5');
+    expect(chevron).toHaveAttribute('aria-expanded', 'true');
+    expect(parent).toHaveAttribute('aria-expanded', 'true');
+    // r1 has r2 under it, so it has a chevron; r2, r3.. have none.
+    expect(chevronIn(child)).not.toBeNull();
+    expect(chevronIn(rowEls()[2]!)).toBeNull();
+    expect(chevronIn(rowEls()[3]!)).toBeNull();
+    await userEvent.click(chevron);
+    // r1 and r2 (the grandchild) are gone; r3 moved from B8 to B6.
+    expect(rowEls()).toHaveLength(4);
+    expect(
+      rowEls().map((r) => within(r).getAllByRole('gridcell')[0]!.getAttribute('data-address')),
+    ).toEqual(['B5', 'B6', 'B7', 'B8']);
+    expect(cellAt(1, 0)).toHaveTextContent('Row 4');
+    expect(chevronIn(rowEls()[0]!)).toHaveAccessibleName('Expand B5');
+    expect(rowEls()[0]).toHaveAttribute('aria-expanded', 'false');
+    expect(grid()).toHaveAttribute('aria-rowcount', '5'); // header + 4
+    expect(live()).toHaveTextContent('Collapsed the row');
+    // Pressing the chevron did not arm the cell under it.
+    expect(cellAt(0, 0)).not.toHaveAttribute('aria-selected');
+    await userEvent.click(chevronIn(rowEls()[0]!)!);
+    expect(rowEls()).toHaveLength(6);
+    expect(live()).toHaveTextContent('Expanded the row');
+    // A11Y-01: with a cell selected elsewhere, the chevron does not take its focus either.
+    await userEvent.click(cellAt(3, 1));
+    expect(cellAt(3, 1)).toHaveFocus();
+    await userEvent.click(chevronIn(rowEls()[0]!)!);
+    expect(rowEls()).toHaveLength(4);
+    expect(cellAt(1, 1)).toHaveFocus(); // the same cell, now drawn one row up
+    expect(selected()).toBe('C6');
+  });
+
+  it('HIER-06 collapsing with a cell inside the subtree selected hands the selection to the parent, before anything hides', async () => {
+    outlineFixture();
+    mount();
+    await userEvent.click(cellAt(2, 1)); // C7, the grandchild
+    expect(selected()).toBe('C7');
+    act(() => {
+      gridRef.current?.commands.setCollapsed(tableId, rows[0]!, true);
+    });
+    expect(selected()).toBe('C5');
+    expect(cellAt(0, 1)).toHaveFocus();
+  });
+
+  it('HIER-06 A11Y-01 ⌥← collapses and ⌥→ expands the selected row by physical key; on a childless row they do nothing', async () => {
+    outlineFixture();
+    mount();
+    await userEvent.click(cellAt(1, 2)); // D6, r1 (which has r2 under it)
+    fireEvent.keyDown(cellAt(1, 2), { code: 'ArrowLeft', key: 'ArrowLeft', altKey: true });
+    expect(rowEls()).toHaveLength(5);
+    expect(selected()).toBe('D6');
+    fireEvent.keyDown(cellAt(1, 2), { code: 'ArrowRight', key: 'ArrowRight', altKey: true });
+    expect(rowEls()).toHaveLength(6);
+    await userEvent.click(cellAt(4, 0)); // a leaf
+    fireEvent.keyDown(cellAt(4, 0), { code: 'ArrowLeft', key: 'ArrowLeft', altKey: true });
+    expect(rowEls()).toHaveLength(6);
+    expect(selected()).toBe('B9');
+  });
+
+  it('KEYS-06 HIER-01 (partial: the keyboard half; the inspector mounts the panel in the integration PR) HIER-02 I18N-02 ⌘] nests and ⌘[ promotes the selected row by physical key, the subtree with it; a refused nest announces why', async () => {
+    outlineFixture();
+    mount();
+    await userEvent.click(cellAt(3, 1)); // C8: r3, at depth 0 right after r0's subtree
+    fireEvent.keyDown(cellAt(3, 1), { code: 'BracketRight', key: ']', metaKey: true });
+    expect(rowEls()[3]).toHaveAttribute('aria-level', '2');
+    expect(live()).toHaveTextContent('Nested to level 2');
+    expect(selected()).toBe('C8'); // HIER-09: same address
+    // Twice more: r2 above it is at depth 2, so depth 3 is the most HIER-02 allows; then it stops.
+    fireEvent.keyDown(cellAt(3, 1), { code: 'BracketRight', key: ']', metaKey: true });
+    fireEvent.keyDown(cellAt(3, 1), { code: 'BracketRight', key: ']', metaKey: true });
+    expect(rowEls()[3]).toHaveAttribute('aria-level', '4');
+    fireEvent.keyDown(cellAt(3, 1), { code: 'BracketRight', key: ']', metaKey: true });
+    expect(rowEls()[3]).toHaveAttribute('aria-level', '4');
+    expect(live()).toHaveTextContent('Cannot nest deeper than one level under the row above');
+    // ⌘[ on r1 promotes it with r2 and (now) r3 under it.
+    await userEvent.click(cellAt(1, 0));
+    fireEvent.keyDown(cellAt(1, 0), { code: 'BracketLeft', key: '[', metaKey: true });
+    expect(levels()).toEqual(['1', '1', '2', '3', '1', '1']);
+    expect(live()).toHaveTextContent('Promoted to the top level');
+    fireEvent.keyDown(cellAt(1, 0), { code: 'BracketLeft', key: '[', metaKey: true });
+    expect(live()).toHaveTextContent('Already at the top level');
+    // I18N-02: the produced character is irrelevant — a layout that types ௗ on that key still nests.
+    fireEvent.keyDown(cellAt(1, 0), { code: 'BracketRight', key: 'ௗ', metaKey: true });
+    expect(rowEls()[1]).toHaveAttribute('aria-level', '2');
+    // Neither chord fires without the modifier, nor with Shift added.
+    fireEvent.keyDown(cellAt(1, 0), { code: 'BracketLeft', key: '[' });
+    fireEvent.keyDown(cellAt(1, 0), {
+      code: 'BracketLeft',
+      key: '{',
+      metaKey: true,
+      shiftKey: true,
+    });
+    expect(rowEls()[1]).toHaveAttribute('aria-level', '2');
+  });
+
+  it('KEYS-03 HIER-01 (partial: keyboard half) a nest by keyboard is one undo step', async () => {
+    const undo = createUndoManager(gd);
+    outlineFixture();
+    undo.clear();
+    mount({ undo });
+    await userEvent.click(cellAt(3, 0));
+    fireEvent.keyDown(cellAt(3, 0), { code: 'BracketRight', key: ']', metaKey: true });
+    expect(undo.undoStack).toHaveLength(1);
+    act(() => {
+      undo.undo();
+    });
+    expect(rowEls()[3]).toHaveAttribute('aria-level', '1');
+  });
+
+  it('HIER-07 (partial: Split() in formulas) a split child row renders nested, read-only with the reason, and collapses with its parent', async () => {
+    outlineFixture();
+    markSplitChildren(gd, tableId, rows[3]!, [rows[4]!]);
+    mount();
+    const child = cellAt(4, 0);
+    expect(rowEls()[4]).toHaveAttribute('aria-level', '2');
+    expect(child).toHaveAttribute('aria-readonly', 'true');
+    expect(child).toHaveAttribute('data-read-only', 'splitChild');
+    expect(child).toHaveAttribute(
+      'aria-label',
+      expect.stringContaining('Read-only: split child row'),
+    );
+    await userEvent.click(child);
+    fireEvent.keyDown(child, { code: 'Enter', key: 'Enter' });
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(live()).toHaveTextContent('B9 is read-only: split child row');
+    await userEvent.click(chevronIn(rowEls()[3]!)!);
+    expect(rowEls()).toHaveLength(5);
+  });
+
+  it('HIER-08 while the table is grouped the outline column shows no depth, prefix or chevron, and the data keeps it; ungrouping restores the outline', () => {
+    outlineFixture();
+    gd.doc.transact(() => {
+      tableMap(gd, tableId)!.set('groupBy', cols[1]);
+    });
+    mount();
+    expect(cellAt(2, 0)).not.toHaveClass('gd-cell--outline');
+    expect(screen.queryByTestId('outline-chevron')).toBeNull();
+    expect(screen.queryByText('↳')).toBeNull();
+    expect(rowEls()[2]).not.toHaveAttribute('aria-level');
+    expect(rowMeta(tableMap(gd, tableId)!, rows[2]!).depth).toBe(2);
+    act(() => {
+      gd.doc.transact(() => {
+        tableMap(gd, tableId)!.set('groupBy', null);
+      });
+    });
+    expect(cellAt(2, 0)).toHaveClass('gd-cell--outline');
+    expect(rowEls()[2]).toHaveAttribute('aria-level', '3');
+  });
+
+  it('HIER-08 under the viewer’s sort or filter the outline is not drawn, the table is a plain grid, and ⌘] ⌘[ ⌥← announce why instead of writing', async () => {
+    outlineFixture();
+    mount({ viewSorted: true });
+    expect(screen.queryByRole('treegrid')).toBeNull();
+    expect(cellAt(2, 0)).not.toHaveClass('gd-cell--outline');
+    expect(screen.queryByTestId('outline-chevron')).toBeNull();
+    expect(rowEls()[2]).not.toHaveAttribute('aria-level');
+    await userEvent.click(cellAt(3, 1));
+    const chord = new KeyboardEvent('keydown', {
+      code: 'BracketRight',
+      key: ']',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    cellAt(3, 1).dispatchEvent(chord);
+    expect(chord.defaultPrevented).toBe(true); // handled, so nothing else takes the chord
+    fireEvent.keyDown(cellAt(3, 1), { code: 'BracketLeft', key: '[', metaKey: true });
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowLeft', key: 'ArrowLeft', altKey: true });
+    expect(live()).toHaveTextContent(
+      'Hierarchy is unavailable while the view is sorted or filtered',
+    );
+    expect(rowMeta(tableMap(gd, tableId)!, rows[3]!).depth).toBe(0);
+    expect(rowMeta(tableMap(gd, tableId)!, rows[0]!).collapsed).toBe(false);
+    expect(rowEls()).toHaveLength(6);
+  });
+
+  it('HIER-04 the designated outline column carries the outline; a hidden one falls back to the first visible column', () => {
+    outlineFixture();
+    setOutlineColumn(gd, tableId, cols[1]!);
+    mount();
+    expect(cellAt(2, 1)).toHaveClass('gd-cell--outline');
+    expect(cellAt(2, 0)).not.toHaveClass('gd-cell--outline');
+    act(() => {
+      hideColumn(gd, tableId, cols[1]!);
+    });
+    expect(cellAt(2, 0, 2)).toHaveClass('gd-cell--outline');
+  });
+
+  it('RESP-02 HIER-05 a read-only viewer sees the indent, the prefix and the chevron state but no control: nothing toggles, ⌘] and ⌥← write nothing', async () => {
+    outlineFixture();
+    setRowCollapsed(gd, tableId, rows[1]!, true);
+    mount({ editable: false });
+    expect(rowEls()).toHaveLength(5);
+    const parent = rowEls()[0]!;
+    const glyph = chevronIn(parent)!;
+    expect(glyph.tagName).toBe('SPAN');
+    expect(glyph).toHaveAttribute('aria-hidden', 'true');
+    expect(parent).toHaveAttribute('aria-expanded', 'true');
+    expect(rowEls()[1]).toHaveAttribute('aria-expanded', 'false');
+    expect(screen.queryByRole('button')).not.toBeInTheDocument();
+    expect(cellAt(1, 0).style.getPropertyValue('--gd-outline-depth')).toBe('1');
+    await userEvent.click(glyph);
+    expect(rowEls()).toHaveLength(5);
+    await userEvent.click(cellAt(2, 0));
+    const chord = new KeyboardEvent('keydown', {
+      code: 'BracketRight',
+      key: ']',
+      metaKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    cellAt(2, 0).dispatchEvent(chord);
+    expect(chord.defaultPrevented).toBe(false);
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowLeft', key: 'ArrowLeft', altKey: true });
+    expect(rowEls()).toHaveLength(5);
+    expect(rowMeta(tableMap(gd, tableId)!, rows[2]!).depth).toBe(2);
+    expect(gridRef.current?.commands.nestRow(tableId, rows[3]!)).toBe(false);
+    expect(gridRef.current?.commands.collapseAll(tableId)).toEqual([]);
+  });
+
+  it('HIER-06 collapse all and expand all through the commands act on the whole table and keep the selection on a rendered row', async () => {
+    outlineFixture();
+    mount();
+    await userEvent.click(cellAt(2, 2)); // D7, two deep
+    act(() => {
+      gridRef.current?.commands.collapseAll(tableId);
+    });
+    expect(rowEls()).toHaveLength(4);
+    expect(selected()).toBe('D5');
+    expect(live()).toHaveTextContent('Collapsed 2 rows');
+    act(() => {
+      gridRef.current?.commands.expandAll(tableId);
+    });
+    expect(rowEls()).toHaveLength(6);
+    expect(live()).toHaveTextContent('Expanded 2 rows');
+  });
+
+  it('HIER-06 GRID-05 traversal skips a collapsed subtree: ArrowDown from the parent lands on the next drawn row', async () => {
+    outlineFixture();
+    setRowCollapsed(gd, tableId, rows[0]!, true);
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowDown', key: 'ArrowDown' });
+    expect(selected()).toBe('B6');
+    expect(cellAt(1, 0)).toHaveTextContent('Row 4');
+  });
+
+  it('HIER-10 GRID-10 a collaborator’s collapse arrives through the document: the subtree leaves the grid and the pinned mirror alike, and a selection on it moves', async () => {
+    outlineFixture();
+    gd.doc.transact(() => {
+      tableMap(gd, tableId)!.set('frozenColumns', 1);
+    });
+    const other = openDocument(new Y.Doc());
+    Y.applyUpdate(other.doc, Y.encodeStateAsUpdate(gd.doc));
+    mount({ pinnedLeft: 0 });
+    await userEvent.click(cellAt(1, 1));
+    const pinned = () => screen.getByTestId('pinned-panel');
+    expect(pinned().querySelectorAll('.gd-cell--outline .gd-cell__branch')).toHaveLength(2);
+    act(() => {
+      setRowCollapsed(other, tableId, rows[0]!, true);
+      Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(other.doc, Y.encodeStateVector(gd.doc)));
+    });
+    expect(rowEls()).toHaveLength(4);
+    expect(pinned().querySelectorAll('.gd-table__row')).toHaveLength(5); // header + 4
+    expect(pinned().querySelectorAll('.gd-cell__branch')).toHaveLength(0);
+    expect(selected()).toBe('C5'); // the collapsed parent, same column
+    expect(gridRef.current?.cell?.rowId).toBe(rows[0]);
   });
 });

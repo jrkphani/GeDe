@@ -47,9 +47,12 @@ export interface TableStructure {
   readonly gridRow: number;
   readonly columns: readonly ColumnStructure[];
   readonly rows: readonly Id[];
-  /** Per row, in row order; 2 for a wrapped row (GRID-09). */
+  /**
+   * Per row, in row order; 2 for a wrapped row (GRID-09), 0 for a row hidden
+   * under a collapsed parent, which has no lattice presence (HIER-06, GRID-02).
+   */
   readonly rowHeights: readonly number[];
-  /** Outline depth per row (HIER); `@` paths are qualified by parent row. */
+  /** Effective outline depth per row (HIER-02 applied); `@` paths are qualified by parent row. */
   readonly rowDepths: readonly number[];
 }
 
