@@ -264,11 +264,14 @@ describe('GeDe CDK app', () => {
     });
   });
 
-  it('Synth runs verify, then the Playwright journeys, then the web build and cdk synth', () => {
+  it('LOAD-06 Synth installs Chromium, then runs verify, db:parity, e2e, the web build and cdk synth in that order', () => {
     interface Project {
       Properties: {
         Source: { BuildSpec?: string };
-        Environment: { EnvironmentVariables?: { Name: string; Value: string }[] };
+        Environment: {
+          PrivilegedMode?: boolean;
+          EnvironmentVariables?: { Name: string; Value: string }[];
+        };
       };
     }
     const projects = Object.values(pipelineTemplate.findResources('AWS::CodeBuild::Project'));
@@ -281,26 +284,34 @@ describe('GeDe CDK app', () => {
       phases: { install: { commands: string[] }; build: { commands: string[] } };
       cache: { paths: string[] };
     };
-    const install = spec.phases.install.commands.join('\n');
-    // Chromium's shared libraries come from dnf (Playwright's install-deps is apt-only),
-    // then the headless shell only.
-    expect(install).toMatch(/^dnf install -y -q .*\bmesa-libgbm\b.*\bnss\b/m);
-    expect(install).toContain('npm ci');
-    expect(install).toContain('npx playwright install --only-shell chromium');
-    expect(install.indexOf('npm ci')).toBeLessThan(install.indexOf('npx playwright install'));
 
-    const build = spec.phases.build.commands;
-    const order = ['npm run verify', 'npm run e2e', 'npm run build --workspace apps/web'].map((c) =>
-      build.findIndex((line) => line.includes(c)),
-    );
-    expect(order.every((i) => i >= 0)).toBe(true);
-    expect(order).toEqual([...order].sort((a, b) => a - b));
-    // Journeys must fail the build before anything is published: no `|| true`, no `--ignore`.
-    expect(build.find((line) => line.includes('npm run e2e'))).toMatch(/^npm run e2e$/);
+    // Install: Chromium's shared libraries come from dnf (Playwright's install-deps is
+    // apt-only), then `npm ci`, then the headless shell only.
+    const install = spec.phases.install.commands;
+    expect(install).toHaveLength(3);
+    expect(install[0]).toMatch(/^dnf install -y -q .*\bmesa-libgbm\b.*\bnss\b/);
+    expect(install[1]).toBe('npm ci');
+    expect(install[2]).toBe('npx playwright install --only-shell chromium');
 
+    // Build: verify → migrations parity on a throwaway Postgres (Docker) → Playwright
+    // journeys → web build → cdk synth. Exact lines: nothing may swallow a failure
+    // (no `|| true`, no `--ignore`), so a red journey stops the pipeline before publishing.
+    expect(spec.phases.build.commands).toEqual([
+      'npm run verify',
+      'npm run db:parity -w packages/db',
+      'npm run e2e',
+      'npm run build --workspace apps/web',
+      'npm run synth --workspace infra',
+    ]);
+
+    // node_modules and the Playwright browser cache survive between builds on a reused host.
     expect(spec.cache.paths).toEqual(
       expect.arrayContaining(['node_modules/**/*', '/root/.cache/ms-playwright/**/*']),
     );
+    // Docker needs a privileged project (`dockerEnabledForSynth`); CI=true turns a missing
+    // Docker into a failure inside packages/db/scripts/parity.sh and selects Playwright's
+    // CI workers, retries and reporters.
+    expect(project.Properties.Environment.PrivilegedMode).toBe(true);
     expect(project.Properties.Environment.EnvironmentVariables).toEqual(
       expect.arrayContaining([expect.objectContaining({ Name: 'CI', Value: 'true' })]),
     );

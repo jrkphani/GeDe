@@ -4,6 +4,7 @@ import { render } from '@testing-library/react';
 import { createMemoryRouter, RouterProvider } from 'react-router';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type * as Cognito from './cognito.js';
+import { resetLocaleForTests } from '../locale.js';
 import { RequireAuth, SessionProvider, takeReturnTo, useSession } from './session.js';
 
 vi.mock('./cognito.js', () => ({
@@ -11,11 +12,23 @@ vi.mock('./cognito.js', () => ({
   onAuthEvent: vi.fn(() => () => undefined),
   signOutLocal: vi.fn(() => Promise.resolve()),
 }));
+vi.mock('../api/me.js', () => ({
+  getMe: vi.fn(() => Promise.reject(new Error('no profile in this test'))),
+  updateMe: vi.fn(() => Promise.resolve()),
+}));
 const cognito = await import('./cognito.js');
+const meApi = await import('../api/me.js');
 
 function Who() {
-  const { state } = useSession();
-  return <p>{state.status === 'signed-in' ? `hello ${state.user.email}` : state.status}</p>;
+  const { state, signOut } = useSession();
+  return (
+    <>
+      <p>{state.status === 'signed-in' ? `hello ${state.user.email}` : state.status}</p>
+      <button type="button" onClick={() => void signOut()}>
+        Sign out
+      </button>
+    </>
+  );
 }
 
 function app(initial: string) {
@@ -49,6 +62,7 @@ function app(initial: string) {
 describe('RequireAuth', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    resetLocaleForTests();
   });
 
   it('AUTH-01 redirects a signed-out visitor to /sign-in and remembers the full location', async () => {
@@ -87,6 +101,40 @@ describe('RequireAuth', () => {
     handler!('tokenRefresh_failure');
     await waitFor(() => {
       expect(screen.getByText('sign-in screen')).toBeInTheDocument();
+    });
+  });
+
+  it('AUTH-09 signOut revokes through the SDK, forgets the session and unbinds the user locale', async () => {
+    vi.mocked(cognito.currentUser).mockResolvedValue({
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      name: 'Meena',
+    });
+    app('/');
+    await screen.findByText('hello meena@1cloudhub.com');
+    expect(localStorage.getItem('gede.locale.sub-9')).toBe('en-US');
+    screen.getByRole('button', { name: 'Sign out' }).click();
+    await screen.findByText('sign-in screen');
+    expect(cognito.signOutLocal).toHaveBeenCalledTimes(1);
+  });
+
+  it('I18N-05 a signed-in user adopts the locale their account carries', async () => {
+    vi.mocked(meApi.getMe).mockResolvedValueOnce({
+      id: 'u',
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      displayName: 'Meena',
+      locale: 'te-IN',
+    });
+    vi.mocked(cognito.currentUser).mockResolvedValue({
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      name: 'Meena',
+    });
+    app('/');
+    await screen.findByText('hello meena@1cloudhub.com');
+    await waitFor(() => {
+      expect(document.documentElement.lang).toBe('te-IN');
     });
   });
 

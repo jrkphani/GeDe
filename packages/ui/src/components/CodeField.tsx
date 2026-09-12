@@ -27,6 +27,9 @@ export function isCodeComplete(value: string): boolean {
 /**
  * Six-digit one-time code input. `inputMode="numeric"` for the phone keypad,
  * `autoComplete="one-time-code"` so iOS/Android offer the SMS/mail code.
+ * No `maxLength` on the element: the browser would truncate a pasted
+ * "123 456" to "123 45" before the digits are stripped; `normaliseCode` caps
+ * the value at six after stripping instead.
  */
 export const CodeField = forwardRef<HTMLInputElement, CodeFieldProps>(function CodeField(
   { label = 'Six-digit code', value, onChange, error, hint, id, className, disabled, ...rest },
@@ -61,7 +64,6 @@ export const CodeField = forwardRef<HTMLInputElement, CodeFieldProps>(function C
         inputMode="numeric"
         autoComplete="one-time-code"
         pattern="[0-9]*"
-        maxLength={CODE_LENGTH}
         value={value}
         onChange={handle}
         disabled={disabled}

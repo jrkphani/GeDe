@@ -16,6 +16,8 @@ export interface SnapshotStore {
   put(key: string, bytes: Uint8Array): Promise<void>;
   /** `undefined` when the key does not exist. */
   get(key: string): Promise<Uint8Array | undefined>;
+  /** Delete every object under `prefix` (a purged document's folder). Resolves to the count removed. */
+  deletePrefix(prefix: string): Promise<number>;
 }
 
 export interface Deps {

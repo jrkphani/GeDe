@@ -1,0 +1,3 @@
+.gd-collapsible__content[data-state='open'] {
+  animation: gd-fade-in var(--dur-base) var(--ease-standard);
+}

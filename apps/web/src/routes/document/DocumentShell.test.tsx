@@ -59,7 +59,7 @@ describe('DocumentShell', () => {
     expect((cols[0] as HTMLElement).style.width).toBe('160px');
     const rows = container.querySelectorAll('.gd-canvas__rows span');
     expect((rows[0] as HTMLElement).style.height).toBe('22px');
-    expect(localStorage.getItem('gede.lastDocument')).toContain('Everest trek');
+    expect(sessionStorage.getItem('gede.lastDocument')).toContain('Everest trek');
   });
 
   it('RESP-02 below 768 px shows "View only on phone", hides the toolbar and renders no edit affordance', async () => {

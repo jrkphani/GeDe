@@ -1,11 +1,7 @@
 import { useNavigate } from 'react-router';
 import { Button, Wordmark } from '@gede/ui';
-import {
-  forgetLastDocument,
-  forgetLastEmail,
-  readLastDocument,
-  readLastEmail,
-} from '../../auth/session.js';
+import { forgetLastEmail, readLastEmail } from '../../auth/session.js';
+import { forgetLastDocument, readLastDocument } from '../../last-document.js';
 
 /** Option 1c sign-out state: says what happened and what to do next. */
 export function SignedOut() {
@@ -37,6 +33,7 @@ export function SignedOut() {
           <Button
             size="lg"
             onClick={() => {
+              // Switch account: the next person starts from a clean sign-in.
               forgetLastEmail();
               forgetLastDocument();
               void navigate('/sign-in');

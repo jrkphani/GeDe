@@ -8,7 +8,10 @@
  * 1. Reads every `**XXX-nn**` id from docs/REQUIREMENTS.md.
  * 2. Scans apps/, packages/ and services/ for *.test.ts, *.test.tsx and *.spec.ts files
  *    (node_modules, dist, cdk.out and coverage are skipped).
- * 3. Collects the ids that appear in it( / test( / describe( names.
+ * 3. Collects the ids that appear in it( / test( / describe( names. An id followed by a
+ *    parenthesised qualifier such as `AUTH-08 (button only)` or `X-01 (partial)` is a
+ *    declared partial and is NOT counted — the requirement stays uncovered until a test
+ *    without the qualifier exists.
  * 4. Writes docs/TRACEABILITY.md: one row per requirement with the tests that name it,
  *    plus a per-area summary. Exit code is 0 either way; the report is informative.
  *
@@ -29,6 +32,7 @@ const scanRoots = ['apps', 'packages', 'services'];
 const skipDirs = new Set(['node_modules', 'dist', 'cdk.out', 'coverage', '.vite', 'test-results']);
 const testFilePattern = /\.(test\.tsx?|spec\.ts)$/;
 const idPattern = /\b([A-Z][A-Z0-9]{1,5})-(\d{2,3})\b/g;
+const partialQualifier = /^\s*\((?:partial|button only)\b[^)]*\)/;
 const testNamePattern =
   /\b(?:it|test|describe)(?:\.(?:only|skip|todo|concurrent|sequential|each))?\s*\(\s*(['"`])((?:\\.|(?!\1)[\s\S])*?)\1/g;
 
@@ -96,6 +100,7 @@ function collectTestReferences(files) {
       const name = match[2];
       const line = lineNumberAt(text, match.index);
       for (const idMatch of name.matchAll(idPattern)) {
+        if (partialQualifier.test(name.slice(idMatch.index + idMatch[0].length))) continue;
         const id = `${idMatch[1]}-${idMatch[2]}`;
         if (!references.has(id)) references.set(id, []);
         const list = references.get(id);

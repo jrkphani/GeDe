@@ -74,6 +74,26 @@ export class RoomManager {
     this.evictions.set(room.documentId, timer);
   }
 
+  /**
+   * The document was deleted or purged (LIB-08): close its room now rather
+   * than at idle. `compact` saves the state first (soft delete — it can be
+   * recovered); a purge passes `false` because the rows are already gone.
+   * Sockets receive `closeCode` (4404 tells the provider not to reconnect
+   * to a document that is no longer served).
+   */
+  async close(documentId: string, options: { compact: boolean; closeCode: number }): Promise<void> {
+    const timer = this.evictions.get(documentId);
+    if (timer) {
+      clearTimeout(timer);
+      this.evictions.delete(documentId);
+    }
+    const room = this.rooms.get(documentId);
+    if (!room) return;
+    this.rooms.delete(documentId);
+    await room.dispose(options);
+    this.logger.info({ documentId, closeCode: options.closeCode }, 'room closed');
+  }
+
   /** Remove the room from the map first so a new join creates a fresh room that loads from storage. */
   async evict(room: Room): Promise<void> {
     if (this.rooms.get(room.documentId) === room) this.rooms.delete(room.documentId);

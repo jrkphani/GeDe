@@ -3,22 +3,44 @@
   inset: 0;
   background: color-mix(in srgb, var(--slate-900) 45%, transparent);
   animation: gd-fade-in var(--dur-enter) var(--ease-out);
+  z-index: 40;
 }
 
 .gd-dialog {
   position: fixed;
+  display: flex;
+  flex-direction: column;
+  padding: var(--space-5);
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: var(--elev-modal);
+  z-index: 41;
+}
+
+/* Modal: centred, for blocking decisions. */
+.gd-dialog--modal {
   top: 50%;
   left: 50%;
   width: min(calc(100vw - var(--space-6)), 22.5rem);
   max-height: 85vh;
   overflow: auto;
   transform: translate(-50%, -50%);
-  padding: var(--space-5);
   border-radius: var(--radius-lg);
-  background: var(--surface);
-  color: var(--ink);
-  box-shadow: var(--elev-modal);
   animation: gd-dialog-enter var(--dur-enter) var(--ease-out);
+}
+
+/* Sheet: edge panel for share and settings. Keeps the page in view behind it. */
+.gd-dialog--sheet {
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: min(100vw, 24rem);
+  overflow: auto;
+  border-left: 1px solid var(--border);
+  animation: gd-sheet-enter var(--dur-enter) var(--ease-out);
+}
+.gd-dialog--sheet .gd-dialog__body {
+  flex: 1;
 }
 
 .gd-dialog__title {
@@ -52,5 +74,11 @@
   from {
     opacity: 0;
     transform: translate(-50%, calc(-50% + var(--space-3)));
+  }
+}
+@keyframes gd-sheet-enter {
+  from {
+    transform: translateX(var(--space-6));
+    opacity: 0;
   }
 }

@@ -104,8 +104,8 @@ Two layers: the **document layer** is the CRDT (authoritative, append-only updat
 
 | Table | Columns | Notes |
 |---|---|---|
-| `users` | id uuid pk · cognito_sub text unique · email citext unique · display_name text · created_at · last_seen_at | Created on first sign-in from the JWT. No credentials stored. |
-| `documents` | id uuid pk · owner_id → users · title text · link_access enum(none, view, edit) · link_token text unique null · snapshot_key text null · snapshot_seq bigint · updated_at · deleted_at null | One row per workbook. `snapshot_key` points into S3 `docs`. |
+| `users` | id uuid pk · cognito_sub text unique · email citext unique · display_name text · locale text null · created_at · last_seen_at | Created on first sign-in from the JWT. No credentials stored. `locale` added by migration 0001 (I18N-05). |
+| `documents` | id uuid pk · owner_id → users · title text · link_access enum(none, view, edit) · link_token text unique null · snapshot_key text null · snapshot_seq bigint · created_at · updated_at · deleted_at null | One row per workbook. `snapshot_key` points into S3 `docs`. `created_at` added by migration 0002 (LIB-02 shows and sorts by it; the C4 listed only `updated_at`). |
 | `shares` | document_id → documents · user_id → users · permission enum(view, edit) · invited_by → users · created_at · pk(document_id, user_id) | The participant list in the share sheet. Owner is implicit edit. |
 | `invites` | id uuid pk · document_id · email citext · permission · token text unique · expires_at · accepted_at null | For emails without an account yet; converts to a share on first sign-in. |
 | `doc_updates` | document_id · seq bigint · update bytea · author_id → users null · created_at · pk(document_id, seq) | Yjs update log since the last snapshot. Pruned after compaction. Typical update 50–500 bytes. |
@@ -121,7 +121,7 @@ Two layers: the **document layer** is the CRDT (authoritative, append-only updat
 | `rows` | id text pk · table_id · ordinal · depth smallint · collapsed bool | Hierarchy depth per §4 of the PRD. |
 | `cells` | row_id · column_id · text_plain text · rich jsonb · formula text null · ref_target text null · style jsonb · pk(row_id, column_id) · gin(to_tsvector(text_plain)) | Search and audit only; the CRDT remains the source of truth. |
 | `graphs` | id text pk · sheet_id · pair_id · kind enum(ring, coverage) · table_id · dimension_columns text[] · grid_col · grid_row · width_units · height_units · slice jsonb | One row per half of a pair; `slice` stores row/column axes and pins. |
-| `audit_log` | id bigserial · document_id · user_id · action text · target text · at timestamptz | Share changes, deletes, restores. Partitioned monthly once volume warrants. |
+| `audit_log` | id bigserial · document_id (no foreign key) · user_id · action text · target text · at timestamptz | Share changes, deletes, restores, purges. `document_id` is not a foreign key (migration 0003) so a `document.purge` row outlives the document it describes. Partitioned monthly once volume warrants. |
 
 **5.3 Document layer (Yjs)** (verbatim):
 - `Y.Map` per document: `sheets` (Y.Array of sheet maps), `tables`, `graphs`, `meta`.

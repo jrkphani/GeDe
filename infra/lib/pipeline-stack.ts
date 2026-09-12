@@ -53,12 +53,12 @@ export const CHROMIUM_DNF_PACKAGES: readonly string[] = [
 ];
 
 /**
- * `main` is production. Push → Synth (verify + e2e + build web + cdk synth) → self-mutate →
- * publish assets (arm64 image, web bundle) → Prod stage → smoke test.
+ * `main` is production. Push → Synth (verify + db:parity + e2e + build web + cdk synth) →
+ * self-mutate → publish assets (arm64 image, web bundle) → Prod stage → smoke test.
  *
- * The Playwright journeys (`npm run e2e`) run inside Synth, after `npm run verify` and
- * before the web build: a red journey stops the pipeline before anything is published.
- * See infra/CLAUDE.md, "Playwright on CodeBuild".
+ * The Playwright journeys (`npm run e2e`) run inside Synth, after `npm run verify` and the
+ * migrations parity check and before the web build: a red journey stops the pipeline before
+ * anything is published. See infra/CLAUDE.md, "Playwright on CodeBuild".
  */
 export class PipelineStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: PipelineStackProps) {
@@ -76,7 +76,8 @@ export class PipelineStack extends cdk.Stack {
 
     const synth = new pipelines.CodeBuildStep('Synth', {
       input: source,
-      // Playwright reads CI to pick workers, retries and reporters (apps/web/playwright.config.ts).
+      // Playwright reads CI to pick workers, retries and reporters (apps/web/playwright.config.ts);
+      // `db:parity` reads it to fail rather than skip when Docker is missing.
       env: { CI: 'true' },
       installCommands: [
         `dnf install -y -q ${CHROMIUM_DNF_PACKAGES.join(' ')}`,
@@ -87,6 +88,10 @@ export class PipelineStack extends cdk.Stack {
       ],
       commands: [
         'npm run verify',
+        // Applies every migration to a throwaway postgres:17 (Docker, hence
+        // `dockerEnabledForSynth`) before anything reaches production. With
+        // CI=true the script fails rather than skips when Docker is missing.
+        'npm run db:parity -w packages/db',
         'npm run e2e',
         'npm run build --workspace apps/web',
         'npm run synth --workspace infra',
@@ -109,6 +114,8 @@ export class PipelineStack extends cdk.Stack {
       selfMutation: true,
       crossAccountKeys: false,
       publishAssetsInParallel: false,
+      // The Synth project runs privileged so `db:parity` can start Postgres in Docker.
+      dockerEnabledForSynth: true,
       dockerEnabledForSelfMutation: false,
       codeBuildDefaults: { buildEnvironment: ARM_SMALL },
       assetPublishingCodeBuildDefaults: {
