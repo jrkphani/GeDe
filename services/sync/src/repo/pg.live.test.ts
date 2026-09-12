@@ -136,6 +136,57 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     expect(tail.updates.map((u) => u.seq)).toEqual([4, 5]);
   });
 
+  test('LOAD-06 two tasks committing at once serialise on the row lock: the newer snapshot wins whichever order the lock hands out (#39)', async () => {
+    const owner = await user('sub-concurrent');
+    const doc = await createDoc(owner, 'Deploy overlap');
+    await repo.updates.append(
+      doc.id,
+      [2, 3, 4, 5].map((n) => ({ update: new Uint8Array([n]), authorId: owner })),
+    );
+    // A third session holds the document row so both commits are open and
+    // waiting at the same time; releasing it lets PostgreSQL pick the order.
+    const holder = await pool.connect();
+    await holder.query('BEGIN');
+    await holder.query('SELECT 1 FROM documents WHERE id = $1 FOR UPDATE', [doc.id]);
+    const newer = repo.updates.commitSnapshot({
+      documentId: doc.id,
+      seq: 5,
+      s3Key: 'c5',
+      sizeBytes: 1,
+    });
+    const older = repo.updates.commitSnapshot({
+      documentId: doc.id,
+      seq: 3,
+      s3Key: 'c3',
+      sizeBytes: 1,
+    });
+    // Both transactions are blocked on the row before the holder lets go.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    const waiting = await pool.query(
+      "SELECT count(*)::int AS n FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock' AND query ILIKE '%for update%'",
+    );
+    expect(waiting.rows[0]).toEqual({ n: 2 });
+    await holder.query('COMMIT');
+    holder.release();
+    const [newerCommitted, olderCommitted] = await Promise.all([newer, older]);
+
+    // Whichever ran first, the pointer ends at 5, the log is pruned to 5, and
+    // the older commit either landed first (then got superseded) or was refused.
+    expect(newerCommitted).toBe(true);
+    const row = await pool.query('select snapshot_key, snapshot_seq from documents where id = $1', [
+      doc.id,
+    ]);
+    expect(row.rows[0]).toEqual({ snapshot_key: 'c5', snapshot_seq: '5' });
+    const snaps = await pool.query(
+      'select seq from snapshots where document_id = $1 order by seq',
+      [doc.id],
+    );
+    expect(snaps.rows.map((r: { seq: string }) => r.seq)).toEqual(
+      olderCommitted ? ['1', '3', '5'] : ['1', '5'],
+    );
+    expect((await repo.updates.loadState(doc.id)).updates).toEqual([]);
+  });
+
   test('LIB-08 recover honours the 30-day window; recover-all audits every document it recovers (#42)', async () => {
     const owner = await user('sub-recover');
     const fresh = await createDoc(owner, 'fresh');

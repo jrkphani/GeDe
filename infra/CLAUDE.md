@@ -33,8 +33,8 @@ cd infra && npx cdk diff GeDe-Pipeline --profile phani-quadnomics   # read-only,
 
 Docker is not needed for synth: `ContainerImage.fromAsset` only hashes the build context locally;
 the image is built by the pipeline's ARM asset-publishing step. The asset carries the build arg
-`GEDE_VERSION` = the short `CODEBUILD_RESOLVED_SOURCE_VERSION` (`local` on a laptop), which
-`/healthz` reports. A build arg is part of the asset hash, so **every commit produces a new image
+`GEDE_VERSION` = the short `CODEBUILD_RESOLVED_SOURCE_VERSION` (`local` on a laptop), which the
+signed-in `GET /api/version` reports. A build arg is part of the asset hash, so **every commit produces a new image
 asset and a task definition revision** even when `services/sync` did not change; that is the
 accepted price of an attributable running version.
 

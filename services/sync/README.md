@@ -27,7 +27,7 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 | `WS_MAX_BUFFERED_BYTES`                              |                  | `16 MiB`  | unread bytes a socket may hold before it is closed 1013 |
 | `WS_UPDATES_PER_SEC` `WS_UPDATES_BURST`              |                  | `200/400` | sync updates per connection; over the burst → 4429      |
 | `WS_AWARENESS_PER_SEC` `WS_AWARENESS_BURST`          |                  | `20/40`   | awareness per connection; excess dropped                |
-| `GEDE_VERSION`                                       |                  | build     | reported by `/healthz`; the short git sha in the image  |
+| `GEDE_VERSION`                                       |                  | build     | reported by `GET /api/version`; the short git sha       |
 
 There is no auth bypass in any environment. Tests inject a fake verifier through `buildServer` deps.
 

@@ -1,0 +1,3 @@
+# Migration checksums (packages/db, migration 0005) are taken over the exact bytes:
+# a CRLF checkout would change every checksum and refuse the boot.
+packages/db/migrations/*.sql text eol=lf

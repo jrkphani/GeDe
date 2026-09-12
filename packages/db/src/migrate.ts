@@ -65,6 +65,12 @@ const SESSION_TIMEOUTS_SQL = [
   "SET idle_in_transaction_session_timeout = '60s'",
   "SET statement_timeout = '0'",
 ];
+/** Undo the above before the connection goes back to the pool (RESET restores the startup parameters). */
+export const SESSION_RESET_SQL = [
+  'RESET lock_timeout',
+  'RESET idle_in_transaction_session_timeout',
+  'RESET statement_timeout',
+];
 
 export function migrationChecksum(sql: string): string {
   return createHash('sha256').update(sql, 'utf8').digest('hex');
@@ -108,6 +114,7 @@ export async function applyMigrations(
   const client = await pool.connect();
   const applied: string[] = [];
   let skipped = 0;
+  let resetFailure: Error | undefined;
 
   try {
     for (const statement of SESSION_TIMEOUTS_SQL) await client.query(statement);
@@ -174,8 +181,22 @@ export async function applyMigrations(
       });
     }
   } finally {
+    // A SET is session-scoped: without this the connection goes back to the
+    // pool with no statement timeout and a two-minute lock wait for the life
+    // of the process. RESET restores the pool's startup parameters. A failed
+    // reset is reported after the release; a migration error still wins.
+    for (const statement of SESSION_RESET_SQL) {
+      await client.query(statement).catch((resetError: unknown) => {
+        log.error('migration session reset failed', { statement, error: String(resetError) });
+        resetFailure ??=
+          resetError instanceof Error
+            ? resetError
+            : new Error(`${statement}: ${String(resetError)}`);
+      });
+    }
     client.release();
   }
+  if (resetFailure !== undefined) throw resetFailure;
 
   log.info('migrations complete', { applied: applied.length, skipped });
   return { applied, skipped };

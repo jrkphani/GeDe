@@ -5,6 +5,7 @@ import {
   LOCK_TIMEOUT_MS,
   migrationChecksum,
   MigrationError,
+  SESSION_RESET_SQL,
   type MigrationClient,
   type MigrationPool,
 } from './migrate.js';
@@ -92,7 +93,9 @@ describe('applyMigrations', () => {
     expect(db.statements[3]).toContain('pg_advisory_lock');
     expect(db.statements[4]).toContain('CREATE TABLE IF NOT EXISTS __migrations');
     expect(db.statements[5]).toContain('ADD COLUMN IF NOT EXISTS checksum');
-    expect(db.statements.at(-1)).toContain('pg_advisory_unlock');
+    // The lock goes first, then the session hands the pool's own limits back (#42).
+    expect(db.statements.at(-4)).toContain('pg_advisory_unlock');
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
     expect(db.released).toBe(1);
     expect(db.inTransaction).toBe(false);
 
@@ -128,7 +131,8 @@ describe('applyMigrations', () => {
       /0000_init\.sql failed: file text differs/,
     );
     expect(db.statements.filter((s) => /^CREATE TABLE [abc] /.test(s))).toEqual([]);
-    expect(db.statements.at(-1)).toContain('pg_advisory_unlock');
+    expect(db.statements.at(-4)).toContain('pg_advisory_unlock');
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
     expect(db.released).toBe(1);
   });
 
@@ -158,9 +162,22 @@ describe('applyMigrations', () => {
     expect([...db.ledger.keys()]).toEqual(['0000_init.sql']);
     expect(db.statements).toContain('ROLLBACK');
     expect(db.statements.filter((s) => s.includes('pg_advisory_unlock')).length).toBe(2);
+    // The session limits are reset on the failure path too, before the connection is released.
+    expect(db.statements.filter((s) => s === 'RESET statement_timeout').length).toBe(2);
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
     expect(db.statements.filter((s) => s === 'CREATE TABLE c ()')).toEqual([]);
     expect(db.released).toBe(2);
     expect(logs).toContain('info applying migration');
+  });
+
+  test('LOAD-06 a lock wait that times out releases the connection with its limits reset (#42)', async () => {
+    const db = fakePool({ failOn: 'pg_advisory_lock(' });
+    await expect(applyMigrations(db.pool, '/ignored', { readFiles })).rejects.toThrow(
+      /pg_advisory_lock/,
+    );
+    expect(db.statements.some((s) => s.includes('pg_advisory_unlock'))).toBe(false);
+    expect(db.statements.slice(-3)).toEqual(SESSION_RESET_SQL);
+    expect(db.released).toBe(1);
   });
 
   test('LOAD-06 reads real files from a directory and sorts them by name', async () => {
