@@ -12,6 +12,7 @@ import { splitCellKey, type Id } from '../ids.js';
 import { parse } from '../formula/parser.js';
 import { references } from '../formula/ast.js';
 import {
+  cellReadOnlyReason,
   cellsMap,
   columnsArray,
   fragmentText,
@@ -20,7 +21,6 @@ import {
   readString,
   rowsArray,
   tableMap,
-  type ColumnMap,
   type GedeDoc,
   type GraphMap,
   type TableMap,
@@ -119,22 +119,6 @@ function text(field: SearchField, value: string): SearchText {
   return { field, text: value };
 }
 
-/**
- * TODO(grid branch): replace with the shared `cellReadOnlyReason` once
- * derived, linked and pulled columns (and category-band rows) land. Until
- * then a column whose `source` is anything other than `entered` — the grid
- * branch stores `entered | derived | linked | pulled` — or one flagged
- * `derived`, `linked` or `pulled` is read-only; everything else is a plain
- * cell.
- */
-export function isReadOnlyCell(column: ColumnMap): boolean {
-  for (const key of ['derived', 'linked', 'pulled']) {
-    if (column.get(key) === true) return true;
-  }
-  const source = column.get('source');
-  return source !== undefined && source !== 'entered';
-}
-
 /** The texts Find sees for one cell: its value, or a formula's source plus each reference it names. */
 export function cellTexts(content: Y.XmlFragment | string): SearchText[] {
   if (!isFormula(content)) {
@@ -176,11 +160,16 @@ function tableEntriesOf(
   rowsArray(table)
     .toArray()
     .forEach((rowId, i) => rowIndex.set(rowId, i));
+  const hidden = new Set<Id>();
+  columns.forEach((c) => {
+    if (c.get('hidden') === true) hidden.add(readString(c, 'id'));
+  });
   const headers: HeaderEntry[] = [];
   columns.forEach((column, ci) => {
     const colId = readString(column, 'id');
     const colLabel = readString(column, 'label');
-    if (colLabel === '') return;
+    // A hidden column has no lattice presence (GRID-02): nothing in it can be found or highlighted.
+    if (colLabel === '' || hidden.has(colId)) return;
     headers.push({
       kind: 'header',
       id: `${tableId}/header:${colId}`,
@@ -202,7 +191,7 @@ function tableEntriesOf(
     const ri = rowIndex.get(rowId);
     if (ci === undefined || ri === undefined) return; // orphaned cell: not addressable
     const column = columns[ci];
-    if (column === undefined) return;
+    if (column === undefined || hidden.has(colId)) return;
     const texts = cellTexts(content);
     if (texts.length === 0) return;
     const value = texts[0]?.text ?? '';
@@ -219,7 +208,8 @@ function tableEntriesOf(
       colIndex: ci,
       colLabel: readString(column, 'label'),
       format: resolveFormat(value, column.get('format')),
-      readOnly: isReadOnlyCell(column),
+      // FIND-08: derived, linked and pulled columns and category-band rows are never rewritten (GRID-04).
+      readOnly: cellReadOnlyReason(table, rowId, colId) !== null,
       texts,
     });
   });

@@ -10,6 +10,8 @@ export interface MatchHighlightsProps {
   /** Index of the current match in `matches`. */
   current: number;
   sheetId: Id | null;
+  /** Viewport x at zoom 1, so cells of frozen columns follow the pinned panel (GRID-10). */
+  viewportLeftPx: number;
 }
 
 /** Beyond this many highlights on one sheet the rest are left to the result list — the canvas stays at 60 fps. */
@@ -22,7 +24,13 @@ const MAX_HIGHLIGHTS = 2000;
  * geometry comes from the document, not the DOM, and pointer events pass
  * through to the cells beneath.
  */
-export function MatchHighlights({ gd, matches, current, sheetId }: MatchHighlightsProps) {
+export function MatchHighlights({
+  gd,
+  matches,
+  current,
+  sheetId,
+  viewportLeftPx,
+}: MatchHighlightsProps) {
   useYVersion(gd.tables); // a table moved or resized: recompute every rectangle
   if (matches.length === 0 || sheetId === null) return null;
   const hits: { key: string; style: React.CSSProperties; isCurrent: boolean }[] = [];
@@ -30,7 +38,7 @@ export function MatchHighlights({ gd, matches, current, sheetId }: MatchHighligh
     const match = matches[i];
     if (match === undefined || match.target.kind === 'document') continue;
     if (match.target.sheetId !== sheetId) continue;
-    const bounds = matchBounds(gd, match);
+    const bounds = matchBounds(gd, match, viewportLeftPx);
     if (bounds === null) continue;
     hits.push({
       key: match.id,

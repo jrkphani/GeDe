@@ -741,6 +741,7 @@ function OpenDocument({
               matches={find.state.matches}
               current={find.state.current}
               sheetId={activeSheetId}
+              viewportLeftPx={viewport.x / viewport.zoom}
             />
             {ready && tables.length === 0 && (
               <div className="gd-canvas__empty" style={emptyStyle()}>

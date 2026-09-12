@@ -111,6 +111,7 @@ function Harness({
             matches={find.state.matches}
             current={find.state.current}
             sheetId={sheetId}
+            viewportLeftPx={0}
           />
         </div>
         <FindBar gd={gd} find={find} editable={editable} phone={phone} />
@@ -395,10 +396,10 @@ describe('Find', () => {
 
   it('FIND-08 Replace rewrites the current match, All rewrites every exact match in scope; read-only matches and fuzzy near misses are left alone with a count', async () => {
     const { gd, sheet1, table1, ids } = fixture();
-    // Column 2 becomes derived: its cells are read-only (see isReadOnlyCell's TODO).
+    // Column 2 becomes derived: its cells are read-only (cellReadOnlyReason, GRID-04).
     const columns = gd.tables.get(table1)!.get('columns') as Y.Array<Y.Map<unknown>>;
     gd.doc.transact(() => {
-      columns.get(1).set('derived', true);
+      columns.get(1).set('source', 'derived');
     });
     setCellText(gd, table1, ids.rows[2]!, ids.cols[1]!, 'Singapore fund');
     render(<Harness gd={gd} navigation={navigation()} sheetId={sheet1} />);

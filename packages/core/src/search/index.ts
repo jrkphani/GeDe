@@ -19,7 +19,6 @@ export {
   cellTexts,
   documentEntriesOf,
   graphEntriesOf,
-  isReadOnlyCell,
   tableEntries,
   type CellEntry,
   type DocumentEntry,

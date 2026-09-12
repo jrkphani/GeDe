@@ -4,9 +4,11 @@ import * as Y from 'yjs';
 import {
   createSheet,
   createTable,
+  hideColumn,
   openDocument,
   setCellText,
   tableById,
+  unhideColumn,
   type GedeDoc,
 } from '../doc/index.js';
 import { approximateFind, editDistance, exactFind } from './distance.js';
@@ -372,37 +374,40 @@ describe('snapshot', () => {
     expect(matches[0]?.readOnly).toBe(true);
   });
 
-  test('FIND-08 a derived, linked or pulled column marks its cells read-only', () => {
+  test('FIND-08 GRID-04 read-only comes from cellReadOnlyReason: derived, linked and pulled columns and category-band rows', () => {
     const { gd, tableId } = fixture();
     const table = gd.tables.get(tableId)!;
     const columns = table.get('columns') as Y.Array<Y.Map<unknown>>;
-    gd.doc.transact(() => {
-      columns.get(1).set('derived', true);
-    });
-    const t = tableEntries(gd, tableId)!;
-    expect(t.entries.filter((e) => e.kind === 'cell').map((e) => e.readOnly)).toEqual([
-      false,
-      true,
-      false,
-      false,
-    ]);
-  });
-
-  test('FIND-08 a column `source` of entered stays editable; derived, linked and pulled sources are read-only', () => {
-    const { gd, tableId } = fixture();
-    const table = gd.tables.get(tableId)!;
-    const columns = table.get('columns') as Y.Array<Y.Map<unknown>>;
+    const record = tableById(gd, tableId)!;
     gd.doc.transact(() => {
       columns.get(0).set('source', 'entered');
       columns.get(1).set('source', 'pulled');
     });
+    let cells = tableEntries(gd, tableId)!.entries.filter((e) => e.kind === 'cell');
+    expect(cells.map((e) => e.readOnly)).toEqual([false, true, false, false]);
+    // A category-band (group) row is read-only whatever its column.
+    const meta = new Y.Map<unknown>();
+    meta.set('group', true);
+    gd.doc.transact(() => {
+      (table.get('rowMeta') as Y.Map<Y.Map<unknown>>).set(record.rows[0]!, meta);
+    });
+    cells = tableEntries(gd, tableId)!.entries.filter((e) => e.kind === 'cell');
+    expect(cells.map((e) => e.readOnly)).toEqual([true, true, false, false]);
+  });
+
+  test('FIND-03 GRID-02 a hidden column has no lattice presence: its header and cells leave the index', () => {
+    const { gd, tableId } = fixture();
+    const record = tableById(gd, tableId)!;
+    hideColumn(gd, tableId, record.columns[1]!.id);
     const t = tableEntries(gd, tableId)!;
-    expect(t.entries.filter((e) => e.kind === 'cell').map((e) => e.readOnly)).toEqual([
-      false,
-      true,
-      false,
-      false,
+    expect(t.entries.map((e) => e.texts[0]?.text)).toEqual([
+      'Column 1',
+      'Base camp',
+      '=Sum(B5:B7)',
+      '=Concat(@Trek.Camp, " to ", @"Base camp".Name)',
     ]);
+    unhideColumn(gd, tableId, record.columns[1]!.id);
+    expect(tableEntries(gd, tableId)!.entries).toHaveLength(6);
   });
 });
 

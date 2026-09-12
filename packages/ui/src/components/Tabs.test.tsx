@@ -58,7 +58,7 @@ describe('Tabs', () => {
 });
 
 describe('Tabs without panes', () => {
-  it('A11Y-04 a tab with no content still owns a (hidden) panel so its aria-controls resolves', () => {
+  it('A11Y-04 a tab with no content still owns an empty panel, out of the tab order, so its aria-controls resolves', () => {
     render(
       <Tabs
         label="Sheets"
@@ -75,7 +75,9 @@ describe('Tabs without panes', () => {
       expect(controls).toBeTruthy();
       const panel = document.getElementById(controls ?? '');
       expect(panel).not.toBeNull();
-      expect(panel).toHaveAttribute('hidden');
+      expect(panel).toHaveClass('gd-tabs__panel--empty');
+      expect(panel).toBeEmptyDOMElement();
+      expect(panel).toHaveAttribute('tabindex', '-1');
     }
   });
 });

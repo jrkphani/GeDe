@@ -214,17 +214,25 @@ for (const width of [1024, 1440] as const) {
         .poll(() => {
           const json = JSON.stringify(room.doc.getMap('tables').toJSON());
           return (
-            json.includes('Mumbai office') &&
             json.includes('Mumbai budget') &&
+            json.includes('Sngapore office') && // a fuzzy near miss is never rewritten (FIND-05 × FIND-08)
             !json.includes('Singapore')
           );
         })
         .toBe(true);
-      // Only the workscape name is left, and it is never rewritten.
+      // The workscape name is read-only; the near miss is left alone (both counted, FIND-08).
+      await expect(page.getByTestId('find-skipped')).toHaveText(
+        '1 near match left alone, 1 not editable',
+      );
+      // The near miss and the workscape name are left; neither is rewritten.
       await bar.getByRole('button', { name: /^Results/ }).click();
-      await expect(list.getByRole('region', { name: 'Cells' })).toHaveCount(0);
-      await expect(list.getByRole('button')).toHaveText([/Singapore budget \(workscape\)/]);
-      await expect(page.getByTestId('find-count')).toHaveText('1 of 1');
+      await expect(list.getByRole('region', { name: 'Cells' }).getByRole('button')).toHaveText([
+        /C7 in Table 1Sngapore office~1/,
+      ]);
+      await expect(list.getByRole('region', { name: 'Workscapes' }).getByRole('button')).toHaveText(
+        [/Singapore budget \(workscape\)/],
+      );
+      await expect(page.getByTestId('find-count')).toHaveText('1 of 2');
       await expect(bar).toBeVisible();
     });
   });
