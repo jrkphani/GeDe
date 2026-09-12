@@ -223,14 +223,16 @@ export function registerApi(
       api.post('/documents/recover-all', async (request) => {
         const user = currentUser(request);
         const recovered = await repo.documents.recoverAllDeleted(user.id);
-        for (const doc of recovered) {
-          await repo.audit.record({
-            documentId: doc.id,
-            userId: user.id,
-            action: 'document.recover',
-            target: null,
-          });
-        }
+        await Promise.all(
+          recovered.map((doc) =>
+            repo.audit.record({
+              documentId: doc.id,
+              userId: user.id,
+              action: 'document.recover',
+              target: null,
+            }),
+          ),
+        );
         return { recovered: recovered.length };
       });
 
@@ -239,24 +241,27 @@ export function registerApi(
         const purged = await repo.documents.purgeDeleted(user.id, user.id);
         // Rooms for these documents cannot have sockets (a deleted document
         // refuses the upgrade) but one may still be idling; free it now.
-        for (const doc of purged) {
-          await rooms.close(doc.id, { compact: false, closeCode: CLOSE_NOT_FOUND });
-        }
+        await Promise.all(
+          purged.map((doc) => rooms.close(doc.id, { compact: false, closeCode: CLOSE_NOT_FOUND })),
+        );
         // S3 is best-effort after the transaction has committed: a failure
         // here leaves orphaned objects under the prefix, never a half-purged
-        // database. The log line carries the document id for the operator.
-        for (const doc of purged) {
-          const prefix = documentPrefix(deps.config.DOCS_PREFIX, doc.id);
-          try {
-            const removed = await deps.s3.deletePrefix(prefix);
-            request.log.info({ documentId: doc.id, objects: removed }, 'snapshot objects purged');
-          } catch (error) {
-            request.log.error(
-              { err: error, documentId: doc.id, prefix, ref: request.id },
-              'snapshot objects not purged; the database rows are gone',
-            );
-          }
-        }
+        // database. Each document is isolated; the log line carries its id
+        // for the operator (see README, Runbook).
+        await Promise.all(
+          purged.map(async (doc) => {
+            const prefix = documentPrefix(deps.config.DOCS_PREFIX, doc.id);
+            try {
+              const removed = await deps.s3.deletePrefix(prefix);
+              request.log.info({ documentId: doc.id, objects: removed }, 'snapshot objects purged');
+            } catch (error) {
+              request.log.error(
+                { err: error, documentId: doc.id, prefix, ref: request.id },
+                'snapshot objects not purged; the database rows are gone',
+              );
+            }
+          }),
+        );
         return { deleted: purged.length };
       });
 

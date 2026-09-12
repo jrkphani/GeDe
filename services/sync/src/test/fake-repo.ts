@@ -273,7 +273,10 @@ export class FakeRepo implements Repo {
       if (!doc) return Promise.resolve(undefined);
       const owner = this.userById(doc.ownerId);
       const participants = [...(this.sharesByDoc.get(documentId) ?? [])]
-        .sort(([, a], [, b]) => a.createdAt.getTime() - b.createdAt.getTime())
+        .sort(
+          ([idA, a], [idB, b]) =>
+            a.createdAt.getTime() - b.createdAt.getTime() || (idA < idB ? -1 : idA > idB ? 1 : 0),
+        )
         .map(([userId, share]) => {
           const user = this.userById(userId);
           return {

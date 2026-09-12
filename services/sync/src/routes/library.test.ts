@@ -409,6 +409,8 @@ describe('GET /api/documents/:id/shares (LIB-07)', () => {
     const doc = server.repo.seedDocument(aliceId, 'team');
     server.repo.share(doc.id, bobId, 'edit');
     server.repo.share(doc.id, carolId, 'view', bobId);
+    // Participants come back in the order they were added (shares.created_at).
+    server.repo.sharesByDoc.get(doc.id)!.get(carolId)!.createdAt = new Date(Date.now() + 1000);
 
     const res = await json<ParticipantsView>(server, 'GET', `/api/documents/${doc.id}/shares`, {
       token: alice,
