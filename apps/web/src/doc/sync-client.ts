@@ -56,6 +56,9 @@ export interface SyncSnapshot {
 export const MESSAGE_NOTICE = 4;
 
 export const CLOSE_BAD_REQUEST = 4400;
+export const CLOSE_UNAUTHENTICATED = 4401;
+export const CLOSE_FORBIDDEN = 4403;
+export const CLOSE_NOT_FOUND = 4404;
 
 /** The subprotocol the server selects; `bearer.<token>` rides beside it. */
 export const WS_SUBPROTOCOL = 'gede.v1';
@@ -64,9 +67,6 @@ export const WS_SUBPROTOCOL = 'gede.v1';
 export function wsProtocols(token: string): string[] {
   return [WS_SUBPROTOCOL, `bearer.${token}`];
 }
-export const CLOSE_UNAUTHENTICATED = 4401;
-export const CLOSE_FORBIDDEN = 4403;
-export const CLOSE_NOT_FOUND = 4404;
 
 /** After this many consecutive failures the status reads 'offline' (the banner appears). */
 export const OFFLINE_AFTER_ATTEMPTS = 3;
