@@ -395,6 +395,19 @@ describe('GeDe CDK app', () => {
       expect(mail.Condition).toEqual({ StringEquals: { 'ses:FromAddress': 'no-reply@gede.work' } });
       expect(JSON.stringify(mail.Resource)).toMatch(/identity\//);
       expect(allowed.filter((a) => a.startsWith('ses:'))).toEqual(['ses:SendEmail']);
+
+      // AUTH-09 / #111: only the service task may delete a pool user, on this pool only.
+      const erase = statements.find((s) => s.Sid === 'EraseIdentity');
+      if (prefix === 'TaskTaskRole') {
+        expect(erase?.Effect).toBe('Allow');
+        expect(actions(erase!)).toEqual(['cognito-idp:AdminDeleteUser']);
+        expect(JSON.stringify(erase!.Resource)).toMatch(/:userpool\//);
+      } else {
+        expect(erase).toBeUndefined();
+      }
+      expect(
+        allowed.filter((a) => a.startsWith('cognito-idp:') && a !== 'cognito-idp:AdminDeleteUser'),
+      ).toEqual([]);
     }
     for (const prefix of ['TaskExecutionRole', 'JobsTaskExecutionRole']) {
       const executionPolicy = policies.find(([id]) => id.startsWith(prefix))?.[1];
