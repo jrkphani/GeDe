@@ -22,19 +22,21 @@ import {
 
 import { LiveRegion } from '../../../announce.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
+import { openViewStore, ViewStoreProvider, type ViewStore } from '../../../doc/view-state.js';
 import { HierarchyPanel } from './HierarchyPanel.js';
 
 let gd: GedeDoc;
 let tableId: Id;
 let rows: readonly Id[];
 let cols: readonly Id[];
+let store: ViewStore;
 const gridRef: { current: Grid | null } = { current: null };
 
 function Harness({ editable = true, viewSorted }: { editable?: boolean; viewSorted?: boolean }) {
   const grid = useGrid(gd, editable);
   gridRef.current = grid;
   return (
-    <>
+    <ViewStoreProvider value={store}>
       <HierarchyPanel
         gd={gd}
         selection={grid.state.selection}
@@ -43,7 +45,7 @@ function Harness({ editable = true, viewSorted }: { editable?: boolean; viewSort
         viewSorted={viewSorted}
       />
       <LiveRegion />
-    </>
+    </ViewStoreProvider>
   );
 }
 
@@ -55,6 +57,8 @@ const select = (rowId: Id) => {
 const button = (name: string) => screen.getByRole('button', { name });
 
 beforeEach(() => {
+  localStorage.clear();
+  store = openViewStore('user-1', 'doc-hier');
   gd = openDocument(new Y.Doc());
   const sheet = createSheet(gd);
   tableId = createTable(gd, { sheetId: sheet, at: { col: 1, row: 1 }, columns: 2, rows: 4 });
@@ -126,25 +130,29 @@ describe('HierarchyPanel', () => {
     expect(screen.queryByRole('button', { name: /Collapse row|Expand row/ })).toBeNull();
   });
 
-  it('HIER-08 while the table is grouped the panel says so, shows the kept depth, and disables the depth controls with the reason', () => {
+  it('HIER-08 while the viewer groups the table the panel says so, shows the kept depth, and disables the depth controls with the reason', () => {
     render(<Harness />);
     act(() => {
-      gd.doc.transact(() => {
-        tableMap(gd, tableId)!.set('groupBy', cols[1]);
-      });
+      store.set(tableId, { sortBy: null, filter: null, groupBy: cols[1]! });
     });
     select(rows[1]!);
     expect(screen.getByTestId('hierarchy-grouped')).toHaveTextContent('Grouped by Column 2');
     expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent('depth 1');
     expect(button('⇤ Promote')).toBeDisabled();
     expect(button('⇤ Promote')).toHaveAttribute('title', 'Unavailable while the table is grouped');
+    // The document never carried it (ADR-026).
+    expect(JSON.stringify(tableMap(gd, tableId)!.toJSON())).not.toContain('groupBy');
     act(() => {
-      gd.doc.transact(() => {
-        tableMap(gd, tableId)!.set('groupBy', null);
-      });
+      store.clear(tableId);
     });
     expect(screen.queryByTestId('hierarchy-grouped')).toBeNull();
     expect(button('⇤ Promote')).toBeEnabled();
+    // The viewer's own sort locks depth the same way, without the prop.
+    act(() => {
+      store.set(tableId, { sortBy: { colId: cols[0]!, mode: 'az' }, filter: null, groupBy: null });
+    });
+    expect(screen.getByTestId('hierarchy-sorted')).toHaveTextContent('sorted or filtered');
+    expect(button('Nest ⇥')).toBeDisabled();
   });
 
   it('HIER-08 while the viewer’s sort or filter is active the panel says so and every depth and collapse control is disabled with the reason; the data keeps its depth', () => {

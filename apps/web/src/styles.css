@@ -5,6 +5,7 @@
 @import './routes/document/find/find.css';
 @import './routes/document/formula/formula.css';
 @import './routes/document/share/share.css';
+@import './routes/document/sort/sort.css';
 @import './routes/errors/errors.css';
 
 #root {

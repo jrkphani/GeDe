@@ -53,8 +53,11 @@ export const ICON_NAMES = [
   'settings',
   'chevron-left',
   'chevron-right',
+  // sort, filter, group (SORT-01): the header's ▼ and its ↑ ↓ state glyphs
   'chevron-down',
   'check',
+  'arrow-up',
+  'arrow-down',
 ] as const;
 
 export type IconName = (typeof ICON_NAMES)[number];
@@ -158,6 +161,8 @@ const GLYPHS: Record<IconName, Glyph> = {
   'chevron-right': { d: 'M7 3.5 12.5 9 7 14.5' },
   'chevron-down': { d: 'M3.5 7 9 12.5 14.5 7' },
   check: { d: 'M3.5 9.5l3.5 3.5 7.5-8' },
+  'arrow-up': { d: 'M9 15.5v-13M4.5 7.5 9 2.5l4.5 5' },
+  'arrow-down': { d: 'M9 2.5v13M4.5 10.5 9 15.5l4.5-5' },
   apple: {
     d: '',
     extra: [
