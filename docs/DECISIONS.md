@@ -249,7 +249,7 @@ Status key: **accepted** is in force; **superseded** points to the replacement.
 
 ## ADR-024 The formula expression line needs a wrapped row
 
-**Status:** accepted, 2026-09-13 — amended by ADR-039 (the compact row shows the expression beside the value)
+**Status:** accepted, 2026-09-13 — amended by ADR-043 (the compact row shows the expression beside the value)
 
 **Context.** FX-07 says a formula cell renders its value with a reference badge and the expression on a secondary line. A compact row is one lattice unit (22 px) and addressing is exact (non-negotiable 3, GRID-09), so a second line cannot be drawn without changing the row's height, which is a document edit.
 
@@ -500,7 +500,7 @@ Status key: **accepted** is in force; **superseded** points to the replacement.
 
 **Consequences.** Shapes (1) and (3) are fixed on this branch; the live pool's choice of shape per address is not under the app's control, so the e2e fake pins one address to each. The "This account is set to use a password" copy no longer has a reachable trigger from `RESET_PASSWORD`; it remains for `CONFIRM_SIGN_IN_WITH_PASSWORD` and `NEW_PASSWORD_REQUIRED`, which the pipeline account could in principle produce. Every other pool exception now surfaces as plain copy by SDK name (`describeOtherFailure`), never the SDK's message (#144).
 
-## ADR-037 A command has one home: the toolbar, a toolbar menu or an inspector tab; context menus and chords are routes
+## ADR-041 A command has one home: the toolbar, a toolbar menu or an inspector tab; context menus and chords are routes
 
 **Status:** accepted, 2026-09-13 — DOC-02, INSP-01, INSP-04, INSP-07, MENU-03, MENU-04, KEYS-08 (`final-fix/document-shell`, closes #140; #138, #136 rely on it)
 
@@ -524,7 +524,7 @@ One overlap is accepted and recorded: the Table tab's row and column _count_ ste
 
 **Consequences.** The Table menu carries eight commands — insert above / before, delete, hide, unhide, widen, narrow. The Organize inspector's tab is owned by the shell so a tool can open a specific tab (INSP-01, #138). The toolbar gains a "Menus" cluster holding the Document and Table menus. Any future command is placed by this table before it is built; a second home is a defect.
 
-## ADR-038 Keyboard rulings from the final audit: `?` on an armed cell, ⌃⌘ off Apple, a next-object chord, ⌘A and ⌫
+## ADR-042 Keyboard rulings from the final audit: `?` on an armed cell, ⌃⌘ off Apple, a next-object chord, ⌘A and ⌫
 
 **Status:** accepted, 2026-09-13 — KEYS-01, KEYS-03, KEYS-05, KEYS-07, KEYS-08, A11Y-01, MENU-05 (`final-fix/document-shell`, closes #136, #131, #145); extends ADR-030 and ADR-033's rule that any chord beyond the handover reference carries an ADR
 
@@ -534,14 +534,14 @@ One overlap is accepted and recorded: the Table tab's row and column _count_ ste
 
 - **`?` opens the shortcut sheet from an armed cell.** The cell's keydown yields to the physical chord (`Slash` with Shift, by `event.code`) before its printable-character branch; the shell's binding takes it. Type-to-edit gives up exactly this one chord; a `?` as the first character is typed after Enter. On a layout where Shift+Slash is another glyph the same physical key opens the sheet — the price of I18N-02, which the handover chose.
 - **Off Apple platforms a chord that wants both ⌘ and ⌃ is spelled Ctrl+Alt.** `matchesChord` adds Alt to the expectation when `mod` and `ctrl` are both set and the platform is not Apple, so Ctrl+= zooms and Ctrl+Alt+= is superscript, never both. The sheet keeps the Mac glyphs, as the handover reference does.
-- **⇧⌘→ / ⇧⌘← move focus to the next / previous object on the sheet** — a table (its tab stop: the selected cell, else its first), a graph (its header) — in render order, wrapping, announced by the object's name. Bound in the shell from anywhere in the document except an open editor; the graph's own arrow handlers ignore modified arrows so the chord passes them. Not ⌃⌥→: off Apple platforms that is the same keys as ⌥⌘→ (add column). Listed on the sheet under View with an `extra: 'ADR-038'` marker; `shortcut-map.test.ts` pins it beside ADR-030's and ADR-033's rows. GRID-05 is untouched: Tab past the last cell still appends a row.
+- **⇧⌘→ / ⇧⌘← move focus to the next / previous object on the sheet** — a table (its tab stop: the selected cell, else its first), a graph (its header) — in render order, wrapping, announced by the object's name. Bound in the shell from anywhere in the document except an open editor; the graph's own arrow handlers ignore modified arrows so the chord passes them. Not ⌃⌥→: off Apple platforms that is the same keys as ⌥⌘→ (add column). Listed on the sheet under View with an `extra: 'ADR-042'` marker; `shortcut-map.test.ts` pins it beside ADR-030's and ADR-033's rows. GRID-05 is untouched: Tab past the last cell still appends a row.
 - **⌘A selects the table; ⌫ then says a cell is needed.** There is no range selection in the model (a cell or a table is selected), so ⌘A selects the object and its pointer route is the cell menu's "Select the table". ⌫ with the table selected and no cell armed announces "The table is selected; select a cell to clear it" rather than clearing every cell: a whole table is not one keystroke, and a press on the table's title selects it the same way.
 - **Every chord has a pointer route (KEYS-08).** The toolbar's new Document menu carries Open (⌘O), Print (⌘P), Undo (⌘Z) and Redo (⇧⌘Z); the hierarchy panel's Promote, Nest, Collapse row and Expand row name their chords whether or not they can run, and the outline chevron's label names ⌥← / ⌥→. ⌘N, ⌘W, ⌃⇥ and ⌃⇧⇥ stay the browser's (ADR-030).
 - **Column menus return focus to their header (MENU-05).** Headers are focusable by script only (`tabIndex -1`, so the grid keeps one tab stop); the menu focuses the header it opens on and Escape returns there, unless a command moved the selection, in which case the new cell takes focus. A press anywhere outside a context menu closes it even when the pressed content stops the event before Radix's document listener (a graph, a cell): the trigger's capture-phase handler dismisses the menu the way Escape does, and the press lands where it was aimed.
 
 **Consequences.** `docs/handover/reference/shortcuts.md` is not edited (ADR-030). A modal `Menu` makes the `aria-hidden` page `inert` while open, as `Select` already did, so no hidden tab stop remains (axe `aria-hidden-focus`). The cell's focus ring is drawn 2 px outside its edge (A11Y-02) with the focused cell lifted above its neighbours; the tab lists in the sheet strip and the inspector keep their inset ring because they are scroll containers that would clip an outside ring — the one recorded exception. The canvas plane and the sheet strip are `user-select: none`, so a drag over a table pans or moves and never selects text into the chrome; editable content keeps its own selection.
 
-## ADR-039 The expression and the path show in a compact row beside the value, at the label step (amends ADR-024)
+## ADR-043 The expression and the path show in a compact row beside the value, at the label step (amends ADR-024)
 
 **Status:** accepted, 2026-09-13 — FX-07, REF-01, GRID-09 (`final-fix/document-shell`, closes #142)
 

@@ -168,7 +168,7 @@ test.describe('formulas', () => {
       .toMatch(/=Sum\(\{c:[0-9A-Z:]+\}, \{c:[0-9A-Z:]+\}\)/);
 
     // FX-07: value, reference badge and the expression in the cell — beside the value in the
-    // compact row (ADR-039), and still the tooltip; the row stays one lattice unit.
+    // compact row (ADR-043), and still the tooltip; the row stays one lattice unit.
     const formula = b7.getByTestId('formula-cell');
     await expect(formula.locator('.gd-formula__value')).toHaveText('1,234');
     await expect(formula.getByLabel('Formula, 2 references')).toHaveText('ƒ2');

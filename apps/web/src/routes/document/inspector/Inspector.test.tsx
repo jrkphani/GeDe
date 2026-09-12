@@ -703,7 +703,7 @@ describe('Inspector', () => {
     expect(tableById(gd, tableId)?.gridCol).toBe(1);
     expect(tableById(gd, tableId)?.gridRow).toBeGreaterThan(tableById(gd, other)!.gridRow);
     expect(screen.getByTestId('live-region')).toHaveTextContent('Stacked: 2 tables placed');
-    // DOC-02 / ADR-037 (#140): pin and DAG edges toggle in the toolbar; the tab states them.
+    // DOC-02 / ADR-041 (#140): pin and DAG edges toggle in the toolbar; the tab states them.
     const viewport = section('viewport');
     expect(within(viewport).queryByRole('switch')).toBeNull();
     expect(screen.getByTestId('arrange-pinned')).toHaveTextContent('not pinned');

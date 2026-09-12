@@ -38,7 +38,7 @@ export interface ToolbarProps {
   onShortcuts: () => void;
   /**
    * SORT-01..06 / DOC-02: Filter opens Organize › Filter and Sort opens Organize › Sort —
-   * two commands, so neither is the Organize toggle (ADR-037).
+   * two commands, so neither is the Organize toggle (ADR-041).
    */
   onOrganize: (tab: OrganizeTarget) => void;
   /** INSP-07 / DOC-02: the selected table's pinned state (null without a table) and its toggle. */
@@ -159,7 +159,7 @@ function Cluster({ label, children }: { label: string; children: ReactNode }) {
 
 /**
  * DOC-02: grouped tool clusters with tooltips. A command has exactly one home
- * — here, in a toolbar menu, or in an inspector tab (ADR-037); context menus
+ * — here, in a toolbar menu, or in an inspector tab (ADR-041); context menus
  * and chords are routes to it. Commands not yet implemented are present but
  * disabled with a reason (MENU-02), never hidden.
  */

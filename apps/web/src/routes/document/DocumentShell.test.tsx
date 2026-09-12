@@ -695,7 +695,7 @@ describe('DocumentShell', () => {
     expect(first.getAttribute('aria-label')).toBe('B5, Line one\nLine two');
   });
 
-  it('KEYS-01 `?` opens the shortcut sheet from an armed cell instead of starting an edit; Enter then `?` types it (#136, ADR 38)', async () => {
+  it('KEYS-01 `?` opens the shortcut sheet from an armed cell instead of starting an edit; Enter then `?` types it (#136, ADR 40)', async () => {
     await openShell();
     const grid = await addTable();
     const first = within(grid).getAllByRole('gridcell')[0]!;
@@ -715,7 +715,7 @@ describe('DocumentShell', () => {
     expect(screen.getByLabelText('Edit B5')).toBeInTheDocument();
   });
 
-  it('A11Y-01 ⇧⌘→ and ⇧⌘← move focus to the next and previous object on the sheet — a graph a keyboard user could not reach by Tab (#131, ADR 38)', async () => {
+  it('A11Y-01 ⇧⌘→ and ⇧⌘← move focus to the next and previous object on the sheet — a graph a keyboard user could not reach by Tab (#131, ADR 40)', async () => {
     await openShell();
     const grid = await addTable();
     // GRAPH-01 / GRAPH-04: + Graph, then "Add shaped table" binds a pair to a new table.
@@ -743,7 +743,7 @@ describe('DocumentShell', () => {
     expect(document.activeElement).toHaveAttribute('role', 'gridcell');
   });
 
-  it('KEYS-03 ⌘A selects the table; ⌫ then says a cell is needed rather than clearing the table (#145, ADR 38)', async () => {
+  it('KEYS-03 ⌘A selects the table; ⌫ then says a cell is needed rather than clearing the table (#145, ADR 40)', async () => {
     await openShell();
     const grid = await addTable();
     const first = within(grid).getAllByRole('gridcell')[0]!;
@@ -885,12 +885,12 @@ describe('DocumentShell', () => {
         name: 'Order',
       }),
     ).toBeInTheDocument();
-    // The Document menu (ADR-038): every Document and Edit chord has a pointer route.
+    // The Document menu (ADR-042): every Document and Edit chord has a pointer route.
     await userEvent.click(within(toolbar).getByRole('button', { name: 'Document menu' }));
     expect(screen.getByRole('menuitem', { name: /Open the library/ })).toHaveTextContent('⌘O');
     expect(screen.getByRole('menuitem', { name: /Undo/ })).toHaveTextContent('⌘Z');
     await userEvent.keyboard('{Escape}');
-    // The Table menu no longer repeats the toolbar's Add row / Add column (DOC-02, ADR-037).
+    // The Table menu no longer repeats the toolbar's Add row / Add column (DOC-02, ADR-041).
     await userEvent.click(within(toolbar).getByRole('button', { name: 'Table menu' }));
     expect(screen.queryByRole('menuitem', { name: /Insert row below/ })).toBeNull();
     expect(screen.queryByRole('menuitemcheckbox', { name: /Header row/ })).toBeNull();

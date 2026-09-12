@@ -52,7 +52,7 @@ export function isEditableTarget(target: EventTarget | null): boolean {
  * Does this event match the chord? Modifiers must match exactly so ⌘0 and ⇧⌘0
  * differ. Off Apple platforms `mod` is Ctrl, so a chord that wants both ⌘ and
  * ⌃ (`⌃⌘+` superscript) would collide with the one that wants ⌘ alone (`⌘+`
- * zoom): there, ⌃⌘ is spelled Ctrl+Alt (ADR-038, #136).
+ * zoom): there, ⌃⌘ is spelled Ctrl+Alt (ADR-042, #136).
  */
 export function matchesChord(
   event: Pick<KeyboardEvent, 'code' | 'metaKey' | 'ctrlKey' | 'shiftKey' | 'altKey'>,
@@ -152,7 +152,7 @@ export const CHORDS = {
   inspector: { code: 'KeyI', mod: true, alt: true } satisfies Chord,
   nextSheet: { code: 'Tab', ctrl: true } satisfies Chord,
   previousSheet: { code: 'Tab', ctrl: true, shift: true } satisfies Chord,
-  // Not in the handover map (ADR-038): Tab never leaves a table forward (past the last
+  // Not in the handover map (ADR-042): Tab never leaves a table forward (past the last
   // cell it appends a row, GRID-05), so these move focus to the sheet's next or previous
   // object — a table, a graph — without a pointer (A11Y-01, #131). ⇧⌘, not ⌃⌥: off Apple
   // platforms ⌃⌥→ is the same keys as ⌥⌘→ (add column), since `mod` is Ctrl there.

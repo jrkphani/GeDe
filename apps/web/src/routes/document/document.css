@@ -533,7 +533,7 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* FX-07 / REF-01 (ADR-039, amends ADR-024): a formula's expression and a reference's path
+/* FX-07 / REF-01 (ADR-043, amends ADR-024): a formula's expression and a reference's path
    render in every row. A compact row (21 px of content) cannot hold a second line above the
    9 px floor of the type scale (#65), so there the secondary text shares the value's line —
    after the value and its badge, at the label step, ellipsised — the way the prototype's

@@ -38,7 +38,7 @@ export interface ArrangeTabProps {
  * origin), pin to viewport (PRD §10) and the sheet's DAG edges (PRD §7;
  * cross-sheet edges are counted here, not drawn, PRD §11). Pin and DAG edges
  * are *stated* here and *toggled* in the toolbar: DOC-02 names the toolbar as
- * their home and a command has one (ADR-037).
+ * their home and a command has one (ADR-041).
  */
 export function ArrangeTab({ gd, table, editable, commands }: ArrangeTabProps) {
   // Stacking, edges and the sheet flag live outside this table's map.

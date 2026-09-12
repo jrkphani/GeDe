@@ -54,7 +54,7 @@ export interface KeyHandlers {
     toggleInspector: () => void;
     showInspector: (mode: InspectorMode) => void;
     toggleShortcutSheet: () => void;
-    /** ADR-038 ⇧⌘→ / ⇧⌘←: focus the next or previous object on the sheet (A11Y-01). */
+    /** ADR-042 ⇧⌘→ / ⇧⌘←: focus the next or previous object on the sheet (A11Y-01). */
     nextObject: () => void;
     previousObject: () => void;
   };
@@ -63,7 +63,7 @@ export interface KeyHandlers {
     redo: () => void;
     selectAll: () => void;
     clear: () => void;
-    /** ⌫ with a table selected and no cell armed: say what it would need (ADR-038). */
+    /** ⌫ with a table selected and no cell armed: say what it would need (ADR-042). */
     clearNeedsCell?: (() => void) | undefined;
     clearSelection: () => void;
     toggleMark: (mark: ToggleMark) => void;
@@ -155,7 +155,7 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
     { id: 'fit', chord: CHORDS.fit, label: LABELS.fit, run: h.view.fit },
     // ⌃⇥ / ⌃⇧⇥ (KEYS-07) are the browser's tab switch everywhere: reserved on the
     // sheet, not bound; the sheet strip is the route (KEYS-08).
-    // ⇧⌘→ / ⇧⌘← (ADR-038): the next or previous object on the sheet, from anywhere
+    // ⇧⌘→ / ⇧⌘← (ADR-042): the next or previous object on the sheet, from anywhere
     // in the document — a cell, a graph node, the toolbar.
     {
       id: 'nextObject',
@@ -274,7 +274,7 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
     {
       // ⌫ clears the armed cell. With the table selected and no cell armed (after ⌘A, or a
       // press on the title) it says what it would need rather than clearing the table
-      // (ADR-038): the selection model has no range, and a whole table is not one keystroke.
+      // (ADR-042): the selection model has no range, and a whole table is not one keystroke.
       id: 'clear',
       chord: CHORDS.clear,
       label: LABELS.clear,

@@ -45,7 +45,7 @@ export interface InspectorProps {
   onOpenChange: (open: boolean) => void;
   /**
    * INSP-01 / DOC-02: the Organize tab, owned by the shell so the toolbar's
-   * Filter and Sort tools can open their own tab (ADR-037). Defaults to
+   * Filter and Sort tools can open their own tab (ADR-041). Defaults to
    * Categories when absent.
    */
   organizeTab?: OrganizeTab | undefined;

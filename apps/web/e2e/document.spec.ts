@@ -508,7 +508,7 @@ test.describe('grid editing', () => {
         await page.mouse.wheel(-240, 0);
         await expect(page.getByTestId('layer')).toHaveAttribute('style', /translate\(0px/);
       }
-      // GRID-09 via the Text tab — wrap's one home (DOC-02, ADR-037): the selected column wraps;
+      // GRID-09 via the Text tab — wrap's one home (DOC-02, ADR-041): the selected column wraps;
       // rows are two lattice units, addresses exact.
       await grid.getByRole('gridcell').first().click();
       const rail = page.getByTestId('inspector');

@@ -150,7 +150,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
       </Section>
       {/* INSP-04 / GRID-11: header row, header column and footer row *counts* — 0 or 1 for the
           rows (the lattice has one header strip and one footer strip), any count short of every
-          column for the frozen columns. This tab is their one home (DOC-02, ADR-037). */}
+          column for the frozen columns. This tab is their one home (DOC-02, ADR-041). */}
       <Section label="headers and footer" hint="0 hides the strip, 1 shows it.">
         <div className="gd-insp__stack">
           <Stepper

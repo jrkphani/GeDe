@@ -1411,7 +1411,7 @@ const Cell = memo(function Cell({
       default:
         break;
     }
-    // KEYS-01 (ADR-038, #136): `?` (Shift+/ by physical key) opens the shortcut sheet from an
+    // KEYS-01 (ADR-042, #136): `?` (Shift+/ by physical key) opens the shortcut sheet from an
     // armed cell as from anywhere else; the shell's binding takes it. Type-to-edit yields to
     // that one chord — Enter then `?` types the character.
     if (matchesChord(e, CHORDS.shortcutSheet, isApplePlatform())) return;
@@ -1553,7 +1553,7 @@ const Cell = memo(function Cell({
           onCancel={actions.cancel}
         />
       ) : refKind === 'reference' || refKind === 'pulled' ? (
-        // FX-07 / REF-01 (ADR-039): the path shows in every row — beside the value in a
+        // FX-07 / REF-01 (ADR-043): the path shows in every row — beside the value in a
         // compact row (document.css), beneath it in a wrapped one.
         <ReferenceCell table={table} cell={cell} kind={refKind} expression />
       ) : refKind === 'derived' && column.derive !== null ? (

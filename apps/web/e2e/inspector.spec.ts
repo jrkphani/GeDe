@@ -542,7 +542,7 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
       await snapshot(`appearance-text-${String(width)}-dark`);
       await theme(page, false);
 
-      // Arrange tab states pin and DAG edges; the toolbar toggles them (DOC-02, ADR-037). The
+      // Arrange tab states pin and DAG edges; the toolbar toggles them (DOC-02, ADR-041). The
       // pinned copy sits in the non-panning layer.
       await rail.getByRole('tab', { name: 'Arrange' }).click();
       await page.getByRole('button', { name: 'Pin to viewport' }).click();

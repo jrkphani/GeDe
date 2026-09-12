@@ -163,7 +163,7 @@ export function GraphObject({
   };
   const onCornerKeyDown = (e: ReactKeyboardEvent<HTMLDivElement>) => {
     if (e.nativeEvent.isComposing) return;
-    // A modified arrow is someone else's chord (⇧⌘→ steps to the next object, ADR-038).
+    // A modified arrow is someone else's chord (⇧⌘→ steps to the next object, ADR-042).
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     let next = { widthUnits: graph.widthUnits, heightUnits: graph.heightUnits };
     switch (e.code) {
@@ -188,7 +188,7 @@ export function GraphObject({
   };
   const onHeaderKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
     if (e.nativeEvent.isComposing || !editable) return;
-    // A modified arrow is someone else's chord (⇧⌘→ steps to the next object, ADR-038).
+    // A modified arrow is someone else's chord (⇧⌘→ steps to the next object, ADR-042).
     if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
     // The header is a button: Enter or Space selects the graph, as a pointer press does
     // (A11Y-01 — the Graph tab must be reachable without a pointer).

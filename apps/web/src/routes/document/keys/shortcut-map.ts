@@ -130,7 +130,7 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
       {
         action: 'Next / previous object on the sheet',
         ids: ['nextObject', 'previousObject'],
-        extra: 'ADR-038',
+        extra: 'ADR-042',
       },
     ],
   },

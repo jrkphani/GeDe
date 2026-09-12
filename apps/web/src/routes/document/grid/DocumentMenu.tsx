@@ -15,7 +15,7 @@ export interface DocumentMenuProps {
 }
 
 /**
- * The Document menu in the toolbar (KEYS-02, KEYS-03, KEYS-08, ADR-038): the
+ * The Document menu in the toolbar (KEYS-02, KEYS-03, KEYS-08, ADR-042): the
  * pointer route for the chords that had none — Open (⌘O), Print (⌘P), Undo
  * (⌘Z) and Redo (⇧⌘Z) — each beside its shortcut. ⌘N and ⌘W are the
  * browser's in Chrome and Safari (ADR-030) and are not listed here: the

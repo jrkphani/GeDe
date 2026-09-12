@@ -69,7 +69,7 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
       ['Select the node’s row', 'ADR-033'],
       ['Open a child sheet for the node', 'ADR-033'],
       ['Cancel pointing', 'ADR-033'],
-      ['Next / previous object on the sheet', 'ADR-038'],
+      ['Next / previous object on the sheet', 'ADR-042'],
     ]);
     // KEYS-02 / KEYS-07: the PRD's chords the browser keeps are listed, marked, and not bound (ADR-030).
     expect(reservedRows().map((row) => row.action)).toEqual([

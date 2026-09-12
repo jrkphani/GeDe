@@ -27,7 +27,7 @@ export function frozenOptions(columnCount: number): number[] {
  * the structure commands no toolbar tool or inspector control carries —
  * insert above / before, delete, hide and unhide, widen and narrow. Add row
  * and Add column live in the toolbar, header, footer, frozen columns and wrap
- * in the Table and Text tabs (DOC-02, ADR-037); this menu does not repeat
+ * in the Table and Text tabs (DOC-02, ADR-041); this menu does not repeat
  * them. Commands that need a cell are present but disabled with the reason
  * (MENU-02). Built on the Radix menu from `@gede/ui`.
  */
