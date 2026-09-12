@@ -24,6 +24,8 @@ export interface ToolbarProps {
   onZoomTo: (zoom: number) => void;
   onFit: () => void;
   onInspector: (mode: InspectorMode | null) => void;
+  /** The Table menu (grid/TableMenu): row, column, freeze, header and footer commands. */
+  tableMenu?: ReactNode | undefined;
 }
 
 interface ToolProps {
@@ -150,6 +152,7 @@ export function Toolbar({
   onZoomTo,
   onFit,
   onInspector,
+  tableMenu,
 }: ToolbarProps) {
   const viewOnly = editable ? undefined : 'you have view-only access';
   const needsTable = viewOnly ?? (hasTable ? undefined : 'select a table first');
@@ -189,6 +192,7 @@ export function Toolbar({
         />
         <Tool icon="graph" label="Add graph" disabledReason={`graphs ${wave2}`} />
       </Cluster>
+      {tableMenu !== undefined && <Cluster label="Table">{tableMenu}</Cluster>}
       <Cluster label="Arrange">
         <Tool icon="pin" label="Pin to viewport" disabledReason={`pinning ${wave2}`} />
         <Tool icon="edges" label="DAG edges" disabledReason={`edges ${wave2}`} />
