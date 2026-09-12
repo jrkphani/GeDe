@@ -1821,4 +1821,122 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     );
     expect(rows.rows[0]?.accepted_at).toBeInstanceOf(Date);
   });
+
+  test('AUTH-09 (partial) erasure scrubs the whole address from audit targets and never a substring of a longer one (#111, review)', async () => {
+    const scrubbed = await repo.users.upsertFromToken({
+      sub: 'sub-erase-scrub',
+      email: 'scrub@example.com',
+    });
+    const other = await user('sub-erase-scrub-other');
+    const doc = await createDoc(other, 'Scrub');
+    const targets = [
+      ['share.invite', 'scrub@example.com'],
+      ['share.invite', 'scrub@example.com.au'],
+      ['share.invite', 'xscrub@example.com'],
+      ['share.invite_withdraw', `SCRUB@example.com:${other}`],
+      [
+        'share.stop',
+        '{"users":[],"invites":["scrub@example.com","scrub@example.com.au","xscrub@example.com"]}',
+      ],
+      // Not an address-bearing action: left alone even though it matches.
+      ['document.rename', 'scrub@example.com'],
+    ] as const;
+    for (const [action, target] of targets) {
+      await pool.query(
+        'insert into audit_log (document_id, user_id, action, target) values ($1, $2, $3, $4)',
+        [doc.id, other, action, target],
+      );
+    }
+    await repo.users.erase(scrubbed.id);
+    const rows = await pool.query<{ action: string; target: string }>(
+      'select action, target from audit_log where document_id = $1 and user_id = $2 and target is not null order by id',
+      [doc.id, other],
+    );
+    expect(rows.rows.map((r) => r.target)).toEqual([
+      '[erased]',
+      'scrub@example.com.au',
+      'xscrub@example.com',
+      `[erased]:${other}`,
+      '{"users":[],"invites":["[erased]","scrub@example.com.au","xscrub@example.com"]}',
+      'scrub@example.com',
+    ]);
+  });
+
+  test('AUTH-09 (partial) erasure locks every document it touches at once, in id order: while it waits for one it holds none, so two erasures or an erasure and a conversion cannot deadlock (#111, review)', async () => {
+    const x = await user('sub-erase-order-x');
+    const y = await user('sub-erase-order-y');
+    // Two documents with known ids: `low` sorts first. X holds a share on `high` (Y's) and owns
+    // `low` (Y is its editor). Locking one document at a time in group order — held shares
+    // first, owned documents last — would take `high` and then wait for `low` while holding it.
+    const low = await createDoc(x, 'Low', '00000000-0000-4000-8000-00000000000a');
+    const high = await createDoc(y, 'High', 'ffffffff-ffff-4fff-8fff-fffffffffff0');
+    await repo.shares.add({
+      documentId: high.id,
+      userId: x,
+      permission: 'edit',
+      invitedBy: y,
+      actorId: y,
+    });
+    await repo.shares.add({
+      documentId: low.id,
+      userId: y,
+      permission: 'edit',
+      invitedBy: x,
+      actorId: x,
+    });
+    const other = await pool.connect();
+    try {
+      await other.query('begin');
+      // Another transaction holds `low` (Y's erasure, say, or a conversion on it).
+      await other.query('select id from documents where id = $1 for update', [low.id]);
+      const erasure = repo.users.erase(x);
+      expect(await settles(erasure)).toBe('waiting');
+      // While X's erasure waits for `low`, `high` is free: nothing is held out of order.
+      await expect(
+        other.query('select id from documents where id = $1 for update nowait', [high.id]),
+      ).resolves.toMatchObject({ rowCount: 1 });
+      await other.query('commit');
+      expect(await erasure).toMatchObject({
+        sharesRemoved: [high.id],
+        transferred: [{ documentId: low.id, toUserId: y }],
+      });
+    } finally {
+      other.release();
+    }
+    // And the other way round: Y's erasure finds `high` its own, with no editor left to take it.
+    const outcome = await repo.users.erase(y);
+    expect(outcome).toMatchObject({ transferred: [], sharesRemoved: [] });
+    expect([...(outcome?.deleted ?? [])].sort()).toEqual([low.id, high.id].sort());
+  });
+
+  test('AUTH-09 (partial) an editor whose own erasure committed first is never made an owner (#111, review)', async () => {
+    const owner = await user('sub-erase-tomb-owner');
+    const gone = await user('sub-erase-tomb-gone');
+    const alive = await user('sub-erase-tomb-alive');
+    const doc = await createDoc(owner, 'Inherit');
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: gone,
+      permission: 'edit',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    await pool.query(
+      "update shares set created_at = now() - interval '1 hour' where document_id = $1 and user_id = $2",
+      [doc.id, gone],
+    );
+    await repo.shares.add({
+      documentId: doc.id,
+      userId: alive,
+      permission: 'edit',
+      invitedBy: owner,
+      actorId: owner,
+    });
+    // A tombstone that somehow still holds an edit share (a hand-run row): not eligible.
+    await pool.query('update users set deleted_at = now() where id = $1', [gone]);
+    expect(await repo.users.erase(owner)).toMatchObject({
+      transferred: [{ documentId: doc.id, toUserId: alive }],
+    });
+    expect(await repo.documents.get(doc.id)).toMatchObject({ ownerId: alive });
+  });
 });

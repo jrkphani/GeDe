@@ -71,6 +71,12 @@ interface MutableUser extends Omit<UserRecord, 'sampleDocumentId'> {
 /** What an erased account's row is called, as `pg.ts` writes it (#111). */
 const ERASED_DISPLAY_NAME = 'Deleted user';
 
+/** The whole-address match erasure scrubs with, as `addressPattern` in `pg.ts` builds it. */
+function addressPattern(email: string): string {
+  const literal = email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return `(^|[^A-Za-z0-9._%+-])${literal}(?![A-Za-z0-9._%+-])`;
+}
+
 export interface FakeShare {
   permission: Permission;
   invitedBy: string;
@@ -503,9 +509,10 @@ export class FakeRepo implements Repo {
         for (const entry of log) if (entry.authorId === id) entry.authorId = null;
       }
       if (user.email !== null) {
-        const pattern = new RegExp(user.email.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+        // Mirrors `addressPattern` in pg.ts: the whole address, never a substring.
+        const pattern = new RegExp(addressPattern(user.email), 'gi');
         for (const entry of this.auditLog) {
-          if (entry.target !== null) entry.target = entry.target.replace(pattern, '[erased]');
+          if (entry.target !== null) entry.target = entry.target.replace(pattern, '$1[erased]');
         }
       }
       const cognitoSub = user.cognitoSub;

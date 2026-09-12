@@ -90,7 +90,7 @@ export function constantTimeEqual(a: string, b: string): boolean {
 /** What an erased account's row is called wherever a name would show (#111). */
 export const ERASED_DISPLAY_NAME = 'Deleted user';
 
-/** The audit actions whose `target` carries an email address (what erasure scrubs, ADR-037). */
+/** The audit actions whose `target` carries an email address (what erasure scrubs, ADR-038). */
 export const ADDRESS_BEARING_AUDIT_ACTIONS: readonly ShareAuditAction[] = [
   'share.invite',
   'share.invite_accept',
@@ -102,6 +102,17 @@ export const ADDRESS_BEARING_AUDIT_ACTIONS: readonly ShareAuditAction[] = [
 /** A literal for a case-insensitive `regexp_replace`: every metacharacter escaped. */
 export function escapeRegex(literal: string): string {
   return literal.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/**
+ * A PostgreSQL ARE that matches `email` as a whole address inside an audit
+ * `target` (bare, `addr:…`, or quoted in JSON) and never as a substring of a
+ * longer one. Group 1 is the character before it, kept by the replacement;
+ * the lookahead refuses an address character after it. ARE has no
+ * lookbehind, hence the group.
+ */
+export function addressPattern(email: string): string {
+  return `(^|[^A-Za-z0-9._%+-])${escapeRegex(email)}(?![A-Za-z0-9._%+-])`;
 }
 
 type DocumentRow = typeof documents.$inferSelect;
@@ -408,11 +419,15 @@ async function convertInvites(
   userId: string,
   email: string,
 ): Promise<ConvertedInvite[]> {
+  // Document id order, the one every multi-document transaction uses (an
+  // erasure locks its documents sorted the same way), so two of them cannot
+  // each hold a row the other waits for. Which invitation converts first
+  // changes nothing but the order of the audit rows.
   const candidates = await tx
     .select({ id: invites.id })
     .from(invites)
     .where(and(eq(invites.email, email), invitePending))
-    .orderBy(asc(invites.createdAt), asc(invites.id));
+    .orderBy(asc(invites.documentId), asc(invites.createdAt), asc(invites.id));
   const converted: ConvertedInvite[] = [];
   for (const { id } of candidates) {
     const outcome = await convertOne(tx, id, userId, null);
@@ -637,13 +652,49 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           if (row.deletedAt !== null) return null;
           const now = new Date();
 
+          // Every document this touches is locked up front, in one statement,
+          // in id order — never one at a time in three differently ordered
+          // groups. Two erasures whose owners share documents, or an erasure
+          // beside a sign-in conversion (which locks in the same id order),
+          // would otherwise each hold one row the other waits for (40P01).
+          // The lists are read again under the locks: what committed while
+          // this waited (a transfer that made this account an owner, a share
+          // it was given) is seen, and a row that went is not acted on.
+          const heldDocs = (q: Executor) =>
+            q
+              .select({ documentId: shares.documentId })
+              .from(shares)
+              .where(eq(shares.userId, id))
+              .orderBy(asc(shares.documentId));
+          const sentInvites = (q: Executor) =>
+            q
+              .select({ id: invites.id, documentId: invites.documentId })
+              .from(invites)
+              .where(and(eq(invites.invitedBy, id), invitePending))
+              .orderBy(asc(invites.documentId), asc(invites.id));
+          const ownedDocs = (q: Executor) =>
+            q
+              .select({ id: documents.id, sample: documents.sample })
+              .from(documents)
+              .where(and(eq(documents.ownerId, id), isNull(documents.deletedAt)))
+              .orderBy(asc(documents.createdAt), asc(documents.id));
+          const touched = new Set<string>([
+            ...(await heldDocs(tx)).map((s) => s.documentId),
+            ...(await sentInvites(tx)).map((i) => i.documentId),
+            ...(await ownedDocs(tx)).map((d) => d.id),
+          ]);
+          if (touched.size > 0) {
+            await tx
+              .select({ id: documents.id })
+              .from(documents)
+              .where(inArray(documents.id, [...touched]))
+              .orderBy(asc(documents.id))
+              .for('update');
+          }
+
           // Shares the user holds on other people's documents: gone, each
           // under its document's lock, so `ever_shared` is right (LIB-D4).
-          const held = await tx
-            .select({ documentId: shares.documentId })
-            .from(shares)
-            .where(eq(shares.userId, id))
-            .orderBy(asc(shares.documentId));
+          const held = await heldDocs(tx);
           const sharesRemoved: string[] = [];
           for (const { documentId } of held) {
             await lockDocument(tx, documentId);
@@ -667,11 +718,7 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           // `FOR UPDATE` re-read (the #100 pattern): an acceptance in flight
           // either committed first — and the row is no longer pending — or
           // waits behind the lock and finds it gone.
-          const sent = await tx
-            .select({ id: invites.id, documentId: invites.documentId })
-            .from(invites)
-            .where(and(eq(invites.invitedBy, id), invitePending))
-            .orderBy(asc(invites.documentId), asc(invites.id));
+          const sent = await sentInvites(tx);
           let invitesWithdrawn = 0;
           for (const { id: inviteId, documentId } of sent) {
             if (!(await lockDocument(tx, documentId))) continue;
@@ -687,21 +734,30 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           }
 
           // Owned live documents: to the earliest editor, else into the trash.
-          const owned = await tx
-            .select({ id: documents.id, sample: documents.sample })
-            .from(documents)
-            .where(and(eq(documents.ownerId, id), isNull(documents.deletedAt)))
-            .orderBy(asc(documents.createdAt), asc(documents.id));
+          const owned = await ownedDocs(tx);
           const transferred: { documentId: string; toUserId: string }[] = [];
           const deleted: string[] = [];
           for (const doc of owned) {
             await lockDocument(tx, doc.id);
+            // An editor whose own erasure has committed is a tombstone and
+            // cannot become an owner. One whose erasure is in flight either
+            // already holds this document (then this waits, and finds the
+            // share gone and the row a tombstone) or is waiting for it (then
+            // it re-reads its owned list under the lock and finds the
+            // document it was just given).
             const [editor] = doc.sample
               ? []
               : await tx
                   .select({ userId: shares.userId })
                   .from(shares)
-                  .where(and(eq(shares.documentId, doc.id), eq(shares.permission, 'edit')))
+                  .innerJoin(users, eq(users.id, shares.userId))
+                  .where(
+                    and(
+                      eq(shares.documentId, doc.id),
+                      eq(shares.permission, 'edit'),
+                      isNull(users.deletedAt),
+                    ),
+                  )
                   .orderBy(asc(shares.createdAt), asc(shares.userId))
                   .limit(1);
             if (editor) {
@@ -779,12 +835,14 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           await tx.update(docUpdates).set({ authorId: null }).where(eq(docUpdates.authorId, id));
           if (row.email !== null) {
             // Only the share actions carry an address in `target`; the scan
-            // is bounded to them.
-            const pattern = escapeRegex(row.email);
+            // is bounded to them. The match is the whole address, never a
+            // substring: `bob@x.com` must leave `bob@x.com.au` and
+            // `malice@x.com` (an `alice@x.com`) as they are.
+            const pattern = addressPattern(row.email);
             await tx
               .update(auditLog)
               .set({
-                target: sql`regexp_replace(${auditLog.target}, ${pattern}, '[erased]', 'gi')`,
+                target: sql`regexp_replace(${auditLog.target}, ${pattern}, '\\1[erased]', 'gi')`,
               })
               .where(
                 and(
