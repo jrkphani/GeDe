@@ -33,6 +33,7 @@ Header comment: "GeDe design tokens — single source of truth. A literal hex, r
 --surface:           var(--slate-0);      --surface-sunken:    var(--slate-50);
 --border:            var(--slate-200);    --ink:               var(--slate-900);
 --ink-muted:         var(--slate-600);
+--border-strong:     #6f7f77;   /* added 2026-09-13 (#81): control boundaries, 4.22:1 on --surface, 3.99:1 on --surface-sunken */
 ```
 **Presence** ("assigned on join; never the brand colour")
 ```
@@ -76,6 +77,7 @@ Header comment: "GeDe design tokens — single source of truth. A literal hex, r
 **Dark theme** `[data-theme="dark"]`:
 ```
 --surface: #0f1a15; --surface-sunken: #0a120e; --border: #24352c;
+--border-strong: #5f7268;   /* added 2026-09-13 (#81): 3.47:1 on --surface, 3.70:1 on --surface-sunken */
 --ink: #e6ede9; --ink-muted: #9fb0a7;
 --action-primary-bg: #2a7b4e;  /* lifted for contrast on dark (per DS page) */
 --selection-ring: #e0a04a;
@@ -146,6 +148,8 @@ Rules: Forest 700 on white 10.6:1 safe for body text. Amber 700 4.8:1 safe for t
 
 ### Contrast requirements
 Body text ≥ 4.5:1; large text and UI boundaries ≥ 3:1; borders, focus rings, selection rings and graph strokes ≥ 3:1 against background. Token table records every ratio; CI fails on a new pair below threshold; contrast recorded in each PR.
+
+**Recorded 2026-09-13 (#81).** `--border` (slate-200 `#e3e8e5`) is 1.24:1 on `--surface` and 1.17:1 on `--surface-sunken` in light, `#24352c` 1.37:1 / 1.47:1 in dark: a decorative hairline (section separators, rulers, menu separators), exempt under WCAG 1.4.11, never a control's only boundary. The boundary of a text field, a select trigger and list, and a menu is `--border-strong` — light `#6f7f77` (4.22:1 / 3.99:1), dark `#5f7268` (3.47:1 / 3.70:1); hover and open states darken it to `--ink-muted` (5.63:1 light, 7.84:1 dark). The `#d3dcd7` (1.40:1) and `#b8c4be` (1.80:1) field borders in the table below are the handover's values and do not meet the floor; the shipped components use the token. `packages/tokens/src/tokens.test.ts` computes and pins these ratios.
 
 ---
 

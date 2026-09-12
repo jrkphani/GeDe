@@ -49,6 +49,10 @@
   --surface:           var(--slate-0);
   --surface-sunken:    var(--slate-50);
   --border:            var(--slate-200);
+  /* boundary of a control at rest (text field, select, menu) — WCAG 1.4.11 needs ≥ 3:1
+     on --surface and --surface-sunken; --border is the decorative hairline (#81).
+     4.22:1 on --surface, 3.99:1 on --surface-sunken. */
+  --border-strong:     #6f7f77;
   --ink:               var(--slate-900);
   --ink-muted:         var(--slate-600);
 
@@ -112,6 +116,7 @@
   --surface:        #0f1a15;
   --surface-sunken: #0a120e;
   --border:         #24352c;
+  --border-strong:  #5f7268;   /* 3.47:1 on --surface, 3.70:1 on --surface-sunken */
   --ink:            #e6ede9;
   --ink-muted:      #9fb0a7;
   --action-primary-bg: #2a7b4e;
@@ -141,6 +146,7 @@
     --surface:        #0f1a15;
     --surface-sunken: #0a120e;
     --border:         #24352c;
+    --border-strong:  #5f7268;
     --ink:            #e6ede9;
     --ink-muted:      #9fb0a7;
     --action-primary-bg: #2a7b4e;

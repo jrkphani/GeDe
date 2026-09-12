@@ -20,7 +20,8 @@
   width: 100%;
   min-width: 0;
   margin: 0;
-  border: 1px solid var(--border);
+  /* As the text field: the boundary identifies the control, so ≥ 3:1 (#81). */
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);
@@ -43,7 +44,7 @@
   font-size: 0.75rem;
 }
 .gd-select__trigger:hover:not(:disabled) {
-  border-color: var(--slate-400);
+  border-color: var(--ink-muted);
 }
 .gd-select__trigger:focus-visible {
   outline: 2px solid var(--focus-ring);
@@ -52,7 +53,7 @@
   box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 18%, transparent);
 }
 .gd-select__trigger[data-state='open'] {
-  border-color: var(--slate-400);
+  border-color: var(--ink-muted);
 }
 .gd-select__trigger:disabled {
   background: var(--surface-sunken);
@@ -75,7 +76,7 @@
   min-width: var(--radix-select-trigger-width);
   max-height: var(--radix-select-content-available-height);
   padding: 0.3125rem;
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
   border-radius: var(--radius-md);
   background: var(--surface);
   color: var(--ink);

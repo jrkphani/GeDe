@@ -4,7 +4,7 @@ export const theme = {
   color: {
     brand:    { subtle: '#f0f7f3', base: '#14532d', strong: '#0a2d18' },
     live:     { subtle: '#fdf6ec', base: '#b45309', strong: '#7c3a05' },
-    surface:  { base: '#ffffff', sunken: '#f7f9f8', border: '#e3e8e5' },
+    surface:  { base: '#ffffff', sunken: '#f7f9f8', border: '#e3e8e5', borderStrong: '#6f7f77' },
     ink:      { base: '#14201a', muted: '#5b6b63', onBrand: '#ffffff' },
     status:   { success: '#166534', warning: '#b45309', danger: '#b42318', info: '#155e75' },
     presence: ['#14201a', '#155e75', '#6d28d9', '#b45309', '#0f766e', '#9d174d'],
