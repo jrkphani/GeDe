@@ -30,7 +30,7 @@ export type {
 } from './types.js';
 export { splitWorkbookCellId, workbookCellId } from './types.js';
 export { derivedCellSource, FormulaEngine, type ApplyOutcome } from './engine.js';
-export { inferCellValue, inferColumnFormat, isSummable, type InferredFormat } from './values.js';
+export { inferCellValue } from './values.js';
 export {
   buildSheetIndex,
   cellAtPosition,

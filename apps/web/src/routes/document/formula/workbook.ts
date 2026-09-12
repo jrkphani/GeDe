@@ -7,33 +7,32 @@
  */
 import type * as Y from 'yjs';
 import {
-  cellKey,
-  cellsMap,
-  inferCellValue,
-  inferColumnFormat,
-  isFormula,
-  fragmentText,
+  AUTO_FORMAT,
+  columnById,
+  columnFormat,
   parse,
   readString,
-  tableRecord,
+  type CellFormat,
   type Id,
-  type InferredFormat,
   type OperandOutline,
   type TableMap,
 } from '@gede/core';
 
 import { projectFormulaFor, workbookIndexFor } from '../../../doc/workbook-index.js';
 
-/** Automatic inference over a column's text cells (formula cells are skipped). */
-export function columnFormatOf(table: TableMap, colId: Id): InferredFormat {
-  const record = tableRecord(table);
-  const cells = cellsMap(table);
-  const values = record.rows.map((rowId) => {
-    const content = cells.get(cellKey(rowId, colId));
-    if (content === undefined || isFormula(content)) return { kind: 'blank' as const };
-    return inferCellValue(fragmentText(content));
-  });
-  return inferColumnFormat(values);
+/** The column's data format as set in the inspector (FMT-01); Automatic when the column is unknown. */
+export function columnFormatOf(table: TableMap, colId: Id): CellFormat {
+  const column = columnById(table, colId);
+  return column === null ? AUTO_FORMAT : columnFormat(column);
+}
+
+/**
+ * FX-02 "Offered only when the column is Number or Currency": the column's
+ * format decides, never what its cells happen to contain. An Automatic
+ * column is not offered Sum; formatting it is the affordance.
+ */
+export function isSummable(format: CellFormat): boolean {
+  return format.kind === 'number' || format.kind === 'currency';
 }
 
 /** The document a table map belongs to; a prelim map (not yet integrated) has none. */

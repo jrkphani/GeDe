@@ -1,8 +1,8 @@
-import { render, screen, waitFor } from '@testing-library/react';
+import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useRef, useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import { setTableTitle, type Id } from '@gede/core';
+import { setColumnFormat, setTableTitle, type Id } from '@gede/core';
 
 import { testDoc, type TestDoc } from '../../../test/formula-doc.js';
 import {
@@ -77,12 +77,14 @@ function Host({
 }
 
 describe('useFormulaAdornments', () => {
-  it('FX-02 typing = opens the menu of forms; Sum is disabled with a reason on a text column and offered on a number column', async () => {
-    const d = testDoc(3, 2);
-    d.set(0, 0, 'Lukla');
-    d.set(1, 0, 'Namche');
-    d.set(0, 1, '2860');
-    d.set(1, 1, '3440');
+  it('FX-02 typing = opens the menu of forms; Sum is "offered only when the column is Number or Currency" — by the column format, not its contents', async () => {
+    const d = testDoc(3, 3);
+    // Column 0 holds only numbers but is Automatic: not offered. Column 1 is formatted Number.
+    d.set(0, 0, '2860');
+    d.set(1, 0, '3440');
+    d.set(0, 1, 'Lukla');
+    d.set(1, 1, 'Namche');
+    setColumnFormat(d.gd, d.tableId, d.colId(1), 'number', { decimals: 2 });
     const view = render(<Host d={d} colId={d.colId(0)} />);
     const editor = screen.getByLabelText('Edit');
     await userEvent.type(editor, '=');
@@ -97,7 +99,7 @@ describe('useFormulaAdornments', () => {
     expect(forms.querySelectorAll('[role=option]')).toHaveLength(3);
 
     view.unmount();
-    render(<Host d={d} colId={d.colId(1)} />);
+    const numberView = render(<Host d={d} colId={d.colId(1)} />);
     const editor2 = screen.getByLabelText('Edit');
     await userEvent.type(editor2, '=');
     await screen.findByRole('listbox', { name: 'Formula forms' });
@@ -109,6 +111,35 @@ describe('useFormulaAdornments', () => {
     expect(editor2).toHaveFocus();
     await waitFor(() => {
       expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    });
+
+    // A Currency column is offered too; a Text column with numbers in it is not.
+    numberView.unmount();
+    setColumnFormat(d.gd, d.tableId, d.colId(2), 'currency', { currency: 'SGD' });
+    const currencyView = render(<Host d={d} colId={d.colId(2)} />);
+    await userEvent.type(screen.getByLabelText('Edit'), '=');
+    await screen.findByRole('listbox', { name: 'Formula forms' });
+    expect(screen.getByRole('option', { name: /Sum/ })).not.toHaveAttribute('aria-disabled');
+    currencyView.unmount();
+    setColumnFormat(d.gd, d.tableId, d.colId(0), 'text');
+    render(<Host d={d} colId={d.colId(0)} />);
+    await userEvent.type(screen.getByLabelText('Edit'), '=');
+    await screen.findByRole('listbox', { name: 'Formula forms' });
+    expect(screen.getByRole('option', { name: /Sum/ })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('FX-02 the offer follows a format change while the editor is open', async () => {
+    const d = testDoc(2, 1);
+    render(<Host d={d} colId={d.colId(0)} />);
+    const editor = screen.getByLabelText('Edit');
+    await userEvent.type(editor, '=');
+    await screen.findByRole('listbox', { name: 'Formula forms' });
+    expect(screen.getByRole('option', { name: /Sum/ })).toHaveAttribute('aria-disabled', 'true');
+    act(() => {
+      setColumnFormat(d.gd, d.tableId, d.colId(0), 'number');
+    });
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: /Sum/ })).not.toHaveAttribute('aria-disabled');
     });
   });
 

@@ -1,6 +1,8 @@
 import { act, render, renderHook, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it } from 'vitest';
 
+import { setColumnFormat } from '@gede/core';
+
 import { setLocale } from '../../../locale.js';
 import { testDoc } from '../../../test/formula-doc.js';
 import { FormulaCellContent } from './FormulaCellContent.js';
@@ -107,6 +109,71 @@ describe('useCellDisplay', () => {
     expect(formatCellValue('en-GB', { kind: 'date', iso: '2026-09-12' })).toBe('12 Sept 2026');
     expect(formatCellValue('en-US', { kind: 'blank' })).toBe('');
     setLocale('en-US');
+  });
+
+  it('FMT-03 FMT-02 a result "takes the operands’ format": a Sum in a Currency column renders SGD 2,554.50 right-aligned with the column’s decimals; Number decimals apply', async () => {
+    const d = testDoc(5, 2);
+    setColumnFormat(d.gd, d.tableId, d.colId(0), 'currency', { currency: 'SGD', decimals: 2 });
+    d.set(0, 0, '100');
+    d.set(1, 0, '-45.5');
+    d.set(2, 0, '2500');
+    d.set(3, 0, `=Sum(${d.addr(0, 0)}:${d.addr(2, 0)})`);
+    const { result } = renderHook(() => useCellDisplay(d.table, d.key(3, 0)));
+    await act(() => d.settled());
+    expect(result.current.value).toBe('SGD\u00a02,554.50');
+    expect(result.current.align).toBe('right');
+    // A negative total takes accounting parentheses like a typed cell (FMT-03).
+    act(() => {
+      d.set(2, 0, '-100');
+    });
+    await act(() => d.settled());
+    expect(result.current.value).toBe('(SGD\u00a045.50)');
+    expect(result.current.align).toBe('right');
+    // A Number column's decimals apply to its result.
+    setColumnFormat(d.gd, d.tableId, d.colId(1), 'number', { decimals: 6 });
+    d.set(0, 1, '1,234.50');
+    d.set(1, 1, '-45');
+    d.set(2, 1, `=Sum(${d.addr(0, 1)}:${d.addr(1, 1)})`);
+    const number = renderHook(() => useCellDisplay(d.table, d.key(2, 1)));
+    await act(() => d.settled());
+    expect(number.result.current.value).toBe('1,189.500000');
+    expect(number.result.current.align).toBe('right');
+    // The explicit format is passed by the grid; the hook reads the same one when it is not.
+    const passed = renderHook(() =>
+      useCellDisplay(d.table, d.key(2, 1), { kind: 'number', opts: { decimals: 0 } }),
+    );
+    expect(passed.result.current.value).toBe('1,190');
+  });
+
+  it('FMT-01 FMT-04 a result in an Automatic column keeps the inferred rendering; a Date column formats per locale; a mixed-currency Sum shows its label', async () => {
+    const d = testDoc(4, 3);
+    d.set(0, 0, '1200');
+    d.set(1, 0, '34.5');
+    d.set(2, 0, `=Sum(${d.addr(0, 0)}:${d.addr(1, 0)})`);
+    const auto = renderHook(() => useCellDisplay(d.table, d.key(2, 0)));
+    await act(() => d.settled());
+    expect(auto.result.current.value).toBe('1,234.5');
+    expect(auto.result.current.align).toBe('right');
+    // A Date column: the listed value reads as the date the column shows, per its pattern (FMT-04).
+    setColumnFormat(d.gd, d.tableId, d.colId(1), 'date', { datePattern: 'DD/MM/YYYY' });
+    d.set(0, 1, '12/9/2026');
+    d.set(1, 1, `=${d.addr(0, 1)}`);
+    const date = renderHook(() => useCellDisplay(d.table, d.key(1, 1)));
+    await act(() => d.settled());
+    expect(date.result.current.value).toBe('12/09/2026');
+    expect(date.result.current.align).toBe('left');
+    // Mixed currencies through formats (the audit's step 4): SGD column plus USD column.
+    setColumnFormat(d.gd, d.tableId, d.colId(0), 'currency', { currency: 'SGD' });
+    setColumnFormat(d.gd, d.tableId, d.colId(2), 'currency', { currency: 'USD' });
+    d.set(0, 2, '10');
+    d.set(1, 2, `=Sum(${d.addr(0, 0)}, ${d.addr(0, 2)})`);
+    const mixed = renderHook(() => useCellDisplay(d.table, d.key(1, 2)));
+    await act(() => d.settled());
+    expect(mixed.result.current.error).toEqual({
+      label: '⚠ mixed currencies',
+      message: `${d.addr(0, 2)} is in USD; the sum so far is in SGD`,
+    });
+    expect(mixed.result.current.value).toBe('');
   });
 });
 

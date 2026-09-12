@@ -29,6 +29,8 @@ import { encodeBound, type BoundReference } from '../formula/bound.js';
 import { evaluate, type BoundOperand, type CellValue, type Resolver } from '../formula/evaluate.js';
 import { formatMethodCall } from '../formula/methods.js';
 import { parse } from '../formula/parser.js';
+import { AUTO_FORMAT, isFormatLocale, type CellFormat } from '../format/types.js';
+import { cellValueOf } from '../format/value.js';
 import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { cellsInColumnOn, entityKey, positionKey, type SheetIndex } from './sheet-index.js';
 import {
@@ -78,6 +80,24 @@ interface TableState {
   readonly cells: Map<CellKey, CellState>;
   /** Columns whose cells the engine synthesises (REF-04). */
   derivedColumns: ReadonlySet<Id>;
+  /** Column id → the column's format, resolved once per structure (FMT-01). */
+  columnFormats: ReadonlyMap<Id, CellFormat>;
+}
+
+function columnFormatsOf(structure: TableStructure): ReadonlyMap<Id, CellFormat> {
+  return new Map(structure.columns.map((c) => [c.id, c.format ?? AUTO_FORMAT]));
+}
+
+function sameFormat(a: CellFormat | undefined, b: CellFormat | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return (
+    a.kind === b.kind &&
+    a.opts.decimals === b.opts.decimals &&
+    a.opts.grouping === b.opts.grouping &&
+    a.opts.currency === b.opts.currency &&
+    a.opts.datePattern === b.opts.datePattern &&
+    a.opts.textCase === b.opts.textCase
+  );
 }
 
 /**
@@ -210,11 +230,16 @@ export class FormulaEngine {
     return { results: this.evaluate(), removed };
   }
 
-  /** Change the locale `Format` cases for; every formula re-evaluates (their text may change). */
+  /**
+   * Change the locale `Format` cases and formatted cells render for; every
+   * formula re-evaluates (their text may change) and every cached cell value
+   * is dropped (a formatted cell's `text` is its rendering for the locale).
+   */
   setLocale(locale: string): ApplyOutcome {
     if (locale === this.locale) return { results: [], removed: [] };
     this.locale = locale;
     for (const cell of this.cells.values()) {
+      cell.value = null;
       if (cell.formula !== null && this.graph.hasNode(cell.id)) this.graph.markDirty(cell.id);
     }
     return { results: this.evaluate(), removed: [] };
@@ -233,7 +258,28 @@ export class FormulaEngine {
     return this.graph.dependenciesOf(cellId);
   }
 
-  /** The value a formula reads from a cell: inferred text, or a formula's result (errors propagate). */
+  /**
+   * The format in force for a cell (FMT-01, FMT-06): its own override, else
+   * its column's, else Automatic — the engine's `effectiveCellFormat`, read
+   * from the projected structure rather than the document.
+   */
+  formatOf(cellId: WorkbookCellId): CellFormat {
+    const cell = this.cells.get(cellId);
+    if (cell === undefined) return AUTO_FORMAT;
+    const table = this.tables.get(cell.tableId);
+    if (table === undefined) return AUTO_FORMAT;
+    return (
+      table.structure.cellFormats?.[cell.key] ??
+      table.columnFormats.get(splitCellKey(cell.key).colId) ??
+      AUTO_FORMAT
+    );
+  }
+
+  /**
+   * The value a formula reads from a cell: its text under the cell's format
+   * (FMT-02, FMT-03, FMT-05) — inferred from the text under Automatic — or a
+   * formula's result (errors propagate).
+   */
   valueOf(cellId: WorkbookCellId, blocked: ReadonlySet<WorkbookCellId>): CellValue {
     const cell = this.cells.get(cellId);
     if (cell === undefined) return { kind: 'blank' };
@@ -253,10 +299,16 @@ export class FormulaEngine {
       return result.value ?? { kind: 'blank' };
     }
     if (cell.value === null) {
-      const inferred = inferCellValue(cell.snapshot.kind === 'text' ? cell.snapshot.text : '');
+      const text = cell.snapshot.kind === 'text' ? cell.snapshot.text : '';
+      const format = this.formatOf(cellId);
+      // Automatic keeps the inference from the typed text (FMT-01); an explicit format decides
+      // the value and excludes what it cannot parse (FMT-05).
+      const value =
+        format.kind === 'auto'
+          ? inferCellValue(text)
+          : cellValueOf(text, format, isFormatLocale(this.locale) ? this.locale : undefined);
       const rich = cell.snapshot.kind === 'text' ? cell.snapshot.rich : undefined;
-      cell.value =
-        inferred.kind === 'text' && rich !== undefined ? { ...inferred, rich } : inferred;
+      cell.value = value.kind === 'text' && rich !== undefined ? { ...value, rich } : value;
     }
     return cell.value;
   }
@@ -278,17 +330,64 @@ export class FormulaEngine {
     const existing = this.tables.get(structure.id);
     let table = existing;
     if (table === undefined) {
-      table = { structure, cells: new Map(), derivedColumns: new Set() };
+      table = {
+        structure,
+        cells: new Map(),
+        derivedColumns: new Set(),
+        columnFormats: columnFormatsOf(structure),
+      };
       this.tables.set(structure.id, table);
     } else {
       // Cells of a row or column that vanished stay in the state: their content is
       // still in the document (a delete removes it separately, an undo brings the
       // row back and the binding with it). They are simply not addressable.
+      const previous = table.structure;
+      const previousFormats = table.columnFormats;
       table.structure = structure;
+      table.columnFormats = columnFormatsOf(structure);
+      this.reformat(table, previous, previousFormats);
     }
     this.index.setTable(structure);
     this.touchStructure(structure.id, structure.sheetId, existing?.structure.sheetId);
     this.syncDerived(table, removed);
+  }
+
+  /**
+   * A format change re-evaluates what depends on it (FMT-02 "changing the
+   * format re-renders without re-typing"; FMT-03; FMT-05): every cell whose
+   * effective format moved — the column's cells when the column's format
+   * changed, one cell when its override did — forgets its cached value and
+   * dirties its dependents. Nothing else in the table is touched, so a
+   * rename or a wrap still evaluates nothing.
+   */
+  private reformat(
+    table: TableState,
+    previous: TableStructure,
+    previousFormats: ReadonlyMap<Id, CellFormat>,
+  ): void {
+    const columns = new Set<Id>();
+    for (const [colId, format] of table.columnFormats) {
+      if (!sameFormat(previousFormats.get(colId), format)) columns.add(colId);
+    }
+    const before = previous.cellFormats ?? {};
+    const after = table.structure.cellFormats ?? {};
+    const overrides = new Set<CellKey>();
+    for (const key of Object.keys(before) as CellKey[]) {
+      if (!sameFormat(before[key], after[key])) overrides.add(key);
+    }
+    for (const key of Object.keys(after) as CellKey[]) {
+      if (!(key in before)) overrides.add(key);
+    }
+    if (columns.size === 0 && overrides.size === 0) return;
+    for (const cell of table.cells.values()) {
+      if (cell.formula !== null) continue;
+      const inColumn = columns.size > 0 && columns.has(splitCellKey(cell.key).colId);
+      // A cell with its own override does not follow the column's change.
+      const follows = inColumn && after[cell.key] === undefined && before[cell.key] === undefined;
+      if (!follows && !overrides.has(cell.key)) continue;
+      cell.value = null;
+      if (this.graph.hasNode(cell.id)) this.graph.markDirty(cell.id);
+    }
   }
 
   /**

@@ -22,6 +22,7 @@ import {
 import {
   canonicalNumber,
   canonicalText,
+  cellValueOf,
   formatCurrency,
   formatDate,
   formatNumber,
@@ -217,6 +218,66 @@ describe('resolveValue (FMT-01, FMT-05)', () => {
 
   test('Text format is never numeric', () => {
     expect(resolveValue('1234', cellFormat('text'))).toEqual({ kind: 'text', text: '1234' });
+  });
+
+  test('FMT-05 an amount under a Number format is invalid, "never silently coerced": S$12 is not 12', () => {
+    for (const text of ['S$12', '$12', 'USD 12', '₹1,234', '12 INR']) {
+      expect(resolveValue(text, cellFormat('number'))).toEqual({
+        kind: 'invalid',
+        text,
+        expected: 'number',
+      });
+      expect(renderText(text, cellFormat('number', { decimals: 6 }))).toEqual({
+        text,
+        align: 'left',
+        invalid: true,
+      });
+      // The stored text is kept as typed, so nothing is lost when the format changes back.
+      expect(canonicalText(text, cellFormat('number'))).toBe(text);
+    }
+    // A plain number and a negative amount in parentheses still parse.
+    expect(resolveValue('(45)', cellFormat('number'))).toEqual({ kind: 'number', value: -45 });
+    // A date under Number is invalid too (the audit's B6).
+    expect(resolveValue('12/9/2026', cellFormat('number')).kind).toBe('invalid');
+  });
+
+  test('FMT-02 FMT-03 FMT-05 cellValueOf is the engine’s read of a formatted cell: the parsed value with its rendered text; invalid is blank', () => {
+    const sgd = cellFormat('currency', { currency: 'SGD', decimals: 2 });
+    expect(cellValueOf('100', sgd, 'en-US')).toEqual({
+      kind: 'currency',
+      value: 100,
+      code: 'SGD',
+      text: 'SGD\u00a0100.00',
+    });
+    expect(cellValueOf('-45.5', sgd, 'en-US')).toEqual({
+      kind: 'currency',
+      value: -45.5,
+      code: 'SGD',
+      text: '(SGD\u00a045.50)',
+    });
+    // A cell overridden to INR yields INR: the code Sum compares.
+    expect(cellValueOf('2500', cellFormat('currency', { currency: 'INR' }), 'en-US')).toEqual({
+      kind: 'currency',
+      value: 2500,
+      code: 'INR',
+      text: '₹2,500.00',
+    });
+    expect(cellValueOf('1,234.50', cellFormat('number', { decimals: 6 }), 'en-US')).toEqual({
+      kind: 'number',
+      value: 1234.5,
+      text: '1,234.500000',
+    });
+    expect(cellValueOf('12/9/2026', cellFormat('date'), 'en-GB')).toEqual({
+      kind: 'date',
+      iso: '2026-09-12',
+      text: '12 Sept 2026',
+    });
+    // Invalid under an explicit format is blank to a formula: excluded, never zero.
+    expect(cellValueOf('S$12', cellFormat('number'))).toEqual({ kind: 'blank' });
+    expect(cellValueOf('12/9/2026', cellFormat('number'))).toEqual({ kind: 'blank' });
+    expect(cellValueOf('abc', sgd)).toEqual({ kind: 'blank' });
+    expect(cellValueOf('   ', sgd)).toEqual({ kind: 'blank' });
+    expect(cellValueOf('1234', cellFormat('text'))).toEqual({ kind: 'text', text: '1234' });
   });
 
   test('FMT-03 Currency takes the column code unless the text names another', () => {

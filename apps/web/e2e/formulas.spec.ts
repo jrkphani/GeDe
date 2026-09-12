@@ -112,8 +112,34 @@ test.describe('formulas', () => {
     await enter(page, 'B5', '1200');
     await enter(page, 'B6', '34');
 
-    // FX-02: `=` opens the forms menu without taking focus; Sum is offered on a number column.
+    // FX-02 "offered only when the column is Number or Currency": on the Automatic column the
+    // menu says why Sum is not offered; formatting the column Number in the inspector offers it.
     const b7 = page.locator('[data-address="B7"]');
+    await b7.dblclick();
+    await page.getByLabel('Edit B7').fill('=');
+    const automatic = page.getByRole('listbox', { name: 'Formula forms' });
+    await expect(automatic.getByRole('option', { name: /Sum/ })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    // Escape closes the list (KEYS-06); the draft is emptied and committed rather than cancelled
+    // with a second Escape, which a closed Popover's still-mounted content can take while its
+    // enter animation settles (a `@gede/ui` Popover matter, see the #122 PR).
+    await page.keyboard.press('Escape');
+    await expect(automatic).toHaveCount(0);
+    await page.getByLabel('Edit B7').press('Backspace');
+    await expect(page.getByLabel('Edit B7')).toHaveText('');
+    await page.getByLabel('Edit B7').press('Enter');
+    await expect(page.getByLabel('Edit B7')).toHaveCount(0);
+    await page.locator('[data-address="B5"]').click();
+    const rail = page.getByTestId('inspector');
+    await rail.getByRole('tab', { name: 'Cell' }).click();
+    const format = rail.getByRole('region', { name: 'data format' });
+    await format.getByRole('combobox', { name: 'Format' }).click();
+    await page.getByRole('option', { name: 'Number' }).click();
+    await expect(format).toContainText('Formats Column 1 as Number');
+
+    // `=` opens the forms menu without taking focus; Sum is offered on the Number column.
     await b7.dblclick();
     const editor = page.getByLabel('Edit B7');
     await editor.fill('=');
@@ -199,7 +225,14 @@ test.describe('formulas', () => {
     await enter(page, 'B7', '66');
     await expect(b8.getByTestId('formula-cell').locator('.gd-formula__value')).toHaveText('1,266');
 
-    // FX-02 / A11Y-04: text in range is an error with icon and text, naming the offender.
+    // FX-02 / A11Y-04: text in range is an error with icon and text, naming the offender. Under
+    // the Number format `camp` would be invalid and excluded (FMT-05), so the column goes back
+    // to Automatic first: there, text is text.
+    await page.locator('[data-address="B6"]').click();
+    await rail.getByRole('tab', { name: 'Cell' }).click();
+    await format.getByRole('combobox', { name: 'Format' }).click();
+    await page.getByRole('option', { name: 'Automatic' }).click();
+    await expect(format).toContainText('Formats Column 1 as Automatic');
     await enter(page, 'B7', 'camp');
     await expect(b8.locator('.gd-formula__error-text')).toHaveText('text in range');
     await expect(
