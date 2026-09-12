@@ -1,0 +1,28 @@
+/* App-level styles. Tokens only; component skins live in @gede/ui. */
+@import './routes/sign-in/sign-in.css';
+@import './routes/library/library.css';
+@import './routes/document/document.css';
+@import './routes/errors/errors.css';
+
+#root {
+  min-height: 100vh;
+}
+
+.gd-app__loading {
+  padding: var(--space-6);
+  max-width: 40rem;
+}
+
+.gd-boot-error {
+  max-width: 36rem;
+  margin: var(--space-8) auto;
+  padding: 0 var(--space-4);
+}
+.gd-boot-error h1 {
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+.gd-boot-error p {
+  color: var(--ink-muted);
+}

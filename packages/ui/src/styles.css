@@ -1,0 +1,92 @@
+/* GeDe UI — global rules and component skins. Import once per app.
+   Every colour, radius and duration below is a token from @gede/tokens. */
+@import '@gede/tokens/tokens.css';
+
+@import './components/Button.css';
+@import './components/TextField.css';
+@import './components/CodeField.css';
+@import './components/SegmentedControl.css';
+@import './components/Dialog.css';
+@import './components/Menu.css';
+@import './components/Tabs.css';
+@import './components/Switch.css';
+@import './components/Checkbox.css';
+@import './components/Tooltip.css';
+@import './components/Toast.css';
+@import './components/Icon.css';
+@import './components/BrandMark.css';
+@import './components/AppleSignInButton.css';
+@import './components/Skeleton.css';
+@import './components/Banner.css';
+@import './components/EmptyState.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html {
+  font: 400 0.9375rem/1.6 var(--font-ui);
+  color: var(--ink);
+  background: var(--surface);
+  -webkit-text-size-adjust: 100%;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+}
+
+/* A11Y-02: 2 px amber ring at 2 px offset on every focusable element, never removed. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* I18N-03: Indic scripts need 1.7 line-height or matras clip. */
+[lang^='ta'],
+[lang^='hi'],
+[lang^='te'] {
+  line-height: 1.7;
+}
+
+a {
+  color: var(--link);
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+code,
+kbd,
+.gd-mono {
+  font-family: var(--font-mono);
+}
+
+/* State change must stay visible under reduced motion: positions jump, nothing fades away. */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.gd-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -1,0 +1,270 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  doc-page:not(:defined) { visibility: hidden; }
+  a { color: oklch(0.58 0.25 350); text-decoration: none; }
+  a:hover { color: oklch(0.48 0.24 350); text-decoration: underline; }
+</style>
+<script src="./doc-page.js"></script>
+</helmet>
+
+<doc-page margin="0.85in">
+  <div slot="header" style="display:flex; justify-content:space-between; align-items:baseline; padding-bottom:7px; border-bottom:1px solid oklch(0.88 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.48 0.008 265)">
+    <span>GeDe · Architecture</span>
+    <span>C4 model · data · capacity</span>
+  </div>
+
+  <div style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif; font-size:11pt; line-height:1.62; color:oklch(0.24 0.01 265); text-wrap:pretty">
+
+    <h1 style="margin:0 0 4px; font-size:27pt; font-weight:600; letter-spacing:-0.03em; line-height:1.1">GeDe — System Architecture</h1>
+    <div style="margin:0 0 8px; font-family:'IBM Plex Mono', monospace; font-size:9pt; letter-spacing:0.06em; text-transform:uppercase; color:oklch(0.58 0.25 350)">C4 model · initial data model · storage · capacity for 9 users, built to grow</div>
+    <p style="margin:0 0 30px; color:oklch(0.45 0.008 265)">Companion to the PRD (§20–22). All compute is AArch64 on AWS; the pipeline is CodeBuild on ARM. The design is sized for nine named users on day one and changes shape, not architecture, at each growth step.</p>
+
+    <!-- ============ LEVEL 1 ============ -->
+    <h2 style="margin:0 0 6px; font-size:14pt; font-weight:600; letter-spacing:-0.02em; padding-bottom:6px; border-bottom:1.5px solid oklch(0.28 0.01 265)">1. Level 1 — System Context</h2>
+    <p style="margin:0 0 14px">Who uses GeDe and what it depends on. GeDe is one system; everything else is a person or an external service.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin:0 0 12px; break-inside:avoid">
+      <div style="border:1px solid oklch(0.86 0.004 262); border-radius:5px; padding:10px 12px; background:oklch(0.985 0.002 262)">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">person</div>
+        <div style="font-weight:600; margin-top:2px">Editor</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">Desktop or tablet. Authors tables, formulas, graphs. Shares documents.</div>
+      </div>
+      <div style="border:1px solid oklch(0.86 0.004 262); border-radius:5px; padding:10px 12px; background:oklch(0.985 0.002 262)">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">person</div>
+        <div style="font-weight:600; margin-top:2px">Viewer</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">Invited view-only, or any editor on a phone. Reads, follows references, never writes.</div>
+      </div>
+      <div style="border:1px solid oklch(0.86 0.004 262); border-radius:5px; padding:10px 12px; background:oklch(0.985 0.002 262)">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">person</div>
+        <div style="font-weight:600; margin-top:2px">Operator</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">1Cloudhub engineer. Ships via the pipeline, watches dashboards, manages the user pool.</div>
+      </div>
+    </div>
+    <div style="display:flex; justify-content:center; margin:0 0 4px; font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.55 0.008 265)">↓ HTTPS · WebSocket ↓</div>
+    <div style="border:2px solid oklch(0.58 0.25 350); border-radius:6px; padding:12px 14px; margin:0 0 4px; background:#fff; break-inside:avoid">
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.58 0.25 350)">software system</div>
+      <div style="font-weight:600; font-size:12.5pt; margin-top:2px">GeDe</div>
+      <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">Text-oriented spreadsheet on an infinite lattice: tables, rich text, formulas, cross-table references, context graphs, real-time sharing.</div>
+    </div>
+    <div style="display:flex; justify-content:center; margin:0 0 4px; font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.55 0.008 265)">↓ uses ↓</div>
+    <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; margin:0 0 26px; break-inside:avoid">
+      <div style="border:1px dashed oklch(0.78 0.006 262); border-radius:5px; padding:10px 12px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">external</div>
+        <div style="font-weight:600; margin-top:2px">Amazon Cognito</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">User pool. Passkeys (WebAuthn), email one-time codes, Apple ID federation. Issues JWTs.</div>
+      </div>
+      <div style="border:1px dashed oklch(0.78 0.006 262); border-radius:5px; padding:10px 12px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">external</div>
+        <div style="font-weight:600; margin-top:2px">Sign in with Apple</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">OIDC identity provider registered in the Cognito pool.</div>
+      </div>
+      <div style="border:1px dashed oklch(0.78 0.006 262); border-radius:5px; padding:10px 12px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">external</div>
+        <div style="font-weight:600; margin-top:2px">Amazon SES</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">Delivers one-time codes and share invitations.</div>
+      </div>
+    </div>
+
+    <!-- ============ LEVEL 2 ============ -->
+    <h2 style="margin:0 0 6px; font-size:14pt; font-weight:600; letter-spacing:-0.02em; padding-bottom:6px; border-bottom:1.5px solid oklch(0.28 0.01 265)">2. Level 2 — Containers</h2>
+    <p style="margin:0 0 14px">The deployable units inside GeDe. Four containers, one of them static. The collaborative document (Yjs CRDT) is the unit of state; PostgreSQL holds its update log and the relational projection; S3 holds snapshots.</p>
+
+    <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin:0 0 10px; break-inside:avoid">
+      <div style="border:1px solid oklch(0.86 0.004 262); border-radius:5px; padding:10px 12px; background:#fff">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">container · web spa</div>
+        <div style="font-weight:600; margin-top:2px">GeDe Web</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">React + TypeScript. Owns rendering, the formula engine, the text-transform algebra, and the local Yjs replica. Served from S3 through CloudFront.</div>
+      </div>
+      <div style="border:1px solid oklch(0.86 0.004 262); border-radius:5px; padding:10px 12px; background:#fff">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">container · service</div>
+        <div style="font-weight:600; margin-top:2px">Sync &amp; API Service</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">Node 20 on <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">linux/arm64</code>, ECS Fargate (Graviton). WebSocket document rooms (y-websocket protocol), REST for documents, shares, invites. Verifies Cognito JWTs; enforces permissions on every message.</div>
+      </div>
+      <div style="border:1px solid oklch(0.86 0.004 262); border-radius:5px; padding:10px 12px; background:#fff">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">container · database</div>
+        <div style="font-weight:600; margin-top:2px">PostgreSQL 16</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">Amazon RDS on Graviton (<code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">db.t4g.micro</code> to start). Users, documents, shares, the Yjs update log, and a relational projection of tables and cells for search and audit.</div>
+      </div>
+      <div style="border:1px solid oklch(0.86 0.004 262); border-radius:5px; padding:10px 12px; background:#fff">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265)">container · object store</div>
+        <div style="font-weight:600; margin-top:2px">Amazon S3</div>
+        <div style="font-size:9.5pt; color:oklch(0.45 0.008 265); line-height:1.45">Two buckets: <em>web</em> (immutable, content-hashed bundle) and <em>docs</em> (compacted Yjs snapshots, versioned, lifecycle to Glacier IR after 90 days).</div>
+      </div>
+    </div>
+
+    <table style="width:100%; border-collapse:collapse; margin:0 0 26px; font-size:9.5pt">
+      <thead><tr>
+        <th style="text-align:left; padding:6px 10px 6px 0; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600">From</th>
+        <th style="text-align:left; padding:6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600">To</th>
+        <th style="text-align:left; padding:6px 0 6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600">Protocol · purpose</th>
+      </tr></thead>
+      <tbody>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Browser</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">CloudFront → S3 <em>web</em></td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">HTTPS · loads the SPA; long-cache hashed assets</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Browser</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Cognito</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">HTTPS · WebAuthn ceremony, OTP, Apple OIDC; receives ID + access tokens</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Browser</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Sync &amp; API (ALB)</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">WSS · Yjs sync + awareness per document room; HTTPS · REST for list, create, share</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Sync &amp; API</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">PostgreSQL</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">TLS · appends Yjs updates, reads permissions, writes projection</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Sync &amp; API</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">S3 <em>docs</em></td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">HTTPS (VPC endpoint) · snapshot every 500 updates or 5 min idle; load on cold open</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Sync &amp; API</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">SES</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">HTTPS · share invitations</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ LEVEL 3 ============ -->
+    <h2 style="margin:0 0 6px; font-size:14pt; font-weight:600; letter-spacing:-0.02em; padding-bottom:6px; border-bottom:1.5px solid oklch(0.28 0.01 265)">3. Level 3 — Components</h2>
+    <p style="margin:0 0 12px">Inside the two containers that hold logic. The line between them is deliberate: the browser computes, the service coordinates and persists.</p>
+
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">3.1 GeDe Web</h3>
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin:0 0 14px; break-inside:avoid">
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Document Store</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Yjs doc: sheets, tables, columns, rows, cells, graphs, shares. Undo manager. IndexedDB persistence for offline.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Dependency Graph</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Incremental reactive graph keyed by cell id; dirty marking, topological batches, cycle detection.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Formula Engine</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Grammar, parser, <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">Concat</code>, <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">Sum</code>, address and <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">@</code> resolution, reference highlighting.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Text Algebra</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Mark-preserving Split / Extract / Replace / Format on ProseMirror-schema text. Smart Chips as RE2 patterns in a Worker.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Lattice &amp; Renderer</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Sparse row/column index, A1 projection, viewport culling, semantic zoom bands, canvas layer for gridlines and edges.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Graphs</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Ring and coverage derived from a bound table; orbit layout; write-back through the Document Store.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Sync Client</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">y-websocket provider, awareness (presence), reconnect with exponential backoff, read-only mode on phone or view permission.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Auth Client</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Amplify Auth / Cognito SDK: passkey ceremony, OTP, Apple OIDC, silent refresh; tokens in memory only.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Inspector &amp; Chrome</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Format / Organize / Graph panels, context menus, share sheet, responsive shell.</div></div>
+    </div>
+
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">3.2 Sync &amp; API Service</h3>
+    <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:8px; margin:0 0 26px; break-inside:avoid">
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Auth Middleware</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Verifies Cognito JWT signature and claims on the WebSocket upgrade and every REST call; maps <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">sub</code> to <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">users</code>.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Room Manager</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">One in-memory Yjs doc per open document; fan-out of updates and awareness to connected sockets; idle eviction.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Permission Guard</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Reads <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">shares</code>; drops update messages from view-only sockets; link access honours the document's access mode.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Persistence Writer</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Appends each update to <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">doc_updates</code>; compacts to an S3 snapshot on threshold; prunes the log after snapshot.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Projection Worker</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">Debounced: materialises tables, columns and cell text into relational tables for search, audit and future reporting.</div></div>
+      <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:8px 10px"><div style="font-weight:600; font-size:10pt">Documents &amp; Sharing API</div><div style="font-size:9pt; color:oklch(0.45 0.008 265); line-height:1.45">REST: list, create, rename, delete; invite, change permission, revoke, link mode; sends SES invitations.</div></div>
+    </div>
+
+    <!-- ============ DEPLOYMENT ============ -->
+    <h2 style="margin:0 0 6px; font-size:14pt; font-weight:600; letter-spacing:-0.02em; padding-bottom:6px; border-bottom:1.5px solid oklch(0.28 0.01 265)">4. Deployment — AWS, single region (ap-southeast-1)</h2>
+    <div style="border:1px solid oklch(0.86 0.004 262); border-radius:6px; padding:12px 14px; margin:0 0 12px; background:oklch(0.985 0.002 262); break-inside:avoid">
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265); margin-bottom:8px">edge</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-bottom:12px">
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">Route 53</strong><br><span style="color:oklch(0.5 0.008 265)">gede.1cloudhub.com</span></div>
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">CloudFront</strong><br><span style="color:oklch(0.5 0.008 265)">SPA origin S3 · /api and /ws origin ALB · WAF managed rules</span></div>
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">Cognito</strong><br><span style="color:oklch(0.5 0.008 265)">user pool · Apple IdP · SES sender</span></div>
+      </div>
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:8pt; letter-spacing:0.07em; text-transform:uppercase; color:oklch(0.6 0.008 265); margin-bottom:8px">vpc · 2 AZs · public + private subnets</div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px">
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">ALB</strong><br><span style="color:oklch(0.5 0.008 265)">HTTPS + WebSocket, idle timeout 3600 s, sticky by document id (path)</span></div>
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">ECS Fargate · ARM64</strong><br><span style="color:oklch(0.5 0.008 265)">Sync &amp; API · 1 task 0.5 vCPU / 1 GiB · min 1, max 4</span></div>
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">RDS PostgreSQL 16</strong><br><span style="color:oklch(0.5 0.008 265)">db.t4g.micro · 20 GB gp3 · single-AZ, 7-day PITR</span></div>
+      </div>
+      <div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; margin-top:8px">
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">S3</strong><br><span style="color:oklch(0.5 0.008 265)">web · docs (versioned) · via gateway endpoint</span></div>
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">Secrets Manager · SSM</strong><br><span style="color:oklch(0.5 0.008 265)">DB credentials, Cognito ids, feature flags</span></div>
+        <div style="border:1px solid oklch(0.88 0.004 262); border-radius:4px; padding:7px 9px; background:#fff; font-size:9.5pt"><strong style="font-weight:600">CloudWatch</strong><br><span style="color:oklch(0.5 0.008 265)">logs, RUM, alarms → SNS email</span></div>
+      </div>
+    </div>
+    <p style="margin:0 0 26px; font-size:10pt; color:oklch(0.45 0.008 265)">Delivery: GitHub source → CodeBuild (<code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">ARM_CONTAINER</code>) verify → build <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">linux/arm64</code> image to ECR and bundle to S3 → CodePipeline deploy to staging, manual approval, production → smoke test → automatic rollback on failure. Everything above is one CDK app (TypeScript) with two stages.</p>
+
+    <!-- ============ DATA MODEL ============ -->
+    <h2 style="margin:0 0 6px; font-size:14pt; font-weight:600; letter-spacing:-0.02em; padding-bottom:6px; border-bottom:1.5px solid oklch(0.28 0.01 265)">5. Initial Data Model</h2>
+    <p style="margin:0 0 12px">Two layers. The <strong style="font-weight:600">document layer</strong> is the CRDT: authoritative, append-only updates plus snapshots. The <strong style="font-weight:600">relational layer</strong> is what the CRDT cannot do well: identity, access control, listing, and a searchable projection. Nothing in the relational projection is written by users directly.</p>
+
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">5.1 Relational — authoritative</h3>
+    <table style="width:100%; border-collapse:collapse; margin:0 0 16px; font-size:9.5pt">
+      <thead><tr>
+        <th style="text-align:left; padding:6px 10px 6px 0; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:19%">Table</th>
+        <th style="text-align:left; padding:6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:50%">Columns</th>
+        <th style="text-align:left; padding:6px 0 6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:31%">Notes</th>
+      </tr></thead>
+      <tbody style="font-family:'Helvetica Neue', Helvetica, Arial, sans-serif">
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">users</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id uuid pk · cognito_sub text unique · email citext unique · display_name text · created_at · last_seen_at</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Created on first sign-in from the JWT. No credentials stored.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">documents</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id uuid pk · owner_id → users · title text · link_access enum(none, view, edit) · link_token text unique null · snapshot_key text null · snapshot_seq bigint · updated_at · deleted_at null</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">One row per workbook. <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">snapshot_key</code> points into S3 <em>docs</em>.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">shares</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">document_id → documents · user_id → users · permission enum(view, edit) · invited_by → users · created_at · pk(document_id, user_id)</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">The participant list in the share sheet. Owner is implicit edit.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">invites</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id uuid pk · document_id · email citext · permission · token text unique · expires_at · accepted_at null</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">For emails without an account yet; converts to a share on first sign-in.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">doc_updates</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">document_id · seq bigint · update bytea · author_id → users null · created_at · pk(document_id, seq)</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Yjs update log since the last snapshot. Pruned after compaction. Typical update 50–500 bytes.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">snapshots</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">document_id · seq bigint · s3_key text · size_bytes int · created_at · pk(document_id, seq)</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">History of compactions; enables point-in-time restore of a document.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">5.2 Relational — projection (rebuildable)</h3>
+    <table style="width:100%; border-collapse:collapse; margin:0 0 16px; font-size:9.5pt">
+      <tbody>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt; width:19%">sheets</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265); width:50%">id text pk (CRDT id) · document_id · ordinal · label · parent_context text null</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); width:31%">Child sheets record the graph context they were opened from.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">tables</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id text pk · sheet_id · title · grid_col int · grid_row int · outline · options jsonb</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Lattice origin, so A1 addresses can be reconstructed server-side.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">columns</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id text pk · table_id · ordinal · label · width_units int · format enum(auto, text, number, currency, date) · format_opts jsonb · derived jsonb null · hidden bool</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)"><code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">derived</code> holds the method and arguments of a pipeline step.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">rows</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id text pk · table_id · ordinal · depth smallint · collapsed bool</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Hierarchy depth per §4 of the PRD.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">cells</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">row_id · column_id · text_plain text · rich jsonb · formula text null · ref_target text null · style jsonb · pk(row_id, column_id) · gin(to_tsvector(text_plain))</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Search and audit only; the CRDT remains the source of truth.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">graphs</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id text pk · sheet_id · pair_id · kind enum(ring, coverage) · table_id · dimension_columns text[] · grid_col · grid_row · width_units · height_units · slice jsonb</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">One row per half of a pair; <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">slice</code> stores row/column axes and pins.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:9pt">audit_log</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); font-family:'IBM Plex Mono', monospace; font-size:8.5pt; color:oklch(0.35 0.008 265)">id bigserial · document_id · user_id · action text · target text · at timestamptz</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Share changes, deletes, restores. Partitioned monthly once volume warrants.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">5.3 Document layer (Yjs)</h3>
+    <ul style="margin:0 0 26px; padding-left:20px; font-size:10pt">
+      <li style="margin-bottom:6px"><code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">Y.Map</code> per document: <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">sheets</code> (Y.Array of sheet maps), <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">tables</code>, <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">graphs</code>, <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">meta</code>.</li>
+      <li style="margin-bottom:6px">Each table: <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">columns</code> Y.Array, <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">rows</code> Y.Array of row ids, <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">cells</code> Y.Map keyed <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">rowId:colId</code> → Y.XmlFragment (ProseMirror-compatible rich text) or a formula string.</li>
+      <li style="margin-bottom:0">Ids are ULIDs generated client-side; A1 addresses are never stored. Awareness carries user id, name, colour, selected cell, and sheet.</li>
+    </ul>
+
+    <!-- ============ STORAGE OPTIONS ============ -->
+    <h2 style="margin:0 0 6px; font-size:14pt; font-weight:600; letter-spacing:-0.02em; padding-bottom:6px; border-bottom:1.5px solid oklch(0.28 0.01 265)">6. Storage Options</h2>
+    <table style="width:100%; border-collapse:collapse; margin:0 0 26px; font-size:9.5pt">
+      <thead><tr>
+        <th style="text-align:left; padding:6px 10px 6px 0; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:22%">Option</th>
+        <th style="text-align:left; padding:6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:38%">Fit</th>
+        <th style="text-align:left; padding:6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:18%">Day-one cost</th>
+        <th style="text-align:left; padding:6px 0 6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:22%">Decision</th>
+      </tr></thead>
+      <tbody>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">RDS PostgreSQL · db.t4g.micro</strong> (Graviton)</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Relational + bytea update log + jsonb projection in one engine. 2 vCPU burst, 1 GiB. Ample for 9 users and a few hundred documents.</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">≈ US$13–16 / mo</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); color:oklch(0.35 0.08 150); font-weight:600">Chosen</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">Aurora Serverless v2</strong> (Graviton)</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Same schema, scales ACUs with load, Multi-AZ, fast clones. Minimum 0.5 ACU always billed.</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">≈ US$45–60 / mo</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Growth step 2 — migrate by snapshot restore; no schema change.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">DynamoDB</strong> for updates + snapshots</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Excellent for the append-only update log; poor for the relational projection and search. Splits the data across two stores from day one.</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">≈ US$1–3 / mo</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Not now. Revisit if the update log outgrows Postgres.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">S3</strong> for snapshots</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Compacted Yjs state per document, versioned. Cheapest durable store; loads in one GET on cold open.</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">&lt; US$1 / mo</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262); color:oklch(0.35 0.08 150); font-weight:600">Chosen</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">ElastiCache Redis</strong> (Graviton)</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Pub/sub between Sync tasks once a document can be open on more than one task. Not needed while one task serves all rooms.</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">≈ US$12 / mo</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Growth step 1.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">OpenSearch</strong></td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Full-text and fuzzy search across documents. Postgres <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">tsvector</code> + <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">pg_trgm</code> covers 9 users comfortably.</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">≈ US$25+ / mo</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Not planned.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ============ CAPACITY ============ -->
+    <h2 style="margin:0 0 6px; font-size:14pt; font-weight:600; letter-spacing:-0.02em; padding-bottom:6px; border-bottom:1.5px solid oklch(0.28 0.01 265)">7. Capacity Plan</h2>
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">7.1 Day one — 9 users</h3>
+    <ul style="margin:0 0 16px; padding-left:20px; font-size:10pt">
+      <li style="margin-bottom:6px"><strong style="font-weight:600">Load.</strong> At most 9 concurrent WebSocket connections, realistically 2–4 documents open at once. A Yjs update is 50–500 bytes; an active editor emits a few per second. Peak service traffic is under 10 KB/s. One Fargate task at 0.5 vCPU / 1 GiB idles below 5 % CPU.</li>
+      <li style="margin-bottom:6px"><strong style="font-weight:600">Data.</strong> A workbook the size of the Workscape demo is ≈ 200–400 KB as a Yjs snapshot. Ten thousand documents would be 4 GB of S3 and a few hundred MB of Postgres. The 20 GB gp3 volume is generous.</li>
+      <li style="margin-bottom:6px"><strong style="font-weight:600">Availability.</strong> Single task and single-AZ database are accepted for nine internal users; ECS restarts a failed task in under a minute and PITR covers the database. CloudFront keeps the SPA reachable regardless.</li>
+      <li style="margin-bottom:0"><strong style="font-weight:600">Cost.</strong> Fargate ARM ≈ US$15, RDS ≈ US$15, ALB ≈ US$18, CloudFront + S3 + Route 53 ≈ US$3, Cognito free under 50 k MAU, CodeBuild ARM ≈ US$2 at a few builds a day, CloudWatch ≈ US$3. <strong style="font-weight:600">About US$55–60 per month</strong>, of which the ALB is the largest fixed line.</li>
+    </ul>
+
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">7.2 Growth steps — no re-architecture</h3>
+    <table style="width:100%; border-collapse:collapse; margin:0 0 16px; font-size:9.5pt">
+      <thead><tr>
+        <th style="text-align:left; padding:6px 10px 6px 0; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:18%">Trigger</th>
+        <th style="text-align:left; padding:6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:50%">Change</th>
+        <th style="text-align:left; padding:6px 0 6px 10px; border-bottom:1.5px solid oklch(0.28 0.01 265); font-weight:600; width:32%">Why it is safe</th>
+      </tr></thead>
+      <tbody>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">≈ 50 users, or any task &gt; 60 % CPU</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">Step 1.</strong> ECS service to 2+ tasks; add ElastiCache Redis for room pub/sub (y-redis pattern) so a document may be open on any task; task size to 1 vCPU / 2 GiB.</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Room Manager already treats the process as one of many; only the fan-out transport changes.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">≈ 200 users, or Postgres &gt; 70 % CPU sustained</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">Step 2.</strong> Snapshot-restore into Aurora Serverless v2 (0.5–8 ACU), Multi-AZ; move the Projection Worker to its own ECS service.</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">Same PostgreSQL wire protocol and schema.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Update log &gt; 50 GB, or compaction lag</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">Step 3.</strong> Move <code style="font-family:'IBM Plex Mono', monospace; font-size:8.5pt">doc_updates</code> to DynamoDB (pk document_id, sk seq, TTL after snapshot).</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">The Persistence Writer is the only component that touches the log.</td></tr>
+        <tr><td style="padding:7px 10px 7px 0; border-bottom:1px solid oklch(0.91 0.004 262)">Users outside SE Asia</td><td style="padding:7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)"><strong style="font-weight:600">Step 4.</strong> Second region for the Sync service with Aurora Global Database read replica; documents pinned to a home region.</td><td style="padding:7px 0 7px 10px; border-bottom:1px solid oklch(0.91 0.004 262)">CRDT merges tolerate the latency; permissions read from the local replica.</td></tr>
+      </tbody>
+    </table>
+
+    <h3 style="margin:14px 0 8px; font-size:11.5pt; font-weight:600">7.3 Operational guardrails from day one</h3>
+    <ul style="margin:0; padding-left:20px; font-size:10pt">
+      <li style="margin-bottom:6px">Alarms: task CPU &gt; 60 % for 10 min, ALB 5xx &gt; 1 %, WebSocket reconnect rate, RDS free storage &lt; 25 %, snapshot lag &gt; 15 min.</li>
+      <li style="margin-bottom:6px">Budgets: AWS Budget at US$100 / month with an alert at 80 %.</li>
+      <li style="margin-bottom:6px">Backups: RDS 7-day PITR; S3 <em>docs</em> versioning with 90-day noncurrent retention; nightly <code style="font-family:'IBM Plex Mono', monospace; font-size:9pt">pg_dump</code> to S3 as a belt-and-braces export.</li>
+      <li style="margin-bottom:0">Least privilege: the task role can
+ read and write only the <em>docs</em> bucket prefix and its own secrets; the database user for the projection is read/write on projection tables only.</li>
+    </ul>
+  </div>
+</doc-page>
+</x-dc>
+</body>
+</html>

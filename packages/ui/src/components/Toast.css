@@ -1,0 +1,90 @@
+.gd-toast__viewport {
+  position: fixed;
+  bottom: var(--space-4);
+  left: var(--space-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(22rem, calc(100vw - var(--space-6)));
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  z-index: 40;
+  outline: none;
+}
+
+.gd-toast {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 0.625rem 0.75rem 0.625rem 0.875rem;
+  border-radius: var(--radius-md);
+  background: var(--slate-900);
+  color: var(--slate-0);
+  box-shadow: var(--elev-overlay);
+  font-size: 0.84375rem;
+  animation: gd-toast-enter var(--dur-base) var(--ease-standard);
+}
+.gd-toast[data-state='closed'] {
+  animation: gd-fade-in var(--dur-fast) var(--ease-out) reverse;
+}
+.gd-toast[data-swipe='move'] {
+  transform: translateY(var(--radix-toast-swipe-move-y));
+}
+.gd-toast[data-swipe='end'] {
+  animation: gd-toast-swipe-out var(--dur-fast) var(--ease-out);
+}
+
+.gd-toast__title {
+  font-weight: 500;
+}
+.gd-toast__description {
+  color: var(--slate-400);
+  font-size: 0.78125rem;
+}
+
+.gd-toast__undo {
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--amber-100);
+  font-weight: 600;
+  cursor: pointer;
+}
+.gd-toast__undo:hover {
+  background: color-mix(in srgb, var(--slate-0) 10%, transparent);
+}
+.gd-toast__undo:active {
+  transform: translateY(1px);
+}
+
+.gd-toast__close {
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--slate-400);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+}
+.gd-toast__close:hover {
+  color: var(--slate-0);
+}
+
+@keyframes gd-toast-enter {
+  from {
+    opacity: 0;
+    transform: translateY(var(--space-2));
+  }
+}
+@keyframes gd-toast-swipe-out {
+  to {
+    opacity: 0;
+    transform: translateY(100%);
+  }
+}

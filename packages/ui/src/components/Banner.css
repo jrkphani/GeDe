@@ -1,0 +1,37 @@
+.gd-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: 0.625rem 0.875rem;
+  border: 1px solid var(--amber-100);
+  border-radius: var(--radius-md);
+  background: var(--amber-50);
+  color: var(--amber-900);
+  font-size: 0.84375rem;
+}
+.gd-banner--danger {
+  border-color: color-mix(in srgb, var(--danger) 25%, var(--surface));
+  background: color-mix(in srgb, var(--danger) 8%, var(--surface));
+  color: var(--danger);
+}
+
+.gd-banner__icon {
+  flex: none;
+  margin-top: 0.125rem;
+  color: var(--warning);
+}
+.gd-banner--danger .gd-banner__icon {
+  color: var(--danger);
+}
+.gd-banner__text {
+  flex: 1;
+  margin: 0;
+  min-width: 0;
+}
+.gd-banner__cause {
+  font-weight: 600;
+}
+.gd-banner__action {
+  flex: none;
+  margin-left: auto;
+}

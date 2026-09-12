@@ -1,0 +1,15 @@
+node_modules/
+dist/
+build/
+coverage/
+cdk.out/
+*.tsbuildinfo
+.env
+.env.*
+!.env.example
+.DS_Store
+test-results/
+playwright-report/
+.vite/
+*.log
+.claude/worktrees/

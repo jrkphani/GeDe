@@ -1,0 +1,21 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "types": ["node"],
+    "rootDir": "src",
+    "outDir": "dist",
+    "tsBuildInfoFile": "dist/.tsbuildinfo"
+  },
+  "include": ["src"],
+  "exclude": ["src/**/*.test.ts", "src/test/**"],
+  "references": [
+    {
+      "path": "../../packages/core/tsconfig.src.json"
+    },
+    {
+      "path": "../../packages/db/tsconfig.src.json"
+    }
+  ]
+}

@@ -1,0 +1,47 @@
+{
+  "name": "gede",
+  "version": "2.0.0",
+  "private": true,
+  "description": "GeDe — text-oriented spreadsheet on an infinite lattice",
+  "license": "UNLICENSED",
+  "engines": {
+    "node": ">=22 <27"
+  },
+  "workspaces": [
+    "packages/*",
+    "services/*",
+    "apps/*",
+    "infra"
+  ],
+  "scripts": {
+    "typecheck": "tsc -b",
+    "lint": "eslint . --quiet",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "verify": "npm run typecheck && npm run lint && npm run format:check && npm run check-literals && npm run test",
+    "build": "npm run build --workspaces --if-present",
+    "e2e": "playwright test",
+    "dev": "npm run dev --workspace apps/web",
+    "synth": "npm run synth --workspace infra",
+    "traceability": "node scripts/traceability.mjs",
+    "check-literals": "node packages/tokens/bin/check-literals.mjs apps packages/ui"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.30.0",
+    "@types/node": "^22.15.0",
+    "@vitest/coverage-v8": "^3.2.0",
+    "eslint": "^9.30.0",
+    "eslint-config-prettier": "^10.1.0",
+    "eslint-plugin-jsx-a11y": "^6.10.0",
+    "eslint-plugin-react-hooks": "^5.2.0",
+    "globals": "^16.3.0",
+    "prettier": "^3.6.0",
+    "typescript": "~5.8.0",
+    "typescript-eslint": "^8.35.0",
+    "vitest": "^3.2.0"
+  },
+  "type": "module"
+}

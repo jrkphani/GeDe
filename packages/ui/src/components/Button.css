@@ -1,0 +1,157 @@
+.gd-btn {
+  --gd-btn-bg: var(--surface);
+  --gd-btn-fg: var(--ink);
+  --gd-btn-border: var(--border);
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-width: 0;
+  margin: 0;
+  border: 1px solid var(--gd-btn-border);
+  border-radius: var(--radius-md);
+  background: var(--gd-btn-bg);
+  color: var(--gd-btn-fg);
+  font-family: var(--font-ui);
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+
+.gd-btn--sm {
+  padding: 0.375rem 0.6875rem;
+  font-size: 0.75rem;
+  min-height: 1.75rem;
+}
+.gd-btn--md {
+  padding: 0.625rem 1rem;
+  font-size: 0.84375rem;
+  min-height: 2.25rem;
+}
+.gd-btn--lg {
+  padding: 0.75rem 1.25rem;
+  font-size: 0.9375rem;
+  min-height: 2.75rem;
+}
+
+.gd-btn--icon-only.gd-btn--sm {
+  padding: 0.375rem;
+}
+.gd-btn--icon-only.gd-btn--md {
+  padding: 0.5rem;
+}
+.gd-btn--icon-only.gd-btn--lg {
+  padding: 0.75rem;
+}
+
+.gd-btn--primary {
+  --gd-btn-bg: var(--action-primary-bg);
+  --gd-btn-fg: var(--action-primary-fg);
+  --gd-btn-border: var(--action-primary-bg);
+}
+.gd-btn--primary:hover:not(:disabled) {
+  --gd-btn-bg: color-mix(in srgb, var(--action-primary-bg) 88%, var(--forest-900));
+  --gd-btn-border: var(--gd-btn-bg);
+}
+.gd-btn--primary:active:not(:disabled) {
+  --gd-btn-bg: var(--forest-900);
+  --gd-btn-border: var(--forest-900);
+}
+
+.gd-btn--secondary:hover:not(:disabled) {
+  --gd-btn-bg: var(--surface-sunken);
+}
+.gd-btn--secondary:active:not(:disabled) {
+  --gd-btn-bg: var(--slate-200);
+}
+
+.gd-btn--ghost {
+  --gd-btn-bg: transparent;
+  --gd-btn-fg: var(--link);
+  --gd-btn-border: transparent;
+}
+.gd-btn--ghost:hover:not(:disabled) {
+  --gd-btn-bg: var(--forest-50);
+}
+.gd-btn--ghost:active:not(:disabled) {
+  --gd-btn-bg: var(--forest-100);
+}
+
+.gd-btn--danger {
+  --gd-btn-bg: var(--danger);
+  --gd-btn-fg: var(--slate-0);
+  --gd-btn-border: var(--danger);
+}
+.gd-btn--danger:hover:not(:disabled) {
+  --gd-btn-bg: color-mix(in srgb, var(--danger) 88%, var(--slate-900));
+  --gd-btn-border: var(--gd-btn-bg);
+}
+.gd-btn--danger:active:not(:disabled) {
+  --gd-btn-bg: color-mix(in srgb, var(--danger) 76%, var(--slate-900));
+}
+
+.gd-btn:active:not(:disabled) {
+  transform: translateY(1px);
+}
+
+.gd-btn:focus-visible {
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus-ring) 35%, transparent);
+}
+
+.gd-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.gd-btn__body {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+}
+.gd-btn__icon {
+  display: inline-flex;
+  flex: none;
+}
+.gd-btn__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Loading keeps the resting width: the body stays in flow but invisible. */
+.gd-btn--loading {
+  cursor: progress;
+  opacity: 1;
+}
+.gd-btn--loading .gd-btn__body {
+  visibility: hidden;
+}
+.gd-btn__loading {
+  position: absolute;
+  inset: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  padding: 0 var(--space-2);
+  overflow: hidden;
+  white-space: nowrap;
+}
+/* Spinner: ~620 ms per turn in the digest; there is no token for it, so derive from --dur-enter. */
+.gd-btn__spinner {
+  animation: gd-spin calc(var(--dur-enter) * 2) linear infinite;
+}
+
+@keyframes gd-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}

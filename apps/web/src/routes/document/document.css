@@ -1,0 +1,199 @@
+.gd-doc {
+  display: grid;
+  grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+  height: 100vh;
+  background: var(--surface);
+}
+
+.gd-doc__titlebar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  min-height: calc(var(--lattice-row) * 2);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+.gd-doc__home {
+  display: inline-flex;
+  color: var(--link);
+}
+.gd-doc__title {
+  flex: 1;
+  min-width: 0;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.gd-doc__title:hover:not(:disabled) {
+  border-color: var(--border);
+}
+.gd-doc__title:focus-visible {
+  border-color: var(--focus-ring);
+}
+.gd-doc__title-static {
+  flex: 1;
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-doc__shared {
+  display: inline-flex;
+  min-width: 0;
+}
+.gd-doc__badge {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  padding: 0.125rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--forest-50);
+  color: var(--forest-700);
+  font-size: 0.71875rem;
+  font-weight: 500;
+}
+.gd-doc__readonly {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+  white-space: nowrap;
+}
+
+.gd-doc__toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: calc(var(--lattice-row) * 2);
+  padding: 0 var(--space-3);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+.gd-doc__toolgap {
+  flex: 1;
+}
+.gd-doc__zoom {
+  min-width: 3ch;
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+  text-align: center;
+}
+.gd-doc__banner {
+  padding: var(--space-2) var(--space-3);
+}
+.gd-doc__skeleton {
+  padding: var(--space-4);
+}
+
+/* The canvas: rulers and lattice, absolute geometry, viewport pans. */
+.gd-canvas {
+  --gd-zoom: 1;
+  --gd-ruler: 1.625rem;
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--gd-ruler) minmax(0, 1fr);
+  grid-template-rows: var(--gd-ruler) minmax(0, 1fr);
+  overflow: auto;
+  background: var(--surface);
+}
+.gd-canvas__corner {
+  position: sticky;
+  top: 0;
+  left: 0;
+  z-index: 3;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-sunken);
+}
+.gd-canvas__cols {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  height: var(--gd-ruler);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-sunken);
+  transform-origin: left top;
+  transform: scaleX(var(--gd-zoom));
+}
+.gd-canvas__cols span {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-right: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.625rem;
+  color: var(--ink-muted);
+}
+.gd-canvas__rows {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  width: var(--gd-ruler);
+  border-right: 1px solid var(--border);
+  background: var(--surface-sunken);
+  transform-origin: left top;
+  transform: scaleY(var(--gd-zoom));
+}
+.gd-canvas__rows span {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: 0.59375rem;
+  color: var(--ink-muted);
+}
+.gd-canvas__sheet {
+  width: calc(var(--lattice-col) * 26 * var(--gd-zoom));
+  height: calc(var(--lattice-row) * 60 * var(--gd-zoom));
+}
+.gd-canvas--gridlines .gd-canvas__sheet {
+  background-image:
+    linear-gradient(to right, var(--border) 1px, transparent 1px),
+    linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: calc(var(--lattice-col) * var(--gd-zoom))
+    calc(var(--lattice-row) * var(--gd-zoom));
+}
+
+.gd-doc__sheets {
+  border-top: 1px solid var(--border);
+  padding: 0 var(--space-2);
+}
+.gd-doc__sheets .gd-tabs__list {
+  border-bottom: 0;
+}
+.gd-doc__sheet {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.gd-doc__sheet .gd-mono {
+  font-size: 0.65625rem;
+  color: var(--ink-muted);
+}
+
+/* RESP-02: phone chrome. Two-row grid: title, canvas, bottom sheet bar. */
+.gd-doc--phone {
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
+}
+.gd-doc__sheets--bottom {
+  position: sticky;
+  bottom: 0;
+  background: var(--surface);
+}
+.gd-doc--phone .gd-doc__sheets .gd-tabs__tab {
+  min-height: 2.75rem;
+}

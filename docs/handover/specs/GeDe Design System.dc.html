@@ -1,0 +1,1199 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+Tamil:wght@400;600&family=Noto+Sans+Devanagari:wght@400;600&family=Noto+Sans+Telugu:wght@400;600&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: #ffffff; }
+  a { color: #14532d; text-decoration: underline; text-underline-offset: 2px; }
+  a:hover { color: #0b3d20; }
+  :focus-visible { outline: 2px solid #b45309; outline-offset: 2px; border-radius: 3px; }
+  input, select, button, textarea { font: inherit; color: inherit; }
+  @keyframes gede-shimmer { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+  @keyframes gede-spin { to { transform: rotate(360deg); } }
+  @keyframes gede-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.45; } }
+  @media (prefers-reduced-motion: reduce) {
+    .gede-skeleton { animation: none !important; background: #eef2f0 !important; }
+  }
+</style>
+</helmet>
+
+<div style="max-width:1160px; margin:0 auto; padding:0 24px 96px; font-family:'Helvetica Neue', Helvetica, Arial, 'Noto Sans Tamil', 'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif; font-size:15px; line-height:1.6; color:#14201a; text-wrap:pretty">
+
+  <div style="display:flex; flex-wrap:wrap; align-items:flex-end; justify-content:space-between; gap:20px; padding:56px 0 28px; border-bottom:1px solid #e3e8e5">
+    <div>
+      <div style="display:flex; align-items:center; gap:12px; margin-bottom:14px">
+        <svg width="34" height="34" viewBox="0 0 40 40" aria-hidden="true"><rect x="2" y="2" width="36" height="36" rx="4" fill="none" stroke="#14532d" stroke-width="2.5"></rect><path d="M2 13h36M13 2v36" stroke="#14532d" stroke-width="1.4" opacity="0.55"></path><circle cx="26" cy="26" r="5" fill="#14532d"></circle></svg>
+        <span style="font-size:28px; font-weight:600; letter-spacing:-0.035em">GeDe</span>
+      </div>
+      <h1 style="margin:0 0 6px; font-size:40px; font-weight:600; letter-spacing:-0.04em; line-height:1.05">Design System Foundation</h1>
+      <p style="margin:0; max-width:62ch; color:#4a5a52; font-size:16px">Tokens, components, responsive rules, motion and accessibility criteria for the GeDe web application. Every specimen on this page is live: what you see is the rule.</p>
+    </div>
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.06em; text-transform:uppercase; color:#6b7c74; text-align:right">
+      <div>v1.0 · React · WCAG 2.1 AA</div>
+      <div style="margin-top:4px">1Cloudhub</div>
+    </div>
+  </div>
+
+  <div style="display:flex; flex-wrap:wrap; gap:6px; padding:16px 0 0; position:sticky; top:0; background:#fff; z-index:20; border-bottom:1px solid #e3e8e5; margin-bottom:40px">
+    <sc-for list="{{ nav }}" as="n" hint-placeholder-count="10">
+      <a href="{{ n.href }}" style="padding:7px 12px 12px; font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.05em; text-transform:uppercase; color:#4a5a52; text-decoration:none">{{ n.label }}</a>
+    </sc-for>
+  </div>
+
+  <!-- ============ 1 IDENTITY ============ -->
+  <section id="identity" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">01 · Visual identity</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">The mark and what it means</h2>
+    <p style="margin:0 0 26px; max-width:70ch; color:#4a5a52">GeDe is <em>generic design</em>: structure that emerges from ordinary text. The mark is a single lattice cell — the grid that underlies every GeDe document — with one filled node showing the cell in focus. It is geometric, drawn on an 8-unit grid, and never illustrative.</p>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(240px, 1fr)); gap:16px; margin-bottom:20px">
+      <sc-for list="{{ logos }}" as="l" hint-placeholder-count="3">
+        <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden">
+          <div style="display:flex; align-items:center; justify-content:center; min-height:150px; padding:24px; background:{{ l.bg }}">{{ l.svg }}</div>
+          <div style="padding:12px 14px; border-top:1px solid #e3e8e5">
+            <div style="font-weight:600; font-size:14px">{{ l.name }}</div>
+            <div style="font-size:12.5px; color:#5b6b63; line-height:1.5">{{ l.use }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <h3 style="margin:26px 0 6px; font-size:18px; font-weight:600; letter-spacing:-0.02em">Application icons and favicons</h3>
+    <p style="margin:0 0 14px; max-width:70ch; color:#4a5a52">The mark simplifies as it shrinks: below 32 px the inner gridlines drop, below 20 px only the node and frame remain. Every asset is SVG first; raster sizes are exported from the same source, never redrawn.</p>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:12px; margin-bottom:16px">
+      <sc-for list="{{ icons }}" as="i" hint-placeholder-count="8">
+        <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden">
+          <div style="display:flex; align-items:center; justify-content:center; min-height:112px; padding:16px; background:{{ i.bg }}; background-image:{{ i.grid }}; background-size:12px 12px">{{ i.svg }}</div>
+          <div style="padding:10px 12px; border-top:1px solid #e3e8e5">
+            <div style="font-weight:600; font-size:12.5px">{{ i.name }}</div>
+            <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#6b7c74; margin-top:2px; line-height:1.5">{{ i.spec }}</div>
+            <div style="font-size:11.5px; color:#5b6b63; margin-top:4px; line-height:1.45">{{ i.use }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden; margin-bottom:20px">
+      <div style="display:grid; grid-template-columns:160px minmax(0,1fr) minmax(0,1.1fr); gap:14px; padding:9px 16px; background:#f7f9f8; border-bottom:1.5px solid #14201a; font-size:12.5px; font-weight:600">
+        <span>File</span><span>Size · format</span><span>Where it is used</span>
+      </div>
+      <sc-for list="{{ assetFiles }}" as="a" hint-placeholder-count="10">
+        <div style="display:grid; grid-template-columns:160px minmax(0,1fr) minmax(0,1.1fr); gap:14px; padding:9px 16px; border-top:1px solid #f0f3f1; font-size:12.5px; align-items:start">
+          <code style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#14532d">{{ a.file }}</code>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; color:#5b6b63">{{ a.spec }}</span>
+          <span style="color:#3d4d45; line-height:1.5">{{ a.use }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="margin-bottom:26px">
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:8px">head markup</div>
+      <pre style="margin:0; padding:16px; background:#0f1a15; color:#d7e5dc; border-radius:10px; overflow-x:auto; font-family:'IBM Plex Mono', monospace; font-size:11.5px; line-height:1.65">{{ headSnippet }}</pre>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px; margin-bottom:32px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Clear space &amp; minimum size</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Clear space on all sides = the height of one lattice division (¼ of the mark).</li>
+          <li>Minimum mark size 20 px; below that use the filled-node glyph alone at 16 px.</li>
+          <li>Wordmark and mark lock up at a 12 px gap; never re-space the letterforms.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Never</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Recolour the node in the selection amber — the mark is brand, not state.</li>
+          <li>Place the green mark on a mid-tone photo; use the reversed white mark.</li>
+          <li>Rotate, outline, add a shadow, or set the wordmark in another face.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 style="margin:0 0 12px; font-size:18px; font-weight:600; letter-spacing:-0.02em">Aesthetic principles</h3>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(250px, 1fr)); gap:12px">
+      <sc-for list="{{ principles }}" as="p" hint-placeholder-count="6">
+        <div style="border-left:2px solid #14532d; padding:2px 0 2px 14px">
+          <div style="font-weight:600; font-size:14px; margin-bottom:2px">{{ p.title }}</div>
+          <div style="font-size:13px; color:#5b6b63; line-height:1.55">{{ p.body }}</div>
+        </div>
+      </sc-for>
+    </div>
+  </section>
+
+  <!-- ============ 2 COLOUR ============ -->
+  <section id="color" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">02 · Colour</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Two hues, one job each</h2>
+    <p style="margin:0 0 24px; max-width:70ch; color:#4a5a52"><strong style="font-weight:600">Forest #14532d</strong> is the brand: identity, primary actions, links, the active state of navigation. <strong style="font-weight:600">Amber #b45309</strong> is <em>live state</em>: the selected cell, formula references, collaborator presence, unsaved and in-progress. Keeping them apart means a user never has to ask whether a green thing is a brand element or a selection.</p>
+
+    <sc-for list="{{ ramps }}" as="r" hint-placeholder-count="4">
+      <div style="margin-bottom:18px">
+        <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:7px">
+          <span style="font-weight:600; font-size:14px">{{ r.name }}</span>
+          <span style="font-size:12.5px; color:#5b6b63">{{ r.use }}</span>
+        </div>
+        <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(92px, 1fr)); gap:6px">
+          <sc-for list="{{ r.steps }}" as="s" hint-placeholder-count="6">
+            <div style="border:1px solid #e3e8e5; border-radius:7px; overflow:hidden">
+              <div style="height:52px; background:{{ s.hex }}"></div>
+              <div style="padding:6px 8px; font-family:'IBM Plex Mono', monospace; font-size:10px; line-height:1.45">
+                <div style="color:#14201a">{{ s.step }}</div>
+                <div style="color:#6b7c74">{{ s.hex }}</div>
+                <div style="color:{{ s.ratioFg }}">{{ s.ratio }}</div>
+              </div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-for>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:16px; margin-top:24px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Semantic assignment</div>
+        <sc-for list="{{ semantic }}" as="s" hint-placeholder-count="8">
+          <div style="display:flex; align-items:center; gap:10px; padding:4px 0; border-top:1px solid #f0f3f1">
+            <span style="flex:none; width:16px; height:16px; border-radius:4px; background:{{ s.hex }}; border:1px solid #dde3df"></span>
+            <code style="flex:1; font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#14201a">{{ s.token }}</code>
+            <span style="font-size:12px; color:#5b6b63; text-align:right">{{ s.use }}</span>
+          </div>
+        </sc-for>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Rules</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Forest 700 on white is 10.6:1 — safe for body text, not only headlines.</li>
+          <li>Amber 700 on white is 4.8:1 — safe for text; amber 500 is decoration only.</li>
+          <li>Never use hue alone to carry meaning: pair with an icon, label or weight.</li>
+          <li>Surface tints step by one ramp value; no arbitrary alpha overlays.</li>
+          <li>Dark theme is a token swap, never a filter or <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">invert()</code>.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 3 TYPOGRAPHY ============ -->
+  <section id="type" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">03 · Typography</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">One grotesque, one mono</h2>
+    <p style="margin:0 0 22px; max-width:70ch; color:#4a5a52">Helvetica Neue for interface and content; IBM Plex Mono for anything addressable — cell references, formulas, tokens, counts, labels. The mono face is a signal, not a style: if it is monospace, you can type it into a formula. Indic scripts fall back to Noto, which Helvetica does not cover.</p>
+
+    <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden; margin-bottom:20px">
+      <sc-for list="{{ typeScale }}" as="t" hint-placeholder-count="8">
+        <div style="display:grid; grid-template-columns:minmax(0,1fr) 190px; gap:16px; align-items:baseline; padding:12px 18px; border-top:1px solid #f0f3f1">
+          <div style="min-width:0; font-size:{{ t.px }}px; font-weight:{{ t.weight }}; letter-spacing:{{ t.ls }}; line-height:{{ t.lh }}; font-family:{{ t.ff }}; overflow:hidden; text-overflow:ellipsis">{{ t.sample }}</div>
+          <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6b7c74; line-height:1.5">
+            <div style="color:#14201a">{{ t.token }}</div>
+            <div>{{ t.spec }}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Script coverage</div>
+        <div style="font-size:20px; line-height:1.7">
+          <div>Work-Force &amp; entities</div>
+          <div style="font-family:'Noto Sans Tamil', sans-serif">பணிக்குழு அமைப்பு</div>
+          <div style="font-family:'Noto Sans Devanagari', sans-serif">कार्यबल संरचना</div>
+          <div style="font-family:'Noto Sans Telugu', sans-serif">పనిబలం నిర్మాణం</div>
+        </div>
+        <div style="margin-top:10px; font-size:12.5px; color:#5b6b63; line-height:1.55">Stack: <code style="font-family:'IBM Plex Mono', monospace; font-size:11.5px">'Helvetica Neue', Helvetica, Arial, 'Noto Sans Tamil', 'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif</code>. Indic line-height is 1.7 minimum; matras clip at 1.4.</div>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Rules</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Sizes are <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">rem</code>; the root stays at 16 px so user zoom works.</li>
+          <li>Body copy never below 0.8125 rem (13 px); grid cells never below 0.6875 rem (11 px).</li>
+          <li>Three weights only: 400, 500, 600. No 700, no italic in UI chrome.</li>
+          <li>Measure caps at 70 characters for prose; grid cells clip with ellipsis and a title.</li>
+          <li>Negative tracking scales with size: −0.04 em at display, 0 below 14 px.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4 SPACE / RADIUS / ELEVATION ============ -->
+  <section id="space" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">04 · Space, radius, elevation</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">A 4 px base and a 160 × 22 lattice</h2>
+    <p style="margin:0 0 22px; max-width:70ch; color:#4a5a52">Interface spacing steps in 4 px units. The document canvas is separate and absolute: a 160 × 22 px lattice that gives every cell its A1 address. Never mix the two — canvas objects snap to the lattice, chrome pads on the scale.</p>
+
+    <div style="display:flex; flex-wrap:wrap; gap:8px; margin-bottom:22px">
+      <sc-for list="{{ spaceScale }}" as="s" hint-placeholder-count="8">
+        <div style="border:1px solid #e3e8e5; border-radius:8px; padding:10px; text-align:center; min-width:88px">
+          <div style="height:{{ s.px }}px; width:{{ s.px }}px; margin:0 auto 8px; background:#d8e5dd; border-radius:2px"></div>
+          <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#14201a">{{ s.token }}</div>
+          <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#6b7c74">{{ s.spec }}</div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:12px">Radius</div>
+        <div style="display:flex; flex-wrap:wrap; gap:10px">
+          <sc-for list="{{ radii }}" as="r" hint-placeholder-count="5">
+            <div style="text-align:center">
+              <div style="width:56px; height:40px; background:#eef3f0; border:1px solid #d8e0db; border-radius:{{ r.px }}px"></div>
+              <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#6b7c74; margin-top:5px">{{ r.label }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:12px">Elevation</div>
+        <div style="display:flex; flex-wrap:wrap; gap:14px">
+          <sc-for list="{{ elevations }}" as="e" hint-placeholder-count="4">
+            <div style="text-align:center">
+              <div style="width:70px; height:46px; background:#fff; border:1px solid #e8ece9; border-radius:8px; box-shadow:{{ e.shadow }}"></div>
+              <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; color:#6b7c74; margin-top:7px">{{ e.label }}</div>
+            </div>
+          </sc-for>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 4b ICONOGRAPHY ============ -->
+  <section id="icons" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">05 · Iconography</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Drawn, not decorated</h2>
+    <p style="margin:0 0 22px; max-width:70ch; color:#4a5a52">One family, one construction. Icons are line-drawn on a 18 × 18 grid at 1.3 px stroke, sharing the mark's geometry: square frames, 4-unit corner radii, filled circles for nodes. They label actions the interface cannot afford to spell out — never decoration, never a substitute for a word when space allows one.</p>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:16px; margin-bottom:22px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:12px">Construction</div>
+        <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px">{{ iconGrid }}</div>
+        <ul style="margin:0; padding-left:18px; font-size:13px; color:#3d4d45; line-height:1.7">
+          <li>18 × 18 viewBox, 1 px keyline inset, 16 px live area.</li>
+          <li>Stroke 1.3 px, round caps and joins, no fills except nodes.</li>
+          <li>Corner radius 1.6 px on small frames, matching the mark at scale.</li>
+          <li>Optical alignment beats mathematical centring — nudge to look right.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:12px">Sizes</div>
+        <div style="display:flex; align-items:flex-end; gap:20px; margin-bottom:12px">{{ iconSizes }}</div>
+        <ul style="margin:0; padding-left:18px; font-size:13px; color:#3d4d45; line-height:1.7">
+          <li>13 px inside dense chrome and menus · 15 px default · 18 px on primary toolbars.</li>
+          <li>Stroke stays 1.3 px at every size; never scale the stroke with the box.</li>
+          <li>Hit area is always ≥ 32 px, ≥ 44 px below the <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">lg</code> breakpoint.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:12px">Colour</div>
+        <div style="display:flex; align-items:center; gap:16px; margin-bottom:12px">{{ iconColours }}</div>
+        <ul style="margin:0; padding-left:18px; font-size:13px; color:#3d4d45; line-height:1.7">
+          <li>Icons inherit <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">currentColor</code>; never hard-code a hue in the path.</li>
+          <li>Ink 900 at rest, forest when the state they control is active, amber when it is live.</li>
+          <li>Disabled is slate 400, not opacity — opacity muddies against tinted rows.</li>
+        </ul>
+      </div>
+    </div>
+
+    <h3 style="margin:0 0 12px; font-size:18px; font-weight:600; letter-spacing:-0.02em">The set</h3>
+    <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden; margin-bottom:20px">
+      <sc-for list="{{ iconSets }}" as="g" hint-placeholder-count="5">
+        <div style="border-top:1px solid #edf1ef; padding:14px 18px">
+          <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">{{ g.group }}</div>
+          <div style="display:grid; grid-template-columns:repeat(auto-fill, minmax(104px, 1fr)); gap:10px">
+            <sc-for list="{{ g.items }}" as="i" hint-placeholder-count="6">
+              <div title="{{ i.name }}" style="display:flex; flex-direction:column; align-items:center; gap:6px; padding:10px 6px; border:1px solid #f0f3f1; border-radius:8px; background:#fff">
+                <span style="color:#14201a">{{ i.svg }}</span>
+                <span style="font-size:10.5px; color:#5b6b63; text-align:center; line-height:1.3">{{ i.name }}</span>
+              </div>
+            </sc-for>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:16px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Do</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Pair an icon with a label wherever the toolbar has room.</li>
+          <li>Give every icon-only control a tooltip <em>and</em> an <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">aria-label</code>.</li>
+          <li>Reuse an existing icon before drawing a new one; a near-duplicate is worse than a reused approximation.</li>
+          <li>Keep one meaning per glyph across the whole product.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Don't</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Mix filled and outline styles in one surface.</li>
+          <li>Use emoji, an icon font, or a third-party set with a different construction.</li>
+          <li>Let an icon carry a state alone — pair it with colour, position or text.</li>
+          <li>Draw anything pictorial: no illustrations, no mascots, no skeuomorphism.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Implementation</div>
+        <pre style="margin:0; font-family:'IBM Plex Mono', monospace; font-size:11px; line-height:1.6; color:#3d4d45; white-space:pre-wrap">{{ iconCode }}</pre>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 5 COMPONENTS ============ -->
+  <section id="components" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">06 · Components</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Atoms to organisms</h2>
+    <p style="margin:0 0 8px; max-width:70ch; color:#4a5a52">Every specimen below is the real component. Interact with them — hover, focus with the keyboard, click. States are not illustrated, they are live.</p>
+    <div style="margin:0 0 24px; padding:12px 16px; border:1px solid #d8e5dd; border-left:3px solid #14532d; border-radius:0 8px 8px 0; background:#f6faf7; font-size:13.5px; color:#2c4038; max-width:80ch">
+      <strong style="font-weight:600">Build on a library, not on hand-rolled primitives.</strong> Behaviour — focus traps, roving tabindex, portal positioning, ARIA wiring, dismiss semantics — comes from a headless library (Radix UI, or Ark/Base UI). GeDe supplies only tokens and skin. A hand-rolled dropdown is a defect: it will be inconsistent, and it will be inaccessible.
+    </div>
+
+    <sc-for list="{{ groups }}" as="g" hint-placeholder-count="9">
+      <div style="margin-bottom:30px">
+        <div style="display:flex; align-items:baseline; gap:10px; margin-bottom:4px">
+          <h3 style="margin:0; font-size:17px; font-weight:600; letter-spacing:-0.02em">{{ g.title }}</h3>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:#8b9c93">{{ g.level }}</span>
+        </div>
+        <div style="font-size:13px; color:#5b6b63; margin-bottom:12px; max-width:78ch">{{ g.note }}</div>
+        <div style="border:1px solid #e3e8e5; border-radius:10px; padding:20px; background:#fcfdfc">{{ g.demo }}</div>
+      </div>
+    </sc-for>
+  </section>
+
+  <!-- ============ 6 RESPONSIVE ============ -->
+  <section id="responsive" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">07 · Responsive</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Five breakpoints, one layout law</h2>
+    <p style="margin:0 0 20px; max-width:70ch; color:#4a5a52">Chrome adapts; the document does not reflow. A table keeps its lattice geometry at every size — the viewport moves over it. What changes is how much chrome surrounds it and whether editing is offered at all.</p>
+    <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden; margin-bottom:18px">
+      <div style="display:grid; grid-template-columns:70px 130px minmax(0,1.3fr) minmax(0,1fr); gap:14px; padding:9px 16px; background:#f7f9f8; border-bottom:1.5px solid #14201a; font-size:12.5px; font-weight:600">
+        <span>Token</span><span>Range</span><span>Chrome</span><span>Capability</span>
+      </div>
+      <sc-for list="{{ breakpoints }}" as="b" hint-placeholder-count="5">
+        <div style="display:grid; grid-template-columns:70px 130px minmax(0,1.3fr) minmax(0,1fr); gap:14px; padding:11px 16px; border-top:1px solid #f0f3f1; font-size:13px; align-items:start">
+          <code style="font-family:'IBM Plex Mono', monospace; font-size:12px; color:#14532d">{{ b.token }}</code>
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#4a5a52">{{ b.range }}</span>
+          <span style="color:#3d4d45; line-height:1.5">{{ b.chrome }}</span>
+          <span style="color:#3d4d45; line-height:1.5">{{ b.cap }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Do</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Query the container, not the window, for anything inside the canvas.</li>
+          <li>Collapse the inspector to a 38 px strip before you shrink its contents.</li>
+          <li>Let toolbars wrap to a second row rather than clip or scroll horizontally.</li>
+          <li>Raise hit targets to 44 px below <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">md</code>; pointer is coarse there.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Don't</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Reflow a table's columns at a breakpoint — addresses would change.</li>
+          <li>Hide a command with no other home; move it, or state that it is unavailable.</li>
+          <li>Ship an edit affordance below <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">md</code>; phone is read-only by contract.</li>
+          <li>Scale type with <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">vw</code>; it breaks user zoom.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 7 MOTION ============ -->
+  <section id="motion" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">08 · Motion</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Physics, briefly</h2>
+    <p style="margin:0 0 20px; max-width:70ch; color:#4a5a52">Motion explains where something came from. Nothing moves for decoration, nothing animates longer than 300 ms, and every transition is cancellable. Hover the swatches to run each curve.</p>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(230px, 1fr)); gap:12px; margin-bottom:18px">
+      <sc-for list="{{ motions }}" as="m" hint-placeholder-count="5">
+        <div style="border:1px solid #e3e8e5; border-radius:10px; padding:14px 16px">
+          <div style="font-weight:600; font-size:13.5px; margin-bottom:2px">{{ m.name }}</div>
+          <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; color:#6b7c74; margin-bottom:10px">{{ m.spec }}</div>
+          <div style="height:26px; background:#f2f5f3; border-radius:6px; overflow:hidden; position:relative" style-hover="{{ m.hoverTrack }}">
+            <div style="position:absolute; top:5px; left:5px; width:16px; height:16px; border-radius:5px; background:#14532d; transition:transform {{ m.dur }} {{ m.ease }}"></div>
+          </div>
+          <div style="font-size:12.5px; color:#5b6b63; line-height:1.5; margin-top:9px">{{ m.use }}</div>
+        </div>
+      </sc-for>
+    </div>
+    <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+      <strong style="font-weight:600">Reduced motion.</strong> Under <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">prefers-reduced-motion: reduce</code>, transitions drop to 0 ms and animations are removed — but state changes must still be visible. Replace a slide with an instant position change, never with a fade that hides the change.
+    </div>
+  </section>
+
+  <!-- ============ 8 ACCESSIBILITY ============ -->
+  <section id="a11y" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">09 · Accessibility · WCAG 2.1 AA</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Criteria, not aspirations</h2>
+    <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden; margin-bottom:20px">
+      <div style="display:grid; grid-template-columns:130px minmax(0,1.2fr) minmax(0,1fr); gap:14px; padding:9px 16px; background:#f7f9f8; border-bottom:1.5px solid #14201a; font-size:12.5px; font-weight:600">
+        <span>Criterion</span><span>What GeDe does</span><span>How to verify</span>
+      </div>
+      <sc-for list="{{ a11y }}" as="a" hint-placeholder-count="10">
+        <div style="display:grid; grid-template-columns:130px minmax(0,1.2fr) minmax(0,1fr); gap:14px; padding:11px 16px; border-top:1px solid #f0f3f1; font-size:13px; align-items:start">
+          <div><code style="font-family:'IBM Plex Mono', monospace; font-size:11.5px; color:#14532d">{{ a.sc }}</code><div style="font-size:11.5px; color:#6b7c74; margin-top:2px">{{ a.name }}</div></div>
+          <span style="color:#3d4d45; line-height:1.5">{{ a.does }}</span>
+          <span style="color:#5b6b63; line-height:1.5">{{ a.test }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Merge checklist — every PR</div>
+      <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(280px, 1fr)); gap:4px 20px">
+        <sc-for list="{{ checklist }}" as="c" hint-placeholder-count="8">
+          <div style="display:flex; gap:9px; align-items:flex-start; font-size:13.5px; color:#3d4d45; padding:3px 0">
+            <span style="flex:none; width:14px; height:14px; margin-top:3px; border:1.5px solid #b8c4be; border-radius:3px"></span>
+            <span>{{ c }}</span>
+          </div>
+        </sc-for>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 9 TOKENS / HANDOFF ============ -->
+  <section id="tokens" style="margin:0 0 64px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">10 · Developer handoff</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Tokens are the contract</h2>
+    <p style="margin:0 0 20px; max-width:70ch; color:#4a5a52">One source of truth in JSON, emitted as CSS custom properties and a typed TypeScript theme. Components read tokens; they never carry literal colours or sizes. A hex code in a component file fails review.</p>
+    <div style="display:flex; gap:4px; margin-bottom:0">
+      <sc-for list="{{ codeTabs }}" as="t" hint-placeholder-count="3">
+        <button onClick="{{ t.on }}" style="border:1px solid #e3e8e5; border-bottom:none; border-radius:8px 8px 0 0; padding:8px 16px; font-size:13px; cursor:pointer; background:{{ t.bg }}; color:{{ t.fg }}; font-weight:{{ t.fw }}">{{ t.label }}</button>
+      </sc-for>
+    </div>
+    <pre style="margin:0 0 20px; padding:18px; background:#0f1a15; color:#d7e5dc; border-radius:0 10px 10px 10px; overflow-x:auto; font-family:'IBM Plex Mono', monospace; font-size:12px; line-height:1.65">{{ codeBody }}</pre>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Naming</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li><code style="font-family:'IBM Plex Mono', monospace; font-size:12px">category-role-variant-state</code>, kebab in CSS, camel in TS.</li>
+          <li>Primitives (<code style="font-family:'IBM Plex Mono', monospace; font-size:12px">forest-700</code>) are private; components use semantic aliases (<code style="font-family:'IBM Plex Mono', monospace; font-size:12px">action-primary-bg</code>).</li>
+          <li>Figma styles carry the same names, so a design change maps to one token.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Definition of done</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>No literal colour, radius, or duration in component source.</li>
+          <li>All five states specified and reachable by keyboard.</li>
+          <li>Renders correctly at 480, 768, 1024, 1440 and at 200 % zoom.</li>
+          <li>Light and dark both checked; contrast recorded in the PR.</li>
+          <li>Built on the headless primitive, not on a <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">div</code> with handlers.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 10 VOICE + EMAILS ============ -->
+  <section id="voice" style="margin:0 0 40px">
+    <div style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.09em; text-transform:uppercase; color:#14532d; margin-bottom:6px">11 · Voice and notifications</div>
+    <h2 style="margin:0 0 10px; font-size:28px; font-weight:600; letter-spacing:-0.03em">Say the thing</h2>
+    <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(260px, 1fr)); gap:16px; margin-bottom:26px">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Voice</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Plain, specific, unhurried. No exclamation marks, no "Oops", no emoji.</li>
+          <li>Name the object: "Delete <em>Work-Force</em>?" not "Delete this item?".</li>
+          <li>Buttons are verbs — Share, Invite, Delete — never OK / Yes / Submit.</li>
+          <li>Errors state cause and remedy: "Sum skipped <em>D14</em> — it holds text."</li>
+          <li>Sentence case everywhere. Title Case only in the wordmark.</li>
+        </ul>
+      </div>
+      <div style="border:1px solid #e3e8e5; border-radius:10px; padding:16px 18px">
+        <div style="font-family:'IBM Plex Mono', monospace; font-size:10.5px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:10px">Email rules</div>
+        <ul style="margin:0; padding-left:18px; font-size:13.5px; color:#3d4d45; line-height:1.7">
+          <li>Subject ≤ 60 characters, front-loaded with the actor or object.</li>
+          <li>One primary action per message; a plain-text link beneath it.</li>
+          <li>Sender <code style="font-family:'IBM Plex Mono', monospace; font-size:12px">GeDe &lt;no-reply@gede.1cloudhub.com&gt;</code>; reply-to the actor where one exists.</li>
+          <li>Never include document content — the recipient may not have access.</li>
+          <li>Codes expire in 10 minutes and say so; invitations in 14 days.</li>
+        </ul>
+      </div>
+    </div>
+
+    <sc-for list="{{ emails }}" as="e" hint-placeholder-count="6">
+      <div style="border:1px solid #e3e8e5; border-radius:10px; overflow:hidden; margin-bottom:14px">
+        <div style="display:flex; flex-wrap:wrap; align-items:baseline; gap:10px; padding:10px 16px; background:#f6faf7; border-bottom:1px solid #e3e8e5">
+          <span style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.06em; text-transform:uppercase; color:#14532d">{{ e.key }}</span>
+          <span style="font-weight:600; font-size:14px">{{ e.trigger }}</span>
+        </div>
+        <div style="padding:14px 16px">
+          <div style="font-size:12.5px; color:#6b7c74; margin-bottom:3px">Subject</div>
+          <div style="font-size:14.5px; font-weight:600; margin-bottom:12px">{{ e.subject }}</div>
+          <div style="font-size:12.5px; color:#6b7c74; margin-bottom:3px">Body</div>
+          <div style="font-size:13.5px; line-height:1.7; white-space:pre-line; color:#25332c">{{ e.body }}</div>
+          <div style="display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:14px">
+            <span style="display:inline-block; background:#14532d; color:#fff; border-radius:6px; padding:8px 16px; font-size:13px; font-weight:500">{{ e.cta }}</span>
+            <span style="font-size:12px; color:#6b7c74">{{ e.note }}</span>
+          </div>
+        </div>
+      </div>
+    </sc-for>
+  </section>
+
+</div>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  state = { tab: 'css' };
+
+  R = (el, p, ...kids) => React.createElement(el, p, ...kids);
+
+  renderVals() {
+    const R = React.createElement;
+    const FOREST = '#14532d';
+    const AMBER = '#b45309';
+    const MONO = "'IBM Plex Mono', monospace";
+    const UI = "'Helvetica Neue', Helvetica, Arial, 'Noto Sans Tamil', 'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif";
+
+    const swatch = (bg, stroke, node) => R('svg', { width: 92, height: 92, viewBox: '0 0 40 40', 'aria-hidden': 'true' },
+      R('rect', { x: 2, y: 2, width: 36, height: 36, rx: 4, fill: 'none', stroke: stroke, strokeWidth: 2.5 }),
+      R('path', { d: 'M2 13h36M13 2v36', stroke: stroke, strokeWidth: 1.4, opacity: 0.55 }),
+      R('circle', { cx: 26, cy: 26, r: 5, fill: node })
+    );
+
+    const logos = [
+      { name: 'Primary mark', use: 'Forest on white. App chrome, favicon at 32 px and above, documents.', bg: '#ffffff', svg: swatch('#fff', FOREST, FOREST) },
+      { name: 'Reversed', use: 'White on forest. Sign-in hero, dark theme, printed covers.', bg: FOREST, svg: swatch(FOREST, '#ffffff', '#ffffff') },
+      { name: 'Lockup', use: 'Mark plus wordmark at a 12 px gap. Marketing, email headers, share sheets.', bg: '#ffffff', svg: R('div', { style: { display: 'flex', alignItems: 'center', gap: 12 } },
+          R('svg', { width: 44, height: 44, viewBox: '0 0 40 40', 'aria-hidden': 'true' },
+            R('rect', { x: 2, y: 2, width: 36, height: 36, rx: 4, fill: 'none', stroke: FOREST, strokeWidth: 2.5 }),
+            R('path', { d: 'M2 13h36M13 2v36', stroke: FOREST, strokeWidth: 1.4, opacity: 0.55 }),
+            R('circle', { cx: 26, cy: 26, r: 5, fill: FOREST })),
+          R('span', { style: { fontSize: 30, fontWeight: 600, letterSpacing: '-0.035em', color: FOREST, fontFamily: UI } }, 'GeDe')) }
+    ];
+
+    const glyph = (size, opts) => {
+      const o = opts || {};
+      const stroke = o.stroke || FOREST;
+      const kids = [R('rect', { key: 'f', x: 2, y: 2, width: 36, height: 36, rx: o.rx === undefined ? 4 : o.rx, fill: o.fill || 'none', stroke: o.frame === false ? 'none' : stroke, strokeWidth: o.sw || 2.5 })];
+      if (o.lines !== false) kids.push(R('path', { key: 'l', d: 'M2 13h36M13 2v36', stroke: stroke, strokeWidth: 1.4, opacity: 0.55 }));
+      kids.push(R('circle', { key: 'n', cx: o.nodeC || 26, cy: o.nodeC || 26, r: o.nodeR || 5, fill: o.node || stroke }));
+      return R('svg', { width: size, height: size, viewBox: '0 0 40 40', 'aria-hidden': 'true', style: o.style || {} }, kids);
+    };
+    const dots = 'linear-gradient(45deg, #f2f5f3 25%, transparent 25%, transparent 75%, #f2f5f3 75%), linear-gradient(45deg, #f2f5f3 25%, transparent 25%, transparent 75%, #f2f5f3 75%)';
+
+    const icons = [
+      { name: 'Full mark', spec: '40 px and above · SVG', use: 'App chrome, sign-in, documents, marketing.', bg: '#fff', grid: 'none', svg: glyph(64) },
+      { name: 'Favicon 32', spec: '32 px · gridlines kept', use: 'Browser tab at 2×, bookmark bar.', bg: '#fff', grid: 'none', svg: glyph(32) },
+      { name: 'Favicon 16', spec: '16 px · gridlines dropped, node larger', use: 'Browser tab at 1×. Detail below 2 px stroke muddies.', bg: '#fff', grid: 'none', svg: glyph(16, { lines: false, sw: 3, nodeR: 7, nodeC: 25, rx: 3 }) },
+      { name: 'Maskable', spec: '512 px · 40% safe zone', use: 'Android adaptive icon; art inside the circle, forest field.', bg: FOREST, grid: 'none', svg: R('div', { style: { position: 'relative', width: 78, height: 78, borderRadius: 18, background: FOREST, display: 'flex', alignItems: 'center', justifyContent: 'center' } }, R('div', { style: { position: 'absolute', inset: 9, border: '1px dashed rgba(255,255,255,0.3)', borderRadius: 999 } }), glyph(40, { stroke: '#fff', node: '#fff' })) },
+      { name: 'Apple touch', spec: '180 px · no transparency, 20% padding', use: 'iOS home screen. iOS applies its own corner radius.', bg: '#f7f9f8', grid: 'none', svg: R('div', { style: { width: 78, height: 78, borderRadius: 16, background: '#fff', border: '1px solid #e3e8e5', display: 'flex', alignItems: 'center', justifyContent: 'center' } }, glyph(46)) },
+      { name: 'Monochrome', spec: 'currentColor · single path', use: 'Safari pinned tab, print, embosses, watermark.', bg: '#fff', grid: 'none', svg: glyph(52, { stroke: '#14201a', node: '#14201a' }) },
+      { name: 'Reversed on dark', spec: 'White on forest 900', use: 'Dark theme chrome, email header, splash.', bg: '#0a2d18', grid: 'none', svg: glyph(52, { stroke: '#fff', node: '#fff' }) },
+      { name: 'Transparent', spec: 'No field · for photos and video', use: 'Overlay on imagery only where contrast is ≥ 3:1.', bg: '#fff', grid: dots, svg: glyph(52) },
+      { name: 'Document icon', spec: 'Mark plus amber node', use: 'A GeDe workscape in a file list — node in live amber marks a document, not the app.', bg: '#fff', grid: 'none', svg: glyph(52, { node: AMBER }) },
+      { name: 'Loading glyph', spec: 'Node pulses, frame static', use: 'Splash while the first snapshot loads. Drops to static under reduced motion.', bg: '#fff', grid: 'none', svg: glyph(52, { style: {} }) },
+      { name: 'Avatar fallback', spec: 'Initials on forest 900', use: 'A user with no picture. Never a generated face.', bg: '#fff', grid: 'none', svg: R('span', { style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 52, height: 52, borderRadius: 52, background: '#14201a', color: '#fff', fontFamily: UI, fontSize: 17, fontWeight: 600 } }, 'RP') },
+      { name: 'Social card', spec: '1200 × 630 · og:image', use: 'Link previews. Mark left, wordmark, one line of copy.', bg: '#fff', grid: 'none', svg: R('div', { style: { width: 150, height: 79, border: '1px solid #e3e8e5', borderRadius: 6, background: FOREST, color: '#fff', display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 4, padding: '0 12px' } }, R('div', { style: { display: 'flex', alignItems: 'center', gap: 6 } }, glyph(16, { stroke: '#fff', node: '#fff', sw: 3 }), R('span', { style: { fontFamily: UI, fontSize: 13, fontWeight: 600, letterSpacing: '-0.02em' } }, 'GeDe')), R('span', { style: { fontFamily: UI, fontSize: 7.5, opacity: 0.8, lineHeight: 1.4 } }, 'A spreadsheet for text')) }
+    ];
+
+    const assetFiles = [
+      { file: 'favicon.svg', spec: 'SVG · currentColor + media query', use: 'Modern browsers; carries the dark-theme variant inline.' },
+      { file: 'favicon.ico', spec: 'ICO · 16, 32, 48', use: 'Legacy fallback and Windows shortcuts.' },
+      { file: 'icon-192.png', spec: 'PNG · 192 × 192', use: 'PWA manifest, Android home screen.' },
+      { file: 'icon-512.png', spec: 'PNG · 512 × 512', use: 'PWA splash and store listing.' },
+      { file: 'icon-maskable-512.png', spec: 'PNG · 512 × 512 · 40% safe zone', use: 'Android adaptive masking (circle, squircle, teardrop).' },
+      { file: 'apple-touch-icon.png', spec: 'PNG · 180 × 180 · opaque', use: 'iOS and iPadOS home screen.' },
+      { file: 'safari-pinned-tab.svg', spec: 'SVG · single monochrome path', use: 'Safari pinned tab; mask colour forest 700.' },
+      { file: 'og-card.png', spec: 'PNG · 1200 × 630', use: 'Open Graph and Twitter link previews.' },
+      { file: 'logo-lockup.svg', spec: 'SVG · mark + wordmark', use: 'Email headers, decks, printed documents.' },
+      { file: 'logo-reversed.svg', spec: 'SVG · white on transparent', use: 'Dark surfaces and photography.' },
+      { file: 'doc-icon.svg', spec: 'SVG · amber node', use: 'Workscape rows in the library and OS file associations.' }
+    ];
+
+    const headSnippet = '<link rel="icon" href="/favicon.ico" sizes="32x32">\n<link rel="icon" href="/favicon.svg" type="image/svg+xml">\n<link rel="apple-touch-icon" href="/apple-touch-icon.png">\n<link rel="mask-icon" href="/safari-pinned-tab.svg" color="#14532d">\n<link rel="manifest" href="/site.webmanifest">\n<meta name="theme-color" content="#ffffff" media="(prefers-color-scheme: light)">\n<meta name="theme-color" content="#0f1a15" media="(prefers-color-scheme: dark)">\n<meta property="og:image" content="https://gede.1cloudhub.com/og-card.png">\n\n<!-- favicon.svg carries both themes in one file -->\n<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">\n  <style>\n    :root { --ink: #14532d; }\n    @media (prefers-color-scheme: dark) { :root { --ink: #ffffff; } }\n  </style>\n  <rect x="2" y="2" width="36" height="36" rx="4" fill="none" stroke="var(--ink)" stroke-width="2.5"/>\n  <path d="M2 13h36M13 2v36" stroke="var(--ink)" stroke-width="1.4" opacity=".55"/>\n  <circle cx="26" cy="26" r="5" fill="var(--ink)"/>\n</svg>';
+
+    const principles = [
+      { title: 'Bold simplicity', body: 'One obvious path through every task. If a screen needs an explanation, the screen is wrong.' },
+      { title: 'Breathable structure', body: 'Whitespace is the primary organiser; rules and fills are the last resort, not the first.' },
+      { title: 'Colour with a job', body: 'Forest means brand and action. Amber means live. Grey means everything else. No third meaning.' },
+      { title: 'Hierarchy by weight', body: 'Size and weight carry rank before colour does, so the system survives greyscale and colour blindness.' },
+      { title: 'Density you can dial', body: 'The grid is dense by design; chrome is not. Comfortable and compact are explicit, never accidental.' },
+      { title: 'Motion as explanation', body: 'Things move to show where they came from. Under 300 ms, always interruptible, never decorative.' },
+      { title: 'Content over chrome', body: 'The document occupies the space. Toolbars collapse before content does.' }
+    ];
+
+    const ramp = (name, use, steps) => ({ name: name, use: use, steps: steps.map((s) => ({ step: s[0], hex: s[1], ratio: s[2], ratioFg: s[3] === 'ok' ? '#166534' : s[3] === 'lg' ? '#b45309' : '#94a3a0' })) });
+    const ramps = [
+      ramp('Forest — brand', 'Identity, primary actions, links, active navigation', [
+        ['50', '#f0f7f3', '—', 'n'], ['100', '#d8e9df', '—', 'n'], ['300', '#7fb195', '—', 'n'],
+        ['500', '#2a7b4e', '4.6:1', 'ok'], ['700', '#14532d', '10.6:1', 'ok'], ['900', '#0a2d18', '15.9:1', 'ok']
+      ]),
+      ramp('Amber — live state', 'Selected cell, formula references, presence, in progress', [
+        ['50', '#fdf6ec', '—', 'n'], ['100', '#f8e6c8', '—', 'n'], ['300', '#e0a04a', '—', 'n'],
+        ['500', '#d97706', '3.1:1', 'lg'], ['700', '#b45309', '4.8:1', 'ok'], ['900', '#7c3a05', '8.2:1', 'ok']
+      ]),
+      ramp('Slate — surface and ink', 'Backgrounds, borders, body and muted text', [
+        ['0', '#ffffff', '—', 'n'], ['50', '#f7f9f8', '—', 'n'], ['200', '#e3e8e5', '—', 'n'],
+        ['400', '#b8c4be', '—', 'n'], ['600', '#5b6b63', '6.1:1', 'ok'], ['900', '#14201a', '16.8:1', 'ok']
+      ]),
+      ramp('Status', 'Validation and system feedback only', [
+        ['success', '#166534', '7.4:1', 'ok'], ['warning', '#b45309', '4.8:1', 'ok'],
+        ['danger', '#b42318', '5.9:1', 'ok'], ['info', '#155e75', '7.0:1', 'ok']
+      ])
+    ];
+
+    const semantic = [
+      { token: '--action-primary-bg', hex: '#14532d', use: 'Primary button' },
+      { token: '--action-primary-fg', hex: '#ffffff', use: 'On primary' },
+      { token: '--link', hex: '#14532d', use: 'Inline links' },
+      { token: '--selection-ring', hex: '#b45309', use: 'Selected cell' },
+      { token: '--reference-1', hex: '#b45309', use: 'First formula operand' },
+      { token: '--presence-2', hex: '#155e75', use: 'Second collaborator' },
+      { token: '--surface', hex: '#ffffff', use: 'Card, sheet, menu' },
+      { token: '--surface-sunken', hex: '#f7f9f8', use: 'Canvas, table header' },
+      { token: '--border', hex: '#e3e8e5', use: 'Hairlines' },
+      { token: '--ink-muted', hex: '#5b6b63', use: 'Secondary text' }
+    ];
+
+    const typeScale = [
+      { token: 'display', spec: '2.5rem / 1.05 / 600 / −0.04em', px: 40, weight: 600, ls: '-0.04em', lh: 1.05, ff: UI, sample: 'Generic design' },
+      { token: 'h1', spec: '1.75rem / 1.15 / 600 / −0.03em', px: 28, weight: 600, ls: '-0.03em', lh: 1.15, ff: UI, sample: 'Work-Force & entities' },
+      { token: 'h2', spec: '1.25rem / 1.25 / 600 / −0.02em', px: 20, weight: 600, ls: '-0.02em', lh: 1.25, ff: UI, sample: 'Stakeholders & actions' },
+      { token: 'h3', spec: '1rem / 1.35 / 600 / −0.01em', px: 16, weight: 600, ls: '-0.01em', lh: 1.35, ff: UI, sample: 'Coverage · one 2-D slice' },
+      { token: 'body', spec: '0.9375rem / 1.6 / 400', px: 15, weight: 400, ls: '0', lh: 1.6, ff: UI, sample: 'Every row is a context; edits flow into the graph live.' },
+      { token: 'body-sm', spec: '0.8125rem / 1.55 / 400', px: 13, weight: 400, ls: '0', lh: 1.55, ff: UI, sample: 'Applies to the whole column; appended rows inherit it.' },
+      { token: 'cell', spec: '0.71875rem / 1.35 / 400', px: 11.5, weight: 400, ls: '0', lh: 1.35, ff: UI, sample: 'Country head - Singapore' },
+      { token: 'mono-cell', spec: '0.625rem / 1.3 / 400 · IBM Plex Mono', px: 10, weight: 400, ls: '0.01em', lh: 1.3, ff: MONO, sample: '=Sum(E14:E27) · @Enterprise.Phani' },
+      { token: 'label', spec: '0.5625rem / 1.2 / 500 / 0.08em · uppercase', px: 9, weight: 500, ls: '0.08em', lh: 1.2, ff: MONO, sample: 'SELECTED NODE' }
+    ];
+
+    const spaceScale = [['space-1', 4], ['space-2', 8], ['space-3', 12], ['space-4', 16], ['space-5', 24], ['space-6', 32], ['space-7', 48], ['space-8', 64]]
+      .map(([t, px]) => ({ token: t, px: px, spec: px + 'px · ' + (px / 16) + 'rem' }));
+
+    const radii = [['none', 0], ['sm', 3], ['md', 6], ['lg', 10], ['pill', 999]].map(([l, px]) => ({ label: l + ' · ' + px + 'px', px: px }));
+
+    const elevations = [
+      { label: 'flat', shadow: 'none' },
+      { label: 'raised', shadow: '0 1px 2px rgba(20,32,26,0.08)' },
+      { label: 'overlay', shadow: '0 8px 24px -10px rgba(20,32,26,0.35)' },
+      { label: 'modal', shadow: '0 24px 60px -20px rgba(20,32,26,0.45)' }
+    ];
+
+    // ---------- component specimens ----------
+    const S = this.state;
+    const set = (k, v) => this.setState(Object.assign({}, S, { [k]: v }));
+    const row = (...kids) => R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 10, alignItems: 'center' } }, ...kids);
+    const cap = (t) => R('div', { style: { fontFamily: MONO, fontSize: 10, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#8b9c93', margin: '14px 0 8px' } }, t);
+
+    const btn = (variant, label, opts) => {
+      const o = opts || {};
+      const base = { fontFamily: UI, fontSize: 13.5, lineHeight: 1, padding: '10px 16px', borderRadius: 6, cursor: o.disabled ? 'not-allowed' : 'pointer', transition: 'background 120ms ease, border-color 120ms ease, color 120ms ease', opacity: o.disabled ? 0.45 : 1 };
+      const skin = variant === 'primary' ? { background: FOREST, color: '#fff', border: '1px solid ' + FOREST }
+        : variant === 'secondary' ? { background: '#fff', color: '#14201a', border: '1px solid #d3dcd7' }
+        : variant === 'ghost' ? { background: 'transparent', color: FOREST, border: '1px solid transparent' }
+        : { background: '#b42318', color: '#fff', border: '1px solid #b42318' };
+      return R('button', { disabled: !!o.disabled, style: Object.assign({}, base, skin, o.style || {}) }, label);
+    };
+
+    const field = (label, node, hint) => R('label', { style: { display: 'block', minWidth: 190, flex: '1 1 190px' } },
+      R('span', { style: { display: 'block', fontSize: 12.5, color: '#5b6b63', marginBottom: 5 } }, label), node,
+      hint ? R('span', { style: { display: 'block', fontSize: 11.5, color: '#8b9c93', marginTop: 4 } }, hint) : null);
+
+    const inputStyle = (state) => Object.assign({
+      width: '100%', fontFamily: UI, fontSize: 13.5, padding: '9px 11px', borderRadius: 6, outline: 'none',
+      border: '1px solid ' + (state === 'error' ? '#b42318' : state === 'focus' ? AMBER : '#d3dcd7'),
+      boxShadow: state === 'focus' ? '0 0 0 3px rgba(180,83,9,0.18)' : 'none',
+      background: state === 'disabled' ? '#f2f5f3' : '#fff', color: state === 'disabled' ? '#8b9c93' : '#14201a'
+    });
+
+    const check = (on, label, kind) => R('button', {
+      onClick: () => set('demo_' + label, !on),
+      style: { display: 'flex', alignItems: 'center', gap: 9, border: 'none', background: 'none', padding: '4px 0', cursor: 'pointer', fontFamily: UI, fontSize: 13.5, color: '#14201a' }
+    },
+      R('span', { style: { flex: 'none', width: 17, height: 17, borderRadius: kind === 'radio' ? 17 : 4, border: '1.5px solid ' + (on ? FOREST : '#b8c4be'), background: on && kind !== 'radio' ? FOREST : '#fff', display: 'inline-flex', alignItems: 'center', justifyContent: 'center', color: '#fff', fontSize: 11, transition: 'all 120ms ease' } },
+        on ? (kind === 'radio' ? R('span', { style: { width: 8, height: 8, borderRadius: 8, background: FOREST } }) : '✓') : ''),
+      label);
+
+    const groups = [
+      { title: 'Buttons', level: 'atom', note: 'Four variants. Primary is forest and appears once per view; destructive is reserved for irreversible actions. Every variant carries hover, focus-visible, active and disabled.',
+        demo: R('div', {},
+          cap('variants'),
+          row(btn('primary', 'Share'), btn('secondary', 'Cancel'), btn('ghost', 'Re-point'), btn('danger', 'Delete workscape')),
+          cap('states — primary'),
+          row(btn('primary', 'Default'),
+            btn('primary', 'Hover', { style: { background: '#0f3f22', borderColor: '#0f3f22' } }),
+            btn('primary', 'Focus', { style: { boxShadow: '0 0 0 3px rgba(180,83,9,0.35)', outline: '2px solid ' + AMBER, outlineOffset: 2 } }),
+            btn('primary', 'Active', { style: { background: '#0a2d18', borderColor: '#0a2d18', transform: 'translateY(1px)' } }),
+            btn('primary', 'Disabled', { disabled: true })),
+          cap('sizes'),
+          row(btn('secondary', 'sm', { style: { fontSize: 12, padding: '6px 11px' } }), btn('secondary', 'md', {}), btn('secondary', 'lg', { style: { fontSize: 15, padding: '12px 20px' } }))
+        ) },
+
+      { title: 'Text fields, selects, choices', level: 'atom', note: 'Focus is amber, not forest — focus is live state. Error states name the problem beneath the field; placeholder text never carries the label.',
+        demo: R('div', {},
+          R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 16 } },
+            field('Default', R('input', { defaultValue: '', placeholder: 'Add people by email', style: inputStyle() })),
+            field('Focus', R('input', { defaultValue: 'phani@1cloudhub.com', style: inputStyle('focus') })),
+            field('Error', R('input', { defaultValue: 'phani@', style: inputStyle('error') }), R('span', { style: { color: '#b42318' } }, 'Enter a complete email address.')),
+            field('Disabled', R('input', { disabled: true, defaultValue: 'Owner', style: inputStyle('disabled') }))),
+          cap('select'),
+          R('select', { defaultValue: 'Currency', style: Object.assign(inputStyle(), { maxWidth: 240, cursor: 'pointer' }) }, ['Automatic', 'Text', 'Number', 'Currency', 'Date'].map((o) => R('option', { key: o }, o))),
+          cap('checkbox · radio · switch'),
+          R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 26, alignItems: 'center' } },
+            R('div', {}, check(S.demo_Title !== false, 'Title', 'check'), check(!!S.demo_Caption, 'Caption', 'check')),
+            R('div', {}, check(S.demo_inv !== false, 'Only people you invite', 'radio'), check(!!S.demo_link, 'Anyone with the link', 'radio')),
+            R('button', { onClick: () => set('demo_sw', !S.demo_sw), style: { position: 'relative', width: 40, height: 22, borderRadius: 22, border: '1px solid ' + (S.demo_sw ? FOREST : '#c6d0ca'), background: S.demo_sw ? FOREST : '#e8ece9', cursor: 'pointer', transition: 'background 140ms ease' } },
+              R('span', { style: { position: 'absolute', top: 2, left: S.demo_sw ? 20 : 2, width: 16, height: 16, borderRadius: 16, background: '#fff', boxShadow: '0 1px 2px rgba(20,32,26,0.4)', transition: 'left 140ms cubic-bezier(0.2,0.8,0.2,1)' } })))
+        ) },
+
+      { title: 'Tabs, segmented controls, chips', level: 'molecule', note: 'Segmented controls switch a view; tabs switch a pane; chips filter. Never nest one inside another of the same kind.',
+        demo: R('div', {},
+          cap('tabs'),
+          R('div', { style: { display: 'flex', gap: 2, borderBottom: '1px solid #e3e8e5' } },
+            ['Table', 'Cell', 'Text', 'Arrange', 'Graph'].map((t) => R('button', { key: t, onClick: () => set('demo_tab', t),
+              style: { border: 'none', background: 'none', padding: '9px 14px', fontSize: 13.5, cursor: 'pointer', color: (S.demo_tab || 'Table') === t ? '#14201a' : '#5b6b63', fontWeight: (S.demo_tab || 'Table') === t ? 600 : 400, borderBottom: '2px solid ' + ((S.demo_tab || 'Table') === t ? FOREST : 'transparent'), marginBottom: -1 } }, t))),
+          cap('segmented'),
+          R('div', { style: { display: 'inline-flex', gap: 2, padding: 2, background: '#eef2f0', borderRadius: 7 } },
+            ['Ring', 'Coverage'].map((t) => R('button', { key: t, onClick: () => set('demo_seg', t),
+              style: { border: 'none', borderRadius: 5, padding: '6px 14px', fontSize: 12.5, cursor: 'pointer', background: (S.demo_seg || 'Ring') === t ? '#fff' : 'transparent', color: (S.demo_seg || 'Ring') === t ? '#14201a' : '#5b6b63', boxShadow: (S.demo_seg || 'Ring') === t ? '0 1px 2px rgba(20,32,26,0.16)' : 'none' } }, t))),
+          cap('chips'),
+          row(['Group', 'Country', 'Accountability', 'Designation'].map((c) => {
+            const on = (S.demo_chip || 'Group') === c;
+            return R('button', { key: c, onClick: () => set('demo_chip', c), style: { display: 'inline-flex', alignItems: 'center', gap: 6, border: '1px solid ' + (on ? FOREST : '#d3dcd7'), background: on ? '#f0f7f3' : '#fff', color: on ? '#14201a' : '#5b6b63', borderRadius: 5, padding: '5px 11px', fontSize: 12.5, cursor: 'pointer' } },
+              R('span', { style: { width: 7, height: 7, borderRadius: 2, background: on ? FOREST : '#c6d0ca' } }), c);
+          }))
+        ) },
+
+      { title: 'Menus and dropdowns', level: 'molecule', note: 'Checkmarks sit left, shortcuts right, separators group by kind. Unavailable commands are shown disabled, never hidden — the absence of an item is itself confusing.',
+        demo: R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 20 } },
+          R('div', { style: { width: 252, padding: '5px 0', background: '#fff', border: '1px solid #dde3df', borderRadius: 8, boxShadow: '0 8px 24px -10px rgba(20,32,26,0.35)' } },
+            [['✓', 'Freeze header columns', false, ''], ['', 'sep', false, ''], ['↑', 'Sort ascending', false, ''], ['↓', 'Sort descending', false, ''], ['', 'Group rows by this column', false, ''], ['', 'sep', false, ''], ['', 'Add column before', false, ''], ['', 'Add column after', false, ''], ['', 'Delete column', false, ''], ['', 'sep', false, ''], ['⬚', 'Magic fill', true, ''], ['⧉', 'Copy', false, '⌘C']]
+              .map((it, i) => it[1] === 'sep'
+                ? R('div', { key: i, style: { height: 1, background: '#edf1ef', margin: '5px 0' } })
+                : R('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 9, padding: '5px 13px 5px 9px', fontSize: 13, color: it[2] ? '#a8b5af' : '#14201a', cursor: it[2] ? 'default' : 'pointer' } },
+                    R('span', { style: { width: 15, textAlign: 'center', fontSize: 11, color: it[2] ? '#c3ccc7' : (it[0] === '✓' ? FOREST : '#5b6b63') } }, it[0]),
+                    R('span', { style: { flex: 1 } }, it[1]),
+                    it[3] ? R('span', { style: { fontFamily: MONO, fontSize: 10.5, color: '#8b9c93' } }, it[3]) : null))),
+          R('div', { style: { flex: '1 1 240px', minWidth: 220 } },
+            R('div', { style: { fontSize: 13, color: '#3d4d45', lineHeight: 1.7 } },
+              R('div', {}, '• Anchor to the trigger; flip before it leaves the viewport.'),
+              R('div', {}, '• Escape closes; focus returns to the trigger.'),
+              R('div', {}, '• Arrow keys move; typing jumps to a matching item.'),
+              R('div', {}, '• Max height 82vh, then scroll inside.'),
+              R('div', {}, '• Use Radix DropdownMenu / ContextMenu — do not hand-roll.')))
+        ) },
+
+      { title: 'Grid — cells, headers, density', level: 'organism', note: 'The densest surface in the product. Row height is one lattice unit (22 px) or two when wrapped. Selection is an amber inset ring; references are amber outlines keyed by operand.',
+        demo: R('div', {},
+          R('div', { style: { border: '1px solid #d3dcd7', borderRadius: 3, overflow: 'hidden', maxWidth: 620, fontFamily: UI } },
+            R('div', { style: { display: 'flex', alignItems: 'flex-end', height: 44, padding: '5px 12px 6px', borderBottom: '1px solid #e3e8e5' } },
+              R('span', { style: { fontFamily: MONO, fontSize: 10, color: FOREST, marginRight: 7 } }, '3°'),
+              R('span', { style: { fontSize: 15, letterSpacing: '-0.02em' } }, 'Work-Force')),
+            R('div', { style: { display: 'grid', gridTemplateColumns: '150px 120px 1fr', height: 22, borderBottom: '1.5px solid #14201a', background: '#f7f9f8' } },
+              ['Group', 'Names', 'Designation'].map((h, i) => R('div', { key: h, style: { display: 'flex', alignItems: 'center', gap: 5, padding: '0 8px', borderRight: '1px solid #e8ece9', fontSize: 11, fontWeight: 600 } },
+                R('span', { style: { fontFamily: MONO, fontSize: 8.5, color: '#8b9c93' } }, ['A', 'B', 'C'][i]), h))),
+            [['Enterprise - Sales', 'Miren', 'Country head - Singapore', 0], ['Enterprise - Sales', 'July', 'Country head - Philippines', 1], ['Pre-sales', 'Ajay', 'Presales manager', 2], ['Pre-sales', '?', 'Country head - Indonesia', 3]]
+              .map((r, i) => R('div', { key: i, style: { display: 'grid', gridTemplateColumns: '150px 120px 1fr', height: 22, borderBottom: '1px solid #f0f3f1', background: i % 2 ? '#fafcfb' : '#fff' } },
+                r.slice(0, 3).map((c, j) => R('div', { key: j, style: { display: 'flex', alignItems: 'center', padding: '0 8px', borderRight: '1px solid #f2f5f3', fontSize: 11.5, color: c === '?' ? '#a8b5af' : '#14201a', boxShadow: (i === 1 && j === 1) ? 'inset 0 0 0 2px ' + AMBER : (i === 2 && j === 2) ? 'inset 0 0 0 2px #155e75' : 'none', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' } }, c)))),
+            R('div', { style: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', height: 22, padding: '0 9px', fontFamily: MONO, fontSize: 9, color: '#8b9c93' } }, R('span', {}, '4 / 30 rows'), R('span', {}, '3 cols'))),
+          cap('density'),
+          R('div', { style: { fontSize: 13, color: '#3d4d45', lineHeight: 1.7, maxWidth: '78ch' } },
+            R('div', {}, '• Compact 22 px — the default; text at 11.5 px, one line, ellipsis with a title attribute.'),
+            R('div', {}, '• Wrapped 44 px — two lattice rows, so A1 addressing stays exact.'),
+            R('div', {}, '• Below 1024 px the grid does not reflow; the viewport pans over it.'),
+            R('div', {}, '• Numeric and currency columns right-align; text and dates left-align.'),
+            R('div', {}, '• Amber = your selection. Teal, violet, orange = other collaborators, assigned on join.'))
+        ) },
+
+      { title: 'Inspector sections', level: 'organism', note: 'A 322 px rail, collapsible to 38 px. Sections are 13/14 px padded blocks separated by hairlines; each opens with a mono uppercase label at 9 px.',
+        demo: R('div', { style: { maxWidth: 322, border: '1px solid #e3e8e5', borderRadius: 8, overflow: 'hidden', background: '#fff' } },
+          R('div', { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '7px 9px', borderBottom: '1px solid #edf1ef' } },
+            R('span', { style: { fontFamily: MONO, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7c74' } }, 'inspector'),
+            R('button', { style: { width: 20, height: 20, border: '1px solid #e3e8e5', background: '#fff', borderRadius: 4, cursor: 'pointer', fontSize: 12, lineHeight: 1, color: '#5b6b63' } }, '›')),
+          R('div', { style: { padding: '13px 14px', borderBottom: '1px solid #edf1ef' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7c74' } }, 'selected node'),
+            R('div', { style: { marginTop: 4, fontSize: 15, letterSpacing: '-0.02em' } }, '3° Work-Force'),
+            R('div', { style: { marginTop: 2, fontSize: 11, color: '#5b6b63' } }, 'B14 selected · 30 rows · 5 columns')),
+          R('div', { style: { padding: '13px 14px' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 7 } }, 'data format'),
+            R('select', { defaultValue: 'Currency', style: Object.assign(inputStyle(), { cursor: 'pointer', fontSize: 12 }) }, ['Automatic', 'Text', 'Number', 'Currency', 'Date'].map((o) => R('option', { key: o }, o))),
+            R('div', { style: { marginTop: 6, fontSize: 10.5, color: '#6b7c74', lineHeight: 1.5 } }, 'Applies to the whole column B · appended rows inherit it.'))) },
+
+      { title: 'Dialogs, sheets, popovers', level: 'organism', note: 'Modal for decisions that block, popover for adjustments in place, sheet for share and settings. All trap focus, close on Escape, and return focus to their trigger.',
+        demo: R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 16, alignItems: 'flex-start' } },
+          R('div', { style: { width: 300, background: '#fff', border: '1px solid #dde3df', borderRadius: 10, boxShadow: '0 24px 60px -20px rgba(20,32,26,0.45)', overflow: 'hidden' } },
+            R('div', { style: { padding: '16px 18px 12px' } },
+              R('div', { style: { fontSize: 15, fontWeight: 600, letterSpacing: '-0.01em' } }, 'Delete “Work-Groups”?'),
+              R('div', { style: { fontSize: 13, color: '#5b6b63', marginTop: 5, lineHeight: 1.55 } }, 'Two graphs read this table. They will show as unbound until you point them at another.')),
+            R('div', { style: { display: 'flex', justifyContent: 'flex-end', gap: 8, padding: '0 18px 16px' } }, btn('secondary', 'Cancel', { style: { padding: '8px 14px', fontSize: 13 } }), btn('danger', 'Delete', { style: { padding: '8px 14px', fontSize: 13 } }))),
+          R('div', { style: { width: 250, background: '#fff', border: '1px solid #dde3df', borderRadius: 8, boxShadow: '0 8px 24px -10px rgba(20,32,26,0.35)', padding: 12 } },
+            R('div', { style: { fontFamily: MONO, fontSize: 9, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 6 } }, 'sort'),
+            row(['None', 'A–Z', 'Z–A', 'Chars'].map((l, i) => R('button', { key: l, style: { border: '1px solid ' + (i === 1 ? FOREST : '#e3e8e5'), background: i === 1 ? '#f0f7f3' : '#fff', color: i === 1 ? '#14201a' : '#5b6b63', borderRadius: 4, padding: '4px 9px', fontSize: 11.5, cursor: 'pointer' } }, l))))) },
+
+      { title: 'Toasts, banners, empty states', level: 'organism', note: 'Toast for the reversible and transient, banner for the persistent and consequential, empty state for a surface with nothing in it yet — always with the action that fills it.',
+        demo: R('div', { style: { display: 'flex', flexDirection: 'column', gap: 14 } },
+          R('div', { style: { display: 'flex', alignItems: 'center', gap: 12, maxWidth: 460, padding: '11px 14px', background: '#14201a', color: '#fff', borderRadius: 8, boxShadow: '0 8px 24px -10px rgba(20,32,26,0.5)' } },
+            R('span', { style: { flex: 1, fontSize: 13.5 } }, 'Row deleted from Work-Force.'),
+            R('button', { style: { border: 'none', background: 'none', color: '#f8e6c8', fontSize: 13, fontWeight: 500, cursor: 'pointer' } }, 'Undo')),
+          R('div', { style: { display: 'flex', gap: 11, maxWidth: 560, padding: '12px 14px', border: '1px solid #f8e6c8', background: '#fdf6ec', borderRadius: 8 } },
+            R('span', { style: { color: AMBER, fontSize: 14, lineHeight: 1.4 } }, '⚠'),
+            R('div', { style: { fontSize: 13.5, color: '#5d4213', lineHeight: 1.55 } }, R('strong', { style: { fontWeight: 600 } }, 'Sum skipped D14. '), 'It holds text, so it cannot be added. Change the column format or clear the cell.')),
+          R('div', { style: { maxWidth: 460, padding: '34px 20px', border: '1px dashed #d3dcd7', borderRadius: 10, textAlign: 'center', background: '#fafcfb' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 10, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#8b9c93' } }, 'no tables on this sheet'),
+            R('div', { style: { fontSize: 13, color: '#5b6b63', marginTop: 7, lineHeight: 1.55 } }, 'An empty sheet is still an infinite plane — the coordinate space exists before any node does.'),
+            R('div', { style: { display: 'flex', justifyContent: 'center', gap: 8, marginTop: 14 } }, btn('primary', '+ Table', { style: { padding: '8px 14px', fontSize: 13 } }), btn('secondary', '+ Graph', { style: { padding: '8px 14px', fontSize: 13 } })))) },
+
+      { title: 'Avatars, badges, presence', level: 'atom', note: 'Initials only, never generated faces. Presence colours are assigned on join from a fixed six and are never the brand green, so a collaborator is never mistaken for a system element.',
+        demo: R('div', {},
+          row(['#14201a', '#155e75', '#6d28d9', '#b45309', '#0f766e', '#9d174d'].map((c, i) => R('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 30, height: 30, borderRadius: 30, background: c, color: '#fff', fontSize: 11, fontWeight: 600 } }, ['RP', 'MD', 'AA', 'KR', 'PS', 'VK'][i]))),
+          cap('stacked · presence · badge'),
+          R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 22, alignItems: 'center' } },
+            R('span', { style: { display: 'flex' } }, ['#14201a', '#155e75', '#6d28d9'].map((c, i) => R('span', { key: i, style: { display: 'inline-flex', alignItems: 'center', justifyContent: 'center', width: 24, height: 24, borderRadius: 24, marginLeft: i ? -7 : 0, border: '2px solid #fff', background: c, color: '#fff', fontSize: 9, fontWeight: 600 } }, ['RP', 'MD', 'AA'][i]))),
+            R('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 6, fontSize: 12.5, color: '#3d4d45' } }, R('span', { style: { width: 8, height: 8, borderRadius: 8, background: '#155e75' } }), 'Meenarapan is editing D12'),
+            R('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 999, background: '#f0f7f3', color: '#14532d', fontSize: 11, fontWeight: 500 } }, 'Shared'),
+            R('span', { style: { display: 'inline-block', padding: '2px 8px', borderRadius: 999, background: '#fdf6ec', color: '#b45309', fontSize: 11, fontWeight: 500 } }, 'Draft'))) },
+
+      { title: 'Canvas objects', level: 'organism', note: 'Tables, graphs and rulers live on the lattice. Their chrome is quieter than interface chrome: hairlines, no shadows at rest, and an amber ring only when selected.',
+        demo: R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-start' } },
+          R('div', {},
+            R('div', { style: { display: 'flex' } },
+              R('div', { style: { width: 26 } }),
+              ['A', 'B', 'C'].map((l) => R('div', { key: l, style: { width: 74, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f2f5f3', borderRight: '1px solid #e3e8e5', borderBottom: '1px solid #dde3df', fontFamily: MONO, fontSize: 10, color: '#5b6b63' } }, l))),
+            R('div', { style: { display: 'flex' } },
+              R('div', {}, [1, 2, 3, 4].map((n) => R('div', { key: n, style: { width: 26, height: 22, display: 'flex', alignItems: 'center', justifyContent: 'flex-end', paddingRight: 5, background: '#f2f5f3', borderRight: '1px solid #dde3df', borderBottom: '1px solid #eef2f0', fontFamily: MONO, fontSize: 9.5, color: '#6b7c74' } }, n))),
+              R('div', { style: { border: '1px solid #d3dcd7', background: '#fff' } }, [0, 1, 2, 3].map((r) => R('div', { key: r, style: { display: 'flex' } }, [0, 1, 2].map((c) => R('div', { key: c, style: { width: 74, height: 22, borderRight: '1px solid #f0f3f1', borderBottom: '1px solid #f0f3f1', boxShadow: (r === 1 && c === 1) ? 'inset 0 0 0 2px ' + AMBER : 'none' } }))))))),
+          R('div', { style: { width: 190, border: '1px solid ' + AMBER, borderRadius: 3, background: '#fff', boxShadow: '0 8px 24px -12px rgba(20,32,26,0.35)' } },
+            R('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 34, padding: '0 10px', borderBottom: '1px solid #edf1ef' } },
+              R('span', { style: { fontFamily: MONO, fontSize: 10, color: FOREST } }, '◎'),
+              R('span', { style: { flex: 1, fontSize: 12 } }, 'Work-Force'),
+              R('span', { style: { fontFamily: MONO, fontSize: 8.5, letterSpacing: '0.06em', textTransform: 'uppercase', color: '#6b7c74', border: '1px solid #e3e8e5', borderRadius: 3, padding: '2px 6px' } }, 'ring')),
+            R('div', { style: { padding: 14, display: 'flex', justifyContent: 'center' } },
+              R('svg', { width: 130, height: 130, viewBox: '0 0 120 120' },
+                R('path', { d: 'M60 12 A48 48 0 0 1 101 84', fill: 'none', stroke: FOREST, strokeWidth: 2.5, strokeLinecap: 'round' }),
+                R('path', { d: 'M96 92 A48 48 0 0 1 24 92', fill: 'none', stroke: '#155e75', strokeWidth: 2.5, strokeLinecap: 'round' }),
+                R('path', { d: 'M19 84 A48 48 0 0 1 60 12', fill: 'none', stroke: AMBER, strokeWidth: 2.5, strokeLinecap: 'round' }),
+                R('circle', { cx: 88, cy: 42, r: 4, fill: FOREST }), R('circle', { cx: 60, cy: 108, r: 4, fill: '#155e75' }), R('circle', { cx: 26, cy: 48, r: 4, fill: AMBER }),
+                R('line', { x1: 60, y1: 60, x2: 88, y2: 42, stroke: FOREST, strokeWidth: 1.4 }), R('line', { x1: 60, y1: 60, x2: 60, y2: 108, stroke: '#155e75', strokeWidth: 1.4 }), R('line', { x1: 60, y1: 60, x2: 26, y2: 48, stroke: AMBER, strokeWidth: 1.4 }),
+                R('circle', { cx: 60, cy: 60, r: 13, fill: '#14201a' }),
+                R('text', { x: 60, y: 60, textAnchor: 'middle', dominantBaseline: 'central', fontFamily: MONO, fontSize: 11, fill: '#fff' }, 'α')))) ) }
+    ];
+
+    const shimmer = (w, h, r) => R('div', { className: 'gede-skeleton', style: {
+      width: w, height: h, borderRadius: r === undefined ? 4 : r,
+      background: 'linear-gradient(90deg, #eef2f0 25%, #f6f9f7 37%, #eef2f0 63%)',
+      backgroundSize: '400% 100%', animation: 'gede-shimmer 1.4s ease-in-out infinite'
+    } });
+
+    const spinner = (size, color) => R('span', { role: 'status', 'aria-label': 'Loading', style: {
+      display: 'inline-block', width: size, height: size, borderRadius: size,
+      border: Math.max(2, Math.round(size / 8)) + 'px solid ' + (color === '#fff' ? 'rgba(255,255,255,0.35)' : '#dbe4df'),
+      borderTopColor: color, animation: 'gede-spin 620ms linear infinite'
+    } });
+
+    groups.push({
+      title: 'Loading, skeletons, progress', level: 'organism',
+      note: 'Three tiers by expected wait. Under 200 ms show nothing — a flash of skeleton reads as jank. 200 ms to 1 s, a skeleton in the shape of the content. Over 1 s, a skeleton plus a status line that says what is happening. Never a full-page spinner: GeDe always knows the shape of what is coming.',
+      demo: R('div', {},
+        cap('tier 1 · inline — action in flight'),
+        row(
+          R('button', { disabled: true, style: { display: 'inline-flex', alignItems: 'center', gap: 9, background: FOREST, color: '#fff', border: '1px solid ' + FOREST, borderRadius: 6, padding: '10px 16px', fontSize: 13.5, cursor: 'progress', opacity: 0.9 } }, spinner(14, '#fff'), 'Inviting…'),
+          R('button', { disabled: true, style: { display: 'inline-flex', alignItems: 'center', gap: 9, background: '#fff', color: '#5b6b63', border: '1px solid #d3dcd7', borderRadius: 6, padding: '10px 16px', fontSize: 13.5, cursor: 'progress' } }, spinner(14, FOREST), 'Compiling'),
+          R('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: '#5b6b63' } }, spinner(11, AMBER), 'Saving…'),
+          R('span', { style: { display: 'inline-flex', alignItems: 'center', gap: 7, fontSize: 12.5, color: '#166534' } }, R('span', { style: { width: 8, height: 8, borderRadius: 8, background: '#166534' } }), 'All changes saved')
+        ),
+        R('div', { style: { fontSize: 12.5, color: '#5b6b63', marginTop: 9, lineHeight: 1.55, maxWidth: '76ch' } }, 'The button keeps its width so the layout never jumps; the label becomes the present participle of the action. Disabled plus ', R('code', { style: { fontFamily: MONO, fontSize: 11.5 } }, 'aria-busy="true"'), ', and the spinner carries ', R('code', { style: { fontFamily: MONO, fontSize: 11.5 } }, 'role="status"'), '.'),
+
+        cap('tier 2 · skeleton — content shaped'),
+        R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-start' } },
+          R('div', { style: { flex: '1 1 300px', minWidth: 280, border: '1px solid #e3e8e5', borderRadius: 8, overflow: 'hidden' } },
+            R('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid #edf1ef' } }, shimmer(18, 18, 4), shimmer(140, 12), R('div', { style: { flex: 1 } }), shimmer(54, 10)),
+            [0, 1, 2, 3].map((i) => R('div', { key: i, style: { display: 'flex', alignItems: 'center', gap: 12, padding: '11px 14px', borderTop: '1px solid #f2f5f3' } },
+              shimmer(18, 18, 4), shimmer(i % 2 ? 120 : 176, 11), R('div', { style: { flex: 1 } }), shimmer(46, 10), shimmer(64, 10))),
+            R('div', { style: { padding: '8px 14px', fontFamily: MONO, fontSize: 10, color: '#8b9c93', borderTop: '1px solid #f2f5f3' } }, 'workscape list')),
+          R('div', { style: { flex: '0 1 320px', minWidth: 280, border: '1px solid #e3e8e5', borderRadius: 3, overflow: 'hidden' } },
+            R('div', { style: { display: 'flex', alignItems: 'center', gap: 8, height: 44, padding: '0 12px', borderBottom: '1px solid #edf1ef' } }, shimmer(12, 10), shimmer(96, 12)),
+            R('div', { style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', height: 22, background: '#f7f9f8', borderBottom: '1.5px solid #dfe5e2' } }, [0, 1, 2].map((i) => R('div', { key: i, style: { display: 'flex', alignItems: 'center', padding: '0 8px', borderRight: '1px solid #eef2f0' } }, shimmer(i === 2 ? 58 : 40, 8)))),
+            [0, 1, 2, 3, 4, 5].map((r) => R('div', { key: r, style: { display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', height: 22, borderBottom: '1px solid #f4f7f5' } },
+              [0, 1, 2].map((c) => R('div', { key: c, style: { display: 'flex', alignItems: 'center', padding: '0 8px', borderRight: '1px solid #f6f8f7' } }, shimmer([64, 44, 78][(r + c) % 3], 8))))),
+            R('div', { style: { padding: '6px 10px', fontFamily: MONO, fontSize: 10, color: '#8b9c93' } }, 'table · lattice rows preserved'))),
+        R('div', { style: { fontSize: 12.5, color: '#5b6b63', marginTop: 9, lineHeight: 1.55, maxWidth: '76ch' } }, 'A skeleton mirrors the real geometry: table skeletons keep the 22 px lattice row so nothing shifts when data lands. Vary bar widths so it reads as content, not as a loading graphic. Wrap in ', R('code', { style: { fontFamily: MONO, fontSize: 11.5 } }, 'aria-busy="true"'), ' and hide bars from the accessibility tree.'),
+
+        cap('tier 3 · long wait — skeleton plus status'),
+        R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 18, alignItems: 'flex-start' } },
+          R('div', { style: { flex: '1 1 320px', minWidth: 300, border: '1px solid #e3e8e5', borderRadius: 10, padding: '20px 18px' } },
+            R('div', { style: { display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 } }, spinner(16, FOREST), R('span', { style: { fontSize: 13.5, fontWeight: 600 } }, 'Opening 1Cloudhub - Workscape')),
+            R('div', { style: { height: 4, background: '#eef2f0', borderRadius: 999, overflow: 'hidden', marginBottom: 12 } }, R('div', { style: { width: '62%', height: '100%', background: FOREST, borderRadius: 999, transition: 'width 240ms cubic-bezier(0.2,0.8,0.2,1)' } })),
+            R('div', { role: 'status', 'aria-live': 'polite', style: { fontFamily: MONO, fontSize: 11, color: '#5b6b63', lineHeight: 1.7 } },
+              R('div', {}, '✓ Snapshot loaded · 312 KB'),
+              R('div', {}, '✓ 48 updates replayed'),
+              R('div', { style: { color: '#14201a' } }, '→ Evaluating 214 formulas'),
+              R('div', { style: { color: '#a8b5af' } }, '   Rendering canvas'))),
+          R('div', { style: { flex: '0 1 300px', minWidth: 280 } },
+            R('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', border: '1px solid #f8e6c8', background: '#fdf6ec', borderRadius: 8, fontSize: 13, color: '#5d4213', marginBottom: 10 } }, spinner(13, AMBER), 'Reconnecting — your edits are saved locally'),
+            R('div', { style: { display: 'flex', alignItems: 'center', gap: 10, padding: '9px 13px', border: '1px solid #e3e8e5', background: '#f7f9f8', borderRadius: 8, fontSize: 13, color: '#3d4d45', marginBottom: 10 } }, R('span', { style: { width: 9, height: 9, borderRadius: 9, background: '#b8c4be', animation: 'gede-pulse 1.2s ease-in-out infinite' } }), 'Meenarapan is typing in D12'),
+            R('div', { style: { padding: '9px 13px', border: '1px solid #e3e8e5', borderRadius: 8, fontSize: 12.5, color: '#5b6b63', lineHeight: 1.55 } }, R('strong', { style: { fontWeight: 600, color: '#14201a' } }, 'Optimistic by default. '), 'A local edit renders immediately and syncs behind it. Only a failed sync surfaces anything — and it offers a retry, never a lost keystroke.'))),
+
+        cap('rules'),
+        R('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(270px, 1fr))', gap: 16 } },
+          R('div', { style: { border: '1px solid #e3e8e5', borderRadius: 10, padding: '14px 16px' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 9 } }, 'Do'),
+            R('ul', { style: { margin: 0, paddingLeft: 18, fontSize: 13, color: '#3d4d45', lineHeight: 1.7 } },
+              R('li', {}, 'Reserve the space the content will occupy — no layout shift on arrival.'),
+              R('li', {}, 'Delay skeletons by 200 ms; if data lands first, the user sees no loading at all.'),
+              R('li', {}, 'Hold a skeleton for at least 400 ms once shown, so it cannot flash.'),
+              R('li', {}, 'Say what is happening on waits over 1 s; name the object.'),
+              R('li', {}, 'Keep already-loaded content visible while the next part loads.'))),
+          R('div', { style: { border: '1px solid #e3e8e5', borderRadius: 10, padding: '14px 16px' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 9 } }, "Don't"),
+            R('ul', { style: { margin: 0, paddingLeft: 18, fontSize: 13, color: '#3d4d45', lineHeight: 1.7 } },
+              R('li', {}, 'Cover the whole app with a spinner — the shell is already known.'),
+              R('li', {}, 'Animate a skeleton under reduced-motion; use a flat tint instead.'),
+              R('li', {}, 'Use a progress bar for an unknown duration; use an indeterminate spinner.'),
+              R('li', {}, 'Block typing in a cell while the document syncs — edits are optimistic.'),
+              R('li', {}, 'Grey out an entire table because one derived column is recomputing.'))),
+          R('div', { style: { border: '1px solid #e3e8e5', borderRadius: 10, padding: '14px 16px' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 9 } }, 'Tokens'),
+            R('div', { style: { fontFamily: MONO, fontSize: 11.5, color: '#3d4d45', lineHeight: 1.9 } },
+              R('div', {}, '--skeleton-base: #eef2f0'),
+              R('div', {}, '--skeleton-sheen: #f6f9f7'),
+              R('div', {}, '--skeleton-speed: 1400ms'),
+              R('div', {}, '--loading-delay: 200ms'),
+              R('div', {}, '--loading-min-hold: 400ms'))))
+      )
+    });
+
+    const ic = (...kids) => R('svg', { width: 18, height: 18, viewBox: '0 0 18 18', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round', strokeLinejoin: 'round' }, ...kids);
+    const P = (d, extra) => R('path', Object.assign({ key: d.slice(0, 8), d: d }, extra || {}));
+    const RC = (x, y, w, h, r) => R('rect', { key: 'r' + x + y, x: x, y: y, width: w, height: h, rx: r === undefined ? 1.6 : r });
+    const CI = (cx, cy, r, fill) => R('circle', { key: 'c' + cx + cy, cx: cx, cy: cy, r: r, fill: fill || 'none', stroke: fill ? 'none' : 'currentColor' });
+
+    const iconSets = [
+      { group: 'Structure — the objects on the canvas', items: [
+        { name: 'Table', svg: ic(RC(2.5, 2.5, 13, 13), P('M2.5 6.6h13M6.8 6.6v8.9M11.2 6.6v8.9', { strokeWidth: 1 })) },
+        { name: 'Add row', svg: ic(RC(2.5, 2.5, 13, 13), P('M2.5 7h13M2.5 11h13', { strokeWidth: 1 })) },
+        { name: 'Add column', svg: ic(RC(2.5, 2.5, 13, 13), P('M7 2.5v13M11 2.5v13', { strokeWidth: 1 })) },
+        { name: 'Graph', svg: ic(CI(9, 9, 6.5), CI(9, 9, 1.6, 'currentColor'), CI(9, 2.5, 1.3, 'currentColor'), CI(14.6, 12.3, 1.3, 'currentColor'), CI(3.4, 12.3, 1.3, 'currentColor')) },
+        { name: 'Sheet', svg: ic(P('M4 2.5h6.5L14 6v9.5H4z'), P('M10.5 2.5V6H14', { strokeWidth: 1 })) },
+        { name: 'Shaped table', svg: ic(RC(2.5, 2.5, 13, 13), P('M2.5 6.6h13', { strokeWidth: 1 }), P('M6 10h6M6 12.5h4', { strokeWidth: 1 })) }
+      ] },
+      { group: 'Data — acting on content', items: [
+        { name: 'Sort', svg: ic(P('M6 3.4v11.2M6 3.4L3.6 6M6 3.4L8.4 6'), P('M12 14.6V3.4M12 14.6L9.6 12M12 14.6l2.4-2.6')) },
+        { name: 'Filter', svg: ic(P('M2.8 4h12.4l-4.9 5.6v4.6L7.7 12.7V9.6z')) },
+        { name: 'Group', svg: ic(P('M3 4.5h12'), P('M5.5 9h9.5M5.5 13.5h9.5', { strokeWidth: 1 }), CI(3.2, 9, 0.9, 'currentColor'), CI(3.2, 13.5, 0.9, 'currentColor')) },
+        { name: 'Formula', svg: ic(P('M6.5 14.5c2 0 2-2.5 2.4-5.5S9.4 3.5 11.4 3.5'), P('M5.5 9h6', { strokeWidth: 1 })) },
+        { name: 'Reference', svg: ic(P('M7.6 10.4a3 3 0 004.3 0l2.2-2.2a3 3 0 10-4.3-4.3L8.7 5'), P('M10.4 7.6a3 3 0 00-4.3 0L3.9 9.8a3 3 0 104.3 4.3L9.3 13')) },
+        { name: 'Derive', svg: ic(CI(4, 5, 1.8), CI(14, 13, 1.8), P('M5.7 6.3C8 8 9.6 9.4 12.3 11.7')) }
+      ] },
+      { group: 'View — controlling the canvas', items: [
+        { name: 'Gridlines', svg: ic(P('M2.5 6.5h13M2.5 11.5h13M6.5 2.5v13M11.5 2.5v13')) },
+        { name: 'Zoom in', svg: ic(CI(8, 8, 5.2), P('M11.8 11.8L15.5 15.5'), P('M8 6v4M6 8h4', { strokeWidth: 1 })) },
+        { name: 'Fit', svg: ic(P('M6.6 2.8H2.8v3.8M11.4 2.8h3.8v3.8M6.6 15.2H2.8v-3.8M11.4 15.2h3.8v-3.8')) },
+        { name: 'Pin', svg: ic(RC(2.5, 2.5, 13, 13), P('M2.5 6.4h13'), P('M9 6.4v9.1', { strokeWidth: 1 })) },
+        { name: 'Collapse rail', svg: ic(RC(2.5, 2.5, 13, 13), P('M11.5 2.5v13'), P('M5 9h3.5M7 7.4L8.6 9 7 10.6', { strokeWidth: 1 })) },
+        { name: 'Edges', svg: ic(CI(4, 5, 1.9), CI(14, 13, 1.9), P('M5.6 6.3C8 8 9.6 9.4 12.3 11.8')) }
+      ] },
+      { group: 'Document — files and sharing', items: [
+        { name: 'Share', svg: ic(P('M9 11V2.5M5.8 5.7L9 2.5l3.2 3.2'), P('M4 9v5.5a1 1 0 001 1h8a1 1 0 001-1V9')) },
+        { name: 'People', svg: ic(CI(7, 6.5, 2.6), P('M2.8 15c0-2.4 1.9-4 4.2-4s4.2 1.6 4.2 4'), P('M12 5.4a2.4 2.4 0 010 4.6M12.6 11.4c1.6.4 2.6 1.7 2.6 3.6', { strokeWidth: 1 })) },
+        { name: 'Link', svg: ic(P('M7.6 10.4a3 3 0 004.3 0l2.2-2.2a3 3 0 10-4.3-4.3'), P('M10.4 7.6a3 3 0 00-4.3 0L3.9 9.8a3 3 0 104.3 4.3')) },
+        { name: 'Download', svg: ic(P('M9 2.5v8.5M5.8 8l3.2 3.2L12.2 8'), P('M3.5 14.5h11')) },
+        { name: 'Delete', svg: ic(P('M3.5 4.8h11'), P('M6.2 4.8V3.4h5.6v1.4'), P('M5 4.8l.7 10h6.6l.7-10'), P('M7.4 7.4v5M10.6 7.4v5', { strokeWidth: 1 })) },
+        { name: 'Recover', svg: ic(P('M3.2 9a5.8 5.8 0 105.8-5.8c-2 0-3.7 1-4.8 2.5'), P('M3 3.4v2.8h2.8')) }
+      ] },
+      { group: 'State — status and feedback', items: [
+        { name: 'Complete', svg: ic(CI(9, 9, 6.5), P('M6 9.2l2 2 4-4.4')) },
+        { name: 'Draft', svg: ic(R('circle', { key: 'd', cx: 9, cy: 9, r: 6.5, strokeDasharray: '3 2' })) },
+        { name: 'Warning', svg: ic(P('M9 2.8l6.4 11.4H2.6z'), P('M9 7v3.4', { strokeWidth: 1.5 }), CI(9, 12.2, 0.8, 'currentColor')) },
+        { name: 'Error', svg: ic(CI(9, 9, 6.5), P('M6.8 6.8l4.4 4.4M11.2 6.8l-4.4 4.4')) },
+        { name: 'Locked', svg: ic(RC(3.8, 8, 10.4, 7, 1.6), P('M6.2 8V6.2a2.8 2.8 0 015.6 0V8')) },
+        { name: 'Loading', svg: ic(R('circle', { key: 'l', cx: 9, cy: 9, r: 6.2, strokeDasharray: '9 4', opacity: 0.85 })) }
+      ] }
+    ];
+
+    const iconGrid = R('div', { style: { display: 'flex', alignItems: 'center', gap: 14 } },
+      R('div', { style: { position: 'relative', width: 72, height: 72, border: '1px solid #dbe4df', borderRadius: 6, background: 'linear-gradient(#f4f7f5 1px, transparent 1px), linear-gradient(90deg, #f4f7f5 1px, transparent 1px)', backgroundSize: '8px 8px' } },
+        R('div', { style: { position: 'absolute', inset: 4, border: '1px dashed #c9d5ce', borderRadius: 4 } }),
+        R('div', { style: { position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', color: FOREST } },
+          R('svg', { width: 44, height: 44, viewBox: '0 0 18 18', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }, R('rect', { x: 2.5, y: 2.5, width: 13, height: 13, rx: 1.6 }), R('path', { d: 'M2.5 6.6h13M6.8 6.6v8.9M11.2 6.6v8.9', strokeWidth: 1 })))),
+      R('div', { style: { fontFamily: MONO, fontSize: 10.5, color: '#6b7c74', lineHeight: 1.8 } },
+        R('div', {}, '18 × 18 box'), R('div', {}, '16 × 16 live'), R('div', {}, '1.3 stroke'), R('div', {}, '8-unit grid')));
+
+    const iconSizes = [13, 15, 18, 22].map((s) => R('div', { key: s, style: { textAlign: 'center', color: '#14201a' } },
+      R('svg', { width: s, height: s, viewBox: '0 0 18 18', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }, R('path', { d: 'M2.8 4h12.4l-4.9 5.6v4.6L7.7 12.7V9.6z' })),
+      R('div', { style: { fontFamily: MONO, fontSize: 9.5, color: '#6b7c74', marginTop: 6 } }, s)));
+
+    const iconColours = [['#14201a', 'rest'], [FOREST, 'active'], [AMBER, 'live'], ['#b8c4be', 'disabled']].map(([c, l]) => R('div', { key: l, style: { textAlign: 'center', color: c } },
+      R('svg', { width: 20, height: 20, viewBox: '0 0 18 18', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3, strokeLinecap: 'round' }, R('rect', { x: 2.5, y: 2.5, width: 13, height: 13, rx: 1.6 }), R('path', { d: 'M2.5 6.4h13' }), R('path', { d: 'M9 6.4v9.1', strokeWidth: 1 })),
+      R('div', { style: { fontFamily: MONO, fontSize: 9.5, color: '#6b7c74', marginTop: 6 } }, l)));
+
+    const iconCode = "<Icon name=\"filter\" size={15} />\n\n// One React component, one sprite.\n// stroke inherits currentColor;\n// size is a token, never arbitrary.\n\n<button aria-label=\"Filter\" title=\"Filter\">\n  <Icon name=\"filter\" />\n</button>";
+
+    const appleBtn = (variant, label) => {
+      const dark = variant === 'black';
+      return R('button', { key: variant, 'aria-label': label, style: {
+        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+        height: 44, minWidth: 140, padding: '0 16px', borderRadius: 8, cursor: 'pointer',
+        background: dark ? '#000' : '#fff', color: dark ? '#fff' : '#000',
+        border: variant === 'outline' ? '1px solid #000' : 'none',
+        fontFamily: "-apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Helvetica Neue', Helvetica, Arial, sans-serif",
+        fontSize: 17, fontWeight: 500, letterSpacing: '-0.01em'
+      } },
+        R('svg', { width: 17, height: 21, viewBox: '0 0 22 26', fill: dark ? '#fff' : '#000', 'aria-hidden': 'true', style: { flex: 'none', marginTop: -2 } }, R('path', { d: 'M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.035 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.416-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.84-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.56-1.701' })),
+        label);
+    };
+
+    groups.push({
+      title: 'Sign in with Apple', level: 'molecule',
+      note: 'Apple specifies this button; GeDe does not get to restyle it. Three variants only, exact glyph, minimum 44 pt height, approved wording, and it must not be visually subordinate to another third-party sign-in option.',
+      demo: R('div', {},
+        cap('the three permitted variants'),
+        R('div', { style: { display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', padding: '4px 0' } },
+          appleBtn('black', 'Sign in with Apple'), appleBtn('white', 'Sign in with Apple'), appleBtn('outline', 'Continue with Apple')),
+        cap('rules'),
+        R('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16 } },
+          R('div', { style: { border: '1px solid #e3e8e5', borderRadius: 10, padding: '14px 16px' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 9 } }, 'Required'),
+            R('ul', { style: { margin: 0, paddingLeft: 18, fontSize: 13, color: '#3d4d45', lineHeight: 1.7 } },
+              R('li', {}, 'Black, white, or white with a black outline. No brand colour, no forest.'),
+              R('li', {}, 'Apple-supplied glyph as SVG — never the ', R('code', { style: { fontFamily: MONO, fontSize: 11.5 } }, ''), ' character, which renders only on Apple devices.'),
+              R('li', {}, 'Minimum height 44 pt; corner radius may be 0 to half the height.'),
+              R('li', {}, 'System font (SF Pro) at roughly 43% of button height, medium weight.'),
+              R('li', {}, 'Approved wording only: “Sign in with Apple” or “Continue with Apple”.'),
+              R('li', {}, 'Equal or greater prominence than any other third-party sign-in.'))),
+          R('div', { style: { border: '1px solid #e3e8e5', borderRadius: 10, padding: '14px 16px' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 9 } }, 'Forbidden'),
+            R('ul', { style: { margin: 0, paddingLeft: 18, fontSize: 13, color: '#3d4d45', lineHeight: 1.7 } },
+              R('li', {}, 'Recolouring the button or the glyph.'),
+              R('li', {}, 'Translating or rewording the label yourself — Apple supplies localisations.'),
+              R('li', {}, 'Cropping, outlining or animating the glyph.'),
+              R('li', {}, 'Placing it below a less prominent alternative.'),
+              R('li', {}, 'Using the word “Apple ID” in the label.'))),
+          R('div', { style: { border: '1px solid #e3e8e5', borderRadius: 10, padding: '14px 16px' } },
+            R('div', { style: { fontFamily: MONO, fontSize: 10.5, letterSpacing: '0.07em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 9 } }, 'In GeDe'),
+            R('div', { style: { fontSize: 13, color: '#3d4d45', lineHeight: 1.7 } }, 'Black variant on the sign-in screen. GeDe’s own primary buttons adopt the same 44 px height and 8 px radius so the stack reads as one system without restyling Apple’s button. The passkey button sits above it, since passwordless on-device is the faster path for an existing user.'))))
+    });
+
+    const keyCap = (t) => R('kbd', { key: t, style: { fontFamily: MONO, fontSize: 11, background: '#f2f5f3', border: '1px solid #dbe4df', borderBottomWidth: 2, borderRadius: 4, padding: '2px 6px', color: '#14201a', whiteSpace: 'nowrap' } }, t);
+    const keyRow = (what, combo) => R('div', { key: what, style: { display: 'flex', alignItems: 'baseline', gap: 10, padding: '4px 0', borderTop: '1px solid #f2f5f3' } },
+      R('span', { style: { flex: 1, fontSize: 13 } }, what), keyCap(combo));
+
+    groups.push({
+      title: 'Find bar and shortcuts', level: 'organism',
+      note: 'Find is a floating bar at the foot of the canvas, following iCloud Numbers so existing users need no retraining. The whole shortcut set matches Numbers; ? opens the reference sheet.',
+      demo: R('div', {},
+        cap('find bar'),
+        R('div', { style: { display: 'inline-flex', alignItems: 'center', gap: 8, padding: '7px 10px', background: '#fcfdfc', border: '1px solid #dde3df', borderRadius: 8, boxShadow: '0 8px 24px -14px rgba(20,32,26,0.4)', maxWidth: '100%', flexWrap: 'wrap' } },
+          R('span', { style: { color: FOREST, display: 'inline-flex', alignItems: 'center', gap: 3 } },
+            R('svg', { width: 16, height: 16, viewBox: '0 0 18 18', fill: 'none', stroke: 'currentColor', strokeWidth: 1.3 }, R('circle', { cx: 9, cy: 9, r: 3 }), R('path', { d: 'M9 1.6v2.2M9 14.2v2.2M2.6 5.4l1.9 1.1M13.5 11.5l1.9 1.1M2.6 12.6l1.9-1.1M13.5 6.5l1.9-1.1' })),
+            R('span', { style: { fontSize: 8 } }, '⌄')),
+          R('input', { defaultValue: 'Singapore', style: Object.assign(inputStyle(), { width: 170, padding: '5px 9px', fontSize: 12.5 }) }),
+          R('span', { style: { fontFamily: MONO, fontSize: 10.5, color: '#5b6b63' } }, '2 of 6'),
+          R('span', { style: { color: '#3d4d45', fontSize: 13 } }, '‹'), R('span', { style: { color: '#3d4d45', fontSize: 13 } }, '›'),
+          R('span', { style: { color: FOREST, fontSize: 12.5, fontWeight: 500 } }, 'Done')),
+        R('div', { style: { fontSize: 12.5, color: '#5b6b63', marginTop: 9, lineHeight: 1.55, maxWidth: '78ch' } }, 'Matches tint amber in place, the current one more strongly. Operators ', R('code', { style: { fontFamily: MONO, fontSize: 11.5 } }, 'col:'), ' and ', R('code', { style: { fontFamily: MONO, fontSize: 11.5 } }, 'is:'), ' narrow by column and format; fuzzy is on by default. The gear carries fuzzy, replace, search-formulas and include-documents.'),
+        cap('shortcut reference · press ?'),
+        R('div', { style: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(230px, 1fr))', gap: 20, maxWidth: 840 } },
+          [['Find', [['Find', '⌘F'], ['Find next', '⌘G'], ['Find previous', '⇧⌘G'], ['Find and replace', '⌥⌘F']]],
+           ['Table and cells', [['Move', 'Tab · arrows'], ['Edit cell', '⏎'], ['Add row below', '⌥⌘↓'], ['Nest row', '⌘]']]],
+           ['View', [['Zoom in', '⌘+'], ['Actual size', '⌘0'], ['Fit to canvas', '⇧⌘0'], ['Inspector', '⌥⌘I']]]]
+            .map(([g, items]) => R('div', { key: g },
+              R('div', { style: { fontFamily: MONO, fontSize: 9, letterSpacing: '0.08em', textTransform: 'uppercase', color: '#6b7c74', marginBottom: 7 } }, g),
+              items.map((it) => keyRow(it[0], it[1]))))),
+        R('div', { style: { fontSize: 12.5, color: '#5b6b63', marginTop: 12, lineHeight: 1.55, maxWidth: '78ch' } }, 'Shortcuts resolve from ', R('code', { style: { fontFamily: MONO, fontSize: 11.5 } }, 'event.code'), ', so they work unchanged on Tamil99, InScript and Remington layouts. Every shortcut appears beside its command in menus and tooltips; no shortcut is the only route to a command.')
+      )
+    });
+
+    const breakpoints = [
+      { token: 'xs', range: '< 480px', chrome: 'Single column. Sheet switcher as a bottom bar, canvas full-bleed.', cap: 'Read-only. Pan, zoom, select, follow references.' },
+      { token: 'sm', range: '480 – 767px', chrome: 'As xs with a two-line chrome bar; share and account remain.', cap: 'Read-only. 44 px minimum hit targets.' },
+      { token: 'md', range: '768 – 1023px', chrome: 'Toolbar returns and wraps. Inspector opens as an overlay sheet.', cap: 'Full editing. Context menus on long-press.' },
+      { token: 'lg', range: '1024 – 1439px', chrome: 'Inspector docks at 322 px, collapsible. Chrome clusters icon-only.', cap: 'Full editing, keyboard traversal.' },
+      { token: 'xl', range: '≥ 1440px', chrome: 'Inspector docked, toolbar on one row, canvas takes the remainder.', cap: 'Full editing; multiple graphs side by side.' }
+    ];
+
+    const motions = [
+      { name: 'instant', spec: '0ms', dur: '0ms', ease: 'linear', use: 'Selection, hover tint, checkbox — anything that must feel like a direct result.', hoverTrack: {} },
+      { name: 'fast', spec: '120ms · ease-out', dur: '120ms', ease: 'cubic-bezier(0,0,0.2,1)', use: 'Buttons, switches, chips, tooltip appearance.', hoverTrack: {} },
+      { name: 'base', spec: '180ms · standard', dur: '180ms', ease: 'cubic-bezier(0.2,0,0,1)', use: 'Menus, popovers, inspector sections opening.', hoverTrack: {} },
+      { name: 'emphasis', spec: '240ms · spring-ish', dur: '240ms', ease: 'cubic-bezier(0.2,0.8,0.2,1)', use: 'Rail collapse, table move and resize, graph reposition.', hoverTrack: {} },
+      { name: 'enter', spec: '300ms · decelerate', dur: '300ms', ease: 'cubic-bezier(0,0,0.15,1)', use: 'Modal and sheet entry; the longest motion in the system.', hoverTrack: {} }
+    ].map((m) => Object.assign(m, { hoverTrack: { background: '#e6efe9' } }));
+
+    const a11y = [
+      { sc: '1.4.3', name: 'Contrast', does: 'Body text ≥ 4.5:1, large text and UI boundaries ≥ 3:1. Muted grey is 6.1:1, not decorative grey.', test: 'Token table records every ratio; CI fails on a new pair below threshold.' },
+      { sc: '1.4.11', name: 'Non-text contrast', does: 'Borders, focus rings, selection rings and graph strokes all ≥ 3:1 against their background.', test: 'Manual check per component; recorded in the PR.' },
+      { sc: '1.4.1', name: 'Use of colour', does: 'Draft nodes are dashed as well as hollow; errors carry an icon and text; references show an index, not only a hue.', test: 'Greyscale screenshot review.' },
+      { sc: '2.1.1', name: 'Keyboard', does: 'Every action reachable: Tab/arrows traverse cells, Enter edits, Escape cancels, ⌘-keys resolve by physical key.', test: 'Unplug the mouse and complete the core task.' },
+      { sc: '2.4.7', name: 'Focus visible', does: '2 px amber outline at 2 px offset on every focusable element, never removed.', test: 'axe scan plus keyboard walk.' },
+      { sc: '2.4.3', name: 'Focus order', does: 'Menus and dialogs trap focus and restore it to the trigger on close.', test: 'Radix primitives supply this; verify on custom compositions.' },
+      { sc: '1.4.4', name: 'Resize text', does: 'All type in rem; layout holds at 200 % zoom with no loss of content.', test: 'Browser zoom at each breakpoint.' },
+      { sc: '1.4.12', name: 'Text spacing', does: 'No fixed heights on text containers in chrome; grid rows are exempt as a lattice constraint and clip with a title.', test: 'Apply the WCAG spacing bookmarklet.' },
+      { sc: '2.3.3', name: 'Animation', does: 'prefers-reduced-motion removes transitions while keeping the state change visible.', test: 'Toggle the OS setting and repeat the flow.' },
+      { sc: '4.1.3', name: 'Status messages', does: 'Loading and sync states announce through a polite live region; skeletons are aria-hidden with aria-busy on the container.', test: 'Screen-reader pass on a cold document open.' },
+      { sc: '4.1.2', name: 'Name, role, value', does: 'Cells expose row and column headers; graph nodes are buttons with aria-pressed; live regions announce selection and sync status.', test: 'VoiceOver and NVDA pass on the core flows.' }
+    ];
+
+    const checklist = [
+      'Keyboard-only pass on the changed flow',
+      'Focus visible on every new control',
+      'Contrast recorded for new colour pairs',
+      'Works at 200 % browser zoom',
+      'Dark theme checked',
+      'Reduced-motion checked',
+      'Screen-reader labels on icon-only buttons',
+      'No new literal hex, px radius, or ms duration',
+      'Built on the headless primitive',
+      'Renders at 480 and 1440'
+    ];
+
+    const CSS = ':root {\n  /* primitives */\n  --forest-50:  #f0f7f3;\n  --forest-500: #2a7b4e;\n  --forest-700: #14532d;   /* brand */\n  --forest-900: #0a2d18;\n  --amber-500:  #d97706;\n  --amber-700:  #b45309;   /* live state */\n  --slate-0:    #ffffff;\n  --slate-50:   #f7f9f8;\n  --slate-200:  #e3e8e5;\n  --slate-600:  #5b6b63;\n  --slate-900:  #14201a;\n\n  /* semantic */\n  --action-primary-bg: var(--forest-700);\n  --action-primary-fg: var(--slate-0);\n  --selection-ring:    var(--amber-700);\n  --focus-ring:        var(--amber-700);\n  --surface:           var(--slate-0);\n  --surface-sunken:    var(--slate-50);\n  --border:            var(--slate-200);\n  --ink:               var(--slate-900);\n  --ink-muted:         var(--slate-600);\n\n  /* space · radius · motion */\n  --space-1: 0.25rem;  --space-4: 1rem;   --space-6: 2rem;\n  --radius-sm: 3px;    --radius-md: 6px;  --radius-lg: 10px;\n  --dur-fast: 120ms;   --dur-base: 180ms; --dur-emphasis: 240ms;\n  --ease-out: cubic-bezier(0,0,0.2,1);\n  --ease-emphasis: cubic-bezier(0.2,0.8,0.2,1);\n\n  /* canvas lattice — absolute, not on the space scale */\n  --lattice-col: 160px;\n  --lattice-row: 22px;\n}\n\n[data-theme="dark"] {\n  --surface:        #0f1a15;\n  --surface-sunken: #0a120e;\n  --border:         #24352c;\n  --ink:            #e6ede9;\n  --ink-muted:      #9fb0a7;\n  --action-primary-bg: #2a7b4e;  /* lifted for contrast on dark */\n  --selection-ring:    #e0a04a;\n}\n\n@media (prefers-reduced-motion: reduce) {\n  * { transition-duration: 0ms !important; animation: none !important; }\n}';
+
+    const TS = "export const theme = {\n  color: {\n    brand:     { subtle: '#f0f7f3', base: '#14532d', strong: '#0a2d18' },\n    live:      { subtle: '#fdf6ec', base: '#b45309', strong: '#7c3a05' },\n    surface:   { base: '#ffffff', sunken: '#f7f9f8', border: '#e3e8e5' },\n    ink:       { base: '#14201a', muted: '#5b6b63', onBrand: '#ffffff' },\n    status:    { success: '#166534', warning: '#b45309', danger: '#b42318', info: '#155e75' },\n    presence:  ['#14201a', '#155e75', '#6d28d9', '#b45309', '#0f766e', '#9d174d'],\n  },\n  space: [0, 4, 8, 12, 16, 24, 32, 48, 64],\n  radius: { none: 0, sm: 3, md: 6, lg: 10, pill: 999 },\n  font: {\n    ui: \"'Helvetica Neue', Helvetica, Arial, 'Noto Sans Tamil', 'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif\",\n    mono: \"'IBM Plex Mono', monospace\",\n  },\n  text: {\n    display: { size: '2.5rem',    weight: 600, lh: 1.05, ls: '-0.04em' },\n    body:    { size: '0.9375rem', weight: 400, lh: 1.6,  ls: '0' },\n    cell:    { size: '0.71875rem',weight: 400, lh: 1.35, ls: '0' },\n    label:   { size: '0.5625rem', weight: 500, lh: 1.2,  ls: '0.08em' },\n  },\n  motion: {\n    fast:     { duration: 120, easing: 'cubic-bezier(0,0,0.2,1)' },\n    base:     { duration: 180, easing: 'cubic-bezier(0.2,0,0,1)' },\n    emphasis: { duration: 240, easing: 'cubic-bezier(0.2,0.8,0.2,1)' },\n  },\n  breakpoint: { xs: 0, sm: 480, md: 768, lg: 1024, xl: 1440 },\n  lattice: { col: 160, row: 22 },\n} as const;\n\nexport type Theme = typeof theme;";
+
+    const USE = "// Components read tokens. A literal hex here fails review.\nimport { styled } from '@/theme';\nimport * as DropdownMenu from '@radix-ui/react-dropdown-menu';\n\nexport const Button = styled('button', {\n  fontFamily: '$ui',\n  fontSize: '0.84375rem',\n  padding: '$3 $4',\n  borderRadius: '$md',\n  transition: 'background $fast, border-color $fast',\n  '&:focus-visible': {\n    outline: '2px solid $live',\n    outlineOffset: 2,\n  },\n  variants: {\n    variant: {\n      primary:   { background: '$brand',  color: '$onBrand', border: '1px solid $brand' },\n      secondary: { background: '$surface',color: '$ink',     border: '1px solid $border' },\n      ghost:     { background: 'transparent', color: '$brand', border: '1px solid transparent' },\n      danger:    { background: '$danger', color: '$onBrand', border: '1px solid $danger' },\n    },\n    size: { sm: { padding: '$2 $3' }, md: {}, lg: { padding: '$4 $5', fontSize: '0.9375rem' } },\n  },\n  defaultVariants: { variant: 'secondary', size: 'md' },\n});\n\n// Behaviour comes from the primitive; GeDe supplies only the skin.\nexport const ColumnMenu = () => (\n  <DropdownMenu.Root>\n    <DropdownMenu.Trigger asChild><Button variant=\"ghost\">▼</Button></DropdownMenu.Trigger>\n    <DropdownMenu.Portal>\n      <MenuContent sideOffset={4}>\n        <MenuItem>Sort ascending</MenuItem>\n        <MenuItem disabled>Magic fill</MenuItem>\n      </MenuContent>\n    </DropdownMenu.Portal>\n  </DropdownMenu.Root>\n);";
+
+    const bodies = { css: CSS, ts: TS, use: USE };
+    const codeTabs = [['css', 'tokens.css'], ['ts', 'theme.ts'], ['use', 'Button.tsx']].map(([k, l]) => ({
+      label: l, on: () => this.setState({ tab: k }),
+      bg: S.tab === k ? '#0f1a15' : '#fff', fg: S.tab === k ? '#d7e5dc' : '#5b6b63', fw: S.tab === k ? 600 : 400
+    }));
+
+    const emails = [
+      { key: 'auth.welcome', trigger: 'Account created', subject: 'Your GeDe account is ready',
+        body: 'Hello ' + 'Phani,\n\nYour GeDe account is set up. GeDe holds your workscapes — tables, formulas and context graphs on one canvas, shared with the people you choose.\n\nWe did not create a password. You sign in with a passkey on this device, or a one-time code by email. You can add more passkeys at any time from your account menu.',
+        cta: 'Open GeDe', note: 'Plain link beneath: gede.1cloudhub.com' },
+      { key: 'auth.otp', trigger: 'One-time sign-in code', subject: '123456 is your GeDe sign-in code',
+        body: 'Your sign-in code is 123456.\n\nIt expires in 10 minutes and can be used once. If you did not ask to sign in, ignore this message — nobody can use the code without your inbox.',
+        cta: 'No button — code only', note: 'Code repeated in the preheader so it is readable from the notification' },
+      { key: 'auth.passkey', trigger: 'Passkey added', subject: 'A passkey was added to your GeDe account',
+        body: 'A passkey was added on MacBook Pro · Safari, on 12 September 2026 at 10:42 SGT, from Singapore.\n\nIf that was you, nothing to do. If it was not, remove the passkey and sign out of all devices from your account settings.',
+        cta: 'Review your passkeys', note: 'Security mail: never links directly to a destructive action' },
+      { key: 'share.member', trigger: 'Shared with an existing user', subject: 'Meenarapan shared “1Cloudhub - Workscape” with you',
+        body: 'Meenarapan D shared a workscape with you and you can make changes.\n\nIt is already in your Shared list the next time you open GeDe.',
+        cta: 'Open workscape', note: 'Reply-to is the person who shared. No document content included.' },
+      { key: 'share.invite', trigger: 'Invitation to someone without an account', subject: 'Meenarapan invited you to a GeDe workscape',
+        body: 'Meenarapan D invited you to “1Cloudhub - Workscape” on GeDe, with permission to make changes.\n\nGeDe is a spreadsheet for text: tables, formulas and context graphs on one shared canvas. You will set up a passkey — there is no password to choose.\n\nThis invitation expires in 14 days.',
+        cta: 'Accept invitation', note: 'One-time token in the link; expires with the invitation' },
+      { key: 'collab.mention', trigger: 'Mentioned in a comment', subject: 'Sembian mentioned you in “Generic Design Architect”',
+        body: 'Sembian V mentioned you on cell D14 of Work-Force.\n\nOpen the workscape to read the comment in place.',
+        cta: 'Go to the cell', note: 'Comment text is not included — the recipient may have view-only access to a different sheet' }
+    ];
+
+    const nav = [['#identity', 'Identity'], ['#color', 'Colour'], ['#type', 'Type'], ['#space', 'Space'], ['#icons', 'Icons'], ['#components', 'Components'], ['#responsive', 'Responsive'], ['#motion', 'Motion'], ['#a11y', 'Accessibility'], ['#tokens', 'Handoff'], ['#voice', 'Voice']]
+      .map(([href, label]) => ({ href: href, label: label }));
+
+    return {
+      nav: nav, logos: logos, icons: icons, iconSets: iconSets, iconGrid: iconGrid, iconSizes: iconSizes, iconColours: iconColours, iconCode: iconCode, assetFiles: assetFiles, headSnippet: headSnippet, principles: principles, ramps: ramps, semantic: semantic,
+      typeScale: typeScale, spaceScale: spaceScale, radii: radii, elevations: elevations,
+      groups: groups, breakpoints: breakpoints, motions: motions, a11y: a11y, checklist: checklist,
+      codeTabs: codeTabs, codeBody: bodies[S.tab] || CSS, emails: emails
+    };
+  }
+}
+
+</script>
+</body>
+</html>

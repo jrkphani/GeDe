@@ -1,0 +1,18 @@
+.gd-icon {
+  display: inline-block;
+  flex: none;
+  vertical-align: middle;
+  color: currentColor;
+}
+
+/* State is never carried by hue alone; these classes add the hue on top of the glyph. */
+.gd-icon--active {
+  color: var(--link);
+}
+.gd-icon--live {
+  color: var(--selection-ring);
+}
+:disabled .gd-icon,
+[aria-disabled='true'] .gd-icon {
+  color: var(--slate-400);
+}

@@ -1,0 +1,11 @@
+.gd-code__input {
+  font-family: var(--font-mono);
+  font-size: 1.375rem;
+  letter-spacing: 0.4em;
+  text-align: center;
+  padding-left: 0.4em; /* balances the trailing letter-spacing so digits sit centred */
+}
+
+.gd-code__input[data-complete] {
+  border-color: var(--forest-500);
+}

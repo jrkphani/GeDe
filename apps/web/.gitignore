@@ -1,0 +1,2 @@
+# Runtime config is written by the deployment (infra/Web stack), never committed.
+public/config.json

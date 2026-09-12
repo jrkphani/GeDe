@@ -1,0 +1,101 @@
+/* GeDe design tokens — single source of truth.
+   A literal hex, radius or duration in a component file fails review. */
+
+:root {
+  /* primitives */
+  --forest-50:  #f0f7f3;
+  --forest-100: #d8e9df;
+  --forest-300: #7fb195;
+  --forest-500: #2a7b4e;
+  --forest-700: #14532d;   /* brand */
+  --forest-900: #0a2d18;
+
+  --amber-50:   #fdf6ec;
+  --amber-100:  #f8e6c8;
+  --amber-300:  #e0a04a;
+  --amber-500:  #d97706;
+  --amber-700:  #b45309;   /* live state */
+  --amber-900:  #7c3a05;
+
+  --slate-0:    #ffffff;
+  --slate-50:   #f7f9f8;
+  --slate-200:  #e3e8e5;
+  --slate-400:  #b8c4be;
+  --slate-600:  #5b6b63;
+  --slate-900:  #14201a;
+
+  --success: #166534;
+  --warning: #b45309;
+  --danger:  #b42318;
+  --info:    #155e75;
+
+  /* semantic */
+  --action-primary-bg: var(--forest-700);
+  --action-primary-fg: var(--slate-0);
+  --link:              var(--forest-700);
+  --selection-ring:    var(--amber-700);
+  --focus-ring:        var(--amber-700);
+  --reference-1:       var(--amber-700);
+  --surface:           var(--slate-0);
+  --surface-sunken:    var(--slate-50);
+  --border:            var(--slate-200);
+  --ink:               var(--slate-900);
+  --ink-muted:         var(--slate-600);
+
+  /* presence — assigned on join; never the brand colour */
+  --presence-1: #14201a;
+  --presence-2: #155e75;
+  --presence-3: #6d28d9;
+  --presence-4: #b45309;
+  --presence-5: #0f766e;
+  --presence-6: #9d174d;
+
+  /* type */
+  --font-ui:   'Helvetica Neue', Helvetica, Arial, 'Noto Sans Tamil', 'Noto Sans Devanagari', 'Noto Sans Telugu', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
+
+  /* space — 4px base */
+  --space-1: 0.25rem; --space-2: 0.5rem;  --space-3: 0.75rem; --space-4: 1rem;
+  --space-5: 1.5rem;  --space-6: 2rem;    --space-7: 3rem;    --space-8: 4rem;
+
+  --radius-none: 0; --radius-sm: 3px; --radius-md: 6px; --radius-lg: 10px; --radius-pill: 999px;
+
+  --elev-raised:  0 1px 2px rgba(20,32,26,0.08);
+  --elev-overlay: 0 8px 24px -10px rgba(20,32,26,0.35);
+  --elev-modal:   0 24px 60px -20px rgba(20,32,26,0.45);
+
+  --dur-fast: 120ms; --dur-base: 180ms; --dur-emphasis: 240ms; --dur-enter: 300ms;
+  --ease-out:      cubic-bezier(0,0,0.2,1);
+  --ease-standard: cubic-bezier(0.2,0,0,1);
+  --ease-emphasis: cubic-bezier(0.2,0.8,0.2,1);
+
+  /* loading */
+  --skeleton-base:  #eef2f0;
+  --skeleton-sheen: #f6f9f7;
+  --skeleton-speed: 1400ms;
+  --loading-delay:  200ms;
+  --loading-min-hold: 400ms;
+
+  /* canvas lattice — absolute, NOT on the space scale */
+  --lattice-col: 160px;
+  --lattice-row: 22px;
+
+  /* breakpoints, for reference in JS */
+  --bp-sm: 480px; --bp-md: 768px; --bp-lg: 1024px; --bp-xl: 1440px;
+}
+
+[data-theme="dark"] {
+  --surface:        #0f1a15;
+  --surface-sunken: #0a120e;
+  --border:         #24352c;
+  --ink:            #e6ede9;
+  --ink-muted:      #9fb0a7;
+  --action-primary-bg: #2a7b4e;
+  --selection-ring:    #e0a04a;
+  --skeleton-base:  #16231c;
+  --skeleton-sheen: #1d2e25;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * { transition-duration: 0ms !important; animation: none !important; }
+}

@@ -1,0 +1,15 @@
+{
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "outDir": "dist",
+    "rootDir": ".",
+    "tsBuildInfoFile": "dist/.tsbuildinfo",
+    "types": ["node"],
+    // aws-cdk-lib's jsii-generated interfaces declare `prop?: T` but implementations expose
+    // `T | undefined`; the library does not compile under exactOptionalPropertyTypes (aws-cdk#19670).
+    "exactOptionalPropertyTypes": false
+  },
+  "include": ["bin", "lib", "test", "vitest.config.ts"]
+}

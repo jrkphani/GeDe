@@ -1,0 +1,10 @@
+{
+  "name": "GeDe",
+  "short_name": "GeDe",
+  "description": "Text-oriented spreadsheet on an infinite lattice",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#14532d",
+  "icons": [{ "src": "/favicon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

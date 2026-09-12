@@ -1,0 +1,9 @@
+node_modules
+dist
+cdk.out
+coverage
+docs/handover
+package-lock.json
+*.snap
+docs/REQUIREMENTS.md
+docs/*-DIGEST.md

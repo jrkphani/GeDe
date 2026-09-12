@@ -1,0 +1,12 @@
+{
+  "files": [],
+  "references": [
+    { "path": "packages/tokens" },
+    { "path": "packages/core" },
+    { "path": "packages/db" },
+    { "path": "packages/ui" },
+    { "path": "services/sync" },
+    { "path": "apps/web" },
+    { "path": "infra" }
+  ]
+}

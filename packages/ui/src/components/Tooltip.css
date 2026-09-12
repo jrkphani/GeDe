@@ -1,0 +1,12 @@
+.gd-tooltip {
+  max-width: 18rem;
+  padding: 0.3125rem 0.5rem;
+  border-radius: var(--radius-sm);
+  background: var(--slate-900);
+  color: var(--slate-0);
+  font-size: 0.75rem;
+  line-height: 1.4;
+  box-shadow: var(--elev-overlay);
+  animation: gd-fade-in var(--dur-fast) var(--ease-out);
+  z-index: 30;
+}

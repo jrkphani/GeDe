@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<meta name="design_doc_mode" content="canvas">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: oklch(0.966 0.004 262); }
+  a { color: #14532d; }
+  a:hover { color: #0a2d18; }
+  input, button { font: inherit; color: inherit; }
+</style>
+</helmet>
+
+<section style="padding:28px 28px 60px; font-family:'Helvetica Neue', Helvetica, Arial, sans-serif">
+  <div style="display:flex; align-items:baseline; gap:12px; margin-bottom:6px">
+    <span style="font-family:'IBM Plex Mono', monospace; font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:#14532d">turn 2</span>
+    <h1 style="margin:0; font-size:22px; font-weight:600; letter-spacing:-0.03em">Error pages</h1>
+  </div>
+  <p style="margin:0 0 22px; max-width:78ch; font-size:14px; color:#4a5a52; line-height:1.6">In the lattice style of <a href="#1b">1b</a>: the error is a cell on the grid. The status code sits in the ruler where a row number would be, so the page reads as part of the product rather than a browser default. Every page names what happened, what it means for your work, and the one thing to do next.</p>
+
+  <div style="display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start">
+    <sc-for list="{{ pages }}" as="p" hint-placeholder-count="6">
+      <div style="flex:1 1 400px; min-width:360px; max-width:520px">
+        <div style="display:flex; align-items:center; gap:9px; margin-bottom:8px">
+          <span style="display:inline-flex; align-items:center; justify-content:center; height:22px; padding:0 8px; border-radius:4px; background:{{ p.badgeBg }}; color:#fff; font-family:'IBM Plex Mono', monospace; font-size:11px">{{ p.code }}</span>
+          <span style="font-size:15px; font-weight:600; letter-spacing:-0.02em">{{ p.name }}</span>
+          <span style="font-size:12.5px; color:#5b6b63">{{ p.when }}</span>
+        </div>
+
+        <div style="border:1px solid #dde3df; border-radius:10px; overflow:hidden; background:#fff">
+          <div style="position:relative; min-height:330px; padding:34px 24px; display:flex; align-items:center; justify-content:center; background:#fbfcfb; background-image:linear-gradient(to right, #eef2f0 1px, transparent 1px), linear-gradient(to bottom, #eef2f0 1px, transparent 1px); background-size:80px 22px">
+
+            <div style="position:absolute; left:0; top:0; width:34px; height:100%; background:#f4f7f5; border-right:1px solid #e3e8e5"></div>
+            <div style="position:absolute; left:0; top:0; width:100%; height:20px; background:#f4f7f5; border-bottom:1px solid #e3e8e5; display:flex; padding-left:34px">
+              <span style="width:80px; display:flex; align-items:center; justify-content:center; border-right:1px solid #e8ece9; font-family:'IBM Plex Mono', monospace; font-size:9px; color:#8b9c93">A</span>
+              <span style="width:80px; display:flex; align-items:center; justify-content:center; border-right:1px solid #e8ece9; font-family:'IBM Plex Mono', monospace; font-size:9px; color:#8b9c93">B</span>
+              <span style="width:80px; display:flex; align-items:center; justify-content:center; border-right:1px solid #e8ece9; font-family:'IBM Plex Mono', monospace; font-size:9px; color:#8b9c93">C</span>
+            </div>
+            <div style="position:absolute; left:0; top:20px; width:34px; display:flex; flex-direction:column; font-family:'IBM Plex Mono', monospace; font-size:9.5px; color:#a8b5af">
+              <span style="height:22px; display:flex; align-items:center; justify-content:flex-end; padding-right:6px; border-bottom:1px solid #eef2f0">1</span>
+              <span style="height:22px; display:flex; align-items:center; justify-content:flex-end; padding-right:6px; border-bottom:1px solid #eef2f0">2</span>
+              <span style="height:22px; display:flex; align-items:center; justify-content:flex-end; padding-right:6px; border-bottom:1px solid #eef2f0; background:{{ p.tint }}; color:{{ p.ink }}; font-weight:500">{{ p.code }}</span>
+              <span style="height:22px; display:flex; align-items:center; justify-content:flex-end; padding-right:6px; border-bottom:1px solid #eef2f0">4</span>
+              <span style="height:22px; display:flex; align-items:center; justify-content:flex-end; padding-right:6px; border-bottom:1px solid #eef2f0">5</span>
+            </div>
+
+            <div style="position:relative; width:100%; max-width:330px; margin-left:20px; background:#fff; border:1px solid #d3dcd7; border-radius:3px; box-shadow:0 18px 50px -26px rgba(20,32,26,0.38); border-top:2px solid {{ p.ink }}">
+              <div style="display:flex; align-items:center; gap:8px; height:40px; padding:0 13px; border-bottom:1px solid #edf1ef">
+                <svg width="17" height="17" viewBox="0 0 40 40"><rect x="2" y="2" width="36" height="36" rx="4" fill="none" stroke="#14532d" stroke-width="2.5"></rect><path d="M2 13h36M13 2v36" stroke="#14532d" stroke-width="1.4" opacity="0.55"></path><circle cx="26" cy="26" r="5" fill="#14532d"></circle></svg>
+                <span style="font-size:12.5px; font-weight:600; letter-spacing:-0.01em">GeDe</span>
+                <span style="flex:1"></span>
+                <span style="font-family:'IBM Plex Mono', monospace; font-size:9px; letter-spacing:0.06em; text-transform:uppercase; color:{{ p.ink }}">{{ p.code }}</span>
+              </div>
+              <div style="padding:18px 17px 17px">
+                <div style="font-family:'IBM Plex Mono', monospace; font-size:9px; letter-spacing:0.08em; text-transform:uppercase; color:#6b7c74; margin-bottom:6px">{{ p.kicker }}</div>
+                <div style="font-size:17px; font-weight:600; letter-spacing:-0.02em; line-height:1.25; margin-bottom:7px">{{ p.title }}</div>
+                <div style="font-size:12.5px; color:#5b6b63; line-height:1.6; margin-bottom:15px">{{ p.body }}</div>
+                <div style="display:flex; flex-wrap:wrap; gap:8px">
+                  <button style="height:36px; border:none; background:#14532d; color:#fff; border-radius:6px; padding:0 14px; font-size:13px; font-weight:500; cursor:pointer">{{ p.cta }}</button>
+                  <button style="height:36px; border:1px solid #d3dcd7; background:#fff; border-radius:6px; padding:0 14px; font-size:13px; cursor:pointer">{{ p.alt }}</button>
+                </div>
+              </div>
+              <div style="display:flex; justify-content:space-between; align-items:center; height:22px; padding:0 10px; border-top:1px solid #f2f5f3; font-family:'IBM Plex Mono', monospace; font-size:9px; color:#a8b5af">
+                <span>{{ p.meta }}</span><span>{{ p.ref }}</span>
+              </div>
+            </div>
+          </div>
+          <div style="padding:10px 14px; border-top:1px solid #edf1ef; background:#fff; font-size:12px; color:#5b6b63; line-height:1.55"><strong style="font-weight:600; color:#14201a">Behaviour ·</strong> {{ p.behaviour }}</div>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="margin-top:26px; display:grid; grid-template-columns:repeat(auto-fit, minmax(290px, 1fr)); gap:16px; max-width:1200px">
+    <div style="border:1px solid #dde3df; border-radius:10px; padding:15px 17px; background:#fff">
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:9px">Rules</div>
+      <ul style="margin:0; padding-left:18px; font-size:13px; color:#3d4d45; line-height:1.7">
+        <li>Never lose work: unsaved edits stay in the local replica through every error state.</li>
+        <li>Say what happened in the title, what it means in the body, one action in the button.</li>
+        <li>Reference code in the footer, copyable, so support can find the request.</li>
+        <li>No apology theatre, no “Oops”, no illustrations of broken robots.</li>
+        <li>4xx is amber, 5xx is red, and the top rule of the card carries that colour.</li>
+      </ul>
+    </div>
+    <div style="border:1px solid #dde3df; border-radius:10px; padding:15px 17px; background:#fff">
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:9px">Placement</div>
+      <ul style="margin:0; padding-left:18px; font-size:13px; color:#3d4d45; line-height:1.7">
+        <li>Full page only when the document cannot render at all.</li>
+        <li>Inside the canvas as a placed card when one table fails to load.</li>
+        <li>As a banner when the document works but a background operation failed.</li>
+        <li>As a toast when the failure is transient and retried automatically.</li>
+      </ul>
+    </div>
+    <div style="border:1px solid #dde3df; border-radius:10px; padding:15px 17px; background:#fff">
+      <div style="font-family:'IBM Plex Mono', monospace; font-size:10px; letter-spacing:0.07em; text-transform:uppercase; color:#6b7c74; margin-bottom:9px">Retry policy</div>
+      <ul style="margin:0; padding-left:18px; font-size:13px; color:#3d4d45; line-height:1.7">
+        <li>5xx and 429 retry automatically with exponential backoff, four attempts, jittered.</li>
+        <li>4xx never auto-retries — the request was wrong, repeating it will not help.</li>
+        <li>503 during deployment shows the maintenance page and polls every 15 s.</li>
+        <li>After exhausted retries the state becomes an explicit error with a manual Retry.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+</x-dc>
+<script type="text/x-dc" data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const AMBER = '#b45309', RED = '#b42318';
+    const p = (code, name, when, kicker, title, body, cta, alt, meta, ref, behaviour, sev) => ({
+      code: code, name: name, when: when, kicker: kicker, title: title, body: body, cta: cta, alt: alt,
+      meta: meta, ref: ref, behaviour: behaviour,
+      ink: sev === 5 ? RED : AMBER, badgeBg: sev === 5 ? RED : AMBER,
+      tint: sev === 5 ? '#fdeceb' : '#fdf6ec'
+    });
+    return {
+      pages: [
+        p('400', 'Bad request', 'Malformed link or payload', 'request', 'That link is not a workscape',
+          'The address is incomplete or has been altered. If you followed it from an email, the link may have been broken across two lines.',
+          'Go to my workscapes', 'Paste the link again', 'no request sent', 'ref 4a19c2',
+          'Full page. Nothing was opened, so nothing is at risk. The pasted-link field validates before it re-navigates.', 4),
+
+        p('401', 'Unauthenticated', 'Session expired or token revoked', 'session', 'Your session ended',
+          'You were signed out after a period of inactivity, or from another device. Any edits you had made are held on this device and will sync once you are back.',
+          'Sign in', 'Switch account', 'edits held locally', 'ref 401·sess', 
+          'Full page, but the document path is remembered — signing in returns you to the same cell, not the library.', 4),
+
+        p('403', 'No access', 'Signed in, but not a participant', 'permission', 'You do not have access to this workscape',
+          'It exists, but you are not on its participant list. The owner can add you; requesting access sends them a single message.',
+          'Request access', 'Back to my workscapes', 'owner · Meenarapan D', 'ref 403·wsp', 
+          'Full page. The document name is never shown to a non-participant — only that it exists. Requesting access is rate-limited to one per day.', 4),
+
+        p('404', 'Not found', 'Deleted, moved, or never existed', 'address', 'Nothing at this address',
+          'The workscape may have been deleted by its owner. Anything deleted in the last 30 days can still be recovered from Recently Deleted.',
+          'Open Recently Deleted', 'Go to my workscapes', 'checked 3 shards', 'ref 404·nf', 
+          'Full page. A 404 on a sheet or table within an open document is a placed card on the canvas instead, so the rest of the document stays usable.', 4),
+
+        p('429', 'Too many requests', 'Rate limit reached', 'throttled', 'Slow down for a moment',
+          'This document received an unusual number of changes in a short time. Editing resumes automatically in a few seconds; nothing has been lost.',
+          'Retry now', 'Work offline', 'retrying in 4s', 'ref 429·rl', 
+          'Banner, not a full page — the document stays on screen and editable against the local replica. The countdown is live.', 4),
+
+        p('500', 'Server error', 'Unhandled failure in the API', 'server', 'Something failed on our side',
+          'Your edits are safe on this device and will sync when the service recovers. The failure has been reported automatically with the reference below.',
+          'Retry', 'Go to my workscapes', 'attempt 3 of 4', 'ref 500·7fd1e9', 
+          'Full page only if the document never rendered; otherwise a banner. Retries run automatically with backoff before this page appears.', 5),
+
+        p('503', 'Unavailable', 'Deployment or capacity event', 'maintenance', 'GeDe is updating',
+          'A new version is rolling out. This usually takes under two minutes. This page checks for you and will continue on its own.',
+          'Check now', 'Go to status page', 'polling · 15s', 'ref 503·dep', 
+          'Full page with automatic polling every 15 s. No manual refresh needed; the button only shortcuts the next poll.', 5),
+
+        p('504', 'Timeout', 'Upstream took too long', 'timeout', 'This is taking longer than expected',
+          'The document is large or the service is busy. The request is still being attempted in the background; you can keep working offline in the meantime.',
+          'Keep waiting', 'Work offline', 'elapsed 31s', 'ref 504·tmo', 
+          'Banner over a skeleton, not a hard failure page — a slow document is not a broken one, and the skeleton keeps the final geometry.', 5)
+      ]
+    };
+  }
+}
+
+</script>
+</body>
+</html>

@@ -1,0 +1,9 @@
+{
+  "region": "ap-southeast-1",
+  "userPoolId": "ap-southeast-1_XXXXXXXXX",
+  "userPoolClientId": "xxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "apiUrl": "https://api.gede.1cloudhub.com",
+  "wsUrl": "wss://api.gede.1cloudhub.com/ws",
+  "appleSignIn": false,
+  "statusUrl": null
+}

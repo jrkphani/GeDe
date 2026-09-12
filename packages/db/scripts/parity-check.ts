@@ -1,0 +1,85 @@
+/**
+ * Runs inside `parity.sh` against a live throwaway Postgres (PG* env set).
+ * 1. Applies migrations; applies them again and requires a no-op.
+ * 2. Compares every table and column in `src/schema.ts` with information_schema.
+ */
+import { getTableColumns, getTableName } from 'drizzle-orm';
+import type { PgTable } from 'drizzle-orm/pg-core';
+
+import { applyMigrations, createPool } from '../src/index.js';
+import * as schema from '../src/schema.js';
+
+const tables: PgTable[] = [
+  schema.users,
+  schema.documents,
+  schema.shares,
+  schema.invites,
+  schema.docUpdates,
+  schema.snapshots,
+  schema.sheets,
+  schema.tables,
+  schema.columns,
+  schema.rows,
+  schema.cells,
+  schema.graphs,
+  schema.auditLog,
+];
+
+const log = {
+  info: (m: string, meta?: Record<string, unknown>) => {
+    console.error(`[parity] ${m}`, meta ?? '');
+  },
+  warn: (m: string) => {
+    console.error(`[parity] ${m}`);
+  },
+  error: (m: string) => {
+    console.error(`[parity] ${m}`);
+  },
+};
+
+const pool = createPool(process.env);
+const dir = new URL('../migrations', import.meta.url).pathname;
+try {
+  const first = await applyMigrations(pool, dir, { logger: log });
+  const second = await applyMigrations(pool, dir, { logger: log });
+  if (second.applied.length !== 0) {
+    throw new Error(
+      `migrations are not idempotent; second run applied ${second.applied.join(', ')}`,
+    );
+  }
+  log.info(`applied ${String(first.applied.length)} files; second run applied 0`);
+
+  const { rows } = await pool.query<{ table_name: string; column_name: string }>(
+    "SELECT table_name, column_name FROM information_schema.columns WHERE table_schema = 'public'",
+  );
+  const live = new Map<string, Set<string>>();
+  for (const row of rows) {
+    const set = live.get(row.table_name) ?? new Set<string>();
+    set.add(row.column_name);
+    live.set(row.table_name, set);
+  }
+
+  const problems: string[] = [];
+  for (const table of tables) {
+    const name = getTableName(table);
+    const liveColumns = live.get(name);
+    if (!liveColumns) {
+      problems.push(`table ${name} missing`);
+      continue;
+    }
+    for (const column of Object.values(getTableColumns(table))) {
+      if (!liveColumns.has(column.name)) problems.push(`column ${name}.${column.name} missing`);
+    }
+    const declared = new Set(Object.values(getTableColumns(table)).map((c) => c.name));
+    for (const c of liveColumns) {
+      if (!declared.has(c))
+        problems.push(`column ${name}.${c} exists in the database but not in schema.ts`);
+    }
+  }
+  if (problems.length > 0) {
+    throw new Error(`schema parity failed:\n  ${problems.join('\n  ')}`);
+  }
+  log.info(`schema parity ok across ${String(tables.length)} tables`);
+} finally {
+  await pool.end();
+}
