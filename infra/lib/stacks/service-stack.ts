@@ -133,6 +133,15 @@ export class ServiceStack extends cdk.Stack {
       DOCS_PREFIX,
       WEB_ORIGIN: `https://${config.domain}`,
     };
+    // Account erasure (#111, ADR-038): `DELETE /api/me` deletes the Cognito user after the
+    // database tombstone is committed. The flag and the grant ship in one change so the
+    // service never answers `identity: 'skipped'` with the grant in place, or `'failed'`
+    // without it. The service task alone: the jobs task never erases anyone.
+    const userPoolArn = cdk.Stack.of(this).formatArn({
+      service: 'cognito-idp',
+      resource: 'userpool',
+      resourceName: props.userPoolId,
+    });
     // Two database identities in every task (#36): the master user (`PG*`) runs the
     // migrations and bootstraps the app role at boot, then the runtime pool connects as
     // `PGAPPUSER` with DML only. Both are injected by the execution role; the process
@@ -218,9 +227,16 @@ export class ServiceStack extends cdk.Stack {
       portMappings: [{ containerPort: CONTAINER_PORT }],
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'sync', logGroup: this.logGroup }),
       secrets: secrets(),
-      environment,
+      environment: { ...environment, COGNITO_ERASE_IDENTITY: 'true' },
     });
     grant(taskDefinition);
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'EraseIdentity',
+        actions: ['cognito-idp:AdminDeleteUser'],
+        resources: [userPoolArn],
+      }),
+    );
 
     // ---- The jobs task (nightly purge, LIB-08) ---------------------------------------
     // Same image, config and permissions; the command selects the job and the
