@@ -52,10 +52,12 @@ export async function purgeExpired(deps: PurgeDeps): Promise<PurgeResult> {
   let purged = 0;
   let objectsDeleted = 0;
   const failed: string[] = [];
+  /** Rows the row delete did not claim tonight (locked elsewhere); excluded, not failed. */
+  const deferred: string[] = [];
   for (;;) {
     const candidates = await deps.repo.documents.expiredForPurge({
       limit: batchSize,
-      exclude: failed,
+      exclude: [...failed, ...deferred],
     });
     if (candidates.length === 0) break;
     const cleared: PurgedDocument[] = [];
@@ -79,6 +81,20 @@ export async function purgeExpired(deps: PurgeDeps): Promise<PurgeResult> {
         purged += gone.length;
         for (const doc of gone) {
           deps.logger.info({ documentId: doc.id }, 'expired document purged');
+        }
+        // A row the delete did not claim — locked by another transaction
+        // (`SKIP LOCKED`), or already gone — is not read again tonight: with
+        // a full batch it would otherwise be re-read, and its prefix
+        // re-listed, in a loop for as long as the lock is held. Not a
+        // failure (the night is not red for a lock); the next run finds it.
+        const claimed = new Set(gone.map((d) => d.id));
+        const skipped = cleared.filter((d) => !claimed.has(d.id)).map((d) => d.id);
+        if (skipped.length > 0) {
+          deps.logger.warn(
+            { documents: skipped },
+            'expired documents not claimed by the row delete; left for the next run',
+          );
+          deferred.push(...skipped);
         }
       } catch (error) {
         // The objects are gone; the rows wait for the next run, which finds

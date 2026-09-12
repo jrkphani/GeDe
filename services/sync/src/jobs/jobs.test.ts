@@ -170,6 +170,38 @@ describe('purgeExpired job', () => {
     expect(repo.docs.size).toBe(0);
   });
 
+  test('LIB-08 a row the delete does not claim (locked elsewhere, SKIP LOCKED) is left for the next run and not read again tonight: a full batch cannot loop on it, and the night is not red for it (#109)', async () => {
+    const repo = new FakeRepo();
+    const alice = repo.seedUser('sub-alice').id;
+    const locked = deletedAgo(repo, alice, 'locked', 100);
+    const other = deletedAgo(repo, alice, 'other', 90);
+    const s3 = new FakeSnapshotStore();
+    await s3.put(snapshotKey('docs/', locked, 1), new Uint8Array([1]));
+    await s3.put(snapshotKey('docs/', other, 1), new Uint8Array([1]));
+    const original = repo.documents.purge.bind(repo.documents);
+    const reads: string[][] = [];
+    const expired = repo.documents.expiredForPurge.bind(repo.documents);
+    (repo.documents as { expiredForPurge: typeof expired }).expiredForPurge = async (query) => {
+      const rows = await expired(query);
+      reads.push(rows.map((r) => r.id));
+      return rows;
+    };
+    // Another transaction holds `locked`: the row delete skips it and claims nothing else.
+    (repo.documents as { purge: typeof original }).purge = (ids) =>
+      original(ids.filter((id) => id !== locked));
+    const result = await purgeExpired({
+      repo,
+      s3,
+      docsPrefix: 'docs/',
+      logger: silent,
+      batchSize: 1,
+    });
+    expect(result).toEqual({ purged: 1, objectsDeleted: 2, failed: [] });
+    // `locked` was read once, then excluded; `other` went; the loop ended.
+    expect(reads).toEqual([[locked], [other], []]);
+    expect([...repo.docs.keys()]).toEqual([locked]);
+  });
+
   test('LIB-08 S3 runs outside any transaction (#109): a slow object store neither holds a claim nor fails the run', async () => {
     const repo = new FakeRepo();
     const alice = repo.seedUser('sub-alice').id;
