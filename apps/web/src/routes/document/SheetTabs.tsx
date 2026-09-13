@@ -6,7 +6,7 @@ import { Button, Tabs, Tooltip } from '@gede/ui';
 import { announce } from '../../announce.js';
 import { isEditableTarget } from '../../doc/shortcuts.js';
 import { useYVersion } from '../../doc/use-y.js';
-import { EMPTY_SHEET_NAME_REASON } from './sheets.js';
+import { emptyNameReason } from './sheets.js';
 
 /**
  * ADR-048: what a tab can do to its sheet beyond selecting it. Absent on
@@ -43,9 +43,7 @@ function tabOf(target: EventTarget | null): { element: HTMLElement; sheetId: Id 
   if (!(target instanceof Element)) return null;
   const element = target.closest<HTMLElement>('[role="tab"][data-value]');
   const sheetId = element?.dataset.value;
-  return element === null || element === undefined || sheetId === undefined
-    ? null
-    : { element, sheetId };
+  return element === null || sheetId === undefined ? null : { element, sheetId };
 }
 
 function isComposing(event: KeyboardEvent): boolean {
@@ -83,13 +81,14 @@ function RenameField({ sheet, commit, cancel }: RenameFieldProps) {
         return;
       }
       setInvalid(true);
-      announce(EMPTY_SHEET_NAME_REASON);
+      announce(emptyNameReason());
       input.current?.focus();
       return;
     }
     done.current = true;
     cancel();
   };
+  const reason = emptyNameReason();
   return (
     <>
       <input
@@ -100,6 +99,8 @@ function RenameField({ sheet, commit, cancel }: RenameFieldProps) {
         aria-label="Sheet name"
         aria-invalid={invalid || undefined}
         aria-describedby={invalid ? reasonId : undefined}
+        // The reason shows where the missing name would be — exactly while it applies (A11Y-04).
+        placeholder={invalid ? reason : undefined}
         data-sheet-rename={sheet.id}
         autoComplete="off"
         spellCheck={false}
@@ -125,8 +126,8 @@ function RenameField({ sheet, commit, cancel }: RenameFieldProps) {
         }}
       />
       {invalid && (
-        <span id={reasonId} className="gd-doc__sheet-rename-reason" role="presentation">
-          {EMPTY_SHEET_NAME_REASON}
+        <span id={reasonId} className="gd-visually-hidden">
+          {reason}
         </span>
       )}
     </>

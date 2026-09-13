@@ -49,12 +49,25 @@
   display: none;
 }
 
-/* An inline editor standing in for a tab while it is renamed: the tab's footprint and underline. */
+/* An inline editor standing in for a tab while it is renamed: an inert spacer keeps the tab's
+   place in the list (a tablist may own only tabs), and the editor sits over it, outside the list,
+   with the tab's footprint and underline. */
+.gd-tabs {
+  position: relative;
+}
+.gd-tabs__slot {
+  flex: none;
+  min-width: 12rem;
+  min-height: 2.25rem;
+}
 .gd-tabs__editor {
+  position: absolute;
+  top: 0;
+  left: 0;
   display: flex;
   align-items: center;
+  box-sizing: border-box;
   min-height: 2.25rem;
   padding: 0 var(--space-1);
-  margin-bottom: -1px;
   border-bottom: 2px solid var(--link);
 }

@@ -97,6 +97,24 @@ export const messages = {
   'object.collapse': 'Collapse {name}',
   'object.expand': 'Expand {name}',
 
+  // ADR-048 (#165): the sheet strip's commands — what the live region says of a renamed,
+  // deleted or restored sheet, and the name field's refusal. A deleted sheet is announced
+  // through `object.deleted*` with `sheet.name.*` as its `{name}`; `{sheet}` is a label.
+  'sheet.name.tables': '{sheet} with {tables}',
+  'sheet.name.graphs': '{sheet} with {graphs}',
+  'sheet.name.both': '{sheet} with {tables} and {graphs}',
+  'sheet.count.table': '1 table',
+  'sheet.count.tables': '{count} tables',
+  'sheet.count.graph': '1 graph',
+  'sheet.count.graphs': '{count} graphs',
+  'sheet.deleted': 'Deleted {name}',
+  'sheet.nowOn': '{deleted}. Now on {sheet}',
+  'sheet.removedRemotely': '{sheet} was deleted — now on {nowOn}',
+  'sheet.renamed': 'Renamed {from} to {to}',
+  'sheet.restored': 'Restored {sheet}',
+  'sheet.lastKept': 'A workscape keeps at least one sheet',
+  'sheet.needsName': 'A sheet needs a name',
+
   'library.help.label': 'Help',
   'library.help.replay': 'Replay guided tour',
   'library.help.shortcuts': 'Keyboard shortcuts',

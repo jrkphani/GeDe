@@ -4,11 +4,14 @@ import {
   bindGraphPair,
   cellAddress,
   commitCellText,
+  createChildSheet,
   createGraphPair,
   createShapedTableWithGraph,
+  deleteSheet,
   graphById,
   listSheets,
   openDocument,
+  renameSheet,
   removeGraphObject,
   removeGraphPair,
   seedSampleWorkscape,
@@ -342,6 +345,39 @@ describe('tour store', () => {
     expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [other.pairId] });
     removeGraphObject(again, other.pairId, 'ring');
     expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'add', pairIds: [] });
+  });
+
+  test('ONB-04 ONB-05 GRAPH-10 ADR-045 ADR-048 a child sheet opened at step 3 can be renamed and deleted mid-step: the derived sub-state and the tracked pair are unchanged, nothing throws; the sample’s only remaining sheet is refused', () => {
+    const gd = openSampleAt(3);
+    const sheetId = listSheets(gd)[0]!.id;
+    const c = cells(gd);
+    const pair = createGraphPair(gd, { sheetId, tableId: c.deliverables.id });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [pair.pairId] });
+    // GRAPH-10: a node's double-click opens a child sheet with a shaped table.
+    const child = createChildSheet(gd, { symbol: 'α', tupleKey: 'Nepal' });
+    expect(listSheets(gd)).toHaveLength(2);
+    expect(tourState()).toMatchObject({ step: 3, substep: 'dimensions', pairIds: [pair.pairId] });
+    expect(renameSheet(gd, child.sheetId, 'Alpha')).toBe(true);
+    expect(tourState()).toMatchObject({ step: 3, substep: 'dimensions', pairIds: [pair.pairId] });
+    // A pair on the child sheet, then the sheet goes with it: the step's own pair is untouched.
+    const onChild = createGraphPair(gd, { sheetId: child.sheetId, tableId: child.tableId });
+    expect(tourState()).toMatchObject({ substep: 'dimensions' });
+    expect(deleteSheet(gd, child.sheetId)).toMatchObject({ tables: 1, graphs: 1 });
+    expect(graphById(gd, onChild.ringId)).toBeNull();
+    const after = tourState();
+    expect(after).toMatchObject({
+      phase: 'running',
+      step: 3,
+      substep: 'dimensions',
+      pairIds: [pair.pairId],
+    });
+    expect(after.phase === 'running' && after.baseline.dimensions.has(pair.pairId)).toBe(true);
+    // The sample's only sheet stays (ADR-048), and the tour with it.
+    expect(() => deleteSheet(gd, sheetId)).toThrow(RangeError);
+    expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'dimensions' });
+    const dims = graphById(gd, pair.coverageId)?.dimensions ?? [];
+    toggleGraphDimension(gd, pair.pairId, dims[0]!, false);
+    expect(tourState()).toMatchObject({ step: 4, substep: null });
   });
 
   test('ONB-05 GRAPH-03 GRAPH-05 an unbound pair never advances; Re-point shows `point` again and, bound to another table, resets the dimensions baseline so the defaults do not count', () => {

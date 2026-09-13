@@ -26,7 +26,7 @@ import { useGrid } from './grid/use-grid.js';
 import type { CellClipboard } from './keys/clipboard.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
 import type { MenuContext } from './menus/entries.js';
-import { EMPTY_SHEET_NAME_REASON, LAST_SHEET_REASON } from './sheets.js';
+import { emptyNameReason, LAST_SHEET_REASON } from './sheets.js';
 import { SheetTabs, type SheetEditing } from './SheetTabs.js';
 
 let gd: GedeDoc;
@@ -226,7 +226,7 @@ describe('sheet tab menu (ADR-048)', () => {
     render(<Harness />);
     const menu = await openMenuOn(tab(/Budget/));
     await userEvent.click(within(menu).getByRole('menuitem', { name: /Rename sheet/ }));
-    const field = await screen.findByRole('textbox', { name: 'Sheet name' });
+    const field = await screen.findByRole<HTMLInputElement>('textbox', { name: 'Sheet name' });
     await waitFor(() => {
       expect(field).toHaveFocus();
     });
@@ -267,8 +267,8 @@ describe('sheet tab menu (ADR-048)', () => {
     expect(again).toBeInTheDocument();
     expect(again).toHaveAttribute('aria-invalid', 'true');
     const reason = document.getElementById(again.getAttribute('aria-describedby') ?? '');
-    expect(reason).toHaveTextContent(EMPTY_SHEET_NAME_REASON);
-    expect(screen.getByTestId('live-region')).toHaveTextContent(EMPTY_SHEET_NAME_REASON);
+    expect(reason).toHaveTextContent(emptyNameReason());
+    expect(screen.getByTestId('live-region')).toHaveTextContent(emptyNameReason());
     expect(sheetById(gd, first)?.label).toBe('Trek');
     // Leaving the field with nothing in it is a cancel, not a rename to nothing.
     fireEvent.blur(again);

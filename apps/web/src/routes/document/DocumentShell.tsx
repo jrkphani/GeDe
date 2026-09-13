@@ -116,9 +116,11 @@ import { SheetTabs, type SheetEditing } from './SheetTabs.js';
 import {
   deletedSheetAnnouncement,
   deletedSheetTitle,
-  LAST_SHEET_ANNOUNCEMENT,
+  lastSheetAnnouncement,
   neighbourSheet,
   remoteSheetRemovedAnnouncement,
+  renamedSheetAnnouncement,
+  restoredSheetAnnouncement,
   sheetName,
 } from './sheets.js';
 import { TableView } from './TableView.js';
@@ -402,7 +404,7 @@ function OpenDocument({
       const written = renameSheet(gd, sheetId, trimmed);
       session.undo.stopCapturing();
       setRenamingSheetId(null);
-      if (written) announce(`Renamed ${was?.label ?? 'the sheet'} to ${trimmed}`);
+      if (written && was !== undefined) announce(renamedSheetAnnouncement(was.label, trimmed));
       return true;
     },
     [gd, session],
@@ -410,7 +412,7 @@ function OpenDocument({
   const removeSheet = useCallback(
     (sheetId: Id) => {
       if (isLastSheet(gd)) {
-        announce(LAST_SHEET_ANNOUNCEMENT);
+        announce(lastSheetAnnouncement());
         return;
       }
       if (listSheets(gd).every((s) => s.id !== sheetId)) return; // already gone
@@ -430,7 +432,8 @@ function OpenDocument({
           if (session.undo.undoStack.at(-1) !== step) return;
           session.undo.undo();
           showSheet(sheetId);
-          announce(`Restored ${result.label}`);
+          const restored = listSheets(gd).find((s) => s.id === sheetId);
+          if (restored !== undefined) announce(restoredSheetAnnouncement(restored));
         },
       });
     },
@@ -457,7 +460,7 @@ function OpenDocument({
       const restored = listSheets(gd).find((s) => !before.has(s.id));
       if (restored !== undefined) {
         showSheet(restored.id);
-        announce(`Restored ${restored.label}`);
+        announce(restoredSheetAnnouncement(restored));
       }
     },
     [gd, session, showSheet],

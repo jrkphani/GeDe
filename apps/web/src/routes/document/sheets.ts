@@ -1,58 +1,116 @@
 /**
  * Sheet commands beyond the strip's + (ADR-048, #165): the words the shell
- * says and the neighbour it shows when a sheet goes. Pure, so the
- * announcements are pinned by tests and the shell only wires them.
+ * says, in the active locale, and the neighbour it shows when a sheet goes.
+ * Pure over the catalogue, so the announcements are pinned by tests and the
+ * shell only wires them.
  */
 import type { DeleteSheetResult, Id, SheetRecord } from '@gede/core';
 
 import { LABELS } from '../../doc/shortcuts.js';
+import { translate } from '../../i18n/index.js';
+import { formatNumber } from '../../intl.js';
+import { activeLocale } from '../../locale.js';
 
-/** Why the last sheet's Delete item is disabled (MENU-02). */
+/** Why the last sheet's Delete item is disabled (MENU-02); inline English like every menu reason. */
 export const LAST_SHEET_REASON = 'a workscape keeps at least one sheet';
-/** What ⌫ on the last sheet's tab says (A11Y-05). */
-export const LAST_SHEET_ANNOUNCEMENT = 'A workscape keeps at least one sheet';
-/** Why an empty name is refused inline (A11Y-04: text, not a red border alone). */
-export const EMPTY_SHEET_NAME_REASON = 'A sheet needs a name';
 
-function plural(n: number, noun: string): string {
-  return `${String(n)} ${noun}${n === 1 ? '' : 's'}`;
+/** What ⌫ on the last sheet's tab says (A11Y-05). */
+export function lastSheetAnnouncement(): string {
+  return translate(activeLocale(), 'sheet.lastKept');
+}
+
+/** Why an empty name is refused inline, beside the field and in the live region (A11Y-04). */
+export function emptyNameReason(): string {
+  return translate(activeLocale(), 'sheet.needsName');
 }
 
 /** "Sheet 2 with 2 tables and 1 graph"; "Sheet 2" when it was empty. */
-function whatWent(result: DeleteSheetResult): string {
-  const contents: string[] = [];
-  if (result.tables > 0) contents.push(plural(result.tables, 'table'));
-  if (result.graphs > 0) contents.push(plural(result.graphs, 'graph'));
-  return `${result.label}${contents.length === 0 ? '' : ` with ${contents.join(' and ')}`}`;
+export function deletedSheetName(result: DeleteSheetResult): string {
+  const locale = activeLocale();
+  const count = (n: number, one: 'sheet.count.table' | 'sheet.count.graph') =>
+    n === 1
+      ? translate(locale, one)
+      : translate(
+          locale,
+          one === 'sheet.count.table' ? 'sheet.count.tables' : 'sheet.count.graphs',
+          {
+            count: formatNumber(locale, n),
+          },
+        );
+  const sheet = result.label;
+  if (result.tables > 0 && result.graphs > 0) {
+    return translate(locale, 'sheet.name.both', {
+      sheet,
+      tables: count(result.tables, 'sheet.count.table'),
+      graphs: count(result.graphs, 'sheet.count.graph'),
+    });
+  }
+  if (result.tables > 0) {
+    return translate(locale, 'sheet.name.tables', {
+      sheet,
+      tables: count(result.tables, 'sheet.count.table'),
+    });
+  }
+  if (result.graphs > 0) {
+    return translate(locale, 'sheet.name.graphs', {
+      sheet,
+      graphs: count(result.graphs, 'sheet.count.graph'),
+    });
+  }
+  return sheet;
 }
 
 /**
  * "Deleted Sheet 2 with 2 tables and 1 graph — press ⌘Z to undo"; with
- * dependents elsewhere, "Deleted Sheet 2 with 2 tables — 3 cells elsewhere
- * now read "reference removed"; press ⌘Z to undo"; and, when the active
- * sheet moved, ". Now on Sheet 1" (#165 §3). The chord is spelled as the
- * shortcut sheet spells it (ADR-042).
+ * dependents elsewhere, "… — 3 cells elsewhere now read “reference removed”;
+ * press ⌘Z to undo" (ADR-047's sentence, the same for a table); and, when
+ * the active sheet moved, ". Now on Sheet 1" (#165 §3). The chord is spelled
+ * as the shortcut sheet spells it (ADR-042).
  */
 export function deletedSheetAnnouncement(
   result: DeleteSheetResult,
   nowOn: SheetRecord | null = null,
 ): string {
-  const refs =
-    result.referencesRemoved === 0
-      ? ''
-      : `${plural(result.referencesRemoved, 'cell')} elsewhere now read "reference removed"; `;
-  const moved = nowOn === null ? '' : `. Now on ${sheetName(nowOn)}`;
-  return `Deleted ${whatWent(result)} — ${refs}press ${LABELS.undo} to undo${moved}`;
+  const locale = activeLocale();
+  const name = deletedSheetName(result);
+  const undo = LABELS.undo;
+  const broken = result.referencesRemoved;
+  const deleted =
+    broken === 0
+      ? translate(locale, 'object.deleted', { name, undo })
+      : broken === 1
+        ? translate(locale, 'object.deleted.ref', { name, undo })
+        : translate(locale, 'object.deleted.refs', {
+            name,
+            undo,
+            count: formatNumber(locale, broken),
+          });
+  return nowOn === null
+    ? deleted
+    : translate(locale, 'sheet.nowOn', { deleted, sheet: sheetName(nowOn) });
 }
 
-/** The toast's one line: what went; its Undo button is the route back. */
+/** The toast's one line — "Deleted Sheet 2 with 1 table"; its Undo button is the route back. */
 export function deletedSheetTitle(result: DeleteSheetResult): string {
-  return `Deleted ${whatWent(result)}`;
+  return translate(activeLocale(), 'sheet.deleted', { name: deletedSheetName(result) });
 }
 
 /** "Sheet 2 was deleted — now on Sheet 1": a collaborator removed the sheet this replica showed. */
 export function remoteSheetRemovedAnnouncement(gone: SheetRecord, nowOn: SheetRecord): string {
-  return `${gone.label} was deleted — now on ${sheetName(nowOn)}`;
+  return translate(activeLocale(), 'sheet.removedRemotely', {
+    sheet: gone.label,
+    nowOn: sheetName(nowOn),
+  });
+}
+
+/** "Renamed Sheet 2 to Budget". */
+export function renamedSheetAnnouncement(from: string, to: string): string {
+  return translate(activeLocale(), 'sheet.renamed', { from, to });
+}
+
+/** "Restored Sheet 2": an undo brought the sheet back and the shell is showing it. */
+export function restoredSheetAnnouncement(sheet: SheetRecord): string {
+  return translate(activeLocale(), 'sheet.restored', { sheet: sheet.label });
 }
 
 /**
