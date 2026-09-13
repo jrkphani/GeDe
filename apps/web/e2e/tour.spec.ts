@@ -364,6 +364,15 @@ async function graphStep(
   await expect(dimensions.locator('.gd-tour__dot--done')).toHaveCount(3);
   await expect(page.getByTestId('inspector')).toHaveAttribute('data-state', 'open');
   await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
+  // The card names "the Graph tab": the tab strip is in the rail's view, not scrolled out
+  // above the checklist (review of #160) — at these heights the whole tab fits below it.
+  await expect
+    .poll(async () => {
+      const rail = (await page.getByTestId('inspector').boundingBox())!;
+      const tab = (await page.getByRole('tab', { name: 'Graph' }).boundingBox())!;
+      return tab.y >= rail.y - 1 && tab.y + tab.height <= rail.y + rail.height + 1;
+    })
+    .toBe(true);
   await expect(dimensions.locator('.gd-tour__action')).toHaveText(
     /Tick at least two dimensions in the Graph tab$/,
   );
@@ -765,6 +774,24 @@ test.describe('200 % zoom', () => {
         .locator('.gd-pointing__label'),
     );
     await expectInsideSpotlight(page, '[data-testid="pointing-banner"]');
+    // The corner is the one placement that covers part of a target (review of #160): the
+    // on-screen part of the Deliverables target stays at least half uncovered, so the
+    // click the card asks for has somewhere to land.
+    const target = (await page
+      .getByRole('button', { name: 'Bind the graph to Deliverables' })
+      .boundingBox())!;
+    const c = (await card(page).boundingBox())!;
+    const onScreen = {
+      x: Math.max(0, target.x),
+      y: Math.max(0, target.y),
+      right: Math.min(1024, target.x + target.width),
+      bottom: Math.min(450, target.y + target.height),
+    };
+    const covered =
+      Math.max(0, Math.min(onScreen.right, c.x + c.width) - Math.max(onScreen.x, c.x)) *
+      Math.max(0, Math.min(onScreen.bottom, c.y + c.height) - Math.max(onScreen.y, c.y));
+    const visible = (onScreen.right - onScreen.x) * (onScreen.bottom - onScreen.y);
+    expect(covered).toBeLessThanOrEqual(visible / 2);
     await checkCardBothThemes(page, checkA11y, 'tour step 3b 1024 200%');
     await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
     const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });

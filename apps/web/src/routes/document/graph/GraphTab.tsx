@@ -104,13 +104,18 @@ function GraphTabBody({
         .querySelector<HTMLElement>('[role="checkbox"]:not([disabled])')
         ?.focus({ preventScroll: true });
     }
-    // Scrolled after the focus, so the rail shows the list from its top (a short viewport
-    // at 200 % zoom holds only part of the tab) — and again once the rail's width
-    // transition ends: while it opens from the strip its content is laid out narrow and
-    // tall, and a scroll taken then lands at the bottom when the layout settles.
+    // Scrolled after the focus: the tab strip to the top of the rail first — the card says
+    // "in the Graph tab", so the tab must stay in view — then the list by the least that
+    // brings all of it in (`nearest`), which at every width but a short viewport (450 px at
+    // 200 % zoom) moves nothing more. Scrolled again once the rail's width transition ends:
+    // while it opens from the strip its content is laid out narrow and tall, and a scroll
+    // taken then lands wrong when the layout settles.
     const rail = list.closest<HTMLElement>('.gd-inspector');
     const show = () => {
-      list.scrollIntoView({ block: 'start', inline: 'nearest' });
+      rail
+        ?.querySelector<HTMLElement>('.gd-inspector__tabs [role="tablist"]')
+        ?.scrollIntoView({ block: 'start', inline: 'nearest' });
+      list.scrollIntoView({ block: 'nearest', inline: 'nearest' });
     };
     show();
     if (rail === null) return;
