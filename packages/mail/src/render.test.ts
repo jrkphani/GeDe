@@ -118,6 +118,22 @@ describe('rendered mail', () => {
     }
   });
 
+  test('AUTH-03 AUTH-04 every code mail matches Cognito’s MessageTemplateType pattern — no format character (Telugu’s ZWNJ, U+200C) survives into the message or the subject', () => {
+    // MessageTemplateType.EmailMessage: `[\p{L}\p{M}\p{S}\p{N}\p{P}\s*]*\{####\}[\p{L}\p{M}\p{S}\p{N}\p{P}\s*]*`;
+    // EmailSubject: `[\p{L}\p{M}\p{S}\p{N}\p{P}\s]+`. Java's `\s` is ASCII whitespace.
+    const CLASS = '[\\p{L}\\p{M}\\p{S}\\p{N}\\p{P}\\t\\n\\x0B\\f\\r *]';
+    const MESSAGE = new RegExp(`^${CLASS}*\\{####\\}${CLASS}*$`, 'u');
+    const SUBJECT = new RegExp(`^${CLASS}+$`, 'u');
+    for (const mail of every()) {
+      if (!(CODE_MAIL_KINDS as readonly string[]).includes(mail.kind)) continue;
+      expect(mail.html, `${mail.kind} ${mail.locale} html`).toMatch(MESSAGE);
+      expect(mail.text, `${mail.kind} ${mail.locale} text`).toMatch(MESSAGE);
+      expect(mail.subject, `${mail.kind} ${mail.locale} subject`).toMatch(SUBJECT);
+    }
+    // The catalogue itself keeps the ZWNJ for the share mail, which SES does not validate.
+    expect(renderShareMail('share.invite', 'te-IN', share).html).toContain('‌');
+  });
+
   test('DESIGN-SYSTEM §6 the live amber is reserved for the code: once in a code mail, absent from a share mail; one action in a share mail, none in a code mail', () => {
     const accent = new RegExp(palette.colors.light.accent, 'g');
     for (const mail of every()) {

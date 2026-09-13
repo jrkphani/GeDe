@@ -5,7 +5,7 @@
  *
  * The PRD sends nothing else: no welcome mail, no passkey notice, no tour mail.
  */
-import { subjectFor, translate, type MailLocale } from './i18n.js';
+import { subjectFor, translate, type MailLocale, type MessageParams } from './i18n.js';
 import { renderHtml, renderText, type MailContent } from './layout.js';
 
 export const CODE_MAIL_KINDS = ['signUpCode', 'signInCode', 'emailChangeCode'] as const;
@@ -54,13 +54,26 @@ function finish(kind: MailKind, content: MailContent): RenderedMail {
   };
 }
 
+/**
+ * Cognito validates a message template — the pool's own and what the custom-message
+ * trigger returns — against `MessageTemplateType`'s pattern, which admits letters, marks,
+ * symbols, numbers, punctuation and whitespace only. A format character (`\p{Cf}`: the
+ * zero-width non-joiner Telugu uses after a virama in loanwords, U+200C) is none of those
+ * and would make Cognito refuse the message, and with it the sign-in. So a code mail
+ * drops them; the share mail, sent through SES, keeps the catalogue as written.
+ */
+const FORMAT_CHARACTERS = /\p{Cf}/gu;
+const forCognito = (text: string) => text.replace(FORMAT_CHARACTERS, '');
+
 export function renderCodeMail(
   kind: CodeMailKind,
   locale: MailLocale,
   input: CodeMailInput,
 ): RenderedMail {
   const t = (suffix: 'subject' | 'heading' | 'body' | 'expires' | 'why') =>
-    translate(locale, `${kind}.${suffix}`);
+    forCognito(translate(locale, `${kind}.${suffix}`));
+  const layout = (key: 'code.label' | 'layout.sentTo' | 'layout.footer', params?: MessageParams) =>
+    forCognito(translate(locale, key, params));
   return finish(kind, {
     locale,
     subject: t('subject'),
@@ -68,12 +81,11 @@ export function renderCodeMail(
     heading: t('heading'),
     lead: [t('body')],
     code: input.code,
-    codeLabel: translate(locale, 'code.label'),
+    codeLabel: layout('code.label'),
     trail: [t('expires')],
     why: t('why'),
-    sentTo:
-      input.email === null ? null : translate(locale, 'layout.sentTo', { email: input.email }),
-    footer: translate(locale, 'layout.footer'),
+    sentTo: input.email === null ? null : layout('layout.sentTo', { email: input.email }),
+    footer: layout('layout.footer'),
   });
 }
 
