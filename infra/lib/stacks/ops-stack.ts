@@ -15,6 +15,7 @@ import {
   aws_scheduler_targets as scheduler_targets,
   aws_sns as sns,
   aws_sns_subscriptions as subscriptions,
+  type aws_sqs as sqs,
 } from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
 
@@ -44,10 +45,22 @@ export interface OpsStackProps extends cdk.StackProps {
   readonly preAuthFunction: lambda.IFunction;
   /** The pool's custom-message trigger: an error there is a stock, English code mail at best. */
   readonly customMessageFunction: lambda.IFunction;
+  /** The SES events dead-letter queue (ADR-046): a message there is an event the service could not process. */
+  readonly sesEventsDeadLetterQueue: sqs.IQueue;
 }
 
 const GIB = 1024 ** 3;
 const MIB = 1024 ** 2;
+
+/**
+ * SES's account-level reputation thresholds, as fractions of sends (ADR-046):
+ * AWS puts an account under review at a 5 % bounce rate or a 0.1 % complaint
+ * rate and pauses sending at 10 % / 0.5 %. The alarms sit on the review line —
+ * `Reputation.BounceRate` and `Reputation.ComplaintRate` in `AWS/SES` are the
+ * rolling rates SES itself judges by, published for the account as a whole.
+ */
+export const SES_BOUNCE_RATE_THRESHOLD = 0.05;
+export const SES_COMPLAINT_RATE_THRESHOLD = 0.001;
 
 /** A Fargate task definition family as the scheduler needs it: the ARN without a revision and the roles every revision uses. */
 interface TaskFamily {
@@ -130,7 +143,9 @@ export const PURGE_SILENCE_HOURS = 26;
  * review"): CPU and memory of the one task, healthy targets, ALB 5xx ratio and p90 latency,
  * RDS free storage, burst credits and memory, a monthly budget on actual and forecast spend
  * — all fanning out to one email subscription. Plus the nightly purge schedule, the alert
- * that fires when its task exits non-zero, and the one that fires when it has not run at all.
+ * that fires when its task exits non-zero, and the one that fires when it has not run at all;
+ * and, since ADR-046, SES's account bounce and complaint rates and the SES events
+ * dead-letter queue.
  */
 export class OpsStack extends cdk.Stack {
   readonly alertsTopic: sns.Topic;
@@ -491,6 +506,59 @@ export class OpsStack extends cdk.Stack {
         treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
       });
     customMessageErrors.addAlarmAction(notify);
+
+    // ---- SES reputation and the events queue (SHARE-02, ADR-046) -----------------------
+    // The account-level rates SES judges the account by, no dimensions: over the review
+    // line for one hourly period is the alert (SES publishes them a few times a day, so
+    // a missing datapoint is nothing). A firing alarm means addresses are being mailed
+    // that should not be — read `mail_suppressions` and the `GeDe/Sync MailEvents`
+    // metric, runbook §5.
+    const reputation = (metricName: string) =>
+      new cloudwatch.Metric({
+        namespace: 'AWS/SES',
+        metricName,
+        period: cdk.Duration.hours(1),
+        statistic: 'Maximum',
+      });
+    const bounceRate = reputation('Reputation.BounceRate').createAlarm(this, 'SesBounceRate', {
+      alarmName: `gede-${config.envName}-ses-bounce-rate`,
+      alarmDescription: `SES account bounce rate above ${String(SES_BOUNCE_RATE_THRESHOLD * 100)} % (AWS's review threshold); check mail_suppressions and GeDe/Sync MailEvents, runbook §5`,
+      threshold: SES_BOUNCE_RATE_THRESHOLD,
+      evaluationPeriods: 1,
+      comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+      treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+    });
+    bounceRate.addAlarmAction(notify);
+    const complaintRate = reputation('Reputation.ComplaintRate').createAlarm(
+      this,
+      'SesComplaintRate',
+      {
+        alarmName: `gede-${config.envName}-ses-complaint-rate`,
+        alarmDescription: `SES account complaint rate above ${String(SES_COMPLAINT_RATE_THRESHOLD * 100)} % (AWS's review threshold); check mail_suppressions and GeDe/Sync MailEvents, runbook §5`,
+        threshold: SES_COMPLAINT_RATE_THRESHOLD,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      },
+    );
+    complaintRate.addAlarmAction(notify);
+
+    // An event the service failed to process five times (a database refusal, a crash
+    // mid-message) is on the dead-letter queue: an address that bounced and was not
+    // suppressed. Any message there is the alarm; it stays until a person redrives or
+    // deletes it (runbook §5).
+    const sesEventsDlq = props.sesEventsDeadLetterQueue
+      .metricApproximateNumberOfMessagesVisible({ period, statistic: 'Maximum' })
+      .createAlarm(this, 'SesEventsDlq', {
+        alarmName: `gede-${config.envName}-ses-events-dlq`,
+        alarmDescription:
+          'An SES bounce/complaint event the sync service could not process is on the dead-letter queue; the address may still be mailed — read the message and the service log, runbook §5',
+        threshold: 0,
+        evaluationPeriods: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      });
+    sesEventsDlq.addAlarmAction(notify);
 
     // `NotificationsWithSubscribers` is create-only on AWS::Budgets::Budget, so any change
     // replaces the resource — and a replacement under the same BudgetName fails ("same name

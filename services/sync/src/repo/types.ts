@@ -4,7 +4,13 @@
  * (`src/test/fake-repo.ts`). Keeping the surface small keeps the fake honest:
  * it implements exactly the queries the service issues, nothing more.
  */
-import type { LinkAccess, Permission, ShareSource } from '@gede/db';
+import type {
+  LinkAccess,
+  MailEventKind,
+  MailSuppressionReason,
+  Permission,
+  ShareSource,
+} from '@gede/db';
 
 import type { Projection } from '../projection/project.js';
 
@@ -302,8 +308,10 @@ export class EmailTakenError extends Error {
  * Audit actions the sharing routes write (ARCHITECTURE §1.5 `audit_log`:
  * "share changes"). `share.link_revoke` (the link switched off or re-minted
  * took its shares with it) and `share.invite_withdraw` (an invitation whose
- * inviter no longer holds what it grants) are written by the system: their
- * `user_id` is the actor whose change caused them, or null at conversion.
+ * inviter no longer holds what it grants, or whose address bounced or
+ * complained — target `<address>:<reason>`, ADR-046) are written by the
+ * system: their `user_id` is the actor whose change caused them, or null at
+ * conversion and on a mail event.
  */
 export type ShareAuditAction =
   | 'share.add'
@@ -627,6 +635,72 @@ export interface ProjectionRepo {
   liveDocumentIds(): Promise<string[]>;
 }
 
+/** An address GeDe will not mail again (`mail_suppressions`, ADR-046). */
+export interface MailSuppressionRecord {
+  readonly email: string;
+  readonly reason: MailSuppressionReason;
+  readonly firstSeenAt: Date;
+  readonly lastEventAt: Date;
+}
+
+/** What `MailRepo.recordEvent` found: whether the row is new, and the address's transient-bounce count. */
+export interface MailEventOutcome {
+  /** `false` when the (message id, address) pair was already recorded — a redelivered message. */
+  readonly recorded: boolean;
+  /**
+   * Transient bounces recorded for the address with `at` after `since`, this
+   * event included whether or not it was new — so a redelivery reaches the
+   * same verdict as the first delivery did.
+   */
+  readonly transientBounces: number;
+}
+
+/** What suppressing an address did (ADR-046). */
+export interface SuppressionOutcome {
+  /** `false` when the address was suppressed already; `last_event_at` and `source` still moved. */
+  readonly created: boolean;
+  /** Pending invitations to the address withdrawn now, by document. */
+  readonly withdrawn: readonly string[];
+}
+
+/**
+ * SES bounce and complaint handling (SHARE-02, ADR-046): the events the
+ * poller has seen and the addresses it has closed. Written only by
+ * `mail/events.ts`; read by the invite and resend routes.
+ */
+export interface MailRepo {
+  /**
+   * Record one SES event for one recipient. Idempotent on `(messageId, email)`
+   * — the primary key — so a redelivered SQS message writes nothing and
+   * answers `recorded: false`. Either way the answer carries the address's
+   * transient-bounce count since `since`, for the caller's verdict.
+   */
+  recordEvent(input: {
+    messageId: string;
+    email: string;
+    kind: MailEventKind;
+    at: Date;
+    source: unknown;
+    since: Date;
+  }): Promise<MailEventOutcome>;
+  /**
+   * Close an address, in one transaction: upsert `mail_suppressions` (a repeat
+   * moves `last_event_at` and `source`, keeps `first_seen_at` and the first
+   * reason) and withdraw every pending invitation to it — each under its
+   * document's lock, lock order documents → invites as every share transaction
+   * (#100) — with one `share.invite_withdraw` row per invitation by the system
+   * (`user_id` null, target `<address>:<reason>`). Idempotent.
+   */
+  suppress(input: {
+    email: string;
+    reason: MailSuppressionReason;
+    at: Date;
+    source: unknown;
+  }): Promise<SuppressionOutcome>;
+  /** The address's suppression, case-insensitively, or `undefined` when it may be mailed. */
+  suppression(email: string): Promise<MailSuppressionRecord | undefined>;
+}
+
 export interface Repo {
   /** `SELECT 1` — throws when the database is unreachable. */
   ping(): Promise<void>;
@@ -637,4 +711,5 @@ export interface Repo {
   readonly updates: UpdatesRepo;
   readonly audit: AuditRepo;
   readonly projection: ProjectionRepo;
+  readonly mail: MailRepo;
 }

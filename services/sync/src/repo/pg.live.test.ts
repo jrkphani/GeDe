@@ -1999,4 +1999,136 @@ describe.skipIf(adminUrl === undefined)('pg repo against PostgreSQL (DATABASE_UR
     });
     expect(await repo.documents.get(doc.id)).toMatchObject({ ownerId: alive });
   });
+
+  test('SHARE-02 mail events: (message id, address) is the key so a redelivery records nothing and still reports the transient count within the window; a suppression upserts case-insensitively, keeps its first sighting and reason, withdraws every pending invitation under its document lock with a system audit row, and the CHECKs refuse other kinds and reasons — as the app role (ADR-046)', async () => {
+    const owner = await user('sub-mail-owner');
+    const docA = await createDoc(owner, 'Mail A');
+    const docB = await createDoc(owner, 'Mail B');
+    const trashed = await createDoc(owner, 'Mail trashed');
+    for (const doc of [docA, docB, trashed]) {
+      await inviteRow({
+        documentId: doc.id,
+        email: 'Bounced@Example.com',
+        permission: 'view',
+        token: `tok-mail-${doc.id}`,
+        invitedBy: owner,
+      });
+    }
+    // An unrelated pending invitation, and one already accepted, must stay.
+    await inviteRow({
+      documentId: docA.id,
+      email: 'fine@example.com',
+      permission: 'view',
+      token: 'tok-mail-fine',
+      invitedBy: owner,
+    });
+    await repo.documents.softDelete(trashed.id);
+    const now = new Date('2026-09-13T01:00:05.000Z');
+    const since = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    // Three transient bounces, one of them from before the window and one redelivered.
+    const t0 = await repo.mail.recordEvent({
+      messageId: 'msg-t0',
+      email: 'bounced@example.com',
+      kind: 'bounce_transient',
+      at: new Date(since.getTime() - 1000),
+      source: { eventType: 'Bounce', bounce: { bounceType: 'Transient' } },
+      since,
+    });
+    expect(t0).toEqual({ recorded: true, transientBounces: 0 });
+    const t1 = await repo.mail.recordEvent({
+      messageId: 'msg-t1',
+      email: 'BOUNCED@example.com',
+      kind: 'bounce_transient',
+      at: now,
+      source: { eventType: 'Bounce' },
+      since,
+    });
+    expect(t1).toEqual({ recorded: true, transientBounces: 1 });
+    const again = await repo.mail.recordEvent({
+      messageId: 'msg-t1',
+      email: 'bounced@example.com',
+      kind: 'bounce_transient',
+      at: now,
+      source: { eventType: 'Bounce' },
+      since,
+    });
+    expect(again).toEqual({ recorded: false, transientBounces: 1 });
+    const { rows: events } = await pool.query<{ message_id: string; email: string; kind: string }>(
+      'select message_id, email, kind from mail_events order by at, message_id',
+    );
+    expect(events).toEqual([
+      { message_id: 'msg-t0', email: 'bounced@example.com', kind: 'bounce_transient' },
+      { message_id: 'msg-t1', email: 'BOUNCED@example.com', kind: 'bounce_transient' },
+    ]);
+    // Only the kinds the service writes; the CHECK refuses the rest.
+    await expect(
+      pool.query(
+        "insert into mail_events (message_id, email, kind, at, source) values ('x', 'x@example.com', 'wobble', now(), '{}')",
+      ),
+    ).rejects.toThrow(/mail_events_kind_check/);
+
+    // Nothing is suppressed yet; the hard bounce does it.
+    expect(await repo.mail.suppression('bounced@example.com')).toBeUndefined();
+    const first = await repo.mail.suppress({
+      email: 'bounced@example.com',
+      reason: 'bounce',
+      at: now,
+      source: { eventType: 'Bounce', mail: { messageId: 'msg-hard' } },
+    });
+    // Every pending invitation to the address went — the trashed document's too
+    // (`softDelete` is the test path that leaves one behind; the owner's Delete
+    // withdraws them itself, #112): the address is closed, wherever it was invited.
+    expect(first.created).toBe(true);
+    expect([...first.withdrawn].sort()).toEqual([docA.id, docB.id, trashed.id].sort());
+    expect((await repo.documents.participants(docA.id))?.invites.map((i) => i.email)).toEqual([
+      'fine@example.com',
+    ]);
+    expect((await repo.documents.participants(docB.id))?.invites).toEqual([]);
+    const { rows: audit } = await pool.query<{
+      document_id: string;
+      user_id: string | null;
+      target: string;
+    }>(
+      "select document_id, user_id, target from audit_log where action = 'share.invite_withdraw' and document_id = any($1) order by document_id",
+      [[docA.id, docB.id, trashed.id]],
+    );
+    expect(audit).toEqual(
+      [docA.id, docB.id, trashed.id].sort().map((document_id) => ({
+        document_id,
+        user_id: null,
+        target: 'bounced@example.com:bounce',
+      })),
+    );
+    const stored = await repo.mail.suppression('BOUNCED@EXAMPLE.COM');
+    expect(stored).toMatchObject({ email: 'bounced@example.com', reason: 'bounce' });
+    expect(stored?.firstSeenAt.toISOString()).toBe(now.toISOString());
+
+    // A repeat (a complaint after the bounce) moves last_event_at and the source,
+    // keeps the first sighting and the first reason, withdraws nothing more.
+    const later = new Date(now.getTime() + 60_000);
+    const repeat = await repo.mail.suppress({
+      email: 'Bounced@example.com',
+      reason: 'complaint',
+      at: later,
+      source: { eventType: 'Complaint' },
+    });
+    expect(repeat).toEqual({ created: false, withdrawn: [] });
+    const after = await repo.mail.suppression('bounced@example.com');
+    expect(after?.reason).toBe('bounce');
+    expect(after?.firstSeenAt.toISOString()).toBe(now.toISOString());
+    expect(after?.lastEventAt.toISOString()).toBe(later.toISOString());
+    const { rows: sources } = await pool.query<{ source: { eventType: string } }>(
+      "select source from mail_suppressions where email = 'BOUNCED@example.com'",
+    );
+    expect(sources).toEqual([{ source: { eventType: 'Complaint' } }]);
+    await expect(
+      pool.query(
+        "insert into mail_suppressions (email, reason, source) values ('y@example.com', 'wobble', '{}')",
+      ),
+    ).rejects.toThrow(/mail_suppressions_reason_check/);
+    // Un-suppressing is a DELETE (runbook §5), which the app role may do.
+    await pool.query("delete from mail_suppressions where email = 'bounced@example.com'");
+    expect(await repo.mail.suppression('bounced@example.com')).toBeUndefined();
+  });
 });

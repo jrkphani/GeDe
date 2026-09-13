@@ -13,6 +13,7 @@
     "@aws-sdk/client-cognito-identity-provider": "^3.850.0",
     "@aws-sdk/client-s3": "^3.850.0",
     "@aws-sdk/client-sesv2": "^3.850.0",
+    "@aws-sdk/client-sqs": "^3.850.0",
     "@fastify/cors": "^11.0.0",
     "@fastify/rate-limit": "^11.2.0",
     "@fastify/websocket": "^11.1.0",

@@ -88,6 +88,8 @@ describe('migrations', () => {
       schema.cells,
       schema.graphs,
       schema.auditLog,
+      schema.mailEvents,
+      schema.mailSuppressions,
     ];
     const sql = stripComments(allSql);
     for (const table of tables) {
@@ -236,6 +238,41 @@ describe('migrations', () => {
     ]);
   });
 
+  test('SHARE-02 0012 adds mail_events (one row per SES message id and recipient, kinds checked) and mail_suppressions (citext address, reason checked), additively; both CHECKs are declared in schema.ts (ADR-046)', () => {
+    expect(files[12]).toBe('0012_mail_events_suppressions.sql');
+    const sql = stripComments(readFileSync(join(dir, '0012_mail_events_suppressions.sql'), 'utf8'));
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS mail_events \(/);
+    expect(sql).toMatch(/PRIMARY KEY \(message_id, email\)/);
+    expect(sql).toMatch(/email\s+citext\s+NOT NULL/);
+    expect(sql).toMatch(
+      /CONSTRAINT mail_events_kind_check\s+CHECK \(kind IN \('bounce_permanent', 'bounce_transient', 'complaint', 'reject'\)\)/,
+    );
+    expect(sql).toContain(
+      'CREATE INDEX IF NOT EXISTS mail_events_email_at_idx ON mail_events (email, at)',
+    );
+    expect(sql).toMatch(/CREATE TABLE IF NOT EXISTS mail_suppressions \(/);
+    expect(sql).toMatch(/email\s+citext\s+PRIMARY KEY/);
+    expect(sql).toMatch(
+      /CONSTRAINT mail_suppressions_reason_check CHECK \(reason IN \('bounce', 'complaint'\)\)/,
+    );
+    expect(sql).not.toMatch(/\bUPDATE\b/);
+    expect(sql).not.toMatch(/\bALTER TABLE\b/);
+    expect(getTableConfig(schema.mailEvents).checks.map((c) => c.name)).toEqual([
+      'mail_events_kind_check',
+    ]);
+    expect(getTableConfig(schema.mailSuppressions).checks.map((c) => c.name)).toEqual([
+      'mail_suppressions_reason_check',
+    ]);
+    // The kinds and reasons the service writes are the ones the CHECKs admit.
+    expect([...schema.MAIL_EVENT_KINDS]).toEqual([
+      'bounce_permanent',
+      'bounce_transient',
+      'complaint',
+      'reject',
+    ]);
+    expect([...schema.MAIL_SUPPRESSION_REASONS]).toEqual(['bounce', 'complaint']);
+  });
+
   test('LOAD-06 every index declared in schema.ts exists in the migrations', () => {
     const sql = stripComments(allSql);
     const declared = [...sql.matchAll(/CREATE (?:UNIQUE )?INDEX IF NOT EXISTS (\w+)/g)].map(
@@ -252,6 +289,8 @@ describe('migrations', () => {
       schema.cells,
       schema.graphs,
       schema.auditLog,
+      schema.mailEvents,
+      schema.mailSuppressions,
     ]) {
       const config = getTableConfig(table);
       for (const idx of config.indexes) {

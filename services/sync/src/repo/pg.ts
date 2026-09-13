@@ -37,6 +37,8 @@ import {
   documents,
   graphs,
   invites,
+  mailEvents,
+  mailSuppressions,
   rows as rowsTable,
   shares,
   sheets,
@@ -1804,6 +1806,88 @@ export function createPgRepo(db: Db, logger: Logger): Repo {
           .where(isNull(documents.deletedAt))
           .orderBy(asc(documents.createdAt), asc(documents.id));
         return found.map((d) => d.id);
+      },
+    },
+
+    mail: {
+      recordEvent({ messageId, email, kind, at, source, since }) {
+        return db.transaction(async (tx) => {
+          // The primary key decides idempotency: a redelivered SQS message (a
+          // crash after the verdict, a visibility timeout) inserts nothing.
+          const inserted = await tx
+            .insert(mailEvents)
+            .values({ messageId, email, kind, at, source })
+            .onConflictDoNothing({ target: [mailEvents.messageId, mailEvents.email] })
+            .returning({ messageId: mailEvents.messageId });
+          const [counted] = await tx
+            .select({ n: sql<number>`count(*)::int` })
+            .from(mailEvents)
+            .where(
+              and(
+                eq(mailEvents.email, email),
+                eq(mailEvents.kind, 'bounce_transient'),
+                gt(mailEvents.at, since),
+              ),
+            );
+          return { recorded: inserted.length > 0, transientBounces: counted?.n ?? 0 };
+        });
+      },
+
+      suppress({ email, reason, at, source }) {
+        return db.transaction(async (tx) => {
+          const inserted = await tx
+            .insert(mailSuppressions)
+            .values({ email, reason, firstSeenAt: at, lastEventAt: at, source })
+            .onConflictDoUpdate({
+              target: mailSuppressions.email,
+              // A repeat keeps the first sighting and the first reason; what
+              // moves is when SES last said so, and what it said.
+              set: { lastEventAt: at, source },
+            })
+            // `xmax = 0` on the returned row: inserted now; otherwise updated.
+            .returning({ created: sql<boolean>`(${mailSuppressions}.xmax = 0)` });
+          const created = inserted[0]?.created === true;
+          // Pending invitations to the address go, each under its document's
+          // lock (documents → invites, #100) so a conversion in flight either
+          // sees the withdrawal or commits first; document id order, as every
+          // multi-document transaction locks.
+          const pending = await tx
+            .select({ id: invites.id, documentId: invites.documentId })
+            .from(invites)
+            .where(and(eq(invites.email, email), invitePending))
+            .orderBy(asc(invites.documentId), asc(invites.createdAt), asc(invites.id));
+          const withdrawn: string[] = [];
+          for (const { id, documentId } of pending) {
+            if (!(await lockDocument(tx, documentId))) continue;
+            const gone = await tx
+              .delete(invites)
+              .where(and(eq(invites.id, id), isNull(invites.acceptedAt)))
+              .returning({ email: invites.email });
+            if (gone.length === 0) continue;
+            await tx.insert(auditLog).values({
+              documentId,
+              userId: null,
+              action: 'share.invite_withdraw' satisfies ShareAuditAction,
+              target: `${email}:${reason}`,
+            });
+            withdrawn.push(documentId);
+          }
+          return { created, withdrawn };
+        });
+      },
+
+      async suppression(email) {
+        const [row] = await db
+          .select({
+            email: mailSuppressions.email,
+            reason: mailSuppressions.reason,
+            firstSeenAt: mailSuppressions.firstSeenAt,
+            lastEventAt: mailSuppressions.lastEventAt,
+          })
+          .from(mailSuppressions)
+          .where(eq(mailSuppressions.email, email))
+          .limit(1);
+        return row;
       },
     },
   };

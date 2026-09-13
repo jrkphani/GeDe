@@ -103,7 +103,8 @@ export interface InviteOutcome {
   /**
    * `failed`: the share or invitation stands but its mail was refused (SES in
    * the sandbox, an outage) — share the link, or Resend. `skipped`: nothing
-   * was sent because nothing was created.
+   * was sent because nothing was created, or because the member's address
+   * cannot receive mail from GeDe (the share stands, ADR-046).
    */
   delivery: MailDelivery;
   shares: ShareSheet;

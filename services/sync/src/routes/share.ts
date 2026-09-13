@@ -28,6 +28,11 @@
  * Conversion to a share happens when the address is bound to an account
  * (`PATCH /api/me { idToken }`, `upsertFromToken`) or when the invitee opens
  * the mail's link signed in as that address.
+ *
+ * ADR-046: an address SES reported as bouncing or complaining is on
+ * `mail_suppressions` (`mail/events.ts`); its pending invitations were
+ * withdrawn then, and inviting or resending to it answers 409
+ * `address_suppressed` — "This address cannot receive email from GeDe".
  */
 import { randomBytes } from 'node:crypto';
 
@@ -166,6 +171,20 @@ export function registerShareRoutes(
   }
 
   /**
+   * ADR-046: an address SES bounced hard (or three times) or that complained
+   * is on `mail_suppressions`; nothing is mailed to it again. An invitation
+   * (no account) is that mail, so it is refused; a share with an existing
+   * account is the grant and stands without it. The sheet shows the message
+   * as it is.
+   */
+  const ADDRESS_SUPPRESSED = () =>
+    new AppError(409, 'address_suppressed', 'This address cannot receive email from GeDe');
+
+  async function refuseSuppressed(email: string): Promise<void> {
+    if ((await repo.mail.suppression(email)) !== undefined) throw ADDRESS_SUPPRESSED();
+  }
+
+  /**
    * Send the invitation mail for a pending row; never throws (see `mail/delivery.ts`).
    * An accepted send is recorded on the row (`mail_sent_at`, #121) so the sheet still
    * knows after a reload which invitations were never mailed.
@@ -260,9 +279,16 @@ export function registerShareRoutes(
     const body = parse(inviteBody, request.body, 'request');
     const { document, permission } = await requirePermission(repo, user.id, id, 'edit');
     if (document.deletedAt !== null) throw NOT_FOUND();
+    // ADR-046: a suppressed address is not mailed. Without an account the mail is
+    // the whole invitation, so it is refused before any budget is spent; with one
+    // the row is the grant (#121) — it is written as ever, its mail skipped.
+    const existing = await repo.users.findByEmail(body.email);
+    const mailable = (await repo.mail.suppression(body.email)) === undefined;
+    if (existing === undefined && !mailable) throw ADDRESS_SUPPRESSED();
     // Counted after validation and the permission check: the budget is for
-    // invitations that would go out, not for typos or for a viewer's attempts.
-    await spendInviteBudget(request);
+    // mail that would go out, not for typos, a viewer's attempts, or a share
+    // whose member cannot be mailed.
+    if (mailable) await spendInviteBudget(request);
     const actor = { actorName: user.displayName, actorEmail: user.email, locale: user.locale };
     const outcome = async (
       kind: InviteOutcome['kind'],
@@ -275,7 +301,6 @@ export function registerShareRoutes(
       shares: await participantsOrThrow(id, { id: user.id, permission }),
     });
 
-    const existing = await repo.users.findByEmail(body.email);
     if (existing) {
       if (existing.id === document.ownerId) {
         throw new AppError(409, 'conflict', 'That is the owner of this workscape');
@@ -290,7 +315,9 @@ export function registerShareRoutes(
       if (!added) {
         throw new AppError(409, 'conflict', 'That person already has access');
       }
-      // The share stands — it works without the mail — and the sender is told how the mail went.
+      // The share stands — it works without the mail — and the sender is told how
+      // the mail went: `skipped` when the member's address is suppressed (ADR-046).
+      if (!mailable) return reply.status(201).send(await outcome('share', true, 'skipped'));
       const delivery = await deliver(
         (mail) => deps.mail.send(mail),
         shareMemberMail({
@@ -344,6 +371,9 @@ export function registerShareRoutes(
     if (document.deletedAt !== null) throw NOT_FOUND();
     const invite = await repo.invites.pending({ documentId: id, inviteId });
     if (!invite) throw NOT_FOUND();
+    // A suppression withdraws the invitation, so this is the narrow race
+    // between the two; refused all the same, before any budget is spent.
+    await refuseSuppressed(invite.email);
     await spendResendCooldown(request);
     await spendInviteBudget(request);
     const delivery = await sendInvite(

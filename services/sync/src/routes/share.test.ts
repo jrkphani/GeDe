@@ -309,6 +309,102 @@ describe('invitations (SHARE-02)', () => {
     expect((await invite(bob, 'b3@example.com')).status).toBe(429);
   });
 
+  test('SHARE-02 an address SES bounced or that complained is not mailed: an invitation to it and Resend answer 409 address_suppressed with the sheet’s copy, case-insensitively, before any budget is spent; a member with an account is still shared with, mail skipped; a bounce arriving after the invitation withdraws it with a share.invite_withdraw row (ADR-046)', async () => {
+    // The poller wrote the suppression (see mail/events.test.ts); here it is the fact.
+    await server.repo.mail.suppress({
+      email: 'bounced@example.com',
+      reason: 'bounce',
+      at: new Date(),
+      source: { eventType: 'Bounce' },
+    });
+    const refused = await json<ErrorBody>(server, 'POST', `/api/documents/${docId}/invites`, {
+      token: alice,
+      body: { email: 'Bounced@Example.com', permission: 'view' },
+    });
+    expect(refused.status).toBe(409);
+    expect(refused.body.error).toMatchObject({
+      code: 'address_suppressed',
+      message: 'This address cannot receive email from GeDe',
+    });
+    expect(refused.body.error.ref).toBeTruthy();
+    expect(server.repo.invitesById.size).toBe(0);
+    expect(server.mail.sent).toHaveLength(0);
+    expect(auditActions()).toEqual([]);
+    // An address with an account is shared with as ever — the row is the grant,
+    // the mail its notification (#121) — and only the mail is skipped.
+    await server.repo.mail.suppress({
+      email: 'carol@example.com',
+      reason: 'complaint',
+      at: new Date(),
+      source: { eventType: 'Complaint' },
+    });
+    const otherDoc = server.repo.seedDocument(aliceId, 'Another').id;
+    const member = await json<InviteOutcome>(server, 'POST', `/api/documents/${otherDoc}/invites`, {
+      token: alice,
+      body: { email: 'carol@example.com', permission: 'edit' },
+    });
+    expect(member.status).toBe(201);
+    expect(member.body).toMatchObject({ kind: 'share', created: true, delivery: 'skipped' });
+    expect(server.repo.sharesByDoc.get(otherDoc)?.get(carolId)?.permission).toBe('edit');
+    expect(server.mail.sent).toHaveLength(0);
+    expect(
+      server.repo.auditLog.filter((a) => a.documentId === otherDoc).map((a) => a.action),
+    ).toEqual(['share.add']);
+    // The refusal and the unmailed share spent no budget (3 per hour): three invitations still go.
+    expect((await invite(alice, 'one@example.com')).status).toBe(201);
+    expect((await invite(alice, 'two@example.com')).status).toBe(201);
+    const third = await invite(alice, 'three@example.com');
+    expect(third.status).toBe(201);
+    expect((await invite(alice, 'four@example.com')).status).toBe(429);
+
+    // A bounce that arrives after the invitation: the row goes with its audit row, and Resend is 404 — or, in the
+    // race where the row still stands, 409.
+    const pending = third.body.shares.invites.find((i) => i.email === 'three@example.com')!;
+    const outcome = await server.repo.mail.suppress({
+      email: 'THREE@example.com',
+      reason: 'bounce',
+      at: new Date(),
+      source: { eventType: 'Bounce' },
+    });
+    expect(outcome).toEqual({ created: true, withdrawn: [docId] });
+    expect(server.repo.auditLog.at(-1)).toEqual({
+      documentId: docId,
+      userId: null,
+      action: 'share.invite_withdraw',
+      target: 'THREE@example.com:bounce',
+    });
+    expect((await shares(alice)).body.invites.map((i) => i.email)).toEqual([
+      'one@example.com',
+      'two@example.com',
+    ]);
+    expect((await resend(bob, pending.id)).status).toBe(404);
+    // The race: the invitation row still present when the suppression is read.
+    const raced = (await invite(bob, 'raced@example.com')).body.shares.invites.find(
+      (i) => i.email === 'raced@example.com',
+    )!;
+    server.repo.mailSuppressions.set('raced@example.com', {
+      email: 'raced@example.com',
+      reason: 'bounce',
+      firstSeenAt: new Date(),
+      lastEventAt: new Date(),
+      source: {},
+    });
+    const held = await json<ErrorBody>(
+      server,
+      'POST',
+      `/api/documents/${docId}/invites/${raced.id}/resend`,
+      { token: bob },
+    );
+    expect(held.status).toBe(409);
+    expect(held.body.error.code).toBe('address_suppressed');
+    expect(server.mail.sent.map((m) => m.to)).toEqual([
+      'one@example.com',
+      'two@example.com',
+      'three@example.com',
+      'raced@example.com',
+    ]);
+  });
+
   test('SHARE-02 a repeated invitation for a pending address is idempotent: 200, the same invitation, no second row, no second mail (review of #76)', async () => {
     const first = await invite(alice, 'twice@example.com', 'edit');
     expect(first.status).toBe(201);

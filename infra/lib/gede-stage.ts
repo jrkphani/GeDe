@@ -99,6 +99,7 @@ export class GedeStage extends cdk.Stage {
       dbSecurityGroup: data.dbSecurityGroup,
       docsBucket: data.docsBucket,
       emailIdentity: auth.emailIdentity,
+      sesEventsQueue: auth.sesEventsQueue,
       userPoolId: auth.userPool.userPoolId,
       // The SPA's tokens and the live suite's (`gede-e2e`) both verify.
       userPoolClientIds: [auth.userPoolClient.userPoolClientId, auth.e2eClient.userPoolClientId],
@@ -133,6 +134,7 @@ export class GedeStage extends cdk.Stage {
       serviceSecurityGroup: service.serviceSecurityGroup,
       preAuthFunction: auth.preAuthFunction,
       customMessageFunction: auth.customMessageFunction,
+      sesEventsDeadLetterQueue: auth.sesEventsDeadLetterQueue,
     });
 
     this.apiUrl = service.apiUrl;

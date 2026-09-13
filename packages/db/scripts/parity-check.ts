@@ -33,6 +33,8 @@ const tables: PgTable[] = [
   schema.cells,
   schema.graphs,
   schema.auditLog,
+  schema.mailEvents,
+  schema.mailSuppressions,
 ];
 
 const log = {
@@ -122,7 +124,7 @@ try {
     for (const check of getTableConfig(table).checks) {
       if (!liveChecks.has(`${getTableName(table)}.${check.name}`)) {
         problems.push(
-          `check ${check.name} on ${getTableName(table)} missing (migration 0008/0010)`,
+          `check ${check.name} on ${getTableName(table)} missing (migration 0008/0010/0011/0012)`,
         );
       }
     }

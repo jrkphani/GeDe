@@ -9,6 +9,10 @@ import {
   aws_route53 as route53,
   aws_secretsmanager as secretsmanager,
   aws_ses as ses,
+  aws_sns as sns,
+  aws_sns_subscriptions as subscriptions,
+  aws_sqs as sqs,
+  custom_resources as cr,
 } from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
 
@@ -59,6 +63,31 @@ export const COGNITO_CODE_PLACEHOLDER = '{####}';
 export const AUTH_SESSION_VALIDITY = cdk.Duration.minutes(10);
 
 /**
+ * The SES events the configuration set publishes (ADR-046): what the sync
+ * service's poller acts on. Not `SEND`/`DELIVERY` (one message per mail for
+ * nothing), not `DELIVERY_DELAY` (SES retries on its own; a delay that ends in
+ * a bounce arrives as one), not opens or clicks (no tracking in a
+ * transactional mail).
+ */
+export const SES_EVENT_TYPES = [
+  ses.EmailSendingEvent.BOUNCE,
+  ses.EmailSendingEvent.COMPLAINT,
+  ses.EmailSendingEvent.REJECT,
+] as const;
+
+/** Reasons SES adds an address to the account-level suppression list (`PutAccountSuppressionAttributes`). */
+export const SES_ACCOUNT_SUPPRESSED_REASONS = ['BOUNCE', 'COMPLAINT'] as const;
+
+/** Redeliveries of one SES event before it lands on the dead-letter queue. */
+export const SES_EVENTS_MAX_RECEIVE_COUNT = 5;
+
+/** How long an unconsumed SES event waits on either queue (SQS's maximum). */
+export const SES_EVENTS_RETENTION = cdk.Duration.days(14);
+
+/** The service's long poll (`SES_EVENTS_WAIT_SECONDS`), also the queue's default. */
+export const SES_EVENTS_WAIT = cdk.Duration.seconds(20);
+
+/**
  * The pool's own message templates, branded en-US (`@gede/mail` at synth time): what
  * Cognito sends when the custom-message trigger returns the event untouched — an
  * unhandled trigger source, or the trigger failing open (infra/assets/custom-message).
@@ -96,6 +125,14 @@ export class AuthStack extends cdk.Stack {
   /** `{ username, password }` of the live suite's account. */
   readonly e2eUserSecret: secretsmanager.Secret;
   readonly emailIdentity: ses.EmailIdentity;
+  /** Every send through the identity carries it: reputation metrics, suppression, the event destination (ADR-046). */
+  readonly sesConfigurationSet: ses.ConfigurationSet;
+  /** Bounce, complaint and reject events, as SES publishes them. */
+  readonly sesEventsTopic: sns.Topic;
+  /** What the sync service polls (`SES_EVENTS_QUEUE_URL`); ServiceStack grants its task role on it. */
+  readonly sesEventsQueue: sqs.Queue;
+  /** Where an event the service could not process ends up; OpsStack alarms on its depth. */
+  readonly sesEventsDeadLetterQueue: sqs.Queue;
   /** The pool's pre-authentication trigger; OpsStack alarms on its `Errors` (#103). */
   readonly preAuthFunction: lambda.IFunction;
   /** The pool's custom-message trigger (branded, localised codes); OpsStack alarms on its `Errors`. */
@@ -121,11 +158,114 @@ export class AuthStack extends cdk.Stack {
       zoneName: config.domain,
     });
 
-    // SES identity for the apex domain, DKIM via Easy DKIM records written into the zone.
+    // ---- SES: the identity, and what SES reports about the addresses it is sent to ----
+    // ADR-046, and what was told to AWS on the production-access case: bounces and
+    // complaints go to an SNS topic; a hard bounce or complaint withdraws the invitation
+    // and blocks further mail to that address. The chain is configuration set → SNS →
+    // SQS → the sync service's poller (services/sync/src/mail/events.ts), which keeps
+    // `mail_suppressions` and refuses to mail a suppressed address again. SES's own
+    // account-level list (below) is the backstop underneath that.
+
+    // Events land on the topic raw and go straight to the queue; nothing else subscribes.
+    this.sesEventsTopic = new sns.Topic(this, 'SesEvents', {
+      topicName: `gede-${config.envName}-ses-events`,
+      displayName: `GeDe ${config.envName} SES events (bounce, complaint, reject)`,
+    });
+    // Both queues: SSE-SQS, TLS only, 14 days (a task that is down for a fortnight is a
+    // bigger problem). The visibility timeout covers one message's worth of database
+    // work with room to spare; after five redeliveries a message the service cannot
+    // process goes to the dead-letter queue and OpsStack says so.
+    this.sesEventsDeadLetterQueue = new sqs.Queue(this, 'SesEventsDlq', {
+      queueName: `gede-${config.envName}-ses-events-dlq`,
+      retentionPeriod: SES_EVENTS_RETENTION,
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+    });
+    this.sesEventsQueue = new sqs.Queue(this, 'SesEventsQueue', {
+      queueName: `gede-${config.envName}-ses-events`,
+      retentionPeriod: SES_EVENTS_RETENTION,
+      receiveMessageWaitTime: SES_EVENTS_WAIT,
+      visibilityTimeout: cdk.Duration.seconds(60),
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      deadLetterQueue: {
+        queue: this.sesEventsDeadLetterQueue,
+        maxReceiveCount: SES_EVENTS_MAX_RECEIVE_COUNT,
+      },
+    });
+    // Raw delivery: the queue body is the SES event itself, not an SNS envelope (the
+    // poller unwraps one anyway, should the subscription ever be recreated without this).
+    // The subscription writes the queue policy: `sns:` SendMessage, from this topic only.
+    this.sesEventsTopic.addSubscription(
+      new subscriptions.SqsSubscription(this.sesEventsQueue, { rawMessageDelivery: true }),
+    );
+
+    // Reputation metrics on (the account-level bounce and complaint rates OpsStack alarms
+    // on are fed either way; this adds the per-set pair), bounces and complaints added to
+    // the account's suppression list, and the three events the service acts on published
+    // to the topic. The L2 adds the topic policy statement for `ses.amazonaws.com`,
+    // conditioned on this account and this configuration set's ARN.
+    this.sesConfigurationSet = new ses.ConfigurationSet(this, 'SesConfigurationSet', {
+      configurationSetName: `gede-${config.envName}`,
+      reputationMetrics: true,
+      suppressionReasons: ses.SuppressionReasons.BOUNCES_AND_COMPLAINTS,
+    });
+    this.sesConfigurationSet.addEventDestination('Events', {
+      configurationSetEventDestinationName: `gede-${config.envName}-ses-events`,
+      destination: ses.EventDestination.snsTopic(this.sesEventsTopic),
+      events: [...SES_EVENT_TYPES],
+    });
+
+    // The account-level suppression list, pinned as code (ADR-046). SES enables it for
+    // BOUNCE and COMPLAINT on new accounts and it is on today, but nothing else would put
+    // it back if a person switched it off. There is no CloudFormation resource for
+    // `PutAccountSuppressionAttributes` (aws-cdk-lib 2.269: `CfnVdmAttributes` is the only
+    // account-level SES resource), so a custom resource makes the one call, on create
+    // and on update, with that one action — which admits no resource ARN. Nothing on
+    // delete: the list outlives the stack. The handler logs its event; there is nothing
+    // in these parameters to keep out of a log.
+    new cr.AwsCustomResource(this, 'SesAccountSuppression', {
+      resourceType: 'Custom::GedeSesAccountSuppression',
+      onCreate: {
+        service: 'sesv2',
+        action: 'PutAccountSuppressionAttributes',
+        parameters: { SuppressedReasons: [...SES_ACCOUNT_SUPPRESSED_REASONS] },
+        physicalResourceId: cr.PhysicalResourceId.of(
+          `gede-${config.envName}-ses-account-suppression`,
+        ),
+      },
+      onUpdate: {
+        service: 'sesv2',
+        action: 'PutAccountSuppressionAttributes',
+        parameters: { SuppressedReasons: [...SES_ACCOUNT_SUPPRESSED_REASONS] },
+        physicalResourceId: cr.PhysicalResourceId.of(
+          `gede-${config.envName}-ses-account-suppression`,
+        ),
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          sid: 'AccountSuppressionList',
+          actions: ['ses:PutAccountSuppressionAttributes'],
+          resources: ['*'],
+        }),
+      ]),
+      installLatestAwsSdk: false,
+      logGroup: new logs.LogGroup(this, 'SesAccountSuppressionLogs', {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+
+    // SES identity for the apex domain, DKIM via Easy DKIM records written into the zone,
+    // with the configuration set above as its default: every `SendEmail` from the
+    // identity that names no set of its own (the sync service's) carries it. Cognito's
+    // `withSES` names its set explicitly (`configurationSetName` in the block below), so
+    // its codes report through the same topic once it sends through SES.
     // Until SES leaves the sandbox Cognito keeps sending from its own address (below).
     this.emailIdentity = new ses.EmailIdentity(this, 'Ses', {
       identity: ses.Identity.publicHostedZone(zone),
       mailFromDomain: `mail.${config.domain}`,
+      configurationSet: this.sesConfigurationSet,
     });
 
     const templates = poolMessageTemplates();
@@ -171,6 +311,8 @@ export class AuthStack extends cdk.Stack {
       //   fromName: 'GeDe',
       //   sesVerifiedDomain: config.domain,
       //   sesRegion: config.region,
+      //   // ADR-046: the codes' bounces and complaints report through the same set.
+      //   configurationSetName: this.sesConfigurationSet.configurationSetName,
       // }),
     });
 

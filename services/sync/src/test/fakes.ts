@@ -18,6 +18,7 @@ import type {
   TokenVerifier,
 } from '../deps.js';
 import { REDACTED_PATHS, requestSerializer } from '../logger.js';
+import type { MailEventQueue, QueuedMessage } from '../mail/events.js';
 import type { Mail } from '../mail/templates.js';
 import type { TokenIdentity } from '../repo/types.js';
 import { buildServer, type SyncServer } from '../server.js';
@@ -98,6 +99,71 @@ export class FakeMailer implements Mailer {
   }
 }
 
+/**
+ * FAKE SQS (ADR-046): a queue of message bodies. `receive` hands over what is
+ * queued, or waits until something is queued or the signal aborts (the long
+ * poll); `delete` records the receipt. A test that wants the redelivery SQS
+ * makes after the visibility timeout enqueues the same body again.
+ */
+export class FakeMailEventQueue implements MailEventQueue {
+  private readonly pending: QueuedMessage[] = [];
+  readonly deleted: string[] = [];
+  /** Set to make the next `receive` reject (an SQS outage). */
+  failNextReceive = false;
+  private waiters: (() => void)[] = [];
+  private seq = 0;
+
+  /** Queue one message body; resolves the receipt the poller will delete. */
+  enqueue(body: string): string {
+    this.seq += 1;
+    const receipt = `receipt-${String(this.seq)}`;
+    this.pending.push({ id: `sqs-${String(this.seq)}`, receipt, body });
+    for (const wake of this.waiters.splice(0)) wake();
+    return receipt;
+  }
+
+  /** Wait until `receipt` has been deleted (the poller finished with it). */
+  async deletedReceipt(receipt: string, timeoutMs = 2000): Promise<void> {
+    const until = Date.now() + timeoutMs;
+    while (!this.deleted.includes(receipt)) {
+      if (Date.now() > until) throw new Error(`receipt ${receipt} not deleted in time`);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+
+  receive(signal: AbortSignal): Promise<QueuedMessage[]> {
+    if (this.failNextReceive) {
+      this.failNextReceive = false;
+      return Promise.reject(new Error('simulated SQS failure'));
+    }
+    if (signal.aborted) return Promise.reject(abortError());
+    if (this.pending.length > 0) return Promise.resolve(this.pending.splice(0, 10));
+    return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        this.waiters = this.waiters.filter((w) => w !== wake);
+        reject(abortError());
+      };
+      const wake = () => {
+        signal.removeEventListener('abort', onAbort);
+        resolve(this.pending.splice(0, 10));
+      };
+      this.waiters.push(wake);
+      signal.addEventListener('abort', onAbort, { once: true });
+    });
+  }
+
+  delete(receipt: string): Promise<void> {
+    this.deleted.push(receipt);
+    return Promise.resolve();
+  }
+}
+
+function abortError(): Error {
+  const error = new Error('aborted');
+  error.name = 'AbortError';
+  return error;
+}
+
 /** FAKE Cognito (#111): records the subs deleted; `failNextDelete` makes one call reject as a throttled API would. */
 export class FakeIdentityStore implements IdentityStore {
   readonly deleted: string[] = [];
@@ -160,6 +226,8 @@ export interface TestServer {
   s3: FakeSnapshotStore;
   mail: FakeMailer;
   identity: FakeIdentityStore;
+  /** The SES events queue the poller consumes; present when `startServer` was given `{ withMailEvents: true }`. */
+  mailEvents: FakeMailEventQueue | null;
   config: Config;
   baseUrl: string;
   wsUrl: string;
@@ -173,6 +241,8 @@ export interface StartOptions {
   captureLogs?: boolean | undefined;
   /** Boot without an identity store, as a deploy with `COGNITO_ERASE_IDENTITY` off does. */
   withoutIdentity?: boolean | undefined;
+  /** Boot with a fake SES events queue and its poller, as the service task does (ADR-046); off by default, as locally. */
+  withMailEvents?: boolean | undefined;
 }
 
 /** The production logger's shape — same serializers and redaction as `main.ts` — into an array. */
@@ -205,6 +275,7 @@ export async function startServer(
   const s3 = new FakeSnapshotStore();
   const mail = new FakeMailer();
   const identity = new FakeIdentityStore();
+  const mailEvents = options.withMailEvents === true ? new FakeMailEventQueue() : null;
   const logs: LogLine[] = [];
   const deps: Deps = {
     config,
@@ -214,6 +285,7 @@ export async function startServer(
     s3,
     mail,
     identity: options.withoutIdentity === true ? null : identity,
+    mailEvents,
     version: 'test',
   };
   const app = await buildServer(deps);
@@ -226,6 +298,7 @@ export async function startServer(
     s3,
     mail,
     identity,
+    mailEvents,
     config,
     baseUrl: `http://127.0.0.1:${String(port)}`,
     wsUrl: `ws://127.0.0.1:${String(port)}`,

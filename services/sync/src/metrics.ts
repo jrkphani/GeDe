@@ -24,9 +24,20 @@ export type MetricName =
   /** An account erasure that could not delete the Cognito identity (#111). */
   | 'UserErasureIdentityFailures'
   /** A share mail SES refused; the row it announced stands (#121). `Reason` is the template. */
-  | 'InviteMailFailures';
+  | 'InviteMailFailures'
+  /**
+   * An SES event the poller processed (ADR-046): a bounce (permanent or
+   * transient), a complaint, a reject, or a message it could not read.
+   * Counted once per event; a redelivered message is not counted again.
+   */
+  | 'MailEvents';
+
+/** The `Reason` of a `MailEvents` datapoint (`mail/events.ts`). */
+export type MailEventReason =
+  'bounce_permanent' | 'bounce_transient' | 'complaint' | 'reject' | 'unrecognised';
 
 export type RefusalReason =
+  | MailEventReason
   | 'message_too_big'
   | 'document_too_large'
   | 'slow_consumer'

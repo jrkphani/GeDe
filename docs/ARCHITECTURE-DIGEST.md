@@ -125,6 +125,13 @@ Two layers: the **document layer** is the CRDT (authoritative, append-only updat
 | `graphs` | id text pk · sheet_id · pair_id · kind enum(ring, coverage) · table_id · dimension_columns text[] · grid_col · grid_row · width_units · height_units · slice jsonb | One row per half of a pair; `slice` stores row/column axes and pins. |
 | `audit_log` | id bigserial · document_id (no foreign key) · user_id · action text · target text · at timestamptz | Share changes, deletes, restores, purges. `document_id` is not a foreign key (migration 0003) so a `document.purge` row outlives the document it describes. Partitioned monthly once volume warrants. |
 
+**5.2a Relational — mail (migration 0012, ADR-046)**, added by the v2 build; not in the C4:
+
+| Table | Columns | Notes |
+|---|---|---|
+| `mail_events` | message_id text · email citext · kind text (bounce_permanent, bounce_transient, complaint, reject) · at · received_at · source jsonb · pk(message_id, email) | One row per (SES message id, recipient) event the sync service has processed from the SES events queue. The primary key makes a redelivered SQS message a no-op; transient bounces are counted here (three within 30 days suppress). `source` is the event as SES published it — headers and the verdict, never message content. Index `mail_events_email_at_idx`. |
+| `mail_suppressions` | email citext pk · reason text (bounce, complaint) · first_seen_at · last_event_at · source jsonb | Addresses GeDe will not mail again: a hard bounce, three transient bounces, or a complaint. Writing the row withdraws every pending invitation to the address (`share.invite_withdraw`, target `<address>:<reason>`); the invite and resend routes answer 409 `address_suppressed` while it exists. Un-suppress: `DELETE` here plus `aws sesv2 delete-suppressed-destination` (runbook §5). |
+
 **5.3 Document layer (Yjs)** (verbatim):
 - `Y.Map` per document: `sheets` (Y.Array of sheet maps), `tables`, `graphs`, `meta`.
 - Each table: `columns` Y.Array, `rows` Y.Array of row ids, `cells` Y.Map keyed `rowId:colId` → Y.XmlFragment (ProseMirror-compatible rich text) or a formula string.

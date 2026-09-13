@@ -55,6 +55,15 @@ export const configSchema = z
 
     /** Exact origin of the SPA (`https://gede.work`). Used for CORS and the WebSocket Origin check. */
     WEB_ORIGIN: z.string().url(),
+    /**
+     * The SQS queue SES bounce, complaint and reject events arrive on
+     * (configuration set → SNS → SQS, ADR-046). Set by the service task
+     * definition; unset locally, where no poller runs and nothing is
+     * suppressed. The task role needs Receive/Delete/GetQueueAttributes on it.
+     */
+    SES_EVENTS_QUEUE_URL: z.string().url().optional(),
+    /** Long-poll wait per `ReceiveMessage` (SQS allows at most 20). */
+    SES_EVENTS_WAIT_SECONDS: z.coerce.number().int().min(1).max(20).default(20),
 
     /** Compact to a snapshot after this many persisted updates (ARCHITECTURE §1.2: 500). */
     SNAPSHOT_EVERY_UPDATES: positiveInt.default(500),
