@@ -811,6 +811,15 @@ button.gd-cell__chevron:hover {
 .gd-table--gutter {
   --gd-gutter: 1.25rem;
 }
+.gd-table__row-head {
+  /* The row header takes no room in the row: its handle and divider sit in the gutter. */
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  overflow: visible;
+}
 .gd-table__row-handle {
   position: absolute;
   top: 0;
@@ -945,17 +954,21 @@ button.gd-cell__chevron:hover {
     outline-offset: 2px;
     border-radius: var(--radius-sm);
   }
-  /* RESP-05: the row divider is a 44 px target too — grown left into the canvas and down
-     over the row's bottom edge, never right into the cells; its 2 px line stays on the edge. */
+  /* RESP-05: the row divider is a 44 px target too — grown left of the gutter into the canvas
+     (the row handle keeps its own 20 px) and centred on the row's bottom edge, never right into
+     the cells; its 2 px line stays on the edge across the gutter. Targets of neighbouring rows
+     overlap on a 22 px pitch: the later row's wins, so a press in the half above an edge is
+     that edge's, as the cursor shows. */
   .gd-table__row-divider {
-    left: calc(-1 * var(--hit-target));
+    left: calc(-1 * var(--hit-target) - var(--gd-gutter) - 1px);
     bottom: calc(-1 * var(--hit-target) / 2);
     width: var(--hit-target);
     height: var(--hit-target);
   }
   .gd-table__row-divider::after {
-    left: calc(var(--hit-target) - var(--gd-gutter) - 1px);
-    right: 0;
+    left: var(--hit-target);
+    right: auto;
+    width: var(--gd-gutter);
     bottom: calc(var(--hit-target) / 2 - 1px);
   }
   .gd-table__row-divider:focus-visible {

@@ -14,7 +14,7 @@ import {
   addMappingColumn,
   openDocument,
   setPull,
-  setRowWrapped,
+  setRowHeight,
   setTablePosition,
   tableRecord,
   type GedeDoc,
@@ -251,9 +251,9 @@ for (const width of [1024, 1440]) {
     await enter(page, 'D7', 'Nepal');
     await expect(pulled).toHaveCount(3);
 
-    // ── Wrapped row: the reference path renders beneath the value (ADR-024).
+    // ── A two-unit row: the reference path renders beneath the value (ADR-024, ADR-049).
     // (The reference cell moved from D5 to E5 when the derived column was inserted.)
-    setRowWrapped(gd, t.id, t.rows[0] ?? '', true);
+    setRowHeight(gd, t.id, t.rows[0] ?? '', 2);
     await expect(page.locator('[data-address="E5"] .gd-ref__path')).toHaveText(
       '@"Table 1"."Namche Bazaar"',
     );

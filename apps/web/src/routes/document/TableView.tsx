@@ -777,12 +777,12 @@ export const TableView = memo(function TableView({
                           );
                         })}
                         {/* ADR-049: the row's handle and divider live in the gutter GeDe draws
-                            left of the table while it is selected (Numbers' row header). The
-                            divider is the row's last child — never in the Tab path, which the
-                            grid owns — and ⌥↓ / ⌥↑ from a cell focus the edge below or above it
-                            (A11Y-01); the handle selects the row (Shift extends). */}
+                            left of the table while it is selected (Numbers' row header) — a
+                            `rowheader` named "Row 5", the row's last child so it is never in
+                            the Tab path the grid owns; ⌥↓ / ⌥↑ from a cell focus the edge below
+                            or above (A11Y-01); the handle selects the row (Shift extends). */}
                         {showAffordances && (
-                          <>
+                          <div role="rowheader" className="gd-table__row-head" aria-label={rowName}>
                             <button
                               type="button"
                               className="gd-table__row-handle"
@@ -822,7 +822,7 @@ export const TableView = memo(function TableView({
                               }
                               fitReason={fitter.reason}
                             />
-                          </>
+                          </div>
                         )}
                       </div>
                     );

@@ -307,7 +307,19 @@ export interface GridCommandDeps {
   settle?: (() => void) | undefined;
 }
 
-/** Wrap every command so `settle` runs after it, whatever it returned. */
+/**
+ * Commands whose write must merge into the step already open: a commit ends
+ * an edit session whose keystrokes are that step (KEYS-03, `RichCellEditor`).
+ */
+const MERGING_COMMANDS = new Set<keyof GridCommands>(['commitCell', 'commitRichCell']);
+
+/**
+ * Wrap every command so `settle` runs before and after it, whatever it
+ * returned: one command is one undo step however close it lands to the
+ * change before it — a divider drag a moment after Add table is its own step
+ * (ADR-047's rule for delete, made general by ADR-049). A commit settles
+ * after only, so it joins its edit session.
+ */
 function settled(commands: GridCommands, settle: (() => void) | undefined): GridCommands {
   if (settle === undefined) return commands;
   const source = commands as unknown as Record<string, (...args: unknown[]) => unknown>;
@@ -316,7 +328,9 @@ function settled(commands: GridCommands, settle: (() => void) | undefined): Grid
     if (key === 'readOnlyReason') continue; // a read, not an action
     const fn = source[key];
     if (fn === undefined) continue;
+    const merging = MERGING_COMMANDS.has(key as keyof GridCommands);
     out[key] = (...args: unknown[]) => {
+      if (!merging) settle();
       try {
         return fn(...args);
       } finally {
