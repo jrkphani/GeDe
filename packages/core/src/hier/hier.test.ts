@@ -21,7 +21,7 @@ import {
   rowHeights,
   rowMeta,
   setRowDepth,
-  setRowWrapped,
+  setRowHeight,
   tableAddresses,
   tableById,
   tableMap,
@@ -444,7 +444,7 @@ describe('two replicas (HIER-10, SHARE)', () => {
     Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc)));
     for (const rowId of [rows[1] ?? '', added]) {
       nestRow(a, tableId, rowId); // A: depth
-      setRowWrapped(b, tableId, rowId, true); // B: height
+      setRowHeight(b, tableId, rowId, 2); // B: height
     }
     const fromA = Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc));
     const fromB = Y.encodeStateAsUpdate(b.doc, Y.encodeStateVector(a.doc));

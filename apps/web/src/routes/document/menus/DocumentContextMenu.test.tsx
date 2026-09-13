@@ -140,6 +140,7 @@ describe('context menus', () => {
       'Clear all',
       'Select the table',
       'Wrap text',
+      'Fit row height to content',
     ]);
     expect(within(menu).getAllByRole('separator').length).toBeGreaterThanOrEqual(7);
     // KEYS-08: the shortcut sits beside its command.

@@ -61,6 +61,13 @@ export interface TableLook {
   readonly outline: OutlineWeight;
   readonly gridlines: GridlineDensity;
   readonly alternating: boolean;
+  /**
+   * Table-scope wrap (ADR-049): the default every cell takes unless its
+   * column, its row or the cell itself says otherwise. Off, a cell clips at
+   * its boundary on one line; on, it wraps and the editing replica stores the
+   * row's measured height.
+   */
+  readonly wrap: boolean;
 }
 
 export const DEFAULT_TABLE_LOOK: TableLook = {
@@ -71,6 +78,7 @@ export const DEFAULT_TABLE_LOOK: TableLook = {
   outline: 'hairline',
   gridlines: 'light',
   alternating: false,
+  wrap: false,
 };
 
 // ---------------------------------------------------------------------------
@@ -166,8 +174,9 @@ export const BOLD_WEIGHT: FontWeight = 600;
  * Sizes on the design system's type scale (DS §2), never below the 11 px cell
  * floor — so `mono-cell` (10 px) and `label` (9 px) are not offered. The
  * whole scale above the floor is: a size whose line box does not fit the
- * 22 px compact row takes the two-unit wrapped row the lattice already has
- * (GRID-09, ADR-024), and choosing it wraps the row.
+ * 22 px compact row takes as many whole lattice rows as its line box needs
+ * (`rowsForSize`), and the editing replica grows the row to hold it
+ * (GRID-09, ADR-034, ADR-049).
  */
 export const TYPE_SIZES = ['cell', 'body-sm', 'body', 'h3', 'h2', 'h1', 'display'] as const;
 export type TypeSize = (typeof TYPE_SIZES)[number];
@@ -210,28 +219,32 @@ const RULE_PX = 1;
 const SUBPIXEL = 0.5;
 
 /** What a cell's content box can show on `rows` lattice rows. */
-export function rowContentPx(rows: 1 | 2): number {
+export function rowContentPx(rows: number): number {
   return rows * ROW_PX - RULE_PX;
 }
 
-/**
- * Lattice rows a size's line box needs: 1 when it fits the compact row's
- * content box, 2 when it fits the wrapped row's (GRID-09), null when it fits
- * neither — h1 and display on Indic text, which the inspector refuses with
- * that reason (INSP-11).
- */
-export function rowsForSize(size: TypeSize, indic: boolean): 1 | 2 | null {
-  const px = TYPE_SIZE_PX[size] * (indic ? INDIC_LINE_HEIGHT : TYPE_SIZE_LINE[size]);
-  if (px <= rowContentPx(1) + SUBPIXEL) return 1;
-  if (px <= rowContentPx(2) + SUBPIXEL) return 2;
-  return null;
+/** The line box of a size in px: the DS leading, or the 1.7 floor Indic text keeps (I18N-03). */
+export function lineBoxPx(size: TypeSize, indic: boolean): number {
+  return TYPE_SIZE_PX[size] * (indic ? INDIC_LINE_HEIGHT : TYPE_SIZE_LINE[size]);
 }
 
-/** INSP-11: why a size cannot be chosen for Indic text, or undefined when it can. */
-export function sizeRefusal(size: TypeSize, indic: boolean): string | undefined {
-  return rowsForSize(size, indic) === null
-    ? `${String(TYPE_SIZE_PX[size])} px needs more than a wrapped row for Tamil, Hindi or Telugu text at the 1.7 line height`
-    : undefined;
+/**
+ * Whole lattice rows a stack of `lines` line boxes of `linePx` each needs,
+ * with `padPx` of vertical chrome above them: the least n with
+ * `rowContentPx(n)` holding it, half a pixel of tolerance. Never below one.
+ */
+export function rowsForLines(lines: number, linePx: number, padPx = 0): number {
+  const needed = Math.max(0, lines) * linePx + padPx - SUBPIXEL;
+  return Math.max(1, Math.ceil((needed + RULE_PX) / ROW_PX));
+}
+
+/**
+ * Lattice rows a size's single line box needs (ADR-034, ADR-049): 1 for every
+ * size up to h3, more for the display sizes — h1 and display on Indic text
+ * take three and four. Every size on the scale can be shown; none is refused.
+ */
+export function rowsForSize(size: TypeSize, indic: boolean): number {
+  return rowsForLines(1, lineBoxPx(size, indic));
 }
 
 export const H_ALIGNS = ['left', 'center', 'right', 'justify'] as const;
@@ -261,6 +274,12 @@ export interface Appearance {
   readonly textColour?: TextColourToken;
   readonly hAlign?: HAlign;
   readonly vAlign?: VAlign;
+  /**
+   * Wrap at this scope (ADR-049): a cell override wins over its row, the row
+   * over the column, the column over the table (`TableLook.wrap`). Absent
+   * inherits; `false` clips at the cell boundary on one line.
+   */
+  readonly wrap?: boolean;
 }
 
 export type AppearanceKey = keyof Appearance;
@@ -273,6 +292,7 @@ export const APPEARANCE_KEYS: readonly AppearanceKey[] = [
   'textColour',
   'hAlign',
   'vAlign',
+  'wrap',
 ];
 
 function oneOf<T extends string | number>(list: readonly T[], value: unknown): value is T {
@@ -334,6 +354,7 @@ export function readAppearance(value: unknown): Appearance {
   if (isTextColourToken(v.textColour)) out.textColour = v.textColour;
   if (isHAlign(v.hAlign)) out.hAlign = v.hAlign;
   if (isVAlign(v.vAlign)) out.vAlign = v.vAlign;
+  if (typeof v.wrap === 'boolean') out.wrap = v.wrap;
   return out;
 }
 

@@ -1,7 +1,8 @@
 /**
  * Table look writes (INSP-04): style, title and caption visibility, outline,
- * gridline density, alternating row colour. Each is one key on the table map
- * and one transaction; none touches the lattice, so no address moves.
+ * gridline density, alternating row colour, table-scope wrap (ADR-049). Each
+ * is one key on the table map and one transaction; none touches the lattice
+ * itself — a wrap's measured heights are written by the editing replica.
  */
 import type { GedeDoc } from '../doc/schema.js';
 import type { Id } from '../ids.js';
@@ -18,6 +19,7 @@ const KEYS: readonly (keyof TableLook)[] = [
   'outline',
   'gridlines',
   'alternating',
+  'wrap',
 ];
 
 /** Write the given fields of the look; absent fields stay. Returns the keys written. */

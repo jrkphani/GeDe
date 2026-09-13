@@ -6,6 +6,7 @@
 import * as Y from 'yjs';
 
 import { effectiveDepths, hasDescendants } from '../hier/outline.js';
+import { rowHidden } from './geometry.js';
 import { cellKey, newId, splitCellKey, type Id } from '../ids.js';
 import { snapPoint, snapSizeToUnits, type LatticeUnits, type Pixels } from '../lattice.js';
 import {
@@ -15,6 +16,7 @@ import {
   DEFAULT_ROW_HEIGHT,
   fragmentText,
   isFormula,
+  LEGACY_WRAPPED_ROW_HEIGHT,
   listSheets,
   objectCount,
   readNumber,
@@ -26,7 +28,6 @@ import {
   tableRecord,
   tablesOnSheet,
   textFragment,
-  WRAPPED_ROW_HEIGHT,
   type ColumnMap,
   type GedeDoc,
   type RowMetaMap,
@@ -438,10 +439,16 @@ export function unhideAllColumns(gd: GedeDoc, tableId: Id): Id[] {
   });
 }
 
-/** Wrap every cell of a column; the table's rows become two lattice units (GRID-09). */
-export function setColumnWrap(gd: GedeDoc, tableId: Id, colId: Id, wrap: boolean): void {
+/**
+ * Column-scope wrap (GRID-09, ADR-049): `true` wraps every cell of the column,
+ * `false` clips them, `null` lets them follow the table. No height is written
+ * here — the editing replica measures the rows and stores what they need.
+ */
+export function setColumnWrap(gd: GedeDoc, tableId: Id, colId: Id, wrap: boolean | null): void {
   transact(gd, () => {
-    requireColumn(requireTable(gd, tableId), tableId, colId).set('wrap', wrap);
+    const column = requireColumn(requireTable(gd, tableId), tableId, colId);
+    if (wrap === null) column.delete('wrap');
+    else if (column.get('wrap') !== wrap) column.set('wrap', wrap);
   });
 }
 
@@ -461,6 +468,27 @@ export function setColumnWidth(gd: GedeDoc, tableId: Id, colId: Id, units: numbe
     if (column.get('width') !== width) column.set('width', width);
   });
   return width;
+}
+
+/**
+ * Several columns' widths in one transaction (GRID-08, ADR-049): a drag on one
+ * divider of a selected band resizes every member, and the fit of a whole
+ * table lands as one undo step. Returns what was stored, in the given order.
+ */
+export function setColumnWidths(
+  gd: GedeDoc,
+  tableId: Id,
+  widths: readonly { readonly colId: Id; readonly units: number }[],
+): number[] {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    return widths.map(({ colId, units }) => {
+      const width = snapWidthUnits(units);
+      const column = requireColumn(table, tableId, colId);
+      if (column.get('width') !== width) column.set('width', width);
+      return width;
+    });
+  });
 }
 
 /** Column width from pixels, snapped to whole units and never below one (GRID-01, GRID-08). */
@@ -503,15 +531,19 @@ export function distributeUnits(sizes: readonly number[], total: number): number
 export interface ScaleTableOptions {
   /** New total width of the visible columns in units, shared out proportionally. */
   widthUnits?: number | undefined;
-  /** Every row wrapped (two units) or compact (one) — the only heights the lattice allows (GRID-09). */
-  wrapped?: boolean | undefined;
+  /**
+   * New total height of the visible rows in units, shared out proportionally
+   * (ADR-049: Numbers' table handle scales every row); each row lands on a
+   * whole unit, at least one, and reads as set by hand.
+   */
+  heightUnits?: number | undefined;
 }
 
 /**
  * The corner handle (GRID-08): scale the whole table on the lattice. Width is
- * distributed across the visible columns, each a whole unit and at least one;
- * height snaps to the two row heights the lattice allows. One undo step.
- * Returns the visible columns' widths after the call, in column order.
+ * distributed across the visible columns and height across the visible rows,
+ * each a whole unit and at least one. One undo step. Returns the visible
+ * columns' widths after the call, in column order.
  */
 export function scaleTable(gd: GedeDoc, tableId: Id, options: ScaleTableOptions): number[] {
   return transact(gd, () => {
@@ -527,9 +559,17 @@ export function scaleTable(gd: GedeDoc, tableId: Id, options: ScaleTableOptions)
         if (column.get('width') !== width) column.set('width', width);
       });
     }
-    if (options.wrapped !== undefined) {
-      const height = options.wrapped ? WRAPPED_ROW_HEIGHT : DEFAULT_ROW_HEIGHT;
-      for (const rowId of rowsArray(table).toArray()) setRowHeight(table, rowId, height);
+    if (options.heightUnits !== undefined) {
+      const record = tableRecord(table);
+      const hidden = rowHidden(table, record);
+      const shown = record.rows.filter((_id, i) => hidden[i] !== true);
+      const heights = distributeUnits(
+        shown.map((rowId) => rowMeta(table, rowId).height),
+        snapWidthUnits(options.heightUnits),
+      );
+      shown.forEach((rowId, i) => {
+        writeRowHeight(table, rowId, heights[i] ?? 1, 'manual');
+      });
     }
     return widths;
   });
@@ -561,18 +601,133 @@ export function setFooterRows(gd: GedeDoc, tableId: Id, count: StripCount): void
 }
 
 /**
- * Store a row height, writing nothing when it already reads that way — a row
- * with no meta is one unit, so setting one unit there is not a write and not
- * an undo step.
+ * How a height came to be (ADR-049, R-B): `manual` is a person's — a drag,
+ * the Height field, the corner — and turns `fit` off, so the row keeps it;
+ * `auto` is the editing replica's measurement, written only while the row
+ * follows its content; `fit` is Fit to content, which turns `fit` back on
+ * and stores the measured height.
  */
-function setRowHeight(table: TableMap, rowId: Id, height: number): void {
+export type RowHeightMode = 'manual' | 'auto' | 'fit';
+
+/**
+ * Store a row height inside the caller's transaction, writing nothing that
+ * already reads that way — a row with no meta is one unit and follows its
+ * content, so writing exactly that is not a write and not an undo step. An
+ * `auto` write on a row that does not follow its content is refused (the
+ * height stays). `fit` is written beside any height past one so a reader can
+ * tell an ADR-049 row from a legacy two-unit wrapped one. Returns the height
+ * the row now has.
+ */
+export function writeRowHeight(
+  table: TableMap,
+  rowId: Id,
+  units: number,
+  mode: RowHeightMode,
+): number {
   const existing = rowMetaMap(table).get(rowId);
+  const current = existing === undefined ? null : rowMeta(table, rowId);
+  if (mode === 'auto' && current !== null && !current.fit) return current.height;
+  const height = snapWidthUnits(units);
+  const fit = mode !== 'manual';
   if (existing === undefined) {
-    if (height === DEFAULT_ROW_HEIGHT) return;
-    rowMetaFor(table, rowId).set('height', height);
-    return;
+    if (height === DEFAULT_ROW_HEIGHT && fit) return height;
+    const meta = rowMetaFor(table, rowId);
+    meta.set('height', height);
+    meta.set('fit', fit);
+    return height;
   }
   if (existing.get('height') !== height) existing.set('height', height);
+  const stored = existing.get('fit');
+  // A meta with neither `fit` nor `wrap` and a height past one reads as a legacy wrapped
+  // row (`rowMeta`); a measured or fitted height landing there writes `fit` so the row
+  // does not start reading as wrapped at row scope.
+  const legacyMarker =
+    stored === undefined &&
+    existing.get('wrap') === undefined &&
+    height >= LEGACY_WRAPPED_ROW_HEIGHT;
+  if ((stored ?? true) !== fit || legacyMarker) existing.set('fit', fit);
+  return height;
+}
+
+/**
+ * Distribute evenly (ADR-049, Numbers' Table › Distribute Rows / Columns
+ * Evenly): the selected rows or columns — or every visible one — share
+ * their current total in whole units, the remainder to the first ones. Rows
+ * then read as set by hand (`fit` off), as after a drag. One undo step.
+ * Returns the sizes stored, in table order.
+ */
+export function distributeEvenly(
+  gd: GedeDoc,
+  tableId: Id,
+  axis: 'row' | 'column',
+  only?: readonly Id[],
+): number[] {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    const record = tableRecord(table);
+    if (axis === 'column') {
+      const columns = columnsArray(table)
+        .toArray()
+        .filter((c) => c.get('hidden') !== true)
+        .filter((c) => only === undefined || only.includes(readString(c, 'id')));
+      const widths = columns.map((c) => Math.max(1, Math.round(readNumber(c, 'width', 1))));
+      const even = evenShares(widths);
+      columns.forEach((column, i) => {
+        if (column.get('width') !== even[i]) column.set('width', even[i]);
+      });
+      return even;
+    }
+    const hidden = rowHidden(table, record);
+    const rows = record.rows
+      .filter((_id, i) => hidden[i] !== true)
+      .filter((id) => only === undefined || only.includes(id));
+    const even = evenShares(rows.map((rowId) => rowMeta(table, rowId).height));
+    rows.forEach((rowId, i) => {
+      writeRowHeight(table, rowId, even[i] ?? 1, 'manual');
+    });
+    return even;
+  });
+}
+
+/** `sizes.length` whole shares of the sizes' total, the remainder to the first ones. */
+export function evenShares(sizes: readonly number[]): number[] {
+  const n = sizes.length;
+  if (n === 0) return [];
+  const total = sizes.reduce((a, b) => a + b, 0);
+  const base = Math.max(1, Math.floor(total / n));
+  const remainder = Math.max(0, total - base * n);
+  return sizes.map((_s, i) => base + (i < remainder ? 1 : 0));
+}
+
+/**
+ * One row's height in whole units (GRID-09, ADR-049): the keyboard route on a
+ * focused row divider, and every other single-row write. One undo step.
+ */
+export function setRowHeight(
+  gd: GedeDoc,
+  tableId: Id,
+  rowId: Id,
+  units: number,
+  mode: RowHeightMode = 'manual',
+): number {
+  return transact(gd, () => writeRowHeight(requireTable(gd, tableId), rowId, units, mode));
+}
+
+/**
+ * Several rows' heights in one transaction: a drag on one divider of a
+ * selected band, a fit of the whole table, the editing replica's auto-fit of
+ * the rows an edit touched. Returns the heights stored, in the given order.
+ */
+export function setRowHeights(
+  gd: GedeDoc,
+  tableId: Id,
+  heights: readonly { readonly rowId: Id; readonly units: number }[],
+  mode: RowHeightMode = 'manual',
+): number[] {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    return heights.map(({ rowId, units }) => writeRowHeight(table, rowId, units, mode));
+  });
 }
 
 /**
@@ -591,14 +746,24 @@ export function rowMetaFor(table: TableMap, rowId: Id): RowMetaMap {
   return meta;
 }
 
-/** A wrapped row occupies two lattice rows so addressing stays exact (GRID-09). */
-export function setRowWrapped(gd: GedeDoc, tableId: Id, rowId: Id, wrapped: boolean): void {
+/**
+ * Row-scope wrap (GRID-09, ADR-049): `true` wraps every cell of the row,
+ * `false` clips them, `null` lets them follow their columns. Writes no height;
+ * the editing replica measures and stores what the row then needs.
+ */
+export function setRowWrap(gd: GedeDoc, tableId: Id, rowId: Id, wrap: boolean | null): void {
   transact(gd, () => {
-    setRowHeight(
-      requireTable(gd, tableId),
-      rowId,
-      wrapped ? WRAPPED_ROW_HEIGHT : DEFAULT_ROW_HEIGHT,
-    );
+    const table = requireTable(gd, tableId);
+    if (rowMetaMap(table).get(rowId) === undefined && wrap === null) return;
+    const meta = rowMetaFor(table, rowId);
+    if (wrap === null) {
+      if (meta.get('wrap') !== undefined) meta.delete('wrap');
+      return;
+    }
+    // A legacy two-unit row reads wrapped from its height alone; writing `fit` beside
+    // `wrap` makes the state explicit, so the reader's legacy rule no longer applies.
+    if (meta.get('fit') === undefined) meta.set('fit', true);
+    if (meta.get('wrap') !== wrap) meta.set('wrap', wrap);
   });
 }
 
@@ -651,6 +816,57 @@ export function clearCell(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): boole
 
 /** Transaction origin for garbage collection; never tracked by undo — nothing a person did. */
 export const SWEEP_ORIGIN = 'sweep';
+
+/**
+ * Transaction origin for the one-time settling of a legacy wrapped table's
+ * heights (ADR-049): local, so it syncs, but never an undo step and never
+ * answered by the auto-height observer — nothing a person did.
+ */
+export const LEGACY_HEIGHTS_ORIGIN = 'legacy-heights';
+
+/**
+ * Before ADR-049 a wrapping column made every row two units by derivation —
+ * nothing was stored — so such a table opens with every row at its stored
+ * one unit, its wrapped text clipped and its addresses shifted, until an edit
+ * re-measures it. True while any visible column wraps and any row has not
+ * been settled (no `fit` key on its meta): the first editing replica then
+ * measures every row and stores what it needs (`settleLegacyRowHeights`).
+ * Rows born after ADR-049 that a measurement never touched read the same
+ * way, so a table's first editing open may settle them once too — a silent,
+ * idempotent write.
+ */
+export function needsLegacyHeightSettling(table: TableMap): boolean {
+  const record = tableRecord(table);
+  if (!record.columns.some((c) => c.wrap === true && !c.hidden)) return false;
+  const metas = rowMetaMap(table);
+  return record.rows.some((rowId) => metas.get(rowId)?.get('fit') === undefined);
+}
+
+/**
+ * Store the measured heights of a legacy wrapped table's rows, marking every
+ * listed row settled (`fit: true`) so the pass never runs again for it. One
+ * transaction under `LEGACY_HEIGHTS_ORIGIN`. Returns how many rows changed height.
+ */
+export function settleLegacyRowHeights(
+  gd: GedeDoc,
+  tableId: Id,
+  heights: readonly { readonly rowId: Id; readonly units: number }[],
+): number {
+  let changed = 0;
+  gd.doc.transact(() => {
+    const table = requireTable(gd, tableId);
+    for (const { rowId, units } of heights) {
+      const meta = rowMetaFor(table, rowId);
+      const height = snapWidthUnits(units);
+      if (meta.get('height') !== height) {
+        meta.set('height', height);
+        changed += 1;
+      }
+      if (meta.get('fit') !== true) meta.set('fit', true);
+    }
+  }, LEGACY_HEIGHTS_ORIGIN);
+  return changed;
+}
 
 /**
  * Cell keys whose row or column is no longer in the table. They arise only from a

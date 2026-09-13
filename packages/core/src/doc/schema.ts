@@ -6,10 +6,11 @@
  *   sheets  Y.Array<Y.Map>   id, label, parentContext, seeded (ordinal is array order),
  *                            edgesShown (the sheet's DAG edges, INSP-07)
  *   tables  Y.Map<Y.Map>     by id: sheetId, title, gridCol, gridRow,
- *                            columns Y.Array<Y.Map{id,label,width}>,
+ *                            columns Y.Array<Y.Map{id,label,width,wrap}>,
  *                            rows Y.Array<rowId>,
  *                            cells Y.Map keyed `rowId:colId` → Y.XmlFragment | formula string,
- *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height}>,
+ *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height,fit,wrap}>
+ *                            (height in whole units, ADR-049),
  *                            cellFormat Y.Map keyed `rowId:colId` → {format, formatOpts}
  *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01),
  *                            style · titleShown · caption · captionShown · outline · gridlines ·
@@ -65,10 +66,14 @@ export const TABLE_HEADER_ROWS = 1;
 export const DEFAULT_FOOTER_ROWS = 0;
 /** Default column width in lattice units. */
 export const DEFAULT_COLUMN_WIDTH = 1;
-/** Default row height in lattice units; a wrapped row is 2 (GRID-09). */
+/** Default row height in lattice units (GRID-09, ADR-049): a row is any whole number of units ≥ 1. */
 export const DEFAULT_ROW_HEIGHT = 1;
-/** Lattice rows a wrapped row occupies (GRID-09) — exactly two, never more. */
-export const WRAPPED_ROW_HEIGHT = 2;
+/**
+ * The two-unit row GRID-09 named before ADR-049 generalised heights: what a
+ * legacy `height: 2` with no `wrap` key reads as (a wrapped row), and the
+ * least a row that shows two lines can be.
+ */
+export const LEGACY_WRAPPED_ROW_HEIGHT = 2;
 
 export type SheetMap = Y.Map<unknown>;
 export type TableMap = Y.Map<unknown>;
@@ -167,8 +172,13 @@ export interface ColumnRecord {
   readonly width: number;
   /** A hidden column has no lattice width; what follows it moves left (GRID-02). */
   readonly hidden: boolean;
-  /** Every cell in the column wraps, so each row is two lattice units (GRID-09). */
-  readonly wrap: boolean;
+  /**
+   * Column-scope wrap (GRID-09, ADR-049): every cell of the column wraps
+   * (`true`) or clips (`false`) unless its row or the cell itself says
+   * otherwise; `null` inherits the table's. Wrapping never sets a height by
+   * itself — the editing replica measures and stores each row's height.
+   */
+  readonly wrap: boolean | null;
   readonly source: ColumnSource;
   /** Set when `source` is `derived` (REF-04). */
   readonly derive: DeriveSpec | null;
@@ -191,8 +201,23 @@ export interface RowMeta {
   readonly depth: number;
   /** A collapsed row hides every row of its subtree (HIER-06, HIER-10). */
   readonly collapsed: boolean;
-  /** Whole lattice units; 2 when the row itself is wrapped (GRID-09). */
+  /**
+   * The row's height in whole lattice units, ≥ 1 (GRID-09, ADR-049). What
+   * every replica draws and addresses by: the editing replica measures a
+   * wrapped row's content and stores the result here, so a collaborator never
+   * measures and addresses agree everywhere.
+   */
   readonly height: number;
+  /**
+   * Whether the row follows its content (ADR-049, R-B): while true, the
+   * replica making an edit measures the row and stores `height`; a divider
+   * drag or a typed Height sets it false and the row keeps that height —
+   * wrapping cells then clip at the last whole line — until Fit to content
+   * sets it true again. Absent reads true.
+   */
+  readonly fit: boolean;
+  /** Row-scope wrap: overrides the column's and the table's; null inherits (ADR-049). */
+  readonly wrap: boolean | null;
   /**
    * A stored category-band row: its cells are not editable (GRID-04). Grouping
    * (`sort/`, SORT-05) renders bands as view rows over the projection and never
@@ -477,7 +502,7 @@ export function columnRecord(map: ColumnMap): ColumnRecord {
     label: readString(map, 'label'),
     width: Math.max(1, Math.round(readNumber(map, 'width', DEFAULT_COLUMN_WIDTH))),
     hidden: readBoolean(map, 'hidden', false),
-    wrap: readBoolean(map, 'wrap', false),
+    wrap: readTriState(map.get('wrap')),
     source,
     derive: source === 'derived' ? readDeriveSpec(map.get('derive')) : null,
     link: source === 'linked' ? readLinkSpec(map.get('link')) : null,
@@ -502,7 +527,13 @@ export function tableLook(map: TableMap): TableLook {
     outline: isOutlineWeight(outline) ? outline : DEFAULT_TABLE_LOOK.outline,
     gridlines: isGridlineDensity(gridlines) ? gridlines : DEFAULT_TABLE_LOOK.gridlines,
     alternating: readBoolean(map, 'alternating', DEFAULT_TABLE_LOOK.alternating),
+    wrap: readBoolean(map, 'wrap', DEFAULT_TABLE_LOOK.wrap),
   };
+}
+
+/** A stored `true` / `false`, or null for anything else (absent means inherit). */
+export function readTriState(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null;
 }
 
 /**
@@ -680,20 +711,29 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
       depth: 0,
       collapsed: false,
       height: DEFAULT_ROW_HEIGHT,
+      fit: true,
+      wrap: null,
       group: false,
       splitChild: false,
       pulledFrom: null,
       splitOf: null,
     };
   }
+  // Whole units, at least one, so addressing stays exact whatever was stored (GRID-01).
+  const height = Math.max(1, Math.round(readNumber(meta, 'height', DEFAULT_ROW_HEIGHT)));
+  const fit = meta.get('fit');
+  const wrap = meta.get('wrap');
   return {
     depth: Math.max(0, Math.round(readNumber(meta, 'depth', 0))),
     collapsed: readBoolean(meta, 'collapsed', false),
-    // A row is one unit or wrapped (two); anything else stored is clamped so addressing stays exact.
-    height:
-      Math.round(readNumber(meta, 'height', DEFAULT_ROW_HEIGHT)) >= WRAPPED_ROW_HEIGHT
-        ? WRAPPED_ROW_HEIGHT
-        : DEFAULT_ROW_HEIGHT,
+    height,
+    fit: readBoolean(meta, 'fit', true),
+    // Before ADR-049 a wrapped row was stored as `height: 2` alone (GRID-09): a row with
+    // neither `wrap` nor `fit` written and a height past one still reads wrapped.
+    wrap:
+      wrap === undefined && fit === undefined && height >= LEGACY_WRAPPED_ROW_HEIGHT
+        ? true
+        : readTriState(wrap),
     group: readBoolean(meta, 'group', false),
     splitChild: readBoolean(meta, 'splitChild', false),
     pulledFrom: readPulledFrom(meta.get('pulledFrom')),

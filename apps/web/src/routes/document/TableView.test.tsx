@@ -36,7 +36,10 @@ import {
   setColumnRules,
   setOutlineColumn,
   setRowCollapsed,
-  setRowWrapped,
+  setColumnWrap,
+  setRowHeight,
+  setRowWrap,
+  TYPE_SIZE_PX,
   setTableLook,
   tableById,
   tableMap,
@@ -52,7 +55,12 @@ import { useYVersion } from '../../doc/use-y.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import { useGrid, type Grid } from './grid/use-grid.js';
 import { openViewStore, ViewStoreProvider, type ViewStore } from '../../doc/view-state.js';
-import { createRuleEvaluator, setSharedRuleEvaluatorForTests } from './style/index.js';
+import {
+  createRuleEvaluator,
+  setSharedRuleEvaluatorForTests,
+  type FitMeasure,
+  type FitOptions,
+} from './style/index.js';
 import { TableView } from './TableView.js';
 
 interface HarnessProps {
@@ -64,6 +72,8 @@ interface HarnessProps {
   undo?: Y.UndoManager | undefined;
   viewSorted?: boolean;
   presence?: readonly PresenceState[];
+  /** ADR-049: a measurer for the auto-height of wrapped rows (jsdom has no canvas). */
+  fit?: (() => FitOptions | null) | undefined;
   grid: { current: Grid | null };
 }
 
@@ -76,9 +86,10 @@ function Harness({
   undo,
   viewSorted,
   presence = [],
+  fit,
   grid,
 }: HarnessProps) {
-  const g = useGrid(gd, editable, { undo });
+  const g = useGrid(gd, editable, { undo, fit });
   grid.current = g;
   useYVersion(gd.tables, { depth: 'shallow' });
   const map = tableMap(gd, tableId);
@@ -90,6 +101,15 @@ function Harness({
         tier={tier}
         selected={g.state.selection?.tableId === tableId}
         selectedCell={g.cell}
+        axisBand={g.state.selection?.tableId === tableId ? (g.state.selection.band ?? null) : null}
+        fitter={
+          fit === undefined
+            ? undefined
+            : {
+                fit,
+                reason: fit() === null ? 'text cannot be measured in this browser' : undefined,
+              }
+        }
         editing={g.state.editing}
         editable={editable}
         viewSorted={viewSorted}
@@ -573,7 +593,7 @@ describe('structure affordances (GRID-07, GRID-08)', () => {
     expect(tableById(gd, tableId)?.columns[0]?.width).toBe(1);
   });
 
-  it('GRID-08 the corner handle scales the whole table: the arrows share width out across the columns and snap rows to compact or wrapped', async () => {
+  it('GRID-08 the corner handle scales the whole table: the arrows share width out across the columns and height across the rows, whole units each (ADR-049)', async () => {
     mount();
     await userEvent.click(cellAt(0, 0));
     const corner = screen.getByRole('separator', { name: 'Resize Table 1' });
@@ -585,64 +605,289 @@ describe('structure affordances (GRID-07, GRID-08)', () => {
       'aria-valuenow',
       '4',
     );
+    // ↓ adds one unit to the body: the first row takes it (distributeUnits' remainder rule).
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize Table 1' }), {
       code: 'ArrowDown',
       key: 'ArrowDown',
     });
-    const dataRows = within(grid()).getAllByRole('row').slice(1);
-    expect(dataRows.every((r) => r.style.height === `${String(LATTICE.row * 2)}px`)).toBe(true);
+    let dataRows = within(grid()).getAllByRole('row').slice(1);
+    expect(dataRows.map((r) => r.style.height)).toEqual(['44px', '22px', '22px']);
     expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B7');
+    // Shift+↓: four more units → 8 in all, shared 3 / 3 / 2.
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize Table 1' }), {
-      code: 'ArrowUp',
-      key: 'ArrowUp',
+      code: 'ArrowDown',
+      key: 'ArrowDown',
+      shiftKey: true,
     });
-    expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B6');
+    dataRows = within(grid()).getAllByRole('row').slice(1);
+    expect(dataRows.map((r) => r.style.height)).toEqual(['88px', '44px', '44px']); // 2:1:1 kept
+    expect(cellAt(2, 0)).toHaveAttribute('data-address', 'B11');
+    expect(live()).toHaveTextContent('rows 8 units tall together');
     fireEvent.keyDown(screen.getByRole('separator', { name: 'Resize Table 1' }), {
       code: 'ArrowLeft',
       key: 'ArrowLeft',
     });
     expect(tableById(gd, tableId)?.columns.map((c) => c.width)).toEqual([1, 1, 1]);
-    // A drag: 330 px right, 40 px down → 5 units wide (from 3), rows wrapped (3 rows: 66 → 106 ≥ 99).
+    // A drag: 330 px right, 40 px down → 5 units wide (from 3), 10 units tall (from 8).
     const handle = screen.getByRole('separator', { name: 'Resize Table 1' });
     fireEvent.pointerDown(handle, { pointerId: 3, button: 0, clientX: 0, clientY: 0 });
     fireEvent.pointerMove(handle, { pointerId: 3, clientX: 330, clientY: 40 });
     expect(screen.getByRole('grid').closest<HTMLElement>('.gd-table')!.style.width).toBe(
       `${String(LATTICE.col * 5)}px`,
     );
+    expect(
+      within(grid())
+        .getAllByRole('row')
+        .slice(1)
+        .map((r) => r.style.height),
+    ).toEqual(['110px', '66px', '44px']); // the live preview: 4:2:2 → 5:3:2
     fireEvent.pointerUp(handle, { pointerId: 3, clientX: 330, clientY: 40 });
     expect(tableById(gd, tableId)?.columns.map((c) => c.width)).toEqual([2, 2, 1]);
-    expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B7');
+    expect(rows.map((r) => rowMeta(tableMap(gd, tableId)!, r).height)).toEqual([5, 3, 2]);
+    expect(rowMeta(tableMap(gd, tableId)!, rows[0]!).fit).toBe(false);
+    expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B10');
+  });
+
+  it('GRID-09 GRID-08 A11Y-01 a row divider in the gutter resizes the row by drag (live preview, one write) and by the keyboard; ⌥↓ from a cell focuses it (ADR-049)', async () => {
+    mount();
+    expect(screen.queryByRole('separator', { name: /Resize row/ })).not.toBeInTheDocument();
+    await userEvent.click(cellAt(1, 0));
+    // One divider per row, named by the ruler's row number; the selected row's is the tab stop.
+    const dividers = screen.getAllByRole('separator', { name: /Resize row/ });
+    expect(dividers.map((d) => d.getAttribute('aria-label'))).toEqual([
+      'Resize row 5',
+      'Resize row 6',
+      'Resize row 7',
+    ]);
+    const divider = screen.getByRole('separator', { name: 'Resize row 6' });
+    expect(divider).toHaveAttribute('aria-orientation', 'horizontal');
+    expect(divider).toHaveAttribute('aria-valuenow', '1');
+    expect(divider).toHaveAttribute('aria-valuemin', '1');
+    expect(divider).not.toHaveAttribute('aria-valuemax');
+    expect(divider.tabIndex).toBe(0);
+    expect(screen.getByRole('separator', { name: 'Resize row 5' }).tabIndex).toBe(-1);
+    // ⌥↓ from the cell focuses the row's bottom edge; ⌥↑ the edge above it (the row before's).
+    fireEvent.keyDown(cellAt(1, 0), { code: 'ArrowDown', key: 'ArrowDown', altKey: true });
+    expect(document.activeElement).toBe(divider);
+    fireEvent.keyDown(cellAt(1, 0), { code: 'ArrowUp', key: 'ArrowUp', altKey: true });
+    expect(document.activeElement).toBe(screen.getByRole('separator', { name: 'Resize row 5' }));
+    // ⌥↑ on the first row has no edge above: nothing happens, the cell keeps focus.
+    cellAt(0, 0).focus();
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowUp', key: 'ArrowUp', altKey: true });
+    expect(document.activeElement).toBe(cellAt(0, 0));
+    divider.focus();
+    let writes = 0;
+    gd.doc.on('update', () => {
+      writes += 1;
+    });
+    // A drag: 10 px down rounds to one unit (no change), 30 px to two, 50 px to three.
+    fireEvent.pointerDown(divider, { pointerId: 5, button: 0, clientX: 0, clientY: 100 });
+    fireEvent.pointerMove(divider, { pointerId: 5, clientX: 0, clientY: 110 });
+    expect(cellAt(1, 0).closest('[role="row"]')).toHaveStyle({ height: '22px' });
+    fireEvent.pointerMove(divider, { pointerId: 5, clientX: 0, clientY: 130 });
+    expect(cellAt(1, 0).closest('[role="row"]')).toHaveStyle({ height: '44px' });
+    fireEvent.pointerMove(divider, { pointerId: 5, clientX: 0, clientY: 150 });
+    expect(cellAt(1, 0).closest('[role="row"]')).toHaveStyle({ height: '66px' });
+    expect(cellAt(2, 0)).toHaveAttribute('data-address', 'B7'); // preview writes nothing
+    expect(writes).toBe(0);
+    fireEvent.pointerUp(divider, { pointerId: 5, clientX: 0, clientY: 150 });
+    expect(writes).toBe(1);
+    expect(rowMeta(tableMap(gd, tableId)!, rows[1]!)).toMatchObject({ height: 3, fit: false });
+    expect(cellAt(2, 0)).toHaveAttribute('data-address', 'B9');
+    expect(cellAt(1, 0).closest('[role="row"]')).toHaveAttribute(
+      'aria-description',
+      '3 units tall',
+    );
+    expect(live()).toHaveTextContent('Row 6 is 3 units tall');
+    // Keyboard: ↑ one unit, ⇧↓ four, ⌥↑ one (the divider owns ⌥ arrows only while focused).
+    const again = () => screen.getByRole('separator', { name: 'Resize row 6' });
+    fireEvent.keyDown(again(), { code: 'ArrowUp', key: 'ArrowUp' });
+    expect(again()).toHaveAttribute('aria-valuenow', '2');
+    fireEvent.keyDown(again(), { code: 'ArrowDown', key: 'ArrowDown', shiftKey: true });
+    expect(again()).toHaveAttribute('aria-valuenow', '6');
+    fireEvent.keyDown(again(), { code: 'ArrowUp', key: 'ArrowUp', altKey: true });
+    expect(again()).toHaveAttribute('aria-valuenow', '5');
+    expect(again()).toHaveAttribute('aria-valuetext', '5 units, 110 px');
+    // Below one unit it floors at one.
+    fireEvent.pointerDown(again(), { pointerId: 6, button: 0, clientX: 0, clientY: 500 });
+    fireEvent.pointerMove(again(), { pointerId: 6, clientX: 0, clientY: 0 });
+    fireEvent.pointerUp(again(), { pointerId: 6, clientX: 0, clientY: 0 });
+    expect(rowMeta(tableMap(gd, tableId)!, rows[1]!).height).toBe(1);
+  });
+
+  it('GRID-08 KEYS-03 a press on a row handle or a column header selects the band; Shift extends it; a drag on any member resizes every member proportionally in one undo step (ADR-049, Numbers N2)', async () => {
+    const undo = createUndoManager(gd);
+    mount({ undo });
+    await userEvent.click(cellAt(0, 0));
+    // Rows 5 and 6 by handle and Shift-handle.
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Select row 5' }), { button: 0 });
+    fireEvent.pointerDown(screen.getByRole('button', { name: 'Select row 6' }), {
+      button: 0,
+      shiftKey: true,
+    });
+    expect(gridRef.current?.state.selection?.band).toEqual({
+      axis: 'row',
+      ids: [rows[0], rows[1]],
+      anchor: rows[0],
+    });
+    expect(screen.getByRole('button', { name: 'Select row 5' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    expect(cellAt(1, 0).closest('[role="row"]')).toHaveAttribute('aria-selected', 'true');
+    expect(cellAt(2, 0).closest('[role="row"]')).not.toHaveAttribute('aria-selected');
+    // Row 6 is two units already; dragging row 5's divider to 2 units doubles both (ratio 2).
+    act(() => {
+      setRowHeight(gd, tableId, rows[1]!, 2);
+    });
+    undo.stopCapturing();
+    const divider = screen.getByRole('separator', { name: 'Resize row 5' });
+    fireEvent.pointerDown(divider, { pointerId: 7, button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(divider, { pointerId: 7, clientX: 0, clientY: 22 });
+    expect(cellAt(0, 0).closest('[role="row"]')).toHaveStyle({ height: '44px' });
+    expect(cellAt(1, 0).closest('[role="row"]')).toHaveStyle({ height: '88px' }); // previewed too
+    expect(cellAt(2, 0).closest('[role="row"]')).toHaveStyle({ height: '22px' }); // not a member
+    const before = undo.undoStack.length;
+    fireEvent.pointerUp(divider, { pointerId: 7, clientX: 0, clientY: 22 });
+    expect(rows.map((r) => rowMeta(tableMap(gd, tableId)!, r).height)).toEqual([2, 4, 1]);
+    expect(undo.undoStack).toHaveLength(before + 1);
+    expect(live()).toHaveTextContent('2 rows resized to 2, 4 units');
+    undo.undo();
+    expect(rows.map((r) => rowMeta(tableMap(gd, tableId)!, r).height)).toEqual([1, 2, 1]);
+    // Columns: a press on a header selects it; ⇧→ from the cell extends to the next column.
+    const headers = within(grid()).getAllByRole('columnheader');
+    fireEvent.pointerDown(headers[0]!, { button: 0 });
+    expect(gridRef.current?.state.selection?.band).toEqual({
+      axis: 'column',
+      ids: [cols[0]],
+      anchor: cols[0],
+    });
+    expect(headers[0]).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowRight', key: 'ArrowRight', shiftKey: true });
+    expect(gridRef.current?.state.selection?.band?.ids).toEqual([cols[0], cols[1]]);
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowRight', key: 'ArrowRight', shiftKey: true });
+    expect(gridRef.current?.state.selection?.band?.ids).toEqual([cols[0], cols[1], cols[2]]);
+    // Dragging Column 1 to 2 units doubles all three; a divider outside a band resizes itself alone.
+    const colDivider = screen.getByRole('separator', { name: 'Resize column Column 1' });
+    fireEvent.pointerDown(colDivider, { pointerId: 8, button: 0, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(colDivider, { pointerId: 8, clientX: 160, clientY: 0 });
+    expect(cellAt(0, 2).style.width).toBe(`${String(LATTICE.col * 2)}px`);
+    fireEvent.pointerUp(colDivider, { pointerId: 8, clientX: 160, clientY: 0 });
+    expect(tableById(gd, tableId)?.columns.map((c) => c.width)).toEqual([2, 2, 2]);
+    expect(live()).toHaveTextContent('3 columns are 2 units wide');
+    // A plain arrow clears the band and moves.
+    fireEvent.keyDown(cellAt(0, 0), { code: 'ArrowDown', key: 'ArrowDown' });
+    expect(gridRef.current?.state.selection?.band).toBeUndefined();
+  });
+
+  it('INSP-04 GRID-08 GRID-09 double-click or Enter on a divider fits the column or the row to its content, with a measurer; without one the divider says why (ADR-049, Numbers N5)', async () => {
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'x'.repeat(40)); // 40 × 5.75 = 230 px + chrome → 2 units
+    setColumnWrap(gd, tableId, cols[0]!, true);
+    setRowHeight(gd, tableId, rows[0]!, 5); // set by hand: fit brings it back to what it needs
+    const measure: FitMeasure = {
+      measure: (text, font) => text.length * (TYPE_SIZE_PX[font.size] / 2),
+    };
+    mount({ fit: () => ({ locale: 'en-US', measure }) });
+    await userEvent.click(cellAt(0, 0));
+    // Enter on the row divider: 230 px wraps into two lines in one unit of width (143 px of
+    // text room): 2 × 15.5 + 2 px → 2 units, and the row follows its content again.
+    const rowDivider = screen.getByRole('separator', { name: 'Resize row 5' });
+    expect(rowDivider).toHaveAttribute('aria-valuenow', '5');
+    expect(rowDivider.title).toMatch(/double-click or Enter fits to content/);
+    fireEvent.keyDown(rowDivider, { code: 'Enter', key: 'Enter' });
+    expect(rowMeta(tableMap(gd, tableId)!, rows[0]!)).toMatchObject({ height: 2, fit: true });
+    expect(live()).toHaveTextContent('Row 5 fits its content: 2 units tall');
+    // Double-click on the column divider: the widest line + chrome → 2 units; the row that
+    // now follows its content drops to one line in the same step (auto-height, R-B).
+    const colDivider = screen.getByRole('separator', { name: 'Resize column Column 1' });
+    fireEvent.doubleClick(colDivider);
+    expect(tableById(gd, tableId)?.columns[0]?.width).toBe(2);
+    expect(live()).toHaveTextContent('Fitted 1 column to content');
+    expect(rowMeta(tableMap(gd, tableId)!, rows[0]!)).toMatchObject({ height: 1, fit: true });
+  });
+
+  it('INSP-04 a divider without a measurer carries the reason and neither double-click nor Enter writes', async () => {
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    const divider = screen.getByRole('separator', { name: 'Resize column Column 1' });
+    expect(divider.title).toMatch(/text cannot be measured in this browser/);
+    fireEvent.doubleClick(divider);
+    fireEvent.keyDown(divider, { code: 'Enter', key: 'Enter' });
+    expect(tableById(gd, tableId)?.columns[0]?.width).toBe(1);
   });
 });
 
 describe('wrap, freeze, header and footer (GRID-09..11)', () => {
-  it('GRID-09 a wrapped column makes every row two lattice units and the addresses stay exact', () => {
+  it('GRID-09 wrap is paint at cell, row, column and table scope; heights are separate data, so a tall row shows its unwrapped cells on one line (ADR-049)', () => {
     mount();
     act(() => {
       gridRef.current?.commands.setColumnWrap(tableId, cols[1]!, true);
     });
+    // Without a measurer nothing writes a height: the rows stay one unit, addresses too.
     const dataRows = within(grid()).getAllByRole('row').slice(1);
     expect(dataRows.map((r) => r.style.height)).toEqual(
-      Array<string>(3).fill(`${String(LATTICE.row * 2)}px`),
+      Array<string>(3).fill(`${String(LATTICE.row)}px`),
     );
     expect(cellAt(0, 1)).toHaveClass('gd-cell--wrap');
-    expect(cellAt(0, 0)).toHaveAttribute('data-address', 'B5');
-    expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B7');
-    expect(cellAt(2, 0)).toHaveAttribute('data-address', 'B9');
+    expect(cellAt(0, 0)).not.toHaveClass('gd-cell--wrap');
+    expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B6');
+    // A row's wrap beats the column's; a cell's beats the row's; the table's is the default.
     act(() => {
-      gridRef.current?.commands.setColumnWrap(tableId, cols[1]!, false);
-      gridRef.current?.commands.setRowWrap(tableId, rows[0]!, true);
+      gridRef.current?.commands.setRowWrap(tableId, rows[0]!, false);
+      gridRef.current?.commands.setTableWrap(tableId, true);
+    });
+    expect(cellAt(0, 1)).not.toHaveClass('gd-cell--wrap');
+    expect(cellAt(1, 0)).toHaveClass('gd-cell--wrap'); // the table's default
+    act(() => {
+      gridRef.current?.commands.setCellAppearance(
+        { tableId, rowId: rows[0]!, colId: cols[2]! },
+        { wrap: true },
+      );
+    });
+    expect(cellAt(0, 2)).toHaveClass('gd-cell--wrap');
+    expect(live()).toHaveTextContent('Wrapped for D5');
+    // A hand-set height of three units: every cell of the row is tall; only wrapping ones wrap.
+    act(() => {
+      gridRef.current?.commands.setRowHeights(tableId, [{ rowId: rows[0]!, units: 3 }]);
     });
     expect(within(grid()).getAllByRole('row')[1]!.style.height).toBe(
-      `${String(LATTICE.row * 2)}px`,
+      `${String(LATTICE.row * 3)}px`,
     );
-    expect(within(grid()).getAllByRole('row')[2]!.style.height).toBe(`${String(LATTICE.row)}px`);
-    expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B7');
-    expect(cellAt(2, 0)).toHaveAttribute('data-address', 'B8');
-    // A row wrapped on its own wraps every cell in it, and only that row.
-    expect(cellAt(0, 0)).toHaveClass('gd-cell--wrap');
-    expect(cellAt(0, 2)).toHaveClass('gd-cell--wrap');
-    expect(cellAt(1, 0)).not.toHaveClass('gd-cell--wrap');
+    expect(cellAt(0, 0)).toHaveClass('gd-cell--tall');
+    expect(cellAt(0, 0)).not.toHaveClass('gd-cell--wrap');
+    expect(cellAt(0, 2)).toHaveClass('gd-cell--tall', 'gd-cell--wrap');
+    expect(cellAt(1, 0)).toHaveAttribute('data-address', 'B8');
+    expect(cellAt(1, 0)).not.toHaveClass('gd-cell--tall');
+  });
+
+  it('GRID-09 INSP-06 text is cut at the last whole line that fits the row: `--gd-lines` follows the row height and the type size, wrapped or not (#167 criterion 11)', () => {
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'one\ntwo\nthree\nfour');
+    mount();
+    // One unit, cell size: 21 px holds one 15.5 px line.
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-lines')).toBe('1');
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-line-px')).toBe('15.525px');
+    act(() => {
+      setRowHeight(gd, tableId, rows[0]!, 3); // 65 px → four lines would be 62.1; padding-free
+    });
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-lines')).toBe('4');
+    act(() => {
+      setRowWrap(gd, tableId, rows[0]!, true); // 2 px of padding: 63 px → still 4 lines
+    });
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-lines')).toBe('4');
+    act(() => {
+      setRowHeight(gd, tableId, rows[0]!, 2); // 43 − 2 = 41 px → 2 lines of 15.5
+    });
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-lines')).toBe('2');
+    act(() => {
+      gridRef.current?.commands.setCellAppearance(
+        { tableId, rowId: rows[0]!, colId: cols[0]! },
+        { size: 'h2' }, // 25 px line box: one line in 41 px
+      );
+    });
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-lines')).toBe('1');
+    expect(cellAt(0, 0).style.getPropertyValue('--gd-line-px')).toBe('25px');
+    // The full text stays on the cell's tooltip (Numbers N9: clipped, never spilled).
+    expect(cellAt(0, 0).title).toBe('one\ntwo\nthree\nfour');
   });
 
   it('GRID-10 frozen columns are shaded with a heavier rule at the boundary, and the pinned panel carries them', () => {
@@ -1378,9 +1623,9 @@ describe('appearance on the grid (INSP-04..06, MENU-04)', () => {
     expect(cell).toHaveAttribute('data-address', 'B7');
     expect(cell.closest('[role="row"]')).toHaveStyle({ height: '22px' });
     act(() => {
-      setRowWrapped(gd, tableId, rows[2]!, true);
+      setRowHeight(gd, tableId, rows[2]!, 2);
     });
-    expect(cellAt(2, 0)).toHaveClass('gd-cell--wrap');
+    expect(cellAt(2, 0)).toHaveClass('gd-cell--tall');
     expect(cellAt(2, 0).closest('[role="row"]')).toHaveStyle({ height: '44px' });
     expect(cellAt(2, 0).querySelector('.gd-formula__expr')).toHaveTextContent('=Sum(B5:B6)');
   });

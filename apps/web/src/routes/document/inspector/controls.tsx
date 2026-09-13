@@ -5,7 +5,7 @@
  * never styled as operable (INSP-11).
  */
 import { Button, Icon, Tooltip, type ButtonProps } from '@gede/ui';
-import { useId, type ReactNode } from 'react';
+import { useId, useState, type ReactNode } from 'react';
 
 export function Section({
   label,
@@ -226,5 +226,134 @@ export function Slot({ name, reason }: { name: string; reason: string }) {
     <p className="gd-insp__slot" data-slot={name}>
       <Icon name="draft" size={13} /> {reason}
     </p>
+  );
+}
+
+export interface SizeFieldProps {
+  /** "Height" / "Width". */
+  label: string;
+  /** The size in lattice units, or null when the selection has none (mixed sizes read the first). */
+  value: number | null;
+  /** Pixels per unit at 100 % (22 for a row, 160 for a column), for `aria-valuetext`. */
+  unitPx: number;
+  /** What the value describes: "row 5", "3 rows", "column B". */
+  subject: string;
+  onChange: (units: number) => void;
+  /** Fit to content beside the field; `fitReason` says why it cannot run. */
+  onFit?: (() => void) | undefined;
+  fitReason?: string | undefined;
+  /** MENU-02 / INSP-11: disabled with the reason, never hidden. */
+  disabledReason?: string | undefined;
+}
+
+/**
+ * The Table tab's Height and Width (INSP-04, #167 criteria 8–9, Numbers N4):
+ * a spinbutton in whole lattice units for the selected rows or columns. ↑ ↓
+ * step one unit, Shift four; a typed value snaps to a whole unit ≥ 1 on
+ * Enter or blur; the value is read back in units and pixels at 100 %. Every
+ * change is one command and one undo step, live on the canvas (INSP-12).
+ */
+export function SizeField({
+  label,
+  value,
+  unitPx,
+  subject,
+  onChange,
+  onFit,
+  fitReason,
+  disabledReason,
+}: SizeFieldProps) {
+  const id = useId();
+  const [draft, setDraft] = useState<string | null>(null);
+  const shown = draft ?? (value === null ? '' : String(value));
+  const reason = disabledReason ?? (value === null ? `select a ${subject} first` : undefined);
+  const commit = (raw: string) => {
+    setDraft(null);
+    const n = Number.parseFloat(raw.trim());
+    if (!Number.isFinite(n)) return;
+    const snapped = Math.max(1, Math.round(n));
+    if (snapped !== value) onChange(snapped);
+  };
+  const step = (delta: number) => {
+    if (value === null) return;
+    onChange(Math.max(1, value + delta));
+  };
+  return (
+    <div className="gd-insp__size" role="group" aria-label={label}>
+      <label className="gd-insp__stepper-label" htmlFor={id}>
+        {label}
+      </label>
+      <input
+        id={id}
+        className="gd-mono gd-insp__size-input"
+        type="text"
+        inputMode="numeric"
+        role="spinbutton"
+        aria-valuenow={value ?? undefined}
+        aria-valuemin={1}
+        aria-valuetext={
+          value === null
+            ? undefined
+            : `${String(value)} ${value === 1 ? 'unit' : 'units'}, ${String(value * unitPx)} px, ${subject}`
+        }
+        aria-disabled={reason !== undefined || undefined}
+        aria-describedby={reason === undefined ? undefined : `${id}-reason`}
+        title={
+          reason === undefined ? `${label} of ${subject} in lattice units` : `${label} — ${reason}`
+        }
+        readOnly={reason !== undefined}
+        value={shown}
+        onChange={(e) => {
+          setDraft(e.target.value);
+        }}
+        onBlur={(e) => {
+          if (draft !== null) commit(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.nativeEvent.isComposing || reason !== undefined) return;
+          switch (e.code) {
+            case 'ArrowUp':
+              e.preventDefault();
+              step(e.shiftKey ? 4 : 1);
+              break;
+            case 'ArrowDown':
+              e.preventDefault();
+              step(e.shiftKey ? -4 : -1);
+              break;
+            case 'Enter':
+            case 'NumpadEnter':
+              e.preventDefault();
+              commit(e.currentTarget.value);
+              break;
+            case 'Escape':
+              if (draft !== null) {
+                e.stopPropagation();
+                setDraft(null);
+              }
+              break;
+            default:
+              break;
+          }
+        }}
+      />
+      <span className="gd-insp__stepper-unit" aria-hidden="true">
+        units
+      </span>
+      <ReasonedButton
+        size="sm"
+        variant="ghost"
+        aria-label={`Fit ${label.toLowerCase()} to content`}
+        label={`Fit ${label.toLowerCase()} to content`}
+        reason={disabledReason ?? fitReason ?? (value === null ? reason : undefined)}
+        onClick={onFit}
+      >
+        Fit
+      </ReasonedButton>
+      {reason !== undefined && (
+        <span id={`${id}-reason`} className="gd-visually-hidden" aria-hidden="true">
+          {reason}
+        </span>
+      )}
+    </div>
   );
 }

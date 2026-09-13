@@ -18,6 +18,7 @@ import {
   setCellText,
   setColumnAppearance,
   setColumnWidth,
+  setColumnWrap,
   spanIndex,
   tableById,
   tableMap,
@@ -28,13 +29,7 @@ import {
 
 import { nextCell, type TraversalTable } from '../../../doc/selection.js';
 import { layoutCell } from '../cell/layout.js';
-import {
-  fitColumnsToContent,
-  fitRowsToContent,
-  MAX_FIT_UNITS,
-  widestLine,
-  type FitMeasure,
-} from './fit.js';
+import { fitColumnsToContent, fitRowsToContent, widestLine, type FitMeasure } from './fit.js';
 import { createRuleEvaluator } from './rules-client.js';
 
 function fixture(): { gd: GedeDoc; tableId: Id; rows: readonly Id[]; cols: readonly Id[] } {
@@ -60,7 +55,7 @@ describe('INSP-04 fit to content', () => {
     const { gd, tableId, rows, cols } = fixture();
     const table = tableMap(gd, tableId)!;
     setCellText(gd, tableId, rows[0]!, cols[0]!, 'x'.repeat(40)); // 280 px + chrome → 2 units
-    setCellText(gd, tableId, rows[1]!, cols[1]!, 'x'.repeat(400)); // far past the cap
+    setCellText(gd, tableId, rows[1]!, cols[1]!, 'x'.repeat(400)); // 2800 px + chrome → 18 units, no cap (#167 criterion 6)
     setColumnAppearance(gd, tableId, cols[2]!, { size: 'h2' });
     setCellText(gd, tableId, rows[2]!, cols[2]!, 'x'.repeat(12)); // 168 px at h2 → 2 units
     const widths = fitColumnsToContent(table, tableById(gd, tableId)!, {
@@ -69,7 +64,7 @@ describe('INSP-04 fit to content', () => {
     });
     expect(widths).toEqual([
       { colId: cols[0], units: 2 },
-      { colId: cols[1], units: MAX_FIT_UNITS },
+      { colId: cols[1], units: 18 },
       { colId: cols[2], units: 2 },
     ]);
     // Every width is a whole number of lattice columns.
@@ -116,21 +111,28 @@ describe('INSP-04 fit to content', () => {
     ).toEqual([{ colId: cols[1], units: 2 }]);
   });
 
-  it('INSP-04 GRID-09 rows wrap when any cell runs past its column; the rest read compact; a wrapped column is not counted twice', () => {
+  it("INSP-04 GRID-09 a row needs the units its wrapped cells' lines take at the column width; an unwrapped cell needs one line; the rest read one unit (ADR-049)", () => {
     const { gd, tableId, rows, cols } = fixture();
     const table = tableMap(gd, tableId)!;
-    setCellText(gd, tableId, rows[0]!, cols[0]!, 'x'.repeat(30)); // 210 px > 160 → wraps
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'x'.repeat(30)); // 210 px > 143 → 2 lines
     setCellText(gd, tableId, rows[1]!, cols[0]!, 'short');
     setColumnWidth(gd, tableId, cols[1]!, 2);
-    setCellText(gd, tableId, rows[2]!, cols[1]!, 'x'.repeat(30)); // 210 px < 320 → fits
+    setCellText(gd, tableId, rows[2]!, cols[1]!, 'x'.repeat(30)); // 210 px < 303 → 1 line
+    const unwrapped = fitRowsToContent(table, tableById(gd, tableId)!, {
+      locale: 'en-US',
+      measure: perChar,
+    });
+    expect(unwrapped.map((n) => n.units)).toEqual([1, 1, 1]);
+    setColumnWrap(gd, tableId, cols[0]!, true);
+    setColumnWrap(gd, tableId, cols[1]!, true);
     const fit = fitRowsToContent(table, tableById(gd, tableId)!, {
       locale: 'en-US',
       measure: perChar,
     });
     expect(fit).toEqual([
-      { rowId: rows[0], wrapped: true },
-      { rowId: rows[1], wrapped: false },
-      { rowId: rows[2], wrapped: false },
+      { rowId: rows[0], units: 2 },
+      { rowId: rows[1], units: 1 },
+      { rowId: rows[2], units: 1 },
     ]);
     expect(LATTICE.col).toBe(160);
   });

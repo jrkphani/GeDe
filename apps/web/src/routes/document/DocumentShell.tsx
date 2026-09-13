@@ -124,7 +124,7 @@ import {
   sheetName,
 } from './sheets.js';
 import { TableView } from './TableView.js';
-import { DagEdges, useTableFlags } from './style/index.js'; // wave4/inspector-controls
+import { DagEdges, useFitter, useTableFlags } from './style/index.js'; // wave4/inspector-controls
 import { SAMPLE_RENAME_REASON, TitleBar } from './TitleBar.js';
 import { ShareControls } from './share/ShareControls.js';
 import { Toolbar, type InspectorMode } from './Toolbar.js';
@@ -291,8 +291,10 @@ function OpenDocument({
     : chosenSheetId === null
       ? (sheets[0]?.id ?? null)
       : (neighbourSheet(lastSheets.current, sheets, chosenSheetId)?.id ?? null);
+  // ADR-049: this replica measures wrapped rows and stores their heights (R-B).
+  const fitter = useFitter(gd.doc);
   // Selection, editing and traversal (GRID-03..06) live in the grid state machine.
-  const grid = useGrid(gd, editable, { undo: session.undo });
+  const grid = useGrid(gd, editable, { undo: session.undo, fit: fitter.fit });
   // SORT-01..06 (ADR-026): the viewer's own sort, filter and grouping per table, from the
   // store the shell mounted above; never document state.
   const sort = useSortCommands(gd, useViewStore());
@@ -1230,6 +1232,8 @@ function OpenDocument({
                             tier={tier}
                             selected={selection?.tableId === t.id}
                             selectedCell={cell !== null && cell.tableId === t.id ? cell : null}
+                            axisBand={selection?.tableId === t.id ? (selection.band ?? null) : null}
+                            fitter={fitter}
                             editing={
                               editing !== null && editing.cell.tableId === t.id ? editing : null
                             }
@@ -1277,6 +1281,8 @@ function OpenDocument({
                     tier={tier}
                     selected={selection?.tableId === t.id}
                     selectedCell={cell !== null && cell.tableId === t.id ? cell : null}
+                    axisBand={selection?.tableId === t.id ? (selection.band ?? null) : null}
+                    fitter={fitter}
                     editing={editing !== null && editing.cell.tableId === t.id ? editing : null}
                     editable={editable}
                     presence={onSheet}

@@ -33,9 +33,13 @@ export {
   canvasMeasure,
   fitColumnsToContent,
   fitRowsToContent,
-  MAX_FIT_UNITS,
+  memoised,
+  rowsToMeasure,
   widestLine,
+  wrappedLines,
   type FitMeasure,
   type FitOptions,
   type MeasureFont,
+  type RowNeed,
 } from './fit.js';
+export { NO_MEASURE_REASON, useFitter, type Fitter } from './use-fit.js';

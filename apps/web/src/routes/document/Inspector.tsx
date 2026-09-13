@@ -222,6 +222,7 @@ export function Inspector({
         <TextTab
           table={t}
           cell={cell}
+          band={selection?.band ?? null}
           editing={editing}
           editable={editable}
           commands={commands}

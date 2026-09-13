@@ -325,7 +325,7 @@ test.describe('inspector rail', () => {
   });
 
   for (const width of [1024, 1440] as const) {
-    test(`INSP-01 INSP-03 INSP-04 INSP-11 INSP-12 GRID-09 at ${String(width)} the final-audit fixes: Organize tabs each show their own section, the filter applies live, the head states the grouping, Wrap every row unwraps, disabled controls look disabled with a reachable reason — axe light and dark (#138, #128, #126)`, async ({
+    test(`INSP-01 INSP-03 INSP-04 INSP-11 INSP-12 GRID-09 at ${String(width)} the final-audit fixes: Organize tabs each show their own section, the filter applies live, the head states the grouping, the table's wrap switch clears again, disabled controls look disabled with a reachable reason — axe light and dark (#138, #128, #126)`, async ({
       page,
       checkA11y,
       snapshot,
@@ -336,16 +336,18 @@ test.describe('inspector rail', () => {
       if ((await rail.getAttribute('data-state')) === 'collapsed') {
         await rail.getByRole('button', { name: 'Expand inspector' }).click();
       }
-      // INSP-04 / GRID-09 (#128): the switch reads the state it set and unwraps again.
-      const wrap = rail.getByRole('switch', { name: 'Wrap every row' });
+      // INSP-04 / GRID-09 (#128, ADR-049): the table's wrap switch reads the state it set and
+      // clears it again; wrap is paint, so an empty table's rows stay one unit either way.
+      const wrap = rail.getByRole('switch', { name: 'Wrap text in cells' });
       const grid = page.getByRole('grid').first();
       await expect(wrap).toHaveAttribute('aria-checked', 'false');
       await wrap.click();
       await expect(wrap).toHaveAttribute('aria-checked', 'true');
-      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '44px');
+      await expect(grid.getByRole('gridcell').first()).toHaveClass(/gd-cell--wrap/);
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px');
       await wrap.click();
       await expect(wrap).toHaveAttribute('aria-checked', 'false');
-      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px');
+      await expect(grid.getByRole('gridcell').first()).not.toHaveClass(/gd-cell--wrap/);
       // The rail's hidden reason sentences scroll with the rail: the page itself never grows.
       expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBe(900);
       // INSP-11 (#126): aria-disabled controls look disabled and describe their reason.
@@ -480,8 +482,9 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
         'Namche Bazaar acclimatisation day',
       );
       await expect(table).toHaveCSS('width', '480px');
-      await rail.getByRole('button', { name: 'Fit columns to content' }).click();
-      await expect(page.getByTestId('live-region')).toContainText('Fitted 3 columns to content');
+      // B5 is the armed cell, so Width's Fit acts on its column (ADR-049, Numbers N4).
+      await rail.getByRole('button', { name: 'Fit width to content' }).click();
+      await expect(page.getByTestId('live-region')).toContainText('Fitted 1 column to content');
       await expect(table).toHaveCSS('width', '640px');
       await expect(firstCell(page)).toHaveCSS('width', '320px');
       await expect(page.getByRole('grid').first().getByRole('gridcell').nth(1)).toHaveAttribute(
@@ -564,7 +567,7 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
     });
   }
 
-  test('INSP-06 I18N-03 every type size fits its row without clipping descenders or matras, in en and ta: the sizes past the compact row wrap it', async ({
+  test('INSP-06 I18N-03 GRID-09 every type size fits its row without clipping descenders or matras, in en and ta: the sizes past the compact row grow it to whole units, h1 and display on Tamil to three and four (ADR-049)', async ({
     page,
   }) => {
     const room = await openDoc(page, 1440);
@@ -591,39 +594,44 @@ test.describe('appearance controls (INSP-04..07, MENU-04)', () => {
         return { ok: inside, why: `${String(line.height)} in ${String(box.height)}` };
       });
     };
-    // Column scope covers the Tamil cell too, so the DS's 1.7 Indic floor decides: h1 and display
-    // cannot fit even the wrapped row and read disabled with the reason; the rest fit in both
-    // scripts. `cell` is the default (a re-selection fires nothing), so it is chosen last.
+    // Column scope covers the Tamil cell too: every size is offered (ADR-049 amends ADR-034's
+    // refusal) and each row grows to the whole units its line box needs — the Tamil row at the
+    // DS's 1.7 floor. `cell` is the default (a re-selection fires nothing), so it is chosen last.
     await rail.getByRole('combobox', { name: 'Size' }).click();
-    await expect(page.getByRole('option', { name: /· h1$/ })).toHaveAttribute('data-disabled', '');
-    await expect(page.getByRole('option', { name: /· display$/ })).toHaveAttribute(
+    await expect(page.getByRole('option', { name: /· h1$/ })).not.toHaveAttribute('data-disabled');
+    await expect(page.getByRole('option', { name: /· display$/ })).not.toHaveAttribute(
       'data-disabled',
-      '',
     );
     await page.keyboard.press('Escape');
-    await expect(rail.getByRole('region', { name: 'font' })).toContainText(
-      '28 px and 40 px — need more than a wrapped row for Tamil, Hindi or Telugu text',
-    );
-    for (const size of ['body-sm', 'body', 'h3', 'h2', 'cell']) {
+    const rowUnits = (index: number) =>
+      grid
+        .getByRole('row')
+        .nth(index + 1)
+        .getAttribute('data-units');
+    const expected: Record<string, [string, string]> = {
+      'body-sm': ['1', '2'],
+      body: ['1', '2'],
+      h3: ['1', '2'],
+      h2: ['2', '2'],
+      h1: ['2', '3'],
+      display: ['2', '4'],
+      cell: ['1', '1'],
+    };
+    for (const size of ['body-sm', 'body', 'h3', 'h2', 'h1', 'display', 'cell']) {
       await rail.getByRole('combobox', { name: 'Size' }).click();
       await page.getByRole('option', { name: new RegExp(`· ${size}$`) }).click();
       await expect(firstCell(page)).toHaveAttribute('data-size', size);
-      const en = await fits(0);
-      const ta = await fits(3);
-      expect(en.ok, `${size} en ${en.why}`).toBe(true);
-      expect(ta.ok, `${size} ta ${ta.why}`).toBe(true);
+      const [en, ta] = expected[size]!;
+      await expect.poll(() => rowUnits(0), { message: `${size} en units` }).toBe(en);
+      await expect.poll(() => rowUnits(1), { message: `${size} ta units` }).toBe(ta);
+      const fitEn = await fits(0);
+      const fitTa = await fits(3);
+      expect(fitEn.ok, `${size} en ${fitEn.why}`).toBe(true);
+      expect(fitTa.ok, `${size} ta ${fitTa.why}`).toBe(true);
     }
-    // body and up took the wrapped row: 44 px, not 22 (the column stays wrapped afterwards).
-    await expect(firstCell(page)).toHaveCSS('height', '44px');
-    // At cell scope on the Latin cell every size is offered; h1 and display fit its wrapped row.
-    await rail.getByRole('radio', { name: 'Cell B5' }).click();
-    for (const size of ['h1', 'display']) {
-      await rail.getByRole('combobox', { name: 'Size' }).click();
-      await page.getByRole('option', { name: new RegExp(`· ${size}$`) }).click();
-      await expect(firstCell(page)).toHaveAttribute('data-size', size);
-      const en = await fits(0);
-      expect(en.ok, `${size} en ${en.why}`).toBe(true);
-    }
+    // Back at the cell size every row is one unit again: the size never wrote a wrap.
+    await expect(firstCell(page)).toHaveCSS('height', '22px');
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBeNull();
   });
 
   test('INSP-07 the edge layer paints under the tables and takes no pointer events', async ({

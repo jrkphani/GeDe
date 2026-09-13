@@ -3,12 +3,16 @@
    1.35 line-height; this owns marks, alignment, the invalid state and the
    Indic line-height rule. */
 
+/* GRID-09 / ADR-049 (Numbers N9): one line per paragraph, clipped hard at the cell's content
+   box — no ellipsis, no spill — cut at the last whole line that fits (`--gd-lines`, set by the
+   cell from the row's height and the type size's line box). */
 .gd-rich {
   display: block;
-  flex: 1 1 auto;
+  flex: 0 1 auto;
   min-width: 0;
+  max-height: calc(var(--gd-lines, 1) * var(--gd-line-px, 1.35em));
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
   white-space: nowrap;
 }
 .gd-rich--right {
@@ -18,15 +22,11 @@
 .gd-rich__p {
   display: block;
   overflow: hidden;
-  text-overflow: ellipsis;
+  text-overflow: clip;
 }
 
-/* GRID-09: a wrapped cell shows two lines, clipped, like the plain text did. */
+/* GRID-09: a wrapped cell lays its text on as many lines as the row holds. */
 .gd-cell--wrap .gd-rich {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
   white-space: normal;
   overflow-wrap: anywhere;
 }

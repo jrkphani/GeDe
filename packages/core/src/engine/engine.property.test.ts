@@ -10,7 +10,7 @@ import {
   createTable,
   openDocument,
   setCellText,
-  setRowWrapped,
+  setRowHeight,
   setTablePosition,
   tableById,
   tableMap,
@@ -152,7 +152,7 @@ describe('FormulaEngine properties', () => {
     );
   });
 
-  test('FX-06 structural edits — rows inserted anywhere, the table moved, rows wrapped — never change what a formula reads (PRD §20 id-bound references)', () => {
+  test('FX-06 structural edits — rows inserted anywhere, the table moved, rows resized — never change what a formula reads (PRD §20 id-bound references)', () => {
     fc.assert(
       fc.property(
         fc.integer({ min: 4, max: 12 }),
@@ -188,7 +188,7 @@ describe('FormulaEngine properties', () => {
             } else if (edit.op === 'move') {
               setTablePosition(h.gd, h.tableId, { col: edit.col, row: edit.row });
             } else {
-              setRowWrapped(h.gd, h.tableId, h.rowId(edit.row % count), true);
+              setRowHeight(h.gd, h.tableId, h.rowId(edit.row % count), 1 + (edit.row % 3));
             }
           }
           // The stored source is untouched, the binding holds, and nothing was re-evaluated.

@@ -4,11 +4,15 @@
  * inspector and menus share one definition.
  */
 export {
+  bandFor,
+  bandRange,
   IDLE,
   nextCell,
   reduce,
   sameCell,
+  selectedBand,
   selectedCell,
+  type AxisBand,
   type CellSelection,
   type Direction,
   type EditSeed,

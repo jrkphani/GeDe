@@ -17,9 +17,25 @@ export interface CellSelection {
   readonly colId: Id;
 }
 
+/**
+ * A band of whole rows or whole columns (ADR-049, Numbers' row and column
+ * selection): what a press on a row handle or a column header selects, and
+ * what a divider drag, the Table tab's Height / Width fields and Distribute
+ * evenly act on together. `ids` are in table order; `anchor` is where the
+ * band began, so Shift extends from it.
+ */
+export interface AxisBand {
+  readonly axis: 'row' | 'column';
+  readonly ids: readonly Id[];
+  readonly anchor: Id;
+}
+
 export interface Selection {
   readonly tableId: Id;
+  /** The armed cell; with a band, its first cell (the band's anchor row or column). */
   readonly cell: Omit<CellSelection, 'tableId'> | null;
+  /** The selected rows or columns, or null for a plain cell or table selection. */
+  readonly band?: AxisBand | null;
 }
 
 /**
@@ -67,6 +83,18 @@ export type MoveResult =
 export type GridEvent =
   | { readonly type: 'select'; readonly cell: CellSelection }
   | { readonly type: 'selectTable'; readonly tableId: Id }
+  /**
+   * ADR-049: select whole rows or columns. `extend` grows the current band of
+   * the same axis (or starts one at the armed cell) to reach `id`, as a
+   * Shift-press or a Shift-arrow does; otherwise the band is `id` alone.
+   */
+  | {
+      readonly type: 'selectBand';
+      readonly tableId: Id;
+      readonly axis: 'row' | 'column';
+      readonly id: Id;
+      readonly extend?: boolean | undefined;
+    }
   | { readonly type: 'clear' }
   /** Open the editor on the selected cell (or `cell` when given). */
   | { readonly type: 'edit'; readonly seed: EditSeed; readonly cell?: CellSelection | undefined }
@@ -98,6 +126,36 @@ export function selectedCell(selection: Selection | null): CellSelection | null 
   const cell = selection?.cell;
   if (selection === null || cell === null || cell === undefined) return null;
   return { tableId: selection.tableId, ...cell };
+}
+
+/** The band in the selection, if it is on `tableId` and of `axis`. */
+export function selectedBand(
+  selection: Selection | null,
+  tableId: Id,
+  axis: 'row' | 'column',
+): AxisBand | null {
+  const band = selection?.band;
+  if (selection === null || band === null || band === undefined) return null;
+  return selection.tableId === tableId && band.axis === axis ? band : null;
+}
+
+/**
+ * The ids a divider on `id` acts on (ADR-049, Numbers N2): every member of a
+ * band that contains it, else itself alone.
+ */
+export function bandFor(band: AxisBand | null, id: Id): readonly Id[] {
+  return band?.ids.includes(id) === true ? band.ids : [id];
+}
+
+/**
+ * The contiguous run of `order` from `anchor` to `id`, in table order
+ * (hidden columns already left out of `order` by the caller).
+ */
+export function bandRange(order: readonly Id[], anchor: Id, id: Id): Id[] {
+  const a = order.indexOf(anchor);
+  const b = order.indexOf(id);
+  if (a < 0 || b < 0) return b < 0 ? (a < 0 ? [] : [anchor]) : [id];
+  return order.slice(Math.min(a, b), Math.max(a, b) + 1);
 }
 
 /**
@@ -189,6 +247,34 @@ export function reduce(
     }
     case 'selectTable':
       return pure({ selection: { tableId: event.tableId, cell: null }, editing: null });
+    case 'selectBand': {
+      const table = lookup(event.tableId);
+      if (table === null) return pure(state);
+      const visible = table.columns.filter((c) => !c.hidden).map((c) => c.id);
+      const order = event.axis === 'row' ? table.rows : visible;
+      if (!order.includes(event.id)) return pure(state);
+      const previous = state.selection?.tableId === event.tableId ? state.selection : null;
+      const prior = previous?.band ?? null;
+      // Extending: from the band's anchor, else from the armed cell's row or column.
+      const armed = previous?.cell ?? null;
+      const anchor =
+        event.extend === true
+          ? prior !== null && prior.axis === event.axis
+            ? prior.anchor
+            : ((event.axis === 'row' ? armed?.rowId : armed?.colId) ?? event.id)
+          : event.id;
+      const ids = bandRange(order, anchor, event.id);
+      // The armed cell: the anchor's cell in the armed column (or row), else the first.
+      const cell =
+        event.axis === 'row'
+          ? { rowId: anchor, colId: armed?.colId ?? visible[0] ?? '' }
+          : { rowId: armed?.rowId ?? table.rows[0] ?? '', colId: anchor };
+      if (cell.rowId === '' || cell.colId === '') return pure(state);
+      return pure({
+        selection: { tableId: event.tableId, cell, band: { axis: event.axis, ids, anchor } },
+        editing: null,
+      });
+    }
     case 'clear':
       return pure(IDLE);
     case 'edit': {

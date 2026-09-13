@@ -1,30 +1,28 @@
-import { useMemo } from 'react';
 import { SegmentedControl, Select, Switch, TextField } from '@gede/ui';
 import {
+  cellAddress,
   GRIDLINE_DENSITIES,
   GRIDLINE_LABELS,
+  LATTICE,
   OUTLINE_WEIGHTS,
-  rowHeights,
+  rowMeta,
   setTableLook,
   TABLE_STYLE_LABELS,
   TABLE_STYLES,
   tableRecord,
-  WRAPPED_ROW_HEIGHT,
   type GedeDoc,
+  type Id,
   type OutlineWeight,
   type TableMap,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
-import { peekEngine } from '../../../doc/engine.js';
-import { useLocale } from '../../../locale.js';
-import { toFormatLocale } from '../cell/index.js';
 import { frozenOptions } from '../grid/TableMenu.js';
 import type { GridCommands } from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
-import type { Selection } from '../selection.js';
-import { canvasMeasure, fitColumnsToContent, fitRowsToContent } from '../style/index.js';
-import { ReasonedButton, Section, Stepper } from './controls.js';
+import { selectedBand, type Selection } from '../selection.js';
+import { fitColumnsToContent, fitRowsToContent, useFitter } from '../style/index.js';
+import { ReasonedButton, Section, SizeField, Stepper } from './controls.js';
 
 export interface TableTabProps {
   gd: GedeDoc;
@@ -51,32 +49,50 @@ const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
  */
 export function TableTab({ gd, table, selection, editable, commands }: TableTabProps) {
   const record = tableRecord(table);
-  const [activeLocale] = useLocale();
   const viewOnly = editable ? undefined : 'you have view-only access';
   const rows = record.rows.length;
   const columns = record.columns.length;
   const visibleWidth = record.columns.filter((c) => !c.hidden).reduce((a, c) => a + c.width, 0);
-  // GRID-09 / #128: the switch reads what the rows are — every drawn row at two units, whether
-  // from its own height or from a wrapping column — so its state answers the click that set it.
-  const drawn = rowHeights(table, record).filter((h) => h > 0);
-  const wrapped = drawn.length > 0 && drawn.every((h) => h === WRAPPED_ROW_HEIGHT);
   const lastRow = record.rows[rows - 1];
   const lastColumn = record.columns[columns - 1];
   const { look } = record;
   // Fit-to-content measures with canvas `measureText`; where no 2D context exists the
   // buttons say so rather than guessing a width (no invented data).
-  const measure = useMemo(() => (typeof document === 'undefined' ? null : canvasMeasure()), []);
-  const fitReason =
-    viewOnly ?? (measure === null ? 'text cannot be measured in this browser' : undefined);
-  const fitOptions = () => {
-    if (measure === null) return null;
-    const engine = peekEngine(gd.doc);
-    return {
-      locale: toFormatLocale(activeLocale),
-      measure,
-      cellValue: (cellId: string) => engine?.result(cellId)?.value ?? undefined,
-    };
-  };
+  const fitter = useFitter(gd.doc);
+  const fitReason = viewOnly ?? fitter.reason;
+  const fitOptions = fitter.fit;
+  // INSP-04 / #167 criterion 8 (Numbers N4): Height and Width act on the selection — the
+  // selected rows or columns (a band), else the armed cell's row and column, else the whole
+  // table when the table is selected. Mixed sizes read the first member's.
+  const rowBand = selectedBand(selection, record.id, 'row');
+  const columnBand = selectedBand(selection, record.id, 'column');
+  const armed = selection?.tableId === record.id ? (selection.cell ?? null) : null;
+  const visibleIds = record.columns.filter((c) => !c.hidden).map((c) => c.id);
+  const targetRows: readonly Id[] =
+    rowBand?.ids ??
+    (armed !== null ? [armed.rowId] : selection?.tableId === record.id ? record.rows : []);
+  const targetColumns: readonly Id[] =
+    columnBand?.ids ??
+    (armed !== null ? [armed.colId] : selection?.tableId === record.id ? visibleIds : []);
+  const rowUnits = targetRows.length === 0 ? null : rowMeta(table, targetRows[0] ?? '').height;
+  const columnUnits =
+    targetColumns.length === 0
+      ? null
+      : (record.columns.find((c) => c.id === targetColumns[0])?.width ?? null);
+  const rowSubject =
+    targetRows.length === 1
+      ? (() => {
+          const first = visibleIds[0];
+          const address =
+            first === undefined ? null : cellAddress(table, targetRows[0] ?? '', first);
+          const n = address?.replace(/^[A-Z]+/, '');
+          return n === undefined || n === '' ? 'row' : `row ${n}`;
+        })()
+      : `${String(targetRows.length)} rows`;
+  const columnSubject =
+    targetColumns.length === 1
+      ? `column ${record.columns.find((c) => c.id === targetColumns[0])?.label ?? ''}`
+      : `${String(targetColumns.length)} columns`;
 
   return (
     <>
@@ -255,11 +271,55 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
       </Section>
       <Section
         label="row and column size"
-        hint="Sizes are whole lattice units; addresses never move."
+        hint="Whole lattice units (22 px rows, 160 px columns at 100 %); addresses never move. Height and Width act on the selected rows and columns, or the whole table."
       >
         <div className="gd-insp__stack">
-          <Stepper
+          <SizeField
+            label="Height"
+            value={rowUnits}
+            unitPx={LATTICE.row}
+            subject={rowSubject}
+            disabledReason={viewOnly}
+            fitReason={fitReason}
+            onChange={(units) => {
+              commands.setRowHeights(
+                record.id,
+                targetRows.map((rowId) => ({ rowId, units })),
+              );
+            }}
+            onFit={() => {
+              const options = fitOptions();
+              if (options !== null)
+                commands.fitRows(
+                  record.id,
+                  fitRowsToContent(table, record, { ...options, only: targetRows }),
+                );
+            }}
+          />
+          <SizeField
             label="Width"
+            value={columnUnits}
+            unitPx={LATTICE.col}
+            subject={columnSubject}
+            disabledReason={viewOnly}
+            fitReason={fitReason}
+            onChange={(units) => {
+              commands.setColumnWidths(
+                record.id,
+                targetColumns.map((colId) => ({ colId, units })),
+              );
+            }}
+            onFit={() => {
+              const options = fitOptions();
+              if (options !== null)
+                commands.fitColumns(
+                  record.id,
+                  fitColumnsToContent(table, record, { ...options, only: targetColumns }),
+                );
+            }}
+          />
+          <Stepper
+            label="Table width"
             unit="units"
             value={visibleWidth}
             min={Math.max(1, record.columns.filter((c) => !c.hidden).length)}
@@ -269,35 +329,37 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
               commands.scaleTable(record.id, { widthUnits: next });
             }}
           />
-          <Switch
-            label="Wrap every row"
-            checked={wrapped}
-            disabled={!editable}
-            onCheckedChange={(on) => {
-              commands.setTableWrapped(record.id, on);
-            }}
-          />
           <div className="gd-insp__row">
+            {/* Numbers N6 (ADR-049): the selected rows or columns, else every one, share their total. */}
             <ReasonedButton
-              label="Fit rows to content"
-              reason={fitReason}
+              label="Distribute rows evenly"
+              reason={viewOnly}
               onClick={() => {
-                const options = fitOptions();
-                if (options !== null)
-                  commands.fitRows(record.id, fitRowsToContent(table, record, options));
+                commands.distributeEvenly(record.id, 'row', rowBand?.ids);
               }}
             />
             <ReasonedButton
-              label="Fit columns to content"
-              reason={fitReason}
+              label="Distribute columns evenly"
+              reason={viewOnly}
               onClick={() => {
-                const options = fitOptions();
-                if (options !== null)
-                  commands.fitColumns(record.id, fitColumnsToContent(table, record, options));
+                commands.distributeEvenly(record.id, 'column', columnBand?.ids);
               }}
             />
           </div>
         </div>
+      </Section>
+      <Section
+        label="wrap"
+        hint="The table's default: a cell, row or column can say otherwise (Text tab). Off, text clips at the cell; on, the row grows to show every line."
+      >
+        <Switch
+          label="Wrap text in cells"
+          checked={look.wrap}
+          disabled={!editable}
+          onCheckedChange={(on) => {
+            commands.setTableWrap(record.id, on);
+          }}
+        />
       </Section>
       {/* HIER-01: the selected row, its parent and depth, promote / nest, collapse. */}
       <Section label="row">

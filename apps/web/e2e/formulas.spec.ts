@@ -8,7 +8,7 @@
  * the `=` forms menu, `@` autocomplete and click-to-insert are the product.
  */
 import type { Page } from '@playwright/test';
-import { insertRowBefore, openDocument, setRowWrapped, tableRecord } from '@gede/core';
+import { insertRowBefore, openDocument, setRowHeight, tableRecord } from '@gede/core';
 import { expect, test } from './fixtures/test.js';
 import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
@@ -177,12 +177,12 @@ test.describe('formulas', () => {
     await expect(b7).toHaveCSS('height', '22px');
     await expect(formula).toHaveCSS('flex-direction', 'row');
 
-    // A collaborator wraps row 7 (GRID-09: two lattice rows): the expression takes the second line.
+    // A collaborator makes row 7 two lattice rows (GRID-09, ADR-049): the expression takes the second line.
     await expect.poll(() => room.doc.getMap('tables').size).toBe(1);
     const gd = openDocument(room.doc);
     const tableId = Array.from(gd.tables.keys())[0] ?? '';
     const record = tableRecord(gd.tables.get(tableId)!);
-    setRowWrapped(gd, record.id, record.rows[2] ?? '', true);
+    setRowHeight(gd, record.id, record.rows[2] ?? '', 2);
     await expect(b7).toHaveCSS('height', '44px');
     await expect(formula).toHaveCSS('flex-direction', 'column');
     await expect(formula.locator('.gd-formula__expr')).toHaveText('=Sum(B5, B6)');

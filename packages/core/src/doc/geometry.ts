@@ -11,7 +11,6 @@ import type { Id } from '../ids.js';
 import { LATTICE, pointToPx, type Pixels } from '../lattice.js';
 import { CAPTION_ROWS } from '../style/types.js';
 import {
-  DEFAULT_ROW_HEIGHT,
   graphFootprintRows,
   graphsOnSheet,
   rowMeta,
@@ -19,7 +18,6 @@ import {
   tableMap,
   tableRecord,
   tablesOnSheet,
-  WRAPPED_ROW_HEIGHT,
   type GedeDoc,
   type GraphRecord,
   type TableMap,
@@ -42,11 +40,6 @@ export interface PixelBounds {
   readonly height: number;
 }
 
-/** True when any visible column wraps: every row of the table is then two units (GRID-09). */
-export function tableWraps(record: TableRecord): boolean {
-  return record.columns.some((c) => c.wrap && !c.hidden);
-}
-
 /**
  * Which data rows are hidden, in row order: a row under a collapsed ancestor
  * (HIER-06). Like a hidden column (GRID-02) it keeps its data but has no
@@ -58,20 +51,20 @@ export function rowHidden(table: TableMap, record: TableRecord = tableRecord(tab
 }
 
 /**
- * Heights of each data row in units, in row order (GRID-09): two when the row
- * itself is wrapped or any visible column wraps, else one — and zero for a row
- * hidden under a collapsed parent (HIER-06). Never anything else, so the row
- * after a wrapped row is exactly two addresses down.
+ * Heights of each data row in whole units, in row order (GRID-09, ADR-049):
+ * the row's stored height (≥ 1) — and zero for a row hidden under a collapsed
+ * parent (HIER-06). Wrap never enters here: a wrapped row's height is what the
+ * editing replica measured and stored, so every replica addresses alike, and
+ * the row after an n-unit row is exactly n addresses down.
  */
 export function rowHeights(table: TableMap, record: TableRecord = tableRecord(table)): number[] {
-  const wrapAll = tableWraps(record);
   const hidden = rowHidden(table, record);
-  return record.rows.map((rowId, i) => {
-    if (hidden[i] === true) return 0;
-    return wrapAll || rowMeta(table, rowId).height >= WRAPPED_ROW_HEIGHT
-      ? WRAPPED_ROW_HEIGHT
-      : DEFAULT_ROW_HEIGHT;
-  });
+  return record.rows.map((rowId, i) => (hidden[i] === true ? 0 : rowMeta(table, rowId).height));
+}
+
+/** Sum of the visible rows' heights in units: the table body's height. */
+export function tableBodyUnits(table: TableMap, record: TableRecord = tableRecord(table)): number {
+  return rowHeights(table, record).reduce((a, b) => a + b, 0);
 }
 
 /** Widths of each column in units, in column order; a hidden column is 0 (GRID-02). */

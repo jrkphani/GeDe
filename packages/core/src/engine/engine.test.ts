@@ -15,7 +15,7 @@ import {
   setCellText,
   setRowDepth,
   setColumnHidden,
-  setRowWrapped,
+  setRowHeight,
   setTablePosition,
   setTableTitle,
   tableById,
@@ -326,13 +326,13 @@ describe('FormulaEngine over a Y.Doc', () => {
     expect(h.reported.slice(reports).flat()).toEqual([]);
   });
 
-  test('FX-06 wrapping a row or renaming the table re-evaluates nothing', () => {
+  test('FX-06 resizing a row or renaming the table re-evaluates nothing', () => {
     const h = harness();
     const g = grid(h.gd, h.sheetId, 3, 1);
     g.set(0, 0, '3');
     g.set(2, 0, `=Sum(${g.addr(0, 0)}:${g.addr(1, 0)})`);
     const reports = h.reported.length;
-    setRowWrapped(h.gd, g.tableId, g.rowId(0), true);
+    setRowHeight(h.gd, g.tableId, g.rowId(0), 3);
     setTableTitle(h.gd, g.tableId, 'Renamed');
     expect(h.reported.slice(reports).flat()).toEqual([]);
     expect(numberOf(h.results.get(g.id(2, 0)))).toBe(3);

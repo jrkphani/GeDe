@@ -191,7 +191,12 @@ test.describe('row hierarchy', () => {
       const chevron = cell('B5').getByRole('button', { name: 'Collapse B5' });
       await expect(chevron).toHaveAttribute('aria-expanded', 'true');
       await expect(dataRows(page).nth(0)).toHaveAttribute('aria-expanded', 'true');
-      await expect(dataRows(page).nth(3).getByRole('button')).toHaveCount(0); // a leaf
+      // A leaf has no chevron (the row handle in the gutter is a button too, ADR-049).
+      await expect(
+        dataRows(page)
+          .nth(3)
+          .getByRole('button', { name: /Collapse|Expand/ }),
+      ).toHaveCount(0);
       await snapshot(`document hierarchy ${String(width)}`);
       await checkA11y(`document hierarchy ${String(width)}`);
 

@@ -31,7 +31,11 @@ import {
   setFooterRows,
   setFrozenColumns,
   setHeaderRows,
-  setRowWrapped,
+  setRowHeight,
+  setRowHeights,
+  setRowWrap,
+  distributeEvenly,
+  evenShares,
   sweepOrphanCells,
   TABLE_TITLE_ROWS,
   tableAddresses,
@@ -41,9 +45,18 @@ import {
   tableWidthUnits,
   unhideAllColumns,
   unhideColumn,
+  rowMeta,
+  tableBodyUnits,
   type GedeDoc,
   type TableMap,
 } from './index.js';
+import {
+  effectiveWrap,
+  setCellAppearance,
+  setColumnAppearance,
+  setTableLook,
+  wrapScopeOf,
+} from '../style/index.js';
 
 function fresh(): GedeDoc {
   return openDocument(new Y.Doc());
@@ -136,34 +149,94 @@ describe('addressing recomputes on every structural edit', () => {
     expect(cellAddress(t, r3, c3)).toBe('B6');
     expect(cellText(t, r1, c2)).toBe('');
     expect(JSON.stringify(t.toJSON())).not.toContain('middle');
-    // Wrap the row above: the corner is two addresses down.
-    setRowWrapped(gd, id, r1, true);
+    // Make the row above two units tall: the corner is two addresses down.
+    setRowHeight(gd, id, r1, 2);
     expect(cellAddress(t, r3, c3)).toBe('B7');
     expect(cellText(t, r3, c3)).toBe('corner');
     expect(JSON.stringify(t.toJSON())).not.toMatch(/"[A-Z]{1,3}[0-9]{1,4}"/);
   });
 
-  test('GRID-09 wrapping a column makes every row two lattice units; unwrapping restores one', () => {
+  test('GRID-09 wrap at any scope is paint: column, row, table and cell wrap write no height and move no address (ADR-049)', () => {
     const { gd, id, rows, cols } = fixture();
     const t = table(gd, id);
     const [r1, r2, r3] = rows as [string, string, string];
     const c2 = cols[1] ?? '';
+    const column = () => tableById(gd, id)?.columns[1] ?? null;
     setColumnWrap(gd, id, c2, true);
+    expect(rowHeights(t)).toEqual([1, 1, 1]);
+    expect(tableAddresses(t).map((row) => row[0])).toEqual(['A4', 'A5', 'A6']);
+    expect(column()?.wrap).toBe(true);
+    expect(effectiveWrap(t, column(), r1)).toBe(true);
+    // Precedence: cell > row > column > table.
+    setRowWrap(gd, id, r1, false);
+    expect(effectiveWrap(t, column(), r1)).toBe(false);
+    expect(wrapScopeOf(t, column()!, r1)).toBe('row');
+    setCellAppearance(gd, id, r1, c2, { wrap: true });
+    expect(effectiveWrap(t, column(), r1)).toBe(true);
+    expect(wrapScopeOf(t, column()!, r1)).toBe('cell');
+    setColumnWrap(gd, id, c2, null);
+    expect(effectiveWrap(t, column(), r2)).toBe(false);
+    expect(wrapScopeOf(t, column()!, r2)).toBe('table');
+    setTableLook(gd, id, { wrap: true });
+    expect(effectiveWrap(t, column(), r2)).toBe(true);
+    expect(effectiveWrap(t, column(), r1)).toBe(true); // the cell override still wins
+    setCellAppearance(gd, id, r1, c2, { wrap: null });
+    expect(effectiveWrap(t, column(), r1)).toBe(false); // the row's false now wins
+    setRowWrap(gd, id, r1, null);
+    expect(effectiveWrap(t, column(), r1)).toBe(true);
+    // Column-scope wrap has one home: the column key, never the appearance map.
+    setColumnAppearance(gd, id, c2, { wrap: false });
+    expect(column()?.wrap).toBe(false);
+    expect(column()?.appearance.wrap).toBeUndefined();
+    // Nothing above changed a height or an address.
+    expect(rowHeights(t)).toEqual([1, 1, 1]);
+    expect(cellAddress(t, r3, c2)).toBe('B6');
+  });
+
+  test('GRID-09 a legacy two-unit row with no wrap key reads wrapped; an ADR-049 row reads what it stores', () => {
+    const { gd, id, rows } = fixture();
+    const t = table(gd, id);
+    const r1 = rows[0] ?? '';
+    const metas = t.get('rowMeta') as Y.Map<Y.Map<unknown>>;
+    gd.doc.transact(() => {
+      metas.get(r1)?.set('height', 2);
+    });
+    expect(rowMeta(t, r1)).toMatchObject({ height: 2, fit: true, wrap: true });
+    // A stored fraction or a value below one is snapped: addressing stays exact (GRID-01).
+    gd.doc.transact(() => {
+      metas.get(r1)?.set('height', 0.2);
+    });
+    expect(rowMeta(t, r1).height).toBe(1);
+    setRowHeight(gd, id, r1, 3); // a hand-set height: the row stops following its content
+    expect(rowMeta(t, r1)).toMatchObject({ height: 3, fit: false, wrap: null });
+    setRowHeight(gd, id, r1, 2, 'auto'); // refused: the row keeps what was set by hand
+    expect(rowMeta(t, r1)).toMatchObject({ height: 3, fit: false });
+    setRowHeight(gd, id, r1, 5, 'auto');
+    expect(rowMeta(t, r1)).toMatchObject({ height: 3, fit: false });
+    setRowHeight(gd, id, r1, 2, 'fit'); // Fit to content: follows its content again
+    expect(rowMeta(t, r1)).toMatchObject({ height: 2, fit: true });
+    setRowHeight(gd, id, r1, 1, 'auto');
+    expect(rowMeta(t, r1)).toMatchObject({ height: 1, fit: true, wrap: null });
+  });
+
+  test('GRID-08 distributeEvenly shares the total in whole units, the remainder to the first, for a selection or the whole axis, in one undo step', () => {
+    const { gd, id, rows, cols } = fixture();
+    const t = table(gd, id);
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    expect(evenShares([1, 4, 2])).toEqual([3, 2, 2]);
+    expect(evenShares([1, 1])).toEqual([1, 1]);
+    expect(evenShares([])).toEqual([]);
+    setColumnWidth(gd, id, cols[0] ?? '', 5);
+    expect(distributeEvenly(gd, id, 'column')).toEqual([3, 2, 2]);
+    expect(distributeEvenly(gd, id, 'column', [cols[0] ?? '', cols[1] ?? ''])).toEqual([3, 2]);
+    expect(tableById(gd, id)?.columns.map((c) => c.width)).toEqual([3, 2, 2]);
+    setRowHeight(gd, id, rows[2] ?? '', 4);
+    expect(distributeEvenly(gd, id, 'row')).toEqual([2, 2, 2]);
     expect(rowHeights(t)).toEqual([2, 2, 2]);
-    expect(tableAddresses(t).map((row) => row[0])).toEqual(['A4', 'A6', 'A8']);
-    expect(tableById(gd, id)?.columns[1]?.wrap).toBe(true);
-    expect(tableUnitBounds(t).rows).toBe(TABLE_TITLE_ROWS + 1 + 6);
-    // A hidden wrapped column no longer wraps the table.
-    hideColumn(gd, id, c2);
-    expect(rowHeights(t)).toEqual([1, 1, 1]);
-    unhideColumn(gd, id, c2);
-    setColumnWrap(gd, id, c2, false);
-    expect(rowHeights(t)).toEqual([1, 1, 1]);
-    // A row's own wrap is independent of the column's, and never more than two units.
-    setRowWrapped(gd, id, r2, true);
-    expect(rowHeights(t)).toEqual([1, 2, 1]);
-    expect(cellAddress(t, r3, c2)).toBe('B7');
-    expect(cellAddress(t, r1, c2)).toBe('B4');
+    expect(rowMeta(t, rows[0] ?? '').fit).toBe(false);
+    expect(undo.undoStack).toHaveLength(4);
+    undo.undo();
+    expect(rowHeights(t)).toEqual([1, 1, 4]);
   });
 
   test('GRID-02 unhideAllColumns reveals every hidden column in one step', () => {
@@ -209,38 +282,54 @@ describe('resize and scale snap to the lattice', () => {
     }
   });
 
-  test('GRID-08 scaleTable spreads the width across visible columns and snaps the height to compact or wrapped', () => {
-    const { gd, id, cols } = fixture();
+  test('GRID-08 scaleTable spreads the width across visible columns and the height across visible rows, whole units each', () => {
+    const { gd, id, cols, rows } = fixture();
     const t = table(gd, id);
     hideColumn(gd, id, cols[1] ?? '');
     expect(scaleTable(gd, id, { widthUnits: 5 })).toEqual([3, 2]);
     expect(tableById(gd, id)?.columns.map((c) => c.width)).toEqual([3, 1, 2]);
     expect(tableWidthUnits(tableById(gd, id)!)).toBe(5);
-    scaleTable(gd, id, { wrapped: true });
+    scaleTable(gd, id, { heightUnits: 6 });
     expect(rowHeights(t)).toEqual([2, 2, 2]);
-    scaleTable(gd, id, { wrapped: false, widthUnits: 1 });
+    expect(rowMeta(t, rows[0] ?? '').fit).toBe(false);
+    scaleTable(gd, id, { heightUnits: 7 });
+    expect(rowHeights(t)).toEqual([3, 2, 2]);
+    scaleTable(gd, id, { heightUnits: 1, widthUnits: 1 });
     expect(rowHeights(t)).toEqual([1, 1, 1]);
     expect(tableById(gd, id)?.columns.map((c) => c.width)).toEqual([1, 1, 1]);
+    expect(tableBodyUnits(t)).toBe(3);
   });
 
-  test('GRID-08 GRID-09 KEYS-03 scaling to compact, or unwrapping, rows that are already one unit writes nothing: no row meta appears and no undo step is added', () => {
+  test('GRID-08 GRID-09 KEYS-03 writing the height a row already has writes nothing: no undo step is added; a real change is one step however many rows it touches', () => {
     const { gd, id, rows } = fixture();
     const undo = createUndoManager(gd, { captureTimeout: 0 });
     // Every row is born with its meta map (so concurrent first writes on two replicas both
     // land, HIER-10); a no-op write must still leave it untouched and add no undo step.
     const metas = table(gd, id).get('rowMeta') as Y.Map<Y.Map<unknown>>;
     expect(metas.size).toBe(3);
-    expect(scaleTable(gd, id, { wrapped: false })).toEqual([1, 1, 1]);
-    setRowWrapped(gd, id, rows[0] ?? '', false);
+    setRowHeights(
+      gd,
+      id,
+      rows.map((rowId) => ({ rowId, units: 1 })),
+      'auto',
+    );
+    setRowHeight(gd, id, rows[0] ?? '', 1, 'auto');
+    setRowWrap(gd, id, rows[0] ?? '', null);
     expect(metas.get(rows[0] ?? '')?.get('height')).toBe(1);
     expect(undo.undoStack).toHaveLength(0);
     // A real change still writes exactly what it needs.
-    setRowWrapped(gd, id, rows[0] ?? '', true);
+    setRowHeight(gd, id, rows[0] ?? '', 2);
     expect(metas.get(rows[0] ?? '')?.get('height')).toBe(2);
     expect(undo.undoStack).toHaveLength(1);
-    scaleTable(gd, id, { wrapped: true });
-    expect(rowHeights(table(gd, id))).toEqual([2, 2, 2]);
+    setRowHeights(
+      gd,
+      id,
+      rows.map((rowId) => ({ rowId, units: 4 })),
+    );
+    expect(rowHeights(table(gd, id))).toEqual([4, 4, 4]);
     expect(undo.undoStack).toHaveLength(2);
+    undo.undo();
+    expect(rowHeights(table(gd, id))).toEqual([2, 1, 1]);
   });
 
   test('GRID-01 GRID-08 a column resize never desynchronises the ruler from the data: the address follows the width', () => {
@@ -404,10 +493,11 @@ describe('two replicas converge on structure', () => {
     setColumnWrap(a, id, cols[1] ?? '', true);
     setHeaderRows(b, id, 0);
     setFooterRows(a, id, 1);
-    setRowWrapped(b, id, rows[0] ?? '', true);
+    setRowHeight(b, id, rows[0] ?? '', 4);
+    setRowHeight(a, id, rows[1] ?? '', 2, 'auto');
     expect(a.tables.toJSON()).toEqual(b.tables.toJSON());
     expect(tableUnitBounds(table(a, id))).toEqual(tableUnitBounds(table(b, id)));
-    expect(tableUnitBounds(table(a, id)).rows).toBe(TABLE_TITLE_ROWS + 0 + 6 + 1);
+    expect(tableUnitBounds(table(a, id)).rows).toBe(TABLE_TITLE_ROWS + 0 + 7 + 1);
     expect(tableAddresses(table(a, id))).toEqual(tableAddresses(table(b, id)));
   });
 

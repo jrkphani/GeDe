@@ -29,6 +29,8 @@ import {
   type GridState,
   type TraversalTable,
 } from '../../../doc/selection.js';
+import type { FitOptions } from '../style/fit.js';
+import { installAutoHeight } from './auto-height.js';
 import { createGridCommands, type GridCommands } from './commands.js';
 
 /** Stable for the life of the document, so `TableView` stays memoised and handlers can be passed bare. */
@@ -49,6 +51,11 @@ export interface GridActions {
    * (the table unmounted) restores document order minus collapsed subtrees.
    */
   readonly setViewRows: (tableId: Id, rows: readonly Id[] | null) => void;
+  /**
+   * ADR-049: select whole rows or columns — a press on a row handle or a
+   * column header; `extend` from a Shift-press or a Shift-arrow.
+   */
+  readonly selectBand: (tableId: Id, axis: 'row' | 'column', id: Id, extend?: boolean) => void;
 }
 
 export interface Grid {
@@ -65,6 +72,13 @@ export interface GridOptions {
    * manager's capture timeout merges for typing elsewhere.
    */
   undo?: Pick<Y.UndoManager, 'stopCapturing'> | undefined;
+  /**
+   * ADR-049: how this replica measures text, for the auto-height of wrapped
+   * rows. Absent, no height is ever written by this hook (a test without a
+   * canvas, a host that measures elsewhere); present, every local edit that
+   * can change a row's lines re-measures it while `editable`.
+   */
+  fit?: (() => FitOptions | null) | undefined;
 }
 
 /** True when the event is a deletion from a table's `rows` or `columns` array. */
@@ -160,6 +174,17 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
   );
   commandsRef.current = commands;
 
+  // ADR-049: the editing replica measures and stores the height a wrapped row needs.
+  const fitRef = useRef(options.fit);
+  fitRef.current = options.fit;
+  useEffect(() => {
+    if (options.fit === undefined) return undefined;
+    return installAutoHeight(gd, {
+      fit: () => fitRef.current?.() ?? null,
+      editable: () => editableRef.current,
+    });
+  }, [gd, options.fit === undefined]);
+
   // Structure can change under the selection — a collaborator deletes or hides the
   // selected row or column, or the table itself (GRID-02, SHARE-04). Keep the
   // selection on something that renders, and sweep the orphan cells a merge can
@@ -194,6 +219,9 @@ export function useGrid(gd: GedeDoc, editable: boolean, options: GridOptions = {
       },
       selectTable: (tableId) => {
         dispatch({ type: 'selectTable', tableId });
+      },
+      selectBand: (tableId, axis, id, extend) => {
+        dispatch({ type: 'selectBand', tableId, axis, id, extend });
       },
       clear: () => {
         dispatch({ type: 'clear' });

@@ -474,7 +474,8 @@ test.describe('grid editing', () => {
       await page.mouse.up();
       await expect(divider).toHaveAttribute('aria-valuenow', '3');
       await expect(table).toHaveCSS('width', '800px');
-      // GRID-08 the corner handle scales the whole table: right adds a unit, down wraps every row.
+      // GRID-08 the corner handle scales the whole table: right adds a unit, down grows the rows
+      // proportionally in whole units (ADR-049: 5 rows + 80 px ≈ 4 units → the first rows take them).
       // At 1024 the 800 px table reaches the inspector strip (RESP-04: 38 px is the rail's);
       // pan the sheet left so the corner and the extra unit have room on screen (DOC-04).
       if (width === 1024) {
@@ -497,7 +498,7 @@ test.describe('grid editing', () => {
       await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '44px');
       await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B7');
       await corner.focus();
-      await page.keyboard.press('ArrowUp');
+      await page.keyboard.press('Shift+ArrowUp'); // four units fewer: every row back to one
       await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px');
       await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B6');
       if (width === 1024) {
@@ -508,18 +509,42 @@ test.describe('grid editing', () => {
         await page.mouse.wheel(-240, 0);
         await expect(page.getByTestId('layer')).toHaveAttribute('style', /translate\(0px/);
       }
-      // GRID-09 via the Text tab — wrap's one home (DOC-02, ADR-041): the selected column wraps;
-      // rows are two lattice units, addresses exact.
+      // GRID-09 via the Text tab — wrap's home for the column (DOC-02, ADR-041): the selected
+      // column wraps; a row with two lines of text grows to two units (ADR-049, measured by
+      // this replica), addresses exact.
       await grid.getByRole('gridcell').first().click();
       const rail = page.getByTestId('inspector');
       if ((await rail.getAttribute('data-state')) === 'collapsed') {
         await rail.getByRole('button', { name: 'Expand inspector' }).click();
       }
       await rail.getByRole('tab', { name: 'Text' }).click();
-      await rail.getByRole('switch', { name: /^Wrap column/ }).click();
-      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '44px');
-      await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute('data-address', 'B7');
-      await expect(page.getByTestId('ruler-rows').locator('[data-row="6"]')).toHaveText('7');
+      await rail.getByRole('switch', { name: 'Wrap text in column Column 1' }).click();
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', '22px'); // empty: one unit
+      await grid.getByRole('gridcell').first().dblclick();
+      await page
+        .getByLabel('Edit B5')
+        .fill(
+          'A sentence long enough to need a second line in this column of text, and then some more words so that it needs one whatever width the column ended up at after the drags above; the count is measured, never assumed.',
+        );
+      await page.getByLabel('Edit B5').press('Enter');
+      // The corner set the rows by hand above, so row 5 keeps its unit until it is fitted
+      // (R-B); a double-click on its edge fits it. The replica measured the wrapped lines and
+      // stored whole units (ADR-049): the row is n × 22 px, the row below is n addresses down,
+      // and the ruler numbers the lattice.
+      await grid.getByRole('gridcell').first().click();
+      await page.getByRole('separator', { name: 'Resize row 5' }).dblclick();
+      await expect
+        .poll(async () => Number(await grid.getByRole('row').nth(1).getAttribute('data-units')))
+        .toBeGreaterThanOrEqual(2);
+      const units = Number(await grid.getByRole('row').nth(1).getAttribute('data-units'));
+      await expect(grid.getByRole('row').nth(1)).toHaveCSS('height', `${String(units * 22)}px`);
+      await expect(grid.getByRole('gridcell').nth(3)).toHaveAttribute(
+        'data-address',
+        `B${String(5 + units)}`,
+      );
+      await expect(
+        page.getByTestId('ruler-rows').locator(`[data-row="${String(4 + units)}"]`),
+      ).toHaveText(String(5 + units));
       // GRID-10 via the Table tab: freeze one column — shaded, a heavier rule at the boundary,
       // and a pinned panel once scrolled under.
       await rail.getByRole('tab', { name: 'Table' }).click();
