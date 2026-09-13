@@ -11,7 +11,15 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import type * as Y from 'yjs';
-import { openDocument, readString, type GedeDoc, type GraphEmphasis, type Id } from '@gede/core';
+import {
+  adjacencyOf,
+  openDocument,
+  readString,
+  type GedeDoc,
+  type GraphDerivation,
+  type GraphEmphasis,
+  type Id,
+} from '@gede/core';
 
 import { engineFor } from '../../../doc/engine.js';
 
@@ -19,6 +27,24 @@ export interface GraphHover {
   readonly pairId: Id;
   readonly tableId: Id | null;
   readonly emphasis: GraphEmphasis;
+  /**
+   * GRAPH-09: the source rows the emphasis lights — the context's own row, or
+   * every context bound to a hovered parameter dot (#141). Read from the
+   * derivation by whoever sets the hover, so this store stays free of it.
+   */
+  readonly rows: ReadonlySet<Id>;
+}
+
+const NO_ROWS: ReadonlySet<Id> = new Set();
+
+/** The hover a half reports for an emphasis, rows included (GRAPH-09). */
+export function hoverFor(
+  pairId: Id,
+  tableId: Id | null,
+  derivation: GraphDerivation,
+  emphasis: GraphEmphasis,
+): GraphHover {
+  return { pairId, tableId, emphasis, rows: adjacencyOf(derivation, emphasis).contextIds };
 }
 
 type Listener = () => void;
@@ -182,8 +208,8 @@ export function useGraphHover(doc: Y.Doc, pairId: Id): GraphEmphasis | null {
   );
 }
 
-/** GRAPH-09: the row a hovered node, dot or cell lights in `tableId`, or null. */
-export function useGraphLitRow(doc: Y.Doc | null, tableId: Id): Id | null {
+/** GRAPH-09: the rows a hovered node, dot or cell lights in `tableId` (empty when none). */
+export function useGraphLitRows(doc: Y.Doc | null, tableId: Id): ReadonlySet<Id> {
   const store = doc === null ? null : graphStoreFor(doc);
   const subscribe = useCallback(
     (l: Listener) => (store === null ? () => undefined : store.subscribeHover(l)),
@@ -193,11 +219,9 @@ export function useGraphLitRow(doc: Y.Doc | null, tableId: Id): Id | null {
     subscribe,
     () => {
       const hover = store?.hover ?? null;
-      return hover !== null && hover.tableId === tableId && hover.emphasis.role === 'context'
-        ? hover.emphasis.id
-        : null;
+      return hover !== null && hover.tableId === tableId ? hover.rows : NO_ROWS;
     },
-    () => null,
+    () => NO_ROWS,
   );
 }
 

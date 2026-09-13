@@ -103,8 +103,13 @@ export function Inspector({
     if (!dismissible) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.code !== 'Escape' || event.defaultPrevented) return;
-      // A menu, select or dialog above the rail takes its own Escape first.
-      if (document.querySelector('[role="menu"], [role="listbox"], [role="dialog"]') !== null)
+      // A menu, select or dialog above the rail takes its own Escape first — not the tour's
+      // card, a non-modal dialog that leaves Escape to the page (ADR-035).
+      if (
+        document.querySelector(
+          '[role="menu"], [role="listbox"], [role="dialog"]:not([aria-modal="false"])',
+        ) !== null
+      )
         return;
       event.preventDefault();
       onOpenChangeRef.current(false);
@@ -132,6 +137,15 @@ export function Inspector({
   const cell: CellSelection | null =
     selection?.cell && table !== null ? { tableId: selection.tableId, ...selection.cell } : null;
   const [formatTab, setFormatTab] = useState<FormatTab>('table');
+  // INSP-08 / INSP-03: selecting a graph makes it the selected object, so its tab comes
+  // to the front the moment it appears (the table tabs have nothing to show for it);
+  // deselecting it falls back to Table below. Adjusted during render, not in an effect.
+  const hasGraph = slots?.graph !== undefined;
+  const [hadGraph, setHadGraph] = useState(hasGraph);
+  if (hasGraph !== hadGraph) {
+    setHadGraph(hasGraph);
+    if (hasGraph) setFormatTab('graph');
+  }
   const [ownOrganizeTab, setOwnOrganizeTab] = useState<OrganizeTab>('categories');
   const organizeTab = organizeTabProp ?? ownOrganizeTab;
   const setOrganizeTab = (tab: OrganizeTab) => {
@@ -166,6 +180,7 @@ export function Inspector({
           aria-label="Expand inspector"
           aria-keyshortcuts={ARIA_KEYS.inspector}
           title={`Expand inspector (${LABELS.inspector})`}
+          data-tour="inspector-expand"
           onClick={() => {
             onOpenChange(true);
           }}

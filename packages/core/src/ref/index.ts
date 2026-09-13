@@ -75,3 +75,4 @@ export {
   isCrossTableFormula,
   newCrossTableReference,
 } from './cross-table.js';
+export { concatFormulaKeys, isConcatFormula } from './concat.js';

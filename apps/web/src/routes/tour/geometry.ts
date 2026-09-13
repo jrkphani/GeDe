@@ -29,7 +29,7 @@ export const CARD_MARGIN = 12;
 /** The card's height before it has been measured (the prototype's estimate). */
 export const CARD_HEIGHT_ESTIMATE = 212;
 
-export type CardPlacement = 'below' | 'above' | 'centre';
+export type CardPlacement = 'below' | 'beside' | 'above' | 'corner' | 'centre';
 
 export interface CardPosition {
   readonly placement: CardPlacement;
@@ -54,9 +54,16 @@ function clamp(value: number, min: number, max: number): number {
 
 /**
  * Where the card goes. Below the target when its measured height (plus the
- * gap) fits between the target and the bottom edge, otherwise above it
- * (ONB-09 "flip above when there is insufficient room below"), never off the
- * top. Without a target the card centres in the viewport (ONB-06).
+ * gap) fits between the target and the bottom edge; else beside it, to its
+ * left, when the target leaves room there (a tall target in the inspector
+ * rail — the dimension checklist — would otherwise be covered along with the
+ * tab strip above it); otherwise above it (ONB-09 "flip above when there is
+ * insufficient room below"), never off the top. When not even above clears
+ * the target (a short viewport — 450 px at 200 % zoom — under a spotlight that
+ * runs from the pointing banner to the tables), the card takes the bottom
+ * right corner: the banner and a target's label chip sit top and top-left,
+ * so that corner covers the least. Without a target the card centres in the
+ * viewport (ONB-06).
  */
 export function placeCard(
   target: Rect | null,
@@ -74,10 +81,20 @@ export function placeCard(
   const bottom = target.y + target.height;
   const fitsBelow = bottom + CARD_GAP + card.height + CARD_MARGIN <= viewport.height;
   if (fitsBelow) return { placement: 'below', left, top: bottom + CARD_GAP };
+  const besideLeft = target.x - SPOTLIGHT_INSET - CARD_GAP - card.width;
+  if (besideLeft >= CARD_MARGIN) {
+    return {
+      placement: 'beside',
+      left: besideLeft,
+      top: clamp(target.y, CARD_MARGIN, viewport.height - card.height - CARD_MARGIN),
+    };
+  }
+  const aboveTop = target.y - CARD_GAP - card.height;
+  if (aboveTop >= CARD_MARGIN) return { placement: 'above', left, top: aboveTop };
   return {
-    placement: 'above',
-    left,
-    top: Math.max(CARD_MARGIN, target.y - CARD_GAP - card.height),
+    placement: 'corner',
+    left: Math.max(CARD_MARGIN, viewport.width - card.width - CARD_MARGIN),
+    top: Math.max(CARD_MARGIN, viewport.height - card.height - CARD_MARGIN),
   };
 }
 
@@ -85,6 +102,31 @@ export function placeCard(
 export function sameRect(a: Rect | null, b: Rect | null): boolean {
   if (a === null || b === null) return a === b;
   return a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+}
+
+/** The smallest box holding both; either side may be null (nothing). */
+export function unionRect(a: Rect | null, b: Rect | null): Rect | null {
+  if (a === null) return b;
+  if (b === null) return a;
+  const x = Math.min(a.x, b.x);
+  const y = Math.min(a.y, b.y);
+  return {
+    x,
+    y,
+    width: Math.max(a.x + a.width, b.x + b.width) - x,
+    height: Math.max(a.y + a.height, b.y + b.height) - y,
+  };
+}
+
+/** The overlap of two boxes, or null when they do not overlap (a clipped-away target paints nothing). */
+export function intersectRect(a: Rect | null, b: Rect | null): Rect | null {
+  if (a === null || b === null) return null;
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  if (right <= x || bottom <= y) return null;
+  return { x, y, width: right - x, height: bottom - y };
 }
 
 /** A DOMRect-like box rounded to whole pixels; a collapsed box (nothing painted) is null. */

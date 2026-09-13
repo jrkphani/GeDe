@@ -14,6 +14,7 @@ import {
 } from '@gede/core';
 
 import { activation, useRoving } from './roving.js';
+import { hoverFor } from './store.js';
 import type { GraphsActions } from './use-graphs.js';
 
 export interface CoverageGraphProps {
@@ -68,7 +69,7 @@ export const CoverageGraph = memo(function CoverageGraph({
   const tableId = graph.tableId;
   const muted = emphasis !== null;
   const hover = (e: GraphEmphasis | null) => {
-    actions.setHover(e === null ? null : { pairId: graph.pairId, tableId, emphasis: e });
+    actions.setHover(e === null ? null : hoverFor(graph.pairId, tableId, derivation, e));
   };
 
   if (derivation.dimensions.length === 0) {

@@ -213,6 +213,29 @@ describe('Inspector', () => {
     expect(tab('Graph')).toBeInTheDocument();
   });
 
+  it('INSP-08 INSP-03 selecting a graph brings its tab to the front; deselecting it falls back to Table; a tab chosen while the graph is selected stays chosen', async () => {
+    const { rerender } = await mount();
+    await userEvent.click(tab('Cell'));
+    expect(tab('Cell')).toHaveAttribute('aria-selected', 'true');
+    // The graph becomes the selected object: its tab is selected at once.
+    rerender(<Harness slots={{ graph: <p>Graph controls</p> }} />);
+    expect(tab('Graph')).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel')).toHaveTextContent('Graph controls');
+    // The person may still move to another tab while the graph stays selected.
+    await userEvent.click(tab('Arrange'));
+    expect(tab('Arrange')).toHaveAttribute('aria-selected', 'true');
+    rerender(<Harness slots={{ graph: <p>Graph controls</p>, derive: <p>Derive</p> }} />);
+    expect(tab('Arrange')).toHaveAttribute('aria-selected', 'true');
+    // Deselected: the Graph tab goes, and a Graph selection falls back to Table.
+    await userEvent.click(tab('Graph'));
+    rerender(<Harness />);
+    expect(screen.queryByRole('tab', { name: 'Graph' })).toBeNull();
+    expect(tab('Table')).toHaveAttribute('aria-selected', 'true');
+    // Reselected: the Graph tab comes to the front again.
+    rerender(<Harness slots={{ graph: <p>Graph controls</p> }} />);
+    expect(tab('Graph')).toHaveAttribute('aria-selected', 'true');
+  });
+
   it('INSP-02 RESP-04 collapsed, the rail is a 38 px strip with the expand control and the mode name; the head and tabs are gone', async () => {
     const onOpenChange = vi.fn();
     await mount({ open: false, onOpenChange });

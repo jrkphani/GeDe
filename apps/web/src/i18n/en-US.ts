@@ -14,6 +14,12 @@
  * a permission per participant, and no PRD row gives a table its own, so the
  * prototype's "per table" named a feature that does not exist (ONB-10 asks
  * for the real difference).
+ *
+ * The sub-cards of steps 2 and 3 (`tour.step2.concat.*`, `tour.step3.point.*`,
+ * `tour.step3.dimensions.*`) are new copy: the prototype had one card per
+ * step. Step 2b names Numbers' CONCATENATE / `&` then the difference (FX-01;
+ * the example evaluates against the sample, `packages/core/src/ref/concat.test.ts`);
+ * step 3's sub-cards keep its note — a graph has no Numbers analogue.
  */
 export const messages = {
   'tour.counter': 'STEP {step} OF {total}',
@@ -32,11 +38,29 @@ export const messages = {
     'Numbers: People::B2, tied to a position. GeDe: =@Entity.Path, tied to the row itself.',
   'tour.step2.action': 'Type a formula into any cell',
 
+  'tour.step2.concat.title': 'Join text with =Concat()',
+  'tour.step2.concat.body':
+    'Concat joins its arguments end to end: cells, @ paths and quoted text, in any mix. In an empty cell, type =Concat(C5, " — ", @Team.Priya.Role) and press Enter; it reads Priya — Product engineer.',
+  'tour.step2.concat.note':
+    'Numbers: CONCATENATE or &, over plain strings. GeDe: =Concat(a, b, …) keeps each argument’s marks and references live, so the joined text follows its sources.',
+  'tour.step2.concat.action': 'Commit a Concat over two or more arguments',
+
   'tour.step3.title': 'Add a context graph',
   'tour.step3.body':
     'A graph is an object on the canvas bound to columns. Click a node and it writes that value back into the rows.',
   'tour.step3.note': 'No Numbers equivalent — it is not a chart. It reads and writes the table.',
   'tour.step3.action': 'Click Add graph in the toolbar',
+
+  'tour.step3.point.title': 'Point it at a table',
+  'tour.step3.point.body':
+    'A graph draws its rows and columns from one table. The sample’s two tables, Deliverables and Team, are outlined as targets; either will do. Escape starts over.',
+  'tour.step3.point.offCanvas': 'A table sits off the canvas; the one on screen is enough.',
+  'tour.step3.point.action': 'Click a table to bind the graph',
+
+  'tour.step3.dimensions.title': 'Choose the dimensions',
+  'tour.step3.dimensions.body':
+    'A dimension is a column whose values define a context, so every combination of values is a node. The graph starts with the first three entered columns; the Graph tab lists each column with its distinct values. Change the set — untick one of the three, or tick another — to see the graph redraw.',
+  'tour.step3.dimensions.action': 'Untick or tick a dimension, keeping at least two',
 
   'tour.step4.title': 'Find across every table',
   'tour.step4.body':

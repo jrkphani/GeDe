@@ -83,7 +83,7 @@ import {
   useReferenceReconciler,
   type MappingCellHandle,
 } from './ref/index.js'; // wave3/references
-import { useGraphLitRow } from './graph/store.js'; // wave4/graphs: GRAPH-09 lit row
+import { useGraphLitRows } from './graph/store.js'; // wave4/graphs: GRAPH-09 lit rows
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
 import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
@@ -340,9 +340,9 @@ export const TableView = memo(function TableView({
   };
   // REF-02 / HIER-07: pulls and Split children stay materialised while this replica can write.
   useReferenceReconciler(table.doc, editable);
-  // GRAPH-09: the row a hovered graph node, dot or cell lights; subscribed here so a hover
-  // re-renders this table and nothing above it.
-  const litRowId = useGraphLitRow(table.doc, record.id);
+  // GRAPH-09: the rows a hovered graph node, dot or cell lights (a dot lights every row bound
+  // to its parameter, #141); subscribed here so a hover re-renders this table and nothing above it.
+  const litRows = useGraphLitRows(table.doc, record.id);
   // HIER-04..08: while the viewer groups the table the bands own the outline column,
   // and while the viewer sorts or filters it a child could draw above its parent:
   // in both the outline shows no depth, though the data keeps it (HIER-08, ADR-026).
@@ -565,10 +565,10 @@ export const TableView = memo(function TableView({
                       <div
                         key={rowId}
                         className={clsx('gd-table__row', {
-                          'gd-table__row--lit': litRowId === rowId,
+                          'gd-table__row--lit': litRows.has(rowId),
                         })}
                         role="row"
-                        data-lit={litRowId === rowId || undefined}
+                        data-lit={litRows.has(rowId) || undefined}
                         aria-rowindex={firstIndex + (band === null ? 0 : 1) + vi}
                         aria-level={
                           hierarchical && outlineRow !== undefined

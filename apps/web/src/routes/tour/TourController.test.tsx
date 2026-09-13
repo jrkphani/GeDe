@@ -20,11 +20,14 @@ import {
   resetTourForTests,
   setTourDocument,
   setTourFindQuery,
+  setTourPointing,
   setTourRoute,
   setTourSampleDocumentId,
   startTour,
   tourState,
 } from './store.js';
+
+const CONCAT_EXAMPLE = '=Concat(C5, " — ", @Team.Priya.Role)';
 
 const user = { sub: 'sub-1', email: 'meena@1cloudhub.com', name: 'Meena' };
 const SAMPLE_ID = '01ARZ3NDEKTSV4RRFFQ69G5SAM';
@@ -115,7 +118,12 @@ function completeFromStepOne(back = '/'): void {
   const table = core.tableById(gd, deliverables!.id)!;
   act(() => {
     core.commitCellText(gd, table.id, table.rows[1]!, table.columns[5]!.id, '=@Team.Marcus.Role');
-    core.createGraphPair(gd, { sheetId: core.listSheets(gd)[0]!.id, tableId: table.id });
+    core.commitCellText(gd, table.id, table.rows[1]!, table.columns[4]!.id, CONCAT_EXAMPLE);
+    const pair = core.createGraphPair(gd, {
+      sheetId: core.listSheets(gd)[0]!.id,
+      tableId: table.id,
+    });
+    core.toggleGraphDimension(gd, pair.pairId, table.columns[0]!.id, false);
     setTourFindQuery(true, 'Blocked');
     reportTourInvite();
     setTourDocument(null);
@@ -253,11 +261,64 @@ describe('TourController', () => {
     act(() => {
       core.commitCellText(gd, table.id, table.rows[1]!, table.columns[5]!.id, '=@Team.Marcus.Role');
     });
-    expect(await screen.findByRole('dialog', { name: 'Add a context graph' })).toHaveTextContent(
-      'No Numbers equivalent — it is not a chart.',
+    // Step 2b: the same counter and dots, the Concat card, still centred (ONB-06).
+    const concat = await screen.findByRole('dialog', { name: 'Join text with =Concat()' });
+    expect(concat).toHaveAttribute('data-step', '2');
+    expect(concat).toHaveAttribute('data-substep', 'concat');
+    expect(concat).toHaveAttribute('data-placement', 'centre');
+    expect(within(concat).getByText('STEP 2 OF 5')).toBeInTheDocument();
+    expect(concat.querySelectorAll('.gd-tour__dot--done')).toHaveLength(2);
+    expect(within(concat).getByText(/Numbers: CONCATENATE or &/)).toHaveClass('gd-tour__note');
+    expect(within(concat).getByText(/Commit a Concat over two or more arguments/)).toHaveClass(
+      'gd-tour__action',
     );
     act(() => {
-      core.createGraphPair(gd, { sheetId: core.listSheets(gd)[0]!.id, tableId: table.id });
+      core.commitCellText(gd, table.id, table.rows[1]!, table.columns[4]!.id, CONCAT_EXAMPLE);
+    });
+    const add = await screen.findByRole('dialog', { name: 'Add a context graph' });
+    expect(add).toHaveTextContent('No Numbers equivalent — it is not a chart.');
+    expect(add).toHaveAttribute('data-substep', 'add');
+    expect(within(add).getByText('STEP 3 OF 5')).toBeInTheDocument();
+    // Step 3b: pointing mode. Escape (pointing off) returns to 3a; the tour never ends.
+    act(() => {
+      setTourPointing(true);
+    });
+    const point = await screen.findByRole('dialog', { name: 'Point it at a table' });
+    expect(point).toHaveAttribute('data-step', '3');
+    expect(point).toHaveAttribute('data-substep', 'point');
+    expect(within(point).getByText('STEP 3 OF 5')).toBeInTheDocument();
+    expect(point.querySelectorAll('.gd-tour__dot--done')).toHaveLength(3);
+    expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'pointing');
+    expect(
+      within(point).getByText(
+        'No Numbers equivalent — it is not a chart. It reads and writes the table.',
+      ),
+    ).toHaveClass('gd-tour__note');
+    act(() => {
+      setTourPointing(false);
+    });
+    expect(await screen.findByRole('dialog', { name: 'Add a context graph' })).toHaveAttribute(
+      'data-substep',
+      'add',
+    );
+    expect(tourState()).toMatchObject({ phase: 'running', step: 3 });
+    act(() => {
+      setTourPointing(true);
+    });
+    await screen.findByRole('dialog', { name: 'Point it at a table' });
+    // Bound: step 3c, with the pair's ring as the spotlight while no checklist is on screen.
+    let pair: core.GraphPair | undefined;
+    act(() => {
+      pair = core.createGraphPair(gd, { sheetId: core.listSheets(gd)[0]!.id, tableId: table.id });
+      setTourPointing(false);
+    });
+    const dimensions = await screen.findByRole('dialog', { name: 'Choose the dimensions' });
+    expect(dimensions).toHaveAttribute('data-substep', 'dimensions');
+    expect(within(dimensions).getByText('STEP 3 OF 5')).toBeInTheDocument();
+    expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'dimensions');
+    expect(tourState()).toMatchObject({ pairIds: [pair!.pairId] });
+    act(() => {
+      core.toggleGraphDimension(gd, pair!.pairId, table.columns[0]!.id, false);
     });
     await screen.findByRole('dialog', { name: 'Find across every table' });
     act(() => {

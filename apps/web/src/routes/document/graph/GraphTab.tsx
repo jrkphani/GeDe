@@ -6,20 +6,30 @@ import {
   GRAPH_MIN_WIDTH_UNITS,
   resolveSlice,
   withAxis,
+  withoutPin,
   withPin,
   type GedeDoc,
   type Id,
 } from '@gede/core';
 import { Button, Checkbox, Select } from '@gede/ui';
 
+import { useEffect, useRef } from 'react';
+
 import { useYVersion } from '../../../doc/use-y.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import { readOnlyLabel } from '../grid/commands.js';
+import { useTourGraphSubstep } from '../../tour/use-tour.js';
 import { Section, Stepper } from '../inspector/controls.js';
 import type { CellSelection } from '../selection.js';
 import { useGraphModel } from './use-graph-model.js';
 import type { Graphs } from './use-graphs.js';
+
+/**
+ * The Pin select's value for "no explicit pin" — a parameter value can be any
+ * text, so the sentinel is a control character no typed value carries.
+ */
+const FOLLOW_SELECTION = '\u0000follow-selection';
 
 export interface GraphTabProps {
   gd: GedeDoc;
@@ -79,6 +89,44 @@ function GraphTabBody({
   const dimOptions = derivation.dimensions.map((d) => ({ value: d.id, label: d.label }));
   const n = (v: number) => formatNumber(locale, v);
   const pairId = graph.pairId;
+  // ONB-05 / A11Y-01 (#159 item 7): while the tour asks for the dimensions, the checklist
+  // is scrolled into the rail and its first box takes focus — after a keyboard bind the
+  // target that had focus has just unmounted, so the next action is one key away. Focus
+  // already in the rail (the person is on the tab strip) is left alone.
+  const tourSubstep = useTourGraphSubstep();
+  const listRef = useRef<HTMLUListElement>(null);
+  const tableId = record?.id ?? null;
+  useEffect(() => {
+    const list = listRef.current;
+    if (tourSubstep !== 'dimensions' || list === null) return;
+    if (!(list.closest('.gd-inspector')?.contains(document.activeElement) ?? false)) {
+      list
+        .querySelector<HTMLElement>('[role="checkbox"]:not([disabled])')
+        ?.focus({ preventScroll: true });
+    }
+    // Scrolled after the focus: the tab strip to the top of the rail first — the card says
+    // "in the Graph tab", so the tab must stay in view — then the list by the least that
+    // brings all of it in (`nearest`), which at every width but a short viewport (450 px at
+    // 200 % zoom) moves nothing more. Scrolled again once the rail's width transition ends:
+    // while it opens from the strip its content is laid out narrow and tall, and a scroll
+    // taken then lands wrong when the layout settles.
+    const rail = list.closest<HTMLElement>('.gd-inspector');
+    const show = () => {
+      rail
+        ?.querySelector<HTMLElement>('.gd-inspector__tabs [role="tablist"]')
+        ?.scrollIntoView({ block: 'start', inline: 'nearest' });
+      list.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+    };
+    show();
+    if (rail === null) return;
+    const onTransitionEnd = (event: TransitionEvent) => {
+      if (event.target === rail) show();
+    };
+    rail.addEventListener('transitionend', onTransitionEnd);
+    return () => {
+      rail.removeEventListener('transitionend', onTransitionEnd);
+    };
+  }, [tourSubstep, tableId]);
 
   return (
     <>
@@ -132,7 +180,12 @@ function GraphTabBody({
         }
       >
         {record !== null && (
-          <ul className="gd-graph-tab__list" data-testid="dimension-checklist">
+          <ul
+            ref={listRef}
+            className="gd-graph-tab__list"
+            data-testid="dimension-checklist"
+            data-tour="dimensions"
+          >
             {record.columns.map((column) => {
               const eligible = column.source === 'entered';
               const on = graph.dimensions.includes(column.id);
@@ -167,6 +220,7 @@ function GraphTabBody({
         )}
         <Button
           size="sm"
+          data-tour="dimensions"
           aria-disabled={viewOnly !== undefined || record === null || undefined}
           title={
             viewOnly !== undefined
@@ -220,12 +274,21 @@ function GraphTabBody({
                 key={pin.dimension.id}
                 label={`Pin ${pin.dimension.label}`}
                 size="sm"
-                hint={pin.explicit ? undefined : 'from the selection'}
-                value={pin.value}
-                options={pin.dimension.parameters.map((p) => ({ value: p.value, label: p.value }))}
+                hint={pin.explicit ? undefined : `from the selection: ${pin.value}`}
+                value={pin.explicit ? pin.value : FOLLOW_SELECTION}
+                options={[
+                  // GRAPH-08 (#141): the way back from an explicit pin to the default.
+                  { value: FOLLOW_SELECTION, label: 'From the selection' },
+                  ...pin.dimension.parameters.map((p) => ({ value: p.value, label: p.value })),
+                ]}
                 disabledReason={viewOnly}
                 onValueChange={(value) => {
-                  actions.setSlice(pairId, withPin(graph.slice, pin.dimension.id, value));
+                  actions.setSlice(
+                    pairId,
+                    value === FOLLOW_SELECTION
+                      ? withoutPin(graph.slice, pin.dimension.id)
+                      : withPin(graph.slice, pin.dimension.id, value),
+                  );
                 }}
               />
             ))}
