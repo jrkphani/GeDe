@@ -835,7 +835,8 @@ button.gd-cell__chevron:hover {
   background: var(--surface-sunken);
   color: var(--ink-muted);
   font-family: var(--font-mono);
-  font-size: 0.53125rem;
+  /* The label step, 9 px: the type floor nothing renders below (#65, ADR-043). */
+  font-size: 0.5625rem;
   line-height: 1;
   cursor: pointer;
   user-select: none;
@@ -955,13 +956,15 @@ button.gd-cell__chevron:hover {
     border-radius: var(--radius-sm);
   }
   /* RESP-05: the row divider is a 44 px target too — grown left of the gutter into the canvas
-     (the row handle keeps its own 20 px) and centred on the row's bottom edge, never right into
+     (the row handle keeps its own 20 px) and straddling the row's bottom edge, never right into
      the cells; its 2 px line stays on the edge across the gutter. Targets of neighbouring rows
-     overlap on a 22 px pitch: the later row's wins, so a press in the half above an edge is
-     that edge's, as the cursor shows. */
+     overlap on a 22 px pitch and the later row's wins, so the target sits 20 px above the edge
+     and 24 px below it: the next row's target then starts 2 px under this edge's line, and a
+     press anywhere on the drawn line — or in the 20 px above it — is this edge's, as the
+     cursor shows (#169 review). */
   .gd-table__row-divider {
     left: calc(-1 * var(--hit-target) - var(--gd-gutter) - 1px);
-    bottom: calc(-1 * var(--hit-target) / 2);
+    bottom: calc(-1 * var(--hit-target) / 2 - 2px);
     width: var(--hit-target);
     height: var(--hit-target);
   }
@@ -969,7 +972,7 @@ button.gd-cell__chevron:hover {
     left: var(--hit-target);
     right: auto;
     width: var(--gd-gutter);
-    bottom: calc(var(--hit-target) / 2 - 1px);
+    bottom: calc(var(--hit-target) / 2 + 1px);
   }
   .gd-table__row-divider:focus-visible {
     outline: none;

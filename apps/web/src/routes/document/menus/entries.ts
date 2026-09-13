@@ -386,7 +386,7 @@ export function cellMenuEntries(
   const canFreeze = visibleBefore < record.columns.filter((c) => !c.hidden).length;
   const address = cellAddress(table, rowId, colId) ?? 'the cell';
   // ADR-049 / Numbers N8: the cell's Wrap Text — checked when the cell wraps, whichever
-  // scope decides it; a change writes the cell's own override (a route to the Cell tab).
+  // scope decides it; a change writes the cell's own override (a route to the Text tab at cell scope).
   const cellWraps = effectiveWrap(table, column, rowId, record.look.wrap);
   const span = spanAt(table, rowId, colId);
   const covered = spanCovering(table, rowId, colId);

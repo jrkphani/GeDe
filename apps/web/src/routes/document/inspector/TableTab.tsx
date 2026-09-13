@@ -350,7 +350,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
       </Section>
       <Section
         label="wrap"
-        hint="The table's default: a cell, row or column can say otherwise (Text tab, Cell tab). Off, text clips at the cell; on, the row grows to show every line."
+        hint="The table's default: a cell, row or column can say otherwise (Text tab). Off, text clips at the cell; on, the row grows to show every line."
       >
         <Switch
           label="Wrap text in cells"
