@@ -324,6 +324,15 @@ export function TextTab({
               }}
             />
           )}
+          {rowBand !== null && rowBand.ids.some((id) => rowMeta(table, id).wrap !== null) && (
+            <ReasonedButton
+              label="Follow the columns' wrap"
+              reason={viewOnly}
+              onClick={() => {
+                commands.setRowsWrap(record.id, rowBand.ids, null);
+              }}
+            />
+          )}
           {(viewOnly ?? (rowBand === null ? needsCell : undefined)) !== undefined && (
             <p className="gd-insp__reason">
               Wrap — {viewOnly ?? (rowBand === null ? needsCell : undefined)}

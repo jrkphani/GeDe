@@ -741,6 +741,36 @@ describe('Inspector', () => {
     expect(rowHeights(table)).toEqual([1, 1, 1, 1]);
   });
 
+  it('INSP-06 GRID-09 KEYS-03 with rows selected the Text tab\'s wrap acts on the band in one step, and "Follow the columns\' wrap" clears it again (ADR-049, review of #169)', async () => {
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    await mount({ undo });
+    const rec = tableById(gd, tableId)!;
+    const table = tableMap(gd, tableId)!;
+    await act(async () => {
+      grid.current?.actions.selectBand(tableId, 'row', rec.rows[0]!);
+      grid.current?.actions.selectBand(tableId, 'row', rec.rows[1]!, true);
+      await Promise.resolve();
+    });
+    await userEvent.click(tab('Text'));
+    const wrap = within(section('wrap'));
+    expect(wrap.queryByRole('button', { name: "Follow the columns' wrap" })).toBeNull();
+    const steps = undo.undoStack.length;
+    await userEvent.click(wrap.getByRole('switch', { name: 'Wrap text in 2 selected rows' }));
+    expect(rowMeta(table, rec.rows[0]!).wrap).toBe(true);
+    expect(rowMeta(table, rec.rows[1]!).wrap).toBe(true);
+    expect(rowMeta(table, rec.rows[2]!).wrap).toBeNull();
+    expect(undo.undoStack).toHaveLength(steps + 1);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('2 rows wrapped');
+    await userEvent.click(wrap.getByRole('button', { name: "Follow the columns' wrap" }));
+    expect(rowMeta(table, rec.rows[0]!).wrap).toBeNull();
+    expect(rowMeta(table, rec.rows[1]!).wrap).toBeNull();
+    expect(undo.undoStack).toHaveLength(steps + 2);
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      "2 rows follow their columns' wrap",
+    );
+    expect(wrap.queryByRole('button', { name: "Follow the columns' wrap" })).toBeNull();
+  });
+
   it('INSP-07 the Arrange tab: stacking order, canvas layout, size and position in grid address and pixels, pin to viewport and DAG edges — live, positions staying on the lattice', async () => {
     // A second table on the sheet, so stacking and layout have something to order.
     const other = createTable(gd, { sheetId, at: { col: 6, row: 1 }, columns: 2, rows: 2 });

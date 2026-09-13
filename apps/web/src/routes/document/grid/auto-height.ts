@@ -14,7 +14,16 @@
  * `height` and `fit` alone, which this observer ignores, so it
  * never answers itself.
  */
-import { rowMeta, setRowHeights, tableMap, tableRecord, type GedeDoc, type Id } from '@gede/core';
+import {
+  needsLegacyHeightSettling,
+  rowMeta,
+  setRowHeights,
+  settleLegacyRowHeights,
+  tableMap,
+  tableRecord,
+  type GedeDoc,
+  type Id,
+} from '@gede/core';
 import * as Y from 'yjs';
 
 import { fitRowsToContent, rowsToMeasure, type FitOptions } from '../style/fit.js';
@@ -134,24 +143,70 @@ export function fitTouched(
 }
 
 /**
- * Install the observer. Returns the disposer. A transaction is answered when
- * it is local (`transaction.local`) and its origin is neither an undo manager
- * nor the seed or sweep origins core uses for housekeeping — those never
- * change what a row needs.
+ * ADR-049, review of #169: a table written before ADR-049 with a wrapping
+ * column had its rows at two units by derivation, never stored. On this
+ * replica — the first that can write — measure every row of such a table
+ * once and store what it needs, under `LEGACY_HEIGHTS_ORIGIN` (local, so it
+ * syncs; not an undo step; not answered by the observer). Readers never
+ * measure (R-B). Idempotent: a settled row carries `fit`, and a table with
+ * no unsettled row is skipped. Returns the ids of the tables settled.
+ */
+export function settleLegacyTables(
+  gd: GedeDoc,
+  deps: AutoHeightDeps,
+  only?: ReadonlySet<Id>,
+): Id[] {
+  if (!deps.editable()) return [];
+  const settled: Id[] = [];
+  let options: FitOptions | null | undefined;
+  gd.tables.forEach((table, tableId) => {
+    if (only !== undefined && !only.has(tableId)) return;
+    if (!needsLegacyHeightSettling(table)) return;
+    options ??= deps.fit();
+    if (options === null) return;
+    const record = tableRecord(table);
+    // A row set by hand since (a stored `fit: false`) keeps its height; the rest are measured.
+    const rows = record.rows.filter((id) => rowMeta(table, id).fit);
+    const needs = fitRowsToContent(table, record, { ...options, only: rows });
+    settleLegacyRowHeights(gd, tableId, needs);
+    settled.push(tableId);
+  });
+  return settled;
+}
+
+/**
+ * Install the observer. Returns the disposer. A local transaction is answered
+ * when its origin is neither an undo manager nor a string (seed, sweep,
+ * legacy settling: housekeeping origins that never change what a row needs).
+ * A remote transaction is not measured (R-B) — but the tables it brings are
+ * checked for the legacy shape, as is everything already loaded at install,
+ * so the first editing replica settles them once.
  */
 export function installAutoHeight(gd: GedeDoc, deps: AutoHeightDeps): () => void {
   const onChange = (
     events: Y.YEvent<Y.AbstractType<unknown>>[],
     transaction: Y.Transaction,
   ): void => {
-    if (!transaction.local) return;
+    if (!transaction.local) {
+      const arrived = new Set<Id>();
+      for (const event of events) {
+        const [tableId] = event.path;
+        if (typeof tableId === 'string') arrived.add(tableId);
+        else if (event.target === gd.tables) {
+          for (const key of event.changes.keys.keys()) arrived.add(key);
+        }
+      }
+      if (arrived.size > 0) settleLegacyTables(gd, deps, arrived);
+      return;
+    }
     if (transaction.origin instanceof Y.UndoManager) return;
-    if (typeof transaction.origin === 'string') return; // seed, sweep: housekeeping origins
+    if (typeof transaction.origin === 'string') return; // seed, sweep, legacy: housekeeping origins
     const touched = touchedRows(events);
     if (touched.size === 0) return;
     fitTouched(gd, touched, deps);
   };
   gd.tables.observeDeep(onChange);
+  settleLegacyTables(gd, deps);
   return () => {
     gd.tables.unobserveDeep(onChange);
   };

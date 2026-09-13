@@ -5,7 +5,9 @@ import {
   createSheet,
   createTable,
   createUndoManager,
+  LEGACY_HEIGHTS_ORIGIN,
   mergeCells,
+  needsLegacyHeightSettling,
   openDocument,
   rowMeta,
   setCellAppearance,
@@ -18,6 +20,7 @@ import {
   setTableLook,
   tableById,
   tableMap,
+  tableRecord,
   TYPE_SIZE_PX,
   type GedeDoc,
   type TableMap,
@@ -54,6 +57,8 @@ function fixture(): { gd: GedeDoc; id: string; t: TableMap; rows: string[]; cols
 
 const fit = () => ({ locale: 'en-US' as const, measure: fakeMeasure });
 const deps = { fit, editable: () => true };
+/** Column ids of a table map, in order. */
+const cols = (t: TableMap): string[] => tableRecord(t).columns.map((c) => c.id);
 
 // One unit of width (160 px) less the 17 px of chrome holds 143 px: 24 characters at 5.75 px.
 const LONG = 'a'.repeat(60); // three lines wrapped, one line clipped
@@ -221,16 +226,26 @@ describe('the editing replica stores heights (GRID-09, KEYS-03, LOAD-06, ADR-049
     b.doc.on('update', (update: Uint8Array) => {
       Y.applyUpdate(a.gd.doc, update, 'remote');
     });
-    const writes: number[] = [];
+    const writes: unknown[] = [];
     b.tables.observeDeep((_events, txn) => {
-      if (txn.local) writes.push(1);
+      if (txn.local) writes.push(txn.origin);
     });
     const disposeB = installAutoHeight(b, deps);
-    setColumnWrap(a.gd, a.id, a.cols[0] ?? '', true);
     setCellText(a.gd, a.id, a.rows[0] ?? '', a.cols[0] ?? '', LONG);
-    // B received A's edit but measured nothing: A had no auto-fit installed, so the row is 1.
+    // B received A's edit but measured nothing: nothing wraps, and a remote edit is A's to
+    // measure (A had no auto-fit installed, so the row is 1).
     expect(writes).toEqual([]);
     expect(rowMeta(tableMap(b, a.id)!, a.rows[0] ?? '').height).toBe(1);
+    // A wraps the column: the table now has the legacy shape (a wrapping column, rows never
+    // settled), so B — the first replica that can write — settles it once, under the
+    // housekeeping origin; the remote edit that follows is still not measured by B.
+    setColumnWrap(a.gd, a.id, a.cols[0] ?? '', true);
+    expect(writes).toEqual([LEGACY_HEIGHTS_ORIGIN]);
+    expect(rowMeta(tableMap(b, a.id)!, a.rows[0] ?? '')).toMatchObject({ height: 3, fit: true });
+    expect(rowMeta(a.t, a.rows[0] ?? '')).toMatchObject({ height: 3, fit: true });
+    setCellText(a.gd, a.id, a.rows[0] ?? '', a.cols[0] ?? '', 'short');
+    expect(writes).toEqual([LEGACY_HEIGHTS_ORIGIN]);
+    expect(rowMeta(tableMap(b, a.id)!, a.rows[0] ?? '').height).toBe(3);
     disposeB();
     // A view-only replica and one that cannot measure write nothing on their own edits.
     const noWrite = fitTouched(a.gd, new Map([[a.id, null]]), { fit, editable: () => false });
@@ -240,8 +255,98 @@ describe('the editing replica stores heights (GRID-09, KEYS-03, LOAD-06, ADR-049
       editable: () => true,
     });
     expect(noContext.size).toBe(0);
-    // With a measurer, the same call writes the three-row height above the floor.
+    // With a measurer, the same call writes what the row now needs: 'short' fits one unit.
     const wrote = fitTouched(a.gd, new Map([[a.id, null]]), deps);
-    expect(wrote.get(a.id)?.get(a.rows[0] ?? '')).toBe(3);
+    expect(wrote.get(a.id)?.get(a.rows[0] ?? '')).toBe(1);
+  });
+});
+
+describe('legacy wrapped tables settle once on the first editing open (ADR-049, review of #169)', () => {
+  /**
+   * A document written before ADR-049: a wrapping column, rows born with
+   * `height: 1` and no `fit` key, one row wrapped the old way (`height: 2`
+   * alone) — every row was two units by derivation, nothing stored.
+   */
+  function legacy(): ReturnType<typeof fixture> {
+    const f = fixture();
+    const [r1, r2] = f.rows as [string, string];
+    setCellText(f.gd, f.id, r1, f.cols[0] ?? '', LONG);
+    setCellText(f.gd, f.id, r2, f.cols[1] ?? '', 'short');
+    const columns = f.t.get('columns') as Y.Array<Y.Map<unknown>>;
+    const metas = f.t.get('rowMeta') as Y.Map<Y.Map<unknown>>;
+    f.gd.doc.transact(() => {
+      columns.get(0).set('wrap', true);
+      metas.get(r2)?.set('height', 2);
+    }, 'seed');
+    return f;
+  }
+
+  it('GRID-09 LOAD-06 the first editing replica measures every row and stores it, not as an undo step; readers and a second open find nothing to do', () => {
+    const { gd, t, rows } = legacy();
+    const [r1, r2, r3] = rows as [string, string, string];
+    expect(needsLegacyHeightSettling(t)).toBe(true);
+    expect(rowMeta(t, r2)).toMatchObject({ height: 2, wrap: true }); // the legacy reader
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const origins: unknown[] = [];
+    gd.doc.on('afterTransaction', (txn: Y.Transaction) => {
+      origins.push(txn.origin);
+    });
+    // A view-only replica never measures (R-B).
+    const disposeViewer = installAutoHeight(gd, { fit, editable: () => false });
+    expect(needsLegacyHeightSettling(t)).toBe(true);
+    disposeViewer();
+    // The first editing replica settles it on install: measured heights, every row marked.
+    const dispose = installAutoHeight(gd, deps);
+    expect(rowMeta(t, r1)).toMatchObject({ height: 3, fit: true });
+    expect(rowMeta(t, r2)).toMatchObject({ height: 1, fit: true, wrap: null }); // no longer legacy-wrapped
+    expect(rowMeta(t, r3)).toMatchObject({ height: 1, fit: true });
+    expect(cellAddress(t, r2, cols(t)[0] ?? '')).toBe('A7'); // the row after a three-unit row
+    expect(needsLegacyHeightSettling(t)).toBe(false);
+    expect(undo.undoStack).toHaveLength(0);
+    expect(origins).toEqual([LEGACY_HEIGHTS_ORIGIN]);
+    // Idempotent: a second install writes nothing.
+    dispose();
+    const again = installAutoHeight(gd, deps);
+    expect(origins).toEqual([LEGACY_HEIGHTS_ORIGIN]);
+    again();
+  });
+
+  it('LOAD-06 a legacy table that arrives over sync is settled by the editing replica that receives it; the other replica converges on the stored heights and addresses', () => {
+    const a = legacy();
+    const b = openDocument(new Y.Doc());
+    const disposeB = installAutoHeight(b, deps); // B is editing, and has nothing yet
+    b.doc.on('update', (update: Uint8Array) => {
+      Y.applyUpdate(a.gd.doc, update, 'remote');
+    });
+    // A's document reaches B in one remote update.
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.gd.doc), 'remote');
+    const tb = tableMap(b, a.id)!;
+    const [r1, r2] = a.rows as [string, string];
+    expect(rowMeta(tb, r1)).toMatchObject({ height: 3, fit: true });
+    expect(needsLegacyHeightSettling(tb)).toBe(false);
+    // A (a reader here, or a later editing open) receives the settled heights: same addresses.
+    expect(rowMeta(a.t, r1)).toMatchObject({ height: 3, fit: true });
+    expect(cellAddress(a.t, r2, cols(a.t)[0] ?? '')).toBe(cellAddress(tb, r2, cols(tb)[0] ?? ''));
+    expect(a.gd.tables.toJSON()).toEqual(b.tables.toJSON());
+    disposeB();
+  });
+
+  it('GRID-08 a row set by hand since keeps its height through the settling; a table with no wrapping column is left alone', () => {
+    const f = legacy();
+    const [r1, r2] = f.rows as [string, string];
+    setRowHeight(f.gd, f.id, r2, 4);
+    const dispose = installAutoHeight(f.gd, deps);
+    expect(rowMeta(f.t, r1)).toMatchObject({ height: 3, fit: true });
+    expect(rowMeta(f.t, r2)).toMatchObject({ height: 4, fit: false });
+    dispose();
+    const plain = fixture();
+    const before = plain.gd.doc.clientID;
+    let writes = 0;
+    plain.gd.doc.on('afterTransaction', () => {
+      writes += 1;
+    });
+    installAutoHeight(plain.gd, deps)();
+    expect(writes).toBe(0);
+    expect(plain.gd.doc.clientID).toBe(before);
   });
 });

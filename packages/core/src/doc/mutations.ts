@@ -818,6 +818,57 @@ export function clearCell(gd: GedeDoc, tableId: Id, rowId: Id, colId: Id): boole
 export const SWEEP_ORIGIN = 'sweep';
 
 /**
+ * Transaction origin for the one-time settling of a legacy wrapped table's
+ * heights (ADR-049): local, so it syncs, but never an undo step and never
+ * answered by the auto-height observer — nothing a person did.
+ */
+export const LEGACY_HEIGHTS_ORIGIN = 'legacy-heights';
+
+/**
+ * Before ADR-049 a wrapping column made every row two units by derivation —
+ * nothing was stored — so such a table opens with every row at its stored
+ * one unit, its wrapped text clipped and its addresses shifted, until an edit
+ * re-measures it. True while any visible column wraps and any row has not
+ * been settled (no `fit` key on its meta): the first editing replica then
+ * measures every row and stores what it needs (`settleLegacyRowHeights`).
+ * Rows born after ADR-049 that a measurement never touched read the same
+ * way, so a table's first editing open may settle them once too — a silent,
+ * idempotent write.
+ */
+export function needsLegacyHeightSettling(table: TableMap): boolean {
+  const record = tableRecord(table);
+  if (!record.columns.some((c) => c.wrap === true && !c.hidden)) return false;
+  const metas = rowMetaMap(table);
+  return record.rows.some((rowId) => metas.get(rowId)?.get('fit') === undefined);
+}
+
+/**
+ * Store the measured heights of a legacy wrapped table's rows, marking every
+ * listed row settled (`fit: true`) so the pass never runs again for it. One
+ * transaction under `LEGACY_HEIGHTS_ORIGIN`. Returns how many rows changed height.
+ */
+export function settleLegacyRowHeights(
+  gd: GedeDoc,
+  tableId: Id,
+  heights: readonly { readonly rowId: Id; readonly units: number }[],
+): number {
+  let changed = 0;
+  gd.doc.transact(() => {
+    const table = requireTable(gd, tableId);
+    for (const { rowId, units } of heights) {
+      const meta = rowMetaFor(table, rowId);
+      const height = snapWidthUnits(units);
+      if (meta.get('height') !== height) {
+        meta.set('height', height);
+        changed += 1;
+      }
+      if (meta.get('fit') !== true) meta.set('fit', true);
+    }
+  }, LEGACY_HEIGHTS_ORIGIN);
+  return changed;
+}
+
+/**
  * Cell keys whose row or column is no longer in the table. They arise only from a
  * merge: one replica deleted a row while another, offline, wrote into it
  * (`deleteRow` removes the cells it can see; the write merges in afterwards).
