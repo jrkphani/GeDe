@@ -1249,7 +1249,7 @@ describe('GeDe CDK app', () => {
     // Actual at 80 % and, since the ops review, the forecast at 100 % (it read US$128 on
     // US$100 while the actual notification sat quiet at 53 %).
     stacks.Ops!.hasResourceProperties('AWS::Budgets::Budget', {
-      Budget: Match.objectLike({ BudgetLimit: { Amount: 150, Unit: 'USD' }, TimeUnit: 'MONTHLY' }),
+      Budget: Match.objectLike({ BudgetLimit: { Amount: 200, Unit: 'USD' }, TimeUnit: 'MONTHLY' }),
       NotificationsWithSubscribers: [
         Match.objectLike({
           Notification: {
