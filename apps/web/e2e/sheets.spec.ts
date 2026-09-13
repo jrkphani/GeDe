@@ -271,7 +271,13 @@ test('DOC-03 MENU-01 MENU-02 MENU-05 RESP-03 at 1440 by pointer: right-click →
   await page.keyboard.type('Nope');
   await page.keyboard.press('Escape');
   await expect(page.getByRole('tab', { name: /2°.*Budget/ })).toBeVisible();
-  await expect(page.getByRole('tab', { name: /2°.*Budget/ })).toBeFocused();
+  // Budget was not the shown sheet: focusing its tab would select it (Radix activates on
+  // focus), so the keyboard lands on the active tab and Trek stays the shown sheet.
+  await expect(page.getByRole('tab', { name: /1°.*Trek/ })).toBeFocused();
+  await expect(page.getByRole('tab', { name: /1°.*Trek/ })).toHaveAttribute(
+    'aria-selected',
+    'true',
+  );
   await page.getByRole('tab', { name: /2°.*Budget/ }).dblclick();
   await expect(field).toBeFocused();
   await page.keyboard.press('Escape');

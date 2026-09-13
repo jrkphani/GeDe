@@ -166,9 +166,17 @@ export function SheetTabs({ gd, activeSheetId, onSelect, onAppend, edit, bottom 
         return;
       }
     }
+    const wantedTab = strip.current?.querySelector<HTMLElement>(
+      `[role="tab"][data-value="${wanted}"]`,
+    );
+    // Focusing an inactive Radix tab activates it (automatic activation), so a sheet renamed
+    // from its menu while another is shown would become the shown one — and its "Renamed …"
+    // announcement would be talked over by the selection's. The keyboard is put on the tab
+    // when it is the active sheet's; otherwise on the active tab, which changes nothing.
     const tab =
-      strip.current?.querySelector<HTMLElement>(`[role="tab"][data-value="${wanted}"]`) ??
-      strip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+      wantedTab?.getAttribute('aria-selected') === 'true'
+        ? wantedTab
+        : strip.current?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
     focusAfter.current = null;
     tab?.focus({ preventScroll: true });
   });

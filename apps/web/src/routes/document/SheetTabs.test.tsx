@@ -247,6 +247,29 @@ describe('sheet tab menu (ADR-048)', () => {
     expect(renamed).toHaveFocus();
   });
 
+  it('DOC-03 MENU-05 renaming an inactive sheet from its menu keeps the active sheet: the commit does not select the renamed tab (focusing an inactive Radix tab would) and focus lands on the active tab', async () => {
+    render(<Harness />);
+    // A right-click on the inactive tab opens its menu without focusing it (the pointer path).
+    fireEvent.contextMenu(tab(/Budget/));
+    const menu = await screen.findByRole('menu', { name: 'Sheet menu' });
+    await userEvent.click(within(menu).getByRole('menuitem', { name: /Rename sheet/ }));
+    const field = await screen.findByRole<HTMLInputElement>('textbox', { name: 'Sheet name' });
+    await waitFor(() => {
+      expect(field).toHaveFocus();
+    });
+    expect(tab(/1°/)).toHaveAttribute('aria-selected', 'true');
+    fireEvent.change(field, { target: { value: 'Costs' } });
+    fireEvent.keyDown(field, { code: 'Enter' });
+    expect(sheetById(gd, second)?.label).toBe('Costs');
+    await screen.findByRole('tab', { name: /2°.*Costs/ });
+    // Sheet 1 is still the shown sheet, and the keyboard is on its tab, not on body.
+    expect(tab(/1°/)).toHaveAttribute('aria-selected', 'true');
+    expect(tab(/2°.*Costs/)).toHaveAttribute('aria-selected', 'false');
+    await waitFor(() => {
+      expect(tab(/1°/)).toHaveFocus();
+    });
+  });
+
   it('DOC-03 KEYS-06 F2 or a double-click renames; Escape cancels and keeps the old name; an empty name is refused with the reason', async () => {
     render(<Harness />);
     act(() => {
