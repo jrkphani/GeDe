@@ -267,6 +267,30 @@ Subject ≤ 60 chars, front-loaded with actor or object. One primary action per 
 | share.invite | Invitation to non-user | "Meenarapan invited you to a GeDe workscape" | Accept invitation; one-time token in link; expires 14 days; mentions passkey setup |
 | collab.mention | Mentioned in a comment | "Sembian mentioned you in “Generic Design Architect”" | Go to the cell; comment text not included |
 
+### Email — as shipped (`packages/mail`, ADR-044)
+
+Every mail GeDe sends is rendered by `@gede/mail`, one layout from the tokens, in the recipient's locale. The handover table above is the brief; this is what exists.
+
+**Layout.** A 600 px column on `--surface-sunken`, one card on `--surface` with a 1 px `--border` and `--radius-lg`; the brand lockup (the mark as the hosted `icon-192.png` at 36 px beside the wordmark — the one place Title Case lives); an `h1` at 22 px/600; body copy at 16 px, line-height 1.6, in the UI font stack (`--font-ui`; no web fonts — Noto is not asked for in mail); then **either** the one-time code — 32 px `--font-mono`, letter-spaced, in the live amber (`--selection-ring`, the only amber in the message) on `--tint-amber-soft` with a `--radius-md` box — **or** the one primary action (`--action-primary-bg` / `--action-primary-fg`, `--radius-md`, a verb) with the plain link written out beneath it in `--link`; a hairline rule; a footer at 14 px `--ink-muted` that says why the mail arrived, which address it went to, and "GeDe, the text-oriented spreadsheet." Table markup, inline styles, at most one `<a>`, no images beyond the mark. Every colour is read from `tokens.css` at generation time into `src/generated/palette.ts` (light from `:root`, dark from the `[data-theme="dark"]` swap); the file is pinned by test and excluded from `check-literals`, which scans the rest of the package.
+
+**Dark.** `<meta name="color-scheme" content="light dark">` and `supported-color-schemes`, plus a `<style>` block that swaps the same tokens under `prefers-color-scheme: dark` (the amber becomes the dark selection ring, amber-300). Contrast, both schemes, pinned in `palette.test.ts`: ink on surface 16.8:1 / 15.0:1, muted ink 5.6:1 / 7.8:1, link 9.1:1 / 7.3:1, button label 9.1:1 / 5.2:1, code on its box 4.7:1 / 8.4:1 (light / dark).
+
+**Kinds** (subjects in en-US; fixed subjects ≤ 60 characters in every locale, share subjects trimmed on the title):
+
+| kind | sent by | subject | body |
+|---|---|---|---|
+| `signUpCode` | Cognito — pool `VerificationMessageTemplate` (en-US) now; `CustomMessage_SignUp` / `_ResendCode` once the trigger is attached | Your GeDe sign-up code | Confirm your email address; the code; works once, expires in 24 hours |
+| `signInCode` | Cognito — pool `EmailAuthenticationMessage` (en-US) now; `CustomMessage_Authentication` (EMAIL_OTP first factor) once attached | Your GeDe sign-in code | Sign in to GeDe; the code; works once, expires in 10 minutes (the client's `authSessionValidity`) |
+| `emailChangeCode` | Cognito — pool `VerificationMessageTemplate` (the sign-up copy, en-US: Cognito uses one template for every attribute verification) now; `CustomMessage_UpdateUserAttribute` / `_VerifyUserAttribute` once attached | Confirm your new GeDe email address | The code; the previous address keeps working until confirmed (`keepOriginal`) |
+| `share.member` | services/sync, SES | {actor} shared “{title}” with you | Open workscape; reply-to the sharer |
+| `share.invite` | services/sync, SES | {actor} invited you to a GeDe workscape | Accept invitation; valid 14 days; passkey or code, no password |
+
+Not sent, because the PRD sends none: a welcome mail, a passkey-added notice, a mention. The code is never in a subject or the preheader (Cognito's `{####}` appears exactly once, by test).
+
+**Locales.** en-US, en-GB, en-IN, ta-IN, hi-IN, te-IN — the catalogue mechanism of `apps/web/src/i18n` (same keys everywhere, `{placeholders}` preserved, product names untranslated). Share mail follows the member's `users.locale`, else the inviter's, today. Cognito mail follows the user's `locale` attribute, which the web app writes at sign-up and on every change — **once the custom-message trigger is attached**, which waits for SES sending (`customMessageTrigger` in `infra/cdk.json`, runbook §5; under Cognito's own sender the trigger would refuse every sign-in, ADR-044). Until then every code is the branded en-US pool template. An unknown tag renders en-US. Code mails are stripped of format characters (te-IN's ZWNJ) for Cognito's template pattern; share mail keeps them. `docs/mail-previews/` holds the rendered sheets (light, dark, the Indic locales), produced from the test snapshots by `packages/mail/scripts/screenshots.mjs`.
+
+**Sender.** Cognito's own address until SES has production access; then `no-reply@gede.work` (runbook §5). The templates do not depend on the sender.
+
 ---
 
 ## 7. Keyboard shortcut map (shortcuts.md, verbatim)

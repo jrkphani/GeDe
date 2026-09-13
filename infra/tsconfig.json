@@ -11,5 +11,6 @@
     // `T | undefined`; the library does not compile under exactOptionalPropertyTypes (aws-cdk#19670).
     "exactOptionalPropertyTypes": false
   },
-  "include": ["bin", "lib", "test", "vitest.config.ts"]
+  "include": ["bin", "lib", "test", "vitest.config.ts"],
+  "references": [{ "path": "../packages/mail/tsconfig.src.json" }]
 }

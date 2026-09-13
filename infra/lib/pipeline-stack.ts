@@ -181,6 +181,7 @@ export class PipelineStack extends cdk.Stack {
       config,
       hostedZoneId: context.hostedZoneId,
       appleSignIn: context.appleSignIn,
+      customMessageTrigger: context.customMessageTrigger,
     });
 
     // The API is probed through CloudFront (`/api/health`), which adds the origin-verify

@@ -15,6 +15,8 @@ export interface GedeStageProps extends cdk.StageProps {
   readonly config: EnvConfig;
   readonly hostedZoneId: string;
   readonly appleSignIn: boolean;
+  /** Attach the custom-message trigger to the pool (only with SES sending; see `AppContext`). */
+  readonly customMessageTrigger: boolean;
 }
 
 /**
@@ -40,7 +42,7 @@ export class GedeStage extends cdk.Stage {
 
   constructor(scope: Construct, id: string, props: GedeStageProps) {
     super(scope, id, props);
-    const { config, hostedZoneId, appleSignIn } = props;
+    const { config, hostedZoneId, appleSignIn, customMessageTrigger } = props;
     const env: cdk.Environment = { account: config.account, region: config.region };
     const name = (stack: string): string => `GeDe-${capitalize(config.envName)}-${stack}`;
 
@@ -64,6 +66,7 @@ export class GedeStage extends cdk.Stage {
       config,
       hostedZoneId,
       appleSignIn,
+      customMessageTrigger,
     });
 
     const edge = new EdgeStack(this, 'Edge', {
@@ -129,6 +132,7 @@ export class GedeStage extends cdk.Stage {
       serviceLogGroup: service.logGroup,
       serviceSecurityGroup: service.serviceSecurityGroup,
       preAuthFunction: auth.preAuthFunction,
+      customMessageFunction: auth.customMessageFunction,
     });
 
     this.apiUrl = service.apiUrl;

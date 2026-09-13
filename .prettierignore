@@ -7,3 +7,4 @@ package-lock.json
 *.snap
 docs/REQUIREMENTS.md
 docs/*-DIGEST.md
+packages/mail/src/__snapshots__

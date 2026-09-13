@@ -11,11 +11,13 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json tsconfig.json ./
 COPY packages/core/package.json ./packages/core/
 COPY packages/db/package.json ./packages/db/
+COPY packages/mail/package.json ./packages/mail/
 COPY services/sync/package.json ./services/sync/
-RUN npm ci -w services/sync -w packages/core -w packages/db --include-workspace-root
+RUN npm ci -w services/sync -w packages/core -w packages/db -w packages/mail --include-workspace-root
 
 COPY packages/core ./packages/core
 COPY packages/db ./packages/db
+COPY packages/mail ./packages/mail
 COPY services/sync ./services/sync
 ARG GEDE_VERSION
 ENV GEDE_VERSION=${GEDE_VERSION}

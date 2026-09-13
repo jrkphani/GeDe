@@ -1,8 +1,10 @@
+import { renderCodeMail } from '@gede/mail';
 import * as cdk from 'aws-cdk-lib';
 import {
   aws_cognito as cognito,
   aws_iam as iam,
   aws_lambda as lambda,
+  aws_lambda_nodejs as lambda_nodejs,
   aws_logs as logs,
   aws_route53 as route53,
   aws_secretsmanager as secretsmanager,
@@ -11,13 +13,30 @@ import {
 import { type Construct } from 'constructs';
 
 import { type EnvConfig, PLAYWRIGHT_LIVE_ROLE_NAME, e2eUsername } from '../config.js';
-import { E2E_USER_HANDLER_DIR, PRE_AUTH_HANDLER_DIR } from '../paths.js';
+import {
+  CUSTOM_MESSAGE_HANDLER_ENTRY,
+  E2E_USER_HANDLER_DIR,
+  MAIL_PACKAGE_ENTRY,
+  PRE_AUTH_HANDLER_DIR,
+  ROOT_LOCKFILE,
+  REPO_ROOT,
+} from '../paths.js';
 
 export interface AuthStackProps extends cdk.StackProps {
   readonly config: EnvConfig;
   readonly hostedZoneId: string;
   /** Provision the Sign in with Apple identity provider (needs the `gede/prod/apple-signin` secret). */
   readonly appleSignIn: boolean;
+  /**
+   * Attach the custom-message trigger to the pool. **Only with `withSES`** (`EmailSendingAccount:
+   * DEVELOPER`): under the built-in sender Cognito rejects a trigger response that carries
+   * `emailMessage`/`emailSubject` with `InvalidLambdaResponseException` — returned to the
+   * caller of SignUp / InitiateAuth, so no code is delivered and every email sign-up and
+   * sign-in is refused (developer guide, "Custom message Lambda trigger", response
+   * parameters; #158 review). The function, its log group and its alarm exist either way,
+   * so the flip is one property on the pool.
+   */
+  readonly customMessageTrigger: boolean;
 }
 
 /** Secrets Manager secret holding the Apple developer credentials, JSON with these fields. */
@@ -25,6 +44,36 @@ const APPLE_SECRET_ID = 'gede/prod/apple-signin';
 
 /** Client name of the pipeline's live-suite app client (`ADMIN_USER_PASSWORD_AUTH` only). */
 export const E2E_CLIENT_NAME = 'gede-e2e';
+
+/**
+ * Cognito's placeholder for the code in a pool message template and in the
+ * custom-message trigger's `request.codeParameter`.
+ */
+export const COGNITO_CODE_PLACEHOLDER = '{####}';
+
+/**
+ * AUTH-06: the sign-in screen says "Codes expire in 10 minutes", so the challenge session
+ * that carries the EMAIL_OTP code lives that long (Cognito's default is 3; the range is
+ * 3–15). The sign-up confirmation code is Cognito's, valid 24 hours, not configurable.
+ */
+export const AUTH_SESSION_VALIDITY = cdk.Duration.minutes(10);
+
+/**
+ * The pool's own message templates, branded en-US (`@gede/mail` at synth time): what
+ * Cognito sends when the custom-message trigger returns the event untouched — an
+ * unhandled trigger source, or the trigger failing open (infra/assets/custom-message).
+ * The trigger is the localised path; these are the floor.
+ */
+export function poolMessageTemplates(): {
+  readonly signUp: { subject: string; body: string };
+  readonly signIn: { subject: string; body: string };
+} {
+  const render = (kind: 'signUpCode' | 'signInCode') => {
+    const mail = renderCodeMail(kind, 'en-US', { code: COGNITO_CODE_PLACEHOLDER, email: null });
+    return { subject: mail.subject, body: mail.html };
+  };
+  return { signUp: render('signUpCode'), signIn: render('signInCode') };
+}
 
 /**
  * Cognito user pool (passwordless: email OTP + passkeys), its SPA client, the SES sending
@@ -49,6 +98,8 @@ export class AuthStack extends cdk.Stack {
   readonly emailIdentity: ses.EmailIdentity;
   /** The pool's pre-authentication trigger; OpsStack alarms on its `Errors` (#103). */
   readonly preAuthFunction: lambda.IFunction;
+  /** The pool's custom-message trigger (branded, localised codes); OpsStack alarms on its `Errors`. */
+  readonly customMessageFunction: lambda.IFunction;
   /** Stage outputs the pipeline's Playwright-Live step reads (`envFromCfnOutputs`). */
   readonly userPoolIdOutput: cdk.CfnOutput;
   readonly e2eClientIdOutput: cdk.CfnOutput;
@@ -77,10 +128,18 @@ export class AuthStack extends cdk.Stack {
       mailFromDomain: `mail.${config.domain}`,
     });
 
+    const templates = poolMessageTemplates();
     this.userPool = new cognito.UserPool(this, 'UserPool', {
       selfSignUpEnabled: true,
       signInAliases: { email: true },
       autoVerify: { email: true },
+      // The branded en-US sign-up code, for when the custom-message trigger below leaves
+      // the event untouched. The trigger renders the same template in the user's locale.
+      userVerification: {
+        emailStyle: cognito.VerificationEmailStyle.CODE,
+        emailSubject: templates.signUp.subject,
+        emailBody: templates.signUp.body,
+      },
       // The SPA client may write `email` (ADR-019). Without this an `UpdateUserAttributes`
       // call with a live access token replaces the verified sign-in address at once, and
       // with `accountRecovery: NONE` there is no way back — a lockout and takeover primitive
@@ -105,7 +164,8 @@ export class AuthStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.RETAIN,
       email: cognito.UserPoolEmail.withCognito(),
       // Once SES is out of the sandbox (production access granted in ap-southeast-1),
-      // switch to the verified domain identity created above:
+      // switch to the verified domain identity created above. The templates and the
+      // custom-message trigger are sender-independent; only the From address changes.
       // email: cognito.UserPoolEmail.withSES({
       //   fromEmail: `no-reply@${config.domain}`,
       //   fromName: 'GeDe',
@@ -113,6 +173,14 @@ export class AuthStack extends cdk.Stack {
       //   sesRegion: config.region,
       // }),
     });
+
+    // The passwordless EMAIL_OTP sign-in code has its own pool template
+    // (`EmailAuthenticationMessage` / `EmailAuthenticationSubject`), which the L2 does not
+    // expose (aws-cdk-lib 2.261, checked in cognito.generated.d.ts). Same floor as the
+    // sign-up template: branded en-US when the trigger does not render it.
+    const cfnPool = this.userPool.node.defaultChild as cognito.CfnUserPool;
+    cfnPool.emailAuthenticationSubject = templates.signIn.subject;
+    cfnPool.emailAuthenticationMessage = templates.signIn.body;
 
     const supportedIdentityProviders = [cognito.UserPoolClientIdentityProvider.COGNITO];
     let apple: cognito.UserPoolIdentityProviderApple | undefined;
@@ -201,6 +269,8 @@ export class AuthStack extends cdk.Stack {
       // period (AUTH-09); Amplify v6 stores the rotated token (refreshAuthTokens.mjs).
       refreshTokenRotationGracePeriod: cdk.Duration.seconds(30),
       enableTokenRevocation: true,
+      // How long an EMAIL_OTP code stays answerable (AUTH-06 says ten minutes).
+      authSessionValidity: AUTH_SESSION_VALIDITY,
       readAttributes,
       writeAttributes,
       supportedIdentityProviders,
@@ -332,6 +402,46 @@ export class AuthStack extends cdk.Stack {
     );
     this.userPool.addTrigger(cognito.UserPoolOperation.PRE_AUTHENTICATION, preAuth);
     this.preAuthFunction = preAuth;
+
+    // Every code the pool sends, branded and in the user's locale (AUTH-03/04, I18N-05):
+    // the custom-message trigger renders `@gede/mail` for CustomMessage_SignUp,
+    // _ResendCode, _Authentication (the EMAIL_OTP first factor), _UpdateUserAttribute and
+    // _VerifyUserAttribute, and returns anything else untouched. esbuild bundles the
+    // handler with @gede/mail's source at synth (no dist to go stale, no node_modules in
+    // the asset); the AWS SDK stays external and unused. No IAM beyond the execution
+    // role's own log group: the function makes no call. It is attached to the pool only
+    // under `customMessageTrigger` (see `AuthStackProps`): with the built-in sender the
+    // pool would refuse every sign-in the moment the trigger answered.
+    const customMessage = new lambda_nodejs.NodejsFunction(this, 'CustomMessage', {
+      description: `GeDe ${config.envName}: custom-message trigger (branded, localised one-time codes)`,
+      entry: CUSTOM_MESSAGE_HANDLER_ENTRY,
+      handler: 'handler',
+      projectRoot: REPO_ROOT,
+      depsLockFilePath: ROOT_LOCKFILE,
+      runtime: lambda.Runtime.NODEJS_22_X,
+      architecture: lambda.Architecture.ARM_64,
+      timeout: cdk.Duration.seconds(5),
+      memorySize: 256,
+      bundling: {
+        format: lambda_nodejs.OutputFormat.ESM,
+        target: 'node22',
+        minify: false,
+        sourceMap: false,
+        esbuildArgs: {
+          '--alias': `@gede/mail=${MAIL_PACKAGE_ENTRY}`,
+          // Keep the catalogue readable in the asset (esbuild escapes non-ASCII by default).
+          '--charset': 'utf8',
+        },
+      },
+      logGroup: new logs.LogGroup(this, 'CustomMessageLogs', {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
+      }),
+    });
+    if (props.customMessageTrigger) {
+      this.userPool.addTrigger(cognito.UserPoolOperation.CUSTOM_MESSAGE, customMessage);
+    }
+    this.customMessageFunction = customMessage;
 
     // What the Playwright-Live CodeBuild role may do, attached here because only this stack
     // knows the exact pool and secret ARNs (PipelineStack creates the role by its fixed name).

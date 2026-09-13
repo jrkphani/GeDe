@@ -24,6 +24,7 @@ export function readContext(app: cdk.App): AppContext {
     codeConnectionArn: str('codeConnectionArn'),
     hostedZoneId: str('hostedZoneId'),
     appleSignIn: bool('appleSignIn'),
+    customMessageTrigger: bool('customMessageTrigger'),
     githubRepo: str('githubRepo'),
     githubBranch: str('githubBranch'),
   };

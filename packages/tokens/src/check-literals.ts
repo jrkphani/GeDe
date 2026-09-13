@@ -19,7 +19,13 @@ export interface Finding {
 }
 
 export const SCANNED_EXTENSIONS: readonly string[] = ['.ts', '.tsx', '.css'];
-export const EXCLUDED_DIRS: readonly string[] = ['node_modules', 'dist', 'packages/tokens'];
+export const EXCLUDED_DIRS: readonly string[] = [
+  'node_modules',
+  'dist',
+  'packages/tokens',
+  // Written by `npm run generate -w packages/mail` from tokens.css; its test pins it to the source.
+  'packages/mail/src/generated',
+];
 export const IGNORE_MARKER = 'literal-ok';
 
 const HEX = /#[0-9a-f]{3,8}\b/gi;

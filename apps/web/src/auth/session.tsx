@@ -12,7 +12,14 @@ import { Navigate, useLocation } from 'react-router';
 import { Skeleton } from '@gede/ui';
 import { bindVerifiedEmail, getMe, updateMe, type Me, type MePatch } from '../api/me.js';
 import { bindUserLocale, unbindUserLocale } from '../locale.js';
-import { currentUser, idToken, onAuthEvent, signOutLocal, type SessionUser } from './cognito.js';
+import {
+  currentUser,
+  idToken,
+  onAuthEvent,
+  signOutLocal,
+  syncLocaleAttribute,
+  type SessionUser,
+} from './cognito.js';
 
 export type SessionState =
   { status: 'loading' } | { status: 'signed-out' } | { status: 'signed-in'; user: SessionUser };
@@ -107,8 +114,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     getMe()
       .then(async (me) => {
         if (epoch.current !== mine) return;
-        bindUserLocale(user.sub, me.locale);
+        const active = bindUserLocale(user.sub, me.locale);
         setProfile(me);
+        // I18N-05: the pool's `locale` attribute is what the sign-in code is rendered in,
+        // before the service is ever asked; bring an account that predates it (or changed
+        // its mind on another device) into line. A nicety: a failure changes nothing here.
+        if (user.locale !== active) {
+          syncLocaleAttribute(active).catch(() => undefined);
+        }
         // SHARE-02: the service knows this account by `sub` only until the ID
         // token binds its verified address; that binding is what converts a
         // pending invitation into a share on first sign-in.

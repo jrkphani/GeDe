@@ -12,6 +12,7 @@ vi.mock('./cognito.js', () => ({
   idToken: vi.fn(() => Promise.resolve('id.token.value')),
   onAuthEvent: vi.fn(() => () => undefined),
   signOutLocal: vi.fn(() => Promise.resolve()),
+  syncLocaleAttribute: vi.fn(() => Promise.resolve()),
 }));
 vi.mock('../api/me.js', () => ({
   getMe: vi.fn(() => Promise.reject(new Error('no profile in this test'))),
@@ -141,6 +142,37 @@ describe('RequireAuth', () => {
     await waitFor(() => {
       expect(document.documentElement.lang).toBe('te-IN');
     });
+    // The pool's `locale` attribute (what the sign-in code is rendered in) is brought
+    // into line with the account when it differs …
+    await waitFor(() => {
+      expect(cognito.syncLocaleAttribute).toHaveBeenCalledWith('te-IN');
+    });
+  });
+
+  it('I18N-05 the pool attribute is left alone when it already matches the account’s locale', async () => {
+    vi.mocked(cognito.syncLocaleAttribute).mockClear();
+    vi.mocked(meApi.getMe).mockResolvedValueOnce({
+      id: 'u',
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      displayName: 'Meena',
+      locale: 'ta-IN',
+      tourDoneAt: null,
+      librarySort: null,
+      sampleDocumentId: null,
+    });
+    vi.mocked(cognito.currentUser).mockResolvedValue({
+      sub: 'sub-9',
+      email: 'meena@1cloudhub.com',
+      name: 'Meena',
+      locale: 'ta-IN',
+    });
+    app('/');
+    await screen.findByText('hello meena@1cloudhub.com');
+    await waitFor(() => {
+      expect(document.documentElement.lang).toBe('ta-IN');
+    });
+    expect(cognito.syncLocaleAttribute).not.toHaveBeenCalled();
   });
 
   it('SHARE-02 a profile without an address presents the ID token once, so pending invitations convert on first sign-in', async () => {

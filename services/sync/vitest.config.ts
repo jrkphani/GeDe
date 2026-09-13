@@ -14,6 +14,7 @@ export default defineConfig({
     alias: {
       '@gede/core': pkg('core'),
       '@gede/db': pkg('db'),
+      '@gede/mail': pkg('mail'),
     },
   },
   test: {

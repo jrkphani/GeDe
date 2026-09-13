@@ -19,6 +19,7 @@ Read the root `CLAUDE.md` first; everything there applies here.
 - Amplify v6 `signIn` with `authFlowType: 'USER_AUTH'`; first factors `EMAIL_OTP` and `WEB_AUTHN`. No password field exists anywhere (AUTH-01..10).
 - Tokens live in memory only. Never write them to `localStorage`, `sessionStorage` or cookies.
 - Passkeys only work on `https://gede.work` (RP id). Do not test them on any other host.
+- The pool's `locale` attribute is written at sign-up and on every locale change (`syncLocaleAttribute`), and backfilled once per session when it differs from the account's choice: it is what the custom-message trigger renders sign-in and sign-up codes in (I18N-05, ADR-044). Keep it in step with `PATCH /api/me { locale }`.
 - A 401 keeps the requested document path and returns to it after sign-in.
 
 ## State

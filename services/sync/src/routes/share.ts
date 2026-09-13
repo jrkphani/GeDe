@@ -173,11 +173,12 @@ export function registerShareRoutes(
   const sendInvite = async (
     request: { id: string; log: Pick<typeof api.log, 'info'> },
     invite: { id: string; documentId: string; email: string; token: string },
-    actor: { actorName: string | null; actorEmail: string | null },
+    actor: { actorName: string | null; actorEmail: string | null; locale: string | null },
     documentTitle: string,
   ): Promise<MailDelivery> => {
     const delivery = await deliver(
       (mail) => deps.mail.send(mail),
+      // I18N-05: the address has no account yet, so the mail speaks the inviter's language.
       shareInviteMail({
         ...actor,
         to: invite.email,
@@ -262,7 +263,7 @@ export function registerShareRoutes(
     // Counted after validation and the permission check: the budget is for
     // invitations that would go out, not for typos or for a viewer's attempts.
     await spendInviteBudget(request);
-    const actor = { actorName: user.displayName, actorEmail: user.email };
+    const actor = { actorName: user.displayName, actorEmail: user.email, locale: user.locale };
     const outcome = async (
       kind: InviteOutcome['kind'],
       created: boolean,
@@ -298,6 +299,8 @@ export function registerShareRoutes(
           from,
           documentTitle: document.title,
           link: documentLink(deps.config.WEB_ORIGIN, id),
+          // I18N-05: the member's own locale when they have chosen one, else the sharer's.
+          locale: existing.locale ?? user.locale,
         }),
         request.log,
         { documentId: id, ref: request.id },
@@ -346,7 +349,7 @@ export function registerShareRoutes(
     const delivery = await sendInvite(
       request,
       invite,
-      { actorName: user.displayName, actorEmail: user.email },
+      { actorName: user.displayName, actorEmail: user.email, locale: user.locale },
       document.title,
     );
     return {
