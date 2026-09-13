@@ -26,7 +26,13 @@
  */
 import { randomUUID } from 'node:crypto';
 
-import type { LinkAccess, Permission, ShareSource } from '@gede/db';
+import type {
+  LinkAccess,
+  MailEventKind,
+  MailSuppressionReason,
+  Permission,
+  ShareSource,
+} from '@gede/db';
 
 import type { Projection } from '../projection/project.js';
 import {
@@ -96,6 +102,24 @@ export interface AuditEntry {
 
 const RETENTION_MS = RECENTLY_DELETED_DAYS * 24 * 60 * 60 * 1000;
 
+/** A `mail_events` row (ADR-046); the key is `${messageId}\n${email lower-cased}`. */
+export interface FakeMailEvent {
+  messageId: string;
+  email: string;
+  kind: MailEventKind;
+  at: Date;
+  source: unknown;
+}
+
+/** A `mail_suppressions` row (ADR-046), keyed by the lower-cased address. */
+export interface FakeMailSuppression {
+  email: string;
+  reason: MailSuppressionReason;
+  firstSeenAt: Date;
+  lastEventAt: Date;
+  source: unknown;
+}
+
 /** Postgres `text` refuses NUL; the fake must fail the same way so a route cannot pass here and 500 in production. */
 function assertText(value: string): void {
   if (value.includes('\u0000')) {
@@ -112,6 +136,10 @@ export class FakeRepo implements Repo {
   readonly updatesByDoc = new Map<string, (StoredUpdate & { authorId: string | null })[]>();
   readonly snapshotsByDoc = new Map<string, { seq: number; s3Key: string; sizeBytes: number }[]>();
   readonly auditLog: AuditEntry[] = [];
+  readonly mailEvents = new Map<string, FakeMailEvent>();
+  readonly mailSuppressions = new Map<string, FakeMailSuppression>();
+  /** Set to make the next `mail.recordEvent` fail before anything is written (a database outage mid-poll). */
+  failNextMailEvent = false;
   /** Set to make `ping` fail. */
   down = false;
   /** Set to make `append` fail once (to exercise retry). */
@@ -1121,6 +1149,66 @@ export class FakeRepo implements Repo {
     record: (entry) => {
       this.auditLog.push(entry);
       return Promise.resolve();
+    },
+  };
+
+  readonly mail: Repo['mail'] = {
+    recordEvent: ({ messageId, email, kind, at, source, since }) => {
+      if (this.failNextMailEvent) {
+        this.failNextMailEvent = false;
+        return Promise.reject(new Error('simulated database failure'));
+      }
+      assertText(email);
+      const key = `${messageId}\n${email.toLowerCase()}`;
+      const recorded = !this.mailEvents.has(key);
+      if (recorded) this.mailEvents.set(key, { messageId, email, kind, at, source });
+      let transientBounces = 0;
+      for (const event of this.mailEvents.values()) {
+        if (
+          this.sameEmail(event.email, email) &&
+          event.kind === 'bounce_transient' &&
+          event.at.getTime() > since.getTime()
+        ) {
+          transientBounces += 1;
+        }
+      }
+      return Promise.resolve({ recorded, transientBounces });
+    },
+    suppress: ({ email, reason, at, source }) => {
+      const key = email.toLowerCase();
+      const existing = this.mailSuppressions.get(key);
+      if (existing) {
+        existing.lastEventAt = at;
+        existing.source = source;
+      } else {
+        this.mailSuppressions.set(key, { email, reason, firstSeenAt: at, lastEventAt: at, source });
+      }
+      const withdrawn: string[] = [];
+      for (const invite of this.pendingInvites((i) => this.sameEmail(i.email, email))) {
+        if (!this.docs.has(invite.documentId)) continue;
+        this.invitesById.delete(invite.id);
+        this.auditLog.push({
+          documentId: invite.documentId,
+          userId: null,
+          action: 'share.invite_withdraw',
+          target: `${email}:${reason}`,
+        });
+        withdrawn.push(invite.documentId);
+      }
+      return Promise.resolve({ created: existing === undefined, withdrawn });
+    },
+    suppression: (email) => {
+      const row = this.mailSuppressions.get(email.toLowerCase());
+      return Promise.resolve(
+        row === undefined
+          ? undefined
+          : {
+              email: row.email,
+              reason: row.reason,
+              firstSeenAt: row.firstSeenAt,
+              lastEventAt: row.lastEventAt,
+            },
+      );
     },
   };
 

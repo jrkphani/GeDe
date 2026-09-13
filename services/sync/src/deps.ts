@@ -5,6 +5,7 @@
  */
 import type { Config } from './config.js';
 import type { Logger } from './logger.js';
+import type { MailEventQueue } from './mail/events.js';
 import type { Mail } from './mail/templates.js';
 import type { Repo, TokenIdentity } from './repo/types.js';
 
@@ -62,6 +63,12 @@ export interface Deps {
   readonly mail: Mailer;
   /** Null until the task role may delete Cognito users (`COGNITO_ERASE_IDENTITY`). */
   readonly identity: IdentityStore | null;
+  /**
+   * The SES events queue (bounces, complaints, rejects; ADR-046): SQS when
+   * `SES_EVENTS_QUEUE_URL` is set, a fake in tests, `null` locally — no
+   * poller runs and no address is ever suppressed.
+   */
+  readonly mailEvents: MailEventQueue | null;
   /** Reported by `/healthz`. */
   readonly version: string;
 }

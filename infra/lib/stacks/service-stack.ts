@@ -12,6 +12,7 @@ import {
   type aws_s3 as s3,
   type aws_secretsmanager as secretsmanager,
   type aws_ses as ses,
+  type aws_sqs as sqs,
 } from 'aws-cdk-lib';
 import { type Construct } from 'constructs';
 
@@ -29,6 +30,8 @@ export interface ServiceStackProps extends cdk.StackProps {
   readonly dbSecurityGroup: ec2.ISecurityGroup;
   readonly docsBucket: s3.IBucket;
   readonly emailIdentity: ses.IEmailIdentity;
+  /** The SES events queue the service task polls (`SES_EVENTS_QUEUE_URL`, ADR-046), from AuthStack. */
+  readonly sesEventsQueue: sqs.IQueue;
   readonly userPoolId: string;
   /** App clients whose tokens the service accepts: the SPA's and the pipeline's `gede-e2e` client. */
   readonly userPoolClientIds: readonly string[];
@@ -227,7 +230,12 @@ export class ServiceStack extends cdk.Stack {
       portMappings: [{ containerPort: CONTAINER_PORT }],
       logging: ecs.LogDrivers.awsLogs({ streamPrefix: 'sync', logGroup: this.logGroup }),
       secrets: secrets(),
-      environment: { ...environment, COGNITO_ERASE_IDENTITY: 'true' },
+      environment: {
+        ...environment,
+        COGNITO_ERASE_IDENTITY: 'true',
+        // ADR-046: the service task alone consumes SES events; the jobs task never mails.
+        SES_EVENTS_QUEUE_URL: props.sesEventsQueue.queueUrl,
+      },
     });
     grant(taskDefinition);
     taskDefinition.taskRole.addToPrincipalPolicy(
@@ -235,6 +243,16 @@ export class ServiceStack extends cdk.Stack {
         sid: 'EraseIdentity',
         actions: ['cognito-idp:AdminDeleteUser'],
         resources: [userPoolArn],
+      }),
+    );
+    // What `services/sync/src/mail/events.ts` calls, and nothing more: no
+    // `ChangeMessageVisibility`, no `GetQueueUrl`, no send (`grantConsumeMessages`
+    // would add the first two). The queue is SSE-SQS, so no KMS grant is needed.
+    taskDefinition.taskRole.addToPrincipalPolicy(
+      new iam.PolicyStatement({
+        sid: 'SesEvents',
+        actions: ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:GetQueueAttributes'],
+        resources: [props.sesEventsQueue.queueArn],
       }),
     );
 

@@ -401,6 +401,71 @@ export const auditLog = pgTable(
 );
 
 // ---------------------------------------------------------------------------
+// 5.3 Mail (migration 0012, ADR-046) — what SES said about the addresses we mailed
+// ---------------------------------------------------------------------------
+
+/** What an SES event said about one recipient, as `mail_events.kind` records it. */
+export const MAIL_EVENT_KINDS = [
+  'bounce_permanent',
+  'bounce_transient',
+  'complaint',
+  'reject',
+] as const;
+export type MailEventKind = (typeof MAIL_EVENT_KINDS)[number];
+
+/** Why an address is on `mail_suppressions`. */
+export const MAIL_SUPPRESSION_REASONS = ['bounce', 'complaint'] as const;
+export type MailSuppressionReason = (typeof MAIL_SUPPRESSION_REASONS)[number];
+
+/**
+ * One row per (SES message id, recipient) event the sync service has processed
+ * (bounce, complaint, reject; SHARE-02, ADR-046). The primary key is what makes a
+ * redelivered SQS message a no-op; transient bounces are counted here before they
+ * suppress. `source` is the event as SES published it: headers and the verdict,
+ * never message content.
+ */
+export const mailEvents = pgTable(
+  'mail_events',
+  {
+    messageId: text('message_id').notNull(),
+    email: citext('email').notNull(),
+    kind: text('kind').$type<MailEventKind>().notNull(),
+    /** The event's own timestamp (SES's clock). */
+    at: timestamptz('at').notNull(),
+    receivedAt: timestamptz('received_at').notNull().defaultNow(),
+    source: jsonb('source').notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.messageId, t.email] }),
+    index('mail_events_email_at_idx').on(t.email, t.at),
+    check(
+      'mail_events_kind_check',
+      sql`${t.kind} IN ('bounce_permanent', 'bounce_transient', 'complaint', 'reject')`,
+    ),
+  ],
+);
+
+/**
+ * Addresses GeDe will not mail again (SHARE-02, ADR-046): a hard bounce, three
+ * transient bounces within the window, or a complaint. The invite and resend
+ * routes answer 409 `address_suppressed` while a row exists; pending invitations
+ * to the address are withdrawn when the row is written. Un-suppressing is a
+ * `DELETE` here plus the account-level SES list (runbook §5).
+ */
+export const mailSuppressions = pgTable(
+  'mail_suppressions',
+  {
+    email: citext('email').primaryKey(),
+    reason: text('reason').$type<MailSuppressionReason>().notNull(),
+    firstSeenAt: timestamptz('first_seen_at').notNull().defaultNow(),
+    lastEventAt: timestamptz('last_event_at').notNull().defaultNow(),
+    /** The event that suppressed the address (the latest, on a repeat). */
+    source: jsonb('source').notNull(),
+  },
+  (t) => [check('mail_suppressions_reason_check', sql`${t.reason} IN ('bounce', 'complaint')`)],
+);
+
+// ---------------------------------------------------------------------------
 // Row types
 // ---------------------------------------------------------------------------
 
@@ -420,3 +485,5 @@ export type Row = typeof rows.$inferSelect;
 export type Cell = typeof cells.$inferSelect;
 export type Graph = typeof graphs.$inferSelect;
 export type AuditEntry = typeof auditLog.$inferSelect;
+export type MailEvent = typeof mailEvents.$inferSelect;
+export type MailSuppression = typeof mailSuppressions.$inferSelect;

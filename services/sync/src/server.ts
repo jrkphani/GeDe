@@ -11,6 +11,7 @@ import { UserResolver } from './auth.js';
 import type { Deps } from './deps.js';
 import { AppError, newRequestId, registerErrorHandling } from './errors.js';
 import { AddressLimiter, registerAddressLimit } from './ip-limit.js';
+import { MailEventsPoller } from './mail/events.js';
 import { ProjectionWorker } from './projection/worker.js';
 import { registerApi } from './routes/api.js';
 import { registerHealth } from './routes/health.js';
@@ -37,6 +38,8 @@ export type SyncServer = FastifyInstance & {
   readonly projection: ProjectionWorker;
   /** The guided-sample seeder (ONB-01); tests read its counters. */
   readonly samples: SampleSeeder;
+  /** The SES events poller (ADR-046), or null without a queue; tests read its stats. */
+  readonly mailEvents: MailEventsPoller | null;
 };
 
 export async function buildServer(deps: Deps): Promise<SyncServer> {
@@ -121,18 +124,28 @@ export async function buildServer(deps: Deps): Promise<SyncServer> {
   registerApi(app, deps, resolver, rooms, projection);
   registerWs(app, { config: deps.config, repo: deps.db, resolver, rooms });
 
+  // SES bounces and complaints (ADR-046): consumed from the queue while the
+  // server runs, on this task; nothing to consume locally.
+  const mailEvents =
+    deps.mailEvents === null
+      ? null
+      : new MailEventsPoller({ queue: deps.mailEvents, repo: deps.db.mail, logger: deps.logger });
+
   // Runs during app.close(), after @fastify/websocket has stopped accepting
   // upgrades: flush every room's pending updates before the pool goes away.
   app.addHook('onClose', async () => {
+    // First: the in-flight long poll is aborted and the message in hand finished.
+    await mailEvents?.stop();
     await rooms.shutdown();
     // Rooms compact on shutdown; write what they scheduled before the pool goes away.
     await projection.close();
   });
 
   await app.ready();
+  mailEvents?.start();
   // `Fastify()` returns the instance intersected with `PromiseLike<undefined>`
   // (legacy `await fastify()` support); strip that so the async return is not
   // treated as a thenable.
   const instance: FastifyInstance = app;
-  return Object.assign(instance, { rooms, projection, samples });
+  return Object.assign(instance, { rooms, projection, samples, mailEvents });
 }

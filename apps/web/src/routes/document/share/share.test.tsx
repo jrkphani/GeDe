@@ -456,6 +456,26 @@ describe('ShareSheet', () => {
     reported.mockRestore();
   });
 
+  it('SHARE-02 an address SES bounced or that complained is refused with the service’s plain copy on the field: "This address cannot receive email from GeDe" (409 address_suppressed, ADR-046)', async () => {
+    const u = userEvent.setup();
+    vi.mocked(shares.inviteToDocument).mockRejectedValue(
+      new ApiError(409, '409 Conflict', 'req-suppr01', {
+        error: {
+          code: 'address_suppressed',
+          message: 'This address cannot receive email from GeDe',
+        },
+      }),
+    );
+    render(<Harness />);
+    const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });
+    const field = await within(dialog).findByRole('textbox', { name: 'Add people by email' });
+    await u.type(field, 'bounced@example.com{Enter}');
+    const alert = await within(dialog).findByRole('alert');
+    expect(alert).toHaveTextContent('This address cannot receive email from GeDe (ref req-su).');
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveValue('bounced@example.com');
+  });
+
   it('RESP-02 on phone the sheet is read-only: who has access and Copy link, no invite field, no permission control, no remove, no stop sharing', async () => {
     render(<Harness readOnly />);
     const dialog = await screen.findByRole('dialog', { name: 'Share Everest trek' });

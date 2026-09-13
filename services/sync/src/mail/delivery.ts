@@ -9,7 +9,8 @@
  *   - `sent`    — SES accepted the message.
  *   - `failed`  — SES refused it; the row stands, Resend is offered.
  *   - `skipped` — nothing was sent: a repeated invitation for an address whose
- *                 invitation already stands (idempotent POST).
+ *                 invitation already stands (idempotent POST), or a share with
+ *                 a member whose address is suppressed (ADR-046).
  */
 import type { Logger } from '../logger.js';
 import { count } from '../metrics.js';

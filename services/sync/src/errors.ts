@@ -22,6 +22,8 @@ export type ErrorCode =
   | 'email_bound'
   /** An invitation past its 14 days (410). */
   | 'expired'
+  /** Invite or Resend to an address SES bounced or that complained (409, ADR-046). */
+  | 'address_suppressed'
   /** The caller's account has been erased (#111); the tombstone refuses its remaining tokens (403). */
   | 'account_deleted'
   | 'too_many_requests'

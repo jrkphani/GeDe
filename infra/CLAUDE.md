@@ -152,6 +152,18 @@ Change` for that family with a non-zero exit code or `TaskFailedToStart` → SNS
   faults (a render error returns the event untouched, so the pool template goes out). The
   SPA client's `authSessionValidity` is ten minutes, the expiry the sign-in screen states
   (AUTH-06).
+- **SES events (ADR-046).** `AuthStack` owns the configuration set `gede-<env>` (the
+  identity's default; `withSES` names it too), its event destination (bounce, complaint,
+  reject → SNS `gede-<env>-ses-events`), the raw SQS subscription `gede-<env>-ses-events`
+  with its dead-letter queue (SSE-SQS, TLS-only, 14 days, five receives), and the
+  `Custom::GedeSesAccountSuppression` resource that pins the account-level list to
+  BOUNCE + COMPLAINT (`PutAccountSuppressionAttributes` — no CloudFormation resource
+  exists for it; one action, nothing on delete). `ServiceStack` hands the service task
+  the queue URL (`SES_EVENTS_QUEUE_URL`) and the three actions the poller makes; the jobs
+  task gets neither. `OpsStack` alarms on the account's `Reputation.BounceRate` (> 5 %)
+  and `Reputation.ComplaintRate` (> 0.1 %) and on any message in the dead-letter queue.
+  What crosses the stack boundaries — the queue's URL and ARN, the dead-letter queue's
+  name — are identifiers (ADR-036). Runbook §5 has the operator's side.
 - **CloudFront `/api/*` reaches the ALB by hostname** (`api.<domain>`) and must carry the
   `X-Origin-Verify` header (ADR-018). WebStack generates one secret per generation in
   `ORIGIN_VERIFY_GENERATIONS` and presents `ORIGIN_VERIFY_PRESENTED`; ServiceStack's HTTPS

@@ -39,6 +39,8 @@ Sync & API service: Fastify 5 REST under `/api`, y-websocket document rooms unde
 | `WS_PERMISSION_RECHECK_MS`                           |                  | `60000`    | every connection's permission and token expiry re-resolved on this cadence (#104)                                       |
 | `DOC_LOG_MAX_BYTES`                                  |                  | `8 MiB`    | `doc_updates` bytes since the last snapshot before the room compacts early (#99)                                        |
 | `DOC_MAX_BYTES`                                      |                  | `64 MiB`   | ceiling on one document's state; an update that would pass it → 4413 (#99, ADR-037)                                     |
+| `SES_EVENTS_QUEUE_URL`                               |                  |            | the SQS queue SES bounce/complaint/reject events arrive on (ADR-046); unset = no poller, nothing is ever suppressed     |
+| `SES_EVENTS_WAIT_SECONDS`                            |                  | `20`       | the poller's long-poll wait per `ReceiveMessage` (1–20)                                                                 |
 | `GEDE_VERSION`                                       |                  | build      | reported by `GET /api/version`; the short git sha                                                                       |
 
 There is no auth bypass in any environment. Tests inject a fake verifier through `buildServer` deps.
@@ -185,15 +187,20 @@ permission, callerId }`. Emails, pending invitations and the link token are for 
     address): while a pending invitation stands, a repeated POST answers 200
     `{ kind: 'invite', created: false, delivery: 'skipped', shares }` — no row, no mail
     (`invites_pending_key`, migration 0007, decides a race). 409 when the address already has
-    access or is the owner's. Its own budget: `RATE_LIMIT_INVITES_PER_HOUR` per user, counted
-    after validation and the permission check.
+    access or is the owner's. 409 `address_suppressed` ("This address cannot receive email from
+    GeDe") when the address has no account and is on `mail_suppressions` — SES bounced it
+    hard, or three times within 30 days, or it complained (ADR-046; `mail/events.ts`) —
+    checked before any budget is spent. An address with an account is shared with as ever
+    (the row is the grant); a suppressed one gets `delivery: 'skipped'` and no mail. Its own
+    budget: `RATE_LIMIT_INVITES_PER_HOUR` per user, counted after validation and the
+    permission check, only when a mail would go.
   - `POST /api/documents/:id/invites/:inviteId/resend` (owner or editor) → 200
     `{ delivery: 'sent' | 'failed', shares }`. Sends the pending invitation's mail again — same
     token, same expiry, only `mail_sent_at` moves on an accepted send, no audit row — and
     spends the same per-user budget;
     one resend of a given invitation per `RATE_LIMIT_RESEND_COOLDOWN_SECONDS` (429 with the wait
     inside it, whoever asks, so an address is never mailed the same invitation repeatedly);
-    404 when the invitation is not pending on this document.
+    404 when the invitation is not pending on this document; 409 `address_suppressed` as above.
   - `DELETE /api/documents/:id/invites/:inviteId` (owner) → 204; 404 when not pending here.
   - `POST /api/documents/:id/invites/accept { token }` (signed in) → `{ permission }`. Converts
     only for the account holding the invitation's address (409 `Finish signing in` while none is

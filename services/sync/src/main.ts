@@ -15,6 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { CognitoIdentityProviderClient } from '@aws-sdk/client-cognito-identity-provider';
 import { S3Client } from '@aws-sdk/client-s3';
 import { SESv2Client } from '@aws-sdk/client-sesv2';
+import { SQSClient } from '@aws-sdk/client-sqs';
 import pino from 'pino';
 import type pg from 'pg';
 
@@ -27,6 +28,7 @@ import { parseInvocation, type Invocation } from './jobs/invocation.js';
 import { purgeExpired } from './jobs/purge.js';
 import { reproject } from './jobs/reproject.js';
 import { REDACTED_PATHS, requestSerializer, type Logger } from './logger.js';
+import { createSqsEventQueue } from './mail/events.js';
 import { createSesMailer } from './mail/ses.js';
 import { ProjectionWorker } from './projection/worker.js';
 import { createPgRepo } from './repo/pg.js';
@@ -147,6 +149,11 @@ async function boot(role: string): Promise<Runtime> {
 
 async function runServer(rt: Runtime): Promise<void> {
   const { config, logger } = rt;
+  // ADR-046: the SES events queue lives beside the identity; no queue, no poller.
+  const sqs =
+    config.SES_EVENTS_QUEUE_URL === undefined
+      ? null
+      : new SQSClient({ region: config.COGNITO_REGION });
   const app = await buildServer({
     config,
     logger,
@@ -162,8 +169,13 @@ async function runServer(rt: Runtime): Promise<void> {
           config.COGNITO_USER_POOL_ID,
         )
       : null,
+    mailEvents:
+      sqs === null || config.SES_EVENTS_QUEUE_URL === undefined
+        ? null
+        : createSqsEventQueue(sqs, config.SES_EVENTS_QUEUE_URL, config.SES_EVENTS_WAIT_SECONDS),
   });
   logger.info({ eraseIdentity: config.COGNITO_ERASE_IDENTITY }, 'account erasure');
+  logger.info({ sesEvents: sqs !== null }, 'ses events poller');
 
   let stopping = false;
   const shutdown = (signal: string): void => {
@@ -177,10 +189,11 @@ async function runServer(rt: Runtime): Promise<void> {
     deadline.unref();
     void (async () => {
       try {
-        await app.close(); // stops accepting; onClose flushes rooms and the projection
+        await app.close(); // stops accepting; onClose stops the poller, flushes rooms and the projection
         await rt.pool.end();
         rt.s3.destroy();
         rt.ses.destroy();
+        sqs?.destroy();
         logger.info('shutdown complete');
         process.exit(0);
       } catch (error) {

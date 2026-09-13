@@ -21,7 +21,23 @@ describe('loadConfig', () => {
       DOCS_PREFIX: '',
       LOG_LEVEL: 'info',
       NODE_ENV: 'production',
+      SES_EVENTS_WAIT_SECONDS: 20,
     });
+    // No queue locally: the SES events poller does not run (ADR-046).
+    expect(config.SES_EVENTS_QUEUE_URL).toBeUndefined();
+  });
+
+  test('SHARE-02 SES_EVENTS_QUEUE_URL must be a URL when set, and the long-poll wait stays within what SQS allows (ADR-046)', () => {
+    const url = 'https://sqs.ap-southeast-1.amazonaws.com/975049998516/gede-prod-ses-events';
+    expect(loadConfig({ ...required, SES_EVENTS_QUEUE_URL: url }).SES_EVENTS_QUEUE_URL).toBe(url);
+    expect(() => loadConfig({ ...required, SES_EVENTS_QUEUE_URL: 'gede-prod-ses-events' })).toThrow(
+      ConfigError,
+    );
+    expect(loadConfig({ ...required, SES_EVENTS_WAIT_SECONDS: '5' }).SES_EVENTS_WAIT_SECONDS).toBe(
+      5,
+    );
+    expect(() => loadConfig({ ...required, SES_EVENTS_WAIT_SECONDS: '21' })).toThrow(ConfigError);
+    expect(() => loadConfig({ ...required, SES_EVENTS_WAIT_SECONDS: '0' })).toThrow(ConfigError);
   });
 
   test('AUTH-01 COGNITO_CLIENT_IDS is a comma-separated allow-list; blanks are dropped and an empty list is refused', () => {

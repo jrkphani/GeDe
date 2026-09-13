@@ -17,6 +17,11 @@ import {
   COGNITO_CODE_PLACEHOLDER,
   E2E_CLIENT_NAME,
   poolMessageTemplates,
+  SES_ACCOUNT_SUPPRESSED_REASONS,
+  SES_EVENT_TYPES,
+  SES_EVENTS_MAX_RECEIVE_COUNT,
+  SES_EVENTS_RETENTION,
+  SES_EVENTS_WAIT,
 } from '../lib/stacks/auth-stack.js';
 import { DB_APP_USERNAME } from '../lib/stacks/data-stack.js';
 import { SPF_RECORD, dmarcRecord } from '../lib/stacks/dns-stack.js';
@@ -25,7 +30,12 @@ import {
   WAF_MANAGED_RULE_GROUPS,
   WAF_REDACTED_HEADERS,
 } from '../lib/stacks/edge-stack.js';
-import { PURGE_SCHEDULE, PURGE_SILENCE_HOURS } from '../lib/stacks/ops-stack.js';
+import {
+  PURGE_SCHEDULE,
+  PURGE_SILENCE_HOURS,
+  SES_BOUNCE_RATE_THRESHOLD,
+  SES_COMPLAINT_RATE_THRESHOLD,
+} from '../lib/stacks/ops-stack.js';
 import { PURGE_COMMAND, gedeVersion } from '../lib/stacks/service-stack.js';
 import {
   ACCESS_LOG_PREFIXES,
@@ -429,6 +439,26 @@ describe('GeDe CDK app', () => {
       expect(
         allowed.filter((a) => a.startsWith('cognito-idp:') && a !== 'cognito-idp:AdminDeleteUser'),
       ).toEqual([]);
+
+      // ADR-046: the service task alone consumes the SES events queue, with the three
+      // actions the poller makes and nothing more, on that queue only.
+      const sesEvents = statements.find((s) => s.Sid === 'SesEvents');
+      if (prefix === 'TaskTaskRole') {
+        expect(sesEvents?.Effect).toBe('Allow');
+        expect(actions(sesEvents!).sort()).toEqual([
+          'sqs:DeleteMessage',
+          'sqs:GetQueueAttributes',
+          'sqs:ReceiveMessage',
+        ]);
+        expect(JSON.stringify(sesEvents!.Resource)).toMatch(/SesEventsQueue.*Arn/);
+      } else {
+        expect(sesEvents).toBeUndefined();
+      }
+      expect(allowed.filter((a) => a.startsWith('sqs:')).sort()).toEqual(
+        prefix === 'TaskTaskRole'
+          ? ['sqs:DeleteMessage', 'sqs:GetQueueAttributes', 'sqs:ReceiveMessage']
+          : [],
+      );
     }
     for (const prefix of ['TaskExecutionRole', 'JobsTaskExecutionRole']) {
       const executionPolicy = policies.find(([id]) => id.startsWith(prefix))?.[1];
@@ -849,6 +879,214 @@ describe('GeDe CDK app', () => {
     });
   });
 
+  it('SHARE-02 SES events (ADR-046): the identity carries the configuration set, which publishes bounce, complaint and reject to the events topic; the topic accepts SES for that set only and feeds a raw SQS subscription; both queues are SSE-SQS, TLS-only, 14 days, with a five-strike dead-letter; the service task is told the queue URL', () => {
+    const auth = stacks.Auth!;
+    // One configuration set, reputation metrics on, bounces and complaints suppressed,
+    // and the identity's default set is that one.
+    auth.resourceCountIs('AWS::SES::ConfigurationSet', 1);
+    auth.hasResourceProperties('AWS::SES::ConfigurationSet', {
+      Name: 'gede-prod',
+      ReputationOptions: { ReputationMetricsEnabled: true },
+      SuppressionOptions: { SuppressedReasons: ['BOUNCE', 'COMPLAINT'] },
+    });
+    const [configurationSetId] = Object.keys(auth.findResources('AWS::SES::ConfigurationSet'));
+    auth.hasResourceProperties('AWS::SES::EmailIdentity', {
+      EmailIdentity: 'gede.work',
+      ConfigurationSetAttributes: { ConfigurationSetName: { Ref: configurationSetId } },
+    });
+    // The event destination: the three events the poller acts on, to the topic, enabled.
+    const [topicId] = Object.entries(auth.findResources('AWS::SNS::Topic')).find(
+      ([, t]) =>
+        (t as { Properties: { TopicName?: string } }).Properties.TopicName ===
+        'gede-prod-ses-events',
+    )!;
+    expect(SES_EVENT_TYPES).toEqual(['bounce', 'complaint', 'reject']);
+    auth.resourceCountIs('AWS::SES::ConfigurationSetEventDestination', 1);
+    auth.hasResourceProperties('AWS::SES::ConfigurationSetEventDestination', {
+      ConfigurationSetName: { Ref: configurationSetId },
+      EventDestination: {
+        Name: 'gede-prod-ses-events',
+        Enabled: true,
+        MatchingEventTypes: ['bounce', 'complaint', 'reject'],
+        SnsDestination: { TopicARN: { Ref: topicId } },
+      },
+    });
+    // The topic policy: SES may publish, from this account and this configuration set's
+    // ARN, and nobody else is named.
+    auth.hasResourceProperties('AWS::SNS::TopicPolicy', {
+      Topics: [{ Ref: topicId }],
+      PolicyDocument: {
+        Statement: [
+          {
+            Effect: 'Allow',
+            Action: 'sns:Publish',
+            Principal: { Service: 'ses.amazonaws.com' },
+            Resource: { Ref: topicId },
+            Condition: {
+              StringEquals: {
+                'AWS:SourceAccount': '975049998516',
+                'AWS:SourceArn': {
+                  'Fn::Join': [
+                    '',
+                    Match.arrayWith([
+                      ':ses:ap-southeast-1:975049998516:configuration-set/',
+                      { Ref: configurationSetId },
+                    ]),
+                  ],
+                },
+              },
+            },
+          },
+        ],
+      },
+    });
+    // The queues.
+    auth.resourceCountIs('AWS::SQS::Queue', 2);
+    const queues = auth.findResources('AWS::SQS::Queue') as Record<
+      string,
+      { Properties: { QueueName: string } }
+    >;
+    const queueId = Object.keys(queues).find(
+      (id) => queues[id]!.Properties.QueueName === 'gede-prod-ses-events',
+    )!;
+    const dlqId = Object.keys(queues).find(
+      (id) => queues[id]!.Properties.QueueName === 'gede-prod-ses-events-dlq',
+    )!;
+    expect(queueId).toBeDefined();
+    expect(dlqId).toBeDefined();
+    expect(SES_EVENTS_RETENTION.toSeconds()).toBe(14 * 24 * 3600);
+    auth.hasResourceProperties('AWS::SQS::Queue', {
+      QueueName: 'gede-prod-ses-events',
+      MessageRetentionPeriod: SES_EVENTS_RETENTION.toSeconds(),
+      ReceiveMessageWaitTimeSeconds: SES_EVENTS_WAIT.toSeconds(),
+      VisibilityTimeout: 60,
+      SqsManagedSseEnabled: true,
+      RedrivePolicy: {
+        deadLetterTargetArn: { 'Fn::GetAtt': [dlqId, 'Arn'] },
+        maxReceiveCount: SES_EVENTS_MAX_RECEIVE_COUNT,
+      },
+      // No KMS key: SSE-SQS, so the topic needs no decrypt grant and the task no KMS grant.
+      KmsMasterKeyId: Match.absent(),
+    });
+    auth.hasResourceProperties('AWS::SQS::Queue', {
+      QueueName: 'gede-prod-ses-events-dlq',
+      MessageRetentionPeriod: SES_EVENTS_RETENTION.toSeconds(),
+      SqsManagedSseEnabled: true,
+      RedrivePolicy: Match.absent(),
+    });
+    // The subscription delivers raw (the body is the SES event), and the queue policy
+    // admits SNS SendMessage from this topic only, next to the TLS-only deny.
+    auth.resourceCountIs('AWS::SNS::Subscription', 1);
+    auth.hasResourceProperties('AWS::SNS::Subscription', {
+      Protocol: 'sqs',
+      TopicArn: { Ref: topicId },
+      Endpoint: { 'Fn::GetAtt': [queueId, 'Arn'] },
+      RawMessageDelivery: true,
+    });
+    auth.hasResourceProperties('AWS::SQS::QueuePolicy', {
+      Queues: [{ Ref: queueId }],
+      PolicyDocument: {
+        Statement: Match.arrayWith([
+          {
+            Effect: 'Deny',
+            Action: 'sqs:*',
+            Principal: { AWS: '*' },
+            Resource: { 'Fn::GetAtt': [queueId, 'Arn'] },
+            Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+          },
+          {
+            Effect: 'Allow',
+            Action: 'sqs:SendMessage',
+            Principal: { Service: 'sns.amazonaws.com' },
+            Resource: { 'Fn::GetAtt': [queueId, 'Arn'] },
+            Condition: { ArnEquals: { 'aws:SourceArn': { Ref: topicId } } },
+          },
+        ]),
+      },
+    });
+    auth.hasResourceProperties('AWS::SQS::QueuePolicy', {
+      Queues: [{ Ref: dlqId }],
+      PolicyDocument: {
+        Statement: [
+          Match.objectLike({
+            Effect: 'Deny',
+            Action: 'sqs:*',
+            Condition: { Bool: { 'aws:SecureTransport': 'false' } },
+          }),
+        ],
+      },
+    });
+    // The service task, and only it, is told where the queue is (the jobs task never mails).
+    stacks.Service!.hasResourceProperties('AWS::ECS::TaskDefinition', {
+      ContainerDefinitions: [
+        Match.objectLike({
+          Name: 'sync',
+          // A weak reference to the queue's URL — an identifier, stable across deploys (ADR-036).
+          Environment: Match.arrayWith([
+            {
+              Name: 'SES_EVENTS_QUEUE_URL',
+              Value: {
+                'Fn::GetStackOutput': Match.objectLike({
+                  StackName: 'GeDe-Prod-Auth',
+                  OutputName: Match.stringLikeRegexp('^PublishOutputRefSesEventsQueue'),
+                }),
+              },
+            },
+          ]),
+        }),
+      ],
+    });
+    const jobs = Object.values(stacks.Service!.findResources('AWS::ECS::TaskDefinition')).find(
+      (t) => (t as { Properties: { Family?: string } }).Properties.Family === 'gede-prod-jobs',
+    ) as { Properties: { ContainerDefinitions: { Environment: { Name: string }[] }[] } };
+    expect(jobs.Properties.ContainerDefinitions[0]!.Environment.map((e) => e.Name)).not.toContain(
+      'SES_EVENTS_QUEUE_URL',
+    );
+  });
+
+  it('SHARE-02 the account-level SES suppression list is pinned to BOUNCE and COMPLAINT by a custom resource with that one action, on create and update, nothing on delete, its handler logging to a one-month group (ADR-046)', () => {
+    const auth = stacks.Auth!;
+    expect(SES_ACCOUNT_SUPPRESSED_REASONS).toEqual(['BOUNCE', 'COMPLAINT']);
+    auth.resourceCountIs('Custom::GedeSesAccountSuppression', 1);
+    const call = JSON.stringify({
+      service: 'sesv2',
+      action: 'PutAccountSuppressionAttributes',
+      parameters: { SuppressedReasons: ['BOUNCE', 'COMPLAINT'] },
+      physicalResourceId: { id: 'gede-prod-ses-account-suppression' },
+    });
+    auth.hasResourceProperties('Custom::GedeSesAccountSuppression', {
+      Create: call,
+      Update: call,
+      Delete: Match.absent(),
+      InstallLatestAwsSdk: false,
+    });
+    auth.hasResourceProperties('AWS::IAM::Policy', {
+      PolicyDocument: {
+        Statement: [
+          {
+            Sid: 'AccountSuppressionList',
+            Effect: 'Allow',
+            Action: 'ses:PutAccountSuppressionAttributes',
+            Resource: '*',
+          },
+        ],
+      },
+    });
+    // No `fromSdkCalls` wildcard: the handler's role carries exactly that statement for SES.
+    const policies = Object.values(auth.findResources('AWS::IAM::Policy')) as {
+      Properties: { PolicyDocument: { Statement: { Action: string | string[] }[] } };
+    }[];
+    const sesActions = policies
+      .flatMap((p) => p.Properties.PolicyDocument.Statement)
+      .flatMap((s) => (Array.isArray(s.Action) ? s.Action : [s.Action]))
+      .filter((a) => a.startsWith('ses:'));
+    expect(sesActions).toEqual(['ses:PutAccountSuppressionAttributes']);
+    auth.hasResourceProperties('AWS::Lambda::Function', {
+      LoggingConfig: { LogGroup: { Ref: Match.stringLikeRegexp('^SesAccountSuppressionLogs') } },
+    });
+    auth.hasResourceProperties('AWS::Logs::LogGroup', { RetentionInDays: 30 });
+  });
+
   it('SHARE-02 SPF at the apex names SES only and DMARC quarantines a spoofed no-reply@gede.work (#116)', () => {
     expect(SPF_RECORD).toBe('v=spf1 include:amazonses.com -all');
     expect(dmarcRecord(PROD)).toBe('v=DMARC1; p=quarantine; rua=mailto:jrkphani@icloud.com');
@@ -998,7 +1236,7 @@ describe('GeDe CDK app', () => {
   });
 
   it('Ops wires alarms and the budget to the alerts email', () => {
-    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 14);
+    stacks.Ops!.resourceCountIs('AWS::CloudWatch::Alarm', 17);
     stacks.Ops!.resourceCountIs('AWS::SNS::Subscription', 1);
     stacks.Ops!.hasResourceProperties('AWS::SNS::Subscription', {
       Protocol: 'email',
@@ -1098,6 +1336,52 @@ describe('GeDe CDK app', () => {
           }),
         }),
       ],
+    });
+  });
+
+  it('SHARE-02 Ops alarms on SES’s account bounce rate above 5 % and complaint rate above 0.1 % (AWS’s review thresholds) and on any message in the SES events dead-letter queue (ADR-046)', () => {
+    expect(SES_BOUNCE_RATE_THRESHOLD).toBe(0.05);
+    expect(SES_COMPLAINT_RATE_THRESHOLD).toBe(0.001);
+    for (const [name, metricName, threshold] of [
+      ['gede-prod-ses-bounce-rate', 'Reputation.BounceRate', SES_BOUNCE_RATE_THRESHOLD],
+      ['gede-prod-ses-complaint-rate', 'Reputation.ComplaintRate', SES_COMPLAINT_RATE_THRESHOLD],
+    ] as const) {
+      stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+        AlarmName: name,
+        Namespace: 'AWS/SES',
+        MetricName: metricName,
+        // The account-level rate: no dimensions.
+        Dimensions: Match.absent(),
+        Statistic: 'Maximum',
+        Period: 3600,
+        Threshold: threshold,
+        EvaluationPeriods: 1,
+        ComparisonOperator: 'GreaterThanThreshold',
+        TreatMissingData: 'notBreaching',
+        AlarmDescription: Match.stringLikeRegexp('runbook §5'),
+      });
+    }
+    stacks.Ops!.hasResourceProperties('AWS::CloudWatch::Alarm', {
+      AlarmName: 'gede-prod-ses-events-dlq',
+      Namespace: 'AWS/SQS',
+      MetricName: 'ApproximateNumberOfMessagesVisible',
+      Dimensions: [
+        {
+          Name: 'QueueName',
+          Value: {
+            'Fn::GetStackOutput': Match.objectLike({
+              StackName: 'GeDe-Prod-Auth',
+              OutputName: Match.stringLikeRegexp('^PublishOutputFnGetAttSesEventsDlq.*QueueName'),
+            }),
+          },
+        },
+      ],
+      Statistic: 'Maximum',
+      Period: 300,
+      Threshold: 0,
+      EvaluationPeriods: 1,
+      ComparisonOperator: 'GreaterThanThreshold',
+      TreatMissingData: 'notBreaching',
     });
   });
 
@@ -1477,14 +1761,23 @@ describe('GeDe CDK app', () => {
       SecretArn: { Ref: Match.stringLikeRegexp('^E2eUser') },
       Username: 'e2e@gede.work',
     });
-    // Three functions: the user's custom resource, the pre-authentication trigger and
-    // the custom-message trigger.
-    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 3);
-    stacks.Auth!.allResourcesProperties('AWS::Lambda::Function', {
-      Runtime: 'nodejs22.x',
-      Architectures: ['arm64'],
-      Handler: 'index.handler',
-    });
+    // Four functions: the user's custom resource, the pre-authentication trigger, the
+    // custom-message trigger — ours, on Node 22 arm64 — and the `AwsCustomResource`
+    // singleton behind the SES account-suppression call (ADR-046), which is CDK's.
+    stacks.Auth!.resourceCountIs('AWS::Lambda::Function', 4);
+    const functions = Object.entries(stacks.Auth!.findResources('AWS::Lambda::Function')) as [
+      string,
+      { Properties: { Runtime: string; Architectures?: string[]; Handler: string } },
+    ][];
+    const ours = functions.filter(([id]) => !id.startsWith('AWS679f53fac002430cb0da5b7982bd2287'));
+    expect(ours).toHaveLength(3);
+    for (const [id, fn] of ours) {
+      expect(fn.Properties, id).toMatchObject({
+        Runtime: 'nodejs22.x',
+        Architectures: ['arm64'],
+        Handler: 'index.handler',
+      });
+    }
     stacks.Auth!.hasResourceProperties('AWS::IAM::Policy', {
       PolicyDocument: Match.objectLike({
         Statement: Match.arrayWith([
@@ -1841,6 +2134,6 @@ describe('GeDe CDK app with -c customMessageTrigger=true (flipped together with 
       SourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
     });
     // The rest of the stack is unchanged by the flag.
-    auth.resourceCountIs('AWS::Lambda::Function', 3);
+    auth.resourceCountIs('AWS::Lambda::Function', 4);
   });
 });
