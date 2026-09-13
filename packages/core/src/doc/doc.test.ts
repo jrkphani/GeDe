@@ -28,13 +28,15 @@ import {
   seedMeta,
   seedNewDocument,
   setCellText,
-  setRowWrapped,
+  setRowHeight,
+  setRowWrap,
   setTablePosition,
   setTitle,
   sheetBounds,
   TABLE_HEADER_ROWS,
   TABLE_TITLE_ROWS,
   tableAddresses,
+  rowMeta,
   tableById,
   tableMap,
   tablesOnSheet,
@@ -306,7 +308,7 @@ describe('tables and snapping', () => {
     expect(JSON.stringify(t.toJSON())).not.toMatch(/"[A-Z]{1,3}[0-9]{1,4}"/);
   });
 
-  test('GRID-09 a wrapped row occupies two lattice rows so the row after it is two addresses down', () => {
+  test('GRID-09 a row of n lattice units keeps its address at its top unit and the row after it is exactly n addresses down', () => {
     const gd = fresh();
     const sheet = createSheet(gd);
     const id = createTable(gd, { sheetId: sheet, at: { col: 0, row: 0 }, columns: 1, rows: 3 });
@@ -315,11 +317,17 @@ describe('tables and snapping', () => {
     const [r1, r2, r3] = rec?.rows ?? [];
     const c1 = rec?.columns[0]?.id ?? '';
     expect(cellAddress(t, r3 ?? '', c1)).toBe('A6');
-    setRowWrapped(gd, id, r2 ?? '', true);
-    expect(cellAddress(t, r1 ?? '', c1)).toBe('A4');
-    expect(cellAddress(t, r2 ?? '', c1)).toBe('A5');
-    expect(cellAddress(t, r3 ?? '', c1)).toBe('A7');
-    expect(tableUnitBounds(t).rows).toBe(TABLE_TITLE_ROWS + TABLE_HEADER_ROWS + 4);
+    for (const n of [2, 3, 5, 1]) {
+      setRowHeight(gd, id, r2 ?? '', n);
+      expect(cellAddress(t, r1 ?? '', c1)).toBe('A4');
+      expect(cellAddress(t, r2 ?? '', c1)).toBe('A5');
+      expect(cellAddress(t, r3 ?? '', c1)).toBe(`A${String(5 + n)}`);
+      expect(tableUnitBounds(t).rows).toBe(TABLE_TITLE_ROWS + TABLE_HEADER_ROWS + 2 + n);
+    }
+    // ADR-049: wrap is paint at every scope; it writes no height and moves no address.
+    setRowWrap(gd, id, r2 ?? '', true);
+    expect(cellAddress(t, r3 ?? '', c1)).toBe('A6');
+    expect(rowMeta(t, r2 ?? '').wrap).toBe(true);
   });
 
   test('DOC-07 sheetBounds frames every table on the sheet, in units and pixels', () => {

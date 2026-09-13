@@ -64,8 +64,8 @@ import {
   mergeAppearance,
   readAppearance,
   rowContentPx,
+  rowsForLines,
   rowsForSize,
-  sizeRefusal,
   TABLE_STYLES,
   TYPE_SIZE_LINE,
   TYPE_SIZE_PX,
@@ -98,7 +98,7 @@ describe('INSP-04 table look', () => {
     expect(look?.alternating).toBe(true);
     expect(look?.outline).toBe('hairline');
     setTableLook(gd, tableId, { outline: 'accent', gridlines: 'contrast', captionShown: true });
-    setTableLook(gd, tableId, { caption: 'Field notes', titleShown: false });
+    setTableLook(gd, tableId, { caption: 'Field notes', titleShown: false, wrap: true });
     expect(tableById(gd, tableId)?.look).toEqual({
       style: 'slate',
       titleShown: false,
@@ -107,6 +107,7 @@ describe('INSP-04 table look', () => {
       outline: 'accent',
       gridlines: 'contrast',
       alternating: true,
+      wrap: true,
     });
   });
 
@@ -185,29 +186,32 @@ describe('INSP-05 INSP-06 INSP-10 appearance', () => {
       for (const indic of [false, true]) {
         const box = TYPE_SIZE_PX[size] * (indic ? INDIC_LINE_HEIGHT : TYPE_SIZE_LINE[size]);
         const rows = rowsForSize(size, indic);
-        // The compact row's content box (22 px less the rule) or the wrapped row's, never past
-        // either (GRID-09); a size that fits neither is refused, never clipped.
-        if (rows === null) expect(box).toBeGreaterThan(rowContentPx(2) + 0.5);
-        else
-          expect(rowContentPx(rows) + 0.5, `${size} ${indic ? 'ta' : 'en'}`).toBeGreaterThanOrEqual(
-            box,
-          );
+        // The least whole number of lattice rows whose content box (22 px each, less the rule)
+        // holds the line box (GRID-09, ADR-049): never clipped, never a row more than needed.
+        expect(rowContentPx(rows) + 0.5, `${size} ${indic ? 'ta' : 'en'}`).toBeGreaterThanOrEqual(
+          box,
+        );
+        if (rows > 1) expect(rowContentPx(rows - 1) + 0.5).toBeLessThan(box);
         expect(rowContentPx(1)).toBe(LATTICE.row - 1);
       }
     }
-    // Every Latin size fits a row or the wrapped row; what fits the compact row stays compact.
+    // Latin: what fits the compact row stays compact; h2 and display take two rows.
     expect(rowsForSize('h3', false)).toBe(1);
     expect(rowsForSize('h2', false)).toBe(2);
     expect(rowsForSize('display', false)).toBe(2);
-    // Indic at the DS's 1.7 floor: cell stays compact, body-sm (22.1 px) to h2 wrap, h1 and
-    // display cannot be shown and say so (INSP-11).
+    // Indic at the DS's 1.7 floor: cell stays compact, body-sm (22.1 px) to h2 take two rows,
+    // h1 (47.6 px) three and display (68 px) four — every size can be shown (ADR-049 amends
+    // ADR-034's refusal).
     expect(rowsForSize('cell', true)).toBe(1);
     expect(rowsForSize('body-sm', true)).toBe(2);
     expect(rowsForSize('body', true)).toBe(2);
     expect(rowsForSize('h2', true)).toBe(2);
-    expect(rowsForSize('h1', true)).toBeNull();
-    expect(sizeRefusal('display', true)).toMatch(/needs more than a wrapped row/);
-    expect(sizeRefusal('display', false)).toBeUndefined();
+    expect(rowsForSize('h1', true)).toBe(3);
+    expect(rowsForSize('display', true)).toBe(4);
+    // A stack of lines: three 15.5 px lines with 2 px of padding need 48.5 px → 3 rows.
+    expect(rowsForLines(3, 15.525, 2)).toBe(3);
+    expect(rowsForLines(1, 15.525, 2)).toBe(1);
+    expect(rowsForLines(0, 15.525)).toBe(1);
     // DS §2 has no 700: the four steps end at 600 and the Bold mark renders there too.
     expect(FONT_WEIGHTS).toEqual([300, 400, 500, 600]);
     expect(BOLD_WEIGHT).toBe(600);

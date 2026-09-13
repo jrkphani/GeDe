@@ -11,7 +11,10 @@ import { cellKey, type Id } from '../ids.js';
 import type { HighlightToken } from '../text/types.js';
 import {
   readMap,
+  readTriState,
+  rowMeta,
   rowsArray,
+  tableLook,
   type ColumnRecord,
   type GedeDoc,
   type TableMap,
@@ -57,6 +60,38 @@ export function cellAppearanceFor(
   if (column === null) return {};
   const override = cellAppearanceOverride(table, rowId, column.id);
   return override === null ? column.appearance : mergeAppearance(column.appearance, override);
+}
+
+/**
+ * Whether one cell wraps (GRID-09, ADR-049): the cell's own override, else
+ * its row's, else its column's, else the table's default. Presentation only —
+ * the row's height is stored separately, measured by the editing replica.
+ */
+export function effectiveWrap(
+  table: TableMap,
+  column: Pick<ColumnRecord, 'id' | 'wrap'> | null,
+  rowId: Id,
+  tableWrap: boolean = tableLook(table).wrap,
+): boolean {
+  if (column === null) return tableWrap;
+  const cell = cellAppearanceOverride(table, rowId, column.id)?.wrap;
+  if (cell !== undefined) return cell;
+  const row = rowMeta(table, rowId).wrap;
+  if (row !== null) return row;
+  return column.wrap ?? tableWrap;
+}
+
+/** Which scope decides a cell's wrap today, for the inspector's sentence (INSP-10). */
+export type WrapScope = 'cell' | 'row' | 'column' | 'table';
+export function wrapScopeOf(
+  table: TableMap,
+  column: Pick<ColumnRecord, 'id' | 'wrap'>,
+  rowId: Id,
+): WrapScope {
+  if (cellAppearanceOverride(table, rowId, column.id)?.wrap !== undefined) return 'cell';
+  if (rowMeta(table, rowId).wrap !== null) return 'row';
+  if (column.wrap !== null) return 'column';
+  return 'table';
 }
 
 /** How many cells of a column carry their own appearance (the inspector names them). */
@@ -143,7 +178,14 @@ export function setColumnAppearance(
 ): Appearance {
   return transact(gd, () => {
     const column = requireColumn(requireTable(gd, tableId), tableId, colId);
-    const next = applyPatch(readAppearance(column.get('appearance')), patch);
+    // ADR-049: column-scope wrap has one home, the column's own `wrap` key (null inherits
+    // the table's); the appearance map never carries it, so the two cannot disagree.
+    const { wrap, ...rest } = patch;
+    if (wrap !== undefined) {
+      if (wrap === null) column.delete('wrap');
+      else if (readTriState(column.get('wrap')) !== wrap) column.set('wrap', wrap);
+    }
+    const next = applyPatch(readAppearance(column.get('appearance')), rest);
     const current = readAppearance(column.get('appearance'));
     if (!appearanceEqual(current, next)) {
       if (isEmptyAppearance(next)) column.delete('appearance');
