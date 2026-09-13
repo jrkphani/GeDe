@@ -18,7 +18,7 @@ export const PROD = {
   domain: 'gede.work',
   envName: 'prod',
   alertsEmail: 'jrkphani@icloud.com',
-  budgetUsd: 150,
+  budgetUsd: 200,
 } as const satisfies EnvConfig;
 
 /** CloudFront certificates and WAF web ACLs with CLOUDFRONT scope must live in us-east-1. */
