@@ -13,6 +13,7 @@ import {
   cellAddress,
   graphById,
   graphsInPair,
+  isLastSheet,
   mergeRoom,
   rowMeta,
   spanAt,
@@ -33,7 +34,9 @@ import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GraphsActions } from '../graph/use-graphs.js';
 import type { GridCommands } from '../grid/commands.js';
 import type { CellClipboard } from '../keys/clipboard.js';
+import { SHEET_KEYS } from '../keys/shortcut-map.js';
 import { TRACKED } from '../inspector/controls.js';
+import { LAST_SHEET_REASON } from '../sheets.js';
 import { canMeasure, canvasMeasure, fitColumnsToContent } from '../style/index.js';
 
 export type MenuTarget =
@@ -82,8 +85,11 @@ export interface MenuContext {
     fit: () => void;
     actualSize: () => void;
   };
+  /** The strip's + (`add`) and the tab's own commands (ADR-048). */
   sheets: {
     add: () => void;
+    rename: (sheetId: Id) => void;
+    remove: (sheetId: Id) => void;
   };
   /** KEYS-03 ⌘A / KEYS-08: the cell menu's "Select the table" (ADR-042). */
   selectTable?: ((tableId: Id) => void) | undefined;
@@ -839,8 +845,19 @@ export function canvasMenuEntries(ctx: MenuContext): MenuEntry[] {
   ];
 }
 
-/** The sheet-tab menu (DOC-03): what the strip's trailing + does. Rename and delete have no requirement yet. */
-export function sheetMenuEntries(ctx: MenuContext): MenuEntry[] {
+/**
+ * The sheet tab's menu (DOC-03, ADR-048, #165): the home of Rename sheet and
+ * Delete sheet — the tab is the only thing on screen that is the sheet — and
+ * a route to Add sheet (the strip's + is its home). F2, ⌫ and double-click
+ * are routes (KEYS-08). Desktop order with separators between kinds
+ * (MENU-01); the last sheet's Delete is present and disabled with the reason
+ * (MENU-02). The stubs of the first cut (#79) were removed as requirement-
+ * less in 362b0e1; the owner's request is that requirement.
+ */
+export function sheetMenuEntries(
+  ctx: MenuContext,
+  target: MenuTarget & { kind: 'sheet' },
+): MenuEntry[] {
   const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
   return [
     {
@@ -849,6 +866,29 @@ export function sheetMenuEntries(ctx: MenuContext): MenuEntry[] {
       label: 'Add sheet',
       disabledReason: viewOnly,
       onSelect: ctx.sheets.add,
+    },
+    sep('s-rename'),
+    {
+      kind: 'item',
+      id: 'sheet-rename',
+      label: 'Rename sheet',
+      shortcut: SHEET_KEYS.rename,
+      disabledReason: viewOnly,
+      onSelect: () => {
+        ctx.sheets.rename(target.sheetId);
+      },
+    },
+    sep('s-delete'),
+    {
+      kind: 'item',
+      id: 'sheet-delete',
+      label: 'Delete sheet',
+      shortcut: SHEET_KEYS.remove,
+      danger: true,
+      disabledReason: viewOnly ?? (isLastSheet(ctx.gd) ? LAST_SHEET_REASON : undefined),
+      onSelect: () => {
+        ctx.sheets.remove(target.sheetId);
+      },
     },
   ];
 }
@@ -864,7 +904,7 @@ export function menuEntriesFor(ctx: MenuContext, target: MenuTarget): MenuEntry[
     case 'graph':
       return graphMenuEntries(ctx, target);
     case 'sheet':
-      return sheetMenuEntries(ctx);
+      return sheetMenuEntries(ctx, target);
     case 'canvas':
       return canvasMenuEntries(ctx);
   }

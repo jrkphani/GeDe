@@ -7,10 +7,13 @@ import {
   cellRich,
   createSheet,
   createTable,
+  deleteSheet,
   graphById,
   graphsOnSheet,
+  isLastSheet,
   LATTICE,
   listSheets,
+  renameSheet,
   sheetBounds,
   sheetEdgesShown,
   tableById,
@@ -23,10 +26,11 @@ import {
   type GedeDoc,
   type Id,
   type PresenceState,
+  type SheetRecord,
   type ToggleMark,
 } from '@gede/core';
 import { atLeast, theme } from '@gede/tokens';
-import { Banner, Button, Skeleton, useLoadingTiers, type LoadingTiers } from '@gede/ui';
+import { Banner, Button, Skeleton, Toast, useLoadingTiers, type LoadingTiers } from '@gede/ui';
 
 import { announce } from '../../announce.js';
 import { getDocument, permissionOf, type DocumentSummary } from '../../api/documents.js';
@@ -108,7 +112,15 @@ import { useTourGraphSubstep } from '../tour/use-tour.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
 import type { MenuContext } from './menus/entries.js';
-import { SheetTabs } from './SheetTabs.js';
+import { SheetTabs, type SheetEditing } from './SheetTabs.js';
+import {
+  deletedSheetAnnouncement,
+  deletedSheetTitle,
+  LAST_SHEET_ANNOUNCEMENT,
+  neighbourSheet,
+  remoteSheetRemovedAnnouncement,
+  sheetName,
+} from './sheets.js';
 import { TableView } from './TableView.js';
 import { DagEdges, useTableFlags } from './style/index.js'; // wave4/inspector-controls
 import { SAMPLE_RENAME_REASON, TitleBar } from './TitleBar.js';
@@ -268,10 +280,15 @@ function OpenDocument({
   // Viewer state (never document state): active sheet, selection, viewport, chrome toggles.
   const sheets = listSheets(gd);
   const [chosenSheetId, setChosenSheetId] = useState<Id | null>(null);
-  const activeSheetId =
-    chosenSheetId !== null && sheets.some((s) => s.id === chosenSheetId)
-      ? chosenSheetId
-      : (sheets[0]?.id ?? null);
+  // The strip as it last rendered, so a sheet that has just gone (a collaborator deleted
+  // it, a redo did) still names its neighbour (ADR-048).
+  const lastSheets = useRef<readonly SheetRecord[]>(sheets);
+  const chosenPresent = chosenSheetId !== null && sheets.some((s) => s.id === chosenSheetId);
+  const activeSheetId = chosenPresent
+    ? chosenSheetId
+    : chosenSheetId === null
+      ? (sheets[0]?.id ?? null)
+      : (neighbourSheet(lastSheets.current, sheets, chosenSheetId)?.id ?? null);
   // Selection, editing and traversal (GRID-03..06) live in the grid state machine.
   const grid = useGrid(gd, editable, { undo: session.undo });
   // SORT-01..06 (ADR-026): the viewer's own sort, filter and grouping per table, from the
@@ -331,24 +348,144 @@ function OpenDocument({
   const { clear: clearSelection } = grid.actions;
 
   // -- sheets (DOC-03) --------------------------------------------------------
-  const selectSheet = useCallback(
+  /** Show a sheet: swap the canvas, clear the selection, back to A1 (DOC-03). Says nothing. */
+  const showSheet = useCallback(
     (sheetId: Id) => {
       setChosenSheetId(sheetId);
       clearSelection();
       setViewport((v) => ({ x: 0, y: 0, zoom: v.zoom }));
+    },
+    [clearSelection],
+  );
+  const selectSheet = useCallback(
+    (sheetId: Id) => {
+      showSheet(sheetId);
       const sheet = listSheets(gd).find((s) => s.id === sheetId);
       // A sheet still named by its ordinal ("Sheet 2") is announced once, not "Sheet 2, Sheet 2" (#142).
-      if (sheet !== undefined) {
-        const ordinal = `Sheet ${String(sheet.ordinal)}`;
-        announce(sheet.label === ordinal ? ordinal : `${ordinal}, ${sheet.label}`);
-      }
+      if (sheet !== undefined) announce(sheetName(sheet));
     },
-    [gd, clearSelection],
+    [gd, showSheet],
   );
   const appendSheet = useCallback(() => {
     const id = createSheet(gd);
     selectSheet(id);
   }, [gd, selectSheet]);
+  // ADR-048 / #165: the tab's commands. Rename is an inline field on the tab; delete goes
+  // straight through with an Undo toast (LIB-D9, ADR-031) and one announcement; the last
+  // sheet stays. The toast's Undo reverses exactly the deletion, so it lives only while that
+  // is the latest local step: the next local step, or an undo, dismisses it.
+  const [renamingSheetId, setRenamingSheetId] = useState<Id | null>(null);
+  const [sheetNotice, setSheetNotice] = useState<{
+    title: string;
+    step: unknown;
+    undo: () => void;
+  } | null>(null);
+  useEffect(() => {
+    if (sheetNotice === null) return;
+    const manager = session.undo;
+    const check = () => {
+      if (manager.undoStack.at(-1) !== sheetNotice.step) setSheetNotice(null);
+    };
+    manager.on('stack-item-added', check);
+    manager.on('stack-item-popped', check);
+    return () => {
+      manager.off('stack-item-added', check);
+      manager.off('stack-item-popped', check);
+    };
+  }, [session, sheetNotice]);
+  const commitSheetRename = useCallback(
+    (sheetId: Id, label: string): boolean => {
+      const trimmed = label.trim();
+      if (trimmed === '') return false;
+      const was = listSheets(gd).find((s) => s.id === sheetId);
+      session.undo.stopCapturing();
+      const written = renameSheet(gd, sheetId, trimmed);
+      session.undo.stopCapturing();
+      setRenamingSheetId(null);
+      if (written) announce(`Renamed ${was?.label ?? 'the sheet'} to ${trimmed}`);
+      return true;
+    },
+    [gd, session],
+  );
+  const removeSheet = useCallback(
+    (sheetId: Id) => {
+      if (isLastSheet(gd)) {
+        announce(LAST_SHEET_ANNOUNCEMENT);
+        return;
+      }
+      if (listSheets(gd).every((s) => s.id !== sheetId)) return; // already gone
+      const wasActive = sheetId === activeSheetId;
+      session.undo.stopCapturing();
+      const result = deleteSheet(gd, sheetId);
+      session.undo.stopCapturing();
+      const step: unknown = session.undo.undoStack.at(-1);
+      const nowOn = listSheets(gd).find((s) => s.id === result.neighbourId) ?? null;
+      if (wasActive) showSheet(result.neighbourId);
+      announce(deletedSheetAnnouncement(result, wasActive ? nowOn : null));
+      setSheetNotice({
+        title: deletedSheetTitle(result),
+        step,
+        undo: () => {
+          setSheetNotice(null);
+          if (session.undo.undoStack.at(-1) !== step) return;
+          session.undo.undo();
+          showSheet(sheetId);
+          announce(`Restored ${result.label}`);
+        },
+      });
+    },
+    [gd, session, activeSheetId, showSheet],
+  );
+  const sheetEditing: SheetEditing | undefined = editable
+    ? {
+        renaming: renamingSheetId,
+        startRename: setRenamingSheetId,
+        commitRename: commitSheetRename,
+        cancelRename: () => {
+          setRenamingSheetId(null);
+        },
+        remove: removeSheet,
+      }
+    : undefined;
+  // KEYS-03: an undo or redo that brings a sheet back shows it — the person is looking for
+  // it; one that takes the active sheet away falls to the neighbour rule below.
+  const undoWithSheets = useCallback(
+    (direction: 'undo' | 'redo') => {
+      const before = new Set(listSheets(gd).map((s) => s.id));
+      if (direction === 'undo') session.undo.undo();
+      else session.undo.redo();
+      const restored = listSheets(gd).find((s) => !before.has(s.id));
+      if (restored !== undefined) {
+        showSheet(restored.id);
+        announce(`Restored ${restored.label}`);
+      }
+    },
+    [gd, session, showSheet],
+  );
+  // The sheet this replica showed has gone — a collaborator deleted it, or an undo or redo
+  // did: the neighbour is shown and said, once, and the keyboard is put on its tab rather
+  // than left on `body` (#165 §3).
+  useEffect(() => {
+    const previous = lastSheets.current;
+    lastSheets.current = sheets;
+    if (chosenSheetId === null || chosenPresent) return;
+    const gone = previous.find((s) => s.id === chosenSheetId);
+    const next = neighbourSheet(previous, sheets, chosenSheetId);
+    if (next === null) return;
+    showSheet(next.id);
+    if (gone !== undefined) announce(remoteSheetRemovedAnnouncement(gone, next));
+    const active = document.activeElement;
+    if (active === null || active === document.body || !active.isConnected) {
+      document
+        .querySelector<HTMLElement>('.gd-doc__sheets [role="tab"][aria-selected="true"]')
+        ?.focus({ preventScroll: true });
+    }
+  }, [sheets, chosenSheetId, chosenPresent, showSheet]);
+  useEffect(() => {
+    if (renamingSheetId !== null && !sheets.some((s) => s.id === renamingSheetId)) {
+      setRenamingSheetId(null);
+    }
+  }, [sheets, renamingSheetId]);
 
   // -- viewport (DOC-04, DOC-07) ----------------------------------------------
   const measured = size.width > 0 ? size : null;
@@ -698,8 +835,12 @@ function OpenDocument({
         },
       },
       edit: {
-        undo: () => session.undo.undo(),
-        redo: () => session.undo.redo(),
+        undo: () => {
+          undoWithSheets('undo');
+        },
+        redo: () => {
+          undoWithSheets('redo');
+        },
         // KEYS-03 ⌘A selects the table (the object); there is no range selection (ADR-042).
         selectAll: () => {
           if (selection !== null) selectTable(selection.tableId);
@@ -757,7 +898,7 @@ function OpenDocument({
         zoomPreset(1);
       },
     },
-    sheets: { add: appendSheet },
+    sheets: { add: appendSheet, rename: setRenamingSheetId, remove: removeSheet },
     selectTable,
     // ADR-047: the pointer routes to the object deletes and collapse.
     deleteTable: editable ? deleteTable : undefined,
@@ -1302,9 +1443,23 @@ function OpenDocument({
           activeSheetId={activeSheetId}
           onSelect={selectSheet}
           onAppend={editable ? appendSheet : undefined}
+          edit={sheetEditing}
           bottom={phone}
         />
       </DocumentContextMenu>
+      {/* LIB-D9 / ADR-031: a deleted sheet goes straight through; the toast's Undo is the safety. */}
+      <Toast
+        open={sheetNotice !== null}
+        onOpenChange={(open) => {
+          if (!open) setSheetNotice(null);
+        }}
+        title={sheetNotice?.title ?? ''}
+        undo={
+          sheetNotice === null
+            ? undefined
+            : { onUndo: sheetNotice.undo, altText: 'Undo deleting the sheet' }
+        }
+      />
       <ShortcutSheet open={shortcutsOpen} onOpenChange={setShortcutsOpen} />
       {selectedTable !== null && (
         <span className="gd-visually-hidden" data-testid="selected-table">

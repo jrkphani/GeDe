@@ -5,6 +5,7 @@
 export * from './schema.js';
 export * from './geometry.js';
 export * from './mutations.js';
+export * from './sheets.js';
 export * from './presence.js';
 export * from './undo.js';
 export * from './seed.js';

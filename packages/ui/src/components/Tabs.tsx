@@ -7,6 +7,13 @@ export interface TabItem<V extends string> {
   label: ReactNode;
   content?: ReactNode | undefined;
   disabled?: boolean | undefined;
+  /**
+   * Rendered in the tab's place while it is being renamed inline (the sheet
+   * strip's F2). A text field cannot sit inside the tab button (a nested
+   * interactive control, WCAG 4.1.2), so the trigger steps aside for it and
+   * comes back, with focus, when the editor unmounts.
+   */
+  editor?: ReactNode | undefined;
 }
 
 export interface TabsProps<V extends string> {
@@ -28,16 +35,23 @@ export function Tabs<V extends string>({ label, items, value, onChange, classNam
       }}
     >
       <RadixTabs.List className="gd-tabs__list" aria-label={label}>
-        {items.map((t) => (
-          <RadixTabs.Trigger
-            key={t.value}
-            value={t.value}
-            className="gd-tabs__tab"
-            disabled={t.disabled}
-          >
-            {t.label}
-          </RadixTabs.Trigger>
-        ))}
+        {items.map((t) =>
+          t.editor !== undefined ? (
+            <div key={t.value} className="gd-tabs__editor" data-value={t.value}>
+              {t.editor}
+            </div>
+          ) : (
+            <RadixTabs.Trigger
+              key={t.value}
+              value={t.value}
+              className="gd-tabs__tab"
+              disabled={t.disabled}
+              data-value={t.value}
+            >
+              {t.label}
+            </RadixTabs.Trigger>
+          ),
+        )}
       </RadixTabs.List>
       {items.map((t) =>
         t.content !== undefined ? (
