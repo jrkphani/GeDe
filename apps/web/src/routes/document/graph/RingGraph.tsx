@@ -17,6 +17,7 @@ import {
 
 import { referenceColourVar } from '../formula/index.js';
 import { activation, useRoving } from './roving.js';
+import { hoverFor } from './store.js';
 import type { GraphsActions } from './use-graphs.js';
 
 export interface RingGraphProps {
@@ -77,7 +78,7 @@ export const RingGraph = memo(function RingGraph({
   const tableId = graph.tableId;
 
   const hover = (e: GraphEmphasis | null) => {
-    actions.setHover(e === null ? null : { pairId: graph.pairId, tableId, emphasis: e });
+    actions.setHover(e === null ? null : hoverFor(graph.pairId, tableId, derivation, e));
   };
 
   if (derivation.dimensions.length === 0) {

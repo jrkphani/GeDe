@@ -169,8 +169,75 @@ async function signIn(page: Page): Promise<void> {
 
 const card = (page: Page) => page.getByTestId('tour-card');
 const scrim = (page: Page) => page.getByTestId('tour-scrim');
+const checklist = (page: Page) => page.getByTestId('dimension-checklist');
 
-/** The card must sit inside the viewport and, when it has a target, not cover it. */
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * The smallest box around every match of `selector`, each clipped by its
+ * scrolling ancestors (the canvas plane, the inspector rail) — what the tour
+ * spotlights (ONB-04).
+ */
+async function unionBox(page: Page, selector: string): Promise<Box | null> {
+  const boxes = await unionBoxes(page, selector);
+  if (boxes.length === 0) return null;
+  const x = Math.min(...boxes.map((b) => b.x));
+  const y = Math.min(...boxes.map((b) => b.y));
+  return {
+    x,
+    y,
+    width: Math.max(...boxes.map((b) => b.x + b.width)) - x,
+    height: Math.max(...boxes.map((b) => b.y + b.height)) - y,
+  };
+}
+
+/** The painted (clipped) boxes of `selector`'s matches; an element clipped away has none. */
+async function unionBoxes(page: Page, selector: string): Promise<Box[]> {
+  return page.locator(selector).evaluateAll((elements) =>
+    elements.flatMap((el) => {
+      const r = el.getBoundingClientRect();
+      let box = { x: r.left, y: r.top, width: r.width, height: r.height };
+      for (let node = el.parentElement; node !== null; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        if (!/auto|scroll|hidden|clip/.test(`${style.overflowX} ${style.overflowY}`)) continue;
+        const c = node.getBoundingClientRect();
+        const x = Math.max(box.x, c.left);
+        const y = Math.max(box.y, c.top);
+        const right = Math.min(box.x + box.width, c.right);
+        const bottom = Math.min(box.y + box.height, c.bottom);
+        if (right <= x || bottom <= y) return [];
+        box = { x, y, width: right - x, height: bottom - y };
+      }
+      return [box];
+    }),
+  );
+}
+
+/** Whether the scrim is `a`'s box 5 px out on every side (ONB-04), and the card is clear of `a`. */
+function spotlightMatches(a: Box, s: Box, box: Box): boolean {
+  const ring =
+    Math.abs(s.x - (a.x - 5)) <= 1 &&
+    Math.abs(s.y - (a.y - 5)) <= 1 &&
+    Math.abs(s.width - (a.width + 10)) <= 2 &&
+    Math.abs(s.height - (a.height + 10)) <= 2;
+  const overlaps =
+    box.x < a.x + a.width &&
+    a.x < box.x + box.width &&
+    box.y < a.y + a.height &&
+    a.y < box.y + box.height;
+  return ring && !overlaps;
+}
+
+/**
+ * The card must sit inside the viewport and, when it has a target, not cover
+ * it. A target with several anchors (`pointing`) is spotlit as their union.
+ * Polled as one measurement, since the ring follows layout by animation frame.
+ */
 async function expectCardPlaced(page: Page, target: string | null): Promise<void> {
   const box = await card(page).boundingBox();
   const viewport = page.viewportSize();
@@ -186,21 +253,164 @@ async function expectCardPlaced(page: Page, target: string | null): Promise<void
     return;
   }
   await expect(scrim(page)).toHaveAttribute('data-target', target);
-  const anchor = page.locator(`[data-tour="${target}"]`);
-  await expect(anchor).toBeVisible();
-  const a = (await anchor.boundingBox())!;
-  const s = (await scrim(page).boundingBox())!;
-  // ONB-04: the spotlight is the anchor's live box, 5 px out on every side.
-  expect(Math.abs(s.x - (a.x - 5))).toBeLessThanOrEqual(1);
-  expect(Math.abs(s.y - (a.y - 5))).toBeLessThanOrEqual(1);
-  expect(Math.abs(s.width - (a.width + 10))).toBeLessThanOrEqual(2);
-  expect(Math.abs(s.height - (a.height + 10))).toBeLessThanOrEqual(2);
-  // The card never covers its target.
+  await expectSpotlightOn(page, `[data-tour="${target}"]`);
+}
+
+/** The scrim is the union of `selector`'s painted boxes, 5 px out, and the card is clear of it. */
+async function expectSpotlightOn(page: Page, selector: string): Promise<void> {
+  await expect(page.locator(selector).first()).toBeVisible();
+  await expect
+    .poll(
+      async () => {
+        const a = await unionBox(page, selector);
+        if (a === null) return 'nothing painted yet';
+        const s = (await scrim(page).boundingBox())!;
+        const c = (await card(page).boundingBox())!;
+        return spotlightMatches(a, s, c) ? 'placed' : JSON.stringify({ a, s, c });
+      },
+      { message: `the spotlight follows ${selector}` },
+    )
+    .toBe('placed');
+}
+
+/** Type `text` into an empty cell and commit it; the entity index, if it opened, is answered first. */
+async function commitFormula(page: Page, address: string, text: string): Promise<void> {
+  await page.locator(`[data-address="${address}"]`).dblclick();
+  const editor = page.getByLabel(`Edit ${address}`);
+  await editor.fill(text);
+  await expect(editor).toHaveText(text);
+  await editor.press('Enter');
+  if (await editor.count()) {
+    // The `@` index took the Enter as its pick; the formula is unchanged, so commit again.
+    await expect(editor).toHaveText(text);
+    await editor.press('Enter');
+  }
+  await expect(editor).toHaveCount(0);
+}
+
+/**
+ * Step 3 as the tour guides it, from its `add` card to step 4: `+ Graph`,
+ * Escape (back to `add`, never Skip), `+ Graph` again, the pointing target
+ * over Deliverables, then one dimension unticked in the Graph tab. Every
+ * sub-card carries the step's counter and gets axe in both themes.
+ */
+async function graphStep(
+  page: Page,
+  checkA11y: (screen: string) => Promise<unknown>,
+  width: number,
+): Promise<void> {
+  const label = String(width);
+  const step3 = page.getByRole('dialog', { name: 'Add a context graph' });
+  await expect(step3).toBeVisible();
+  await expect(step3).toHaveAttribute('data-step', '3');
+  await expect(step3).toHaveAttribute('data-substep', 'add');
+  await expect(step3.getByText('STEP 3 OF 5', { exact: true })).toBeVisible();
+  await expect(step3.locator('.gd-tour__dot--done')).toHaveCount(3);
+  await expect(
+    step3.getByText('No Numbers equivalent — it is not a chart. It reads and writes the table.'),
+  ).toBeVisible();
+  await expect(step3.getByRole('button', { name: /next/i })).toHaveCount(0);
+  await expectCardPlaced(page, 'graph');
+  await checkCardBothThemes(page, checkA11y, `tour step 3a ${label}`);
+
+  // 3b — pointing mode: the targets over both tables are spotlit as one; the banner is lit.
+  await page.getByRole('button', { name: 'Add graph' }).click();
+  const point = page.getByRole('dialog', { name: 'Point it at a table' });
+  await expect(point).toBeVisible();
+  await expect(point).toHaveAttribute('data-step', '3');
+  await expect(point).toHaveAttribute('data-substep', 'point');
+  await expect(point.getByText('STEP 3 OF 5', { exact: true })).toBeVisible();
+  await expect(point.locator('.gd-tour__dot--done')).toHaveCount(3);
+  await expect(point.locator('.gd-tour__action')).toHaveText(/Click a table to bind the graph$/);
+  await expect(point.getByText(/Deliverables and Team/)).toBeVisible();
+  await expect(
+    point.getByText('No Numbers equivalent — it is not a chart. It reads and writes the table.'),
+  ).toBeVisible();
+  await expect(page.getByTestId('pointing-target')).toHaveCount(2);
+  await expect(page.getByText('Click a table to bind the graph.')).toBeVisible();
+  await expect(page.locator('.gd-doc__pointing--lit')).toHaveCount(1);
+  // The toolbar button is no longer the spotlight; the targets and the banner are, as one.
+  await expectCardPlaced(page, 'pointing');
+  await expectInsideSpotlight(page, '[data-testid="pointing-banner"]');
+  await expectInsideSpotlight(page, '[aria-label="Bind the graph to Deliverables"]');
+  // The Team table sits to the right of the canvas at these widths: the card says so.
+  const painted = await unionBoxes(page, '[data-testid="pointing-target"]');
+  if (painted.length < 2) await expect(point.getByTestId('tour-off-canvas')).toBeVisible();
+  else await expect(point.getByTestId('tour-off-canvas')).toHaveCount(0);
+  await checkCardBothThemes(page, checkA11y, `tour step 3b ${label}`);
+  // GRAPH-03: Escape cancels pointing and returns to 3a — Skip is the only exit (ONB-07).
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('pointing-target')).toHaveCount(0);
+  await expect(step3).toBeVisible();
+  await expect(step3).toHaveAttribute('data-substep', 'add');
+  await expect(step3.getByRole('button', { name: 'Skip' })).toBeVisible();
+  await expectCardPlaced(page, 'graph');
+  // The banner's Cancel does the same.
+  await page.getByRole('button', { name: 'Add graph' }).click();
+  await expect(point).toBeVisible();
+  await page.getByTestId('pointing-banner').getByRole('button', { name: 'Cancel' }).click();
+  await expect(step3).toHaveAttribute('data-substep', 'add');
+  await page.getByRole('button', { name: 'Add graph' }).click();
+  await expect(point).toBeVisible();
+  await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
+  await expect(page.getByRole('region', { name: 'Ring graph of Deliverables' })).toBeVisible();
+
+  // 3c — the dimensions: the rail opens in Format mode on the Graph tab; the checklist is spotlit.
+  const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
+  await expect(dimensions).toBeVisible();
+  await expect(dimensions).toHaveAttribute('data-step', '3');
+  await expect(dimensions).toHaveAttribute('data-substep', 'dimensions');
+  await expect(dimensions.getByText('STEP 3 OF 5', { exact: true })).toBeVisible();
+  await expect(dimensions.locator('.gd-tour__dot--done')).toHaveCount(3);
+  await expect(page.getByTestId('inspector')).toHaveAttribute('data-state', 'open');
+  await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
+  await expect(dimensions.locator('.gd-tour__action')).toHaveText(
+    /Tick at least two dimensions in the Graph tab$/,
+  );
+  const list = checklist(page);
+  await expect(list).toBeVisible();
+  // GRAPH-05: the product's defaults, nothing more — the first three columns are ticked — and
+  // the defaults alone never advance: step 4 is not here (ONB-05).
+  await expect(list.getByRole('checkbox', { checked: true })).toHaveCount(3);
+  await expect(list.getByRole('checkbox', { name: /^Deliverable/ })).toBeChecked();
+  await expect(page.getByRole('dialog', { name: 'Find across every table' })).toHaveCount(0);
+  // The spotlight is the checklist with its Add dimension column control; the card covers
+  // neither them nor the tab strip.
+  await expectCardPlaced(page, 'dimensions');
+  await expectInsideSpotlight(page, 'button[data-tour="dimensions"]');
+  await expectClearOf(page, page.getByRole('tablist', { name: 'Format' }));
+  await checkCardBothThemes(page, checkA11y, `tour step 3c ${label}`);
+  // ONB-11: the checklist is operable under the tour. Unticking one leaves Owner and Status.
+  await list.getByRole('checkbox', { name: /^Deliverable/ }).click();
+  await expect(list.getByRole('checkbox', { checked: true })).toHaveCount(2);
+}
+
+/** `selector`'s painted box lies inside the scrim's cut-out: it is not dimmed (ONB-04, ONB-11). */
+async function expectInsideSpotlight(page: Page, selector: string): Promise<void> {
+  await expect
+    .poll(
+      async () => {
+        const a = await unionBox(page, selector);
+        if (a === null) return 'nothing painted yet';
+        const s = (await scrim(page).boundingBox())!;
+        const inside =
+          a.x >= s.x - 1 &&
+          a.y >= s.y - 1 &&
+          a.x + a.width <= s.x + s.width + 1 &&
+          a.y + a.height <= s.y + s.height + 1;
+        return inside ? 'inside' : JSON.stringify({ a, s });
+      },
+      { message: `${selector} is inside the spotlight` },
+    )
+    .toBe('inside');
+}
+
+/** The card does not intersect `locator`'s box. */
+async function expectClearOf(page: Page, locator: ReturnType<Page['locator']>): Promise<void> {
+  const a = (await locator.boundingBox())!;
+  const c = (await card(page).boundingBox())!;
   const overlaps =
-    box!.x < a.x + a.width &&
-    a.x < box!.x + box!.width &&
-    box!.y < a.y + a.height &&
-    a.y < box!.y + box!.height;
+    c.x < a.x + a.width && a.x < c.x + c.width && c.y < a.y + a.height && a.y < c.y + c.height;
   expect(overlaps).toBe(false);
 }
 
@@ -228,7 +438,7 @@ async function checkCardBothThemes(
 }
 
 for (const width of [1024, 1440] as const) {
-  test(`ONB-01 ONB-02 ONB-04 ONB-05 ONB-06 ONB-09 ONB-10 ONB-11 ONB-14 ONB-03 at ${String(width)}: the tour starts on arrival, spotlights the pinned sample, and advances only as each of the five actions is performed for real; completion confirms and sets the account flag`, async ({
+  test(`ONB-01 ONB-02 ONB-04 ONB-05 ONB-06 ONB-09 ONB-10 ONB-11 ONB-14 ONB-03 FX-01 GRAPH-03 GRAPH-05 at ${String(width)}: the tour starts on arrival, spotlights the pinned sample, and advances only as each action is performed for real — the reference and Concat sub-flow, the graph sub-flow — and completion confirms and sets the account flag`, async ({
     page,
     checkA11y,
     snapshot,
@@ -303,19 +513,27 @@ for (const width of [1024, 1440] as const) {
     // REF-01: a bare =@ path is a live reference cell showing the source's value.
     await expect(g6.getByTestId('reference-cell')).toContainText('Platform engineer');
 
-    // Step 3 — the graph command in the toolbar.
-    const step3 = page.getByRole('dialog', { name: 'Add a context graph' });
-    await expect(step3).toBeVisible();
+    // Step 2b — Concat (FX-01): same counter and dots, still centred (ONB-06), Numbers named first.
+    const concat = page.getByRole('dialog', { name: 'Join text with =Concat()' });
+    await expect(concat).toBeVisible();
+    await expect(concat).toHaveAttribute('data-step', '2');
+    await expect(concat).toHaveAttribute('data-substep', 'concat');
+    await expect(concat.getByText('STEP 2 OF 5', { exact: true })).toBeVisible();
+    await expect(concat.locator('.gd-tour__dot--done')).toHaveCount(2);
+    await expect(concat.getByText(/^Numbers: CONCATENATE or &/)).toBeVisible();
+    await expect(concat.getByText('Commit a Concat over two or more arguments')).toHaveClass(
+      /gd-tour__action/,
+    );
+    await expectCardPlaced(page, null);
+    await checkCardBothThemes(page, checkA11y, `tour step 2b ${String(width)}`);
+    // The card's own example, in the empty Owner role cell of row 3: C5 is Priya.
+    await commitFormula(page, 'G7', '=Concat(C5, " — ", @Team.Priya.Role)');
     await expect(
-      step3.getByText('No Numbers equivalent — it is not a chart. It reads and writes the table.'),
-    ).toBeVisible();
-    await expectCardPlaced(page, 'graph');
-    await checkCardBothThemes(page, checkA11y, `tour step 3 ${String(width)}`);
-    await page.getByRole('button', { name: 'Add graph' }).click();
-    await expect(page.getByText('Click a table to bind the graph.')).toBeVisible();
-    await expect(step3).toBeVisible();
-    await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
-    await expect(page.getByRole('region', { name: 'Ring graph of Deliverables' })).toBeVisible();
+      page.locator('[data-address="G7"]').getByTestId('formula-cell').locator('.gd-formula__value'),
+    ).toHaveText('Priya — Product engineer');
+
+    // Step 3 — the graph sub-flow: + Graph, point at Deliverables, choose the dimensions.
+    await graphStep(page, checkA11y, width);
 
     // Step 4 — Find.
     const step4 = page.getByRole('dialog', { name: 'Find across every table' });
@@ -330,8 +548,8 @@ for (const width of [1024, 1440] as const) {
     await expect(field).toBeFocused();
     await expect(step4).toBeVisible();
     await field.fill('Blocked');
-    // Two Blocked cells, and the graph bound in step 3 whose Status dimension carries the
-    // value (FIND-03 "graph dimension values", #125).
+    // Two Blocked cells, and the graph bound in step 3 whose Status dimension (kept in 3c)
+    // carries the value (FIND-03 "graph dimension values", #125).
     await expect(page.getByTestId('find-count')).toHaveText(/of 3/);
 
     // Step 5 — Share and invite.
@@ -438,6 +656,196 @@ test('ONB-08 Replay guided tour from the ? help control clears the flag and rest
   await help.click();
   await menu.getByRole('menuitem', { name: 'Keyboard shortcuts' }).click();
   await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
+});
+
+/** Steps 1 and 2 as the journey does them, to reach step 3's first card. */
+async function reachGraphStep(page: Page): Promise<void> {
+  await page.getByRole('row').filter({ hasText: 'Guided sample' }).dblclick();
+  await expect(page).toHaveURL(new RegExp(`/d/${SAMPLE_ID}$`));
+  await expect(
+    page.getByRole('dialog', { name: 'Reference a cell in another table' }),
+  ).toBeVisible();
+  await expect(page.getByRole('grid').first()).toBeVisible();
+  await commitFormula(page, 'G6', '=@Team.Marcus.Role');
+  await expect(page.getByRole('dialog', { name: 'Join text with =Concat()' })).toBeVisible();
+  await commitFormula(page, 'G7', '=Concat(C5, " — ", @Team.Priya.Role)');
+  await expect(page.getByRole('dialog', { name: 'Add a context graph' })).toBeVisible();
+}
+
+for (const width of [1024, 1440] as const) {
+  test(`A11Y-01 ONB-11 GRAPH-03 GRAPH-05 at ${String(width)}: step 3 completes with the mouse unplugged — Enter on Add graph hands focus to the first target, Tab cycles targets, Skip and the banner's controls, Enter binds, Space ticks`, async ({
+    page,
+    checkA11y,
+  }) => {
+    test.setTimeout(120_000);
+    await installFakes(page, null);
+    await page.setViewportSize({ width, height: 900 });
+    await signIn(page);
+    await reachGraphStep(page);
+    const rowsBefore = await page.locator('[data-address^="B"][data-address$="5"]').count();
+    // The toolbar command, focused and activated from the keyboard.
+    const addGraph = page.getByRole('button', { name: 'Add graph' });
+    await addGraph.focus();
+    await expect(addGraph).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog', { name: 'Point it at a table' })).toBeVisible();
+    // GRAPH-03: pointing mode hands focus to its first target (a button); Tab cycles the
+    // mode's controls — targets, the tour's Skip, the banner's buttons — never the grid.
+    const deliverables = page.getByRole('button', { name: 'Bind the graph to Deliverables' });
+    await expect(deliverables).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('button', { name: 'Bind the graph to Team' })).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(card(page).getByRole('button', { name: 'Skip' })).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(page.getByRole('button', { name: 'Add shaped table' })).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(
+      page.getByTestId('pointing-banner').getByRole('button', { name: 'Cancel' }),
+    ).toBeFocused();
+    await page.keyboard.press('Tab');
+    await expect(deliverables).toBeFocused();
+    await page.keyboard.press('Shift+Tab');
+    await expect(
+      page.getByTestId('pointing-banner').getByRole('button', { name: 'Cancel' }),
+    ).toBeFocused();
+    for (let i = 0; i < 4; i += 1) await page.keyboard.press('Shift+Tab');
+    await expect(deliverables).toBeFocused();
+    // No Tab walked the table: the sample still has its eight rows (GRID-05 appends past the last).
+    expect(await page.locator('[data-address^="B"][data-address$="5"]').count()).toBe(rowsBefore);
+    await expect(page.locator('[data-address="B13"]')).toHaveCount(0);
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog', { name: 'Choose the dimensions' })).toBeVisible();
+    await expect(page.getByTestId('inspector')).toHaveAttribute('data-state', 'open');
+    await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
+    // The tour put focus on the checklist's first box, so the next action is one key away:
+    // Space toggles a Radix checkbox.
+    const deliverable = checklist(page).getByRole('checkbox', { name: /^Deliverable/ });
+    await expect(deliverable).toBeFocused();
+    await page.keyboard.press('Space');
+    await expect(deliverable).not.toBeChecked();
+    await expect(page.getByRole('dialog', { name: 'Find across every table' })).toBeVisible();
+    await settled(page);
+    await checkA11y(`tour step 4 after keyboard step 3 ${String(width)}`);
+  });
+}
+
+test.describe('200 % zoom', () => {
+  // A 2048 × 900 window at 200 % browser zoom: 1024 CSS px wide and 450 tall, device scale 2.
+  test.use({ viewport: { width: 1024, height: 450 }, deviceScaleFactor: 2 });
+
+  test('ONB-04 ONB-11 GRAPH-03 GRAPH-05 at 1024 × 200 % the graph sub-flow keeps every card inside the viewport and clear of the targets, the banner and the checklist', async ({
+    page,
+    checkA11y,
+  }) => {
+    test.setTimeout(120_000);
+    await installFakes(page, null);
+    await signIn(page);
+    await reachGraphStep(page);
+    await expectCardPlaced(page, 'graph');
+    await page.getByRole('button', { name: 'Add graph' }).click();
+    const point = page.getByRole('dialog', { name: 'Point it at a table' });
+    await expect(point).toBeVisible();
+    // 450 CSS px tall: the banner-to-tables spotlight leaves no room for the card below,
+    // beside or above it, so it takes the bottom-right corner (ADR-045) — inside the
+    // viewport, clear of the banner, its controls and the Deliverables label chip.
+    await expect(point).toHaveAttribute('data-placement', 'corner');
+    // The card's own height decides its top (ONB-09), one frame after it is measured.
+    await expect
+      .poll(async () => {
+        const box = (await card(page).boundingBox())!;
+        return box.x + box.width <= 1024 && box.y + box.height <= 450;
+      })
+      .toBe(true);
+    await expectClearOf(page, page.getByTestId('pointing-banner'));
+    await expectClearOf(
+      page,
+      page
+        .getByRole('button', { name: 'Bind the graph to Deliverables' })
+        .locator('.gd-pointing__label'),
+    );
+    await expectInsideSpotlight(page, '[data-testid="pointing-banner"]');
+    await checkCardBothThemes(page, checkA11y, 'tour step 3b 1024 200%');
+    await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
+    const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
+    await expect(dimensions).toBeVisible();
+    await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
+    await expectCardPlaced(page, 'dimensions');
+    await expectClearOf(page, page.getByRole('tablist', { name: 'Format' }));
+    await checkCardBothThemes(page, checkA11y, 'tour step 3c 1024 200%');
+    await checklist(page)
+      .getByRole('checkbox', { name: /^Deliverable/ })
+      .click();
+    await expect(page.getByRole('dialog', { name: 'Find across every table' })).toBeVisible();
+  });
+});
+
+test('ONB-07 GRAPH-03 Skip during pointing ends the tour and cancels pointing mode: no banner or targets are left behind', async ({
+  page,
+}) => {
+  const fakes = await installFakes(page, null);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signIn(page);
+  await reachGraphStep(page);
+  await page.getByRole('button', { name: 'Add graph' }).click();
+  const point = page.getByRole('dialog', { name: 'Point it at a table' });
+  await expect(point).toBeVisible();
+  await point.getByRole('button', { name: 'Skip' }).click();
+  await expect(card(page)).toHaveCount(0);
+  await expect(scrim(page)).toHaveCount(0);
+  await expect(page.getByTestId('pointing-banner')).toHaveCount(0);
+  await expect(page.getByTestId('pointing-target')).toHaveCount(0);
+  await expect.poll(() => fakes.patches).toEqual([{ tourDone: true }]);
+});
+
+test('ONB-13 RESP-03 ONB-04 at 768 the graph sub-flow runs with the inspector as an overlay: it opens for the dimensions card, the spotlight tracks the checklist, and falls back to the ring while the overlay is dismissed', async ({
+  page,
+  checkA11y,
+}) => {
+  test.setTimeout(120_000);
+  await installFakes(page, null);
+  await page.setViewportSize({ width: 768, height: 900 });
+  await signIn(page);
+  await reachGraphStep(page);
+  const rail = page.getByTestId('inspector');
+  await expect(rail).toHaveAttribute('data-state', 'collapsed');
+  await page.getByRole('button', { name: 'Add graph' }).click();
+  await expectCardPlaced(page, 'pointing');
+  await checkCardBothThemes(page, checkA11y, 'tour step 3b 768');
+  await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
+  const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
+  await expect(dimensions).toBeVisible();
+  // RESP-03: below 1024 the open rail is an overlay; the tour opened it for the Graph tab.
+  await expect(rail).toHaveAttribute('data-state', 'open');
+  await expect(rail).toHaveAttribute('data-overlay', 'true');
+  await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
+  await expectCardPlaced(page, 'dimensions');
+  await checkCardBothThemes(page, checkA11y, 'tour step 3c 768');
+  // Escape dismisses the overlay (not the tour): the checklist is gone and the graph is still
+  // selected, so the strip's Expand control is spotlit; expanding brings the checklist back.
+  await page.keyboard.press('Escape');
+  await expect(rail).toHaveAttribute('data-state', 'collapsed');
+  await expect(dimensions).toBeVisible();
+  await expectSpotlightOn(page, '[data-tour="inspector-expand"]');
+  await page.getByRole('button', { name: 'Expand inspector' }).click();
+  await expect(rail).toHaveAttribute('data-state', 'open');
+  await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
+  await expectCardPlaced(page, 'dimensions');
+  // Deselecting the graph (a click on the canvas) drops the Graph tab: the ring is spotlit,
+  // and selecting it again brings the rail and the checklist back.
+  await page.getByTestId('plane').click({ position: { x: 40, y: 600 } });
+  await expect(page.getByRole('tab', { name: 'Graph' })).toHaveCount(0);
+  const ring = page.getByRole('region', { name: 'Ring graph of Deliverables' });
+  await expectSpotlightOn(page, '[data-graph-kind="ring"][data-pair-id]:not([data-selected])');
+  await ring.getByRole('button').first().click();
+  await expect(rail).toHaveAttribute('data-state', 'open');
+  await expectCardPlaced(page, 'dimensions');
+  await checklist(page)
+    .getByRole('checkbox', { name: /^Deliverable/ })
+    .click();
+  await expect(page.getByRole('dialog', { name: 'Find across every table' })).toBeVisible();
+  await settled(page);
+  await checkA11y('tour step 4 768');
 });
 
 test('ONB-13 RESP-02 RESP-05 below 768 px (480) the tour does not run and the flag stays unset; at 768 it does, with a 44 px Skip', async ({

@@ -8,7 +8,7 @@
  * a view-only participant) get the commands as no-ops so the objects still
  * render, without pointing, dragging or write-back.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import {
   bindGraphPair,
   bindShapedTable,
@@ -32,10 +32,30 @@ import {
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { setTourPointing, subscribeTour, tourState } from '../../tour/store.js';
 import { graphStoreFor, type GraphHover } from './store.js';
 import type { LatticeUnits, Pixels } from '@gede/core';
 import type { GridActions } from '../grid/use-grid.js';
 import type { GridCommands } from '../grid/commands.js';
+
+/** The controls Tab cycles while pointing, in reading order: banner buttons, targets, the tour's Skip. */
+function pointingControls(): HTMLElement[] {
+  return Array.from(
+    document.querySelectorAll<HTMLElement>(
+      '.gd-doc__pointing button, .gd-pointing__target, .gd-tour__skip',
+    ),
+  ).filter((el) => !el.hasAttribute('disabled'));
+}
+
+/**
+ * Whether a Tab from `active` belongs to pointing mode: nothing focused, the
+ * command that armed it (the toolbar), or the canvas — never a field, a menu or
+ * a dialog the person is in, which keep their own Tab.
+ */
+function focusBelongsToPointing(active: Element | null): boolean {
+  if (active === null || active === document.body) return true;
+  return active.closest('.gd-doc__toolbar, .gd-canvas, .gd-doc__pointing') !== null;
+}
 
 export type Pointing =
   /** `+ Graph` with nothing to bind yet: the click creates the pair (GRAPH-03). */
@@ -122,16 +142,44 @@ export function useGraphs({
   useEffect(() => {
     if (!editable) setPointing(null);
   }, [editable]);
+  // ONB-05: the guided tour's step 3 shows its `point` card while pointing mode is on.
+  useEffect(() => {
+    setTourPointing(pointing !== null);
+    return () => {
+      setTourPointing(false);
+    };
+  }, [pointing]);
+  // ONB-07 (#159 item 8): Skip ends the tour and leaves no mode behind it — the pointing
+  // mode the tour asked for is cancelled with it.
+  const tour = useSyncExternalStore(subscribeTour, tourState, tourState);
+  useEffect(() => {
+    if (tour.phase === 'ending' && tour.reason === 'skipped') setPointing(null);
+  }, [tour]);
 
   // GRAPH-03: Escape cancels pointing, taken in the capture phase so the shell's Escape
-  // (clear the selection) does not also fire (`event.code`, I18N-02).
+  // (clear the selection) does not also fire (`event.code`, I18N-02). Tab cycles the mode's
+  // own controls — the banner's buttons, every pointing target, the tour's Skip — so the
+  // keyboard reaches a target from the toolbar without walking the grid (whose Tab appends
+  // rows past the last one, GRID-05); Escape and Cancel are the way out (A11Y-01, #159).
   useEffect(() => {
     if (pointing === null) return undefined;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.code !== 'Escape' || event.defaultPrevented) return;
+      if (event.defaultPrevented) return;
+      if (event.code === 'Escape') {
+        event.preventDefault();
+        setPointing(null);
+        announce('Pointing cancelled');
+        return;
+      }
+      if (event.code !== 'Tab') return;
+      const controls = pointingControls();
+      const active = document.activeElement;
+      const index = active instanceof HTMLElement ? controls.indexOf(active) : -1;
+      if (controls.length === 0 || (index === -1 && !focusBelongsToPointing(active))) return;
       event.preventDefault();
-      setPointing(null);
-      announce('Pointing cancelled');
+      const step = event.shiftKey ? -1 : 1;
+      const next = index === -1 ? 0 : (index + step + controls.length) % controls.length;
+      controls[next]?.focus({ preventScroll: true });
     };
     window.addEventListener('keydown', onKeyDown, true);
     return () => {

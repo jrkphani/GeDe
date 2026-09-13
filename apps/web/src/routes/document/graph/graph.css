@@ -331,26 +331,38 @@
   align-items: flex-start;
   box-sizing: border-box;
   margin: 0;
-  padding: var(--space-1) var(--space-2);
-  border: 2px dashed var(--selection-ring);
+  padding: 0;
+  /* GRAPH-03 "tables outline in accent": forest (`--rule-accent`), not the amber the DS
+     keeps for live and selection state (#141). */
+  border: 2px dashed var(--rule-accent);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--selection-ring) 10%, transparent);
+  background: color-mix(in srgb, var(--rule-accent) 10%, transparent);
   color: var(--ink);
   font: inherit;
   cursor: pointer;
 }
 .gd-pointing__target:hover {
-  background: color-mix(in srgb, var(--selection-ring) 18%, transparent);
+  background: color-mix(in srgb, var(--rule-accent) 18%, transparent);
 }
 .gd-pointing__target:focus-visible {
   outline: 2px solid var(--focus-ring);
   outline-offset: 2px;
 }
+/* The chip hangs above the table's top edge, in the gutter row, so it never overprints the
+   table's own title (#141). */
 .gd-pointing__label {
+  position: absolute;
+  left: -2px;
+  top: -2px;
+  transform: translateY(-100%);
   padding: 0 var(--space-1);
+  border: 1px solid var(--rule-accent);
   border-radius: var(--radius-sm);
   background: var(--surface);
+  color: var(--link);
   font-size: 0.6875rem;
+  line-height: 1.5;
+  white-space: nowrap;
 }
 
 /* GRAPH-09: the source row lit in the table while a node, dot or cell is hovered. */

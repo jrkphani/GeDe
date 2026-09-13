@@ -36,6 +36,7 @@ export {
   resolveSlice,
   withAxis,
   withPin,
+  withoutPin,
   type CoverageCell,
   type CoverageMatrix,
   type ResolvedPin,

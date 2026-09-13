@@ -35,6 +35,13 @@
   background: color-mix(in srgb, var(--slate-900) 34%, transparent);
 }
 
+/* Step 3's `point` card: the pointing banner (GRAPH-03) stays lit above the scrim, next to
+   the spotlit targets, so its instruction and its two controls read as part of the step. */
+.gd-doc__pointing--lit {
+  position: relative;
+  z-index: 26;
+}
+
 .gd-tour__card {
   position: fixed;
   z-index: 26;

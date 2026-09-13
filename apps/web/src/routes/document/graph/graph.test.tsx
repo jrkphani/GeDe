@@ -5,6 +5,8 @@
 // inline formula engine run for real; table content is written through
 // `@gede/core` on the room's replica and arrives over the fake socket.
 import 'fake-indexeddb/auto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { createElement } from 'react';
 import { act, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -28,6 +30,7 @@ import { FakeRoom, until } from '../../../test/fake-websocket.js';
 import { installMatchMedia, phoneMedia } from '../../../test/match-media.js';
 import { renderRoutes, withConfig } from '../../../test/helpers.js';
 import { routes } from '../../../routes.js';
+import { resetTourForTests, skipTour, startTour, tourState } from '../../tour/store.js';
 
 const user = { sub: 'sub-1', email: 'meena@1cloudhub.com', name: 'Meena' };
 
@@ -176,7 +179,56 @@ describe('context graphs', () => {
   });
   afterEach(() => {
     setDocumentSeamsForTests(null);
+    resetTourForTests();
     vi.restoreAllMocks();
+  });
+
+  it('A11Y-01 GRAPH-03 ONB-07 arming pointing hands focus to the first target; Tab cycles the targets and the banner controls, never the grid; Escape cancels; Skip on the guided tour cancels pointing with it (#159)', async () => {
+    await openShell();
+    await addTable();
+    await userEvent.click(screen.getByRole('button', { name: 'Add table' }));
+    await until(() => room.doc.getMap('tables').size === 2);
+    await userEvent.click(screen.getByRole('button', { name: 'Add graph' }));
+    const targets = screen.getAllByTestId('pointing-target');
+    expect(targets).toHaveLength(2);
+    expect(targets[0]).toHaveFocus();
+    // The cycle, in reading order: banner buttons, targets — and back around.
+    const shaped = screen.getByRole('button', { name: 'Add shaped table' });
+    const cancel = screen.getByRole('button', { name: 'Cancel' });
+    fireEvent.keyDown(window, { code: 'Tab' });
+    expect(targets[1]).toHaveFocus();
+    fireEvent.keyDown(window, { code: 'Tab' });
+    expect(shaped).toHaveFocus();
+    fireEvent.keyDown(window, { code: 'Tab' });
+    expect(cancel).toHaveFocus();
+    fireEvent.keyDown(window, { code: 'Tab' });
+    expect(targets[0]).toHaveFocus();
+    fireEvent.keyDown(window, { code: 'Tab', shiftKey: true });
+    expect(cancel).toHaveFocus();
+    // A Tab from a field the person is in is theirs: the title stays put.
+    const title = screen.getByLabelText('Workscape title');
+    title.focus();
+    expect(fireEvent.keyDown(window, { code: 'Tab' })).toBe(true);
+    expect(title).toHaveFocus();
+    // The grid gained no row while pointing (GRID-05 appends past the last row on Tab).
+    expect(room.doc.getMap('tables').size).toBe(2);
+    fireEvent.keyDown(window, { code: 'Escape' });
+    expect(screen.queryByTestId('pointing-overlay')).not.toBeInTheDocument();
+
+    // Skip during pointing: the tour ends and pointing mode goes with it.
+    act(() => {
+      startTour();
+    });
+    await userEvent.click(screen.getByRole('button', { name: 'Add graph' }));
+    expect(screen.getByTestId('pointing-overlay')).toBeInTheDocument();
+    act(() => {
+      skipTour();
+    });
+    expect(tourState()).toEqual({ phase: 'ending', reason: 'skipped' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('pointing-overlay')).not.toBeInTheDocument();
+    });
+    expect(screen.queryByText('Click a table to bind the graph.')).not.toBeInTheDocument();
   });
 
   it('GRAPH-01 GRAPH-03 GRAPH-02 + Graph enters pointing mode (accent targets, banner, Escape cancels); the click binds a ring and coverage pair side by side below the table', async () => {
@@ -186,6 +238,17 @@ describe('context graphs', () => {
     expect(screen.getByText('Click a table to bind the graph.')).toBeInTheDocument();
     const target = screen.getByRole('button', { name: 'Bind the graph to Table 1' });
     expect(target).toHaveClass('gd-pointing__target');
+    // #141: the outline is the accent (forest), never the amber the DS keeps for live state, and
+    // the table's chip hangs above the target so it never overprints the table's title. jsdom
+    // applies no stylesheet: the rules are asserted from the source.
+    const css = readFileSync(join(__dirname, 'graph.css'), 'utf8');
+    const targetRule = /\.gd-pointing__target \{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(targetRule).toMatch(/border: 2px dashed var\(--rule-accent\);/);
+    expect(targetRule).not.toMatch(/selection-ring|warning/);
+    const labelRule = /\.gd-pointing__label \{([^}]*)\}/.exec(css)?.[1] ?? '';
+    expect(labelRule).toMatch(/position: absolute;/);
+    expect(labelRule).toMatch(/transform: translateY\(-100%\);/);
+    expect(within(target).getByText('Table 1')).toHaveClass('gd-pointing__label');
     expect(screen.getByTestId('live-region')).toHaveTextContent(/Pointing/);
     fireEvent.keyDown(window, { code: 'Escape' });
     expect(screen.queryByTestId('pointing-overlay')).not.toBeInTheDocument();
@@ -339,6 +402,26 @@ describe('context graphs', () => {
     await waitFor(() => {
       expect(axes()).toHaveTextContent('pinned Column 3: Easy');
     });
+    // GRAPH-08 (#141): "From the selection" forgets the pin; the selected row (β: Hard) drives it again.
+    await userEvent.click(screen.getByRole('combobox', { name: /Pin Column 3/ }));
+    await userEvent.click(screen.getByRole('option', { name: 'From the selection' }));
+    await waitFor(() => {
+      expect(axes()).toHaveTextContent('pinned Column 3: Hard');
+    });
+    const grade = cols[2] ?? '';
+    await until(() => {
+      const [g] = graphsOnSheet(gd, listSheets(gd)[0]?.id ?? '');
+      return g !== undefined && !(grade in g.slice.pins);
+    });
+    expect(screen.getByRole('combobox', { name: /Pin Column 3/ })).toHaveTextContent(
+      'From the selection',
+    );
+    // Pin it explicitly again for the rest of the journey.
+    await userEvent.click(screen.getByRole('combobox', { name: /Pin Column 3/ }));
+    await userEvent.click(screen.getByRole('option', { name: 'Easy' }));
+    await waitFor(() => {
+      expect(axes()).toHaveTextContent('pinned Column 3: Easy');
+    });
     // Swapping an axis keeps the two distinct (GRAPH-05 chips).
     await userEvent.click(screen.getByRole('combobox', { name: /Rows/ }));
     await userEvent.click(screen.getByRole('option', { name: 'Column 2' }));
@@ -375,6 +458,21 @@ describe('context graphs', () => {
     expect(
       within(screen.getByTestId('coverage-graph')).getByRole('button', { name: /^α:/ }),
     ).toHaveClass('gd-coverage__cell--lit');
+    fireEvent.pointerLeave(screen.getByTestId('ring-graph'));
+    await waitFor(() => {
+      expect(document.querySelector('.gd-table__row--lit')).toBeNull();
+    });
+    // GRAPH-09 (#141): a parameter dot lights every source row bound to it — Nepal is rows α and γ.
+    const nepal = dots.find((d) => d.getAttribute('aria-label')?.startsWith('Column 1 Nepal'))!;
+    fireEvent.pointerEnter(nepal);
+    await waitFor(() => {
+      expect(document.querySelectorAll('.gd-table__row--lit')).toHaveLength(2);
+    });
+    const bodyRows = document.querySelectorAll('.gd-table__row:not(.gd-table__row--header)');
+    expect([...document.querySelectorAll('.gd-table__row--lit')]).toEqual([
+      bodyRows[0],
+      bodyRows[2],
+    ]);
     fireEvent.pointerLeave(screen.getByTestId('ring-graph'));
     await waitFor(() => {
       expect(document.querySelector('.gd-table__row--lit')).toBeNull();

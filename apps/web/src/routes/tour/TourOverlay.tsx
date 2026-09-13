@@ -8,7 +8,12 @@
  * own and traps nothing, so the spotlit control — and every other one — stays
  * operable and a cell edit is never blocked. Skip is the card's only control
  * and is reachable by Tab like any button; Escape is left to the page (it
- * cancels an edit or closes Find), so it never ends the tour by accident.
+ * cancels an edit, closes Find or leaves pointing mode), so it never ends the
+ * tour by accident.
+ *
+ * A sub-flow's cards (steps 2 and 3) share the step's counter and progress
+ * dots; only the title, body and pending action change, and the card carries
+ * `data-substep` for tests.
  *
  * Only the pending-action line is live (A11Y-05): a step change announces
  * "Pending action: <what to do next>", not the whole card; the counter and
@@ -27,19 +32,23 @@ import {
   spotlightRect,
   type Rect,
 } from './geometry.js';
-import { TOUR_STEP_COUNT, tourStep } from './steps.js';
-import { useSpotlight, useViewportSize } from './use-spotlight.js';
+import { TOUR_STEP_COUNT, tourCard, type TourSubstep } from './steps.js';
+import { targetSelectors, useSpotlightBox, useViewportSize } from './use-spotlight.js';
 
 export interface TourOverlayProps {
   /** 1-based step. */
   step: number;
+  /** The sub-flow's current card, for steps 2 and 3. */
+  substep?: TourSubstep | null | undefined;
+  /** The pair the person made in step 3, whose ring stands in for a hidden checklist. */
+  pairId?: string | null | undefined;
   onSkip: () => void;
 }
 
-export function TourOverlay({ step, onSkip }: TourOverlayProps) {
+export function TourOverlay({ step, substep = null, pairId = null, onSkip }: TourOverlayProps) {
   const t = useMessages();
-  const definition = tourStep(step);
-  const target = useSpotlight(definition.target);
+  const definition = tourCard(step, substep);
+  const { rect: target, hidden } = useSpotlightBox(targetSelectors(definition.target, pairId));
   const viewport = useViewportSize();
   const cardRef = useRef<HTMLDivElement>(null);
   const [cardHeight, setCardHeight] = useState(CARD_HEIGHT_ESTIMATE);
@@ -83,6 +92,7 @@ export function TourOverlay({ step, onSkip }: TourOverlayProps) {
         style={{ left: position.left, top: position.top, width: CARD_WIDTH }}
         data-testid="tour-card"
         data-step={step}
+        data-substep={substep ?? undefined}
         data-placement={position.placement}
       >
         <div className="gd-tour__header">
@@ -103,6 +113,13 @@ export function TourOverlay({ step, onSkip }: TourOverlayProps) {
         </h2>
         <p id={bodyId} className="gd-tour__body">
           {t(definition.body)}
+          {/* GRAPH-03: a table off the canvas is still a target; the card says so (#159 item 2). */}
+          {definition.target === 'pointing' && hidden > 0 && (
+            <>
+              {' '}
+              <span data-testid="tour-off-canvas">{t('tour.step3.point.offCanvas')}</span>
+            </>
+          )}
         </p>
         {definition.note !== null && <p className="gd-tour__note">{t(definition.note)}</p>}
         <div className="gd-tour__footer">

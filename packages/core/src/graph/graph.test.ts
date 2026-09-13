@@ -22,7 +22,14 @@ import {
   type GedeDoc,
   type Id,
 } from '../index.js';
-import { cellWriteBack, coverageMatrix, resolveSlice, withAxis, withPin } from './coverage.js';
+import {
+  cellWriteBack,
+  coverageMatrix,
+  resolveSlice,
+  withAxis,
+  withoutPin,
+  withPin,
+} from './coverage.js';
 import {
   coverageLabel,
   deriveGraph,
@@ -295,6 +302,18 @@ describe('GRAPH-08 coverage slice', () => {
       'r1',
     );
     expect(pinned.pins[0]).toMatchObject({ value: 'Easy', explicit: true });
+    // "From the selection" (#141): the pin is forgotten and the selection drives it again.
+    const released = withoutPin(
+      withPin({ rowAxis: null, colAxis: null, pins: {} }, 'd2', 'Easy'),
+      'd2',
+    );
+    expect(released.pins).toEqual({});
+    expect(resolveSlice(d, released, 'r1').pins[0]).toMatchObject({
+      value: 'Hard',
+      explicit: false,
+    });
+    const untouched = { rowAxis: null, colAxis: null, pins: { d1: 'Spring' } };
+    expect(withoutPin(untouched, 'd2')).toBe(untouched);
   });
 
   test('GRAPH-08 choosing for one axis the dimension on the other swaps them', () => {

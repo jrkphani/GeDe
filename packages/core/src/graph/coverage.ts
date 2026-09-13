@@ -153,6 +153,16 @@ export function withPin(slice: GraphSlice, dimensionId: Id, value: string): Grap
   return { ...slice, pins: { ...slice.pins, [dimensionId]: value } };
 }
 
+/**
+ * GRAPH-08: forget the explicit pin on a dimension, so it follows the
+ * selected context's binding again ("From the selection" in the Graph tab).
+ */
+export function withoutPin(slice: GraphSlice, dimensionId: Id): GraphSlice {
+  if (!(dimensionId in slice.pins)) return slice;
+  const pins = Object.fromEntries(Object.entries(slice.pins).filter(([id]) => id !== dimensionId));
+  return { ...slice, pins };
+}
+
 /** The values a click on an empty cell writes back (GRAPH-10), keyed by dimension column id. */
 export function cellWriteBack(derivation: GraphDerivation, cell: CoverageCell): Record<Id, string> {
   const out: Record<Id, string> = {};

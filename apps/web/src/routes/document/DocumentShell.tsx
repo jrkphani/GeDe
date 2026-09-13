@@ -99,6 +99,7 @@ import {
   tableEntry,
 } from './keys/objects.js';
 import { setTourDocument } from '../tour/store.js';
+import { useTourGraphSubstep } from '../tour/use-tour.js';
 import { ShortcutSheet } from './keys/ShortcutSheet.js';
 import { DocumentContextMenu } from './menus/DocumentContextMenu.js';
 import type { MenuContext } from './menus/entries.js';
@@ -523,6 +524,14 @@ function OpenDocument({
     if (tab !== undefined) setOrganizeTab(tab);
     setInspectorOpen(true);
   }, []);
+  // ONB-04 / GRAPH-05: while the tour's step 3 asks for the dimensions, the Graph tab must
+  // be on screen — the rail opens in Format mode (an overlay below 1024 px, RESP-03) each
+  // time the person's graph is selected. The Graph tab itself scrolls its checklist into
+  // the rail and hands it focus (A11Y-01).
+  const tourGraphSubstep = useTourGraphSubstep();
+  useEffect(() => {
+    if (tourGraphSubstep === 'dimensions' && selectedGraphId !== null) showInspector('format');
+  }, [tourGraphSubstep, selectedGraphId, showInspector]);
   // ADR-042 ⇧⌘→ / ⇧⌘←: the next or previous object on the sheet takes focus at its own
   // entry — a cell (which arms it), a graph's header. Tab cannot do this forward (GRID-05).
   // The objects are the document's, not the DOM's: a table outside the viewport is culled
@@ -810,30 +819,39 @@ function OpenDocument({
         {/* wave2/formulas mount point */}
         <FormulaEngineBanner doc={gd.doc} />
         {graphs.state.pointing !== null && (
-          <Banner
-            className="gd-doc__pointing"
-            cause={
-              graphs.state.pointing.mode === 'rebind'
-                ? 'Click a table to re-point the graph.'
-                : 'Click a table to bind the graph.'
-            }
-            remedy="Press Escape to cancel, or add a shaped table and bind it in one step."
-            action={
-              <>
-                <Button
-                  size="sm"
-                  onClick={() => {
-                    graphs.actions.addShapedTable();
-                  }}
-                >
-                  Add shaped table
-                </Button>
-                <Button size="sm" onClick={graphs.actions.cancelPointing}>
-                  Cancel
-                </Button>
-              </>
-            }
-          />
+          // ONB-04 / ONB-11: the tour's `point` card spotlights the banner with the targets
+          // (`data-tour`) and keeps it above the scrim.
+          <div
+            className={clsx('gd-doc__pointing', {
+              'gd-doc__pointing--lit': tourGraphSubstep === 'point',
+            })}
+            data-tour="pointing"
+            data-testid="pointing-banner"
+          >
+            <Banner
+              cause={
+                graphs.state.pointing.mode === 'rebind'
+                  ? 'Click a table to re-point the graph.'
+                  : 'Click a table to bind the graph.'
+              }
+              remedy="Press Escape to cancel, or add a shaped table and bind it in one step."
+              action={
+                <>
+                  <Button
+                    size="sm"
+                    onClick={() => {
+                      graphs.actions.addShapedTable();
+                    }}
+                  >
+                    Add shaped table
+                  </Button>
+                  <Button size="sm" onClick={graphs.actions.cancelPointing}>
+                    Cancel
+                  </Button>
+                </>
+              }
+            />
+          </div>
         )}
         {renameError !== null && (
           <Banner

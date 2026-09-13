@@ -4,27 +4,43 @@
  * search, invite by email. Each names the element it spotlights by its
  * `data-tour` anchor (`docs/PROTOTYPE-CHANGES-2026-09-12.md` §1.1) — step 2
  * has none and centres its card (ONB-06) — and the catalogue keys of its copy.
+ *
+ * Two steps are guided sub-flows: several cards under one counter, each
+ * advancing only on the person's action, never a Next. Step 2 (`2 of 5`)
+ * teaches the cross-table reference and then `=Concat()` (FX-01). Step 3
+ * (`3 of 5`) is only meaningful once the graph is pointed at a table and its
+ * dimensions are chosen (GRAPH-03, GRAPH-05): `add` spotlights `+ Graph`,
+ * `point` the pointing targets over the sheet's tables, `dimensions` the
+ * checklist in the Graph tab. Which sub-card shows is derived by the store
+ * from the document and pointing mode.
  */
 import type { MessageKey } from '../../i18n/index.js';
 
 /** `data-tour` anchors the tour measures by bounding box (ONB-04). */
-export type TourTarget = 'sample' | 'graph' | 'find' | 'share';
+export type TourTarget =
+  'sample' | 'graph' | 'pointing' | 'dimensions' | 'inspector-expand' | 'find' | 'share';
 
 /** How a step knows its action was performed (ONB-05). */
 export type TourAdvance =
   /** The sample document is open (the route is `/d/<sampleDocumentId>`). */
   | { readonly kind: 'sample-open' }
-  /** One more committed cross-table formula than when the step began. */
+  /**
+   * One more committed cross-table formula than when the step began, then one
+   * more committed `=Concat()` over two operands with a bound reference.
+   */
   | { readonly kind: 'cross-table-reference' }
-  /** One more graph object than when the step began. */
+  /**
+   * A graph pair that was not there when the step began is bound to a table
+   * and its dimensions were changed to a set of at least two (GRAPH-05).
+   */
   | { readonly kind: 'graph-added' }
   /** Find is open with a non-empty query. */
   | { readonly kind: 'find-query' }
   /** An invitation was sent from the Share sheet. */
   | { readonly kind: 'invite-sent' };
 
-export interface TourStep {
-  readonly id: string;
+/** The copy and target of one card (a step, or one of a sub-flow's cards). */
+export interface TourCard {
   readonly target: TourTarget | null;
   readonly title: MessageKey;
   readonly body: MessageKey;
@@ -32,8 +48,68 @@ export interface TourStep {
   readonly note: MessageKey | null;
   /** The pending action, rendered in amber (ONB-09). */
   readonly action: MessageKey;
+}
+
+export interface TourStep extends TourCard {
+  readonly id: string;
   readonly advance: TourAdvance;
 }
+
+/** Step 2's sub-states, in the order a person meets them. */
+export type ReferenceSubstep = 'reference' | 'concat';
+/** Step 3's sub-states, in the order a person meets them. */
+export type GraphSubstep = 'add' | 'point' | 'dimensions';
+export type TourSubstep = ReferenceSubstep | GraphSubstep;
+
+export const REFERENCE_STEP = 2;
+export const GRAPH_STEP = 3;
+
+export function isGraphSubstep(substep: TourSubstep | null): substep is GraphSubstep {
+  return substep === 'add' || substep === 'point' || substep === 'dimensions';
+}
+
+/**
+ * The sub-cards. `reference` and `add` are the prototype's steps 2 and 3
+ * verbatim; the graph sub-cards keep step 3's comparison note — the graph
+ * is introduced on its own terms throughout (ONB-10).
+ */
+export const SUBSTEP_CARDS: Readonly<Record<TourSubstep, TourCard>> = {
+  reference: {
+    target: null,
+    title: 'tour.step2.title',
+    body: 'tour.step2.body',
+    note: 'tour.step2.note',
+    action: 'tour.step2.action',
+  },
+  concat: {
+    target: null,
+    title: 'tour.step2.concat.title',
+    body: 'tour.step2.concat.body',
+    note: 'tour.step2.concat.note',
+    action: 'tour.step2.concat.action',
+  },
+  add: {
+    target: 'graph',
+    title: 'tour.step3.title',
+    body: 'tour.step3.body',
+    note: 'tour.step3.note',
+    action: 'tour.step3.action',
+  },
+  point: {
+    target: 'pointing',
+    title: 'tour.step3.point.title',
+    body: 'tour.step3.point.body',
+    note: 'tour.step3.note',
+    action: 'tour.step3.point.action',
+  },
+  dimensions: {
+    target: 'dimensions',
+    title: 'tour.step3.dimensions.title',
+    body: 'tour.step3.dimensions.body',
+    note: 'tour.step3.note',
+    action: 'tour.step3.dimensions.action',
+  },
+};
 
 export const TOUR_STEPS: readonly TourStep[] = [
   {
@@ -47,20 +123,12 @@ export const TOUR_STEPS: readonly TourStep[] = [
   },
   {
     id: 'cross-table-reference',
-    target: null,
-    title: 'tour.step2.title',
-    body: 'tour.step2.body',
-    note: 'tour.step2.note',
-    action: 'tour.step2.action',
+    ...SUBSTEP_CARDS.reference,
     advance: { kind: 'cross-table-reference' },
   },
   {
     id: 'add-graph',
-    target: 'graph',
-    title: 'tour.step3.title',
-    body: 'tour.step3.body',
-    note: 'tour.step3.note',
-    action: 'tour.step3.action',
+    ...SUBSTEP_CARDS.add,
     advance: { kind: 'graph-added' },
   },
   {
@@ -90,4 +158,10 @@ export function tourStep(step: number): TourStep {
   const found = TOUR_STEPS[step - 1];
   if (found === undefined) throw new RangeError(`no tour step ${String(step)}`);
   return found;
+}
+
+/** The card to show: the sub-flow's current card during steps 2 and 3, else the step's own. */
+export function tourCard(step: number, substep: TourSubstep | null): TourCard {
+  if (substep !== null) return SUBSTEP_CARDS[substep];
+  return tourStep(step);
 }

@@ -41,10 +41,45 @@ describe('tour geometry', () => {
     expect(above.top).toBe(800 - CARD_GAP - CARD_HEIGHT_ESTIMATE);
     // A shorter card fits below the same target (842 + 14 + 30 + 12 ≤ 900).
     expect(placeCard(target, viewport, { width: CARD_WIDTH, height: 30 }).placement).toBe('below');
-    // Never off the top of the viewport.
+  });
+
+  test('ONB-09 ONB-11 when neither below, beside nor above clears the target (a short viewport under a tall spotlight) the card takes the bottom-right corner, inside the viewport', () => {
+    // 1024 × 450 at 200 % zoom: the pointing banner and the targets span y 96–410.
+    const spotlit = { x: 12, y: 96, width: 1000, height: 314 };
+    const short = { width: 1024, height: 450 };
+    const card = { width: CARD_WIDTH, height: 275 };
+    expect(placeCard(spotlit, short, card)).toEqual({
+      placement: 'corner',
+      left: 1024 - CARD_WIDTH - CARD_MARGIN,
+      top: 450 - 275 - CARD_MARGIN,
+    });
+    // Never off the top of the viewport either way.
     expect(placeCard({ x: 0, y: 30, width: 10, height: 10 }, { width: 400, height: 60 }).top).toBe(
       CARD_MARGIN,
     );
+  });
+
+  test('ONB-09 GRAPH-05 a tall target at the right edge (the checklist in the rail) takes the card beside it, to its left, never over the tab strip above; without room to the left it flips above', () => {
+    const checklist = { x: 1130, y: 260, width: 280, height: 500 };
+    const beside = placeCard(
+      checklist,
+      { width: 1440, height: 900 },
+      { width: CARD_WIDTH, height: 240 },
+    );
+    expect(beside).toEqual({
+      placement: 'beside',
+      left: 1130 - SPOTLIGHT_INSET - CARD_GAP - CARD_WIDTH,
+      top: 260,
+    });
+    // Clamped off the bottom edge when the target starts low.
+    const low = placeCard(
+      { ...checklist, y: 800 },
+      { width: 1440, height: 900 },
+      { width: CARD_WIDTH, height: 240 },
+    );
+    expect(low).toMatchObject({ placement: 'beside', top: 900 - 240 - CARD_MARGIN });
+    // A target with no room to its left flips above, as before.
+    expect(placeCard({ x: 300, y: 800, width: 400, height: 42 }, viewport).placement).toBe('above');
   });
 
   test('ONB-09 the card is clamped 12 px inside either viewport edge', () => {

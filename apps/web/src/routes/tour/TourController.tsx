@@ -12,7 +12,7 @@
  *   - ONB-14: completion shows the confirmation naming the `?` in the library.
  */
 import { Toast } from '@gede/ui';
-import { useCallback, useEffect, useSyncExternalStore } from 'react';
+import { useCallback, useEffect } from 'react';
 import { useLocation, useNavigate } from 'react-router';
 
 import { useSession } from '../../auth/session.js';
@@ -26,19 +26,16 @@ import {
   setTourSampleDocumentId,
   skipTour,
   startTour,
-  subscribeTour,
   tourEnded,
-  tourState,
   type TourEndReason,
 } from './store.js';
 import { TourOverlay } from './TourOverlay.js';
+import { useTourState } from './use-tour.js';
+
+export { useTourGraphSubstep, useTourState } from './use-tour.js';
 
 /** How long the completion confirmation stays (DS: ~8 s). */
 export const TOUR_DONE_TOAST_MS = 8000;
-
-export function useTourState() {
-  return useSyncExternalStore(subscribeTour, tourState, tourState);
-}
 
 /** ONB-13: the tour needs an editable document, so it never runs on a phone (ADR-035, ADR-039). */
 export function useTourAllowed(): boolean {
@@ -110,7 +107,14 @@ export function TourController() {
 
   return (
     <>
-      {state.phase === 'running' && <TourOverlay step={state.step} onSkip={skipTour} />}
+      {state.phase === 'running' && (
+        <TourOverlay
+          step={state.step}
+          substep={state.substep}
+          pairId={state.pairId}
+          onSkip={skipTour}
+        />
+      )}
       <Toast
         className="gd-tour__toast"
         open={state.phase === 'done'}

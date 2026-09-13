@@ -8,41 +8,90 @@
  * action happened (ONB-05); there is no Next. The inputs are:
  *
  *   - the route (`setTourRoute`), for step 1 (the sample is open);
- *   - the open Y.Doc (`setTourDocument`), for steps 2 and 3 — the set of
- *     cells holding a cross-table formula, and the count of graph objects,
+ *   - the open Y.Doc (`setTourDocument`), for steps 2 and 3 — the sets of
+ *     cells holding a cross-table formula and a `=Concat()` (step 2), the set
+ *     of graph pairs and the dimensions of the pair the person made (step 3),
  *     compared with what was there when the step began, so what the sample
  *     ships with never advances it. Every transaction is observed, remote
  *     ones included: a collaborator writing a reference into the sample
  *     while the person is on step 2 advances it — the action happened in the
  *     document the card points at, and attributing transactions would put
  *     origin tracking in the tour for no product gain;
+ *   - pointing mode (`setTourPointing`), for step 3's `point` sub-card;
  *   - Find's query (`setTourFindQuery`) for step 4 and the Share sheet's
  *     invitation (`reportTourInvite`) for step 5.
+ *
+ * Steps 2 and 3 are sub-flows. Their sub-state is derived from the inputs on
+ * every evaluation, never stored as a cursor: step 2 shows `reference` until
+ * a new cross-table formula exists and `concat` after; step 3 shows `point`
+ * while pointing mode is on, else `dimensions` while a bound pair the step
+ * did not start with exists, else `add`. So Escape in pointing mode returns
+ * to `add` by itself, a graph removed returns to `add`, and Re-point returns
+ * to `point` — Skip stays the only exit (ONB-07).
  *
  * The store never talks to the server: `TourController` persists the flag
  * (`PATCH /api/me { tourDone }`) when the phase becomes `ending` and moves
  * it on with `tourEnded()`.
  */
-import { crossTableReferenceKeys, newCrossTableReference, type GedeDoc } from '@gede/core';
+import {
+  concatFormulaKeys,
+  crossTableReferenceKeys,
+  graphRecord,
+  graphsInPair,
+  newCrossTableReference,
+  tableById,
+  type GedeDoc,
+  type Id,
+} from '@gede/core';
 
-import { TOUR_STEP_COUNT, tourStep } from './steps.js';
+import {
+  GRAPH_STEP,
+  REFERENCE_STEP,
+  TOUR_STEP_COUNT,
+  tourStep,
+  type TourSubstep,
+} from './steps.js';
 
 export type TourEndReason = 'skipped' | 'completed';
 
+/** What was there when the step began, once the document was available; null until then. */
+export interface TourBaseline {
+  /** Workbook cell ids holding a cross-table formula (step 2a). */
+  readonly crossReferences: ReadonlySet<string> | null;
+  /**
+   * Workbook cell ids holding a `=Concat()` over a bound reference, taken when
+   * the `concat` card first shows (step 2b) — so the formula that satisfied 2a
+   * is part of 2b's baseline and 2b waits for a second one (#159 item 11d).
+   */
+  readonly concats: ReadonlySet<string> | null;
+  /** Graph pair ids (step 3). */
+  readonly graphs: ReadonlySet<Id> | null;
+  /**
+   * The dimensions the person's pair had when its binding first showed the
+   * `dimensions` card (step 3c); re-taken when the pair or its table changes
+   * (Re-point binds another table and resets the dimensions).
+   */
+  readonly dimensions: {
+    readonly pairId: Id;
+    readonly tableId: Id;
+    readonly columns: ReadonlySet<Id>;
+  } | null;
+}
+
+export interface TourRunning {
+  readonly phase: 'running';
+  /** 1-based. */
+  readonly step: number;
+  /** The sub-flow's current card (steps 2 and 3), null for the others. */
+  readonly substep: TourSubstep | null;
+  /** The pair the person made in step 3, once one exists. */
+  readonly pairId: Id | null;
+  readonly baseline: TourBaseline;
+}
+
 export type TourState =
   | { readonly phase: 'idle' }
-  | {
-      readonly phase: 'running';
-      /** 1-based. */
-      readonly step: number;
-      /** What was there when the step began, once the document was available; null until then. */
-      readonly baseline: {
-        /** Workbook cell ids holding a cross-table formula (step 2). */
-        readonly crossReferences: ReadonlySet<string> | null;
-        /** Graph objects (step 3). */
-        readonly graphs: number | null;
-      };
-    }
+  | TourRunning
   /** Skip or completion happened; the controller is persisting the flag. */
   | { readonly phase: 'ending'; readonly reason: TourEndReason }
   /** Completed and persisted; the confirmation is showing (ONB-14). */
@@ -52,17 +101,28 @@ interface Inputs {
   pathname: string;
   sampleDocumentId: string | null;
   doc: GedeDoc | null;
+  pointing: boolean;
   findOpen: boolean;
   findQuery: string;
 }
 
+/** GRAPH-05: the fewest dimensions a chosen set may hold for step 3 to complete. */
+export const TOUR_MIN_DIMENSIONS = 2;
+
 const IDLE: TourState = { phase: 'idle' };
+const EMPTY_BASELINE: TourBaseline = {
+  crossReferences: null,
+  concats: null,
+  graphs: null,
+  dimensions: null,
+};
 
 let state: TourState = IDLE;
 const inputs: Inputs = {
   pathname: '/',
   sampleDocumentId: null,
   doc: null,
+  pointing: false,
   findOpen: false,
   findQuery: '',
 };
@@ -98,8 +158,21 @@ export function tourState(): TourState {
 // Detectors (ONB-05): pure reads over the inputs.
 // ---------------------------------------------------------------------------
 
-export function graphCount(gd: GedeDoc): number {
-  return gd.graphs.size;
+/** The ids of the document's graph pairs. */
+export function graphPairIds(gd: GedeDoc): Set<Id> {
+  const ids = new Set<Id>();
+  gd.graphs.forEach((map) => {
+    ids.add(graphRecord(map).pairId);
+  });
+  return ids;
+}
+
+/** A pair's binding and dimensions, read from its ring; null when the pair is gone. */
+function pairDimensions(gd: GedeDoc, pairId: Id): { columns: Id[]; tableId: Id | null } | null {
+  const lead = graphsInPair(gd, pairId)[0];
+  if (lead === undefined) return null;
+  const bound = lead.tableId !== null && tableById(gd, lead.tableId) !== null;
+  return { columns: [...lead.dimensions], tableId: bound ? lead.tableId : null };
 }
 
 function sampleIsOpen(): boolean {
@@ -107,40 +180,142 @@ function sampleIsOpen(): boolean {
   return id !== null && inputs.pathname === `/d/${id}`;
 }
 
-/** Take whichever baseline the current step needs and does not have yet. */
-function settleBaseline(): void {
-  if (state.phase !== 'running' || inputs.doc === null) return;
-  const { advance } = tourStep(state.step);
-  const { baseline } = state;
-  if (advance.kind === 'cross-table-reference' && baseline.crossReferences === null) {
-    set({
-      ...state,
-      baseline: { ...baseline, crossReferences: crossTableReferenceKeys(inputs.doc) },
-    });
-  } else if (advance.kind === 'graph-added' && baseline.graphs === null) {
-    set({ ...state, baseline: { ...baseline, graphs: graphCount(inputs.doc) } });
-  }
+function sameSet(a: ReadonlySet<string>, b: readonly string[]): boolean {
+  if (a.size !== b.length) return false;
+  for (const x of b) if (!a.has(x)) return false;
+  return true;
 }
 
-/** Whether the current step's action has been performed. */
-function stepSatisfied(): boolean {
-  if (state.phase !== 'running') return false;
-  const { advance } = tourStep(state.step);
-  const { baseline } = state;
+/** A key in `current` that `baseline` did not have. */
+function newKey(baseline: ReadonlySet<string> | null, current: ReadonlySet<string>): string | null {
+  if (baseline === null) return null;
+  for (const key of current) if (!baseline.has(key)) return key;
+  return null;
+}
+
+/** The first bound pair the step did not start with, or null. */
+function newBoundPairId(running: TourRunning, gd: GedeDoc): Id | null {
+  const baseline = running.baseline.graphs;
+  if (baseline === null) return null;
+  for (const pairId of graphPairIds(gd)) {
+    if (!baseline.has(pairId) && pairDimensions(gd, pairId)?.tableId != null) return pairId;
+  }
+  return null;
+}
+
+/**
+ * Step 2's sub-state: `concat` once a cross-table formula the step did not
+ * start with exists.
+ */
+function referenceSubstep(running: TourRunning): TourSubstep {
+  const gd = inputs.doc;
+  if (gd === null || running.baseline.crossReferences === null) return 'reference';
+  return newCrossTableReference(running.baseline.crossReferences, crossTableReferenceKeys(gd)) ===
+    null
+    ? 'reference'
+    : 'concat';
+}
+
+/**
+ * Step 3's sub-state: `point` while pointing mode is on (arming, or Re-point
+ * from the Graph tab); else `dimensions` while a pair the step did not start
+ * with exists and is bound ("Graph this table" and "Add shaped table" bind at
+ * once, so they arrive here directly); else `add`.
+ */
+function graphSubstep(running: TourRunning): { substep: TourSubstep; pairId: Id | null } {
+  if (inputs.pointing) return { substep: 'point', pairId: null };
+  const gd = inputs.doc;
+  const pairId = gd === null ? null : newBoundPairId(running, gd);
+  if (pairId !== null) return { substep: 'dimensions', pairId };
+  return { substep: 'add', pairId: null };
+}
+
+/** The sub-state the inputs imply for the running step. */
+function deriveSubstep(running: TourRunning): { substep: TourSubstep | null; pairId: Id | null } {
+  if (running.step === REFERENCE_STEP) return { substep: referenceSubstep(running), pairId: null };
+  if (running.step === GRAPH_STEP) return graphSubstep(running);
+  return { substep: null, pairId: null };
+}
+
+/** Take whichever baselines the step needs and does not have yet. */
+function withBaseline(running: TourRunning): TourRunning {
+  const gd = inputs.doc;
+  if (gd === null) return running;
+  const { advance } = tourStep(running.step);
+  const { baseline } = running;
+  if (advance.kind === 'cross-table-reference') {
+    let next = running;
+    if (baseline.crossReferences === null) {
+      next = { ...next, baseline: { ...baseline, crossReferences: crossTableReferenceKeys(gd) } };
+    }
+    // 2b's baseline is taken as its card first shows, after 2a's formula exists.
+    if (next.baseline.concats === null && referenceSubstep(next) === 'concat') {
+      next = { ...next, baseline: { ...next.baseline, concats: concatFormulaKeys(gd) } };
+    }
+    return next;
+  }
+  if (advance.kind === 'graph-added') {
+    let next = running;
+    if (baseline.graphs === null) {
+      next = { ...next, baseline: { ...next.baseline, graphs: graphPairIds(gd) } };
+    }
+    // The dimensions baseline is per binding: taken when the person's pair first shows
+    // the `dimensions` card, re-taken if the pair goes and another arrives, or if it is
+    // re-pointed at another table (which resets its dimensions).
+    const { pairId } = graphSubstep(next);
+    const dims = pairId === null ? null : pairDimensions(gd, pairId);
+    const current = next.baseline.dimensions;
+    if (
+      pairId !== null &&
+      dims?.tableId != null &&
+      (current?.pairId !== pairId || current.tableId !== dims.tableId)
+    ) {
+      next = {
+        ...next,
+        baseline: {
+          ...next.baseline,
+          dimensions: { pairId, tableId: dims.tableId, columns: new Set(dims.columns) },
+        },
+      };
+    }
+    return next;
+  }
+  return running;
+}
+
+/** The running state with its derived sub-state in step with the inputs. */
+function withSubstep(running: TourRunning): TourRunning {
+  const { substep, pairId } = deriveSubstep(running);
+  if (substep === running.substep && pairId === running.pairId) return running;
+  return { ...running, substep, pairId };
+}
+
+/** Whether the step's action has been performed. */
+function stepSatisfied(running: TourRunning): boolean {
+  const { advance } = tourStep(running.step);
+  const { baseline } = running;
+  const gd = inputs.doc;
   switch (advance.kind) {
     case 'sample-open':
       return sampleIsOpen();
     case 'cross-table-reference':
       return (
-        inputs.doc !== null &&
-        baseline.crossReferences !== null &&
-        newCrossTableReference(baseline.crossReferences, crossTableReferenceKeys(inputs.doc)) !==
-          null
+        gd !== null &&
+        newKey(baseline.crossReferences, crossTableReferenceKeys(gd)) !== null &&
+        newKey(baseline.concats, concatFormulaKeys(gd)) !== null
       );
-    case 'graph-added':
+    case 'graph-added': {
+      if (gd === null || baseline.dimensions === null) return false;
+      const { pairId } = graphSubstep(running);
+      if (pairId === null || pairId !== baseline.dimensions.pairId) return false;
+      const dims = pairDimensions(gd, pairId);
       return (
-        inputs.doc !== null && baseline.graphs !== null && graphCount(inputs.doc) > baseline.graphs
+        dims !== null &&
+        dims.tableId === baseline.dimensions.tableId &&
+        dims.columns.length >= TOUR_MIN_DIMENSIONS &&
+        !sameSet(baseline.dimensions.columns, dims.columns)
       );
+    }
     case 'find-query':
       return inputs.findOpen && inputs.findQuery.trim() !== '';
     case 'invite-sent':
@@ -149,32 +324,28 @@ function stepSatisfied(): boolean {
   }
 }
 
-let evaluating = false;
-
-/** Re-read the inputs; advance while the current step is satisfied. */
-function evaluate(): void {
-  if (evaluating) return;
-  evaluating = true;
-  try {
-    settleBaseline();
-    while (state.phase === 'running' && stepSatisfied()) advance();
-  } finally {
-    evaluating = false;
-  }
+function running(step: number): TourRunning {
+  return { phase: 'running', step, substep: null, pairId: null, baseline: EMPTY_BASELINE };
 }
 
-function advance(): void {
+/**
+ * Re-read the inputs: settle the step's baselines and sub-state, advance while
+ * the step is satisfied. One emission per evaluation, with everything settled.
+ */
+function evaluate(force = false): void {
   if (state.phase !== 'running') return;
-  if (state.step >= TOUR_STEP_COUNT) {
-    set({ phase: 'ending', reason: 'completed' });
-    return;
+  let next = withBaseline(state);
+  while (stepSatisfied(next)) {
+    if (next.step >= TOUR_STEP_COUNT) {
+      set({ phase: 'ending', reason: 'completed' });
+      return;
+    }
+    next = withBaseline(running(next.step + 1));
   }
-  set({
-    phase: 'running',
-    step: state.step + 1,
-    baseline: { crossReferences: null, graphs: null },
-  });
-  settleBaseline();
+  const settled = withSubstep(next);
+  if (settled === state && !force) return;
+  state = settled;
+  emit();
 }
 
 // ---------------------------------------------------------------------------
@@ -214,6 +385,13 @@ export function setTourDocument(doc: GedeDoc | null): void {
   evaluate();
 }
 
+/** GRAPH-03: whether pointing mode is on in the open document (step 3's `point` card). */
+export function setTourPointing(active: boolean): void {
+  if (inputs.pointing === active) return;
+  inputs.pointing = active;
+  evaluate();
+}
+
 export function setTourFindQuery(open: boolean, query: string): void {
   if (inputs.findOpen === open && inputs.findQuery === query) return;
   inputs.findOpen = open;
@@ -224,7 +402,14 @@ export function setTourFindQuery(open: boolean, query: string): void {
 /** The Share sheet sent an invitation (ONB-05, step 5). */
 export function reportTourInvite(): void {
   if (state.phase !== 'running') return;
-  if (tourStep(state.step).advance.kind === 'invite-sent') advance();
+  if (tourStep(state.step).advance.kind !== 'invite-sent') return;
+  if (state.step >= TOUR_STEP_COUNT) {
+    set({ phase: 'ending', reason: 'completed' });
+    return;
+  }
+  // Replaced silently, then evaluated and announced once, settled (ONB-05).
+  state = running(state.step + 1);
+  evaluate(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -233,8 +418,8 @@ export function reportTourInvite(): void {
 
 /** Begin at step 1 (ONB-02, ONB-08). Restarts a running tour. */
 export function startTour(): void {
-  set({ phase: 'running', step: 1, baseline: { crossReferences: null, graphs: null } });
-  evaluate();
+  state = running(1);
+  evaluate(true);
 }
 
 /**
@@ -272,6 +457,7 @@ export function resetTourForTests(): void {
   inputs.pathname = '/';
   inputs.sampleDocumentId = null;
   inputs.doc = null;
+  inputs.pointing = false;
   inputs.findOpen = false;
   inputs.findQuery = '';
   autoStarted.clear();

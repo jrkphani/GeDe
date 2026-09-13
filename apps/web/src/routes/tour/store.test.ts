@@ -1,16 +1,21 @@
 import { afterEach, describe, expect, test } from 'vitest';
 import * as Y from 'yjs';
 import {
+  bindGraphPair,
   cellAddress,
   commitCellText,
   createGraphPair,
+  createShapedTableWithGraph,
   listSheets,
   openDocument,
+  removeGraphPair,
   seedSampleWorkscape,
   setCellText,
+  setGraphDimensions,
   tableById,
   tableMap,
   tablesOnSheet,
+  toggleGraphDimension,
   type GedeDoc,
 } from '@gede/core';
 
@@ -21,6 +26,7 @@ import {
   resetTourForTests,
   setTourDocument,
   setTourFindQuery,
+  setTourPointing,
   setTourRoute,
   setTourSampleDocumentId,
   skipTour,
@@ -29,6 +35,9 @@ import {
   tourEnded,
   tourState,
 } from './store.js';
+
+/** The worked example step 2b shows (`tour.step2.concat.body`). */
+const CONCAT_EXAMPLE = '=Concat(C5, " — ", @Team.Priya.Role)';
 
 const SAMPLE_ID = '9a1a0d7e-0000-4000-8000-000000000001';
 
@@ -63,19 +72,50 @@ function openSampleAt(step: 2 | 3 | 4 | 5): GedeDoc {
   setTourRoute(`/d/${SAMPLE_ID}`);
   if (step >= 3) {
     const c = cells(gd);
+    reference(gd, '=@Team.Marcus.Role');
     commitCellText(
       gd,
       c.deliverables.id,
       c.deliverables.row,
-      c.deliverables.roleCol,
-      '=@Team.Marcus.Role',
+      c.deliverables.daysCol,
+      CONCAT_EXAMPLE,
     );
   }
-  if (step >= 4)
-    createGraphPair(gd, { sheetId: listSheets(gd)[0]!.id, tableId: cells(gd).deliverables.id });
+  if (step >= 4) bindAndChoose(gd);
   if (step >= 5) setTourFindQuery(true, 'Blocked');
   expect(tourState()).toMatchObject({ phase: 'running', step });
   return gd;
+}
+
+/** Commit `text` into Deliverables row 2's Owner role cell (the cross-table reference cell). */
+function reference(gd: GedeDoc, text: string): void {
+  const c = cells(gd);
+  commitCellText(gd, c.deliverables.id, c.deliverables.row, c.deliverables.roleCol, text);
+}
+
+/** Commit `text` into Deliverables row 2's Days cell (where the Concat goes). */
+function days(gd: GedeDoc, text: string): void {
+  const c = cells(gd);
+  commitCellText(gd, c.deliverables.id, c.deliverables.row, c.deliverables.daysCol, text);
+}
+
+/** Step 3 done the direct way: a pair bound to Deliverables, then one dimension unticked (3 → 2). */
+function bindAndChoose(gd: GedeDoc): void {
+  const d = cells(gd).deliverables;
+  const pair = createGraphPair(gd, { sheetId: listSheets(gd)[0]!.id, tableId: d.id });
+  toggleGraphDimension(gd, pair.pairId, tableById(gd, d.id)!.columns[0]!.id, false);
+}
+
+/** `gd` as another replica sees it, and a way to merge that replica's edits back. */
+function replica(gd: GedeDoc): { rgd: GedeDoc; merge: () => void } {
+  const other = new Y.Doc();
+  Y.applyUpdate(other, Y.encodeStateAsUpdate(gd.doc));
+  return {
+    rgd: openDocument(other),
+    merge: () => {
+      Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(other), 'other');
+    },
+  };
 }
 
 afterEach(() => {
@@ -126,14 +166,57 @@ describe('tour store', () => {
       `=Sum(${from}:${to})`,
     );
     expect(tourState()).toMatchObject({ step: 2 });
-    commitCellText(
-      gd,
-      c.deliverables.id,
-      c.deliverables.row,
-      c.deliverables.roleCol,
-      '=@Team.Marcus.Role',
-    );
-    expect(tourState()).toMatchObject({ step: 3, baseline: { graphs: 0 } });
+    reference(gd, '=@Team.Marcus.Role');
+    // The reference alone moves step 2 to its second card, not to step 3.
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    days(gd, CONCAT_EXAMPLE);
+    const after = tourState();
+    expect(after).toMatchObject({ step: 3, substep: 'add' });
+    expect(after.phase === 'running' && after.baseline.graphs?.size).toBe(0);
+  });
+
+  test('ONB-05 FX-01 step 2b advances on a committed Concat over two or more operands with a bound reference, written since 2b began; one operand or literals only do not count; `concat` is `Concat`', () => {
+    // #159 item 11d: a formula that satisfies both cards advances only the current one —
+    // 2a takes it, and 2b (baselined as its card shows) waits for a second formula.
+    let gd = openSampleAt(2);
+    days(gd, '=Concat(C5, " — ", @Team.Priya.Role)');
+    let state = tourState();
+    expect(state).toMatchObject({ step: 2, substep: 'concat' });
+    expect(state.phase === 'running' && state.baseline.concats?.size).toBe(1);
+    reference(gd, '=Concat(@Team.Priya.Name, ": ", @Team.Priya.Role)');
+    expect(tourState()).toMatchObject({ step: 3 });
+
+    resetTourForTests();
+    gd = openSampleAt(2);
+    state = tourState();
+    expect(state).toMatchObject({ step: 2, substep: 'reference' });
+    // 2b's baseline is not taken until its card shows.
+    expect(state.phase === 'running' && state.baseline.concats).toBeNull();
+    reference(gd, '=@Team.Marcus.Role');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    days(gd, '=Concat(C5)');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    days(gd, '=Concat("a", "b")');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    days(gd, '=Sum(F5, F6)');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    // Clearing the reference returns to 2a: the sub-state is derived, never a cursor.
+    reference(gd, '');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'reference' });
+    reference(gd, '=@Team.Marcus.Role');
+    // The parser's name map: `concat` is `Concat`; an entity path alone is a bound operand.
+    days(gd, '=concat(@Team.Priya.Role, "x")');
+    expect(tourState()).toMatchObject({ step: 3 });
+  });
+
+  test('ONB-05 FX-01 a Concat that arrives from another replica counts (as ADR 35 rules)', () => {
+    const gd = openSampleAt(2);
+    reference(gd, '=@Team.Marcus.Role');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    const { rgd, merge } = replica(gd);
+    days(rgd, CONCAT_EXAMPLE);
+    merge();
+    expect(tourState()).toMatchObject({ step: 3 });
   });
 
   test('ONB-05 step 2 advances when the seeded reference is overwritten with another, or cleared and written elsewhere — the set changed, not the count', () => {
@@ -153,7 +236,7 @@ describe('tour store', () => {
     setCellText(gd, c.deliverables.id, d.rows[0]!, c.deliverables.roleCol, '');
     expect(tourState()).toMatchObject({ step: 2 });
     commitCellText(gd, c.deliverables.id, d.rows[1]!, c.deliverables.roleCol, '=@Team.Priya.Role');
-    expect(tourState()).toMatchObject({ step: 3 });
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
 
     resetTourForTests();
     gd = openSampleAt(2);
@@ -171,7 +254,7 @@ describe('tour store', () => {
       '=@Team.Marcus.Role',
     );
     Y.applyUpdate(gd.doc, Y.encodeStateAsUpdate(remote), 'remote');
-    expect(tourState()).toMatchObject({ step: 3 });
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
   });
 
   test('ONB-05 step 2 takes its baseline when the document arrives, so the tour can start before the room loads', () => {
@@ -187,9 +270,126 @@ describe('tour store', () => {
     expect(tourState()).toMatchObject({ step: 2 });
   });
 
-  test('ONB-05 step 3 advances when a graph object appears in the document (a pair counts once as more than before)', () => {
+  test('ONB-05 GRAPH-03 GRAPH-05 step 3 is a sub-flow: `add` → `point` while pointing → `dimensions` once the pair is bound → step 4 when the dimensions change to two or more', () => {
     const gd = openSampleAt(3);
-    createGraphPair(gd, { sheetId: listSheets(gd)[0]!.id, tableId: cells(gd).deliverables.id });
+    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairId: null });
+    setTourPointing(true);
+    expect(tourState()).toMatchObject({ step: 3, substep: 'point' });
+    const d = cells(gd).deliverables;
+    const pair = createGraphPair(gd, { sheetId: listSheets(gd)[0]!.id, tableId: d.id });
+    setTourPointing(false);
+    // Bound: the dimensions card, with the pair the person made and its three default dimensions.
+    const bound = tourState();
+    expect(bound).toMatchObject({ step: 3, substep: 'dimensions', pairId: pair.pairId });
+    const cols = tableById(gd, d.id)!.columns.map((c) => c.id);
+    expect(bound.phase === 'running' && bound.baseline.dimensions).toEqual({
+      pairId: pair.pairId,
+      tableId: d.id,
+      columns: new Set(cols.slice(0, 3)),
+    });
+    // Down to one dimension: changed, but fewer than two — not done.
+    setGraphDimensions(gd, pair.pairId, [cols[2]!]);
+    expect(tourState()).toMatchObject({ step: 3, substep: 'dimensions' });
+    // Back to the defaults: two or more, but the set the card began with — not done.
+    setGraphDimensions(gd, pair.pairId, cols.slice(0, 3));
+    expect(tourState()).toMatchObject({ step: 3, substep: 'dimensions' });
+    // A fourth dimension: changed and at least two.
+    toggleGraphDimension(gd, pair.pairId, cols[3]!, true);
+    expect(tourState()).toMatchObject({ step: 4, substep: null, pairId: null });
+  });
+
+  test('ONB-05 GRAPH-03 Escape in pointing mode returns to `add`, not to Skip; a pair removed during `dimensions` returns to `add` too', () => {
+    const gd = openSampleAt(3);
+    setTourPointing(true);
+    expect(tourState()).toMatchObject({ substep: 'point' });
+    setTourPointing(false);
+    expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'add' });
+    const sheetId = listSheets(gd)[0]!.id;
+    const pair = createGraphPair(gd, { sheetId, tableId: cells(gd).deliverables.id });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: pair.pairId });
+    removeGraphPair(gd, pair.pairId);
+    expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'add', pairId: null });
+    // The next pair takes a fresh dimensions baseline.
+    const again = createGraphPair(gd, { sheetId, tableId: cells(gd).team.id });
+    const next = tourState();
+    expect(next).toMatchObject({ substep: 'dimensions', pairId: again.pairId });
+    expect(next.phase === 'running' && next.baseline.dimensions?.pairId).toBe(again.pairId);
+  });
+
+  test('ONB-05 GRAPH-03 GRAPH-05 an unbound pair never advances; Re-point shows `point` again and, bound to another table, resets the dimensions baseline so the defaults do not count', () => {
+    const gd = openSampleAt(3);
+    const sheetId = listSheets(gd)[0]!.id;
+    const c = cells(gd);
+    // An unbound pair (pointing mode's own, or one whose table was deleted) is not the action.
+    const unbound = createGraphPair(gd, { sheetId, tableId: null });
+    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairId: null });
+    expect(bindGraphPair(gd, unbound.pairId, c.deliverables.id)).toBe(true);
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: unbound.pairId });
+    // Re-point: pointing mode on, the card goes back to `point` while the pair stays bound.
+    setTourPointing(true);
+    expect(tourState()).toMatchObject({ substep: 'point', pairId: null });
+    // Escape: back to the dimensions of the same binding, baseline kept.
+    setTourPointing(false);
+    let state = tourState();
+    expect(state).toMatchObject({ substep: 'dimensions', pairId: unbound.pairId });
+    expect(state.phase === 'running' && state.baseline.dimensions?.tableId).toBe(c.deliverables.id);
+    // Re-pointed at Team: its default three dimensions are a new baseline, not a change.
+    setTourPointing(true);
+    expect(bindGraphPair(gd, unbound.pairId, c.team.id)).toBe(true);
+    setTourPointing(false);
+    state = tourState();
+    expect(state).toMatchObject({ step: 3, substep: 'dimensions', pairId: unbound.pairId });
+    expect(state.phase === 'running' && state.baseline.dimensions?.tableId).toBe(c.team.id);
+    const teamCols = tableById(gd, c.team.id)!.columns.map((x) => x.id);
+    toggleGraphDimension(gd, unbound.pairId, teamCols[0]!, false);
+    expect(tourState()).toMatchObject({ step: 4 });
+  });
+
+  test('ONB-05 GRAPH-01 GRAPH-04 "Graph this table" and "Add shaped table" bind at once and skip `point`; a pair present when the step began never counts', () => {
+    // Graph this table: bound directly.
+    let gd = openSampleAt(3);
+    const direct = createGraphPair(gd, {
+      sheetId: listSheets(gd)[0]!.id,
+      tableId: cells(gd).deliverables.id,
+    });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: direct.pairId });
+
+    // Add shaped table, from pointing mode: bound to the new table in one step.
+    resetTourForTests();
+    gd = openSampleAt(3);
+    setTourPointing(true);
+    const shaped = createShapedTableWithGraph(gd, {
+      sheetId: listSheets(gd)[0]!.id,
+      at: { col: 1, row: 30 },
+    });
+    setTourPointing(false);
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: shaped.pairId });
+    const first = tableById(gd, shaped.tableId)!.columns[0]!.id;
+    expect(toggleGraphDimension(gd, shaped.pairId, first, false)).toHaveLength(2);
+    expect(tourState()).toMatchObject({ step: 4 });
+
+    // A pair present when the step began is the baseline, not the action.
+    resetTourForTests();
+    startTour();
+    setTourSampleDocumentId(SAMPLE_ID);
+    const pre = sample();
+    createGraphPair(pre, { sheetId: listSheets(pre)[0]!.id, tableId: cells(pre).deliverables.id });
+    setTourDocument(pre);
+    setTourRoute(`/d/${SAMPLE_ID}`);
+    reference(pre, '=@Team.Marcus.Role');
+    days(pre, CONCAT_EXAMPLE);
+    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairId: null });
+  });
+
+  test('ONB-05 GRAPH-05 a pair bound and re-dimensioned from another replica counts (as ADR 35 rules)', () => {
+    const gd = openSampleAt(3);
+    const { rgd, merge } = replica(gd);
+    const d = cells(rgd).deliverables;
+    const pair = createGraphPair(rgd, { sheetId: listSheets(rgd)[0]!.id, tableId: d.id });
+    merge();
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: pair.pairId });
+    toggleGraphDimension(rgd, pair.pairId, tableById(rgd, d.id)!.columns[0]!.id, false);
+    merge();
     expect(tourState()).toMatchObject({ step: 4 });
   });
 
@@ -239,15 +439,16 @@ describe('tour store', () => {
     const seen: string[] = [];
     const stop = subscribeTour(() => {
       const s = tourState();
-      seen.push(s.phase === 'running' ? `running:${String(s.step)}` : s.phase);
+      seen.push(s.phase === 'running' ? `running:${String(s.step)}:${s.substep ?? '-'}` : s.phase);
     });
     startTour();
     setTourRoute('/');
     setTourRoute('/');
     setTourSampleDocumentId(SAMPLE_ID);
     setTourRoute(`/d/${SAMPLE_ID}`);
+    setTourPointing(true); // Pointing mode outside step 3 changes nothing.
     stop();
     skipTour();
-    expect(seen).toEqual(['running:1', 'running:2']);
+    expect(seen).toEqual(['running:1:-', 'running:2:reference']);
   });
 });

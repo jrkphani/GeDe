@@ -1,4 +1,4 @@
-import { memo, useCallback, useMemo, useRef } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef } from 'react';
 import {
   graphsOnSheet,
   tableMap,
@@ -210,18 +210,28 @@ const GraphHalf = memo(function GraphHalf({
  * GRAPH-03 pointing mode: every table on the sheet takes a dashed accent
  * outline that is itself the target — a button named after the table, so
  * the keyboard binds as well as the pointer. The banner lives in the shell.
+ * The targets carry the tour's `pointing` anchor (ONB-04): step 3's `point`
+ * card spotlights all of them at once.
  */
 function PointingOverlay({ gd, sheetId, graphs }: { gd: GedeDoc; sheetId: Id; graphs: Graphs }) {
   const tables = tablesOnSheet(gd, sheetId);
+  // A11Y-01: entering pointing mode hands focus to the first target, so the keyboard binds
+  // with Enter (Tab walks the others, Escape cancels) without crossing the grid's own Tab
+  // traversal (GRID-05). The plane is not a scroller, so focus must not try to scroll it.
+  const first = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    first.current?.focus({ preventScroll: true });
+  }, []);
   return (
     <div className="gd-pointing" data-testid="pointing-overlay">
-      {tables.map((record) => {
+      {tables.map((record, i) => {
         const map = tableMap(gd, record.id);
         if (map === null) return null;
         const px = unitBoundsToPx(tableUnitBounds(map, record));
         return (
           <button
             key={record.id}
+            ref={i === 0 ? first : undefined}
             type="button"
             className="gd-pointing__target"
             style={{
@@ -232,6 +242,7 @@ function PointingOverlay({ gd, sheetId, graphs }: { gd: GedeDoc; sheetId: Id; gr
             }}
             aria-label={`Bind the graph to ${record.title}`}
             data-testid="pointing-target"
+            data-tour="pointing"
             data-table-id={record.id}
             onPointerDown={(e) => {
               e.stopPropagation();
