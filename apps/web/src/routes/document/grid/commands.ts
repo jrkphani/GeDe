@@ -27,14 +27,13 @@ import {
   CANVAS_LAYOUT_LABELS,
   cellAddress,
   cellReadOnlyReason,
-  cellText,
   clearCell as clearCellText,
   collapseAll as collapseAllMutation,
   commitCellText,
   deleteColumn as deleteColumnMutation,
   deleteRow as deleteRowMutation,
   deleteTableWithGraphs,
-  detectIndicLang,
+  distributeEvenly as distributeEvenlyMutation,
   graphsBoundTo,
   expandAll as expandAllMutation,
   hideColumn as hideColumnMutation,
@@ -52,21 +51,22 @@ import {
   refreshDerivedLabels,
   richFromText,
   renameColumn as renameColumnMutation,
+  rowHeights,
   rowMeta,
   rowReadOnlyReason,
-  rowsForSize,
-  sizeRefusal,
   setCellAppearance,
   setCellRich,
   setColumnAppearance,
   setMappingValue,
   setColumnWidth as setColumnWidthMutation,
+  setColumnWidths as setColumnWidthsMutation,
   setColumnWrap as setColumnWrapMutation,
   setFooterRows as setFooterRowsMutation,
   setFrozenColumns as setFrozenColumnsMutation,
   setHeaderRows as setHeaderRowsMutation,
   setRowCollapsed,
-  setRowWrapped,
+  setRowHeights as setRowHeightsMutation,
+  setRowWrap as setRowWrapMutation,
   setSheetEdgesShown,
   setTableLook as setTableLookMutation,
   setTablePinned,
@@ -79,7 +79,6 @@ import {
   unhideColumn as unhideColumnMutation,
   unmergeCells as unmergeCellsMutation,
   updateColumnRule,
-  WRAPPED_ROW_HEIGHT,
   type AppearancePatch,
   type CanvasLayout,
   type ColumnRecord,
@@ -149,21 +148,39 @@ export interface GridCommands {
   unhideColumn(tableId: Id, colId: Id): boolean;
   /** Reveal every hidden column of the table. Returns the ids revealed. */
   unhideAllColumns(tableId: Id): Id[];
-  /** GRID-09: wrap every cell of the column (rows become two lattice units). */
-  setColumnWrap(tableId: Id, colId: Id, wrap: boolean): boolean;
-  /** GRID-09: wrap one row. */
-  setRowWrap(tableId: Id, rowId: Id, wrapped: boolean): boolean;
+  /**
+   * GRID-09 / ADR-049: column-scope wrap — `true` wraps the column's cells,
+   * `false` clips them, `null` follows the table. Paint only: the editing
+   * replica's auto-height then stores what each row needs.
+   */
+  setColumnWrap(tableId: Id, colId: Id, wrap: boolean | null): boolean;
+  /** GRID-09 / ADR-049: row-scope wrap, over the column's and the table's; `null` follows them. */
+  setRowWrap(tableId: Id, rowId: Id, wrap: boolean | null): boolean;
+  /** The same over a selected band of rows, in one transaction (one undo step). */
+  setRowsWrap(tableId: Id, rowIds: readonly Id[], wrap: boolean | null): boolean;
+  /** INSP-04 / ADR-049: table-scope wrap, the default every cell inherits. */
+  setTableWrap(tableId: Id, wrap: boolean): boolean;
   /** GRID-08: column width in whole units (≥ 1). Returns the width stored. */
   setColumnWidth(tableId: Id, colId: Id, units: number): number | null;
-  /** GRID-08: the corner handle. Returns the visible columns' widths after the call. */
+  /**
+   * GRID-08 / ADR-049: several columns' widths in one transaction — a drag
+   * on one divider of a selected band, or the Width field over a selection.
+   * Returns the widths stored, in the given order.
+   */
+  setColumnWidths(tableId: Id, widths: readonly { colId: Id; units: number }[]): number[] | null;
+  /**
+   * GRID-09 / ADR-049: rows set to a height by hand — a row divider drag, the
+   * Height field, the keyboard on a focused divider. The rows stop following
+   * their content (R-B) until Fit to content. Returns the heights stored.
+   */
+  setRowHeights(tableId: Id, heights: readonly { rowId: Id; units: number }[]): number[] | null;
+  /** GRID-08: the corner handle: total width and total height, each shared out in whole units. */
   scaleTable(tableId: Id, options: ScaleTableOptions): number[] | null;
   /**
-   * INSP-04 / GRID-09: every row wrapped (two units) or compact (one), in one
-   * transaction. Unwrapping also clears every column's own wrap — a column
-   * that wraps keeps every row at two units, so the switch could never read
-   * or set "compact" otherwise (#128). Returns how many columns lost their wrap.
+   * ADR-049 (Numbers' Table › Distribute Rows / Columns Evenly): the selected
+   * rows or columns, or every visible one, share their total evenly. One undo step.
    */
-  setTableWrapped(tableId: Id, wrapped: boolean): number | null;
+  distributeEvenly(tableId: Id, axis: 'row' | 'column', only?: readonly Id[]): number[] | null;
   /** GRID-10: leading frozen columns, clamped to the table. Returns the count stored. */
   setFrozenColumns(tableId: Id, count: number): number | null;
   /** GRID-11: 0 hides the column-header row, 1 shows it. */
@@ -229,10 +246,13 @@ export interface GridCommands {
 
   /** INSP-04: table style, title and caption, outline, gridline density, banding. */
   setTableLook(tableId: Id, patch: TableLookPatch): boolean;
-  /** INSP-04: every visible column to its measured width, one transaction. */
+  /** INSP-04: the given columns to their measured widths, one transaction. */
   fitColumns(tableId: Id, widths: readonly { colId: Id; units: number }[]): boolean;
-  /** INSP-04: every row to compact or wrapped as measured, one transaction. */
-  fitRows(tableId: Id, rows: readonly { rowId: Id; wrapped: boolean }[]): boolean;
+  /**
+   * INSP-04 / ADR-049: the given rows to their measured heights, one
+   * transaction; each row follows its content again (`fit` on).
+   */
+  fitRows(tableId: Id, rows: readonly { rowId: Id; units: number }[]): boolean;
   /**
    * INSP-05 / INSP-06 / INSP-10: fill, border, typography and alignment on the
    * column (every cell without its own value, and rows added later), or on
@@ -348,7 +368,21 @@ const LOOK_LABELS: Readonly<Record<keyof TableLookPatch, string>> = {
   outline: 'outline',
   gridlines: 'gridlines',
   alternating: 'alternating rows',
+  wrap: 'wrap',
 };
+
+/** "Row 5", by the row's lattice number as the ruler shows it (DOC-06), for announcements. */
+function rowName(table: TableMap, record: TableRecord, rowId: Id): string {
+  const first = record.columns.find((c) => !c.hidden);
+  const address = first === undefined ? null : cellAddress(table, rowId, first.id);
+  const number = address?.replace(/^[A-Z]+/, '');
+  return number === undefined || number === '' ? 'The row' : `Row ${number}`;
+}
+
+/** "3 units tall" / "1 unit wide": a size in words. */
+function units(n: number, what: 'tall' | 'wide'): string {
+  return `${String(n)} ${n === 1 ? 'unit' : 'units'} ${what}`;
+}
 
 /** A11Y-05: what an appearance change did, in words. */
 function describePatch(patch: AppearancePatch): string {
@@ -364,6 +398,11 @@ function describePatch(patch: AppearancePatch): string {
   if (patch.textColour !== undefined) say('Text colour', patch.textColour);
   if (patch.hAlign !== undefined) say('Alignment', patch.hAlign);
   if (patch.vAlign !== undefined) say('Vertical alignment', patch.vAlign);
+  if (patch.wrap !== undefined) {
+    parts.push(
+      patch.wrap === null ? 'Wrap follows the column' : patch.wrap ? 'Wrapped' : 'Unwrapped',
+    );
+  }
   return parts.length === 0 ? 'Appearance unchanged' : parts.join(', ');
 }
 
@@ -565,14 +604,53 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const column = record(tableId)?.columns.find((c) => c.id === colId);
       if (!editable() || column === undefined) return false;
       setColumnWrapMutation(gd, tableId, colId, wrap);
-      announce(wrap ? `Wrapped column ${column.label}` : `Unwrapped column ${column.label}`);
+      announce(
+        wrap === null
+          ? `Column ${column.label} follows the table's wrap`
+          : wrap
+            ? `Wrapped column ${column.label}`
+            : `Unwrapped column ${column.label}`,
+      );
       return true;
     },
-    setRowWrap(tableId, rowId, wrapped) {
+    setRowWrap(tableId, rowId, wrap) {
       const rec = record(tableId);
-      if (!editable() || rec?.rows.includes(rowId) !== true) return false;
-      setRowWrapped(gd, tableId, rowId, wrapped);
-      announce(wrapped ? 'Wrapped the row' : 'Unwrapped the row');
+      const t = map(tableId);
+      if (!editable() || rec === null || t === null || !rec.rows.includes(rowId)) return false;
+      setRowWrapMutation(gd, tableId, rowId, wrap);
+      const name = rowName(t, rec, rowId);
+      announce(
+        wrap === null
+          ? `${name} follows its columns' wrap`
+          : wrap
+            ? `${name} wrapped`
+            : `${name} unwrapped`,
+      );
+      return true;
+    },
+    setRowsWrap(tableId, rowIds, wrap) {
+      const rec = record(tableId);
+      if (!editable() || rec === null) return false;
+      const known = rowIds.filter((id) => rec.rows.includes(id));
+      if (known.length === 0) return false;
+      gd.doc.transact(() => {
+        for (const rowId of known) setRowWrapMutation(gd, tableId, rowId, wrap);
+      }, gd.origin);
+      const n = String(known.length);
+      announce(
+        wrap === null
+          ? `${n} rows follow their columns' wrap`
+          : wrap
+            ? `${n} rows wrapped`
+            : `${n} rows unwrapped`,
+      );
+      return true;
+    },
+    setTableWrap(tableId, wrap) {
+      const rec = record(tableId);
+      if (!editable() || rec === null) return false;
+      setTableLookMutation(gd, tableId, { wrap });
+      announce(wrap ? `${rec.title}: text wraps in cells` : `${rec.title}: text clips in cells`);
       return true;
     },
     setColumnWidth(tableId, colId, units) {
@@ -582,33 +660,73 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       announce(`${column.label} is ${String(width)} ${width === 1 ? 'unit' : 'units'} wide`);
       return width;
     },
+    setColumnWidths(tableId, widths) {
+      const rec = record(tableId);
+      if (!editable() || rec === null || widths.length === 0) return null;
+      if (widths.some((w) => !Number.isFinite(w.units))) return null;
+      const known = widths.filter((w) => rec.columns.some((c) => c.id === w.colId));
+      if (known.length === 0) return null;
+      const stored = setColumnWidthsMutation(gd, tableId, known);
+      if (known.length === 1) {
+        const column = rec.columns.find((c) => c.id === known[0]?.colId);
+        announce(`${column?.label ?? 'The column'} is ${units(stored[0] ?? 1, 'wide')}`);
+      } else {
+        const same = stored.every((w) => w === stored[0]);
+        announce(
+          same
+            ? `${String(known.length)} columns are ${units(stored[0] ?? 1, 'wide')}`
+            : `${String(known.length)} columns resized to ${stored.map(String).join(', ')} units`,
+        );
+      }
+      return stored;
+    },
+    setRowHeights(tableId, heights) {
+      const rec = record(tableId);
+      const t = map(tableId);
+      if (!editable() || rec === null || t === null || heights.length === 0) return null;
+      if (heights.some((h) => !Number.isFinite(h.units))) return null;
+      const known = heights.filter((h) => rec.rows.includes(h.rowId));
+      if (known.length === 0) return null;
+      const stored = setRowHeightsMutation(gd, tableId, known, 'manual');
+      if (known.length === 1) {
+        announce(`${rowName(t, rec, known[0]?.rowId ?? '')} is ${units(stored[0] ?? 1, 'tall')}`);
+      } else {
+        const same = stored.every((h) => h === stored[0]);
+        announce(
+          same
+            ? `${String(known.length)} rows are ${units(stored[0] ?? 1, 'tall')}`
+            : `${String(known.length)} rows resized to ${stored.map(String).join(', ')} units`,
+        );
+      }
+      return stored;
+    },
     scaleTable(tableId, options) {
       const rec = record(tableId);
-      if (!editable() || rec === null) return null;
+      const t = map(tableId);
+      if (!editable() || rec === null || t === null) return null;
       const widths = scaleTableMutation(gd, tableId, options);
       const total = widths.reduce((a, b) => a + b, 0);
+      const height = rowHeights(t).reduce((a, b) => a + b, 0);
       announce(
-        `${rec.title} is ${String(total)} ${total === 1 ? 'unit' : 'units'} wide${
-          options.wrapped === undefined ? '' : options.wrapped ? ', rows wrapped' : ', rows compact'
+        `${rec.title} is ${units(total, 'wide')}${
+          options.heightUnits === undefined ? '' : `, rows ${units(height, 'tall')} together`
         }`,
       );
       return widths;
     },
-    setTableWrapped(tableId, wrapped) {
+    distributeEvenly(tableId, axis, only) {
       const rec = record(tableId);
       if (!editable() || rec === null) return null;
-      const wrappingColumns = wrapped ? [] : rec.columns.filter((c) => c.wrap);
-      gd.doc.transact(() => {
-        scaleTableMutation(gd, tableId, { wrapped });
-        for (const c of wrappingColumns) setColumnWrapMutation(gd, tableId, c.id, false);
-      }, gd.origin);
-      const n = wrappingColumns.length;
+      const sizes = distributeEvenlyMutation(gd, tableId, axis, only);
+      if (sizes.length === 0) return sizes;
+      const what = axis === 'row' ? 'rows' : 'columns';
+      const same = sizes.every((s) => s === sizes[0]);
       announce(
-        wrapped
-          ? `${rec.title}: every row wrapped`
-          : `${rec.title}: every row compact${n === 0 ? '' : `; column wrap cleared on ${String(n)} ${n === 1 ? 'column' : 'columns'}`}`,
+        same
+          ? `${String(sizes.length)} ${what} are ${units(sizes[0] ?? 1, axis === 'row' ? 'tall' : 'wide')}`
+          : `${String(sizes.length)} ${what} distributed: ${sizes.map(String).join(', ')} units`,
       );
-      return n;
+      return sizes;
     },
     setFrozenColumns(tableId, count) {
       const rec = record(tableId);
@@ -812,62 +930,42 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     },
     fitRows(tableId, rows) {
       const rec = record(tableId);
-      if (!editable() || rec === null || rows.length === 0) return false;
-      gd.doc.transact(() => {
-        for (const r of rows) setRowWrapped(gd, tableId, r.rowId, r.wrapped);
-      }, gd.origin);
-      const wrapped = rows.filter((r) => r.wrapped).length;
-      announce(
-        wrapped === 0
-          ? 'Every row fits on one line'
-          : `${String(wrapped)} ${wrapped === 1 ? 'row wraps' : 'rows wrap'} to fit its content`,
-      );
+      const t = map(tableId);
+      if (!editable() || rec === null || t === null || rows.length === 0) return false;
+      const stored = setRowHeightsMutation(gd, tableId, rows, 'fit');
+      if (rows.length === 1) {
+        announce(
+          `${rowName(t, rec, rows[0]?.rowId ?? '')} fits its content: ${units(stored[0] ?? 1, 'tall')}`,
+        );
+      } else {
+        const tall = stored.filter((h) => h > 1).length;
+        announce(
+          tall === 0
+            ? `${String(rows.length)} rows fit their content on one unit`
+            : `${String(rows.length)} rows fit their content; ${String(tall)} ${tall === 1 ? 'is' : 'are'} taller than one unit`,
+        );
+      }
       return true;
     },
     setColumnAppearance(tableId, colId, patch) {
       const rec = record(tableId);
       const column = rec?.columns.find((c) => c.id === colId);
-      const t = map(tableId);
-      if (!editable() || rec === null || column === undefined || t === null) return false;
-      // INSP-06 / GRID-09: a size whose line box needs the wrapped row wraps the column, in the
-      // same transaction — the lattice already has the two-unit row (ADR-024).
-      const indic = rec.rows.some((rowId) => detectIndicLang(cellText(t, rowId, colId)) !== null);
-      const refusal = patch.size == null ? undefined : sizeRefusal(patch.size, indic);
-      if (refusal !== undefined) {
-        announce(`Size not applied: ${refusal}`);
-        return false;
-      }
-      const wraps = patch.size != null && rowsForSize(patch.size, indic) === 2 && !column.wrap;
-      gd.doc.transact(() => {
-        setColumnAppearance(gd, tableId, colId, patch);
-        if (wraps) setColumnWrapMutation(gd, tableId, colId, true);
-      }, gd.origin);
-      announce(
-        `${describePatch(patch)} for column ${column.label}${wraps ? '; the column wraps to fit the size' : ''}`,
-      );
+      if (!editable() || rec === null || column === undefined) return false;
+      // INSP-06 / GRID-09 / ADR-049: a size whose line box needs more than one row grows the
+      // rows through the editing replica's auto-height, in the same undo step; every size on
+      // the scale can be chosen (ADR-034's Indic refusal is gone).
+      setColumnAppearance(gd, tableId, colId, patch);
+      announce(`${describePatch(patch)} for column ${column.label}`);
       return true;
     },
     setCellAppearance(cell, patch) {
       const t = map(cell.tableId);
       if (!editable() || t === null) return false;
-      const indic = detectIndicLang(cellText(t, cell.rowId, cell.colId)) !== null;
-      const refusal = patch?.size == null ? undefined : sizeRefusal(patch.size, indic);
-      if (refusal !== undefined) {
-        announce(`Size not applied: ${refusal}`);
-        return false;
-      }
-      const wraps =
-        patch?.size != null &&
-        rowsForSize(patch.size, indic) === 2 &&
-        rowMeta(t, cell.rowId).height !== WRAPPED_ROW_HEIGHT;
-      gd.doc.transact(() => {
-        setCellAppearance(gd, cell.tableId, cell.rowId, cell.colId, patch);
-        if (wraps) setRowWrapped(gd, cell.tableId, cell.rowId, true);
-      }, gd.origin);
+      setCellAppearance(gd, cell.tableId, cell.rowId, cell.colId, patch);
       announce(
         patch === null
           ? `${addressOf(cell)} follows its column again`
-          : `${describePatch(patch)} for ${addressOf(cell)}${wraps ? '; the row wraps to fit the size' : ''}`,
+          : `${describePatch(patch)} for ${addressOf(cell)}`,
       );
       return true;
     },

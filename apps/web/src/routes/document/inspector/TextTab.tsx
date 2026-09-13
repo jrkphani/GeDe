@@ -2,12 +2,11 @@ import { useId } from 'react';
 import { Button, SegmentedControl, Select, Switch, Tooltip } from '@gede/ui';
 import {
   cellRich,
-  cellText,
   CHARACTER_STYLE_BUNDLES,
   CHARACTER_STYLE_LABELS,
   CHARACTER_STYLES,
   characterStyleOf,
-  detectIndicLang,
+  effectiveWrap,
   FONT_FAMILIES,
   FONT_FAMILY_LABELS,
   FONT_WEIGHT_LABELS,
@@ -15,14 +14,12 @@ import {
   H_ALIGNS,
   hasMarkThroughout,
   rowMeta,
-  sizeRefusal,
   tableRecord,
   TEXT_COLOUR_TOKENS,
   TOGGLE_MARKS,
   TYPE_SIZE_PX,
   TYPE_SIZES,
   V_ALIGNS,
-  WRAPPED_ROW_HEIGHT,
   type FontWeight,
   type HAlign,
   type TableMap,
@@ -32,7 +29,7 @@ import {
 
 import type { GridCommands } from '../grid/commands.js';
 import { markAriaKeys, markLabel } from '../keys/shortcut-map.js';
-import type { CellSelection } from '../selection.js';
+import type { AxisBand, CellSelection } from '../selection.js';
 import { useAppearanceScope } from './appearance-scope.js';
 import { ReasonedButton, Section } from './controls.js';
 import { TEXT_COLOUR_LABELS } from './RulesSection.js';
@@ -40,6 +37,8 @@ import { TEXT_COLOUR_LABELS } from './RulesSection.js';
 export interface TextTabProps {
   table: TableMap;
   cell: CellSelection | null;
+  /** ADR-049: the selected rows or columns of this table, if any — wrap then acts on them. */
+  band?: AxisBand | null | undefined;
   editing: boolean;
   editable: boolean;
   commands: GridCommands;
@@ -86,7 +85,15 @@ const V_LABELS: Readonly<Record<VAlign, string>> = {
  * colour and alignment are column-scoped with a cell override (INSP-10);
  * every change is one `GridCommands` call, live on the canvas (INSP-12).
  */
-export function TextTab({ table, cell, editing, editable, commands, onToggleMark }: TextTabProps) {
+export function TextTab({
+  table,
+  cell,
+  band = null,
+  editing,
+  editable,
+  commands,
+  onToggleMark,
+}: TextTabProps) {
   const record = tableRecord(table);
   const column = cell === null ? null : (record.columns.find((c) => c.id === cell.colId) ?? null);
   const viewOnly = editable ? undefined : 'you have view-only access';
@@ -95,19 +102,30 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
     viewOnly ?? needsCell ?? (editing ? 'finish editing to format the whole cell' : undefined);
   const marksReasonId = useId();
   const rich = cell === null ? null : cellRich(table, cell.rowId, cell.colId);
-  const rowWrapped = cell !== null && rowMeta(table, cell.rowId).height === WRAPPED_ROW_HEIGHT;
   const look = useAppearanceScope(table, record, cell, editable, commands, 'the typography');
   const a = look.effective;
   const activeStyle = characterStyleOf(a);
-  // I18N-03: Indic text keeps the 1.7 line height, so the two largest sizes cannot be shown for
-  // it even on the wrapped row; they read disabled with that reason (INSP-11).
-  const indic =
-    cell === null || column === null
-      ? false
+  // ADR-049 (Numbers N8): one "Wrap text in cell" switch whose scope is the selection's —
+  // the selected rows (row scope), else the INSP-10 scope: the column, or the cell as an
+  // override. Column-scope wrap lives on the column's own key (`effectiveWrap` reads it).
+  const rowBand = band !== null && band.axis === 'row' && band.ids.length > 0 ? band : null;
+  const wrapChecked =
+    rowBand !== null
+      ? (rowMeta(table, rowBand.ids[0] ?? '').wrap ??
+        (column === null ? record.look.wrap : (column.wrap ?? record.look.wrap)))
+      : cell === null || column === null
+        ? record.look.wrap
+        : look.scope === 'cell'
+          ? effectiveWrap(table, column, cell.rowId, record.look.wrap)
+          : (column.wrap ?? record.look.wrap);
+  const wrapLabel =
+    rowBand !== null
+      ? rowBand.ids.length === 1
+        ? 'Wrap text in the selected row'
+        : `Wrap text in ${String(rowBand.ids.length)} selected rows`
       : look.scope === 'cell'
-        ? detectIndicLang(cellText(table, cell.rowId, cell.colId)) !== null
-        : record.rows.some((rowId) => detectIndicLang(cellText(table, rowId, column.id)) !== null);
-  const refused = TYPE_SIZES.filter((size) => sizeRefusal(size, indic) !== undefined);
+        ? `Wrap text in ${look.address ?? 'the cell'}`
+        : `Wrap text in column ${column?.label ?? ''}`;
 
   return (
     <>
@@ -142,17 +160,10 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
             }}
             options={TYPE_SIZES.map((size) => ({
               value: size,
+              // ADR-049: every size can be shown; one past the compact row grows the row.
               label: `${String(TYPE_SIZE_PX[size])} px · ${size}`,
-              disabled: refused.includes(size),
             }))}
           />
-          {refused.length > 0 && (
-            <p className="gd-insp__reason">
-              {refused.map((s) => `${String(TYPE_SIZE_PX[s])} px`).join(' and ')} — need more than a
-              wrapped row for Tamil, Hindi or Telugu text at the 1.7 line height. Sizes past the
-              compact row wrap it.
-            </p>
-          )}
         </div>
       </Section>
       <Section
@@ -287,26 +298,36 @@ export function TextTab({ table, cell, editing, editable, commands, onToggleMark
           />
         </div>
       </Section>
-      <Section label="wrap" hint="Wrapped rows take two lattice units; addresses never move.">
+      <Section
+        label="wrap"
+        hint="On, the text wraps and the row grows to show every line; off, it clips at the cell. Addresses never move. The table's default is in the Table tab."
+      >
         <div className="gd-insp__stack">
           <Switch
-            label={column === null ? 'Wrap column' : `Wrap column ${column.label}`}
-            checked={column?.wrap === true}
-            disabled={viewOnly !== undefined || column === null}
+            label={wrapLabel}
+            checked={wrapChecked}
+            disabled={viewOnly !== undefined || (rowBand === null && column === null)}
             onCheckedChange={(on) => {
-              if (column !== null) commands.setColumnWrap(record.id, column.id, on);
+              if (rowBand !== null) {
+                commands.setRowsWrap(record.id, rowBand.ids, on);
+                return;
+              }
+              look.write({ wrap: on });
             }}
           />
-          <Switch
-            label="Wrap this row"
-            checked={rowWrapped}
-            disabled={viewOnly !== undefined || cell === null}
-            onCheckedChange={(on) => {
-              if (cell !== null) commands.setRowWrap(record.id, cell.rowId, on);
-            }}
-          />
-          {(viewOnly ?? needsCell) !== undefined && (
-            <p className="gd-insp__reason">Wrap — {viewOnly ?? needsCell}</p>
+          {rowBand === null && look.scope === 'cell' && look.override?.wrap !== undefined && (
+            <ReasonedButton
+              label="Follow the column's wrap"
+              reason={viewOnly}
+              onClick={() => {
+                look.write({ wrap: null });
+              }}
+            />
+          )}
+          {(viewOnly ?? (rowBand === null ? needsCell : undefined)) !== undefined && (
+            <p className="gd-insp__reason">
+              Wrap — {viewOnly ?? (rowBand === null ? needsCell : undefined)}
+            </p>
           )}
         </div>
       </Section>

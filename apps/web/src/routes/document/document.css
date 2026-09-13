@@ -538,21 +538,21 @@
    render in every row. A compact row (21 px of content) cannot hold a second line above the
    9 px floor of the type scale (#65), so there the secondary text shares the value's line —
    after the value and its badge, at the label step, ellipsised — the way the prototype's
-   compact formula cells show the expression at reduced size. A wrapped row (`.gd-cell--wrap`)
+   compact formula cells show the expression at reduced size. A row of two or more units (`.gd-cell--tall`, ADR-049)
    gives it its own line (formula.css, ref.css). Nothing here changes a row's height. */
-.gd-cell:not(.gd-cell--wrap) .gd-formula,
-.gd-cell:not(.gd-cell--wrap) .gd-ref {
+.gd-cell:not(.gd-cell--tall) .gd-formula,
+.gd-cell:not(.gd-cell--tall) .gd-ref {
   flex-direction: row;
   align-items: baseline;
   gap: var(--space-2);
 }
-.gd-cell:not(.gd-cell--wrap) .gd-formula__line,
-.gd-cell:not(.gd-cell--wrap) .gd-ref__line {
+.gd-cell:not(.gd-cell--tall) .gd-formula__line,
+.gd-cell:not(.gd-cell--tall) .gd-ref__line {
   flex: none;
   max-width: 70%;
 }
-.gd-cell:not(.gd-cell--wrap) .gd-formula__expr,
-.gd-cell:not(.gd-cell--wrap) .gd-ref__path {
+.gd-cell:not(.gd-cell--tall) .gd-formula__expr,
+.gd-cell:not(.gd-cell--tall) .gd-ref__path {
   flex: 1;
   min-width: 0;
 }
@@ -663,17 +663,21 @@
   color: var(--ink-muted);
 }
 
-/* ---- wrapped rows (GRID-09): two lattice units, text on two lines */
+/* ---- wrap and clip (GRID-09, ADR-049, #167 criteria 11–14) ----------------
+   A wrapped cell lays its text on as many lines as the row holds; an unwrapped one keeps one
+   line per paragraph and clips hard at the cell's content box, as Numbers does — no ellipsis,
+   no spill into the neighbour; the full text is the cell's `title`. Either way the text is
+   cut at the last whole line that fits: `--gd-lines` (the row's content box over the cell's
+   line box, set by the cell) caps the text's height, so a hand-set row never shows half a
+   glyph. Vertical alignment (INSP-06, `data-valign`) positions the text inside whatever
+   height the row has, wrapped or not; the default is middle. */
 .gd-cell--wrap {
-  align-items: flex-start;
-  padding-top: 0.125rem;
+  padding-block: 0.0625rem;
   white-space: normal;
 }
 .gd-cell--wrap .gd-cell__text {
-  display: -webkit-box;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
+  display: block;
+  max-height: calc(var(--gd-lines, 1) * var(--gd-line-px, 1.35em));
   overflow: hidden;
   overflow-wrap: anywhere;
 }
@@ -794,9 +798,90 @@ button.gd-cell__chevron:hover {
   letter-spacing: 0.01em;
 }
 
-/* ---- resize handles (GRID-08): a divider per column header, a corner on the table */
+/* ---- resize handles (GRID-08, ADR-049): a divider per column header, a handle and a divider
+   per row in the gutter left of a selected table (Numbers' row headers), a corner on the table */
 .gd-table__header {
   position: relative;
+}
+.gd-table__row {
+  position: relative;
+}
+/* The gutter: 20 px outside the table's lattice footprint, drawn only while the table is
+   selected and editable, so no address and no neighbour moves. */
+.gd-table--gutter {
+  --gd-gutter: 1.25rem;
+}
+.gd-table__row-handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: calc(-1 * var(--gd-gutter) - 1px);
+  z-index: 3;
+  box-sizing: border-box;
+  width: var(--gd-gutter);
+  padding: 0;
+  border: 1px solid var(--border);
+  border-right: 0;
+  border-radius: var(--radius-none);
+  background: var(--surface-sunken);
+  color: var(--ink-muted);
+  font-family: var(--font-mono);
+  font-size: 0.53125rem;
+  line-height: 1;
+  cursor: pointer;
+  user-select: none;
+}
+.gd-table__row-handle:hover {
+  color: var(--ink);
+}
+.gd-table__row-handle[aria-pressed='true'] {
+  background: color-mix(in srgb, var(--selection-ring) 28%, var(--surface-sunken));
+  color: var(--ink);
+  font-weight: 600;
+}
+.gd-table__row-handle:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.gd-table__row-divider {
+  /* On the row's bottom edge, across the gutter only: the cells keep every pixel of the row. */
+  position: absolute;
+  left: calc(-1 * var(--gd-gutter) - 1px);
+  bottom: -4px;
+  z-index: 4;
+  width: var(--gd-gutter);
+  height: 7px;
+  cursor: row-resize;
+  touch-action: none;
+}
+.gd-table__row-divider::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 3px;
+  height: 2px;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease-out);
+}
+.gd-table__row-divider:hover::after,
+.gd-table__row-divider:focus-visible::after {
+  background: var(--selection-ring);
+}
+.gd-table__row-divider:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: -1px;
+  border-radius: var(--radius-sm);
+}
+/* A selected band (ADR-049): its header or handle is pressed, and its cells carry a tint
+   under the armed cell's ring — the state is also in `aria-selected`, never hue alone. */
+.gd-table__header--banded {
+  background: color-mix(in srgb, var(--selection-ring) 28%, var(--surface-sunken));
+  box-shadow: inset 0 -2px 0 var(--selection-ring);
+}
+.gd-table__row--banded .gd-cell:not(.gd-cell--selected),
+.gd-cell--banded:not(.gd-cell--selected) {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--selection-ring) 60%, transparent);
 }
 .gd-table__divider {
   /* Inside the header's box (the header clips overflow), flush with its right edge. */
@@ -856,6 +941,27 @@ button.gd-cell__chevron:hover {
     outline: none;
   }
   .gd-table__divider:focus-visible::after {
+    outline: 2px solid var(--focus-ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+  /* RESP-05: the row divider is a 44 px target too — grown left into the canvas and down
+     over the row's bottom edge, never right into the cells; its 2 px line stays on the edge. */
+  .gd-table__row-divider {
+    left: calc(-1 * var(--hit-target));
+    bottom: calc(-1 * var(--hit-target) / 2);
+    width: var(--hit-target);
+    height: var(--hit-target);
+  }
+  .gd-table__row-divider::after {
+    left: calc(var(--hit-target) - var(--gd-gutter) - 1px);
+    right: 0;
+    bottom: calc(var(--hit-target) / 2 - 1px);
+  }
+  .gd-table__row-divider:focus-visible {
+    outline: none;
+  }
+  .gd-table__row-divider:focus-visible::after {
     outline: 2px solid var(--focus-ring);
     outline-offset: 2px;
     border-radius: var(--radius-sm);
@@ -1572,26 +1678,7 @@ button.gd-cell__chevron:hover {
   line-height: 1.05;
   letter-spacing: -0.04em;
 }
-/* A sized cell on the wrapped row shows one line of the larger type, centred without the
-   wrapped row's top padding, so display (42 px) sits inside the 43 px content box. */
-.gd-cell--wrap[data-size='h2'],
-.gd-cell--wrap[data-size='h1'],
-.gd-cell--wrap[data-size='display'] {
-  align-items: center;
-  padding-top: 0;
-}
-.gd-cell--wrap[data-size='h2'] .gd-rich,
-.gd-cell--wrap[data-size='h1'] .gd-rich,
-.gd-cell--wrap[data-size='display'] .gd-rich {
-  display: block;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.gd-cell--wrap[data-size='h2'] .gd-rich__p,
-.gd-cell--wrap[data-size='h1'] .gd-rich__p,
-.gd-cell--wrap[data-size='display'] .gd-rich__p {
-  white-space: nowrap;
-}
+/* ADR-049: the display sizes wrap like any other size — the row grows to their line boxes. */
 
 /* ---- alignment (INSP-06): horizontal on the text, vertical on the cell's flex axis */
 .gd-cell[data-halign='left'] .gd-rich {

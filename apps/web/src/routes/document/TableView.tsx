@@ -19,8 +19,11 @@ import {
   cellKey,
   cellRich,
   columnLetter,
+  cellAddress,
   distributeUnits,
+  effectiveWrap,
   LATTICE,
+  lineBoxPx,
   rowHeights as effectiveRowHeights,
   rowMeta,
   rowReadOnlyReason,
@@ -29,8 +32,6 @@ import {
   tableAddresses,
   tableOutline,
   tableRecord,
-  tableWraps,
-  WRAPPED_ROW_HEIGHT,
   EMPTY_DOC,
   plainText,
   richFromText,
@@ -55,7 +56,9 @@ import { announce } from '../../announce.js';
 import { ARIA_KEYS, CHORDS, isApplePlatform, matchesChord } from '../../doc/shortcuts.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import {
+  bandFor,
   nextCell,
+  type AxisBand,
   type CellSelection,
   type Direction,
   type Editing,
@@ -85,7 +88,7 @@ import {
 } from './ref/index.js'; // wave3/references
 import { useGraphLitRows } from './graph/store.js'; // wave4/graphs: GRAPH-09 lit rows
 import { frozenColumns as frozenColumnsOf } from './grid/pinned.js';
-import { ColumnDivider, CornerHandle } from './grid/ResizeHandle.js';
+import { ColumnDivider, CornerHandle, RowDivider } from './grid/ResizeHandle.js';
 import type { GridActions } from './grid/use-grid.js';
 import {
   ariaSortOf,
@@ -96,12 +99,16 @@ import {
   type SortCommands,
 } from './sort/index.js';
 import {
+  fitColumnsToContent,
+  fitRowsToContent,
   looksEqual,
   paintLook,
   paintTable,
   styleOf,
   useColumnRules,
+  useFitter,
   type CellLook,
+  type Fitter,
 } from './style/index.js'; // wave4/inspector-controls
 
 export interface TableViewProps {
@@ -109,6 +116,10 @@ export interface TableViewProps {
   tier: ZoomTier;
   selected: boolean;
   selectedCell: CellSelection | null;
+  /** ADR-049: the selected rows or columns of this table, if any (the shell filters by table). */
+  axisBand?: AxisBand | null | undefined;
+  /** ADR-049: how to measure for fit-to-content; defaults to this document's canvas measurer. */
+  fitter?: Fitter | undefined;
   editing: Editing | null;
   /** RESP-02 / SHARE-03: no edit affordance renders when false. */
   editable: boolean;
@@ -154,27 +165,47 @@ function sameIds(a: readonly Id[], b: readonly Id[]): boolean {
 const HEADER_PX = LATTICE.row;
 const FOOTER_PX = LATTICE.row;
 
-interface ColumnPreview {
-  colId: Id;
-  units: number;
-}
+/** A drag's live preview: the sizes every dragged member would take, by id (ADR-049). */
+type SizePreview = ReadonlyMap<Id, number>;
 interface TablePreview {
   widthUnits: number;
-  wrapped: boolean;
+  heightUnits: number;
+}
+
+/**
+ * Numbers N2 (ADR-049): the sizes a band takes when one member is dragged —
+ * each scales by the dragged one's new/old ratio, snapped to whole units,
+ * never below one; the dragged member lands exactly where the pointer is.
+ */
+export function proportionalSizes(
+  sizes: ReadonlyMap<Id, number>,
+  draggedId: Id,
+  draggedUnits: number,
+): Map<Id, number> {
+  const from = sizes.get(draggedId) ?? 1;
+  const ratio = draggedUnits / Math.max(1, from);
+  const out = new Map<Id, number>();
+  for (const [id, units] of sizes) {
+    out.set(id, id === draggedId ? draggedUnits : Math.max(1, Math.round(units * ratio)));
+  }
+  return out;
 }
 
 /**
  * One table on the lattice (DOM-first). Geometry is absolute: the title bar is
- * two lattice rows, the header one (or none, GRID-11), every data row one (two
- * when wrapped, GRID-09), the footer strip one, and every visible column
- * `width` units wide; a hidden column is not drawn (GRID-02). Nothing here
- * reflows at a breakpoint (RESP-01) — the viewport pans over it.
+ * two lattice rows, the header one (or none, GRID-11), every data row its
+ * stored whole number of units (GRID-09, ADR-049), the footer strip one, and
+ * every visible column `width` units wide; a hidden column is not drawn
+ * (GRID-02). Nothing here reflows at a breakpoint (RESP-01) — the viewport
+ * pans over it.
  */
 export const TableView = memo(function TableView({
   table,
   tier,
   selected,
   selectedCell,
+  axisBand = null,
+  fitter: givenFitter,
   editing,
   editable,
   viewSorted = false,
@@ -202,8 +233,13 @@ export const TableView = memo(function TableView({
   );
   const bandLabelId = useId();
   const ref = useRef<HTMLElement>(null);
-  const [columnPreview, setColumnPreview] = useState<ColumnPreview | null>(null);
+  const [columnPreview, setColumnPreview] = useState<SizePreview | null>(null);
+  const [rowPreview, setRowPreview] = useState<SizePreview | null>(null);
   const [tablePreview, setTablePreview] = useState<TablePreview | null>(null);
+  const ownFitter = useFitter(table.doc);
+  const fitter = givenFitter ?? ownFitter;
+  const columnBand = axisBand !== null && axisBand.axis === 'column' ? axisBand : null;
+  const rowBand = axisBand !== null && axisBand.axis === 'row' ? axisBand : null;
 
   // Visible columns with the width each renders at (a drag previews before it commits).
   const visible = record.columns.filter((c) => !c.hidden);
@@ -211,22 +247,31 @@ export const TableView = memo(function TableView({
   const previewWidths =
     tablePreview === null ? storedWidths : distributeUnits(storedWidths, tablePreview.widthUnits);
   const widthUnitsOf = (colId: Id, i: number): number =>
-    columnPreview?.colId === colId ? columnPreview.units : (previewWidths[i] ?? 1);
+    columnPreview?.get(colId) ?? previewWidths[i] ?? 1;
   const columnUnits = visible.map((c, i) => widthUnitsOf(c.id, i));
   const widthPx =
     Math.max(
       1,
       columnUnits.reduce((a, b) => a + b, 0),
     ) * LATTICE.col;
+  // Heights in document row order (GRID-09, ADR-049): the stored whole units, or a drag's
+  // preview — one row's, a band's, or the corner's proportional share of every row's.
   const storedHeights = effectiveRowHeights(table, record);
-  const rowHeights =
-    tablePreview === null
-      ? storedHeights
-      : storedHeights.map((h) =>
-          tablePreview.wrapped || tableWraps(record) ? WRAPPED_ROW_HEIGHT : Math.min(h, 1),
-        );
-  const allWrapped =
-    storedHeights.length > 0 && storedHeights.every((h) => h === WRAPPED_ROW_HEIGHT);
+  const rowHeights = useMemo(() => {
+    if (rowPreview === null && tablePreview === null) return storedHeights;
+    if (tablePreview !== null) {
+      const shown = storedHeights.filter((h) => h > 0);
+      const shared = distributeUnits(shown, tablePreview.heightUnits);
+      let k = 0;
+      return storedHeights.map((h) => (h === 0 ? 0 : (shared[k++] ?? h)));
+    }
+    return storedHeights.map((h, i) => {
+      if (h === 0) return 0;
+      const id = record.rows[i];
+      return (id === undefined ? undefined : rowPreview?.get(id)) ?? h;
+    });
+  }, [storedHeights, rowPreview, tablePreview, record.rows]);
+  const bodyUnits = storedHeights.reduce((a, b) => a + b, 0);
   const addresses = tier === 'micro' ? tableAddresses(table) : null;
   const headerPx = record.headerRows === 1 ? HEADER_PX : 0;
   const footerPx = record.footerRows === 1 ? FOOTER_PX : 0;
@@ -243,6 +288,68 @@ export const TableView = memo(function TableView({
     ...paint.style,
   };
   const showAffordances = editable && selected && tier !== 'macro';
+  // ADR-049: the fit routes (double-click, Enter on a divider); absent where nothing measures.
+  const fitOptions = fitter.fit;
+  const fitColumnIds = (ids: readonly Id[]) => {
+    const o = fitOptions();
+    if (o === null) return;
+    commands.fitColumns(record.id, fitColumnsToContent(table, record, { ...o, only: ids }));
+  };
+  const fitRowIds = (ids: readonly Id[]) => {
+    const o = fitOptions();
+    if (o === null) return;
+    commands.fitRows(record.id, fitRowsToContent(table, record, { ...o, only: ids }));
+  };
+  // A drag on a member of the selected band resizes every member, proportionally (N2).
+  const columnSizes = new Map(visible.map((c) => [c.id, c.width]));
+  const rowSizes = new Map(record.rows.map((id, i) => [id, storedHeights[i] ?? 1]));
+  const previewColumns = (colId: Id, units: number | null) => {
+    if (units === null) {
+      setColumnPreview(null);
+      return;
+    }
+    const ids = bandFor(columnBand, colId);
+    const sizes = new Map(ids.map((id) => [id, columnSizes.get(id) ?? 1]));
+    setColumnPreview(proportionalSizes(sizes, colId, units));
+  };
+  const commitColumns = (colId: Id, units: number) => {
+    const ids = bandFor(columnBand, colId);
+    if (ids.length === 1) {
+      commands.setColumnWidth(record.id, colId, units);
+      return;
+    }
+    const sizes = new Map(ids.map((id) => [id, columnSizes.get(id) ?? 1]));
+    const next = proportionalSizes(sizes, colId, units);
+    commands.setColumnWidths(
+      record.id,
+      ids.map((id) => ({ colId: id, units: next.get(id) ?? 1 })),
+    );
+  };
+  const previewRows = (rowId: Id, units: number | null) => {
+    if (units === null) {
+      setRowPreview(null);
+      return;
+    }
+    const ids = bandFor(rowBand, rowId);
+    const sizes = new Map(ids.map((id) => [id, rowSizes.get(id) ?? 1]));
+    setRowPreview(proportionalSizes(sizes, rowId, units));
+  };
+  const commitRows = (rowId: Id, units: number) => {
+    const ids = bandFor(rowBand, rowId);
+    const sizes = new Map(ids.map((id) => [id, rowSizes.get(id) ?? 1]));
+    const next = proportionalSizes(sizes, rowId, units);
+    commands.setRowHeights(
+      record.id,
+      ids.map((id) => ({ rowId: id, units: next.get(id) ?? 1 })),
+    );
+  };
+  /** "Row 5", by the lattice number the ruler shows (DOC-06). */
+  const rowNameOf = (rowId: Id): string => {
+    const first = visible[0];
+    const address = first === undefined ? null : cellAddress(table, rowId, first.id);
+    const number = address?.replace(/^[A-Z]+/, '');
+    return number === undefined || number === '' ? 'Row' : `Row ${number}`;
+  };
 
   let colOffset = 0;
   const columnStarts = visible.map((_c, i) => {
@@ -330,13 +437,11 @@ export const TableView = memo(function TableView({
     record.columns.map((c) => [c.id, c.source === 'entered' ? null : c.source]),
   );
   // One rowMeta read per row: the row-level read-only reason (GRID-04: a category band;
-  // REF-02: a pulled row; HIER-07: a split child), the row's own wrap (GRID-09) and the
-  // meta itself for the cell bodies that need provenance.
-  const rowFacts = (
-    rowId: Id,
-  ): { readOnly: ReadOnlyReason | null; wrapped: boolean; meta: RowMeta } => {
+  // REF-02: a pulled row; HIER-07: a split child) and the meta itself for the cell bodies
+  // that need provenance.
+  const rowFacts = (rowId: Id): { readOnly: ReadOnlyReason | null; meta: RowMeta } => {
     const meta = rowMeta(table, rowId);
-    return { readOnly: rowReadOnlyReason(meta), wrapped: meta.height === WRAPPED_ROW_HEIGHT, meta };
+    return { readOnly: rowReadOnlyReason(meta), meta };
   };
   // REF-02 / HIER-07: pulls and Split children stay materialised while this replica can write.
   useReferenceReconciler(table.doc, editable);
@@ -396,8 +501,10 @@ export const TableView = memo(function TableView({
       ref={ref}
       className={clsx('gd-table', `gd-table--${tier}`, {
         'gd-table--selected': selected,
-        'gd-table--resizing': columnPreview !== null || tablePreview !== null,
+        'gd-table--resizing':
+          columnPreview !== null || rowPreview !== null || tablePreview !== null,
         'gd-table--pinned': record.pinned,
+        'gd-table--gutter': showAffordances,
       })}
       style={style}
       aria-label={record.title}
@@ -455,6 +562,7 @@ export const TableView = memo(function TableView({
                   const grouped = projection.view.groupBy === col.id;
                   const columnTabStop =
                     selectedCell?.tableId === record.id && selectedCell.colId === col.id;
+                  const inBand = columnBand?.ids.includes(col.id) === true;
                   return (
                     <div
                       key={col.id}
@@ -463,12 +571,25 @@ export const TableView = memo(function TableView({
                       // can return focus to it; the grid keeps one tab stop (A11Y-01).
                       tabIndex={-1}
                       aria-sort={ariaSortOf(projection.view, col.id)}
+                      aria-selected={inBand ? true : undefined}
                       className={clsx('gd-table__header', {
                         'gd-table__header--frozen': frozenIds.has(col.id),
                         'gd-table__header--freeze-edge': col.id === freezeEdgeId,
                         'gd-table__header--view': glyph !== null || grouped,
+                        'gd-table__header--banded': inBand,
                       })}
                       style={{ width: `${String(units * LATTICE.col)}px` }}
+                      // ADR-049 (Numbers): a press on the header selects the column; Shift
+                      // extends. The ▼, its menu (a portal whose events still bubble here in
+                      // React's tree) and the divider keep their own presses.
+                      onPointerDown={(e) => {
+                        if (e.button !== 0 || !editable) return;
+                        const target = e.target instanceof Element ? e.target : null;
+                        if (target === null || !e.currentTarget.contains(target)) return;
+                        if (target.closest('button, [role="separator"]') !== null) return;
+                        e.stopPropagation();
+                        actions.selectBand(record.id, 'column', col.id, e.shiftKey);
+                      }}
                       title={
                         glyph === null && !grouped
                           ? col.label
@@ -507,13 +628,19 @@ export const TableView = memo(function TableView({
                           tabStop={columnTabStop}
                           scale={scale}
                           onPreview={(preview) => {
-                            setColumnPreview(
-                              preview === null ? null : { colId: col.id, units: preview },
-                            );
+                            previewColumns(col.id, preview);
                           }}
                           onCommit={(next) => {
-                            commands.setColumnWidth(record.id, col.id, next);
+                            commitColumns(col.id, next);
                           }}
+                          onFit={
+                            fitter.reason === undefined
+                              ? () => {
+                                  fitColumnIds(bandFor(columnBand, col.id));
+                                }
+                              : undefined
+                          }
+                          fitReason={fitter.reason}
                         />
                       )}
                     </div>
@@ -554,21 +681,25 @@ export const TableView = memo(function TableView({
                     // One outline entry per row; rows under a collapsed parent never reach
                     // here (the sections leave them out, HIER-06).
                     const outlineRow = outline.rows[ri];
-                    const heightPx = (rowHeights[ri] ?? 1) * LATTICE.row;
-                    const {
-                      readOnly: rowReadOnly,
-                      wrapped: rowWrapped,
-                      meta: rowMetaOf,
-                    } = rowFacts(rowId);
+                    const rowUnits = rowHeights[ri] ?? 1;
+                    const heightPx = rowUnits * LATTICE.row;
+                    const { readOnly: rowReadOnly, meta: rowMetaOf } = rowFacts(rowId);
                     const parentRow = hierarchical && outlineRow?.hasChildren === true;
+                    const rowSelected =
+                      selectedCell?.tableId === record.id && selectedCell.rowId === rowId;
+                    const rowInBand = rowBand?.ids.includes(rowId) === true;
+                    const rowName = rowNameOf(rowId);
                     return (
                       <div
                         key={rowId}
                         className={clsx('gd-table__row', {
                           'gd-table__row--lit': litRows.has(rowId),
+                          'gd-table__row--banded': rowInBand,
                         })}
                         role="row"
                         data-lit={litRows.has(rowId) || undefined}
+                        data-row-id={rowId}
+                        data-units={rowUnits}
                         aria-rowindex={firstIndex + (band === null ? 0 : 1) + vi}
                         aria-level={
                           hierarchical && outlineRow !== undefined
@@ -576,6 +707,11 @@ export const TableView = memo(function TableView({
                             : undefined
                         }
                         aria-expanded={parentRow ? !outlineRow.collapsed : undefined}
+                        aria-selected={rowInBand ? true : undefined}
+                        // #167 criterion 18: a row taller than one unit says so.
+                        aria-description={
+                          rowUnits > 1 ? `${String(rowUnits)} units tall` : undefined
+                        }
                         style={{ height: `${String(heightPx)}px` }}
                         data-depth={
                           showOutline && outlineRow !== undefined ? outlineRow.depth : undefined
@@ -627,9 +763,10 @@ export const TableView = memo(function TableView({
                               undo={undo ?? null}
                               frozen={frozenIds.has(col.id)}
                               freezeEdge={col.id === freezeEdgeId}
-                              // Per-column wrap clamps that column's cells only; a row wrapped on its
-                              // own wraps all of its cells. Other cells in a two-unit row stay one line.
-                              wrap={col.wrap || rowWrapped}
+                              // ADR-049: wrap is cell > row > column > table; the row's height is
+                              // separate data, so a tall row shows its unwrapped cells on one line.
+                              wrap={effectiveWrap(table, col, rowId, record.look.wrap)}
+                              rowUnits={rowUnits}
                               other={other}
                               version={versions.of(cellKey(rowId, col.id))}
                               look={lookOf(col, rowId)}
@@ -639,6 +776,54 @@ export const TableView = memo(function TableView({
                             />
                           );
                         })}
+                        {/* ADR-049: the row's handle and divider live in the gutter GeDe draws
+                            left of the table while it is selected (Numbers' row header). The
+                            divider is the row's last child — never in the Tab path, which the
+                            grid owns — and ⌥↓ / ⌥↑ from a cell focus the edge below or above it
+                            (A11Y-01); the handle selects the row (Shift extends). */}
+                        {showAffordances && (
+                          <>
+                            <button
+                              type="button"
+                              className="gd-table__row-handle"
+                              tabIndex={-1}
+                              aria-label={`Select ${rowName.toLowerCase()}`}
+                              aria-pressed={rowInBand}
+                              title={`${rowName}: click to select, Shift-click to extend`}
+                              onPointerDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                if (e.button !== 0) return;
+                                actions.selectBand(record.id, 'row', rowId, e.shiftKey);
+                              }}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                              }}
+                            >
+                              <span aria-hidden="true">{rowName.replace(/^Row ?/, '')}</span>
+                            </button>
+                            <RowDivider
+                              name={rowName}
+                              units={storedHeights[ri] ?? 1}
+                              tabStop={rowSelected}
+                              scale={scale}
+                              onPreview={(preview) => {
+                                previewRows(rowId, preview);
+                              }}
+                              onCommit={(next) => {
+                                commitRows(rowId, next);
+                              }}
+                              onFit={
+                                fitter.reason === undefined
+                                  ? () => {
+                                      fitRowIds(bandFor(rowBand, rowId));
+                                    }
+                                  : undefined
+                              }
+                              fitReason={fitter.reason}
+                            />
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -753,8 +938,7 @@ export const TableView = memo(function TableView({
           <CornerHandle
             title={record.title}
             widthUnits={storedWidths.reduce((a, b) => a + b, 0)}
-            rows={rowCount}
-            wrapped={allWrapped}
+            heightUnits={bodyUnits}
             tabStop={selected}
             scale={scale}
             onPreview={setTablePreview}
@@ -895,8 +1079,8 @@ function PinnedPanel({
                       key={col.id}
                       className={clsx('gd-cell', 'gd-cell--frozen', paint.className, {
                         'gd-cell--selected': isSelected,
-                        'gd-cell--wrap':
-                          col.wrap || rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT,
+                        'gd-cell--wrap': effectiveWrap(table, col, rowId, record.look.wrap),
+                        'gd-cell--tall': (rowHeights[ri] ?? 1) > 1,
                         'gd-cell--outline': onOutline,
                       })}
                       style={{
@@ -1033,7 +1217,10 @@ interface CellProps {
   undo: Y.UndoManager | null;
   frozen: boolean;
   freezeEdge: boolean;
+  /** ADR-049: whether this cell wraps (cell > row > column > table). */
   wrap: boolean;
+  /** The row's height in lattice units, for the whole-line clip (#167 criterion 11). */
+  rowUnits: number;
   other: PresenceState | undefined;
   /**
    * The cell's own change counter (`grid/cell-versions.ts`): the one prop
@@ -1106,6 +1293,8 @@ const ROW_META_KEYS = {
   depth: true,
   collapsed: true,
   height: true,
+  fit: true,
+  wrap: true,
   group: true,
   splitChild: true,
   pulledFrom: true,
@@ -1194,6 +1383,7 @@ const COMPARED_CELL_PROPS = {
   frozen: true,
   freezeEdge: true,
   wrap: true,
+  rowUnits: true,
   other: true,
   version: true,
   look: true,
@@ -1229,6 +1419,7 @@ function cellPropsEqual(a: CellProps, b: CellProps): boolean {
     a.frozen !== b.frozen ||
     a.freezeEdge !== b.freezeEdge ||
     a.wrap !== b.wrap ||
+    a.rowUnits !== b.rowUnits ||
     a.other !== b.other ||
     a.version !== b.version ||
     a.traversal !== b.traversal ||
@@ -1276,6 +1467,7 @@ const Cell = memo(function Cell({
   frozen,
   freezeEdge,
   wrap,
+  rowUnits,
   other,
   look,
   traversal,
@@ -1297,6 +1489,17 @@ const Cell = memo(function Cell({
   const text = layout.text;
   // INSP-05 / INSP-06: the paint for this look — classes, custom properties, data attributes.
   const paint = paintLook(look, format);
+  // #167 criterion 11 / ADR-049: text clips at the last whole line that fits the row — the
+  // lines the row's content box holds at this cell's line box, as `--gd-lines` for the
+  // stylesheet's max-height; a span's box is its rows' sum.
+  const cellUnits = look.spanUnits?.heightUnits ?? rowUnits;
+  const linePx = lineBoxPx(look.appearance.size ?? 'cell', layout.lang !== null);
+  const clipStyle = {
+    '--gd-lines': String(
+      Math.max(1, Math.floor((cellUnits * LATTICE.row - 1 - (wrap ? 2 : 0) + 0.5) / linePx)),
+    ),
+    '--gd-line-px': `${String(linePx)}px`,
+  } as CSSProperties;
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (selected && editing === null) ref.current?.focus({ preventScroll: true });
@@ -1308,6 +1511,10 @@ const Cell = memo(function Cell({
   const picker = useRef<MappingCellHandle>(null);
   const mappingEditable =
     refKind === 'mapping' && editable && !row.group && row.pulledFrom === null && !row.splitChild;
+
+  // ADR-049: where the last Shift-arrow left the band's far edge, so the next one extends
+  // from there (the armed cell stays at the anchor).
+  const bandEdgeRef = useRef<{ axis: 'row' | 'column'; id: Id } | null>(null);
 
   const refuse = () => {
     if (readOnly !== null) {
@@ -1363,10 +1570,47 @@ const Cell = memo(function Cell({
     }
     const arrow = arrowDirection(e.code);
     if (arrow !== null) {
+      // ADR-049 / A11Y-01: ⌥↓ focuses this row's divider (its bottom edge), ⌥↑ the row above's
+      // (its top edge); the divider then takes the arrows itself. ⌥← / ⌥→ stay the hierarchy's.
+      if (!mod && e.altKey && (arrow === 'down' || arrow === 'up') && editable) {
+        const row = ref.current?.closest<HTMLElement>('[role="row"]') ?? null;
+        const target = arrow === 'down' ? row : (row?.previousElementSibling ?? null);
+        const edge = target?.querySelector<HTMLElement>('.gd-table__row-divider') ?? null;
+        if (edge === null) return;
+        e.preventDefault();
+        e.stopPropagation();
+        rearm();
+        edge.focus();
+        return;
+      }
       if (mod || e.altKey) return; // ⌥⌘↓ / ⌥⌘→ add a row or column (the shell binds them)
       e.preventDefault();
       e.stopPropagation();
       rearm();
+      // ADR-049 (Numbers): ⇧↑ / ⇧↓ select rows from this one, ⇧← / ⇧→ columns; a second
+      // press extends the band by one. An editable table only: a band exists to be resized.
+      if (e.shiftKey) {
+        if (!editable) return;
+        const t = traversal();
+        const axis = arrow === 'up' || arrow === 'down' ? 'row' : 'column';
+        const order = axis === 'row' ? t.rows : t.columns.filter((c) => !c.hidden).map((c) => c.id);
+        const bandEdge = bandEdgeRef.current;
+        const from =
+          bandEdge?.axis === axis ? bandEdge.id : axis === 'row' ? cell.rowId : cell.colId;
+        const at = order.indexOf(from);
+        const next =
+          order[
+            Math.min(
+              order.length - 1,
+              Math.max(0, at + (arrow === 'down' || arrow === 'right' ? 1 : -1)),
+            )
+          ];
+        if (next === undefined) return;
+        bandEdgeRef.current = { axis, id: next };
+        actions.selectBand(cell.tableId, axis, next, true);
+        return;
+      }
+      bandEdgeRef.current = null;
       actions.move(arrow);
       return;
     }
@@ -1489,7 +1733,8 @@ const Cell = memo(function Cell({
         'gd-cell--locked': readOnly !== null,
         'gd-cell--frozen': frozen,
         'gd-cell--freeze-edge': freezeEdge,
-        'gd-cell--wrap': wrap || (look.span !== null && look.span.rows > 1),
+        'gd-cell--wrap': wrap,
+        'gd-cell--tall': cellUnits > 1,
         'gd-cell--outline': outline !== null,
       })}
       style={{
@@ -1497,6 +1742,7 @@ const Cell = memo(function Cell({
         ...presenceStyle,
         ...outlineStyle(outline ?? undefined),
         ...paint.style,
+        ...clipStyle,
       }}
       {...paint.data}
       title={
@@ -1562,8 +1808,8 @@ const Cell = memo(function Cell({
         <ReferenceCell table={table} cell={cell} kind={refKind} expression />
       ) : refKind === 'derived' && column.derive !== null ? (
         // A derived cell's pipeline is the lineage header's (ADR-032); its expression takes
-        // the second line of a wrapped row only.
-        <DerivedCell table={table} cell={cell} spec={column.derive} expression={wrap} />
+        // its own line only in a row of two or more units (ADR-043, ADR-049).
+        <DerivedCell table={table} cell={cell} spec={column.derive} expression={cellUnits > 1} />
       ) : refKind === 'mapping' && column.link !== null ? (
         <MappingCell
           ref={picker}

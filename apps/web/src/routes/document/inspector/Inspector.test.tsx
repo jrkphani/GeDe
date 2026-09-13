@@ -23,8 +23,8 @@ import {
   LATTICE,
   openDocument,
   rowHeights,
+  rowMeta,
   setCellText,
-  setColumnWrap,
   spanAt,
   tableAddresses,
   tableById,
@@ -342,9 +342,9 @@ describe('Inspector', () => {
     // Fit-to-content needs a text measurer; jsdom has no 2D canvas, so the buttons say so
     // rather than guessing a width (INSP-11 shape, a live reason).
     expect(
-      within(section('row and column size')).getByRole('button', { name: 'Fit columns to content' })
+      within(section('row and column size')).getByRole('button', { name: 'Fit width to content' })
         .title,
-    ).toBe('Fit columns to content — text cannot be measured in this browser');
+    ).toBe('Fit width to content — text cannot be measured in this browser');
     // INSP-04 / GRID-11 (#138): header row and footer row are counts (0 or 1), like the
     // header columns.
     const headers = section('headers and footer');
@@ -375,33 +375,57 @@ describe('Inspector', () => {
     const size = section('row and column size');
     await userEvent.click(within(size).getByRole('button', { name: 'More units' }));
     expect(tableById(gd, tableId)?.columns.reduce((a, c) => a + c.width, 0)).toBe(4);
-    await userEvent.click(within(size).getByRole('switch', { name: 'Wrap every row' }));
-    expect(screen.getByTestId('live-region')).toHaveTextContent('every row wrapped');
+    await userEvent.click(
+      within(section('wrap')).getByRole('switch', { name: 'Wrap text in cells' }),
+    );
+    expect(tableById(gd, tableId)?.look.wrap).toBe(true);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('text wraps in cells');
   });
 
-  it('INSP-04 GRID-09 "Wrap every row" reads the rows it set and unwraps them again — clearing a column\'s own wrap, which would otherwise hold every row at two units (#128)', async () => {
-    await mount();
+  it("INSP-04 GRID-08 GRID-09 KEYS-03 the Table tab's Height and Width act on the selected row and column as spinbuttons — arrows, Shift-arrows, typed values snapped to whole units, each one undo step — and Distribute evenly shares the total (ADR-049, #167 criteria 7–9)", async () => {
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    await mount({ undo });
     await userEvent.click(tab('Table'));
     const size = section('row and column size');
-    const wrap = () => within(size).getByRole('switch', { name: 'Wrap every row' });
     const table = tableMap(gd, tableId)!;
-    expect(wrap()).toHaveAttribute('aria-checked', 'false');
-    await userEvent.click(wrap());
-    expect(wrap()).toHaveAttribute('aria-checked', 'true');
-    expect(rowHeights(table)).toEqual([2, 2, 2, 2]);
-    await userEvent.click(wrap());
-    expect(wrap()).toHaveAttribute('aria-checked', 'false');
-    expect(rowHeights(table)).toEqual([1, 1, 1, 1]);
-    // A wrapping column reads as "every row wrapped" too, and unwrapping clears it.
-    setColumnWrap(gd, tableId, tableById(gd, tableId)!.columns[0]!.id, true);
-    await waitFor(() => {
-      expect(wrap()).toHaveAttribute('aria-checked', 'true');
-    });
-    await userEvent.click(wrap());
-    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false);
-    expect(rowHeights(table)).toEqual([1, 1, 1, 1]);
+    const rec = tableById(gd, tableId)!;
+    const height = () => within(size).getByRole('spinbutton', { name: 'Height' });
+    const width = () => within(size).getByRole('spinbutton', { name: 'Width' });
+    // B5 is selected: the fields read row 5 and column Column 1, in units and px at 100 %.
+    expect(height()).toHaveAttribute('aria-valuenow', '1');
+    expect(height()).toHaveAttribute('aria-valuetext', '1 unit, 22 px, row 5');
+    expect(width()).toHaveAttribute('aria-valuetext', '1 unit, 160 px, column Column 1');
+    expect(height()).toHaveAttribute('aria-valuemin', '1');
+    expect(height()).not.toHaveAttribute('aria-valuemax');
+    const steps = undo.undoStack.length;
+    height().focus();
+    await userEvent.keyboard('{ArrowUp}');
+    expect(rowMeta(table, rec.rows[0]!)).toMatchObject({ height: 2, fit: false });
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Row 5 is 2 units tall');
+    await userEvent.keyboard('{Shift>}{ArrowUp}{/Shift}');
+    expect(rowMeta(table, rec.rows[0]!).height).toBe(6);
+    expect(undo.undoStack).toHaveLength(steps + 2);
+    // A typed value snaps to a whole unit ≥ 1 on Enter; nothing below one.
+    await userEvent.clear(height());
+    await userEvent.type(height(), '2.4{Enter}');
+    expect(rowMeta(table, rec.rows[0]!).height).toBe(2);
+    await userEvent.clear(height());
+    await userEvent.type(height(), '0{Enter}');
+    expect(rowMeta(table, rec.rows[0]!).height).toBe(1);
+    // Width: the same for the selected column.
+    width().focus();
+    await userEvent.keyboard('{ArrowUp}{ArrowUp}');
+    expect(tableById(gd, tableId)?.columns[0]?.width).toBe(3);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Column 1 is 3 units wide');
+    // Distribute columns evenly: 3 + 1 + 1 → 2, 2, 1 (the remainder to the first).
+    await userEvent.click(within(size).getByRole('button', { name: 'Distribute columns evenly' }));
+    expect(tableById(gd, tableId)?.columns.map((c) => c.width)).toEqual([2, 2, 1]);
     expect(screen.getByTestId('live-region')).toHaveTextContent(
-      'every row compact; column wrap cleared on 1 column',
+      '3 columns distributed: 2, 2, 1 units',
+    );
+    // Fit needs a measurer; jsdom has none, so the field's Fit says so.
+    expect(within(size).getByRole('button', { name: 'Fit height to content' }).title).toBe(
+      'Fit height to content — text cannot be measured in this browser',
     );
   });
 
@@ -638,7 +662,7 @@ describe('Inspector', () => {
       weight: 600,
       size: 'body',
     });
-    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false); // body fits the compact row
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBeNull(); // a size never touches wrap (ADR-049)
     await userEvent.click(within(font).getByRole('combobox', { name: 'Weight' }));
     expect((await screen.findAllByRole('option')).map((o) => o.textContent)).toEqual([
       'Light',
@@ -648,15 +672,17 @@ describe('Inspector', () => {
     ]);
     await userEvent.keyboard('{Escape}');
     // Character styles are bundles on the scale; the active one reads pressed. Title (h2) needs
-    // the wrapped row, so choosing it wraps the column in the same step (GRID-09).
+    // two rows: the editing replica's auto-height grows them (ADR-049), wrap is untouched.
     const presets = within(section('character styles'));
     await userEvent.click(presets.getByRole('button', { name: 'Title' }));
     expect(tableById(gd, tableId)?.columns[0]?.appearance).toMatchObject({
       size: 'h2',
       weight: 600,
     });
-    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(true);
-    expect(screen.getByTestId('live-region')).toHaveTextContent('the column wraps to fit the size');
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBeNull();
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'Weight set, Size set for column Column 1',
+    );
     expect(presets.getByRole('button', { name: 'Title' })).toHaveAttribute('aria-pressed', 'true');
     // Text colour and alignment.
     const colour = within(section('text colour'));
@@ -696,13 +722,23 @@ describe('Inspector', () => {
     const rich = cellRich(table, record.rows[0]!, record.columns[0]!.id);
     expect(hasMarkThroughout(rich, 'subscript')).toBe(true);
     expect(hasMarkThroughout(rich, 'superscript')).toBe(false);
-    // The Title preset wrapped the column above; the switch reads on and unwraps it.
+    // ADR-049: one wrap switch at the tab's scope — the cell here (chosen above); the column
+    // when the scope says so; the table's default is in the Table tab. No height is written.
     const wrap = within(section('wrap'));
-    expect(wrap.getByRole('switch', { name: 'Wrap column Column 1' })).toBeChecked();
-    await userEvent.click(wrap.getByRole('switch', { name: 'Wrap column Column 1' }));
-    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(false);
-    await userEvent.click(wrap.getByRole('switch', { name: 'Wrap this row' }));
-    expect(screen.getByTestId('live-region')).toHaveTextContent('Wrapped the row');
+    expect(wrap.getByRole('switch', { name: 'Wrap text in B5' })).not.toBeChecked();
+    await userEvent.click(wrap.getByRole('switch', { name: 'Wrap text in B5' }));
+    expect(
+      cellAppearanceOverride(tableMap(gd, tableId)!, record.rows[0]!, record.columns[0]!.id)?.wrap,
+    ).toBe(true);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Wrapped for B5');
+    await userEvent.click(wrap.getByRole('button', { name: "Follow the column's wrap" }));
+    expect(
+      cellAppearanceOverride(tableMap(gd, tableId)!, record.rows[0]!, record.columns[0]!.id)?.wrap,
+    ).toBeUndefined();
+    await userEvent.click(within(font).getByRole('radio', { name: /Column/ }));
+    await userEvent.click(wrap.getByRole('switch', { name: 'Wrap text in column Column 1' }));
+    expect(tableById(gd, tableId)?.columns[0]?.wrap).toBe(true);
+    expect(rowHeights(table)).toEqual([1, 1, 1, 1]);
   });
 
   it('INSP-07 the Arrange tab: stacking order, canvas layout, size and position in grid address and pixels, pin to viewport and DAG edges — live, positions staying on the lattice', async () => {

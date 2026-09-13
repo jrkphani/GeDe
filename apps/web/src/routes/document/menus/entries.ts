@@ -15,12 +15,11 @@ import {
   graphsInPair,
   isLastSheet,
   mergeRoom,
-  rowMeta,
   spanAt,
   spanCovering,
   tableById,
   tableMap,
-  WRAPPED_ROW_HEIGHT,
+  effectiveWrap,
   type GedeDoc,
   type GraphKind,
   type Id,
@@ -37,7 +36,12 @@ import type { CellClipboard } from '../keys/clipboard.js';
 import { SHEET_KEYS } from '../keys/shortcut-map.js';
 import { TRACKED } from '../inspector/controls.js';
 import { LAST_SHEET_REASON } from '../sheets.js';
-import { canMeasure, canvasMeasure, fitColumnsToContent } from '../style/index.js';
+import {
+  canMeasure,
+  canvasMeasure,
+  fitColumnsToContent,
+  fitRowsToContent,
+} from '../style/index.js';
 
 export type MenuTarget =
   | { kind: 'cell'; tableId: Id; rowId: Id; colId: Id }
@@ -381,7 +385,9 @@ export function cellMenuEntries(
   const frozenThrough = record.frozenColumns >= visibleBefore && visibleBefore > 0;
   const canFreeze = visibleBefore < record.columns.filter((c) => !c.hidden).length;
   const address = cellAddress(table, rowId, colId) ?? 'the cell';
-  const rowWrapped = rowMeta(table, rowId).height === WRAPPED_ROW_HEIGHT;
+  // ADR-049 / Numbers N8: the cell's Wrap Text — checked when the cell wraps, whichever
+  // scope decides it; a change writes the cell's own override (a route to the Cell tab).
+  const cellWraps = effectiveWrap(table, column, rowId, record.look.wrap);
   const span = spanAt(table, rowId, colId);
   const covered = spanCovering(table, rowId, colId);
   const room = mergeRoom(record, rowId, colId);
@@ -536,19 +542,37 @@ export function cellMenuEntries(
     {
       kind: 'check',
       id: 'wrap',
-      // MENU-04: the cell's wrap is its column's or its row's (GRID-09). On, it wraps the
-      // column; off, it unwraps whichever is wrapping this cell — the row alone when only
-      // the row is, both when both are — so the item's state always answers the click.
-      label: column?.wrap === true ? 'Wrap text' : rowWrapped ? 'Wrap text (row)' : 'Wrap text',
-      checked: column?.wrap === true || rowWrapped,
+      // MENU-04 / ADR-049 (Numbers N8): checked when this cell wraps (cell > row > column >
+      // table). A change writes the cell's own override, so the item's state always answers
+      // the click and no other cell moves; the Text tab says which scope decides it.
+      label: 'Wrap text',
+      checked: cellWraps,
       disabledReason: viewOnly,
       onCheckedChange: (on) => {
-        if (on) {
-          commands.setColumnWrap(tableId, colId, true);
-          return;
-        }
-        if (column?.wrap === true) commands.setColumnWrap(tableId, colId, false);
-        if (rowWrapped) commands.setRowWrap(tableId, rowId, false);
+        commands.setCellAppearance({ tableId, rowId, colId }, { wrap: on });
+      },
+    },
+    {
+      kind: 'item',
+      id: 'row-fit',
+      label: 'Fit row height to content',
+      // #167 criterion 5: the row's fit, from the cell's menu (GeDe has no row menu). Where
+      // no 2D canvas exists the item says so (MENU-02), as the inspector's buttons do.
+      disabledReason:
+        viewOnly ?? (canMeasure() ? undefined : 'text cannot be measured in this browser'),
+      onSelect: () => {
+        const measure = canvasMeasure();
+        if (measure === null) return;
+        const engine = peekEngine(gd.doc);
+        commands.fitRows(
+          tableId,
+          fitRowsToContent(table, record, {
+            locale: toFormatLocale(activeLocale()),
+            measure,
+            cellValue: (cellId) => engine?.result(cellId)?.value ?? undefined,
+            only: [rowId],
+          }),
+        );
       },
     },
   ];
@@ -660,8 +684,10 @@ export function columnMenuEntries(
     {
       kind: 'check',
       id: 'wrap',
+      // ADR-049: the column's scope — checked when the column wraps by its own key or the
+      // table's default; a change writes the column's key.
       label: 'Wrap text',
-      checked: column.wrap,
+      checked: column.wrap ?? record.look.wrap,
       disabledReason: viewOnly,
       onCheckedChange: (on) => {
         commands.setColumnWrap(tableId, colId, on);

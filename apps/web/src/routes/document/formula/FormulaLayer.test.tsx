@@ -1,6 +1,6 @@
 import { act, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
-import { addRow, LATTICE, parseAddress, setRowWrapped } from '@gede/core';
+import { addRow, LATTICE, parseAddress, setRowHeight } from '@gede/core';
 
 import { testDoc } from '../../../test/formula-doc.js';
 import {
@@ -71,9 +71,9 @@ describe('ReferenceOutlines', () => {
     expect(referenceColourVar(6)).toBe('var(--reference-1)');
   });
 
-  it('GRID-09 a wrapped row makes the outlined block two lattice rows tall', () => {
+  it('GRID-09 a two-unit row makes the outlined block two lattice rows tall', () => {
     const d = testDoc(3, 1);
-    setRowWrapped(d.gd, d.tableId, d.rowId(1), true);
+    setRowHeight(d.gd, d.tableId, d.rowId(1), 2);
     const operands = operandsOf(d.doc, d.sheetId, `=${d.addr(1, 0)}`);
     expect(operands[0]?.rect).toMatchObject({ rows: 2, cols: 1 });
   });

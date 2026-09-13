@@ -109,6 +109,19 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
       // ADR-047: ⌫ with the table selected (⌘A, or a press on its title) deletes the table;
       // undo is the safety. Owner-directed; not in the handover reference.
       { action: 'Delete table (table selected)', ids: ['clear'], extra: 'ADR-047' },
+      // ADR-049 (#167, owner-directed, Numbers' row and column selection and resize): keys
+      // the grid and a focused divider handle themselves — not shell chords, so no id.
+      { action: 'Select rows / columns from the cell', keys: ['⇧arrows'], extra: 'ADR-049' },
+      {
+        action: 'Resize the focused divider (Shift: four units)',
+        keys: ['arrows', '⌥arrows'],
+        extra: 'ADR-049',
+      },
+      {
+        action: 'Fit the focused divider to content',
+        keys: ['⏎', 'double-click'],
+        extra: 'ADR-049',
+      },
     ],
   },
   {

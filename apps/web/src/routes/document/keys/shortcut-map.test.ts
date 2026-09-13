@@ -67,6 +67,9 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
     expect(extras.map((row) => [row.action, row.extra])).toEqual([
       ['Collapse / expand row', 'ADR-025, ADR-030'],
       ['Delete table (table selected)', 'ADR-047'],
+      ['Select rows / columns from the cell', 'ADR-049'],
+      ['Resize the focused divider (Shift: four units)', 'ADR-049'],
+      ['Fit the focused divider to content', 'ADR-049'],
       ['Move between nodes, dots and cells', 'ADR-033'],
       ['Select the node’s row', 'ADR-033'],
       ['Open a child sheet for the node', 'ADR-033'],
