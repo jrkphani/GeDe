@@ -29,10 +29,14 @@ export function AccountMenu({ user, onSignOut }: AccountMenuProps) {
     if (!isLocale(value) || value === locale) return;
     setLocale(value);
     announce(`Language set to ${LOCALE_LABELS[value]}`);
-    // Mirror the choice to the account so other devices follow (I18N-05), and to the
-    // pool's `locale` attribute so the next sign-in code arrives in that language.
-    Promise.all([updateMe({ locale: value }), syncLocaleAttribute(value)]).catch(() => {
+    // Mirror the choice to the account so other devices follow (I18N-05) …
+    updateMe({ locale: value }).catch(() => {
       announce('Language saved on this device only; the account could not be updated');
+    });
+    // … and to the pool's `locale` attribute so the next sign-in code arrives in that
+    // language. Its own sentence: the account may well have been updated.
+    syncLocaleAttribute(value).catch(() => {
+      announce('Language saved; sign-in codes keep their current language until it syncs');
     });
   };
 

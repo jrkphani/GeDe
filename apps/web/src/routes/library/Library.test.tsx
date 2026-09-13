@@ -1017,6 +1017,30 @@ describe('Library', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent('Language set to English (India)');
   });
 
+  it('I18N-05 a failed pool-attribute write announces its own sentence; the account update is not called into question', async () => {
+    const u = userEvent.setup();
+    const cognito = await import('../../auth/cognito.js');
+    // Keyed on the value: the session's one-time backfill on sign-in also calls it.
+    vi.mocked(cognito.syncLocaleAttribute).mockImplementation((locale) =>
+      locale === 'ta-IN' ? Promise.reject(new Error('offline')) : Promise.resolve(),
+    );
+    serve(live);
+    renderRoutes(routes, ['/']);
+    await screen.findByText('Everest trek');
+    await u.click(screen.getByRole('button', { name: 'Account: Meena' }));
+    const menu = await screen.findByRole('menu');
+    await u.click(within(menu).getByRole('menuitemradio', { name: 'தமிழ் (India)' }));
+    expect(me.updateMe).toHaveBeenCalledWith({ locale: 'ta-IN' });
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'Language saved; sign-in codes keep their current language until it syncs',
+      );
+    });
+    expect(screen.getByTestId('live-region')).not.toHaveTextContent('could not be updated');
+    // `vi.clearAllMocks` in beforeEach clears calls, not implementations.
+    vi.mocked(cognito.syncLocaleAttribute).mockImplementation(() => Promise.resolve());
+  });
+
   it('WCAG 3.1.2 every autonym in the locale picker carries its own lang, so தமிழ், हिन्दी and తెలుగు are read in their language', async () => {
     const u = userEvent.setup();
     serve(live);

@@ -27,6 +27,16 @@ export interface AuthStackProps extends cdk.StackProps {
   readonly hostedZoneId: string;
   /** Provision the Sign in with Apple identity provider (needs the `gede/prod/apple-signin` secret). */
   readonly appleSignIn: boolean;
+  /**
+   * Attach the custom-message trigger to the pool. **Only with `withSES`** (`EmailSendingAccount:
+   * DEVELOPER`): under the built-in sender Cognito rejects a trigger response that carries
+   * `emailMessage`/`emailSubject` with `InvalidLambdaResponseException` — returned to the
+   * caller of SignUp / InitiateAuth, so no code is delivered and every email sign-up and
+   * sign-in is refused (developer guide, "Custom message Lambda trigger", response
+   * parameters; #158 review). The function, its log group and its alarm exist either way,
+   * so the flip is one property on the pool.
+   */
+  readonly customMessageTrigger: boolean;
 }
 
 /** Secrets Manager secret holding the Apple developer credentials, JSON with these fields. */
@@ -399,7 +409,9 @@ export class AuthStack extends cdk.Stack {
     // _VerifyUserAttribute, and returns anything else untouched. esbuild bundles the
     // handler with @gede/mail's source at synth (no dist to go stale, no node_modules in
     // the asset); the AWS SDK stays external and unused. No IAM beyond the execution
-    // role's own log group: the function makes no call.
+    // role's own log group: the function makes no call. It is attached to the pool only
+    // under `customMessageTrigger` (see `AuthStackProps`): with the built-in sender the
+    // pool would refuse every sign-in the moment the trigger answered.
     const customMessage = new lambda_nodejs.NodejsFunction(this, 'CustomMessage', {
       description: `GeDe ${config.envName}: custom-message trigger (branded, localised one-time codes)`,
       entry: CUSTOM_MESSAGE_HANDLER_ENTRY,
@@ -426,7 +438,9 @@ export class AuthStack extends cdk.Stack {
         removalPolicy: cdk.RemovalPolicy.DESTROY,
       }),
     });
-    this.userPool.addTrigger(cognito.UserPoolOperation.CUSTOM_MESSAGE, customMessage);
+    if (props.customMessageTrigger) {
+      this.userPool.addTrigger(cognito.UserPoolOperation.CUSTOM_MESSAGE, customMessage);
+    }
     this.customMessageFunction = customMessage;
 
     // What the Playwright-Live CodeBuild role may do, attached here because only this stack

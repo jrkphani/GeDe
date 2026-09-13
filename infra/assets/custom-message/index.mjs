@@ -19,9 +19,18 @@
  * The locale is the user's `locale` attribute, which the web app writes at sign-up and
  * whenever the account's choice changes (apps/web/src/auth/cognito.ts); an absent or
  * unknown tag renders en-US. The trigger has no dependency but @gede/mail (bundled in by
- * `NodejsFunction` at synth time), makes no call, and fails open: whatever goes wrong,
- * the event is returned as received and the pool's own branded en-US template is sent —
- * a trigger that throws would refuse the sign-up or sign-in itself.
+ * `NodejsFunction` at synth time) and makes no call.
+ *
+ * What "fails open" means here, exactly: for the handler's OWN faults — a render error, a
+ * malformed event — the event is returned as received and the pool's branded en-US
+ * template goes out, because a trigger that throws refuses the sign-up or sign-in itself.
+ * It does NOT cover a response Cognito refuses: with the built-in sender
+ * (`EmailSendingAccount: COGNITO_DEFAULT`) Cognito answers a well-formed response that
+ * sets `emailMessage`/`emailSubject` with `InvalidLambdaResponseException` to the caller —
+ * no mail, every sign-in refused, and nothing here can see it. That is why the pool
+ * attaches this function only under the `customMessageTrigger` context flag, flipped in
+ * the same merge as `withSES` (ADR-044, runbook §5). The te-IN strings are stripped of
+ * format characters (ZWNJ) before they leave, for MessageTemplateType's pattern.
  */
 /* eslint-disable no-console -- a Lambda's stdout is its CloudWatch log; nothing secret is written */
 import { renderCodeMail, resolveMailLocale } from '@gede/mail';

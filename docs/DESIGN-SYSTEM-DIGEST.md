@@ -279,15 +279,15 @@ Every mail GeDe sends is rendered by `@gede/mail`, one layout from the tokens, i
 
 | kind | sent by | subject | body |
 |---|---|---|---|
-| `signUpCode` | Cognito, `CustomMessage_SignUp` / `_ResendCode` | Your GeDe sign-up code | Confirm your email address; the code; works once, expires in 24 hours |
-| `signInCode` | Cognito, `CustomMessage_Authentication` (EMAIL_OTP first factor) | Your GeDe sign-in code | Sign in to GeDe; the code; works once, expires in 10 minutes (the client's `authSessionValidity`) |
-| `emailChangeCode` | Cognito, `CustomMessage_UpdateUserAttribute` / `_VerifyUserAttribute` | Confirm your new GeDe email address | The code; the previous address keeps working until confirmed (`keepOriginal`) |
+| `signUpCode` | Cognito — pool `VerificationMessageTemplate` (en-US) now; `CustomMessage_SignUp` / `_ResendCode` once the trigger is attached | Your GeDe sign-up code | Confirm your email address; the code; works once, expires in 24 hours |
+| `signInCode` | Cognito — pool `EmailAuthenticationMessage` (en-US) now; `CustomMessage_Authentication` (EMAIL_OTP first factor) once attached | Your GeDe sign-in code | Sign in to GeDe; the code; works once, expires in 10 minutes (the client's `authSessionValidity`) |
+| `emailChangeCode` | Cognito — pool `VerificationMessageTemplate` (the sign-up copy, en-US: Cognito uses one template for every attribute verification) now; `CustomMessage_UpdateUserAttribute` / `_VerifyUserAttribute` once attached | Confirm your new GeDe email address | The code; the previous address keeps working until confirmed (`keepOriginal`) |
 | `share.member` | services/sync, SES | {actor} shared “{title}” with you | Open workscape; reply-to the sharer |
 | `share.invite` | services/sync, SES | {actor} invited you to a GeDe workscape | Accept invitation; valid 14 days; passkey or code, no password |
 
 Not sent, because the PRD sends none: a welcome mail, a passkey-added notice, a mention. The code is never in a subject or the preheader (Cognito's `{####}` appears exactly once, by test).
 
-**Locales.** en-US, en-GB, en-IN, ta-IN, hi-IN, te-IN — the catalogue mechanism of `apps/web/src/i18n` (same keys everywhere, `{placeholders}` preserved, product names untranslated). Cognito mail follows the user's `locale` attribute, which the web app writes at sign-up and on every change; share mail follows the member's `users.locale`, else the inviter's. An unknown tag renders en-US. `docs/mail-previews/` holds the rendered sheets (light, dark, the Indic locales), produced from the test snapshots by `packages/mail/scripts/screenshots.mjs`.
+**Locales.** en-US, en-GB, en-IN, ta-IN, hi-IN, te-IN — the catalogue mechanism of `apps/web/src/i18n` (same keys everywhere, `{placeholders}` preserved, product names untranslated). Share mail follows the member's `users.locale`, else the inviter's, today. Cognito mail follows the user's `locale` attribute, which the web app writes at sign-up and on every change — **once the custom-message trigger is attached**, which waits for SES sending (`customMessageTrigger` in `infra/cdk.json`, runbook §5; under Cognito's own sender the trigger would refuse every sign-in, ADR-044). Until then every code is the branded en-US pool template. An unknown tag renders en-US. Code mails are stripped of format characters (te-IN's ZWNJ) for Cognito's template pattern; share mail keeps them. `docs/mail-previews/` holds the rendered sheets (light, dark, the Indic locales), produced from the test snapshots by `packages/mail/scripts/screenshots.mjs`.
 
 **Sender.** Cognito's own address until SES has production access; then `no-reply@gede.work` (runbook §5). The templates do not depend on the sender.
 

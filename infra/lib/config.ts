@@ -32,6 +32,13 @@ export interface AppContext {
   readonly codeConnectionArn: string;
   readonly hostedZoneId: string;
   readonly appleSignIn: boolean;
+  /**
+   * Attach the pool's custom-message trigger (localised one-time codes, ADR-044). Off until
+   * the pool sends through SES: with the built-in sender (`COGNITO_DEFAULT`) Cognito answers
+   * a trigger that returns `emailMessage` with `InvalidLambdaResponseException` to the caller
+   * — a refused sign-up and sign-in for everyone. Flip with `withSES` in the same merge.
+   */
+  readonly customMessageTrigger: boolean;
   readonly githubRepo: string;
   readonly githubBranch: string;
 }

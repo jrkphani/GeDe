@@ -1572,7 +1572,7 @@ describe('GeDe CDK app', () => {
     });
   });
 
-  it('AUTH-03 AUTH-04 I18N-05 a custom-message trigger renders every one-time code from @gede/mail, invoked by the pool alone, with no IAM of its own', () => {
+  it('AUTH-03 AUTH-04 I18N-05 the custom-message function is built from @gede/mail with no IAM of its own, and is NOT attached while the pool sends through Cognito (customMessageTrigger off in cdk.json)', () => {
     const [fnId, fn] = Object.entries(stacks.Auth!.findResources('AWS::Lambda::Function')).find(
       ([, f]) =>
         (f as { Properties: { Description?: string } }).Properties.Description?.includes(
@@ -1582,15 +1582,23 @@ describe('GeDe CDK app', () => {
       string,
       { Properties: { Code: { S3Key: string }; Role: { 'Fn::GetAtt': [string, string] } } },
     ];
+    // Under COGNITO_DEFAULT a trigger that answers with emailMessage is an
+    // InvalidLambdaResponseException to every caller (#158 review): the pool must not
+    // name it until the sender is SES, and no invoke permission exists for it either.
     stacks.Auth!.hasResourceProperties('AWS::Cognito::UserPool', {
-      LambdaConfig: Match.objectLike({ CustomMessage: { 'Fn::GetAtt': [fnId, 'Arn'] } }),
+      LambdaConfig: { PreAuthentication: Match.anyValue() },
+      EmailConfiguration: { EmailSendingAccount: 'COGNITO_DEFAULT' },
     });
-    stacks.Auth!.hasResourceProperties('AWS::Lambda::Permission', {
-      Action: 'lambda:InvokeFunction',
-      Principal: 'cognito-idp.amazonaws.com',
-      FunctionName: { 'Fn::GetAtt': [fnId, 'Arn'] },
-      SourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
-    });
+    const pools = Object.values(stacks.Auth!.findResources('AWS::Cognito::UserPool')) as {
+      Properties: { LambdaConfig: Record<string, unknown> };
+    }[];
+    expect(pools[0]!.Properties.LambdaConfig).not.toHaveProperty('CustomMessage');
+    const permissions = Object.values(stacks.Auth!.findResources('AWS::Lambda::Permission')) as {
+      Properties: { FunctionName: unknown };
+    }[];
+    expect(permissions.some((p) => JSON.stringify(p.Properties.FunctionName).includes(fnId))).toBe(
+      false,
+    );
     stacks.Auth!.hasResourceProperties('AWS::Lambda::Function', {
       Description: Match.stringLikeRegexp('custom-message'),
       Runtime: 'nodejs22.x',
@@ -1796,5 +1804,43 @@ describe('GeDe CDK app with -c appleSignIn=true (the switch stays off in cdk.jso
         }),
       }),
     });
+  });
+});
+
+describe('GeDe CDK app with -c customMessageTrigger=true (flipped together with withSES, runbook §5)', () => {
+  let auth: Template;
+
+  beforeAll(() => {
+    const app = new cdk.App({
+      context: {
+        ...cdkJsonContext(),
+        hostedZoneId: TEST_ZONE_ID,
+        appleSignIn: false,
+        customMessageTrigger: true,
+      },
+    });
+    const pipelineStack = buildApp(app);
+    const stage = pipelineStack.node.findChild('Prod') as GedeStage;
+    app.synth();
+    auth = Template.fromStack(stageStack(stage, 'GeDe-Prod-Auth'));
+  });
+
+  it('AUTH-03 AUTH-04 I18N-05 the pool names the custom-message function and grants it the invoke permission', () => {
+    const [fnId] = Object.entries(auth.findResources('AWS::Lambda::Function')).find(([, f]) =>
+      (f as { Properties: { Description?: string } }).Properties.Description?.includes(
+        'custom-message',
+      ),
+    )!;
+    auth.hasResourceProperties('AWS::Cognito::UserPool', {
+      LambdaConfig: Match.objectLike({ CustomMessage: { 'Fn::GetAtt': [fnId, 'Arn'] } }),
+    });
+    auth.hasResourceProperties('AWS::Lambda::Permission', {
+      Action: 'lambda:InvokeFunction',
+      Principal: 'cognito-idp.amazonaws.com',
+      FunctionName: { 'Fn::GetAtt': [fnId, 'Arn'] },
+      SourceArn: { 'Fn::GetAtt': [Match.stringLikeRegexp('^UserPool'), 'Arn'] },
+    });
+    // The rest of the stack is unchanged by the flag.
+    auth.resourceCountIs('AWS::Lambda::Function', 3);
   });
 });
