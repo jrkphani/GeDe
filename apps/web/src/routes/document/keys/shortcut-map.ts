@@ -13,7 +13,17 @@ import { ARIA_KEYS, CHORDS, LABELS, type Chord, type ChordId } from '../../../do
 import { MARK_CHORDS } from '../cell/index.js';
 
 export type ShortcutGroup =
-  'Document' | 'Edit' | 'Find' | 'Format' | 'Table and cells' | 'Graphs' | 'View';
+  'Document' | 'Edit' | 'Find' | 'Format' | 'Table and cells' | 'Graphs' | 'Sheets' | 'View';
+
+/**
+ * ADR-048: the keys a focused sheet tab handles itself (like the grid's
+ * Tab and Enter, not shell chords), spelled as the sheet and the tab menu
+ * spell them. Physical keys: `F2`, `Delete` / `Backspace` (KEYS, I18N-02).
+ */
+export const SHEET_KEYS = {
+  rename: 'F2',
+  remove: LABELS.clear,
+} as const;
 
 export interface ShortcutRow {
   readonly action: string;
@@ -122,6 +132,15 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
         ids: ['collapse', 'expand'],
         extra: 'ADR-047',
       },
+    ],
+  },
+  {
+    // ADR-048 / #165: keys a focused sheet tab handles (owner-directed; the handover map
+    // has no sheet commands). Each is also an item of the tab's menu (KEYS-08).
+    group: 'Sheets',
+    rows: [
+      { action: 'Rename sheet', keys: [SHEET_KEYS.rename, 'double-click'], extra: 'ADR-048' },
+      { action: 'Delete sheet (sheet tab focused)', keys: [SHEET_KEYS.remove], extra: 'ADR-048' },
     ],
   },
   {

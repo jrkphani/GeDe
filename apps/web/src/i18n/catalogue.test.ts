@@ -5,9 +5,9 @@ import { LOCALES } from '../locale.js';
 import { CATALOGUE, format, MESSAGE_KEYS, translate, type MessageKey } from './index.js';
 
 const TOUR_KEYS = MESSAGE_KEYS.filter((k) => k.startsWith('tour.'));
-/** Keys whose values are prose in the locale's own script (the tour, and ADR-047's object copy). */
+/** Keys whose values are prose in the locale's own script (the tour, ADR-047's object copy, ADR-048's sheet copy). */
 const TRANSLATED_KEYS = MESSAGE_KEYS.filter(
-  (k) => k.startsWith('tour.') || k.startsWith('object.'),
+  (k) => k.startsWith('tour.') || k.startsWith('object.') || k.startsWith('sheet.'),
 );
 
 const placeholders = (s: string): string[] =>

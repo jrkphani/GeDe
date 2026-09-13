@@ -46,12 +46,9 @@ export function resolveMenuTarget(gd: GedeDoc, node: EventTarget | null): MenuTa
     if (header !== null) return { kind: 'column', tableId, colId: header.dataset.colId ?? '' };
     return { kind: 'table', tableId };
   }
-  const sheetTab = node.closest<HTMLElement>('.gd-doc__sheets [role="tab"]');
+  const sheetTab = node.closest<HTMLElement>('.gd-doc__sheets [role="tab"][data-value]');
   if (sheetTab !== null) {
-    const list = sheetTab.parentElement;
-    const index =
-      list === null ? -1 : Array.from(list.querySelectorAll('[role="tab"]')).indexOf(sheetTab);
-    const sheet = listSheets(gd)[index];
+    const sheet = listSheets(gd).find((s) => s.id === sheetTab.dataset.value);
     return sheet === undefined ? null : { kind: 'sheet', sheetId: sheet.id };
   }
   // ADR-047: a graph half, before the plane it sits in.
@@ -129,6 +126,18 @@ export function DocumentContextMenu({
       // focus — unless a command moved the selection (an inserted row, the neighbour of a deleted
       // one), in which case the new cell is where the keyboard should be.
       returnFocus={(opener) => {
+        // ADR-048: Rename sheet swapped the tab for its name field, which keeps focus; after
+        // Delete sheet or Add sheet after, the strip's selected tab (the neighbour, the new
+        // sheet) is where the keyboard is — the tab the menu opened on may be gone.
+        const renameField = document.querySelector<HTMLElement>('[data-sheet-rename]');
+        if (renameField !== null) return renameField;
+        if (opener?.matches('[role="tab"][data-value]') === true) {
+          return (
+            document.querySelector<HTMLElement>(
+              '.gd-doc__sheets [role="tab"][aria-selected="true"]',
+            ) ?? opener
+          );
+        }
         const selected = selectedCellElement();
         const moved = selectedKey(selected) !== selectionAtOpen.current;
         if (!moved && opener?.isConnected === true && opener.matches('[role="columnheader"]')) {

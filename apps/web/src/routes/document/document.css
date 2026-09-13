@@ -289,6 +289,7 @@
   .gd-doc__toolbar .gd-btn,
   .gd-doc__zoom,
   .gd-doc__sheets .gd-tabs__tab,
+  .gd-doc__sheet-rename,
   .gd-doc__add-sheet,
   .gd-doc__home {
     min-width: var(--hit-target);
@@ -1310,6 +1311,31 @@ button.gd-cell__chevron:hover {
 }
 .gd-doc__add-sheet {
   flex: none;
+}
+/* ADR-048: the inline name field that stands in for a tab while it is renamed. The tab's
+   type and height; the boundary is --border-strong so the box reads at ≥ 3:1 (WCAG 1.4.11). */
+.gd-doc__sheet-rename {
+  width: 100%;
+  min-width: 0;
+  min-height: 1.75rem;
+  padding: 0.125rem 0.5rem;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.84375rem;
+  font-weight: 600;
+}
+.gd-doc__sheet-rename:focus-visible {
+  border-color: var(--focus-ring);
+}
+.gd-doc__sheet-rename[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+/* The refusal is the placeholder, in the danger ink (≥ 4.5:1 on both surfaces), not the muted one. */
+.gd-doc__sheet-rename[aria-invalid='true']::placeholder {
+  color: var(--danger);
+  opacity: 1;
 }
 
 /* ---- phone (RESP-02): title, canvas, bottom sheet bar; no toolbar, no inspector. */

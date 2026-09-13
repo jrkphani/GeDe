@@ -51,7 +51,7 @@ const clipboard: CellClipboard = {
   },
 };
 const canvas = { addTable: vi.fn(), fit: vi.fn(), actualSize: vi.fn() };
-const sheets = { add: vi.fn() };
+const sheets = { add: vi.fn(), rename: vi.fn(), remove: vi.fn() };
 
 function Harness({ editable = true, phone = false }: { editable?: boolean; phone?: boolean }) {
   const g = useGrid(gd, editable);
@@ -425,9 +425,13 @@ describe('context menus', () => {
       'fit',
       'actual',
     ]);
-    // DOC-03 names an appending +; rename and delete have no requirement, so they are not listed.
+    // ADR-048 / #165: the tab's menu is the home of Rename and Delete (DOC-02); + on the strip appends.
     expect(menuEntriesFor(ctx, { kind: 'sheet', sheetId: 'x' }).map((e) => e.id)).toEqual([
       'sheet-add',
+      's-rename',
+      'sheet-rename',
+      's-delete',
+      'sheet-delete',
     ]);
     expect(menuEntriesFor(ctx, { kind: 'table', tableId }).some((e) => e.id === 'fit')).toBe(true);
     const record = tableById(gd, tableId)!;

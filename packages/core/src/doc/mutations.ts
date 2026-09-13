@@ -81,6 +81,20 @@ export function seedMeta(gd: GedeDoc, seed: { title: string; createdAt?: string 
 // Sheets (DOC-03)
 // ---------------------------------------------------------------------------
 
+/**
+ * The default name for a new sheet: `Sheet N` for the first N, counting from
+ * one past the sheet count, that no sheet already carries. After a delete the
+ * count alone would repeat a name that is still in the strip (ADR-048).
+ */
+function nextSheetLabel(gd: GedeDoc): string {
+  const taken = new Set(listSheets(gd).map((s) => s.label));
+  for (let n = gd.sheets.length + 1; ; n += 1) {
+    const label = `Sheet ${String(n)}`;
+    if (!taken.has(label)) return label;
+  }
+}
+
+/** A sheet appended at the end of the strip (DOC-03). */
 export function createSheet(
   gd: GedeDoc,
   options: { label?: string | undefined; parentContext?: string | null | undefined } = {},
@@ -89,17 +103,26 @@ export function createSheet(
     const id = newId();
     const map: SheetMap = new Y.Map<unknown>();
     map.set('id', id);
-    map.set('label', options.label ?? `Sheet ${String(gd.sheets.length + 1)}`);
+    map.set('label', options.label ?? nextSheetLabel(gd));
     map.set('parentContext', options.parentContext ?? null);
     gd.sheets.push([map]);
     return id;
   });
 }
 
-export function renameSheet(gd: GedeDoc, sheetId: Id, label: string): void {
-  transact(gd, () => {
+/**
+ * Rename a sheet (ADR-048). The label is trimmed; an empty name is refused
+ * and an unchanged one writes nothing, so neither is an undo step. Returns
+ * whether the label was written.
+ */
+export function renameSheet(gd: GedeDoc, sheetId: Id, label: string): boolean {
+  const trimmed = label.trim();
+  if (trimmed === '') return false;
+  return transact(gd, () => {
     const map = gd.sheets.toArray().find((s) => readString(s, 'id') === sheetId);
-    map?.set('label', label);
+    if (map === undefined || readString(map, 'label') === trimmed) return false;
+    map.set('label', trimmed);
+    return true;
   });
 }
 

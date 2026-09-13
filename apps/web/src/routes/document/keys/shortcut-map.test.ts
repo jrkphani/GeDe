@@ -12,6 +12,7 @@ import {
   rowAriaKeys,
   reservedRows,
   rowKeys,
+  SHEET_KEYS,
   SHORTCUT_SECTIONS,
   unlistedChords,
 } from './shortcut-map.js';
@@ -72,8 +73,23 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
       ['Cancel pointing', 'ADR-033'],
       ['Delete the ring or coverage', 'ADR-047'],
       ['Collapse / expand the ring or coverage', 'ADR-047'],
+      ['Rename sheet', 'ADR-048'],
+      ['Delete sheet (sheet tab focused)', 'ADR-048'],
       ['Next / previous object on the sheet', 'ADR-042'],
     ]);
+    // ADR-048 / KEYS-08: the tab's keys are spelled on the sheet as the tab menu spells them.
+    const sheetsGroup = SHORTCUT_SECTIONS.find((s) => s.group === 'Sheets');
+    expect(sheetsGroup?.rows.map(rowKeys)).toEqual([
+      [SHEET_KEYS.rename, 'double-click'],
+      [SHEET_KEYS.remove],
+    ]);
+    // KEYS-07: the reserved sheet-switch row stays under View, not in the new group.
+    expect(
+      SHORTCUT_SECTIONS.find((s) => s.group === 'View')?.rows.some(
+        (r) => r.action === 'Next / previous sheet',
+      ),
+    ).toBe(true);
+    expect(SHEET_KEYS.remove).toBe(LABELS.clear);
     // KEYS-02 / KEYS-07: the PRD's chords the browser keeps are listed, marked, and not bound (ADR-030).
     expect(reservedRows().map((row) => row.action)).toEqual([
       'New workscape',
