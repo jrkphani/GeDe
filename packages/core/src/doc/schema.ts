@@ -9,7 +9,7 @@
  *                            columns Y.Array<Y.Map{id,label,width,wrap}>,
  *                            rows Y.Array<rowId>,
  *                            cells Y.Map keyed `rowId:colId` → Y.XmlFragment | formula string,
- *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height,manualHeight,wrap}>
+ *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height,fit,wrap}>
  *                            (height in whole units, ADR-049),
  *                            cellFormat Y.Map keyed `rowId:colId` → {format, formatOpts}
  *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01),
@@ -209,11 +209,13 @@ export interface RowMeta {
    */
   readonly height: number;
   /**
-   * The height a person set by hand — a divider drag, the Row size field —
-   * or null while the row follows its content. Auto-fit never goes below it;
-   * Fit to content clears it (ADR-049).
+   * Whether the row follows its content (ADR-049, R-B): while true, the
+   * replica making an edit measures the row and stores `height`; a divider
+   * drag or a typed Height sets it false and the row keeps that height —
+   * wrapping cells then clip at the last whole line — until Fit to content
+   * sets it true again. Absent reads true.
    */
-  readonly manualHeight: number | null;
+  readonly fit: boolean;
   /** Row-scope wrap: overrides the column's and the table's; null inherits (ADR-049). */
   readonly wrap: boolean | null;
   /**
@@ -709,7 +711,7 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
       depth: 0,
       collapsed: false,
       height: DEFAULT_ROW_HEIGHT,
-      manualHeight: null,
+      fit: true,
       wrap: null,
       group: false,
       splitChild: false,
@@ -719,20 +721,17 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
   }
   // Whole units, at least one, so addressing stays exact whatever was stored (GRID-01).
   const height = Math.max(1, Math.round(readNumber(meta, 'height', DEFAULT_ROW_HEIGHT)));
-  const manual = meta.get('manualHeight');
+  const fit = meta.get('fit');
   const wrap = meta.get('wrap');
   return {
     depth: Math.max(0, Math.round(readNumber(meta, 'depth', 0))),
     collapsed: readBoolean(meta, 'collapsed', false),
     height,
-    manualHeight:
-      typeof manual === 'number' && Number.isFinite(manual)
-        ? Math.max(1, Math.round(manual))
-        : null,
+    fit: readBoolean(meta, 'fit', true),
     // Before ADR-049 a wrapped row was stored as `height: 2` alone (GRID-09): a row with
-    // neither `wrap` nor `manualHeight` written and a height past one still reads wrapped.
+    // neither `wrap` nor `fit` written and a height past one still reads wrapped.
     wrap:
-      wrap === undefined && manual === undefined && height >= LEGACY_WRAPPED_ROW_HEIGHT
+      wrap === undefined && fit === undefined && height >= LEGACY_WRAPPED_ROW_HEIGHT
         ? true
         : readTriState(wrap),
     group: readBoolean(meta, 'group', false),

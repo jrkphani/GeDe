@@ -601,20 +601,22 @@ export function setFooterRows(gd: GedeDoc, tableId: Id, count: StripCount): void
 }
 
 /**
- * How a height came to be (ADR-049): `manual` records it as the floor a person
- * set (a drag, the size field, the corner); `auto` is the editing replica's
- * measurement, which never goes below that floor; `fit` clears the floor so
- * the row follows its content again.
+ * How a height came to be (ADR-049, R-B): `manual` is a person's — a drag,
+ * the Height field, the corner — and turns `fit` off, so the row keeps it;
+ * `auto` is the editing replica's measurement, written only while the row
+ * follows its content; `fit` is Fit to content, which turns `fit` back on
+ * and stores the measured height.
  */
 export type RowHeightMode = 'manual' | 'auto' | 'fit';
 
 /**
  * Store a row height inside the caller's transaction, writing nothing that
  * already reads that way — a row with no meta is one unit and follows its
- * content, so writing exactly that is not a write and not an undo step.
- * `manualHeight` is always written beside `height` (a number, or null) so a
- * reader can tell an ADR-049 row from a legacy two-unit wrapped one. Returns
- * the height stored.
+ * content, so writing exactly that is not a write and not an undo step. An
+ * `auto` write on a row that does not follow its content is refused (the
+ * height stays). `fit` is written beside any height past one so a reader can
+ * tell an ADR-049 row from a legacy two-unit wrapped one. Returns the height
+ * the row now has.
  */
 export function writeRowHeight(
   table: TableMap,
@@ -624,28 +626,77 @@ export function writeRowHeight(
 ): number {
   const existing = rowMetaMap(table).get(rowId);
   const current = existing === undefined ? null : rowMeta(table, rowId);
-  const floor = current?.manualHeight ?? null;
-  const height =
-    mode === 'auto' ? Math.max(snapWidthUnits(units), floor ?? 1) : snapWidthUnits(units);
-  const manual = mode === 'manual' ? height : mode === 'fit' ? null : floor;
+  if (mode === 'auto' && current !== null && !current.fit) return current.height;
+  const height = snapWidthUnits(units);
+  const fit = mode !== 'manual';
   if (existing === undefined) {
-    if (height === DEFAULT_ROW_HEIGHT && manual === null) return height;
+    if (height === DEFAULT_ROW_HEIGHT && fit) return height;
     const meta = rowMetaFor(table, rowId);
     meta.set('height', height);
-    meta.set('manualHeight', manual);
+    meta.set('fit', fit);
     return height;
   }
   if (existing.get('height') !== height) existing.set('height', height);
-  const stored = existing.get('manualHeight');
-  // A meta with neither `manualHeight` nor `wrap` and a height past one reads as a legacy
-  // wrapped row (`rowMeta`); a measured or fitted height landing there writes the null
-  // marker so the row does not start reading as wrapped at row scope.
+  const stored = existing.get('fit');
+  // A meta with neither `fit` nor `wrap` and a height past one reads as a legacy wrapped
+  // row (`rowMeta`); a measured or fitted height landing there writes `fit` so the row
+  // does not start reading as wrapped at row scope.
   const legacyMarker =
     stored === undefined &&
     existing.get('wrap') === undefined &&
     height >= LEGACY_WRAPPED_ROW_HEIGHT;
-  if ((stored ?? null) !== manual || legacyMarker) existing.set('manualHeight', manual);
+  if ((stored ?? true) !== fit || legacyMarker) existing.set('fit', fit);
   return height;
+}
+
+/**
+ * Distribute evenly (ADR-049, Numbers' Table › Distribute Rows / Columns
+ * Evenly): the selected rows or columns — or every visible one — share
+ * their current total in whole units, the remainder to the first ones. Rows
+ * then read as set by hand (`fit` off), as after a drag. One undo step.
+ * Returns the sizes stored, in table order.
+ */
+export function distributeEvenly(
+  gd: GedeDoc,
+  tableId: Id,
+  axis: 'row' | 'column',
+  only?: readonly Id[],
+): number[] {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    const record = tableRecord(table);
+    if (axis === 'column') {
+      const columns = columnsArray(table)
+        .toArray()
+        .filter((c) => c.get('hidden') !== true)
+        .filter((c) => only === undefined || only.includes(readString(c, 'id')));
+      const widths = columns.map((c) => Math.max(1, Math.round(readNumber(c, 'width', 1))));
+      const even = evenShares(widths);
+      columns.forEach((column, i) => {
+        if (column.get('width') !== even[i]) column.set('width', even[i]);
+      });
+      return even;
+    }
+    const hidden = rowHidden(table, record);
+    const rows = record.rows
+      .filter((_id, i) => hidden[i] !== true)
+      .filter((id) => only === undefined || only.includes(id));
+    const even = evenShares(rows.map((rowId) => rowMeta(table, rowId).height));
+    rows.forEach((rowId, i) => {
+      writeRowHeight(table, rowId, even[i] ?? 1, 'manual');
+    });
+    return even;
+  });
+}
+
+/** `sizes.length` whole shares of the sizes' total, the remainder to the first ones. */
+export function evenShares(sizes: readonly number[]): number[] {
+  const n = sizes.length;
+  if (n === 0) return [];
+  const total = sizes.reduce((a, b) => a + b, 0);
+  const base = Math.max(1, Math.floor(total / n));
+  const remainder = Math.max(0, total - base * n);
+  return sizes.map((_s, i) => base + (i < remainder ? 1 : 0));
 }
 
 /**
@@ -709,9 +760,9 @@ export function setRowWrap(gd: GedeDoc, tableId: Id, rowId: Id, wrap: boolean | 
       if (meta.get('wrap') !== undefined) meta.delete('wrap');
       return;
     }
-    // A legacy two-unit row reads wrapped from its height alone; writing `manualHeight`
-    // beside `wrap` makes the state explicit, so the reader's legacy rule no longer applies.
-    if (meta.get('manualHeight') === undefined) meta.set('manualHeight', null);
+    // A legacy two-unit row reads wrapped from its height alone; writing `fit` beside
+    // `wrap` makes the state explicit, so the reader's legacy rule no longer applies.
+    if (meta.get('fit') === undefined) meta.set('fit', true);
     if (meta.get('wrap') !== wrap) meta.set('wrap', wrap);
   });
 }

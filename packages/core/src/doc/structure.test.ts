@@ -34,6 +34,8 @@ import {
   setRowHeight,
   setRowHeights,
   setRowWrap,
+  distributeEvenly,
+  evenShares,
   sweepOrphanCells,
   TABLE_TITLE_ROWS,
   tableAddresses,
@@ -199,22 +201,42 @@ describe('addressing recomputes on every structural edit', () => {
     gd.doc.transact(() => {
       metas.get(r1)?.set('height', 2);
     });
-    expect(rowMeta(t, r1)).toMatchObject({ height: 2, manualHeight: null, wrap: true });
+    expect(rowMeta(t, r1)).toMatchObject({ height: 2, fit: true, wrap: true });
     // A stored fraction or a value below one is snapped: addressing stays exact (GRID-01).
     gd.doc.transact(() => {
       metas.get(r1)?.set('height', 0.2);
     });
     expect(rowMeta(t, r1).height).toBe(1);
-    setRowHeight(gd, id, r1, 3);
-    expect(rowMeta(t, r1)).toMatchObject({ height: 3, manualHeight: 3, wrap: null });
-    setRowHeight(gd, id, r1, 2, 'auto'); // never below the hand-set floor
-    expect(rowMeta(t, r1)).toMatchObject({ height: 3, manualHeight: 3 });
-    setRowHeight(gd, id, r1, 5, 'auto'); // grows past it
-    expect(rowMeta(t, r1)).toMatchObject({ height: 5, manualHeight: 3 });
-    setRowHeight(gd, id, r1, 2, 'fit'); // fit clears the floor
-    expect(rowMeta(t, r1)).toMatchObject({ height: 2, manualHeight: null });
+    setRowHeight(gd, id, r1, 3); // a hand-set height: the row stops following its content
+    expect(rowMeta(t, r1)).toMatchObject({ height: 3, fit: false, wrap: null });
+    setRowHeight(gd, id, r1, 2, 'auto'); // refused: the row keeps what was set by hand
+    expect(rowMeta(t, r1)).toMatchObject({ height: 3, fit: false });
+    setRowHeight(gd, id, r1, 5, 'auto');
+    expect(rowMeta(t, r1)).toMatchObject({ height: 3, fit: false });
+    setRowHeight(gd, id, r1, 2, 'fit'); // Fit to content: follows its content again
+    expect(rowMeta(t, r1)).toMatchObject({ height: 2, fit: true });
     setRowHeight(gd, id, r1, 1, 'auto');
-    expect(rowMeta(t, r1)).toMatchObject({ height: 1, manualHeight: null, wrap: null });
+    expect(rowMeta(t, r1)).toMatchObject({ height: 1, fit: true, wrap: null });
+  });
+
+  test('GRID-08 distributeEvenly shares the total in whole units, the remainder to the first, for a selection or the whole axis, in one undo step', () => {
+    const { gd, id, rows, cols } = fixture();
+    const t = table(gd, id);
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    expect(evenShares([1, 4, 2])).toEqual([3, 2, 2]);
+    expect(evenShares([1, 1])).toEqual([1, 1]);
+    expect(evenShares([])).toEqual([]);
+    setColumnWidth(gd, id, cols[0] ?? '', 5);
+    expect(distributeEvenly(gd, id, 'column')).toEqual([3, 2, 2]);
+    expect(distributeEvenly(gd, id, 'column', [cols[0] ?? '', cols[1] ?? ''])).toEqual([3, 2]);
+    expect(tableById(gd, id)?.columns.map((c) => c.width)).toEqual([3, 2, 2]);
+    setRowHeight(gd, id, rows[2] ?? '', 4);
+    expect(distributeEvenly(gd, id, 'row')).toEqual([2, 2, 2]);
+    expect(rowHeights(t)).toEqual([2, 2, 2]);
+    expect(rowMeta(t, rows[0] ?? '').fit).toBe(false);
+    expect(undo.undoStack).toHaveLength(4);
+    undo.undo();
+    expect(rowHeights(t)).toEqual([1, 1, 4]);
   });
 
   test('GRID-02 unhideAllColumns reveals every hidden column in one step', () => {
@@ -269,7 +291,7 @@ describe('resize and scale snap to the lattice', () => {
     expect(tableWidthUnits(tableById(gd, id)!)).toBe(5);
     scaleTable(gd, id, { heightUnits: 6 });
     expect(rowHeights(t)).toEqual([2, 2, 2]);
-    expect(rowMeta(t, rows[0] ?? '').manualHeight).toBe(2);
+    expect(rowMeta(t, rows[0] ?? '').fit).toBe(false);
     scaleTable(gd, id, { heightUnits: 7 });
     expect(rowHeights(t)).toEqual([3, 2, 2]);
     scaleTable(gd, id, { heightUnits: 1, widthUnits: 1 });
