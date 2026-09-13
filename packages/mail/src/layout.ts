@@ -90,8 +90,8 @@ const type = {
   small: `font-family:${palette.fontUi};font-size:14px;line-height:1.5;`,
 };
 
-function p(cls: 'gd-ink' | 'gd-muted', text: string, extra = ''): string {
-  return `<p class="${cls}" style="margin:0 0 16px 0;${type.body}${light[cls]}${extra}">${escapeHtml(text)}</p>`;
+function p(cls: 'gd-ink' | 'gd-muted', text: string): string {
+  return `<p class="${cls}" style="margin:0 0 16px 0;${type.body}${light[cls]}">${escapeHtml(text)}</p>`;
 }
 
 function codeBlock(code: string, label: string | undefined): string {
