@@ -2,6 +2,7 @@ import {
   columnLetter,
   coverageMatrix,
   graphById,
+  graphsInPair,
   GRAPH_MIN_HEIGHT_UNITS,
   GRAPH_MIN_WIDTH_UNITS,
   resolveSlice,
@@ -11,10 +12,11 @@ import {
   type GedeDoc,
   type Id,
 } from '@gede/core';
-import { Button, Checkbox, Select } from '@gede/ui';
+import { Button, Checkbox, Select, Switch } from '@gede/ui';
 
 import { useEffect, useRef } from 'react';
 
+import { ARIA_KEYS, LABELS } from '../../../doc/shortcuts.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
@@ -44,7 +46,10 @@ export interface GraphTabProps {
  * table, GRAPH-04); the eligible-column checklist with distinct counts (REF-05
  * keeps derived, linked and pulled columns out, and says so); Add dimension
  * column; the coverage axes and pins (GRAPH-08); context counts; geometry;
- * Remove. Every control writes at once (INSP-12).
+ * Arrange (collapse or expand this half, ADR-047); Delete — this half, the
+ * other half, or the pair. Every control writes at once (INSP-12). This tab
+ * is the home of collapse and delete (DOC-02, ADR-041); the header chevron,
+ * the context menu and the chords are routes to it.
  */
 export function GraphTab({ gd, graphId, graphs, selectedCell, editable }: GraphTabProps) {
   // The tab reads the graph's shared keys (dimensions, slice) and the table's columns live.
@@ -89,6 +94,8 @@ function GraphTabBody({
   const dimOptions = derivation.dimensions.map((d) => ({ value: d.id, label: d.label }));
   const n = (v: number) => formatNumber(locale, v);
   const pairId = graph.pairId;
+  // ADR-047: a pair may be one half; the delete controls name what exists.
+  const otherHalf = graphsInPair(gd, pairId).find((g) => g.id !== graph.id);
   // ONB-05 / A11Y-01 (#159 item 7): while the tour asks for the dimensions, the checklist
   // is scrolled into the rail and its first box takes focus — after a keyboard bind the
   // target that had focus has just unmounted, so the next action is one key away. Focus
@@ -306,7 +313,10 @@ function GraphTabBody({
         </p>
       </Section>
 
-      <Section label="geometry" hint="Whole lattice units; the ring scales to fit its box.">
+      <Section
+        label="geometry"
+        hint="Whole lattice units; the ring scales to fit its box. Collapsed, the half is its header strip — one row — and keeps its box for the expand."
+      >
         <Stepper
           label="Column"
           value={graph.gridCol}
@@ -340,9 +350,20 @@ function GraphTabBody({
           unit="units"
           value={graph.heightUnits}
           min={GRAPH_MIN_HEIGHT_UNITS}
-          disabledReason={viewOnly}
+          disabledReason={
+            viewOnly ?? (graph.collapsed ? 'expand the graph to resize it' : undefined)
+          }
           onChange={(next) => {
             actions.resize(graph.id, { widthUnits: graph.widthUnits, heightUnits: next });
+          }}
+        />
+        {/* ADR-047: the home of collapse (DOC-02); the chevron, ⌥← / ⌥→ and the menu are routes. */}
+        <Switch
+          label={`Collapsed (${LABELS.collapse} / ${LABELS.expand})`}
+          checked={graph.collapsed}
+          disabled={!editable}
+          onCheckedChange={(on) => {
+            actions.setCollapsed(graph.id, on);
           }}
         />
         <p className="gd-mono gd-insp__hint">
@@ -350,23 +371,55 @@ function GraphTabBody({
         </p>
       </Section>
 
-      <Section label="remove">
-        <Button
-          size="sm"
-          aria-disabled={viewOnly !== undefined || undefined}
-          title={
-            viewOnly === undefined ? 'Remove both halves of the pair' : `Remove graph — ${viewOnly}`
-          }
-          onClick={
-            viewOnly === undefined
-              ? () => {
-                  actions.remove(pairId);
-                }
-              : undefined
-          }
-        >
-          Remove graph
-        </Button>
+      <Section
+        label="remove"
+        hint="A half can go on its own; the other stays bound to the table. Undo restores either."
+      >
+        <div className="gd-insp__row">
+          <Button
+            size="sm"
+            variant="danger"
+            aria-disabled={viewOnly !== undefined || undefined}
+            aria-keyshortcuts={ARIA_KEYS.clear}
+            title={
+              viewOnly === undefined
+                ? `Delete this half only (${LABELS.clear})`
+                : `Delete ${graph.kind} — ${viewOnly}`
+            }
+            data-testid="graph-tab-delete-half"
+            onClick={
+              viewOnly === undefined
+                ? () => {
+                    actions.removeHalf(pairId, graph.kind);
+                  }
+                : undefined
+            }
+          >
+            {graph.kind === 'ring' ? 'Delete ring' : 'Delete coverage'}
+          </Button>
+          <Button
+            size="sm"
+            variant="danger"
+            aria-disabled={viewOnly !== undefined || otherHalf === undefined || undefined}
+            title={
+              viewOnly === undefined
+                ? otherHalf === undefined
+                  ? 'Delete graph pair — this is the only half left'
+                  : 'Delete both halves of the pair'
+                : `Delete graph pair — ${viewOnly}`
+            }
+            data-testid="graph-tab-delete-pair"
+            onClick={
+              viewOnly === undefined && otherHalf !== undefined
+                ? () => {
+                    actions.remove(pairId);
+                  }
+                : undefined
+            }
+          >
+            Delete graph pair
+          </Button>
+        </div>
       </Section>
     </>
   );

@@ -1,7 +1,8 @@
-import { tableById, type GedeDoc } from '@gede/core';
+import { tableById, type GedeDoc, type Id } from '@gede/core';
 import { Button, Menu, type MenuEntry } from '@gede/ui';
 
 import type { CellSelection, Selection } from '../../../doc/selection.js';
+import { LABELS } from '../../../doc/shortcuts.js';
 import { useYVersion } from '../../../doc/use-y.js';
 import type { GridCommands } from './commands.js';
 
@@ -10,6 +11,8 @@ export interface TableMenuProps {
   selection: Selection | null;
   editable: boolean;
   commands: GridCommands;
+  /** ADR-047: Delete table's home is this menu; the shell deletes and moves focus. */
+  onDeleteTable?: ((tableId: Id) => void) | undefined;
 }
 
 /**
@@ -25,13 +28,14 @@ export function frozenOptions(columnCount: number): number[] {
 /**
  * The Table menu in the toolbar (GRID-02, GRID-07..08, A11Y-01): the home of
  * the structure commands no toolbar tool or inspector control carries —
- * insert above / before, delete, hide and unhide, widen and narrow. Add row
+ * insert above / before, delete row, column and table (ADR-047), hide and
+ * unhide, widen and narrow. Add row
  * and Add column live in the toolbar, header, footer, frozen columns and wrap
  * in the Table and Text tabs (DOC-02, ADR-041); this menu does not repeat
  * them. Commands that need a cell are present but disabled with the reason
  * (MENU-02). Built on the Radix menu from `@gede/ui`.
  */
-export function TableMenu({ gd, selection, editable, commands }: TableMenuProps) {
+export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: TableMenuProps) {
   useYVersion(gd.tables);
   const record = selection === null ? null : tableById(gd, selection.tableId);
   const cell: CellSelection | null =
@@ -123,6 +127,21 @@ export function TableMenu({ gd, selection, editable, commands }: TableMenuProps)
         needsCell ?? ((column?.width ?? 1) <= 1 ? 'already one unit wide' : undefined),
       onSelect: () => {
         commands.setColumnWidth(tableId, columnId, (column?.width ?? 1) - 1);
+      },
+    },
+    { kind: 'separator', id: 's2' },
+    {
+      // ADR-047: the table, its cells and meta, and its graph pairs — one undo step, no
+      // dialog. ⌫ with the table selected and the table context menu are the routes.
+      kind: 'item',
+      id: 'table-delete',
+      label: 'Delete table',
+      shortcut: LABELS.clear,
+      danger: true,
+      disabledReason:
+        needsTable ?? (onDeleteTable === undefined ? 'select a table first' : undefined),
+      onSelect: () => {
+        onDeleteTable?.(tableId);
       },
     },
   ];

@@ -54,6 +54,15 @@ export function resolveMenuTarget(gd: GedeDoc, node: EventTarget | null): MenuTa
     const sheet = listSheets(gd)[index];
     return sheet === undefined ? null : { kind: 'sheet', sheetId: sheet.id };
   }
+  // ADR-047: a graph half, before the plane it sits in.
+  const graph = node.closest<HTMLElement>('[data-graph-id]');
+  if (graph !== null) {
+    return {
+      kind: 'graph',
+      graphId: graph.dataset.graphId ?? '',
+      pairId: graph.dataset.pairId ?? '',
+    };
+  }
   if (node.closest('.gd-canvas__plane') !== null) return { kind: 'canvas' };
   return null;
 }
@@ -125,6 +134,12 @@ export function DocumentContextMenu({
         if (!moved && opener?.isConnected === true && opener.matches('[role="columnheader"]')) {
           return opener;
         }
+        // ADR-047: a delete took the opener with it; the command already put focus on what
+        // is left (the other half, the bound table, the canvas), and that stands.
+        if (opener?.isConnected !== true) {
+          const active = document.activeElement;
+          if (active instanceof HTMLElement && active !== document.body) return active;
+        }
         return selected ?? opener;
       }}
       trigger={
@@ -191,6 +206,8 @@ export function DocumentContextMenu({
                 if (context.selectedCell?.tableId !== next.tableId)
                   actions.selectTable(next.tableId);
               }
+              // ADR-047: a right-click on a graph half selects it, as a press does.
+              if (next.kind === 'graph') context.graphs?.select(next.graphId);
               selectionAtOpen.current = selectedKey(selectedCellElement());
               // MENU-05: the header is the trigger of a column menu, so focus can come back to it
               // (headers take focus only this way — they are not in the tab order).

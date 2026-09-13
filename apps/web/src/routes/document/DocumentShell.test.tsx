@@ -12,6 +12,7 @@ import {
   LATTICE,
   listSheets,
   openDocument,
+  setCellText,
   tableById,
   type GedeDoc,
 } from '@gede/core';
@@ -781,7 +782,7 @@ describe('DocumentShell', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent('Table 2');
   });
 
-  it('KEYS-03 ⌘A selects the table; ⌫ then says a cell is needed rather than clearing the table (#145, ADR 42)', async () => {
+  it('KEYS-03 A11Y-01 ADR-047 ⌘A selects the table; ⌫ then deletes it — cells and graph pair with it, one undo step, announced with the undo chord, no dialog; the armed cell still clears as before', async () => {
     await openShell();
     const grid = await addTable();
     const first = within(grid).getAllByRole('gridcell')[0]!;
@@ -790,14 +791,93 @@ describe('DocumentShell', () => {
     });
     fireEvent.keyDown(first, { code: 'KeyQ', key: 'q' });
     fireEvent.keyDown(screen.getByLabelText('Edit B5'), { code: 'Enter' });
+    // An armed cell (Enter committed downward; re-arm the first): ⌫ clears the cell, never
+    // the table (GRID-04).
+    await waitFor(() => {
+      expect(first).toHaveTextContent('q');
+    });
+    await userEvent.click(first);
+    fireEvent.keyDown(window, { code: 'Backspace' });
+    await waitFor(() => {
+      expect(first).not.toHaveTextContent('q');
+    });
+    fireEvent.keyDown(first, { code: 'KeyQ', key: 'q' });
+    fireEvent.keyDown(screen.getByLabelText('Edit B5'), { code: 'Enter' });
+    // A pair bound to the table, so the delete has something to take with it.
+    await userEvent.click(screen.getByRole('button', { name: 'Add graph' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Bind the graph to Table 1' }));
+    await until(() => roomDoc().getMap('graphs').size === 2);
+    // Back to the table, then ⌘A selects it: no cell is armed.
+    await userEvent.click(within(grid).getAllByRole('gridcell')[1]!);
     fireEvent.keyDown(window, { code: 'KeyA', metaKey: true });
     expect(screen.getByTestId('selected-table')).toBeInTheDocument();
     expect(screen.queryByRole('gridcell', { selected: true })).toBeNull();
     fireEvent.keyDown(window, { code: 'Backspace' });
-    expect(screen.getByTestId('live-region')).toHaveTextContent(
-      'The table is selected; select a cell to clear it',
+    await until(() => roomDoc().getMap('tables').size === 0);
+    expect(roomDoc().getMap('graphs').size).toBe(0);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'Deleted Table 1 and its graph — press ⌘Z to undo',
+      );
+    });
+    expect(screen.queryByTestId('selected-table')).not.toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByTestId('plane'));
+    // One undo step restores the table, its cell text and the pair.
+    fireEvent.keyDown(window, { code: 'KeyZ', metaKey: true });
+    await until(() => roomDoc().getMap('tables').size === 1);
+    expect(roomDoc().getMap('graphs').size).toBe(2);
+    await waitFor(() => {
+      expect(screen.getAllByRole('gridcell')[0]).toHaveTextContent('q');
+    });
+    expect(screen.getByRole('region', { name: 'Ring graph of Table 1' })).toBeInTheDocument();
+  });
+
+  it('FX-06 KEYS-03 ADR-047 deleting a table that formulas elsewhere read needs no dialog: the dependents fall to the reference-removed error, the announcement counts them, and ⌘Z restores the values', async () => {
+    await openShell();
+    const grid = await addTable();
+    await addTable();
+    await until(() => roomDoc().getMap('tables').size === 2);
+    const other = openDocument(roomDoc());
+    const [first, second] = Array.from(other.tables.keys());
+    // Two cells of Table 2 read Table 1's first cell.
+    room.edit(() => {
+      const target = tableById(other, second!)!;
+      const source = tableById(other, first!)!;
+      setCellText(other, source.id, source.rows[0]!, source.columns[0]!.id, '41');
+      const cells = other.tables.get(second!)?.get('cells') as Y.Map<unknown>;
+      const ref = `{c:${source.id}:${source.rows[0]!}:${source.columns[0]!.id}}`;
+      cells.set(`${target.rows[0]!}:${target.columns[0]!.id}`, `=Sum(${ref})`);
+      cells.set(`${target.rows[1]!}:${target.columns[0]!.id}`, `=Sum(${ref}, 1)`);
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText('41').length).toBe(2);
+      expect(screen.getByText('42')).toBeInTheDocument();
+    });
+    await userEvent.click(within(grid).getAllByRole('gridcell')[0]!);
+    fireEvent.keyDown(window, { code: 'KeyA', metaKey: true });
+    expect(screen.getByTestId('selected-table')).toHaveTextContent('Table 1');
+    fireEvent.keyDown(window, { code: 'Delete' });
+    await until(() => roomDoc().getMap('tables').size === 1);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'Deleted Table 1 — 2 cells elsewhere now read “reference removed”; press ⌘Z to undo',
+      );
+    });
+    // Focus landed on what is left: Table 2's entry cell.
+    expect(document.activeElement).toHaveAttribute('role', 'gridcell');
+    expect(document.activeElement?.closest('[data-table-id]')).toHaveAttribute(
+      'data-table-id',
+      second!,
     );
-    expect(first).toHaveTextContent('q');
+    fireEvent.keyDown(window, { code: 'KeyZ', metaKey: true });
+    await until(() => roomDoc().getMap('tables').size === 2);
+    expect(tableById(openDocument(roomDoc()), first!)).not.toBeNull();
+    await waitFor(() => {
+      expect(screen.getAllByText('41').length).toBe(2);
+      expect(screen.getByText('42')).toBeInTheDocument();
+    });
   });
 
   it('LOAD-01 LOAD-02 LOAD-03 while the document loads a content-shaped skeleton appears after 200 ms with 22 px lattice rows', async () => {

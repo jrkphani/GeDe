@@ -17,6 +17,7 @@ import {
   listSheets,
   openDocument,
   setCellText,
+  setGraphCollapsed,
   tableById,
   tablesOnSheet,
   type GedeDoc,
@@ -590,8 +591,8 @@ describe('context graphs', () => {
       expect(screen.getByTestId('graph-source')).toHaveTextContent('Table 2');
     });
     expect(room.doc.getMap('graphs').size).toBe(2);
-    // Remove takes both halves.
-    await userEvent.click(screen.getByRole('button', { name: 'Remove graph' }));
+    // Delete graph pair takes both halves.
+    await userEvent.click(screen.getByRole('button', { name: 'Delete graph pair' }));
     await until(() => room.doc.getMap('graphs').size === 0);
     expect(screen.queryByRole('tab', { name: 'Graph' })).not.toBeInTheDocument();
   });
@@ -709,6 +710,27 @@ describe('context graphs', () => {
     expect(screen.queryByRole('button', { name: /^Move Ring graph/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('separator', { name: /^Resize/ })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Add graph' })).not.toBeInTheDocument();
+    // ADR-047: no collapse or delete affordance either; a collapsed half still renders as
+    // its strip, one lattice row tall.
+    expect(screen.queryByTestId('graph-chevron')).not.toBeInTheDocument();
+    fireEvent.contextMenu(ring());
+    expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    const { gd: phoneGd, sheetId: phoneSheet } = roomTable();
+    const phoneRing = graphsOnSheet(phoneGd, phoneSheet)[0];
+    act(() => {
+      setGraphCollapsed(phoneGd, phoneRing?.id ?? '', true);
+    });
+    await waitFor(() => {
+      expect(ring()).toHaveAttribute('data-collapsed', 'true');
+    });
+    expect(ring().style.height).toBe('22px');
+    expect(screen.queryByTestId('ring-graph')).not.toBeInTheDocument();
+    act(() => {
+      setGraphCollapsed(phoneGd, phoneRing?.id ?? '', false);
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('ring-graph')).toBeInTheDocument();
+    });
     const empty = within(screen.getByTestId('coverage-graph')).getAllByRole('button', {
       name: /^Unexplored/,
     })[0]!;
@@ -726,6 +748,226 @@ describe('context graphs', () => {
     expect(room.doc.getMap('graphs').size).toBe(2);
     expect(room.doc.getArray('sheets').length).toBe(1);
     expect(room.doc.getMap('tables').size).toBe(rowsBefore);
+  });
+
+  it('KEYS-03 GRAPH-02 GRAPH-05 A11Y-01 A11Y-05 ADR-047 Delete on a selected half removes that half only: the other stays bound, takes focus and the selection, the Graph tab stays; the announcement names the half and the undo chord; ⌘Z brings it back', async () => {
+    await openShell();
+    await addTable();
+    await fillContexts();
+    await graphThisTable();
+    const { gd, sheetId, tableId } = roomTable();
+    const [ringRecord, coverageRecord] = graphsOnSheet(gd, sheetId);
+    // Select the ring from the keyboard: Enter on its header.
+    const header = within(ring()).getByRole('button', { name: /^Move Ring graph/ });
+    act(() => {
+      header.focus();
+    });
+    fireEvent.keyDown(header, { code: 'Enter' });
+    await waitFor(() => {
+      expect(ring()).toHaveAttribute('data-selected', 'true');
+    });
+    fireEvent.keyDown(window, { code: 'Delete' });
+    await until(() => room.doc.getMap('graphs').size === 1);
+    expect(screen.queryByRole('region', { name: /^Ring graph/ })).not.toBeInTheDocument();
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'Deleted the ring of Table 1 — press ⌘Z to undo',
+    );
+    // The lone coverage: still bound, selected, focused at its header; the Graph tab reads it.
+    expect(graphsOnSheet(gd, sheetId).map((g) => g.id)).toEqual([coverageRecord?.id]);
+    expect(graphsOnSheet(gd, sheetId)[0]?.tableId).toBe(tableId);
+    await waitFor(() => {
+      expect(coverage()).toHaveAttribute('data-selected', 'true');
+    });
+    expect(document.activeElement).toBe(
+      within(coverage()).getByRole('button', { name: /^Move Coverage graph/ }),
+    );
+    expect(screen.getByRole('tab', { name: 'Graph' })).toBeInTheDocument();
+    expect(within(coverage()).getByTestId('graph-stat')).toBeInTheDocument();
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
+    expect(screen.getByTestId('graph-source')).toHaveTextContent('Table 1');
+    expect(screen.getByRole('button', { name: 'Delete coverage' })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Delete ring' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Delete graph pair' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
+    );
+    // One undo step brings the ring back, bound and derived like before.
+    fireEvent.keyDown(window, { code: 'KeyZ', metaKey: true });
+    await until(() => room.doc.getMap('graphs').size === 2);
+    await waitFor(() => {
+      expect(ring()).toBeInTheDocument();
+    });
+    expect(graphsOnSheet(gd, sheetId).map((g) => g.id)).toEqual([
+      ringRecord?.id,
+      coverageRecord?.id,
+    ]);
+    expect(within(ring()).getAllByRole('button', { name: /^Context/ }).length).toBeGreaterThan(0);
+    // Backspace is the same chord (`event.code`); with the last half gone, focus lands on the
+    // bound table's entry cell and the graph selection is over.
+    await userEvent.click(within(coverage()).getByRole('button', { name: /^Move Coverage graph/ }));
+    fireEvent.keyDown(window, { code: 'Backspace' });
+    await until(() => room.doc.getMap('graphs').size === 1);
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'Deleted the coverage of Table 1 — press ⌘Z to undo',
+    );
+    await userEvent.click(within(ring()).getByRole('button', { name: /^Move Ring graph/ }));
+    fireEvent.keyDown(window, { code: 'Backspace' });
+    await until(() => room.doc.getMap('graphs').size === 0);
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'Deleted the ring of Table 1 — press ⌘Z to undo',
+    );
+    expect(document.activeElement).toHaveAttribute('role', 'gridcell');
+    expect(document.activeElement?.closest('[data-table-id]')).toHaveAttribute(
+      'data-table-id',
+      tableId,
+    );
+    expect(screen.queryByRole('tab', { name: 'Graph' })).not.toBeInTheDocument();
+  });
+
+  it('GRAPH-02 GRAPH-07 GRAPH-08 GRAPH-11 DOC-02 A11Y-01 A11Y-02 ADR-047 the header chevron collapses a half to one lattice row that keeps its title, dimensions and count, and expands it back with its size; Enter and Space press it; ⌥← / ⌥→ are the chords; the Graph tab switch is the home, the context menu a route; the sibling is untouched', async () => {
+    await openShell();
+    await addTable();
+    await fillContexts();
+    await graphThisTable();
+    const { gd, sheetId } = roomTable();
+    const before = graphsOnSheet(gd, sheetId)[1];
+    const chevron = within(coverage()).getByRole('button', {
+      name: 'Collapse Coverage graph of Table 1',
+    });
+    expect(chevron).toHaveAttribute('aria-controls');
+    expect(chevron).toHaveAttribute('aria-expanded', 'true');
+    // Enter on the chevron collapses (a native button): the half is its strip, the body and
+    // corner are gone, the position and the stored size are not.
+    act(() => {
+      chevron.focus();
+    });
+    await userEvent.keyboard('{Enter}');
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === true);
+    await waitFor(() => {
+      expect(coverage()).toHaveAttribute('data-collapsed', 'true');
+    });
+    expect(coverage().style.height).toBe('22px');
+    expect(coverage().style.top).toBe(`${String((before?.gridRow ?? 0) * 22)}px`);
+    expect(screen.queryByTestId('coverage-graph')).not.toBeInTheDocument();
+    expect(
+      within(coverage()).queryByRole('separator', { name: /^Resize/ }),
+    ).not.toBeInTheDocument();
+    expect(within(coverage()).getByTestId('graph-stat')).toBeInTheDocument();
+    expect(graphsOnSheet(gd, sheetId)[1]).toMatchObject({
+      gridCol: before?.gridCol,
+      gridRow: before?.gridRow,
+      widthUnits: before?.widthUnits,
+      heightUnits: before?.heightUnits,
+    });
+    expect(screen.getByTestId('live-region')).toHaveTextContent(
+      'Collapsed the coverage of Table 1',
+    );
+    // The ring is untouched (per object, GRAPH-02); the sheet's Fit shrinks to the strip.
+    expect(graphsOnSheet(gd, sheetId)[0]?.collapsed).toBe(false);
+    expect(ring()).not.toHaveAttribute('data-collapsed');
+    // Focus stayed on the chevron, now "Expand coverage"; Space expands and the box is back.
+    const expand = within(coverage()).getByRole('button', {
+      name: 'Expand Coverage graph of Table 1',
+    });
+    expect(document.activeElement).toBe(expand);
+    expect(expand).toHaveAttribute('aria-expanded', 'false');
+    await userEvent.keyboard(' ');
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === false);
+    await waitFor(() => {
+      expect(screen.getByTestId('coverage-graph')).toBeInTheDocument();
+    });
+    expect(coverage().style.height).toBe(`${String((before?.heightUnits ?? 0) * 22)}px`);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Expanded the coverage of Table 1');
+    // ⌥← / ⌥→ on the selected half (the chevron's press selected it), by `event.code`.
+    expect(coverage()).toHaveAttribute('data-selected', 'true');
+    fireEvent.keyDown(window, { code: 'ArrowLeft', altKey: true });
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === true);
+    fireEvent.keyDown(window, { code: 'ArrowLeft', altKey: true });
+    expect(graphsOnSheet(gd, sheetId)[1]?.collapsed).toBe(true);
+    fireEvent.keyDown(window, { code: 'ArrowRight', altKey: true });
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === false);
+    // The Graph tab's Collapsed switch (the home, on Radix) and the context menu (a route)
+    // toggle it too; the height stepper is off with its reason while collapsed.
+    await userEvent.click(screen.getByRole('tab', { name: 'Graph' }));
+    const collapsedSwitch = screen.getByRole('switch', { name: /^Collapsed/ });
+    expect(collapsedSwitch).toHaveAccessibleName('Collapsed (⌥← / ⌥→)');
+    await userEvent.click(collapsedSwitch);
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === true);
+    expect(screen.getByRole('switch', { name: /^Collapsed/ })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+    expect(
+      within(screen.getByRole('group', { name: 'Height' })).getByRole('button', { name: /^More/ }),
+    ).toHaveAccessibleDescription('expand the graph to resize it');
+    fireEvent.contextMenu(within(coverage()).getByRole('button', { name: /^Move Coverage graph/ }));
+    const item = await screen.findByRole('menuitem', { name: /^Expand/ });
+    expect(item).toHaveTextContent('⌥→');
+    await userEvent.click(item);
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === false);
+    // ⌘Z undoes one toggle at a time.
+    fireEvent.keyDown(window, { code: 'KeyZ', metaKey: true });
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === true);
+    fireEvent.keyDown(window, { code: 'KeyZ', metaKey: true });
+    await until(() => graphsOnSheet(gd, sheetId)[1]?.collapsed === false);
+  });
+
+  it('MENU-01 MENU-02 MENU-05 KEYS-08 ADR-047 the graph context menu carries Collapse / Expand, Delete ring or coverage, Delete graph pair, Fit and Actual size with their chords; a lone half says why the pair cannot go; the table title menu deletes the table', async () => {
+    await openShell();
+    await addTable();
+    await graphThisTable();
+    const { gd, sheetId } = roomTable();
+    fireEvent.contextMenu(within(ring()).getByRole('button', { name: /^Move Ring graph/ }));
+    const menu = await screen.findByRole('menu', { name: 'Graph menu' });
+    expect(
+      Array.from(menu.querySelectorAll('.gd-menu__label')).map((el) => el.textContent),
+    ).toEqual(['Collapse', 'Delete ring', 'Delete graph pair', 'Fit to canvas', 'Actual size']);
+    expect(ring()).toHaveAttribute('data-selected', 'true');
+    expect(screen.getByRole('menuitem', { name: /^Collapse/ })).toHaveTextContent('⌥←');
+    expect(screen.getByRole('menuitem', { name: /^Delete ring/ })).toHaveTextContent('⌫');
+    // Delete the coverage from its own menu: the ring survives, bound, and takes the selection
+    // and focus (MENU-05: the opener went with the delete, so focus stays where the command
+    // put it).
+    await userEvent.keyboard('{Escape}');
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    fireEvent.contextMenu(within(coverage()).getByRole('button', { name: /^Move Coverage graph/ }));
+    await userEvent.click(await screen.findByRole('menuitem', { name: /^Delete coverage/ }));
+    await until(() => room.doc.getMap('graphs').size === 1);
+    expect(graphsOnSheet(gd, sheetId)[0]?.kind).toBe('ring');
+    await waitFor(() => {
+      expect(ring()).toHaveAttribute('data-selected', 'true');
+    });
+    await waitFor(() => {
+      expect(document.activeElement).toBe(
+        within(ring()).getByRole('button', { name: /^Move Ring graph/ }),
+      );
+    });
+    fireEvent.contextMenu(within(ring()).getByRole('button', { name: /^Move Ring graph/ }));
+    const lone = await screen.findByRole('menu', { name: 'Graph menu' });
+    expect(
+      Array.from(lone.querySelectorAll('.gd-menu__label')).map((el) => el.textContent),
+    ).toEqual(['Collapse', 'Delete ring', 'Delete graph pair', 'Fit to canvas', 'Actual size']);
+    expect(screen.getByRole('menuitem', { name: /^Delete graph pair/ })).toHaveAttribute(
+      'title',
+      'this is the only half left',
+    );
+    await userEvent.click(screen.getByRole('menuitem', { name: /^Delete ring/ }));
+    await until(() => room.doc.getMap('graphs').size === 0);
+    // The table's own menu deletes the table (with any pair) as ⌫ does.
+    fireEvent.contextMenu(screen.getByText('Table 1', { selector: '.gd-table__title-text' }));
+    const del = await screen.findByRole('menuitem', { name: /^Delete table/ });
+    expect(del).toHaveTextContent('⌫');
+    await userEvent.click(del);
+    await until(() => room.doc.getMap('tables').size === 0);
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'Deleted Table 1 — press ⌘Z to undo',
+      );
+    });
+    // Nothing is left on the sheet: focus lands on the canvas plane, never on body.
+    expect(document.activeElement).toBe(screen.getByTestId('plane'));
   });
 
   it('GRAPH-06 GRAPH-09 render scope: a keystroke in a cell that is not a dimension renders neither half; a committed edit in a dimension column renders each half once; a hover renders the pair, not the shell', async () => {

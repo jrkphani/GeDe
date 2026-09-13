@@ -11,6 +11,8 @@
  */
 import {
   cellAddress,
+  graphById,
+  graphsInPair,
   mergeRoom,
   rowMeta,
   spanAt,
@@ -19,6 +21,7 @@ import {
   tableMap,
   WRAPPED_ROW_HEIGHT,
   type GedeDoc,
+  type GraphKind,
   type Id,
 } from '@gede/core';
 import type { MenuEntry } from '@gede/ui';
@@ -27,6 +30,7 @@ import { peekEngine } from '../../../doc/engine.js';
 import { LABELS } from '../../../doc/shortcuts.js';
 import { activeLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/useCellFormat.js';
+import type { GraphsActions } from '../graph/use-graphs.js';
 import type { GridCommands } from '../grid/commands.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { TRACKED } from '../inspector/controls.js';
@@ -36,6 +40,8 @@ export type MenuTarget =
   | { kind: 'cell'; tableId: Id; rowId: Id; colId: Id }
   | { kind: 'column'; tableId: Id; colId: Id }
   | { kind: 'table'; tableId: Id }
+  /** ADR-047: a graph half — collapse or expand it, delete it or its pair. */
+  | { kind: 'graph'; graphId: Id; pairId: Id }
   | { kind: 'sheet'; sheetId: Id }
   | { kind: 'canvas' };
 
@@ -81,6 +87,13 @@ export interface MenuContext {
   };
   /** KEYS-03 ⌘A / KEYS-08: the cell menu's "Select the table" (ADR-042). */
   selectTable?: ((tableId: Id) => void) | undefined;
+  /**
+   * ADR-047 / KEYS-08: ⌫'s pointer route on a table — the table, its cells and
+   * its graph pairs go as one undo step; the shell moves focus afterwards.
+   */
+  deleteTable?: ((tableId: Id) => void) | undefined;
+  /** ADR-047: the graph menu's commands (the Graph tab is their home). */
+  graphs?: Pick<GraphsActions, 'select' | 'remove' | 'removeHalf' | 'setCollapsed'> | undefined;
   slots?: MenuSlots | undefined;
 }
 
@@ -651,6 +664,77 @@ export function columnMenuEntries(
   ];
 }
 
+/** ADR-047: what the delete items call a half. */
+function halfLabel(kind: GraphKind): string {
+  return kind === 'ring' ? 'Delete ring' : 'Delete coverage';
+}
+
+/**
+ * ADR-047: the graph half's menu — a route to the Graph tab's collapse and
+ * delete controls (DOC-02, ADR-041): collapse or expand this half; delete this
+ * half or the pair; Fit and Actual size (MENU-01 order, MENU-02 reasons).
+ */
+export function graphMenuEntries(
+  ctx: MenuContext,
+  target: MenuTarget & { kind: 'graph' },
+): MenuEntry[] {
+  const graph = graphById(ctx.gd, target.graphId);
+  if (graph === null) return [];
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  const soon = ctx.graphs === undefined ? GRAPH_SOON : undefined;
+  const other = graphsInPair(ctx.gd, graph.pairId).find((g) => g.id !== graph.id);
+  return [
+    {
+      kind: 'item',
+      id: 'collapse',
+      label: graph.collapsed ? 'Expand' : 'Collapse',
+      shortcut: graph.collapsed ? LABELS.expand : LABELS.collapse,
+      disabledReason: viewOnly ?? soon,
+      onSelect: () => {
+        ctx.graphs?.setCollapsed(graph.id, !graph.collapsed);
+      },
+    },
+    sep('s-delete'),
+    {
+      kind: 'item',
+      id: 'delete-half',
+      label: halfLabel(graph.kind),
+      shortcut: LABELS.clear,
+      danger: true,
+      disabledReason: viewOnly ?? soon,
+      onSelect: () => {
+        ctx.graphs?.removeHalf(graph.pairId, graph.kind);
+      },
+    },
+    {
+      kind: 'item',
+      id: 'delete-pair',
+      label: 'Delete graph pair',
+      danger: true,
+      disabledReason:
+        viewOnly ?? soon ?? (other === undefined ? 'this is the only half left' : undefined),
+      onSelect: () => {
+        ctx.graphs?.remove(graph.pairId);
+      },
+    },
+    sep('s-view'),
+    {
+      kind: 'item',
+      id: 'fit',
+      label: 'Fit to canvas',
+      shortcut: LABELS.fit,
+      onSelect: ctx.canvas.fit,
+    },
+    {
+      kind: 'item',
+      id: 'actual',
+      label: 'Actual size',
+      shortcut: LABELS.actualSize,
+      onSelect: ctx.canvas.actualSize,
+    },
+  ];
+}
+
 /** The table title's menu: structure commands that need no cell. */
 export function tableMenuEntries(
   ctx: MenuContext,
@@ -680,6 +764,20 @@ export function tableMenuEntries(
       disabledReason: viewOnly,
       onSelect: () => {
         ctx.commands.insertColumnAfter(target.tableId);
+      },
+    },
+    sep('s-delete'),
+    {
+      // ADR-047 / KEYS-08: ⌫'s pointer route; the Table menu in the toolbar is the home.
+      kind: 'item',
+      id: 'table-delete',
+      label: 'Delete table',
+      shortcut: LABELS.clear,
+      danger: true,
+      disabledReason:
+        viewOnly ?? (ctx.deleteTable === undefined ? 'select a table first' : undefined),
+      onSelect: () => {
+        ctx.deleteTable?.(target.tableId);
       },
     },
     sep('s-view'),
@@ -763,6 +861,8 @@ export function menuEntriesFor(ctx: MenuContext, target: MenuTarget): MenuEntry[
       return columnMenuEntries(ctx, target);
     case 'table':
       return tableMenuEntries(ctx, target);
+    case 'graph':
+      return graphMenuEntries(ctx, target);
     case 'sheet':
       return sheetMenuEntries(ctx);
     case 'canvas':
@@ -779,6 +879,8 @@ export function menuLabelFor(target: MenuTarget): string {
       return 'Column menu';
     case 'table':
       return 'Table menu';
+    case 'graph':
+      return 'Graph menu';
     case 'sheet':
       return 'Sheet menu';
     case 'canvas':

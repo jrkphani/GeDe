@@ -12,6 +12,7 @@ import { LATTICE, pointToPx, type Pixels } from '../lattice.js';
 import { CAPTION_ROWS } from '../style/types.js';
 import {
   DEFAULT_ROW_HEIGHT,
+  graphFootprintRows,
   graphsOnSheet,
   rowMeta,
   TABLE_TITLE_ROWS,
@@ -20,6 +21,7 @@ import {
   tablesOnSheet,
   WRAPPED_ROW_HEIGHT,
   type GedeDoc,
+  type GraphRecord,
   type TableMap,
   type TableRecord,
 } from './schema.js';
@@ -184,6 +186,19 @@ export function unionBounds(list: readonly UnitBounds[]): UnitBounds | null {
   return { col: minCol, row: minRow, cols: maxCol - minCol, rows: maxRow - minRow };
 }
 
+/**
+ * A graph half's lattice footprint (GRAPH-11): its box, or its one-row header
+ * strip while collapsed (ADR-047) — the stored height waits for the expand.
+ */
+export function graphUnitBounds(graph: GraphRecord): UnitBounds {
+  return {
+    col: graph.gridCol,
+    row: graph.gridRow,
+    cols: graph.widthUnits,
+    rows: graphFootprintRows(graph),
+  };
+}
+
 /** DOC-07: bounds of all tables and graphs on a sheet, framed together. */
 export function sheetBounds(gd: GedeDoc, sheetId: Id): UnitBounds | null {
   const tables = tablesOnSheet(gd, sheetId).map((record) => {
@@ -191,12 +206,7 @@ export function sheetBounds(gd: GedeDoc, sheetId: Id): UnitBounds | null {
     if (map === null) throw new RangeError(`table ${record.id} vanished mid-read`);
     return tableUnitBounds(map, record);
   });
-  const graphs = graphsOnSheet(gd, sheetId).map((g) => ({
-    col: g.gridCol,
-    row: g.gridRow,
-    cols: g.widthUnits,
-    rows: g.heightUnits,
-  }));
+  const graphs = graphsOnSheet(gd, sheetId).map(graphUnitBounds);
   return unionBounds([...tables, ...graphs]);
 }
 

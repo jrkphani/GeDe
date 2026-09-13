@@ -96,6 +96,9 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
       { action: 'Add column after', ids: ['addColumn'] },
       { action: 'Nest / promote row', ids: ['nest', 'promote'] },
       { action: 'Collapse / expand row', ids: ['collapse', 'expand'], extra: 'ADR-025, ADR-030' },
+      // ADR-047: ⌫ with the table selected (⌘A, or a press on its title) deletes the table;
+      // undo is the safety. Owner-directed; not in the handover reference.
+      { action: 'Delete table (table selected)', ids: ['clear'], extra: 'ADR-047' },
     ],
   },
   {
@@ -111,6 +114,14 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
       { action: 'Select the node’s row', keys: ['⏎', 'click'], extra: 'ADR-033' },
       { action: 'Open a child sheet for the node', keys: ['⇧⏎', 'double-click'], extra: 'ADR-033' },
       { action: 'Cancel pointing', ids: ['escape'], extra: 'ADR-033' },
+      // ADR-047: the selected half only — the other half stays bound to its table; ⌥← / ⌥→
+      // are the row chevron's chords (ADR-030), here on the selected half.
+      { action: 'Delete the ring or coverage', ids: ['clear'], extra: 'ADR-047' },
+      {
+        action: 'Collapse / expand the ring or coverage',
+        ids: ['collapse', 'expand'],
+        extra: 'ADR-047',
+      },
     ],
   },
   {

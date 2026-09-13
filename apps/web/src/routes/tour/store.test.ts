@@ -6,11 +6,14 @@ import {
   commitCellText,
   createGraphPair,
   createShapedTableWithGraph,
+  graphById,
   listSheets,
   openDocument,
+  removeGraphObject,
   removeGraphPair,
   seedSampleWorkscape,
   setCellText,
+  setGraphCollapsed,
   setGraphDimensions,
   tableById,
   tableMap,
@@ -313,6 +316,32 @@ describe('tour store', () => {
     const next = tourState();
     expect(next).toMatchObject({ substep: 'dimensions', pairIds: [again.pairId] });
     expect(next.phase === 'running' && next.baseline.dimensions.has(again.pairId)).toBe(true);
+  });
+
+  test('ONB-05 GRAPH-02 ADR-045 ADR-047 a pair reduced to one half stays the tracked pair: the lone half keeps `dimensions`, its baseline holds, and changing its set completes the step; deleting the last half returns to `add`', () => {
+    const gd = openSampleAt(3);
+    const sheetId = listSheets(gd)[0]!.id;
+    const c = cells(gd);
+    const pair = createGraphPair(gd, { sheetId, tableId: c.deliverables.id });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [pair.pairId] });
+    removeGraphObject(gd, pair.pairId, 'ring');
+    const lone = tourState();
+    expect(lone).toMatchObject({ phase: 'running', step: 3, substep: 'dimensions' });
+    expect(lone.phase === 'running' && lone.baseline.dimensions.has(pair.pairId)).toBe(true);
+    // Collapsing the survivor changes nothing the tour reads.
+    setGraphCollapsed(gd, pair.coverageId, true);
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [pair.pairId] });
+    const dims = graphById(gd, pair.coverageId)?.dimensions ?? [];
+    toggleGraphDimension(gd, pair.pairId, dims[0]!, false);
+    expect(tourState()).toMatchObject({ step: 4, substep: null });
+    // Back at step 3 with a fresh pair: losing both halves is losing the pair.
+    const again = openSampleAt(3);
+    const againSheet = listSheets(again)[0]!.id;
+    const other = createGraphPair(again, { sheetId: againSheet, tableId: cells(again).team.id });
+    removeGraphObject(again, other.pairId, 'coverage');
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [other.pairId] });
+    removeGraphObject(again, other.pairId, 'ring');
+    expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'add', pairIds: [] });
   });
 
   test('ONB-05 GRAPH-03 GRAPH-05 an unbound pair never advances; Re-point shows `point` again and, bound to another table, resets the dimensions baseline so the defaults do not count', () => {

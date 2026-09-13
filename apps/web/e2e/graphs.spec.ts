@@ -12,6 +12,8 @@ import {
   listSheets,
   openDocument,
   setCellText,
+  setGraphCollapsed,
+  setGraphPosition,
   tableRecord,
   type GedeDoc,
   type Id,
@@ -304,6 +306,193 @@ for (const width of [1024, 1440] as const) {
     await snapshot(`graph-dark-${String(width)}`);
   });
 }
+
+/** The layer's zoom, read from the canvas layer's transform. */
+async function layerZoom(page: Page): Promise<number> {
+  const style = (await page.getByTestId('layer').getAttribute('style')) ?? '';
+  const match = /scale\(([\d.]+)\)/.exec(style);
+  return match?.[1] === undefined ? 1 : Number(match[1]);
+}
+
+// ADR-047 (#163): the object chords. Desktop Chrome reports a Windows UA, so `mod` is
+// Control here; the announcements keep the sheet's Mac glyphs (ADR-042).
+for (const width of [1024, 1440] as const) {
+  for (const scheme of ['light', 'dark'] as const) {
+    test(`KEYS-03 KEYS-08 GRAPH-02 GRAPH-05 GRAPH-07 GRAPH-08 GRAPH-11 DOC-07 A11Y-01 A11Y-02 A11Y-05 MENU-01 ADR-047 at ${String(width)} ${scheme}, keyboard only: Delete takes one half, undo brings it back; ⌥← collapses a half to its strip and Fit frames the tables; ⌘A then Delete takes the table with its pair, one undo restores all`, async ({
+      page,
+      checkA11y,
+      snapshot,
+    }) => {
+      const room = await installFakes(page);
+      await page.setViewportSize({ width, height: 900 });
+      await page.emulateMedia({ colorScheme: scheme });
+      await signInTo(page, `/d/${DOC_ID}`);
+      await page.getByRole('button', { name: 'Add table' }).click();
+      await fillTable(page);
+      await page.getByRole('button', { name: 'Add graph' }).click();
+      await page.getByRole('button', { name: 'Bind the graph to Table 1' }).click();
+      const ring = page.getByRole('region', { name: 'Ring graph of Table 1' });
+      const coverage = page.getByRole('region', { name: 'Coverage graph of Table 1' });
+      await expect(ring).toBeVisible();
+      await expect(coverage).toBeVisible();
+      const live = page.getByTestId('live-region');
+      const graphs = () =>
+        room.doc.getMap('graphs').toJSON() as Record<
+          string,
+          { kind: string; tableId: string; collapsed?: boolean }
+        >;
+      const tag = `${String(width)}-${scheme}`;
+
+      // ── From B5, ⇧⌘→ lands on the ring's header; Delete takes the ring only (KEYS-03).
+      await page.locator('[data-address="B5"]').click();
+      await page.keyboard.press('Control+Shift+ArrowRight');
+      await expect(ring.getByRole('button', { name: /^Move Ring graph/ })).toBeFocused();
+      await page.keyboard.press('Delete');
+      await expect(ring).toHaveCount(0);
+      await expect(coverage).toBeVisible();
+      await expect(live).toHaveText('Deleted the ring of Table 1 — press ⌘Z to undo');
+      const lone = Object.values(graphs());
+      expect(lone.map((g) => g.kind)).toEqual(['coverage']);
+      expect(lone[0]?.tableId).toBe(Object.keys(room.doc.getMap('tables').toJSON())[0]);
+      // The survivor holds focus and the selection; the Graph tab still serves it (GRAPH-05).
+      await expect(coverage.getByRole('button', { name: /^Move Coverage graph/ })).toBeFocused();
+      await expect(coverage).toHaveAttribute('data-selected', 'true');
+      await expect(coverage.getByTestId('graph-stat')).toHaveText('3 / 12');
+      await checkA11y(`graph half deleted ${tag}`);
+      await snapshot(`graph-half-deleted-${tag}`);
+      // ⌘Z brings the ring back, bound and derived as before.
+      await page.keyboard.press('Control+z');
+      await expect(ring).toBeVisible();
+      await expect(ring.getByTestId('graph-stat')).toHaveText('3 / 12');
+      expect(
+        Object.values(graphs())
+          .map((g) => g.kind)
+          .sort(),
+      ).toEqual(['coverage', 'ring']);
+
+      // ── ⌥← collapses the selected coverage to its header strip (GRAPH-11, GRAPH-08).
+      // A collaborator stacks the coverage under the ring first, so the sheet's height, not
+      // its width, is what Fit has to frame (side by side, the 14-column width binds either way).
+      const gd = openDocument(room.doc);
+      const stacked = Object.entries(graphs());
+      const ringRecord = stacked.find(([, g]) => g.kind === 'ring');
+      const coverageId = stacked.find(([, g]) => g.kind === 'coverage')?.[0] ?? '';
+      const ringRow = (ringRecord?.[1] as { gridRow?: number } | undefined)?.gridRow ?? 0;
+      setGraphPosition(gd, coverageId, { col: 1, row: ringRow + 29 });
+      await expect(coverage).toHaveCSS('top', `${String((ringRow + 29) * 22)}px`);
+      await page.keyboard.press('Control+Shift+Digit0');
+      const zoomBefore = await layerZoom(page);
+      expect(zoomBefore).toBeLessThan(0.6);
+      await coverage.getByRole('button', { name: /^Move Coverage graph/ }).focus();
+      await page.keyboard.press('Alt+ArrowLeft');
+      const chevron = coverage.getByRole('button', { name: 'Expand Coverage graph of Table 1' });
+      await expect(chevron).toHaveAttribute('aria-expanded', 'false');
+      await expect(coverage).toHaveCSS('height', '22px');
+      await expect(coverage.getByTestId('graph-stat')).toHaveText('3 / 12');
+      await expect(coverage.getByTestId('coverage-axes')).toHaveText(
+        'rows Column 1 · columns Column 2',
+      );
+      await expect(coverage.getByTestId('coverage-graph')).toHaveCount(0);
+      await expect(live).toHaveText('Collapsed the coverage of Table 1');
+      expect(Object.values(graphs()).find((g) => g.kind === 'coverage')?.collapsed).toBe(true);
+      // The ring too (⇧⌘← steps back to it), then Fit frames the tables at a larger zoom
+      // than the two 28-row boxes allowed (DOC-07).
+      await page.keyboard.press('Control+Shift+ArrowLeft');
+      await expect(ring.getByRole('button', { name: /^Move Ring graph/ })).toBeFocused();
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Alt+ArrowLeft');
+      await expect(ring).toHaveCSS('height', '22px');
+      await expect(ring.getByTestId('graph-dimensions')).toHaveText(
+        'Column 1 · Column 2 · Column 3',
+      );
+      await page.keyboard.press('Control+Shift+Digit0');
+      expect(await layerZoom(page)).toBeGreaterThan(zoomBefore);
+      // The chevron's focus ring is the 2 px amber ring at 2 px offset (A11Y-02).
+      await chevron.focus();
+      await expect(chevron).toHaveCSS('outline-width', '2px');
+      await expect(chevron).toHaveCSS('outline-offset', '2px');
+      await checkA11y(`graph collapsed ${tag}`);
+      await snapshot(`graph-collapsed-${tag}`);
+      // ⌥→ expands each back to its stored box; Enter on the chevron works the same way.
+      await page.keyboard.press('Enter');
+      await expect(coverage.getByTestId('coverage-graph')).toBeVisible();
+      await expect(coverage).toHaveCSS('height', '616px');
+      await ring.getByRole('button', { name: /^Move Ring graph/ }).focus();
+      await page.keyboard.press('Enter');
+      await page.keyboard.press('Alt+ArrowRight');
+      await expect(ring).toHaveCSS('height', '616px');
+      await expect(live).toHaveText('Expanded the ring of Table 1');
+      // The graph context menu is the pointer's route (MENU-01).
+      await ring.getByRole('button', { name: /^Move Ring graph/ }).click({ button: 'right' });
+      const menu = page.getByRole('menu', { name: 'Graph menu' });
+      await expect(menu.getByRole('menuitem')).toHaveText([
+        /^Collapse/,
+        /^Delete ring/,
+        /^Delete graph pair/,
+        /^Fit to canvas/,
+        /^Actual size/,
+      ]);
+      await page.keyboard.press('Escape');
+      await expect(menu).toHaveCount(0);
+
+      // ── ⌘A selects the table; Delete takes it with both halves, no dialog; one undo restores.
+      await page.locator('[data-address="B5"]').click();
+      await page.keyboard.press('Control+a');
+      await expect(page.getByTestId('selected-table')).toHaveText('Table 1');
+      await page.keyboard.press('Delete');
+      await expect(page.getByRole('grid')).toHaveCount(0);
+      await expect(ring).toHaveCount(0);
+      await expect(coverage).toHaveCount(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(live).toHaveText('Deleted Table 1 and its graph — press ⌘Z to undo');
+      expect(room.doc.getMap('tables').size).toBe(0);
+      expect(room.doc.getMap('graphs').size).toBe(0);
+      await expect(page.getByTestId('plane')).toBeFocused();
+      await checkA11y(`table deleted ${tag}`);
+      await snapshot(`table-deleted-${tag}`);
+      await page.keyboard.press('Control+z');
+      await expect(page.locator('[data-address="B5"]')).toHaveText('Nepal');
+      await expect(ring).toBeVisible();
+      await expect(coverage).toBeVisible();
+      expect(room.doc.getMap('graphs').size).toBe(2);
+    });
+  }
+}
+
+test('RESP-02 RESP-05 ADR-047 at 480 no chevron and no delete or collapse route renders; a half a collaborator collapsed renders as its strip', async ({
+  page,
+  checkA11y,
+  snapshot,
+}) => {
+  const room = await installFakes(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signInTo(page, `/d/${DOC_ID}`);
+  await page.getByRole('button', { name: 'Add shaped table here' }).click();
+  const ring = page.getByRole('region', { name: 'Ring graph of Contexts 1' });
+  await expect(ring).toBeVisible();
+  await expect(ring.getByRole('button', { name: /^Collapse Ring graph/ })).toBeVisible();
+  await asPhone(page, 480, 900);
+  await expect(page.getByText('View only on phone')).toBeVisible();
+  await expect(page.getByTestId('graph-chevron')).toHaveCount(0);
+  await ring.dispatchEvent('contextmenu');
+  await expect(page.getByRole('menu')).toHaveCount(0);
+  await ring.focus();
+  await page.keyboard.press('Delete');
+  await page.keyboard.press('Alt+ArrowLeft');
+  expect(room.doc.getMap('graphs').size).toBe(2);
+  // Document state: a collaborator's collapse shows as the strip, read-only.
+  const gd = openDocument(room.doc);
+  const ringId = Object.entries(
+    room.doc.getMap('graphs').toJSON() as Record<string, { kind: string }>,
+  ).find(([, g]) => g.kind === 'ring')?.[0];
+  setGraphCollapsed(gd, ringId ?? '', true);
+  await expect(ring).toHaveAttribute('data-collapsed', 'true');
+  await expect(ring).toHaveCSS('height', '22px');
+  await expect(page.getByTestId('ring-graph')).toHaveCount(0);
+  await expect(page.getByTestId('graph-chevron')).toHaveCount(0);
+  await checkA11y('graph collapsed phone at 480');
+  await snapshot('graph-collapsed-480');
+});
 
 test('GRAPH-04 GRAPH-10 "Add shaped table" binds a pair in one step; Shift+Enter on a node opens a child sheet named after the symbol', async ({
   page,

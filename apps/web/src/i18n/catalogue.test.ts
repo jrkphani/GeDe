@@ -5,6 +5,10 @@ import { LOCALES } from '../locale.js';
 import { CATALOGUE, format, MESSAGE_KEYS, translate, type MessageKey } from './index.js';
 
 const TOUR_KEYS = MESSAGE_KEYS.filter((k) => k.startsWith('tour.'));
+/** Keys whose values are prose in the locale's own script (the tour, and ADR-047's object copy). */
+const TRANSLATED_KEYS = MESSAGE_KEYS.filter(
+  (k) => k.startsWith('tour.') || k.startsWith('object.'),
+);
 
 const placeholders = (s: string): string[] =>
   [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]!).sort();
@@ -39,7 +43,7 @@ describe('message catalogue', () => {
       'te-IN': /\p{Script=Telugu}/u,
     };
     for (const [locale, script] of Object.entries(scripts)) {
-      for (const key of TOUR_KEYS) {
+      for (const key of TRANSLATED_KEYS) {
         const value = CATALOGUE[locale as keyof typeof CATALOGUE][key];
         expect(script.test(value), `${locale} ${key}: ${value}`).toBe(true);
       }
@@ -99,7 +103,7 @@ describe('message catalogue', () => {
 
   test('ONB-12 the voice holds in every locale: no exclamation mark, no "Oops", no emoji', () => {
     for (const locale of LOCALES) {
-      for (const key of TOUR_KEYS) {
+      for (const key of TRANSLATED_KEYS) {
         const value = CATALOGUE[locale][key];
         expect(value, `${locale} ${key}`).not.toMatch(/!|Oops|\p{Extended_Pictographic}/u);
       }
@@ -114,6 +118,48 @@ describe('message catalogue', () => {
       for (const operator of named) {
         expect(isEmptyQuery(parseQuery(operator)), `${locale} ${operator}`).toBe(false);
       }
+    }
+  });
+
+  test('A11Y-05 ADR-047 the object announcements compose a localized name with the undo chord in every locale', () => {
+    expect(
+      translate('en-US', 'object.deleted', {
+        name: translate('en-US', 'object.name.ring', { table: 'Table 1' }),
+        undo: '⌘Z',
+      }),
+    ).toBe('Deleted the ring of Table 1 — press ⌘Z to undo');
+    expect(
+      translate('en-US', 'object.deleted', {
+        name: translate('en-US', 'object.name.pairUnbound'),
+        undo: '⌘Z',
+      }),
+    ).toBe('Deleted the graph — press ⌘Z to undo');
+    expect(translate('en-US', 'object.collapsed', { name: 'the coverage of Table 1' })).toBe(
+      'Collapsed the coverage of Table 1',
+    );
+    // #163: the table's announcement counts its graphs and the cells its delete broke.
+    expect(
+      translate('en-US', 'object.deleted.refs', {
+        name: translate('en-US', 'object.name.tableGraph', { table: 'Table 1' }),
+        count: 3,
+        undo: '⌘Z',
+      }),
+    ).toBe(
+      'Deleted Table 1 and its graph — 3 cells elsewhere now read “reference removed”; press ⌘Z to undo',
+    );
+    expect(translate('en-US', 'object.name.tableGraphs', { table: 'Table 1', count: 2 })).toBe(
+      'Table 1 and its 2 graphs',
+    );
+    expect(translate('en-US', 'object.collapse', { name: 'Ring graph of Table 1' })).toBe(
+      'Collapse Ring graph of Table 1',
+    );
+    for (const locale of LOCALES) {
+      const name = translate(locale, 'object.name.coverage', { table: 'Table 1' });
+      expect(name, locale).toContain('Table 1');
+      const said = translate(locale, 'object.deleted', { name, undo: '⌘Z' });
+      expect(said, locale).toContain('Table 1');
+      expect(said, locale).toContain('⌘Z');
+      expect(said, locale).not.toMatch(/\{\w+\}/);
     }
   });
 

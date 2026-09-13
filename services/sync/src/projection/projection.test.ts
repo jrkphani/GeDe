@@ -12,11 +12,14 @@ import {
   createGraphPair,
   createSheet,
   createTable,
+  deleteTableWithGraphs,
   encodeSeededDocument,
   listSheets,
   openDocument,
+  removeGraphObject,
   seedNewDocument,
   setCellText,
+  setGraphCollapsed,
   setGraphPosition,
   setGraphSlice,
   setRowDepth,
@@ -249,6 +252,27 @@ describe('projectDocument', () => {
     gd.doc.transact(() => {
       gd.tables.delete(tableId);
     });
+    expect(projectDocument(gd.doc, DOC_ID).graphs).toEqual([]);
+  });
+
+  test('GRAPH-02 ADR-047 a pair reduced to one half projects that half, bound as before; a collapsed half projects its stored geometry and the collapse key is not a column', () => {
+    const { gd, sheetId, tableId, cols } = sample();
+    const pair = createGraphPair(gd, { sheetId, tableId });
+    expect(removeGraphObject(gd, pair.pairId, 'ring')).toBe(pair.ringId);
+    setGraphCollapsed(gd, pair.coverageId, true);
+    const projection = projectDocument(gd.doc, DOC_ID);
+    expect(projection.graphs.map((g) => g.id)).toEqual([pair.coverageId]);
+    expect(projection.graphs[0]).toMatchObject({
+      kind: 'coverage',
+      pairId: pair.pairId,
+      tableId,
+      dimensionColumns: cols,
+      widthUnits: 6,
+      heightUnits: 28,
+    });
+    expect(projection.graphs[0]).not.toHaveProperty('collapsed');
+    // Deleting the table takes the half with it, so nothing dangles.
+    deleteTableWithGraphs(gd, tableId);
     expect(projectDocument(gd.doc, DOC_ID).graphs).toEqual([]);
   });
 

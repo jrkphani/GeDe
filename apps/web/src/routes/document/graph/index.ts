@@ -21,6 +21,8 @@ export {
   type GraphHover,
 } from './store.js';
 export {
+  deletedAnnouncement,
+  graphObjectName,
   useGraphs,
   type Graphs,
   type GraphsActions,

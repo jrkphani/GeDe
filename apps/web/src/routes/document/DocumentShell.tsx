@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { flushSync } from 'react-dom';
 import { useLocation, useNavigate, useParams, useSearchParams } from 'react-router';
 import {
@@ -61,7 +61,11 @@ import {
   type Size,
   type Viewport,
 } from '../../doc/viewport.js';
-import { useLocale } from '../../locale.js';
+import { peekEngine } from '../../doc/engine.js';
+import { LABELS } from '../../doc/shortcuts.js';
+import { translate } from '../../i18n/index.js';
+import { formatNumber } from '../../intl.js';
+import { activeLocale, useLocale } from '../../locale.js';
 import { usePhone } from '../../breakpoint.js';
 import { useMediaQuery } from '../../use-media-query.js';
 import { Canvas } from './Canvas.js';
@@ -97,6 +101,7 @@ import {
   sheetObjects,
   stepObject,
   tableEntry,
+  type SheetObject,
 } from './keys/objects.js';
 import { setTourDocument } from '../tour/store.js';
 import { useTourGraphSubstep } from '../tour/use-tour.js';
@@ -389,6 +394,11 @@ function OpenDocument({
   }, []);
 
   // -- context graphs (GRAPH-01..11) --------------------------------------------
+  // ADR-047: the hook reads its options through a ref, so the focus hand-off it needs
+  // after a delete can be defined below, beside the object chords it shares logic with.
+  const afterDeleteRef = useRef<
+    (landing: { tableId: Id | null; fallback: SheetObject | null }) => void
+  >(() => undefined);
   const graphs = useGraphs({
     gd,
     activeSheetId,
@@ -398,6 +408,9 @@ function OpenDocument({
     reveal,
     settle: () => {
       session.undo.stopCapturing();
+    },
+    afterDelete: (landing) => {
+      afterDeleteRef.current(landing);
     },
   });
   const { select: selectGraph } = graphs.actions;
@@ -536,15 +549,13 @@ function OpenDocument({
   // entry — a cell (which arms it), a graph's header. Tab cannot do this forward (GRID-05).
   // The objects are the document's, not the DOM's: a table outside the viewport is culled
   // (`visibleTables`), so the object is revealed first and focused once it has rendered.
-  const moveObject = useCallback(
-    (direction: 1 | -1) => {
-      if (activeSheetId === null) return;
-      const objects = sheetObjects(gd, activeSheetId);
-      const next = stepObject(objects, currentObject(document.activeElement), direction);
-      if (next === null) {
-        announce('Nothing on this sheet');
-        return;
-      }
+  /**
+   * Reveal an object and put focus at its entry. Returns false when it could not be
+   * found in the DOM. Used by ⇧⌘→ / ⇧⌘← and, after a delete (ADR-047), to land on
+   * the surviving object.
+   */
+  const focusObject = useCallback(
+    (next: SheetObject, options: { announceName: boolean }) => {
       const bounds = objectBounds(gd, next);
       const entryCell = next.kind === 'table' ? tableEntry(gd, next.id, cell) : null;
       // Synchronous, so the revealed table is in the DOM before its entry is looked up.
@@ -564,15 +575,80 @@ function OpenDocument({
       });
       const section = objectElement(next);
       const entry = section === null ? null : objectEntry(section);
-      if (section === null || entry === null) {
-        announce('No other object on this sheet');
+      if (section === null || entry === null) return false;
+      entry.focus({ preventScroll: true });
+      if (options.announceName) announce(section.getAttribute('aria-label') ?? 'Object');
+      return true;
+    },
+    [gd, cell, measured, grid.actions],
+  );
+  const moveObject = useCallback(
+    (direction: 1 | -1) => {
+      if (activeSheetId === null) return;
+      const objects = sheetObjects(gd, activeSheetId);
+      const next = stepObject(objects, currentObject(document.activeElement), direction);
+      if (next === null) {
+        announce('Nothing on this sheet');
         return;
       }
-      entry.focus({ preventScroll: true });
-      announce(section.getAttribute('aria-label') ?? 'Object');
+      if (!focusObject(next, { announceName: true })) announce('No other object on this sheet');
     },
-    [gd, activeSheetId, cell, measured, grid.actions],
+    [gd, activeSheetId, focusObject],
   );
+  // ADR-047 (#163): after a delete, focus lands on an object that is left — the bound table
+  // when a graph half went, else the object before it; the next object when a table went —
+  // and on the canvas plane when nothing is, so the keyboard is never dropped on `body`.
+  // The announcement is the delete's own and comes after the landing.
+  const landAfterDelete = useCallback(
+    (landing: { tableId: Id | null; fallback: SheetObject | null }) => {
+      const candidates: SheetObject[] = [];
+      if (landing.tableId !== null) candidates.push({ kind: 'table', id: landing.tableId });
+      if (landing.fallback !== null) candidates.push(landing.fallback);
+      for (const candidate of candidates) {
+        if (focusObject(candidate, { announceName: false })) return;
+      }
+      document.querySelector<HTMLElement>('.gd-canvas__plane')?.focus({ preventScroll: true });
+    },
+    [focusObject],
+  );
+  afterDeleteRef.current = landAfterDelete;
+  const deleteTable = useCallback(
+    (tableId: Id) => {
+      if (editing !== null || activeSheetId === null) return;
+      // FX-06: dependents elsewhere fall to the reference-removed error; the engine reports
+      // them in the batch that answers this change, and the announcement names the count.
+      const engine = peekEngine(gd.doc);
+      let broken = 0;
+      const stop = engine?.subscribeAll((touched) => {
+        for (const id of touched) {
+          if (engine.result(id)?.error?.kind === 'reference-removed') broken += 1;
+        }
+      });
+      const objects = sheetObjects(gd, activeSheetId);
+      const index = objects.findIndex((o) => o.kind === 'table' && o.id === tableId);
+      // One undo step of its own: never merged into a change made just before it (KEYS-03).
+      session.undo.stopCapturing();
+      const outcome = grid.commands.deleteTable(tableId);
+      if (outcome === null) {
+        stop?.();
+        return;
+      }
+      const left = sheetObjects(gd, activeSheetId);
+      const next = left[Math.min(Math.max(index, 0), left.length - 1)] ?? null;
+      landAfterDelete({ tableId: null, fallback: next });
+      const finish = () => {
+        stop?.();
+        announce(deletedTableAnnouncement(outcome, broken));
+      };
+      if (engine === undefined) finish();
+      else void engine.settled().then(finish);
+    },
+    [gd, editing, activeSheetId, grid.commands, landAfterDelete, session.undo],
+  );
+  const deleteSelectedTable = useCallback(() => {
+    if (selection !== null) deleteTable(selection.tableId);
+  }, [selection, deleteTable]);
+  const selectedGraph = selectedGraphId === null ? null : graphById(gd, selectedGraphId);
   useShortcuts(
     documentBindings({
       phone,
@@ -631,13 +707,26 @@ function OpenDocument({
         clear: () => {
           if (cell !== null) grid.commands.clearCell(cell);
         },
-        clearNeedsCell: () => {
-          announce('The table is selected; select a cell to clear it');
-        },
+        deleteTable: deleteSelectedTable,
         clearSelection: clearAll,
         toggleMark,
       },
       table: { addRow: addRowToSelected, addColumn: addColumnToSelected },
+      // ADR-047: ⌫ / Delete on a selected half removes that half; ⌥← / ⌥→ collapse or expand it.
+      graph: {
+        selected: selectedGraph !== null,
+        pointing: graphs.state.pointing !== null,
+        remove: () => {
+          if (selectedGraph !== null)
+            graphs.actions.removeHalf(selectedGraph.pairId, selectedGraph.kind);
+        },
+        collapse: () => {
+          if (selectedGraph !== null) graphs.actions.setCollapsed(selectedGraph.id, true);
+        },
+        expand: () => {
+          if (selectedGraph !== null) graphs.actions.setCollapsed(selectedGraph.id, false);
+        },
+      },
       clipboard,
       hierarchy: {
         nest: (c) => grid.commands.nestRow(c.tableId, c.rowId),
@@ -670,6 +759,16 @@ function OpenDocument({
     },
     sheets: { add: appendSheet },
     selectTable,
+    // ADR-047: the pointer routes to the object deletes and collapse.
+    deleteTable: editable ? deleteTable : undefined,
+    graphs: editable
+      ? {
+          select: graphs.actions.select,
+          remove: graphs.actions.remove,
+          removeHalf: graphs.actions.removeHalf,
+          setCollapsed: graphs.actions.setCollapsed,
+        }
+      : undefined,
     slots: {
       // SORT-01..06 (#74): the viewer's own sort, filter and grouping; the options live in
       // the Organize inspector, so "show … options" opens it.
@@ -768,7 +867,13 @@ function OpenDocument({
           onAddRow={addRowToSelected}
           onAddColumn={addColumnToSelected}
           tableMenu={
-            <TableMenu gd={gd} selection={selection} editable={editable} commands={grid.commands} />
+            <TableMenu
+              gd={gd}
+              selection={selection}
+              editable={editable}
+              commands={grid.commands}
+              onDeleteTable={deleteTable}
+            />
           }
           onGridlines={setGridlines}
           pinned={selectedTable?.pinned ?? null}
@@ -1208,6 +1313,31 @@ function OpenDocument({
       )}
     </div>
   );
+}
+
+/**
+ * ADR-047 (#163): "Deleted Table 1 and its graph — 3 cells elsewhere now read
+ * “reference removed”; press ⌘Z to undo", in the active locale.
+ */
+function deletedTableAnnouncement(outcome: { title: string; graphs: number }, broken: number) {
+  const locale = activeLocale();
+  const name =
+    outcome.graphs === 0
+      ? outcome.title
+      : outcome.graphs === 1
+        ? translate(locale, 'object.name.tableGraph', { table: outcome.title })
+        : translate(locale, 'object.name.tableGraphs', {
+            table: outcome.title,
+            count: formatNumber(locale, outcome.graphs),
+          });
+  const undo = LABELS.undo;
+  if (broken === 0) return translate(locale, 'object.deleted', { name, undo });
+  if (broken === 1) return translate(locale, 'object.deleted.ref', { name, undo });
+  return translate(locale, 'object.deleted.refs', {
+    name,
+    undo,
+    count: formatNumber(locale, broken),
+  });
 }
 
 /** INSP-03 / INSP-08: what the head says of a selected graph — its kind, source and dimensions. */

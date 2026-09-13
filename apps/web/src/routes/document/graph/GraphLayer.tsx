@@ -15,7 +15,7 @@ import {
 
 import { useYVersion } from '../../../doc/use-y.js';
 import type { CellSelection } from '../selection.js';
-import { CoverageGraph } from './CoverageGraph.js';
+import { CoverageGraph, coverageAxesNote } from './CoverageGraph.js';
 import { GraphObject, UnboundBody } from './GraphObject.js';
 import { RingGraph } from './RingGraph.js';
 import { useGraphHover } from './store.js';
@@ -166,6 +166,13 @@ const GraphHalf = memo(function GraphHalf({
   hovering,
   selectedRowId,
 }: GraphHalfProps) {
+  // ADR-047 / GRAPH-08: a collapsed coverage keeps its axes line where its body showed it.
+  const strip =
+    graph.collapsed && graph.kind === 'coverage' && sourceTitle !== null ? (
+      <span data-testid="coverage-axes">
+        {coverageAxesNote(derivation, graph.slice, selectedRowId)}
+      </span>
+    ) : undefined;
   return (
     <GraphObject
       graph={graph}
@@ -175,6 +182,7 @@ const GraphHalf = memo(function GraphHalf({
       editable={editable}
       actions={actions}
       scale={scale}
+      subLine={strip}
     >
       {sourceTitle === null ? (
         <UnboundBody pairId={graph.pairId} editable={editable} actions={actions} />

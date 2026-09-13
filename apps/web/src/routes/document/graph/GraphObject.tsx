@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import {
+  useId,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -8,6 +9,7 @@ import {
 } from 'react';
 import {
   coverageLabel,
+  GRAPH_COLLAPSED_HEIGHT_UNITS,
   GRAPH_MIN_HEIGHT_UNITS,
   GRAPH_MIN_WIDTH_UNITS,
   LATTICE,
@@ -19,10 +21,15 @@ import {
 } from '@gede/core';
 import { Button, Icon } from '@gede/ui';
 
+import { useMessages } from '../../../i18n/index.js';
 import type { GraphsActions } from './use-graphs.js';
 
 /** The header is two lattice rows, like a table's title bar. */
 export const GRAPH_HEADER_PX = TABLE_TITLE_ROWS * LATTICE.row;
+/** Collapsed, the object is its header strip alone: one lattice row (ADR-047). */
+export const GRAPH_COLLAPSED_PX = GRAPH_COLLAPSED_HEIGHT_UNITS * LATTICE.row;
+/** The chevron's box: 14 px, so its 2 px ring at 2 px offset fits the 22 px strip (A11Y-02). */
+const CHEVRON_PX = 14;
 /** Pointer travel below this is a click on the header, not a drag. */
 const DRAG_THRESHOLD_PX = 3;
 
@@ -37,6 +44,11 @@ export interface GraphObjectProps {
   actions: GraphsActions;
   /** Screen pixels per canvas pixel right now (the layer's zoom). */
   scale: () => number;
+  /**
+   * ADR-047: what the header's second line says — the dimensions, or for a
+   * coverage its axes line (GRAPH-08), so the strip keeps it while collapsed.
+   */
+  subLine?: ReactNode | undefined;
   children: ReactNode;
 }
 
@@ -52,7 +64,9 @@ interface Drag {
  * object, a body, and a corner handle that resizes it; both snap to the
  * lattice on release and preview the snapped geometry while dragging. The
  * header states the source, the dimensions and the covered / total tuple
- * count (GRAPH-07); the chip names the half.
+ * count (GRAPH-07); the chip names the half. The header's chevron collapses
+ * the half to that strip — one lattice row, position and stored size kept —
+ * and expands it again (ADR-047); collapsed, no body and no corner render.
  */
 export function GraphObject({
   graph,
@@ -62,8 +76,11 @@ export function GraphObject({
   editable,
   actions,
   scale,
+  subLine: subLineOverride,
   children,
 }: GraphObjectProps) {
+  const t = useMessages();
+  const bodyId = useId();
   const drag = useRef<Drag | null>(null);
   // Previews live in state for the render and in refs for the release handler: pointer
   // moves are continuous events React may not have flushed when the pointer lifts.
@@ -76,9 +93,14 @@ export function GraphObject({
   } | null>(null);
   const at = movePreview ?? { col: graph.gridCol, row: graph.gridRow };
   const size = sizePreview ?? { widthUnits: graph.widthUnits, heightUnits: graph.heightUnits };
+  const { collapsed } = graph;
+  const heightPx = collapsed ? GRAPH_COLLAPSED_PX : size.heightUnits * LATTICE.row;
+  const headerPx = collapsed ? GRAPH_COLLAPSED_PX : GRAPH_HEADER_PX;
   const bound = graph.tableId !== null && sourceTitle !== null;
   const dimensionLine = derivation.dimensions.map((d) => d.label).join(' · ');
-  const subLine = !bound ? 'unbound' : dimensionLine === '' ? 'no dimensions' : dimensionLine;
+  const subLine =
+    subLineOverride ??
+    (!bound ? 'unbound' : dimensionLine === '' ? 'no dimensions' : dimensionLine);
   const stat = bound ? coverageLabel(derivation) : '';
   const kindLabel = graph.kind === 'ring' ? 'Ring' : 'Coverage';
   const name = `${kindLabel} graph${bound ? ` of ${sourceTitle}` : ''}`;
@@ -188,8 +210,27 @@ export function GraphObject({
   };
   const onHeaderKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
     if (e.nativeEvent.isComposing || !editable) return;
+    // The chevron inside the header keeps its own keys: Enter and Space press it.
+    if (e.target !== e.currentTarget) return;
+    const mod = e.ctrlKey || e.metaKey;
+    // ADR-047 (#163): the header is the ⇧⌘→ landing spot, focused but not always selected,
+    // so the object chords work from it by `event.code` — ⌫ / Delete removes this half,
+    // ⌥← / ⌥→ collapse or expand it (the row chevron's chords, ADR-030). The shell binds the
+    // same chords for the selected half wherever focus is; this handler stops them here.
+    if ((e.code === 'Delete' || e.code === 'Backspace') && !mod && !e.altKey && !e.shiftKey) {
+      e.preventDefault();
+      e.stopPropagation();
+      actions.removeHalf(graph.pairId, graph.kind);
+      return;
+    }
+    if (e.altKey && !mod && !e.shiftKey && (e.code === 'ArrowLeft' || e.code === 'ArrowRight')) {
+      e.preventDefault();
+      e.stopPropagation();
+      actions.setCollapsed(graph.id, e.code === 'ArrowLeft');
+      return;
+    }
     // A modified arrow is someone else's chord (⇧⌘→ steps to the next object, ADR-042).
-    if (e.ctrlKey || e.metaKey || e.altKey || e.shiftKey) return;
+    if (mod || e.altKey || e.shiftKey) return;
     // The header is a button: Enter or Space selects the graph, as a pointer press does
     // (A11Y-01 — the Graph tab must be reachable without a pointer).
     if (e.code === 'Enter' || e.code === 'NumpadEnter' || e.code === 'Space') {
@@ -226,26 +267,64 @@ export function GraphObject({
         'gd-graph--selected': selected,
         'gd-graph--dragging': movePreview !== null || sizePreview !== null,
         'gd-graph--unbound': !bound,
+        'gd-graph--collapsed': collapsed,
       })}
       style={{
         left: `${String(at.col * LATTICE.col)}px`,
         top: `${String(at.row * LATTICE.row)}px`,
         width: `${String(size.widthUnits * LATTICE.col)}px`,
-        height: `${String(size.heightUnits * LATTICE.row)}px`,
+        height: `${String(heightPx)}px`,
       }}
       aria-label={name}
       data-graph-id={graph.id}
       data-graph-kind={graph.kind}
       data-pair-id={graph.pairId}
       data-selected={selected || undefined}
+      data-collapsed={collapsed || undefined}
       onPointerDown={(e) => {
         e.stopPropagation();
         actions.select(graph.id);
       }}
     >
+      {editable && (
+        // ADR-047: the collapse chevron, at the header's leading edge — a sibling of the
+        // header, not a child: the header is itself a button (move), and a control inside a
+        // control is a defect (axe nested-interactive). A native button, so Enter and Space
+        // press it; it neither starts a drag nor hands its keys to the header. Absent on the
+        // phone and for a view-only participant (RESP-02, SHARE-03): collapse is a document
+        // edit. Below 1024 px its hit area is the 44 px target (RESP-05, CSS).
+        <button
+          type="button"
+          className="gd-graph__chevron"
+          style={{ top: `${String((headerPx - CHEVRON_PX) / 2)}px` }}
+          aria-expanded={!collapsed}
+          aria-controls={bodyId}
+          aria-label={t(collapsed ? 'object.expand' : 'object.collapse', { name })}
+          title={t(collapsed ? 'object.expand' : 'object.collapse', { name })}
+          data-testid="graph-chevron"
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            actions.select(graph.id);
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            // A press selects the half (as any press on it does), from the keyboard too.
+            actions.select(graph.id);
+            actions.toggleCollapsed(graph.id);
+          }}
+        >
+          <Icon
+            name="chevron-right"
+            size={13}
+            className={clsx('gd-graph__chevron-glyph', {
+              'gd-graph__chevron-glyph--expanded': !collapsed,
+            })}
+          />
+        </button>
+      )}
       <header
-        className="gd-graph__header"
-        style={{ height: `${String(GRAPH_HEADER_PX)}px` }}
+        className={clsx('gd-graph__header', { 'gd-graph__header--with-chevron': editable })}
+        style={{ height: `${String(headerPx)}px` }}
         role={editable ? 'button' : undefined}
         tabIndex={editable ? 0 : undefined}
         aria-label={
@@ -279,13 +358,16 @@ export function GraphObject({
           {graph.kind}
         </span>
       </header>
-      <div
-        className="gd-graph__body"
-        style={{ height: `${String(size.heightUnits * LATTICE.row - GRAPH_HEADER_PX)}px` }}
-      >
-        {children}
-      </div>
-      {editable && (
+      {!collapsed && (
+        <div
+          id={bodyId}
+          className="gd-graph__body"
+          style={{ height: `${String(size.heightUnits * LATTICE.row - GRAPH_HEADER_PX)}px` }}
+        >
+          {children}
+        </div>
+      )}
+      {editable && !collapsed && (
         <div
           role="separator"
           aria-orientation="horizontal"
