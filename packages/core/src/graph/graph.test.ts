@@ -8,12 +8,14 @@ import {
   cellText,
   createSheet,
   createTable,
+  createUndoManager,
   graphById,
   graphsInPair,
   graphsOnSheet,
   listSheets,
   openDocument,
   setCellText,
+  graphUnitBounds,
   sheetBounds,
   tableById,
   tableMap,
@@ -47,7 +49,12 @@ import {
   createGraphPair,
   createShapedTableWithGraph,
   defaultDimensions,
+  deleteTableWithGraphs,
+  graphsBoundTo,
+  removeGraph,
+  removeGraphObject,
   removeGraphPair,
+  setGraphCollapsed,
   setGraphDimensions,
   setGraphPosition,
   setGraphSize,
@@ -636,6 +643,169 @@ describe('GRAPH-01 GRAPH-02 graph objects in the document', () => {
     expect(removeGraphPair(gd, pair.pairId).sort()).toEqual([pair.coverageId, pair.ringId].sort());
     expect(transactions).toBe(1);
     expect(graphsOnSheet(gd, sheetId)).toEqual([]);
+  });
+
+  test('GRAPH-02 ADR-047 removing one half leaves the other bound to the table, in one transaction, and the lone half still takes every pair mutation', () => {
+    const { gd, sheetId, tableId, cols } = fixture();
+    const pair = createGraphPair(gd, { sheetId, tableId });
+    let transactions = 0;
+    gd.doc.on('afterTransaction', () => {
+      transactions += 1;
+    });
+    expect(removeGraphObject(gd, pair.pairId, 'ring')).toBe(pair.ringId);
+    expect(transactions).toBe(1);
+    expect(removeGraphObject(gd, pair.pairId, 'ring')).toBeNull();
+    expect(removeGraph(gd, pair.ringId)).toBe(false);
+    const survivors = graphsInPair(gd, pair.pairId);
+    expect(survivors.map((g) => g.id)).toEqual([pair.coverageId]);
+    expect(survivors[0]?.tableId).toBe(tableId);
+    // The lone coverage carries the shared state, so the pair mutations keep working on it.
+    expect(setGraphDimensions(gd, pair.pairId, [cols[1] ?? ''])).toEqual([cols[1]]);
+    expect(toggleGraphDimension(gd, pair.pairId, cols[2] ?? '', true)).toEqual([cols[1], cols[2]]);
+    setGraphSlice(gd, pair.pairId, { rowAxis: cols[2] ?? null, colAxis: null, pins: {} });
+    expect(graphById(gd, pair.coverageId)?.slice.rowAxis).toBe(cols[2]);
+    const other = createTable(gd, { sheetId, at: { col: 10, row: 1 }, columns: 2 });
+    expect(bindGraphPair(gd, pair.pairId, other)).toBe(true);
+    expect(graphById(gd, pair.coverageId)?.tableId).toBe(other);
+    // The other half goes the same way (by id this time); then the pair is gone.
+    expect(removeGraph(gd, pair.coverageId)).toBe(true);
+    expect(graphsInPair(gd, pair.pairId)).toEqual([]);
+    expect(removeGraphObject(gd, pair.pairId, 'coverage')).toBeNull();
+  });
+
+  test('GRAPH-06 ADR-047 a lone half derives from its table like a whole pair', () => {
+    const { gd, sheetId, tableId, rows, cols } = fixture();
+    fill(gd, tableId, rows, cols, [
+      ['a', 'x', '1'],
+      ['b', 'x', '2'],
+      ['a', 'y', '1'],
+    ]);
+    const table = tableMap(gd, tableId);
+    if (table === null) throw new Error('table');
+    const pair = createGraphPair(gd, { sheetId, tableId });
+    const whole = deriveGraph(
+      graphInputOf(table, graphById(gd, pair.ringId)?.dimensions ?? [], (r, c) =>
+        cellText(table, r, c),
+      ),
+    );
+    removeGraphObject(gd, pair.pairId, 'ring');
+    const lone = graphsInPair(gd, pair.pairId)[0];
+    if (lone === undefined) throw new Error('lone half');
+    const derived = deriveGraph(
+      graphInputOf(table, lone.dimensions, (r, c) => cellText(table, r, c)),
+    );
+    expect(derived).toEqual(whole);
+    expect(derived.contexts.length).toBe(3);
+    expect(coverageLabel(derived)).toBe(coverageLabel(whole));
+  });
+
+  test('GRAPH-02 GRAPH-11 ADR-047 collapse is per object, keeps position and size, is one undo step, and the footprint is one row', () => {
+    const { gd, sheetId, tableId } = fixture();
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const pair = createGraphPair(gd, { sheetId, tableId });
+    setGraphSize(gd, pair.coverageId, { widthUnits: 9, heightUnits: 40 });
+    setGraphPosition(gd, pair.coverageId, { col: 20, row: 3 });
+    undo.stopCapturing();
+    const before = sheetBounds(gd, sheetId);
+    expect(before?.rows).toBe(3 + 40 - (before?.row ?? 0));
+    expect(graphById(gd, pair.coverageId)?.collapsed).toBe(false);
+    expect(setGraphCollapsed(gd, pair.coverageId, true)).toBe(true);
+    expect(setGraphCollapsed(gd, pair.coverageId, true)).toBe(false);
+    const collapsed = graphById(gd, pair.coverageId);
+    expect(collapsed).toMatchObject({
+      collapsed: true,
+      gridCol: 20,
+      gridRow: 3,
+      widthUnits: 9,
+      heightUnits: 40,
+    });
+    expect(graphById(gd, pair.ringId)?.collapsed).toBe(false);
+    if (collapsed === null) throw new Error('coverage');
+    expect(graphUnitBounds(collapsed)).toEqual({ col: 20, row: 3, cols: 9, rows: 1 });
+    // DOC-07: Fit frames the strip, not the stored box.
+    expect(sheetBounds(gd, sheetId)?.rows).toBeLessThan(before?.rows ?? 0);
+    // Expand restores the stored size exactly.
+    expect(setGraphCollapsed(gd, pair.coverageId, false)).toBe(true);
+    expect(graphById(gd, pair.coverageId)).toMatchObject({
+      collapsed: false,
+      widthUnits: 9,
+      heightUnits: 40,
+    });
+    expect(sheetBounds(gd, sheetId)).toEqual(before);
+    // One undo step per toggle.
+    undo.stopCapturing();
+    undo.undo();
+    expect(graphById(gd, pair.coverageId)?.collapsed).toBe(true);
+    undo.undo();
+    expect(graphById(gd, pair.coverageId)?.collapsed).toBe(false);
+    undo.redo();
+    expect(graphById(gd, pair.coverageId)?.collapsed).toBe(true);
+  });
+
+  test('GRAPH-02 ADR-047 two replicas converge on a half deleted and the other collapsed apart', () => {
+    const a = openDocument(new Y.Doc());
+    const sheetId = createSheet(a);
+    const tableId = createTable(a, { sheetId, at: { col: 1, row: 1 }, columns: 3 });
+    const pair = createGraphPair(a, { sheetId, tableId });
+    const b = openDocument(new Y.Doc());
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc));
+    // Apart: A deletes the ring, B collapses the coverage and re-dimensions the pair.
+    expect(removeGraphObject(a, pair.pairId, 'ring')).toBe(pair.ringId);
+    expect(setGraphCollapsed(b, pair.coverageId, true)).toBe(true);
+    const cols = tableById(b, tableId)?.columns.map((c) => c.id) ?? [];
+    setGraphDimensions(b, pair.pairId, [cols[0] ?? '']);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc)));
+    Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(b.doc, Y.encodeStateVector(a.doc)));
+    for (const gd of [a, b]) {
+      expect(graphsInPair(gd, pair.pairId).map((g) => g.id)).toEqual([pair.coverageId]);
+      expect(graphById(gd, pair.coverageId)).toMatchObject({
+        collapsed: true,
+        dimensions: [cols[0]],
+        tableId,
+      });
+    }
+    expect(JSON.stringify(a.graphs.toJSON())).toBe(JSON.stringify(b.graphs.toJSON()));
+    // Concurrent collapse and expand of the same half land the same way on both.
+    setGraphCollapsed(a, pair.coverageId, false);
+    setGraphCollapsed(b, pair.coverageId, false);
+    setGraphCollapsed(b, pair.coverageId, true);
+    Y.applyUpdate(b.doc, Y.encodeStateAsUpdate(a.doc, Y.encodeStateVector(b.doc)));
+    Y.applyUpdate(a.doc, Y.encodeStateAsUpdate(b.doc, Y.encodeStateVector(a.doc)));
+    expect(graphById(a, pair.coverageId)?.collapsed).toBe(graphById(b, pair.coverageId)?.collapsed);
+  });
+
+  test('ADR-047 deleting a table takes every graph bound to it, in one transaction that one undo restores', () => {
+    const { gd, sheetId, tableId, rows, cols } = fixture();
+    fill(gd, tableId, rows, cols, [['kept', 'x', '1']]);
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const pair = createGraphPair(gd, { sheetId, tableId });
+    const other = createTable(gd, { sheetId, at: { col: 10, row: 1 }, columns: 2 });
+    const otherPair = createGraphPair(gd, { sheetId, tableId: other });
+    const unbound = createGraphPair(gd, { sheetId, tableId: null });
+    undo.stopCapturing();
+    expect(graphsBoundTo(gd, tableId).map((g) => g.id)).toEqual([pair.ringId, pair.coverageId]);
+    let transactions = 0;
+    gd.doc.on('afterTransaction', () => {
+      transactions += 1;
+    });
+    expect(deleteTableWithGraphs(gd, tableId)?.sort()).toEqual(
+      [pair.ringId, pair.coverageId].sort(),
+    );
+    expect(transactions).toBe(1);
+    expect(tableById(gd, tableId)).toBeNull();
+    expect(graphsInPair(gd, pair.pairId)).toEqual([]);
+    // Pairs bound elsewhere, and unbound pairs, stay.
+    expect(graphsInPair(gd, otherPair.pairId).length).toBe(2);
+    expect(graphsInPair(gd, unbound.pairId).length).toBe(2);
+    expect(deleteTableWithGraphs(gd, tableId)).toBeNull();
+    undo.stopCapturing();
+    undo.undo();
+    const restored = tableMap(gd, tableId);
+    expect(restored).not.toBeNull();
+    if (restored === null) throw new Error('table');
+    expect(cellText(restored, rows[0] ?? '', cols[0] ?? '')).toBe('kept');
+    expect(graphsInPair(gd, pair.pairId).map((g) => g.id)).toEqual([pair.ringId, pair.coverageId]);
+    expect(graphById(gd, pair.ringId)?.tableId).toBe(tableId);
   });
 
   test('GRAPH-04 "Add shaped table" creates Dimension A · B · C · Notes and binds a pair in one step', () => {

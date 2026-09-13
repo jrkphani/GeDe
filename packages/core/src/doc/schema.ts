@@ -265,6 +265,11 @@ export const GRAPH_DEFAULT_HEIGHT_UNITS = 28;
 /** Smallest box a graph can be resized to (GRAPH-11). */
 export const GRAPH_MIN_WIDTH_UNITS = 2;
 export const GRAPH_MIN_HEIGHT_UNITS = 8;
+/**
+ * A collapsed half is one lattice row tall — its header strip — whatever
+ * its stored height, which is kept for the expand (ADR-047).
+ */
+export const GRAPH_COLLAPSED_HEIGHT_UNITS = 1;
 
 export interface GraphRecord {
   readonly id: Id;
@@ -284,7 +289,13 @@ export interface GraphRecord {
   readonly gridCol: number;
   readonly gridRow: number;
   readonly widthUnits: number;
+  /** The stored height; the footprint while collapsed is `GRAPH_COLLAPSED_HEIGHT_UNITS`. */
   readonly heightUnits: number;
+  /**
+   * ADR-047: collapsed to its header strip. Per object, like position and size
+   * (GRAPH-02); position and stored size are unchanged by it.
+   */
+  readonly collapsed: boolean;
 }
 
 export interface DocumentMeta {
@@ -618,7 +629,13 @@ export function graphRecord(map: GraphMap): GraphRecord {
     gridRow: Math.max(0, Math.round(readNumber(map, 'gridRow', 0))),
     widthUnits: Math.max(1, Math.round(readNumber(map, 'widthUnits', 1))),
     heightUnits: Math.max(1, Math.round(readNumber(map, 'heightUnits', 1))),
+    collapsed: readBoolean(map, 'collapsed', false),
   };
+}
+
+/** The rows a graph occupies on the lattice right now: its header strip while collapsed. */
+export function graphFootprintRows(graph: Pick<GraphRecord, 'heightUnits' | 'collapsed'>): number {
+  return graph.collapsed ? GRAPH_COLLAPSED_HEIGHT_UNITS : graph.heightUnits;
 }
 
 export function graphMap(gd: GedeDoc, graphId: Id): GraphMap | null {

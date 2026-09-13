@@ -9,7 +9,7 @@
 import * as Y from 'yjs';
 
 import { sheetBounds, tableUnitBounds } from '../doc/geometry.js';
-import { addRow, createSheet, createTable, setCellText } from '../doc/mutations.js';
+import { addRow, createSheet, createTable, deleteTable, setCellText } from '../doc/mutations.js';
 import {
   EMPTY_SLICE,
   GRAPH_DEFAULT_HEIGHT_UNITS,
@@ -19,6 +19,7 @@ import {
   columnsArray,
   graphById,
   graphMap,
+  graphRecord,
   graphsInPair,
   readString,
   tableById,
@@ -27,6 +28,7 @@ import {
   type GedeDoc,
   type GraphKind,
   type GraphMap,
+  type GraphRecord,
   type GraphSlice,
   type TableRecord,
 } from '../doc/schema.js';
@@ -269,6 +271,69 @@ export function removeGraphPair(gd: GedeDoc, pairId: Id): Id[] {
   return transact(gd, () => {
     const ids = graphsInPair(gd, pairId).map((g) => g.id);
     for (const id of ids) gd.graphs.delete(id);
+    return ids;
+  });
+}
+
+/**
+ * ADR-047: remove one graph object — one half of a pair — and leave the other
+ * bound to the table. A lone half is a valid pair: it carries the shared state
+ * itself, so every pair mutation keeps working on it. One transaction, one
+ * undo step. Returns false when the graph is not in the document.
+ */
+export function removeGraph(gd: GedeDoc, graphId: Id): boolean {
+  return transact(gd, () => {
+    if (graphMap(gd, graphId) === null) return false;
+    gd.graphs.delete(graphId);
+    return true;
+  });
+}
+
+/** `removeGraph` addressed by pair and kind. Returns the id removed, or null when there is no such half. */
+export function removeGraphObject(gd: GedeDoc, pairId: Id, kind: GraphKind): Id | null {
+  return transact(gd, () => {
+    const half = graphsInPair(gd, pairId).find((g) => g.kind === kind);
+    if (half === undefined || !removeGraph(gd, half.id)) return null;
+    return half.id;
+  });
+}
+
+/**
+ * ADR-047: collapse one half to its header strip, or expand it. Position and
+ * the stored size are untouched, so the expand restores the box exactly.
+ * Returns false when the graph is gone or already reads that way.
+ */
+export function setGraphCollapsed(gd: GedeDoc, graphId: Id, collapsed: boolean): boolean {
+  return transact(gd, () => {
+    const map = graphMap(gd, graphId);
+    if (map === null || graphRecord(map).collapsed === collapsed) return false;
+    if (collapsed) map.set('collapsed', true);
+    else map.delete('collapsed');
+    return true;
+  });
+}
+
+/** Every graph object bound to `tableId`, on any sheet. */
+export function graphsBoundTo(gd: GedeDoc, tableId: Id): GraphRecord[] {
+  const out: GraphRecord[] = [];
+  gd.graphs.forEach((map) => {
+    const record = graphRecord(map);
+    if (record.tableId === tableId) out.push(record);
+  });
+  return out.sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0));
+}
+
+/**
+ * ADR-047: delete a table and every graph object bound to it in one
+ * transaction — one undo step restores the table, its cells and meta, and the
+ * pairs. Returns the graph ids removed with it, or null when the table is gone.
+ */
+export function deleteTableWithGraphs(gd: GedeDoc, tableId: Id): Id[] | null {
+  return transact(gd, () => {
+    if (tableMap(gd, tableId) === null) return null;
+    const ids = graphsBoundTo(gd, tableId).map((g) => g.id);
+    for (const id of ids) gd.graphs.delete(id);
+    deleteTable(gd, tableId);
     return ids;
   });
 }

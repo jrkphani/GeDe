@@ -76,6 +76,27 @@ export const messages = {
   'tour.done.message': 'All five done. Replay any time from the ? in your library.',
   'tour.done.replay': 'Replay',
 
+  // ADR-047: what the live region says of a deleted, collapsed or expanded object, and the
+  // chevron's name. `{name}` is one of the `object.name.*` phrases (or a table's title, or the
+  // object's accessible name); `{undo}` is the chord's glyph.
+  'object.name.ring': 'the ring of {table}',
+  'object.name.coverage': 'the coverage of {table}',
+  'object.name.pair': 'the graph of {table}',
+  'object.name.ringUnbound': 'the ring',
+  'object.name.coverageUnbound': 'the coverage',
+  'object.name.pairUnbound': 'the graph',
+  'object.name.tableGraph': '{table} and its graph',
+  'object.name.tableGraphs': '{table} and its {count} graphs',
+  'object.deleted': 'Deleted {name} — press {undo} to undo',
+  'object.deleted.ref':
+    'Deleted {name} — 1 cell elsewhere now reads “reference removed”; press {undo} to undo',
+  'object.deleted.refs':
+    'Deleted {name} — {count} cells elsewhere now read “reference removed”; press {undo} to undo',
+  'object.collapsed': 'Collapsed {name}',
+  'object.expanded': 'Expanded {name}',
+  'object.collapse': 'Collapse {name}',
+  'object.expand': 'Expand {name}',
+
   'library.help.label': 'Help',
   'library.help.replay': 'Replay guided tour',
   'library.help.shortcuts': 'Keyboard shortcuts',

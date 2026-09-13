@@ -52,14 +52,27 @@ function handlers(overrides: Partial<KeyHandlers> = {}): KeyHandlers {
       redo: vi.fn(),
       selectAll: vi.fn(),
       clear: vi.fn(),
+      deleteTable: vi.fn(),
       clearSelection: vi.fn(),
       toggleMark: vi.fn(),
     },
     table: { addRow: vi.fn(), addColumn: vi.fn() },
+    graph: {
+      selected: false,
+      pointing: false,
+      remove: vi.fn(),
+      collapse: vi.fn(),
+      expand: vi.fn(),
+    },
     clipboard,
     hierarchy: undefined,
     ...overrides,
   };
+}
+
+/** ADR-047: a graph half selected, every handler a spy. */
+function graphSelected(): KeyHandlers['graph'] {
+  return { selected: true, pointing: false, remove: vi.fn(), collapse: vi.fn(), expand: vi.fn() };
 }
 
 function Host({ h }: { h: KeyHandlers }) {
@@ -229,6 +242,84 @@ describe('document key bindings', () => {
       'superscript',
       'subscript',
     ]);
+  });
+
+  it('KEYS-03 ADR-047 ⌫ and Delete branch on what is selected: the armed cell clears, a selected graph half is removed, a selected table is deleted; an edit in progress or nothing selected leaves the key alone', () => {
+    // An armed cell (the default): clear, and the graph and table handlers stay quiet.
+    const armed = handlers({ graph: graphSelected() });
+    const first = render(<Host h={armed} />);
+    press({ code: 'Backspace' });
+    expect(armed.edit.clear).toHaveBeenCalledTimes(1);
+    expect(armed.graph.remove).not.toHaveBeenCalled();
+    expect(armed.edit.deleteTable).not.toHaveBeenCalled();
+    first.unmount();
+    // A graph half selected, no grid selection: the half goes.
+    const graph = handlers({ cell: null, hasSelection: false, graph: graphSelected() });
+    const second = render(<Host h={graph} />);
+    expect(press({ code: 'Delete' })).toBe(false);
+    expect(graph.graph.remove).toHaveBeenCalledTimes(1);
+    expect(graph.edit.clear).not.toHaveBeenCalled();
+    expect(graph.edit.deleteTable).not.toHaveBeenCalled();
+    second.unmount();
+    // Pointing mode owns the keyboard (Escape is its key): nothing is deleted.
+    const pointing = handlers({
+      cell: null,
+      hasSelection: false,
+      graph: { ...graphSelected(), pointing: true },
+    });
+    const pointingView = render(<Host h={pointing} />);
+    expect(press({ code: 'Delete' })).toBe(true);
+    expect(pointing.graph.remove).not.toHaveBeenCalled();
+    pointingView.unmount();
+    // The table selected (⌘A, or a press on its title), no cell armed: the table goes.
+    const table = handlers({ cell: null, hasSelection: true });
+    const third = render(<Host h={table} />);
+    expect(press({ code: 'Backspace' })).toBe(false);
+    expect(table.edit.deleteTable).toHaveBeenCalledTimes(1);
+    expect(table.edit.clear).not.toHaveBeenCalled();
+    third.unmount();
+    // Editing: the editor owns the key; the binding does not claim it.
+    const editing = handlers({ editing: true });
+    const fourth = render(<Host h={editing} />);
+    expect(press({ code: 'Backspace' })).toBe(true);
+    expect(editing.edit.clear).not.toHaveBeenCalled();
+    expect(editing.edit.deleteTable).not.toHaveBeenCalled();
+    fourth.unmount();
+    // Nothing selected: not claimed either.
+    const none = handlers({ cell: null, hasSelection: false });
+    render(<Host h={none} />);
+    expect(press({ code: 'Delete' })).toBe(true);
+    expect(none.edit.deleteTable).not.toHaveBeenCalled();
+    expect(none.graph.remove).not.toHaveBeenCalled();
+  });
+
+  it('KEYS-08 HIER-06 ADR-047 ⌥← / ⌥→ collapse or expand the selected graph half when no cell is armed, the selected row when one is, and nothing otherwise — the same physical chords, by `event.code`', () => {
+    // Nothing selected: not claimed.
+    const none = handlers({ cell: null, hasSelection: false });
+    const first = render(<Host h={none} />);
+    expect(press({ code: 'ArrowLeft', altKey: true })).toBe(true);
+    expect(none.graph.collapse).not.toHaveBeenCalled();
+    first.unmount();
+    // A half selected: collapse and expand go to it, and the row handlers stay quiet.
+    const hierarchy = { nest: vi.fn(), promote: vi.fn(), collapse: vi.fn(), expand: vi.fn() };
+    const graph = handlers({ cell: null, hasSelection: false, graph: graphSelected(), hierarchy });
+    const second = render(<Host h={graph} />);
+    expect(press({ code: 'ArrowLeft', altKey: true })).toBe(false);
+    expect(press({ code: 'ArrowRight', altKey: true })).toBe(false);
+    expect(graph.graph.collapse).toHaveBeenCalledTimes(1);
+    expect(graph.graph.expand).toHaveBeenCalledTimes(1);
+    expect(hierarchy.collapse).not.toHaveBeenCalled();
+    expect(hierarchy.expand).not.toHaveBeenCalled();
+    // A modified arrow that is someone else's chord (⇧⌘→) is not a collapse.
+    expect(press({ code: 'ArrowRight', metaKey: true, shiftKey: true })).toBe(false);
+    expect(graph.graph.expand).toHaveBeenCalledTimes(1);
+    second.unmount();
+    // A cell armed: the row's, as before (HIER-06), even with a half marked selected.
+    const cell = handlers({ graph: graphSelected(), hierarchy });
+    render(<Host h={cell} />);
+    press({ code: 'ArrowLeft', altKey: true });
+    expect(hierarchy.collapse).toHaveBeenCalledWith(CELL);
+    expect(cell.graph.collapse).not.toHaveBeenCalled();
   });
 
   it('GRID-03 Escape clears the selection only while no layered surface is open', () => {

@@ -60,6 +60,24 @@ export const messages: Messages = {
   'tour.done.message': 'पाँचों पूरे हुए। अपनी लाइब्रेरी में ? से कभी भी दोबारा चलाएँ।',
   'tour.done.replay': 'दोबारा चलाएँ',
 
+  'object.name.ring': '{table} का वलय',
+  'object.name.coverage': '{table} का कवरेज',
+  'object.name.pair': '{table} का ग्राफ़',
+  'object.name.ringUnbound': 'वलय',
+  'object.name.coverageUnbound': 'कवरेज',
+  'object.name.pairUnbound': 'ग्राफ़',
+  'object.name.tableGraph': '{table} और उसका ग्राफ़',
+  'object.name.tableGraphs': '{table} और उसके {count} ग्राफ़',
+  'object.deleted': '{name} हटाया गया — पूर्ववत करने के लिए {undo} दबाएँ',
+  'object.deleted.ref':
+    '{name} हटाया गया — अन्यत्र 1 सेल अब “संदर्भ हटाया गया” दिखाता है; पूर्ववत करने के लिए {undo} दबाएँ',
+  'object.deleted.refs':
+    '{name} हटाया गया — अन्यत्र {count} सेल अब “संदर्भ हटाया गया” दिखाते हैं; पूर्ववत करने के लिए {undo} दबाएँ',
+  'object.collapsed': '{name} समेटा गया',
+  'object.expanded': '{name} फैलाया गया',
+  'object.collapse': '{name} समेटें',
+  'object.expand': '{name} फैलाएँ',
+
   'library.help.label': 'सहायता',
   'library.help.replay': 'निर्देशित टूर दोबारा चलाएँ',
   'library.help.shortcuts': 'कीबोर्ड शॉर्टकट',

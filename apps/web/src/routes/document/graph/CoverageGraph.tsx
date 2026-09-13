@@ -10,6 +10,7 @@ import {
   type GraphDerivation,
   type GraphEmphasis,
   type GraphRecord,
+  type GraphSlice,
   type Id,
 } from '@gede/core';
 
@@ -47,6 +48,31 @@ function shortLabel(text: string, max: number): string {
  * editable, appends a pre-filled row on click (GRAPH-10). Hover mutes what
  * is not adjacent across the pair (GRAPH-09).
  */
+/** GRAPH-08: "rows Region · columns Season", or "rows Region" when one dimension serves both axes. */
+function axesLine(
+  rowAxis: { readonly id: string; readonly label: string },
+  colAxis: { readonly id: string; readonly label: string },
+): string {
+  return rowAxis.id === colAxis.id
+    ? `rows ${rowAxis.label}`
+    : `rows ${rowAxis.label} · columns ${colAxis.label}`;
+}
+
+/**
+ * ADR-047: the axes line a collapsed coverage keeps in its header strip — the
+ * same text its body shows, resolved the same way. Empty without dimensions.
+ */
+export function coverageAxesNote(
+  derivation: GraphDerivation,
+  slice: GraphSlice,
+  selectedRowId: Id | null,
+): string {
+  if (derivation.dimensions.length === 0) return '';
+  const matrix = coverageMatrix(derivation, resolveSlice(derivation, slice, selectedRowId));
+  if (matrix.rowAxis === null || matrix.colAxis === null) return '';
+  return axesLine(matrix.rowAxis, matrix.colAxis);
+}
+
 export const CoverageGraph = memo(function CoverageGraph({
   graph,
   derivation,
@@ -87,9 +113,7 @@ export const CoverageGraph = memo(function CoverageGraph({
   const width = LABEL_COLUMN + cols * COVERAGE_CELL;
   const height = LABEL_BAND + rows * COVERAGE_CELL;
   const pinNote = matrix.pins.map((p) => `${p.dimension.label}: ${p.value}`).join(' · ');
-  const axesNote = oneDimensional
-    ? `rows ${matrix.rowAxis.label}`
-    : `rows ${matrix.rowAxis.label} · columns ${matrix.colAxis.label}`;
+  const axesNote = axesLine(matrix.rowAxis, matrix.colAxis);
   const svgName = oneDimensional
     ? `Coverage of ${sourceTitle}: ${matrix.rowAxis.label}`
     : `Coverage of ${sourceTitle}: ${matrix.rowAxis.label} by ${matrix.colAxis.label}`;

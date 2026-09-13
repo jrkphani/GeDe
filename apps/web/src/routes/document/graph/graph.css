@@ -85,6 +85,77 @@
   text-transform: uppercase;
   color: var(--ink-muted);
 }
+/* ADR-047: collapsed, the frame is its header strip — one lattice row, no rule under it;
+   the title, the second line (dimensions, or the coverage's axes) and the count share the
+   row (GRAPH-07, GRAPH-08). */
+.gd-graph--collapsed .gd-graph__header {
+  border-bottom: 0;
+}
+.gd-graph--collapsed .gd-graph__titles {
+  flex-direction: row;
+  align-items: baseline;
+  gap: var(--space-2);
+}
+.gd-graph--collapsed .gd-graph__sub {
+  flex: 1;
+}
+/* The chevron sits over the header's leading edge; the header pads for it. */
+.gd-graph__header--with-chevron {
+  padding-left: calc(var(--space-2) + 14px + var(--space-2));
+}
+.gd-graph__chevron {
+  position: absolute;
+  left: var(--space-2);
+  z-index: 2;
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--ink-muted);
+  font: inherit;
+  cursor: pointer;
+}
+/* RESP-05: below lg the chevron's hit area is the hit-target token (44 px), centred on the
+   glyph, as the row chevron's is (ADR-025); the frame clips what falls outside the object. */
+@media (max-width: 1023.98px) {
+  .gd-graph__chevron::before {
+    content: '';
+    position: absolute;
+    top: calc((14px - var(--hit-target)) / 2);
+    left: calc((14px - var(--hit-target)) / 2);
+    width: var(--hit-target);
+    height: var(--hit-target);
+  }
+}
+.gd-graph__chevron:hover {
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
+  color: var(--ink);
+}
+.gd-graph__chevron:active {
+  background: color-mix(in srgb, var(--ink) 12%, transparent);
+}
+/* A11Y-02: the 2 px ring at 2 px offset; the 14 px box leaves it room inside the 22 px strip. */
+.gd-graph__chevron:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 2px;
+}
+.gd-graph__chevron-glyph {
+  transition: transform var(--dur-fast) var(--ease-standard);
+}
+.gd-graph__chevron-glyph--expanded {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .gd-graph__chevron-glyph {
+    transition: none;
+  }
+}
 .gd-graph__body {
   position: relative;
   display: flex;

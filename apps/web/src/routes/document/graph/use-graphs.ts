@@ -18,7 +18,9 @@ import {
   defaultPairOrigin,
   graphById,
   graphsInPair,
+  removeGraphObject,
   removeGraphPair,
+  setGraphCollapsed,
   setGraphPosition,
   setGraphSize,
   setGraphSlice,
@@ -27,16 +29,44 @@ import {
   toggleGraphDimension,
   type GedeDoc,
   type GraphContext,
+  type GraphKind,
+  type GraphRecord,
   type GraphSlice,
   type Id,
 } from '@gede/core';
 
 import { announce } from '../../../announce.js';
+import { LABELS } from '../../../doc/shortcuts.js';
+import { translate } from '../../../i18n/index.js';
+import { activeLocale } from '../../../locale.js';
+import {
+  objectElement,
+  objectEntry,
+  sheetObjects,
+  stepObject,
+  type SheetObject,
+} from '../keys/objects.js';
 import { setTourPointing, subscribeTour, tourState } from '../../tour/store.js';
 import { graphStoreFor, type GraphHover } from './store.js';
 import type { LatticeUnits, Pixels } from '@gede/core';
 import type { GridActions } from '../grid/use-grid.js';
 import type { GridCommands } from '../grid/commands.js';
+
+/**
+ * ADR-047: the name the live region gives a half or a pair — "the ring of
+ * Table 1", or "the ring" while unbound — in the active locale.
+ */
+export function graphObjectName(gd: GedeDoc, kind: GraphKind | 'pair', tableId: Id | null): string {
+  const table = tableId === null ? null : tableById(gd, tableId);
+  const locale = activeLocale();
+  if (table === null) return translate(locale, `object.name.${kind}Unbound`);
+  return translate(locale, `object.name.${kind}`, { table: table.title });
+}
+
+/** "Deleted the ring of Table 1 — press ⌘Z to undo" (A11Y-05). */
+export function deletedAnnouncement(name: string): string {
+  return translate(activeLocale(), 'object.deleted', { name, undo: LABELS.undo });
+}
 
 /** The controls Tab cycles while pointing, in reading order: banner buttons, targets, the tour's Skip. */
 function pointingControls(): HTMLElement[] {
@@ -85,7 +115,16 @@ export interface GraphsActions {
    * being re-pointed, else as a new pair.
    */
   addShapedTable: (pairId?: Id) => void;
+  /** GRAPH-05 Remove: both halves. Focus then moves to the bound table (ADR-047). */
   remove: (pairId: Id) => void;
+  /**
+   * ADR-047: delete one half only; the other stays bound to the table and takes
+   * focus and the selection. With no other half, focus moves to the bound table.
+   */
+  removeHalf: (pairId: Id, kind: GraphKind) => void;
+  /** ADR-047: collapse a half to its header strip, or expand it; the box is kept. */
+  setCollapsed: (graphId: Id, collapsed: boolean) => void;
+  toggleCollapsed: (graphId: Id) => void;
   toggleDimension: (pairId: Id, colId: Id, on: boolean) => void;
   setSlice: (pairId: Id, slice: GraphSlice) => void;
   /** GRAPH-05 "Add dimension column": a new entered column, marked as a dimension. */
@@ -117,6 +156,14 @@ export interface UseGraphsOptions {
   reveal: (col: number, row: number) => void;
   /** KEYS-03: the undo manager's `stopCapturing`, so one command is one step. */
   settle?: (() => void) | undefined;
+  /**
+   * ADR-047: where focus goes once a graph object is deleted and no half of its
+   * pair remains — the bound table when there is one, else the object before
+   * the deleted one in sheet order (`fallback`), revealed and entered as ⇧⌘→
+   * does; the shell decides and falls back to the canvas when nothing is left.
+   */
+  afterDelete?:
+    ((landing: { tableId: Id | null; fallback: SheetObject | null }) => void) | undefined;
 }
 
 export function useGraphs({
@@ -127,11 +174,21 @@ export function useGraphs({
   selectSheet,
   reveal,
   settle,
+  afterDelete,
 }: UseGraphsOptions): Graphs {
   const [selectedGraphId, setSelectedGraphId] = useState<Id | null>(null);
   const [pointing, setPointing] = useState<Pointing | null>(null);
-  const latest = useRef({ gd, activeSheetId, editable, grid, selectSheet, reveal, settle });
-  latest.current = { gd, activeSheetId, editable, grid, selectSheet, reveal, settle };
+  const latest = useRef({
+    gd,
+    activeSheetId,
+    editable,
+    grid,
+    selectSheet,
+    reveal,
+    settle,
+    afterDelete,
+  });
+  latest.current = { gd, activeSheetId, editable, grid, selectSheet, reveal, settle, afterDelete };
 
   // A selection or pointing state must not outlive its sheet (DOC-03) or its object.
   useEffect(() => {
@@ -190,6 +247,31 @@ export function useGraphs({
   const actions = useMemo<GraphsActions>(() => {
     const done = () => latest.current.settle?.();
     const can = () => latest.current.editable;
+    // ADR-047: focus after a delete — the surviving half's header, else the bound table,
+    // else the object before the deleted one (#163). The survivor is already in the DOM
+    // (nothing about it changed), so its header can take focus at once; a table or another
+    // object is the shell's to reveal and enter. `fallback` is read before the delete.
+    const fallbackFor = (graphId: Id): SheetObject | null => {
+      const { gd: doc, activeSheetId: sheetId } = latest.current;
+      if (sheetId === null) return null;
+      const objects = sheetObjects(doc, sheetId);
+      const previous = stepObject(objects, { kind: 'graph', id: graphId }, -1);
+      return previous !== null && previous.id === graphId ? null : previous;
+    };
+    const afterRemoval = (
+      survivor: GraphRecord | null,
+      tableId: Id | null,
+      fallback: SheetObject | null,
+    ) => {
+      if (survivor !== null) {
+        const section = objectElement({ kind: 'graph', id: survivor.id });
+        const entry = section === null ? null : objectEntry(section);
+        entry?.focus({ preventScroll: true });
+        return;
+      }
+      const bound = tableId !== null && tableById(latest.current.gd, tableId) !== null;
+      latest.current.afterDelete?.({ tableId: bound ? tableId : null, fallback });
+    };
     const selectPair = (ringId: Id) => {
       latest.current.grid.actions.clear();
       setSelectedGraphId(ringId);
@@ -216,7 +298,7 @@ export function useGraphs({
       setPointing(null);
       done();
     };
-    return {
+    const actions: GraphsActions = {
       select(graphId) {
         if (graphId !== null) latest.current.grid.actions.clear();
         setSelectedGraphId(graphId);
@@ -264,13 +346,63 @@ export function useGraphs({
         done();
       },
       remove(pairId) {
-        if (!can()) return;
-        const ids = removeGraphPair(latest.current.gd, pairId);
+        const { gd: doc } = latest.current;
+        const lead = graphsInPair(doc, pairId)[0];
+        // Pointing mode owns the keyboard (Escape is its key, GRAPH-03): no delete under it.
+        if (!can() || pointing !== null || lead === undefined) return;
+        const name = graphObjectName(doc, 'pair', lead.tableId);
+        const halves = graphsInPair(doc, pairId).map((g) => g.id);
+        // The object before the pair's first half, skipping the pair's own halves.
+        const fallback = (() => {
+          const previous = fallbackFor(lead.id);
+          return previous !== null && previous.kind === 'graph' && halves.includes(previous.id)
+            ? fallbackFor(previous.id)
+            : previous;
+        })();
+        done(); // one undo step of its own, never merged into the change before it (KEYS-03)
+        const ids = removeGraphPair(doc, pairId);
         setSelectedGraphId((current) =>
           current !== null && ids.includes(current) ? null : current,
         );
-        announce('Removed the graph');
         done();
+        // Focus first, then the announcement: the entry cell's own "Selected …" must not be
+        // what the live region ends on — the undo hint is (A11Y-05).
+        afterRemoval(null, lead.tableId, fallback);
+        announce(deletedAnnouncement(name));
+      },
+      removeHalf(pairId, kind) {
+        const { gd: doc } = latest.current;
+        const half = graphsInPair(doc, pairId).find((g) => g.kind === kind);
+        if (!can() || pointing !== null || half === undefined) return;
+        const name = graphObjectName(doc, kind, half.tableId);
+        const fallback = fallbackFor(half.id);
+        done();
+        const removed = removeGraphObject(doc, pairId, kind);
+        if (removed === null) return;
+        const survivor = graphsInPair(doc, pairId)[0] ?? null;
+        // The survivor takes the selection with the focus (the Graph tab then reads it), as
+        // Enter on its header would; with none, a selection of the removed half ends.
+        if (survivor !== null) actions.select(survivor.id);
+        else setSelectedGraphId((current) => (current === removed ? null : current));
+        done();
+        afterRemoval(survivor, half.tableId, fallback);
+        announce(deletedAnnouncement(name));
+      },
+      setCollapsed(graphId, collapsed) {
+        const { gd: doc } = latest.current;
+        const graph = graphById(doc, graphId);
+        if (!can() || pointing !== null || graph === null) return;
+        done();
+        if (!setGraphCollapsed(doc, graphId, collapsed)) return;
+        const name = graphObjectName(doc, graph.kind, graph.tableId);
+        announce(
+          translate(activeLocale(), collapsed ? 'object.collapsed' : 'object.expanded', { name }),
+        );
+        done();
+      },
+      toggleCollapsed(graphId) {
+        const graph = graphById(latest.current.gd, graphId);
+        if (graph !== null) actions.setCollapsed(graphId, !graph.collapsed);
       },
       toggleDimension(pairId, colId, on) {
         if (!can()) return;
@@ -327,6 +459,7 @@ export function useGraphs({
         graphStoreFor(latest.current.gd.doc).setHover(hover);
       },
     };
+    return actions;
   }, [pointing]);
 
   return { state: { selectedGraphId, pointing }, actions };

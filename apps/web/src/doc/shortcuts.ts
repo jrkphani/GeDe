@@ -158,6 +158,10 @@ export const CHORDS = {
   // platforms ⌃⌥→ is the same keys as ⌥⌘→ (add column), since `mod` is Ctrl there.
   nextObject: { code: 'ArrowRight', mod: true, shift: true } satisfies Chord,
   previousObject: { code: 'ArrowLeft', mod: true, shift: true } satisfies Chord,
+  // ADR-047 adds no chord id: `clear` (⌫ / Delete) also deletes a selected graph half or
+  // a selected table, and `collapse` / `expand` (⌥← / ⌥→, ADR-030's chevron chords) also
+  // collapse or expand a selected graph half — the same physical keys, the same meaning,
+  // on whichever object is selected (a cell's row, or a half).
 } as const;
 
 export type ChordId = keyof typeof CHORDS;

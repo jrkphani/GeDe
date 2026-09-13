@@ -65,10 +65,13 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
     );
     expect(extras.map((row) => [row.action, row.extra])).toEqual([
       ['Collapse / expand row', 'ADR-025, ADR-030'],
+      ['Delete table (table selected)', 'ADR-047'],
       ['Move between nodes, dots and cells', 'ADR-033'],
       ['Select the node’s row', 'ADR-033'],
       ['Open a child sheet for the node', 'ADR-033'],
       ['Cancel pointing', 'ADR-033'],
+      ['Delete the ring or coverage', 'ADR-047'],
+      ['Collapse / expand the ring or coverage', 'ADR-047'],
       ['Next / previous object on the sheet', 'ADR-042'],
     ]);
     // KEYS-02 / KEYS-07: the PRD's chords the browser keeps are listed, marked, and not bound (ADR-030).
@@ -97,6 +100,20 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
     expect(markAriaKeys('strikethrough')).toBe('Shift+Meta+X');
     expect(markAriaKeys('superscript')).toBe('Control+Meta+Equal');
     expect(ariaKeysFor(CHORDS.nest)).toBe('Meta+BracketRight');
+    // ADR-047 KEYS-08: the Graphs group lists ⌫ for the selected half and ⌥← / ⌥→ for its
+    // collapse and expand — the row chevron's own chords, no new id — and the Table and cells
+    // group lists ⌫ for the selected table.
+    const graphs = SHORTCUT_SECTIONS.find((s) => s.group === 'Graphs');
+    expect(graphs?.rows.map((r) => r.ids ?? [])).toEqual(
+      expect.arrayContaining([['clear'], ['collapse', 'expand']]),
+    );
+    expect(graphs?.rows.map((r) => rowKeys(r))).toEqual(
+      expect.arrayContaining([['⌫'], ['⌥←', '⌥→']]),
+    );
+    const cells = SHORTCUT_SECTIONS.find((s) => s.group === 'Table and cells');
+    expect(cells?.rows.some((r) => r.ids?.includes('clear') && r.action.includes('table'))).toBe(
+      true,
+    );
     // HIER-06 KEYS-06: the hierarchy chords the cell handles are the ones the sheet lists.
     for (const key of ['nest', 'promote', 'collapse', 'expand'] as const) {
       expect(CHORDS[key]).toEqual(HIER_CHORDS[key]);

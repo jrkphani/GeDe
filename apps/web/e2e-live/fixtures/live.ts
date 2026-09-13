@@ -150,7 +150,11 @@ export const test = base.extend<LiveFixtures, LiveWorkerFixtures>({
         api: (path, init = {}) => {
           const headers = new Headers(init.headers);
           headers.set('authorization', `Bearer ${minted.tokens.accessToken}`);
-          headers.set('content-type', 'application/json');
+          // A JSON content type on a bodiless DELETE or POST makes Fastify answer 400 (an
+          // empty body is not JSON), so the worker's teardown deleted nothing (#163).
+          if (init.body !== undefined && init.body !== null) {
+            headers.set('content-type', 'application/json');
+          }
           return fetch(`${apiUrl}${path}`, { ...init, headers });
         },
       };

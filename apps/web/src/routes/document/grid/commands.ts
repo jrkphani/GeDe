@@ -33,7 +33,9 @@ import {
   commitCellText,
   deleteColumn as deleteColumnMutation,
   deleteRow as deleteRowMutation,
+  deleteTableWithGraphs,
   detectIndicLang,
+  graphsBoundTo,
   expandAll as expandAllMutation,
   hideColumn as hideColumnMutation,
   insertRowBefore,
@@ -126,6 +128,17 @@ export interface GridCommands {
   insertColumnBefore(tableId: Id, colId: Id): Id | null;
   /** Delete a column; the selection moves to the column after, else before, else the table. */
   deleteColumn(tableId: Id, colId: Id): boolean;
+  /**
+   * ADR-047: delete the table — cells, row and column meta, and every graph
+   * object bound to it — as one undo step; references from other tables read
+   * the reference-removed error (FX-06). No confirmation: undo is the safety.
+   * The selection clears. Returns the table's title and how many graphs (pairs)
+   * went with it, for the caller to announce once it has moved focus and the
+   * engine has reported the dependents it broke — so the undo hint, not the
+   * landing cell's "Selected …", is what the live region ends on — or null
+   * when nothing was deleted.
+   */
+  deleteTable(tableId: Id): { title: string; graphs: number } | null;
   /**
    * Rename a column; derived columns that name it re-spell their signature
    * (REF-04). A derived column refuses — its label is its signature.
@@ -501,6 +514,14 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       reselectAfterColumn(tableId, before, index);
       announce('Deleted the column');
       return true;
+    },
+    deleteTable(tableId) {
+      const before = record(tableId);
+      if (!editable() || before === null) return null;
+      const pairs = new Set(graphsBoundTo(gd, tableId).map((g) => g.pairId));
+      if (deleteTableWithGraphs(gd, tableId) === null) return null;
+      dispatch({ type: 'tableGone', tableId });
+      return { title: before.title, graphs: pairs.size };
     },
     renameColumn(tableId, colId, label) {
       const before = record(tableId);

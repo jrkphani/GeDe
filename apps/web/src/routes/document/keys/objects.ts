@@ -16,7 +16,7 @@
 import {
   graphRecord,
   graphsOnSheet,
-  LATTICE,
+  graphUnitBounds,
   tableMap,
   tableRecord,
   tablesOnSheet,
@@ -78,14 +78,8 @@ export function objectBounds(gd: GedeDoc, object: SheetObject): PixelBounds | nu
     return map === null ? null : unitBoundsToPx(tableUnitBounds(map));
   }
   const map = gd.graphs.get(object.id);
-  if (map === undefined) return null;
-  const graph = graphRecord(map);
-  return {
-    x: graph.gridCol * LATTICE.col,
-    y: graph.gridRow * LATTICE.row,
-    width: graph.widthUnits * LATTICE.col,
-    height: graph.heightUnits * LATTICE.row,
-  };
+  // A collapsed half is its one-row header strip (ADR-047).
+  return map === undefined ? null : unitBoundsToPx(graphUnitBounds(graphRecord(map)));
 }
 
 /**

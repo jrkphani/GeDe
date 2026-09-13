@@ -261,6 +261,8 @@ export function Canvas({
         ref={planeRef}
         className="gd-canvas__plane"
         aria-label="Canvas"
+        // ADR-047: focus lands here when a delete leaves nothing on the sheet; never a tab stop.
+        tabIndex={-1}
         data-testid="plane"
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}

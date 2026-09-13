@@ -1390,6 +1390,10 @@ const Cell = memo(function Cell({
       case 'Delete':
       case 'Backspace':
         if (mod) return;
+        // ADR-047 (#163): only the armed cell clears. With the table selected (⌘A, or a press
+        // on its title) this cell still holds DOM focus but is not armed; the keystroke is the
+        // shell's, which deletes the table.
+        if (!selected) return;
         e.preventDefault();
         e.stopPropagation();
         if (editable) commands.clearCell(cell);

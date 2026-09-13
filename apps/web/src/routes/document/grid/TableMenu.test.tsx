@@ -61,7 +61,35 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
       'Unhide columns',
       'Widen column',
       'Narrow column',
+      'Delete table',
     ]);
+  });
+
+  it('ADR-047 KEYS-08 Delete table is at home here, names ⌫, and calls the shell with the selected table; without a handler it says what it needs', async () => {
+    const onDeleteTable = vi.fn();
+    const view = render(
+      <TableMenu
+        gd={gd}
+        selection={{ tableId, cell: null }}
+        editable
+        commands={commands}
+        onDeleteTable={onDeleteTable}
+      />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
+    const item = screen.getByRole('menuitem', { name: /^Delete table/ });
+    expect(item).not.toHaveAttribute('aria-disabled');
+    expect(item).toHaveTextContent('⌫');
+    await userEvent.click(item);
+    expect(onDeleteTable).toHaveBeenCalledWith(tableId);
+    view.rerender(
+      <TableMenu gd={gd} selection={{ tableId, cell: null }} editable commands={commands} />,
+    );
+    await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
+    expect(screen.getByRole('menuitem', { name: /^Delete table/ })).toHaveAttribute(
+      'title',
+      'select a table first',
+    );
   });
 
   it('GRID-02 GRID-08 with a cell selected, row and column commands act on it: hide, unhide, widen, narrow, delete', async () => {
@@ -120,7 +148,7 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
       expect(item).toHaveAttribute('aria-disabled', 'true');
       expect(item).toHaveAttribute('title', 'you have view-only access');
     }
-    expect(screen.getAllByRole('menuitem').length).toBe(8);
+    expect(screen.getAllByRole('menuitem').length).toBe(9);
   });
 
   it('GRID-10 frozen-column choices run to every count short of the whole table — no other cap', () => {

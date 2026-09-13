@@ -64,6 +64,24 @@ export const messages: Messages = {
     'ஐந்தும் முடிந்தது. உங்கள் நூலகத்தில் உள்ள ? இலிருந்து எப்போது வேண்டுமானாலும் மீண்டும் இயக்கலாம்.',
   'tour.done.replay': 'மீண்டும் இயக்கு',
 
+  'object.name.ring': '{table}-இன் வளையம்',
+  'object.name.coverage': '{table}-இன் கவரேஜ்',
+  'object.name.pair': '{table}-இன் வரைபடம்',
+  'object.name.ringUnbound': 'வளையம்',
+  'object.name.coverageUnbound': 'கவரேஜ்',
+  'object.name.pairUnbound': 'வரைபடம்',
+  'object.name.tableGraph': '{table} மற்றும் அதன் வரைபடம்',
+  'object.name.tableGraphs': '{table} மற்றும் அதன் {count} வரைபடங்கள்',
+  'object.deleted': '{name} நீக்கப்பட்டது — செயல்தவிர்க்க {undo} அழுத்தவும்',
+  'object.deleted.ref':
+    '{name} நீக்கப்பட்டது — வேறு இடத்தில் 1 கலம் இப்போது “குறிப்பு நீக்கப்பட்டது” எனக் காட்டுகிறது; செயல்தவிர்க்க {undo} அழுத்தவும்',
+  'object.deleted.refs':
+    '{name} நீக்கப்பட்டது — வேறு இடத்தில் {count} கலங்கள் இப்போது “குறிப்பு நீக்கப்பட்டது” எனக் காட்டுகின்றன; செயல்தவிர்க்க {undo} அழுத்தவும்',
+  'object.collapsed': '{name} சுருக்கப்பட்டது',
+  'object.expanded': '{name} விரிக்கப்பட்டது',
+  'object.collapse': '{name} சுருக்கு',
+  'object.expand': '{name} விரி',
+
   'library.help.label': 'உதவி',
   'library.help.replay': 'வழிகாட்டிச் சுற்றை மீண்டும் இயக்கு',
   'library.help.shortcuts': 'விசைப்பலகைக் குறுக்குவழிகள்',

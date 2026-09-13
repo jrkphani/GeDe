@@ -63,14 +63,31 @@ export interface KeyHandlers {
     redo: () => void;
     selectAll: () => void;
     clear: () => void;
-    /** ⌫ with a table selected and no cell armed: say what it would need (ADR-042). */
-    clearNeedsCell?: (() => void) | undefined;
+    /**
+     * ADR-047: ⌫ / Delete with the table selected and no cell armed (after ⌘A, or a
+     * press on its title) deletes the table — cells, meta and its graph pairs — as one
+     * undo step. Amends ADR-042, which had the chord announce that a cell was needed.
+     */
+    deleteTable: () => void;
     clearSelection: () => void;
     toggleMark: (mark: ToggleMark) => void;
   };
   table: {
     addRow: () => void;
     addColumn: () => void;
+  };
+  /**
+   * ADR-047: the selected graph half. A graph selection is not a grid selection,
+   * so the object chords read it here: ⌫ / Delete removes that half only, ⌥← /
+   * ⌥→ collapse or expand it. While pointing mode is on, none of them run
+   * (Escape is that mode's key).
+   */
+  graph: {
+    selected: boolean;
+    pointing: boolean;
+    remove: () => void;
+    collapse: () => void;
+    expand: () => void;
   };
   clipboard: CellClipboard;
   hierarchy?: HierarchyActions | undefined;
@@ -79,6 +96,8 @@ export interface KeyHandlers {
 export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
   const noCell = h.cell === null || h.editing;
   const cellEdit = !h.editable || noCell;
+  // ADR-047: a selected half takes the object chords when no cell is armed.
+  const graphSelected = h.editable && !h.editing && h.graph.selected && !h.graph.pointing;
   const bindings: ShortcutBinding[] = [
     // Find (KEYS-04): from the Find field too; Esc closes the bar before it clears the selection.
     {
@@ -229,14 +248,16 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
       },
       disabled: cellEdit || h.hierarchy === undefined,
     },
+    // ⌥← / ⌥→: the selected cell's row (HIER-06), else the selected graph half (ADR-047).
     {
       id: 'collapse',
       chord: CHORDS.collapse,
       label: LABELS.collapse,
       run: () => {
         if (h.cell !== null) h.hierarchy?.collapse(h.cell);
+        else h.graph.collapse();
       },
-      disabled: cellEdit || h.hierarchy === undefined,
+      disabled: (cellEdit || h.hierarchy === undefined) && !graphSelected,
     },
     {
       id: 'expand',
@@ -244,8 +265,9 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
       label: LABELS.expand,
       run: () => {
         if (h.cell !== null) h.hierarchy?.expand(h.cell);
+        else h.graph.expand();
       },
-      disabled: cellEdit || h.hierarchy === undefined,
+      disabled: (cellEdit || h.hierarchy === undefined) && !graphSelected,
     },
     // Edit (KEYS-03). ⌘X ⌘C ⌘V are NOT bound here: the browser's own copy / cut / paste
     // commands run on the focused cell and raise the native `copy` / `cut` / `paste`
@@ -272,17 +294,19 @@ export function documentBindings(h: KeyHandlers): ShortcutBinding[] {
       disabled: !h.hasSelection || h.editing,
     },
     {
-      // ⌫ clears the armed cell. With the table selected and no cell armed (after ⌘A, or a
-      // press on the title) it says what it would need rather than clearing the table
-      // (ADR-042): the selection model has no range, and a whole table is not one keystroke.
+      // ⌫ clears the armed cell. With a graph half selected it deletes that half; with the
+      // table selected and no cell armed (after ⌘A, or a press on the title) it deletes the
+      // table (ADR-047; undo is the safety, no dialog). While a cell is edited the editor
+      // owns the key and this binding is off.
       id: 'clear',
       chord: CHORDS.clear,
       label: LABELS.clear,
       run: () => {
-        if (h.cell === null) h.edit.clearNeedsCell?.();
-        else h.edit.clear();
+        if (h.cell !== null) h.edit.clear();
+        else if (graphSelected) h.graph.remove();
+        else h.edit.deleteTable();
       },
-      disabled: !h.editable || h.editing || !h.hasSelection,
+      disabled: !h.editable || h.editing || h.graph.pointing || (!h.hasSelection && !graphSelected),
     },
     // Format (KEYS-05): on a selected cell the mark covers the whole cell; while
     // editing, the editor binds the same physical keys to the selection.

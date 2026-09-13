@@ -60,6 +60,24 @@ export const messages: Messages = {
   'tour.done.message': 'ఐదూ పూర్తయ్యాయి. మీ లైబ్రరీలోని ? నుండి ఎప్పుడైనా మళ్లీ ప్లే చేయవచ్చు.',
   'tour.done.replay': 'మళ్లీ ప్లే చేయి',
 
+  'object.name.ring': '{table} యొక్క రింగ్',
+  'object.name.coverage': '{table} యొక్క కవరేజ్',
+  'object.name.pair': '{table} యొక్క గ్రాఫ్',
+  'object.name.ringUnbound': 'రింగ్',
+  'object.name.coverageUnbound': 'కవరేజ్',
+  'object.name.pairUnbound': 'గ్రాఫ్',
+  'object.name.tableGraph': '{table} మరియు దాని గ్రాఫ్',
+  'object.name.tableGraphs': '{table} మరియు దాని {count} గ్రాఫ్‌లు',
+  'object.deleted': '{name} తొలగించబడింది — రద్దు చేయడానికి {undo} నొక్కండి',
+  'object.deleted.ref':
+    '{name} తొలగించబడింది — వేరే చోట 1 సెల్ ఇప్పుడు “సూచన తొలగించబడింది” అని చూపుతోంది; రద్దు చేయడానికి {undo} నొక్కండి',
+  'object.deleted.refs':
+    '{name} తొలగించబడింది — వేరే చోట {count} సెల్‌లు ఇప్పుడు “సూచన తొలగించబడింది” అని చూపుతున్నాయి; రద్దు చేయడానికి {undo} నొక్కండి',
+  'object.collapsed': '{name} కుదించబడింది',
+  'object.expanded': '{name} విస్తరించబడింది',
+  'object.collapse': '{name} కుదించు',
+  'object.expand': '{name} విస్తరించు',
+
   'library.help.label': 'సహాయం',
   'library.help.replay': 'గైడెడ్ టూర్ మళ్లీ ప్లే చేయి',
   'library.help.shortcuts': 'కీబోర్డ్ షార్ట్‌కట్‌లు',
