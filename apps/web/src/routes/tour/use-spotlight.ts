@@ -37,24 +37,24 @@ export function anchorSelector(target: TourTarget): string {
 }
 
 /**
- * Which elements a card spotlights. `pairId` is the pair the person made in
- * step 3: while its checklist is not on screen, the spotlight falls back to
- * what brings it back — the pair's ring while it is not selected (select it),
- * else the collapsed rail's Expand control (the person dismissed the overlay,
- * RESP-03), else the ring.
+ * Which elements a card spotlights. `pairIds` are the pairs made since step 3
+ * began (the person's, and any collaborator's): while no checklist is on
+ * screen, the spotlight falls back to what brings one back — a ring of theirs
+ * that is not selected (select it), else the collapsed rail's Expand control
+ * (the person dismissed the overlay, RESP-03), else their rings.
  */
 export function targetSelectors(
   target: TourTarget | null,
-  pairId: string | null = null,
+  pairIds: readonly string[] = [],
 ): TargetSelectors | null {
   if (target === null) return null;
-  if (target === 'dimensions' && pairId !== null) {
-    const ring = `[data-pair-id="${pairId}"][data-graph-kind="ring"]`;
+  if (target === 'dimensions' && pairIds.length > 0) {
+    const rings = pairIds.map((id) => `[data-pair-id="${id}"][data-graph-kind="ring"]`);
     return [
       anchorSelector(target),
-      `${ring}:not([data-selected])`,
+      rings.map((ring) => `${ring}:not([data-selected])`).join(', '),
       anchorSelector('inspector-expand'),
-      ring,
+      rings.join(', '),
     ];
   }
   return [anchorSelector(target)];

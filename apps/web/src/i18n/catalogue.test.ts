@@ -86,12 +86,15 @@ describe('message catalogue', () => {
     const en = CATALOGUE['en-US'];
     expect(en['tour.step3.action']).toBe('Click Add graph in the toolbar');
     expect(en['tour.step3.point.action']).toBe('Click a table to bind the graph');
+    // The action names the change: three are ticked when the card shows and the step
+    // completes only when the set changes (review of #160, D1; #159 items 5 and 9).
     expect(en['tour.step3.dimensions.action']).toBe(
-      'Tick at least two dimensions in the Graph tab',
+      'Untick or tick a dimension, keeping at least two',
     );
     expect(en['tour.step3.point.body']).toMatch(/Deliverables and Team/);
     expect(en['tour.step3.dimensions.body']).toMatch(/^A dimension is a column/);
     expect(en['tour.step3.dimensions.body']).toMatch(/first three entered columns/);
+    expect(en['tour.step3.dimensions.body']).toMatch(/Change the set — untick one of the three/);
   });
 
   test('ONB-12 the voice holds in every locale: no exclamation mark, no "Oops", no emoji', () => {

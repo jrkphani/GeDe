@@ -374,7 +374,7 @@ async function graphStep(
     })
     .toBe(true);
   await expect(dimensions.locator('.gd-tour__action')).toHaveText(
-    /Tick at least two dimensions in the Graph tab$/,
+    /Untick or tick a dimension, keeping at least two$/,
   );
   const list = checklist(page);
   await expect(list).toBeVisible();

@@ -272,7 +272,7 @@ describe('tour store', () => {
 
   test('ONB-05 GRAPH-03 GRAPH-05 step 3 is a sub-flow: `add` → `point` while pointing → `dimensions` once the pair is bound → step 4 when the dimensions change to two or more', () => {
     const gd = openSampleAt(3);
-    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairId: null });
+    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairIds: [] });
     setTourPointing(true);
     expect(tourState()).toMatchObject({ step: 3, substep: 'point' });
     const d = cells(gd).deliverables;
@@ -280,10 +280,9 @@ describe('tour store', () => {
     setTourPointing(false);
     // Bound: the dimensions card, with the pair the person made and its three default dimensions.
     const bound = tourState();
-    expect(bound).toMatchObject({ step: 3, substep: 'dimensions', pairId: pair.pairId });
+    expect(bound).toMatchObject({ step: 3, substep: 'dimensions', pairIds: [pair.pairId] });
     const cols = tableById(gd, d.id)!.columns.map((c) => c.id);
-    expect(bound.phase === 'running' && bound.baseline.dimensions).toEqual({
-      pairId: pair.pairId,
+    expect(bound.phase === 'running' && bound.baseline.dimensions.get(pair.pairId)).toEqual({
       tableId: d.id,
       columns: new Set(cols.slice(0, 3)),
     });
@@ -295,7 +294,7 @@ describe('tour store', () => {
     expect(tourState()).toMatchObject({ step: 3, substep: 'dimensions' });
     // A fourth dimension: changed and at least two.
     toggleGraphDimension(gd, pair.pairId, cols[3]!, true);
-    expect(tourState()).toMatchObject({ step: 4, substep: null, pairId: null });
+    expect(tourState()).toMatchObject({ step: 4, substep: null, pairIds: [] });
   });
 
   test('ONB-05 GRAPH-03 Escape in pointing mode returns to `add`, not to Skip; a pair removed during `dimensions` returns to `add` too', () => {
@@ -306,14 +305,14 @@ describe('tour store', () => {
     expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'add' });
     const sheetId = listSheets(gd)[0]!.id;
     const pair = createGraphPair(gd, { sheetId, tableId: cells(gd).deliverables.id });
-    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: pair.pairId });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [pair.pairId] });
     removeGraphPair(gd, pair.pairId);
-    expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'add', pairId: null });
+    expect(tourState()).toMatchObject({ phase: 'running', step: 3, substep: 'add', pairIds: [] });
     // The next pair takes a fresh dimensions baseline.
     const again = createGraphPair(gd, { sheetId, tableId: cells(gd).team.id });
     const next = tourState();
-    expect(next).toMatchObject({ substep: 'dimensions', pairId: again.pairId });
-    expect(next.phase === 'running' && next.baseline.dimensions?.pairId).toBe(again.pairId);
+    expect(next).toMatchObject({ substep: 'dimensions', pairIds: [again.pairId] });
+    expect(next.phase === 'running' && next.baseline.dimensions.has(again.pairId)).toBe(true);
   });
 
   test('ONB-05 GRAPH-03 GRAPH-05 an unbound pair never advances; Re-point shows `point` again and, bound to another table, resets the dimensions baseline so the defaults do not count', () => {
@@ -322,24 +321,28 @@ describe('tour store', () => {
     const c = cells(gd);
     // An unbound pair (pointing mode's own, or one whose table was deleted) is not the action.
     const unbound = createGraphPair(gd, { sheetId, tableId: null });
-    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairId: null });
+    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairIds: [] });
     expect(bindGraphPair(gd, unbound.pairId, c.deliverables.id)).toBe(true);
-    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: unbound.pairId });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [unbound.pairId] });
     // Re-point: pointing mode on, the card goes back to `point` while the pair stays bound.
     setTourPointing(true);
-    expect(tourState()).toMatchObject({ substep: 'point', pairId: null });
+    expect(tourState()).toMatchObject({ substep: 'point', pairIds: [] });
     // Escape: back to the dimensions of the same binding, baseline kept.
     setTourPointing(false);
     let state = tourState();
-    expect(state).toMatchObject({ substep: 'dimensions', pairId: unbound.pairId });
-    expect(state.phase === 'running' && state.baseline.dimensions?.tableId).toBe(c.deliverables.id);
+    expect(state).toMatchObject({ substep: 'dimensions', pairIds: [unbound.pairId] });
+    expect(
+      state.phase === 'running' && state.baseline.dimensions.get(unbound.pairId)?.tableId,
+    ).toBe(c.deliverables.id);
     // Re-pointed at Team: its default three dimensions are a new baseline, not a change.
     setTourPointing(true);
     expect(bindGraphPair(gd, unbound.pairId, c.team.id)).toBe(true);
     setTourPointing(false);
     state = tourState();
-    expect(state).toMatchObject({ step: 3, substep: 'dimensions', pairId: unbound.pairId });
-    expect(state.phase === 'running' && state.baseline.dimensions?.tableId).toBe(c.team.id);
+    expect(state).toMatchObject({ step: 3, substep: 'dimensions', pairIds: [unbound.pairId] });
+    expect(
+      state.phase === 'running' && state.baseline.dimensions.get(unbound.pairId)?.tableId,
+    ).toBe(c.team.id);
     const teamCols = tableById(gd, c.team.id)!.columns.map((x) => x.id);
     toggleGraphDimension(gd, unbound.pairId, teamCols[0]!, false);
     expect(tourState()).toMatchObject({ step: 4 });
@@ -352,7 +355,7 @@ describe('tour store', () => {
       sheetId: listSheets(gd)[0]!.id,
       tableId: cells(gd).deliverables.id,
     });
-    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: direct.pairId });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [direct.pairId] });
 
     // Add shaped table, from pointing mode: bound to the new table in one step.
     resetTourForTests();
@@ -363,7 +366,7 @@ describe('tour store', () => {
       at: { col: 1, row: 30 },
     });
     setTourPointing(false);
-    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: shaped.pairId });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [shaped.pairId] });
     const first = tableById(gd, shaped.tableId)!.columns[0]!.id;
     expect(toggleGraphDimension(gd, shaped.pairId, first, false)).toHaveLength(2);
     expect(tourState()).toMatchObject({ step: 4 });
@@ -378,7 +381,59 @@ describe('tour store', () => {
     setTourRoute(`/d/${SAMPLE_ID}`);
     reference(pre, '=@Team.Marcus.Role');
     days(pre, CONCAT_EXAMPLE);
-    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairId: null });
+    expect(tourState()).toMatchObject({ step: 3, substep: 'add', pairIds: [] });
+  });
+
+  test("ONB-05 GRAPH-05 a collaborator's pair arriving mid-step is tracked beside the person's own, never instead of it: the person's change completes the step, and so would the collaborator's (review of #160, D2)", () => {
+    const gd = openSampleAt(3);
+    const sheetId = listSheets(gd)[0]!.id;
+    const c = cells(gd);
+    // A collaborator binds a pair on Team while the person is still on `add`.
+    const { rgd, merge } = replica(gd);
+    const theirs = createGraphPair(rgd, { sheetId, tableId: cells(rgd).team.id });
+    merge();
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [theirs.pairId] });
+    // The person adds their own on Deliverables: both are tracked, each with its own baseline.
+    setTourPointing(true);
+    const mine = createGraphPair(gd, { sheetId, tableId: c.deliverables.id });
+    setTourPointing(false);
+    const state = tourState();
+    expect(state).toMatchObject({ substep: 'dimensions' });
+    expect(state.phase === 'running' && [...state.pairIds].sort()).toEqual(
+      [theirs.pairId, mine.pairId].sort(),
+    );
+    expect(state.phase === 'running' && state.baseline.dimensions.get(mine.pairId)?.tableId).toBe(
+      c.deliverables.id,
+    );
+    expect(state.phase === 'running' && state.baseline.dimensions.get(theirs.pairId)?.tableId).toBe(
+      c.team.id,
+    );
+    // The person unticks one of their own dimensions: done — the collaborator's pair untouched.
+    toggleGraphDimension(gd, mine.pairId, tableById(gd, c.deliverables.id)!.columns[0]!.id, false);
+    expect(tourState()).toMatchObject({ step: 4 });
+
+    // And the other way round: the collaborator's change on their pair counts too (ADR 35).
+    resetTourForTests();
+    const again = openSampleAt(3);
+    const other = replica(again);
+    const pair = createGraphPair(other.rgd, {
+      sheetId: listSheets(other.rgd)[0]!.id,
+      tableId: cells(other.rgd).team.id,
+    });
+    other.merge();
+    createGraphPair(again, {
+      sheetId: listSheets(again)[0]!.id,
+      tableId: cells(again).deliverables.id,
+    });
+    expect(tourState()).toMatchObject({ step: 3, substep: 'dimensions' });
+    toggleGraphDimension(
+      other.rgd,
+      pair.pairId,
+      tableById(other.rgd, cells(other.rgd).team.id)!.columns[0]!.id,
+      false,
+    );
+    other.merge();
+    expect(tourState()).toMatchObject({ step: 4 });
   });
 
   test('ONB-05 GRAPH-05 a pair bound and re-dimensioned from another replica counts (as ADR 35 rules)', () => {
@@ -387,7 +442,7 @@ describe('tour store', () => {
     const d = cells(rgd).deliverables;
     const pair = createGraphPair(rgd, { sheetId: listSheets(rgd)[0]!.id, tableId: d.id });
     merge();
-    expect(tourState()).toMatchObject({ substep: 'dimensions', pairId: pair.pairId });
+    expect(tourState()).toMatchObject({ substep: 'dimensions', pairIds: [pair.pairId] });
     toggleGraphDimension(rgd, pair.pairId, tableById(rgd, d.id)!.columns[0]!.id, false);
     merge();
     expect(tourState()).toMatchObject({ step: 4 });

@@ -111,7 +111,7 @@ export function TourController() {
         <TourOverlay
           step={state.step}
           substep={state.substep}
-          pairId={state.pairId}
+          pairIds={state.pairIds}
           onSkip={skipTour}
         />
       )}

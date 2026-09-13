@@ -59,8 +59,8 @@ export const messages = {
 
   'tour.step3.dimensions.title': 'Choose the dimensions',
   'tour.step3.dimensions.body':
-    'A dimension is a column whose values define a context, so every combination of values is a node. The graph starts with the first three entered columns; the Graph tab lists each column with its distinct values.',
-  'tour.step3.dimensions.action': 'Tick at least two dimensions in the Graph tab',
+    'A dimension is a column whose values define a context, so every combination of values is a node. The graph starts with the first three entered columns; the Graph tab lists each column with its distinct values. Change the set — untick one of the three, or tick another — to see the graph redraw.',
+  'tour.step3.dimensions.action': 'Untick or tick a dimension, keeping at least two',
 
   'tour.step4.title': 'Find across every table',
   'tour.step4.body':

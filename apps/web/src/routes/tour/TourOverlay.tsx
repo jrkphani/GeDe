@@ -40,15 +40,15 @@ export interface TourOverlayProps {
   step: number;
   /** The sub-flow's current card, for steps 2 and 3. */
   substep?: TourSubstep | null | undefined;
-  /** The pair the person made in step 3, whose ring stands in for a hidden checklist. */
-  pairId?: string | null | undefined;
+  /** The pairs made since step 3 began, whose rings stand in for a hidden checklist. */
+  pairIds?: readonly string[] | undefined;
   onSkip: () => void;
 }
 
-export function TourOverlay({ step, substep = null, pairId = null, onSkip }: TourOverlayProps) {
+export function TourOverlay({ step, substep = null, pairIds = [], onSkip }: TourOverlayProps) {
   const t = useMessages();
   const definition = tourCard(step, substep);
-  const { rect: target, hidden } = useSpotlightBox(targetSelectors(definition.target, pairId));
+  const { rect: target, hidden } = useSpotlightBox(targetSelectors(definition.target, pairIds));
   const viewport = useViewportSize();
   const cardRef = useRef<HTMLDivElement>(null);
   const [cardHeight, setCardHeight] = useState(CARD_HEIGHT_ESTIMATE);

@@ -67,15 +67,18 @@ export interface TourBaseline {
   /** Graph pair ids (step 3). */
   readonly graphs: ReadonlySet<Id> | null;
   /**
-   * The dimensions the person's pair had when its binding first showed the
-   * `dimensions` card (step 3c); re-taken when the pair or its table changes
-   * (Re-point binds another table and resets the dimensions).
+   * Per pair the step did not start with: the dimensions it had when its
+   * binding first showed the `dimensions` card (step 3c); re-taken when its
+   * table changes (Re-point binds another table and resets the dimensions).
+   * Per pair, so a collaborator's pair arriving mid-step is tracked beside
+   * the person's own, never instead of it (review of #160, D2).
    */
-  readonly dimensions: {
-    readonly pairId: Id;
-    readonly tableId: Id;
-    readonly columns: ReadonlySet<Id>;
-  } | null;
+  readonly dimensions: ReadonlyMap<Id, PairBaseline>;
+}
+
+export interface PairBaseline {
+  readonly tableId: Id;
+  readonly columns: ReadonlySet<Id>;
 }
 
 export interface TourRunning {
@@ -84,8 +87,8 @@ export interface TourRunning {
   readonly step: number;
   /** The sub-flow's current card (steps 2 and 3), null for the others. */
   readonly substep: TourSubstep | null;
-  /** The pair the person made in step 3, once one exists. */
-  readonly pairId: Id | null;
+  /** The bound pairs made since step 3 began, in creation order (the person's, and any collaborator's). */
+  readonly pairIds: readonly Id[];
   readonly baseline: TourBaseline;
 }
 
@@ -114,7 +117,7 @@ const EMPTY_BASELINE: TourBaseline = {
   crossReferences: null,
   concats: null,
   graphs: null,
-  dimensions: null,
+  dimensions: new Map(),
 };
 
 let state: TourState = IDLE;
@@ -193,14 +196,19 @@ function newKey(baseline: ReadonlySet<string> | null, current: ReadonlySet<strin
   return null;
 }
 
-/** The first bound pair the step did not start with, or null. */
-function newBoundPairId(running: TourRunning, gd: GedeDoc): Id | null {
+/** The bound pairs the step did not start with, in creation order (ULIDs sort by time). */
+function newBoundPairIds(running: TourRunning, gd: GedeDoc): Id[] {
   const baseline = running.baseline.graphs;
-  if (baseline === null) return null;
+  if (baseline === null) return [];
+  const out: Id[] = [];
   for (const pairId of graphPairIds(gd)) {
-    if (!baseline.has(pairId) && pairDimensions(gd, pairId)?.tableId != null) return pairId;
+    if (!baseline.has(pairId) && pairDimensions(gd, pairId)?.tableId != null) out.push(pairId);
   }
-  return null;
+  return out.sort();
+}
+
+function sameList(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((x, i) => x === b[i]);
 }
 
 /**
@@ -222,19 +230,26 @@ function referenceSubstep(running: TourRunning): TourSubstep {
  * with exists and is bound ("Graph this table" and "Add shaped table" bind at
  * once, so they arrive here directly); else `add`.
  */
-function graphSubstep(running: TourRunning): { substep: TourSubstep; pairId: Id | null } {
-  if (inputs.pointing) return { substep: 'point', pairId: null };
+function graphSubstep(running: TourRunning): { substep: TourSubstep; pairIds: readonly Id[] } {
+  if (inputs.pointing) return { substep: 'point', pairIds: NO_PAIRS };
   const gd = inputs.doc;
-  const pairId = gd === null ? null : newBoundPairId(running, gd);
-  if (pairId !== null) return { substep: 'dimensions', pairId };
-  return { substep: 'add', pairId: null };
+  const pairIds = gd === null ? NO_PAIRS : newBoundPairIds(running, gd);
+  if (pairIds.length > 0) return { substep: 'dimensions', pairIds };
+  return { substep: 'add', pairIds: NO_PAIRS };
 }
 
+const NO_PAIRS: readonly Id[] = [];
+
 /** The sub-state the inputs imply for the running step. */
-function deriveSubstep(running: TourRunning): { substep: TourSubstep | null; pairId: Id | null } {
-  if (running.step === REFERENCE_STEP) return { substep: referenceSubstep(running), pairId: null };
+function deriveSubstep(running: TourRunning): {
+  substep: TourSubstep | null;
+  pairIds: readonly Id[];
+} {
+  if (running.step === REFERENCE_STEP) {
+    return { substep: referenceSubstep(running), pairIds: NO_PAIRS };
+  }
   if (running.step === GRAPH_STEP) return graphSubstep(running);
-  return { substep: null, pairId: null };
+  return { substep: null, pairIds: NO_PAIRS };
 }
 
 /** Take whichever baselines the step needs and does not have yet. */
@@ -259,25 +274,18 @@ function withBaseline(running: TourRunning): TourRunning {
     if (baseline.graphs === null) {
       next = { ...next, baseline: { ...next.baseline, graphs: graphPairIds(gd) } };
     }
-    // The dimensions baseline is per binding: taken when the person's pair first shows
-    // the `dimensions` card, re-taken if the pair goes and another arrives, or if it is
-    // re-pointed at another table (which resets its dimensions).
-    const { pairId } = graphSubstep(next);
-    const dims = pairId === null ? null : pairDimensions(gd, pairId);
-    const current = next.baseline.dimensions;
-    if (
-      pairId !== null &&
-      dims?.tableId != null &&
-      (current?.pairId !== pairId || current.tableId !== dims.tableId)
-    ) {
-      next = {
-        ...next,
-        baseline: {
-          ...next.baseline,
-          dimensions: { pairId, tableId: dims.tableId, columns: new Set(dims.columns) },
-        },
-      };
+    // The dimensions baseline is per binding: taken for each new pair as it first shows
+    // the `dimensions` card, re-taken if a pair is re-pointed at another table (which
+    // resets its dimensions). A pair that goes keeps its entry, harmlessly.
+    let dimensions: Map<Id, PairBaseline> | null = null;
+    for (const pairId of graphSubstep(next).pairIds) {
+      const dims = pairDimensions(gd, pairId);
+      const current = next.baseline.dimensions.get(pairId);
+      if (dims?.tableId == null || current?.tableId === dims.tableId) continue;
+      dimensions ??= new Map(next.baseline.dimensions);
+      dimensions.set(pairId, { tableId: dims.tableId, columns: new Set(dims.columns) });
     }
+    if (dimensions !== null) next = { ...next, baseline: { ...next.baseline, dimensions } };
     return next;
   }
   return running;
@@ -285,9 +293,9 @@ function withBaseline(running: TourRunning): TourRunning {
 
 /** The running state with its derived sub-state in step with the inputs. */
 function withSubstep(running: TourRunning): TourRunning {
-  const { substep, pairId } = deriveSubstep(running);
-  if (substep === running.substep && pairId === running.pairId) return running;
-  return { ...running, substep, pairId };
+  const { substep, pairIds } = deriveSubstep(running);
+  if (substep === running.substep && sameList(pairIds, running.pairIds)) return running;
+  return { ...running, substep, pairIds };
 }
 
 /** Whether the step's action has been performed. */
@@ -305,16 +313,20 @@ function stepSatisfied(running: TourRunning): boolean {
         newKey(baseline.concats, concatFormulaKeys(gd)) !== null
       );
     case 'graph-added': {
-      if (gd === null || baseline.dimensions === null) return false;
-      const { pairId } = graphSubstep(running);
-      if (pairId === null || pairId !== baseline.dimensions.pairId) return false;
-      const dims = pairDimensions(gd, pairId);
-      return (
-        dims !== null &&
-        dims.tableId === baseline.dimensions.tableId &&
-        dims.columns.length >= TOUR_MIN_DIMENSIONS &&
-        !sameSet(baseline.dimensions.columns, dims.columns)
-      );
+      if (gd === null) return false;
+      // Any pair made since the step began whose dimensions changed to two or more —
+      // the person's own, whoever else's arrived meanwhile (ADR-035: remote counts).
+      return graphSubstep(running).pairIds.some((pairId) => {
+        const taken = baseline.dimensions.get(pairId);
+        const dims = pairDimensions(gd, pairId);
+        return (
+          taken !== undefined &&
+          dims !== null &&
+          dims.tableId === taken.tableId &&
+          dims.columns.length >= TOUR_MIN_DIMENSIONS &&
+          !sameSet(taken.columns, dims.columns)
+        );
+      });
     }
     case 'find-query':
       return inputs.findOpen && inputs.findQuery.trim() !== '';
@@ -325,7 +337,7 @@ function stepSatisfied(running: TourRunning): boolean {
 }
 
 function running(step: number): TourRunning {
-  return { phase: 'running', step, substep: null, pairId: null, baseline: EMPTY_BASELINE };
+  return { phase: 'running', step, substep: null, pairIds: NO_PAIRS, baseline: EMPTY_BASELINE };
 }
 
 /**

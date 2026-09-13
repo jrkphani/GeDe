@@ -39,8 +39,8 @@ function anchor(
   return el;
 }
 
-function Probe({ target, pairId = null }: { target: TourTarget | null; pairId?: string | null }) {
-  const rect = useSpotlight(targetSelectors(target, pairId));
+function Probe({ target, pairIds = [] }: { target: TourTarget | null; pairIds?: string[] }) {
+  const rect = useSpotlight(targetSelectors(target, pairIds));
   return (
     <output data-testid="rect">
       {rect === null
@@ -201,7 +201,7 @@ describe('useSpotlight', () => {
     other.setAttribute('data-graph-kind', 'ring');
     boxed(other, { left: 500, top: 300, width: 320, height: 200 });
     document.body.appendChild(other);
-    render(<Probe target="dimensions" pairId="pair-1" />);
+    render(<Probe target="dimensions" pairIds={['pair-1']} />);
     expect(screen.getByTestId('rect')).toHaveTextContent('40,300,320,200');
     const checklist = anchor({ left: 900, top: 120, width: 280, height: 160 }, 'dimensions');
     await frame();
@@ -223,7 +223,7 @@ describe('useSpotlight', () => {
     await frame();
     expect(screen.getByTestId('rect')).toHaveTextContent('40,300,320,200');
     // Without a pair there is nothing to fall back to.
-    expect(measureTarget(targetSelectors('dimensions', null))).toBeNull();
+    expect(measureTarget(targetSelectors('dimensions', []))).toBeNull();
   });
 
   it('ONB-04 INSP-02 a checklist inside the scrolling inspector rail is spotlit only where it shows, and re-measures when the rail scrolls', async () => {
@@ -234,7 +234,7 @@ describe('useSpotlight', () => {
     // The checklist starts 60 px above the rail's top and runs below its bottom.
     const checklist = anchor({ left: 820, top: 40, width: 260, height: 700 }, 'dimensions', rail);
     expect(paintedRect(checklist)).toEqual({ x: 820, y: 100, width: 260, height: 400 });
-    render(<Probe target="dimensions" pairId="pair-1" />);
+    render(<Probe target="dimensions" pairIds={['pair-1']} />);
     expect(screen.getByTestId('rect')).toHaveTextContent('820,100,260,400');
     // Scrolling the rail (not the window) moves the checklist: the capturing listener sees it.
     boxed(checklist, { left: 820, top: 300, width: 260, height: 700 });

@@ -316,7 +316,7 @@ describe('TourController', () => {
     expect(dimensions).toHaveAttribute('data-substep', 'dimensions');
     expect(within(dimensions).getByText('STEP 3 OF 5')).toBeInTheDocument();
     expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'dimensions');
-    expect(tourState()).toMatchObject({ pairId: pair!.pairId });
+    expect(tourState()).toMatchObject({ pairIds: [pair!.pairId] });
     act(() => {
       core.toggleGraphDimension(gd, pair!.pairId, table.columns[0]!.id, false);
     });
