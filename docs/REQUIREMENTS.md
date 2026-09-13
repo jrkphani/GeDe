@@ -57,8 +57,8 @@ _The lattice is 160 × 22 px. Geometry and addressing are one fact._
 - **GRID-05** — Traversal: Tab / Shift-Tab and arrows move, wrapping at row ends. Moving past the final row appends a row and places the cursor in it.
 - **GRID-06** — Commit: Enter commits and moves down; Tab commits and moves right; blur commits. Committing must never occur during IME composition.
 - **GRID-07** — Add row · column: A dashed add-row strip sits beneath the last row of the selected table; an add-column stub sits at its right edge. Each occupies exactly one lattice unit.
-- **GRID-08** — Resize: A divider at each column header resizes that column; a corner handle scales the whole table. Both snap.
-- **GRID-09** — Wrap: Wrapped rows occupy two lattice rows so addressing stays exact.
+- **GRID-08** — Resize: A divider at each column header resizes that column; a corner handle scales the whole table. Both snap. _Amended by ADR-049 (#167): a divider under each row's handle resizes that row; a divider on a selected band of rows or columns resizes every member proportionally; a double-click (or Enter on the focused divider) fits the column or row to its content; the corner scales widths and heights alike. Everything snaps to whole lattice units; the minimum is one unit each way._
+- **GRID-09** — Wrap: Wrapped rows occupy two lattice rows so addressing stays exact. _Amended by ADR-049 (#167): a wrapped row occupies as many whole lattice rows as its content needs (n ≥ 1), measured and stored by the replica that edits it, so addressing stays exact on every replica; wrap is a setting at cell, row, column and table scope; off, text clips at the cell._
 - **GRID-10** — Frozen columns: A per-table count shades the leading columns, draws a heavier rule at the boundary, and determines which columns the pinned panel carries.
 - **GRID-11** — Header rows · footer: Counts of 0 or 1 show or hide the column-header row and the footer count strip.
 
@@ -163,7 +163,7 @@ _A 322 px rail with two modes, selected from the chrome._
 - **INSP-01** — Modes: Format (Table, Cell, Text, Arrange, and Graph when a graph is selected) and Organize (Categories, Sort, Filter). The chrome toggles carry the active state.
 - **INSP-02** — Collapse: The rail collapses to a 38 px strip and back; below 1200 px it starts collapsed, and below 768 px it does not render.
 - **INSP-03** — Selected node: The head of the rail always states the selected object, its address when a cell is selected, row and column counts, derived count and grouping.
-- **INSP-04** — Table tab: Table styles; title and caption visibility; header row, header column and footer row counts; row and column counts that insert or delete structure; outline; gridline density; alternating row colour; row and column size with fit-to-content.
+- **INSP-04** — Table tab: Table styles; title and caption visibility; header row, header column and footer row counts; row and column counts that insert or delete structure; outline; gridline density; alternating row colour; row and column size with fit-to-content. _Amended by ADR-049 (#167): Height and Width act on the selected rows and columns, each with Fit to content beside it; Distribute rows / columns evenly; the table's default wrap._
 - **INSP-05** — Cell tab: Data format with its options, fill, a positional border matrix (all, any single edge, outline, paired, none) with hairline/strong/accent weight, and conditional highlighting rules.
 - **INSP-06** — Text tab: Font family, four-step weight, size, inline marks, character styles, text colour, horizontal and vertical alignment, wrap.
 - **INSP-07** — Arrange tab: Stacking order, canvas layout, size, position in both pixels and grid address, pin to viewport, DAG edges.

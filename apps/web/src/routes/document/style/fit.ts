@@ -11,15 +11,15 @@
 import {
   BOLD_WEIGHT,
   cellAppearanceFor,
+  cellAppearanceOverride,
   cellFormatFor,
   cellRich,
   cellsMap,
-  detectIndicLang,
-  effectiveWrap,
   evaluatedText,
   isFormula,
   LATTICE,
   lineBoxPx,
+  mergeAppearance,
   richFromText,
   rowMeta,
   rowsForLines,
@@ -73,8 +73,14 @@ export function canMeasure(): boolean {
   return measurable;
 }
 
+/** A font's cache key, computed once per font object (a run's font serves every word of the run). */
+const fontKeys = new WeakMap<MeasureFont, string>();
 function fontKey(font: MeasureFont): string {
-  return `${font.family}|${String(font.weight)}|${font.size}|${font.italic === true ? 'i' : 'r'}`;
+  const hit = fontKeys.get(font);
+  if (hit !== undefined) return hit;
+  const key = `${font.family}|${String(font.weight)}|${font.size}|${font.italic === true ? 'i' : 'r'}`;
+  fontKeys.set(font, key);
+  return key;
 }
 
 /**
@@ -104,15 +110,28 @@ const CACHE_LIMIT = 20_000;
 
 /** A measure that remembers each (font, text) it has answered. */
 export function memoised(inner: FitMeasure): FitMeasure {
-  let cache = new Map<string, number>();
+  // Two levels — font, then text — so a word costs one map lookup, no key building.
+  let byFont = new Map<string, Map<string, number>>();
+  let size = 0;
   return {
     measure: (text, font) => {
-      const key = `${fontKey(font)}|${text}`;
-      const hit = cache.get(key);
+      const key = fontKey(font);
+      let widths = byFont.get(key);
+      if (widths === undefined) {
+        widths = new Map();
+        byFont.set(key, widths);
+      }
+      const hit = widths.get(text);
       if (hit !== undefined) return hit;
-      if (cache.size >= CACHE_LIMIT) cache = new Map();
+      if (size >= CACHE_LIMIT) {
+        byFont = new Map();
+        widths = new Map();
+        byFont.set(key, widths);
+        size = 0;
+      }
       const width = inner.measure(text, font);
-      cache.set(key, width);
+      widths.set(text, width);
+      size += 1;
       return width;
     },
   };
@@ -132,21 +151,25 @@ export interface FitOptions {
   widths?: ReadonlyMap<Id, number> | undefined;
 }
 
-function shownLayout(table: TableMap, record: TableRecord, rowId: Id, colId: Id, o: FitOptions) {
-  const column = record.columns.find((c) => c.id === colId) ?? null;
-  const key = `${rowId}:${colId}` as const;
+function shownLayout(
+  table: TableMap,
+  record: TableRecord,
+  rowId: Id,
+  column: ColumnRecord,
+  o: FitOptions,
+) {
+  const key = `${rowId}:${column.id}` as const;
   const content = cellsMap(table).get(key);
   const rich = isFormula(content)
     ? richFromText(evaluatedText(o.cellValue?.(workbookCellId(record.id, key))))
-    : cellRich(table, rowId, colId);
+    : cellRich(table, rowId, column.id);
   return {
     layout: layoutCell(rich, cellFormatFor(table, column, rowId), o.locale),
     formula: isFormula(content),
   };
 }
 
-function fontOf(table: TableMap, record: TableRecord, rowId: Id, colId: Id): MeasureFont {
-  const column = record.columns.find((c) => c.id === colId) ?? null;
+function fontOf(table: TableMap, column: ColumnRecord, rowId: Id): MeasureFont {
   const a = cellAppearanceFor(table, column, rowId);
   return { family: a.font ?? 'ui', weight: a.weight ?? 400, size: a.size ?? 'cell' };
 }
@@ -186,9 +209,18 @@ export function widestLine(layout: CellLayout, font: MeasureFont, measure: FitMe
   return widest;
 }
 
-/** Split text into words and the whitespace between them, in order, nothing dropped. */
-function tokens(text: string): string[] {
-  return text.match(/\s+|\S+/g) ?? [];
+const WHITESPACE = /\s/;
+
+/** Split text into words and the whitespace between them, in order, nothing dropped; memoised per string. */
+const TOKEN_CACHE_LIMIT = 5000;
+let tokenCache = new Map<string, readonly string[]>();
+function tokens(text: string): readonly string[] {
+  const hit = tokenCache.get(text);
+  if (hit !== undefined) return hit;
+  if (tokenCache.size >= TOKEN_CACHE_LIMIT) tokenCache = new Map();
+  const out = text.match(/\s+|\S+/g) ?? [];
+  tokenCache.set(text, out);
+  return out;
 }
 
 /**
@@ -213,7 +245,8 @@ export function wrappedLines(
     const scale = script ? 0.75 : 1;
     for (const token of tokens(run.text)) {
       const width = measure.measure(token, f) * scale;
-      if (/^\s+$/.test(token)) {
+      // A token is all whitespace or none: its first character says which.
+      if (WHITESPACE.test(token.charAt(0))) {
         // Trailing whitespace hangs past the edge; it never starts a line of its own.
         line += width;
         continue;
@@ -258,12 +291,9 @@ export function fitColumnsToContent(
         size: 'cell',
       });
       for (const rowId of record.rows) {
-        const { layout } = shownLayout(table, record, rowId, column.id, o);
+        const { layout } = shownLayout(table, record, rowId, column, o);
         if (layout.text === '') continue;
-        widest = Math.max(
-          widest,
-          widestLine(layout, fontOf(table, record, rowId, column.id), o.measure),
-        );
+        widest = Math.max(widest, widestLine(layout, fontOf(table, column, rowId), o.measure));
       }
       const units = Math.ceil((widest + CELL_CHROME_PX) / LATTICE.col);
       return { colId: column.id, units: Math.max(1, units) };
@@ -292,17 +322,33 @@ function widthUnitsOf(ctx: RowNeedContext, column: ColumnRecord): number {
   return ctx.o.widths?.get(column.id) ?? column.width;
 }
 
-/** Whole units one cell needs at `widthPx`: its lines at its type size's line box. */
-function cellNeed(ctx: RowNeedContext, rowId: Id, column: ColumnRecord, widthPx: number): number {
+/**
+ * Whole units one cell needs at `widthPx`: its lines at its type size's line
+ * box. `rowWrap` is the row's own wrap, read once per row by the caller.
+ */
+function cellNeed(
+  ctx: RowNeedContext,
+  rowId: Id,
+  column: ColumnRecord,
+  widthPx: number,
+  rowWrap: boolean | null,
+): number {
   const { table, record, o } = ctx;
-  const { layout } = shownLayout(table, record, rowId, column.id, o);
-  const font = fontOf(table, record, rowId, column.id);
+  const { layout } = shownLayout(table, record, rowId, column, o);
+  // One read of the cell's override serves the font and the wrap (cell > row > column > table).
+  const override = cellAppearanceOverride(table, rowId, column.id);
+  const a = override === null ? column.appearance : mergeAppearance(column.appearance, override);
+  const font: MeasureFont = {
+    family: a.font ?? 'ui',
+    weight: a.weight ?? 400,
+    size: a.size ?? 'cell',
+  };
   if (layout.text === '') {
     // An empty cell still needs its type size's line box (ADR-034).
     return rowsForSize(font.size, false);
   }
-  const indic = layout.lang !== null || detectIndicLang(layout.text) !== null;
-  const wrap = effectiveWrap(table, column, rowId, ctx.tableWrap);
+  const indic = layout.lang !== null;
+  const wrap = override?.wrap ?? rowWrap ?? column.wrap ?? ctx.tableWrap;
   let lines = 0;
   if (wrap) {
     for (const runs of layout.paragraphs) {
@@ -330,6 +376,7 @@ function cellNeed(ctx: RowNeedContext, rowId: Id, column: ColumnRecord, widthPx:
  */
 function rowNeed(ctx: RowNeedContext, rowId: Id): number {
   const { spans } = ctx;
+  const rowWrap = rowMeta(ctx.table, rowId).wrap;
   let units = 1;
   for (const column of ctx.visible) {
     const key: CellKey = `${rowId}:${column.id}`;
@@ -338,7 +385,7 @@ function rowNeed(ctx: RowNeedContext, rowId: Id): number {
     if (span === null) {
       units = Math.max(
         units,
-        cellNeed(ctx, rowId, column, widthUnitsOf(ctx, column) * LATTICE.col),
+        cellNeed(ctx, rowId, column, widthUnitsOf(ctx, column) * LATTICE.col, rowWrap),
       );
       continue;
     }
@@ -353,7 +400,11 @@ function rowNeed(ctx: RowNeedContext, rowId: Id): number {
     const otherRows = span.rowIds
       .filter((id) => id !== rowId)
       .reduce((acc, id) => acc + (ctx.heights.get(id) ?? 1), 0);
-    units = Math.max(units, cellNeed(ctx, span.rowId, anchorColumn, widthPx) - otherRows);
+    const anchorWrap = span.rowId === rowId ? rowWrap : rowMeta(ctx.table, span.rowId).wrap;
+    units = Math.max(
+      units,
+      cellNeed(ctx, span.rowId, anchorColumn, widthPx, anchorWrap) - otherRows,
+    );
   }
   return Math.max(1, units);
 }
