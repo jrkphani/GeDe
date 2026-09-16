@@ -188,28 +188,39 @@ describe('SignIn (option 1c)', () => {
     expect(cognito.startPasskeySignIn).toHaveBeenCalledWith('meena@1cloudhub.com');
   });
 
-  it('AUTH-06 code step: six digits, expiry note, Resend; wrong code names the problem', async () => {
+  it('AUTH-06 sign-in code step: the EMAIL_OTP code is eight digits — label, hint, Verify at exactly eight; expiry note; Resend; wrong code names the problem', async () => {
     const u = userEvent.setup();
     vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
       kind: 'code',
+      code: 'sign-in',
       destination: 'm***@1cloudhub.com',
     });
     vi.mocked(cognito.confirmCode).mockRejectedValueOnce(namedError('CodeMismatchException'));
     renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
-    const code = await screen.findByLabelText('Six-digit code');
+    const code = await screen.findByLabelText('Eight-digit code');
+    expect(screen.queryByLabelText('Six-digit code')).not.toBeInTheDocument();
     expect(code).toHaveAttribute('inputmode', 'numeric');
     expect(code).toHaveAttribute('autocomplete', 'one-time-code');
-    expect(screen.getByText('Codes expire in 10 minutes')).toBeInTheDocument();
+    expect(code).toHaveAttribute('data-length', '8');
+    // The hint is what describes the field (A11Y): the ten-minute auth session of a sign-in code.
+    const hint = screen.getByText('Codes expire in 10 minutes');
+    expect(code.getAttribute('aria-describedby')?.split(' ')).toContain(hint.id);
     const verify = screen.getByRole('button', { name: 'Verify and sign in' });
     expect(verify).toBeDisabled();
     await u.type(code, '12ab34');
     expect(code).toHaveValue('1234');
     expect(verify).toBeDisabled();
+    // Six digits — the length the screen used to stop at — is not enough for a sign-in code.
     await u.type(code, '56');
+    expect(code).toHaveValue('123456');
+    expect(verify).toBeDisabled();
+    await u.type(code, '78');
+    expect(code).toHaveValue('12345678');
     expect(verify).toBeEnabled();
     await u.click(verify);
+    expect(cognito.confirmCode).toHaveBeenCalledWith('12345678');
     expect(await screen.findByRole('alert')).toHaveTextContent('That code does not match');
 
     await u.click(screen.getByRole('button', { name: 'Resend code' }));
@@ -217,9 +228,58 @@ describe('SignIn (option 1c)', () => {
     expect(await screen.findByText('A new code is on its way.')).toBeInTheDocument();
   });
 
+  it('AUTH-06 regression: an eight-digit code pasted into the sign-in step keeps all eight digits and verifies', async () => {
+    const u = userEvent.setup();
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-in',
+      destination: 'm***@1cloudhub.com',
+    });
+    vi.mocked(cognito.confirmCode).mockImplementation(() => {
+      cognito.__noUser.current = user;
+      return Promise.resolve({ kind: 'done' });
+    });
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
+    const code = await screen.findByLabelText('Eight-digit code');
+    await u.click(code);
+    // The mail's code, as a mail client copies it.
+    await u.paste('4839 2017');
+    expect(code).toHaveValue('48392017');
+    const verify = screen.getByRole('button', { name: 'Verify and sign in' });
+    expect(verify).toBeEnabled();
+    await u.click(verify);
+    await waitFor(() => {
+      expect(cognito.confirmCode).toHaveBeenCalledWith('48392017');
+    });
+  });
+
+  it('AUTH-06 the announcement names the length of the code that was sent', async () => {
+    const u = userEvent.setup();
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-in',
+      destination: undefined,
+    });
+    renderRoutes(routes, ['/sign-in']);
+    await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
+    await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
+    await screen.findByLabelText('Eight-digit code');
+    await waitFor(() => {
+      expect(screen.getByTestId('live-region')).toHaveTextContent(
+        'We sent an eight-digit code to your email',
+      );
+    });
+  });
+
   it('AUTH-07 after a code sign-in, offers a passkey; declining is remembered for 30 days', async () => {
     const u = userEvent.setup();
-    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-in',
+      destination: undefined,
+    });
     vi.mocked(cognito.confirmCode).mockImplementation(() => {
       cognito.__noUser.current = user;
       return Promise.resolve({ kind: 'done' });
@@ -227,7 +287,7 @@ describe('SignIn (option 1c)', () => {
     const { router } = renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
-    await u.type(await screen.findByLabelText('Six-digit code'), '123456');
+    await u.type(await screen.findByLabelText('Eight-digit code'), '12345678');
     await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
     const dialog = await screen.findByRole('dialog', { name: 'Add a passkey to this device?' });
     expect(dialog).toBeInTheDocument();
@@ -260,7 +320,11 @@ describe('SignIn (option 1c)', () => {
           }, 20 * reads);
         }),
     );
-    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-in',
+      destination: undefined,
+    });
     vi.mocked(cognito.confirmCode).mockImplementation(() => {
       cognito.__noUser.current = user;
       hub?.('signedIn');
@@ -271,7 +335,7 @@ describe('SignIn (option 1c)', () => {
       const { router } = renderRoutes(routes, ['/sign-in']);
       await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
       await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
-      await u.type(await screen.findByLabelText('Six-digit code'), '123456');
+      await u.type(await screen.findByLabelText('Eight-digit code'), '12345678');
       await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
       expect(
         await screen.findByRole('dialog', { name: 'Add a passkey to this device?' }),
@@ -287,7 +351,11 @@ describe('SignIn (option 1c)', () => {
   it('AUTH-07 does not re-offer within 30 days to the user who declined', async () => {
     localStorage.setItem('gede.passkeyOfferDeclinedAt.sub-1', String(Date.now() - 1000));
     const u = userEvent.setup();
-    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-in',
+      destination: undefined,
+    });
     vi.mocked(cognito.confirmCode).mockImplementation(() => {
       cognito.__noUser.current = user;
       return Promise.resolve({ kind: 'done' });
@@ -295,7 +363,7 @@ describe('SignIn (option 1c)', () => {
     const { router } = renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
-    await u.type(await screen.findByLabelText('Six-digit code'), '123456');
+    await u.type(await screen.findByLabelText('Eight-digit code'), '12345678');
     await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
     await waitFor(() => {
       expect(router.state.location.pathname).toBe('/');
@@ -346,12 +414,13 @@ describe('SignIn (option 1c)', () => {
     const u = userEvent.setup();
     vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
       kind: 'code',
+      code: 'sign-in',
       destination: 'n***@e***',
     });
     renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'nobody@example.invalid{Enter}');
     await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
-    await screen.findByLabelText('Six-digit code');
+    await screen.findByLabelText('Eight-digit code');
     expect(
       screen.getByText(/If no code arrives, this email may not have an account yet/),
     ).toBeInTheDocument();
@@ -378,14 +447,18 @@ describe('SignIn (option 1c)', () => {
 
   it('AUTH-06 an error replaces the resend notice, and a fresh notice replaces the error (#144)', async () => {
     const u = userEvent.setup();
-    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({ kind: 'code', destination: undefined });
+    vi.mocked(cognito.startCodeSignIn).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-in',
+      destination: undefined,
+    });
     vi.mocked(cognito.confirmCode).mockRejectedValue(namedError('CodeMismatchException'));
     renderRoutes(routes, ['/sign-in']);
     await u.type(await screen.findByLabelText('Email'), 'meena@1cloudhub.com{Enter}');
     await u.click(await screen.findByRole('button', { name: 'Email me a one-time code' }));
     await u.click(await screen.findByRole('button', { name: 'Resend code' }));
     expect(await screen.findByText('A new code is on its way.')).toBeInTheDocument();
-    await u.type(screen.getByLabelText('Six-digit code'), '111111');
+    await u.type(screen.getByLabelText('Eight-digit code'), '11111111');
     await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
     expect(await screen.findByRole('alert')).toHaveTextContent('That code does not match');
     expect(screen.queryByText('A new code is on its way.')).not.toBeInTheDocument();
@@ -430,7 +503,11 @@ describe('SignIn (option 1c)', () => {
 
   it('AUTH-03 sign-up sends the name with no password and verifies with a code', async () => {
     const u = userEvent.setup();
-    vi.mocked(cognito.startSignUp).mockResolvedValue({ destination: 'm***@1cloudhub.com' });
+    vi.mocked(cognito.startSignUp).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-up',
+      destination: 'm***@1cloudhub.com',
+    });
     vi.mocked(cognito.confirmSignUpCode).mockImplementation(() => {
       cognito.__noUser.current = user;
       return Promise.resolve({ kind: 'done' });
@@ -442,9 +519,51 @@ describe('SignIn (option 1c)', () => {
     // I18N-05: the device's locale rides along as the pool's `locale` attribute, so the
     // confirmation code itself arrives in that language.
     expect(cognito.startSignUp).toHaveBeenCalledWith('meena@1cloudhub.com', 'Meena', 'en-US');
+    // AUTH-06: the sign-up verification code is Cognito's six-digit one, valid 24 hours.
+    const code = await screen.findByLabelText('Six-digit code');
+    expect(code).toHaveAttribute('data-length', '6');
+    expect(screen.getByText('Codes expire in 24 hours')).toBeInTheDocument();
+    const verify = screen.getByRole('button', { name: 'Verify and create account' });
+    await u.type(code, '65432');
+    expect(verify).toBeDisabled();
+    await u.type(code, '1');
+    expect(verify).toBeEnabled();
+    await u.click(verify);
+    expect(cognito.confirmSignUpCode).toHaveBeenCalledWith('meena@1cloudhub.com', '654321');
+  });
+
+  it('AUTH-06 when auto sign-in after confirmation falls back to a code sign-in, the step becomes the eight-digit sign-in step and Verify calls confirmCode', async () => {
+    const u = userEvent.setup();
+    vi.mocked(cognito.startSignUp).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-up',
+      destination: 'm***@1cloudhub.com',
+    });
+    // `confirmSignUpCode` falls back to `startCodeSignIn` when auto sign-in did not start
+    // (cognito.ts): what it then returns is a sign-in code step, not another sign-up one.
+    vi.mocked(cognito.confirmSignUpCode).mockResolvedValue({
+      kind: 'code',
+      code: 'sign-in',
+      destination: 'm***@1cloudhub.com',
+    });
+    vi.mocked(cognito.confirmCode).mockImplementation(() => {
+      cognito.__noUser.current = user;
+      return Promise.resolve({ kind: 'done' });
+    });
+    renderRoutes(routes, ['/sign-in']);
+    await u.click(await screen.findByRole('radio', { name: 'Create account' }));
+    await u.type(screen.getByLabelText('Email'), 'meena@1cloudhub.com');
+    await u.type(screen.getByLabelText('Display name'), 'Meena{Enter}');
     await u.type(await screen.findByLabelText('Six-digit code'), '654321');
     await u.click(screen.getByRole('button', { name: 'Verify and create account' }));
-    expect(cognito.confirmSignUpCode).toHaveBeenCalledWith('meena@1cloudhub.com', '654321');
+    const code = await screen.findByLabelText('Eight-digit code');
+    expect(screen.getByText('Codes expire in 10 minutes')).toBeInTheDocument();
+    await u.type(code, '12345678');
+    await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
+    await waitFor(() => {
+      expect(cognito.confirmCode).toHaveBeenCalledWith('12345678');
+    });
+    expect(cognito.confirmSignUpCode).toHaveBeenCalledTimes(1);
   });
 
   it('AUTH-08 (button only) the Apple button is absent unless config.appleSignIn is set', async () => {

@@ -96,4 +96,11 @@ export const messages: Messages = {
   'library.help.label': 'सहायता',
   'library.help.replay': 'निर्देशित टूर दोबारा चलाएँ',
   'library.help.shortcuts': 'कीबोर्ड शॉर्टकट',
+
+  'auth.code.label.six': 'छह अंकों का कोड',
+  'auth.code.label.eight': 'आठ अंकों का कोड',
+  'auth.code.sent.six': 'हमने आपके ईमेल पर छह अंकों का कोड भेजा है',
+  'auth.code.sent.eight': 'हमने आपके ईमेल पर आठ अंकों का कोड भेजा है',
+  'auth.code.expires.signIn': 'कोड 10 मिनट में समाप्त हो जाते हैं',
+  'auth.code.expires.signUp': 'कोड 24 घंटे में समाप्त हो जाते हैं',
 };
