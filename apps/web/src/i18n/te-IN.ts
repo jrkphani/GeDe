@@ -96,4 +96,11 @@ export const messages: Messages = {
   'library.help.label': 'సహాయం',
   'library.help.replay': 'గైడెడ్ టూర్ మళ్లీ ప్లే చేయి',
   'library.help.shortcuts': 'కీబోర్డ్ షార్ట్‌కట్‌లు',
+
+  'auth.code.label.six': 'ఆరు అంకెల కోడ్',
+  'auth.code.label.eight': 'ఎనిమిది అంకెల కోడ్',
+  'auth.code.sent.six': 'మీ ఇమెయిల్‌కు ఆరు అంకెల కోడ్ పంపాము',
+  'auth.code.sent.eight': 'మీ ఇమెయిల్‌కు ఎనిమిది అంకెల కోడ్ పంపాము',
+  'auth.code.expires.signIn': 'కోడ్‌లు 10 నిమిషాల్లో గడువు ముగుస్తాయి',
+  'auth.code.expires.signUp': 'కోడ్‌లు 24 గంటల్లో గడువు ముగుస్తాయి',
 };

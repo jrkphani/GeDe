@@ -100,4 +100,11 @@ export const messages: Messages = {
   'library.help.label': 'உதவி',
   'library.help.replay': 'வழிகாட்டிச் சுற்றை மீண்டும் இயக்கு',
   'library.help.shortcuts': 'விசைப்பலகைக் குறுக்குவழிகள்',
+
+  'auth.code.label.six': 'ஆறு இலக்கக் குறியீடு',
+  'auth.code.label.eight': 'எட்டு இலக்கக் குறியீடு',
+  'auth.code.sent.six': 'உங்கள் மின்னஞ்சலுக்கு ஆறு இலக்கக் குறியீட்டை அனுப்பியுள்ளோம்',
+  'auth.code.sent.eight': 'உங்கள் மின்னஞ்சலுக்கு எட்டு இலக்கக் குறியீட்டை அனுப்பியுள்ளோம்',
+  'auth.code.expires.signIn': 'குறியீடுகள் 10 நிமிடங்களில் காலாவதியாகும்',
+  'auth.code.expires.signUp': 'குறியீடுகள் 24 மணி நேரத்தில் காலாவதியாகும்',
 };

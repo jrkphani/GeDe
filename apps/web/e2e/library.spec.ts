@@ -1,5 +1,5 @@
 import { type Page } from '@playwright/test';
-import { FAKE_CODE, installFakeCognito } from './fakes/cognito.js';
+import { FAKE_SIGN_IN_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
 import { asPhone, expect, test } from './fixtures/test.js';
 
@@ -186,7 +186,7 @@ async function signIn(page: Page): Promise<void> {
   await page.getByLabel('Email').fill(SESSION.email);
   await page.getByLabel('Email').press('Enter');
   await page.getByRole('button', { name: 'Email me a one-time code' }).click();
-  await page.getByLabel('Six-digit code').fill(FAKE_CODE);
+  await page.getByLabel('Eight-digit code').fill(FAKE_SIGN_IN_CODE);
   await page.getByRole('button', { name: 'Verify and sign in' }).click();
   // AUTH-07: the passkey offer follows a code sign-in; decline it whenever it appears.
   const notNow = page.getByRole('button', { name: 'Not now' });

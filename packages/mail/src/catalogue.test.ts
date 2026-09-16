@@ -86,4 +86,23 @@ describe('mail catalogue', () => {
       }
     }
   });
+
+  test('AUTH-06 no code mail states how many digits the code has: Cognito fills {####} with six for a sign-up or attribute code and eight for a sign-in code, and the mail must never contradict it', () => {
+    // "digit" in each script, and a spelled or numeric count beside it; the mail says "the code".
+    const digitCount: readonly RegExp[] = [
+      /\b(?:six|eight|\d)[- ]?digit/iu, // English
+      /(?:ஆறு|எட்டு|\d)\s*இலக்க/u, // Tamil
+      /(?:छह|आठ|\d)\s*अंक/u, // Hindi
+      /(?:ఆరు|ఎనిమిది|\d)\s*అంక/u, // Telugu
+    ];
+    for (const locale of MAIL_LOCALES) {
+      for (const key of MESSAGE_KEYS) {
+        if (!/^(signUpCode|signInCode|emailChangeCode|code)\./.test(key)) continue;
+        const value = CATALOGUE[locale][key];
+        for (const re of digitCount) {
+          expect(value, `${locale} ${key}: ${value}`).not.toMatch(re);
+        }
+      }
+    }
+  });
 });

@@ -1,38 +1,52 @@
 import { forwardRef, useId, type ChangeEvent, type InputHTMLAttributes } from 'react';
 import clsx from 'clsx';
 
-export const CODE_LENGTH = 6;
+/**
+ * The lengths Cognito's codes come in: six digits for a sign-up (or attribute) verification
+ * code, eight for the passwordless EMAIL_OTP sign-in code. Which step expects which is the
+ * auth boundary's knowledge (`apps/web/src/auth/cognito.ts`); the field only needs to know
+ * the longest, so that it never drops a digit of any code Cognito can send (AUTH-06).
+ */
+export type CodeLength = 6 | 8;
+export const MAX_CODE_LENGTH: CodeLength = 8;
 
 export interface CodeFieldProps extends Omit<
   InputHTMLAttributes<HTMLInputElement>,
   'value' | 'onChange' | 'type' | 'maxLength' | 'inputMode'
 > {
-  label?: string | undefined;
+  /** How many digits the step expects: the complete state fires at exactly this many. */
+  length: CodeLength;
+  label: string;
   value: string;
-  /** Receives the digits-only value (max six) and whether it is complete. */
+  /** Receives the digits-only value (at most `MAX_CODE_LENGTH`) and whether it is complete. */
   onChange: (value: string, complete: boolean) => void;
   error?: string | undefined;
   hint?: string | undefined;
 }
 
-/** Strip anything that is not an ASCII digit and cap at six (AUTH-06). */
+/**
+ * Strip anything that is not an ASCII digit and cap at the longest code Cognito sends
+ * (AUTH-06). The cap is the maximum, not the step's own length: a step that expected six
+ * and received eight would otherwise truncate the code to something that can never match,
+ * and the person would have no way to see why (the production defect this replaced).
+ */
 export function normaliseCode(raw: string): string {
-  return raw.replace(/\D+/g, '').slice(0, CODE_LENGTH);
+  return raw.replace(/\D+/g, '').slice(0, MAX_CODE_LENGTH);
 }
 
-export function isCodeComplete(value: string): boolean {
-  return value.length === CODE_LENGTH;
+export function isCodeComplete(value: string, length: CodeLength): boolean {
+  return value.length === length;
 }
 
 /**
- * Six-digit one-time code input. `inputMode="numeric"` for the phone keypad,
+ * One-time code input. `inputMode="numeric"` for the phone keypad,
  * `autoComplete="one-time-code"` so iOS/Android offer the SMS/mail code.
  * No `maxLength` on the element: the browser would truncate a pasted
  * "123 456" to "123 45" before the digits are stripped; `normaliseCode` caps
- * the value at six after stripping instead.
+ * the value after stripping instead.
  */
 export const CodeField = forwardRef<HTMLInputElement, CodeFieldProps>(function CodeField(
-  { label = 'Six-digit code', value, onChange, error, hint, id, className, disabled, ...rest },
+  { length, label, value, onChange, error, hint, id, className, disabled, ...rest },
   ref,
 ) {
   const autoId = useId();
@@ -46,7 +60,7 @@ export const CodeField = forwardRef<HTMLInputElement, CodeFieldProps>(function C
 
   const handle = (e: ChangeEvent<HTMLInputElement>) => {
     const next = normaliseCode(e.target.value);
-    onChange(next, isCodeComplete(next));
+    onChange(next, isCodeComplete(next, length));
   };
 
   return (
@@ -69,7 +83,8 @@ export const CodeField = forwardRef<HTMLInputElement, CodeFieldProps>(function C
         disabled={disabled}
         aria-invalid={error !== undefined || undefined}
         aria-describedby={describedBy}
-        data-complete={isCodeComplete(value) || undefined}
+        data-length={length}
+        data-complete={isCodeComplete(value, length) || undefined}
         {...rest}
       />
       {hint !== undefined && (

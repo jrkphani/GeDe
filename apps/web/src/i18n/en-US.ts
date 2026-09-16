@@ -118,4 +118,14 @@ export const messages = {
   'library.help.label': 'Help',
   'library.help.replay': 'Replay guided tour',
   'library.help.shortcuts': 'Keyboard shortcuts',
+
+  // AUTH-06: the code step's copy follows the code the auth step expects. Cognito's sign-in
+  // code (the EMAIL_OTP first factor) is eight digits and lives ten minutes; its sign-up
+  // verification code is six and lives 24 hours (`auth/codes.ts`, `CODE_LENGTH`).
+  'auth.code.label.six': 'Six-digit code',
+  'auth.code.label.eight': 'Eight-digit code',
+  'auth.code.sent.six': 'We sent a six-digit code to your email',
+  'auth.code.sent.eight': 'We sent an eight-digit code to your email',
+  'auth.code.expires.signIn': 'Codes expire in 10 minutes',
+  'auth.code.expires.signUp': 'Codes expire in 24 hours',
 } as const;

@@ -7,10 +7,11 @@ export {
 export { TextField, type TextFieldProps } from './components/TextField.js';
 export {
   CodeField,
-  CODE_LENGTH,
+  MAX_CODE_LENGTH,
   isCodeComplete,
   normaliseCode,
   type CodeFieldProps,
+  type CodeLength,
 } from './components/CodeField.js';
 export {
   SegmentedControl,

@@ -25,10 +25,19 @@ import { Hub, sharedInMemoryStorage } from 'aws-amplify/utils';
 import type { AppConfig } from '../config.js';
 import { clearReplicas } from '../doc/replica.js';
 import { clearViewState } from '../doc/view-state.js';
+import type { CodeKind } from './codes.js';
+
+/** A step that asks for a code. `code` says which one Cognito sent (`codes.ts`: its length). */
+export interface CodeStep {
+  kind: 'code';
+  /** Which confirm call answers it — and, through `CODE_LENGTH`, how long the code is. */
+  code: CodeKind;
+  destination: string | undefined;
+}
 
 export type SignInStep =
   | { kind: 'done' }
-  | { kind: 'code'; destination: string | undefined }
+  | CodeStep
   /** Cognito asked for something GeDe does not offer; `reason` is plain copy for the screen. */
   | { kind: 'unsupported'; reason: string };
 
@@ -162,7 +171,8 @@ function toStep(out: SignInOutput): SignInStep {
     case 'DONE':
       return { kind: 'done' };
     case 'CONFIRM_SIGN_IN_WITH_EMAIL_CODE':
-      return { kind: 'code', destination: step.codeDeliveryDetails?.destination };
+      // Every code a SignInOutput asks for is the EMAIL_OTP first factor: eight digits.
+      return { kind: 'code', code: 'sign-in', destination: step.codeDeliveryDetails?.destination };
     case 'CONTINUE_SIGN_IN_WITH_FIRST_FACTOR_SELECTION':
       if (!(step.availableChallenges ?? []).includes('EMAIL_OTP')) {
         throw new AuthFailureError({ kind: 'unknown-email' });
@@ -232,11 +242,7 @@ export async function confirmCode(code: string): Promise<SignInStep> {
  * trigger reads to render this very confirmation code — and every later code —
  * in that language (infra/assets/custom-message).
  */
-export async function startSignUp(
-  email: string,
-  name: string,
-  locale: string,
-): Promise<{ destination: string | undefined }> {
+export async function startSignUp(email: string, name: string, locale: string): Promise<CodeStep> {
   const out = await signUp({
     username: email,
     options: {
@@ -247,7 +253,8 @@ export async function startSignUp(
   const step = out.nextStep;
   const destination =
     step.signUpStep === 'CONFIRM_SIGN_UP' ? step.codeDeliveryDetails.destination : undefined;
-  return { destination };
+  // The sign-up verification code: six digits, answered by `confirmSignUpCode`.
+  return { kind: 'code', code: 'sign-up', destination };
 }
 
 export async function confirmSignUpCode(email: string, code: string): Promise<SignInStep> {
@@ -256,6 +263,7 @@ export async function confirmSignUpCode(email: string, code: string): Promise<Si
     return toStep(await autoSignIn());
   }
   // Auto sign-in did not start (e.g. the listener timed out); fall back to a code sign-in.
+  // That step is a `sign-in` code — eight digits, answered by `confirmCode` — and says so.
   return startCodeSignIn(email);
 }
 

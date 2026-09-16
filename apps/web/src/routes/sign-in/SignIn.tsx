@@ -11,6 +11,7 @@ import {
   Wordmark,
 } from '@gede/ui';
 import { announce } from '../../announce.js';
+import { CODE_LENGTH, type CodeKind } from '../../auth/codes.js';
 import {
   classifyError,
   confirmCode,
@@ -32,6 +33,7 @@ import {
 } from '../../auth/passkey-offer.js';
 import { readLastEmail, rememberLastEmail, takeReturnTo, useSession } from '../../auth/session.js';
 import { getConfig } from '../../config.js';
+import { useMessages, type MessageKey } from '../../i18n/index.js';
 import { activeLocale } from '../../locale.js';
 import { canContinue, flowReducer, initialFlow, type Mode } from './flow.js';
 import { RingMotif } from './RingMotif.js';
@@ -40,6 +42,20 @@ const MODES: { value: Mode; label: string }[] = [
   { value: 'sign-in', label: 'Sign in' },
   { value: 'sign-up', label: 'Create account' },
 ];
+
+/**
+ * AUTH-06: everything the code step says about the code follows the code the auth step
+ * expects (`CODE_LENGTH`): the field's label and the announcement by its length, the
+ * expiry by its kind (a sign-in code lives for the auth session, a sign-up code 24 hours).
+ */
+const CODE_COPY: Readonly<Record<6 | 8, { label: MessageKey; sent: MessageKey }>> = {
+  6: { label: 'auth.code.label.six', sent: 'auth.code.sent.six' },
+  8: { label: 'auth.code.label.eight', sent: 'auth.code.sent.eight' },
+};
+const CODE_EXPIRY: Readonly<Record<CodeKind, MessageKey>> = {
+  'sign-in': 'auth.code.expires.signIn',
+  'sign-up': 'auth.code.expires.signUp',
+};
 
 function failureMessage(f: AuthFailure, mode: Mode): string | null {
   switch (f.kind) {
@@ -62,6 +78,7 @@ function failureMessage(f: AuthFailure, mode: Mode): string | null {
 export function SignIn() {
   const session = useSession();
   const navigate = useNavigate();
+  const t = useMessages();
   const config = getConfig();
   const passkeys = isPasskeySupported();
   const [state, dispatch] = useReducer(flowReducer, undefined, () =>
@@ -106,7 +123,7 @@ export function SignIn() {
     else dispatch({ type: 'error', message });
   };
 
-  const handleStep = async (step: SignInStep, purpose: 'sign-in' | 'sign-up', viaCode: boolean) => {
+  const handleStep = async (step: SignInStep, viaCode: boolean) => {
     switch (step.kind) {
       case 'done':
         rememberLastEmail(state.email.trim());
@@ -129,8 +146,9 @@ export function SignIn() {
         }
         return;
       case 'code':
-        dispatch({ type: 'go-code', purpose, destination: step.destination });
-        announce('We sent a six-digit code to your email');
+        // The step says which code it sent; the purpose and the length follow from it.
+        dispatch({ type: 'go-code', purpose: step.code, destination: step.destination });
+        announce(t(CODE_COPY[CODE_LENGTH[step.code]].sent));
         return;
       case 'unsupported':
         dispatch({ type: 'error', message: step.reason });
@@ -147,36 +165,36 @@ export function SignIn() {
     }
     dispatch({ type: 'busy', busy: 'continue' });
     startSignUp(state.email.trim(), state.name.trim(), activeLocale())
-      .then(({ destination }) => {
-        dispatch({ type: 'go-code', purpose: 'sign-up', destination });
-        announce('We sent a six-digit code to confirm your email');
-      })
+      .then((step) => handleStep(step, true))
       .catch(fail);
   };
 
   const usePasskey = () => {
     dispatch({ type: 'busy', busy: 'passkey' });
     startPasskeySignIn(state.email.trim())
-      .then((step) => handleStep(step, 'sign-in', false))
+      .then((step) => handleStep(step, false))
       .catch(fail);
   };
 
   const emailCode = () => {
     dispatch({ type: 'busy', busy: 'code' });
     startCodeSignIn(state.email.trim())
-      .then((step) => handleStep(step, 'sign-in', true))
+      .then((step) => handleStep(step, true))
       .catch(fail);
   };
 
+  const codeLength = CODE_LENGTH[state.codePurpose];
+  const codeComplete = state.code.length === codeLength;
+
   const verify = (e: SubmitEvent<HTMLFormElement>) => {
     e.preventDefault();
-    if (state.code.length !== 6 || state.busy !== null) return;
+    if (!codeComplete || state.busy !== null) return;
     dispatch({ type: 'busy', busy: 'verify' });
     const call =
       state.codePurpose === 'sign-up'
         ? confirmSignUpCode(state.email.trim(), state.code)
         : confirmCode(state.code);
-    call.then((step) => handleStep(step, state.codePurpose, true)).catch(fail);
+    call.then((step) => handleStep(step, true)).catch(fail);
   };
 
   const resend = () => {
@@ -378,12 +396,14 @@ export function SignIn() {
               <span className="gd-signin__email">{state.destination ?? state.email.trim()}</span>
             </p>
             <CodeField
+              length={codeLength}
+              label={t(CODE_COPY[codeLength].label)}
               value={state.code}
               onChange={(code) => {
                 dispatch({ type: 'set-code', code });
               }}
               error={state.error ?? undefined}
-              hint="Codes expire in 10 minutes"
+              hint={t(CODE_EXPIRY[state.codePurpose])}
               autoFocus
               disabled={busy === 'verify'}
             />
@@ -392,9 +412,11 @@ export function SignIn() {
                 {state.notice}
               </p>
             )}
-            {state.codePurpose === 'sign-in' && (
+            {state.mode === 'sign-in' && (
               // ADR-040 (#46): the pool answers an unknown address with a simulated code
               // challenge the app cannot tell from a real one, so the way out is said here.
+              // Keyed on the mode, not the code's kind: the sign-in code step that follows a
+              // confirmed sign-up (the auto-sign-in fallback) belongs to an account that exists.
               <p className="gd-signin__note">
                 If no code arrives, this email may not have an account yet: switch to Create account
                 to start one.
@@ -404,7 +426,7 @@ export function SignIn() {
               type="submit"
               variant="primary"
               size="lg"
-              disabled={state.code.length !== 6 || busy !== null}
+              disabled={!codeComplete || busy !== null}
               loading={busy === 'verify'}
               loadingLabel={state.codePurpose === 'sign-up' ? 'Creating account…' : 'Verifying…'}
             >

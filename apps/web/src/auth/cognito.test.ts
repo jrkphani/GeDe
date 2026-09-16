@@ -52,7 +52,15 @@ describe('sign-in steps', () => {
     });
   });
 
-  it('AUTH-06 an email code challenge carries the masked destination', async () => {
+  it('AUTH-06 the sign-in code is eight digits and the sign-up code six: the lengths belong to the step, not the field', async () => {
+    const { CODE_LENGTH } = await import('./codes.js');
+    // CodeDeliveryDetailsType carries AttributeName, DeliveryMedium and Destination — no
+    // length — so the lengths are pinned here from the operation that sends each code.
+    expect(CODE_LENGTH['sign-in']).toBe(8);
+    expect(CODE_LENGTH['sign-up']).toBe(6);
+  });
+
+  it('AUTH-06 an email code challenge is the eight-digit sign-in code and carries the masked destination', async () => {
     vi.mocked(amplifyAuth.signIn).mockResolvedValue({
       isSignedIn: false,
       nextStep: {
@@ -62,6 +70,7 @@ describe('sign-in steps', () => {
     });
     await expect(startCodeSignIn('meena@1cloudhub.com')).resolves.toEqual({
       kind: 'code',
+      code: 'sign-in',
       destination: 'm***@1cloudhub.com',
     });
   });
@@ -172,6 +181,8 @@ describe('locale attribute', () => {
       },
     });
     await expect(startSignUp('meena@1cloudhub.com', 'Meena', 'ta-IN')).resolves.toEqual({
+      kind: 'code',
+      code: 'sign-up',
       destination: 'm***@1cloudhub.com',
     });
     expect(amplifyAuth.signUp).toHaveBeenCalledWith({

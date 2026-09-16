@@ -5,9 +5,13 @@ import { LOCALES } from '../locale.js';
 import { CATALOGUE, format, MESSAGE_KEYS, translate, type MessageKey } from './index.js';
 
 const TOUR_KEYS = MESSAGE_KEYS.filter((k) => k.startsWith('tour.'));
-/** Keys whose values are prose in the locale's own script (the tour, ADR-047's object copy, ADR-048's sheet copy). */
+/** Keys whose values are prose in the locale's own script (the tour, ADR-047's object copy, ADR-048's sheet copy, AUTH-06's code step). */
 const TRANSLATED_KEYS = MESSAGE_KEYS.filter(
-  (k) => k.startsWith('tour.') || k.startsWith('object.') || k.startsWith('sheet.'),
+  (k) =>
+    k.startsWith('tour.') ||
+    k.startsWith('object.') ||
+    k.startsWith('sheet.') ||
+    k.startsWith('auth.'),
 );
 
 const placeholders = (s: string): string[] =>
@@ -160,6 +164,25 @@ describe('message catalogue', () => {
       expect(said, locale).toContain('Table 1');
       expect(said, locale).toContain('⌘Z');
       expect(said, locale).not.toMatch(/\{\w+\}/);
+    }
+  });
+
+  test('AUTH-06 the code step names the length of the code the auth step expects, in every locale: six for a sign-up code, eight for a sign-in code', () => {
+    const en = CATALOGUE['en-US'];
+    expect(en['auth.code.label.eight']).toBe('Eight-digit code');
+    expect(en['auth.code.label.six']).toBe('Six-digit code');
+    expect(en['auth.code.sent.eight']).toBe('We sent an eight-digit code to your email');
+    expect(en['auth.code.sent.six']).toBe('We sent a six-digit code to your email');
+    // The sign-in code lives for the app client's auth session (ten minutes, AUTH-06); the
+    // sign-up verification code is Cognito's, valid 24 hours.
+    expect(en['auth.code.expires.signIn']).toBe('Codes expire in 10 minutes');
+    expect(en['auth.code.expires.signUp']).toBe('Codes expire in 24 hours');
+    for (const locale of LOCALES) {
+      const m = CATALOGUE[locale];
+      expect(m['auth.code.label.six'], locale).not.toBe(m['auth.code.label.eight']);
+      expect(m['auth.code.sent.six'], locale).not.toBe(m['auth.code.sent.eight']);
+      expect(m['auth.code.expires.signIn'], locale).toContain('10');
+      expect(m['auth.code.expires.signUp'], locale).toContain('24');
     }
   });
 
