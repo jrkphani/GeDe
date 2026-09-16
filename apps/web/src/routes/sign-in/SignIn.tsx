@@ -412,9 +412,11 @@ export function SignIn() {
                 {state.notice}
               </p>
             )}
-            {state.codePurpose === 'sign-in' && (
+            {state.mode === 'sign-in' && (
               // ADR-040 (#46): the pool answers an unknown address with a simulated code
               // challenge the app cannot tell from a real one, so the way out is said here.
+              // Keyed on the mode, not the code's kind: the sign-in code step that follows a
+              // confirmed sign-up (the auto-sign-in fallback) belongs to an account that exists.
               <p className="gd-signin__note">
                 If no code arrives, this email may not have an account yet: switch to Create account
                 to start one.

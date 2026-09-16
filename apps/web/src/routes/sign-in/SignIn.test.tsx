@@ -558,6 +558,9 @@ describe('SignIn (option 1c)', () => {
     await u.click(screen.getByRole('button', { name: 'Verify and create account' }));
     const code = await screen.findByLabelText('Eight-digit code');
     expect(screen.getByText('Codes expire in 10 minutes')).toBeInTheDocument();
+    // The account was just created: the "may not have an account yet" note (ADR-040) is
+    // for sign-in mode only, not for this sign-in code.
+    expect(screen.queryByText(/may not have an account yet/)).not.toBeInTheDocument();
     await u.type(code, '12345678');
     await u.click(screen.getByRole('button', { name: 'Verify and sign in' }));
     await waitFor(() => {
