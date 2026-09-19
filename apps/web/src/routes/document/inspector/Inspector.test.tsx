@@ -511,6 +511,34 @@ describe('Inspector', () => {
     expect(section('column')).toHaveTextContent('Select a column, or a cell in it, to rename it.');
   });
 
+  it('INSP-04 REF-01 the Name field shows a duplicate’s reason and keeps the draft; a refusal or a draft for one column never shows for the next (the field is keyed by its subject)', async () => {
+    await mount();
+    await userEvent.click(tab('Table'));
+    const record = tableById(gd, tableId)!;
+    const name = () => within(section('column')).getByRole('textbox', { name: 'Name' });
+    await userEvent.clear(name());
+    await userEvent.type(name(), 'column 2{Enter}');
+    expect(within(section('column')).getByRole('alert')).toHaveTextContent(
+      'Another column is already named Column 2',
+    );
+    expect(name()).toHaveValue('column 2');
+    expect(tableById(gd, tableId)?.columns[0]?.label).toBe('Column 1');
+    await userEvent.clear(name());
+    await userEvent.keyboard('{Enter}');
+    expect(within(section('column')).getByRole('alert')).toHaveTextContent('A column needs a name');
+    // Select a cell of Column 2: its own name, no alert, no draft carried over.
+    act(() => {
+      grid.current!.actions.selectCell({
+        tableId,
+        rowId: record.rows[0]!,
+        colId: record.columns[1]!.id,
+      });
+    });
+    expect(name()).toHaveValue('Column 2');
+    expect(name()).not.toHaveAttribute('aria-invalid');
+    expect(within(section('column')).queryByRole('alert')).not.toBeInTheDocument();
+  });
+
   it('HIER-01 HIER-02 the Table tab mounts the hierarchy panel: the selected row, its parent, and Nest / Promote acting through the grid commands', async () => {
     await mount();
     await userEvent.click(tab('Table'));

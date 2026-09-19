@@ -334,6 +334,20 @@ export const TableView = memo(function TableView({
       target.kind === 'column' ? (returnTo ?? columnHeaderOf(target.colId)) : titleBarOf();
     next?.focus({ preventScroll: true });
   };
+  /**
+   * A column whose label is its lineage never gets a field — the route says why instead, as
+   * the command and the menus do (MENU-02); the ▼ and the context menu are disabled with it.
+   */
+  const startColumnRename = (col: ColumnRecord) => {
+    if (renamer === undefined) return;
+    const reason = columnRenameReason(col);
+    if (reason !== undefined) {
+      announce(`Column ${col.label} keeps its name: ${reason}`);
+      return;
+    }
+    const target: RenameTarget = { kind: 'column', tableId: record.id, colId: col.id };
+    if (!sameRenameTarget(renamer.target, target)) renamer.start(target);
+  };
   const renameField = (target: RenameTarget, value: string) =>
     renamer === undefined ? null : (
       <InlineNameField
@@ -348,6 +362,7 @@ export const TableView = memo(function TableView({
         className={clsx('gd-table__rename', {
           'gd-table__rename--title': target.kind === 'table',
         })}
+        reasonClassName="gd-table__rename-reason"
         data={{ 'data-table-rename': target.kind === 'column' ? target.colId : target.tableId }}
       />
     );
@@ -359,15 +374,18 @@ export const TableView = memo(function TableView({
   const onSectionKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
     if (renamer === undefined || e.defaultPrevented || e.code !== 'F2' || !plainKey(e)) return;
     if (isEditableTarget(e.target)) return;
-    const target: RenameTarget | null =
-      columnBand !== null
-        ? { kind: 'column', tableId: record.id, colId: columnBand.anchor }
-        : selected && selectedCell === null
-          ? { kind: 'table', tableId: record.id }
-          : null;
-    if (target === null) return;
+    if (columnBand !== null) {
+      const col = record.columns.find((c) => c.id === columnBand.anchor);
+      if (col === undefined) return;
+      e.preventDefault();
+      e.stopPropagation();
+      startColumnRename(col);
+      return;
+    }
+    if (!selected || selectedCell !== null) return;
     e.preventDefault();
     e.stopPropagation();
+    const target: RenameTarget = { kind: 'table', tableId: record.id };
     if (!sameRenameTarget(renamer.target, target)) renamer.start(target);
   };
   // ADR-049: the fit routes (double-click, Enter on a divider); absent where nothing measures.
@@ -763,7 +781,7 @@ export const TableView = memo(function TableView({
                         const target = e.target instanceof Element ? e.target : null;
                         if (target?.closest('button, [role="separator"], input') !== null) return;
                         e.preventDefault();
-                        renamer.start({ kind: 'column', tableId: record.id, colId: col.id });
+                        startColumnRename(col);
                       }}
                       onKeyDown={(e) => {
                         if (renamer === undefined || e.defaultPrevented) return;
@@ -773,7 +791,7 @@ export const TableView = memo(function TableView({
                         }
                         e.preventDefault();
                         e.stopPropagation();
-                        renamer.start({ kind: 'column', tableId: record.id, colId: col.id });
+                        startColumnRename(col);
                       }}
                       title={
                         glyph === null && !grouped
@@ -811,7 +829,7 @@ export const TableView = memo(function TableView({
                           // ADR-051: the ▼ carries Rename column… too; the reason when it cannot.
                           rename={{
                             onSelect: () => {
-                              renamer?.start({ kind: 'column', tableId: record.id, colId: col.id });
+                              startColumnRename(col);
                             },
                             disabledReason:
                               renamer === undefined

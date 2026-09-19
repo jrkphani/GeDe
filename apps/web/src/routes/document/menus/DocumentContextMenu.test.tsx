@@ -67,12 +67,12 @@ function Harness({ editable = true, phone = false }: { editable?: boolean; phone
         target: renaming,
         start: setRenaming,
         commit: (target, name) => {
-          const ok =
+          const result =
             target.kind === 'column'
               ? g.commands.renameColumn(target.tableId, target.colId, name)
               : g.commands.setTableTitle(target.tableId, name);
-          if (ok) setRenaming(null);
-          return ok;
+          if (result.ok) setRenaming(null);
+          return result;
         },
         cancel: () => {
           setRenaming(null);

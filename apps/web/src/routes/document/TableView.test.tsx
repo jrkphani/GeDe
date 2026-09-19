@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   addColumnRule,
+  addDerivedColumn,
+  addMappingColumn,
   addRow,
   cellRich,
   createSheet,
@@ -104,12 +106,12 @@ function Harness({
         target: renaming,
         start: setRenaming,
         commit: (target, name) => {
-          const ok =
+          const result =
             target.kind === 'column'
               ? g.commands.renameColumn(target.tableId, target.colId, name)
               : g.commands.setTableTitle(target.tableId, name);
-          if (ok) setRenaming(null);
-          return ok;
+          if (result.ok) setRenaming(null);
+          return result;
         },
         cancel: () => {
           setRenaming(null);
@@ -1181,6 +1183,104 @@ describe('inline rename of the title and the column headers (ADR-051)', () => {
     fireEvent.keyDown(titleField(), { code: 'Enter', key: 'Enter' });
     expect(titleField()).toHaveAttribute('placeholder', 'A table needs a title');
     expect(tableById(gd, tableId)?.title).toBe('Owners');
+  });
+
+  it('REF-05 MENU-02 a derived or a mapping column gets no field from any route — a double-click on the label, Enter or F2 on the header, F2 with the column selected — and each route says why', async () => {
+    const regions = createTable(gd, {
+      sheetId: tableById(gd, tableId)!.sheetId,
+      at: { col: 8, row: 1 },
+      columns: 1,
+      rows: 1,
+      title: 'Regions',
+    });
+    const linked = addMappingColumn(gd, tableId, {
+      tableId: regions,
+      colId: tableById(gd, regions)!.columns[0]!.id,
+    })!;
+    const derived = addDerivedColumn(gd, tableId, {
+      sourceColId: cols[0]!,
+      method: 'Format',
+      args: ['Trimmed'],
+    })!;
+    mount();
+    await userEvent.click(cellAt(0, 0, 5));
+    const headerOf = (colId: Id) =>
+      within(grid())
+        .getAllByRole('columnheader')
+        .find((h) => h.dataset.colId === colId)!;
+    const noField = () =>
+      expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    // The mapping column: `↔ Regions · Column 1`.
+    await userEvent.dblClick(within(headerOf(linked)).getByText(/^↔ Regions/));
+    noField();
+    expect(live()).toHaveTextContent(
+      'Column ↔ Regions · Column 1 keeps its name: a mapping column is named by its target',
+    );
+    headerOf(linked).focus();
+    fireEvent.keyDown(headerOf(linked), { code: 'Enter', key: 'Enter' });
+    noField();
+    fireEvent.keyDown(headerOf(linked), { code: 'F2', key: 'F2' });
+    noField();
+    // The derived column, selected as a band from the header press: F2 from its anchor cell.
+    await userEvent.dblClick(within(headerOf(derived)).getByText(/^@/));
+    noField();
+    expect(live()).toHaveTextContent('keeps its name: a derived column is named by its signature');
+    expect(headerOf(derived)).toHaveAttribute('aria-selected', 'true');
+    const anchor = cells().find((el) => el.getAttribute('aria-selected') === 'true')!;
+    fireEvent.keyDown(anchor, { code: 'F2', key: 'F2' });
+    noField();
+    // Focus never went into a field: the keyboard is where the press left it.
+    expect(document.activeElement?.matches('input')).toBe(false);
+    // An entered column still renames from the same routes.
+    await userEvent.dblClick(within(headerOf(cols[1]!)).getByText('Column 2'));
+    expect(columnField()).toHaveFocus();
+  });
+
+  it('REF-01 MENU-05 a duplicate name is refused in the field with the reason shown beside it and said once; leaving the field with a refused name cancels — the label returns and focus is not taken back', async () => {
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    await userEvent.dblClick(within(header(1)).getByText('Column 2'));
+    const field = columnField();
+    await userEvent.clear(field);
+    await userEvent.type(field, 'column 3{Enter}');
+    expect(field).toBeInTheDocument();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveValue('column 3');
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe('column 3'.length);
+    const reason = document.getElementById(field.getAttribute('aria-describedby') ?? '')!;
+    expect(reason).toHaveTextContent('Another column is already named Column 3');
+    expect(reason).toHaveClass('gd-table__rename-reason');
+    expect(reason).not.toHaveClass('gd-visually-hidden');
+    expect(live()).toHaveTextContent('Another column is already named Column 3');
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Column 2');
+    // Typing again clears the refusal; leaving with the refused name still typed cancels.
+    await userEvent.type(field, '!');
+    expect(field).not.toHaveAttribute('aria-invalid');
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Column 1');
+    await userEvent.click(cellAt(2, 2));
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Column 2');
+    expect(within(header(1)).getByText('Column 2')).toBeInTheDocument();
+    expect(cellAt(2, 2)).toHaveFocus();
+    // The title: a duplicate across the workbook is refused the same way.
+    createTable(gd, {
+      sheetId: tableById(gd, tableId)!.sheetId,
+      at: { col: 8, row: 8 },
+      columns: 1,
+      rows: 1,
+      title: 'Other',
+    });
+    act(() => {
+      gridRef.current?.actions.selectTable(tableId);
+    });
+    fireEvent.keyDown(cellAt(2, 2), { code: 'F2', key: 'F2' });
+    await userEvent.clear(titleField());
+    await userEvent.type(titleField(), 'other{Enter}');
+    expect(titleField()).toHaveAttribute('aria-invalid', 'true');
+    expect(live()).toHaveTextContent('Another table is already named Other');
+    expect(tableById(gd, tableId)?.title).toBe('Table 1');
   });
 
   it('RESP-02 SHARE-03 without the rename routes (phone, view-only) nothing opens on F2, Enter or a double-click, and the title bar is not focusable', async () => {

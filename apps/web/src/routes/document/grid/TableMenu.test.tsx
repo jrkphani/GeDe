@@ -53,7 +53,6 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     expect(
       Array.from(menu.querySelectorAll('.gd-menu__label')).map((el) => el.textContent),
     ).toEqual([
-      'Rename table…',
       'Insert row above',
       'Delete row',
       'Insert column before',
@@ -88,32 +87,6 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
     );
     await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
     expect(screen.getByRole('menuitem', { name: /^Delete table/ })).toHaveAttribute(
-      'title',
-      'select a table first',
-    );
-  });
-
-  it('ADR-051 KEYS-08 Rename table… leads the menu beside F2 and asks the shell to open the title’s inline field; without a table or a handler it says what it needs', async () => {
-    const onRename = vi.fn();
-    const view = render(
-      <TableMenu
-        gd={gd}
-        selection={{ tableId, cell: null }}
-        editable
-        commands={commands}
-        onRename={onRename}
-      />,
-    );
-    await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
-    const item = screen.getByRole('menuitem', { name: /^Rename table…/ });
-    expect(item).not.toHaveAttribute('aria-disabled');
-    expect(item).toHaveTextContent('F2');
-    expect(screen.getAllByRole('menuitem')[0]).toBe(item);
-    await userEvent.click(item);
-    expect(onRename).toHaveBeenCalledWith({ kind: 'table', tableId });
-    view.rerender(<TableMenu gd={gd} selection={null} editable commands={commands} />);
-    await userEvent.click(screen.getByRole('button', { name: 'Table menu' }));
-    expect(screen.getByRole('menuitem', { name: /^Rename table…/ })).toHaveAttribute(
       'title',
       'select a table first',
     );
@@ -175,7 +148,7 @@ describe('TableMenu (A11Y-01, MENU-02)', () => {
       expect(item).toHaveAttribute('aria-disabled', 'true');
       expect(item).toHaveAttribute('title', 'you have view-only access');
     }
-    expect(screen.getAllByRole('menuitem').length).toBe(10);
+    expect(screen.getAllByRole('menuitem').length).toBe(9);
   });
 
   it('GRID-10 frozen-column choices run to every count short of the whole table — no other cap', () => {

@@ -7,6 +7,8 @@
 import { Button, Icon, TextField, Tooltip, type ButtonProps } from '@gede/ui';
 import { useId, useState, type ReactNode } from 'react';
 
+import type { RenameResult } from '../grid/rename.js';
+
 export function Section({
   label,
   children,
@@ -368,10 +370,11 @@ export interface NameFieldProps {
   /** What the field says when the typed name is empty (A11Y-04). */
   emptyReason: string;
   /**
-   * Write the trimmed name; false when the command refused it (the field
-   * keeps the draft and says why). Unchanged names are not sent.
+   * Write the trimmed name; a refusal carries its reason — a duplicate, a
+   * lineage label — which the field shows as its error while the draft
+   * stays. Unchanged names are not sent.
    */
-  onCommit: (name: string) => boolean;
+  onCommit: (name: string) => RenameResult;
   hint?: ReactNode | undefined;
   /** MENU-02 / INSP-11: disabled with the reason, never hidden. */
   disabledReason?: string | undefined;
@@ -394,18 +397,26 @@ export function NameField({
   disabledReason,
 }: NameFieldProps) {
   const [draft, setDraft] = useState<string | null>(null);
-  const [refused, setRefused] = useState(false);
+  const [refused, setRefused] = useState<string | null>(null);
   const reason = disabledReason ?? (value === null ? `select ${subject} first` : undefined);
   const shown = draft ?? value ?? '';
   const commit = (raw: string) => {
     const name = raw.trim();
     if (name === '') {
-      setRefused(true);
+      setRefused(emptyReason);
       return;
     }
-    if (name === value || onCommit(name)) {
+    if (name === value) {
       setDraft(null);
-      setRefused(false);
+      setRefused(null);
+      return;
+    }
+    const result = onCommit(name);
+    if (result.ok) {
+      setDraft(null);
+      setRefused(null);
+    } else {
+      setRefused(result.reason);
     }
   };
   return (
@@ -413,7 +424,7 @@ export function NameField({
       label={label}
       value={shown}
       hint={hint}
-      error={refused ? emptyReason : undefined}
+      error={refused ?? undefined}
       readOnly={reason !== undefined}
       aria-disabled={reason !== undefined || undefined}
       title={reason === undefined ? `${label} of ${subject}` : `${label} — ${reason}`}
@@ -421,7 +432,7 @@ export function NameField({
       spellCheck={false}
       onChange={(e) => {
         setDraft(e.currentTarget.value);
-        if (refused) setRefused(false);
+        if (refused !== null) setRefused(null);
       }}
       onBlur={(e) => {
         if (draft !== null) commit(e.currentTarget.value);
@@ -440,7 +451,7 @@ export function NameField({
               e.preventDefault();
               e.stopPropagation();
               setDraft(null);
-              setRefused(false);
+              setRefused(null);
             }
             break;
           default:

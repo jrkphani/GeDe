@@ -159,6 +159,7 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
               the table menu are routes. Written on Enter or blur as one undo step; @ paths are
               id-bound, so a rename breaks no formula (REF-01). */}
           <NameField
+            key={record.id}
             label="Title text"
             value={record.title}
             subject="the table"
@@ -409,14 +410,18 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             : `Column ${namedColumn.label}. Formulas and paths follow the column by id, so renaming breaks nothing.`
         }
       >
+        {/* Keyed by the column: a draft or a refusal for one column never shows for the next. */}
         <NameField
+          key={namedColumn?.id ?? 'none'}
           label="Name"
           value={namedColumn?.label ?? null}
           subject={namedColumn === null ? 'a column' : `column ${namedColumn.label}`}
           emptyReason={EMPTY_COLUMN_NAME_REASON}
           disabledReason={nameReason}
           onCommit={(name) =>
-            namedColumn !== null && commands.renameColumn(record.id, namedColumn.id, name)
+            namedColumn === null
+              ? { ok: false, reason: 'Select a column first' }
+              : commands.renameColumn(record.id, namedColumn.id, name)
           }
         />
       </Section>

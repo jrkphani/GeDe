@@ -158,7 +158,11 @@ export function SheetTabs({ gd, activeSheetId, onSelect, onAppend, edit, bottom 
                     value={s.label}
                     label="Sheet name"
                     emptyReason={emptyNameReason()}
-                    commit={(label) => edit.commitRename(s.id, label)}
+                    commit={(label) =>
+                      edit.commitRename(s.id, label)
+                        ? { ok: true }
+                        : { ok: false, reason: emptyNameReason() }
+                    }
                     cancel={edit.cancelRename}
                     className="gd-doc__sheet-rename"
                     data={{ 'data-sheet-rename': s.id }}

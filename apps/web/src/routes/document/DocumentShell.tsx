@@ -80,7 +80,7 @@ import { matchBounds } from './find/match-geometry.js';
 import { useFind, type FindNavigation } from './find/useFind.js';
 import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2/formulas mount points
 import { pinnedPanelOffset } from './grid/pinned.js';
-import type { RenameTarget, TableRenaming } from './grid/rename.js';
+import type { RenameResult, RenameTarget, TableRenaming } from './grid/rename.js';
 import { DocumentMenu } from './grid/DocumentMenu.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
@@ -458,13 +458,13 @@ function OpenDocument({
   // empty name refused, one undo step, synced); the shell only holds which field is open.
   const [renamingTarget, setRenamingTarget] = useState<RenameTarget | null>(null);
   const commitTableRename = useCallback(
-    (target: RenameTarget, name: string): boolean => {
-      const ok =
+    (target: RenameTarget, name: string): RenameResult => {
+      const result =
         target.kind === 'column'
           ? grid.commands.renameColumn(target.tableId, target.colId, name)
           : grid.commands.setTableTitle(target.tableId, name);
-      if (ok) setRenamingTarget(null);
-      return ok;
+      if (result.ok) setRenamingTarget(null);
+      return result;
     },
     [grid.commands],
   );
@@ -1060,7 +1060,6 @@ function OpenDocument({
               editable={editable}
               commands={grid.commands}
               onDeleteTable={deleteTable}
-              onRename={editable ? setRenamingTarget : undefined}
             />
           }
           onGridlines={setGridlines}

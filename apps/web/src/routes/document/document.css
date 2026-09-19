@@ -911,16 +911,20 @@ button.gd-cell__chevron:hover {
   bottom: 0;
   right: 0;
   width: 2px;
-  background: transparent;
+  background: var(--gd-divider-rest, transparent);
   transition: background var(--dur-fast) var(--ease-out);
 }
-/* ADR-051: while the table is selected every column divider shows at rest — a 2 px rule in
-   --border-strong on the boundary (3.99:1 on the header's sunken surface in light, 3.70:1 in
-   dark; WCAG 1.4.11's 3:1) — so the drag affordance is seen before it is found by hovering.
-   Hover and focus paint it in the selection ring, and the col-resize cursor and the focus ring
-   carry the state beyond hue. */
-.gd-table--selected .gd-table__divider::after {
-  background: var(--border-strong);
+/* ADR-051: while the table is selected every column divider shows at rest — a 2 px rule on the
+   boundary in --border-strong (3.99:1 on the plain header's sunken surface in light, 3.70:1 in
+   dark) and, on the slate style, --ink-muted (4.54:1 on --tint-slate in light, 5.14:1 in dark;
+   --border-strong would read 2.28:1 there) — WCAG 1.4.11's 3:1 either way, so the drag
+   affordance is seen before it is found by hovering. Hover and focus paint it in the selection
+   ring, and the col-resize cursor and the focus ring carry the state beyond hue. */
+.gd-table--selected {
+  --gd-divider-rest: var(--border-strong);
+}
+.gd-table--selected[data-style='slate'] {
+  --gd-divider-rest: var(--ink-muted);
 }
 .gd-table__divider:hover::after,
 .gd-table__divider:focus-visible::after {
@@ -1024,7 +1028,7 @@ button.gd-cell__chevron:hover {
   background: var(--surface);
   color: var(--ink);
   font: inherit;
-  font-size: 0.71875rem;
+  font-size: var(--text-cell);
   font-weight: 500;
   line-height: 1;
 }
@@ -1033,9 +1037,25 @@ button.gd-cell__chevron:hover {
   width: 50%;
   height: 1.5rem;
   padding: 0 var(--space-2);
-  font-size: 0.8125rem;
+  font-size: var(--text-body-sm);
   font-weight: 600;
   letter-spacing: -0.01em;
+}
+/* The refusal, under the field, in the danger ink (≥ 4.5:1 on the surface), over the row below
+   it — a note, not a layout change: nothing under it moves (non-negotiable 3). */
+.gd-table__rename-reason {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 4;
+  max-width: 100%;
+  padding: 0 var(--space-1);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: var(--text-cell);
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
 }
 .gd-table__rename:focus-visible {
   border-color: var(--focus-ring);
@@ -1053,6 +1073,7 @@ button.gd-cell__chevron:hover {
   overflow: visible;
 }
 .gd-table__title--renaming {
+  position: relative;
   cursor: text;
   user-select: auto;
 }

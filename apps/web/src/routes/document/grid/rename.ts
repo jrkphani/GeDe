@@ -9,6 +9,10 @@
  */
 import type { Id } from '@gede/core';
 
+import type { RenameResult } from './commands.js';
+
+export type { RenameResult } from './commands.js';
+
 export type RenameTarget =
   | { readonly kind: 'table'; readonly tableId: Id }
   | { readonly kind: 'column'; readonly tableId: Id; readonly colId: Id };
@@ -19,10 +23,10 @@ export interface TableRenaming {
   /** F2, Enter on the header or title, a double-click, or the context menu's Rename. */
   readonly start: (target: RenameTarget) => void;
   /**
-   * The typed name, trimmed by the command. False when it was refused
-   * (empty): the field stays open and says why.
+   * The typed name, trimmed by the command. A refusal carries the reason —
+   * empty, a duplicate, a lineage label, view-only — for the field to show.
    */
-  readonly commit: (target: RenameTarget, name: string) => boolean;
+  readonly commit: (target: RenameTarget, name: string) => RenameResult;
   readonly cancel: () => void;
 }
 

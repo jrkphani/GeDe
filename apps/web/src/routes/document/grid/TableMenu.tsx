@@ -1,14 +1,10 @@
 import { tableById, type GedeDoc, type Id } from '@gede/core';
 import { Button, Menu, type MenuEntry } from '@gede/ui';
 
-import { useRef } from 'react';
-
 import type { CellSelection, Selection } from '../../../doc/selection.js';
 import { LABELS } from '../../../doc/shortcuts.js';
 import { useYVersion } from '../../../doc/use-y.js';
-import { RENAME_KEYS } from '../keys/shortcut-map.js';
 import type { GridCommands } from './commands.js';
-import type { RenameTarget } from './rename.js';
 
 export interface TableMenuProps {
   gd: GedeDoc;
@@ -17,12 +13,6 @@ export interface TableMenuProps {
   commands: GridCommands;
   /** ADR-047: Delete table's home is this menu; the shell deletes and moves focus. */
   onDeleteTable?: ((tableId: Id) => void) | undefined;
-  /**
-   * ADR-051: Rename table… opens the inline field on the selected table's
-   * title bar, beside its chord (KEYS-08); the Table tab's Title text is the
-   * property's home. Absent where nothing can be written.
-   */
-  onRename?: ((target: RenameTarget) => void) | undefined;
 }
 
 /**
@@ -45,18 +35,8 @@ export function frozenOptions(columnCount: number): number[] {
  * them. Commands that need a cell are present but disabled with the reason
  * (MENU-02). Built on the Radix menu from `@gede/ui`.
  */
-export function TableMenu({
-  gd,
-  selection,
-  editable,
-  commands,
-  onDeleteTable,
-  onRename,
-}: TableMenuProps) {
+export function TableMenu({ gd, selection, editable, commands, onDeleteTable }: TableMenuProps) {
   useYVersion(gd.tables);
-  // Set when Rename table… was chosen: the menu's close leaves focus on the inline field it
-  // opened rather than returning it to the Table button (which would blur, and so close, it).
-  const renameOnClose = useRef(false);
   const record = selection === null ? null : tableById(gd, selection.tableId);
   const cell: CellSelection | null =
     selection?.cell && record !== null ? { tableId: record.id, ...selection.cell } : null;
@@ -70,18 +50,6 @@ export function TableMenu({
   const rowId = cell?.rowId ?? '';
 
   const entries: MenuEntry[] = [
-    {
-      kind: 'item',
-      id: 'table-rename',
-      label: 'Rename table…',
-      shortcut: RENAME_KEYS.rename,
-      disabledReason: needsTable ?? (onRename === undefined ? 'select a table first' : undefined),
-      onSelect: () => {
-        renameOnClose.current = true;
-        onRename?.({ kind: 'table', tableId });
-      },
-    },
-    { kind: 'separator', id: 's0' },
     {
       kind: 'item',
       id: 'row-above',
@@ -183,14 +151,6 @@ export function TableMenu({
       label="Table"
       align="start"
       entries={entries}
-      onCloseAutoFocus={(event) => {
-        if (!renameOnClose.current) return;
-        renameOnClose.current = false;
-        const field = document.querySelector<HTMLElement>('[data-table-rename]');
-        if (field === null) return;
-        event.preventDefault();
-        field.focus();
-      }}
       trigger={
         <Button size="sm" variant="ghost" className="gd-tool gd-tool--text" aria-label="Table menu">
           Table
