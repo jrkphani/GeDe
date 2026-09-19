@@ -19,7 +19,7 @@
  * changes when the rounded box did.
  *
  * A target is a list of selectors tried in order; the first with a painted
- * match wins, and the box is the union of its matches — step 3's `point`
+ * match wins, and the box is the union of its matches — step 4's `point`
  * card spotlights every pointing target over the sheet's tables at once, and
  * its `dimensions` card falls back from the checklist to the person's ring
  * graph while the checklist is not on screen (graph deselected).
@@ -37,7 +37,7 @@ export function anchorSelector(target: TourTarget): string {
 }
 
 /**
- * Which elements a card spotlights. `pairIds` are the pairs made since step 3
+ * Which elements a card spotlights. `pairIds` are the pairs made since step 4
  * began (the person's, and any collaborator's): while no checklist is on
  * screen, the spotlight falls back to what brings one back — a ring of theirs
  * that is not selected (select it), else the collapsed rail's Expand control

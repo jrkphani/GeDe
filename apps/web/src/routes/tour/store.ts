@@ -1,33 +1,37 @@
 /**
  * Tour state (ONB-02..08, ONB-13). One module store for the whole app, read
  * with `useSyncExternalStore`: the tour outlives route changes (step 1 is in
- * the library, steps 2–5 in the sample document), so it cannot live in a
+ * the library, steps 2–6 in the sample document), so it cannot live in a
  * route's React state.
  *
  * A step advances only when the document, the route or a feature says its
  * action happened (ONB-05); there is no Next. The inputs are:
  *
  *   - the route (`setTourRoute`), for step 1 (the sample is open);
- *   - the open Y.Doc (`setTourDocument`), for steps 2 and 3 — the sets of
- *     cells holding a cross-table formula and a `=Concat()` (step 2), the set
- *     of graph pairs and the dimensions of the pair the person made (step 3),
- *     compared with what was there when the step began, so what the sample
- *     ships with never advances it. Every transaction is observed, remote
- *     ones included: a collaborator writing a reference into the sample
- *     while the person is on step 2 advances it — the action happened in the
- *     document the card points at, and attributing transactions would put
- *     origin tracking in the tour for no product gain;
- *   - pointing mode (`setTourPointing`), for step 3's `point` sub-card;
- *   - Find's query (`setTourFindQuery`) for step 4 and the Share sheet's
- *     invitation (`reportTourInvite`) for step 5.
+ *   - the open Y.Doc (`setTourDocument`), for steps 2, 3 and 4 — the sets of
+ *     cells holding a cross-table formula and a `=Concat()` (step 2), the
+ *     sets of cells holding a set-operator formula and one that compares two
+ *     sets (step 3, FX-09), the set of graph pairs and the dimensions of the
+ *     pair the person made (step 4), compared with what was there when the
+ *     step began, so what the sample ships with never advances it. Every
+ *     transaction is observed, remote ones included: a collaborator writing
+ *     a reference into the sample while the person is on step 2 advances
+ *     it — the action happened in the document the card points at, and
+ *     attributing transactions would put origin tracking in the tour for no
+ *     product gain;
+ *   - pointing mode (`setTourPointing`), for step 4's `point` sub-card;
+ *   - Find's query (`setTourFindQuery`) for step 5 and the Share sheet's
+ *     invitation (`reportTourInvite`) for step 6.
  *
- * Steps 2 and 3 are sub-flows. Their sub-state is derived from the inputs on
- * every evaluation, never stored as a cursor: step 2 shows `reference` until
- * a new cross-table formula exists and `concat` after; step 3 shows `point`
- * while pointing mode is on, else `dimensions` while a bound pair the step
- * did not start with exists, else `add`. So Escape in pointing mode returns
- * to `add` by itself, a graph removed returns to `add`, and Re-point returns
- * to `point` — Skip stays the only exit (ONB-07).
+ * Steps 2, 3 and 4 are sub-flows. Their sub-state is derived from the inputs
+ * on every evaluation, never stored as a cursor: step 2 shows `reference`
+ * until a new cross-table formula exists and `concat` after; step 3 shows
+ * `pick-form` until a new set-operator formula exists and `set-result`
+ * after; step 4 shows `point` while pointing mode is on, else `dimensions`
+ * while a bound pair the step did not start with exists, else `add`. So
+ * Escape in pointing mode returns to `add` by itself, a graph removed
+ * returns to `add`, Re-point returns to `point`, and a set formula cleared
+ * returns to `pick-form` — Skip stays the only exit (ONB-07).
  *
  * The store never talks to the server: `TourController` persists the flag
  * (`PATCH /api/me { tourDone }`) when the phase becomes `ending` and moves
@@ -39,6 +43,8 @@ import {
   graphRecord,
   graphsInPair,
   newCrossTableReference,
+  SET_RESULT_FUNCTION_NAMES,
+  setOperatorFormulaKeys,
   tableById,
   type GedeDoc,
   type Id,
@@ -47,6 +53,7 @@ import {
 import {
   GRAPH_STEP,
   REFERENCE_STEP,
+  SET_STEP,
   TOUR_STEP_COUNT,
   tourStep,
   type TourSubstep,
@@ -64,11 +71,19 @@ export interface TourBaseline {
    * is part of 2b's baseline and 2b waits for a second one (#159 item 11d).
    */
   readonly concats: ReadonlySet<string> | null;
-  /** Graph pair ids (step 3). */
+  /** Workbook cell ids holding a set-operator formula (step 3a, FX-09). */
+  readonly setCalls: ReadonlySet<string> | null;
+  /**
+   * Workbook cell ids holding an Inter, Diff, Comp or Cross, taken when the
+   * `set-result` card first shows (step 3b) — so a Diff that satisfied 3a is
+   * part of 3b's baseline and 3b waits for a second one (ADR-045, ADR-055).
+   */
+  readonly setResults: ReadonlySet<string> | null;
+  /** Graph pair ids (step 4). */
   readonly graphs: ReadonlySet<Id> | null;
   /**
    * Per pair the step did not start with: the dimensions it had when its
-   * binding first showed the `dimensions` card (step 3c); re-taken when its
+   * binding first showed the `dimensions` card (step 4c); re-taken when its
    * table changes (Re-point binds another table and resets the dimensions).
    * Per pair, so a collaborator's pair arriving mid-step is tracked beside
    * the person's own, never instead of it (review of #160, D2).
@@ -85,9 +100,9 @@ export interface TourRunning {
   readonly phase: 'running';
   /** 1-based. */
   readonly step: number;
-  /** The sub-flow's current card (steps 2 and 3), null for the others. */
+  /** The sub-flow's current card (steps 2, 3 and 4), null for the others. */
   readonly substep: TourSubstep | null;
-  /** The bound pairs made since step 3 began, in creation order (the person's, and any collaborator's). */
+  /** The bound pairs made since step 4 began, in creation order (the person's, and any collaborator's). */
   readonly pairIds: readonly Id[];
   readonly baseline: TourBaseline;
 }
@@ -109,13 +124,15 @@ interface Inputs {
   findQuery: string;
 }
 
-/** GRAPH-05: the fewest dimensions a chosen set may hold for step 3 to complete. */
+/** GRAPH-05: the fewest dimensions a chosen set may hold for step 4 to complete. */
 export const TOUR_MIN_DIMENSIONS = 2;
 
 const IDLE: TourState = { phase: 'idle' };
 const EMPTY_BASELINE: TourBaseline = {
   crossReferences: null,
   concats: null,
+  setCalls: null,
+  setResults: null,
   graphs: null,
   dimensions: new Map(),
 };
@@ -225,7 +242,19 @@ function referenceSubstep(running: TourRunning): TourSubstep {
 }
 
 /**
- * Step 3's sub-state: `point` while pointing mode is on (arming, or Re-point
+ * Step 3's sub-state: `set-result` once a set-operator formula the step did
+ * not start with exists (FX-09, ADR-055).
+ */
+function setSubstep(running: TourRunning): TourSubstep {
+  const gd = inputs.doc;
+  if (gd === null || running.baseline.setCalls === null) return 'pick-form';
+  return newKey(running.baseline.setCalls, setOperatorFormulaKeys(gd)) === null
+    ? 'pick-form'
+    : 'set-result';
+}
+
+/**
+ * Step 4's sub-state: `point` while pointing mode is on (arming, or Re-point
  * from the Graph tab); else `dimensions` while a pair the step did not start
  * with exists and is bound ("Graph this table" and "Add shaped table" bind at
  * once, so they arrive here directly); else `add`.
@@ -248,6 +277,7 @@ function deriveSubstep(running: TourRunning): {
   if (running.step === REFERENCE_STEP) {
     return { substep: referenceSubstep(running), pairIds: NO_PAIRS };
   }
+  if (running.step === SET_STEP) return { substep: setSubstep(running), pairIds: NO_PAIRS };
   if (running.step === GRAPH_STEP) return graphSubstep(running);
   return { substep: null, pairIds: NO_PAIRS };
 }
@@ -266,6 +296,24 @@ function withBaseline(running: TourRunning): TourRunning {
     // 2b's baseline is taken as its card first shows, after 2a's formula exists.
     if (next.baseline.concats === null && referenceSubstep(next) === 'concat') {
       next = { ...next, baseline: { ...next.baseline, concats: concatFormulaKeys(gd) } };
+    }
+    return next;
+  }
+  if (advance.kind === 'set-formula') {
+    let next = running;
+    if (baseline.setCalls === null) {
+      next = { ...next, baseline: { ...baseline, setCalls: setOperatorFormulaKeys(gd) } };
+    }
+    // 3b's baseline is taken as its card first shows, after 3a's formula exists — keyed to
+    // what it measures: the four operators that compare two sets, Union left out.
+    if (next.baseline.setResults === null && setSubstep(next) === 'set-result') {
+      next = {
+        ...next,
+        baseline: {
+          ...next.baseline,
+          setResults: setOperatorFormulaKeys(gd, SET_RESULT_FUNCTION_NAMES),
+        },
+      };
     }
     return next;
   }
@@ -311,6 +359,12 @@ function stepSatisfied(running: TourRunning): boolean {
         gd !== null &&
         newKey(baseline.crossReferences, crossTableReferenceKeys(gd)) !== null &&
         newKey(baseline.concats, concatFormulaKeys(gd)) !== null
+      );
+    case 'set-formula':
+      return (
+        gd !== null &&
+        newKey(baseline.setCalls, setOperatorFormulaKeys(gd)) !== null &&
+        newKey(baseline.setResults, setOperatorFormulaKeys(gd, SET_RESULT_FUNCTION_NAMES)) !== null
       );
     case 'graph-added': {
       if (gd === null) return false;
@@ -397,7 +451,7 @@ export function setTourDocument(doc: GedeDoc | null): void {
   evaluate();
 }
 
-/** GRAPH-03: whether pointing mode is on in the open document (step 3's `point` card). */
+/** GRAPH-03: whether pointing mode is on in the open document (step 4's `point` card). */
 export function setTourPointing(active: boolean): void {
   if (inputs.pointing === active) return;
   inputs.pointing = active;
@@ -411,7 +465,7 @@ export function setTourFindQuery(open: boolean, query: string): void {
   evaluate();
 }
 
-/** The Share sheet sent an invitation (ONB-05, step 5). */
+/** The Share sheet sent an invitation (ONB-05, step 6). */
 export function reportTourInvite(): void {
   if (state.phase !== 'running') return;
   if (tourStep(state.step).advance.kind !== 'invite-sent') return;

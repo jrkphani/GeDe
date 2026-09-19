@@ -7,19 +7,25 @@
  * (`docs/PROTOTYPE-CHANGES-2026-09-12.md` §1.4), with three departures where
  * the PRD wins: step 1's "— it resets" is held back (it names a Reset control
  * no PRD row specifies, and the handover says not to ship the sentence without
- * the control); step 4's operator example is `is:date`, not the prototype's
- * `is:blocked` — FIND-04 defines `is:` over resolved formats
+ * the control); the Find step's operator example is `is:date`, not the
+ * prototype's `is:blocked` — FIND-04 defines `is:` over resolved formats
  * (`currency | date | number | text`), so `is:blocked` would match nothing;
- * and step 5's difference is "a permission you set per person" — SHARE-01 is
- * a permission per participant, and no PRD row gives a table its own, so the
- * prototype's "per table" named a feature that does not exist (ONB-10 asks
- * for the real difference).
+ * and the invite step's difference is "a permission you set per person" —
+ * SHARE-01 is a permission per participant, and no PRD row gives a table its
+ * own, so the prototype's "per table" named a feature that does not exist
+ * (ONB-10 asks for the real difference).
  *
- * The sub-cards of steps 2 and 3 (`tour.step2.concat.*`, `tour.step3.point.*`,
- * `tour.step3.dimensions.*`) are new copy: the prototype had one card per
- * step. Step 2b names Numbers' CONCATENATE / `&` then the difference (FX-01;
- * the example evaluates against the sample, `packages/core/src/ref/concat.test.ts`);
- * step 3's sub-cards keep its note — a graph has no Numbers analogue.
+ * The keys are numbered by the step as the tour counts it today (ADR-055
+ * made the set operators step 3, so the graph is `tour.step4.*`, Find
+ * `tour.step5.*` and the invitation `tour.step6.*`). The sub-cards of steps
+ * 2, 3 and 4 (`tour.step2.concat.*`, `tour.step3.result.*`,
+ * `tour.step4.point.*`, `tour.step4.dimensions.*`) are new copy: the
+ * prototype had one card per step. Step 2b names Numbers' CONCATENATE / `&`
+ * then the difference (FX-01; the example evaluates against the sample,
+ * `packages/core/src/ref/concat.test.ts`); step 3 names Numbers' UNIQUE then
+ * the difference, and its two cards share the note (FX-09; both examples
+ * evaluate against the sample, `packages/core/src/ref/set-call.test.ts`);
+ * step 4's sub-cards keep its note — a graph has no Numbers analogue.
  */
 export const messages = {
   'tour.counter': 'STEP {step} OF {total}',
@@ -45,35 +51,47 @@ export const messages = {
     'Numbers: CONCATENATE or &, over plain strings. GeDe: =Concat(a, b, …) keeps each argument’s marks and references live, so the joined text follows its sources.',
   'tour.step2.concat.action': 'Commit a Concat over two or more arguments',
 
-  'tour.step3.title': 'Add a context graph',
+  'tour.step3.title': 'Compute over the text in cells',
   'tour.step3.body':
-    'A graph is an object on the canvas bound to columns. Click a node and it writes that value back into the rows.',
-  'tour.step3.note': 'No Numbers equivalent — it is not a chart. It reads and writes the table.',
-  'tour.step3.action': 'Click Add graph in the toolbar',
+    'A cell’s commas make a set, and five forms compare sets. Double-click an empty cell in Deliverables, type = to open the forms menu and choose Union(a, b, …). Name two ranges inside the parentheses: =Union(C5:C12, I5:I8) is everyone named as an owner or on the team, once each — Priya, Marcus, Aditi, Sanjay.',
+  'tour.step3.note':
+    'Numbers: UNIQUE spills its result down a column. GeDe: a cell’s commas make a set, and a set formula’s result is one cell that reads like its sources.',
+  'tour.step3.action': 'Type = in a cell and choose Union',
 
-  'tour.step3.point.title': 'Point it at a table',
-  'tour.step3.point.body':
-    'A graph draws its rows and columns from one table. The sample’s two tables, Deliverables and Team, are outlined as targets; either will do. Escape starts over.',
-  'tour.step3.point.offCanvas': 'A table sits off the canvas; the one on screen is enough.',
-  'tour.step3.point.action': 'Click a table to bind the graph',
+  'tour.step3.result.title': 'Compare two sets',
+  'tour.step3.result.body':
+    'Diff keeps what the first set has and the second does not. Who else on the team could take Billing export? In another empty cell, type =Diff(I5:I8, C6) and press Enter: the team less that row’s owner — Priya, Aditi, Sanjay. Inter keeps what both have, Comp what the universe has and a set lacks, Cross every pair.',
+  'tour.step3.result.action': 'Commit a Diff, Inter, Comp or Cross over two operands',
 
-  'tour.step3.dimensions.title': 'Choose the dimensions',
-  'tour.step3.dimensions.body':
-    'A dimension is a column whose values define a context, so every combination of values is a node. The graph starts with the first three entered columns; the Graph tab lists each column with its distinct values. Change the set — untick one of the three, or tick another — to see the graph redraw.',
-  'tour.step3.dimensions.action': 'Untick or tick a dimension, keeping at least two',
-
-  'tour.step4.title': 'Find across every table',
+  'tour.step4.title': 'Add a context graph',
   'tour.step4.body':
+    'A graph is an object on the canvas bound to columns. Click a node and it writes that value back into the rows.',
+  'tour.step4.note': 'No Numbers equivalent — it is not a chart. It reads and writes the table.',
+  'tour.step4.action': 'Click Add graph in the toolbar',
+
+  'tour.step4.point.title': 'Point it at a table',
+  'tour.step4.point.body':
+    'A graph draws its rows and columns from one table. The sample’s two tables, Deliverables and Team, are outlined as targets; either will do. Escape starts over.',
+  'tour.step4.point.offCanvas': 'A table sits off the canvas; the one on screen is enough.',
+  'tour.step4.point.action': 'Click a table to bind the graph',
+
+  'tour.step4.dimensions.title': 'Choose the dimensions',
+  'tour.step4.dimensions.body':
+    'A dimension is a column whose values define a context, so every combination of values is a node. The graph starts with the first three entered columns; the Graph tab lists each column with its distinct values. Change the set — untick one of the three, or tick another — to see the graph redraw.',
+  'tour.step4.dimensions.action': 'Untick or tick a dimension, keeping at least two',
+
+  'tour.step5.title': 'Find across every table',
+  'tour.step5.body':
     'One search covers the whole workscape. Operators narrow it: col:Owner, is:date.',
-  'tour.step4.note': 'Numbers searches one sheet at a time. ⌘F here spans every table and graph.',
-  'tour.step4.action': 'Open Find and type anything',
+  'tour.step5.note': 'Numbers searches one sheet at a time. ⌘F here spans every table and graph.',
+  'tour.step5.action': 'Open Find and type anything',
 
-  'tour.step5.title': 'Invite someone by email',
-  'tour.step5.body': 'People you invite get this same pass the first time they open a workscape.',
-  'tour.step5.note': 'Like iCloud sharing, with a permission you set per person.',
-  'tour.step5.action': 'Open Share and invite an email',
+  'tour.step6.title': 'Invite someone by email',
+  'tour.step6.body': 'People you invite get this same pass the first time they open a workscape.',
+  'tour.step6.note': 'Like iCloud sharing, with a permission you set per person.',
+  'tour.step6.action': 'Open Share and invite an email',
 
-  'tour.done.message': 'All five done. Replay any time from the ? in your library.',
+  'tour.done.message': 'All six done. Replay any time from the ? in your library.',
   'tour.done.replay': 'Replay',
 
   // ADR-047: what the live region says of a deleted, collapsed or expanded object, and the

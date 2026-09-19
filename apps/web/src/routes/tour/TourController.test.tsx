@@ -28,6 +28,9 @@ import {
 } from './store.js';
 
 const CONCAT_EXAMPLE = '=Concat(C5, " — ", @Team.Priya.Role)';
+/** The worked examples step 3 shows (ADR-055); `packages/core/src/ref/set-call.test.ts` evaluates them. */
+const UNION_EXAMPLE = '=Union(C5:C12, I5:I8)';
+const DIFF_EXAMPLE = '=Diff(I5:I8, C6)';
 
 const user = { sub: 'sub-1', email: 'meena@1cloudhub.com', name: 'Meena' };
 const SAMPLE_ID = '01ARZ3NDEKTSV4RRFFQ69G5SAM';
@@ -119,6 +122,8 @@ function completeFromStepOne(back = '/'): void {
   act(() => {
     core.commitCellText(gd, table.id, table.rows[1]!, table.columns[5]!.id, '=@Team.Marcus.Role');
     core.commitCellText(gd, table.id, table.rows[1]!, table.columns[4]!.id, CONCAT_EXAMPLE);
+    core.commitCellText(gd, table.id, table.rows[2]!, table.columns[5]!.id, UNION_EXAMPLE);
+    core.commitCellText(gd, table.id, table.rows[3]!, table.columns[5]!.id, DIFF_EXAMPLE);
     const pair = core.createGraphPair(gd, {
       sheetId: core.listSheets(gd)[0]!.id,
       tableId: table.id,
@@ -151,9 +156,9 @@ describe('TourController', () => {
     const dialog = await screen.findByRole('dialog', { name: 'Open the sample workscape' });
     expect(dialog).toHaveAttribute('aria-modal', 'false');
     expect(dialog).toHaveAttribute('data-step', '1');
-    expect(within(dialog).getByText('STEP 1 OF 5')).toBeInTheDocument();
-    expect(within(dialog).getByText('Step 1 of 5')).toBeInTheDocument();
-    expect(dialog.querySelectorAll('.gd-tour__dot')).toHaveLength(5);
+    expect(within(dialog).getByText('STEP 1 OF 6')).toBeInTheDocument();
+    expect(within(dialog).getByText('Step 1 of 6')).toBeInTheDocument();
+    expect(dialog.querySelectorAll('.gd-tour__dot')).toHaveLength(6);
     expect(dialog.querySelectorAll('.gd-tour__dot--done')).toHaveLength(1);
     expect(
       within(dialog).getByText(
@@ -240,7 +245,7 @@ describe('TourController', () => {
     expect(await screen.findByRole('dialog', { name: 'Keyboard shortcuts' })).toBeInTheDocument();
   });
 
-  it('ONB-14 ONB-03 completing step 5 confirms, names the ? in the library, sets the flag and offers Replay', async () => {
+  it('ONB-14 ONB-03 ONB-06 ONB-09 FX-09 completing step 6 confirms, names the ? in the library, sets the flag and offers Replay; step 3’s two cards are centred, share the counter and the note, and advance on the set formulas', async () => {
     arrive(null);
     await screen.findByRole('dialog', { name: 'Open the sample workscape' });
     // Reach step 5 by satisfying each step through the store's inputs, as the
@@ -266,7 +271,7 @@ describe('TourController', () => {
     expect(concat).toHaveAttribute('data-step', '2');
     expect(concat).toHaveAttribute('data-substep', 'concat');
     expect(concat).toHaveAttribute('data-placement', 'centre');
-    expect(within(concat).getByText('STEP 2 OF 5')).toBeInTheDocument();
+    expect(within(concat).getByText('STEP 2 OF 6')).toBeInTheDocument();
     expect(concat.querySelectorAll('.gd-tour__dot--done')).toHaveLength(2);
     expect(within(concat).getByText(/Numbers: CONCATENATE or &/)).toHaveClass('gd-tour__note');
     expect(within(concat).getByText(/Commit a Concat over two or more arguments/)).toHaveClass(
@@ -275,19 +280,67 @@ describe('TourController', () => {
     act(() => {
       core.commitCellText(gd, table.id, table.rows[1]!, table.columns[4]!.id, CONCAT_EXAMPLE);
     });
+    // Step 3a: the set operators (FX-09, ADR-055) — centred like step 2 (ONB-06), Numbers'
+    // UNIQUE named first, the Union example and its result in the body.
+    const pick = await screen.findByRole('dialog', { name: 'Compute over the text in cells' });
+    expect(pick).toHaveAttribute('data-step', '3');
+    expect(pick).toHaveAttribute('data-substep', 'pick-form');
+    expect(pick).toHaveAttribute('data-placement', 'centre');
+    expect(within(pick).getByText('STEP 3 OF 6')).toBeInTheDocument();
+    expect(pick.querySelectorAll('.gd-tour__dot')).toHaveLength(6);
+    expect(pick.querySelectorAll('.gd-tour__dot--done')).toHaveLength(3);
+    expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'none');
+    expect(within(pick).getByText(/^Numbers: UNIQUE spills its result down a column/)).toHaveClass(
+      'gd-tour__note',
+    );
+    expect(pick).toHaveTextContent('=Union(C5:C12, I5:I8)');
+    expect(pick).toHaveTextContent('Priya, Marcus, Aditi, Sanjay');
+    expect(within(pick).getByText(/Type = in a cell and choose Union/)).toHaveClass(
+      'gd-tour__action',
+    );
+    // A Sum is what Numbers teaches; it does not move the card (ONB-10).
+    act(() => {
+      core.commitCellText(gd, table.id, table.rows[2]!, table.columns[5]!.id, '=Sum(F5, F6)');
+    });
+    expect(screen.getByRole('dialog', { name: 'Compute over the text in cells' })).toHaveAttribute(
+      'data-substep',
+      'pick-form',
+    );
+    act(() => {
+      core.commitCellText(gd, table.id, table.rows[2]!, table.columns[5]!.id, UNION_EXAMPLE);
+    });
+    // Step 3b: the same counter, dots and note; the Diff example; still centred.
+    const compare = await screen.findByRole('dialog', { name: 'Compare two sets' });
+    expect(compare).toHaveAttribute('data-step', '3');
+    expect(compare).toHaveAttribute('data-substep', 'set-result');
+    expect(compare).toHaveAttribute('data-placement', 'centre');
+    expect(within(compare).getByText('STEP 3 OF 6')).toBeInTheDocument();
+    expect(compare.querySelectorAll('.gd-tour__dot--done')).toHaveLength(3);
+    expect(
+      within(compare).getByText(/^Numbers: UNIQUE spills its result down a column/),
+    ).toHaveClass('gd-tour__note');
+    expect(compare).toHaveTextContent('=Diff(I5:I8, C6)');
+    expect(compare).toHaveTextContent('Priya, Aditi, Sanjay');
+    expect(
+      within(compare).getByText('Commit a Diff, Inter, Comp or Cross over two operands'),
+    ).toHaveClass('gd-tour__action');
+    expect(within(compare).getByRole('button', { name: 'Skip' })).toBeInTheDocument();
+    act(() => {
+      core.commitCellText(gd, table.id, table.rows[3]!, table.columns[5]!.id, DIFF_EXAMPLE);
+    });
     const add = await screen.findByRole('dialog', { name: 'Add a context graph' });
     expect(add).toHaveTextContent('No Numbers equivalent — it is not a chart.');
     expect(add).toHaveAttribute('data-substep', 'add');
-    expect(within(add).getByText('STEP 3 OF 5')).toBeInTheDocument();
-    // Step 3b: pointing mode. Escape (pointing off) returns to 3a; the tour never ends.
+    expect(within(add).getByText('STEP 4 OF 6')).toBeInTheDocument();
+    // Step 4b: pointing mode. Escape (pointing off) returns to 4a; the tour never ends.
     act(() => {
       setTourPointing(true);
     });
     const point = await screen.findByRole('dialog', { name: 'Point it at a table' });
-    expect(point).toHaveAttribute('data-step', '3');
+    expect(point).toHaveAttribute('data-step', '4');
     expect(point).toHaveAttribute('data-substep', 'point');
-    expect(within(point).getByText('STEP 3 OF 5')).toBeInTheDocument();
-    expect(point.querySelectorAll('.gd-tour__dot--done')).toHaveLength(3);
+    expect(within(point).getByText('STEP 4 OF 6')).toBeInTheDocument();
+    expect(point.querySelectorAll('.gd-tour__dot--done')).toHaveLength(4);
     expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'pointing');
     expect(
       within(point).getByText(
@@ -301,12 +354,12 @@ describe('TourController', () => {
       'data-substep',
       'add',
     );
-    expect(tourState()).toMatchObject({ phase: 'running', step: 3 });
+    expect(tourState()).toMatchObject({ phase: 'running', step: 4 });
     act(() => {
       setTourPointing(true);
     });
     await screen.findByRole('dialog', { name: 'Point it at a table' });
-    // Bound: step 3c, with the pair's ring as the spotlight while no checklist is on screen.
+    // Bound: step 4c, with the pair's ring as the spotlight while no checklist is on screen.
     let pair: core.GraphPair | undefined;
     act(() => {
       pair = core.createGraphPair(gd, { sheetId: core.listSheets(gd)[0]!.id, tableId: table.id });
@@ -314,7 +367,7 @@ describe('TourController', () => {
     });
     const dimensions = await screen.findByRole('dialog', { name: 'Choose the dimensions' });
     expect(dimensions).toHaveAttribute('data-substep', 'dimensions');
-    expect(within(dimensions).getByText('STEP 3 OF 5')).toBeInTheDocument();
+    expect(within(dimensions).getByText('STEP 4 OF 6')).toBeInTheDocument();
     expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'dimensions');
     expect(tourState()).toMatchObject({ pairIds: [pair!.pairId] });
     act(() => {
@@ -332,7 +385,7 @@ describe('TourController', () => {
       expect(me.updateMe).toHaveBeenCalledWith({ tourDone: true });
     });
     const messages = await screen.findAllByText(
-      'All five done. Replay any time from the ? in your library.',
+      'All six done. Replay any time from the ? in your library.',
     );
     const toast = messages.map((m) => m.closest('.gd-toast')).find((t) => t !== null);
     expect(toast).toBeDefined();
@@ -342,7 +395,7 @@ describe('TourController', () => {
     ).toBeInTheDocument();
     expect(screen.queryByRole('dialog')).toBeNull();
     // Announced once, by the toast's own region — never also through the app's (A11Y-05).
-    expect(screen.getByTestId('live-region')).not.toHaveTextContent(/All five done/);
+    expect(screen.getByTestId('live-region')).not.toHaveTextContent(/All six done/);
     act(() => {
       setTourDocument(null);
     });
@@ -422,7 +475,7 @@ describe('TourController', () => {
     });
     const tamil = await screen.findByRole('dialog', { name: 'மாதிரி workscape-ஐத் திறக்கவும்' });
     expect(within(tamil).getByRole('button', { name: 'தவிர்' })).toBeInTheDocument();
-    expect(within(tamil).getByText('படி 1 / 5')).toBeInTheDocument();
+    expect(within(tamil).getByText('படி 1 / 6')).toBeInTheDocument();
     expect(document.documentElement.lang).toBe('ta-IN');
   });
 });

@@ -199,7 +199,7 @@ export function useGraphs({
   useEffect(() => {
     if (!editable) setPointing(null);
   }, [editable]);
-  // ONB-05: the guided tour's step 3 shows its `point` card while pointing mode is on.
+  // ONB-05: the guided tour's step 4 shows its `point` card while pointing mode is on.
   useEffect(() => {
     setTourPointing(pointing !== null);
     return () => {

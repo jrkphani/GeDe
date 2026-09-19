@@ -218,7 +218,7 @@ const GraphHalf = memo(function GraphHalf({
  * GRAPH-03 pointing mode: every table on the sheet takes a dashed accent
  * outline that is itself the target — a button named after the table, so
  * the keyboard binds as well as the pointer. The banner lives in the shell.
- * The targets carry the tour's `pointing` anchor (ONB-04): step 3's `point`
+ * The targets carry the tour's `pointing` anchor (ONB-04): step 4's `point`
  * card spotlights all of them at once.
  */
 function PointingOverlay({ gd, sheetId, graphs }: { gd: GedeDoc; sheetId: Id; graphs: Graphs }) {
