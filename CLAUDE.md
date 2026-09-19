@@ -9,7 +9,7 @@ reference for anything here.
 
 | Question                                 | Where                                                                                                                                |
 | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| What must the product do?                | `docs/REQUIREMENTS.md` — 172 numbered requirements (PRD §24). Verbatim.                                                              |
+| What must the product do?                | `docs/REQUIREMENTS.md` — 173 numbered requirements (PRD §24 verbatim, plus ADR rows).                                                |
 | Why / narrative                          | `docs/PRD-DIGEST.md`; full PRD at `docs/handover/specs/Text-Oriented Spreadsheet PRD.dc.html`                                        |
 | Architecture, data model, capacity       | `docs/ARCHITECTURE-DIGEST.md`; C4 at `docs/handover/specs/GeDe Architecture C4.dc.html`                                              |
 | Design system, tokens, components        | `docs/DESIGN-SYSTEM-DIGEST.md`; `packages/tokens/` is the only place a colour, radius or duration may be written                     |
