@@ -1,6 +1,6 @@
 /**
  * Formula journeys against the built bundle (FX-02, FX-06, FX-07, FX-08,
- * A11Y-04). Same labelled FAKES at the network edge as `document.spec.ts`
+ * FX-09, A11Y-04). Same labelled FAKES at the network edge as `document.spec.ts`
  * (Cognito, the documents REST API, the y-websocket room); the SPA, the Yjs
  * replica and the formula Worker run for real.
  *
@@ -8,7 +8,7 @@
  * the `=` forms menu, `@` autocomplete and click-to-insert are the product.
  */
 import type { Page } from '@playwright/test';
-import { insertRowBefore, openDocument, setRowHeight, tableRecord } from '@gede/core';
+import { addColumn, insertRowBefore, openDocument, setRowHeight, tableRecord } from '@gede/core';
 import { expect, test } from './fixtures/test.js';
 import { FAKE_SIGN_IN_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
@@ -282,6 +282,89 @@ test.describe('formulas', () => {
     await expect(d5).toHaveAttribute('title', '=Sum(@"Table 1"."Lukla airstrip"."Column 2")');
     await expect(d5.getByTestId('formula-cell').locator('.gd-formula__value')).toHaveText('2,860');
     await expect.poll(() => JSON.stringify(room.doc.getMap('tables').toJSON())).toMatch(/\{e:/);
+  });
+
+  test('FX-09 FX-06 A11Y-04 the set operators over the strings in cells: Union, Inter, Diff, Comp and Cross from the forms menu and typed verbatim; a source edit updates the result; the Worker evaluates', async ({
+    page,
+    checkA11y,
+  }) => {
+    const room = await installFakes(page);
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await signInTo(page, `/d/${DOC_ID}`);
+    await page.getByRole('button', { name: 'Add table' }).click();
+    await expect(page.locator('[data-address="B5"]')).toBeVisible();
+    await expect(page.getByTestId('formula-engine')).toHaveAttribute('data-mode', 'worker');
+    // A collaborator adds a fourth column so the results have a home at E5:E9.
+    await expect.poll(() => room.doc.getMap('tables').size).toBe(1);
+    const gd = openDocument(room.doc);
+    const tableId = Array.from(gd.tables.keys())[0] ?? '';
+    addColumn(gd, tableId);
+    await expect(page.locator('[data-address="E5"]')).toBeVisible();
+
+    await enter(page, 'B5', '1, 2');
+    await enter(page, 'C5', '2, 3');
+    await enter(page, 'D5', '1, 2, 3, 4');
+
+    // The `=` forms menu offers the five on an Automatic column, each with a hint.
+    const e5 = page.locator('[data-address="E5"]');
+    await e5.dblclick();
+    const editor = page.getByLabel('Edit E5');
+    await editor.fill('=');
+    const forms = page.getByRole('listbox', { name: 'Formula forms' });
+    await expect(forms).toBeVisible();
+    for (const name of ['Union', 'Inter', 'Diff', 'Comp', 'Cross']) {
+      await expect(
+        forms.getByRole('option', { name: new RegExp(`^${name}\\(`) }),
+      ).not.toHaveAttribute('aria-disabled');
+    }
+    await expect(forms.getByRole('option', { name: /^Union\(/ })).toContainText(
+      'elements in any of the sets',
+    );
+    await page.keyboard.press('Escape');
+    await expect(forms).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(editor).toHaveCount(0);
+
+    const valueOf = (address: string) =>
+      page
+        .locator(`[data-address="${address}"]`)
+        .getByTestId('formula-cell')
+        .locator('.gd-formula__value');
+    await enter(page, 'E5', '=UNION(B5, C5)');
+    await expect(valueOf('E5')).toHaveText('1, 2, 3');
+    await expect(e5).toHaveAttribute('title', '=Union(B5, C5)');
+    await enter(page, 'E6', '=inter(B5,C5)');
+    await expect(valueOf('E6')).toHaveText('2');
+    await enter(page, 'E7', '=Diff(B5, C5)');
+    await expect(valueOf('E7')).toHaveText('1');
+    await enter(page, 'E8', '=Comp(B5, D5)');
+    await expect(valueOf('E8')).toHaveText('3, 4');
+    await enter(page, 'E9', '=Cross(B5, C5)');
+    await expect(valueOf('E9')).toHaveText('(1, 2), (1, 3), (2, 2), (2, 3)');
+    // The stored formulas are id-bound and canonically spelled.
+    await expect
+      .poll(() => JSON.stringify(room.doc.getMap('tables').toJSON()))
+      .toMatch(/=Inter\(\{c:[0-9A-Z:]+\},\{c:[0-9A-Z:]+\}\)/);
+
+    // FX-06: editing a source updates every dependent.
+    await enter(page, 'B5', '1, 2, 5');
+    await expect(valueOf('E5')).toHaveText('1, 2, 5, 3');
+    await expect(valueOf('E7')).toHaveText('1, 5');
+    await expect(valueOf('E9')).toHaveText('(1, 2), (1, 3), (2, 2), (2, 3), (5, 2), (5, 3)');
+
+    // A11Y-04: wrong arity is an error with icon and text, never hue alone.
+    await enter(page, 'E6', '=Comp(B5)');
+    await expect(page.locator('[data-address="E6"] .gd-formula__error-text')).toHaveText(
+      'Comp takes 2 arguments',
+    );
+    await expect(
+      page
+        .locator('[data-address="E6"]')
+        .getByRole('img', { name: 'Comp takes exactly 2 arguments: the set, then its universe' }),
+    ).toBeVisible();
+    await checkA11y('document with set operator formulas');
+    await expect(page.getByTestId('formula-engine')).toHaveAttribute('data-mode', 'worker');
+    await expect(page.getByTestId('formula-engine')).toHaveAttribute('data-restarts', '0');
   });
 
   test('FX-06 a reference loop reports circular on every member, and a formula may read a formula', async ({

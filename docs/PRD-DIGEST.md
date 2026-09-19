@@ -1,6 +1,6 @@
 # GeDe — Text-Oriented Spreadsheet PRD: Narrative Digest (§1–§23)
 
-Source: `handover/specs/Text-Oriented Spreadsheet PRD.dc.html` (package 2026-09-12; header reads "Specification · sections 1–24 · 135 requirements · v1 scope" — the "135" is a stale figure, the table holds 172). §24 (172 numbered requirements) is captured separately in `REQUIREMENTS.md`. Items struck through in the source are marked **[removed in v1]** below. The 2026-09-12 package added two §24 blocks with no §1–23 prose behind them; they are digested at the end of this file.
+Source: `handover/specs/Text-Oriented Spreadsheet PRD.dc.html` (package 2026-09-12; header reads "Specification · sections 1–24 · 135 requirements · v1 scope" — the "135" is a stale figure, the table holds 172). §24 is captured separately in `REQUIREMENTS.md` (173 numbered requirements: the 172 verbatim rows plus FX-09, added by ADR-053). Items struck through in the source are marked **[removed in v1]** below. The 2026-09-12 package added two §24 blocks with no §1–23 prose behind them; they are digested at the end of this file.
 
 ## What the product is
 

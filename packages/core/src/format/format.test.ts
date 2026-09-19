@@ -208,7 +208,11 @@ describe('resolveValue (FMT-01, FMT-05)', () => {
       text: 'abc',
       expected: 'date',
     });
-    expect(toCellValue(resolveValue('abc', cellFormat('number')))).toEqual({ kind: 'blank' });
+    // Blank to a formula, but the stored text rides along for the set operators (FX-09).
+    expect(toCellValue(resolveValue('abc', cellFormat('number')))).toEqual({
+      kind: 'blank',
+      text: 'abc',
+    });
     expect(renderText('abc', cellFormat('number'))).toEqual({
       text: 'abc',
       align: 'left',
@@ -241,19 +245,21 @@ describe('resolveValue (FMT-01, FMT-05)', () => {
     expect(resolveValue('12/9/2026', cellFormat('number')).kind).toBe('invalid');
   });
 
-  test('FMT-02 FMT-03 FMT-05 cellValueOf is the engine’s read of a formatted cell: the parsed value with its rendered text; invalid is blank', () => {
+  test('FMT-02 FMT-03 FMT-05 cellValueOf is the engine’s read of a formatted cell: the parsed value with its rendered text, marked rendered; invalid is blank with its stored text', () => {
     const sgd = cellFormat('currency', { currency: 'SGD', decimals: 2 });
     expect(cellValueOf('100', sgd, 'en-US')).toEqual({
       kind: 'currency',
       value: 100,
       code: 'SGD',
       text: 'SGD\u00a0100.00',
+      rendered: true,
     });
     expect(cellValueOf('-45.5', sgd, 'en-US')).toEqual({
       kind: 'currency',
       value: -45.5,
       code: 'SGD',
       text: '(SGD\u00a045.50)',
+      rendered: true,
     });
     // A cell overridden to INR yields INR: the code Sum compares.
     expect(cellValueOf('2500', cellFormat('currency', { currency: 'INR' }), 'en-US')).toEqual({
@@ -261,21 +267,27 @@ describe('resolveValue (FMT-01, FMT-05)', () => {
       value: 2500,
       code: 'INR',
       text: '₹2,500.00',
+      rendered: true,
     });
     expect(cellValueOf('1,234.50', cellFormat('number', { decimals: 6 }), 'en-US')).toEqual({
       kind: 'number',
       value: 1234.5,
       text: '1,234.500000',
+      rendered: true,
     });
     expect(cellValueOf('12/9/2026', cellFormat('date'), 'en-GB')).toEqual({
       kind: 'date',
       iso: '2026-09-12',
       text: '12 Sept 2026',
+      rendered: true,
     });
     // Invalid under an explicit format is blank to a formula: excluded, never zero.
-    expect(cellValueOf('S$12', cellFormat('number'))).toEqual({ kind: 'blank' });
-    expect(cellValueOf('12/9/2026', cellFormat('number'))).toEqual({ kind: 'blank' });
-    expect(cellValueOf('abc', sgd)).toEqual({ kind: 'blank' });
+    expect(cellValueOf('S$12', cellFormat('number'))).toEqual({ kind: 'blank', text: 'S$12' });
+    expect(cellValueOf('12/9/2026', cellFormat('number'))).toEqual({
+      kind: 'blank',
+      text: '12/9/2026',
+    });
+    expect(cellValueOf('abc', sgd)).toEqual({ kind: 'blank', text: 'abc' });
     expect(cellValueOf('   ', sgd)).toEqual({ kind: 'blank' });
     expect(cellValueOf('1234', cellFormat('text'))).toEqual({ kind: 'text', text: '1234' });
   });

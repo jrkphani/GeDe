@@ -116,7 +116,31 @@ function setUp(rows: number) {
       throw new Error(`no numeric result at ${addr(i)}: ${JSON.stringify(r)}`);
     return r.value.value;
   };
-  return { gd, tableId, engine, results, reported, rowId, colId, addr, id, write, valueOf };
+  const writeText = (i: number, text: string) => {
+    commitCellText(gd, tableId, rowId(i), colId(), text);
+  };
+  /** The elements of a set result (FX-09): a `list` of text items. */
+  const setOf = (i: number): string[] => {
+    const r = results.get(id(i));
+    if (r?.value?.kind !== 'list')
+      throw new Error(`no set result at ${addr(i)}: ${JSON.stringify(r)}`);
+    return r.value.items.map((item) => (item.kind === 'text' ? item.text : '?'));
+  };
+  return {
+    gd,
+    tableId,
+    engine,
+    results,
+    reported,
+    rowId,
+    colId,
+    addr,
+    id,
+    write,
+    writeText,
+    setOf,
+    valueOf,
+  };
 }
 
 describe('FormulaEngine properties', () => {
@@ -203,6 +227,53 @@ describe('FormulaEngine properties', () => {
           expect(shown).toBe(`=Sum(${cellAddress(map, targetRowId, h.colId())})`);
         },
       ),
+      { numRuns: 40 },
+    );
+  });
+});
+
+describe('set operator properties (FX-09)', () => {
+  const element = fc.stringMatching(/^[a-z0-9]{1,3}$/);
+  const set = fc.uniqueArray(element, { maxLength: 6 });
+  const spell = (s: readonly string[]) => s.join(', ');
+
+  test('FX-09 FX-06 through the engine: Union is commutative and idempotent, Inter is within each operand, Diff and B are disjoint, |Cross| = |A|·|B|; editing a source re-evaluates', () => {
+    fc.assert(
+      fc.property(set, set, set, (a, b, later) => {
+        // Rows: 0 A, 1 B, 2 Union(A,B), 3 Union(B,A), 4 Union(A,A), 5 Inter(A,B), 6 Diff(A,B),
+        // 7 Cross(A,B), 8 Inter(Diff(A,B), B), 9 Comp(A, Union(A,B)).
+        const h = setUp(10);
+        h.writeText(0, spell(a));
+        h.writeText(1, spell(b));
+        const A = h.addr(0);
+        const B = h.addr(1);
+        h.writeText(2, `=Union(${A}, ${B})`);
+        h.writeText(3, `=Union(${B}, ${A})`);
+        h.writeText(4, `=Union(${A}, ${A})`);
+        h.writeText(5, `=Inter(${A}, ${B})`);
+        h.writeText(6, `=Diff(${A}, ${B})`);
+        h.writeText(7, `=Cross(${A}, ${B})`);
+        h.writeText(8, `=Inter(Diff(${A}, ${B}), ${B})`);
+        h.writeText(9, `=Comp(${A}, Union(${A}, ${B}))`);
+        const check = (x: readonly string[], y: readonly string[]) => {
+          expect(new Set(h.setOf(2))).toEqual(new Set(h.setOf(3)));
+          expect(h.setOf(2)).toEqual([...x, ...y.filter((e) => !x.includes(e))]);
+          expect(h.setOf(4)).toEqual([...x]);
+          for (const e of h.setOf(5)) {
+            expect(x).toContain(e);
+            expect(y).toContain(e);
+          }
+          for (const e of h.setOf(6)) expect(y).not.toContain(e);
+          expect(h.setOf(7)).toHaveLength(x.length * y.length);
+          expect(h.setOf(8)).toEqual([]);
+          expect(h.setOf(9)).toEqual(y.filter((e) => !x.includes(e)));
+        };
+        check(a, b);
+        // FX-06: the sources are id-bound and every dependent follows an edit to A.
+        h.writeText(0, spell(later));
+        check(later, b);
+        expect(h.engine.dependenciesOf(h.id(2))).toEqual(new Set([h.id(0), h.id(1)]));
+      }),
       { numRuns: 40 },
     );
   });

@@ -199,6 +199,19 @@ describe('bind at commit, project for display', () => {
     expect(bindFormula('plain', binder)).toBe('plain');
   });
 
+  test('FX-09 a function name commits in its canonical spelling: =UNION( and aliases store as Union, Inter, Diff, Comp, Cross; =sum( as Sum', () => {
+    const c = encodeBound(cell);
+    expect(bindFormula('=UNION(B5, B5)', binder)).toBe(`=Union(${c}, ${c})`);
+    expect(bindFormula('=intersect(B5, B5)', binder)).toBe(`=Inter(${c}, ${c})`);
+    expect(bindFormula('=Minus(B5, B5)', binder)).toBe(`=Diff(${c}, ${c})`);
+    expect(bindFormula('=compl(B5, B5)', binder)).toBe(`=Comp(${c}, ${c})`);
+    expect(bindFormula('=PRODUCT(B5, cart(B5, B5))', binder)).toBe(
+      `=Cross(${c}, Cross(${c}, ${c}))`,
+    );
+    expect(bindFormula('=sum(B5)', binder)).toBe(`=Sum(${c})`);
+    expect(bindFormula('=Union(B5, B5)', binder)).toBe(`=Union(${c}, ${c})`);
+  });
+
   test('FX-06 an open-ended corner projects to the table edge and round-trips through its token', () => {
     const open = `{r:${T}:${R1}:${C1}:*:${C1}}`;
     expect(decodeBound(open)).toEqual({

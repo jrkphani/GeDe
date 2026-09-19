@@ -68,9 +68,12 @@ export function resolveValue(text: string, format: CellFormat): FormattedValue {
   }
 }
 
-/** The formula engine's view: invalid cells are blank (excluded, FMT-05), everything else as is. */
+/**
+ * The formula engine's view: invalid cells are blank (excluded, FMT-05) but
+ * keep their stored text for the set operators (FX-09); everything else as is.
+ */
 export function toCellValue(value: FormattedValue): CellValue {
-  return value.kind === 'invalid' ? { kind: 'blank' } : value;
+  return value.kind === 'invalid' ? { kind: 'blank', text: value.text } : value;
 }
 
 /**
@@ -91,7 +94,8 @@ export function cellValueOf(
     case 'number':
     case 'currency':
     case 'date':
-      return { ...value, text: renderValue(value, format, locale).text };
+      // `rendered`: this text is the locale's, not the stored spelling (FX-09 never splits it).
+      return { ...value, text: renderValue(value, format, locale).text, rendered: true };
     default:
       return toCellValue(value);
   }

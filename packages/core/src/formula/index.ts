@@ -18,14 +18,30 @@ export type {
   StringLiteral,
 } from './ast.js';
 export {
+  calls,
   isMethodName,
   isReference,
+  isSetFunctionName,
   METHOD_NAMES,
   references,
+  SET_FUNCTION_NAMES,
   type MethodArg,
   type MethodCall,
   type MethodName,
+  type SetFunctionName,
 } from './ast.js';
+export {
+  complement,
+  cross,
+  dedupe,
+  difference,
+  intersection,
+  normaliseElement,
+  MAX_CROSS_TUPLES,
+  crossCardinality,
+  splitSetElements,
+  union,
+} from './sets.js';
 export {
   applyMethod,
   formatMethodCall,
@@ -61,6 +77,7 @@ export {
 } from './project.js';
 export { tokenize, type Token, type TokenKind } from './tokenizer.js';
 export {
+  arityText,
   DEFAULT_MAX_DEPTH,
   defaultFormatValue,
   errorLabel,

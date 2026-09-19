@@ -295,6 +295,41 @@ describe('FormulaEngine over a Y.Doc', () => {
     ]);
   });
 
+  test('FX-09 FX-08 a set operator’s result carries each operand with its index and cells, nested calls included, so highlighting needs nothing new', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 3, 3);
+    g.set(0, 0, '1, 2');
+    g.set(1, 0, '2, 3');
+    g.set(0, 1, '4');
+    g.set(
+      2,
+      1,
+      `=Union(Cross(${g.addr(0, 0)}, ${g.addr(1, 0)}), Cross(${g.addr(0, 0)}, ${g.addr(0, 1)}))`,
+    );
+    const result = h.results.get(g.id(2, 1))!;
+    expect(result.value).toEqual({
+      kind: 'list',
+      items: ['(1, 2)', '(1, 3)', '(2, 2)', '(2, 3)', '(1, 4)', '(2, 4)'].map((text) => ({
+        kind: 'text',
+        text,
+      })),
+    });
+    expect(result.operands).toEqual([
+      { index: 0, kind: 'address', cellIds: [g.id(0, 0)], missing: false, anchored: true },
+      { index: 1, kind: 'address', cellIds: [g.id(1, 0)], missing: false, anchored: true },
+      { index: 2, kind: 'address', cellIds: [g.id(0, 0)], missing: false, anchored: true },
+      { index: 3, kind: 'address', cellIds: [g.id(0, 1)], missing: false, anchored: true },
+    ]);
+    expect(h.engine.dependenciesOf(g.id(2, 1))).toEqual(
+      new Set([g.id(0, 0), g.id(1, 0), g.id(0, 1)]),
+    );
+    // Wrong arity is an error value with icon text, never a throw (FX-09).
+    g.set(2, 2, `=Comp(${g.addr(0, 0)})`);
+    const error = h.results.get(g.id(2, 2))!.error;
+    expect(error).toEqual({ kind: 'arity', name: 'Comp', arity: { exactly: 2 } });
+    expect(cellErrorLabel(error!)).toBe('⚠ Comp takes 2 arguments');
+  });
+
   test('FX-06 inserting a row above a referenced cell keeps the value; the shown address moves with the cell', () => {
     const h = harness();
     const g = grid(h.gd, h.sheetId, 3, 1);
@@ -761,6 +796,63 @@ describe('formats reach the engine (FMT-02, FMT-03, FMT-05, FX-02)', () => {
       kind: 'text',
       text: 'SGD\u00a012,34,567.50 total',
     });
+  });
+
+  test('FX-09 FMT-05 a set over formatted cells is the same under en-US, en-IN and no locale: a number, amount or date is one locale-independent element; an invalid cell contributes its stored text', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 4, 3);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'number', { decimals: 0 });
+    setColumnFormat(h.gd, g.tableId, g.colId(1), 'currency', { currency: 'SGD', decimals: 2 });
+    setColumnFormat(h.gd, g.tableId, g.colId(2), 'date');
+    g.set(0, 0, '1234567');
+    g.set(1, 0, 'north, south'); // invalid under Number (FMT-05)
+    g.set(0, 1, '1234567.5');
+    g.set(0, 2, '2026-09-12');
+    g.set(3, 0, `=Union(${g.addr(0, 0)}, ${g.addr(1, 0)}, ${g.addr(0, 1)}, ${g.addr(0, 2)})`);
+    g.set(3, 1, `=Inter(${g.addr(0, 0)}, "1234567")`);
+    const want = {
+      kind: 'list',
+      items: ['1234567', 'north', 'south', 'SGD 1234567.5', '2026-09-12'].map((text) => ({
+        kind: 'text',
+        text,
+      })),
+    };
+    const one = { kind: 'list', items: [{ kind: 'text', text: '1234567' }] };
+    // No locale set yet (the sync projection runs this way).
+    expect(h.results.get(g.id(3, 0))?.value).toEqual(want);
+    expect(h.results.get(g.id(3, 1))?.value).toEqual(one);
+    for (const locale of ['en-US', 'en-IN']) {
+      for (const r of h.engine.setLocale(locale).results) h.results.set(r.cellId, r);
+      expect(h.results.get(g.id(3, 0))?.value, locale).toEqual(want);
+      expect(h.results.get(g.id(3, 1))?.value, locale).toEqual(one);
+    }
+    // The invalid cell is still excluded from Sum.
+    g.set(2, 0, `=Sum(${g.addr(0, 0)}, ${g.addr(1, 0)})`);
+    expect(h.results.get(g.id(2, 0))?.value).toEqual({ kind: 'number', value: 1234567 });
+  });
+
+  test('FX-09 FMT-05 a whole-column reference keeps an invalid cell for the set operators, while Sum still skips it and Concat spells only the populated cells', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 6, 2);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'number', { decimals: 0 });
+    g.set(0, 0, '10');
+    g.set(1, 0, 'apple, pear'); // invalid under Number (FMT-05); rows 2 and 3 stay empty
+    const letters = g.addr(0, 0).replace(/\d+$/, '');
+    const column = `${letters}:${letters}`;
+    g.set(0, 1, `=Union(${column}, "x")`);
+    g.set(1, 1, `=Union(${g.addr(0, 0)}:${g.addr(1, 0)}, "x")`);
+    g.set(2, 1, `=Sum(${column})`);
+    g.set(3, 1, `=Concat(${column})`);
+    const want = {
+      kind: 'list',
+      items: ['10', 'apple', 'pear', 'x'].map((text) => ({ kind: 'text', text })),
+    };
+    expect(h.results.get(g.id(0, 1))?.value).toEqual(want);
+    expect(h.results.get(g.id(1, 1))?.value).toEqual(want);
+    expect(h.results.get(g.id(2, 1))?.value).toEqual({ kind: 'number', value: 10 });
+    expect(h.results.get(g.id(3, 1))?.value).toEqual({ kind: 'text', text: '10' });
+    // The column is id-bound, so the same holds through the bound token.
+    expect(g.stored(0, 1)).toBe(`=Union({k:${g.tableId}:${g.colId(0)}}, "x")`);
   });
 
   test('FMT-01 an Automatic column keeps the inference from the typed text', () => {

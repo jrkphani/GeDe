@@ -73,7 +73,7 @@ _Set on the column, overridable per cell._
 - **FMT-05** — Invalid: A value that cannot be parsed under an explicit format tints the cell and is excluded from aggregation; it is never silently coerced to zero.
 - **FMT-06** — Inheritance: Appended rows inherit the column format. The inspector states the scope of the change before it is applied.
 
-## FX — Formulas (8)
+## FX — Formulas (9)
 
 _Typing `=` opens formula entry with a menu of available forms._
 
@@ -85,6 +85,7 @@ _Typing `=` opens formula entry with a menu of available forms._
 - **FX-06** — Evaluation: Results track their sources; editing a referenced cell updates every dependent. Formulas may reference formulas; a depth guard reports `⚠ circular`.
 - **FX-07** — Presentation: A formula cell renders its value with a reference badge and the expression on a secondary line. Re-opening restores the expression, not the result.
 - **FX-08** — Highlighting: While a formula cell is selected or edited, every cell it reads is outlined in the colour of its operand index; ranges draw as one block. Outlines follow pan and zoom and clear on deselect.
+- **FX-09** — Set operators: `=Union(a, b, …)`, `=Inter(a, b, …)`, `=Diff(a, b, …)`, `=Comp(a, u)` and `=Cross(a, b, …)` read every argument as a set of the strings in its cells: the text split on commas, semicolons and newlines, each element trimmed and NFC-normalised, empties dropped, duplicates collapsed on first occurrence; equality is exact and case-sensitive. Arguments may be cell addresses, ranges, columns, `@` paths, quoted literals or nested calls, separated by `,` or `;`; a blank cell is the empty set; an Automatic cell splits its stored text as typed; under an explicit format a number, amount or date is one element, spelled locale-independently, so every replica computes the same set, and a cell the format could not parse (FMT-05) contributes its stored text; a list (a `Split` or another set) contributes its items as they are. Union is the elements in any set, Inter the elements in every set, Diff the first set less the union of the rest, Comp the elements of the universe `u` (the second argument; there is no implicit universe) not in `a`, Cross every ordered tuple first-operand-major rendered `(a, b)`. Results keep first-seen order, render comma-separated, feed another set function unchanged (a separator inside parentheses does not split) and an empty result is an empty cell. Union, Inter, Diff and Cross take two or more arguments, Comp exactly two; anything else yields `⚠ Comp takes 2 arguments` in the error family. A Cross past 10,000 tuples is refused from the operand sizes as `⚠ too many tuples` before any tuple is built. Names parse case-insensitively with the aliases Intersect, Intsec, Minus, Compl, Prod, Cart, Product and commit in canonical spelling; the `=` forms menu offers the five wherever Concat is. _Added by ADR-053 (owner-directed, 2026-09-19)._
 
 ## REF — References and cross-table relations (5)
 
@@ -284,7 +285,7 @@ _Deletion is conditional on sharing history. A workscape that has ever had a par
 | DOC | 7 |
 | GRID | 11 |
 | FMT | 6 |
-| FX | 8 |
+| FX | 9 |
 | REF | 5 |
 | HIER | 10 |
 | FIND | 10 |
@@ -300,4 +301,4 @@ _Deletion is conditional on sharing history. A workscape that has ever had a par
 | RESP | 5 |
 | ONB | 14 |
 | LIB-D | 11 |
-| **Total** | **172** |
+| **Total** | **173** |

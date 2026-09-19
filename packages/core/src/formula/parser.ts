@@ -27,10 +27,29 @@ import { tokenize, type Token } from './tokenizer.js';
 const ADDRESS_RE = /^([A-Za-z]{1,3})([1-9][0-9]{0,6})$/;
 const LETTERS_RE = /^[A-Za-z]{1,3}$/;
 
+/**
+ * Lower-cased spelling → canonical name. The set operators (FX-09) take the
+ * abbreviations the owner asked for and the longer spellings people type;
+ * the canonical name is what a projected formula shows.
+ */
 const FUNCTION_NAMES: ReadonlyMap<string, FunctionName> = new Map([
   ['concat', 'Concat'],
   ['sum', 'Sum'],
+  ['union', 'Union'],
+  ['inter', 'Inter'],
+  ['intersect', 'Inter'],
+  ['intsec', 'Inter'],
+  ['diff', 'Diff'],
+  ['minus', 'Diff'],
+  ['comp', 'Comp'],
+  ['compl', 'Comp'],
+  ['cross', 'Cross'],
+  ['prod', 'Cross'],
+  ['cart', 'Cross'],
+  ['product', 'Cross'],
 ]);
+
+const KNOWN_FUNCTIONS = 'Concat, Sum, Union, Inter, Diff, Comp or Cross';
 
 class ParseFailure extends Error {
   constructor(readonly parseError: ParseError) {
@@ -241,7 +260,7 @@ class Parser {
     const nameToken = this.next();
     const name = FUNCTION_NAMES.get(nameToken.text.toLowerCase());
     if (name === undefined) {
-      fail(`unknown function ${nameToken.text}; use Concat or Sum`, nameToken.span);
+      fail(`unknown function ${nameToken.text}; use ${KNOWN_FUNCTIONS}`, nameToken.span);
     }
     this.skipSpace();
     const open = this.next();
@@ -255,6 +274,7 @@ class Parser {
         name,
         args,
         span: { start: nameToken.span.start, end: close.span.end },
+        nameSpan: nameToken.span,
       };
     }
     for (;;) {
@@ -264,7 +284,13 @@ class Parser {
       const t = this.next();
       if (t.kind === 'comma') continue;
       if (t.kind === 'rparen') {
-        return { kind: 'call', name, args, span: { start: nameToken.span.start, end: t.span.end } };
+        return {
+          kind: 'call',
+          name,
+          args,
+          span: { start: nameToken.span.start, end: t.span.end },
+          nameSpan: nameToken.span,
+        };
       }
       if (t.kind === 'eof')
         fail('missing closing )', { start: open.span.start, end: this.text.length });

@@ -90,6 +90,58 @@ describe('parse — calls', () => {
     expect(mustParse('=Sum()')).toMatchObject({ kind: 'call', args: [] });
   });
 
+  test('FX-09 the five set operators parse case-insensitively to their canonical names; =UNION(A1, A2) verbatim', () => {
+    const ast = mustParse('=UNION(A1, A2)');
+    expect(ast).toMatchObject({ kind: 'call', name: 'Union' });
+    if (ast.kind !== 'call') return;
+    expect(ast.args.map((a) => a.kind)).toEqual(['address', 'address']);
+    expect(mustParse('=inter(B5,C5)')).toMatchObject({ kind: 'call', name: 'Inter' });
+    expect(mustParse('=Diff(B5, C5)')).toMatchObject({ kind: 'call', name: 'Diff' });
+    expect(mustParse('=cOmP(B5, D5)')).toMatchObject({ kind: 'call', name: 'Comp' });
+    expect(mustParse('=CROSS(B5, C5)')).toMatchObject({ kind: 'call', name: 'Cross' });
+  });
+
+  test.each([
+    ['Intersect', 'Inter'],
+    ['intsec', 'Inter'],
+    ['Minus', 'Diff'],
+    ['Compl', 'Comp'],
+    ['Prod', 'Cross'],
+    ['cart', 'Cross'],
+    ['PRODUCT', 'Cross'],
+  ])('FX-09 alias %s parses as %s', (alias, name) => {
+    expect(mustParse(`=${alias}(A1, A2)`)).toMatchObject({ kind: 'call', name });
+  });
+
+  test('FX-09 set operators nest inside each other and inside Concat; a quoted literal is an operand', () => {
+    const ast = mustParse('=Union(Cross(A1, B1), Cross(A1, C1))');
+    if (ast.kind !== 'call') throw new Error('expected call');
+    expect(ast.args.map((a) => (a.kind === 'call' ? a.name : a.kind))).toEqual(['Cross', 'Cross']);
+    expect(references(ast).map(describeRef)).toEqual(['A1', 'B1', 'A1', 'C1']);
+    expect(mustParse('=Concat(Union(A1, "1, 2"), "!")')).toMatchObject({ kind: 'call' });
+  });
+
+  test('FX-09 ; separates arguments like , inside a call; in list mode it stays separator text', () => {
+    const ast = mustParse('=Union(A1; B1;C1)');
+    if (ast.kind !== 'call') throw new Error('expected call');
+    expect(references(ast).map(describeRef)).toEqual(['A1', 'B1', 'C1']);
+    expect(mustParse('=Sum(A1;2)')).toMatchObject({ kind: 'call', name: 'Sum' });
+    const list = mustParse('=A1; B1');
+    if (list.kind !== 'list') throw new Error('expected list');
+    expect(
+      list.items.map((i) => (i.kind === 'separator' ? `[${i.text}]` : describeRef(i))),
+    ).toEqual(['A1', '[; ]', 'B1']);
+  });
+
+  test('FX-09 the unknown-function message lists every form', () => {
+    const result = parse('=Unite(A1)');
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.message).toBe(
+      'unknown function Unite; use Concat, Sum, Union, Inter, Diff, Comp or Cross',
+    );
+  });
+
   test('FX-01 ranges inside calls are normalised', () => {
     const ast = mustParse('=Sum(C3:B2)');
     if (ast.kind !== 'call') throw new Error('expected call');

@@ -96,7 +96,8 @@ describe('useFormulaAdornments', () => {
     const sum = screen.getByRole('option', { name: /Sum/ });
     expect(sum).toHaveAttribute('aria-disabled', 'true');
     expect(sum).toHaveTextContent('Sum is offered on Number or Currency columns');
-    expect(forms.querySelectorAll('[role=option]')).toHaveLength(3);
+    // Concat, Sum, the five set operators (FX-09) and the @ path.
+    expect(forms.querySelectorAll('[role=option]')).toHaveLength(8);
 
     view.unmount();
     const numberView = render(<Host d={d} colId={d.colId(1)} />);
@@ -126,6 +127,44 @@ describe('useFormulaAdornments', () => {
     await userEvent.type(screen.getByLabelText('Edit'), '=');
     await screen.findByRole('listbox', { name: 'Formula forms' });
     expect(screen.getByRole('option', { name: /Sum/ })).toHaveAttribute('aria-disabled', 'true');
+  });
+
+  it('FX-09 the forms menu offers Union, Inter, Diff, Comp and Cross wherever Concat is, each with a hint; picking one inserts the call with the caret inside the parentheses', async () => {
+    const d = testDoc(3, 3);
+    // An Automatic column: Sum is withheld, the set operators are not gated by format.
+    render(<Host d={d} colId={d.colId(0)} />);
+    const editor = screen.getByLabelText('Edit');
+    await userEvent.type(editor, '=');
+    const forms = await screen.findByRole('listbox', { name: 'Formula forms' });
+    const labels = Array.from(
+      forms.querySelectorAll('[role=option] .gd-formula-option__label'),
+    ).map((el) => el.textContent);
+    expect(labels).toEqual([
+      'Concat(a, b, …)',
+      'Sum(B2:B14)',
+      'Union(a, b, …)',
+      'Inter(a, b, …)',
+      'Diff(a, b, …)',
+      'Comp(a, u)',
+      'Cross(a, b, …)',
+      '@Group.Entity',
+    ]);
+    for (const name of ['Union', 'Inter', 'Diff', 'Comp', 'Cross']) {
+      const option = screen.getByRole('option', { name: new RegExp(`^${name}\\(`) });
+      expect(option).not.toHaveAttribute('aria-disabled');
+      expect(option.querySelector('.gd-formula-option__hint')?.textContent).not.toBe('');
+    }
+    expect(screen.getByRole('option', { name: /^Union\(/ })).toHaveTextContent(
+      'elements in any of the sets',
+    );
+    // Concat, Sum, Union: two presses of ↓ highlight Union; Enter inserts it and the editor stays open.
+    await userEvent.keyboard('{ArrowDown}{ArrowDown}{Enter}');
+    expect(editor).toHaveValue('=Union(');
+    expect(editor).toHaveFocus();
+    expect((editor as HTMLTextAreaElement).selectionStart).toBe('=Union('.length);
+    await waitFor(() => {
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    });
   });
 
   it('FX-02 the offer follows a format change while the editor is open', async () => {

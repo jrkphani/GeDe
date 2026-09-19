@@ -211,6 +211,55 @@ describe('formula entry in the grid editor', () => {
     expect(formulaCell).toHaveAttribute('title', '=Sum(B6)');
   });
 
+  it('FX-09 FX-06 FX-07 =UNION(B5, C5) typed verbatim commits id-bound, projects as Union, renders the set comma-separated with a badge; editing a source updates it; an empty result is an empty cell', async () => {
+    render(<Harness gd={gd} tableId={tableId} />);
+    await type(cellAt(0, 0), '1, 2');
+    press('Enter');
+    await type(cellAt(0, 1), '2, 3');
+    press('Enter');
+    await type(cellAt(1, 0), '=UNION(B5, C5)');
+    press('Enter');
+    const stored = cellText(tableMap(gd, tableId)!, rows[1]!, cols[0]!);
+    expect(stored).toMatch(/^=Union\(\{c:.*\}, \{c:.*\}\)$/);
+    await act(() => settled());
+    await waitFor(() => {
+      expect(within(cellAt(1, 0)).getByText('1, 2, 3')).toBeInTheDocument();
+    });
+    expect(within(cellAt(1, 0)).getByLabelText('Formula, 2 references')).toHaveTextContent('ƒ2');
+    expect(cellAt(1, 0)).toHaveAttribute('title', '=Union(B5, C5)');
+    await type(cellAt(1, 1), '=inter(B5,C5)');
+    press('Enter');
+    await type(cellAt(2, 0), '=Cross(B5, C5)');
+    press('Enter');
+    await type(cellAt(2, 1), '=Diff(C5, B5)');
+    press('Enter');
+    await act(() => settled());
+    await waitFor(() => {
+      expect(within(cellAt(1, 1)).getByText('2')).toBeInTheDocument();
+      expect(within(cellAt(2, 0)).getByText('(1, 2), (1, 3), (2, 2), (2, 3)')).toBeInTheDocument();
+      expect(within(cellAt(2, 1)).getByText('3')).toBeInTheDocument();
+    });
+    // The name is canonical; the typed spacing is kept.
+    expect(cellAt(1, 1)).toHaveAttribute('title', '=Inter(B5,C5)');
+    // FX-06: the sources are id-bound; an edit to B5 re-evaluates every dependent.
+    await type(cellAt(0, 0), '1, 2, 5');
+    press('Enter');
+    await act(() => settled());
+    await waitFor(() => {
+      expect(within(cellAt(1, 0)).getByText('1, 2, 5, 3')).toBeInTheDocument();
+    });
+    // An empty result is an empty cell, not an error.
+    await type(cellAt(0, 1), 'x');
+    press('Enter');
+    await act(() => settled());
+    await waitFor(() => {
+      expect(within(cellAt(1, 1)).queryByText('2')).not.toBeInTheDocument();
+    });
+    expect(within(cellAt(1, 1)).queryByText(/⚠/)).not.toBeInTheDocument();
+    expect(cellAt(1, 1).querySelector('.gd-formula__error-text')).toBeNull();
+    expect(within(cellAt(1, 1)).getByLabelText('Formula, 2 references')).toBeInTheDocument();
+  });
+
   it('FX-04 @ opens the workbook entity index at the caret and Enter inserts the path, editor still open', async () => {
     render(<Harness gd={gd} tableId={tableId} />);
     await type(cellAt(0, 0), 'Lukla');
