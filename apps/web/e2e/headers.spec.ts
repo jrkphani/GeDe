@@ -9,7 +9,14 @@
  * Cognito (`fakes/cognito`), the documents REST API and the room (`fakes/room`).
  */
 import type { Page } from '@playwright/test';
-import { createSheet, createTable, openDocument, renameColumn, tableRecord } from '@gede/core';
+import {
+  addDerivedColumn,
+  createSheet,
+  createTable,
+  openDocument,
+  renameColumn,
+  tableRecord,
+} from '@gede/core';
 import { asDesktop, asPhone, expect, test, type Breakpoint } from './fixtures/test.js';
 import { FAKE_SIGN_IN_CODE, installFakeCognito } from './fakes/cognito.js';
 import type { FakeSession } from './fakes/jwt.js';
@@ -213,6 +220,51 @@ for (const width of [1024, 1440] as const) {
     await page.keyboard.press('Enter');
     await expect(header(page, 'Place')).toBeVisible();
 
+    // ── A duplicate is refused where it was typed, with the reason beside the field and said
+    // once; leaving the field with the refused name cancels (the label returns, focus stays put).
+    await header(page, 'Column 3').locator('.gd-table__header-label').dblclick();
+    await expect(columnField(page)).toBeFocused();
+    await columnField(page).fill('owner');
+    await page.keyboard.press('Enter');
+    await expect(columnField(page)).toHaveAttribute('aria-invalid', 'true');
+    await expect(page.locator('.gd-table__rename-reason')).toHaveText(
+      'Another column is already named Owner',
+    );
+    await expect(live(page)).toHaveText('Another column is already named Owner');
+    await checkA11y(`column rename refused ${String(width)}`);
+    await snapshot(`column-rename-refused-${String(width)}`);
+    await b5.click();
+    await expect(columnField(page)).toHaveCount(0);
+    await expect(header(page, 'Column 3')).toBeVisible();
+    await expect(b5).toBeFocused();
+    // ── A derived column's label is its signature: no field from any route, the reason said.
+    const gd = openDocument(room.doc);
+    const tableId = Array.from(gd.tables.keys())[0] ?? '';
+    const record = tableRecord(gd.tables.get(tableId)!);
+    // Appended after Column 3, so no existing address moves.
+    addDerivedColumn(
+      gd,
+      tableId,
+      { sourceColId: record.columns[0]!.id, method: 'Format', args: ['Trimmed'] },
+      record.columns[2]!.id,
+    );
+    const derivedHeader = page.getByRole('columnheader', { name: /^@/ });
+    await expect(derivedHeader).toBeVisible();
+    await derivedHeader.locator('.gd-table__header-label').dblclick();
+    await expect(columnField(page)).toHaveCount(0);
+    await expect(live(page)).toHaveText(
+      /keeps its name: a derived column is named by its signature/,
+    );
+    await derivedHeader.click({ button: 'right' });
+    const derivedItem = page.getByRole('menuitem', { name: /Rename column…/ });
+    await expect(derivedItem).toHaveAttribute('aria-disabled', 'true');
+    await expect(derivedItem).toHaveAttribute(
+      'title',
+      'a derived column is named by its signature',
+    );
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('menu')).toHaveCount(0);
+
     // ── From the column menu (MENU-03): Rename column… names F2 and opens the field.
     await header(page, 'Column 3').click({ button: 'right' });
     const menu = page.getByRole('menu', { name: 'Column menu' });
@@ -252,7 +304,7 @@ for (const width of [1024, 1440] as const) {
     // body row: the selected column's is a separator with its name, the arrows resize it.
     await rail.getByRole('button', { name: 'Fewer header rows' }).click();
     await expect(page.getByRole('columnheader')).toHaveCount(0);
-    await expect(page.getByRole('separator', { name: /^Resize column / })).toHaveCount(3);
+    await expect(page.getByRole('separator', { name: /^Resize column / })).toHaveCount(4);
     // Shift+Tab from the first cell reaches the selected column's divider (A11Y-01), as it
     // does with the header row shown; the arrows resize it, Shift steps four.
     const b4 = page.locator('[data-address="B4"]');
@@ -288,8 +340,8 @@ for (const width of [1024, 1440] as const) {
     await checkA11y(`hidden header dividers ${String(width)}`);
     await snapshot(`hidden-header-dividers-${String(width)}`);
     await rail.getByRole('button', { name: 'More header rows' }).click();
-    await expect(page.getByRole('columnheader')).toHaveCount(3);
-    await expect(page.getByRole('separator', { name: /^Resize column / })).toHaveCount(3);
+    await expect(page.getByRole('columnheader')).toHaveCount(4);
+    await expect(page.getByRole('separator', { name: /^Resize column / })).toHaveCount(4);
     // The resting cue: a selected table's column boundaries carry a 2 px rule in the strong
     // border token before any hover (ADR-051); the divider's line is transparent otherwise.
     const rule = (name: string) =>
