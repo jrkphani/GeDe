@@ -13,6 +13,7 @@ import * as Y from 'yjs';
 import { newColumn } from '../doc/mutations.js';
 import {
   columnsArray,
+  readColumnSource,
   readString,
   tableRecord,
   type ColumnMap,
@@ -189,14 +190,18 @@ export function refreshDerivedLabels(gd: GedeDoc, tableId: Id): number {
 
 /**
  * Rename a column and re-spell the derived columns that name it, in one
- * transaction (one undo step). A derived column cannot be renamed by hand:
- * its label is its signature. False when the column is missing or derived.
+ * transaction (one undo step). Only an entered column can be renamed by
+ * hand: a derived column's label is its signature (REF-04), a pulled one's
+ * is `↰ Table · Column` (REF-02) and a mapping column's names its target
+ * (REF-03) — each is rewritten from its spec, so a typed name would not
+ * survive the next reconcile. False when the column is missing or not entered.
+ * The label is stored as given; the caller trims and refuses an empty one.
  */
 export function renameColumn(gd: GedeDoc, tableId: Id, colId: Id, label: string): boolean {
   return transact(gd, () => {
     const table = requireTable(gd, tableId);
     const column = columnMapOf(table, colId);
-    if (column === undefined || readString(column, 'source') === 'derived') return false;
+    if (column === undefined || readColumnSource(column) !== 'entered') return false;
     if (readString(column, 'label') !== label) column.set('label', label);
     refreshInTransaction(table);
     return true;

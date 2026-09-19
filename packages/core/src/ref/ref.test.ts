@@ -44,6 +44,7 @@ import {
   REF_ORIGIN,
   reconcileSplitChildren,
   referenceSource,
+  renameColumn,
   referenceTargetOf,
   setDerivedColumn,
   setMappingValue,
@@ -706,5 +707,12 @@ describe('REF-05 guard', () => {
       false, // the receiving (pulled) column
       false, // linked
     ]);
+    // ADR-051: a label that is lineage — the derived signature, `↰ Table · Column`, the
+    // mapping's target — is rewritten from its spec, so only the entered column renames.
+    expect(renameColumn(gd, t, derived, 'Typed')).toBe(false);
+    expect(renameColumn(gd, t, linked, 'Typed')).toBe(false);
+    expect(renameColumn(gd, t, receiving, 'Typed')).toBe(false);
+    expect(renameColumn(gd, t, source, 'Place')).toBe(true);
+    expect(tableById(gd, t)?.columns.map((c) => c.label)[0]).toBe('Place');
   });
 });
