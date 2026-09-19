@@ -2,7 +2,10 @@
  * Formula grammar (PRD §13, §22; FX-01..FX-03).
  *
  *   formula   := '=' (call | method | list)
- *   call      := name '(' [arg (',' arg)*] ')'          name ∈ { Concat, Sum }
+ *   call      := name '(' [arg (',' arg)*] ')'          name ∈ { Concat, Sum, Union, Inter,
+ *                                                      Diff, Comp, Cross } — the set operators
+ *                                                      read every argument as a set of the
+ *                                                      strings in its cells (FX-09, ADR-053)
  *   method    := reference '.' method-name [ '.' chip ] '(' [marg (',' marg)*] ')'
  *                                                      method-name ∈ { Extract, Split, Replace,
  *                                                      Format, Concat } — the text algebra on one
@@ -98,13 +101,28 @@ export interface NumberLiteral {
   readonly span: Span;
 }
 
-export type FunctionName = 'Concat' | 'Sum';
+/**
+ * The set operators (FX-09): Union A ∪ B, Inter A ∩ B, Diff A \ B, Comp Aᶜ
+ * within a universe, Cross A × B. The parser also accepts the aliases listed
+ * in `parser.ts` and writes back these spellings.
+ */
+export const SET_FUNCTION_NAMES = ['Union', 'Inter', 'Diff', 'Comp', 'Cross'] as const;
+export type SetFunctionName = (typeof SET_FUNCTION_NAMES)[number];
+
+export type FunctionName = 'Concat' | 'Sum' | SetFunctionName;
+
+export function isSetFunctionName(name: string): name is SetFunctionName {
+  return (SET_FUNCTION_NAMES as readonly string[]).includes(name);
+}
 
 export interface CallExpr {
   readonly kind: 'call';
+  /** Canonical name; the text may spell it `UNION`, `intersect` or `prod`. */
   readonly name: FunctionName;
   readonly args: readonly Expr[];
   readonly span: Span;
+  /** The name as typed, so the binder can write the canonical spelling back at commit. */
+  readonly nameSpan: Span;
 }
 
 /**
@@ -168,6 +186,18 @@ export function isReference(node: Expr | Separator): node is Reference {
  * nested calls). The index in the returned array is the operand index FX-08
  * colours by.
  */
+/** Every call in the formula, outermost first, depth-first through nested arguments. */
+export function calls(ast: Ast): CallExpr[] {
+  const out: CallExpr[] = [];
+  const visit = (node: Expr): void => {
+    if (node.kind !== 'call') return;
+    out.push(node);
+    for (const arg of node.args) visit(arg);
+  };
+  if (ast.kind === 'call') visit(ast);
+  return out;
+}
+
 export function references(ast: Ast): Reference[] {
   const out: Reference[] = [];
   const visit = (node: Expr | Separator): void => {

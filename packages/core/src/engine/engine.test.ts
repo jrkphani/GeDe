@@ -295,6 +295,41 @@ describe('FormulaEngine over a Y.Doc', () => {
     ]);
   });
 
+  test('FX-09 FX-08 a set operator’s result carries each operand with its index and cells, nested calls included, so highlighting needs nothing new', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 3, 3);
+    g.set(0, 0, '1, 2');
+    g.set(1, 0, '2, 3');
+    g.set(0, 1, '4');
+    g.set(
+      2,
+      1,
+      `=Union(Cross(${g.addr(0, 0)}, ${g.addr(1, 0)}), Cross(${g.addr(0, 0)}, ${g.addr(0, 1)}))`,
+    );
+    const result = h.results.get(g.id(2, 1))!;
+    expect(result.value).toEqual({
+      kind: 'list',
+      items: ['(1, 2)', '(1, 3)', '(2, 2)', '(2, 3)', '(1, 4)', '(2, 4)'].map((text) => ({
+        kind: 'text',
+        text,
+      })),
+    });
+    expect(result.operands).toEqual([
+      { index: 0, kind: 'address', cellIds: [g.id(0, 0)], missing: false, anchored: true },
+      { index: 1, kind: 'address', cellIds: [g.id(1, 0)], missing: false, anchored: true },
+      { index: 2, kind: 'address', cellIds: [g.id(0, 0)], missing: false, anchored: true },
+      { index: 3, kind: 'address', cellIds: [g.id(0, 1)], missing: false, anchored: true },
+    ]);
+    expect(h.engine.dependenciesOf(g.id(2, 1))).toEqual(
+      new Set([g.id(0, 0), g.id(1, 0), g.id(0, 1)]),
+    );
+    // Wrong arity is an error value with icon text, never a throw (FX-09).
+    g.set(2, 2, `=Comp(${g.addr(0, 0)})`);
+    const error = h.results.get(g.id(2, 2))!.error;
+    expect(error).toEqual({ kind: 'arity', name: 'Comp', arity: { exactly: 2 } });
+    expect(cellErrorLabel(error!)).toBe('⚠ Comp takes 2 arguments');
+  });
+
   test('FX-06 inserting a row above a referenced cell keeps the value; the shown address moves with the cell', () => {
     const h = harness();
     const g = grid(h.gd, h.sheetId, 3, 1);

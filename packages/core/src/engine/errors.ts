@@ -3,7 +3,7 @@
  * never hue alone). The short label sits in the cell; the message is the
  * tooltip and the live-region announcement.
  */
-import { errorLabel } from '../formula/evaluate.js';
+import { arityText, errorLabel } from '../formula/evaluate.js';
 import type { CellError } from './types.js';
 
 export function cellErrorLabel(error: CellError): string {
@@ -27,5 +27,9 @@ export function cellErrorMessage(error: CellError): string {
       return `This formula reads ${error.label} that was deleted; undo the delete or re-enter the formula`;
     case 'invalid-argument':
       return error.message;
+    case 'arity':
+      return error.name === 'Comp'
+        ? 'Comp takes exactly 2 arguments: the set, then its universe'
+        : `${error.name} takes ${arityText(error.arity)}`;
   }
 }

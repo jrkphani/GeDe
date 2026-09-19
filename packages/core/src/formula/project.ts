@@ -5,7 +5,9 @@
  *   projectFormula(stored, projector)     → '=Sum(B5:B6)'             for display, every time
  *
  * Both are pure text rewrites over the parser's spans; the callbacks answer
- * from the workbook (`engine/workbook-index.ts`). A range with one corner
+ * from the workbook (`engine/workbook-index.ts`). Binding also writes every
+ * function name in its canonical spelling (`=UNION(` → `=Union(`, FX-09), so
+ * what is stored is what the grammar names. A range with one corner
  * past the table binds that corner open-ended (`^` first, `*` last row or
  * column) so it follows the table; a reference that names nothing at all
  * (an address over empty canvas, an unknown `@` path, a range across two
@@ -21,7 +23,7 @@ import {
   type CellRef,
 } from '../address.js';
 import type { Id } from '../ids.js';
-import { references, type Reference } from './ast.js';
+import { calls, references, type Reference } from './ast.js';
 import {
   encodeBound,
   HIDDEN_REFERENCE_TEXT,
@@ -202,6 +204,13 @@ export function bindFormula(text: string, binder: Binder, previous?: PreviousSou
   const kept = previous === undefined ? [] : placeholderTokens(previous);
   let next = 0;
   const edits: Edit[] = [];
+  // A function name is stored in its canonical spelling: `=UNION(` and `=intersect(` commit as
+  // `=Union(` and `=Inter(` (FX-09), `=sum(` as `=Sum(`.
+  for (const call of calls(parsed.value)) {
+    if (text.slice(call.nameSpan.start, call.nameSpan.end) !== call.name) {
+      edits.push({ ...call.nameSpan, text: call.name });
+    }
+  }
   for (const ref of references(parsed.value)) {
     if (ref.kind === 'placeholder') {
       const token = kept[next];

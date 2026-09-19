@@ -9,9 +9,18 @@
  */
 import { formatAddress, cellsInRange, type CellRef } from '../address.js';
 import { err, ok, type Result } from '../result.js';
-import type { Ast, Expr, MethodCall, Reference, Separator } from './ast.js';
+import type { Ast, Expr, MethodCall, Reference, Separator, SetFunctionName } from './ast.js';
 import type { BoundReference } from './bound.js';
 import { applyMethod } from './methods.js';
+import {
+  complement,
+  cross,
+  dedupe,
+  difference,
+  intersection,
+  splitSetElements,
+  union,
+} from './sets.js';
 import { richFromText, type RichDoc } from '../text/types.js';
 
 export type CellValue =
@@ -48,7 +57,16 @@ export type FormulaError =
   /** `⚠ reference removed` — a bound cell, row, column or table was deleted (PRD §20 id semantics). */
   | { readonly kind: 'reference-removed'; readonly label: string }
   /** `⚠ invalid argument` — e.g. a quoted string inside Sum. */
-  | { readonly kind: 'invalid-argument'; readonly message: string };
+  | { readonly kind: 'invalid-argument'; readonly message: string }
+  /**
+   * `⚠ Comp takes 2 arguments` / `⚠ Union takes at least 2 arguments` — a set
+   * operator called with the wrong number of operands (FX-09).
+   */
+  | {
+      readonly kind: 'arity';
+      readonly name: SetFunctionName;
+      readonly arity: { readonly exactly: number } | { readonly atLeast: number };
+    };
 
 /** How the evaluator reads the workbook. Implemented over the Yjs document by the app. */
 export interface Resolver {
@@ -104,7 +122,15 @@ export function errorLabel(error: FormulaError): string {
       return '⚠ reference removed';
     case 'invalid-argument':
       return '⚠ invalid argument';
+    case 'arity':
+      return `⚠ ${error.name} takes ${arityText(error.arity)}`;
   }
+}
+
+export function arityText(arity: { exactly: number } | { atLeast: number }): string {
+  return 'exactly' in arity
+    ? `${String(arity.exactly)} arguments`
+    : `at least ${String(arity.atLeast)} arguments`;
 }
 
 export function defaultFormatValue(value: CellValue): string {
@@ -210,6 +236,76 @@ class Evaluator {
         return { kind: 'text', text: node.args.map((arg) => this.textOf(arg)).join('') };
       case 'Sum':
         return this.sum(node.args);
+      default:
+        return this.setOperator(node.name, node.args);
+    }
+  }
+
+  /**
+   * The set operators (FX-09, ADR-053): every argument is a set of the strings
+   * in its cells (`sets.ts`), the result is a `list` of the elements that
+   * survive, so it renders comma-separated and feeds another set function
+   * unchanged. Arity is checked before any operand is read. Union, Inter, Diff
+   * and Cross take two or more sets; Comp takes exactly the set and its
+   * universe — there is no implicit universe.
+   */
+  private setOperator(name: SetFunctionName, args: readonly Expr[]): CellValue {
+    const arity = name === 'Comp' ? { exactly: 2 } : { atLeast: 2 };
+    const wrong = 'exactly' in arity ? args.length !== arity.exactly : args.length < arity.atLeast;
+    if (wrong) fail({ kind: 'arity', name, arity });
+    const sets = args.map((arg) => this.setOf(arg));
+    const [a = [], u = []] = sets;
+    let elements: string[];
+    switch (name) {
+      case 'Union':
+        elements = union(sets);
+        break;
+      case 'Inter':
+        elements = intersection(sets);
+        break;
+      case 'Diff':
+        elements = difference(sets);
+        break;
+      case 'Comp':
+        elements = complement(a, u);
+        break;
+      case 'Cross':
+        elements = cross(sets);
+        break;
+    }
+    return { kind: 'list', items: elements.map((text) => ({ kind: 'text', text })) };
+  }
+
+  /** The set one argument yields: a literal split like a cell, a nested result, or every cell a reference covers. */
+  private setOf(arg: Expr): string[] {
+    switch (arg.kind) {
+      case 'string':
+        return splitSetElements(arg.value);
+      case 'number':
+        return splitSetElements(this.format({ kind: 'number', value: arg.value }));
+      case 'call':
+        return this.elementsOf(this.call(arg));
+      case 'method':
+        return this.elementsOf(this.method(arg));
+      default:
+        return dedupe(this.operands(arg).flatMap((o) => this.elementsOf(this.unwrap(o.value))));
+    }
+  }
+
+  /** The elements one value contributes: a blank none, a list each of its items, anything else its text split. */
+  private elementsOf(value: CellValue): string[] {
+    switch (value.kind) {
+      case 'blank':
+        return [];
+      case 'list':
+        return dedupe(value.items.flatMap((item) => this.elementsOf(item)));
+      case 'error':
+        fail(value.error);
+        break;
+      case 'text':
+        return splitSetElements(value.text);
+      default:
+        return splitSetElements(this.format(value));
     }
   }
 
