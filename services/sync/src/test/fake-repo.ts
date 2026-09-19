@@ -26,6 +26,20 @@
  */
 import { randomUUID } from 'node:crypto';
 
+/**
+ * Row timestamps come from here, never from `new Date()`: Postgres stamps
+ * `created_at` with microsecond `now()`, so two rows written back to back
+ * never tie, and every `ORDER BY created_at, id` is insertion order. `Date`
+ * has millisecond resolution, so two rows in the same millisecond would fall
+ * back to the random UUID tie-break and come back in random order (the
+ * SHARE-02 flake). One strictly increasing clock keeps the fake honest.
+ */
+let lastStamp = 0;
+function stamp(): Date {
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return new Date(lastStamp);
+}
+
 import type {
   LinkAccess,
   MailEventKind,
@@ -207,7 +221,7 @@ export class FakeRepo implements Repo {
   seedDocument(
     ownerId: string,
     title = 'Untitled',
-    at = new Date(),
+    at = stamp(),
     id: string = randomUUID(),
     flags: { sample?: boolean } = {},
   ): DocumentRecord {
@@ -287,14 +301,14 @@ export class FakeRepo implements Repo {
           map.set(userId, {
             permission: invite.permission,
             invitedBy: invite.invitedBy ?? doc.ownerId,
-            createdAt: new Date(),
+            createdAt: stamp(),
             source: this.inheritedSource(doc.id, invite.invitedBy ?? doc.ownerId),
           });
           this.sharesByDoc.set(doc.id, map);
         }
         this.markShared(doc.id);
       }
-      invite.acceptedAt = new Date();
+      invite.acceptedAt = stamp();
       this.auditLog.push({
         documentId: doc.id,
         userId,
@@ -313,7 +327,7 @@ export class FakeRepo implements Repo {
     map.set(userId, {
       permission,
       invitedBy: invitedBy ?? owner ?? userId,
-      createdAt: new Date(),
+      createdAt: stamp(),
       source: 'invite',
     });
     this.sharesByDoc.set(documentId, map);
@@ -438,7 +452,7 @@ export class FakeRepo implements Repo {
       if (patch.displayName !== undefined) assertText(patch.displayName);
       if (patch.displayName !== undefined) user.displayName = patch.displayName;
       if (patch.locale !== undefined) user.locale = patch.locale;
-      if (patch.tourDone !== undefined) user.tourDoneAt = patch.tourDone ? new Date() : null;
+      if (patch.tourDone !== undefined) user.tourDoneAt = patch.tourDone ? stamp() : null;
       if (patch.librarySort !== undefined) user.librarySort = patch.librarySort;
       return Promise.resolve(this.userRecord(user));
     },
@@ -451,7 +465,7 @@ export class FakeRepo implements Repo {
       const user = this.userById(id);
       if (!user) return Promise.resolve(undefined);
       if (user.deletedAt !== null) return Promise.resolve(null);
-      const now = new Date();
+      const now = stamp();
       const sharesRemoved: string[] = [];
       for (const [documentId, map] of this.sharesByDoc) {
         if (!map.delete(id)) continue;
@@ -620,7 +634,7 @@ export class FakeRepo implements Repo {
       }
       if (this.docs.has(id))
         return Promise.reject(new Error('duplicate key value (documents_pkey)'));
-      const doc = this.seedDocument(ownerId, title, new Date(), id);
+      const doc = this.seedDocument(ownerId, title, stamp(), id);
       // Same transaction as pg.ts: the row points at its seed snapshot and the create is audited.
       const stored = this.docs.get(doc.id);
       if (stored) {
@@ -649,7 +663,7 @@ export class FakeRepo implements Repo {
       }
       if (this.docs.has(id)) throw new Error('duplicate key value (documents_pkey)');
       await writeSnapshot();
-      const doc = this.seedDocument(ownerId, title, new Date(), id, { sample: true });
+      const doc = this.seedDocument(ownerId, title, stamp(), id, { sample: true });
       const stored = this.docs.get(doc.id);
       if (stored) {
         stored.snapshotKey = snapshot.s3Key;
@@ -681,7 +695,7 @@ export class FakeRepo implements Repo {
       const doc = this.docs.get(id);
       // #114: never a sample (the CHECK forbids it).
       if (doc?.deletedAt !== null || doc.sample) return Promise.resolve(undefined);
-      doc.deletedAt = new Date();
+      doc.deletedAt = stamp();
       doc.archivedAt = null;
       doc.updatedAt = doc.deletedAt;
       return Promise.resolve({ ...doc });
@@ -716,7 +730,7 @@ export class FakeRepo implements Repo {
       if (doc?.deletedAt !== null || doc.archivedAt !== null) {
         return Promise.resolve(undefined);
       }
-      doc.archivedAt = new Date();
+      doc.archivedAt = stamp();
       return Promise.resolve({ ...doc });
     },
     unarchive: (id) => {
@@ -729,7 +743,7 @@ export class FakeRepo implements Repo {
       const doc = this.docs.get(id);
       if (!doc || !this.withinRetention(doc, Date.now())) return Promise.resolve(undefined);
       doc.deletedAt = null;
-      doc.updatedAt = new Date();
+      doc.updatedAt = stamp();
       return Promise.resolve({ ...doc });
     },
     recoverAllDeleted: (ownerId, actorId) => {
@@ -882,7 +896,7 @@ export class FakeRepo implements Repo {
       map.set(userId, {
         permission,
         invitedBy,
-        createdAt: new Date(),
+        createdAt: stamp(),
         source: this.inheritedSource(documentId, invitedBy),
       });
       this.sharesByDoc.set(documentId, map);
@@ -975,7 +989,7 @@ export class FakeRepo implements Repo {
       map.set(userId, {
         permission: granted,
         invitedBy: doc.ownerId,
-        createdAt: new Date(),
+        createdAt: stamp(),
         source: 'link',
       });
       this.sharesByDoc.set(documentId, map);
@@ -1011,7 +1025,7 @@ export class FakeRepo implements Repo {
         invitedBy,
         expiresAt,
         acceptedAt: null,
-        createdAt: new Date(),
+        createdAt: stamp(),
         mailSentAt: null,
       };
       this.invitesById.set(invite.id, invite);
@@ -1021,7 +1035,7 @@ export class FakeRepo implements Repo {
     markMailSent: ({ inviteId }) => {
       const invite = this.invitesById.get(inviteId);
       if (!invite) return Promise.resolve(false);
-      invite.mailSentAt = new Date();
+      invite.mailSentAt = stamp();
       return Promise.resolve(true);
     },
     remove: ({ documentId, inviteId, actorId }) => {
@@ -1068,14 +1082,14 @@ export class FakeRepo implements Repo {
           map.set(userId, {
             permission: invite.permission,
             invitedBy: invite.invitedBy ?? doc.ownerId,
-            createdAt: new Date(),
+            createdAt: stamp(),
             source: this.inheritedSource(doc.id, invite.invitedBy ?? doc.ownerId),
           });
           this.sharesByDoc.set(doc.id, map);
         }
         this.markShared(doc.id);
       }
-      invite.acceptedAt = new Date();
+      invite.acceptedAt = stamp();
       this.auditLog.push({
         documentId: doc.id,
         userId,
@@ -1118,7 +1132,7 @@ export class FakeRepo implements Repo {
         log.push({ seq: base + i + 1, update: u.update, authorId: u.authorId }),
       );
       this.updatesByDoc.set(documentId, log);
-      doc.updatedAt = new Date();
+      doc.updatedAt = stamp();
       return { firstSeq: base + 1, lastSeq: base + updates.length };
     },
     commitSnapshot: ({ documentId, seq, s3Key, sizeBytes, coversFrom, appended }) => {
