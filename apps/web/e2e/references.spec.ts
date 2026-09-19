@@ -13,6 +13,7 @@ import {
   addDerivedColumn,
   addMappingColumn,
   openDocument,
+  seedSampleWorkscape,
   setPull,
   setRowHeight,
   setTablePosition,
@@ -56,7 +57,7 @@ const record = {
   deletedAt: null,
 };
 
-async function installFakes(page: Page): Promise<FakeRoom> {
+async function installFakes(page: Page, options: { sample?: boolean } = {}): Promise<FakeRoom> {
   await page.route('**/config.json', (route) => route.fulfill({ json: CONFIG }));
   await installFakeCognito(page, SESSION);
   await page.route(`**/api/documents/${DOC_ID}`, (route) =>
@@ -71,10 +72,15 @@ async function installFakes(page: Page): Promise<FakeRoom> {
         email: SESSION.email,
         displayName: SESSION.name,
         locale: 'en-US',
+        // The tour is done: the guided sample opens as an ordinary document (ONB-10).
+        tourDoneAt: '2026-09-13T01:00:00.000Z',
+        sampleDocumentId: null,
       },
     }),
   );
   const room = new FakeRoom({ viewOnly: false });
+  // The real guided sample, as the service seeds it (ONB-01), when a journey works on it.
+  if (options.sample === true) seedSampleWorkscape(room.doc);
   await room.install(page);
   return room;
 }
@@ -161,6 +167,20 @@ for (const width of [1024, 1440]) {
     await enter(page, 'B6', 'Namche Bazaar');
     await expect(reference.locator('.gd-ref__value')).toHaveText('Namche Bazaar');
     await expect(reference).toHaveAttribute('title', '@"Table 1"."Namche Bazaar"');
+    // ADR-054: a value in the second column is an entity too, offered by its text.
+    const d6 = page.locator('[data-address="D6"]');
+    await d6.dblclick();
+    const editor6 = page.getByLabel('Edit D6');
+    await editor6.pressSequentially('=@Ind');
+    const india = page.getByRole('listbox', { name: 'Entities' }).getByRole('option');
+    await expect(india).toHaveCount(1);
+    await expect(india.first().locator('.gd-formula-option__value')).toHaveText('India');
+    await expect(india.first().locator('.gd-formula-option__path')).toHaveText(
+      '@"Table 1"."Leh (3500 m)"."Column 2"',
+    );
+    await page.keyboard.press('Escape'); // closes the list
+    await page.keyboard.press('Escape'); // cancels the edit
+    await expect(editor6).toHaveCount(0);
 
     // ── REF-04 / HIER-07: a derived column bound on the collaborator's replica.
     const gd = openDocument(room.doc);
@@ -292,6 +312,124 @@ for (const width of [1024, 1440]) {
       await checkA11y(`references dark at ${String(width)}`);
       await snapshot(`references-dark-${String(width)}`);
     }
+  });
+}
+
+for (const width of [1024, 1440]) {
+  test(`REF-01 FX-04 at ${String(width)}: on the guided sample, =@Pri in Deliverables “Owner role” offers Priya from the Owner column — once per row, the value first and the path beneath — beside the Team row; the value entry commits a live reference to that cell, which follows an edit of the source (ADR-054)`, async ({
+    page,
+    checkA11y,
+    snapshot,
+  }) => {
+    const room = await installFakes(page, { sample: true });
+    await page.setViewportSize({ width, height: 900 });
+    await signInTo(page, `/d/${DOC_ID}`);
+    // Deliverables at B2: header row 4, data B5:G12; Owner is C, Owner role is G.
+    const c5 = page.locator('[data-address="C5"]');
+    await expect(c5).toHaveText('Priya');
+    const g6 = page.locator('[data-address="G6"]');
+    await g6.dblclick();
+    const editor = page.getByLabel('Edit G6');
+    await editor.pressSequentially('=@Pri');
+    const list = page.getByRole('listbox', { name: 'Entities' });
+    await expect(list).toBeVisible();
+    const options = list.getByRole('option');
+    // Every Priya in the workscape, in workbook order: the two Owner cells, then the Team row.
+    await expect(options).toHaveCount(3);
+    await expect(options.nth(0).locator('.gd-formula-option__value')).toHaveText('Priya');
+    await expect(options.nth(0).locator('.gd-formula-option__path')).toHaveText(
+      '@Deliverables."Onboarding flow".Owner',
+    );
+    await expect(options.nth(1).locator('.gd-formula-option__path')).toHaveText(
+      '@Deliverables."Passkey sign-in".Owner',
+    );
+    await expect(options.nth(2).locator('.gd-formula-option__path')).toHaveText('@Team.Priya');
+    await expect(options.nth(2)).toContainText('Team');
+    await expect(options.nth(0)).toHaveAttribute('aria-selected', 'true');
+    await checkA11y(`references sample picker ${String(width)}`);
+    await snapshot(`references-sample-picker-${String(width)}`);
+    // Enter takes the highlighted value entry into the formula; Enter again commits it.
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveText('=@Deliverables."Onboarding flow".Owner');
+    await page.keyboard.press('Enter');
+    await expect(editor).toHaveCount(0);
+    const reference = g6.getByTestId('reference-cell');
+    await expect(reference.locator('.gd-ref__value')).toHaveText('Priya');
+    await expect(reference.getByLabel(/^Reference, /)).toHaveText('@');
+    await expect(reference).toHaveAttribute('title', '@Deliverables."Onboarding flow".Owner');
+    // Stored as one entity-bound token (ADR-023), never the label or the value.
+    const tables = room.doc.getMap('tables').toJSON() as Record<
+      string,
+      { title: string; cells: Record<string, unknown> }
+    >;
+    const deliverables = Object.values(tables).find((t) => t.title === 'Deliverables');
+    const bound = Object.values(deliverables?.cells ?? {}).filter(
+      (v) => typeof v === 'string' && /^=\{e:[0-9A-Z:]+\}$/.test(v),
+    );
+    expect(bound).toHaveLength(2); // the sample's own Owner role reference, and this one
+    // Live: the source cell changes, the reference follows; the path names the row, so it stays.
+    await enter(page, 'C5', 'Priya S');
+    await expect(reference.locator('.gd-ref__value')).toHaveText('Priya S');
+    await expect(reference).toHaveAttribute('title', '@Deliverables."Onboarding flow".Owner');
+
+    // A status typed from the same column: both Blocked cells, by value, nothing else.
+    const g7 = page.locator('[data-address="G7"]');
+    await g7.dblclick();
+    const editor7 = page.getByLabel('Edit G7');
+    await editor7.pressSequentially('=@Blocked');
+    const blocked = page.getByRole('listbox', { name: 'Entities' }).getByRole('option');
+    await expect(blocked).toHaveCount(2);
+    await expect(blocked.nth(0).locator('.gd-formula-option__path')).toHaveText(
+      '@Deliverables."Billing export".Status',
+    );
+    await expect(blocked.nth(1).locator('.gd-formula-option__path')).toHaveText(
+      '@Deliverables."Passkey sign-in".Status',
+    );
+    await expect(page.getByText(/more — keep typing/)).toHaveCount(0);
+    // A multi-word value is reached past its first word, quoted or not (ADR-054).
+    await editor7.fill('=@In pr');
+    const inProgress = page.getByRole('listbox', { name: 'Entities' }).getByRole('option');
+    await expect(inProgress).toHaveCount(3);
+    await expect(inProgress.nth(0).locator('.gd-formula-option__value')).toHaveText('In progress');
+    await editor7.fill('=@"In pr');
+    await expect(inProgress).toHaveCount(3);
+    await editor7.fill('=@Onboarding fl');
+    await expect(inProgress).toHaveCount(1);
+    await expect(inProgress.first().locator('.gd-formula-option__path')).toHaveText(
+      '@Deliverables."Onboarding flow"',
+    );
+    // A bare =@ lists this table first, eight at a time, and counts the rest; at 800 px the
+    // popover holds all eight without scrolling (a scrolling listbox has no tab stop).
+    await page.setViewportSize({ width, height: 800 });
+    await editor7.fill('=@');
+    const bare = page.getByRole('listbox', { name: 'Entities' }).getByRole('option');
+    await expect(bare).toHaveCount(8);
+    await expect(bare.nth(0).locator('.gd-formula-option__path')).toHaveText(
+      '@Deliverables."Onboarding flow"',
+    );
+    await expect(bare.nth(7)).not.toContainText('@Team');
+    const more = page.getByText(/^\d+ more — keep typing$/);
+    await expect(more).toBeVisible();
+    await expect(editor7).toHaveAttribute(
+      'aria-describedby',
+      (await more.getAttribute('id')) ?? '',
+    );
+    const popover = page.locator('.gd-formula-popover');
+    const box = await popover.evaluate((el) => ({
+      client: el.clientHeight,
+      scroll: el.scrollHeight,
+      clientW: el.clientWidth,
+      scrollW: el.scrollWidth,
+    }));
+    expect(box.client).toBeGreaterThanOrEqual(box.scroll);
+    expect(box.clientW).toBeGreaterThanOrEqual(box.scrollW);
+    for (let i = 0; i < 7; i += 1) await page.keyboard.press('ArrowDown');
+    await expect(bare.nth(7)).toHaveAttribute('aria-selected', 'true');
+    await expect(bare.nth(7)).toBeInViewport();
+    await checkA11y(`references bare picker ${String(width)}`);
+    await page.keyboard.press('Escape');
+    await page.keyboard.press('Escape');
+    await expect(editor7).toHaveCount(0);
   });
 }
 

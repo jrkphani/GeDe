@@ -914,8 +914,9 @@ function OpenDocument({
       },
       clipboard,
       hierarchy: {
-        nest: (c) => grid.commands.nestRow(c.tableId, c.rowId),
-        promote: (c) => grid.commands.promoteRow(c.tableId, c.rowId),
+        // ADR-052: the outline is drawn in the column of the selected cell.
+        nest: (c) => grid.commands.nestRow(c.tableId, c.rowId, c.colId),
+        promote: (c) => grid.commands.promoteRow(c.tableId, c.rowId, c.colId),
         collapse: (c) => grid.commands.setCollapsed(c.tableId, c.rowId, true),
         expand: (c) => grid.commands.setCollapsed(c.tableId, c.rowId, false),
       },

@@ -43,6 +43,7 @@ export function sheetOf(rows: number, cols: number, fill: (r: number, c: number)
     rows: rowIds,
     rowHeights: rowIds.map(() => 1),
     rowDepths: rowIds.map(() => 0),
+    rowOutlineColumns: rowIds.map(() => colIdAt(0)),
     cells,
   };
   return { table, rowIds, columns };

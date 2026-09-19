@@ -146,6 +146,38 @@ describe('HierarchyPanel', () => {
     expect(screen.getByTestId('live-region')).toHaveTextContent('Promoted to level 2');
   });
 
+  it('HIER-01 HIER-04 HIER-03 Nest acts in the selected cell’s column: the row’s outline moves there, the panel names the row by that column’s text and says where the outline is, the announcement names the column; Promote to the top level clears it', async () => {
+    setCellText(gd, tableId, rows[2]!, cols[0]!, 'Gorak Shep');
+    setCellText(gd, tableId, rows[2]!, cols[1]!, 'Kala Patthar');
+    render(<Harness />);
+    act(() => {
+      gridRef.current?.actions.selectCell({ tableId, rowId: rows[2]!, colId: cols[1]! });
+    });
+    expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('Gorak Shep');
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent(/^depth 0$/);
+    expect(screen.queryByTestId('hierarchy-outline')).toBeNull();
+    await userEvent.click(button('Nest ⇥'));
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent(/^depth 1$/);
+    expect(screen.getByTestId('hierarchy-outline')).toHaveTextContent('Outline in Column 2');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Nested to level 2 in Column 2');
+    expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('Kala Patthar');
+    expect(screen.getByTestId('hierarchy-parent')).toHaveTextContent('↳ under Base camp');
+    // A nest from A puts the outline back in A; the row nested without a column says so too.
+    select(rows[2]!);
+    await userEvent.click(button('Nest ⇥'));
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent(/^depth 2$/);
+    expect(screen.getByTestId('hierarchy-outline')).toHaveTextContent('Outline in Column 1');
+    expect(screen.getByTestId('hierarchy-row')).toHaveTextContent('Gorak Shep');
+    select(rows[1]!);
+    expect(screen.getByTestId('hierarchy-outline')).toHaveTextContent('Outline in Column 1');
+    select(rows[2]!);
+    await userEvent.click(button('⇤ Promote'));
+    await userEvent.click(button('⇤ Promote'));
+    expect(screen.getByTestId('hierarchy-depth')).toHaveTextContent(/^depth 0$/);
+    expect(screen.queryByTestId('hierarchy-outline')).toBeNull();
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Promoted to the top level');
+  });
+
   it('HIER-06 Collapse row, Collapse all and Expand all act on the document; they render disabled when there is nothing to do', async () => {
     render(<Harness />);
     select(rows[0]!);

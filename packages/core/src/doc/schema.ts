@@ -9,8 +9,9 @@
  *                            columns Y.Array<Y.Map{id,label,width,wrap}>,
  *                            rows Y.Array<rowId>,
  *                            cells Y.Map keyed `rowId:colId` → Y.XmlFragment | formula string,
- *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height,fit,wrap}>
- *                            (height in whole units, ADR-049),
+ *                            rowMeta Y.Map<rowId → Y.Map{depth,collapsed,height,fit,wrap,
+ *                            outlineColumn}> (height in whole units, ADR-049; outlineColumn
+ *                            the column the row's outline is drawn in, ADR-052),
  *                            cellFormat Y.Map keyed `rowId:colId` → {format, formatOpts}
  *                            (per-cell override of the column's `format`/`formatOpts`, FMT-01),
  *                            style · titleShown · caption · captionShown · outline · gridlines ·
@@ -234,6 +235,15 @@ export interface RowMeta {
   readonly pulledFrom: PulledFrom | null;
   /** Which parent and piece a `Split()` child came from (HIER-07 provenance); null otherwise. */
   readonly splitOf: SplitOf | null;
+  /**
+   * The column this row's outline — indentation, ↳ and the chevron — is drawn
+   * in (ADR-052): the column of the cell that was selected when the row was
+   * nested. Null falls back to the table's `outlineColumnId`. Presentation
+   * only: depth, parent, validity, collapse and addresses (HIER-02, HIER-03,
+   * HIER-06, HIER-09) are all by depth and never read it. Resolve through
+   * `rowOutlineColumnId`, which ignores a column that is gone or hidden.
+   */
+  readonly outlineColumn: Id | null;
 }
 
 /** Header and footer counts are 0 or 1 (GRID-11). */
@@ -596,6 +606,19 @@ export function outlineColumnId(record: TableRecord): Id | null {
   return record.columns.find((c) => !c.hidden)?.id ?? null;
 }
 
+/**
+ * The column one row's outline is drawn in (ADR-052, HIER-04): the row's own
+ * `outlineColumn` when that column is still in the table and visible, else
+ * the table's `outlineColumnId`; null when every column is hidden.
+ */
+export function rowOutlineColumnId(
+  record: TableRecord,
+  meta: Pick<RowMeta, 'outlineColumn'>,
+): Id | null {
+  const own = record.columns.find((c) => c.id === meta.outlineColumn && !c.hidden);
+  return own?.id ?? outlineColumnId(record);
+}
+
 export function tableById(gd: GedeDoc, tableId: Id): TableRecord | null {
   const map = tableMap(gd, tableId);
   return map === null ? null : tableRecord(map);
@@ -717,6 +740,7 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
       splitChild: false,
       pulledFrom: null,
       splitOf: null,
+      outlineColumn: null,
     };
   }
   // Whole units, at least one, so addressing stays exact whatever was stored (GRID-01).
@@ -738,7 +762,13 @@ export function rowMeta(table: TableMap, rowId: Id): RowMeta {
     splitChild: readBoolean(meta, 'splitChild', false),
     pulledFrom: readPulledFrom(meta.get('pulledFrom')),
     splitOf: readSplitOf(meta.get('splitOf')),
+    outlineColumn: readOutlineColumn(meta.get('outlineColumn')),
   };
+}
+
+/** ADR-052: a stored column id, or null; anything else stored reads as unset. */
+function readOutlineColumn(value: unknown): Id | null {
+  return typeof value === 'string' && value !== '' ? value : null;
 }
 
 /**

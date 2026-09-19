@@ -32,6 +32,7 @@ import { parse } from '../formula/parser.js';
 import { AUTO_FORMAT, isFormatLocale, type CellFormat } from '../format/types.js';
 import { cellValueOf } from '../format/value.js';
 import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
+import { cellMayRelabel } from './entities.js';
 import { cellsInColumnOn, entityKey, positionKey, type SheetIndex } from './sheet-index.js';
 import {
   workbookCellId,
@@ -483,7 +484,21 @@ export class FormulaEngine {
   ): void {
     const table = this.tables.get(tableId);
     if (table === undefined) return;
-    const firstCol = table.structure.columns[0]?.id;
+    // ADR-054: a cell in the row's outline column names the row, and so may any
+    // cell while that one is blank; `@` paths must re-resolve after such a write.
+    let rowOrdinals: Map<Id, number> | null = null;
+    const relabels = (key: CellKey): boolean => {
+      rowOrdinals ??= new Map(table.structure.rows.map((rowId, i) => [rowId, i]));
+      return cellMayRelabel(
+        table.structure,
+        key,
+        (_tableId, k) => {
+          const cell = table.cells.get(k);
+          return cell?.snapshot.kind === 'text' ? cell.snapshot.text : '';
+        },
+        rowOrdinals,
+      );
+    };
     for (const [rawKey, snapshot] of Object.entries(cells)) {
       const key = rawKey as CellKey;
       const id = workbookCellId(tableId, key);
@@ -504,7 +519,7 @@ export class FormulaEngine {
           // The document's cell went: the column's synthesised value returns.
           if (!synthetic && derivedColumn) this.resynthesise(table, key, removed);
         }
-        if (firstCol !== undefined && key.endsWith(`:${firstCol}`)) this.labelsChanged();
+        if (relabels(key)) this.labelsChanged();
         continue;
       }
       const cell: CellState = existing ?? {
@@ -538,8 +553,7 @@ export class FormulaEngine {
         }
         if (this.graph.hasNode(id)) this.graph.markDirty(id);
       }
-      // A label in the first column names a row; `@` paths must re-resolve.
-      if (firstCol !== undefined && key.endsWith(`:${firstCol}`)) this.labelsChanged();
+      if (relabels(key)) this.labelsChanged();
     }
   }
 

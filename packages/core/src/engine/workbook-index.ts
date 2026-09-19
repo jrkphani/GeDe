@@ -95,7 +95,7 @@ export class WorkbookIndex {
     this.invalidateLabels();
   }
 
-  /** Row labels changed (a first-column cell): `@` paths must be re-read. */
+  /** Row labels changed (a cell in a row's outline column, ADR-054): `@` paths must be re-read. */
   invalidateLabels(): void {
     this.entities = null;
     this.entityByCell = null;

@@ -17,7 +17,9 @@ export function isBareEquals(text: string): boolean {
 
 /**
  * The `@` path being typed at the caret, if any: `=Sum(@Ever` with the caret
- * at the end yields `{ start: 5, query: 'Ever' }`. Segments may be quoted.
+ * at the end yields `{ start: 5, query: 'Ever' }`. Segments may be quoted,
+ * and the trailing segment may hold spaces — `@In pr` reaches "In progress"
+ * (ADR-054) — so the query stops only at `,`, `(`, `)` or another `@`.
  */
 export function entityQueryAt(
   text: string,
@@ -25,7 +27,7 @@ export function entityQueryAt(
 ): { readonly start: number; readonly query: string } | null {
   if (!isFormulaInput(text) && !isReferenceDraft(text)) return null;
   const before = text.slice(0, caret);
-  const m = /@((?:"[^"]*"?|[^\s,()@"])*)$/u.exec(before);
+  const m = /@((?:"[^"]*"?|[^,()@"])*)$/u.exec(before);
   if (m === null) return null;
   return { start: caret - m[0].length, query: m[1] ?? '' };
 }

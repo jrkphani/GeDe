@@ -69,6 +69,12 @@ export interface TableStructure {
   readonly rowHeights: readonly number[];
   /** Effective outline depth per row (HIER-02 applied); `@` paths are qualified by parent row. */
   readonly rowDepths: readonly number[];
+  /**
+   * Effective outline column per row (ADR-052): the row's own when set and
+   * visible, else the table's; null when every column is hidden. The entity
+   * index labels a row by this column's text (ADR-054).
+   */
+  readonly rowOutlineColumns: readonly (Id | null)[];
   /** Per-cell format overrides (FMT-01), keyed by cell; a cell absent here inherits its column's. */
   readonly cellFormats?: Readonly<Record<CellKey, CellFormat>> | undefined;
 }
@@ -214,6 +220,17 @@ export interface EntityEntry {
   readonly text: string;
   readonly cellId: WorkbookCellId;
   readonly tableId: Id;
+  /**
+   * The cell's text (ADR-054): what the `@` picker shows first and matches
+   * against. For the row's own entry it is the row label; '' for a cell that
+   * is empty or holds a formula (still addressable by path).
+   */
+  readonly value: string;
+  /**
+   * The column segment as written in the path — its label, or its grid letter
+   * when the label is blank (ADR-054) — or null for the row's own entry.
+   */
+  readonly column: string | null;
 }
 
 export type { CellRange, CellRef };

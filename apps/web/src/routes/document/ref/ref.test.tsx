@@ -150,8 +150,11 @@ describe('REF-01 reference cells', () => {
     const editor = screen.getByRole('textbox');
     await typeText(editor, '@Luk');
     const list = await screen.findByRole('listbox', { name: 'Entities' });
-    expect(within(list).getAllByRole('option')[0]).toHaveTextContent('@Peaks.Lukla');
-    await userEvent.keyboard('{Enter}');
+    // ADR-054: the table being edited ranks first (its own Lukla row), Peaks' Lukla next.
+    const options = within(list).getAllByRole('option');
+    expect(options[0]).toHaveTextContent('@Notes."Lukla (2860 m)"');
+    expect(options[1]).toHaveTextContent('@Peaks.Lukla');
+    await userEvent.keyboard('{ArrowDown}{Enter}');
     // The pick committed at once as one entity-bound token (ADR-023), no formula typed.
     await waitFor(() => {
       expect(screen.queryByRole('textbox')).toBeNull();

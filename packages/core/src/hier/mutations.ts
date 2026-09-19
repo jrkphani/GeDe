@@ -12,6 +12,11 @@
  * parent on its own would leave its children two levels below it, which
  * HIER-02 forbids. (The handover prototype moved the row alone and left the
  * invariant to chance; the PRD's invariant wins.)
+ *
+ * ADR-052: a nest names the column the outline is drawn in — the column of
+ * the selected cell. It is stored per row as `outlineColumn`, presentation
+ * only; the subtree keeps its own columns, and a promote that reaches the
+ * top level clears it.
  */
 import type { Id } from '../ids.js';
 import { rowMetaFor, settleCollapsed } from '../doc/mutations.js';
@@ -53,6 +58,29 @@ function writeDepth(table: TableMap, rowId: Id, depth: number): void {
   if (existing.get('depth') !== depth) existing.set('depth', depth);
 }
 
+/** ADR-052: store the row's outline column, or clear it; writes nothing when it already reads so. */
+function writeOutlineColumn(table: TableMap, rowId: Id, colId: Id | null): void {
+  const existing = rowMetaMap(table).get(rowId);
+  if (colId === null) {
+    if (existing?.get('outlineColumn') !== undefined) existing.delete('outlineColumn');
+    return;
+  }
+  if (existing === undefined) {
+    rowMetaFor(table, rowId).set('outlineColumn', colId);
+    return;
+  }
+  if (existing.get('outlineColumn') !== colId) existing.set('outlineColumn', colId);
+}
+
+/** A column id the outline may be drawn in: in the table and not hidden (ADR-052). */
+function visibleColumn(table: TableMap, colId: Id | undefined): Id | null {
+  if (colId === undefined) return null;
+  const known = columnsArray(table)
+    .toArray()
+    .some((c) => readString(c, 'id') === colId && c.get('hidden') !== true);
+  return known ? colId : null;
+}
+
 function writeCollapsed(table: TableMap, rowId: Id, collapsed: boolean): void {
   const existing = rowMetaMap(table).get(rowId);
   if (existing === undefined) {
@@ -67,8 +95,17 @@ function writeCollapsed(table: TableMap, rowId: Id, collapsed: boolean): void {
  * Shift a row and its subtree by `delta` levels when HIER-02 allows it.
  * Returns the row's new depth, or null when refused (unknown row, first row
  * nesting, already one deeper than the row above, promote at depth 0).
+ * ADR-052: a nest with `colId` draws the row's outline in that column from
+ * now on (an unknown or hidden column is ignored and the outline stays where
+ * it was); a promote that lands at depth 0 clears it. Children keep their own.
  */
-function shiftSubtree(gd: GedeDoc, tableId: Id, rowId: Id, delta: 1 | -1): number | null {
+function shiftSubtree(
+  gd: GedeDoc,
+  tableId: Id,
+  rowId: Id,
+  delta: 1 | -1,
+  colId?: Id,
+): number | null {
   return transact(gd, () => {
     const table = requireTable(gd, tableId);
     const rows = rowsArray(table).toArray();
@@ -82,26 +119,37 @@ function shiftSubtree(gd: GedeDoc, tableId: Id, rowId: Id, delta: 1 | -1): numbe
       const id = rows[i];
       if (id !== undefined) writeDepth(table, id, (depths[i] ?? 0) + delta);
     }
+    const depth = (depths[index] ?? 0) + delta;
+    if (delta === 1) {
+      const column = visibleColumn(table, colId);
+      if (column !== null) writeOutlineColumn(table, rowId, column);
+    } else if (depth === 0) {
+      writeOutlineColumn(table, rowId, null);
+    }
     // A promote can take the last child out from under a collapsed parent (HIER-06).
     if (delta === -1) settleCollapsed(table);
-    return (depths[index] ?? 0) + delta;
+    return depth;
   });
 }
 
 /**
  * HIER-01 / KEYS-06 `⌘]`: nest the row one level under the row above it, its
- * subtree with it. Returns the new depth, or null when HIER-02 refuses.
+ * subtree with it. `colId` — the selected cell's column — is where the row's
+ * outline is drawn from now on (ADR-052); without it the row keeps its column.
+ * Returns the new depth, or null when HIER-02 refuses.
  */
-export function nestRow(gd: GedeDoc, tableId: Id, rowId: Id): number | null {
-  return shiftSubtree(gd, tableId, rowId, 1);
+export function nestRow(gd: GedeDoc, tableId: Id, rowId: Id, colId?: Id): number | null {
+  return shiftSubtree(gd, tableId, rowId, 1, colId);
 }
 
 /**
  * HIER-01 / KEYS-06 `⌘[`: promote the row one level, its subtree with it.
+ * Reaching the top level clears the row's outline column (ADR-052); `colId`
+ * is accepted for symmetry with `nestRow` and does not move the outline.
  * Returns the new depth, or null at depth 0.
  */
-export function promoteRow(gd: GedeDoc, tableId: Id, rowId: Id): number | null {
-  return shiftSubtree(gd, tableId, rowId, -1);
+export function promoteRow(gd: GedeDoc, tableId: Id, rowId: Id, colId?: Id): number | null {
+  return shiftSubtree(gd, tableId, rowId, -1, colId);
 }
 
 /**
@@ -166,7 +214,8 @@ export function expandAll(gd: GedeDoc, tableId: Id): Id[] {
 /**
  * HIER-04: designate the column that carries the outline, or null to fall
  * back to the first visible column. Returns false when the column is not in
- * the table.
+ * the table or is hidden (a hidden column cannot carry the outline, as with
+ * `nestRow`; ADR-052).
  */
 export function setOutlineColumn(gd: GedeDoc, tableId: Id, colId: Id | null): boolean {
   return transact(gd, () => {
@@ -175,10 +224,7 @@ export function setOutlineColumn(gd: GedeDoc, tableId: Id, colId: Id | null): bo
       if (table.get('outlineColumn') !== undefined) table.delete('outlineColumn');
       return true;
     }
-    const known = columnsArray(table)
-      .toArray()
-      .some((c) => readString(c, 'id') === colId);
-    if (!known) return false;
+    if (visibleColumn(table, colId) === null) return false;
     if (table.get('outlineColumn') !== colId) table.set('outlineColumn', colId);
     return true;
   });

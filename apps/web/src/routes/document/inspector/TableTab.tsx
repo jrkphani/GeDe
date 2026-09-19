@@ -18,6 +18,7 @@ import {
 
 import { announce } from '../../../announce.js';
 import { frozenOptions } from '../grid/TableMenu.js';
+import { columnDisplayName } from '../grid/column-name.js';
 import {
   columnRenameReason,
   EMPTY_COLUMN_NAME_REASON,
@@ -36,6 +37,9 @@ export interface TableTabProps {
   editable: boolean;
   commands: GridCommands;
 }
+
+/** The "Outline column" select's value for "no designation: the first visible column" (ADR-052). */
+const OUTLINE_DEFAULT = 'first';
 
 const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
   none: 'None',
@@ -427,6 +431,23 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
       </Section>
       {/* HIER-01: the selected row, its parent and depth, promote / nest, collapse. */}
       <Section label="row">
+        {/* HIER-04 / ADR-052: the table's default outline column; a row nested from another
+            column keeps its own. `first` is the sentinel for "no designation" (Radix refuses ''). */}
+        <Select
+          label="Outline column"
+          hint="default"
+          value={record.outlineColumn ?? OUTLINE_DEFAULT}
+          disabledReason={viewOnly}
+          onValueChange={(value) => {
+            commands.setOutlineColumn(record.id, value === OUTLINE_DEFAULT ? null : value);
+          }}
+          options={[
+            { value: OUTLINE_DEFAULT, label: 'First visible column' },
+            ...record.columns
+              .filter((c) => !c.hidden)
+              .map((c) => ({ value: c.id, label: columnDisplayName(record, c.id) ?? c.label })),
+          ]}
+        />
         <HierarchyPanel gd={gd} selection={selection} commands={commands} editable={editable} />
       </Section>
     </>

@@ -15,6 +15,7 @@ import {
   graphsInPair,
   isLastSheet,
   mergeRoom,
+  outlineColumnId,
   spanAt,
   spanCovering,
   tableById,
@@ -655,6 +656,22 @@ export function columnMenuEntries(
         viewOnly ?? (canFreeze ? undefined : 'freezing every column would leave nothing to scroll'),
       onCheckedChange: (on) => {
         commands.setFrozenColumns(tableId, on ? visibleBefore : 0);
+      },
+    },
+    {
+      // HIER-04 / ADR-052: the table's default outline column; off returns to the first visible
+      // column, so on the implicit first visible column there is nothing to uncheck.
+      kind: 'check',
+      id: 'outline-column',
+      label: 'Use as outline column',
+      checked: outlineColumnId(record) === colId,
+      disabledReason:
+        viewOnly ??
+        (record.outlineColumn === null && outlineColumnId(record) === colId
+          ? 'Already the first visible column'
+          : undefined),
+      onCheckedChange: (on) => {
+        commands.setOutlineColumn(tableId, on ? colId : null);
       },
     },
     sep('s-sort'),
