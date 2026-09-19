@@ -278,9 +278,21 @@ class Evaluator {
 
   private listItemText(item: Reference | Separator): string {
     if (item.kind === 'separator') return item.text;
-    return this.operands(item)
+    return this.textOperands(item)
       .map((o) => this.format(this.unwrap(o.value)))
       .join(', ');
+  }
+
+  /**
+   * The operands Concat and lists spell out. A whole column reads its
+   * populated cells only: a cell its format excluded (FMT-05) is `blank` with
+   * its stored text, kept by the resolver for the set operators, but it is
+   * still blank here and would only add an empty piece.
+   */
+  private textOperands(ref: Reference): Operand[] {
+    const operands = this.operands(ref);
+    const column = ref.kind === 'column' || (ref.kind === 'bound' && ref.ref.kind === 'column');
+    return column ? operands.filter((o) => o.value.kind !== 'blank') : operands;
   }
 
   private call(node: Expr & { kind: 'call' }): CellValue {
@@ -404,7 +416,7 @@ class Evaluator {
       case 'method':
         return this.format(this.method(arg));
       default:
-        return this.operands(arg)
+        return this.textOperands(arg)
           .map((o) => this.format(this.unwrap(o.value)))
           .join(', ');
     }

@@ -150,7 +150,7 @@ class EngineResolver implements Resolver {
     const out: { row: number; value: CellValue }[] = [];
     for (const cell of cellsInColumnOn(this.sheet, col)) {
       const value = this.engine.valueOf(cell.cellId, this.blocked);
-      if (value.kind !== 'blank') out.push({ row: cell.ref.row, value });
+      if (!isEmpty(value)) out.push({ row: cell.ref.row, value });
     }
     return out;
   }
@@ -162,11 +162,21 @@ class EngineResolver implements Resolver {
     for (const id of ids) {
       const value = this.engine.valueOf(id, this.blocked);
       // A column reads its populated cells; a range reads every position (blanks are zero).
-      if (ref.kind === 'column' && value.kind === 'blank') continue;
+      if (ref.kind === 'column' && isEmpty(value)) continue;
       out.push({ address: this.engine.index.addressOf(id), value });
     }
     return out;
   }
+}
+
+/**
+ * A cell a whole-column reference skips: empty, with nothing typed. A cell an
+ * explicit format could not parse is `blank` too (FMT-05) but carries its
+ * stored text; it stays in the column so the set operators read it (FX-09).
+ * Sum and Concat treat it as the blank it is.
+ */
+function isEmpty(value: CellValue): boolean {
+  return value.kind === 'blank' && value.text === undefined;
 }
 
 export class FormulaEngine {
