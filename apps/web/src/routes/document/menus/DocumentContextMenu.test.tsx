@@ -251,7 +251,7 @@ describe('context menus', () => {
     expect(clipboard.copySnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it('MENU-03 right-click on a column header opens the column menu; hide and freeze act on that column', async () => {
+  it('MENU-03 HIER-04 right-click on a column header opens the column menu; hide and freeze act on that column; "Use as outline column" designates the table’s outline column and reads checked for the column that carries it (ADR-051)', async () => {
     render(<Harness />);
     const header = screen.getAllByRole('columnheader')[1]!;
     fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
@@ -259,6 +259,7 @@ describe('context menus', () => {
     expect(labels(menu)).toEqual([
       'Graph this table',
       'Freeze columns through Column 2',
+      'Use as outline column',
       'Sort ascending',
       'Sort descending',
       'Show sort options',
@@ -280,6 +281,27 @@ describe('context menus', () => {
       'Clear column',
       'Wrap text',
     ]);
+    // ADR-051: column A carries the outline by default; designating column B moves it there.
+    const outlineItem = () =>
+      screen.getByRole('menuitemcheckbox', { name: 'Use as outline column' });
+    expect(outlineItem()).toHaveAttribute('aria-checked', 'false');
+    await userEvent.click(outlineItem());
+    await waitFor(() => {
+      expect(tableById(gd, tableId)?.outlineColumn).toBe(tableById(gd, tableId)?.columns[1]?.id);
+    });
+    fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    expect(outlineItem()).toHaveAttribute('aria-checked', 'true');
+    await userEvent.click(outlineItem());
+    await waitFor(() => {
+      expect(tableById(gd, tableId)?.outlineColumn).toBeNull();
+    });
+    fireEvent.contextMenu(screen.getAllByRole('columnheader')[0]!, { clientX: 20, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    expect(outlineItem()).toHaveAttribute('aria-checked', 'true'); // the first visible column
+    await userEvent.keyboard('{Escape}');
+    fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
     await userEvent.click(screen.getByRole('menuitemcheckbox', { name: /Freeze columns/ }));
     await waitFor(() => {
       expect(tableById(gd, tableId)?.frozenColumns).toBe(2);

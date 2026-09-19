@@ -32,6 +32,9 @@ export interface TableTabProps {
   commands: GridCommands;
 }
 
+/** The "Outline column" select's value for "no designation: the first visible column" (ADR-051). */
+const OUTLINE_DEFAULT = 'first';
+
 const OUTLINE_LABELS: Readonly<Record<OutlineWeight, string>> = {
   none: 'None',
   hairline: 'Hairline',
@@ -363,6 +366,23 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
       </Section>
       {/* HIER-01: the selected row, its parent and depth, promote / nest, collapse. */}
       <Section label="row">
+        {/* HIER-04 / ADR-051: the table's default outline column; a row nested from another
+            column keeps its own. `first` is the sentinel for "no designation" (Radix refuses ''). */}
+        <Select
+          label="Outline column"
+          hint="default"
+          value={record.outlineColumn ?? OUTLINE_DEFAULT}
+          disabledReason={viewOnly}
+          onValueChange={(value) => {
+            commands.setOutlineColumn(record.id, value === OUTLINE_DEFAULT ? null : value);
+          }}
+          options={[
+            { value: OUTLINE_DEFAULT, label: 'First visible column' },
+            ...record.columns
+              .filter((c) => !c.hidden)
+              .map((c) => ({ value: c.id, label: c.label.trim() === '' ? 'Unlabelled' : c.label })),
+          ]}
+        />
         <HierarchyPanel gd={gd} selection={selection} commands={commands} editable={editable} />
       </Section>
     </>

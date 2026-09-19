@@ -64,6 +64,7 @@ import {
   setFooterRows as setFooterRowsMutation,
   setFrozenColumns as setFrozenColumnsMutation,
   setHeaderRows as setHeaderRowsMutation,
+  setOutlineColumn as setOutlineColumnMutation,
   setRowCollapsed,
   setRowHeights as setRowHeightsMutation,
   setRowWrap as setRowWrapMutation,
@@ -75,6 +76,7 @@ import {
   STACKING_LABELS,
   tableById,
   tableMap,
+  tableOutline,
   unhideAllColumns as unhideAllColumnsMutation,
   unhideColumn as unhideColumnMutation,
   unmergeCells as unmergeCellsMutation,
@@ -183,6 +185,12 @@ export interface GridCommands {
   distributeEvenly(tableId: Id, axis: 'row' | 'column', only?: readonly Id[]): number[] | null;
   /** GRID-10: leading frozen columns, clamped to the table. Returns the count stored. */
   setFrozenColumns(tableId: Id, count: number): number | null;
+  /**
+   * HIER-04 / ADR-051: the table's designated outline column — the default a
+   * row falls back to — or null for the first visible column. One undo step.
+   * False when the column is not in the table or nothing changes.
+   */
+  setOutlineColumn(tableId: Id, colId: Id | null): boolean;
   /** GRID-11: 0 hides the column-header row, 1 shows it. */
   setHeaderRows(tableId: Id, count: StripCount): boolean;
   /** GRID-11: 0 hides the footer count strip, 1 shows it. */
@@ -223,11 +231,13 @@ export interface GridCommands {
   readOnlyReason(cell: CellSelection): ReadOnlyReason | null;
   /**
    * HIER-01 / KEYS-06 `⌘]`: nest the row one level under the row above, its
-   * subtree with it. False when HIER-02 refuses (the control is disabled then).
+   * subtree with it. `colId` — the selected cell's column — is where the row's
+   * outline is drawn from then on (ADR-051). False when HIER-02 refuses (the
+   * control is disabled then).
    */
-  nestRow(tableId: Id, rowId: Id): boolean;
+  nestRow(tableId: Id, rowId: Id, colId?: Id): boolean;
   /** HIER-01 / KEYS-06 `⌘[`: promote the row one level. False at depth 0. */
-  promoteRow(tableId: Id, rowId: Id): boolean;
+  promoteRow(tableId: Id, rowId: Id, colId?: Id): boolean;
   /**
    * HIER-06: collapse or expand a row with descendants. The selection leaves
    * a subtree about to be hidden for its parent first, so it never sits on a
@@ -391,6 +401,16 @@ function rowName(table: TableMap, record: TableRecord, rowId: Id): string {
   const address = first === undefined ? null : cellAddress(table, rowId, first.id);
   const number = address?.replace(/^[A-Z]+/, '');
   return number === undefined || number === '' ? 'The row' : `Row ${number}`;
+}
+
+/** ADR-051: how a column is named in an announcement — its label, else its grid letter. */
+function columnName(table: TableMap, rec: TableRecord, colId: Id | null): string {
+  const column = rec.columns.find((c) => c.id === colId);
+  if (column === undefined) return 'the first visible column';
+  if (column.label.trim() !== '') return column.label;
+  const first = rec.rows[0];
+  const letter = first === undefined ? null : cellAddress(table, first, column.id);
+  return letter === null ? 'an unlabelled column' : `column ${letter.replace(/\d+$/u, '')}`;
 }
 
 /** "3 units tall" / "1 unit wide": a size in words. */
@@ -588,12 +608,26 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     },
     hideColumn(tableId, colId) {
       const before = record(tableId);
-      if (!editable() || before === null) return false;
+      const table = map(tableId);
+      if (!editable() || before === null || table === null) return false;
       const index = before.columns.findIndex((c) => c.id === colId);
       if (index < 0 || before.columns[index]?.hidden === true) return false;
+      // ADR-051: the outline drawn in this column — the table's default or a row's own —
+      // falls back once it is hidden; say where it went.
+      const outlineBefore = tableOutline(table, before);
+      const carriedOutline =
+        outlineBefore.column === colId || outlineBefore.rows.some((r) => r.column === colId);
       hideColumnMutation(gd, tableId, colId);
       reselectAfterColumn(tableId, before, index);
-      announce(`Hid column ${before.columns[index]?.label ?? ''}`.trim());
+      const hid = `Hid column ${before.columns[index]?.label ?? ''}`.trim();
+      const after = record(tableId);
+      if (carriedOutline && after !== null) {
+        const from = columnName(table, before, colId);
+        const to = columnName(table, after, tableOutline(table, after).column);
+        announce(`${hid}. Outline column ${from} is hidden; showing the outline in ${to}`);
+      } else {
+        announce(hid);
+      }
       return true;
     },
     unhideColumn(tableId, colId) {
@@ -753,6 +787,21 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       );
       return frozen;
     },
+    setOutlineColumn(tableId, colId) {
+      const rec = record(tableId);
+      const table = map(tableId);
+      if (!editable() || rec === null || table === null) return false;
+      if (rec.outlineColumn === colId) return false;
+      if (!setOutlineColumnMutation(gd, tableId, colId)) return false;
+      const after = record(tableId);
+      if (after === null) return false;
+      announce(
+        colId === null
+          ? 'Outline column: the first visible column'
+          : `Outline column: ${columnName(table, after, colId)}`,
+      );
+      return true;
+    },
     setHeaderRows(tableId, count) {
       if (!editable() || record(tableId) === null) return false;
       setHeaderRowsMutation(gd, tableId, count);
@@ -852,19 +901,25 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       return setCellRich(gd, cell.tableId, cell.rowId, cell.colId, doc);
     },
     readOnlyReason,
-    nestRow(tableId, rowId) {
-      if (!editable() || record(tableId) === null) return false;
-      const depth = nestRowMutation(gd, tableId, rowId);
+    nestRow(tableId, rowId, colId) {
+      const table = map(tableId);
+      if (!editable() || table === null) return false;
+      const depth = nestRowMutation(gd, tableId, rowId, colId);
       if (depth === null) {
         announce('Cannot nest deeper than one level under the row above');
         return false;
       }
-      announce(`Nested to level ${String(depth + 1)}`);
+      // ADR-051: say where the outline landed — the row's column after the write.
+      const after = tableById(gd, tableId);
+      const column = rowOutline(table, rowId)?.column ?? null;
+      const where =
+        after === null || column === null ? '' : ` in ${columnName(table, after, column)}`;
+      announce(`Nested to level ${String(depth + 1)}${where}`);
       return true;
     },
-    promoteRow(tableId, rowId) {
+    promoteRow(tableId, rowId, colId) {
       if (!editable() || record(tableId) === null) return false;
-      const depth = promoteRowMutation(gd, tableId, rowId);
+      const depth = promoteRowMutation(gd, tableId, rowId, colId);
       if (depth === null) {
         announce('Already at the top level');
         return false;

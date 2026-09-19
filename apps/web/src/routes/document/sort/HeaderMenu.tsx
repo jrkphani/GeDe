@@ -25,6 +25,18 @@ export interface HeaderMenuProps {
   commands: SortCommands;
   /** Roving tab stop: Tab reaches the ▼ of the selected column only, like the column divider. */
   tabStop: boolean;
+  /**
+   * HIER-04 / ADR-051: "Use as outline column" — the table's default outline
+   * column, a document write beside the viewer's own sort, filter and group.
+   * Absent for a viewer who cannot write the document (the item is not shown).
+   */
+  outline?:
+    | {
+        readonly checked: boolean;
+        readonly disabledReason?: string | undefined;
+        readonly onCheckedChange: (on: boolean) => void;
+      }
+    | undefined;
 }
 
 /** The sort mode the menu shows for this column: its own, or None. */
@@ -77,7 +89,7 @@ export function ariaSortOf(
  * the filter panel — a popover, because a text field is not a menu item (it
  * would be neither Tab-reachable nor axe-clean inside one).
  */
-export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderMenuProps) {
+export function HeaderMenu({ tableId, column, view, commands, tabStop, outline }: HeaderMenuProps) {
   const trigger = useRef<HTMLButtonElement>(null);
   // The popover anchors to the ▼'s wrapper; an element, so Radix can measure it.
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -140,6 +152,19 @@ export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderM
         commands.clear(tableId);
       },
     },
+    ...(outline === undefined
+      ? []
+      : ([
+          { kind: 'separator', id: 's3' },
+          {
+            kind: 'check',
+            id: 'outline-column',
+            label: 'Use as outline column',
+            checked: outline.checked,
+            disabledReason: outline.disabledReason,
+            onCheckedChange: outline.onCheckedChange,
+          },
+        ] satisfies MenuEntry[])),
   ];
 
   return (

@@ -450,6 +450,35 @@ describe('Inspector', () => {
     expect(within(section('row')).getByText(/under/)).toBeInTheDocument();
   });
 
+  it('HIER-04 KEYS-03 the Table tab’s "Outline column" select designates the table’s outline column over the visible columns, defaults to the first visible column, is one undo step and announces (ADR-051)', async () => {
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    await mount({ undo });
+    await userEvent.click(tab('Table'));
+    const row = within(section('row'));
+    const select = row.getByRole('combobox', { name: 'Outline column' });
+    expect(select).toHaveTextContent('First visible column');
+    undo.clear();
+    await userEvent.click(select);
+    const options = await screen.findAllByRole('option');
+    expect(options.map((o) => o.textContent)).toEqual([
+      'First visible column',
+      'Column 1',
+      'Column 2',
+      'Column 3',
+    ]);
+    await userEvent.click(screen.getByRole('option', { name: 'Column 2' }));
+    const record = tableById(gd, tableId)!;
+    expect(record.outlineColumn).toBe(record.columns[1]!.id);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Outline column: Column 2');
+    expect(select).toHaveTextContent('Column 2');
+    expect(undo.undoStack).toHaveLength(1);
+    act(() => {
+      undo.undo();
+    });
+    expect(tableById(gd, tableId)?.outlineColumn).toBeNull();
+    expect(select).toHaveTextContent('First visible column');
+  });
+
   it('INSP-05 INSP-10 FMT-06 the Cell tab scopes the data format to the column by default, states the scope before applying, and the cell override beats it', async () => {
     await mount();
     await userEvent.click(tab('Cell'));

@@ -114,6 +114,14 @@ async function signInTo(page: Page, path: string): Promise<void> {
   await expect(page).toHaveURL(target);
 }
 
+/** The stored outline column of a row, read from the room's replica (ADR-051, HIER-10). */
+function roomOutlineColumn(room: FakeRoom, tableId: Id, rowId: Id): string | null {
+  const table = room.doc.getMap('tables').get(tableId) as Y.Map<unknown>;
+  const meta = (table.get('rowMeta') as Y.Map<Y.Map<unknown>>).get(rowId);
+  const column = meta?.get('outlineColumn');
+  return typeof column === 'string' ? column : null;
+}
+
 /** The stored depth of a row, read from the room's replica (HIER-10). */
 function roomDepth(room: FakeRoom, tableId: Id, rowId: Id): number {
   const table = room.doc.getMap('tables').get(tableId) as Y.Map<unknown>;
@@ -235,6 +243,152 @@ test.describe('row hierarchy', () => {
     });
   }
 
+  for (const width of [1024, 1440] as const) {
+    test(`HIER-04 HIER-05 HIER-09 HIER-10 KEYS-06 at ${String(width)} px: ⌘] on a cell in column C nests the row with its outline in C — the indent and ↳ are drawn there and B is untouched — the address C6 stays, the room stores the column per row, a row nested from B keeps B, and a fresh load draws it the same (ADR-051)`, async ({
+      page,
+      checkA11y,
+      snapshot,
+    }) => {
+      const { room, tableId, rows } = await installFakes(page);
+      const gd = openDocument(room.doc);
+      const rec = tableById(gd, tableId)!;
+      const colB = rec.columns[0]!.id;
+      const colC = rec.columns[1]!.id;
+      rec.rows.forEach((rowId, i) => {
+        setCellText(gd, tableId, rowId, colC, `Note ${String(i + 1)}`);
+      });
+      await page.setViewportSize({ width, height: 800 });
+      await signInTo(page, `/d/${DOC_ID}`);
+      const grid = anyGrid(page);
+      await expect(grid).toBeVisible();
+      const cell = (address: string) =>
+        grid.locator(`[role="gridcell"][data-address="${address}"]`);
+      const basePadding = await cell('C5').evaluate((el) => getComputedStyle(el).paddingLeft);
+      // The inspector head names the selected address; the rail starts collapsed at 1024.
+      const rail = page.getByTestId('inspector');
+      if ((await rail.getAttribute('data-state')) === 'collapsed') {
+        await rail.getByRole('button', { name: 'Expand inspector' }).click();
+      }
+      const address = rail.getByTestId('inspector-selected').locator('.gd-inspector__address');
+
+      // KEYS-06 by physical key, from a cell in column C.
+      await cell('C6').click();
+      await expect(address).toHaveText('C6');
+      await page.keyboard.press('Control+BracketRight');
+      await expect(dataRows(page).nth(1)).toHaveAttribute('aria-level', '2');
+      // HIER-04: the indent and ↳ are in C, and only there; B reads as before.
+      await expect(cell('C6')).toHaveCSS(
+        'padding-left',
+        `${String(parseFloat(basePadding) + 15)}px`,
+      );
+      await expect(cell('C6').locator('.gd-cell__branch')).toHaveText('↳');
+      await expect(cell('B6')).toHaveCSS('padding-left', basePadding);
+      await expect(cell('B6').locator('.gd-cell__branch')).toHaveCount(0);
+      await expect(cell('B6')).toHaveText('Lobuche');
+      // HIER-09: the selected cell is still C6, in the grid and in the inspector head.
+      await expect(cell('C6')).toHaveAttribute('aria-selected', 'true');
+      await expect(address).toHaveText('C6');
+      // HIER-10: the room holds the depth and the column, per row.
+      await expect.poll(() => roomDepth(room, tableId, rows[1]!)).toBe(1);
+      await expect.poll(() => roomOutlineColumn(room, tableId, rows[1]!)).toBe(colC);
+      // A row nested from B draws in B, under the same parent (HIER-03 is by depth).
+      await cell('B7').click();
+      await page.keyboard.press('Control+BracketRight');
+      await expect(dataRows(page).nth(2)).toHaveAttribute('aria-level', '2');
+      await expect(cell('B7').locator('.gd-cell__branch')).toHaveText('↳');
+      await expect(cell('C7').locator('.gd-cell__branch')).toHaveCount(0);
+      await expect.poll(() => roomOutlineColumn(room, tableId, rows[2]!)).toBe(colB);
+      // HIER-05: the parent's chevron sits in the table's outline column (B5 was never nested).
+      await expect(cell('B5').getByRole('button', { name: 'Collapse B5' })).toBeVisible();
+      await snapshot(`document hierarchy column ${String(width)}`);
+      await checkA11y(`document hierarchy column ${String(width)}`);
+
+      // A fresh load of the document draws the outline where it was stored.
+      await signInTo(page, `/d/${DOC_ID}`);
+      await expect(anyGrid(page)).toBeVisible();
+      await expect(dataRows(page).nth(1)).toHaveAttribute('aria-level', '2');
+      await expect(cell('C6').locator('.gd-cell__branch')).toHaveText('↳');
+      await expect(cell('C6')).toHaveCSS(
+        'padding-left',
+        `${String(parseFloat(basePadding) + 15)}px`,
+      );
+      await expect(cell('B6').locator('.gd-cell__branch')).toHaveCount(0);
+      await expect(cell('B7').locator('.gd-cell__branch')).toHaveText('↳');
+      // ⌘[ from B takes C6's row to the top level and clears its column.
+      await cell('B6').click();
+      await page.keyboard.press('Control+BracketLeft');
+      await expect(dataRows(page).nth(1)).toHaveAttribute('aria-level', '1');
+      await expect(cell('C6').locator('.gd-cell__branch')).toHaveCount(0);
+      await expect.poll(() => roomOutlineColumn(room, tableId, rows[1]!)).toBeNull();
+    });
+  }
+
+  test('HIER-04 INSP-04 MENU-03 KEYS-03 at 1440 px: the Table tab’s "Outline column" select and the header ▼’s "Use as outline column" designate the table’s default column — rows nested without a column follow it, a row nested from its own column keeps that — one undo step each, announced; hiding the designated column falls back and says so (ADR-051)', async ({
+    page,
+    checkA11y,
+  }) => {
+    const { room, tableId, rows } = await installFakes(page);
+    const gd = openDocument(room.doc);
+    const rec = tableById(gd, tableId)!;
+    const colC = rec.columns[1]!.id;
+    nestRow(gd, tableId, rows[1]!); // Lobuche, no column: follows the table's default
+    nestRow(gd, tableId, rows[2]!, colC); // Gorak Shep, from C: keeps C
+    await page.setViewportSize({ width: 1440, height: 800 });
+    await signInTo(page, `/d/${DOC_ID}`);
+    const grid = anyGrid(page);
+    await expect(grid).toBeVisible();
+    const cell = (address: string) => grid.locator(`[role="gridcell"][data-address="${address}"]`);
+    await expect(cell('B6').locator('.gd-cell__branch')).toHaveText('↳');
+    await expect(cell('C7').locator('.gd-cell__branch')).toHaveText('↳');
+    await cell('B5').click();
+    const rail = page.getByTestId('inspector');
+    if ((await rail.getAttribute('data-state')) === 'collapsed') {
+      await rail.getByRole('button', { name: 'Expand inspector' }).click();
+    }
+    await rail.getByRole('tab', { name: 'Table' }).click();
+    const select = rail.getByRole('combobox', { name: 'Outline column' });
+    await expect(select).toHaveText('First visible column');
+    await select.click();
+    await page.getByRole('option', { name: 'Column 2' }).click();
+    await expect(select).toHaveText('Column 2');
+    await expect(page.getByTestId('live-region')).toHaveText(/Outline column: Column 2/);
+    // Lobuche moved to C with the default; Gorak Shep was already there; B carries nothing.
+    await expect(cell('C6').locator('.gd-cell__branch')).toHaveText('↳');
+    await expect(cell('B6').locator('.gd-cell__branch')).toHaveCount(0);
+    await expect(cell('C7').locator('.gd-cell__branch')).toHaveText('↳');
+    await expect
+      .poll(() => (room.doc.getMap('tables').get(tableId) as Y.Map<unknown>).get('outlineColumn'))
+      .toBe(colC);
+    await checkA11y('document hierarchy outline column select 1440');
+    // KEYS-03: one ⌘Z takes the designation back.
+    await cell('B5').click();
+    await page.keyboard.press('Control+z');
+    await expect(select).toHaveText('First visible column');
+    await expect(cell('B6').locator('.gd-cell__branch')).toHaveText('↳');
+    // The header ▼ carries the same choice, checked on the column that carries the outline.
+    await page.getByRole('button', { name: 'Sort, filter or group Column 2' }).click();
+    const item = page.getByRole('menuitemcheckbox', { name: 'Use as outline column' });
+    await expect(item).toHaveAttribute('aria-checked', 'false');
+    await item.click();
+    await expect(cell('C6').locator('.gd-cell__branch')).toHaveText('↳');
+    await page.getByRole('button', { name: 'Sort, filter or group Column 2' }).click();
+    await expect(
+      page.getByRole('menuitemcheckbox', { name: 'Use as outline column' }),
+    ).toHaveAttribute('aria-checked', 'true');
+    await expect(page.getByRole('menu')).toHaveCSS('opacity', '1');
+    await checkA11y('document hierarchy outline column menu 1440');
+    await page.keyboard.press('Escape');
+    // Hiding the designated column: the outline falls back to B and the live region says so.
+    await page.getByRole('columnheader', { name: /Column 2/ }).click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Hide column' }).click();
+    await expect(page.getByTestId('live-region')).toHaveText(
+      /Outline column Column 2 is hidden; showing the outline in Column 1/,
+    );
+    await expect(cell('B6').locator('.gd-cell__branch')).toHaveText('↳');
+    await expect(cell('B7').locator('.gd-cell__branch')).toHaveText('↳');
+    expect(roomOutlineColumn(room, tableId, rows[2]!)).toBe(colC); // the row remembers
+  });
+
   test('RESP-05 HIER-05 at 768 px the chevron’s hit area is the 44 px target: a press 18 px below the 22 px row still toggles the row, and the box measures 44 × 44', async ({
     page,
     checkA11y,
@@ -283,10 +437,11 @@ test.describe('row hierarchy', () => {
   }) => {
     const { room, tableId, rows } = await installFakes(page);
     const gd = openDocument(room.doc);
+    const colC = tableById(gd, tableId)!.columns[1]!.id;
     nestRow(gd, tableId, rows[1]!);
     nestRow(gd, tableId, rows[2]!);
     nestRow(gd, tableId, rows[2]!);
-    nestRow(gd, tableId, rows[4]!);
+    nestRow(gd, tableId, rows[4]!, colC); // ADR-051: Pheriche's outline is in C
     setRowCollapsed(gd, tableId, rows[3]!, true);
     await asPhone(page, 480, 800);
     await signInTo(page, `/d/${DOC_ID}`);
@@ -316,6 +471,17 @@ test.describe('row hierarchy', () => {
     await expect(dataRows(page).nth(3)).toHaveAttribute('aria-level', '1');
     expect(roomDepth(room, tableId, rows[3]!)).toBe(0);
     expect(roomCollapsed(room, tableId, rows[3]!)).toBe(true);
+    // ADR-051: a row nested from C draws its outline in C, read-only like the rest, and a
+    // chord from C writes nothing either. The collaborator expands Kala Patthar to show it.
+    setRowCollapsed(gd, tableId, rows[3]!, false);
+    await expect(dataRows(page)).toHaveCount(5);
+    await expect(cell('C9').locator('.gd-cell__branch')).toHaveText('↳');
+    await expect(cell('B9').locator('.gd-cell__branch')).toHaveCount(0);
+    await expect(cell('C9')).toHaveCSS('padding-left', `${String(parseFloat(basePadding) + 15)}px`);
+    await cell('C9').click();
+    await page.keyboard.press('Control+BracketLeft');
+    await expect(dataRows(page).nth(4)).toHaveAttribute('aria-level', '2');
+    expect(roomOutlineColumn(room, tableId, rows[4]!)).toBe(colC);
     await snapshot('document hierarchy 480 read-only');
     await checkA11y('document hierarchy read-only 480');
   });

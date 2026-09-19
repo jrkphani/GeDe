@@ -26,6 +26,7 @@ import {
   nestRow,
   openDocument,
   paragraphNode,
+  promoteRow,
   rowMeta,
   setCellAppearance,
   setCellFormat,
@@ -1356,6 +1357,98 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
     expect(rowMeta(tableMap(gd, tableId)!, rows[3]!).depth).toBe(0);
     expect(rowMeta(tableMap(gd, tableId)!, rows[0]!).collapsed).toBe(false);
     expect(rowEls()).toHaveLength(6);
+  });
+
+  it('HIER-04 HIER-09 KEYS-06 ⌘] on a cell in column D nests the row with its outline in D — the indent and ↳ render there, B carries nothing, no address moves, the selection stays — while the rows nested from B keep theirs; the chevron sits in the parent’s column; ⌘[ back to the top level clears the column', async () => {
+    outlineFixture();
+    mount();
+    const before = cells().map((el) => el.getAttribute('data-address'));
+    await userEvent.click(cellAt(3, 2)); // D8: r3, at depth 0 right after r0's subtree
+    fireEvent.keyDown(cellAt(3, 2), { code: 'BracketRight', key: ']', metaKey: true });
+    expect(rowEls()[3]).toHaveAttribute('aria-level', '2');
+    expect(cellAt(3, 2)).toHaveClass('gd-cell--outline');
+    expect(cellAt(3, 2).style.getPropertyValue('--gd-outline-depth')).toBe('1');
+    expect(within(cellAt(3, 2)).getByText('↳')).toHaveAttribute('aria-hidden', 'true');
+    expect(cellAt(3, 0)).not.toHaveClass('gd-cell--outline');
+    expect(cellAt(3, 0).style.getPropertyValue('--gd-outline-depth')).toBe('');
+    expect(within(cellAt(3, 0)).queryByText('↳')).toBeNull();
+    // r1 and r2 were nested without a column: they stay in B.
+    expect(cellAt(1, 0)).toHaveClass('gd-cell--outline');
+    expect(cellAt(2, 0).style.getPropertyValue('--gd-outline-depth')).toBe('2');
+    // HIER-09: no address moved; the selection is still D8.
+    expect(cells().map((el) => el.getAttribute('data-address'))).toEqual(before);
+    expect(selected()).toBe('D8');
+    expect(rowMeta(tableMap(gd, tableId)!, rows[3]!).outlineColumn).toBe(cols[2]);
+    // HIER-05: nest r4 under r3 from B — r4 draws in B, and r3's chevron is in D, its own column.
+    await userEvent.click(cellAt(4, 0));
+    fireEvent.keyDown(cellAt(4, 0), { code: 'BracketRight', key: ']', metaKey: true });
+    fireEvent.keyDown(cellAt(4, 0), { code: 'BracketRight', key: ']', metaKey: true });
+    expect(rowEls()[4]).toHaveAttribute('aria-level', '3');
+    expect(cellAt(4, 0)).toHaveClass('gd-cell--outline');
+    expect(within(cellAt(3, 2)).getByTestId('outline-chevron')).toBeInTheDocument();
+    expect(within(cellAt(3, 0)).queryByTestId('outline-chevron')).toBeNull();
+    // ⌘[ from B promotes r3 (r4 with it): at the top level the row's column is cleared.
+    await userEvent.click(cellAt(3, 0));
+    fireEvent.keyDown(cellAt(3, 0), { code: 'BracketLeft', key: '[', metaKey: true });
+    expect(rowEls()[3]).toHaveAttribute('aria-level', '1');
+    expect(cellAt(3, 2)).not.toHaveClass('gd-cell--outline');
+    expect(cellAt(3, 0)).toHaveClass('gd-cell--outline');
+    expect(within(cellAt(3, 0)).getByTestId('outline-chevron')).toBeInTheDocument();
+    expect(rowMeta(tableMap(gd, tableId)!, rows[3]!).outlineColumn).toBeNull();
+    expect(cells().map((el) => el.getAttribute('data-address'))).toEqual(before);
+  });
+
+  it('HIER-04 A11Y-05 hiding the column that carries the outline — a row’s own or the table’s — falls back to the table’s outline column and the announcement says where the outline went; the row keeps its column for when the column returns', () => {
+    outlineFixture();
+    nestRow(gd, tableId, rows[3]!, cols[2]); // r3 from D
+    mount();
+    expect(cellAt(3, 2)).toHaveClass('gd-cell--outline');
+    act(() => {
+      gridRef.current?.commands.hideColumn(tableId, cols[2]!);
+    });
+    expect(live()).toHaveTextContent(
+      'Hid column Column 3. Outline column Column 3 is hidden; showing the outline in Column 1',
+    );
+    expect(cellAt(3, 0, 2)).toHaveClass('gd-cell--outline');
+    expect(within(cellAt(3, 0, 2)).getByText('↳')).toBeInTheDocument();
+    expect(rowMeta(tableMap(gd, tableId)!, rows[3]!).outlineColumn).toBe(cols[2]);
+    act(() => {
+      gridRef.current?.commands.unhideColumn(tableId, cols[2]!);
+    });
+    expect(cellAt(3, 2)).toHaveClass('gd-cell--outline');
+    // The table's own outline column hidden: the same sentence, the next visible column.
+    setOutlineColumn(gd, tableId, cols[1]!);
+    act(() => {
+      gridRef.current?.commands.hideColumn(tableId, cols[1]!);
+    });
+    expect(live()).toHaveTextContent(
+      'Hid column Column 2. Outline column Column 2 is hidden; showing the outline in Column 1',
+    );
+    // A column that carries no outline says only that it was hidden: r3 promoted to the top
+    // level forgets its column, so Column 3 carries nothing.
+    act(() => {
+      gridRef.current?.commands.unhideColumn(tableId, cols[1]!);
+      promoteRow(gd, tableId, rows[3]!);
+      gridRef.current?.commands.hideColumn(tableId, cols[2]!);
+    });
+    expect(live()).toHaveTextContent(/^Hid column Column 3$/);
+  });
+
+  it('HIER-04 GRID-10 the pinned mirror draws each row’s outline in that row’s own column', () => {
+    outlineFixture();
+    gd.doc.transact(() => {
+      tableMap(gd, tableId)!.set('frozenColumns', 2);
+    });
+    nestRow(gd, tableId, rows[3]!, cols[1]); // r3 from C
+    mount({ pinnedLeft: 0 });
+    const mirrorRows = screen.getByTestId('pinned-panel').querySelectorAll('.gd-table__row');
+    const mirrorCells = (r: number) => mirrorRows[r + 1]!.querySelectorAll('.gd-cell'); // after the header
+    expect(mirrorCells(1)[0]).toHaveClass('gd-cell--outline'); // r1: B
+    expect(mirrorCells(1)[0]!.querySelector('.gd-cell__branch')).toHaveTextContent('↳');
+    expect(mirrorCells(3)[1]).toHaveClass('gd-cell--outline'); // r3: C
+    expect(mirrorCells(3)[1]!.querySelector('.gd-cell__branch')).toHaveTextContent('↳');
+    expect(mirrorCells(3)[0]).not.toHaveClass('gd-cell--outline');
+    expect(mirrorCells(3)[0]!.querySelector('.gd-cell__branch')).toBeNull();
   });
 
   it('HIER-04 the designated outline column carries the outline; a hidden one falls back to the first visible column', () => {

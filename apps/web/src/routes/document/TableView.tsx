@@ -619,6 +619,17 @@ export const TableView = memo(function TableView({
                           view={projection.view}
                           commands={sort}
                           tabStop={columnTabStop}
+                          // ADR-051: the table's default outline column, for an editor only.
+                          outline={
+                            editable
+                              ? {
+                                  checked: outline.column === col.id,
+                                  onCheckedChange: (on) => {
+                                    commands.setOutlineColumn(record.id, on ? col.id : null);
+                                  },
+                                }
+                              : undefined
+                          }
                         />
                       )}
                       {editable && (
@@ -751,10 +762,9 @@ export const TableView = memo(function TableView({
                               editing={isEditing ? editing : null}
                               editable={editable}
                               readOnly={readOnly}
+                              // ADR-051: the row's own outline column, not the table's.
                               outline={
-                                showOutline && col.id === outline.column && outlineRow !== undefined
-                                  ? outlineRow
-                                  : null
+                                showOutline && outlineRow?.column === col.id ? outlineRow : null
                               }
                               outlineLocked={outlineLocked}
                               column={col}
@@ -1045,7 +1055,7 @@ function PinnedPanel({
                     selectedCell.tableId === record.id &&
                     selectedCell.rowId === rowId &&
                     selectedCell.colId === col.id;
-                  const onOutline = outline !== null && col.id === outline.column;
+                  const onOutline = outline !== null && outlineRow?.column === col.id;
                   const coveredBy = spans.covered.get(cellKey(rowId, col.id));
                   if (coveredBy !== undefined) {
                     const inAnchorRow = coveredBy.startsWith(`${rowId}:`);
@@ -1093,9 +1103,7 @@ function PinnedPanel({
                         onSelect({ tableId: record.id, rowId, colId: col.id });
                       }}
                     >
-                      {onOutline && outlineRow !== undefined && (
-                        <OutlineMarks row={outlineRow} control={null} />
-                      )}
+                      {onOutline && <OutlineMarks row={outlineRow} control={null} />}
                       <CellContent
                         content={cellRich(table, rowId, col.id)}
                         format={format}
@@ -1258,6 +1266,7 @@ const OUTLINE_ROW_KEYS = {
   splitChild: true,
   canNest: true,
   canPromote: true,
+  column: true,
 } as const satisfies Record<keyof OutlineRow, true>;
 
 const FORMAT_OPTS_KEYS = {
@@ -1299,6 +1308,7 @@ const ROW_META_KEYS = {
   splitChild: true,
   pulledFrom: true,
   splitOf: true,
+  outlineColumn: true,
 } as const satisfies Record<keyof RowMeta, true>;
 
 function rowMetaEqual(a: RowMeta, b: RowMeta): boolean {
@@ -1554,11 +1564,12 @@ const Cell = memo(function Cell({
         return;
       }
       switch (hierarchy) {
+        // ADR-051: the outline is drawn in the column of the selected cell.
         case 'nest':
-          commands.nestRow(cell.tableId, cell.rowId);
+          commands.nestRow(cell.tableId, cell.rowId, cell.colId);
           return;
         case 'promote':
-          commands.promoteRow(cell.tableId, cell.rowId);
+          commands.promoteRow(cell.tableId, cell.rowId, cell.colId);
           return;
         case 'collapse':
           commands.setCollapsed(cell.tableId, cell.rowId, true);
