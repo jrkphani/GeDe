@@ -278,6 +278,37 @@ describe('FormulaEngine over a Y.Doc', () => {
     );
   });
 
+  test('FX-04 REF-01 a row nested from column C is addressed by its column-C text; editing that cell re-spells the path and keeps the value; editing a blank-labelled row’s first text cell re-labels it too', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 3, 3);
+    const b = grid(h.gd, h.sheetId, 1, 1, { col: 10, row: 1 });
+    g.set(0, 0, 'Asia');
+    g.set(1, 1, 'Nepal');
+    g.set(1, 2, 'Kathmandu');
+    nestRow(h.gd, g.tableId, g.rowId(1), g.colId(1));
+    const title = tableById(h.gd, g.tableId)!.title;
+    const city = tableById(h.gd, g.tableId)!.columns[2]!.label;
+    b.set(0, 0, `=@"${title}".Asia.Nepal."${city}"`);
+    expect(b.stored(0, 0)).toBe(`={e:${g.tableId}:${g.rowId(1)}:${g.colId(2)}}`);
+    expect(h.results.get(b.id(0, 0))?.value).toEqual({ kind: 'text', text: 'Kathmandu' });
+    // The label lives in column C, so a write there re-spells the reference (ADR-052).
+    g.set(1, 1, 'Nepal (Federal)');
+    expect(b.shown(0, 0)).toBe(`=@"${title}".Asia."Nepal (Federal)"."${city}"`);
+    expect(h.results.get(b.id(0, 0))?.value).toEqual({ kind: 'text', text: 'Kathmandu' });
+    // A write in column A of that row does not re-label it while C has text.
+    g.set(1, 0, 'ignored');
+    expect(b.shown(0, 0)).toBe(`=@"${title}".Asia."Nepal (Federal)"."${city}"`);
+    // Row 3 has no text in its outline column (A): the first text cell labels it.
+    g.set(2, 2, 'Pokhara');
+    expect(h.engine.index.entityIndex().entries.map((e) => e.text)).toContain(
+      `@"${title}".Pokhara`,
+    );
+    g.set(2, 0, 'Lakeside');
+    expect(h.engine.index.entityIndex().entries.map((e) => e.text)).toContain(
+      `@"${title}".Lakeside."${city}"`,
+    );
+  });
+
   test('FX-08 results carry each operand with its index, kind and cells', () => {
     const h = harness();
     const g = grid(h.gd, h.sheetId, 3, 2);

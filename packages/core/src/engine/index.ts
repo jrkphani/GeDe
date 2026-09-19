@@ -46,10 +46,16 @@ export { WorkbookIndex, type LabelReader } from './workbook-index.js';
 export { commitCellText, projectCellText, workbookIndexOf } from './commit.js';
 export {
   buildEntityIndex,
+  cellMayRelabel,
+  columnSegment,
   formatEntityPath,
   formatEntitySegment,
+  rowLabelOf,
   searchEntities,
   type EntityIndex,
+  type EntitySearch,
+  type EntitySearchOptions,
+  type TextReader,
 } from './entities.js';
 export {
   cellSnapshot,
