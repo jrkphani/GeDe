@@ -3,8 +3,10 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNod
 import { formatNumber } from '../../../intl.js';
 import { activeLocale } from '../../../locale.js';
 import {
+  cellKey,
   readString,
   searchEntities,
+  workbookCellId,
   type EntityEntry,
   type EntitySearch,
   type Id,
@@ -32,6 +34,12 @@ export interface FormulaAdornmentsOptions {
    */
   table: TableMap | null;
   colId: Id;
+  /**
+   * The row of the cell being edited (ADR-054): its own entry is left out of
+   * the `@` list, so a pick can never make a self-reference. Absent for a
+   * detached editor.
+   */
+  rowId?: Id | undefined;
   /** The editor's draft and selection, straight from the textarea. */
   text: string;
   selectionStart: number;
@@ -134,7 +142,7 @@ function forms(summable: boolean): FormOption[] {
  * the host forwards keys through `onKeyDown`.
  */
 export function useFormulaAdornments(options: FormulaAdornmentsOptions): FormulaAdornments {
-  const { table, colId, text, selectionStart, selectionEnd, anchor, onReplace } = options;
+  const { table, colId, rowId, text, selectionStart, selectionEnd, anchor, onReplace } = options;
   const doc = table?.doc ?? null;
   const enabled = (options.enabled ?? true) && table !== null && doc !== null;
   // The column's format decides whether Sum is offered (FX-02); the workbook's labels feed the @ index.
@@ -159,16 +167,20 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
 
   const formOptions = useMemo(() => forms(summable), [summable]);
   const tableId = table === null ? null : readString(table, 'id');
+  // ADR-054: the cell being edited is never offered — its draft is in the document live.
+  const self =
+    tableId === null || rowId === undefined ? null : workbookCellId(tableId, cellKey(rowId, colId));
   const search = useMemo<EntitySearch>(
     () =>
       showEntities && doc !== null
         ? searchEntities(workbookIndexFor(doc).entityIndex(), entityQuery.query, {
             limit: ENTITY_LIMIT,
             tableId, // ADR-054: the table being edited ranks first
+            exclude: self,
           })
         : { entries: [], more: 0 },
     // indexVersion: labels or tables changed; the index itself is cached per document.
-    [doc, showEntities, entityQuery?.query, indexVersion, tableId],
+    [doc, showEntities, entityQuery?.query, indexVersion, tableId, self],
   );
   const entities: readonly EntityEntry[] = search.entries;
 

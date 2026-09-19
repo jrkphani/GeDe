@@ -160,6 +160,7 @@ export function RichCellEditor({
   const adornments = useFormulaAdornments({
     table: table ?? null,
     colId: cell?.colId ?? '',
+    rowId: cell?.rowId,
     text: draft.text,
     selectionStart: draft.start,
     selectionEnd: draft.end,

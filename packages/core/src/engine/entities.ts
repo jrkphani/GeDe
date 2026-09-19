@@ -19,7 +19,12 @@
 import { columnLetter } from '../address.js';
 import { cellKey, splitCellKey, type CellKey, type Id } from '../ids.js';
 import { entityKey } from './sheet-index.js';
-import { workbookCellId, type EntityEntry, type TableStructure } from './types.js';
+import {
+  workbookCellId,
+  type EntityEntry,
+  type TableStructure,
+  type WorkbookCellId,
+} from './types.js';
 
 const PLAIN_SEGMENT = /^[\p{L}_][\p{L}\p{M}\p{N}_]*$/u;
 
@@ -37,6 +42,16 @@ export interface EntityIndex {
   readonly byKey: ReadonlyMap<string, EntityEntry>;
   /** Every entry in workbook order (tables by id, rows in order, row before its columns). */
   readonly entries: readonly EntityEntry[];
+}
+
+/**
+ * A cell's text as an entry's value: a formula or reference draft (`=…`) is
+ * not a value — the reader yields '' for a stored formula, and a draft being
+ * typed is bound into the document live, so it reads the same (ADR-054).
+ */
+function valueOf(text: string): string {
+  const trimmed = text.trim();
+  return trimmed.startsWith('=') ? '' : trimmed;
 }
 
 /** Reads a cell's plain text; a formula cell has no label and yields ''. */
@@ -57,11 +72,11 @@ export function rowLabelOf(
   if (rowId === undefined) return null;
   const outline = table.rowOutlineColumns[r] ?? table.columns[0]?.id ?? null;
   if (outline === null) return null;
-  const outlineLabel = textOf(table.id, cellKey(rowId, outline)).trim();
+  const outlineLabel = valueOf(textOf(table.id, cellKey(rowId, outline)));
   if (outlineLabel !== '') return { colId: outline, label: outlineLabel };
   for (const column of table.columns) {
     if (column.width === 0 || column.id === outline) continue;
-    const label = textOf(table.id, cellKey(rowId, column.id)).trim();
+    const label = valueOf(textOf(table.id, cellKey(rowId, column.id)));
     if (label !== '') return { colId: column.id, label };
   }
   return { colId: outline, label: '' };
@@ -86,7 +101,7 @@ export function cellMayRelabel(
   const outline = table.rowOutlineColumns[r] ?? table.columns[0]?.id ?? null;
   if (outline === null) return false;
   if (colId === outline) return true;
-  return textOf(table.id, cellKey(rowId, outline)).trim() === '';
+  return valueOf(textOf(table.id, cellKey(rowId, outline))) === '';
 }
 
 /**
@@ -159,7 +174,7 @@ export function buildEntityIndex(
           const segment = segments.get(column.id) ?? null;
           if (segment === null) continue;
           const key = cellKey(rowId, column.id);
-          add([...path, segment], table.id, key, textOf(table.id, key).trim(), segment);
+          add([...path, segment], table.id, key, valueOf(textOf(table.id, key)), segment);
         }
       }
       ancestors.length = depth;
@@ -174,6 +189,8 @@ export interface EntitySearchOptions {
   readonly limit?: number | undefined;
   /** The table being edited: its entries rank first within each match tier. */
   readonly tableId?: Id | null | undefined;
+  /** The cell being edited: left out, so a reference can never point at itself (ADR-054). */
+  readonly exclude?: WorkbookCellId | null | undefined;
 }
 
 export interface EntitySearch {
@@ -221,7 +238,9 @@ export function searchEntities(
   const q = normaliseQuery(query);
   // Four tiers: prefix in this table, prefix elsewhere, contains here, contains elsewhere.
   const tiers: [EntityEntry[], EntityEntry[], EntityEntry[], EntityEntry[]] = [[], [], [], []];
+  const exclude = options.exclude ?? null;
   for (const e of index.entries) {
+    if (e.cellId === exclude) continue;
     let tier: 0 | 2 | null;
     if (q === '') {
       tier = 0;

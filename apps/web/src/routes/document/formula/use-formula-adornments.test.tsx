@@ -27,11 +27,13 @@ import { useFormulaAdornments } from './use-formula-adornments.js';
 function Host({
   d,
   colId,
+  rowId,
   onClickAddress,
   initial = '',
 }: {
   d: TestDoc;
   colId: Id;
+  rowId?: Id | undefined;
   onClickAddress?: ((insert: (address: string) => void) => void) | undefined;
   initial?: string;
 }) {
@@ -43,6 +45,7 @@ function Host({
   const a = useFormulaAdornments({
     table: d.table,
     colId,
+    rowId,
     text,
     selectionStart: caret.start,
     selectionEnd: caret.end,
@@ -325,6 +328,36 @@ describe('useFormulaAdornments', () => {
     ]);
     expect(screen.queryByText(/more — keep typing/)).toBeNull();
     expect(editor).not.toHaveAttribute('aria-describedby');
+  });
+
+  it('REF-01 FX-04 (partial: test host, grid editor not wired) the cell being edited is never offered, and its draft — bound into the document live — is no value: no self-reference is possible (ADR-054)', async () => {
+    const d = testDoc(2, 3);
+    setTableTitle(d.gd, d.tableId, 'Trek');
+    d.set(0, 0, 'Kala Patthar');
+    d.set(0, 1, 'Priya');
+    d.set(1, 0, 'Pheriche');
+    // The draft as the grid editor binds it while typing: a formula-shaped text in C5.
+    d.set(0, 2, '=@Pri');
+    render(<Host d={d} colId={d.colId(2)} rowId={d.rowId(0)} initial="=@Pri" />);
+    const editor = screen.getByLabelText('Edit');
+    await userEvent.click(editor);
+    await userEvent.type(editor, 'y');
+    const list = await screen.findByRole('listbox', { name: 'Entities' });
+    const paths = () =>
+      Array.from(list.querySelectorAll('.gd-formula-option__path, .gd-formula-option__label')).map(
+        (o) => o.textContent,
+      );
+    expect(paths()).toEqual(['@Trek."Kala Patthar"."Column 2"']);
+    expect(paths()).not.toContain('@Trek."Kala Patthar"."Column 3"');
+    // Every other cell of the row is still offered: the exclusion is the cell, not the row.
+    await userEvent.clear(editor);
+    await userEvent.type(editor, '=@Trek."Kala Patthar".');
+    const row = await screen.findByRole('listbox', { name: 'Entities' });
+    expect(
+      Array.from(row.querySelectorAll('.gd-formula-option__path, .gd-formula-option__label')).map(
+        (o) => o.textContent,
+      ),
+    ).toEqual(['@Trek."Kala Patthar"."Column 2"']);
   });
 
   it('FX-05 (partial: test host, grid editor not wired) a cell clicked while editing lands at the caret with the right separator', async () => {

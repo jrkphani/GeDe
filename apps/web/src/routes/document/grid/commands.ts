@@ -696,10 +696,11 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       const outlineBefore = tableOutline(table, before);
       const carriedOutline =
         outlineBefore.column === colId || outlineBefore.rows.some((r) => r.column === colId);
-      const from = columnName(before, colId);
+      // "Hid column D" / "Hid column Column 3": the word is the sentence's, not the name's.
+      const from = columnDisplayName(before, colId) ?? '';
       hideColumnMutation(gd, tableId, colId);
       reselectAfterColumn(tableId, before, index);
-      const hid = `Hid column ${from}`;
+      const hid = `Hid column ${from}`.trim();
       const after = record(tableId);
       if (carriedOutline && after !== null) {
         const to = columnName(after, tableOutline(table, after).column);

@@ -368,6 +368,36 @@ describe('searchEntities (ADR-054)', () => {
     ]);
   });
 
+  test('REF-01 FX-04 a value that starts with = is a formula or a draft, not a value: the entry stays addressable with no value, never labels a row, and the cell being edited is left out of the search (ADR-054)', () => {
+    const f = fixture(
+      'Trek',
+      ['Stop', 'Owner', 'Note'],
+      [
+        ['Kala Patthar', 'Priya', '=@Pri'],
+        ['', '=Sum(B5)', 'Pheriche'],
+      ],
+    );
+    const entries = indexOf(f).entries;
+    expect(entries.map((e) => [e.text, e.value])).toEqual([
+      ['@Trek."Kala Patthar"', 'Kala Patthar'],
+      ['@Trek."Kala Patthar".Owner', 'Priya'],
+      ['@Trek."Kala Patthar".Note', ''],
+      // Row 2: the blank Stop falls back past the formula in Owner to the text in Note.
+      ['@Trek.Pheriche', 'Pheriche'],
+      ['@Trek.Pheriche.Stop', ''],
+      ['@Trek.Pheriche.Owner', ''],
+    ]);
+    // `=@Pri` matches nothing by value; and the cell being edited is excluded outright.
+    expect(searchEntities(indexOf(f), 'Pri').entries.map((e) => e.text)).toEqual([
+      '@Trek."Kala Patthar".Owner',
+    ]);
+    const self = workbookCellId(f.tableId, cellKey(f.rows[0] ?? '', f.cols[1] ?? ''));
+    expect(searchEntities(indexOf(f), 'Pri', { exclude: self }).entries).toEqual([]);
+    expect(
+      searchEntities(indexOf(f), '', { exclude: self }).entries.map((e) => e.text),
+    ).not.toContain('@Trek."Kala Patthar".Owner');
+  });
+
   test('FX-04 the limit is the caller’s and the overflow is counted; an empty query lists the edited table first, rows before their columns, in row order; a blank value never matches', () => {
     const { f, teamId } = workscape();
     const page = searchEntities(indexOf(f), '', { limit: 2, tableId: teamId });

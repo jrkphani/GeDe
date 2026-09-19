@@ -1807,7 +1807,7 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
       gridRef.current?.commands.hideColumn(tableId, cols[2]!);
     });
     expect(live()).toHaveTextContent(
-      'Hid column column D. Outline column column D is hidden; showing the outline in Column 2',
+      'Hid column D. Outline column D is hidden; showing the outline in Column 2',
     );
   });
 
