@@ -319,8 +319,8 @@ async function setStep(
   await expect(pick.getByText('STEP 3 OF 6', { exact: true })).toBeVisible();
   await expect(pick.locator('.gd-tour__dot')).toHaveCount(6);
   await expect(pick.locator('.gd-tour__dot--done')).toHaveCount(3);
-  // ONB-10: Numbers' UNIQUE named first, then the difference; nothing about Sum.
-  await expect(pick.getByText(/^Numbers: UNIQUE spills its result down a column/)).toHaveClass(
+  // ONB-10: no Numbers analogue, said so in the graph step's form; nothing about Sum.
+  await expect(pick.getByText(/^No Numbers equivalent — a cell’s commas/)).toHaveClass(
     /gd-tour__note/,
   );
   await expect(pick).not.toContainText('Sum');
@@ -359,14 +359,14 @@ async function setStep(
   await expect(compare).toHaveAttribute('data-substep', 'set-result');
   await expect(compare.getByText('STEP 3 OF 6', { exact: true })).toBeVisible();
   await expect(compare.locator('.gd-tour__dot--done')).toHaveCount(3);
-  await expect(compare.getByText(/^Numbers: UNIQUE spills its result down a column/)).toHaveClass(
+  await expect(compare.getByText(/^No Numbers equivalent — a cell’s commas/)).toHaveClass(
     /gd-tour__note/,
   );
   await expect(compare).toContainText('=Diff(I5:I8, C6)');
   await expect(compare).toContainText('Priya, Aditi, Sanjay');
   await expect(compare).toContainText('Billing export');
   await expect(
-    compare.getByText('Commit a Diff, Inter, Comp or Cross over two operands'),
+    compare.getByText('Commit a Diff, Inter, Comp or Cross over two cells or ranges'),
   ).toHaveClass(/gd-tour__action/);
   await expect(compare.getByRole('button', { name: 'Skip' })).toBeVisible();
   await expectCardPlaced(page, null);

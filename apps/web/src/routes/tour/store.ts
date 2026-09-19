@@ -293,9 +293,14 @@ function withBaseline(running: TourRunning): TourRunning {
     if (baseline.crossReferences === null) {
       next = { ...next, baseline: { ...baseline, crossReferences: crossTableReferenceKeys(gd) } };
     }
-    // 2b's baseline is taken as its card first shows, after 2a's formula exists.
-    if (next.baseline.concats === null && referenceSubstep(next) === 'concat') {
+    // 2b's baseline is taken as its card first shows, after 2a's formula exists — and let go
+    // when 2a's card shows again (the reference was cleared), so the next 2b takes a fresh one
+    // and a Concat written meanwhile is not silently past it.
+    const sub = referenceSubstep(next);
+    if (sub === 'concat' && next.baseline.concats === null) {
       next = { ...next, baseline: { ...next.baseline, concats: concatFormulaKeys(gd) } };
+    } else if (sub === 'reference' && next.baseline.concats !== null) {
+      next = { ...next, baseline: { ...next.baseline, concats: null } };
     }
     return next;
   }
@@ -305,8 +310,11 @@ function withBaseline(running: TourRunning): TourRunning {
       next = { ...next, baseline: { ...baseline, setCalls: setOperatorFormulaKeys(gd) } };
     }
     // 3b's baseline is taken as its card first shows, after 3a's formula exists — keyed to
-    // what it measures: the four operators that compare two sets, Union left out.
-    if (next.baseline.setResults === null && setSubstep(next) === 'set-result') {
+    // what it measures: the four operators that compare two sets, Union left out — and let
+    // go when 3a's card shows again, so a Union cleared and a Diff typed next shows 3b
+    // instead of jumping to the graph.
+    const sub = setSubstep(next);
+    if (sub === 'set-result' && next.baseline.setResults === null) {
       next = {
         ...next,
         baseline: {
@@ -314,6 +322,8 @@ function withBaseline(running: TourRunning): TourRunning {
           setResults: setOperatorFormulaKeys(gd, SET_RESULT_FUNCTION_NAMES),
         },
       };
+    } else if (sub === 'pick-form' && next.baseline.setResults !== null) {
+      next = { ...next, baseline: { ...next.baseline, setResults: null } };
     }
     return next;
   }

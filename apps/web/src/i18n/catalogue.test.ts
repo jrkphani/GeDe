@@ -73,10 +73,10 @@ describe('message catalogue', () => {
     expect(en['tour.step2.concat.note']).toMatch(/^Numbers: CONCATENATE or &/);
     expect(en['tour.step2.concat.note']).toMatch(/GeDe: =Concat\(a, b, …\)/);
     // Step 3 (FX-09, ADR-055): Numbers already teaches SUM, so the step teaches the set
-    // operators — no Numbers analogue — with one honest comparison: UNIQUE spills a column,
-    // a set formula's result is one cell. Both cards share the note.
-    expect(en['tour.step3.note']).toMatch(/^Numbers: UNIQUE spills its result down a column/);
-    expect(en['tour.step3.note']).toMatch(/GeDe: a cell’s commas make a set/);
+    // operators, which have no Numbers analogue and say so — the graph step's honest form,
+    // never a claim about Numbers we cannot stand behind. Both cards share the note.
+    expect(en['tour.step3.note']).toMatch(/^No Numbers equivalent — a cell’s commas make a set/);
+    expect(en['tour.step3.note']).not.toMatch(/UNIQUE|Numbers:/);
     expect(en['tour.step3.body']).not.toMatch(/\bSum\b/);
     expect(en['tour.step3.result.body']).not.toMatch(/\bSum\b/);
     expect(MESSAGE_KEYS).not.toContain('tour.step3.result.note');
@@ -86,8 +86,8 @@ describe('message catalogue', () => {
     for (const locale of LOCALES) {
       expect(CATALOGUE[locale]['tour.step2.concat.note']).toContain('CONCATENATE');
       expect(CATALOGUE[locale]['tour.step2.concat.note']).toContain('=Concat(a, b, …)');
-      expect(CATALOGUE[locale]['tour.step3.note']).toContain('UNIQUE');
-      expect(CATALOGUE[locale]['tour.step3.note']).toContain('GeDe');
+      expect(CATALOGUE[locale]['tour.step3.note']).toContain('Numbers');
+      expect(CATALOGUE[locale]['tour.step3.note']).not.toContain('UNIQUE');
     }
   });
 
@@ -111,8 +111,9 @@ describe('message catalogue', () => {
     }
     const en = CATALOGUE['en-US'];
     expect(en['tour.step3.action']).toBe('Type = in a cell and choose Union');
+    // "cells or ranges": the detector needs a bound operand, so literals alone never count.
     expect(en['tour.step3.result.action']).toBe(
-      'Commit a Diff, Inter, Comp or Cross over two operands',
+      'Commit a Diff, Inter, Comp or Cross over two cells or ranges',
     );
   });
 

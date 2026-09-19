@@ -280,8 +280,8 @@ describe('TourController', () => {
     act(() => {
       core.commitCellText(gd, table.id, table.rows[1]!, table.columns[4]!.id, CONCAT_EXAMPLE);
     });
-    // Step 3a: the set operators (FX-09, ADR-055) — centred like step 2 (ONB-06), Numbers'
-    // UNIQUE named first, the Union example and its result in the body.
+    // Step 3a: the set operators (FX-09, ADR-055) — centred like step 2 (ONB-06), the note
+    // in the graph step's honest form, the Union example and its result in the body.
     const pick = await screen.findByRole('dialog', { name: 'Compute over the text in cells' });
     expect(pick).toHaveAttribute('data-step', '3');
     expect(pick).toHaveAttribute('data-substep', 'pick-form');
@@ -290,7 +290,7 @@ describe('TourController', () => {
     expect(pick.querySelectorAll('.gd-tour__dot')).toHaveLength(6);
     expect(pick.querySelectorAll('.gd-tour__dot--done')).toHaveLength(3);
     expect(screen.getByTestId('tour-scrim')).toHaveAttribute('data-target', 'none');
-    expect(within(pick).getByText(/^Numbers: UNIQUE spills its result down a column/)).toHaveClass(
+    expect(within(pick).getByText(/^No Numbers equivalent — a cell’s commas/)).toHaveClass(
       'gd-tour__note',
     );
     expect(pick).toHaveTextContent('=Union(C5:C12, I5:I8)');
@@ -316,13 +316,13 @@ describe('TourController', () => {
     expect(compare).toHaveAttribute('data-placement', 'centre');
     expect(within(compare).getByText('STEP 3 OF 6')).toBeInTheDocument();
     expect(compare.querySelectorAll('.gd-tour__dot--done')).toHaveLength(3);
-    expect(
-      within(compare).getByText(/^Numbers: UNIQUE spills its result down a column/),
-    ).toHaveClass('gd-tour__note');
+    expect(within(compare).getByText(/^No Numbers equivalent — a cell’s commas/)).toHaveClass(
+      'gd-tour__note',
+    );
     expect(compare).toHaveTextContent('=Diff(I5:I8, C6)');
     expect(compare).toHaveTextContent('Priya, Aditi, Sanjay');
     expect(
-      within(compare).getByText('Commit a Diff, Inter, Comp or Cross over two operands'),
+      within(compare).getByText('Commit a Diff, Inter, Comp or Cross over two cells or ranges'),
     ).toHaveClass('gd-tour__action');
     expect(within(compare).getByRole('button', { name: 'Skip' })).toBeInTheDocument();
     act(() => {

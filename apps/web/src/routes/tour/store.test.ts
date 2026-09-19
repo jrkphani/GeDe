@@ -359,6 +359,37 @@ describe('tour store', () => {
     expect(state).toMatchObject({ step: 4 });
   });
 
+  test('ONB-05 FX-09 a Union cleared and a Diff typed next shows 3b, not the graph: 3b’s baseline is let go when 3a shows again; step 2’s Concat baseline the same way', () => {
+    let gd = openSampleAt(3);
+    roleAt(gd, 2, UNION_EXAMPLE);
+    expect(tourState()).toMatchObject({ step: 3, substep: 'set-result' });
+    roleAt(gd, 2, '');
+    let state = tourState();
+    expect(state).toMatchObject({ step: 3, substep: 'pick-form' });
+    expect(state.phase === 'running' && state.baseline.setResults).toBeNull();
+    // The Diff satisfies 3a and is then 3b's fresh baseline: the person sees card 3b.
+    roleAt(gd, 2, DIFF_EXAMPLE);
+    state = tourState();
+    expect(state).toMatchObject({ step: 3, substep: 'set-result' });
+    expect(state.phase === 'running' && state.baseline.setResults?.size).toBe(1);
+    roleAt(gd, 3, '=Inter(C5:C12, I5:I8)');
+    expect(tourState()).toMatchObject({ step: 4, substep: 'add' });
+
+    // Step 2 the same way: reference → cleared → a Concat that is also a reference shows 2b.
+    resetTourForTests();
+    gd = openSampleAt(2);
+    reference(gd, '=@Team.Marcus.Role');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    reference(gd, '');
+    state = tourState();
+    expect(state).toMatchObject({ step: 2, substep: 'reference' });
+    expect(state.phase === 'running' && state.baseline.concats).toBeNull();
+    reference(gd, '=Concat(@Team.Marcus.Role, " x")');
+    expect(tourState()).toMatchObject({ step: 2, substep: 'concat' });
+    days(gd, CONCAT_EXAMPLE);
+    expect(tourState()).toMatchObject({ step: 3 });
+  });
+
   test('ONB-05 FX-09 a set formula that arrives from another replica counts (as ADR 35 rules)', () => {
     const gd = openSampleAt(3);
     const { rgd, merge } = replica(gd);

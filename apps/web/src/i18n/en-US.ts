@@ -22,10 +22,11 @@
  * `tour.step4.point.*`, `tour.step4.dimensions.*`) are new copy: the
  * prototype had one card per step. Step 2b names Numbers' CONCATENATE / `&`
  * then the difference (FX-01; the example evaluates against the sample,
- * `packages/core/src/ref/concat.test.ts`); step 3 names Numbers' UNIQUE then
- * the difference, and its two cards share the note (FX-09; both examples
- * evaluate against the sample, `packages/core/src/ref/set-call.test.ts`);
- * step 4's sub-cards keep its note — a graph has no Numbers analogue.
+ * `packages/core/src/ref/concat.test.ts`); step 3's two cards share a note
+ * that claims no Numbers analogue, as the graph's does — set algebra over a
+ * cell's text has none (FX-09; both examples evaluate against the sample,
+ * `packages/core/src/ref/set-call.test.ts`); step 4's sub-cards keep its
+ * note — a graph has no Numbers analogue.
  */
 export const messages = {
   'tour.counter': 'STEP {step} OF {total}',
@@ -55,13 +56,13 @@ export const messages = {
   'tour.step3.body':
     'A cell’s commas make a set, and five forms compare sets. Double-click an empty cell in Deliverables, type = to open the forms menu and choose Union(a, b, …). Name two ranges inside the parentheses: =Union(C5:C12, I5:I8) is everyone named as an owner or on the team, once each — Priya, Marcus, Aditi, Sanjay.',
   'tour.step3.note':
-    'Numbers: UNIQUE spills its result down a column. GeDe: a cell’s commas make a set, and a set formula’s result is one cell that reads like its sources.',
+    'No Numbers equivalent — a cell’s commas make a set, and a set formula’s result is one cell that reads like its sources.',
   'tour.step3.action': 'Type = in a cell and choose Union',
 
   'tour.step3.result.title': 'Compare two sets',
   'tour.step3.result.body':
     'Diff keeps what the first set has and the second does not. Who else on the team could take Billing export? In another empty cell, type =Diff(I5:I8, C6) and press Enter: the team less that row’s owner — Priya, Aditi, Sanjay. Inter keeps what both have, Comp what the universe has and a set lacks, Cross every pair.',
-  'tour.step3.result.action': 'Commit a Diff, Inter, Comp or Cross over two operands',
+  'tour.step3.result.action': 'Commit a Diff, Inter, Comp or Cross over two cells or ranges',
 
   'tour.step4.title': 'Add a context graph',
   'tour.step4.body':
