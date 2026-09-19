@@ -8,7 +8,23 @@
  */
 import { useCallback, useSyncExternalStore } from 'react';
 import * as Y from 'yjs';
-import { cellsMap, openDocument, workbookIndexOf, type WorkbookIndex } from '@gede/core';
+import {
+  cellKey,
+  cellsMap,
+  cellValue,
+  fragmentText,
+  isCellKey,
+  isFormula,
+  openDocument,
+  rowMeta,
+  rowOutlineColumnId,
+  splitCellKey,
+  tableRecord,
+  workbookIndexOf,
+  type TableMap,
+  type TableRecord,
+  type WorkbookIndex,
+} from '@gede/core';
 
 interface Entry {
   index: WorkbookIndex | null;
@@ -68,7 +84,11 @@ function entryFor(doc: Y.Doc): Entry {
   return created;
 }
 
-/** A first-column cell changed: `@` paths may re-spell. Any other cell edit is invisible to the index. */
+/**
+ * ADR-052: a cell in its row's outline column names the row, and while that
+ * cell is blank the label falls back to another column — so an edit there may
+ * re-spell `@` paths. Any other cell edit is invisible to the index.
+ */
 function labelChangeAffectsIndex(
   event: Y.YEvent<Y.AbstractType<unknown>>,
   tables: Y.Map<Y.Map<unknown>>,
@@ -79,22 +99,33 @@ function labelChangeAffectsIndex(
   while (node !== null) {
     const parent: AnyType | null = node.parent;
     if (parent instanceof Y.Map && parent.parent === tables) {
-      const table = parent;
-      const columns = table.get('columns') as Y.Array<Y.Map<unknown>> | undefined;
-      const firstCol =
-        columns === undefined || columns.length === 0 ? undefined : columns.get(0).get('id');
-      if (typeof firstCol !== 'string') return false;
+      const table = parent as TableMap;
+      const record = tableRecord(table);
       if (key === null) {
         // The cells map itself changed: look at the keys.
-        for (const k of event.changes.keys.keys()) if (k.endsWith(`:${firstCol}`)) return true;
+        for (const k of event.changes.keys.keys()) {
+          if (cellMayRelabelIn(table, record, k)) return true;
+        }
         return false;
       }
-      return key.endsWith(`:${firstCol}`);
+      return cellMayRelabelIn(table, record, key);
     }
     key = node._item?.parentSub ?? key;
     node = parent;
   }
   return false;
+}
+
+function cellMayRelabelIn(table: TableMap, record: TableRecord, key: string): boolean {
+  if (!isCellKey(key)) return false;
+  const { rowId, colId } = splitCellKey(key);
+  if (!record.rows.includes(rowId)) return false;
+  const outline = rowOutlineColumnId(record, rowMeta(table, rowId));
+  if (outline === null) return false;
+  if (colId === outline) return true;
+  // A formula has no label, like an empty cell: the label comes from another column.
+  const content = cellValue(table, cellKey(rowId, outline));
+  return content === undefined || isFormula(content) || fragmentText(content).trim() === '';
 }
 
 export function workbookIndexFor(doc: Y.Doc): WorkbookIndex {

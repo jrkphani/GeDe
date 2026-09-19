@@ -156,6 +156,32 @@
 .gd-formula-option__label {
   white-space: nowrap;
 }
+/* ADR-052: an entity is a cell — its value first, the path it is written as beneath. */
+.gd-formula-option__entity {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  line-height: 1.25;
+}
+.gd-formula-option__value {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.gd-formula-more {
+  margin: 0;
+  padding: 0.375rem 0.5rem 0.125rem;
+  border-top: 1px solid var(--rule-hairline);
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+}
+.gd-formula-option__path {
+  overflow: hidden;
+  font-size: 0.71875rem;
+  color: var(--ink-muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .gd-formula-option__hint {
   overflow: hidden;
   font-size: 0.71875rem;

@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
-import { readString, searchEntities, type EntityEntry, type Id, type TableMap } from '@gede/core';
+import {
+  readString,
+  searchEntities,
+  type EntityEntry,
+  type EntitySearch,
+  type Id,
+  type TableMap,
+} from '@gede/core';
 import { Icon, Popover } from '@gede/ui';
 
 import { useYVersion } from '../../../doc/use-y.js';
@@ -73,6 +80,13 @@ interface FormOption {
 
 const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
 
+/**
+ * ADR-052: every column's values are entities now, so a name that appears in
+ * several rows lists once per row; twelve rows of the picker keep a
+ * one-to-many spread visible without a scroll for the common case.
+ */
+const ENTITY_LIMIT = 12;
+
 function forms(summable: boolean): FormOption[] {
   return [
     { id: 'concat', label: 'Concat(a, b, …)', hint: 'joins values end to end', insert: '=Concat(' },
@@ -123,14 +137,19 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
     entityQuery !== null && dismissed !== text && (isFormulaInput(text) || isReferenceDraft(text));
 
   const formOptions = useMemo(() => forms(summable), [summable]);
-  const entities = useMemo<readonly EntityEntry[]>(
+  const tableId = table === null ? null : readString(table, 'id');
+  const search = useMemo<EntitySearch>(
     () =>
       showEntities && doc !== null
-        ? searchEntities(workbookIndexFor(doc).entityIndex(), entityQuery.query)
-        : [],
+        ? searchEntities(workbookIndexFor(doc).entityIndex(), entityQuery.query, {
+            limit: ENTITY_LIMIT,
+            tableId, // ADR-052: the table being edited ranks first
+          })
+        : { entries: [], more: 0 },
     // indexVersion: labels or tables changed; the index itself is cached per document.
-    [doc, showEntities, entityQuery?.query, indexVersion],
+    [doc, showEntities, entityQuery?.query, indexVersion, tableId],
   );
+  const entities: readonly EntityEntry[] = search.entries;
 
   const open: 'forms' | 'entities' | null = showForms
     ? 'forms'
@@ -266,13 +285,27 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
               }}
             >
               <Icon name="reference" size={13} />
-              <span className="gd-mono gd-formula-option__label">{entry.text}</span>
+              {/* ADR-052: the cell's value leads; the path is how it is written back. */}
+              {entry.value === '' ? (
+                <span className="gd-mono gd-formula-option__label">{entry.text}</span>
+              ) : (
+                <span className="gd-formula-option__entity">
+                  <span className="gd-formula-option__value">{entry.value}</span>
+                  <span className="gd-mono gd-formula-option__path">{entry.text}</span>
+                </span>
+              )}
               {entry.path[0] !== tableTitle && (
                 <span className="gd-formula-option__hint">{entry.path[0]}</span>
               )}
             </div>
           ))}
         </div>
+      )}
+      {open === 'entities' && search.more > 0 && (
+        // ADR-052: the list is capped; the count says so, outside the listbox (not an option).
+        <p className="gd-formula-more" aria-live="polite">
+          {search.more} more — keep typing
+        </p>
       )}
     </Popover>
   );

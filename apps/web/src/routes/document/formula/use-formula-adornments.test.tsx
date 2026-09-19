@@ -2,7 +2,15 @@ import { act, render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useRef, useState } from 'react';
 import { describe, expect, it } from 'vitest';
-import { setColumnFormat, setTableTitle, type Id } from '@gede/core';
+import {
+  createTable,
+  setCellText,
+  setColumnFormat,
+  setTableTitle,
+  tableById,
+  tableMap,
+  type Id,
+} from '@gede/core';
 
 import { testDoc, type TestDoc } from '../../../test/formula-doc.js';
 import {
@@ -168,6 +176,101 @@ describe('useFormulaAdornments', () => {
     await userEvent.type(editor, '.');
     const again = await screen.findByRole('listbox', { name: 'Entities' });
     expect(again.textContent).toContain('@"Everest trek".Namche."Column 2"');
+  });
+
+  it('REF-01 FX-04 (partial: test host, grid editor not wired) typing @Pri in column 3 offers Priya from column 2 — once per row, the value first and the path beneath — and picking her commits the path as a reference', async () => {
+    const d = testDoc(3, 3);
+    setTableTitle(d.gd, d.tableId, 'Deliverables');
+    d.set(0, 0, 'Onboarding flow');
+    d.set(0, 1, 'Priya');
+    d.set(1, 0, 'Passkey sign-in');
+    d.set(1, 1, 'Priya');
+    d.set(2, 0, 'Billing export');
+    d.set(2, 1, 'Marcus');
+    render(<Host d={d} colId={d.colId(2)} />);
+    const editor = screen.getByLabelText('Edit');
+    await userEvent.click(editor);
+    await userEvent.type(editor, '@Pri');
+    const list = await screen.findByRole('listbox', { name: 'Entities' });
+    const options = Array.from(list.querySelectorAll('[role=option]'));
+    expect(options.map((o) => o.querySelector('.gd-formula-option__value')?.textContent)).toEqual([
+      'Priya',
+      'Priya',
+    ]);
+    expect(options.map((o) => o.querySelector('.gd-formula-option__path')?.textContent)).toEqual([
+      '@Deliverables."Onboarding flow"."Column 2"',
+      '@Deliverables."Passkey sign-in"."Column 2"',
+    ]);
+    expect(options[0]).toHaveAttribute('aria-selected', 'true');
+    expect(editor).toHaveAttribute('aria-activedescendant', options[0]!.id);
+    await userEvent.keyboard('{ArrowDown}');
+    expect(editor).toHaveAttribute('aria-activedescendant', options[1]!.id);
+    await userEvent.keyboard('{Enter}');
+    // REF-01: in a plain cell the pick is the whole draft.
+    expect(editor).toHaveValue('=@Deliverables."Passkey sign-in"."Column 2"');
+    await waitFor(() => {
+      expect(screen.queryByRole('listbox')).not.toBeInTheDocument();
+    });
+    // A row whose first cell is blank is offered by its first text cell.
+    d.set(2, 0, '');
+    await userEvent.clear(editor);
+    await userEvent.type(editor, '@Mar');
+    const again = await screen.findByRole('listbox', { name: 'Entities' });
+    expect(again.querySelector('.gd-formula-option__value')).toHaveTextContent('Marcus');
+    expect(again.querySelector('.gd-formula-option__path')).toHaveTextContent(
+      '@Deliverables.Marcus',
+    );
+  });
+
+  it('FX-04 REF-01 (partial: test host, grid editor not wired) a bare @ lists the edited table first, twelve entries at most with the highlight walking them, and says how many more there are; a value typed from another table still finds it (ADR-052)', async () => {
+    const d = testDoc(4, 4);
+    setTableTitle(d.gd, d.tableId, 'Deliverables');
+    for (let r = 0; r < 4; r += 1) {
+      for (let c = 0; c < 4; c += 1) d.set(r, c, `D${String(r)}${String(c)}`);
+    }
+    d.set(1, 2, 'Blocked');
+    d.set(3, 2, 'Blocked');
+    // A second table, created later (so it sorts after Deliverables in workbook order), is the
+    // one being edited: its entries lead the bare list all the same.
+    const teamId = createTable(d.gd, {
+      sheetId: d.sheetId,
+      at: { col: 8, row: 1 },
+      columns: 2,
+      rows: 2,
+      title: 'Team',
+    });
+    const team = tableById(d.gd, teamId)!;
+    setCellText(d.gd, teamId, team.rows[0]!, team.columns[0]!.id, 'Priya');
+    setCellText(d.gd, teamId, team.rows[1]!, team.columns[0]!.id, 'Marcus');
+    render(<Host d={{ ...d, table: tableMap(d.gd, teamId)! }} colId={team.columns[1]!.id} />);
+    const editor = screen.getByLabelText('Edit');
+    await userEvent.click(editor);
+    await userEvent.type(editor, '=@');
+    await screen.findByRole('listbox', { name: 'Entities' });
+    const options = () =>
+      Array.from(
+        screen.getByRole('listbox', { name: 'Entities' }).querySelectorAll('[role=option]'),
+      );
+    expect(options()).toHaveLength(12);
+    expect(options()[0]!.textContent).toContain('@Team.Priya');
+    expect(options()[1]!.textContent).toContain('@Team.Priya."Column 2"');
+    expect(options()[2]!.textContent).toContain('@Team.Marcus');
+    expect(options()[4]!.textContent).toContain('@Deliverables.D00');
+    // 4 Team + 16 Deliverables entries, 12 shown.
+    expect(screen.getByText('8 more — keep typing')).toBeInTheDocument();
+    for (let i = 0; i < 11; i += 1) await userEvent.keyboard('{ArrowDown}');
+    expect(editor).toHaveAttribute('aria-activedescendant', options()[11]!.id);
+    expect(options()[11]).toHaveAttribute('aria-selected', 'true');
+    // A value in another table's third column is found by its text.
+    await userEvent.type(editor, 'Blocked');
+    await waitFor(() => {
+      expect(options()).toHaveLength(2);
+    });
+    expect(options().map((o) => o.querySelector('.gd-formula-option__path')?.textContent)).toEqual([
+      '@Deliverables.D10."Column 3"',
+      '@Deliverables.D30."Column 3"',
+    ]);
+    expect(screen.queryByText(/more — keep typing/)).toBeNull();
   });
 
   it('FX-05 (partial: test host, grid editor not wired) a cell clicked while editing lands at the caret with the right separator', async () => {
