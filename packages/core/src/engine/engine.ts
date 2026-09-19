@@ -784,7 +784,7 @@ function sameValue(a: CellValue | null, b: CellValue | null): boolean {
     case 'date':
       return b.kind === 'date' && a.iso === b.iso;
     case 'blank':
-      return true;
+      return b.kind === 'blank' && a.text === b.text;
     case 'list':
       return (
         b.kind === 'list' &&

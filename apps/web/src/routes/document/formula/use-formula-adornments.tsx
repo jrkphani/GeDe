@@ -75,16 +75,16 @@ const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
 
 /** The set operators (FX-09, ADR-053): offered wherever Concat is — every argument is the strings in its cells. */
 const SET_FORMS: readonly FormOption[] = [
-  { id: 'union', label: 'Union(a, b)', hint: 'elements in any of the sets', insert: '=Union(' },
-  { id: 'inter', label: 'Inter(a, b)', hint: 'elements in every set', insert: '=Inter(' },
-  { id: 'diff', label: 'Diff(a, b)', hint: 'elements of a that are not in b', insert: '=Diff(' },
+  { id: 'union', label: 'Union(a, b, …)', hint: 'elements in any of the sets', insert: '=Union(' },
+  { id: 'inter', label: 'Inter(a, b, …)', hint: 'elements in every set', insert: '=Inter(' },
+  { id: 'diff', label: 'Diff(a, b, …)', hint: 'elements of a that are not in b', insert: '=Diff(' },
   {
     id: 'comp',
     label: 'Comp(a, u)',
     hint: 'elements of the universe u not in a',
     insert: '=Comp(',
   },
-  { id: 'cross', label: 'Cross(a, b)', hint: 'every ordered pair (a, b)', insert: '=Cross(' },
+  { id: 'cross', label: 'Cross(a, b, …)', hint: 'every ordered pair (a, b)', insert: '=Cross(' },
 ];
 
 function forms(summable: boolean): FormOption[] {

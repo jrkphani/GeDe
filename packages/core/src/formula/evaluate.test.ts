@@ -260,11 +260,62 @@ describe('set operators (FX-09)', () => {
     expect(ELEMENTS(run('=Inter(A1, "APPLE")', r))).toEqual([]);
   });
 
-  test('FX-09 a blank cell is the empty set, a range contributes every cell and skips blanks, a number is its formatted text', () => {
+  test('FX-09 a blank cell is the empty set, a range contributes every cell and skips blanks; an Automatic number splits its stored spelling as typed', () => {
     const r = fakeResolver({ A1: txt('1, 2'), A3: txt('3'), B1: num(1200, '1,200') });
     expect(ELEMENTS(run('=Union(A1:A4, Z9)', r))).toEqual(['1', '2', '3']);
     expect(ELEMENTS(run('=Diff(Z9, A1)', r))).toEqual([]);
     expect(ELEMENTS(run('=Union(B1, 7)', r))).toEqual(['1', '200', '7']);
+  });
+
+  test('FX-09 a number, amount or date under an explicit format is one element spelled locale-independently, never its locale rendering', () => {
+    // As the engine builds them for an en-IN replica (`cellValueOf`): the text is a rendering.
+    const r = fakeResolver({
+      A1: { kind: 'number', value: 1234567, text: '12,34,567', rendered: true },
+      B1: { kind: 'currency', value: 1200.5, code: 'SGD', text: 'S$1,200.50', rendered: true },
+      C1: { kind: 'date', iso: '2026-09-12', text: '12/9/2026', rendered: true },
+      D1: { kind: 'number', value: 3.5 },
+    });
+    const formatValue = (v: CellValue): string =>
+      v.kind === 'number' ? new Intl.NumberFormat('en-IN').format(v.value) : '';
+    const ast = parse('=Union(A1, B1, C1, D1, Sum(D1, D1), "1234567")');
+    if (!ast.ok) throw new Error('parse');
+    expect(ELEMENTS(evaluate(ast.value, r, { formatValue, locale: 'en-IN' }))).toEqual([
+      '1234567',
+      'SGD 1200.5',
+      '2026-09-12',
+      '3.5',
+      '7',
+    ]);
+    expect(ELEMENTS(run('=Inter(A1, "1234567")', r))).toEqual(['1234567']);
+  });
+
+  test('FX-09 FMT-05 a cell its format could not parse is blank to Sum but contributes its stored text as a set', () => {
+    const r = fakeResolver({ A1: { kind: 'blank', text: 'north, south' }, B1: num(1) });
+    expect(run('=Sum(A1, B1)', r)).toEqual({ ok: true, value: num(1) });
+    expect(ELEMENTS(run('=Union(A1, "east")', r))).toEqual(['north', 'south', 'east']);
+    expect(run('=Concat(A1, B1)', r)).toEqual({ ok: true, value: txt('1') });
+  });
+
+  test('FX-09 Cross is refused from the operand sizes past MAX_CROSS_TUPLES, before any tuple is built', () => {
+    const big = (n: number, prefix: string): CellValue =>
+      txt(Array.from({ length: n }, (_, i) => `${prefix}${String(i)}`).join(', '));
+    const r = fakeResolver({ A1: big(100, 'a'), B1: big(100, 'b'), C1: big(101, 'c') });
+    const ok = run('=Cross(A1, B1)', r);
+    expect(ok.ok).toBe(true);
+    if (ok.ok && ok.value.kind === 'list') expect(ok.value.items).toHaveLength(10_000);
+    const refused = run('=Cross(A1, C1)', r);
+    expect(refused).toEqual({ ok: false, error: { kind: 'too-many-tuples', count: 10_100 } });
+    if (!refused.ok) expect(errorLabel(refused.error)).toBe('⚠ too many tuples');
+    // Three operands multiply; duplicates do not count.
+    expect(run('=Cross(A1, B1, "x, x, y")', r)).toEqual({
+      ok: false,
+      error: { kind: 'too-many-tuples', count: 20_000 },
+    });
+  });
+
+  test('FX-09 ; separates arguments like , inside a call', () => {
+    expect(run('=Union(A1; B1)', sets())).toEqual({ ok: true, value: set('1', '2', '3') });
+    expect(run('=Comp(A1;U1)', sets())).toEqual({ ok: true, value: set('3', '4') });
   });
 
   test('FX-09 a set result round-trips as the operand of another set function, pairs from Cross included', () => {
@@ -293,10 +344,20 @@ describe('set operators (FX-09)', () => {
     });
   });
 
-  test('FX-09 quoted literals, @ paths and a Split list are operands; a list item with no separator stays one element', () => {
-    const r = fakeResolver({ A1: txt('x / y / z') }, { 'Team.Tags': txt('y; q') });
+  test('FX-09 quoted literals, @ paths and a Split list are operands; a list’s items are the elements — the Split boundary wins over a comma inside a piece', () => {
+    const r = fakeResolver(
+      { A1: txt('x / y / z'), B1: txt('x, y / z') },
+      { 'Team.Tags': txt('y; q') },
+    );
     expect(ELEMENTS(run('=Union("a, b", @Team.Tags)', r))).toEqual(['a', 'b', 'y', 'q']);
     expect(ELEMENTS(run('=Inter(A1.Split(" / "), @Team.Tags)', r))).toEqual(['y']);
+    expect(ELEMENTS(run('=Union(B1.Split(" / "), "x")', r))).toEqual(['x, y', 'z', 'x']);
+  });
+
+  test('FX-09 a lone ( swallows the rest of the text into one element; quotes are not delimiters', () => {
+    const r = fakeResolver({ A1: txt('a, (b, c'), B1: txt('"a, b", c') });
+    expect(ELEMENTS(run('=Union(A1, "")', r))).toEqual(['a', '(b, c']);
+    expect(ELEMENTS(run('=Union(B1, "")', r))).toEqual(['"a', 'b"', 'c']);
   });
 
   test('FX-09 FX-06 an error in an operand propagates as it does for Sum', () => {

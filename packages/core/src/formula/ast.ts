@@ -2,10 +2,11 @@
  * Formula grammar (PRD §13, §22; FX-01..FX-03).
  *
  *   formula   := '=' (call | method | list)
- *   call      := name '(' [arg (',' arg)*] ')'          name ∈ { Concat, Sum, Union, Inter,
+ *   call      := name '(' [arg (sep arg)*] ')'           name ∈ { Concat, Sum, Union, Inter,
  *                                                      Diff, Comp, Cross } — the set operators
  *                                                      read every argument as a set of the
  *                                                      strings in its cells (FX-09, ADR-053)
+ *   sep       := ',' | ';'                               either separates arguments
  *   method    := reference '.' method-name [ '.' chip ] '(' [marg (',' marg)*] ')'
  *                                                      method-name ∈ { Extract, Split, Replace,
  *                                                      Format, Concat } — the text algebra on one

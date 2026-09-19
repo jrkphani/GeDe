@@ -798,6 +798,39 @@ describe('formats reach the engine (FMT-02, FMT-03, FMT-05, FX-02)', () => {
     });
   });
 
+  test('FX-09 FMT-05 a set over formatted cells is the same under en-US, en-IN and no locale: a number, amount or date is one locale-independent element; an invalid cell contributes its stored text', () => {
+    const h = harness();
+    const g = grid(h.gd, h.sheetId, 4, 3);
+    setColumnFormat(h.gd, g.tableId, g.colId(0), 'number', { decimals: 0 });
+    setColumnFormat(h.gd, g.tableId, g.colId(1), 'currency', { currency: 'SGD', decimals: 2 });
+    setColumnFormat(h.gd, g.tableId, g.colId(2), 'date');
+    g.set(0, 0, '1234567');
+    g.set(1, 0, 'north, south'); // invalid under Number (FMT-05)
+    g.set(0, 1, '1234567.5');
+    g.set(0, 2, '2026-09-12');
+    g.set(3, 0, `=Union(${g.addr(0, 0)}, ${g.addr(1, 0)}, ${g.addr(0, 1)}, ${g.addr(0, 2)})`);
+    g.set(3, 1, `=Inter(${g.addr(0, 0)}, "1234567")`);
+    const want = {
+      kind: 'list',
+      items: ['1234567', 'north', 'south', 'SGD 1234567.5', '2026-09-12'].map((text) => ({
+        kind: 'text',
+        text,
+      })),
+    };
+    const one = { kind: 'list', items: [{ kind: 'text', text: '1234567' }] };
+    // No locale set yet (the sync projection runs this way).
+    expect(h.results.get(g.id(3, 0))?.value).toEqual(want);
+    expect(h.results.get(g.id(3, 1))?.value).toEqual(one);
+    for (const locale of ['en-US', 'en-IN']) {
+      for (const r of h.engine.setLocale(locale).results) h.results.set(r.cellId, r);
+      expect(h.results.get(g.id(3, 0))?.value, locale).toEqual(want);
+      expect(h.results.get(g.id(3, 1))?.value, locale).toEqual(one);
+    }
+    // The invalid cell is still excluded from Sum.
+    g.set(2, 0, `=Sum(${g.addr(0, 0)}, ${g.addr(1, 0)})`);
+    expect(h.results.get(g.id(2, 0))?.value).toEqual({ kind: 'number', value: 1234567 });
+  });
+
   test('FMT-01 an Automatic column keeps the inference from the typed text', () => {
     const h = harness();
     const g = grid(h.gd, h.sheetId, 3, 1);

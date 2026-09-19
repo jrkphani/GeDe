@@ -1,7 +1,16 @@
 import fc from 'fast-check';
 import { describe, expect, test } from 'vitest';
 
-import { complement, cross, difference, intersection, splitSetElements, union } from './sets.js';
+import {
+  complement,
+  cross,
+  crossCardinality,
+  difference,
+  intersection,
+  MAX_CROSS_TUPLES,
+  splitSetElements,
+  union,
+} from './sets.js';
 
 describe('set elements (FX-09)', () => {
   test('FX-09 a cell splits on commas, semicolons and newlines; pieces are trimmed, empties dropped, duplicates collapsed first-seen', () => {
@@ -16,6 +25,30 @@ describe('set elements (FX-09)', () => {
     expect(splitSetElements('(a, (b, c)), d')).toEqual(['(a, (b, c))', 'd']);
     // An unbalanced close does not swallow the rest of the text.
     expect(splitSetElements('a), b')).toEqual(['a)', 'b']);
+  });
+
+  test('FX-09 a lone ( swallows the rest of the text into one element', () => {
+    expect(splitSetElements('a, (b, c')).toEqual(['a', '(b, c']);
+    expect(splitSetElements('(a, b')).toEqual(['(a, b']);
+  });
+
+  test('FX-09 quotes are not delimiters: "a, b", c is three elements', () => {
+    expect(splitSetElements('"a, b", c')).toEqual(['"a', 'b"', 'c']);
+  });
+
+  test('FX-09 crossCardinality is the product of the deduplicated operand sizes, computed without building a tuple', () => {
+    expect(
+      crossCardinality([
+        ['a', 'b'],
+        ['c', 'd', 'e'],
+      ]),
+    ).toBe(6);
+    expect(crossCardinality([['a', 'a'], ['c']])).toBe(1);
+    expect(crossCardinality([['a'], []])).toBe(0);
+    expect(crossCardinality([])).toBe(0);
+    const big = Array.from({ length: 3000 }, (_, i) => String(i));
+    expect(crossCardinality([big, big])).toBe(9_000_000);
+    expect(MAX_CROSS_TUPLES).toBe(10_000);
   });
 
   test('FX-09 equality is exact after trim and NFC: case-sensitive, composed and decomposed forms equal', () => {

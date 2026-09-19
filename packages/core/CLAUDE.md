@@ -30,7 +30,7 @@ Read the root `CLAUDE.md` first.
 
 ## Error values
 
-Errors are values, not exceptions. Evaluation returns a `Result<Value, FormulaError>`; `FormulaError` carries `kind` (`circular`, `text_in_range`, `mixed_currency`, `invalid_format`, `parse`, `unknown_reference`, `arity`), a message and, where relevant, the offending cell id. Throwing from evaluation is a defect.
+Errors are values, not exceptions. Evaluation returns a `Result<Value, FormulaError>`; `FormulaError` carries `kind` (`circular`, `text_in_range`, `mixed_currency`, `invalid_format`, `parse`, `unknown_reference`, `arity`, `too_many_tuples`), a message and, where relevant, the offending cell id. Throwing from evaluation is a defect.
 
 ## Text algebra
 

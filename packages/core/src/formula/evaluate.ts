@@ -15,9 +15,12 @@ import { applyMethod } from './methods.js';
 import {
   complement,
   cross,
+  crossCardinality,
   dedupe,
   difference,
   intersection,
+  MAX_CROSS_TUPLES,
+  normaliseElement,
   splitSetElements,
   union,
 } from './sets.js';
@@ -26,16 +29,38 @@ import { richFromText, type RichDoc } from '../text/types.js';
 export type CellValue =
   /** `rich` carries the cell's marks when it has any, so `Extract(Style=…)` can read them. */
   | { readonly kind: 'text'; readonly text: string; readonly rich?: RichDoc | undefined }
-  /** `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not `String(value)`. */
-  | { readonly kind: 'number'; readonly value: number; readonly text?: string }
+  /**
+   * `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not
+   * `String(value)`. Under an explicit format it is the rendering for the
+   * engine's locale instead, and `rendered` says so: the set operators (FX-09)
+   * split a stored spelling as typed but never a rendering, which differs
+   * between replicas.
+   */
+  | {
+      readonly kind: 'number';
+      readonly value: number;
+      readonly text?: string;
+      readonly rendered?: true;
+    }
   | {
       readonly kind: 'currency';
       readonly value: number;
       readonly code: string;
       readonly text?: string;
+      readonly rendered?: true;
     }
-  | { readonly kind: 'date'; readonly iso: string; readonly text?: string }
-  | { readonly kind: 'blank' }
+  | {
+      readonly kind: 'date';
+      readonly iso: string;
+      readonly text?: string;
+      readonly rendered?: true;
+    }
+  /**
+   * `text` is present for a cell an explicit format could not parse (FMT-05):
+   * excluded from Sum and empty to Concat, but the set operators read the
+   * stored text (FX-09).
+   */
+  | { readonly kind: 'blank'; readonly text?: string }
   /** `Split()` pieces (HIER-07): each renders as a child row; as text they read joined by `, `. */
   | { readonly kind: 'list'; readonly items: readonly CellValue[] }
   /** A referenced formula cell that is itself in error. Its error propagates (FX-06). */
@@ -66,7 +91,9 @@ export type FormulaError =
       readonly kind: 'arity';
       readonly name: SetFunctionName;
       readonly arity: { readonly exactly: number } | { readonly atLeast: number };
-    };
+    }
+  /** `⚠ too many tuples` — a Cross product past `MAX_CROSS_TUPLES`, refused before it is built (FX-09). */
+  | { readonly kind: 'too-many-tuples'; readonly count: number };
 
 /** How the evaluator reads the workbook. Implemented over the Yjs document by the app. */
 export interface Resolver {
@@ -124,6 +151,8 @@ export function errorLabel(error: FormulaError): string {
       return '⚠ invalid argument';
     case 'arity':
       return `⚠ ${error.name} takes ${arityText(error.arity)}`;
+    case 'too-many-tuples':
+      return '⚠ too many tuples';
   }
 }
 
@@ -180,6 +209,30 @@ function boundLabel(ref: BoundReference): string {
 interface Operand {
   readonly address: string;
   readonly value: CellValue;
+}
+
+/** One trimmed, NFC element, or none when the text is empty. */
+function oneElement(text: string): string[] {
+  const e = normaliseElement(text);
+  return e === '' ? [] : [e];
+}
+
+/**
+ * The one element a number, amount or date contributes when its `text` is a
+ * locale rendering or absent (FX-09): the same on every replica and in the
+ * sync projection, which runs with no locale.
+ */
+function canonicalSpelling(
+  value: CellValue & { readonly kind: 'number' | 'currency' | 'date' },
+): string {
+  switch (value.kind) {
+    case 'number':
+      return String(value.value);
+    case 'currency':
+      return `${value.code} ${String(value.value)}`;
+    case 'date':
+      return value.iso;
+  }
 }
 
 class Evaluator {
@@ -269,9 +322,13 @@ class Evaluator {
       case 'Comp':
         elements = complement(a, u);
         break;
-      case 'Cross':
+      case 'Cross': {
+        // Refused from the operand sizes, before a tuple is allocated (ADR-053).
+        const count = crossCardinality(sets);
+        if (count > MAX_CROSS_TUPLES) fail({ kind: 'too-many-tuples', count });
         elements = cross(sets);
         break;
+      }
     }
     return { kind: 'list', items: elements.map((text) => ({ kind: 'text', text })) };
   }
@@ -282,7 +339,7 @@ class Evaluator {
       case 'string':
         return splitSetElements(arg.value);
       case 'number':
-        return splitSetElements(this.format({ kind: 'number', value: arg.value }));
+        return [String(arg.value)];
       case 'call':
         return this.elementsOf(this.call(arg));
       case 'method':
@@ -292,20 +349,46 @@ class Evaluator {
     }
   }
 
-  /** The elements one value contributes: a blank none, a list each of its items, anything else its text split. */
+  /**
+   * The elements one value contributes. Text splits as a cell does. A list's
+   * items are the elements — a Split boundary wins over a comma inside a
+   * piece. A number, amount or date is one element: its stored spelling when
+   * the cell is Automatic, otherwise a locale-independent spelling, so every
+   * replica computes the same set. A blank contributes nothing unless it is a
+   * cell its format excluded, whose stored text still counts (FMT-05).
+   */
   private elementsOf(value: CellValue): string[] {
     switch (value.kind) {
       case 'blank':
-        return [];
+        return value.text === undefined ? [] : splitSetElements(value.text);
       case 'list':
-        return dedupe(value.items.flatMap((item) => this.elementsOf(item)));
+        return dedupe(value.items.flatMap((item) => this.listElement(item)));
       case 'error':
         fail(value.error);
         break;
       case 'text':
         return splitSetElements(value.text);
       default:
-        return splitSetElements(this.format(value));
+        return value.text !== undefined && value.rendered === undefined
+          ? splitSetElements(value.text)
+          : [canonicalSpelling(value)];
+    }
+  }
+
+  /** One list item as an element: never re-split; a nested list flattens one level. */
+  private listElement(item: CellValue): string[] {
+    switch (item.kind) {
+      case 'blank':
+        return item.text === undefined ? [] : oneElement(item.text);
+      case 'list':
+        return item.items.flatMap((inner) => this.listElement(inner));
+      case 'error':
+        fail(item.error);
+        break;
+      case 'text':
+        return oneElement(item.text);
+      default:
+        return [canonicalSpelling(item)];
     }
   }
 

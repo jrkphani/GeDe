@@ -142,11 +142,11 @@ describe('useFormulaAdornments', () => {
     expect(labels).toEqual([
       'Concat(a, b, …)',
       'Sum(B2:B14)',
-      'Union(a, b)',
-      'Inter(a, b)',
-      'Diff(a, b)',
+      'Union(a, b, …)',
+      'Inter(a, b, …)',
+      'Diff(a, b, …)',
       'Comp(a, u)',
-      'Cross(a, b)',
+      'Cross(a, b, …)',
       '@Group.Entity',
     ]);
     for (const name of ['Union', 'Inter', 'Diff', 'Comp', 'Cross']) {

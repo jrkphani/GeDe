@@ -10,11 +10,20 @@
  *
  * A separator inside parentheses does not split: `(1, 2), (1, 3)` is the two
  * pairs `Cross` renders, so a product feeds another set function unchanged.
+ * Consequently a lone `(` swallows the rest of the text into one element.
+ * Quotes are not delimiters: `"a, b", c` is three elements.
  *
  * Framework-free: strings in, arrays out.
  */
 
 const SEPARATORS = new Set([',', ';', '\n', '\r']);
+
+/**
+ * The most tuples a Cross may build (ADR-053): two 3,000-element cells would
+ * otherwise make 9,000,000 tuples and ~137 MB across the Worker boundary. The
+ * evaluator checks `crossCardinality` before allocating anything.
+ */
+export const MAX_CROSS_TUPLES = 10_000;
 
 /**
  * The elements a text contributes, in order of appearance, duplicates
@@ -81,9 +90,15 @@ export function complement(a: readonly string[], u: readonly string[]): string[]
   return dedupe(u).filter((e) => !inA.has(e));
 }
 
+/** |A| · |B| · …, over the deduplicated operands, without building a tuple. */
+export function crossCardinality(sets: readonly (readonly string[])[]): number {
+  return sets.reduce((n, set) => n * dedupe(set).length, sets.length === 0 ? 0 : 1);
+}
+
 /**
  * A × B × …: every ordered tuple, first-operand-major, rendered `(a, b)` /
- * `(a, b, c)`. An empty operand makes an empty product.
+ * `(a, b, c)`. An empty operand makes an empty product. Unbounded: the
+ * caller checks `crossCardinality` against `MAX_CROSS_TUPLES` first.
  */
 export function cross(sets: readonly (readonly string[])[]): string[] {
   let tuples: string[][] = [[]];

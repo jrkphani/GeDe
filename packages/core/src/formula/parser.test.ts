@@ -121,6 +121,18 @@ describe('parse — calls', () => {
     expect(mustParse('=Concat(Union(A1, "1, 2"), "!")')).toMatchObject({ kind: 'call' });
   });
 
+  test('FX-09 ; separates arguments like , inside a call; in list mode it stays separator text', () => {
+    const ast = mustParse('=Union(A1; B1;C1)');
+    if (ast.kind !== 'call') throw new Error('expected call');
+    expect(references(ast).map(describeRef)).toEqual(['A1', 'B1', 'C1']);
+    expect(mustParse('=Sum(A1;2)')).toMatchObject({ kind: 'call', name: 'Sum' });
+    const list = mustParse('=A1; B1');
+    if (list.kind !== 'list') throw new Error('expected list');
+    expect(
+      list.items.map((i) => (i.kind === 'separator' ? `[${i.text}]` : describeRef(i))),
+    ).toEqual(['A1', '[; ]', 'B1']);
+  });
+
   test('FX-09 the unknown-function message lists every form', () => {
     const result = parse('=Unite(A1)');
     expect(result.ok).toBe(false);

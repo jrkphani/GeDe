@@ -63,7 +63,8 @@ export function tokenize(text: string): TokenizeResult {
       push('at', start, ++i);
     } else if (ch === '.') {
       push('dot', start, ++i);
-    } else if (ch === ',') {
+    } else if (ch === ',' || ch === ';') {
+      // `;` separates arguments like `,` (FX-09: `=Union(A1; B1)`); in list mode both are separator text.
       push('comma', start, ++i);
     } else if (ch === ':') {
       push('colon', start, ++i);

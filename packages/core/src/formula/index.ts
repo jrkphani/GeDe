@@ -37,6 +37,8 @@ export {
   difference,
   intersection,
   normaliseElement,
+  MAX_CROSS_TUPLES,
+  crossCardinality,
   splitSetElements,
   union,
 } from './sets.js';

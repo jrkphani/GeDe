@@ -31,5 +31,7 @@ export function cellErrorMessage(error: CellError): string {
       return error.name === 'Comp'
         ? 'Comp takes exactly 2 arguments: the set, then its universe'
         : `${error.name} takes ${arityText(error.arity)}`;
+    case 'too-many-tuples':
+      return `Cross would make ${new Intl.NumberFormat('en').format(error.count)} tuples; narrow the sets`;
   }
 }
