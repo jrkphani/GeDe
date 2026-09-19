@@ -16,6 +16,7 @@ import {
 } from '@gede/core';
 import { Button, Icon, Menu, Popover, Select, Switch, TextField, type MenuEntry } from '@gede/ui';
 
+import { RENAME_KEYS } from '../keys/shortcut-map.js';
 import { describeFilter, type SortCommands } from './commands.js';
 
 export interface HeaderMenuProps {
@@ -25,6 +26,13 @@ export interface HeaderMenuProps {
   commands: SortCommands;
   /** Roving tab stop: Tab reaches the ▼ of the selected column only, like the column divider. */
   tabStop: boolean;
+  /**
+   * ADR-051 / MENU-03: Rename column… beside its chord (KEYS-08), opening the
+   * header's inline name field; disabled with the reason where the column
+   * cannot be renamed (view-only, a lineage label). The Table tab's Name is
+   * the home. Absent renders no item (a host without a document).
+   */
+  rename?: { onSelect: () => void; disabledReason?: string | undefined } | undefined;
 }
 
 /** The sort mode the menu shows for this column: its own, or None. */
@@ -77,8 +85,11 @@ export function ariaSortOf(
  * the filter panel — a popover, because a text field is not a menu item (it
  * would be neither Tab-reachable nor axe-clean inside one).
  */
-export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderMenuProps) {
+export function HeaderMenu({ tableId, column, view, commands, tabStop, rename }: HeaderMenuProps) {
   const trigger = useRef<HTMLButtonElement>(null);
+  // Set when Rename column… was chosen: the menu's close leaves focus on the field it opened
+  // rather than returning it to the ▼ (which would blur, and so close, the field).
+  const renameOnClose = useRef(false);
   // The popover anchors to the ▼'s wrapper; an element, so Radix can measure it.
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   const [filterOpen, setFilterOpen] = useState(false);
@@ -140,6 +151,22 @@ export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderM
         commands.clear(tableId);
       },
     },
+    ...(rename === undefined
+      ? []
+      : ([
+          { kind: 'separator', id: 's3' },
+          {
+            kind: 'item',
+            id: 'rename',
+            label: 'Rename column…',
+            shortcut: RENAME_KEYS.rename,
+            disabledReason: rename.disabledReason,
+            onSelect: () => {
+              renameOnClose.current = true;
+              rename.onSelect();
+            },
+          },
+        ] satisfies MenuEntry[])),
   ];
 
   return (
@@ -151,6 +178,14 @@ export function HeaderMenu({ tableId, column, view, commands, tabStop }: HeaderM
           modal={false}
           entries={entries}
           onCloseAutoFocus={(event) => {
+            if (renameOnClose.current) {
+              renameOnClose.current = false;
+              const field = document.querySelector<HTMLElement>('[data-table-rename]');
+              if (field === null) return;
+              event.preventDefault();
+              field.focus();
+              return;
+            }
             if (!openFilterOnClose.current) return;
             openFilterOnClose.current = false;
             event.preventDefault();

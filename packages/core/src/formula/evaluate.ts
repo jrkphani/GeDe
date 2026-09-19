@@ -9,24 +9,58 @@
  */
 import { formatAddress, cellsInRange, type CellRef } from '../address.js';
 import { err, ok, type Result } from '../result.js';
-import type { Ast, Expr, MethodCall, Reference, Separator } from './ast.js';
+import type { Ast, Expr, MethodCall, Reference, Separator, SetFunctionName } from './ast.js';
 import type { BoundReference } from './bound.js';
 import { applyMethod } from './methods.js';
+import {
+  complement,
+  cross,
+  crossCardinality,
+  dedupe,
+  difference,
+  intersection,
+  MAX_CROSS_TUPLES,
+  normaliseElement,
+  splitSetElements,
+  union,
+} from './sets.js';
 import { richFromText, type RichDoc } from '../text/types.js';
 
 export type CellValue =
   /** `rich` carries the cell's marks when it has any, so `Extract(Style=…)` can read them. */
   | { readonly kind: 'text'; readonly text: string; readonly rich?: RichDoc | undefined }
-  /** `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not `String(value)`. */
-  | { readonly kind: 'number'; readonly value: number; readonly text?: string }
+  /**
+   * `text` is the cell's own spelling ("1,200") so Concat and lists echo it, not
+   * `String(value)`. Under an explicit format it is the rendering for the
+   * engine's locale instead, and `rendered` says so: the set operators (FX-09)
+   * split a stored spelling as typed but never a rendering, which differs
+   * between replicas.
+   */
+  | {
+      readonly kind: 'number';
+      readonly value: number;
+      readonly text?: string;
+      readonly rendered?: true;
+    }
   | {
       readonly kind: 'currency';
       readonly value: number;
       readonly code: string;
       readonly text?: string;
+      readonly rendered?: true;
     }
-  | { readonly kind: 'date'; readonly iso: string; readonly text?: string }
-  | { readonly kind: 'blank' }
+  | {
+      readonly kind: 'date';
+      readonly iso: string;
+      readonly text?: string;
+      readonly rendered?: true;
+    }
+  /**
+   * `text` is present for a cell an explicit format could not parse (FMT-05):
+   * excluded from Sum and empty to Concat, but the set operators read the
+   * stored text (FX-09).
+   */
+  | { readonly kind: 'blank'; readonly text?: string }
   /** `Split()` pieces (HIER-07): each renders as a child row; as text they read joined by `, `. */
   | { readonly kind: 'list'; readonly items: readonly CellValue[] }
   /** A referenced formula cell that is itself in error. Its error propagates (FX-06). */
@@ -48,7 +82,18 @@ export type FormulaError =
   /** `⚠ reference removed` — a bound cell, row, column or table was deleted (PRD §20 id semantics). */
   | { readonly kind: 'reference-removed'; readonly label: string }
   /** `⚠ invalid argument` — e.g. a quoted string inside Sum. */
-  | { readonly kind: 'invalid-argument'; readonly message: string };
+  | { readonly kind: 'invalid-argument'; readonly message: string }
+  /**
+   * `⚠ Comp takes 2 arguments` / `⚠ Union takes at least 2 arguments` — a set
+   * operator called with the wrong number of operands (FX-09).
+   */
+  | {
+      readonly kind: 'arity';
+      readonly name: SetFunctionName;
+      readonly arity: { readonly exactly: number } | { readonly atLeast: number };
+    }
+  /** `⚠ too many tuples` — a Cross product past `MAX_CROSS_TUPLES`, refused before it is built (FX-09). */
+  | { readonly kind: 'too-many-tuples'; readonly count: number };
 
 /** How the evaluator reads the workbook. Implemented over the Yjs document by the app. */
 export interface Resolver {
@@ -104,7 +149,17 @@ export function errorLabel(error: FormulaError): string {
       return '⚠ reference removed';
     case 'invalid-argument':
       return '⚠ invalid argument';
+    case 'arity':
+      return `⚠ ${error.name} takes ${arityText(error.arity)}`;
+    case 'too-many-tuples':
+      return '⚠ too many tuples';
   }
+}
+
+export function arityText(arity: { exactly: number } | { atLeast: number }): string {
+  return 'exactly' in arity
+    ? `${String(arity.exactly)} arguments`
+    : `at least ${String(arity.atLeast)} arguments`;
 }
 
 export function defaultFormatValue(value: CellValue): string {
@@ -156,6 +211,30 @@ interface Operand {
   readonly value: CellValue;
 }
 
+/** One trimmed, NFC element, or none when the text is empty. */
+function oneElement(text: string): string[] {
+  const e = normaliseElement(text);
+  return e === '' ? [] : [e];
+}
+
+/**
+ * The one element a number, amount or date contributes when its `text` is a
+ * locale rendering or absent (FX-09): the same on every replica and in the
+ * sync projection, which runs with no locale.
+ */
+function canonicalSpelling(
+  value: CellValue & { readonly kind: 'number' | 'currency' | 'date' },
+): string {
+  switch (value.kind) {
+    case 'number':
+      return String(value.value);
+    case 'currency':
+      return `${value.code} ${String(value.value)}`;
+    case 'date':
+      return value.iso;
+  }
+}
+
 class Evaluator {
   private readonly depth: number;
   private readonly format: (value: CellValue) => string;
@@ -199,9 +278,21 @@ class Evaluator {
 
   private listItemText(item: Reference | Separator): string {
     if (item.kind === 'separator') return item.text;
-    return this.operands(item)
+    return this.textOperands(item)
       .map((o) => this.format(this.unwrap(o.value)))
       .join(', ');
+  }
+
+  /**
+   * The operands Concat and lists spell out. A whole column reads its
+   * populated cells only: a cell its format excluded (FMT-05) is `blank` with
+   * its stored text, kept by the resolver for the set operators, but it is
+   * still blank here and would only add an empty piece.
+   */
+  private textOperands(ref: Reference): Operand[] {
+    const operands = this.operands(ref);
+    const column = ref.kind === 'column' || (ref.kind === 'bound' && ref.ref.kind === 'column');
+    return column ? operands.filter((o) => o.value.kind !== 'blank') : operands;
   }
 
   private call(node: Expr & { kind: 'call' }): CellValue {
@@ -210,6 +301,106 @@ class Evaluator {
         return { kind: 'text', text: node.args.map((arg) => this.textOf(arg)).join('') };
       case 'Sum':
         return this.sum(node.args);
+      default:
+        return this.setOperator(node.name, node.args);
+    }
+  }
+
+  /**
+   * The set operators (FX-09, ADR-053): every argument is a set of the strings
+   * in its cells (`sets.ts`), the result is a `list` of the elements that
+   * survive, so it renders comma-separated and feeds another set function
+   * unchanged. Arity is checked before any operand is read. Union, Inter, Diff
+   * and Cross take two or more sets; Comp takes exactly the set and its
+   * universe — there is no implicit universe.
+   */
+  private setOperator(name: SetFunctionName, args: readonly Expr[]): CellValue {
+    const arity = name === 'Comp' ? { exactly: 2 } : { atLeast: 2 };
+    const wrong = 'exactly' in arity ? args.length !== arity.exactly : args.length < arity.atLeast;
+    if (wrong) fail({ kind: 'arity', name, arity });
+    const sets = args.map((arg) => this.setOf(arg));
+    const [a = [], u = []] = sets;
+    let elements: string[];
+    switch (name) {
+      case 'Union':
+        elements = union(sets);
+        break;
+      case 'Inter':
+        elements = intersection(sets);
+        break;
+      case 'Diff':
+        elements = difference(sets);
+        break;
+      case 'Comp':
+        elements = complement(a, u);
+        break;
+      case 'Cross': {
+        // Refused from the operand sizes, before a tuple is allocated (ADR-053).
+        const count = crossCardinality(sets);
+        if (count > MAX_CROSS_TUPLES) fail({ kind: 'too-many-tuples', count });
+        elements = cross(sets);
+        break;
+      }
+    }
+    return { kind: 'list', items: elements.map((text) => ({ kind: 'text', text })) };
+  }
+
+  /** The set one argument yields: a literal split like a cell, a nested result, or every cell a reference covers. */
+  private setOf(arg: Expr): string[] {
+    switch (arg.kind) {
+      case 'string':
+        return splitSetElements(arg.value);
+      case 'number':
+        return [String(arg.value)];
+      case 'call':
+        return this.elementsOf(this.call(arg));
+      case 'method':
+        return this.elementsOf(this.method(arg));
+      default:
+        return dedupe(this.operands(arg).flatMap((o) => this.elementsOf(this.unwrap(o.value))));
+    }
+  }
+
+  /**
+   * The elements one value contributes. Text splits as a cell does. A list's
+   * items are the elements — a Split boundary wins over a comma inside a
+   * piece. A number, amount or date is one element: its stored spelling when
+   * the cell is Automatic, otherwise a locale-independent spelling, so every
+   * replica computes the same set. A blank contributes nothing unless it is a
+   * cell its format excluded, whose stored text still counts (FMT-05).
+   */
+  private elementsOf(value: CellValue): string[] {
+    switch (value.kind) {
+      case 'blank':
+        return value.text === undefined ? [] : splitSetElements(value.text);
+      case 'list':
+        return dedupe(value.items.flatMap((item) => this.listElement(item)));
+      case 'error':
+        fail(value.error);
+        break;
+      case 'text':
+        return splitSetElements(value.text);
+      default:
+        return value.text !== undefined && value.rendered === undefined
+          ? splitSetElements(value.text)
+          : [canonicalSpelling(value)];
+    }
+  }
+
+  /** One list item as an element: never re-split; a nested list flattens one level. */
+  private listElement(item: CellValue): string[] {
+    switch (item.kind) {
+      case 'blank':
+        return item.text === undefined ? [] : oneElement(item.text);
+      case 'list':
+        return item.items.flatMap((inner) => this.listElement(inner));
+      case 'error':
+        fail(item.error);
+        break;
+      case 'text':
+        return oneElement(item.text);
+      default:
+        return [canonicalSpelling(item)];
     }
   }
 
@@ -225,7 +416,7 @@ class Evaluator {
       case 'method':
         return this.format(this.method(arg));
       default:
-        return this.operands(arg)
+        return this.textOperands(arg)
           .map((o) => this.format(this.unwrap(o.value)))
           .join(', ');
     }

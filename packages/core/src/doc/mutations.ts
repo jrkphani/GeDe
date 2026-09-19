@@ -35,6 +35,7 @@ import {
   type StripCount,
   type TableMap,
 } from './schema.js';
+import { duplicateTableTitle, refreshLineageLabelsInTransaction } from './labels.js';
 import { firstSheetMap, SEED_ORIGIN } from './seed.js';
 
 function transact<T>(gd: GedeDoc, fn: () => T): T {
@@ -243,9 +244,24 @@ export function createTable(gd: GedeDoc, options: CreateTableOptions): Id {
   });
 }
 
-export function setTableTitle(gd: GedeDoc, tableId: Id, title: string): void {
-  transact(gd, () => {
-    requireTable(gd, tableId).set('title', title);
+/**
+ * Rename a table (ADR-051). False — nothing written — when another table of
+ * the workbook already carries the title (trimmed, case-insensitive): an `@`
+ * path names a table by title and would reach only the first. The pulled and
+ * mapping columns anywhere that spell this table's title re-spell in the same
+ * transaction (REF-02, REF-03), so a rename and what it re-spells are one
+ * undo step. The title is stored as given; the caller trims and refuses an
+ * empty one. Unchanged writes nothing.
+ */
+export function setTableTitle(gd: GedeDoc, tableId: Id, title: string): boolean {
+  return transact(gd, () => {
+    const table = requireTable(gd, tableId);
+    if (duplicateTableTitle(gd, tableId, title) !== null) return false;
+    if (readString(table, 'title') !== title) {
+      table.set('title', title);
+      refreshLineageLabelsInTransaction(gd, tableId);
+    }
+    return true;
   });
 }
 

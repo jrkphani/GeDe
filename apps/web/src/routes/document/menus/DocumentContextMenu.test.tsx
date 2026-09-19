@@ -5,9 +5,11 @@
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { useState } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addDerivedColumn,
   createSheet,
   createTable,
   LATTICE,
@@ -23,6 +25,7 @@ import {
 
 import { LiveRegion } from '../../../announce.js';
 import { useYVersion } from '../../../doc/use-y.js';
+import type { RenameTarget, TableRenaming } from '../grid/rename.js';
 import { useGrid, type Grid } from '../grid/use-grid.js';
 import type { CellClipboard } from '../keys/clipboard.js';
 import { TableView } from '../TableView.js';
@@ -57,6 +60,25 @@ function Harness({ editable = true, phone = false }: { editable?: boolean; phone
   const g = useGrid(gd, editable);
   grid.current = g;
   useYVersion(gd.tables, { depth: 'shallow' });
+  // ADR-051: the shell's rename state, as `DocumentShell` holds it — one open field.
+  const [renaming, setRenaming] = useState<RenameTarget | null>(null);
+  const rename: TableRenaming | undefined = editable
+    ? {
+        target: renaming,
+        start: setRenaming,
+        commit: (target, name) => {
+          const result =
+            target.kind === 'column'
+              ? g.commands.renameColumn(target.tableId, target.colId, name)
+              : g.commands.setTableTitle(target.tableId, name);
+          if (result.ok) setRenaming(null);
+          return result;
+        },
+        cancel: () => {
+          setRenaming(null);
+        },
+      }
+    : undefined;
   const map = tableMap(gd, tableId);
   if (map === null) return null;
   const context: MenuContext = {
@@ -67,6 +89,7 @@ function Harness({ editable = true, phone = false }: { editable?: boolean; phone
     selectedCell: g.cell,
     canvas,
     sheets,
+    rename: editable ? setRenaming : undefined,
     slots: undefined,
   };
   return (
@@ -83,6 +106,7 @@ function Harness({ editable = true, phone = false }: { editable?: boolean; phone
           pinnedLeft={null}
           actions={g.actions}
           commands={g.commands}
+          rename={rename}
         />
       </div>
       <LiveRegion />
@@ -141,6 +165,7 @@ describe('context menus', () => {
       'Select the table',
       'Wrap text',
       'Fit row height to content',
+      'Fit column width to content',
     ]);
     expect(within(menu).getAllByRole('separator').length).toBeGreaterThanOrEqual(7);
     // KEYS-08: the shortcut sits beside its command.
@@ -171,6 +196,11 @@ describe('context menus', () => {
     const unmerge = screen.getByRole('menuitem', { name: 'Unmerge cells' });
     expect(unmerge).toHaveAttribute('aria-disabled', 'true');
     expect(unmerge).toHaveAttribute('title', 'the cell is not merged');
+    // ADR-051 / GRID-11: the cell menu fits the column too — the route that stays when the
+    // header row (and so the column menu) is hidden; it carries the same reason.
+    const fitColumn = screen.getByRole('menuitem', { name: 'Fit column width to content' });
+    expect(fitColumn).toHaveAttribute('aria-disabled', 'true');
+    expect(fitColumn).toHaveAttribute('title', 'text cannot be measured in this browser');
   });
 
   it('MENU-04 GRID-01 merge with the cell to the right and below spans from the cell; covered cells leave the grid but keep their addresses; unmerge brings them back', async () => {
@@ -270,6 +300,7 @@ describe('context menus', () => {
       'Show category options',
       'Add column before',
       'Add column after',
+      'Rename column…',
       'Delete column',
       'Hide column',
       'Fit width to content',
@@ -392,6 +423,75 @@ describe('context menus', () => {
     const selected = document.querySelector('[role="gridcell"][aria-selected="true"]');
     expect(selected).not.toBeNull();
     expect(selected).toHaveFocus();
+  });
+
+  it('MENU-03 MENU-05 KEYS-08 Rename column… opens the header’s inline name field (focused, the name selected); Enter writes the name and focus returns to the header; the item names F2 and is disabled with the reason on a derived column (ADR-051)', async () => {
+    render(<Harness />);
+    const record = tableById(gd, tableId)!;
+    const header = screen.getAllByRole('columnheader')[1]!;
+    fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Column menu' });
+    const item = screen.getByRole('menuitem', { name: /^Rename column…/ });
+    expect(item).toHaveTextContent('F2');
+    await userEvent.click(item);
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    const field = screen.getByRole('textbox', { name: 'Column name' });
+    expect(field).toHaveValue('Column 2');
+    await waitFor(() => {
+      expect(field).toHaveFocus();
+    });
+    expect(field.closest('[role="columnheader"]')).toBe(header);
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Owner{Enter}');
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Owner');
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Renamed column Column 2 to Owner');
+    expect(screen.getAllByRole('columnheader')[1]).toHaveFocus();
+    // A derived column is named by its signature: the item is present, disabled, with the reason.
+    const derived = addDerivedColumn(gd, tableId, {
+      sourceColId: record.columns[0]!.id,
+      method: 'Format',
+      args: ['Trimmed'],
+    })!;
+    const ctx: MenuContext = {
+      gd,
+      editable: true,
+      commands: grid.current!.commands,
+      clipboard,
+      selectedCell: null,
+      canvas,
+      sheets,
+      rename: vi.fn(),
+    };
+    expect(
+      columnMenuEntries(ctx, { kind: 'column', tableId, colId: derived }).find(
+        (e) => e.id === 'col-rename',
+      ),
+    ).toMatchObject({ disabledReason: 'a derived column is named by its signature' });
+    // The table menu carries Rename table… before Delete table, and it opens the title's field.
+    const table = menuEntriesFor(ctx, { kind: 'table', tableId }).map((e) => e.id);
+    expect(table.slice(table.indexOf('s-rename'))).toEqual([
+      's-rename',
+      'table-rename',
+      's-delete',
+      'table-delete',
+      's-view',
+      'fit',
+    ]);
+    fireEvent.contextMenu(screen.getByText('Table 1'), { clientX: 40, clientY: 5 });
+    await screen.findByRole('menu', { name: 'Table menu' });
+    await userEvent.click(screen.getByRole('menuitem', { name: /^Rename table…/ }));
+    const title = await screen.findByRole('textbox', { name: 'Table title' });
+    expect(title).toHaveValue('Table 1');
+    await waitFor(() => {
+      expect(title).toHaveFocus();
+    });
+    await userEvent.clear(title);
+    await userEvent.type(title, 'Owners{Enter}');
+    expect(tableById(gd, tableId)?.title).toBe('Owners');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Renamed table Table 1 to Owners');
   });
 
   it('KEYS Shift+F10 and the ContextMenu key open the menu for the focused cell', async () => {

@@ -57,7 +57,7 @@ _The lattice is 160 × 22 px. Geometry and addressing are one fact._
 - **GRID-05** — Traversal: Tab / Shift-Tab and arrows move, wrapping at row ends. Moving past the final row appends a row and places the cursor in it.
 - **GRID-06** — Commit: Enter commits and moves down; Tab commits and moves right; blur commits. Committing must never occur during IME composition.
 - **GRID-07** — Add row · column: A dashed add-row strip sits beneath the last row of the selected table; an add-column stub sits at its right edge. Each occupies exactly one lattice unit.
-- **GRID-08** — Resize: A divider at each column header resizes that column; a corner handle scales the whole table. Both snap. _Amended by ADR-049 (#167): a divider under each row's handle resizes that row; a divider on a selected band of rows or columns resizes every member proportionally; a double-click (or Enter on the focused divider) fits the column or row to its content; the corner scales widths and heights alike. Everything snaps to whole lattice units; the minimum is one unit each way._
+- **GRID-08** — Resize: A divider at each column header resizes that column; a corner handle scales the whole table. Both snap. _Amended by ADR-049 (#167): a divider under each row's handle resizes that row; a divider on a selected band of rows or columns resizes every member proportionally; a double-click (or Enter on the focused divider) fits the column or row to its content; the corner scales widths and heights alike. Everything snaps to whole lattice units; the minimum is one unit each way._ _Amended by ADR-051: with the header row hidden (GRID-11) the column dividers sit in a one-row strip over the first body row, so a column resizes by pointer and keyboard either way; while the table is selected every column boundary shows its divider at rest._
 - **GRID-09** — Wrap: Wrapped rows occupy two lattice rows so addressing stays exact. _Amended by ADR-049 (#167): a wrapped row occupies as many whole lattice rows as its content needs (n ≥ 1), measured and stored by the replica that edits it, so addressing stays exact on every replica; wrap is a setting at cell, row, column and table scope; off, text clips at the cell._
 - **GRID-10** — Frozen columns: A per-table count shades the leading columns, draws a heavier rule at the boundary, and determines which columns the pinned panel carries.
 - **GRID-11** — Header rows · footer: Counts of 0 or 1 show or hide the column-header row and the footer count strip.
@@ -73,7 +73,7 @@ _Set on the column, overridable per cell._
 - **FMT-05** — Invalid: A value that cannot be parsed under an explicit format tints the cell and is excluded from aggregation; it is never silently coerced to zero.
 - **FMT-06** — Inheritance: Appended rows inherit the column format. The inspector states the scope of the change before it is applied.
 
-## FX — Formulas (8)
+## FX — Formulas (9)
 
 _Typing `=` opens formula entry with a menu of available forms._
 
@@ -85,6 +85,7 @@ _Typing `=` opens formula entry with a menu of available forms._
 - **FX-06** — Evaluation: Results track their sources; editing a referenced cell updates every dependent. Formulas may reference formulas; a depth guard reports `⚠ circular`.
 - **FX-07** — Presentation: A formula cell renders its value with a reference badge and the expression on a secondary line. Re-opening restores the expression, not the result.
 - **FX-08** — Highlighting: While a formula cell is selected or edited, every cell it reads is outlined in the colour of its operand index; ranges draw as one block. Outlines follow pan and zoom and clear on deselect.
+- **FX-09** — Set operators: `=Union(a, b, …)`, `=Inter(a, b, …)`, `=Diff(a, b, …)`, `=Comp(a, u)` and `=Cross(a, b, …)` read every argument as a set of the strings in its cells: the text split on commas, semicolons and newlines, each element trimmed and NFC-normalised, empties dropped, duplicates collapsed on first occurrence; equality is exact and case-sensitive. Arguments may be cell addresses, ranges, columns, `@` paths, quoted literals or nested calls, separated by `,` or `;`; a blank cell is the empty set; an Automatic cell splits its stored text as typed; under an explicit format a number, amount or date is one element, spelled locale-independently, so every replica computes the same set, and a cell the format could not parse (FMT-05) contributes its stored text; a list (a `Split` or another set) contributes its items as they are. Union is the elements in any set, Inter the elements in every set, Diff the first set less the union of the rest, Comp the elements of the universe `u` (the second argument; there is no implicit universe) not in `a`, Cross every ordered tuple first-operand-major rendered `(a, b)`. Results keep first-seen order, render comma-separated, feed another set function unchanged (a separator inside parentheses does not split) and an empty result is an empty cell. Union, Inter, Diff and Cross take two or more arguments, Comp exactly two; anything else yields `⚠ Comp takes 2 arguments` in the error family. A Cross past 10,000 tuples is refused from the operand sizes as `⚠ too many tuples` before any tuple is built. Names parse case-insensitively with the aliases Intersect, Intsec, Minus, Compl, Prod, Cart, Product and commit in canonical spelling; the `=` forms menu offers the five wherever Concat is. _Added by ADR-053 (owner-directed, 2026-09-19)._
 
 ## REF — References and cross-table relations (5)
 
@@ -152,8 +153,8 @@ _Right-click on a column header or a cell._
 
 - **MENU-01** — Parity: Menus follow desktop spreadsheet order and grouping, with separators between kinds.
 - **MENU-02** — Disabled: Unavailable commands render disabled with their reason available on hover — never hidden. Absence is more confusing than a greyed item.
-- **MENU-03** — Column menu: Graph this table; freeze; sort and sort options; quick filter and filter options; add, remove and configure a category; add column before/after; delete; hide; fit width; clipboard; wrap text.
-- **MENU-04** — Cell menu: Freeze; add row above/below; add column before/after; delete row/column; sort, filter, category options; merge controls; cut, copy, copy snapshot, paste, paste and match style, clear all; wrap text.
+- **MENU-03** — Column menu: Graph this table; freeze; sort and sort options; quick filter and filter options; add, remove and configure a category; add column before/after; delete; hide; fit width; clipboard; wrap text. _Amended by ADR-051: Rename column… (F2) between Add column after and Delete column, disabled with the reason on a derived, pulled or mapping column; the header's ▼ carries it too._
+- **MENU-04** — Cell menu: Freeze; add row above/below; add column before/after; delete row/column; sort, filter, category options; merge controls; cut, copy, copy snapshot, paste, paste and match style, clear all; wrap text. _Amended by ADR-051: Fit column width to content beside Fit row height to content, so a column fits with the header row hidden; the table's context menu (on the title) carries Rename table… (F2); the toolbar's Table menu does not (one home, ADR-041)._
 - **MENU-05** — Dismissal: Escape or a click outside closes; focus returns to the trigger element.
 
 ## INSP — Inspector (12)
@@ -163,7 +164,7 @@ _A 322 px rail with two modes, selected from the chrome._
 - **INSP-01** — Modes: Format (Table, Cell, Text, Arrange, and Graph when a graph is selected) and Organize (Categories, Sort, Filter). The chrome toggles carry the active state.
 - **INSP-02** — Collapse: The rail collapses to a 38 px strip and back; below 1200 px it starts collapsed, and below 768 px it does not render.
 - **INSP-03** — Selected node: The head of the rail always states the selected object, its address when a cell is selected, row and column counts, derived count and grouping.
-- **INSP-04** — Table tab: Table styles; title and caption visibility; header row, header column and footer row counts; row and column counts that insert or delete structure; outline; gridline density; alternating row colour; row and column size with fit-to-content. _Amended by ADR-049 (#167): Height and Width act on the selected rows and columns, each with Fit to content beside it; Distribute rows / columns evenly; the table's default wrap._
+- **INSP-04** — Table tab: Table styles; title and caption visibility; header row, header column and footer row counts; row and column counts that insert or delete structure; outline; gridline density; alternating row colour; row and column size with fit-to-content. _Amended by ADR-049 (#167): Height and Width act on the selected rows and columns, each with Fit to content beside it; Distribute rows / columns evenly; the table's default wrap._ _Amended by ADR-051: Title text beside the Title switch (as Caption text sits beside Caption) and a Name field for the selected column — the homes of Rename table and Rename column; the title bar and the column headers rename inline by double-click, F2 or Enter, and the context menus carry the routes; a name is unique — a column's in its table, a table's in the workbook — and every lineage label follows a rename._
 - **INSP-05** — Cell tab: Data format with its options, fill, a positional border matrix (all, any single edge, outline, paired, none) with hairline/strong/accent weight, and conditional highlighting rules.
 - **INSP-06** — Text tab: Font family, four-step weight, size, inline marks, character styles, text colour, horizontal and vertical alignment, wrap.
 - **INSP-07** — Arrange tab: Stacking order, canvas layout, size, position in both pixels and grid address, pin to viewport, DAG edges.
@@ -284,7 +285,7 @@ _Deletion is conditional on sharing history. A workscape that has ever had a par
 | DOC | 7 |
 | GRID | 11 |
 | FMT | 6 |
-| FX | 8 |
+| FX | 9 |
 | REF | 5 |
 | HIER | 10 |
 | FIND | 10 |
@@ -300,4 +301,4 @@ _Deletion is conditional on sharing history. A workscape that has ever had a par
 | RESP | 5 |
 | ONB | 14 |
 | LIB-D | 11 |
-| **Total** | **172** |
+| **Total** | **173** |

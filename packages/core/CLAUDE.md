@@ -24,12 +24,13 @@ Read the root `CLAUDE.md` first.
 ## Formula grammar
 
 - The grammar is the PRD's (§13, §22): `=Concat(a, b, …)`, `=Sum(range | list | @paths | column)`, lists `=A2, D5` and `=@Path, @Path` with any typed separator, `@` entity paths with dotted segments (quoted when they contain spaces or dots), quoted string literals, ranges `B2:B14` and whole columns `B:B`.
+- The set operators (FX-09, ADR-053): `=Union(a, b, …)`, `=Inter(a, b, …)`, `=Diff(a, b, …)`, `=Comp(a, u)`, `=Cross(a, b, …)` over the strings in cells — `formula/sets.ts` is the algebra, the evaluator only plumbs operands into it. Names commit in canonical spelling; the aliases live in the parser's name map and nowhere else.
 - Function names and A1 addresses are ASCII in every locale; `@` paths may contain any script.
 - The parser reports error positions. Sum over a text cell yields the `text_in_range` error naming the offender; mixed currencies yield an error, never a conversion (FMT-03, FX-02).
 
 ## Error values
 
-Errors are values, not exceptions. Evaluation returns a `Result<Value, FormulaError>`; `FormulaError` carries `kind` (`circular`, `text_in_range`, `mixed_currency`, `invalid_format`, `parse`, `unknown_reference`), a message and, where relevant, the offending cell id. Throwing from evaluation is a defect.
+Errors are values, not exceptions. Evaluation returns a `Result<Value, FormulaError>`; `FormulaError` carries `kind` (`circular`, `text_in_range`, `mixed_currency`, `invalid_format`, `parse`, `unknown_reference`, `arity`, `too_many_tuples`), a message and, where relevant, the offending cell id. Throwing from evaluation is a defect.
 
 ## Text algebra
 

@@ -4,6 +4,7 @@
  */
 export * from './schema.js';
 export * from './geometry.js';
+export * from './labels.js';
 export * from './mutations.js';
 export * from './sheets.js';
 export * from './presence.js';

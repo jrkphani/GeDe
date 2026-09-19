@@ -126,10 +126,13 @@ export function DocumentContextMenu({
       // focus — unless a command moved the selection (an inserted row, the neighbour of a deleted
       // one), in which case the new cell is where the keyboard should be.
       returnFocus={(opener) => {
-        // ADR-048: Rename sheet swapped the tab for its name field, which keeps focus; after
-        // Delete sheet or Add sheet after, the strip's selected tab (the neighbour, the new
-        // sheet) is where the keyboard is — the tab the menu opened on may be gone.
-        const renameField = document.querySelector<HTMLElement>('[data-sheet-rename]');
+        // ADR-048 / ADR-051: Rename sheet, Rename column or Rename table swapped the tab, the
+        // header's label or the title text for a name field, which keeps focus; after Delete
+        // sheet or Add sheet after, the strip's selected tab (the neighbour, the new sheet) is
+        // where the keyboard is — the tab the menu opened on may be gone.
+        const renameField = document.querySelector<HTMLElement>(
+          '[data-sheet-rename], [data-table-rename]',
+        );
         if (renameField !== null) return renameField;
         if (opener?.matches('[role="tab"][data-value]') === true) {
           return (
