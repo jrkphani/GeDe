@@ -16,6 +16,7 @@ import {
   isFormula,
   readString,
   rowMeta,
+  rowOutlineColumnId,
   tableRecord,
   type CellContent,
   type GedeDoc,
@@ -60,6 +61,7 @@ function cellFormats(table: TableMap): Record<CellKey, CellFormat> | undefined {
 export function tableStructure(table: TableMap): TableStructure {
   const record = tableRecord(table);
   const overrides = cellFormats(table);
+  const metas = record.rows.map((rowId) => rowMeta(table, rowId));
   return {
     id: record.id,
     sheetId: record.sheetId,
@@ -79,7 +81,9 @@ export function tableStructure(table: TableMap): TableStructure {
     rowHeights: rowHeights(table, record),
     // Effective depths (HIER-02): a merge can leave a stored depth deeper than the
     // row above allows, and an `@` path must be qualified by the parent the reader sees.
-    rowDepths: effectiveDepths(record.rows.map((rowId) => rowMeta(table, rowId).depth)),
+    rowDepths: effectiveDepths(metas.map((m) => m.depth)),
+    // ADR-051: the column each row's outline is drawn in; the `@` index labels the row by it.
+    rowOutlineColumns: metas.map((m) => rowOutlineColumnId(record, m)),
     ...(overrides === undefined ? {} : { cellFormats: overrides }),
   };
 }

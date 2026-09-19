@@ -15,6 +15,7 @@ import {
   createSheet,
   createTable,
   createUndoManager,
+  deleteColumn,
   deleteRow,
   hideColumn,
   openDocument,
@@ -22,6 +23,7 @@ import {
   rowMeta,
   setRowDepth,
   setRowHeight,
+  unhideColumn,
   tableAddresses,
   tableById,
   tableMap,
@@ -148,6 +150,36 @@ describe('nest and promote (HIER-02, HIER-10)', () => {
         }
         expect(tableAddresses(table)).toEqual(before);
       }),
+    );
+  });
+
+  test('HIER-02 HIER-04 HIER-09 any sequence of nests and promotes from any column — known, hidden or unknown — keeps the outline valid, every address in place, and every row’s outline column a visible column; a top-level row has none of its own', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.tuple(fc.nat(5), fc.boolean(), fc.nat(3)), { maxLength: 40 }),
+        (ops) => {
+          const gd = fresh();
+          const { tableId, rows, cols, table } = seed(gd);
+          const hiddenCol = cols[1] ?? '';
+          hideColumn(gd, tableId, hiddenCol);
+          const before = tableAddresses(table);
+          for (const [pick, nest, col] of ops) {
+            const rowId = rows[pick] ?? '';
+            // 0 → column A, 1 → the hidden column, 2 → a column not in the table, 3 → no column.
+            const colId =
+              col === 0 ? cols[0] : col === 1 ? hiddenCol : col === 2 ? 'nope' : undefined;
+            if (nest) nestRow(gd, tableId, rowId, colId);
+            else promoteRow(gd, tableId, rowId, colId);
+            expect(isValidDepths(rowDepths(gd, tableId))).toBe(true);
+            const outline = tableOutline(table);
+            for (const row of outline.rows) {
+              expect(row.column).toBe(cols[0]);
+              if (row.depth === 0) expect(rowMeta(table, row.id).outlineColumn).toBeNull();
+            }
+          }
+          expect(tableAddresses(table)).toEqual(before);
+        },
+      ),
     );
   });
 
@@ -415,6 +447,124 @@ describe('outline column and grouping (HIER-04, HIER-08)', () => {
     expect(rowDepths(gd, tableId)).toEqual([0, 1, 2, 1, 0, 0]);
     expect(nestRow(gd, tableId, rows[4] ?? '')).toBe(1); // the data still takes depth
     expect(rowDepths(gd, tableId)).toEqual([0, 1, 2, 1, 1, 0]);
+  });
+});
+
+describe('the outline column of a row (ADR-051; HIER-04, HIER-05, HIER-09, HIER-10)', () => {
+  test('HIER-04 HIER-10 a nest names the column its outline is drawn in, stored per row; the subtree keeps its own; a promote keeps it until the row reaches the top level, which clears it', () => {
+    const gd = fresh();
+    const s = seed(gd);
+    const [r0, r1, r2] = s.rows;
+    const [colA, colB] = s.cols;
+    if (r0 === undefined || r1 === undefined || r2 === undefined) throw new Error('rows');
+    if (colA === undefined || colB === undefined) throw new Error('cols');
+    // Nothing named: the table's outline column (A) draws every row, and nothing is stored.
+    expect(nestRow(gd, s.tableId, r1)).toBe(1);
+    expect(rowMeta(s.table, r1).outlineColumn).toBeNull();
+    expect(rowOutline(s.table, r1)?.column).toBe(colA);
+    // From column B: r2 draws in B, r1 stays in A, the table default is untouched.
+    expect(nestRow(gd, s.tableId, r2, colB)).toBe(1);
+    expect(rowMeta(s.table, r2).outlineColumn).toBe(colB);
+    expect(rowOutline(s.table, r2)?.column).toBe(colB);
+    expect(rowOutline(s.table, r1)?.column).toBe(colA);
+    expect(tableOutline(s.table).column).toBe(colA);
+    expect(tableById(gd, s.tableId)?.outlineColumn).toBeNull();
+    // Nesting r2 again from A moves its outline to A; the depth is the same write.
+    expect(nestRow(gd, s.tableId, r2, colA)).toBe(2);
+    expect(rowOutline(s.table, r2)?.column).toBe(colA);
+    expect(nestRow(gd, s.tableId, r2, colB)).toBeNull(); // HIER-02 refuses: nothing moves
+    expect(rowOutline(s.table, r2)?.column).toBe(colA);
+    // Promote from B does not move the outline (the nest chose it); the top level clears it.
+    expect(promoteRow(gd, s.tableId, r2, colB)).toBe(1);
+    expect(rowMeta(s.table, r2).outlineColumn).toBe(colA);
+    expect(promoteRow(gd, s.tableId, r2)).toBe(0);
+    expect(rowMeta(s.table, r2).outlineColumn).toBeNull();
+    expect(rowOutline(s.table, r2)?.column).toBe(colA);
+  });
+
+  test('HIER-04 HIER-05 the subtree keeps its own columns: nesting a parent from B leaves its children where they were, and the chevron follows the parent’s column', () => {
+    const gd = fresh();
+    const s = outlineFixture(gd); // r0 > r1 > r2, r0 > r3
+    const [, r1, r2, r3] = s.rows;
+    const [colA, colB] = s.cols;
+    if (r1 === undefined || r2 === undefined || r3 === undefined) throw new Error('rows');
+    if (colA === undefined || colB === undefined) throw new Error('cols');
+    promoteRow(gd, s.tableId, r1); // r1 to 0 with r2; r3 stays at 1 under r1
+    expect(rowDepths(gd, s.tableId)).toEqual([0, 0, 1, 1, 0, 0]);
+    expect(nestRow(gd, s.tableId, r1, colB)).toBe(1);
+    expect(rowDepths(gd, s.tableId)).toEqual([0, 1, 2, 2, 0, 0]);
+    const outline = tableOutline(s.table);
+    expect(outline.rows.map((r) => r.column)).toEqual([colA, colB, colA, colA, colA, colA]);
+    expect(outline.rows[1]).toMatchObject({ hasChildren: true, column: colB });
+    expect(rowMeta(s.table, r2).outlineColumn).toBeNull();
+  });
+
+  test('HIER-04 an unknown or hidden column is ignored — the nest still happens where the row was — and a column hidden or deleted later falls back to the table’s outline column without rewriting the row', () => {
+    const gd = fresh();
+    const s = seed(gd);
+    const [, r1, r2] = s.rows;
+    const [colA, colB] = s.cols;
+    if (r1 === undefined || r2 === undefined || colA === undefined || colB === undefined)
+      throw new Error('fixture');
+    expect(nestRow(gd, s.tableId, r1, 'not-a-column')).toBe(1);
+    expect(rowMeta(s.table, r1).outlineColumn).toBeNull();
+    hideColumn(gd, s.tableId, colB);
+    expect(nestRow(gd, s.tableId, r2, colB)).toBe(1);
+    expect(rowMeta(s.table, r2).outlineColumn).toBeNull();
+    expect(rowOutline(s.table, r2)?.column).toBe(colA);
+    unhideColumn(gd, s.tableId, colB);
+    expect(nestRow(gd, s.tableId, r2, colB)).toBe(2);
+    expect(rowOutline(s.table, r2)?.column).toBe(colB);
+    // Hidden again: the stored column stays (the row remembers), the outline falls back.
+    hideColumn(gd, s.tableId, colB);
+    expect(rowMeta(s.table, r2).outlineColumn).toBe(colB);
+    expect(rowOutline(s.table, r2)?.column).toBe(colA);
+    unhideColumn(gd, s.tableId, colB);
+    expect(rowOutline(s.table, r2)?.column).toBe(colB);
+    deleteColumn(gd, s.tableId, colB);
+    expect(rowOutline(s.table, r2)?.column).toBe(colA);
+    expect(rowOutline(s.table, r2)?.depth).toBe(2);
+  });
+
+  test('HIER-09 the column a row’s outline is drawn in moves no address: B and C read the same before and after', () => {
+    const gd = fresh();
+    const s = seed(gd);
+    const before = tableAddresses(s.table);
+    nestRow(gd, s.tableId, s.rows[1] ?? '', s.cols[1]);
+    nestRow(gd, s.tableId, s.rows[2] ?? '', s.cols[1]);
+    nestRow(gd, s.tableId, s.rows[2] ?? '', s.cols[0]);
+    expect(tableAddresses(s.table)).toEqual(before);
+    expect(cellAddress(s.table, s.rows[2] ?? '', s.cols[1] ?? '')).toBe('C7');
+  });
+
+  test('HIER-01 (partial: the write) KEYS-03 KEYS-06 a nest from another column is one undo step: depth and column go back together', () => {
+    const gd = fresh();
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const s = seed(gd);
+    undo.clear();
+    expect(nestRow(gd, s.tableId, s.rows[1] ?? '', s.cols[1])).toBe(1);
+    expect(undo.undoStack).toHaveLength(1);
+    undo.undo();
+    expect(rowMeta(s.table, s.rows[1] ?? '')).toMatchObject({ depth: 0, outlineColumn: null });
+    undo.redo();
+    expect(rowMeta(s.table, s.rows[1] ?? '')).toMatchObject({
+      depth: 1,
+      outlineColumn: s.cols[1],
+    });
+  });
+
+  test('HIER-10 the outline column written on one replica reads the same on the other', () => {
+    const { a, b } = pair();
+    const { tableId, rows, cols } = seed(a);
+    nestRow(a, tableId, rows[1] ?? '', cols[1]);
+    const tb = tableMap(b, tableId);
+    if (tb === null) throw new Error('table');
+    expect(rowMeta(tb, rows[1] ?? '')).toMatchObject({ depth: 1, outlineColumn: cols[1] });
+    expect(rowOutline(tb, rows[1] ?? '')?.column).toBe(cols[1]);
+    promoteRow(b, tableId, rows[1] ?? '');
+    const ta = tableMap(a, tableId);
+    if (ta === null) throw new Error('table');
+    expect(rowMeta(ta, rows[1] ?? '')).toMatchObject({ depth: 0, outlineColumn: null });
   });
 });
 

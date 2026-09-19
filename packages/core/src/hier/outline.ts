@@ -16,6 +16,7 @@ import type { Id } from '../ids.js';
 import {
   outlineColumnId,
   rowMeta,
+  rowOutlineColumnId,
   tableRecord,
   type TableMap,
   type TableRecord,
@@ -136,13 +137,20 @@ export interface OutlineRow {
   readonly splitChild: boolean;
   readonly canNest: boolean;
   readonly canPromote: boolean;
+  /**
+   * The column this row's indentation, ↳ and chevron are drawn in (ADR-051,
+   * HIER-04): the row's own `outlineColumn` when it exists and is visible,
+   * else the table's `column`. Null when every column is hidden.
+   */
+  readonly column: Id | null;
 }
 
 export interface TableOutline {
   readonly rows: readonly OutlineRow[];
   /**
-   * The column that carries indentation, ↳ and the chevron, or null when every
-   * column is hidden (HIER-04). Whether it is *shown* is the viewer's affair:
+   * The table's default column for indentation, ↳ and the chevron, or null
+   * when every column is hidden (HIER-04); a row nested from another column
+   * carries its own in `rows[i].column` (ADR-051). Whether it is *shown* is the viewer's affair:
    * while their view groups, sorts or filters the table (ADR-026) the bands own
    * the column and depth is kept in the data but not drawn (HIER-08).
    */
@@ -159,21 +167,24 @@ export function tableOutline(
   const hidden = hiddenRows(
     metas.map((m, i) => ({ depth: depths[i] ?? 0, collapsed: m.collapsed })),
   );
+  const column = outlineColumnId(record);
   const rows = record.rows.map((id, i): OutlineRow => {
     const parent = parentIndex(depths, i);
+    const meta = metas[i];
     return {
       id,
       depth: depths[i] ?? 0,
-      collapsed: metas[i]?.collapsed ?? false,
+      collapsed: meta?.collapsed ?? false,
       hidden: hidden[i] ?? false,
       hasChildren: hasDescendants(depths, i),
       parent: parent === null ? null : (record.rows[parent] ?? null),
-      splitChild: metas[i]?.splitChild ?? false,
+      splitChild: meta?.splitChild ?? false,
       canNest: canNest(depths, i),
       canPromote: canPromote(depths, i),
+      column: meta === undefined ? column : rowOutlineColumnId(record, meta),
     };
   });
-  return { rows, column: outlineColumnId(record) };
+  return { rows, column };
 }
 
 /** The outline entry of one row, or null when the row is not in the table. */
