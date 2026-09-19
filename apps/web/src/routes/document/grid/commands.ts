@@ -70,6 +70,7 @@ import {
   setSheetEdgesShown,
   setTableLook as setTableLookMutation,
   setTablePinned,
+  setTableTitle as setTableTitleMutation,
   spanAt,
   spanCovering,
   STACKING_LABELS,
@@ -139,10 +140,19 @@ export interface GridCommands {
    */
   deleteTable(tableId: Id): { title: string; graphs: number } | null;
   /**
-   * Rename a column; derived columns that name it re-spell their signature
-   * (REF-04). A derived column refuses — its label is its signature.
+   * ADR-051: rename a column; derived columns that name it re-spell their
+   * signature (REF-04). The name is trimmed; an empty one is refused and
+   * nothing is announced (the field says why); an unchanged one writes
+   * nothing. A column whose label is its lineage — derived, pulled, mapped —
+   * refuses and says why (`columnRenameReason`). Formulas and `@` paths are
+   * id-bound, so nothing that reads the column breaks (REF-01).
    */
   renameColumn(tableId: Id, colId: Id, label: string): boolean;
+  /**
+   * ADR-051: rename the table. Trimmed; empty refused (false, no write, no
+   * announcement); unchanged writes nothing. One undo step, synced.
+   */
+  setTableTitle(tableId: Id, title: string): boolean;
   /** Hide a column (its data stays); the selection leaves it the same way a delete would. */
   hideColumn(tableId: Id, colId: Id): boolean;
   unhideColumn(tableId: Id, colId: Id): boolean;
@@ -356,6 +366,29 @@ export function readOnlyLabel(reason: ReadOnlyReason): string {
       return 'split child row';
   }
 }
+
+/**
+ * ADR-051 / MENU-02: why a column cannot be renamed by hand, or undefined
+ * when it can. A label that is lineage is rewritten from its spec: the
+ * derived signature (REF-04), `↰ Table · Column` for a pull (REF-02), the
+ * mapping's target (REF-03). Inline English, as every menu reason is.
+ */
+export function columnRenameReason(column: Pick<ColumnRecord, 'source'>): string | undefined {
+  switch (column.source) {
+    case 'entered':
+      return undefined;
+    case 'derived':
+      return 'a derived column is named by its signature';
+    case 'pulled':
+      return 'a pulled column is named by its source';
+    case 'linked':
+      return 'a mapping column is named by its target';
+  }
+}
+
+/** ADR-051 / A11Y-04: what the inline field says beside itself when the name is empty. */
+export const EMPTY_COLUMN_NAME_REASON = 'A column needs a name';
+export const EMPTY_TABLE_TITLE_REASON = 'A table needs a title';
 
 /** HIER-06: whether `rowId` sits anywhere in `parentId`'s subtree. */
 function isUnder(table: TableMap, rowId: Id, parentId: Id): boolean {
@@ -578,12 +611,28 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     },
     renameColumn(tableId, colId, label) {
       const before = record(tableId);
-      if (!editable() || before === null) return false;
-      if (!renameColumnMutation(gd, tableId, colId, label)) {
-        announce('A derived column is named by its signature');
+      const column = before?.columns.find((c) => c.id === colId);
+      if (!editable() || before === null || column === undefined) return false;
+      const reason = columnRenameReason(column);
+      if (reason !== undefined) {
+        announce(`Column ${column.label} keeps its name: ${reason}`);
         return false;
       }
-      announce(`Column renamed to ${label}`);
+      const next = label.trim();
+      if (next === '') return false;
+      if (next === column.label) return true;
+      if (!renameColumnMutation(gd, tableId, colId, next)) return false;
+      announce(`Renamed column ${column.label} to ${next}`);
+      return true;
+    },
+    setTableTitle(tableId, title) {
+      const before = record(tableId);
+      if (!editable() || before === null) return false;
+      const next = title.trim();
+      if (next === '') return false;
+      if (next === before.title) return true;
+      setTableTitleMutation(gd, tableId, next);
+      announce(`Renamed table ${before.title} to ${next}`);
       return true;
     },
     hideColumn(tableId, colId) {

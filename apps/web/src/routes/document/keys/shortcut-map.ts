@@ -25,6 +25,16 @@ export const SHEET_KEYS = {
   remove: LABELS.clear,
 } as const;
 
+/**
+ * ADR-051: the key a table handles itself to rename its title or a column —
+ * F2 with the column band selected or the table selected (Enter too, on the
+ * focused header or title bar, where it is not GRID-04's Edit cell). The
+ * sheet's key, so one physical key renames whatever is selected.
+ */
+export const RENAME_KEYS = {
+  rename: SHEET_KEYS.rename,
+} as const;
+
 export interface ShortcutRow {
   readonly action: string;
   /** Not in `docs/handover/reference/shortcuts.md`; the ADR that added it. */
@@ -121,6 +131,18 @@ export const SHORTCUT_SECTIONS: readonly ShortcutSection[] = [
         action: 'Fit the focused divider to content',
         keys: ['⏎', 'double-click'],
         extra: 'ADR-049',
+      },
+      // ADR-051 (owner-directed, the customer's report): keys the table handles itself on the
+      // selected column or the selected table; each is also an item of the context menus.
+      {
+        action: 'Rename column (column selected)',
+        keys: [RENAME_KEYS.rename, 'double-click'],
+        extra: 'ADR-051',
+      },
+      {
+        action: 'Rename table (table selected)',
+        keys: [RENAME_KEYS.rename, 'double-click'],
+        extra: 'ADR-051',
       },
     ],
   },

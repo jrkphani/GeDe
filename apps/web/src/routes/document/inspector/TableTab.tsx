@@ -18,11 +18,16 @@ import {
 
 import { announce } from '../../../announce.js';
 import { frozenOptions } from '../grid/TableMenu.js';
-import type { GridCommands } from '../grid/commands.js';
+import {
+  columnRenameReason,
+  EMPTY_COLUMN_NAME_REASON,
+  EMPTY_TABLE_TITLE_REASON,
+  type GridCommands,
+} from '../grid/commands.js';
 import { HierarchyPanel } from '../hier/HierarchyPanel.js';
 import { selectedBand, type Selection } from '../selection.js';
 import { fitColumnsToContent, fitRowsToContent, useFitter } from '../style/index.js';
-import { ReasonedButton, Section, SizeField, Stepper } from './controls.js';
+import { NameField, ReasonedButton, Section, SizeField, Stepper } from './controls.js';
 
 export interface TableTabProps {
   gd: GedeDoc;
@@ -93,6 +98,23 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
     targetColumns.length === 1
       ? `column ${record.columns.find((c) => c.id === targetColumns[0])?.label ?? ''}`
       : `${String(targetColumns.length)} columns`;
+  // ADR-051: Name acts on one column — the selected column, else the armed cell's; a band of
+  // several, or the table alone, has no one name to edit. The Title text acts on the table.
+  const namedColumn =
+    columnBand !== null
+      ? columnBand.ids.length === 1
+        ? (record.columns.find((c) => c.id === columnBand.anchor) ?? null)
+        : null
+      : armed !== null
+        ? (record.columns.find((c) => c.id === armed.colId) ?? null)
+        : null;
+  const nameReason =
+    viewOnly ??
+    (namedColumn === null
+      ? columnBand !== null && columnBand.ids.length > 1
+        ? 'select one column'
+        : 'select a column first'
+      : columnRenameReason(namedColumn));
 
   return (
     <>
@@ -132,6 +154,22 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
             onCheckedChange={(on) => {
               commands.setTableLook(record.id, { titleShown: on });
             }}
+          />
+          {/* ADR-051: the home of Rename table (INSP-04); the title bar's inline field, F2 and
+              the table menu are routes. Written on Enter or blur as one undo step; @ paths are
+              id-bound, so a rename breaks no formula (REF-01). */}
+          <NameField
+            label="Title text"
+            value={record.title}
+            subject="the table"
+            emptyReason={EMPTY_TABLE_TITLE_REASON}
+            disabledReason={viewOnly}
+            hint={
+              look.titleShown
+                ? undefined
+                : 'Hidden on the canvas; still the table’s name in formulas and the index.'
+            }
+            onCommit={(title) => commands.setTableTitle(record.id, title)}
           />
           <Switch
             label="Caption"
@@ -359,6 +397,27 @@ export function TableTab({ gd, table, selection, editable, commands }: TableTabP
           onCheckedChange={(on) => {
             commands.setTableWrap(record.id, on);
           }}
+        />
+      </Section>
+      {/* ADR-051: the selected column's name — the home of Rename column (INSP-04, MENU-03);
+          the header's inline field, F2, a double-click and the column menu are routes. */}
+      <Section
+        label="column"
+        hint={
+          namedColumn === null
+            ? 'Select a column, or a cell in it, to rename it.'
+            : `Column ${namedColumn.label}. Formulas and paths follow the column by id, so renaming breaks nothing.`
+        }
+      >
+        <NameField
+          label="Name"
+          value={namedColumn?.label ?? null}
+          subject={namedColumn === null ? 'a column' : `column ${namedColumn.label}`}
+          emptyReason={EMPTY_COLUMN_NAME_REASON}
+          disabledReason={nameReason}
+          onCommit={(name) =>
+            namedColumn !== null && commands.renameColumn(record.id, namedColumn.id, name)
+          }
         />
       </Section>
       {/* HIER-01: the selected row, its parent and depth, promote / nest, collapse. */}

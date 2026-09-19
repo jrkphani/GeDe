@@ -53,7 +53,13 @@ import { Icon } from '@gede/ui';
 import type * as Y from 'yjs';
 
 import { announce } from '../../announce.js';
-import { ARIA_KEYS, CHORDS, isApplePlatform, matchesChord } from '../../doc/shortcuts.js';
+import {
+  ARIA_KEYS,
+  CHORDS,
+  isApplePlatform,
+  isEditableTarget,
+  matchesChord,
+} from '../../doc/shortcuts.js';
 import type { ZoomTier } from '../../doc/viewport.js';
 import {
   bandFor,
@@ -75,7 +81,15 @@ import {
 } from './formula/index.js'; // wave2/formulas
 import { useWorkbookIndexVersion } from '../../doc/workbook-index.js';
 import { useCellVersions } from './grid/cell-versions.js';
-import { readOnlyLabel, type GridCommands } from './grid/commands.js';
+import {
+  columnRenameReason,
+  EMPTY_COLUMN_NAME_REASON,
+  EMPTY_TABLE_TITLE_REASON,
+  readOnlyLabel,
+  type GridCommands,
+} from './grid/commands.js';
+import { sameRenameTarget, type RenameTarget, type TableRenaming } from './grid/rename.js';
+import { InlineNameField, isComposingEvent } from './InlineNameField.js';
 import { HIER_ARIA_KEYS, HIER_LABELS, hierarchyKey } from './grid/hier-keys.js';
 import {
   DerivedCell,
@@ -151,6 +165,12 @@ export interface TableViewProps {
    * Not tied to `editable`: the view is the viewer's own (ADR-025).
    */
   sort?: SortCommands | undefined;
+  /**
+   * ADR-051: inline rename of the title and the column headers. Absent on
+   * phone (RESP-02) and for view-only participants: no field, no F2, no
+   * double-click. The shell holds which field is open.
+   */
+  rename?: TableRenaming | undefined;
 }
 
 const TITLE_PX = TABLE_TITLE_ROWS * LATTICE.row;
@@ -215,6 +235,7 @@ export const TableView = memo(function TableView({
   actions,
   commands,
   sort,
+  rename,
 }: TableViewProps) {
   // Per-cell counters (not just the table's): a keystroke re-renders its own cell only.
   const versions = useCellVersions(table);
@@ -288,6 +309,67 @@ export const TableView = memo(function TableView({
     ...paint.style,
   };
   const showAffordances = editable && selected && tier !== 'macro';
+  // ADR-051: the rename routes exist where the field can (editable, not the block view); the
+  // open field, if it is in this table, replaces the title text or the column's label.
+  const renamer = editable && tier !== 'macro' ? rename : undefined;
+  const renaming =
+    renamer !== undefined && renamer.target?.tableId === record.id ? renamer.target : null;
+  const renamingColumn = renaming?.kind === 'column' ? renaming.colId : null;
+  const plainKey = (e: ReactKeyboardEvent) =>
+    !e.metaKey && !e.ctrlKey && !e.altKey && !e.shiftKey && !isComposingEvent(e);
+  /**
+   * MENU-05: once a column's field closes the keyboard goes back where it came from (the
+   * armed cell, the header), else to the header. After the title's field it lands on the
+   * title bar: with the table selected (⌘A, a press on the title) the cell that still held
+   * DOM focus is not armed, and focusing it would arm it — a selection change nobody asked
+   * for, whose announcement would talk over "Renamed …".
+   */
+  const columnHeaderOf = (colId: Id): HTMLElement | null =>
+    ref.current?.querySelector<HTMLElement>(`[role="columnheader"][data-col-id="${colId}"]`) ??
+    null;
+  const titleBarOf = (): HTMLElement | null =>
+    ref.current?.querySelector<HTMLElement>('.gd-table__title') ?? null;
+  const focusAfterRename = (target: RenameTarget, returnTo: HTMLElement | null) => {
+    const next =
+      target.kind === 'column' ? (returnTo ?? columnHeaderOf(target.colId)) : titleBarOf();
+    next?.focus({ preventScroll: true });
+  };
+  const renameField = (target: RenameTarget, value: string) =>
+    renamer === undefined ? null : (
+      <InlineNameField
+        value={value}
+        label={target.kind === 'column' ? 'Column name' : 'Table title'}
+        emptyReason={target.kind === 'column' ? EMPTY_COLUMN_NAME_REASON : EMPTY_TABLE_TITLE_REASON}
+        commit={(name) => renamer.commit(target, name)}
+        cancel={renamer.cancel}
+        onDone={(returnTo) => {
+          focusAfterRename(target, returnTo);
+        }}
+        className={clsx('gd-table__rename', {
+          'gd-table__rename--title': target.kind === 'table',
+        })}
+        data={{ 'data-table-rename': target.kind === 'column' ? target.colId : target.tableId }}
+      />
+    );
+  /**
+   * F2 anywhere in the table (KEYS-08, ADR-051): with a column band selected it renames the
+   * band's anchor column; with the table selected and no cell armed, the title. Enter keeps
+   * GRID-04's meaning on a cell (edit) and renames only on the focused header or title.
+   */
+  const onSectionKeyDown = (e: ReactKeyboardEvent<HTMLElement>) => {
+    if (renamer === undefined || e.defaultPrevented || e.code !== 'F2' || !plainKey(e)) return;
+    if (isEditableTarget(e.target)) return;
+    const target: RenameTarget | null =
+      columnBand !== null
+        ? { kind: 'column', tableId: record.id, colId: columnBand.anchor }
+        : selected && selectedCell === null
+          ? { kind: 'table', tableId: record.id }
+          : null;
+    if (target === null) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (!sameRenameTarget(renamer.target, target)) renamer.start(target);
+  };
   // ADR-049: the fit routes (double-click, Enter on a divider); absent where nothing measures.
   const fitOptions = fitter.fit;
   const fitColumnIds = (ids: readonly Id[]) => {
@@ -479,6 +561,34 @@ export const TableView = memo(function TableView({
     return width === 0 ? 1 : width / el.offsetWidth;
   }, []);
 
+  /**
+   * GRID-08: the divider at a column's right edge — at its header, or, with the header
+   * row hidden (GRID-11), in the strip over the first body row (ADR-051), so a column
+   * can still be resized by pointer and keyboard. The same handle either way.
+   */
+  const columnDivider = (col: ColumnRecord, tabStop: boolean) => (
+    <ColumnDivider
+      label={col.label}
+      units={col.width}
+      tabStop={tabStop}
+      scale={scale}
+      onPreview={(preview) => {
+        previewColumns(col.id, preview);
+      }}
+      onCommit={(next) => {
+        commitColumns(col.id, next);
+      }}
+      onFit={
+        fitter.reason === undefined
+          ? () => {
+              fitColumnIds(bandFor(columnBand, col.id));
+            }
+          : undefined
+      }
+      fitReason={fitter.reason}
+    />
+  );
+
   const rowCount = record.rows.length;
   const columnCount = visible.length;
   // INSP-05 / INSP-06 / MENU-04: the look of one cell — appearance, matched rule, span —
@@ -510,18 +620,44 @@ export const TableView = memo(function TableView({
       aria-label={record.title}
       data-table-id={record.id}
       data-frozen-columns={record.frozenColumns}
+      onKeyDown={onSectionKeyDown}
       {...paint.data}
     >
       <header
-        className="gd-table__title"
+        className={clsx('gd-table__title', {
+          'gd-table__title--renaming': renaming?.kind === 'table',
+        })}
         style={{ height: `${String(TITLE_PX)}px` }}
+        // ADR-051: focusable by script and pointer only (as a column header is), so a press on
+        // the title puts the keyboard where F2 and Enter rename it; never a tab stop (A11Y-01).
+        tabIndex={renamer === undefined ? undefined : -1}
         onPointerDown={(e) => {
           e.stopPropagation();
+          if (e.target instanceof Element && e.target.closest('input') !== null) return;
           actions.selectTable(record.id);
+        }}
+        // ADR-051: a double-click on the title opens the inline field; F2 or Enter on the
+        // focused bar does the same. The lineage header's controls keep their own gestures.
+        onDoubleClick={(e) => {
+          if (renamer === undefined || renaming?.kind === 'table') return;
+          const target = e.target instanceof Element ? e.target : null;
+          if (target?.closest('button, input, a') !== null) return;
+          e.preventDefault();
+          renamer.start({ kind: 'table', tableId: record.id });
+        }}
+        onKeyDown={(e) => {
+          if (renamer === undefined || e.defaultPrevented || e.target !== e.currentTarget) return;
+          if (e.code !== 'F2' && e.code !== 'Enter' && e.code !== 'NumpadEnter') return;
+          if (!plainKey(e)) return;
+          e.preventDefault();
+          e.stopPropagation();
+          renamer.start({ kind: 'table', tableId: record.id });
         }}
       >
         {/* INSP-04: a hidden title leaves its two-row bar (no address moves); the section's name stays. */}
-        {record.look.titleShown && <span className="gd-table__title-text">{record.title}</span>}
+        {renaming?.kind === 'table'
+          ? renameField(renaming, record.title)
+          : record.look.titleShown && <span className="gd-table__title-text">{record.title}</span>}
         <span className="gd-mono gd-table__degree" aria-hidden="true">
           {columnLetter(record.gridCol)}
           {record.gridRow + 1}
@@ -537,6 +673,34 @@ export const TableView = memo(function TableView({
         />
       ) : (
         <>
+          {/* GRID-08 / GRID-11 (ADR-051): with the header row hidden the dividers have no
+              header to sit in, so a one-row strip over the first body row carries them —
+              before the grid in DOM order, as the header row would be, so Shift+Tab from the
+              first cell still reaches the selected column's divider (A11Y-01). Outside the
+              grid, so its rows and their count are untouched. */}
+          {record.headerRows === 0 && editable && (
+            <div
+              className="gd-table__divider-strip"
+              style={{ top: `${String(TITLE_PX)}px`, height: `${String(LATTICE.row)}px` }}
+              data-testid="divider-strip"
+            >
+              {visible.map((col, ci) => (
+                <div
+                  key={col.id}
+                  className="gd-table__divider-slot"
+                  style={{
+                    left: `${String((columnStarts[ci] ?? 0) * LATTICE.col)}px`,
+                    width: `${String((columnUnits[ci] ?? 1) * LATTICE.col)}px`,
+                  }}
+                >
+                  {columnDivider(
+                    col,
+                    selectedCell?.tableId === record.id && selectedCell.colId === col.id,
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
           <div
             className="gd-table__grid"
             role={hierarchical ? 'treegrid' : 'grid'}
@@ -577,18 +741,39 @@ export const TableView = memo(function TableView({
                         'gd-table__header--freeze-edge': col.id === freezeEdgeId,
                         'gd-table__header--view': glyph !== null || grouped,
                         'gd-table__header--banded': inBand,
+                        'gd-table__header--renaming': renamingColumn === col.id,
                       })}
                       style={{ width: `${String(units * LATTICE.col)}px` }}
                       // ADR-049 (Numbers): a press on the header selects the column; Shift
                       // extends. The ▼, its menu (a portal whose events still bubble here in
-                      // React's tree) and the divider keep their own presses.
+                      // React's tree), the divider and the name field keep their own presses.
                       onPointerDown={(e) => {
                         if (e.button !== 0 || !editable) return;
                         const target = e.target instanceof Element ? e.target : null;
                         if (target === null || !e.currentTarget.contains(target)) return;
-                        if (target.closest('button, [role="separator"]') !== null) return;
+                        if (target.closest('button, [role="separator"], input') !== null) return;
                         e.stopPropagation();
                         actions.selectBand(record.id, 'column', col.id, e.shiftKey);
+                      }}
+                      // ADR-051: a double-click on the label opens the inline name field; F2 or
+                      // Enter on the focused header does the same. The ▼ and the divider (whose
+                      // double-click fits the column, and which owns Enter) keep their gestures.
+                      onDoubleClick={(e) => {
+                        if (renamer === undefined || renamingColumn === col.id) return;
+                        const target = e.target instanceof Element ? e.target : null;
+                        if (target?.closest('button, [role="separator"], input') !== null) return;
+                        e.preventDefault();
+                        renamer.start({ kind: 'column', tableId: record.id, colId: col.id });
+                      }}
+                      onKeyDown={(e) => {
+                        if (renamer === undefined || e.defaultPrevented) return;
+                        if (e.target !== e.currentTarget || !plainKey(e)) return;
+                        if (e.code !== 'F2' && e.code !== 'Enter' && e.code !== 'NumpadEnter') {
+                          return;
+                        }
+                        e.preventDefault();
+                        e.stopPropagation();
+                        renamer.start({ kind: 'column', tableId: record.id, colId: col.id });
                       }}
                       title={
                         glyph === null && !grouped
@@ -598,7 +783,11 @@ export const TableView = memo(function TableView({
                       data-col-id={col.id}
                       data-view={glyph === null && !grouped ? undefined : 'active'}
                     >
-                      <span className="gd-table__header-label">{col.label}</span>
+                      {renamingColumn === col.id && renaming !== null ? (
+                        renameField(renaming, col.label)
+                      ) : (
+                        <span className="gd-table__header-label">{col.label}</span>
+                      )}
                       {glyphs.map((g) => (
                         <span key={g.icon} className="gd-table__header-glyph" data-glyph={g.icon}>
                           <Icon name={g.icon} size={13} label={g.label} />
@@ -619,30 +808,19 @@ export const TableView = memo(function TableView({
                           view={projection.view}
                           commands={sort}
                           tabStop={columnTabStop}
+                          // ADR-051: the ▼ carries Rename column… too; the reason when it cannot.
+                          rename={{
+                            onSelect: () => {
+                              renamer?.start({ kind: 'column', tableId: record.id, colId: col.id });
+                            },
+                            disabledReason:
+                              renamer === undefined
+                                ? 'you have view-only access'
+                                : columnRenameReason(col),
+                          }}
                         />
                       )}
-                      {editable && (
-                        <ColumnDivider
-                          label={col.label}
-                          units={col.width}
-                          tabStop={columnTabStop}
-                          scale={scale}
-                          onPreview={(preview) => {
-                            previewColumns(col.id, preview);
-                          }}
-                          onCommit={(next) => {
-                            commitColumns(col.id, next);
-                          }}
-                          onFit={
-                            fitter.reason === undefined
-                              ? () => {
-                                  fitColumnIds(bandFor(columnBand, col.id));
-                                }
-                              : undefined
-                          }
-                          fitReason={fitter.reason}
-                        />
-                      )}
+                      {editable && columnDivider(col, columnTabStop)}
                     </div>
                   );
                 })}

@@ -11,6 +11,7 @@ import userEvent from '@testing-library/user-event';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
+  addDerivedColumn,
   cellAppearanceOverride,
   cellFormatOverride,
   cellRich,
@@ -427,6 +428,87 @@ describe('Inspector', () => {
     expect(within(size).getByRole('button', { name: 'Fit height to content' }).title).toBe(
       'Fit height to content — text cannot be measured in this browser',
     );
+  });
+
+  it('INSP-04 KEYS-03 REF-01 the Table tab is the home of Rename table and Rename column: Title text beside the Title switch and Name for the selected column, each written on Enter or blur as one undo step; an empty name is refused beside the field; Escape drops the draft; a derived column’s Name says why; Width is reachable with one cell selected (ADR-051)', async () => {
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const record = tableById(gd, tableId)!;
+    const derived = addDerivedColumn(gd, tableId, {
+      sourceColId: record.columns[0]!.id,
+      method: 'Format',
+      args: ['Trimmed'],
+    })!;
+    await mount({ undo });
+    await userEvent.click(tab('Table'));
+    // Title text, next to the Title switch (the switch keeps its name; the field has its own).
+    const titling = section('title and caption');
+    expect(within(titling).getByRole('switch', { name: 'Title' })).toBeInTheDocument();
+    const title = within(titling).getByRole('textbox', { name: 'Title text' });
+    expect(title).toHaveValue('Table 1');
+    const steps = undo.undoStack.length;
+    await userEvent.clear(title);
+    await userEvent.type(title, '  Camps  {Enter}');
+    expect(tableById(gd, tableId)?.title).toBe('Camps');
+    expect(undo.undoStack).toHaveLength(steps + 1);
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Renamed table Table 1 to Camps');
+    // An empty title is refused beside the field; nothing is written; Escape drops the draft.
+    await userEvent.clear(title);
+    await userEvent.keyboard('{Enter}');
+    expect(within(titling).getByRole('alert')).toHaveTextContent('A table needs a title');
+    expect(title).toHaveAttribute('aria-invalid', 'true');
+    expect(tableById(gd, tableId)?.title).toBe('Camps');
+    await userEvent.keyboard('{Escape}');
+    expect(title).toHaveValue('Camps');
+    expect(within(titling).queryByRole('alert')).not.toBeInTheDocument();
+    // Blur commits a typed title.
+    await userEvent.clear(title);
+    await userEvent.type(title, 'Camps 2026');
+    act(() => {
+      title.blur();
+    });
+    expect(tableById(gd, tableId)?.title).toBe('Camps 2026');
+    // Name: the armed cell's column (B5 → Column 1); the section says what it names.
+    const column = section('column');
+    expect(column).toHaveTextContent(
+      /Column Column 1\. Formulas and paths follow the column by id/,
+    );
+    const name = within(column).getByRole('textbox', { name: 'Name' });
+    expect(name).toHaveValue('Column 1');
+    await userEvent.clear(name);
+    await userEvent.type(name, 'Owner{Enter}');
+    expect(tableById(gd, tableId)?.columns[0]?.label).toBe('Owner');
+    expect(screen.getByTestId('live-region')).toHaveTextContent('Renamed column Column 1 to Owner');
+    expect(undo.undoStack).toHaveLength(steps + 3);
+    // Width is reachable from the same single-cell selection (no band needed).
+    const size = section('row and column size');
+    expect(within(size).getByRole('spinbutton', { name: 'Width' })).toHaveAttribute(
+      'aria-valuetext',
+      '1 unit, 160 px, column Owner',
+    );
+    // A derived column is named by its signature: the field is present, read-only, with the reason.
+    act(() => {
+      grid.current!.actions.selectCell({ tableId, rowId: record.rows[0]!, colId: derived });
+    });
+    const derivedName = within(section('column')).getByRole('textbox', { name: 'Name' });
+    expect(derivedName).toHaveAttribute('aria-disabled', 'true');
+    expect(derivedName).toHaveAttribute('readonly');
+    expect(derivedName.title).toBe('Name — a derived column is named by its signature');
+    // A band of several columns has no one name to edit.
+    act(() => {
+      grid.current!.actions.selectBand(tableId, 'column', record.columns[0]!.id);
+      grid.current!.actions.selectBand(tableId, 'column', record.columns[1]!.id, true);
+    });
+    expect(within(section('column')).getByRole('textbox', { name: 'Name' }).title).toBe(
+      'Name — select one column',
+    );
+    // The table alone: no column selected.
+    act(() => {
+      grid.current!.actions.selectTable(tableId);
+    });
+    expect(within(section('column')).getByRole('textbox', { name: 'Name' }).title).toBe(
+      'Name — select a column first',
+    );
+    expect(section('column')).toHaveTextContent('Select a column, or a cell in it, to rename it.');
   });
 
   it('HIER-01 HIER-02 the Table tab mounts the hierarchy panel: the selected row, its parent, and Nest / Promote acting through the grid commands', async () => {

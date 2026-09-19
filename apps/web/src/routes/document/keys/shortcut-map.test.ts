@@ -12,6 +12,7 @@ import {
   rowAriaKeys,
   reservedRows,
   rowKeys,
+  RENAME_KEYS,
   SHEET_KEYS,
   SHORTCUT_SECTIONS,
   unlistedChords,
@@ -70,6 +71,8 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
       ['Select rows / columns from the cell', 'ADR-049'],
       ['Resize the focused divider (Shift: four units)', 'ADR-049'],
       ['Fit the focused divider to content', 'ADR-049'],
+      ['Rename column (column selected)', 'ADR-051'],
+      ['Rename table (table selected)', 'ADR-051'],
       ['Move between nodes, dots and cells', 'ADR-033'],
       ['Select the node’s row', 'ADR-033'],
       ['Open a child sheet for the node', 'ADR-033'],
@@ -93,6 +96,8 @@ describe('the keyboard map (KEYS-01, KEYS-08)', () => {
       ),
     ).toBe(true);
     expect(SHEET_KEYS.remove).toBe(LABELS.clear);
+    // ADR-051 / KEYS-08: one physical key renames the selected sheet, column or table.
+    expect(RENAME_KEYS.rename).toBe(SHEET_KEYS.rename);
     // KEYS-02 / KEYS-07: the PRD's chords the browser keeps are listed, marked, and not bound (ADR-030).
     expect(reservedRows().map((row) => row.action)).toEqual([
       'New workscape',
