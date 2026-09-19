@@ -619,17 +619,6 @@ export const TableView = memo(function TableView({
                           view={projection.view}
                           commands={sort}
                           tabStop={columnTabStop}
-                          // ADR-051: the table's default outline column, for an editor only.
-                          outline={
-                            editable
-                              ? {
-                                  checked: outline.column === col.id,
-                                  onCheckedChange: (on) => {
-                                    commands.setOutlineColumn(record.id, on ? col.id : null);
-                                  },
-                                }
-                              : undefined
-                          }
                         />
                       )}
                       {editable && (
@@ -762,7 +751,7 @@ export const TableView = memo(function TableView({
                               editing={isEditing ? editing : null}
                               editable={editable}
                               readOnly={readOnly}
-                              // ADR-051: the row's own outline column, not the table's.
+                              // ADR-052: the row's own outline column, not the table's.
                               outline={
                                 showOutline && outlineRow?.column === col.id ? outlineRow : null
                               }
@@ -1564,7 +1553,7 @@ const Cell = memo(function Cell({
         return;
       }
       switch (hierarchy) {
-        // ADR-051: the outline is drawn in the column of the selected cell.
+        // ADR-052: the outline is drawn in the column of the selected cell.
         case 'nest':
           commands.nestRow(cell.tableId, cell.rowId, cell.colId);
           return;

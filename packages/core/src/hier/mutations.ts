@@ -13,7 +13,7 @@
  * HIER-02 forbids. (The handover prototype moved the row alone and left the
  * invariant to chance; the PRD's invariant wins.)
  *
- * ADR-051: a nest names the column the outline is drawn in — the column of
+ * ADR-052: a nest names the column the outline is drawn in — the column of
  * the selected cell. It is stored per row as `outlineColumn`, presentation
  * only; the subtree keeps its own columns, and a promote that reaches the
  * top level clears it.
@@ -58,7 +58,7 @@ function writeDepth(table: TableMap, rowId: Id, depth: number): void {
   if (existing.get('depth') !== depth) existing.set('depth', depth);
 }
 
-/** ADR-051: store the row's outline column, or clear it; writes nothing when it already reads so. */
+/** ADR-052: store the row's outline column, or clear it; writes nothing when it already reads so. */
 function writeOutlineColumn(table: TableMap, rowId: Id, colId: Id | null): void {
   const existing = rowMetaMap(table).get(rowId);
   if (colId === null) {
@@ -72,7 +72,7 @@ function writeOutlineColumn(table: TableMap, rowId: Id, colId: Id | null): void 
   if (existing.get('outlineColumn') !== colId) existing.set('outlineColumn', colId);
 }
 
-/** A column id the outline may be drawn in: in the table and not hidden (ADR-051). */
+/** A column id the outline may be drawn in: in the table and not hidden (ADR-052). */
 function visibleColumn(table: TableMap, colId: Id | undefined): Id | null {
   if (colId === undefined) return null;
   const known = columnsArray(table)
@@ -95,7 +95,7 @@ function writeCollapsed(table: TableMap, rowId: Id, collapsed: boolean): void {
  * Shift a row and its subtree by `delta` levels when HIER-02 allows it.
  * Returns the row's new depth, or null when refused (unknown row, first row
  * nesting, already one deeper than the row above, promote at depth 0).
- * ADR-051: a nest with `colId` draws the row's outline in that column from
+ * ADR-052: a nest with `colId` draws the row's outline in that column from
  * now on (an unknown or hidden column is ignored and the outline stays where
  * it was); a promote that lands at depth 0 clears it. Children keep their own.
  */
@@ -135,7 +135,7 @@ function shiftSubtree(
 /**
  * HIER-01 / KEYS-06 `⌘]`: nest the row one level under the row above it, its
  * subtree with it. `colId` — the selected cell's column — is where the row's
- * outline is drawn from now on (ADR-051); without it the row keeps its column.
+ * outline is drawn from now on (ADR-052); without it the row keeps its column.
  * Returns the new depth, or null when HIER-02 refuses.
  */
 export function nestRow(gd: GedeDoc, tableId: Id, rowId: Id, colId?: Id): number | null {
@@ -144,7 +144,7 @@ export function nestRow(gd: GedeDoc, tableId: Id, rowId: Id, colId?: Id): number
 
 /**
  * HIER-01 / KEYS-06 `⌘[`: promote the row one level, its subtree with it.
- * Reaching the top level clears the row's outline column (ADR-051); `colId`
+ * Reaching the top level clears the row's outline column (ADR-052); `colId`
  * is accepted for symmetry with `nestRow` and does not move the outline.
  * Returns the new depth, or null at depth 0.
  */
@@ -214,7 +214,8 @@ export function expandAll(gd: GedeDoc, tableId: Id): Id[] {
 /**
  * HIER-04: designate the column that carries the outline, or null to fall
  * back to the first visible column. Returns false when the column is not in
- * the table.
+ * the table or is hidden (a hidden column cannot carry the outline, as with
+ * `nestRow`; ADR-052).
  */
 export function setOutlineColumn(gd: GedeDoc, tableId: Id, colId: Id | null): boolean {
   return transact(gd, () => {
@@ -223,10 +224,7 @@ export function setOutlineColumn(gd: GedeDoc, tableId: Id, colId: Id | null): bo
       if (table.get('outlineColumn') !== undefined) table.delete('outlineColumn');
       return true;
     }
-    const known = columnsArray(table)
-      .toArray()
-      .some((c) => readString(c, 'id') === colId);
-    if (!known) return false;
+    if (visibleColumn(table, colId) === null) return false;
     if (table.get('outlineColumn') !== colId) table.set('outlineColumn', colId);
     return true;
   });

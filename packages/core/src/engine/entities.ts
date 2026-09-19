@@ -7,9 +7,9 @@
  *   @Table.Row.Column     → the cell in that column
  *
  * A row is labelled by the text of its outline column — the column its
- * outline is drawn in (ADR-051), the first visible column by default — and,
+ * outline is drawn in (ADR-052), the first visible column by default — and,
  * when that cell is blank, by the first visible column that has text
- * (ADR-052), so a row whose first cell is empty is still addressable. Every
+ * (ADR-054), so a row whose first cell is empty is still addressable. Every
  * other column of the row is an entry too, carrying the cell's text as its
  * `value` so the `@` picker can offer "Priya" wherever Priya is written, not
  * only where she is a row label. A column with a blank label is spelled by
@@ -43,7 +43,7 @@ export interface EntityIndex {
 export type TextReader = (tableId: Id, key: CellKey) => string;
 
 /**
- * The column that labels row `r` and its text (ADR-052): the row's outline
+ * The column that labels row `r` and its text (ADR-054): the row's outline
  * column when its cell has text, else the first visible column with text,
  * else the outline column with an empty label (the row is unaddressable but
  * still qualifies its children). Null when the table has no column at all.
@@ -68,7 +68,7 @@ export function rowLabelOf(
 }
 
 /**
- * Whether a change to this cell can re-spell the row's `@` path (ADR-052):
+ * Whether a change to this cell can re-spell the row's `@` path (ADR-054):
  * the cell is in the row's outline column, or that column's cell is blank so
  * the label falls back to another column. A superset, cheap to decide; the
  * index is rebuilt lazily either way.
@@ -90,7 +90,7 @@ export function cellMayRelabel(
 }
 
 /**
- * The segment a column is written as in a path (ADR-052): its label, or its
+ * The segment a column is written as in a path (ADR-054): its label, or its
  * grid letter when the label is blank — the letter the column's cells carry
  * in their A1 address, so `@Table.Row.C` names what the grid shows as C.
  */
@@ -185,7 +185,26 @@ export interface EntitySearch {
 const DEFAULT_ENTITY_LIMIT = 8;
 
 /**
- * Entries for the `@` popover (ADR-052): those whose written path or whose
+ * What is typed, ready to compare: trimmed, lower-cased, and with an opening
+ * quote on the last segment dropped — `Table."In pr` and `"In pr` both mean
+ * the segment "In pr…", which the written path spells quoted and the value
+ * spells plain (ADR-054).
+ */
+function normaliseQuery(query: string): string {
+  const q = query.trim().toLowerCase();
+  // The last segment starts after the last `.` outside quotes.
+  let start = 0;
+  let quoted = false;
+  for (let i = 0; i < q.length; i += 1) {
+    const ch = q[i];
+    if (ch === '"') quoted = !quoted;
+    else if (ch === '.' && !quoted) start = i + 1;
+  }
+  return q[start] === '"' ? q.slice(0, start) + q.slice(start + 1) : q;
+}
+
+/**
+ * Entries for the `@` popover (ADR-054): those whose written path or whose
  * value starts with what was typed, then those whose last segment or value
  * contains it (case-insensitive); within each tier the table being edited
  * comes first, then the rest in workbook order. A blank value never matches;
@@ -199,7 +218,7 @@ export function searchEntities(
 ): EntitySearch {
   const limit = options.limit ?? DEFAULT_ENTITY_LIMIT;
   const here = options.tableId ?? null;
-  const q = query.trim().toLowerCase();
+  const q = normaliseQuery(query);
   // Four tiers: prefix in this table, prefix elsewhere, contains here, contains elsewhere.
   const tiers: [EntityEntry[], EntityEntry[], EntityEntry[], EntityEntry[]] = [[], [], [], []];
   for (const e of index.entries) {

@@ -25,6 +25,10 @@ describe('formula input helpers', () => {
       query: '"Everest trek".Luk',
     });
     expect(entityQueryAt('=Sum(@Everest, B2', 17)).toBeNull();
+    // ADR-054: spaces stay in the trailing segment, so a multi-word value can be typed on.
+    expect(entityQueryAt('=@In pr', 7)).toEqual({ start: 1, query: 'In pr' });
+    expect(entityQueryAt('=Sum(@Onboarding fl', 19)).toEqual({ start: 5, query: 'Onboarding fl' });
+    expect(entityQueryAt('=@"In pr', 8)).toEqual({ start: 1, query: '"In pr' });
     expect(entityQueryAt('=Sum(@Everest, @', 16)).toEqual({ start: 15, query: '' });
     expect(entityQueryAt('hello @there', 12)).toBeNull();
     // Caret before the @: nothing to complete yet.

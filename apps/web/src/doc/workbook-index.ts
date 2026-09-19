@@ -85,7 +85,7 @@ function entryFor(doc: Y.Doc): Entry {
 }
 
 /**
- * ADR-052: a cell in its row's outline column names the row, and while that
+ * ADR-054: a cell in its row's outline column names the row, and while that
  * cell is blank the label falls back to another column — so an edit there may
  * re-spell `@` paths. Any other cell edit is invisible to the index.
  */

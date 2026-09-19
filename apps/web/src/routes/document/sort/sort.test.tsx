@@ -6,7 +6,7 @@
  * Worker), through the same engine the Worker runs, and the formula engine
  * runs inline the same way.
  */
-import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { useMemo } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -231,32 +231,6 @@ describe('header menu (SORT-01, MENU-03)', () => {
     await userEvent.keyboard('{Escape}');
     expect(screen.queryByRole('menu')).not.toBeInTheDocument();
     expect(menuButton('Column 1')).toHaveFocus();
-  });
-
-  it('HIER-04 MENU-03 the ▼ carries "Use as outline column" for an editor — checked on the column that carries the outline, a document write; a viewer’s ▼ has no such item (ADR-051)', async () => {
-    mount();
-    const first = await openMenu('Column 1');
-    expect(
-      within(first).getByRole('menuitemcheckbox', { name: 'Use as outline column' }),
-    ).toHaveAttribute('aria-checked', 'true'); // the first visible column, by default
-    await userEvent.keyboard('{Escape}');
-    const second = await openMenu('Column 2');
-    const item = within(second).getByRole('menuitemcheckbox', { name: 'Use as outline column' });
-    expect(item).toHaveAttribute('aria-checked', 'false');
-    await userEvent.click(item);
-    await waitFor(() => {
-      expect(tableById(gd, tableId)?.outlineColumn).toBe(cols[1]);
-    });
-    expect(screen.getByTestId('live-region')).toHaveTextContent('Outline column: Column 2');
-    // The outline is drawn in Column 2 now: its cells carry the class, Column 1's do not.
-    expect(cellByAddress(addressOf(0, 1)!)).toHaveClass('gd-cell--outline');
-    expect(cellByAddress(addressOf(0, 0)!)).not.toHaveClass('gd-cell--outline');
-    cleanup();
-    mount({ editable: false });
-    const viewer = await openMenu('Column 2');
-    expect(
-      within(viewer).queryByRole('menuitemcheckbox', { name: 'Use as outline column' }),
-    ).toBeNull();
   });
 
   it('SORT-01 choosing A–Z sorts the rows on screen, tints the header with ↑ and sets aria-sort; no address changes', async () => {

@@ -474,7 +474,7 @@ export class FormulaEngine {
   ): void {
     const table = this.tables.get(tableId);
     if (table === undefined) return;
-    // ADR-052: a cell in the row's outline column names the row, and so may any
+    // ADR-054: a cell in the row's outline column names the row, and so may any
     // cell while that one is blank; `@` paths must re-resolve after such a write.
     let rowOrdinals: Map<Id, number> | null = null;
     const relabels = (key: CellKey): boolean => {

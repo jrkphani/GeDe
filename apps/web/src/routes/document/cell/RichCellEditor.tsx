@@ -227,7 +227,7 @@ export function RichCellEditor({
     if (dom === undefined) return;
     const props = adornments.inputProps;
     dom.setAttribute('aria-autocomplete', props['aria-autocomplete']);
-    for (const name of ['aria-controls', 'aria-activedescendant'] as const) {
+    for (const name of ['aria-controls', 'aria-activedescendant', 'aria-describedby'] as const) {
       const value = props[name];
       if (value === undefined) dom.removeAttribute(name);
       else dom.setAttribute(name, value);

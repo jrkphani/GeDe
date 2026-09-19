@@ -18,6 +18,7 @@ import {
   rowMeta,
   rowOutlineColumnId,
   tableRecord,
+  type RowMeta,
   type TableMap,
   type TableRecord,
 } from '../doc/schema.js';
@@ -138,9 +139,10 @@ export interface OutlineRow {
   readonly canNest: boolean;
   readonly canPromote: boolean;
   /**
-   * The column this row's indentation, ↳ and chevron are drawn in (ADR-051,
+   * The column this row's indentation, ↳ and chevron are drawn in (ADR-052,
    * HIER-04): the row's own `outlineColumn` when it exists and is visible,
-   * else the table's `column`. Null when every column is hidden.
+   * else the table's `column`; a `Split()` child draws in its parent's. Null
+   * when every column is hidden.
    */
   readonly column: Id | null;
 }
@@ -150,11 +152,31 @@ export interface TableOutline {
   /**
    * The table's default column for indentation, ↳ and the chevron, or null
    * when every column is hidden (HIER-04); a row nested from another column
-   * carries its own in `rows[i].column` (ADR-051). Whether it is *shown* is the viewer's affair:
+   * carries its own in `rows[i].column` (ADR-052). Whether it is *shown* is the viewer's affair:
    * while their view groups, sorts or filters the table (ADR-026) the bands own
    * the column and depth is kept in the data but not drawn (HIER-08).
    */
   readonly column: Id | null;
+}
+
+/**
+ * ADR-052: the column each row's outline is drawn in, in row order — the row's
+ * own when it exists and is visible, else the table's (`rowOutlineColumnId`);
+ * a `Split()` child (HIER-07) draws in its parent's effective column, since
+ * the engine materialises it under the parent and nothing nests it by hand.
+ * Expects effective depths. The projection and the engine snapshot share it.
+ */
+export function rowOutlineColumns(
+  record: TableRecord,
+  metas: readonly Pick<RowMeta, 'outlineColumn' | 'splitChild'>[],
+  depths: readonly number[],
+): (Id | null)[] {
+  const out: (Id | null)[] = new Array<Id | null>(metas.length);
+  metas.forEach((meta, i) => {
+    const parent = meta.splitChild ? parentIndex(depths, i) : null;
+    out[i] = parent === null ? rowOutlineColumnId(record, meta) : (out[parent] ?? null);
+  });
+  return out;
 }
 
 /** The outline of every row of a table, in row order, from the document. */
@@ -168,6 +190,7 @@ export function tableOutline(
     metas.map((m, i) => ({ depth: depths[i] ?? 0, collapsed: m.collapsed })),
   );
   const column = outlineColumnId(record);
+  const columns = rowOutlineColumns(record, metas, depths);
   const rows = record.rows.map((id, i): OutlineRow => {
     const parent = parentIndex(depths, i);
     const meta = metas[i];
@@ -181,7 +204,7 @@ export function tableOutline(
       splitChild: meta?.splitChild ?? false,
       canNest: canNest(depths, i),
       canPromote: canPromote(depths, i),
-      column: meta === undefined ? column : rowOutlineColumnId(record, meta),
+      column: columns[i] ?? column,
     };
   });
   return { rows, column };

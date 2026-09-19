@@ -29,6 +29,7 @@ import {
 import { useYVersion } from '../../../doc/use-y.js';
 import { useTableView } from '../../../doc/view-state.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
+import { columnDisplayName } from '../grid/column-name.js';
 import type { GridCommands } from '../grid/commands.js';
 import { HIER_ARIA_KEYS, HIER_LABELS } from '../grid/hier-keys.js';
 import { ReasonedButton } from '../inspector/controls.js';
@@ -51,7 +52,7 @@ export interface HierarchyPanelProps {
 
 /**
  * How a row is named in the panel: the text of its outline column — the
- * row's own (ADR-051), else the table's — else its address, else "(blank
+ * row's own (ADR-052), else the table's — else its address, else "(blank
  * row)". A formula or reference cell names the row by its projected
  * expression (`=Sum(B5:B6)`, `@Offices.City`), never by the stored id tokens
  * (PRD §20, #142).
@@ -68,16 +69,13 @@ export function rowLabel(table: TableMap, outline: TableOutline, rowId: Id, gd?:
 }
 
 /**
- * ADR-051: the name of the column a nested row's outline is drawn in — the
+ * ADR-052: the name of the column a nested row's outline is drawn in — the
  * column's label, else its grid letter — or null for a top-level row, which
  * has no indent to place.
  */
-function outlineColumnName(table: TableMap, record: TableRecord, row: OutlineRow): string | null {
+function outlineColumnName(record: TableRecord, row: OutlineRow): string | null {
   if (row.depth === 0 || row.column === null) return null;
-  const column = record.columns.find((c) => c.id === row.column);
-  if (column === undefined) return null;
-  if (column.label.trim() !== '') return column.label;
-  return cellAddress(table, row.id, column.id)?.replace(/\d+$/u, '') ?? null;
+  return columnDisplayName(record, row.column);
 }
 
 export function HierarchyPanel({
@@ -91,7 +89,7 @@ export function HierarchyPanel({
   const headingId = useId();
   const table = selection === null ? null : tableMap(gd, selection.tableId);
   const rowId = selection?.cell?.rowId ?? null;
-  // ADR-051: a nest draws the outline in the selected cell's column.
+  // ADR-052: a nest draws the outline in the selected cell's column.
   const colId = selection?.cell?.colId;
   const record = table === null ? null : tableRecord(table);
   // ADR-026: the viewer's own grouping, sort and filter, from the view store.
@@ -129,7 +127,7 @@ export function HierarchyPanel({
       ? 'Unavailable while the view is sorted or filtered'
       : null;
   const disabledReason = viewOnly ? 'View only' : depthLocked;
-  const outlineIn = row === null ? null : outlineColumnName(table, record, row);
+  const outlineIn = row === null ? null : outlineColumnName(record, row);
 
   return (
     <section className="gd-hier" aria-labelledby={headingId} data-testid="hierarchy-panel">
@@ -163,7 +161,7 @@ export function HierarchyPanel({
             depth {row.depth}
           </p>
           {outlineIn !== null && (
-            // ADR-051: where the indent lands — the column the row was nested from.
+            // ADR-052: where the indent lands — the column the row was nested from.
             <p className="gd-inspector__counts" data-testid="hierarchy-outline">
               Outline in {outlineIn}
             </p>

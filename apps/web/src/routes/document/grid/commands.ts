@@ -100,6 +100,7 @@ import {
 
 import type { CellSelection, GridEvent, GridState } from '../../../doc/selection.js';
 import { workbookIndexFor } from '../../../doc/workbook-index.js';
+import { columnDisplayName } from './column-name.js';
 import { isFormulaInput } from '../formula/input.js';
 
 /** One cell's worth of clipboard content: its text, and its marks when it had any. */
@@ -186,7 +187,7 @@ export interface GridCommands {
   /** GRID-10: leading frozen columns, clamped to the table. Returns the count stored. */
   setFrozenColumns(tableId: Id, count: number): number | null;
   /**
-   * HIER-04 / ADR-051: the table's designated outline column — the default a
+   * HIER-04 / ADR-052: the table's designated outline column — the default a
    * row falls back to — or null for the first visible column. One undo step.
    * False when the column is not in the table or nothing changes.
    */
@@ -232,7 +233,7 @@ export interface GridCommands {
   /**
    * HIER-01 / KEYS-06 `⌘]`: nest the row one level under the row above, its
    * subtree with it. `colId` — the selected cell's column — is where the row's
-   * outline is drawn from then on (ADR-051). False when HIER-02 refuses (the
+   * outline is drawn from then on (ADR-052). False when HIER-02 refuses (the
    * control is disabled then).
    */
   nestRow(tableId: Id, rowId: Id, colId?: Id): boolean;
@@ -403,14 +404,13 @@ function rowName(table: TableMap, record: TableRecord, rowId: Id): string {
   return number === undefined || number === '' ? 'The row' : `Row ${number}`;
 }
 
-/** ADR-051: how a column is named in an announcement — its label, else its grid letter. */
-function columnName(table: TableMap, rec: TableRecord, colId: Id | null): string {
+/** ADR-052: how a column is named in an announcement — its label, else "column C". */
+function columnName(rec: TableRecord, colId: Id | null): string {
+  if (colId === null) return 'the first visible column';
   const column = rec.columns.find((c) => c.id === colId);
-  if (column === undefined) return 'the first visible column';
-  if (column.label.trim() !== '') return column.label;
-  const first = rec.rows[0];
-  const letter = first === undefined ? null : cellAddress(table, first, column.id);
-  return letter === null ? 'an unlabelled column' : `column ${letter.replace(/\d+$/u, '')}`;
+  const name = columnDisplayName(rec, colId);
+  if (column === undefined || name === null) return 'the first visible column';
+  return column.label.trim() === '' ? `column ${name}` : name;
 }
 
 /** "3 units tall" / "1 unit wide": a size in words. */
@@ -612,18 +612,19 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       if (!editable() || before === null || table === null) return false;
       const index = before.columns.findIndex((c) => c.id === colId);
       if (index < 0 || before.columns[index]?.hidden === true) return false;
-      // ADR-051: the outline drawn in this column — the table's default or a row's own —
-      // falls back once it is hidden; say where it went.
+      // ADR-052: the outline drawn in this column — the table's default or a row's own —
+      // falls back once it is hidden; say where it went. Names are read before the write:
+      // a hidden column has no grid letter.
       const outlineBefore = tableOutline(table, before);
       const carriedOutline =
         outlineBefore.column === colId || outlineBefore.rows.some((r) => r.column === colId);
+      const from = columnName(before, colId);
       hideColumnMutation(gd, tableId, colId);
       reselectAfterColumn(tableId, before, index);
-      const hid = `Hid column ${before.columns[index]?.label ?? ''}`.trim();
+      const hid = `Hid column ${from}`;
       const after = record(tableId);
       if (carriedOutline && after !== null) {
-        const from = columnName(table, before, colId);
-        const to = columnName(table, after, tableOutline(table, after).column);
+        const to = columnName(after, tableOutline(table, after).column);
         announce(`${hid}. Outline column ${from} is hidden; showing the outline in ${to}`);
       } else {
         announce(hid);
@@ -798,7 +799,7 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
       announce(
         colId === null
           ? 'Outline column: the first visible column'
-          : `Outline column: ${columnName(table, after, colId)}`,
+          : `Outline column: ${columnName(after, colId)}`,
       );
       return true;
     },
@@ -909,11 +910,10 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
         announce('Cannot nest deeper than one level under the row above');
         return false;
       }
-      // ADR-051: say where the outline landed — the row's column after the write.
+      // ADR-052: say where the outline landed — the row's column after the write.
       const after = tableById(gd, tableId);
       const column = rowOutline(table, rowId)?.column ?? null;
-      const where =
-        after === null || column === null ? '' : ` in ${columnName(table, after, column)}`;
+      const where = after === null || column === null ? '' : ` in ${columnName(after, column)}`;
       announce(`Nested to level ${String(depth + 1)}${where}`);
       return true;
     },

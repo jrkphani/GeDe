@@ -1432,6 +1432,16 @@ describe('row hierarchy in the grid (HIER, KEYS-06)', () => {
       gridRef.current?.commands.hideColumn(tableId, cols[2]!);
     });
     expect(live()).toHaveTextContent(/^Hid column Column 3$/);
+    // A blank-labelled column is named by its grid letter, read before it hides (it has none after).
+    act(() => {
+      gridRef.current?.commands.unhideColumn(tableId, cols[2]!);
+      gridRef.current?.commands.renameColumn(tableId, cols[2]!, '');
+      nestRow(gd, tableId, rows[3]!, cols[2]);
+      gridRef.current?.commands.hideColumn(tableId, cols[2]!);
+    });
+    expect(live()).toHaveTextContent(
+      'Hid column column D. Outline column column D is hidden; showing the outline in Column 2',
+    );
   });
 
   it('HIER-04 GRID-10 the pinned mirror draws each row’s outline in that row’s own column', () => {

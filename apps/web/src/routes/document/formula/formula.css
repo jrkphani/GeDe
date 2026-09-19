@@ -154,9 +154,13 @@
   cursor: not-allowed;
 }
 .gd-formula-option__label {
+  /* A path can outrun the popover's width (ADR-054): clip it, never scroll the surface. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
-/* ADR-052: an entity is a cell — its value first, the path it is written as beneath. */
+/* ADR-054: an entity is a cell — its value first, the path it is written as beneath. */
 .gd-formula-option__entity {
   display: flex;
   flex-direction: column;

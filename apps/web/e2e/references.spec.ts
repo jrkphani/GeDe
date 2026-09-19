@@ -167,7 +167,7 @@ for (const width of [1024, 1440]) {
     await enter(page, 'B6', 'Namche Bazaar');
     await expect(reference.locator('.gd-ref__value')).toHaveText('Namche Bazaar');
     await expect(reference).toHaveAttribute('title', '@"Table 1"."Namche Bazaar"');
-    // ADR-052: a value in the second column is an entity too, offered by its text.
+    // ADR-054: a value in the second column is an entity too, offered by its text.
     const d6 = page.locator('[data-address="D6"]');
     await d6.dblclick();
     const editor6 = page.getByLabel('Edit D6');
@@ -316,7 +316,7 @@ for (const width of [1024, 1440]) {
 }
 
 for (const width of [1024, 1440]) {
-  test(`REF-01 FX-04 at ${String(width)}: on the guided sample, =@Pri in Deliverables “Owner role” offers Priya from the Owner column — once per row, the value first and the path beneath — beside the Team row; the value entry commits a live reference to that cell, which follows an edit of the source (ADR-052)`, async ({
+  test(`REF-01 FX-04 at ${String(width)}: on the guided sample, =@Pri in Deliverables “Owner role” offers Priya from the Owner column — once per row, the value first and the path beneath — beside the Team row; the value entry commits a live reference to that cell, which follows an edit of the source (ADR-054)`, async ({
     page,
     checkA11y,
     snapshot,
@@ -386,15 +386,47 @@ for (const width of [1024, 1440]) {
       '@Deliverables."Passkey sign-in".Status',
     );
     await expect(page.getByText(/more — keep typing/)).toHaveCount(0);
-    // A bare =@ lists this table first, twelve at a time, and counts the rest.
+    // A multi-word value is reached past its first word, quoted or not (ADR-054).
+    await editor7.fill('=@In pr');
+    const inProgress = page.getByRole('listbox', { name: 'Entities' }).getByRole('option');
+    await expect(inProgress).toHaveCount(3);
+    await expect(inProgress.nth(0).locator('.gd-formula-option__value')).toHaveText('In progress');
+    await editor7.fill('=@"In pr');
+    await expect(inProgress).toHaveCount(3);
+    await editor7.fill('=@Onboarding fl');
+    await expect(inProgress).toHaveCount(1);
+    await expect(inProgress.first().locator('.gd-formula-option__path')).toHaveText(
+      '@Deliverables."Onboarding flow"',
+    );
+    // A bare =@ lists this table first, eight at a time, and counts the rest; at 800 px the
+    // popover holds all eight without scrolling (a scrolling listbox has no tab stop).
+    await page.setViewportSize({ width, height: 800 });
     await editor7.fill('=@');
     const bare = page.getByRole('listbox', { name: 'Entities' }).getByRole('option');
-    await expect(bare).toHaveCount(12);
+    await expect(bare).toHaveCount(8);
     await expect(bare.nth(0).locator('.gd-formula-option__path')).toHaveText(
       '@Deliverables."Onboarding flow"',
     );
-    await expect(bare.nth(11)).not.toContainText('@Team');
-    await expect(page.getByText(/^\d+ more — keep typing$/)).toBeVisible();
+    await expect(bare.nth(7)).not.toContainText('@Team');
+    const more = page.getByText(/^\d+ more — keep typing$/);
+    await expect(more).toBeVisible();
+    await expect(editor7).toHaveAttribute(
+      'aria-describedby',
+      (await more.getAttribute('id')) ?? '',
+    );
+    const popover = page.locator('.gd-formula-popover');
+    const box = await popover.evaluate((el) => ({
+      client: el.clientHeight,
+      scroll: el.scrollHeight,
+      clientW: el.clientWidth,
+      scrollW: el.scrollWidth,
+    }));
+    expect(box.client).toBeGreaterThanOrEqual(box.scroll);
+    expect(box.clientW).toBeGreaterThanOrEqual(box.scrollW);
+    for (let i = 0; i < 7; i += 1) await page.keyboard.press('ArrowDown');
+    await expect(bare.nth(7)).toHaveAttribute('aria-selected', 'true');
+    await expect(bare.nth(7)).toBeInViewport();
+    await checkA11y(`references bare picker ${String(width)}`);
     await page.keyboard.press('Escape');
     await page.keyboard.press('Escape');
     await expect(editor7).toHaveCount(0);

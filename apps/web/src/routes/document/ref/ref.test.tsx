@@ -150,7 +150,7 @@ describe('REF-01 reference cells', () => {
     const editor = screen.getByRole('textbox');
     await typeText(editor, '@Luk');
     const list = await screen.findByRole('listbox', { name: 'Entities' });
-    // ADR-052: the table being edited ranks first (its own Lukla row), Peaks' Lukla next.
+    // ADR-054: the table being edited ranks first (its own Lukla row), Peaks' Lukla next.
     const options = within(list).getAllByRole('option');
     expect(options[0]).toHaveTextContent('@Notes."Lukla (2860 m)"');
     expect(options[1]).toHaveTextContent('@Peaks.Lukla');

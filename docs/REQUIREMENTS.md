@@ -80,7 +80,7 @@ _Typing `=` opens formula entry with a menu of available forms._
 - **FX-01** — Concat: `=Concat(a, b, …)` joins arguments end to end. Arguments may be cell addresses, `@` entity paths, or quoted literals.
 - **FX-02** — Sum: `=Sum(B2:B14)` accepts a range, a list of addresses, `@` paths or a whole column. Offered only when the column is Number or Currency. Blanks count as zero; a text cell in range yields `⚠ text in range` naming the offender.
 - **FX-03** — Lists: `=A2, D5` lists addressed values comma-separated; `=@Path, @Path` does the same for entities with any typed separator.
-- **FX-04** — Autocomplete: Typing `@` anywhere in a formula opens the workbook entity index and inserts the dotted path at the cursor, leaving the editor open. _Amended by ADR-052: the index holds every cell of every titled table, listed by its value with the path beneath; a query matches values as well as paths; a row is labelled by its outline column, falling back to its first cell with text; a blank column label is spelled by the column’s grid letter._
+- **FX-04** — Autocomplete: Typing `@` anywhere in a formula opens the workbook entity index and inserts the dotted path at the cursor, leaving the editor open. _Amended by ADR-054: the index holds every cell of every titled table, listed by its value with the path beneath; a query matches values as well as paths; a row is labelled by its outline column, falling back to its first cell with text; a blank column label is spelled by the column’s grid letter._
 - **FX-05** — Click to insert: While editing a formula, clicking another cell inserts its address at the cursor with an appropriate separator.
 - **FX-06** — Evaluation: Results track their sources; editing a referenced cell updates every dependent. Formulas may reference formulas; a depth guard reports `⚠ circular`.
 - **FX-07** — Presentation: A formula cell renders its value with a reference badge and the expression on a secondary line. Re-opening restores the expression, not the result.
@@ -88,7 +88,7 @@ _Typing `=` opens formula entry with a menu of available forms._
 
 ## REF — References and cross-table relations (5)
 
-- **REF-01** — Entity reference: Selecting an entity from the `@` index turns the cell into a live reference rendered in accent mono with a badge and the path beneath. _Amended by ADR-052: an entity is a cell — a row or any cell of it — listed by its value; the reference binds to that cell’s id._
+- **REF-01** — Entity reference: Selecting an entity from the `@` index turns the cell into a live reference rendered in accent mono with a badge and the path beneath. _Amended by ADR-054: an entity is a cell — a row or any cell of it — listed by its value; the reference binds to that cell’s id._
 - **REF-02** — Pull: A table may mirror rows from any table on any sheet, filtered by a contains expression; the receiving column renames itself to name its source.
 - **REF-03** — Mapping column: A column may be bound to a target column elsewhere; its cells become pickers over that column’s distinct values.
 - **REF-04** — Derived column: Composed as `@Column.Method(args)` through the inspector, shown under a lineage header, recomputing on every upstream change.
@@ -101,8 +101,8 @@ _Manual outline structure, independent of category grouping._
 - **HIER-01** — Controls: With a cell selected, the inspector shows the row, its current parent and depth, with Promote (⇤) and Nest (⇥). `⌘]` and `⌘[` do the same from the keyboard.
 - **HIER-02** — Validity: A row may nest at most one level deeper than the row immediately above it; deeper nesting is refused and the control renders disabled. Promote stops at depth 0.
 - **HIER-03** — Parent resolution: A row’s parent is the nearest row above it at a shallower depth. The inspector states it as “↳ under <parent>”, or “top level — no parent” at depth 0.
-- **HIER-04** — Indentation: Depth indents the table’s designated outline column by 15 px per level and prefixes child rows with ↳. _Amended by ADR-051: the outline is drawn in the row’s outline column — the column of the cell that was selected when the row was nested, else the table’s designated outline column, else the first visible column. Presentation only; stored per row; a promote to the top level clears it._
-- **HIER-05** — Chevron: Any row with descendants shows a disclosure chevron in the outline column; rotation indicates state. _Amended by ADR-051: in the row’s own outline column._
+- **HIER-04** — Indentation: Depth indents the table’s designated outline column by 15 px per level and prefixes child rows with ↳. _Amended by ADR-052: the outline is drawn in the row’s outline column — the column of the cell that was selected when the row was nested, else the table’s designated outline column, else the first visible column. Presentation only; stored per row; a promote to the top level clears it._
+- **HIER-05** — Chevron: Any row with descendants shows a disclosure chevron in the outline column; rotation indicates state. _Amended by ADR-052: in the row’s own outline column._
 - **HIER-06** — Collapse: Collapsing a parent hides its entire subtree, not only its immediate children. Collapse all / Expand all act on the whole table.
 - **HIER-07** — Split children: Rows produced by `Split()` render as nested child rows beneath their parent and are read-only; they collapse with the parent.
 - **HIER-08** — Interaction with grouping: When a table is grouped by a column, group bands take over the outline column and manual depth is preserved but not displayed; removing the grouping restores the outline.

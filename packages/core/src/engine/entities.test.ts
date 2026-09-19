@@ -1,5 +1,5 @@
 /**
- * The entity index and its search (REF-01, FX-04, HIER-04; ADR-052): every
+ * The entity index and its search (REF-01, FX-04, HIER-04; ADR-054): every
  * cell is an entity listed by its value, a row is labelled by its outline
  * column with a fallback to the first column that has text, a blank column
  * label is spelled by its grid letter, and a query matches values as well as
@@ -92,7 +92,7 @@ function indexOf(f: Fixture) {
   return workbookIndexOf(f.gd).entityIndex();
 }
 
-describe('buildEntityIndex (ADR-052)', () => {
+describe('buildEntityIndex (ADR-054)', () => {
   test('REF-01 FX-04 every cell of a labelled row is an entry carrying its value; the row entry carries the label; entries come row before columns, in workbook order', () => {
     const f = fixture(
       'Deliverables',
@@ -232,7 +232,7 @@ describe('buildEntityIndex (ADR-052)', () => {
   });
 });
 
-describe('cellMayRelabel (ADR-052)', () => {
+describe('cellMayRelabel (ADR-054)', () => {
   test('FX-04 REF-01 a cell in the row’s outline column may re-spell the path; another column may only while that cell is blank', () => {
     const f = fixture(
       'T',
@@ -259,7 +259,7 @@ describe('cellMayRelabel (ADR-052)', () => {
   });
 });
 
-describe('searchEntities (ADR-052)', () => {
+describe('searchEntities (ADR-054)', () => {
   /** Deliverables and Team in one document, as the guided sample lays them out. */
   function workscape() {
     const f = fixture(
@@ -326,6 +326,28 @@ describe('searchEntities (ADR-052)', () => {
       '@Deliverables."Onboarding flow"',
       '@Deliverables."Onboarding flow".Owner',
       '@Deliverables."Onboarding flow".Status',
+    ]);
+  });
+
+  test('FX-04 REF-01 a multi-word value is reached past its first word, quoted or not, as a value or as a path segment (ADR-054)', () => {
+    const { f } = workscape();
+    const paths = (q: string) => searchEntities(indexOf(f), q).entries.map((e) => e.text);
+    expect(paths('In pr')).toEqual(['@Deliverables."Onboarding flow".Status']);
+    expect(paths('"In pr')).toEqual(['@Deliverables."Onboarding flow".Status']);
+    expect(paths('Onboarding fl')).toEqual(['@Deliverables."Onboarding flow"']);
+    // Typed as a path, the row's cells come too.
+    expect(paths('Deliverables."Onboarding fl')).toEqual([
+      '@Deliverables."Onboarding flow"',
+      '@Deliverables."Onboarding flow".Owner',
+      '@Deliverables."Onboarding flow".Status',
+    ]);
+    expect(paths('Deliverables."Onboarding flow".Sta')).toEqual([
+      '@Deliverables."Onboarding flow".Status',
+    ]);
+    // A dot inside the open quote is not a segment break.
+    const dotted = fixture('T', ['A', 'B'], [['x', 'Rest day. Acclimatise']]);
+    expect(searchEntities(indexOf(dotted), '"Rest day. Acc').entries.map((e) => e.value)).toEqual([
+      'Rest day. Acclimatise',
     ]);
   });
 

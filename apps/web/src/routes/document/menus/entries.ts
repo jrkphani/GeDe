@@ -611,12 +611,17 @@ export function columnMenuEntries(
       },
     },
     {
-      // HIER-04 / ADR-051: the table's default outline column; off returns to the first visible.
+      // HIER-04 / ADR-052: the table's default outline column; off returns to the first visible
+      // column, so on the implicit first visible column there is nothing to uncheck.
       kind: 'check',
       id: 'outline-column',
       label: 'Use as outline column',
       checked: outlineColumnId(record) === colId,
-      disabledReason: viewOnly,
+      disabledReason:
+        viewOnly ??
+        (record.outlineColumn === null && outlineColumnId(record) === colId
+          ? 'Already the first visible column'
+          : undefined),
       onCheckedChange: (on) => {
         commands.setOutlineColumn(tableId, on ? colId : null);
       },

@@ -222,7 +222,7 @@ describe('useFormulaAdornments', () => {
     );
   });
 
-  it('FX-04 REF-01 (partial: test host, grid editor not wired) a bare @ lists the edited table first, twelve entries at most with the highlight walking them, and says how many more there are; a value typed from another table still finds it (ADR-052)', async () => {
+  it('FX-04 REF-01 (partial: test host, grid editor not wired) a bare @ lists the edited table first, eight entries at most with the highlight walking them, and the editor is described by how many more there are; a value typed from another table still finds it (ADR-054)', async () => {
     const d = testDoc(4, 4);
     setTableTitle(d.gd, d.tableId, 'Deliverables');
     for (let r = 0; r < 4; r += 1) {
@@ -251,16 +251,19 @@ describe('useFormulaAdornments', () => {
       Array.from(
         screen.getByRole('listbox', { name: 'Entities' }).querySelectorAll('[role=option]'),
       );
-    expect(options()).toHaveLength(12);
+    expect(options()).toHaveLength(8);
     expect(options()[0]!.textContent).toContain('@Team.Priya');
     expect(options()[1]!.textContent).toContain('@Team.Priya."Column 2"');
     expect(options()[2]!.textContent).toContain('@Team.Marcus');
     expect(options()[4]!.textContent).toContain('@Deliverables.D00');
-    // 4 Team + 16 Deliverables entries, 12 shown.
-    expect(screen.getByText('8 more — keep typing')).toBeInTheDocument();
-    for (let i = 0; i < 11; i += 1) await userEvent.keyboard('{ArrowDown}');
-    expect(editor).toHaveAttribute('aria-activedescendant', options()[11]!.id);
-    expect(options()[11]).toHaveAttribute('aria-selected', 'true');
+    // 4 Team + 16 Deliverables entries, 8 shown; the count describes the editor, not the list.
+    const more = screen.getByText('12 more — keep typing');
+    expect(more).not.toHaveAttribute('aria-live');
+    expect(editor).toHaveAttribute('aria-describedby', more.id);
+    expect(editor).toHaveAccessibleDescription('12 more — keep typing');
+    for (let i = 0; i < 7; i += 1) await userEvent.keyboard('{ArrowDown}');
+    expect(editor).toHaveAttribute('aria-activedescendant', options()[7]!.id);
+    expect(options()[7]).toHaveAttribute('aria-selected', 'true');
     // A value in another table's third column is found by its text.
     await userEvent.type(editor, 'Blocked');
     await waitFor(() => {
@@ -271,6 +274,7 @@ describe('useFormulaAdornments', () => {
       '@Deliverables.D30."Column 3"',
     ]);
     expect(screen.queryByText(/more — keep typing/)).toBeNull();
+    expect(editor).not.toHaveAttribute('aria-describedby');
   });
 
   it('FX-05 (partial: test host, grid editor not wired) a cell clicked while editing lands at the caret with the right separator', async () => {

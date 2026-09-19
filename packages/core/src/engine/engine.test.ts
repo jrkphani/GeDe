@@ -291,7 +291,7 @@ describe('FormulaEngine over a Y.Doc', () => {
     b.set(0, 0, `=@"${title}".Asia.Nepal."${city}"`);
     expect(b.stored(0, 0)).toBe(`={e:${g.tableId}:${g.rowId(1)}:${g.colId(2)}}`);
     expect(h.results.get(b.id(0, 0))?.value).toEqual({ kind: 'text', text: 'Kathmandu' });
-    // The label lives in column C, so a write there re-spells the reference (ADR-052).
+    // The label lives in column C, so a write there re-spells the reference (ADR-054).
     g.set(1, 1, 'Nepal (Federal)');
     expect(b.shown(0, 0)).toBe(`=@"${title}".Asia."Nepal (Federal)"."${city}"`);
     expect(h.results.get(b.id(0, 0))?.value).toEqual({ kind: 'text', text: 'Kathmandu' });

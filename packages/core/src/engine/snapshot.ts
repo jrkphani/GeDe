@@ -7,7 +7,7 @@
 import * as Y from 'yjs';
 
 import { rowHeights } from '../doc/geometry.js';
-import { effectiveDepths } from '../hier/outline.js';
+import { effectiveDepths, rowOutlineColumns } from '../hier/outline.js';
 import {
   cellFormatMap,
   cellFormatOverride,
@@ -16,7 +16,6 @@ import {
   isFormula,
   readString,
   rowMeta,
-  rowOutlineColumnId,
   tableRecord,
   type CellContent,
   type GedeDoc,
@@ -62,6 +61,7 @@ export function tableStructure(table: TableMap): TableStructure {
   const record = tableRecord(table);
   const overrides = cellFormats(table);
   const metas = record.rows.map((rowId) => rowMeta(table, rowId));
+  const depths = effectiveDepths(metas.map((m) => m.depth));
   return {
     id: record.id,
     sheetId: record.sheetId,
@@ -81,9 +81,9 @@ export function tableStructure(table: TableMap): TableStructure {
     rowHeights: rowHeights(table, record),
     // Effective depths (HIER-02): a merge can leave a stored depth deeper than the
     // row above allows, and an `@` path must be qualified by the parent the reader sees.
-    rowDepths: effectiveDepths(metas.map((m) => m.depth)),
-    // ADR-051: the column each row's outline is drawn in; the `@` index labels the row by it.
-    rowOutlineColumns: metas.map((m) => rowOutlineColumnId(record, m)),
+    rowDepths: depths,
+    // ADR-052: the column each row's outline is drawn in; the `@` index labels the row by it.
+    rowOutlineColumns: rowOutlineColumns(record, metas, depths),
     ...(overrides === undefined ? {} : { cellFormats: overrides }),
   };
 }

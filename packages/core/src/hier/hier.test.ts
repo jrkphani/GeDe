@@ -418,6 +418,61 @@ describe('split children', () => {
     expect(cellReadOnlyReason(table, r2 ?? '', cols[0] ?? '')).toBeNull();
     expect(markSplitChildren(gd, tableId, 'gone', [r2 ?? ''])).toBe(false);
   });
+
+  test('HIER-07 HIER-04 a split child draws its outline in its parent’s column — the parent’s own when it was nested from one, the table’s otherwise — and follows when the parent moves or that column hides (ADR-052)', () => {
+    const gd = fresh();
+    const { tableId, rows, cols, table } = seed(gd);
+    const [, r1, r2, r3] = rows;
+    const [colA, colB] = cols;
+    if (r1 === undefined || r2 === undefined || r3 === undefined) throw new Error('rows');
+    if (colA === undefined || colB === undefined) throw new Error('cols');
+    nestRow(gd, tableId, r1, colB); // the parent, outlined in B
+    expect(markSplitChildren(gd, tableId, r1, [r2, r3])).toBe(true);
+    // Nothing is written on the children; the projection resolves them to the parent's column.
+    expect(rowMeta(table, r2).outlineColumn).toBeNull();
+    expect(tableOutline(table).rows.map((r) => r.column)).toEqual([
+      colA,
+      colB,
+      colB,
+      colB,
+      colA,
+      colA,
+    ]);
+    // The parent nested again from A: the children follow.
+    promoteRow(gd, tableId, r1);
+    nestRow(gd, tableId, r1, colA);
+    expect(tableOutline(table).rows.map((r) => r.column)).toEqual([
+      colA,
+      colA,
+      colA,
+      colA,
+      colA,
+      colA,
+    ]);
+    promoteRow(gd, tableId, r1);
+    expect(nestRow(gd, tableId, r1, colB)).toBe(1);
+    hideColumn(gd, tableId, colB);
+    expect(tableOutline(table).rows.map((r) => r.column)).toEqual([
+      colA,
+      colA,
+      colA,
+      colA,
+      colA,
+      colA,
+    ]);
+    // A row nested by hand under the parent keeps its own column (it is not a split child).
+    unhideColumn(gd, tableId, colB);
+    clearSplitChildren(gd, tableId, [r3]);
+    nestRow(gd, tableId, r3, colA);
+    expect(tableOutline(table).rows.map((r) => r.column)).toEqual([
+      colA,
+      colB,
+      colB,
+      colA,
+      colA,
+      colA,
+    ]);
+  });
 });
 
 describe('outline column and grouping (HIER-04, HIER-08)', () => {
@@ -430,6 +485,11 @@ describe('outline column and grouping (HIER-04, HIER-08)', () => {
     hideColumn(gd, tableId, cols[1] ?? '');
     expect(tableOutline(table).column).toBe(cols[0]);
     expect(setOutlineColumn(gd, tableId, 'nope')).toBe(false);
+    // ADR-052: a hidden column is refused, as `nestRow` refuses it; unhidden, it is accepted.
+    expect(setOutlineColumn(gd, tableId, cols[1] ?? '')).toBe(false);
+    expect(tableById(gd, tableId)?.outlineColumn).toBe(cols[1]); // the earlier designation stays
+    unhideColumn(gd, tableId, cols[1] ?? '');
+    expect(setOutlineColumn(gd, tableId, cols[1] ?? '')).toBe(true);
     expect(setOutlineColumn(gd, tableId, null)).toBe(true);
     expect(tableById(gd, tableId)?.outlineColumn).toBeNull();
   });
@@ -450,7 +510,7 @@ describe('outline column and grouping (HIER-04, HIER-08)', () => {
   });
 });
 
-describe('the outline column of a row (ADR-051; HIER-04, HIER-05, HIER-09, HIER-10)', () => {
+describe('the outline column of a row (ADR-052; HIER-04, HIER-05, HIER-09, HIER-10)', () => {
   test('HIER-04 HIER-10 a nest names the column its outline is drawn in, stored per row; the subtree keeps its own; a promote keeps it until the row reaches the top level, which clears it', () => {
     const gd = fresh();
     const s = seed(gd);

@@ -114,7 +114,7 @@ async function signInTo(page: Page, path: string): Promise<void> {
   await expect(page).toHaveURL(target);
 }
 
-/** The stored outline column of a row, read from the room's replica (ADR-051, HIER-10). */
+/** The stored outline column of a row, read from the room's replica (ADR-052, HIER-10). */
 function roomOutlineColumn(room: FakeRoom, tableId: Id, rowId: Id): string | null {
   const table = room.doc.getMap('tables').get(tableId) as Y.Map<unknown>;
   const meta = (table.get('rowMeta') as Y.Map<Y.Map<unknown>>).get(rowId);
@@ -244,7 +244,7 @@ test.describe('row hierarchy', () => {
   }
 
   for (const width of [1024, 1440] as const) {
-    test(`HIER-04 HIER-05 HIER-09 HIER-10 KEYS-06 at ${String(width)} px: ⌘] on a cell in column C nests the row with its outline in C — the indent and ↳ are drawn there and B is untouched — the address C6 stays, the room stores the column per row, a row nested from B keeps B, and a fresh load draws it the same (ADR-051)`, async ({
+    test(`HIER-04 HIER-05 HIER-09 HIER-10 KEYS-06 at ${String(width)} px: ⌘] on a cell in column C nests the row with its outline in C — the indent and ↳ are drawn there and B is untouched — the address C6 stays, the room stores the column per row, a row nested from B keeps B, and a fresh load draws it the same (ADR-052)`, async ({
       page,
       checkA11y,
       snapshot,
@@ -323,7 +323,7 @@ test.describe('row hierarchy', () => {
     });
   }
 
-  test('HIER-04 INSP-04 MENU-03 KEYS-03 at 1440 px: the Table tab’s "Outline column" select and the header ▼’s "Use as outline column" designate the table’s default column — rows nested without a column follow it, a row nested from its own column keeps that — one undo step each, announced; hiding the designated column falls back and says so (ADR-051)', async ({
+  test('HIER-04 INSP-04 MENU-03 KEYS-03 at 1440 px: the Table tab’s "Outline column" select and the column menu’s "Use as outline column" designate the table’s default column — rows nested without a column follow it, a row nested from its own column keeps that — one undo step each, announced; hiding the designated column falls back and says so (ADR-052)', async ({
     page,
     checkA11y,
   }) => {
@@ -365,16 +365,21 @@ test.describe('row hierarchy', () => {
     await page.keyboard.press('Control+z');
     await expect(select).toHaveText('First visible column');
     await expect(cell('B6').locator('.gd-cell__branch')).toHaveText('↳');
-    // The header ▼ carries the same choice, checked on the column that carries the outline.
-    await page.getByRole('button', { name: 'Sort, filter or group Column 2' }).click();
-    const item = page.getByRole('menuitemcheckbox', { name: 'Use as outline column' });
-    await expect(item).toHaveAttribute('aria-checked', 'false');
-    await item.click();
+    // The column context menu carries the same choice, checked on the column that carries the
+    // outline; on the implicit first visible column the uncheck is disabled with the reason.
+    const columnMenuItem = () =>
+      page.getByRole('menuitemcheckbox', { name: 'Use as outline column' });
+    await page.getByRole('columnheader', { name: /Column 1/ }).click({ button: 'right' });
+    await expect(columnMenuItem()).toHaveAttribute('aria-checked', 'true');
+    await expect(columnMenuItem()).toHaveAttribute('aria-disabled', 'true');
+    await expect(columnMenuItem()).toHaveAttribute('title', 'Already the first visible column');
+    await page.keyboard.press('Escape');
+    await page.getByRole('columnheader', { name: /Column 2/ }).click({ button: 'right' });
+    await expect(columnMenuItem()).toHaveAttribute('aria-checked', 'false');
+    await columnMenuItem().click();
     await expect(cell('C6').locator('.gd-cell__branch')).toHaveText('↳');
-    await page.getByRole('button', { name: 'Sort, filter or group Column 2' }).click();
-    await expect(
-      page.getByRole('menuitemcheckbox', { name: 'Use as outline column' }),
-    ).toHaveAttribute('aria-checked', 'true');
+    await page.getByRole('columnheader', { name: /Column 2/ }).click({ button: 'right' });
+    await expect(columnMenuItem()).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByRole('menu')).toHaveCSS('opacity', '1');
     await checkA11y('document hierarchy outline column menu 1440');
     await page.keyboard.press('Escape');
@@ -441,7 +446,7 @@ test.describe('row hierarchy', () => {
     nestRow(gd, tableId, rows[1]!);
     nestRow(gd, tableId, rows[2]!);
     nestRow(gd, tableId, rows[2]!);
-    nestRow(gd, tableId, rows[4]!, colC); // ADR-051: Pheriche's outline is in C
+    nestRow(gd, tableId, rows[4]!, colC); // ADR-052: Pheriche's outline is in C
     setRowCollapsed(gd, tableId, rows[3]!, true);
     await asPhone(page, 480, 800);
     await signInTo(page, `/d/${DOC_ID}`);
@@ -471,7 +476,7 @@ test.describe('row hierarchy', () => {
     await expect(dataRows(page).nth(3)).toHaveAttribute('aria-level', '1');
     expect(roomDepth(room, tableId, rows[3]!)).toBe(0);
     expect(roomCollapsed(room, tableId, rows[3]!)).toBe(true);
-    // ADR-051: a row nested from C draws its outline in C, read-only like the rest, and a
+    // ADR-052: a row nested from C draws its outline in C, read-only like the rest, and a
     // chord from C writes nothing either. The collaborator expands Kala Patthar to show it.
     setRowCollapsed(gd, tableId, rows[3]!, false);
     await expect(dataRows(page)).toHaveCount(5);

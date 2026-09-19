@@ -450,7 +450,7 @@ describe('Inspector', () => {
     expect(within(section('row')).getByText(/under/)).toBeInTheDocument();
   });
 
-  it('HIER-04 KEYS-03 the Table tab’s "Outline column" select designates the table’s outline column over the visible columns, defaults to the first visible column, is one undo step and announces (ADR-051)', async () => {
+  it('HIER-04 KEYS-03 the Table tab’s "Outline column" select designates the table’s outline column over the visible columns, defaults to the first visible column, is one undo step and announces (ADR-052)', async () => {
     const undo = createUndoManager(gd, { captureTimeout: 0 });
     await mount({ undo });
     await userEvent.click(tab('Table'));

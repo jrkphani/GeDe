@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
+
+import { formatNumber } from '../../../intl.js';
+import { activeLocale } from '../../../locale.js';
 import {
   readString,
   searchEntities,
@@ -66,6 +69,8 @@ export interface FormulaAdornments {
     readonly 'aria-autocomplete': 'list';
     readonly 'aria-controls': string | undefined;
     readonly 'aria-activedescendant': string | undefined;
+    /** ADR-054: the "n more — keep typing" line while the entity list is capped. */
+    readonly 'aria-describedby': string | undefined;
   };
   readonly open: 'forms' | 'entities' | null;
 }
@@ -81,11 +86,12 @@ interface FormOption {
 const SUM_DISABLED = 'Sum is offered on Number or Currency columns';
 
 /**
- * ADR-052: every column's values are entities now, so a name that appears in
- * several rows lists once per row; twelve rows of the picker keep a
- * one-to-many spread visible without a scroll for the common case.
+ * ADR-054: every column's values are entities now, so a name that appears in
+ * several rows lists once per row. Eight keep the popover inside its 60 vh at
+ * an 800 px viewport, so the listbox never scrolls (a scrolling region with no
+ * tab stop is an axe `serious`); the count beneath says what is past the cap.
  */
-const ENTITY_LIMIT = 12;
+const ENTITY_LIMIT = 8;
 
 function forms(summable: boolean): FormOption[] {
   return [
@@ -143,7 +149,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
       showEntities && doc !== null
         ? searchEntities(workbookIndexFor(doc).entityIndex(), entityQuery.query, {
             limit: ENTITY_LIMIT,
-            tableId, // ADR-052: the table being edited ranks first
+            tableId, // ADR-054: the table being edited ranks first
           })
         : { entries: [], more: 0 },
     // indexVersion: labels or tables changed; the index itself is cached per document.
@@ -161,6 +167,16 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
   useEffect(() => {
     setHighlighted(0);
   }, [open, entityQuery?.query]);
+  // Keep the highlighted option in view should the surface ever scroll (a long value, 200 % zoom).
+  useEffect(() => {
+    if (open === null) return;
+    const option = document.getElementById(`${listboxId}-${String(highlighted)}`);
+    // jsdom has no scrollIntoView; a browser always does.
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition
+    if (option !== null && typeof option.scrollIntoView === 'function') {
+      option.scrollIntoView({ block: 'nearest' });
+    }
+  }, [open, highlighted, listboxId]);
 
   const pick = useCallback(
     (index: number) => {
@@ -226,6 +242,8 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
 
   const activeId = open === null ? undefined : `${listboxId}-${String(highlighted)}`;
   const tableTitle = table === null ? '' : readString(table, 'title');
+  const moreId = `${listboxId}-more`;
+  const more = open === 'entities' && search.more > 0 ? search.more : 0;
 
   const element: ReactNode = (
     <Popover
@@ -285,7 +303,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
               }}
             >
               <Icon name="reference" size={13} />
-              {/* ADR-052: the cell's value leads; the path is how it is written back. */}
+              {/* ADR-054: the cell's value leads; the path is how it is written back. */}
               {entry.value === '' ? (
                 <span className="gd-mono gd-formula-option__label">{entry.text}</span>
               ) : (
@@ -301,10 +319,11 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
           ))}
         </div>
       )}
-      {open === 'entities' && search.more > 0 && (
-        // ADR-052: the list is capped; the count says so, outside the listbox (not an option).
-        <p className="gd-formula-more" aria-live="polite">
-          {search.more} more — keep typing
+      {more > 0 && (
+        // ADR-054: the list is capped; the count says so outside the listbox (not an option),
+        // and the editor is described by it.
+        <p id={moreId} className="gd-formula-more">
+          {formatNumber(activeLocale(), more)} more — keep typing
         </p>
       )}
     </Popover>
@@ -318,6 +337,7 @@ export function useFormulaAdornments(options: FormulaAdornmentsOptions): Formula
       'aria-autocomplete': 'list',
       'aria-controls': open === null ? undefined : listboxId,
       'aria-activedescendant': activeId,
+      'aria-describedby': more > 0 ? moreId : undefined,
     },
     open,
   };

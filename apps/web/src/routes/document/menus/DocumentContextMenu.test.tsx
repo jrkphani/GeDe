@@ -251,7 +251,7 @@ describe('context menus', () => {
     expect(clipboard.copySnapshot).toHaveBeenCalledTimes(1);
   });
 
-  it('MENU-03 HIER-04 right-click on a column header opens the column menu; hide and freeze act on that column; "Use as outline column" designates the table’s outline column and reads checked for the column that carries it (ADR-051)', async () => {
+  it('MENU-03 HIER-04 right-click on a column header opens the column menu; hide and freeze act on that column; "Use as outline column" designates the table’s outline column and reads checked for the column that carries it (ADR-052)', async () => {
     render(<Harness />);
     const header = screen.getAllByRole('columnheader')[1]!;
     fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
@@ -281,7 +281,7 @@ describe('context menus', () => {
       'Clear column',
       'Wrap text',
     ]);
-    // ADR-051: column A carries the outline by default; designating column B moves it there.
+    // ADR-052: column A carries the outline by default; designating column B moves it there.
     const outlineItem = () =>
       screen.getByRole('menuitemcheckbox', { name: 'Use as outline column' });
     expect(outlineItem()).toHaveAttribute('aria-checked', 'false');
@@ -298,7 +298,10 @@ describe('context menus', () => {
     });
     fireEvent.contextMenu(screen.getAllByRole('columnheader')[0]!, { clientX: 20, clientY: 5 });
     await screen.findByRole('menu', { name: 'Column menu' });
-    expect(outlineItem()).toHaveAttribute('aria-checked', 'true'); // the first visible column
+    // The implicit first visible column: checked, and unchecking would change nothing (MENU-02).
+    expect(outlineItem()).toHaveAttribute('aria-checked', 'true');
+    expect(outlineItem()).toHaveAttribute('aria-disabled', 'true');
+    expect(outlineItem()).toHaveAttribute('title', 'Already the first visible column');
     await userEvent.keyboard('{Escape}');
     fireEvent.contextMenu(header, { clientX: 200, clientY: 5 });
     await screen.findByRole('menu', { name: 'Column menu' });
