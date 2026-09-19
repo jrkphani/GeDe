@@ -76,3 +76,9 @@ export {
   newCrossTableReference,
 } from './cross-table.js';
 export { concatFormulaKeys, isConcatFormula } from './concat.js';
+export {
+  isSetOperatorCall,
+  isSetOperatorFormula,
+  SET_RESULT_FUNCTION_NAMES,
+  setOperatorFormulaKeys,
+} from './set-call.js';
