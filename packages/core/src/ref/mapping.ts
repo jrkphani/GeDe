@@ -39,13 +39,10 @@ function requireTable(gd: GedeDoc, tableId: Id): TableMap {
   return table;
 }
 
-/** `↔ Table · Column` — how a mapping column names its target (PRD §14). */
-export function mappingLabel(gd: GedeDoc, link: LinkSpec): string {
-  const table = gd.tables.get(link.tableId);
-  const record = table === undefined ? null : tableRecord(table);
-  const column = record?.columns.find((c) => c.id === link.colId);
-  return `↔ ${record?.title ?? '#REF'} · ${column?.label ?? '#REF'}`;
-}
+// The label lives in the doc layer since ADR-051, so a table rename can re-spell it.
+import { mappingLabel } from '../doc/labels.js';
+
+export { mappingLabel };
 
 /**
  * Add a mapping column bound to `link`, after `afterColId` (default: at the

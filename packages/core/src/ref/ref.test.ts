@@ -9,6 +9,8 @@ import {
   createTable,
   createUndoManager,
   deleteRow,
+  duplicateColumnLabel,
+  duplicateTableTitle,
   openDocument,
   rowMeta,
   rowReadOnlyReason,
@@ -657,6 +659,83 @@ describe('REF-03 mapping columns', () => {
       args: ['Trimmed'],
     });
     expect(addMappingColumn(gd, trek, { tableId: regions, colId: derived ?? '' })).toBeNull();
+  });
+});
+
+describe('ADR-051 lineage labels and unique names', () => {
+  test('REF-02 REF-03 renaming a source column or its table re-spells the pulled and mapping labels of every table in the same undo step, and a derived signature with them (REF-04)', () => {
+    const { gd, sheetId } = harness();
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    const peaks = grid(gd, sheetId, 'Peaks', [['Everest', '8849']]);
+    const trek = grid(gd, sheetId, 'Trek', [['Base', '']]);
+    const other = grid(gd, sheetId, 'Other', [['x', '']]);
+    const peakCol = cellAt(gd, peaks, 0, 0).colId;
+    const heightCol = cellAt(gd, peaks, 0, 1).colId;
+    // Trek pulls Peaks · Column 1 and maps Peaks · Column 2; Other maps Peaks · Column 1 too.
+    setPull(gd, trek, cellAt(gd, trek, 0, 1).colId, { tableId: peaks, colId: peakCol, filter: '' });
+    const mapped = addMappingColumn(gd, trek, { tableId: peaks, colId: heightCol })!;
+    const otherMapped = addMappingColumn(gd, other, { tableId: peaks, colId: peakCol })!;
+    const derived = addDerivedColumn(gd, peaks, {
+      sourceColId: peakCol,
+      method: 'Format',
+      args: ['Trimmed'],
+    })!;
+    const labelOf = (tableId: Id, colId: Id) =>
+      tableById(gd, tableId)?.columns.find((c) => c.id === colId)?.label;
+    const pulled = cellAt(gd, trek, 0, 1).colId;
+    expect(labelOf(trek, pulled)).toBe('↰ Peaks · Column 1');
+    expect(labelOf(trek, mapped)).toBe('↔ Peaks · Column 2');
+    expect(labelOf(other, otherMapped)).toBe('↔ Peaks · Column 1');
+    undo.stopCapturing();
+    const steps = undo.undoStack.length;
+    expect(renameColumn(gd, peaks, peakCol, 'Place')).toBe(true);
+    expect(labelOf(trek, pulled)).toBe('↰ Peaks · Place');
+    expect(labelOf(other, otherMapped)).toBe('↔ Peaks · Place');
+    expect(labelOf(trek, mapped)).toBe('↔ Peaks · Column 2'); // names another column: untouched
+    expect(labelOf(peaks, derived)).toBe('@Place.Format("Trimmed")');
+    expect(undo.undoStack).toHaveLength(steps + 1);
+    expect(renameColumn(gd, peaks, heightCol, 'Region')).toBe(true);
+    expect(labelOf(trek, mapped)).toBe('↔ Peaks · Region');
+    expect(setTableTitle(gd, peaks, 'Summits')).toBe(true);
+    expect(labelOf(trek, pulled)).toBe('↰ Summits · Place');
+    expect(labelOf(trek, mapped)).toBe('↔ Summits · Region');
+    expect(labelOf(other, otherMapped)).toBe('↔ Summits · Place');
+    expect(undo.undoStack).toHaveLength(steps + 3);
+    // One undo step reverses the title and every label it re-spelled.
+    undo.undo();
+    expect(tableById(gd, peaks)?.title).toBe('Peaks');
+    expect(labelOf(trek, pulled)).toBe('↰ Peaks · Place');
+    expect(labelOf(other, otherMapped)).toBe('↔ Peaks · Place');
+    // The receiving, mapping and derived columns still refuse a typed name (REF-05).
+    expect(renameColumn(gd, trek, pulled, 'Typed')).toBe(false);
+    expect(renameColumn(gd, trek, mapped, 'Typed')).toBe(false);
+    expect(renameColumn(gd, peaks, derived, 'Typed')).toBe(false);
+  });
+
+  test('REF-01 a column label unique in its table and a table title unique in the workbook: a duplicate (trimmed, case-insensitive) is refused and nothing is written; a column may keep its own name', () => {
+    const { gd, sheetId } = harness();
+    const a = grid(gd, sheetId, 'Alpha', [['1', '2']]);
+    const b = grid(gd, sheetId, 'Beta', [['1']]);
+    const first = cellAt(gd, a, 0, 0).colId;
+    const second = cellAt(gd, a, 0, 1).colId;
+    let writes = 0;
+    gd.doc.on('update', () => {
+      writes += 1;
+    });
+    expect(renameColumn(gd, a, first, 'column 2')).toBe(false);
+    expect(renameColumn(gd, a, first, ' Column 2 ')).toBe(false);
+    expect(duplicateColumnLabel(tableById(gd, a)!, first, 'COLUMN 2')?.id).toBe(second);
+    expect(renameColumn(gd, a, first, 'Column 1')).toBe(true); // its own name
+    expect(writes).toBe(0);
+    expect(setTableTitle(gd, a, 'beta')).toBe(false);
+    expect(setTableTitle(gd, a, ' Beta ')).toBe(false);
+    expect(duplicateTableTitle(gd, a, 'BETA')?.id).toBe(b);
+    expect(setTableTitle(gd, a, 'Alpha')).toBe(true);
+    expect(writes).toBe(0);
+    // A column in another table may share the name; a title may differ by accent.
+    expect(renameColumn(gd, b, cellAt(gd, b, 0, 0).colId, 'Column 2')).toBe(true);
+    expect(setTableTitle(gd, a, 'Béta')).toBe(true);
+    expect(writes).toBe(2);
   });
 });
 

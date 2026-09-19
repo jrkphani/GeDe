@@ -70,13 +70,10 @@ function requireTable(gd: GedeDoc, tableId: Id): TableMap {
   return table;
 }
 
-/** `↰ Table · Column` — how the receiving column names its source (PRD §14). */
-export function pullLabel(gd: GedeDoc, spec: PullSpec): string {
-  const table = gd.tables.get(spec.tableId);
-  const record = table === undefined ? null : tableRecord(table);
-  const column = record?.columns.find((c) => c.id === spec.colId);
-  return `↰ ${record?.title ?? '#REF'} · ${column?.label ?? '#REF'}`;
-}
+// The label lives in the doc layer since ADR-051, so a table rename can re-spell it.
+import { pullLabel } from '../doc/labels.js';
+
+export { pullLabel };
 
 /** The pull a table carries: its receiving column and spec, or null. One per table. */
 export function pullOf(table: TableMap): { readonly colId: Id; readonly spec: PullSpec } | null {

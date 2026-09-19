@@ -10,6 +10,7 @@
  */
 import * as Y from 'yjs';
 
+import { duplicateColumnLabel, refreshLineageLabelsInTransaction } from '../doc/labels.js';
 import { newColumn } from '../doc/mutations.js';
 import {
   columnsArray,
@@ -189,21 +190,28 @@ export function refreshDerivedLabels(gd: GedeDoc, tableId: Id): number {
 }
 
 /**
- * Rename a column and re-spell the derived columns that name it, in one
+ * Rename a column and re-spell every label that names it — the derived
+ * columns of its table (their signature, REF-04) and the pulled and mapping
+ * columns of any table whose spec targets it (REF-02, REF-03) — in one
  * transaction (one undo step). Only an entered column can be renamed by
- * hand: a derived column's label is its signature (REF-04), a pulled one's
- * is `↰ Table · Column` (REF-02) and a mapping column's names its target
- * (REF-03) — each is rewritten from its spec, so a typed name would not
- * survive the next reconcile. False when the column is missing or not entered.
- * The label is stored as given; the caller trims and refuses an empty one.
+ * hand: the others' labels are their lineage, kept true by this very
+ * refresh. False, nothing written, when the column is missing or not
+ * entered, or when another column of the table already carries the label
+ * (trimmed, case-insensitive — an `@` path would reach only the first,
+ * ADR-051). The label is stored as given; the caller trims and refuses an
+ * empty one.
  */
 export function renameColumn(gd: GedeDoc, tableId: Id, colId: Id, label: string): boolean {
   return transact(gd, () => {
     const table = requireTable(gd, tableId);
     const column = columnMapOf(table, colId);
     if (column === undefined || readColumnSource(column) !== 'entered') return false;
-    if (readString(column, 'label') !== label) column.set('label', label);
-    refreshInTransaction(table);
+    if (duplicateColumnLabel(tableRecord(table), colId, label) !== null) return false;
+    if (readString(column, 'label') !== label) {
+      column.set('label', label);
+      refreshInTransaction(table);
+      refreshLineageLabelsInTransaction(gd, tableId, colId);
+    }
     return true;
   });
 }
