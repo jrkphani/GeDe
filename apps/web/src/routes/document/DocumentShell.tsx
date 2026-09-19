@@ -80,6 +80,7 @@ import { matchBounds } from './find/match-geometry.js';
 import { useFind, type FindNavigation } from './find/useFind.js';
 import { FormulaEngineBanner, FormulaLayer } from './formula/index.js'; // wave2/formulas mount points
 import { pinnedPanelOffset } from './grid/pinned.js';
+import type { RenameResult, RenameTarget, TableRenaming } from './grid/rename.js';
 import { DocumentMenu } from './grid/DocumentMenu.js';
 import { TableMenu } from './grid/TableMenu.js';
 import { useGrid } from './grid/use-grid.js';
@@ -452,6 +453,44 @@ function OpenDocument({
         remove: removeSheet,
       }
     : undefined;
+  // ADR-051: the table title or column header that is an inline name field right now — one
+  // across the document, as the sheet strip's. The commit is the grid command (trimmed, an
+  // empty name refused, one undo step, synced); the shell only holds which field is open.
+  const [renamingTarget, setRenamingTarget] = useState<RenameTarget | null>(null);
+  const commitTableRename = useCallback(
+    (target: RenameTarget, name: string): RenameResult => {
+      const result =
+        target.kind === 'column'
+          ? grid.commands.renameColumn(target.tableId, target.colId, name)
+          : grid.commands.setTableTitle(target.tableId, name);
+      if (result.ok) setRenamingTarget(null);
+      return result;
+    },
+    [grid.commands],
+  );
+  const tableRenaming = useMemo<TableRenaming | undefined>(
+    () =>
+      editable
+        ? {
+            target: renamingTarget,
+            start: setRenamingTarget,
+            commit: commitTableRename,
+            cancel: () => {
+              setRenamingTarget(null);
+            },
+          }
+        : undefined,
+    [editable, renamingTarget, commitTableRename],
+  );
+  // The field's subject went (a collaborator deleted the table or the column): the field goes too.
+  useEffect(() => {
+    if (renamingTarget === null) return;
+    const table = tableById(gd, renamingTarget.tableId);
+    const present =
+      table !== null &&
+      (renamingTarget.kind === 'table' || table.columns.some((c) => c.id === renamingTarget.colId));
+    if (!present) setRenamingTarget(null);
+  }, [gd, renamingTarget, tables]);
   // KEYS-03: an undo or redo that brings a sheet back shows it — the person is looking for
   // it; one that takes the active sheet away falls to the neighbour rule below.
   const undoWithSheets = useCallback(
@@ -904,6 +943,8 @@ function OpenDocument({
       },
     },
     sheets: { add: appendSheet, rename: setRenamingSheetId, remove: removeSheet },
+    // ADR-051: the pointer route to the inline name field on a title or a column header.
+    rename: editable ? setRenamingTarget : undefined,
     selectTable,
     // ADR-047: the pointer routes to the object deletes and collapse.
     deleteTable: editable ? deleteTable : undefined,
@@ -1244,6 +1285,7 @@ function OpenDocument({
                             actions={grid.actions}
                             commands={grid.commands}
                             sort={phone ? undefined : sort}
+                            rename={tableRenaming}
                           />
                         </div>
                       );
@@ -1291,6 +1333,7 @@ function OpenDocument({
                     actions={tableActions}
                     commands={grid.commands}
                     sort={phone ? undefined : sort}
+                    rename={tableRenaming}
                   />
                 );
               })}

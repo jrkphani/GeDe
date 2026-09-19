@@ -4,8 +4,10 @@
  * one way an unimplemented control is shown — disabled, with its reason,
  * never styled as operable (INSP-11).
  */
-import { Button, Icon, Tooltip, type ButtonProps } from '@gede/ui';
+import { Button, Icon, TextField, Tooltip, type ButtonProps } from '@gede/ui';
 import { useId, useState, type ReactNode } from 'react';
+
+import type { RenameResult } from '../grid/rename.js';
 
 export function Section({
   label,
@@ -355,5 +357,107 @@ export function SizeField({
         </span>
       )}
     </div>
+  );
+}
+
+export interface NameFieldProps {
+  /** "Title text" / "Name". */
+  label: string;
+  /** The name as stored, or null when the selection has no subject. */
+  value: string | null;
+  /** What the value names: "the table", "column Column 2". */
+  subject: string;
+  /** What the field says when the typed name is empty (A11Y-04). */
+  emptyReason: string;
+  /**
+   * Write the trimmed name; a refusal carries its reason — a duplicate, a
+   * lineage label — which the field shows as its error while the draft
+   * stays. Unchanged names are not sent.
+   */
+  onCommit: (name: string) => RenameResult;
+  hint?: ReactNode | undefined;
+  /** MENU-02 / INSP-11: disabled with the reason, never hidden. */
+  disabledReason?: string | undefined;
+}
+
+/**
+ * ADR-051: the Table tab's Title text and the column's Name — the home of
+ * Rename table and Rename column (INSP-04, ADR-041). A typed name is written
+ * on Enter or when the field is left, as one command and one undo step;
+ * Escape drops the draft; an empty name is refused beside the field. A name
+ * a collaborator writes shows as soon as nothing is being typed here.
+ */
+export function NameField({
+  label,
+  value,
+  subject,
+  emptyReason,
+  onCommit,
+  hint,
+  disabledReason,
+}: NameFieldProps) {
+  const [draft, setDraft] = useState<string | null>(null);
+  const [refused, setRefused] = useState<string | null>(null);
+  const reason = disabledReason ?? (value === null ? `select ${subject} first` : undefined);
+  const shown = draft ?? value ?? '';
+  const commit = (raw: string) => {
+    const name = raw.trim();
+    if (name === '') {
+      setRefused(emptyReason);
+      return;
+    }
+    if (name === value) {
+      setDraft(null);
+      setRefused(null);
+      return;
+    }
+    const result = onCommit(name);
+    if (result.ok) {
+      setDraft(null);
+      setRefused(null);
+    } else {
+      setRefused(result.reason);
+    }
+  };
+  return (
+    <TextField
+      label={label}
+      value={shown}
+      hint={hint}
+      error={refused ?? undefined}
+      readOnly={reason !== undefined}
+      aria-disabled={reason !== undefined || undefined}
+      title={reason === undefined ? `${label} of ${subject}` : `${label} — ${reason}`}
+      autoComplete="off"
+      spellCheck={false}
+      onChange={(e) => {
+        setDraft(e.currentTarget.value);
+        if (refused !== null) setRefused(null);
+      }}
+      onBlur={(e) => {
+        if (draft !== null) commit(e.currentTarget.value);
+      }}
+      onKeyDown={(e) => {
+        // eslint-disable-next-line @typescript-eslint/no-deprecated -- keyCode 229 is the legacy IME signal
+        if (e.nativeEvent.isComposing || e.keyCode === 229 || reason !== undefined) return;
+        switch (e.code) {
+          case 'Enter':
+          case 'NumpadEnter':
+            e.preventDefault();
+            commit(e.currentTarget.value);
+            break;
+          case 'Escape':
+            if (draft !== null) {
+              e.preventDefault();
+              e.stopPropagation();
+              setDraft(null);
+              setRefused(null);
+            }
+            break;
+          default:
+            break;
+        }
+      }}
+    />
   );
 }

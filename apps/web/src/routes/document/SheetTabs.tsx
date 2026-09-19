@@ -1,11 +1,11 @@
 import clsx from 'clsx';
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type MouseEvent } from 'react';
-import { listSheets, objectCount, type GedeDoc, type Id, type SheetRecord } from '@gede/core';
+import { useEffect, useRef, type KeyboardEvent, type MouseEvent } from 'react';
+import { listSheets, objectCount, type GedeDoc, type Id } from '@gede/core';
 import { Button, Tabs, Tooltip } from '@gede/ui';
 
-import { announce } from '../../announce.js';
 import { isEditableTarget } from '../../doc/shortcuts.js';
 import { useYVersion } from '../../doc/use-y.js';
+import { InlineNameField, isComposingEvent } from './InlineNameField.js';
 import { emptyNameReason } from './sheets.js';
 
 /**
@@ -44,94 +44,6 @@ function tabOf(target: EventTarget | null): { element: HTMLElement; sheetId: Id 
   const element = target.closest<HTMLElement>('[role="tab"][data-value]');
   const sheetId = element?.dataset.value;
   return element === null || sheetId === undefined ? null : { element, sheetId };
-}
-
-function isComposing(event: KeyboardEvent): boolean {
-  // eslint-disable-next-line @typescript-eslint/no-deprecated -- keyCode 229 is the legacy IME signal
-  return event.nativeEvent.isComposing || event.keyCode === 229;
-}
-
-interface RenameFieldProps {
-  sheet: SheetRecord;
-  commit: (label: string) => boolean;
-  cancel: () => void;
-}
-
-/**
- * The inline name field that stands in for a tab (ADR-048). Enter commits,
- * Escape cancels, leaving the field commits what is there; an empty name is
- * refused with the reason beside the field and in the live region. Keys
- * resolve from `event.code` and nothing happens while an IME composes.
- */
-function RenameField({ sheet, commit, cancel }: RenameFieldProps) {
-  const [invalid, setInvalid] = useState(false);
-  const reasonId = useId();
-  const input = useRef<HTMLInputElement | null>(null);
-  const done = useRef(false);
-  useEffect(() => {
-    input.current?.focus();
-    input.current?.select();
-  }, []);
-  const finish = (how: 'commit' | 'cancel') => {
-    if (done.current) return;
-    const value = input.current?.value ?? '';
-    if (how === 'commit') {
-      if (value.trim() !== '' && commit(value)) {
-        done.current = true;
-        return;
-      }
-      setInvalid(true);
-      announce(emptyNameReason());
-      input.current?.focus();
-      return;
-    }
-    done.current = true;
-    cancel();
-  };
-  const reason = emptyNameReason();
-  return (
-    <>
-      <input
-        ref={input}
-        className="gd-doc__sheet-rename"
-        type="text"
-        defaultValue={sheet.label}
-        aria-label="Sheet name"
-        aria-invalid={invalid || undefined}
-        aria-describedby={invalid ? reasonId : undefined}
-        // The reason shows where the missing name would be — exactly while it applies (A11Y-04).
-        placeholder={invalid ? reason : undefined}
-        data-sheet-rename={sheet.id}
-        autoComplete="off"
-        spellCheck={false}
-        onChange={() => {
-          if (invalid) setInvalid(false);
-        }}
-        onKeyDown={(event) => {
-          if (isComposing(event)) return;
-          if (event.code === 'Enter' || event.code === 'NumpadEnter') {
-            event.preventDefault();
-            event.stopPropagation();
-            finish('commit');
-          } else if (event.code === 'Escape') {
-            event.preventDefault();
-            event.stopPropagation();
-            finish('cancel');
-          }
-        }}
-        onBlur={() => {
-          // Leaving the field keeps a typed name; an empty one is not kept, and the tab returns.
-          if ((input.current?.value ?? '').trim() === '') finish('cancel');
-          else finish('commit');
-        }}
-      />
-      {invalid && (
-        <span id={reasonId} className="gd-visually-hidden">
-          {reason}
-        </span>
-      )}
-    </>
-  );
 }
 
 /**
@@ -181,7 +93,7 @@ export function SheetTabs({ gd, activeSheetId, onSelect, onAppend, edit, bottom 
     tab?.focus({ preventScroll: true });
   });
   const onKeyDown = (event: KeyboardEvent<HTMLElement>) => {
-    if (edit === undefined || isComposing(event) || event.defaultPrevented) return;
+    if (edit === undefined || isComposingEvent(event) || event.defaultPrevented) return;
     const plain = !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
     const isDelete = (event.code === 'Delete' || event.code === 'Backspace') && plain;
     const tab = tabOf(event.target);
@@ -238,12 +150,22 @@ export function SheetTabs({ gd, activeSheetId, onSelect, onAppend, edit, bottom 
                   </span>
                 </span>
               ),
+              // ADR-048: the inline name field stands in for the tab; the strip's own focus
+              // rule puts the keyboard back on a tab once it goes (never on an inactive one).
               editor:
                 edit !== undefined && renaming === s.id ? (
-                  <RenameField
-                    sheet={s}
-                    commit={(label) => edit.commitRename(s.id, label)}
+                  <InlineNameField
+                    value={s.label}
+                    label="Sheet name"
+                    emptyReason={emptyNameReason()}
+                    commit={(label) =>
+                      edit.commitRename(s.id, label)
+                        ? { ok: true }
+                        : { ok: false, reason: emptyNameReason() }
+                    }
                     cancel={edit.cancelRename}
+                    className="gd-doc__sheet-rename"
+                    data={{ 'data-sheet-rename': s.id }}
                   />
                 ) : undefined,
             };

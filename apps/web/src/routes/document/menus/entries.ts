@@ -31,9 +31,10 @@ import { LABELS } from '../../../doc/shortcuts.js';
 import { activeLocale } from '../../../locale.js';
 import { toFormatLocale } from '../cell/useCellFormat.js';
 import type { GraphsActions } from '../graph/use-graphs.js';
-import type { GridCommands } from '../grid/commands.js';
+import { columnRenameReason, type GridCommands } from '../grid/commands.js';
+import type { RenameTarget } from '../grid/rename.js';
 import type { CellClipboard } from '../keys/clipboard.js';
-import { SHEET_KEYS } from '../keys/shortcut-map.js';
+import { RENAME_KEYS, SHEET_KEYS } from '../keys/shortcut-map.js';
 import { TRACKED } from '../inspector/controls.js';
 import { LAST_SHEET_REASON } from '../sheets.js';
 import {
@@ -97,6 +98,12 @@ export interface MenuContext {
   };
   /** KEYS-03 ⌘A / KEYS-08: the cell menu's "Select the table" (ADR-042). */
   selectTable?: ((tableId: Id) => void) | undefined;
+  /**
+   * ADR-051: open the inline name field on a table title or a column header —
+   * the pointer route to Rename table and Rename column, whose home is the
+   * Table tab. Absent where nothing can be written (phone, view-only).
+   */
+  rename?: ((target: RenameTarget) => void) | undefined;
   /**
    * ADR-047 / KEYS-08: ⌫'s pointer route on a table — the table, its cells and
    * its graph pairs go as one undo step; the shell moves focus afterwards.
@@ -369,6 +376,46 @@ function graphEntry(ctx: MenuContext, tableId: Id): MenuEntry {
 }
 
 /** MENU-04: the cell menu. */
+/**
+ * INSP-04 / MENU-03: fit one column's width to its widest cell, snapped to
+ * whole units — the column menu's item, and (ADR-051) the cell menu's, so
+ * the column can be fitted with the header row hidden (GRID-11) and no
+ * column menu to open. Where no 2D canvas exists the item says so (MENU-02),
+ * as the inspector's buttons do.
+ */
+function fitColumnEntry(
+  ctx: MenuContext,
+  tableId: Id,
+  colId: Id,
+  label: 'Fit width to content' | 'Fit column width to content',
+): MenuEntry {
+  const { gd, commands } = ctx;
+  const viewOnly = ctx.editable ? undefined : VIEW_ONLY;
+  return {
+    kind: 'item',
+    id: 'col-fit',
+    label,
+    disabledReason:
+      viewOnly ?? (canMeasure() ? undefined : 'text cannot be measured in this browser'),
+    onSelect: () => {
+      const measure = canvasMeasure();
+      const table = tableMap(gd, tableId);
+      const record = tableById(gd, tableId);
+      if (measure === null || table === null || record === null) return;
+      const engine = peekEngine(gd.doc);
+      commands.fitColumns(
+        tableId,
+        fitColumnsToContent(table, record, {
+          locale: toFormatLocale(activeLocale()),
+          measure,
+          cellValue: (cellId) => engine?.result(cellId)?.value ?? undefined,
+          only: [colId],
+        }),
+      );
+    },
+  };
+}
+
 export function cellMenuEntries(
   ctx: MenuContext,
   target: MenuTarget & { kind: 'cell' },
@@ -575,6 +622,7 @@ export function cellMenuEntries(
         );
       },
     },
+    fitColumnEntry(ctx, tableId, colId, 'Fit column width to content'),
   ];
 }
 
@@ -633,6 +681,19 @@ export function columnMenuEntries(
         commands.insertColumnAfter(tableId, colId);
       },
     },
+    {
+      // ADR-051 / MENU-03: the route to the header's inline name field (the Table tab's Name
+      // field is the home). A column whose label is its lineage says why (MENU-02).
+      kind: 'item',
+      id: 'col-rename',
+      label: 'Rename column…',
+      shortcut: RENAME_KEYS.rename,
+      disabledReason:
+        viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY : columnRenameReason(column)),
+      onSelect: () => {
+        ctx.rename?.({ kind: 'column', tableId, colId });
+      },
+    },
     sep('s-delete'),
     {
       kind: 'item',
@@ -654,30 +715,7 @@ export function columnMenuEntries(
         commands.hideColumn(tableId, colId);
       },
     },
-    {
-      kind: 'item',
-      id: 'col-fit',
-      label: 'Fit width to content',
-      // INSP-04 / MENU-03: measures this column's widest cell and snaps to whole units. Where
-      // no 2D canvas exists the item says so (MENU-02), as the inspector's buttons do.
-      disabledReason:
-        viewOnly ?? (canMeasure() ? undefined : 'text cannot be measured in this browser'),
-      onSelect: () => {
-        const measure = canvasMeasure();
-        const table = tableMap(gd, tableId);
-        if (measure === null || table === null) return;
-        const engine = peekEngine(gd.doc);
-        commands.fitColumns(
-          tableId,
-          fitColumnsToContent(table, record, {
-            locale: toFormatLocale(activeLocale()),
-            measure,
-            cellValue: (cellId) => engine?.result(cellId)?.value ?? undefined,
-            only: [colId],
-          }),
-        );
-      },
-    },
+    fitColumnEntry(ctx, tableId, colId, 'Fit width to content'),
     sep('s-clipboard'),
     ...columnClipboardEntries(ctx, target),
     sep('s-wrap'),
@@ -796,6 +834,18 @@ export function tableMenuEntries(
       disabledReason: viewOnly,
       onSelect: () => {
         ctx.commands.insertColumnAfter(target.tableId);
+      },
+    },
+    sep('s-rename'),
+    {
+      // ADR-051: the route to the title bar's inline field; the Table tab's Title text is the home.
+      kind: 'item',
+      id: 'table-rename',
+      label: 'Rename table…',
+      shortcut: RENAME_KEYS.rename,
+      disabledReason: viewOnly ?? (ctx.rename === undefined ? VIEW_ONLY : undefined),
+      onSelect: () => {
+        ctx.rename?.({ kind: 'table', tableId: target.tableId });
       },
     },
     sep('s-delete'),

@@ -6,11 +6,13 @@
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
   addColumnRule,
+  addDerivedColumn,
+  addMappingColumn,
   addRow,
   cellRich,
   createSheet,
@@ -23,6 +25,7 @@ import {
   mergeCells,
   commitCellText,
   setFrozenColumns,
+  setHeaderRows,
   nestRow,
   openDocument,
   paragraphNode,
@@ -53,6 +56,7 @@ import {
 import { LiveRegion } from '../../announce.js';
 import { useYVersion } from '../../doc/use-y.js';
 import type { ZoomTier } from '../../doc/viewport.js';
+import type { RenameTarget, TableRenaming } from './grid/rename.js';
 import { useGrid, type Grid } from './grid/use-grid.js';
 import { openViewStore, ViewStoreProvider, type ViewStore } from '../../doc/view-state.js';
 import {
@@ -74,6 +78,8 @@ interface HarnessProps {
   presence?: readonly PresenceState[];
   /** ADR-049: a measurer for the auto-height of wrapped rows (jsdom has no canvas). */
   fit?: (() => FitOptions | null) | undefined;
+  /** ADR-051: whether the shell hands the table its rename routes (it does when editable). */
+  renamable?: boolean;
   grid: { current: Grid | null };
 }
 
@@ -87,11 +93,31 @@ function Harness({
   viewSorted,
   presence = [],
   fit,
+  renamable = editable,
   grid,
 }: HarnessProps) {
   const g = useGrid(gd, editable, { undo, fit });
   grid.current = g;
   useYVersion(gd.tables, { depth: 'shallow' });
+  // ADR-051: the shell's rename state — one open field, committed through the grid commands.
+  const [renaming, setRenaming] = useState<RenameTarget | null>(null);
+  const rename: TableRenaming | undefined = renamable
+    ? {
+        target: renaming,
+        start: setRenaming,
+        commit: (target, name) => {
+          const result =
+            target.kind === 'column'
+              ? g.commands.renameColumn(target.tableId, target.colId, name)
+              : g.commands.setTableTitle(target.tableId, name);
+          if (result.ok) setRenaming(null);
+          return result;
+        },
+        cancel: () => {
+          setRenaming(null);
+        },
+      }
+    : undefined;
   const map = tableMap(gd, tableId);
   if (map === null) return null;
   return (
@@ -118,6 +144,7 @@ function Harness({
         undo={undo}
         actions={g.actions}
         commands={g.commands}
+        rename={rename}
       />
       <LiveRegion />
     </ViewStoreProvider>
@@ -936,6 +963,339 @@ describe('wrap, freeze, header and footer (GRID-09..11)', () => {
       gridRef.current?.commands.setHeaderRows(tableId, 1);
     });
     expect(cellAt(0, 0)).toHaveAttribute('data-address', 'B5');
+  });
+});
+
+describe('column width with the header row hidden, and fit on a fresh table (GRID-08, ADR-051)', () => {
+  it('GRID-08 GRID-11 A11Y-01 with header rows 0 the column dividers sit in a strip over the first body row: the selected column’s is the tab stop before the grid, the keyboard and a drag resize it, the grid’s rows are untouched', async () => {
+    mount();
+    act(() => {
+      gridRef.current?.commands.setHeaderRows(tableId, 0);
+    });
+    await userEvent.click(cellAt(0, 1));
+    expect(within(grid()).queryAllByRole('columnheader')).toHaveLength(0);
+    const strip = screen.getByTestId('divider-strip');
+    expect(strip.style.top).toBe(`${String(2 * LATTICE.row)}px`);
+    expect(strip.style.height).toBe(`${String(LATTICE.row)}px`);
+    // The strip is outside the grid, before it: aria-rowcount counts data rows only.
+    expect(grid()).toHaveAttribute('aria-rowcount', '3');
+    expect(strip.contains(grid())).toBe(false);
+    expect(strip.compareDocumentPosition(grid()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    const dividers = within(strip).getAllByRole('separator');
+    expect(dividers.map((d) => d.getAttribute('aria-label'))).toEqual([
+      'Resize column Column 1',
+      'Resize column Column 2',
+      'Resize column Column 3',
+    ]);
+    expect(dividers.map((d) => d.tabIndex)).toEqual([-1, 0, -1]);
+    // Each slot is its column's box, so the divider lands on the boundary.
+    const slots = strip.querySelectorAll<HTMLElement>('.gd-table__divider-slot');
+    expect(Array.from(slots).map((el) => el.style.left)).toEqual(['0px', '160px', '320px']);
+    dividers[1]!.focus();
+    fireEvent.keyDown(dividers[1]!, { code: 'ArrowRight', key: 'ArrowRight' });
+    expect(tableById(gd, tableId)?.columns[1]?.width).toBe(2);
+    expect(cellAt(0, 1).style.width).toBe(`${String(LATTICE.col * 2)}px`);
+    expect(cellAt(0, 2)).toHaveAttribute('data-address', 'E4');
+    expect(live()).toHaveTextContent('Column 2 is 2 units wide');
+    // A drag on the first column's divider previews and commits once (as at the header).
+    let writes = 0;
+    gd.doc.on('update', () => {
+      writes += 1;
+    });
+    const first = within(screen.getByTestId('divider-strip')).getAllByRole('separator')[0]!;
+    fireEvent.pointerDown(first, { pointerId: 1, button: 0, clientX: 100, clientY: 0 });
+    fireEvent.pointerMove(first, { pointerId: 1, clientX: 100 + 400, clientY: 0 });
+    expect(cellAt(0, 0).style.width).toBe(`${String(LATTICE.col * 4)}px`);
+    expect(writes).toBe(0);
+    fireEvent.pointerUp(first, { pointerId: 1, clientX: 500, clientY: 0 });
+    expect(writes).toBe(1);
+    expect(tableById(gd, tableId)?.columns[0]?.width).toBe(4);
+    // Showing the header row again moves the dividers back into it; the strip goes.
+    act(() => {
+      gridRef.current?.commands.setHeaderRows(tableId, 1);
+    });
+    expect(screen.queryByTestId('divider-strip')).not.toBeInTheDocument();
+    expect(within(grid()).getAllByRole('columnheader')).toHaveLength(3);
+  });
+
+  it('GRID-08 the strip renders only where a divider can: not for a read-only viewer', () => {
+    setHeaderRows(gd, tableId, 0);
+    mount({ editable: false });
+    expect(screen.queryByTestId('divider-strip')).not.toBeInTheDocument();
+    expect(screen.queryAllByRole('separator')).toHaveLength(0);
+  });
+
+  it('GRID-08 INSP-04 double-click on a divider fits a freshly created table with its default “Column N” headers: the fit route is gated on a measurer only, never on the table’s age or content', async () => {
+    const measure: FitMeasure = {
+      measure: (text, font) => text.length * (TYPE_SIZE_PX[font.size] / 2),
+    };
+    // A new table: empty cells, "Column 1".."Column 3" — the customer's case.
+    mount({ fit: () => ({ locale: 'en-US', measure }) });
+    await userEvent.click(cellAt(0, 0));
+    const divider = screen.getByRole('separator', { name: 'Resize column Column 1' });
+    expect(divider.title).toMatch(/double-click or Enter fits to content/);
+    // Widen it by hand first, so the fit has something to bring back.
+    fireEvent.keyDown(divider, { code: 'ArrowRight', key: 'ArrowRight', shiftKey: true });
+    expect(tableById(gd, tableId)?.columns[0]?.width).toBe(5);
+    fireEvent.doubleClick(screen.getByRole('separator', { name: 'Resize column Column 1' }));
+    // "Column 1" at 8 × 6.5 = 52 px + chrome → one unit: the header label alone sizes it.
+    expect(tableById(gd, tableId)?.columns[0]?.width).toBe(1);
+    expect(live()).toHaveTextContent('Fitted 1 column to content');
+  });
+});
+
+describe('inline rename of the title and the column headers (ADR-051)', () => {
+  const columnField = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Column name' });
+  const titleField = () => screen.getByRole<HTMLInputElement>('textbox', { name: 'Table title' });
+  const header = (i: number) => within(grid()).getAllByRole('columnheader')[i]!;
+
+  it('KEYS-06 KEYS-08 A11Y-01 F2 with a column selected (⇧→ from a cell) opens the header’s field in place of the label, selected, not a tab stop of the grid; Enter writes the name as one undo step, announces it and puts focus back on the cell; @ paths keep resolving (REF-01)', async () => {
+    const undo = createUndoManager(gd, { captureTimeout: 0 });
+    setCellText(gd, tableId, rows[0]!, cols[0]!, 'Namche');
+    setCellText(gd, tableId, rows[0]!, cols[1]!, '3440');
+    commitCellText(gd, tableId, rows[1]!, cols[2]!, '=Sum(@"Table 1".Namche."Column 2")');
+    mount({ undo });
+    await userEvent.click(cellAt(0, 1));
+    fireEvent.keyDown(cellAt(0, 1), { code: 'F2', key: 'F2' });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    // ⇧→ selects Column 2 from the cell; F2 then renames the band's anchor column.
+    fireEvent.keyDown(cellAt(0, 1), { code: 'ArrowRight', key: 'ArrowRight', shiftKey: true });
+    expect(header(1)).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(cellAt(0, 1), { code: 'F2', key: 'F2' });
+    const field = columnField();
+    expect(field.closest('[role="columnheader"]')).toBe(header(1));
+    expect(field).toHaveValue('Column 2');
+    expect(field).toHaveFocus();
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe('Column 2'.length);
+    expect(within(header(1)).queryByText('Column 2')).not.toBeInTheDocument();
+    // The grid keeps its one tab stop among the cells (A11Y-01).
+    expect(cells().filter((el) => el.tabIndex === 0)).toHaveLength(1);
+    const steps = undo.undoStack.length;
+    await userEvent.clear(field);
+    await userEvent.type(field, ' Owner {Enter}');
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Owner'); // trimmed
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    expect(within(header(1)).getByText('Owner')).toBeInTheDocument();
+    expect(live()).toHaveTextContent('Renamed column Column 2 to Owner');
+    expect(cellAt(0, 1)).toHaveFocus();
+    expect(undo.undoStack).toHaveLength(steps + 1);
+    // The formula is bound to the column's id: the value holds and the text re-spells.
+    expect(cellAt(1, 2)).toHaveTextContent(/3,440/);
+    expect(cellAt(1, 2)).toHaveTextContent('=Sum(@"Table 1".Namche.Owner)');
+    act(() => {
+      undo.undo();
+    });
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Column 2');
+  });
+
+  it('KEYS-08 MENU-05 a double-click on the label opens the field; Escape keeps the old name and returns focus; an empty name is refused beside the field and in the live region; an unchanged name writes nothing; Enter on the focused header opens it too', async () => {
+    let writes = 0;
+    gd.doc.on('update', () => {
+      writes += 1;
+    });
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    await userEvent.dblClick(within(header(2)).getByText('Column 3'));
+    const field = columnField();
+    expect(field).toHaveFocus();
+    await userEvent.type(field, 'Nope');
+    fireEvent.keyDown(field, { code: 'Escape', key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    expect(tableById(gd, tableId)?.columns[2]?.label).toBe('Column 3');
+    // The presses under the double-click selected Column 3 (ADR-049) and put focus on its
+    // header; Escape went to the field, not the shell: that selection stands, focus is back
+    // on the header — where Enter renames again.
+    expect(header(2)).toHaveAttribute('aria-selected', 'true');
+    expect(cellAt(0, 2)).toHaveAttribute('aria-selected', 'true');
+    expect(header(2)).toHaveFocus();
+    fireEvent.keyDown(header(2), { code: 'Enter', key: 'Enter' });
+    const again = columnField();
+    await userEvent.clear(again);
+    fireEvent.keyDown(again, { code: 'Enter', key: 'Enter' });
+    expect(again).toBeInTheDocument();
+    expect(again).toHaveAttribute('aria-invalid', 'true');
+    expect(again).toHaveAttribute('placeholder', 'A column needs a name');
+    expect(live()).toHaveTextContent('A column needs a name');
+    expect(again).toHaveFocus();
+    // The same name again: no write, the field closes.
+    await userEvent.type(again, 'Column 3');
+    const before = writes;
+    fireEvent.keyDown(again, { code: 'Enter', key: 'Enter' });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    expect(writes).toBe(before);
+    expect(header(2)).toHaveFocus();
+    // Leaving the field commits what is typed.
+    await userEvent.dblClick(within(header(2)).getByText('Column 3'));
+    await userEvent.clear(columnField());
+    await userEvent.type(columnField(), 'Status');
+    fireEvent.blur(columnField());
+    expect(tableById(gd, tableId)?.columns[2]?.label).toBe('Status');
+  });
+
+  it('I18N-01 GRID-08 the field ignores Enter and Escape while an IME composes; a double-click on the divider fits rather than renames', async () => {
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    await userEvent.dblClick(within(header(0)).getByText('Column 1'));
+    const field = columnField();
+    fireEvent.keyDown(field, { code: 'Enter', key: 'Enter', isComposing: true });
+    fireEvent.keyDown(field, { code: 'Escape', key: 'Escape', keyCode: 229 });
+    expect(columnField()).toBeInTheDocument();
+    fireEvent.keyDown(field, { code: 'Escape', key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    fireEvent.doubleClick(screen.getByRole('separator', { name: 'Resize column Column 1' }));
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+  });
+
+  it('KEYS-08 MENU-05 the title: F2 with the table selected, Enter on the focused title bar or a double-click on the title text opens the title field; Enter renames the table and announces it; Escape keeps the title; an empty title is refused', async () => {
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    // ⌘A's outcome: the table selected, no cell armed, focus still on the cell.
+    act(() => {
+      gridRef.current?.actions.selectTable(tableId);
+    });
+    fireEvent.keyDown(cellAt(0, 0), { code: 'F2', key: 'F2' });
+    const field = titleField();
+    expect(field).toHaveValue('Table 1');
+    expect(field).toHaveFocus();
+    expect(field.closest('.gd-table__title')).not.toBeNull();
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Owners{Enter}');
+    expect(tableById(gd, tableId)?.title).toBe('Owners');
+    expect(live()).toHaveTextContent('Renamed table Table 1 to Owners');
+    expect(screen.getByRole('grid', { name: 'Owners' })).toBeInTheDocument();
+    // Focus lands on the title bar (focusable by script and pointer only, never a tab stop):
+    // back on the cell it would have armed it and talked over the announcement. The table
+    // stays selected; Enter on the bar renames again.
+    const bar = document.querySelector<HTMLElement>('.gd-table__title')!;
+    expect(bar.tabIndex).toBe(-1);
+    expect(bar).toHaveFocus();
+    expect(selected()).toBeNull();
+    fireEvent.keyDown(bar, { code: 'Enter', key: 'Enter' });
+    expect(titleField()).toHaveFocus();
+    fireEvent.keyDown(titleField(), { code: 'Escape', key: 'Escape' });
+    expect(screen.queryByRole('textbox', { name: 'Table title' })).not.toBeInTheDocument();
+    expect(tableById(gd, tableId)?.title).toBe('Owners');
+    expect(bar).toHaveFocus();
+    await userEvent.dblClick(screen.getByText('Owners', { selector: '.gd-table__title-text' }));
+    expect(titleField()).toHaveFocus();
+    await userEvent.clear(titleField());
+    fireEvent.keyDown(titleField(), { code: 'Enter', key: 'Enter' });
+    expect(titleField()).toHaveAttribute('placeholder', 'A table needs a title');
+    expect(tableById(gd, tableId)?.title).toBe('Owners');
+  });
+
+  it('REF-05 MENU-02 a derived or a mapping column gets no field from any route — a double-click on the label, Enter or F2 on the header, F2 with the column selected — and each route says why', async () => {
+    const regions = createTable(gd, {
+      sheetId: tableById(gd, tableId)!.sheetId,
+      at: { col: 8, row: 1 },
+      columns: 1,
+      rows: 1,
+      title: 'Regions',
+    });
+    const linked = addMappingColumn(gd, tableId, {
+      tableId: regions,
+      colId: tableById(gd, regions)!.columns[0]!.id,
+    })!;
+    const derived = addDerivedColumn(gd, tableId, {
+      sourceColId: cols[0]!,
+      method: 'Format',
+      args: ['Trimmed'],
+    })!;
+    mount();
+    await userEvent.click(cellAt(0, 0, 5));
+    const headerOf = (colId: Id) =>
+      within(grid())
+        .getAllByRole('columnheader')
+        .find((h) => h.dataset.colId === colId)!;
+    const noField = () =>
+      expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    // The mapping column: `↔ Regions · Column 1`.
+    await userEvent.dblClick(within(headerOf(linked)).getByText(/^↔ Regions/));
+    noField();
+    expect(live()).toHaveTextContent(
+      'Column ↔ Regions · Column 1 keeps its name: a mapping column is named by its target',
+    );
+    headerOf(linked).focus();
+    fireEvent.keyDown(headerOf(linked), { code: 'Enter', key: 'Enter' });
+    noField();
+    fireEvent.keyDown(headerOf(linked), { code: 'F2', key: 'F2' });
+    noField();
+    // The derived column, selected as a band from the header press: F2 from its anchor cell.
+    await userEvent.dblClick(within(headerOf(derived)).getByText(/^@/));
+    noField();
+    expect(live()).toHaveTextContent('keeps its name: a derived column is named by its signature');
+    expect(headerOf(derived)).toHaveAttribute('aria-selected', 'true');
+    const anchor = cells().find((el) => el.getAttribute('aria-selected') === 'true')!;
+    fireEvent.keyDown(anchor, { code: 'F2', key: 'F2' });
+    noField();
+    // Focus never went into a field: the keyboard is where the press left it.
+    expect(document.activeElement?.matches('input')).toBe(false);
+    // An entered column still renames from the same routes.
+    await userEvent.dblClick(within(headerOf(cols[1]!)).getByText('Column 2'));
+    expect(columnField()).toHaveFocus();
+  });
+
+  it('REF-01 MENU-05 a duplicate name is refused in the field with the reason shown beside it and said once; leaving the field with a refused name cancels — the label returns and focus is not taken back', async () => {
+    mount();
+    await userEvent.click(cellAt(0, 0));
+    await userEvent.dblClick(within(header(1)).getByText('Column 2'));
+    const field = columnField();
+    await userEvent.clear(field);
+    await userEvent.type(field, 'column 3{Enter}');
+    expect(field).toBeInTheDocument();
+    expect(field).toHaveAttribute('aria-invalid', 'true');
+    expect(field).toHaveValue('column 3');
+    expect(field.selectionStart).toBe(0);
+    expect(field.selectionEnd).toBe('column 3'.length);
+    const reason = document.getElementById(field.getAttribute('aria-describedby') ?? '')!;
+    expect(reason).toHaveTextContent('Another column is already named Column 3');
+    expect(reason).toHaveClass('gd-table__rename-reason');
+    expect(reason).not.toHaveClass('gd-visually-hidden');
+    expect(live()).toHaveTextContent('Another column is already named Column 3');
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Column 2');
+    // Typing again clears the refusal; leaving with the refused name still typed cancels.
+    await userEvent.type(field, '!');
+    expect(field).not.toHaveAttribute('aria-invalid');
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Column 1');
+    await userEvent.click(cellAt(2, 2));
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Column 2');
+    expect(within(header(1)).getByText('Column 2')).toBeInTheDocument();
+    expect(cellAt(2, 2)).toHaveFocus();
+    // The title: a duplicate across the workbook is refused the same way.
+    createTable(gd, {
+      sheetId: tableById(gd, tableId)!.sheetId,
+      at: { col: 8, row: 8 },
+      columns: 1,
+      rows: 1,
+      title: 'Other',
+    });
+    act(() => {
+      gridRef.current?.actions.selectTable(tableId);
+    });
+    fireEvent.keyDown(cellAt(2, 2), { code: 'F2', key: 'F2' });
+    await userEvent.clear(titleField());
+    await userEvent.type(titleField(), 'other{Enter}');
+    expect(titleField()).toHaveAttribute('aria-invalid', 'true');
+    expect(live()).toHaveTextContent('Another table is already named Other');
+    expect(tableById(gd, tableId)?.title).toBe('Table 1');
+  });
+
+  it('RESP-02 SHARE-03 without the rename routes (phone, view-only) nothing opens on F2, Enter or a double-click, and the title bar is not focusable', async () => {
+    mount({ editable: false });
+    await userEvent.dblClick(within(header(0)).getByText('Column 1'));
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    header(0).focus();
+    fireEvent.keyDown(header(0), { code: 'F2', key: 'F2' });
+    fireEvent.keyDown(header(0), { code: 'Enter', key: 'Enter' });
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    await userEvent.dblClick(screen.getByText('Table 1'));
+    expect(screen.queryByRole('textbox')).not.toBeInTheDocument();
+    expect(document.querySelector<HTMLElement>('.gd-table__title')?.hasAttribute('tabindex')).toBe(
+      false,
+    );
   });
 });
 

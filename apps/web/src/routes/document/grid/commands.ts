@@ -34,6 +34,8 @@ import {
   deleteRow as deleteRowMutation,
   deleteTableWithGraphs,
   distributeEvenly as distributeEvenlyMutation,
+  duplicateColumnLabel,
+  duplicateTableTitle,
   graphsBoundTo,
   expandAll as expandAllMutation,
   hideColumn as hideColumnMutation,
@@ -70,6 +72,7 @@ import {
   setSheetEdgesShown,
   setTableLook as setTableLookMutation,
   setTablePinned,
+  setTableTitle as setTableTitleMutation,
   spanAt,
   spanCovering,
   STACKING_LABELS,
@@ -139,10 +142,21 @@ export interface GridCommands {
    */
   deleteTable(tableId: Id): { title: string; graphs: number } | null;
   /**
-   * Rename a column; derived columns that name it re-spell their signature
-   * (REF-04). A derived column refuses — its label is its signature.
+   * ADR-051: rename a column; every label that names it re-spells — derived
+   * signatures (REF-04), pulled and mapping labels anywhere (REF-02, REF-03).
+   * The name is trimmed; an unchanged one writes nothing. Refused, with the
+   * reason announced and returned for the field to show: an empty name, a
+   * name another column of the table already carries, a column whose label
+   * is its lineage (`columnRenameReason`). Formulas and `@` paths are
+   * id-bound, so nothing that reads the column breaks (REF-01).
    */
-  renameColumn(tableId: Id, colId: Id, label: string): boolean;
+  renameColumn(tableId: Id, colId: Id, label: string): RenameResult;
+  /**
+   * ADR-051: rename the table. Trimmed; unchanged writes nothing; an empty
+   * title or one another table already carries is refused with the reason.
+   * One undo step, synced; pulled and mapping labels naming the table re-spell.
+   */
+  setTableTitle(tableId: Id, title: string): RenameResult;
   /** Hide a column (its data stays); the selection leaves it the same way a delete would. */
   hideColumn(tableId: Id, colId: Id): boolean;
   unhideColumn(tableId: Id, colId: Id): boolean;
@@ -357,6 +371,44 @@ export function readOnlyLabel(reason: ReadOnlyReason): string {
   }
 }
 
+/**
+ * ADR-051 / MENU-02: why a column cannot be renamed by hand, or undefined
+ * when it can. A label that is lineage is rewritten from its spec: the
+ * derived signature (REF-04), `↰ Table · Column` for a pull (REF-02), the
+ * mapping's target (REF-03). Inline English, as every menu reason is.
+ */
+export function columnRenameReason(column: Pick<ColumnRecord, 'source'>): string | undefined {
+  switch (column.source) {
+    case 'entered':
+      return undefined;
+    case 'derived':
+      return 'a derived column is named by its signature';
+    case 'pulled':
+      return 'a pulled column is named by its source';
+    case 'linked':
+      return 'a mapping column is named by its target';
+  }
+}
+
+/** ADR-051 / A11Y-04: what the inline field says beside itself when the name is empty. */
+export const EMPTY_COLUMN_NAME_REASON = 'A column needs a name';
+export const EMPTY_TABLE_TITLE_REASON = 'A table needs a title';
+const VIEW_ONLY_REASON = 'You have view-only access';
+
+/**
+ * ADR-051: what a rename came to. A refusal carries the sentence the field
+ * shows beside itself (`aria-describedby`, A11Y-04); the command has already
+ * said it through the live region (A11Y-05) — except an empty name, which
+ * the field says itself as it does for a sheet (ADR-048).
+ */
+export type RenameResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+const OK: RenameResult = { ok: true };
+
+/** "a derived column is named by its signature" → "A derived column is named by its signature". */
+function sentence(reason: string): string {
+  return reason.charAt(0).toLocaleUpperCase() + reason.slice(1);
+}
+
 /** HIER-06: whether `rowId` sits anywhere in `parentId`'s subtree. */
 function isUnder(table: TableMap, rowId: Id, parentId: Id): boolean {
   return ancestorIds(table, rowId).includes(parentId);
@@ -472,6 +524,11 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     }
     return { column, rows, skipped };
   };
+  /** A rename refusal: said once here (unless `said` is null), then shown by the field. */
+  const refused = (reason: string, said: string | null = reason): RenameResult => {
+    if (said !== null) announce(said);
+    return { ok: false, reason };
+  };
   const skippedNote = (skipped: number): string =>
     skipped === 0 ? '' : `; ${String(skipped)} read-only ${skipped === 1 ? 'row' : 'rows'} skipped`;
 
@@ -578,13 +635,34 @@ export function createGridCommands(deps: GridCommandDeps): GridCommands {
     },
     renameColumn(tableId, colId, label) {
       const before = record(tableId);
-      if (!editable() || before === null) return false;
-      if (!renameColumnMutation(gd, tableId, colId, label)) {
-        announce('A derived column is named by its signature');
-        return false;
+      const column = before?.columns.find((c) => c.id === colId);
+      if (!editable()) return refused(VIEW_ONLY_REASON);
+      if (before === null || column === undefined) return refused('The column is gone');
+      const lineage = columnRenameReason(column);
+      if (lineage !== undefined) {
+        return refused(sentence(lineage), `Column ${column.label} keeps its name: ${lineage}`);
       }
-      announce(`Column renamed to ${label}`);
-      return true;
+      const next = label.trim();
+      if (next === '') return refused(EMPTY_COLUMN_NAME_REASON, null);
+      if (next === column.label) return OK;
+      const taken = duplicateColumnLabel(before, colId, next);
+      if (taken !== null) return refused(`Another column is already named ${taken.label}`);
+      if (!renameColumnMutation(gd, tableId, colId, next)) return refused('The column is gone');
+      announce(`Renamed column ${column.label} to ${next}`);
+      return OK;
+    },
+    setTableTitle(tableId, title) {
+      const before = record(tableId);
+      if (!editable()) return refused(VIEW_ONLY_REASON);
+      if (before === null) return refused('The table is gone');
+      const next = title.trim();
+      if (next === '') return refused(EMPTY_TABLE_TITLE_REASON, null);
+      if (next === before.title) return OK;
+      const taken = duplicateTableTitle(gd, tableId, next);
+      if (taken !== null) return refused(`Another table is already named ${taken.title}`);
+      if (!setTableTitleMutation(gd, tableId, next)) return refused('The table is gone');
+      announce(`Renamed table ${before.title} to ${next}`);
+      return OK;
     },
     hideColumn(tableId, colId) {
       const before = record(tableId);

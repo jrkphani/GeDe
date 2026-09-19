@@ -25,6 +25,7 @@ import {
 import { effectiveCellFormat } from '../format/column.js';
 import { setCellFormat, setColumnFormat } from '../format/mutations.js';
 import { nestRow, setRowCollapsed } from '../hier/mutations.js';
+import { renameColumn } from '../ref/derive.js';
 import { commitCellText, workbookIndexOf } from './commit.js';
 import { FormulaEngine } from './engine.js';
 import { observeWorkbook } from './snapshot.js';
@@ -260,6 +261,36 @@ describe('FormulaEngine over a Y.Doc', () => {
     b.set(0, 0, `=@"${title}".Nowhere`);
     expect(b.stored(0, 0)).toBe(`=@"${title}".Nowhere`);
     expect(h.results.get(b.id(0, 0))?.error).toMatchObject({ kind: 'unknown-entity' });
+  });
+
+  test('REF-01 renaming a column or the table keeps an @ path bound: the value holds and the shown path re-spells with the new names (ADR-051)', () => {
+    const h = harness();
+    const a = grid(h.gd, h.sheetId, 2, 2, { col: 1, row: 1 });
+    const b = grid(h.gd, h.sheetId, 1, 1, { col: 10, row: 1 });
+    a.set(0, 0, 'Namche');
+    a.set(0, 1, '3440');
+    const title = tableById(h.gd, a.tableId)!.title;
+    const col = tableById(h.gd, a.tableId)!.columns[1]!.label;
+    b.set(0, 0, `=Sum(@"${title}".Namche."${col}")`);
+    const stored = b.stored(0, 0);
+    expect(stored).toBe(`=Sum({e:${a.tableId}:${a.rowId(0)}:${a.colId(1)}})`);
+    expect(numberOf(h.results.get(b.id(0, 0)))).toBe(3440);
+    // The column and the table are renamed by hand (the header's inline field, the Table
+    // tab): the stored source is untouched, the value holds, the projection follows.
+    expect(renameColumn(h.gd, a.tableId, a.colId(1), 'Altitude')).toBe(true);
+    setTableTitle(h.gd, a.tableId, 'Camps');
+    expect(b.stored(0, 0)).toBe(stored);
+    expect(numberOf(h.results.get(b.id(0, 0)))).toBe(3440);
+    expect(b.shown(0, 0)).toBe('=Sum(@Camps.Namche.Altitude)');
+    expect(h.engine.index.entityIndex().entries.map((e) => e.text)).toContain(
+      '@Camps.Namche.Altitude',
+    );
+    // The old spelling no longer names anything; the new one binds.
+    b.set(0, 0, `=Sum(@"${title}".Namche."${col}")`);
+    expect(h.results.get(b.id(0, 0))?.error).toMatchObject({ kind: 'unknown-entity' });
+    b.set(0, 0, '=Sum(@Camps.Namche.Altitude)');
+    expect(b.stored(0, 0)).toBe(stored);
+    expect(numberOf(h.results.get(b.id(0, 0)))).toBe(3440);
   });
 
   test('FX-04 nested rows are qualified by their parent row', () => {

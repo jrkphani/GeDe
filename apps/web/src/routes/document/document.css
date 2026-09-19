@@ -911,8 +911,20 @@ button.gd-cell__chevron:hover {
   bottom: 0;
   right: 0;
   width: 2px;
-  background: transparent;
+  background: var(--gd-divider-rest, transparent);
   transition: background var(--dur-fast) var(--ease-out);
+}
+/* ADR-051: while the table is selected every column divider shows at rest — a 2 px rule on the
+   boundary in --border-strong (3.99:1 on the plain header's sunken surface in light, 3.70:1 in
+   dark) and, on the slate style, --ink-muted (4.54:1 on --tint-slate in light, 5.14:1 in dark;
+   --border-strong would read 2.28:1 there) — WCAG 1.4.11's 3:1 either way, so the drag
+   affordance is seen before it is found by hovering. Hover and focus paint it in the selection
+   ring, and the col-resize cursor and the focus ring carry the state beyond hue. */
+.gd-table--selected {
+  --gd-divider-rest: var(--border-strong);
+}
+.gd-table--selected[data-style='slate'] {
+  --gd-divider-rest: var(--ink-muted);
 }
 .gd-table__divider:hover::after,
 .gd-table__divider:focus-visible::after {
@@ -982,6 +994,88 @@ button.gd-cell__chevron:hover {
     outline-offset: 2px;
     border-radius: var(--radius-sm);
   }
+}
+/* ADR-051 / GRID-11: with the header row hidden, a one-row strip over the first body row
+   carries the column dividers. The strip itself takes no presses (the cells beneath keep
+   theirs); each slot is the column's box, so the divider sits on the boundary as it does in
+   the header, with the same 44 px target below lg. */
+.gd-table__divider-strip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  pointer-events: none;
+}
+.gd-table__divider-slot {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  pointer-events: none;
+}
+.gd-table__divider-slot .gd-table__divider {
+  pointer-events: auto;
+}
+/* ADR-051: the inline name field that stands in for a column label or the title text. The
+   label's own type; the boundary is --border-strong so the box reads at ≥ 3:1 (WCAG 1.4.11);
+   the refusal is the placeholder in the danger ink, as the sheet field does it (ADR-048). */
+.gd-table__rename {
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 1.125rem;
+  padding: 0 var(--space-1);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: inherit;
+  font-size: var(--text-cell);
+  font-weight: 500;
+  line-height: 1;
+}
+.gd-table__rename--title {
+  flex: 0 1 auto;
+  width: 50%;
+  height: 1.5rem;
+  padding: 0 var(--space-2);
+  font-size: var(--text-body-sm);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+/* The refusal, under the field, in the danger ink (≥ 4.5:1 on the surface), over the row below
+   it — a note, not a layout change: nothing under it moves (non-negotiable 3). */
+.gd-table__rename-reason {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 4;
+  max-width: 100%;
+  padding: 0 var(--space-1);
+  background: var(--surface);
+  color: var(--danger);
+  font-size: var(--text-cell);
+  font-weight: 500;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+.gd-table__rename:focus-visible {
+  border-color: var(--focus-ring);
+}
+.gd-table__rename[aria-invalid='true'] {
+  border-color: var(--danger);
+}
+.gd-table__rename[aria-invalid='true']::placeholder {
+  color: var(--danger);
+  opacity: 1;
+}
+/* The header clips its overflow; while its field has focus the 2 px ring at 2 px offset
+   must draw outside the 22 px row, so the clipping lifts for exactly that header. */
+.gd-table__header--renaming {
+  overflow: visible;
+}
+.gd-table__title--renaming {
+  position: relative;
+  cursor: text;
+  user-select: auto;
 }
 .gd-table__corner {
   position: absolute;

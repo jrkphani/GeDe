@@ -8,6 +8,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import * as Y from 'yjs';
 import {
   addDerivedColumn,
+  addMappingColumn,
   cellText,
   createSheet,
   createTable,
@@ -27,6 +28,7 @@ import {
   type Id,
 } from '@gede/core';
 
+import type { RenameResult } from './commands.js';
 import { useGrid } from './use-grid.js';
 
 /** Two replicas that exchange every update, as the sync service would relay them. */
@@ -217,11 +219,11 @@ describe('column rename and derived lineage (REF-04)', () => {
       args: ['UPPERCASE'],
     })!;
     expect(tableById(a, tableId)?.columns[1]?.label).toBe('@"Column 1".Format("UPPERCASE")');
-    let ok = false;
+    let ok: RenameResult = { ok: false, reason: 'not yet' };
     act(() => {
       ok = result.current.commands.renameColumn(tableId, cols[0]!, 'Site');
     });
-    expect(ok).toBe(true);
+    expect(ok).toEqual({ ok: true });
     const after = tableById(a, tableId)!;
     expect(after.columns[0]?.label).toBe('Site');
     expect(after.columns[1]?.label).toBe('@Site.Format("UPPERCASE")');
@@ -235,8 +237,81 @@ describe('column rename and derived lineage (REF-04)', () => {
     act(() => {
       ok = result.current.commands.renameColumn(tableId, derived, 'Shout');
     });
-    expect(ok).toBe(false);
+    expect(ok).toEqual({ ok: false, reason: 'A derived column is named by its signature' });
     expect(tableById(a, tableId)?.columns[1]?.label).toBe('@"Column 1".Format("UPPERCASE")');
+  });
+
+  it('INSP-04 KEYS-03 SHARE-01 setTableTitle and renameColumn trim, refuse an empty or a duplicate name with the reason, write nothing for an unchanged one, are one undo step each and reach the other replica; a mapping column keeps its lineage name (ADR-051)', () => {
+    const undo = createUndoManager(a, { captureTimeout: 0 });
+    const { result } = renderHook(() => useGrid(a, true, { undo }));
+    // A mapping column names its target (REF-03): refused, the reason announced.
+    const regions = createTable(a, {
+      sheetId: tableById(a, tableId)!.sheetId,
+      at: { col: 8, row: 0 },
+      columns: 1,
+      rows: 1,
+      title: 'Regions',
+    });
+    const linked = addMappingColumn(a, tableId, {
+      tableId: regions,
+      colId: tableById(a, regions)!.columns[0]!.id,
+    })!;
+    let ok: RenameResult = { ok: false, reason: 'not yet' };
+    act(() => {
+      ok = result.current.commands.renameColumn(tableId, linked, 'Region');
+    });
+    expect(ok).toEqual({ ok: false, reason: 'A mapping column is named by its target' });
+    expect(tableById(a, tableId)?.columns.find((c) => c.id === linked)?.label).not.toBe('Region');
+    let writes = 0;
+    a.doc.on('update', () => {
+      writes += 1;
+    });
+    const steps = undo.undoStack.length;
+    act(() => {
+      ok = result.current.commands.setTableTitle(tableId, '   ');
+    });
+    expect(ok).toEqual({ ok: false, reason: 'A table needs a title' });
+    act(() => {
+      ok = result.current.commands.setTableTitle(tableId, 'regions');
+    });
+    expect(ok).toEqual({ ok: false, reason: 'Another table is already named Regions' });
+    expect(writes).toBe(0);
+    act(() => {
+      ok = result.current.commands.setTableTitle(tableId, 'Table 1');
+    });
+    expect(ok).toEqual({ ok: true }); // unchanged: accepted, nothing written
+    expect(writes).toBe(0);
+    act(() => {
+      ok = result.current.commands.setTableTitle(tableId, '  Camps ');
+    });
+    expect(ok).toEqual({ ok: true });
+    expect(tableById(a, tableId)?.title).toBe('Camps');
+    expect(tableById(b, tableId)?.title).toBe('Camps');
+    // The mapping label re-spelled the title in the same step (REF-03).
+    expect(tableById(b, tableId)?.columns.find((c) => c.id === linked)?.label).toBe(
+      '↔ Regions · Column 1',
+    );
+    expect(undo.undoStack).toHaveLength(steps + 1);
+    act(() => {
+      ok = result.current.commands.renameColumn(tableId, cols[1]!, ' ');
+    });
+    expect(ok).toEqual({ ok: false, reason: 'A column needs a name' });
+    act(() => {
+      ok = result.current.commands.renameColumn(tableId, cols[1]!, ' column 3 ');
+    });
+    expect(ok).toEqual({ ok: false, reason: 'Another column is already named Column 3' });
+    act(() => {
+      ok = result.current.commands.renameColumn(tableId, cols[1]!, ' Owner ');
+    });
+    expect(ok).toEqual({ ok: true });
+    expect(tableById(b, tableId)?.columns[1]?.label).toBe('Owner');
+    expect(undo.undoStack).toHaveLength(steps + 2);
+    act(() => {
+      undo.undo();
+      undo.undo();
+    });
+    expect(tableById(a, tableId)?.columns[1]?.label).toBe('Column 2');
+    expect(tableById(a, tableId)?.title).toBe('Table 1');
   });
 
   it('REF-04 deleting the source column leaves the derived column naming #REF', () => {

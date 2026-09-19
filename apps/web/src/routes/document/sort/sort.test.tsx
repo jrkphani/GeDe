@@ -8,7 +8,7 @@
  */
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import * as Y from 'yjs';
 import {
@@ -39,6 +39,7 @@ import {
   ViewStoreProvider,
   type ViewStore,
 } from '../../../doc/view-state.js';
+import type { RenameTarget, TableRenaming } from '../grid/rename.js';
 import { useGrid, type Grid, type GridActions } from '../grid/use-grid.js';
 import { TableView } from '../TableView.js';
 import { ariaSortOf, headerGlyphs, sortModeOf } from './HeaderMenu.js';
@@ -84,6 +85,25 @@ function Harness({
   );
   onGrid(g, sort);
   useYVersion(gd.tables, { depth: 'shallow' });
+  // ADR-051: the shell's rename state, so the ▼'s Rename column… has a field to open.
+  const [renaming, setRenaming] = useState<RenameTarget | null>(null);
+  const rename: TableRenaming | undefined = editable
+    ? {
+        target: renaming,
+        start: setRenaming,
+        commit: (target, name) => {
+          const result =
+            target.kind === 'column'
+              ? g.commands.renameColumn(target.tableId, target.colId, name)
+              : g.commands.setTableTitle(target.tableId, name);
+          if (result.ok) setRenaming(null);
+          return result;
+        },
+        cancel: () => {
+          setRenaming(null);
+        },
+      }
+    : undefined;
   const map = tableMap(gd, tableId);
   if (map === null) return null;
   return (
@@ -101,6 +121,7 @@ function Harness({
         actions={actions}
         commands={g.commands}
         sort={menu ? sort : undefined}
+        rename={rename}
       />
       <LiveRegion />
     </ViewStoreProvider>
@@ -202,6 +223,33 @@ async function openMenu(label: string) {
 }
 
 describe('header menu (SORT-01, MENU-03)', () => {
+  it('MENU-03 KEYS-08 MENU-05 the ▼ carries Rename column… beside F2: it opens the header’s inline field, which keeps focus as the menu closes; Enter renames; a read-only viewer sees it disabled with the reason (ADR-051)', async () => {
+    const view = mount();
+    const menu = await openMenu('Column 2');
+    const item = within(menu).getByRole('menuitem', { name: /^Rename column…/ });
+    expect(item).toHaveTextContent('F2');
+    await userEvent.click(item);
+    await waitFor(() => {
+      expect(screen.queryByRole('menu')).not.toBeInTheDocument();
+    });
+    const field = screen.getByRole('textbox', { name: 'Column name' });
+    expect(field).toHaveValue('Column 2');
+    await waitFor(() => {
+      expect(field).toHaveFocus();
+    });
+    await userEvent.clear(field);
+    await userEvent.type(field, 'Owner{Enter}');
+    expect(tableById(gd, tableId)?.columns[1]?.label).toBe('Owner');
+    expect(screen.queryByRole('textbox', { name: 'Column name' })).not.toBeInTheDocument();
+    expect(menuButton('Owner')).toBeInTheDocument();
+    view.unmount();
+    mount({ editable: false });
+    const readOnly = await openMenu('Column 1');
+    const disabled = within(readOnly).getByRole('menuitem', { name: /^Rename column…/ });
+    expect(disabled).toHaveAttribute('aria-disabled', 'true');
+    expect(disabled).toHaveAttribute('title', 'you have view-only access');
+  });
+
   it('SORT-01 each header carries a ▼ opening None, A–Z, Z–A, Chars, Words, Freq, the group toggle and a contains filter', async () => {
     mount();
     expect(menuButton('Column 1')).toBeInTheDocument();
