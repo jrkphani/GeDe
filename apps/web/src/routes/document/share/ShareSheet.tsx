@@ -240,7 +240,7 @@ export function ShareSheet({
               : `${address} already has a pending invitation`,
         );
       }
-      // ONB-05, step 5: the action is the invitation, which now exists (or the address was
+      // ONB-05, step 6: the action is the invitation, which now exists (or the address was
       // added on the spot) — whether or not its mail could be delivered (#121).
       reportTourInvite();
       setEmail('');

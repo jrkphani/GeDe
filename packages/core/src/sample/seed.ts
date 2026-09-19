@@ -1,7 +1,7 @@
 /**
  * The guided sample workscape (ONB-01): `Q3 Delivery — Guided sample`, seeded
  * server-side once per user and pinned first in every library. It carries
- * exactly what the five-step tour refers to:
+ * exactly what the six-step tour refers to:
  *
  *   - two tables, `Deliverables` and `Team`, so a cross-table reference
  *     (`=@Team.Priya.Role`, step 2) has somewhere to point;
@@ -9,8 +9,12 @@
  *     examples match rows (`col:Owner`; `Due` is a date column for `is:date`);
  *   - a `Due` column formatted as dates and a `Days` column formatted as
  *     numbers, with an id-bound `=Sum(…)` over it (FX, FMT);
+ *   - an `Owner` column with repeated names and a `Team` whose names are
+ *     the owners, so the set-operator step's examples evaluate (step 3,
+ *     FX-09, ADR-055): `=Union(C5:C12, I5:I8)` and `=Diff(I5:I8, C6)` —
+ *     `ref/set-call.test.ts` pins the addresses and the results;
  *   - at least two entered columns on `Deliverables`, so a context graph the
- *     person adds in step 3 binds with two or more dimensions (GRAPH-05).
+ *     person adds in step 4 binds with two or more dimensions (GRAPH-05).
  *
  * The formulas go through `commitCellText`, so they are stored id-bound like
  * any formula a person types. Everything is written under `SEED_ORIGIN` in

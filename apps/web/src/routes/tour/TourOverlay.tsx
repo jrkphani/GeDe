@@ -11,7 +11,7 @@
  * cancels an edit, closes Find or leaves pointing mode), so it never ends the
  * tour by accident.
  *
- * A sub-flow's cards (steps 2 and 3) share the step's counter and progress
+ * A sub-flow's cards (steps 2, 3 and 4) share the step's counter and progress
  * dots; only the title, body and pending action change, and the card carries
  * `data-substep` for tests.
  *
@@ -38,9 +38,9 @@ import { targetSelectors, useSpotlightBox, useViewportSize } from './use-spotlig
 export interface TourOverlayProps {
   /** 1-based step. */
   step: number;
-  /** The sub-flow's current card, for steps 2 and 3. */
+  /** The sub-flow's current card, for steps 2, 3 and 4. */
   substep?: TourSubstep | null | undefined;
-  /** The pairs made since step 3 began, whose rings stand in for a hidden checklist. */
+  /** The pairs made since step 4 began, whose rings stand in for a hidden checklist. */
   pairIds?: readonly string[] | undefined;
   onSkip: () => void;
 }
@@ -117,7 +117,7 @@ export function TourOverlay({ step, substep = null, pairIds = [], onSkip }: Tour
           {definition.target === 'pointing' && hidden > 0 && (
             <>
               {' '}
-              <span data-testid="tour-off-canvas">{t('tour.step3.point.offCanvas')}</span>
+              <span data-testid="tour-off-canvas">{t('tour.step4.point.offCanvas')}</span>
             </>
           )}
         </p>

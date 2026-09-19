@@ -247,7 +247,7 @@ export function useFind({ gd, docId, editable, navigation }: UseFindOptions): Fi
   const [focusTick, setFocusTick] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  // ONB-05, step 4: the tour advances once Find is open with a query.
+  // ONB-05, step 5: the tour advances once Find is open with a query.
   useEffect(() => {
     setTourFindQuery(open, query);
     return () => {

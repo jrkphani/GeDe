@@ -19,8 +19,9 @@ const placeholders = (s: string): string[] =>
 
 describe('message catalogue', () => {
   test('ONB-12 every tour string exists, non-empty, in all six locales, with no extra keys', () => {
-    // 4 shared + 5 steps × 4 (step 1 has no note: −1) + 2b × 4 + 3b × 4 + 3c × 3 + 2 done = 36.
-    expect(TOUR_KEYS.length).toBeGreaterThanOrEqual(36);
+    // 4 shared + 6 steps × 4 (step 1 has no note: −1) + 2b × 4 + 3b × 3 (shares 3's note)
+    // + 4b × 4 + 4c × 3 + 2 done = 43.
+    expect(TOUR_KEYS.length).toBeGreaterThanOrEqual(43);
     for (const locale of LOCALES) {
       const messages = CATALOGUE[locale];
       expect(Object.keys(messages).sort(), locale).toEqual([...MESSAGE_KEYS].sort());
@@ -57,27 +58,63 @@ describe('message catalogue', () => {
   test('ONB-10 the copy names the Numbers equivalent, then the difference; graphs are introduced on their own terms', () => {
     const en = CATALOGUE['en-US'];
     expect(en['tour.step2.note']).toMatch(/^Numbers: People::B2/);
-    expect(en['tour.step4.note']).toMatch(/^Numbers searches one sheet/);
+    expect(en['tour.step5.note']).toMatch(/^Numbers searches one sheet/);
     // SHARE-01: the permission is per person; nothing in the product is per table.
-    expect(en['tour.step5.note']).toBe(
+    expect(en['tour.step6.note']).toBe(
       'Like iCloud sharing, with a permission you set per person.',
     );
     for (const locale of ['ta-IN', 'hi-IN', 'te-IN'] as const) {
-      expect(CATALOGUE[locale]['tour.step5.note']).toContain('iCloud');
+      expect(CATALOGUE[locale]['tour.step6.note']).toContain('iCloud');
     }
-    expect(en['tour.step3.note']).toMatch(/^No Numbers equivalent/);
+    expect(en['tour.step4.note']).toMatch(/^No Numbers equivalent/);
     // Step 1 teaches nothing Numbers already does and has no comparison note.
     expect(MESSAGE_KEYS).not.toContain('tour.step1.note');
     // Step 2b (FX-01): Numbers' CONCATENATE / `&` first, then the difference.
     expect(en['tour.step2.concat.note']).toMatch(/^Numbers: CONCATENATE or &/);
     expect(en['tour.step2.concat.note']).toMatch(/GeDe: =Concat\(a, b, …\)/);
-    // Step 3's sub-cards keep its note: a graph is introduced on its own terms throughout.
-    expect(MESSAGE_KEYS).not.toContain('tour.step3.point.note');
-    expect(MESSAGE_KEYS).not.toContain('tour.step3.dimensions.note');
+    // Step 3 (FX-09, ADR-055): Numbers already teaches SUM, so the step teaches the set
+    // operators, which have no Numbers analogue and say so — the graph step's honest form,
+    // never a claim about Numbers we cannot stand behind. Both cards share the note.
+    expect(en['tour.step3.note']).toMatch(/^No Numbers equivalent — a cell’s commas make a set/);
+    expect(en['tour.step3.note']).not.toMatch(/UNIQUE|Numbers:/);
+    expect(en['tour.step3.body']).not.toMatch(/\bSum\b/);
+    expect(en['tour.step3.result.body']).not.toMatch(/\bSum\b/);
+    expect(MESSAGE_KEYS).not.toContain('tour.step3.result.note');
+    // Step 4's sub-cards keep its note: a graph is introduced on its own terms throughout.
+    expect(MESSAGE_KEYS).not.toContain('tour.step4.point.note');
+    expect(MESSAGE_KEYS).not.toContain('tour.step4.dimensions.note');
     for (const locale of LOCALES) {
       expect(CATALOGUE[locale]['tour.step2.concat.note']).toContain('CONCATENATE');
       expect(CATALOGUE[locale]['tour.step2.concat.note']).toContain('=Concat(a, b, …)');
+      expect(CATALOGUE[locale]['tour.step3.note']).toContain('Numbers');
+      expect(CATALOGUE[locale]['tour.step3.note']).not.toContain('UNIQUE');
     }
+  });
+
+  test('ONB-10 ONB-01 FX-09 step 3 shows the worked examples that evaluate against the sample, spelled the same in every locale, and its pending actions name the forms', () => {
+    // `packages/core/src/ref/set-call.test.ts` commits these exact strings into the sample and
+    // evaluates them to the results the cards show (ADR-055).
+    for (const locale of LOCALES) {
+      const m = CATALOGUE[locale];
+      expect(m['tour.step3.body'], locale).toContain('=Union(C5:C12, I5:I8)');
+      expect(m['tour.step3.body'], locale).toContain('Priya, Marcus, Aditi, Sanjay');
+      expect(m['tour.step3.body'], locale).toContain('Union(a, b, …)');
+      expect(m['tour.step3.result.body'], locale).toContain('=Diff(I5:I8, C6)');
+      expect(m['tour.step3.result.body'], locale).toContain('Priya, Aditi, Sanjay');
+      expect(m['tour.step3.result.body'], locale).toContain('Billing export');
+      for (const name of ['Inter', 'Comp', 'Cross']) {
+        expect(m['tour.step3.result.body'], `${locale} ${name}`).toContain(name);
+        expect(m['tour.step3.result.action'], `${locale} ${name}`).toContain(name);
+      }
+      expect(m['tour.step3.action'], locale).toContain('Union');
+      expect(m['tour.step3.result.action'], locale).toContain('Diff');
+    }
+    const en = CATALOGUE['en-US'];
+    expect(en['tour.step3.action']).toBe('Type = in a cell and choose Union');
+    // "cells or ranges": the detector needs a bound operand, so literals alone never count.
+    expect(en['tour.step3.result.action']).toBe(
+      'Commit a Diff, Inter, Comp or Cross over two cells or ranges',
+    );
   });
 
   test('ONB-10 FX-01 ONB-01 step 2b shows the worked example that evaluates against the sample, spelled the same in every locale', () => {
@@ -92,17 +129,27 @@ describe('message catalogue', () => {
     }
     // #159 item 9: the pending actions, verbatim.
     const en = CATALOGUE['en-US'];
-    expect(en['tour.step3.action']).toBe('Click Add graph in the toolbar');
-    expect(en['tour.step3.point.action']).toBe('Click a table to bind the graph');
+    expect(en['tour.step4.action']).toBe('Click Add graph in the toolbar');
+    expect(en['tour.step4.point.action']).toBe('Click a table to bind the graph');
     // The action names the change: three are ticked when the card shows and the step
     // completes only when the set changes (review of #160, D1; #159 items 5 and 9).
-    expect(en['tour.step3.dimensions.action']).toBe(
+    expect(en['tour.step4.dimensions.action']).toBe(
       'Untick or tick a dimension, keeping at least two',
     );
-    expect(en['tour.step3.point.body']).toMatch(/Deliverables and Team/);
-    expect(en['tour.step3.dimensions.body']).toMatch(/^A dimension is a column/);
-    expect(en['tour.step3.dimensions.body']).toMatch(/first three entered columns/);
-    expect(en['tour.step3.dimensions.body']).toMatch(/Change the set — untick one of the three/);
+    expect(en['tour.step4.point.body']).toMatch(/Deliverables and Team/);
+    expect(en['tour.step4.dimensions.body']).toMatch(/^A dimension is a column/);
+    expect(en['tour.step4.dimensions.body']).toMatch(/first three entered columns/);
+    expect(en['tour.step4.dimensions.body']).toMatch(/Change the set — untick one of the three/);
+  });
+
+  test('ONB-14 the completion copy counts six and names the ? in the library, in every locale', () => {
+    expect(CATALOGUE['en-US']['tour.done.message']).toBe(
+      'All six done. Replay any time from the ? in your library.',
+    );
+    for (const locale of LOCALES) {
+      expect(CATALOGUE[locale]['tour.done.message'], locale).toContain('?');
+      expect(CATALOGUE[locale]['tour.done.message'], locale).not.toMatch(/five|ஐந்து|पाँच|ఐదు/);
+    }
   });
 
   test('ONB-12 the voice holds in every locale: no exclamation mark, no "Oops", no emoji', () => {
@@ -114,9 +161,9 @@ describe('message catalogue', () => {
     }
   });
 
-  test('ONB-10 FIND-04 the operators step 4 names are ones Find understands, in every locale', () => {
+  test('ONB-10 FIND-04 the operators step 5 names are ones Find understands, in every locale', () => {
     for (const locale of LOCALES) {
-      const body = CATALOGUE[locale]['tour.step4.body'];
+      const body = CATALOGUE[locale]['tour.step5.body'];
       const named = [...body.matchAll(/\b(col|is):[\w|]+/g)].map((m) => m[0]);
       expect(named, `${locale}: ${body}`).toEqual(['col:Owner', 'is:date']);
       for (const operator of named) {
@@ -187,9 +234,9 @@ describe('message catalogue', () => {
   });
 
   test('ONB-12 format substitutes placeholders and leaves unknown ones as written', () => {
-    expect(format('STEP {step} OF {total}', { step: 2, total: 5 })).toBe('STEP 2 OF 5');
+    expect(format('STEP {step} OF {total}', { step: 2, total: 6 })).toBe('STEP 2 OF 6');
     expect(format('{a} and {b}', { a: 'x' })).toBe('x and {b}');
-    expect(translate('ta-IN', 'tour.counter', { step: 1, total: 5 })).toBe('படி 1 / 5');
+    expect(translate('ta-IN', 'tour.counter', { step: 1, total: 6 })).toBe('படி 1 / 6');
     const key: MessageKey = 'tour.skip';
     expect(translate('hi-IN', key)).toBe('छोड़ें');
   });

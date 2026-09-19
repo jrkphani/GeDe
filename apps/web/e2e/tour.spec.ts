@@ -6,6 +6,9 @@
  * with the real sample (`seedSampleWorkscape` from `@gede/core`). The SPA —
  * library, document, formula Worker, Find, Share sheet and the tour itself —
  * runs for real. Axe runs on every card, light and dark, at 1024 and 1440.
+ *
+ * Step 3's examples (ADR-055) are asserted to evaluate to what the cards
+ * promise — that is what ONB-01 guarantees of the sample.
  */
 import type { Page } from '@playwright/test';
 import { seedSampleWorkscape } from '@gede/core';
@@ -288,8 +291,97 @@ async function commitFormula(page: Page, address: string, text: string): Promise
   await expect(editor).toHaveCount(0);
 }
 
+/** The value a formula cell shows. */
+function valueOf(page: Page, address: string) {
+  return page
+    .locator(`[data-address="${address}"]`)
+    .getByTestId('formula-cell')
+    .locator('.gd-formula__value');
+}
+
 /**
- * Step 3 as the tour guides it, from its `add` card to step 4: `+ Graph`,
+ * Step 3 as the tour guides it (FX-09, ADR-055): both cards centred with no
+ * spotlight (ONB-06), the same counter, dots and note. 3a is done through
+ * the `=` forms menu — Union picked, the ranges typed — into G8; 3b by typing
+ * the Diff into G9. Each example is asserted to evaluate to what its card
+ * says (ONB-01), and each card gets axe in both themes.
+ */
+async function setStep(
+  page: Page,
+  checkA11y: (screen: string) => Promise<unknown>,
+  width: number,
+): Promise<void> {
+  const label = String(width);
+  const pick = page.getByRole('dialog', { name: 'Compute over the text in cells' });
+  await expect(pick).toBeVisible();
+  await expect(pick).toHaveAttribute('data-step', '3');
+  await expect(pick).toHaveAttribute('data-substep', 'pick-form');
+  await expect(pick.getByText('STEP 3 OF 6', { exact: true })).toBeVisible();
+  await expect(pick.locator('.gd-tour__dot')).toHaveCount(6);
+  await expect(pick.locator('.gd-tour__dot--done')).toHaveCount(3);
+  // ONB-10: no Numbers analogue, said so in the graph step's form; nothing about Sum.
+  await expect(pick.getByText(/^No Numbers equivalent — a cell’s commas/)).toHaveClass(
+    /gd-tour__note/,
+  );
+  await expect(pick).not.toContainText('Sum');
+  await expect(pick).toContainText('=Union(C5:C12, I5:I8)');
+  await expect(pick).toContainText('Priya, Marcus, Aditi, Sanjay');
+  await expect(pick.getByText('Type = in a cell and choose Union')).toHaveClass(/gd-tour__action/);
+  await expect(pick.getByRole('button', { name: /next/i })).toHaveCount(0);
+  await expectCardPlaced(page, null);
+  await checkCardBothThemes(page, checkA11y, `tour step 3a ${label}`);
+
+  // The card's own route: `=` opens the forms menu, Union is picked, the ranges are typed.
+  const g8 = page.locator('[data-address="G8"]');
+  await g8.dblclick();
+  const editor = page.getByLabel('Edit G8');
+  await editor.fill('=');
+  const forms = page.getByRole('listbox', { name: 'Formula forms' });
+  await expect(forms).toBeVisible();
+  // ONB-11: the card never blocked the edit — the menu and the editor are live under it.
+  await expect(pick).toBeVisible();
+  await forms.getByRole('option', { name: /^Union\(/ }).click();
+  await expect(editor).toHaveText('=Union(');
+  await expect(editor).toBeFocused();
+  await editor.press('End');
+  await editor.pressSequentially('C5:C12, I5:I8)');
+  await expect(editor).toHaveText('=Union(C5:C12, I5:I8)');
+  await editor.press('Enter');
+  await expect(editor).toHaveCount(0);
+  // ONB-01: the example evaluates in the sample to what the card says, in first-seen order.
+  await expect(valueOf(page, 'G8')).toHaveText('Priya, Marcus, Aditi, Sanjay');
+  await expect(g8).toHaveAttribute('title', '=Union(C5:C12, I5:I8)');
+
+  // 3b — compare two sets: same counter, dots and note; the Diff example; still centred.
+  const compare = page.getByRole('dialog', { name: 'Compare two sets' });
+  await expect(compare).toBeVisible();
+  await expect(compare).toHaveAttribute('data-step', '3');
+  await expect(compare).toHaveAttribute('data-substep', 'set-result');
+  await expect(compare.getByText('STEP 3 OF 6', { exact: true })).toBeVisible();
+  await expect(compare.locator('.gd-tour__dot--done')).toHaveCount(3);
+  await expect(compare.getByText(/^No Numbers equivalent — a cell’s commas/)).toHaveClass(
+    /gd-tour__note/,
+  );
+  await expect(compare).toContainText('=Diff(I5:I8, C6)');
+  await expect(compare).toContainText('Priya, Aditi, Sanjay');
+  await expect(compare).toContainText('Billing export');
+  await expect(
+    compare.getByText('Commit a Diff, Inter, Comp or Cross over two cells or ranges'),
+  ).toHaveClass(/gd-tour__action/);
+  await expect(compare.getByRole('button', { name: 'Skip' })).toBeVisible();
+  await expectCardPlaced(page, null);
+  await checkCardBothThemes(page, checkA11y, `tour step 3b ${label}`);
+  // A second Union is not the action: the card stays.
+  await commitFormula(page, 'G10', '=Union(C5, C6)');
+  await expect(valueOf(page, 'G10')).toHaveText('Priya, Marcus');
+  await expect(compare).toBeVisible();
+  await expect(page.getByRole('dialog', { name: 'Add a context graph' })).toHaveCount(0);
+  await commitFormula(page, 'G9', '=Diff(I5:I8, C6)');
+  await expect(valueOf(page, 'G9')).toHaveText('Priya, Aditi, Sanjay');
+}
+
+/**
+ * Step 4 as the tour guides it, from its `add` card to step 5: `+ Graph`,
  * Escape (back to `add`, never Skip), `+ Graph` again, the pointing target
  * over Deliverables, then one dimension unticked in the Graph tab. Every
  * sub-card carries the step's counter and gets axe in both themes.
@@ -300,27 +392,27 @@ async function graphStep(
   width: number,
 ): Promise<void> {
   const label = String(width);
-  const step3 = page.getByRole('dialog', { name: 'Add a context graph' });
-  await expect(step3).toBeVisible();
-  await expect(step3).toHaveAttribute('data-step', '3');
-  await expect(step3).toHaveAttribute('data-substep', 'add');
-  await expect(step3.getByText('STEP 3 OF 5', { exact: true })).toBeVisible();
-  await expect(step3.locator('.gd-tour__dot--done')).toHaveCount(3);
+  const step4 = page.getByRole('dialog', { name: 'Add a context graph' });
+  await expect(step4).toBeVisible();
+  await expect(step4).toHaveAttribute('data-step', '4');
+  await expect(step4).toHaveAttribute('data-substep', 'add');
+  await expect(step4.getByText('STEP 4 OF 6', { exact: true })).toBeVisible();
+  await expect(step4.locator('.gd-tour__dot--done')).toHaveCount(4);
   await expect(
-    step3.getByText('No Numbers equivalent — it is not a chart. It reads and writes the table.'),
+    step4.getByText('No Numbers equivalent — it is not a chart. It reads and writes the table.'),
   ).toBeVisible();
-  await expect(step3.getByRole('button', { name: /next/i })).toHaveCount(0);
+  await expect(step4.getByRole('button', { name: /next/i })).toHaveCount(0);
   await expectCardPlaced(page, 'graph');
-  await checkCardBothThemes(page, checkA11y, `tour step 3a ${label}`);
+  await checkCardBothThemes(page, checkA11y, `tour step 4a ${label}`);
 
-  // 3b — pointing mode: the targets over both tables are spotlit as one; the banner is lit.
+  // 4b — pointing mode: the targets over both tables are spotlit as one; the banner is lit.
   await page.getByRole('button', { name: 'Add graph' }).click();
   const point = page.getByRole('dialog', { name: 'Point it at a table' });
   await expect(point).toBeVisible();
-  await expect(point).toHaveAttribute('data-step', '3');
+  await expect(point).toHaveAttribute('data-step', '4');
   await expect(point).toHaveAttribute('data-substep', 'point');
-  await expect(point.getByText('STEP 3 OF 5', { exact: true })).toBeVisible();
-  await expect(point.locator('.gd-tour__dot--done')).toHaveCount(3);
+  await expect(point.getByText('STEP 4 OF 6', { exact: true })).toBeVisible();
+  await expect(point.locator('.gd-tour__dot--done')).toHaveCount(4);
   await expect(point.locator('.gd-tour__action')).toHaveText(/Click a table to bind the graph$/);
   await expect(point.getByText(/Deliverables and Team/)).toBeVisible();
   await expect(
@@ -337,31 +429,31 @@ async function graphStep(
   const painted = await unionBoxes(page, '[data-testid="pointing-target"]');
   if (painted.length < 2) await expect(point.getByTestId('tour-off-canvas')).toBeVisible();
   else await expect(point.getByTestId('tour-off-canvas')).toHaveCount(0);
-  await checkCardBothThemes(page, checkA11y, `tour step 3b ${label}`);
-  // GRAPH-03: Escape cancels pointing and returns to 3a — Skip is the only exit (ONB-07).
+  await checkCardBothThemes(page, checkA11y, `tour step 4b ${label}`);
+  // GRAPH-03: Escape cancels pointing and returns to 4a — Skip is the only exit (ONB-07).
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('pointing-target')).toHaveCount(0);
-  await expect(step3).toBeVisible();
-  await expect(step3).toHaveAttribute('data-substep', 'add');
-  await expect(step3.getByRole('button', { name: 'Skip' })).toBeVisible();
+  await expect(step4).toBeVisible();
+  await expect(step4).toHaveAttribute('data-substep', 'add');
+  await expect(step4.getByRole('button', { name: 'Skip' })).toBeVisible();
   await expectCardPlaced(page, 'graph');
   // The banner's Cancel does the same.
   await page.getByRole('button', { name: 'Add graph' }).click();
   await expect(point).toBeVisible();
   await page.getByTestId('pointing-banner').getByRole('button', { name: 'Cancel' }).click();
-  await expect(step3).toHaveAttribute('data-substep', 'add');
+  await expect(step4).toHaveAttribute('data-substep', 'add');
   await page.getByRole('button', { name: 'Add graph' }).click();
   await expect(point).toBeVisible();
   await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
   await expect(page.getByRole('region', { name: 'Ring graph of Deliverables' })).toBeVisible();
 
-  // 3c — the dimensions: the rail opens in Format mode on the Graph tab; the checklist is spotlit.
+  // 4c — the dimensions: the rail opens in Format mode on the Graph tab; the checklist is spotlit.
   const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
   await expect(dimensions).toBeVisible();
-  await expect(dimensions).toHaveAttribute('data-step', '3');
+  await expect(dimensions).toHaveAttribute('data-step', '4');
   await expect(dimensions).toHaveAttribute('data-substep', 'dimensions');
-  await expect(dimensions.getByText('STEP 3 OF 5', { exact: true })).toBeVisible();
-  await expect(dimensions.locator('.gd-tour__dot--done')).toHaveCount(3);
+  await expect(dimensions.getByText('STEP 4 OF 6', { exact: true })).toBeVisible();
+  await expect(dimensions.locator('.gd-tour__dot--done')).toHaveCount(4);
   await expect(page.getByTestId('inspector')).toHaveAttribute('data-state', 'open');
   await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
   // The card names "the Graph tab": the tab strip is in the rail's view, not scrolled out
@@ -379,7 +471,7 @@ async function graphStep(
   const list = checklist(page);
   await expect(list).toBeVisible();
   // GRAPH-05: the product's defaults, nothing more — the first three columns are ticked — and
-  // the defaults alone never advance: step 4 is not here (ONB-05).
+  // the defaults alone never advance: step 5 is not here (ONB-05).
   await expect(list.getByRole('checkbox', { checked: true })).toHaveCount(3);
   await expect(list.getByRole('checkbox', { name: /^Deliverable/ })).toBeChecked();
   await expect(page.getByRole('dialog', { name: 'Find across every table' })).toHaveCount(0);
@@ -388,7 +480,7 @@ async function graphStep(
   await expectCardPlaced(page, 'dimensions');
   await expectInsideSpotlight(page, 'button[data-tour="dimensions"]');
   await expectClearOf(page, page.getByRole('tablist', { name: 'Format' }));
-  await checkCardBothThemes(page, checkA11y, `tour step 3c ${label}`);
+  await checkCardBothThemes(page, checkA11y, `tour step 4c ${label}`);
   // ONB-11: the checklist is operable under the tour. Unticking one leaves Owner and Status.
   await list.getByRole('checkbox', { name: /^Deliverable/ }).click();
   await expect(list.getByRole('checkbox', { checked: true })).toHaveCount(2);
@@ -447,7 +539,7 @@ async function checkCardBothThemes(
 }
 
 for (const width of [1024, 1440] as const) {
-  test(`ONB-01 ONB-02 ONB-04 ONB-05 ONB-06 ONB-09 ONB-10 ONB-11 ONB-14 ONB-03 FX-01 GRAPH-03 GRAPH-05 at ${String(width)}: the tour starts on arrival, spotlights the pinned sample, and advances only as each action is performed for real — the reference and Concat sub-flow, the graph sub-flow — and completion confirms and sets the account flag`, async ({
+  test(`ONB-01 ONB-02 ONB-04 ONB-05 ONB-06 ONB-09 ONB-10 ONB-11 ONB-12 ONB-14 ONB-03 FX-01 FX-09 GRAPH-03 GRAPH-05 at ${String(width)}: the tour starts on arrival, spotlights the pinned sample, and advances only as each action is performed for real — the reference and Concat sub-flow, the set-operator sub-flow, the graph sub-flow — and completion confirms and sets the account flag`, async ({
     page,
     checkA11y,
     snapshot,
@@ -464,7 +556,8 @@ for (const width of [1024, 1440] as const) {
     const step1 = page.getByRole('dialog', { name: 'Open the sample workscape' });
     await expect(step1).toBeVisible();
     await expect(step1).toHaveAttribute('aria-modal', 'false');
-    await expect(step1.getByText('STEP 1 OF 5', { exact: true })).toBeVisible();
+    await expect(step1.getByText('STEP 1 OF 6', { exact: true })).toBeVisible();
+    await expect(step1.locator('.gd-tour__dot')).toHaveCount(6);
     await expect(step1.getByText('Double-click “Q3 Delivery — Guided sample”')).toBeVisible();
     await expect(step1.getByRole('button', { name: 'Skip' })).toBeVisible();
     await expect(step1.getByRole('button', { name: /next/i })).toHaveCount(0);
@@ -485,7 +578,7 @@ for (const width of [1024, 1440] as const) {
     // Step 2 — centred, no spotlight (ONB-06); the sample's tables are on the canvas.
     const step2 = page.getByRole('dialog', { name: 'Reference a cell in another table' });
     await expect(step2).toBeVisible();
-    await expect(step2.getByText('STEP 2 OF 5', { exact: true })).toBeVisible();
+    await expect(step2.getByText('STEP 2 OF 6', { exact: true })).toBeVisible();
     await expect(
       step2.getByText(
         'Numbers: People::B2, tied to a position. GeDe: =@Entity.Path, tied to the row itself.',
@@ -527,7 +620,7 @@ for (const width of [1024, 1440] as const) {
     await expect(concat).toBeVisible();
     await expect(concat).toHaveAttribute('data-step', '2');
     await expect(concat).toHaveAttribute('data-substep', 'concat');
-    await expect(concat.getByText('STEP 2 OF 5', { exact: true })).toBeVisible();
+    await expect(concat.getByText('STEP 2 OF 6', { exact: true })).toBeVisible();
     await expect(concat.locator('.gd-tour__dot--done')).toHaveCount(2);
     await expect(concat.getByText(/^Numbers: CONCATENATE or &/)).toBeVisible();
     await expect(concat.getByText('Commit a Concat over two or more arguments')).toHaveClass(
@@ -537,42 +630,44 @@ for (const width of [1024, 1440] as const) {
     await checkCardBothThemes(page, checkA11y, `tour step 2b ${String(width)}`);
     // The card's own example, in the empty Owner role cell of row 3: C5 is Priya.
     await commitFormula(page, 'G7', '=Concat(C5, " — ", @Team.Priya.Role)');
-    await expect(
-      page.locator('[data-address="G7"]').getByTestId('formula-cell').locator('.gd-formula__value'),
-    ).toHaveText('Priya — Product engineer');
+    await expect(valueOf(page, 'G7')).toHaveText('Priya — Product engineer');
 
-    // Step 3 — the graph sub-flow: + Graph, point at Deliverables, choose the dimensions.
+    // Step 3 — the set-operator sub-flow: Union from the forms menu, then a Diff.
+    await setStep(page, checkA11y, width);
+
+    // Step 4 — the graph sub-flow: + Graph, point at Deliverables, choose the dimensions.
     await graphStep(page, checkA11y, width);
 
-    // Step 4 — Find.
-    const step4 = page.getByRole('dialog', { name: 'Find across every table' });
-    await expect(step4).toBeVisible();
+    // Step 5 — Find.
+    const step5 = page.getByRole('dialog', { name: 'Find across every table' });
+    await expect(step5).toBeVisible();
+    await expect(step5.getByText('STEP 5 OF 6', { exact: true })).toBeVisible();
     await expect(
-      step4.getByText('Numbers searches one sheet at a time. ⌘F here spans every table and graph.'),
+      step5.getByText('Numbers searches one sheet at a time. ⌘F here spans every table and graph.'),
     ).toBeVisible();
     await expectCardPlaced(page, 'find');
-    await checkCardBothThemes(page, checkA11y, `tour step 4 ${String(width)}`);
+    await checkCardBothThemes(page, checkA11y, `tour step 5 ${String(width)}`);
     await page.keyboard.press(`${mod}+KeyF`);
     const field = page.getByRole('textbox', { name: 'Find' });
     await expect(field).toBeFocused();
-    await expect(step4).toBeVisible();
+    await expect(step5).toBeVisible();
     await field.fill('Blocked');
-    // Two Blocked cells, and the graph bound in step 3 whose Status dimension (kept in 3c)
+    // Two Blocked cells, and the graph bound in step 4 whose Status dimension (kept in 4c)
     // carries the value (FIND-03 "graph dimension values", #125).
     await expect(page.getByTestId('find-count')).toHaveText(/of 3/);
 
-    // Step 5 — Share and invite.
-    const step5 = page.getByRole('dialog', { name: 'Invite someone by email' });
-    await expect(step5).toBeVisible();
+    // Step 6 — Share and invite.
+    const step6 = page.getByRole('dialog', { name: 'Invite someone by email' });
+    await expect(step6).toBeVisible();
     await expect(
-      step5.getByText('Like iCloud sharing, with a permission you set per person.'),
+      step6.getByText('Like iCloud sharing, with a permission you set per person.'),
     ).toBeVisible();
-    await expect(step5.getByText('STEP 5 OF 5', { exact: true })).toBeVisible();
-    await expect(step5.locator('.gd-tour__dot--done')).toHaveCount(5);
+    await expect(step6.getByText('STEP 6 OF 6', { exact: true })).toBeVisible();
+    await expect(step6.locator('.gd-tour__dot--done')).toHaveCount(6);
     await page.keyboard.press('Escape');
     await expectCardPlaced(page, 'share');
-    await checkCardBothThemes(page, checkA11y, `tour step 5 ${String(width)}`);
-    await snapshot(`tour-step-5-${String(width)}`);
+    await checkCardBothThemes(page, checkA11y, `tour step 6 ${String(width)}`);
+    await snapshot(`tour-step-6-${String(width)}`);
     await page.getByRole('button', { name: 'Share' }).click();
     const sheet = page.getByRole('dialog', { name: 'Share Q3 Delivery — Guided sample' });
     await expect(sheet).toBeVisible();
@@ -592,7 +687,7 @@ for (const width of [1024, 1440] as const) {
     await sheet.getByRole('button', { name: 'Done' }).click();
     await expect(sheet).toBeHidden();
     const done = page.locator('.gd-tour__toast');
-    await expect(done).toContainText('All five done. Replay any time from the ? in your library.');
+    await expect(done).toContainText('All six done. Replay any time from the ? in your library.');
     await expect(done.getByRole('button', { name: 'Replay' })).toBeVisible();
     await expect(card(page)).toHaveCount(0);
     await expect(scrim(page)).toHaveCount(0);
@@ -667,7 +762,7 @@ test('ONB-08 Replay guided tour from the ? help control clears the flag and rest
   await expect(page.getByRole('dialog', { name: 'Keyboard shortcuts' })).toBeVisible();
 });
 
-/** Steps 1 and 2 as the journey does them, to reach step 3's first card. */
+/** Steps 1 to 3 as the journey does them, to reach step 4's first card. */
 async function reachGraphStep(page: Page): Promise<void> {
   await page.getByRole('row').filter({ hasText: 'Guided sample' }).dblclick();
   await expect(page).toHaveURL(new RegExp(`/d/${SAMPLE_ID}$`));
@@ -678,11 +773,15 @@ async function reachGraphStep(page: Page): Promise<void> {
   await commitFormula(page, 'G6', '=@Team.Marcus.Role');
   await expect(page.getByRole('dialog', { name: 'Join text with =Concat()' })).toBeVisible();
   await commitFormula(page, 'G7', '=Concat(C5, " — ", @Team.Priya.Role)');
+  await expect(page.getByRole('dialog', { name: 'Compute over the text in cells' })).toBeVisible();
+  await commitFormula(page, 'G8', '=Union(C5:C12, I5:I8)');
+  await expect(page.getByRole('dialog', { name: 'Compare two sets' })).toBeVisible();
+  await commitFormula(page, 'G9', '=Diff(I5:I8, C6)');
   await expect(page.getByRole('dialog', { name: 'Add a context graph' })).toBeVisible();
 }
 
 for (const width of [1024, 1440] as const) {
-  test(`A11Y-01 ONB-11 GRAPH-03 GRAPH-05 at ${String(width)}: step 3 completes with the mouse unplugged — Enter on Add graph hands focus to the first target, Tab cycles targets, Skip and the banner's controls, Enter binds, Space ticks`, async ({
+  test(`A11Y-01 ONB-11 GRAPH-03 GRAPH-05 at ${String(width)}: step 4 completes with the mouse unplugged — Enter on Add graph hands focus to the first target, Tab cycles targets, Skip and the banner's controls, Enter binds, Space ticks`, async ({
     page,
     checkA11y,
   }) => {
@@ -735,7 +834,7 @@ for (const width of [1024, 1440] as const) {
     await expect(deliverable).not.toBeChecked();
     await expect(page.getByRole('dialog', { name: 'Find across every table' })).toBeVisible();
     await settled(page);
-    await checkA11y(`tour step 4 after keyboard step 3 ${String(width)}`);
+    await checkA11y(`tour step 5 after keyboard step 4 ${String(width)}`);
   });
 }
 
@@ -792,14 +891,14 @@ test.describe('200 % zoom', () => {
       Math.max(0, Math.min(onScreen.bottom, c.y + c.height) - Math.max(onScreen.y, c.y));
     const visible = (onScreen.right - onScreen.x) * (onScreen.bottom - onScreen.y);
     expect(covered).toBeLessThanOrEqual(visible / 2);
-    await checkCardBothThemes(page, checkA11y, 'tour step 3b 1024 200%');
+    await checkCardBothThemes(page, checkA11y, 'tour step 4b 1024 200%');
     await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
     const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
     await expect(dimensions).toBeVisible();
     await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
     await expectCardPlaced(page, 'dimensions');
     await expectClearOf(page, page.getByRole('tablist', { name: 'Format' }));
-    await checkCardBothThemes(page, checkA11y, 'tour step 3c 1024 200%');
+    await checkCardBothThemes(page, checkA11y, 'tour step 4c 1024 200%');
     await checklist(page)
       .getByRole('checkbox', { name: /^Deliverable/ })
       .click();
@@ -838,7 +937,7 @@ test('ONB-13 RESP-03 ONB-04 at 768 the graph sub-flow runs with the inspector as
   await expect(rail).toHaveAttribute('data-state', 'collapsed');
   await page.getByRole('button', { name: 'Add graph' }).click();
   await expectCardPlaced(page, 'pointing');
-  await checkCardBothThemes(page, checkA11y, 'tour step 3b 768');
+  await checkCardBothThemes(page, checkA11y, 'tour step 4b 768');
   await page.getByRole('button', { name: 'Bind the graph to Deliverables' }).click();
   const dimensions = page.getByRole('dialog', { name: 'Choose the dimensions' });
   await expect(dimensions).toBeVisible();
@@ -847,7 +946,7 @@ test('ONB-13 RESP-03 ONB-04 at 768 the graph sub-flow runs with the inspector as
   await expect(rail).toHaveAttribute('data-overlay', 'true');
   await expect(page.getByRole('tab', { name: 'Graph' })).toHaveAttribute('aria-selected', 'true');
   await expectCardPlaced(page, 'dimensions');
-  await checkCardBothThemes(page, checkA11y, 'tour step 3c 768');
+  await checkCardBothThemes(page, checkA11y, 'tour step 4c 768');
   // Escape dismisses the overlay (not the tour): the checklist is gone and the graph is still
   // selected, so the strip's Expand control is spotlit; expanding brings the checklist back.
   await page.keyboard.press('Escape');
@@ -872,7 +971,7 @@ test('ONB-13 RESP-03 ONB-04 at 768 the graph sub-flow runs with the inspector as
     .click();
   await expect(page.getByRole('dialog', { name: 'Find across every table' })).toBeVisible();
   await settled(page);
-  await checkA11y('tour step 4 768');
+  await checkA11y('tour step 5 768');
 });
 
 test('ONB-13 RESP-02 RESP-05 below 768 px (480) the tour does not run and the flag stays unset; at 768 it does, with a 44 px Skip', async ({

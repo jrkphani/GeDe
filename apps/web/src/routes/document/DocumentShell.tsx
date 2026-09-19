@@ -718,7 +718,7 @@ function OpenDocument({
     if (tab !== undefined) setOrganizeTab(tab);
     setInspectorOpen(true);
   }, []);
-  // ONB-04 / GRAPH-05: while the tour's step 3 asks for the dimensions, the Graph tab must
+  // ONB-04 / GRAPH-05: while the tour's step 4 asks for the dimensions, the Graph tab must
   // be on screen — the rail opens in Format mode (an overlay below 1024 px, RESP-03) each
   // time the person's graph is selected. The Graph tab itself scrolls its checklist into
   // the rail and hands it focus (A11Y-01).

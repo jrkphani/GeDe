@@ -243,14 +243,14 @@ _Breakpoints 480 / 768 / 1024 / 1440._
 
 ## ONB — First-run guided tour (14)
 
-_Five steps over the live interface. Written for users fluent in iCloud Numbers, so it teaches only what Numbers does not. Direction 1a of the explored options._
+_Five steps over the live interface. Written for users fluent in iCloud Numbers, so it teaches only what Numbers does not. Direction 1a of the explored options._ _Six steps since ADR-055 (owner-directed, 2026-09-19): a set-operator step sits between the cross-table reference and the context graph._
 
 - **ONB-01** — Sample workscape: A workscape named `Q3 Delivery — Guided sample` must be present in every library, pinned above all other rows and flagged Sample in the shared column. It must be seeded with the tables, formulas and dates the tour refers to.
 - **ONB-02** — Trigger: The tour must start on the user’s first arrival at the library after authentication, and only when the per-user completion flag is unset. Users arriving from a shared invitation get the same tour.
 - **ONB-03** — Completion state: Completing the final step, or skipping at any step, must set a per-user server-side flag. The flag is per account, not per device or browser.
 - **ONB-04** — Spotlight: Each step must spotlight its target element by live bounding box, re-measured on scroll, resize, zoom and any layout change, with the surrounding page dimmed. The dim layer must not intercept pointer events.
-- **ONB-05** — Advance condition: A step must advance only when the user performs its action. No Next control is provided. Step order: open the sample, write a cross-table reference, add a context graph, open Find and search, invite by email.
-- **ONB-06** — Step 2 targeting: The cross-table reference step has no single target element, because formulas are typed in the cell. Its card must centre in the viewport with no spotlight.
+- **ONB-05** — Advance condition: A step must advance only when the user performs its action. No Next control is provided. Step order: open the sample, write a cross-table reference, add a context graph, open Find and search, invite by email. _Amended by ADR-055 (owner-directed, 2026-09-19): the order is open the sample, write a cross-table reference, compute over the text in cells with a set operator (FX-09: one of Union, Inter, Diff, Comp or Cross committed over two operands with a bound reference, then one of the four that compare two sets), add a context graph, open Find and search, invite by email — six steps._
+- **ONB-06** — Step 2 targeting: The cross-table reference step has no single target element, because formulas are typed in the cell. Its card must centre in the viewport with no spotlight. _Amended by ADR-055 (owner-directed, 2026-09-19): so does the set-operator step (step 3), whose forms menu exists only while a cell is being typed into._
 - **ONB-07** — Skip: Skip must be present on every step and must end the tour permanently, setting the flag as in ONB-03.
 - **ONB-08** — Replay: Replay must be available from the help control in the library header at any time, and must clear the flag and restart at step 1.
 - **ONB-09** — Card anatomy: Each card must carry a step counter, progress dots, a title, an instruction body, a comparison note, and the pending action rendered in amber. The card must flip above its target when there is insufficient room below.
@@ -258,7 +258,7 @@ _Five steps over the live interface. Written for users fluent in iCloud Numbers,
 - **ONB-11** — Interactivity: The spotlit element must remain fully operable while the tour is active. The tour must never block an edit.
 - **ONB-12** — Localisation: All tour strings must live in the same message catalogue as the rest of the interface and must render in all six supported locales.
 - **ONB-13** — Responsive: The tour must not run below 768 px, where documents are read-only. The flag must remain unset so the user receives it on a larger viewport.
-- **ONB-14** — Completion: On completing step 5 the product must confirm completion and state where the tour can be replayed.
+- **ONB-14** — Completion: On completing step 5 the product must confirm completion and state where the tour can be replayed. _Amended by ADR-055 (owner-directed, 2026-09-19): on completing step 6._
 
 ## LIB-D — Library: delete and archive (11)
 
